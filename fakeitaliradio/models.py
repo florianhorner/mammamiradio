@@ -102,9 +102,8 @@ class StationState:
     running_jokes: list[str] = field(default_factory=list)
     current_track: Track | None = None
     segments_produced: int = 0
+    failed_segments: int = 0
     segment_log: list[SegmentLogEntry] = field(default_factory=list)
-    # Upcoming tracks (next N from the cycle, for dashboard preview)
-    upcoming_tracks: list[Track] = field(default_factory=list)
     # Last banter/ad scripts for display
     last_banter_script: list[dict] = field(default_factory=list)
     last_ad_script: dict = field(default_factory=dict)

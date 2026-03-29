@@ -1,41 +1,47 @@
 from __future__ import annotations
 
 import random
+from dataclasses import dataclass
 
 from fakeitaliradio.config import PacingSection
 from fakeitaliradio.models import SegmentType, StationState
 
 
-def next_segment_type(state: StationState, pacing: PacingSection) -> SegmentType:
-    # First segment is always music
-    if state.segments_produced == 0:
+def _decide(segments_produced: int, songs_since_ad: int,
+            songs_since_banter: int, pacing: PacingSection,
+            deterministic: bool = False) -> SegmentType:
+    """Core pacing decision. Single source of truth."""
+    if segments_produced == 0:
         return SegmentType.MUSIC
 
-    # Check ads first (less frequent, higher priority when due)
-    if state.songs_since_ad >= pacing.songs_between_ads:
+    if songs_since_ad >= pacing.songs_between_ads:
         return SegmentType.AD
 
-    # Check banter with ±1 jitter
-    threshold = pacing.songs_between_banter + random.randint(-1, 0)
+    threshold = pacing.songs_between_banter
+    if not deterministic:
+        threshold += random.randint(-1, 0)
     threshold = max(1, threshold)
-    if state.songs_since_banter >= threshold:
+    if songs_since_banter >= threshold:
         return SegmentType.BANTER
 
     return SegmentType.MUSIC
 
 
+def next_segment_type(state: StationState, pacing: PacingSection) -> SegmentType:
+    return _decide(state.segments_produced, state.songs_since_ad,
+                   state.songs_since_banter, pacing)
+
+
 def preview_upcoming(
     state: StationState, pacing: PacingSection, tracks: list, count: int = 8
 ) -> list[dict]:
-    """Predict the next N segments (type + label) without mutating state."""
+    """Predict the next N segments without mutating state."""
     preview = []
-    # Simulate state counters
     songs_since_banter = state.songs_since_banter
     songs_since_ad = state.songs_since_ad
     segments_produced = state.segments_produced
     track_idx = 0
 
-    # Find current position in playlist
     if state.current_track and tracks:
         for i, t in enumerate(tracks):
             if t.spotify_id == state.current_track.spotify_id:
@@ -43,14 +49,8 @@ def preview_upcoming(
                 break
 
     for _ in range(count):
-        if segments_produced == 0:
-            seg_type = SegmentType.MUSIC
-        elif songs_since_ad >= pacing.songs_between_ads:
-            seg_type = SegmentType.AD
-        elif songs_since_banter >= pacing.songs_between_banter:
-            seg_type = SegmentType.BANTER
-        else:
-            seg_type = SegmentType.MUSIC
+        seg_type = _decide(segments_produced, songs_since_ad,
+                           songs_since_banter, pacing, deterministic=True)
 
         if seg_type == SegmentType.MUSIC:
             real_idx = track_idx % len(tracks) if tracks else -1

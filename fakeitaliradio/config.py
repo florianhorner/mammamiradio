@@ -73,6 +73,32 @@ class StationConfig:
     anthropic_api_key: str = ""
 
 
+def _validate(config: StationConfig) -> None:
+    """Fail fast on bad config instead of cryptic runtime errors."""
+    import logging
+    log = logging.getLogger(__name__)
+    errors = []
+
+    if not config.hosts:
+        errors.append("No hosts configured — banter requires at least one host")
+    if config.pacing.songs_between_banter < 1:
+        errors.append("pacing.songs_between_banter must be >= 1")
+    if config.pacing.songs_between_ads < 1:
+        errors.append("pacing.songs_between_ads must be >= 1")
+    if config.pacing.lookahead_segments < 1:
+        errors.append("pacing.lookahead_segments must be >= 1")
+
+    if not config.anthropic_api_key:
+        log.warning("No ANTHROPIC_API_KEY — banter/ads will use fallback text")
+    if not config.ads.brands:
+        log.warning("No ad brands configured — ad segments will be skipped")
+    if not config.spotify_client_id or not config.spotify_client_secret:
+        log.warning("No Spotify credentials — using demo playlist")
+
+    if errors:
+        raise ValueError("Config errors:\n  " + "\n  ".join(errors))
+
+
 def load_config(path: str = "radio.toml") -> StationConfig:
     with open(path, "rb") as f:
         raw = tomllib.load(f)
@@ -113,7 +139,7 @@ def load_config(path: str = "radio.toml") -> StationConfig:
         ]
         sfx_dir = ads_raw.get("sfx_dir", "sfx")
 
-    return StationConfig(
+    config = StationConfig(
         station=StationSection(**raw.get("station", {})),
         playlist=PlaylistSection(**raw.get("playlist", {})),
         pacing=PacingSection(**raw.get("pacing", {})),
@@ -124,3 +150,5 @@ def load_config(path: str = "radio.toml") -> StationConfig:
         spotify_client_secret=os.getenv("SPOTIFY_CLIENT_SECRET", ""),
         anthropic_api_key=os.getenv("ANTHROPIC_API_KEY", ""),
     )
+    _validate(config)
+    return config

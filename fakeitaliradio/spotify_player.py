@@ -195,8 +195,8 @@ class SpotifyPlayer:
     async def _try_transfer_playback(self) -> None:
         """Use Spotify Web API to transfer playback to our device."""
         try:
-            from fakeitaliradio.playlist import _get_spotify_oauth
-            sp = _get_spotify_oauth(self.config)
+            from fakeitaliradio.spotify_auth import get_spotify_client
+            sp = get_spotify_client(self.config)
 
             devices = sp.devices()
             our_device = None

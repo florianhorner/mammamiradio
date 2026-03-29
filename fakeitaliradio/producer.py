@@ -4,6 +4,7 @@ import asyncio
 import itertools
 import logging
 import random
+import subprocess
 from pathlib import Path
 from uuid import uuid4
 
@@ -32,24 +33,6 @@ def _pick_brand(brands: list[AdBrand], ad_history: list) -> AdBrand:
     weights = [3 if b.recurring else 1 for b in eligible]
     return random.choices(eligible, weights=weights, k=1)[0]
 
-
-def _update_upcoming(state: StationState, current_track: Track) -> None:
-    """Update the upcoming tracks preview based on current position in playlist."""
-    try:
-        playlist = state.playlist
-        if not playlist:
-            return
-        # Find current track index
-        idx = next(
-            (i for i, t in enumerate(playlist) if t.spotify_id == current_track.spotify_id),
-            0,
-        )
-        upcoming = []
-        for j in range(1, 6):
-            upcoming.append(playlist[(idx + j) % len(playlist)])
-        state.upcoming_tracks = upcoming
-    except Exception:
-        pass
 
 
 async def run_producer(
@@ -83,12 +66,6 @@ async def run_producer(
             if seg_type == SegmentType.MUSIC:
                 track = next(track_iter)
                 logger.info("Producing MUSIC: %s", track.display)
-
-                # Update upcoming preview (peek next 5 tracks)
-                upcoming = []
-                temp_iter = itertools.tee(track_iter, 1)[0]
-                # Can't easily peek a cycle, so use playlist index
-                _update_upcoming(state, track)
 
                 norm_path = config.tmp_dir / f"music_{uuid4().hex[:8]}.mp3"
 
@@ -246,9 +223,11 @@ async def run_producer(
                     },
                 )
 
-        except Exception as e:
+        except (OSError, RuntimeError, FileNotFoundError,
+                subprocess.CalledProcessError) as e:
+            # Recoverable: network/ffmpeg/disk errors — insert silence, retry next loop
             logger.error("Failed to produce %s segment: %s", seg_type.value, e)
-            # Insert silence so the stream doesn't stall
+            state.failed_segments += 1
             silence_path = config.tmp_dir / f"silence_{uuid4().hex[:8]}.mp3"
             loop = asyncio.get_running_loop()
             await loop.run_in_executor(None, generate_silence, silence_path, 5.0)
@@ -257,12 +236,7 @@ async def run_producer(
                 path=silence_path,
                 metadata={"error": str(e)},
             )
-            if seg_type == SegmentType.MUSIC:
-                state.after_music(next(track_iter))
-            elif seg_type == SegmentType.BANTER:
-                state.after_banter()
-            elif seg_type == SegmentType.AD:
-                state.after_ad(brand="")
+            # Do NOT advance state counters — failed segment doesn't count
 
         if segment:
             await queue.put(segment)

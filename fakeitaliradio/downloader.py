@@ -2,22 +2,12 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import subprocess
 from pathlib import Path
 
 from fakeitaliradio.models import Track
+from fakeitaliradio.normalizer import _run_ffmpeg
 
 logger = logging.getLogger(__name__)
-
-
-def _run_ffmpeg(cmd: list[str], description: str) -> subprocess.CompletedProcess:
-    """Run an ffmpeg command with stderr capture and logging on failure."""
-    result = subprocess.run(cmd, capture_output=True)
-    if result.returncode != 0:
-        stderr = result.stderr.decode(errors="replace")[-500:]
-        logger.error("ffmpeg failed (%s): %s", description, stderr)
-        result.check_returncode()  # raises CalledProcessError
-    return result
 
 
 def _generate_placeholder(track: Track, out_path: Path) -> Path:

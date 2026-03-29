@@ -23,18 +23,12 @@ DEMO_TRACKS = [
 ]
 
 
+from fakeitaliradio.spotify_auth import get_spotify_client
+
+
 def _get_spotify_oauth(config: StationConfig):
-    import spotipy
-    from spotipy.oauth2 import SpotifyOAuth
-    auth = SpotifyOAuth(
-        client_id=config.spotify_client_id,
-        client_secret=config.spotify_client_secret,
-        redirect_uri="http://127.0.0.1:8888/callback",
-        scope="user-modify-playback-state user-read-playback-state user-library-read playlist-read-private",
-        cache_path=".spotify_token_cache",
-        open_browser=True,
-    )
-    return spotipy.Spotify(auth_manager=auth)
+    """Deprecated: use spotify_auth.get_spotify_client directly."""
+    return get_spotify_client(config)
 
 
 def _extract_playlist_id(url: str) -> str | None:
