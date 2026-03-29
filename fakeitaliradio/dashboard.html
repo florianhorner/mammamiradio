@@ -723,8 +723,9 @@ async function searchTracks() {
   const d = await r.json();
   const container = document.getElementById('search-results');
   if (!d.results || !d.results.length) {
-    container.innerHTML = '<div style="font-size:12px;color:var(--muted);padding:4px 0">No results</div>';
-    setTimeout(() => { container.innerHTML = ''; }, 2000);
+    const msg = d.error ? 'Search unavailable (Spotify not configured)' : 'No results';
+    container.innerHTML = '<div style="font-size:12px;color:var(--muted);padding:4px 0">' + escHtml(msg) + '</div>';
+    setTimeout(() => { container.innerHTML = ''; }, 3000);
     return;
   }
   container.innerHTML = '<ul style="list-style:none;background:var(--card);border:1px solid rgba(176,164,148,0.15);border-radius:6px;overflow:hidden">' +
