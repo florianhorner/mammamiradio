@@ -1,6 +1,8 @@
 # Contributing
 
-This project is small enough that the fastest way to break it is to change something without running the station. Do the local setup, run targeted tests, then do a quick listen-through.
+This repo is small, but it has real moving parts: FastAPI, FFmpeg, Edge TTS, Spotify, Claude, and optional Home Assistant. The fastest way to break it is to change behavior without actually running the station.
+
+Do the local setup, run targeted tests, then do a quick listen-through.
 
 ## Prerequisites
 
@@ -9,7 +11,7 @@ This project is small enough that the fastest way to break it is to change somet
 - go-librespot if you want to test real Spotify playback
 - Spotify and Anthropic credentials if you want the full happy path
 
-You can still work on config, scheduler, and most UI/API behavior without Spotify credentials. The app falls back to demo tracks when Spotify is not configured.
+You can still work on config, scheduler, most routes, and documentation without Spotify credentials. The app falls back to demo tracks when Spotify is not configured.
 
 ## Local setup
 
@@ -20,13 +22,14 @@ pip install -e .
 cp .env.example .env
 ```
 
-Then edit `.env` as needed:
+Then fill in whatever `.env` values you need:
 
 - `SPOTIFY_CLIENT_ID` / `SPOTIFY_CLIENT_SECRET` for Spotify playlist access and playback transfer
 - `ANTHROPIC_API_KEY` for banter and ad script generation
+- `HA_TOKEN` for Home Assistant prompt context
 - `ADMIN_PASSWORD` or `ADMIN_TOKEN` if you plan to bind outside localhost
 
-`radio.toml` is the main station config. That is where you change hosts, pacing, playlist source, ad brands, and audio settings.
+`radio.toml` is the main station config. That is where you change hosts, pacing, playlist source, ad brands, audio settings, and Home Assistant enablement.
 
 ## Run the app
 
@@ -50,9 +53,17 @@ source .venv/bin/activate
 python -m uvicorn fakeitaliradio.main:app --reload --reload-dir fakeitaliradio
 ```
 
+Useful URLs:
+
+- `http://127.0.0.1:8000/`
+- `http://127.0.0.1:8000/listen`
+- `http://127.0.0.1:8000/stream`
+- `http://127.0.0.1:8000/public-status`
+- `http://127.0.0.1:8000/status`
+
 ## Tests
 
-Fast tests with no audio generation:
+Fast tests:
 
 ```bash
 pytest tests/test_config.py tests/test_scheduler.py
@@ -97,13 +108,15 @@ After starting the app:
 
 If you are testing the Spotify path, also open Spotify and select the `fakeitaliradio` device. If you are binding to `0.0.0.0`, set `ADMIN_PASSWORD` or `ADMIN_TOKEN` first or config validation will reject startup.
 
-## Docs and release notes
+## Documentation expectations
 
 When behavior changes, update the matching docs in the same change:
 
-- `README.md` for user-facing setup or product behavior
-- `ARCHITECTURE.md` for runtime model or component boundary changes
-- `CLAUDE.md` for command and file-map updates
-- `CHANGELOG.md` for release notes
+- `README.md` for user-facing setup and route changes
+- `ARCHITECTURE.md` for runtime flow and system design changes
+- `CLAUDE.md` for the codebase map used by coding agents
+- `TROUBLESHOOTING.md` for failure modes users will actually hit
+- `OPERATIONS.md` for runtime and deployment assumptions
+- `CHANGELOG.md` for shipped behavior worth calling out
 
-This repo does not currently have a standalone `VERSION` file. The current version source of truth is `pyproject.toml`.
+If you add a new config key, env var, route, auth rule, or fallback path and do not document it, the docs are wrong. Fix them in the same change.

@@ -1,3 +1,5 @@
+"""Live streaming transport, HTTP routes, and admin controls."""
+
 from __future__ import annotations
 
 import asyncio
@@ -24,12 +26,15 @@ LISTENER_HTML = __import__("pathlib").Path(__file__).with_name("listener.html").
 
 
 class LiveStreamHub:
+    """Fan out live audio chunks to all connected listener streams."""
+
     def __init__(self, listener_queue_size: int = 128):
         self._listener_queue_size = listener_queue_size
         self._listeners: dict[int, asyncio.Queue[bytes | None]] = {}
         self._next_listener_id = 0
 
     def subscribe(self) -> tuple[int, asyncio.Queue[bytes | None]]:
+        """Register a listener and return its dedicated chunk queue."""
         listener_id = self._next_listener_id
         self._next_listener_id += 1
         queue: asyncio.Queue[bytes | None] = asyncio.Queue(maxsize=self._listener_queue_size)
@@ -38,13 +43,16 @@ class LiveStreamHub:
         return listener_id, queue
 
     def unsubscribe(self, listener_id: int) -> None:
+        """Remove a listener and drop any future broadcast work for it."""
         if self._listeners.pop(listener_id, None) is not None:
             logger.info("Listener disconnected (%d active)", len(self._listeners))
 
     def has_listener(self, listener_id: int) -> bool:
+        """Return whether a listener is still subscribed."""
         return listener_id in self._listeners
 
     async def broadcast(self, chunk: bytes) -> None:
+        """Push one encoded audio chunk to every listener, dropping laggards."""
         slow_listeners = []
         for listener_id, queue in list(self._listeners.items()):
             try:
@@ -57,6 +65,7 @@ class LiveStreamHub:
             self.unsubscribe(listener_id)
 
     def close(self) -> None:
+        """Signal all listeners to terminate and clear the hub."""
         listeners = list(self._listeners.items())
         self._listeners.clear()
         for _, queue in listeners:
@@ -67,6 +76,7 @@ class LiveStreamHub:
 
 
 def _is_loopback_client(request: Request) -> bool:
+    """Return whether the current request originated from localhost."""
     if not request.client:
         return False
     host = request.client.host
@@ -82,6 +92,7 @@ def require_admin_access(
     request: Request,
     credentials: HTTPBasicCredentials | None = Depends(security),
 ) -> None:
+    """Authorize admin-only routes using token, basic auth, or loopback trust."""
     config = request.app.state.config
     is_loopback = _is_loopback_client(request)
     if config.admin_token:
@@ -198,16 +209,19 @@ async def _audio_generator(request: Request):
 
 @router.get("/", response_class=HTMLResponse, dependencies=[Depends(require_admin_access)])
 async def dashboard():
+    """Serve the authenticated control-plane dashboard."""
     return DASHBOARD_HTML
 
 
 @router.get("/listen", response_class=HTMLResponse)
 async def listener():
+    """Serve the public listener UI."""
     return LISTENER_HTML
 
 
 @router.get("/stream")
 async def stream(request: Request):
+    """Expose the live MP3 stream consumed by browsers and audio players."""
     config = request.app.state.config
     headers = {
         "Content-Type": "audio/mpeg",
@@ -313,6 +327,7 @@ async def move_to_next(request: Request, _: None = Depends(require_admin_access)
 
 
 def _public_status_payload(request: Request) -> dict:
+    """Build the read-only status payload shared by public and admin APIs."""
     state = request.app.state.station_state
     config = request.app.state.config
     return {
@@ -329,11 +344,13 @@ def _public_status_payload(request: Request) -> dict:
 
 @router.get("/public-status")
 async def public_status(request: Request):
+    """Return listener-safe station metadata and upcoming segment previews."""
     return _public_status_payload(request)
 
 
 @router.get("/status")
 async def status(request: Request, _: None = Depends(require_admin_access)):
+    """Return full admin diagnostics for the running station."""
     state = request.app.state.station_state
     segment_queue = request.app.state.queue
     start_time = request.app.state.start_time
@@ -361,6 +378,7 @@ async def status(request: Request, _: None = Depends(require_admin_access)):
 
 
 def _tail_log(path: str, lines: int = 15) -> list[str]:
+    """Return the last lines from a log file without raising on missing files."""
     try:
         with open(path) as f:
             return f.readlines()[-lines:]

@@ -1,3 +1,10 @@
+"""Configuration loading for fakeitaliradio.
+
+This module combines checked-in station settings from ``radio.toml`` with
+environment-sourced secrets and deployment overrides, then validates the
+result before the rest of the app boots.
+"""
+
 from __future__ import annotations
 
 try:
@@ -18,6 +25,8 @@ load_dotenv()
 
 @dataclass
 class StationSection:
+    """Station identity and public stream metadata."""
+
     name: str = "Radio Italì"
     language: str = "it"
     theme: str = ""
@@ -25,12 +34,16 @@ class StationSection:
 
 @dataclass
 class PlaylistSection:
+    """Playlist source selection and ordering preferences."""
+
     spotify_url: str = ""
     shuffle: bool = False
 
 
 @dataclass
 class PacingSection:
+    """Rules that control how often banter and ad breaks occur."""
+
     songs_between_banter: int = 2
     songs_between_ads: int = 4
     ad_spots_per_break: int = 1
@@ -39,6 +52,8 @@ class PacingSection:
 
 @dataclass
 class AudioSection:
+    """Audio pipeline settings for encoding and Spotify capture."""
+
     sample_rate: int = 48000
     channels: int = 2
     bitrate: int = 192
@@ -51,6 +66,8 @@ class AudioSection:
 
 @dataclass
 class HomeAssistantSection:
+    """Optional Home Assistant integration used to seed prompt context."""
+
     enabled: bool = False
     url: str = ""
     poll_interval: int = 60  # seconds between state refreshes
@@ -58,6 +75,8 @@ class HomeAssistantSection:
 
 @dataclass
 class AdsSection:
+    """Structured ad inventory, voices, and optional sound-effect assets."""
+
     brands: list[AdBrand] = field(default_factory=list)
     voices: list[AdVoice] = field(default_factory=list)
     sfx_dir: str = "sfx"
@@ -65,6 +84,8 @@ class AdsSection:
 
 @dataclass
 class StationConfig:
+    """Fully resolved application configuration used at runtime."""
+
     station: StationSection
     playlist: PlaylistSection
     pacing: PacingSection
@@ -88,6 +109,7 @@ class StationConfig:
 
 
 def _is_loopback_host(host: str) -> bool:
+    """Return whether a bind target should be treated as localhost-only."""
     if host in {"localhost", ""}:
         return True
     try:
@@ -126,6 +148,7 @@ def _validate(config: StationConfig) -> None:
 
 
 def load_config(path: str = "radio.toml") -> StationConfig:
+    """Load ``radio.toml`` plus environment overrides into a validated config."""
     with open(path, "rb") as f:
         raw = tomllib.load(f)
 
@@ -177,7 +200,14 @@ def load_config(path: str = "radio.toml") -> StationConfig:
         else:
             station_raw.pop("bitrate")
 
+    ha_raw = raw.get("homeassistant", {})
+    ha_section = HomeAssistantSection(**ha_raw)
     ha_token = os.getenv("HA_TOKEN", "")
+    if ha_section.enabled and not ha_token:
+        import logging as _log
+        _log.getLogger(__name__).warning(
+            "Home Assistant enabled but no HA_TOKEN in environment"
+        )
 
     config = StationConfig(
         station=StationSection(**station_raw),
@@ -186,6 +216,7 @@ def load_config(path: str = "radio.toml") -> StationConfig:
         hosts=hosts,
         ads=AdsSection(brands=brands, voices=voices, sfx_dir=sfx_dir),
         audio=AudioSection(**audio_raw),
+        homeassistant=ha_section,
         bind_host=os.getenv("FAKEITALIRADIO_BIND_HOST", "127.0.0.1"),
         port=int(os.getenv("FAKEITALIRADIO_PORT", "8000")),
         admin_username=os.getenv("ADMIN_USERNAME", "admin"),

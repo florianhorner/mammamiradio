@@ -1,3 +1,5 @@
+"""FastAPI application entrypoint for the fakeitaliradio station."""
+
 from __future__ import annotations
 
 import asyncio
@@ -30,6 +32,7 @@ _spotify_player: SpotifyPlayer | None = None
 
 @app.on_event("startup")
 async def startup():
+    """Load config, build initial state, and start producer/playback workers."""
     global _producer_task, _playback_task, _spotify_player
 
     config = load_config()
@@ -74,6 +77,7 @@ async def startup():
 
 @app.on_event("shutdown")
 async def shutdown():
+    """Stop background workers and close shared streaming resources."""
     if _spotify_player:
         _spotify_player.stop()
     if _producer_task:

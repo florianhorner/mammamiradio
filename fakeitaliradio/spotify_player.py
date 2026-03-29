@@ -37,6 +37,8 @@ BYTES_PER_SEC = SAMPLE_RATE * CHANNELS * SAMPLE_SIZE
 
 
 class SpotifyPlayer:
+    """Manage go-librespot, persistent FIFO draining, and track capture."""
+
     def __init__(self, config: StationConfig):
         self.config = config
         self._process: subprocess.Popen | None = None
@@ -55,6 +57,7 @@ class SpotifyPlayer:
         self._transfer_counter = 0
 
     def _ensure_fifo(self) -> None:
+        """Create or repair the PCM FIFO used by go-librespot output."""
         if self._fifo_path.exists():
             if not self._fifo_path.is_fifo():
                 self._fifo_path.unlink()
@@ -217,6 +220,7 @@ class SpotifyPlayer:
             logger.info("Stopped fallback FIFO drain (PID %d)", pid)
 
     def start(self) -> None:
+        """Start FIFO drainage and attach to or launch go-librespot."""
         if self._process and self._process.poll() is None:
             return
 
@@ -251,6 +255,7 @@ class SpotifyPlayer:
         logger.info("go-librespot started (PID %d)", self._process.pid)
 
     def stop(self) -> None:
+        """Stop capture helpers and terminate go-librespot if we launched it."""
         if getattr(self, "_external", False):
             # Keep a single reader alive across uvicorn reloads, then let the
             # next app process reclaim ownership on startup.
@@ -329,6 +334,7 @@ class SpotifyPlayer:
             logger.warning("Auto-transfer failed: %s", e)
 
     async def wait_for_auth(self, timeout: float = 120.0) -> bool:
+        """Poll until a Spotify user connects or the timeout expires."""
         deadline = asyncio.get_running_loop().time() + timeout
         while asyncio.get_running_loop().time() < deadline:
             if await self.check_auth():
@@ -339,6 +345,7 @@ class SpotifyPlayer:
         return False
 
     async def play_track(self, track: Track) -> None:
+        """Ask go-librespot to start playback for one Spotify track URI."""
         uri = f"spotify:track:{track.spotify_id}"
         async with httpx.AsyncClient() as client:
             resp = await client.post(
@@ -353,6 +360,7 @@ class SpotifyPlayer:
                 raise RuntimeError(f"go-librespot play failed: {resp.status_code}")
 
     async def pause(self) -> None:
+        """Pause the currently playing Spotify track, if any."""
         async with httpx.AsyncClient() as client:
             await client.post(f"{self._api_base}/player/pause")
 
@@ -447,4 +455,5 @@ class SpotifyPlayer:
 
 
 async def download_track_spotify(player: SpotifyPlayer, track: Track, output_path: Path) -> Path:
+    """Capture a Spotify-backed track into a normalized MP3 segment."""
     return await player.capture_track_audio(track, output_path)

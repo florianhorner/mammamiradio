@@ -1,3 +1,5 @@
+"""FFmpeg-based helpers for shaping all audio into a consistent stream format."""
+
 from __future__ import annotations
 
 import logging
@@ -18,6 +20,7 @@ def _run_ffmpeg(cmd: list[str], description: str) -> subprocess.CompletedProcess
 
 
 def normalize(input_path: Path, output_path: Path, config=None) -> Path:
+    """Re-encode an input file to the station's target loudness and format."""
     sample_rate = str(config.audio.sample_rate) if config else "48000"
     channels = str(config.audio.channels) if config else "2"
     bitrate = f"{config.audio.bitrate}k" if config else "192k"
@@ -46,6 +49,7 @@ def normalize(input_path: Path, output_path: Path, config=None) -> Path:
 
 
 def concat_files(paths: list[Path], output_path: Path, silence_ms: int = 300) -> Path:
+    """Concatenate rendered parts into a single MP3 segment."""
     if len(paths) == 1:
         return paths[0]
 
@@ -286,6 +290,7 @@ def generate_bumper_jingle(output_path: Path, duration_sec: float = 1.2) -> Path
 
 
 def generate_silence(output_path: Path, duration_sec: float = 3.0) -> Path:
+    """Generate silent audio used for pauses and error recovery."""
     cmd = [
         "ffmpeg",
         "-y",

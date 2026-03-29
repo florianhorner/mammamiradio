@@ -1,3 +1,5 @@
+"""Scheduling rules for the station timeline."""
+
 from __future__ import annotations
 
 import random
@@ -31,6 +33,7 @@ def _decide(
 
 
 def next_segment_type(state: StationState, pacing: PacingSection) -> SegmentType:
+    """Choose the next segment type from the current mutable station state."""
     return _decide(state.segments_produced, state.songs_since_ad, state.songs_since_banter, pacing)
 
 

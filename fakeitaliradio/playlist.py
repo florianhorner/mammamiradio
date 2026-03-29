@@ -1,3 +1,5 @@
+"""Playlist loading from Spotify or bundled demo tracks."""
+
 from __future__ import annotations
 
 import logging
@@ -32,11 +34,13 @@ def _get_spotify_oauth(config: StationConfig):
 
 
 def _extract_playlist_id(url: str) -> str | None:
+    """Pull the Spotify playlist ID out of a share URL."""
     m = re.search(r"playlist/([a-zA-Z0-9]+)", url)
     return m.group(1) if m else None
 
 
 def fetch_playlist(config: StationConfig) -> list[Track]:
+    """Fetch tracks from the configured Spotify source with demo fallbacks."""
     if not config.spotify_client_id or not config.spotify_client_secret:
         logger.warning("No Spotify credentials — using demo Italian playlist")
         tracks = list(DEMO_TRACKS)
