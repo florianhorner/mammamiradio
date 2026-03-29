@@ -42,12 +42,6 @@ def preview_upcoming(
     segments_produced = state.segments_produced
     track_idx = 0
 
-    if state.current_track and tracks:
-        for i, t in enumerate(tracks):
-            if t.spotify_id == state.current_track.spotify_id:
-                track_idx = (i + 1) % len(tracks)
-                break
-
     for _ in range(count):
         seg_type = _decide(segments_produced, songs_since_ad,
                            songs_since_banter, pacing, deterministic=True)

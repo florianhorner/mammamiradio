@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import itertools
 import logging
 import random
 import subprocess
@@ -42,7 +41,6 @@ async def run_producer(
     config: StationConfig,
     spotify_player: SpotifyPlayer | None = None,
 ) -> None:
-    track_iter = itertools.cycle(state.playlist)
     logger.info("Producer started. Playlist: %d tracks", len(state.playlist))
 
     # Home Assistant context cache
@@ -80,7 +78,7 @@ async def run_producer(
 
         try:
             if seg_type == SegmentType.MUSIC:
-                track = next(track_iter)
+                track = state.reserve_next_track()
                 logger.info("Producing MUSIC: %s", track.display)
 
                 norm_path = config.tmp_dir / f"music_{uuid4().hex[:8]}.mp3"

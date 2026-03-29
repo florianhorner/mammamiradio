@@ -551,7 +551,7 @@
 
   // Status polling
   function fetchStatus(){
-    fetch('/status')
+    fetch('/public-status')
       .then(function(r){return r.json()})
       .then(function(data){
         updateNowPlaying(data.now_streaming);

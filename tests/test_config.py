@@ -45,3 +45,30 @@ def test_audio_section_defaults():
     assert audio.sample_rate == 48000
     assert audio.channels == 2
     assert audio.bitrate == 192
+
+
+def test_loads_admin_env(monkeypatch):
+    toml_path = Path(__file__).parent.parent / "radio.toml"
+    monkeypatch.setenv("ADMIN_USERNAME", "radio")
+    monkeypatch.setenv("ADMIN_PASSWORD", "secret")
+    monkeypatch.setenv("ADMIN_TOKEN", "token123")
+
+    config = load_config(str(toml_path))
+
+    assert config.admin_username == "radio"
+    assert config.admin_password == "secret"
+    assert config.admin_token == "token123"
+
+
+def test_non_local_bind_requires_admin_auth(monkeypatch):
+    toml_path = Path(__file__).parent.parent / "radio.toml"
+    monkeypatch.setenv("FAKEITALIRADIO_BIND_HOST", "0.0.0.0")
+    monkeypatch.delenv("ADMIN_PASSWORD", raising=False)
+    monkeypatch.delenv("ADMIN_TOKEN", raising=False)
+
+    try:
+        load_config(str(toml_path))
+    except ValueError as exc:
+        assert "Non-local bind requires ADMIN_PASSWORD or ADMIN_TOKEN" in str(exc)
+    else:
+        raise AssertionError("Expected config validation to fail for non-local bind without auth")

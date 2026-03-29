@@ -502,6 +502,37 @@ function fmtUptime(s) {
   return m + 'm ' + (s % 60) + 's';
 }
 
+function escHtml(value) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function renderAdHtml(adData) {
+  if (!adData) return '';
+
+  if (adData.brand && adData.text) {
+    return '<div><span class="script-ad-brand">' + escHtml(adData.brand) + '</span> ' +
+      '(voice: ' + escHtml(adData.voice || adData.host || '?') + ')</div>' +
+      '<div style="margin-top:6px;color:var(--cream-dk)">' + escHtml(adData.text) + '</div>';
+  }
+
+  if (Array.isArray(adData.brands) && adData.brands.length) {
+    const brands = adData.brands.map(escHtml).join(', ');
+    const texts = Array.isArray(adData.texts)
+      ? adData.texts.map(text =>
+          '<div style="margin-top:6px;color:var(--cream-dk)">' + escHtml(text) + '</div>'
+        ).join('')
+      : '';
+    return '<div><span class="script-ad-brand">' + brands + '</span></div>' + texts;
+  }
+
+  return '';
+}
+
 async function refresh() {
   try {
     const r = await fetch('/status');
@@ -539,7 +570,7 @@ async function refresh() {
       '<li' + (i === 0 ? ' style="color:var(--cream);font-weight:600"' : '') + '>' +
         '<span class="seg-icon ' + (cls[e.type] || '') + '">' + (icons[e.type] || '?') + '</span>' +
         '<span class="seg-time">' + fmt(e.timestamp) + '</span>' +
-        '<span class="seg-label">' + e.label + '</span>' +
+        '<span class="seg-label">' + escHtml(e.label) + '</span>' +
         (i === 0 ? '<span class="seg-now-tag">\u2190 NOW</span>' : '') +
       '</li>'
     ).join('');
@@ -553,7 +584,9 @@ async function refresh() {
     if (queueItems.length > 0) {
       log.innerHTML += '<li style="color:var(--muted);padding-top:8px;border-top:1px solid rgba(122,143,109,0.15)">' +
         '<span class="seg-icon" style="background:rgba(176,164,148,0.12);color:var(--muted)">\u23F3</span>' +
-        '<span class="seg-label">In queue: ' + queueItems.map(e => e.label).join(', ') + '</span></li>';
+        '<span class="seg-label">In queue: ' +
+          queueItems.map(e => escHtml(e.label)).join(', ') +
+        '</span></li>';
     }
 
     // Upcoming (full schedule: music + banter + ads)
@@ -570,7 +603,7 @@ async function refresh() {
       return '<li>' +
         '<span class="seg-icon ' + (cls[e.type] || '') + '" style="width:18px;height:18px;font-size:10px">' +
           (icons[e.type] || '?') + '</span> ' +
-        '<span class="seg-label">' + e.label + '</span>' +
+        '<span class="seg-label">' + escHtml(e.label) + '</span>' +
         actions +
       '</li>';
     }).join('') || '<li>...</li>';
@@ -581,33 +614,29 @@ async function refresh() {
     const lastBanter = streamLog.find(e => e.type === 'banter');
     if (lastBanter && lastBanter.metadata && lastBanter.metadata.lines) {
       banter.innerHTML = lastBanter.metadata.lines.map(l =>
-        '<div><span class="script-host">' + l.host + ':</span> ' + l.text + '</div>'
+        '<div><span class="script-host">' + escHtml(l.host) + ':</span> ' + escHtml(l.text) + '</div>'
       ).join('');
     } else if (d.last_banter_script && d.last_banter_script.length) {
       banter.innerHTML = d.last_banter_script.map(l =>
-        '<div><span class="script-host">' + l.host + ':</span> ' + l.text + '</div>'
+        '<div><span class="script-host">' + escHtml(l.host) + ':</span> ' + escHtml(l.text) + '</div>'
       ).join('');
     }
 
     // Ad
     const ad = document.getElementById('ad');
     const lastAd = streamLog.find(e => e.type === 'ad');
-    if (lastAd && lastAd.metadata && lastAd.metadata.text) {
-      ad.innerHTML =
-        '<div><span class="script-ad-brand">' + (lastAd.metadata.brand || '?') + '</span> ' +
-        '(voice: ' + (lastAd.metadata.voice || lastAd.metadata.host || '?') + ')</div>' +
-        '<div style="margin-top:6px;color:var(--cream-dk)">' + lastAd.metadata.text + '</div>';
-    } else if (d.last_ad_script && d.last_ad_script.brand) {
-      ad.innerHTML =
-        '<div><span class="script-ad-brand">' + d.last_ad_script.brand + '</span> ' +
-        '(voice: ' + (d.last_ad_script.voice || d.last_ad_script.host || '?') + ')</div>' +
-        '<div style="margin-top:6px;color:var(--cream-dk)">' + d.last_ad_script.text + '</div>';
+    const lastAdHtml = lastAd && lastAd.metadata ? renderAdHtml(lastAd.metadata) : '';
+    const fallbackAdHtml = renderAdHtml(d.last_ad_script);
+    if (lastAdHtml) {
+      ad.innerHTML = lastAdHtml;
+    } else if (fallbackAdHtml) {
+      ad.innerHTML = fallbackAdHtml;
     }
 
     // Jokes
     const jokes = document.getElementById('jokes');
     jokes.innerHTML = (d.running_jokes || []).map(j =>
-      '<li>\u201C' + j + '\u201D</li>'
+      '<li>\u201C' + escHtml(j) + '\u201D</li>'
     ).join('') || '<li>No running jokes yet...</li>';
 
     // Home Assistant context
@@ -627,18 +656,20 @@ async function refresh() {
         const levelM = raw.match(/level=(\w+)/);
         const msgM = raw.match(/msg="([^"]+)"/);
         const ts = timeM ? timeM[1].split('T')[1]?.split('+')[0] || '' : '';
-        const lvl = levelM ? levelM[1] : 'info';
-        const msg = msgM ? msgM[1] : raw.replace(/</g,'&lt;');
+        const lvl = ['error', 'warning', 'info'].includes(levelM?.[1]) ? levelM[1] : 'info';
+        const msg = escHtml(msgM ? msgM[1] : raw);
         // Extract extra fields (error=, uri=, etc.)
         const extras = [];
         const errM = raw.match(/error="([^"]+)"/);
         const uriM = raw.match(/uri="([^"]+)"/);
         if (errM) extras.push(errM[1]);
         if (uriM) extras.push(uriM[1].replace('spotify:track:',''));
-        const detail = extras.length ? '<span class="detail">' + extras.join(' ') + '</span>' : '';
+        const detail = extras.length
+          ? '<span class="detail">' + extras.map(escHtml).join(' ') + '</span>'
+          : '';
         return '<div class="entry">' +
-          '<span class="ts">' + ts + '</span>' +
-          '<span class="lvl lvl-' + lvl + '">' + lvl.toUpperCase() + '</span>' +
+          '<span class="ts">' + escHtml(ts) + '</span>' +
+          '<span class="lvl lvl-' + lvl + '">' + escHtml(lvl.toUpperCase()) + '</span>' +
           '<span class="msg">' + msg + '</span>' +
           detail + '</div>';
       }).join('');
@@ -652,8 +683,8 @@ async function refresh() {
         ? d.producer_errors.map(e =>
             '<div class="entry">' +
               '<span class="lvl lvl-error">ERR</span>' +
-              '<span class="msg">' + e.type + ': ' + e.label + '</span>' +
-              '<span class="detail">' + (e.metadata.error || '') + '</span>' +
+              '<span class="msg">' + escHtml(e.type) + ': ' + escHtml(e.label) + '</span>' +
+              '<span class="detail">' + escHtml(e.metadata.error || '') + '</span>' +
             '</div>'
           ).join('')
         : '<div class="entry"><span class="msg" style="color:var(--sage)">No errors</span></div>';

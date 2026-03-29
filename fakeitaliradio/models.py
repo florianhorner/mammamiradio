@@ -141,6 +141,14 @@ class StationState:
         if len(self.stream_log) > 50:
             self.stream_log = self.stream_log[-50:]
 
+    def reserve_next_track(self) -> Track:
+        """Rotate the upcoming playlist order when a music segment is queued."""
+        if not self.playlist:
+            raise RuntimeError("Playlist is empty")
+        track = self.playlist.pop(0)
+        self.playlist.append(track)
+        return track
+
     def after_music(self, track: Track) -> None:
         self.played_tracks.append(track)
         self.current_track = track

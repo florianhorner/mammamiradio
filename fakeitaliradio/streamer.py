@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import logging
+import secrets
 import time
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi.security import HTTPBasic, HTTPBasicCredentials
 
 from fakeitaliradio.models import Segment
 from fakeitaliradio.scheduler import preview_upcoming
@@ -13,6 +16,7 @@ from fakeitaliradio.scheduler import preview_upcoming
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+security = HTTPBasic(auto_error=False)
 
 DASHBOARD_HTML = (
     __import__("pathlib").Path(__file__).with_name("dashboard.html").read_text()
@@ -23,34 +27,121 @@ LISTENER_HTML = (
 )
 
 
-async def _audio_generator(request: Request):
-    """Stream audio at playback rate so dashboard stays in sync with listener."""
-    CHUNK = 4096  # smaller chunks for tighter pacing
-    segment_queue = request.app.state.queue
-    state = request.app.state.station_state
-    config = request.app.state.config
+class LiveStreamHub:
+    def __init__(self, listener_queue_size: int = 128):
+        self._listener_queue_size = listener_queue_size
+        self._listeners: dict[int, asyncio.Queue[bytes | None]] = {}
+        self._next_listener_id = 0
 
-    # Throttle to bitrate so server stays in sync with what listener hears
-    bytes_per_sec = (config.station.bitrate * 1000) / 8  # 192kbps = 24000 B/s
-    chunk_duration = CHUNK / bytes_per_sec  # seconds per chunk
+    def subscribe(self) -> tuple[int, asyncio.Queue[bytes | None]]:
+        listener_id = self._next_listener_id
+        self._next_listener_id += 1
+        queue: asyncio.Queue[bytes | None] = asyncio.Queue(maxsize=self._listener_queue_size)
+        self._listeners[listener_id] = queue
+        logger.info("Listener connected (%d active)", len(self._listeners))
+        return listener_id, queue
+
+    def unsubscribe(self, listener_id: int) -> None:
+        if self._listeners.pop(listener_id, None) is not None:
+            logger.info("Listener disconnected (%d active)", len(self._listeners))
+
+    def has_listener(self, listener_id: int) -> bool:
+        return listener_id in self._listeners
+
+    async def broadcast(self, chunk: bytes) -> None:
+        slow_listeners = []
+        for listener_id, queue in list(self._listeners.items()):
+            try:
+                queue.put_nowait(chunk)
+            except asyncio.QueueFull:
+                slow_listeners.append(listener_id)
+
+        for listener_id in slow_listeners:
+            logger.warning("Dropping slow listener %d", listener_id)
+            self.unsubscribe(listener_id)
+
+    def close(self) -> None:
+        listeners = list(self._listeners.items())
+        self._listeners.clear()
+        for _, queue in listeners:
+            try:
+                queue.put_nowait(None)
+            except asyncio.QueueFull:
+                pass
+
+
+def _is_loopback_client(request: Request) -> bool:
+    host = request.client.host if request.client else ""
+    if host in {"localhost", ""}:
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def require_admin_access(
+    request: Request,
+    credentials: HTTPBasicCredentials | None = Depends(security),
+) -> None:
+    config = request.app.state.config
+    is_loopback = _is_loopback_client(request)
+    if config.admin_token:
+        token = request.headers.get("X-Radio-Admin-Token") or request.query_params.get("admin_token")
+        if token and secrets.compare_digest(token, config.admin_token):
+            return
+
+    if config.admin_password:
+        username = credentials.username if credentials else ""
+        password = credentials.password if credentials else ""
+        if (
+            secrets.compare_digest(username, config.admin_username)
+            and secrets.compare_digest(password, config.admin_password)
+        ):
+            return
+
+    if config.admin_password:
+        raise HTTPException(
+            status_code=401,
+            detail="Admin authentication required",
+            headers={"WWW-Authenticate": 'Basic realm="fakeitaliradio admin"'},
+        )
+
+    if config.admin_token:
+        if is_loopback:
+            return
+        raise HTTPException(
+            status_code=401,
+            detail="X-Radio-Admin-Token required",
+        )
+
+    if is_loopback:
+        return
+
+    raise HTTPException(
+        status_code=403,
+        detail="Admin endpoints are only available from localhost unless admin auth is configured",
+    )
+
+
+async def run_playback_loop(app) -> None:
+    """Play queued segments on a single station timeline and fan out audio chunks."""
+    CHUNK = 4096
+    segment_queue = app.state.queue
+    skip_event = app.state.skip_event
+    state = app.state.station_state
+    config = app.state.config
+    hub = app.state.stream_hub
+    bytes_per_sec = (config.station.bitrate * 1000) / 8
 
     while True:
-        if await request.is_disconnected():
-            logger.info("Client disconnected")
-            state.now_streaming = {}
-            break
-
         try:
-            segment: Segment = await asyncio.wait_for(
-                segment_queue.get(), timeout=30.0
-            )
+            segment: Segment = await asyncio.wait_for(segment_queue.get(), timeout=30.0)
         except asyncio.TimeoutError:
             logger.warning("Queue empty for 30s, waiting...")
             continue
 
-        # Mark this segment as NOW STREAMING
         state.on_stream_segment(segment)
-
         logger.info(
             ">>> NOW STREAMING %s: %s",
             segment.type.value,
@@ -60,12 +151,17 @@ async def _audio_generator(request: Request):
         try:
             send_start = time.monotonic()
             bytes_sent = 0
+            skip_event.clear()
             with open(segment.path, "rb") as f:
                 while chunk := f.read(CHUNK):
-                    yield chunk
+                    if skip_event.is_set():
+                        logger.info("Skipping current segment")
+                        skip_event.clear()
+                        break
+
+                    await hub.broadcast(chunk)
                     bytes_sent += len(chunk)
 
-                    # Throttle: sleep to match playback rate
                     elapsed = time.monotonic() - send_start
                     expected = bytes_sent / bytes_per_sec
                     ahead = expected - elapsed
@@ -78,7 +174,32 @@ async def _audio_generator(request: Request):
             segment_queue.task_done()
 
 
-@router.get("/", response_class=HTMLResponse)
+async def _audio_generator(request: Request):
+    """Stream the live station feed from the playback loop."""
+    hub = request.app.state.stream_hub
+    listener_id, listener_queue = hub.subscribe()
+
+    try:
+        while True:
+            if await request.is_disconnected():
+                break
+
+            try:
+                chunk = await asyncio.wait_for(listener_queue.get(), timeout=5.0)
+            except asyncio.TimeoutError:
+                if not hub.has_listener(listener_id):
+                    break
+                continue
+
+            if chunk is None:
+                break
+
+            yield chunk
+    finally:
+        hub.unsubscribe(listener_id)
+
+
+@router.get("/", response_class=HTMLResponse, dependencies=[Depends(require_admin_access)])
 async def dashboard():
     return DASHBOARD_HTML
 
@@ -107,7 +228,7 @@ async def stream(request: Request):
 
 
 @router.get("/api/logs")
-async def logs(lines: int = 50):
+async def logs(lines: int = 50, _: None = Depends(require_admin_access)):
     """Return recent go-librespot + producer logs."""
     return {
         "go_librespot": _tail_log("tmp/go-librespot.log", lines),
@@ -115,7 +236,7 @@ async def logs(lines: int = 50):
 
 
 @router.post("/api/shuffle")
-async def shuffle_playlist(request: Request):
+async def shuffle_playlist(request: Request, _: None = Depends(require_admin_access)):
     """Shuffle upcoming tracks."""
     import random
     state = request.app.state.station_state
@@ -124,15 +245,19 @@ async def shuffle_playlist(request: Request):
 
 
 @router.post("/api/skip")
-async def skip_track(request: Request):
+async def skip_track(request: Request, _: None = Depends(require_admin_access)):
     """Skip the currently streaming segment."""
     state = request.app.state.station_state
+    if not state.now_streaming:
+        return {"ok": False, "error": "Nothing is currently streaming"}
+
+    request.app.state.skip_event.set()
     state.now_streaming = {"type": "skipping", "label": "Skipping...", "started": time.time()}
     return {"ok": True}
 
 
 @router.post("/api/purge")
-async def purge_queue(request: Request):
+async def purge_queue(request: Request, _: None = Depends(require_admin_access)):
     """Drain all pre-produced segments from the queue."""
     q = request.app.state.queue
     purged = 0
@@ -148,7 +273,7 @@ async def purge_queue(request: Request):
 
 
 @router.post("/api/playlist/remove")
-async def remove_track(request: Request):
+async def remove_track(request: Request, _: None = Depends(require_admin_access)):
     """Remove a track from playlist by index."""
     body = await request.json()
     idx = body.get("index", -1)
@@ -160,7 +285,7 @@ async def remove_track(request: Request):
 
 
 @router.post("/api/playlist/move")
-async def move_track(request: Request):
+async def move_track(request: Request, _: None = Depends(require_admin_access)):
     """Move a track in the playlist. body: {from: N, to: N}"""
     body = await request.json()
     src = body.get("from", -1)
@@ -175,62 +300,57 @@ async def move_track(request: Request):
 
 
 @router.post("/api/playlist/move_to_next")
-async def move_to_next(request: Request):
+async def move_to_next(request: Request, _: None = Depends(require_admin_access)):
     """Move a track to play next (position 0 in upcoming)."""
     body = await request.json()
     idx = body.get("index", -1)
     state = request.app.state.station_state
     pl = state.playlist
 
-    # Find current position
-    current_idx = 0
-    if state.current_track:
-        for i, t in enumerate(pl):
-            if t.spotify_id == state.current_track.spotify_id:
-                current_idx = i
-                break
-
-    # The "next" position is current_idx + 1
-    next_pos = (current_idx + 1) % len(pl) if pl else 0
-
     if 0 <= idx < len(pl):
         track = pl.pop(idx)
-        # Adjust next_pos if we popped before it
-        if idx < next_pos:
-            next_pos -= 1
-        pl.insert(next_pos, track)
-        return {"ok": True, "moved": track.display, "to_position": next_pos}
+        pl.insert(0, track)
+        return {"ok": True, "moved": track.display, "to_position": 0}
     return {"ok": False, "error": "Invalid index"}
 
 
-@router.get("/status")
-async def status(request: Request):
+def _public_status_payload(request: Request) -> dict:
     state = request.app.state.station_state
     config = request.app.state.config
-    segment_queue = request.app.state.queue
-    start_time = request.app.state.start_time
     return {
         "station": config.station.name,
-        "queue_depth": segment_queue.qsize(),
-        "segments_produced": state.segments_produced,
-        "tracks_played": len(state.played_tracks),
         "running_jokes": state.running_jokes,
-        "uptime_sec": round(time.time() - start_time),
-        "spotify_connected": state.spotify_connected,
-        # What the listener hears RIGHT NOW
         "now_streaming": state.now_streaming,
-        # What the producer has made (queued, waiting to stream)
-        "produced_log": [
-            {"type": e.type, "label": e.label, "timestamp": e.timestamp}
-            for e in state.segment_log
-        ],
-        # What has actually been streamed to the listener
         "stream_log": [
             {"type": e.type, "label": e.label, "timestamp": e.timestamp,
              "metadata": e.metadata}
             for e in state.stream_log
         ],
         "upcoming": preview_upcoming(state, config.pacing, state.playlist, count=5),
+    }
+
+
+@router.get("/public-status")
+async def public_status(request: Request):
+    return _public_status_payload(request)
+
+
+@router.get("/status")
+async def status(request: Request, _: None = Depends(require_admin_access)):
+    state = request.app.state.station_state
+    segment_queue = request.app.state.queue
+    start_time = request.app.state.start_time
+    payload = _public_status_payload(request)
+    payload.update({
+        "queue_depth": segment_queue.qsize(),
+        "segments_produced": state.segments_produced,
+        "tracks_played": len(state.played_tracks),
+        "uptime_sec": round(time.time() - start_time),
+        "spotify_connected": state.spotify_connected,
+        "produced_log": [
+            {"type": e.type, "label": e.label, "timestamp": e.timestamp}
+            for e in state.segment_log
+        ],
         "last_banter_script": state.last_banter_script,
         "last_ad_script": state.last_ad_script,
         "ha_context": state.ha_context if state.ha_context else None,
@@ -240,7 +360,8 @@ async def status(request: Request):
             for e in state.segment_log
             if e.metadata.get("error")
         ][-5:],
-    }
+    })
+    return payload
 
 
 def _tail_log(path: str, lines: int = 15) -> list[str]:

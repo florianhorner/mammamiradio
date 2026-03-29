@@ -16,8 +16,10 @@ import asyncio
 import logging
 import os
 import select
+import signal
 import subprocess
 import threading
+import time
 from pathlib import Path
 
 import httpx
@@ -41,6 +43,7 @@ class SpotifyPlayer:
         self._config_dir = Path("go-librespot")
         self._log_file = None
         self._fifo_path = Path(config.audio.fifo_path)
+        self._drain_pid_file = config.tmp_dir / "fifo-drain.pid"
         self._api_base = f"http://127.0.0.1:{config.audio.go_librespot_port}"
 
         # Persistent FIFO drain
@@ -117,6 +120,97 @@ class SpotifyPlayer:
         except Exception:
             return False
 
+    def _read_fallback_drain_pid(self) -> int | None:
+        try:
+            return int(self._drain_pid_file.read_text().strip())
+        except (FileNotFoundError, ValueError, OSError):
+            return None
+
+    def _find_fallback_drain_pids(self) -> list[int]:
+        try:
+            result = subprocess.run(
+                ["pgrep", "-f", f"cat .*{self._fifo_path}"],
+                capture_output=True, text=True,
+            )
+        except Exception:
+            return []
+
+        if result.returncode != 0:
+            return []
+
+        pids = []
+        for line in result.stdout.splitlines():
+            try:
+                pids.append(int(line.strip()))
+            except ValueError:
+                continue
+        return pids
+
+    def _is_fallback_drain_pid(self, pid: int) -> bool:
+        try:
+            result = subprocess.run(
+                ["ps", "-p", str(pid), "-o", "command="],
+                capture_output=True, text=True,
+            )
+        except Exception:
+            return False
+
+        if result.returncode != 0:
+            return False
+
+        cmd = result.stdout.strip()
+        return "cat" in cmd and str(self._fifo_path) in cmd
+
+    def _start_fallback_drain(self) -> None:
+        pid = self._read_fallback_drain_pid()
+        if pid and self._is_fallback_drain_pid(pid):
+            return
+
+        for legacy_pid in self._find_fallback_drain_pids():
+            if self._is_fallback_drain_pid(legacy_pid):
+                self._drain_pid_file.write_text(str(legacy_pid))
+                return
+
+        proc = subprocess.Popen(
+            ["cat", str(self._fifo_path)],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        self._drain_pid_file.write_text(str(proc.pid))
+        logger.info("Started fallback FIFO drain (PID %d)", proc.pid)
+
+    def _stop_fallback_drain(self) -> None:
+        pids = []
+        pid = self._read_fallback_drain_pid()
+        if pid:
+            pids.append(pid)
+        pids.extend(self._find_fallback_drain_pids())
+
+        seen = set()
+        stopped = []
+        for pid in pids:
+            if pid in seen or not self._is_fallback_drain_pid(pid):
+                seen.add(pid)
+                continue
+
+            seen.add(pid)
+            try:
+                os.kill(pid, signal.SIGTERM)
+                deadline = time.time() + 3
+                while time.time() < deadline:
+                    if not self._is_fallback_drain_pid(pid):
+                        break
+                    time.sleep(0.1)
+                else:
+                    os.kill(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            stopped.append(pid)
+
+        self._drain_pid_file.unlink(missing_ok=True)
+        for pid in stopped:
+            logger.info("Stopped fallback FIFO drain (PID %d)", pid)
+
     def start(self) -> None:
         if self._process and self._process.poll() is None:
             return
@@ -127,6 +221,7 @@ class SpotifyPlayer:
         self._drain_running = True
         self._drain_thread = threading.Thread(target=self._drain_fifo, daemon=True)
         self._drain_thread.start()
+        self._stop_fallback_drain()
 
         # Check if go-librespot is already running (started by start.sh)
         if self._is_golibrespot_running():
@@ -150,6 +245,10 @@ class SpotifyPlayer:
         logger.info("go-librespot started (PID %d)", self._process.pid)
 
     def stop(self) -> None:
+        if getattr(self, "_external", False):
+            # Keep a single reader alive across uvicorn reloads, then let the
+            # next app process reclaim ownership on startup.
+            self._start_fallback_drain()
         self._drain_running = False
         if self._drain_thread:
             self._drain_thread.join(timeout=3)
