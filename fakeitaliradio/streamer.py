@@ -458,7 +458,7 @@ async def status(request: Request):
              "metadata": e.metadata}
             for e in state.stream_log
         ],
-        "upcoming": preview_upcoming(state, config.pacing, state.playlist, count=8),
+        "upcoming": preview_upcoming(state, config.pacing, state.playlist, count=5),
         "last_banter_script": state.last_banter_script,
         "last_ad_script": state.last_ad_script,
     }
