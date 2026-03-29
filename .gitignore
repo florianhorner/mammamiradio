@@ -13,3 +13,4 @@ go-librespot/state.json
 .spotify_token_cache
 .cache
 .claude/worktrees/
+.gstack/
