@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import shutil
 import time
 
 from fastapi import FastAPI
@@ -35,9 +34,6 @@ async def startup():
     config = load_config()
     logger.info("Station: %s (%s)", config.station.name, config.station.language)
 
-    # Create directories (sole owner of mkdir)
-    if config.tmp_dir.exists():
-        shutil.rmtree(config.tmp_dir)
     config.tmp_dir.mkdir(exist_ok=True)
     config.cache_dir.mkdir(exist_ok=True)
 

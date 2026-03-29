@@ -106,6 +106,17 @@ class SpotifyPlayer:
 
         logger.info("FIFO drain thread stopped")
 
+    def _is_golibrespot_running(self) -> bool:
+        """Check if go-librespot is already running externally (e.g., via start.sh)."""
+        try:
+            result = subprocess.run(
+                ["pgrep", "-f", "go-librespot"],
+                capture_output=True, text=True,
+            )
+            return result.returncode == 0
+        except Exception:
+            return False
+
     def start(self) -> None:
         if self._process and self._process.poll() is None:
             return
@@ -117,6 +128,13 @@ class SpotifyPlayer:
         self._drain_thread = threading.Thread(target=self._drain_fifo, daemon=True)
         self._drain_thread.start()
 
+        # Check if go-librespot is already running (started by start.sh)
+        if self._is_golibrespot_running():
+            logger.info("go-librespot already running externally — attaching")
+            self._external = True
+            return
+
+        self._external = False
         cmd = [
             self.config.audio.go_librespot_bin,
             "--config_dir", str(self._config_dir),
@@ -136,7 +154,8 @@ class SpotifyPlayer:
         if self._drain_thread:
             self._drain_thread.join(timeout=3)
             self._drain_thread = None
-        if self._process:
+        # Only kill go-librespot if WE started it (not if external)
+        if self._process and not getattr(self, '_external', False):
             self._process.terminate()
             try:
                 self._process.wait(timeout=5)
