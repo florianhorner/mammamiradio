@@ -140,13 +140,19 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   .debug-panel.open { display: block; }
   .debug-log {
     background: #0d0d0d; border: 1px solid #222; border-radius: 4px;
-    padding: 8px; font-size: 11px; color: #888; line-height: 1.6;
-    max-height: 300px; overflow-y: auto; white-space: pre-wrap;
-    font-family: 'SF Mono', monospace;
+    padding: 10px; font-size: 12px; color: #999; line-height: 1.8;
+    max-height: 350px; overflow-y: auto;
+    font-family: 'SF Mono', 'Fira Code', monospace;
   }
-  .debug-log .err { color: #ff4444; }
-  .debug-log .warn { color: #ffaa00; }
-  .debug-log .info { color: #666; }
+  .debug-log .entry { padding: 2px 0; border-bottom: 1px solid #111; }
+  .debug-log .ts { color: #555; font-size: 11px; margin-right: 6px; }
+  .debug-log .lvl { font-size: 10px; font-weight: bold; padding: 1px 4px;
+    border-radius: 2px; margin-right: 6px; }
+  .debug-log .lvl-error { background: #441111; color: #ff4444; }
+  .debug-log .lvl-warning { background: #332200; color: #ffaa00; }
+  .debug-log .lvl-info { background: #112211; color: #66aa66; }
+  .debug-log .msg { color: #ccc; }
+  .debug-log .detail { color: #666; font-size: 11px; margin-left: 4px; }
 </style>
 </head>
 <body>
@@ -362,26 +368,47 @@ async function refresh() {
       '<li>"' + j + '"</li>'
     ).join('') || '<li>No running jokes yet...</li>';
 
-    // Debug: go-librespot log
+    // Debug: go-librespot log (parse structured log format)
     const gl = document.getElementById('debug-gl');
     if (gl && d.go_librespot_log) {
-      gl.innerHTML = d.go_librespot_log.map(l => {
-        l = l.trim();
-        const cls = l.includes('error') ? 'err' : l.includes('warn') ? 'warn' : 'info';
-        return '<div class="' + cls + '">' + l.replace(/</g,'&lt;') + '</div>';
+      gl.innerHTML = d.go_librespot_log.map(raw => {
+        raw = raw.trim();
+        if (!raw) return '';
+        // Parse: time="..." level=info msg="..." key="val"
+        const timeM = raw.match(/time="([^"]+)"/);
+        const levelM = raw.match(/level=(\w+)/);
+        const msgM = raw.match(/msg="([^"]+)"/);
+        const ts = timeM ? timeM[1].split('T')[1]?.split('+')[0] || '' : '';
+        const lvl = levelM ? levelM[1] : 'info';
+        const msg = msgM ? msgM[1] : raw.replace(/</g,'&lt;');
+        // Extract extra fields (error=, uri=, etc.)
+        const extras = [];
+        const errM = raw.match(/error="([^"]+)"/);
+        const uriM = raw.match(/uri="([^"]+)"/);
+        if (errM) extras.push(errM[1]);
+        if (uriM) extras.push(uriM[1].replace('spotify:track:',''));
+        const detail = extras.length ? '<span class="detail">' + extras.join(' ') + '</span>' : '';
+        return '<div class="entry">' +
+          '<span class="ts">' + ts + '</span>' +
+          '<span class="lvl lvl-' + lvl + '">' + lvl.toUpperCase() + '</span>' +
+          '<span class="msg">' + msg + '</span>' +
+          detail + '</div>';
       }).join('');
       gl.scrollTop = gl.scrollHeight;
     }
 
-    // Debug: errors
+    // Debug: producer errors
     const errs = document.getElementById('debug-errors');
     if (errs && d.producer_errors) {
       errs.innerHTML = d.producer_errors.length
         ? d.producer_errors.map(e =>
-            '<div class="err">' + e.type + ': ' + e.label + ' — ' +
-            (e.metadata.error || JSON.stringify(e.metadata)) + '</div>'
+            '<div class="entry">' +
+              '<span class="lvl lvl-error">ERR</span>' +
+              '<span class="msg">' + e.type + ': ' + e.label + '</span>' +
+              '<span class="detail">' + (e.metadata.error || '') + '</span>' +
+            '</div>'
           ).join('')
-        : '<div class="info">No errors</div>';
+        : '<div class="entry"><span class="msg" style="color:#66aa66">No errors</span></div>';
     }
 
   } catch (e) {
