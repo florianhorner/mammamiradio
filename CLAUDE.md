@@ -44,6 +44,7 @@ tests/              — pytest tests (config, scheduler, ads)
 
 ## Architecture
 
+- **Bitrate**: `audio.bitrate` is the single source of truth for encoding and stream throttling
 - **Producer/consumer queue**: producer.py fills an asyncio.Queue with Segment objects, streamer.py drains it at playback bitrate
 - **Segment types**: MUSIC, BANTER, AD. Scheduler picks the next type based on counters in StationState
 - **Audio pipeline**: all audio passes through normalizer.py (FFmpeg) for loudness normalization (-16 LUFS)

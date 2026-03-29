@@ -67,7 +67,7 @@ Everything lives in `radio.toml`. Key sections:
 
 | Section | What it controls |
 |---------|-----------------|
-| `[station]` | Name, language, theme description, bitrate |
+| `[station]` | Name, language, theme description |
 | `[playlist]` | Spotify playlist URL (or empty for liked songs), shuffle |
 | `[pacing]` | Songs between banter/ads, spots per ad break, lookahead depth |
 | `[[hosts]]` | Host personalities: name, Edge TTS voice, style description |
@@ -103,6 +103,20 @@ The producer generates three types of segments:
 - **Ad breaks**: Claude writes scripts for fictional brands. Multi-part audio with voice acting, SFX, bumper jingles, and music beds. Supports campaign arcs where the same brand gets callbacks across breaks.
 
 The scheduler cycles through them: a few songs, then banter, a few more, then an ad break. Pacing is configurable in `radio.toml`.
+
+## Project layout
+
+Core application files live in `fakeitaliradio/`. Everything else:
+
+| Path | What it is |
+|------|-----------|
+| `fakeitaliradio/` | Application runtime code |
+| `tests/` | pytest tests |
+| `radio.toml` | Station config (tracked, safe defaults) |
+| `.claude/skills/gstack` | Vendored agent/tooling support — not application code |
+| `tmp/` | Generated runtime audio and logs (gitignored) |
+| `cache/` | Downloaded/cached tracks (gitignored) |
+| `.context/` | Conductor agent collaboration artifacts (gitignored) |
 
 ## Dependencies
 

@@ -134,7 +134,7 @@ async def run_playback_loop(app) -> None:
     state = app.state.station_state
     config = app.state.config
     hub = app.state.stream_hub
-    bytes_per_sec = (config.station.bitrate * 1000) / 8
+    bytes_per_sec = (config.audio.bitrate * 1000) / 8
 
     while True:
         try:
@@ -218,7 +218,7 @@ async def stream(request: Request):
         "Content-Type": "audio/mpeg",
         "icy-name": config.station.name,
         "icy-genre": config.station.theme[:64],
-        "icy-br": str(config.station.bitrate),
+        "icy-br": str(config.audio.bitrate),
         "Cache-Control": "no-cache, no-store",
         "Connection": "keep-alive",
     }

@@ -21,7 +21,6 @@ class StationSection:
     name: str = "Radio Italì"
     language: str = "it"
     theme: str = ""
-    bitrate: int = 192
 
 
 @dataclass
@@ -160,13 +159,26 @@ def load_config(path: str = "radio.toml") -> StationConfig:
         ]
         sfx_dir = ads_raw.get("sfx_dir", "sfx")
 
+    # Legacy: station.bitrate → audio.bitrate migration
+    station_raw = dict(raw.get("station", {}))
+    audio_raw = dict(raw.get("audio", {}))
+    if "bitrate" in station_raw:
+        import logging as _log
+        _log.getLogger(__name__).warning(
+            "station.bitrate is deprecated — use audio.bitrate instead"
+        )
+        if "bitrate" not in audio_raw:
+            audio_raw["bitrate"] = station_raw.pop("bitrate")
+        else:
+            station_raw.pop("bitrate")
+
     config = StationConfig(
-        station=StationSection(**raw.get("station", {})),
+        station=StationSection(**station_raw),
         playlist=PlaylistSection(**raw.get("playlist", {})),
         pacing=PacingSection(**raw.get("pacing", {})),
         hosts=hosts,
         ads=AdsSection(brands=brands, voices=voices, sfx_dir=sfx_dir),
-        audio=AudioSection(**raw.get("audio", {})),
+        audio=AudioSection(**audio_raw),
         bind_host=os.getenv("FAKEITALIRADIO_BIND_HOST", "127.0.0.1"),
         port=int(os.getenv("FAKEITALIRADIO_PORT", "8000")),
         admin_username=os.getenv("ADMIN_USERNAME", "admin"),
@@ -178,3 +190,28 @@ def load_config(path: str = "radio.toml") -> StationConfig:
     )
     _validate(config)
     return config
+
+
+def runtime_json(config: StationConfig | None = None) -> dict:
+    """Return resolved runtime settings for shell consumers."""
+    if config is None:
+        config = load_config()
+    return {
+        "bind_host": config.bind_host,
+        "port": config.port,
+        "fifo_path": config.audio.fifo_path,
+        "go_librespot_bin": config.audio.go_librespot_bin,
+        "go_librespot_port": config.audio.go_librespot_port,
+        "tmp_dir": str(config.tmp_dir),
+    }
+
+
+if __name__ == "__main__":
+    import json
+    import sys
+
+    if len(sys.argv) > 1 and sys.argv[1] == "runtime-json":
+        print(json.dumps(runtime_json()))
+    else:
+        print(f"Usage: python -m fakeitaliradio.config runtime-json", file=sys.stderr)
+        sys.exit(1)
