@@ -458,6 +458,15 @@
 </div>
 
 <div class="debug-section">
+  <div class="debug-toggle" onclick="document.getElementById('ha-panel').classList.toggle('open')">
+    &#9654; Home Assistant context
+  </div>
+  <div class="debug-panel" id="ha-panel">
+    <pre class="debug-log" id="ha-context" style="white-space:pre-wrap;font-size:12px;padding:8px;"></pre>
+  </div>
+</div>
+
+<div class="debug-section">
   <div class="debug-toggle" onclick="document.getElementById('debug').classList.toggle('open')">
     &#9654; Debug logs (click to expand)
   </div>
@@ -600,6 +609,12 @@ async function refresh() {
     jokes.innerHTML = (d.running_jokes || []).map(j =>
       '<li>\u201C' + j + '\u201D</li>'
     ).join('') || '<li>No running jokes yet...</li>';
+
+    // Home Assistant context
+    const haCtx = document.getElementById('ha-context');
+    if (haCtx) {
+      haCtx.textContent = d.ha_context || 'Home Assistant not connected';
+    }
 
     // Debug: go-librespot log (parse structured log format)
     const gl = document.getElementById('debug-gl');
