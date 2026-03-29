@@ -43,9 +43,9 @@ Home Assistant -> optional context --+
 
 - Python 3.11+
 - FFmpeg
-- Optional: go-librespot, for real Spotify device playback and capture
-- Optional: Spotify client credentials, for your own playlist or liked songs
-- Optional: Anthropic API key, for non-fallback banter and ads
+- Spotify client credentials (client ID and secret from [Spotify Developer Dashboard](https://developer.spotify.com/dashboard))
+- go-librespot, for real Spotify device playback and capture
+- Optional: Anthropic API key, for Claude-generated banter and ads (falls back to stock copy without it)
 - Optional: Home Assistant long-lived token, for ambient home-state references in scripts
 
 ### Setup
@@ -72,7 +72,15 @@ ANTHROPIC_API_KEY=
 HA_TOKEN=
 ```
 
-### Run
+### Run (macOS one-click)
+
+```bash
+./setup-mac.sh
+```
+
+This creates a `Radio Italì.app` you can drag to your Dock, plus `Dashboard.webloc` and `Listener.webloc` bookmark files. Double-click the app to start the radio and open the dashboard. Double-click `Stop Radio.command` to stop it.
+
+### Run (terminal)
 
 ```bash
 ./start.sh
@@ -92,6 +100,21 @@ Open:
 - Raw stream: `http://localhost:8000/stream`
 
 On first full Spotify run, select `fakeitaliradio` as the playback device in Spotify. The app also tries to auto-transfer playback when the device appears.
+
+### Sharing with friends
+
+To let others listen on your network, bind to all interfaces and set an admin password:
+
+```dotenv
+FAKEITALIRADIO_BIND_HOST=0.0.0.0
+ADMIN_PASSWORD=your-secret-here
+```
+
+Share `http://<your-ip>:8000/listen` with listeners. The `/listen` page and `/stream` endpoint are public; the admin dashboard requires the password.
+
+### Customizing your station
+
+`radio.toml` is the station's identity. Change the station name, host personalities, ad brands, pacing, and audio settings to make it your own. Secrets (API keys, passwords) stay in `.env`.
 
 ## Fallback behavior
 
