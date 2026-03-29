@@ -67,6 +67,7 @@ class AdScript:
     brand: str
     parts: list[AdPart] = field(default_factory=list)
     summary: str = ""  # 1-sentence for history/cross-ref
+    mood: str = ""  # music bed mood: "dramatic", "lounge", "upbeat", "mysterious", "epic"
 
 
 @dataclass

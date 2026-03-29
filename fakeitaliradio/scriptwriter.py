@@ -90,6 +90,25 @@ Return JSON:
         return [(host, text)]
 
 
+AD_BREAK_INTROS = [
+    "E ora... un messaggio dai nostri sponsor!",
+    "Ma prima, una pausa pubblicitaria!",
+    "Restate con noi, torniamo dopo questi messaggi!",
+    "E ora, le cose importanti della vita... la pubblicità!",
+    "Un attimo di pausa per i nostri amici commerciali!",
+    "Ecco a voi... la pubblicità! Non cambiate stazione!",
+]
+
+AD_BREAK_OUTROS = [
+    "Bene, siamo tornati!",
+    "Eccoci di nuovo! Vi siete persi?",
+    "E torniamo alla musica, finalmente!",
+    "Siamo ancora qui! Non siamo scappati!",
+    "Ok, basta pubblicità. Per ora.",
+    "Torniamo a noi! Dove eravamo rimasti?",
+]
+
+
 async def write_ad(
     brand: AdBrand,
     voice: AdVoice,
@@ -106,6 +125,20 @@ async def write_ad(
     jokes = state.running_jokes[-3:] if state.running_jokes else []
     recent_tracks = [t.display for t in state.played_tracks[-3:]]
 
+    # Find same-brand history for campaign arcs
+    same_brand_ads = [
+        e.summary for e in state.ad_history if e.brand == brand.name
+    ][-3:]
+    campaign_context = ""
+    if same_brand_ads:
+        campaign_context = f"""
+CAMPAIGN ARC — This brand has advertised before on this station:
+{chr(10).join(f'- Previous ad: {s}' for s in same_brand_ads)}
+BUILD ON THIS. Reference or contradict previous claims. Create a narrative arc:
+- If first follow-up: acknowledge the previous ad ("Come promesso..." / "Dopo il successo di...")
+- If ongoing campaign: escalate the absurdity, add plot twists, reveal scandals about the brand
+- Think GTA radio: each ad for the same brand is an episode in a saga"""
+
     prompt = f"""Write a fake radio ad for the fictional brand "{brand.name}".
 Tagline: "{brand.tagline}"
 Category: {brand.category}
@@ -114,19 +147,23 @@ The ad is read by {voice.name}, whose style is: {voice.style}
 
 IMPORTANT: {voice.name} is NOT one of the radio hosts. This is a separate commercial voice.
 
-Recent ads that aired (you may cleverly reference these but NEVER repeat them):
+Recent ads from OTHER brands that aired (you may cleverly reference or mock these):
 {chr(10).join(recent_ads)}
+{campaign_context}
 
 Running jokes from the hosts: {jokes if jokes else "none"}
 Recently played music: {recent_tracks if recent_tracks else "show just started"}
 
 RULES:
-- Absurd but delivered with complete sincerity. The product may be insane but the pitch is professional.
+- Absurd but delivered with COMPLETE sincerity. The product may be insane but the pitch is 100% professional.
+- Think Italian TV shopping channel meets GTA radio meets Silvio Berlusconi's fever dream.
 - 15-25 seconds when read aloud. Keep each voice line under 30 words.
+- Structure the ad like a REAL produced commercial: open with a hook or SFX, build tension, deliver the pitch, end with a fast disclaimer or tagline.
 - You may interleave sound effect cues between voice lines for a produced feel.
 - Available SFX types: "chime", "sweep", "ding", "cash_register", "whoosh"
 - ALL text must be in {config.station.language}.
-- You may reference what the hosts said or what previous ads claimed, GTA-radio style.
+- You may reference what the hosts said, what other ads claimed, or current music — GTA-radio style cross-pollination.
+- The mood field determines background music: "dramatic" for serious/dark products, "lounge" for luxury/lifestyle, "upbeat" for exciting offers, "mysterious" for weird products, "epic" for grandiose claims.
 
 Return JSON:
 {{
@@ -136,8 +173,9 @@ Return JSON:
     {{"type": "sfx", "sfx": "sweep"}},
     {{"type": "voice", "text": "More ad copy"}},
     {{"type": "pause", "duration": 0.5}},
-    {{"type": "voice", "text": "Tagline or disclaimer"}}
+    {{"type": "voice", "text": "Tagline or fast disclaimer"}}
   ],
+  "mood": "lounge",
   "summary": "One sentence summary of this ad for future reference"
 }}"""
 
@@ -167,8 +205,9 @@ Return JSON:
             parts = [AdPart(type="voice", text=data.get("text", brand.tagline))]
 
         summary = data.get("summary", f"Ad for {brand.name}")
-        logger.info("Generated structured ad for %s: %d parts", brand.name, len(parts))
-        return AdScript(brand=brand.name, parts=parts, summary=summary)
+        mood = data.get("mood", "lounge")
+        logger.info("Generated structured ad for %s: %d parts, mood=%s", brand.name, len(parts), mood)
+        return AdScript(brand=brand.name, parts=parts, summary=summary, mood=mood)
 
     except Exception as e:
         logger.error("Ad generation failed: %s", e)

@@ -9,11 +9,14 @@ from uuid import uuid4
 
 from fakeitaliradio.config import StationConfig
 from fakeitaliradio.downloader import download_track
-from fakeitaliradio.models import Segment, SegmentType, StationState
+from fakeitaliradio.models import AdBrand, AdHistoryEntry, Segment, SegmentType, StationState
 from fakeitaliradio.normalizer import normalize, generate_silence
 from fakeitaliradio.scheduler import next_segment_type
-from fakeitaliradio.models import AdBrand
-from fakeitaliradio.scriptwriter import write_ad, write_banter
+from fakeitaliradio.normalizer import concat_files, generate_bumper_jingle
+from fakeitaliradio.scriptwriter import (
+    AD_BREAK_INTROS, AD_BREAK_OUTROS,
+    write_ad, write_banter,
+)
 from fakeitaliradio.spotify_player import SpotifyPlayer, download_track_spotify
 from fakeitaliradio.tts import synthesize, synthesize_ad, synthesize_dialogue
 
@@ -134,40 +137,114 @@ async def run_producer(
                     state.after_ad(brand="")
                     continue
 
-                brand = _pick_brand(config.ads.brands, state.ad_history)
-                voice = random.choice(config.ads.voices) if config.ads.voices else None
-                logger.info("Producing AD: %s (voice: %s)", brand.name, voice.name if voice else "host")
+                num_spots = max(1, config.pacing.ad_spots_per_break)
+                logger.info("Producing AD BREAK: %d spot(s)", num_spots)
+                break_parts: list[Path] = []
+                break_brands: list[str] = []
+                break_summaries: list[str] = []
+                break_texts: list[str] = []
 
-                if voice:
-                    # Use dedicated ad voice
-                    script = await write_ad(brand, voice, state, config)
-                    sfx_dir = Path(config.ads.sfx_dir) if config.ads.sfx_dir else None
-                    ad_path = await synthesize_ad(script, voice, config.tmp_dir, sfx_dir)
+                # 1. Host tease intro
+                intro_text = random.choice(AD_BREAK_INTROS)
+                intro_host = random.choice(config.hosts)
+                intro_path = config.tmp_dir / f"ad_intro_{uuid4().hex[:8]}.mp3"
+                await synthesize(intro_text, intro_host.voice, intro_path)
+                break_parts.append(intro_path)
+
+                # 2. Opening bumper jingle
+                bumper_in = config.tmp_dir / f"bumper_in_{uuid4().hex[:8]}.mp3"
+                loop = asyncio.get_running_loop()
+                await loop.run_in_executor(None, generate_bumper_jingle, bumper_in)
+                break_parts.append(bumper_in)
+
+                # 3. Individual ad spots
+                used_brands_this_break: list[str] = []
+                for spot_idx in range(num_spots):
+                    # Avoid brands used in this same break
+                    brand = _pick_brand(
+                        config.ads.brands,
+                        state.ad_history + [
+                            AdHistoryEntry(brand=b, summary="", timestamp=0)
+                            for b in used_brands_this_break
+                        ],
+                    )
+                    used_brands_this_break.append(brand.name)
+
+                    voice = random.choice(config.ads.voices) if config.ads.voices else None
+                    logger.info("  Spot %d/%d: %s (voice: %s)",
+                                spot_idx + 1, num_spots, brand.name,
+                                voice.name if voice else "host")
+
+                    if voice:
+                        script = await write_ad(brand, voice, state, config)
+                        sfx_dir = Path(config.ads.sfx_dir) if config.ads.sfx_dir else None
+                        ad_path = await synthesize_ad(script, voice, config.tmp_dir, sfx_dir)
+                    else:
+                        from fakeitaliradio.models import AdVoice as _AV
+                        host = random.choice(config.hosts)
+                        fallback_voice = _AV(name=host.name, voice=host.voice, style=host.style)
+                        script = await write_ad(brand, fallback_voice, state, config)
+                        sfx_dir = Path(config.ads.sfx_dir) if config.ads.sfx_dir else None
+                        ad_path = await synthesize_ad(script, fallback_voice, config.tmp_dir, sfx_dir)
+
+                    break_parts.append(ad_path)
+                    break_brands.append(brand.name)
+                    break_summaries.append(script.summary)
+                    full_text = " ".join(
+                        p.text for p in script.parts if p.type == "voice" and p.text
+                    )
+                    break_texts.append(full_text)
+
+                    # Record each ad in history immediately so next spot sees it
+                    state.after_ad(brand=brand.name, summary=script.summary)
+
+                    # Bumper jingle between spots (not after last one)
+                    if spot_idx < num_spots - 1:
+                        between_bumper = config.tmp_dir / f"bumper_mid_{uuid4().hex[:8]}.mp3"
+                        await loop.run_in_executor(
+                            None, generate_bumper_jingle, between_bumper, 0.8,
+                        )
+                        break_parts.append(between_bumper)
+
+                # 4. Closing bumper jingle
+                bumper_out = config.tmp_dir / f"bumper_out_{uuid4().hex[:8]}.mp3"
+                await loop.run_in_executor(None, generate_bumper_jingle, bumper_out)
+                break_parts.append(bumper_out)
+
+                # 5. Host tease outro
+                outro_text = random.choice(AD_BREAK_OUTROS)
+                outro_host = random.choice(config.hosts)
+                outro_path = config.tmp_dir / f"ad_outro_{uuid4().hex[:8]}.mp3"
+                await synthesize(outro_text, outro_host.voice, outro_path)
+                break_parts.append(outro_path)
+
+                # 6. Concat everything into one ad break segment
+                if len(break_parts) == 1:
+                    ad_break_path = break_parts[0]
                 else:
-                    # Fallback: use a host voice (old behavior)
-                    from fakeitaliradio.models import AdVoice as _AV
-                    host = random.choice(config.hosts)
-                    fallback_voice = _AV(name=host.name, voice=host.voice, style=host.style)
-                    script = await write_ad(brand, fallback_voice, state, config)
-                    sfx_dir = Path(config.ads.sfx_dir) if config.ads.sfx_dir else None
-                    ad_path = await synthesize_ad(script, fallback_voice, config.tmp_dir, sfx_dir)
+                    ad_break_path = config.tmp_dir / f"adbreak_{uuid4().hex[:8]}.mp3"
+                    await loop.run_in_executor(
+                        None, concat_files, break_parts, ad_break_path,
+                    )
+                    for p in break_parts:
+                        p.unlink(missing_ok=True)
 
-                # Collect all voice text for dashboard display
-                voice_name = voice.name if voice else host.name
-                full_text = " ".join(p.text for p in script.parts if p.type == "voice" and p.text)
+                # Dashboard display: show all brands in the break
                 state.last_ad_script = {
-                    "brand": brand.name, "voice": voice_name,
-                    "text": full_text, "summary": script.summary,
+                    "brands": break_brands,
+                    "texts": break_texts,
+                    "summaries": break_summaries,
+                    "spots": num_spots,
                 }
                 segment = Segment(
                     type=SegmentType.AD,
-                    path=ad_path,
+                    path=ad_break_path,
                     metadata={
-                        "type": "ad", "brand": brand.name,
-                        "text": full_text, "voice": voice_name,
+                        "type": "ad_break",
+                        "brands": break_brands,
+                        "spots": num_spots,
                     },
                 )
-                state.after_ad(brand=brand.name, summary=script.summary)
 
         except Exception as e:
             logger.error("Failed to produce %s segment: %s", seg_type.value, e)

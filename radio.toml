@@ -11,7 +11,7 @@ shuffle = false
 [pacing]
 songs_between_banter = 2
 songs_between_ads = 4
-ad_spots_per_break = 1
+ad_spots_per_break = 2
 lookahead_segments = 3
 
 [[hosts]]

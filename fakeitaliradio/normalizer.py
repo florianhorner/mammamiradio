@@ -117,6 +117,105 @@ def generate_sfx(output_path: Path, sfx_type: str, sfx_dir: Path | None = None) 
         return generate_tone(output_path, freq_hz=880, duration_sec=0.4)
 
 
+def generate_music_bed(output_path: Path, mood: str, duration_sec: float) -> Path:
+    """Generate a synthetic music bed for an ad based on mood.
+
+    Uses ffmpeg lavfi filters to create simple ambient beds:
+    - dramatic: low rumbling drone with slow LFO
+    - lounge: warm mid-frequency hum with gentle modulation
+    - upbeat: bright rhythmic pulse
+    - mysterious: dark filtered noise with reverb feel
+    - epic: layered low+high drones
+    """
+    fade_out = min(1.5, duration_sec / 3)
+
+    mood_configs = {
+        "dramatic": (
+            f"sine=frequency=80:duration={duration_sec},"
+            f"sine=frequency=120:duration={duration_sec}"
+        ),
+        "lounge": (
+            f"sine=frequency=220:duration={duration_sec},"
+            f"sine=frequency=330:duration={duration_sec}"
+        ),
+        "upbeat": (
+            f"sine=frequency=440:duration={duration_sec},"
+            f"sine=frequency=660:duration={duration_sec}"
+        ),
+        "mysterious": (
+            f"sine=frequency=100:duration={duration_sec},"
+            f"sine=frequency=150:duration={duration_sec}"
+        ),
+        "epic": (
+            f"sine=frequency=60:duration={duration_sec},"
+            f"sine=frequency=880:duration={duration_sec}"
+        ),
+    }
+
+    lavfi = mood_configs.get(mood, mood_configs["lounge"])
+    # Two sine sources mixed together with tremolo and fade
+    cmd = [
+        "ffmpeg", "-y",
+        "-f", "lavfi", "-i", lavfi.split(",")[0],
+        "-f", "lavfi", "-i", lavfi.split(",")[1],
+        "-filter_complex",
+        f"[0:a][1:a]amix=inputs=2:duration=first[mix];"
+        f"[mix]tremolo=f=2:d=0.3,"
+        f"afade=t=in:d=0.5,afade=t=out:st={duration_sec - fade_out}:d={fade_out},"
+        f"volume=0.15[out]",
+        "-map", "[out]",
+        "-ar", "48000", "-ac", "2", "-b:a", "192k",
+        "-f", "mp3", str(output_path),
+    ]
+    _run_ffmpeg(cmd, f"music bed ({mood})")
+    logger.info("Generated music bed: %s (%s, %.1fs)", output_path.name, mood, duration_sec)
+    return output_path
+
+
+def mix_with_bed(voice_path: Path, bed_path: Path, output_path: Path) -> Path:
+    """Layer a music bed under voice audio. Bed at -18dB relative to voice."""
+    cmd = [
+        "ffmpeg", "-y",
+        "-i", str(voice_path),
+        "-i", str(bed_path),
+        "-filter_complex",
+        "[1:a]volume=0.12[bed];"
+        "[0:a][bed]amix=inputs=2:duration=first:dropout_transition=2[out]",
+        "-map", "[out]",
+        "-ar", "48000", "-ac", "2", "-b:a", "192k",
+        "-f", "mp3", str(output_path),
+    ]
+    _run_ffmpeg(cmd, "mix voice+bed")
+    logger.info("Mixed voice + bed -> %s", output_path.name)
+    return output_path
+
+
+def generate_bumper_jingle(output_path: Path, duration_sec: float = 1.2) -> Path:
+    """Generate a short radio bumper jingle (ascending chime pattern)."""
+    fade = min(0.1, duration_sec / 4)
+    cmd = [
+        "ffmpeg", "-y",
+        "-f", "lavfi", "-i",
+        f"sine=frequency=523:duration={duration_sec * 0.3}",  # C5
+        "-f", "lavfi", "-i",
+        f"sine=frequency=659:duration={duration_sec * 0.3}",  # E5
+        "-f", "lavfi", "-i",
+        f"sine=frequency=784:duration={duration_sec * 0.4}",  # G5
+        "-filter_complex",
+        f"[0:a]adelay=0|0[a];[1:a]adelay={int(duration_sec*300)}|{int(duration_sec*300)}[b];"
+        f"[2:a]adelay={int(duration_sec*600)}|{int(duration_sec*600)}[c];"
+        f"[a][b][c]amix=inputs=3:duration=longest,"
+        f"afade=t=in:d={fade},afade=t=out:st={duration_sec - fade}:d={fade}[out]",
+        "-map", "[out]",
+        "-ar", "48000", "-ac", "2", "-b:a", "192k",
+        "-t", str(duration_sec),
+        "-f", "mp3", str(output_path),
+    ]
+    _run_ffmpeg(cmd, "bumper jingle")
+    logger.info("Generated bumper jingle: %s", output_path.name)
+    return output_path
+
+
 def generate_silence(output_path: Path, duration_sec: float = 3.0) -> Path:
     cmd = [
         "ffmpeg", "-y",

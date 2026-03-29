@@ -1,0 +1,679 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Radio Itali - Late-night Milan talk radio</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,600;0,700;1,400;1,600&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
+<style>
+  *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+
+  :root{
+    --bg:#2a2320;
+    --bg2:#3d3530;
+    --cream:#f5efe6;
+    --cream-dk:#e8dfd3;
+    --terracotta:#c4654a;
+    --dusty-rose:#d4917a;
+    --sage:#7a8f6d;
+    --highlight:#faf3eb;
+    --muted:#b0a494;
+    --font-display:'Playfair Display',Georgia,serif;
+    --font-body:'Inter',system-ui,sans-serif;
+  }
+
+  html{font-size:16px;-webkit-font-smoothing:antialiased}
+
+  body{
+    background:var(--bg);
+    color:var(--cream);
+    font-family:var(--font-body);
+    line-height:1.6;
+    min-height:100vh;
+    padding-bottom:100px;
+    overflow-x:hidden;
+  }
+
+  /* ---- Station Header ---- */
+  .station-header{
+    text-align:center;
+    padding:2.5rem 1.5rem 1.5rem;
+  }
+  .station-name{
+    font-family:var(--font-display);
+    font-size:clamp(2.4rem,6vw,3.6rem);
+    font-weight:700;
+    letter-spacing:0.02em;
+    color:var(--highlight);
+    margin-bottom:0.15em;
+  }
+  .station-subtitle{
+    font-size:0.9rem;
+    font-weight:300;
+    color:var(--muted);
+    letter-spacing:0.08em;
+    text-transform:uppercase;
+  }
+  .on-air{
+    display:inline-flex;
+    align-items:center;
+    gap:0.45rem;
+    margin-top:0.75rem;
+    font-size:0.72rem;
+    font-weight:600;
+    letter-spacing:0.14em;
+    text-transform:uppercase;
+    color:var(--terracotta);
+    opacity:0;
+    transition:opacity 0.4s;
+  }
+  .on-air.visible{opacity:1}
+  .on-air-dot{
+    width:8px;height:8px;
+    border-radius:50%;
+    background:var(--terracotta);
+    animation:pulse-glow 1.8s ease-in-out infinite;
+  }
+  @keyframes pulse-glow{
+    0%,100%{box-shadow:0 0 4px var(--terracotta);opacity:1}
+    50%{box-shadow:0 0 14px var(--terracotta),0 0 28px rgba(196,101,74,0.3);opacity:0.7}
+  }
+
+  /* ---- Shared container ---- */
+  .container{
+    max-width:640px;
+    margin:0 auto;
+    padding:0 1.25rem;
+  }
+
+  /* ---- Now Playing ---- */
+  .now-playing{
+    background:var(--bg2);
+    border-radius:16px;
+    padding:2rem 1.75rem;
+    margin-bottom:1.5rem;
+    position:relative;
+    overflow:hidden;
+    transition:background 0.3s;
+  }
+  .now-playing::before{
+    content:'';
+    position:absolute;
+    top:0;left:0;right:0;
+    height:3px;
+    background:linear-gradient(90deg,var(--terracotta),var(--dusty-rose),var(--sage));
+    opacity:0.7;
+  }
+  .np-section-label{
+    font-size:0.7rem;
+    font-weight:600;
+    letter-spacing:0.12em;
+    text-transform:uppercase;
+    color:var(--muted);
+    margin-bottom:0.75rem;
+  }
+  .np-type-badge{
+    display:inline-block;
+    font-size:1.1rem;
+    margin-bottom:0.5rem;
+  }
+  .np-label{
+    font-family:var(--font-display);
+    font-size:clamp(1.35rem,4vw,1.75rem);
+    font-weight:600;
+    color:var(--highlight);
+    line-height:1.35;
+    transition:opacity 0.3s;
+  }
+  .np-sublabel{
+    font-size:0.85rem;
+    color:var(--dusty-rose);
+    margin-top:0.35rem;
+    font-weight:400;
+  }
+
+  /* Equalizer */
+  .equalizer{
+    display:flex;
+    align-items:flex-end;
+    gap:3px;
+    height:28px;
+    margin-top:1.25rem;
+  }
+  .eq-bar{
+    width:4px;
+    border-radius:2px;
+    background:var(--terracotta);
+    opacity:0.6;
+    transition:height 0.15s ease;
+  }
+  .eq-bar:nth-child(1){height:8px}
+  .eq-bar:nth-child(2){height:16px}
+  .eq-bar:nth-child(3){height:10px}
+  .eq-bar:nth-child(4){height:20px}
+  .eq-bar:nth-child(5){height:12px}
+
+  .equalizer.active .eq-bar{animation:eq-bounce var(--dur,0.8s) ease-in-out infinite alternate}
+  .equalizer.active .eq-bar:nth-child(1){--dur:0.6s}
+  .equalizer.active .eq-bar:nth-child(2){--dur:0.75s;animation-delay:0.1s}
+  .equalizer.active .eq-bar:nth-child(3){--dur:0.65s;animation-delay:0.2s}
+  .equalizer.active .eq-bar:nth-child(4){--dur:0.8s;animation-delay:0.05s}
+  .equalizer.active .eq-bar:nth-child(5){--dur:0.7s;animation-delay:0.15s}
+
+  @keyframes eq-bounce{
+    0%{height:4px;opacity:0.4}
+    100%{height:26px;opacity:0.8}
+  }
+
+  /* ---- Section cards ---- */
+  .section-card{
+    margin-bottom:1.5rem;
+  }
+  .section-title{
+    font-family:var(--font-display);
+    font-size:1rem;
+    font-weight:600;
+    color:var(--cream-dk);
+    margin-bottom:0.75rem;
+    letter-spacing:0.02em;
+  }
+
+  /* Up Next list */
+  .upcoming-list{display:flex;flex-direction:column}
+  .upcoming-item{
+    display:flex;
+    align-items:center;
+    gap:0.75rem;
+    padding:0.65rem 0;
+    border-bottom:1px solid rgba(122,143,109,0.2);
+    transition:opacity 0.3s,transform 0.3s;
+  }
+  .upcoming-item:last-child{border-bottom:none}
+  .item-icon{
+    font-size:0.95rem;
+    width:1.5rem;
+    text-align:center;
+    flex-shrink:0;
+  }
+  .item-label{
+    font-size:0.88rem;
+    color:var(--cream-dk);
+    font-weight:400;
+  }
+
+  /* Recently Played */
+  .log-item{
+    display:flex;
+    align-items:center;
+    gap:0.75rem;
+    padding:0.5rem 0;
+    border-bottom:1px solid rgba(122,143,109,0.1);
+  }
+  .log-item:last-child{border-bottom:none}
+  .log-time{
+    font-size:0.72rem;
+    color:var(--muted);
+    font-variant-numeric:tabular-nums;
+    flex-shrink:0;
+    width:3.2rem;
+  }
+  .log-icon{font-size:0.85rem;width:1.3rem;text-align:center;flex-shrink:0}
+  .log-label{font-size:0.82rem;color:var(--muted);font-weight:300}
+
+  /* Running Jokes */
+  .jokes-section{
+    border-left:3px solid var(--terracotta);
+    padding-left:1rem;
+    margin-bottom:1.5rem;
+  }
+  .jokes-title{
+    font-family:var(--font-display);
+    font-size:0.85rem;
+    font-weight:600;
+    color:var(--dusty-rose);
+    margin-bottom:0.5rem;
+    letter-spacing:0.04em;
+  }
+  .joke-item{
+    font-size:0.82rem;
+    font-style:italic;
+    color:var(--muted);
+    padding:0.25rem 0;
+    line-height:1.5;
+  }
+
+  /* ---- Fixed Bottom Player ---- */
+  .player-bar{
+    position:fixed;
+    bottom:0;left:0;right:0;
+    background:linear-gradient(180deg,rgba(42,35,32,0.0) 0%,var(--bg) 12%,var(--bg2) 100%);
+    padding:1.5rem 0 0;
+    z-index:100;
+  }
+  .player-inner{
+    max-width:640px;
+    margin:0 auto;
+    padding:0 1.25rem 1.25rem;
+    display:flex;
+    align-items:center;
+    gap:1rem;
+  }
+  .play-btn{
+    width:56px;height:56px;
+    border-radius:50%;
+    background:var(--terracotta);
+    border:none;
+    cursor:pointer;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    flex-shrink:0;
+    transition:background 0.2s,transform 0.15s;
+    box-shadow:0 4px 20px rgba(196,101,74,0.35);
+  }
+  .play-btn:hover{background:#d4735a;transform:scale(1.05)}
+  .play-btn:active{transform:scale(0.97)}
+  .play-btn svg{width:22px;height:22px;fill:var(--highlight);margin-left:2px}
+  .play-btn.playing svg{margin-left:0}
+
+  .player-meta{flex:1;min-width:0}
+  .player-live{
+    font-size:0.62rem;
+    font-weight:600;
+    letter-spacing:0.14em;
+    text-transform:uppercase;
+    color:var(--terracotta);
+    display:flex;
+    align-items:center;
+    gap:0.35rem;
+  }
+  .player-live-dot{
+    width:6px;height:6px;
+    border-radius:50%;
+    background:var(--terracotta);
+    animation:pulse-glow 1.8s ease-in-out infinite;
+  }
+  .player-now{
+    font-size:0.82rem;
+    color:var(--cream-dk);
+    white-space:nowrap;
+    overflow:hidden;
+    text-overflow:ellipsis;
+    margin-top:0.1rem;
+  }
+
+  .volume-wrap{
+    display:flex;
+    align-items:center;
+    gap:0.5rem;
+    flex-shrink:0;
+  }
+  .volume-icon{
+    font-size:0.85rem;
+    color:var(--muted);
+    cursor:pointer;
+  }
+  .volume-slider{
+    -webkit-appearance:none;
+    appearance:none;
+    width:80px;
+    height:4px;
+    border-radius:2px;
+    background:rgba(122,143,109,0.3);
+    outline:none;
+  }
+  .volume-slider::-webkit-slider-thumb{
+    -webkit-appearance:none;
+    width:14px;height:14px;
+    border-radius:50%;
+    background:var(--sage);
+    cursor:pointer;
+    transition:background 0.2s;
+  }
+  .volume-slider::-webkit-slider-thumb:hover{background:#8da87e}
+  .volume-slider::-moz-range-thumb{
+    width:14px;height:14px;
+    border-radius:50%;
+    background:var(--sage);
+    cursor:pointer;
+    border:none;
+  }
+  .volume-slider::-moz-range-track{
+    height:4px;
+    border-radius:2px;
+    background:rgba(122,143,109,0.3);
+    border:none;
+  }
+
+  /* Loading state */
+  .loading-shimmer{
+    background:linear-gradient(90deg,transparent 0%,rgba(245,239,230,0.04) 50%,transparent 100%);
+    background-size:200% 100%;
+    animation:shimmer 1.8s infinite;
+  }
+  @keyframes shimmer{0%{background-position:200% 0}100%{background-position:-200% 0}}
+
+  /* Fade transitions */
+  .fade-content{transition:opacity 0.25s ease}
+  .fade-content.updating{opacity:0.6}
+
+  /* Responsive */
+  @media(min-width:768px){
+    .station-header{padding-top:3.5rem}
+    .now-playing{padding:2.5rem 2.25rem}
+    .volume-slider{width:100px}
+  }
+  @media(max-width:380px){
+    .volume-wrap{display:none}
+    .player-inner{gap:0.75rem}
+  }
+
+  /* Safe area for iOS */
+  @supports(padding-bottom:env(safe-area-inset-bottom)){
+    .player-bar{padding-bottom:env(safe-area-inset-bottom)}
+  }
+</style>
+</head>
+<body>
+
+<!-- Station Header -->
+<header class="station-header">
+  <h1 class="station-name">Radio Itali</h1>
+  <p class="station-subtitle">Late-night Milan talk radio</p>
+  <div class="on-air" id="onAirBadge">
+    <span class="on-air-dot"></span>
+    ON AIR
+  </div>
+</header>
+
+<div class="container">
+
+  <!-- Now Playing -->
+  <div class="now-playing" id="nowPlaying">
+    <div class="np-section-label">Now playing</div>
+    <div class="np-type-badge" id="npIcon">&#9835;</div>
+    <div class="np-label fade-content" id="npLabel">Waiting for signal...</div>
+    <div class="np-sublabel fade-content" id="npSublabel"></div>
+    <div class="equalizer" id="equalizer">
+      <div class="eq-bar"></div>
+      <div class="eq-bar"></div>
+      <div class="eq-bar"></div>
+      <div class="eq-bar"></div>
+      <div class="eq-bar"></div>
+    </div>
+  </div>
+
+  <!-- Up Next -->
+  <div class="section-card" id="upNextSection" style="display:none">
+    <div class="section-title">Up next</div>
+    <div class="upcoming-list" id="upNextList"></div>
+  </div>
+
+  <!-- Running Jokes -->
+  <div class="jokes-section" id="jokesSection" style="display:none">
+    <div class="jokes-title">Callback corner</div>
+    <div id="jokesList"></div>
+  </div>
+
+  <!-- Recently Played -->
+  <div class="section-card" id="recentSection" style="display:none">
+    <div class="section-title">Recently played</div>
+    <div id="recentList"></div>
+  </div>
+
+</div>
+
+<!-- Audio element (hidden) -->
+<audio id="radioAudio" preload="none"></audio>
+
+<!-- Fixed Bottom Player -->
+<div class="player-bar">
+  <div class="player-inner">
+    <button class="play-btn" id="playBtn" aria-label="Play Radio Itali">
+      <svg id="playIcon" viewBox="0 0 24 24"><polygon points="6,3 20,12 6,21"/></svg>
+      <svg id="pauseIcon" viewBox="0 0 24 24" style="display:none"><rect x="5" y="3" width="4" height="18"/><rect x="15" y="3" width="4" height="18"/></svg>
+    </button>
+    <div class="player-meta">
+      <div class="player-live"><span class="player-live-dot"></span> LIVE</div>
+      <div class="player-now fade-content" id="playerNow">Radio Itali</div>
+    </div>
+    <div class="volume-wrap">
+      <span class="volume-icon" id="volumeToggle">&#128266;</span>
+      <input type="range" class="volume-slider" id="volumeSlider" min="0" max="1" step="0.05" value="0.8" aria-label="Volume">
+    </div>
+  </div>
+</div>
+
+<script>
+(function(){
+  const audio = document.getElementById('radioAudio');
+  const playBtn = document.getElementById('playBtn');
+  const playIcon = document.getElementById('playIcon');
+  const pauseIcon = document.getElementById('pauseIcon');
+  const eq = document.getElementById('equalizer');
+  const onAir = document.getElementById('onAirBadge');
+  const volumeSlider = document.getElementById('volumeSlider');
+  const volumeToggle = document.getElementById('volumeToggle');
+
+  let isPlaying = false;
+  let lastVolume = 0.8;
+  let currentLabel = '';
+
+  audio.volume = 0.8;
+
+  // Type icons
+  function icon(type){
+    if(type==='music') return '\u266B';
+    if(type==='banter') return '\uD83C\uDF99\uFE0F';
+    if(type==='ad') return '\uD83D\uDCE2';
+    return '\u266B';
+  }
+
+  function typeLabel(type){
+    if(type==='music') return 'Music';
+    if(type==='banter') return 'Banter';
+    if(type==='ad') return 'Sponsors';
+    return type||'';
+  }
+
+  // Play/Pause
+  playBtn.addEventListener('click', function(){
+    if(isPlaying){
+      audio.pause();
+    } else {
+      // Reload stream source each time to get live position
+      audio.src = '/stream';
+      audio.load();
+      audio.play().catch(function(){});
+    }
+  });
+
+  audio.addEventListener('play', function(){
+    isPlaying = true;
+    playIcon.style.display = 'none';
+    pauseIcon.style.display = 'block';
+    playBtn.classList.add('playing');
+    eq.classList.add('active');
+    onAir.classList.add('visible');
+  });
+
+  audio.addEventListener('pause', function(){
+    isPlaying = false;
+    playIcon.style.display = 'block';
+    pauseIcon.style.display = 'none';
+    playBtn.classList.remove('playing');
+    eq.classList.remove('active');
+  });
+
+  audio.addEventListener('waiting', function(){
+    eq.classList.remove('active');
+  });
+
+  audio.addEventListener('playing', function(){
+    if(!audio.paused) eq.classList.add('active');
+  });
+
+  // Volume
+  volumeSlider.addEventListener('input', function(){
+    audio.volume = this.value;
+    lastVolume = this.value;
+    updateVolumeIcon();
+  });
+
+  volumeToggle.addEventListener('click', function(){
+    if(audio.volume > 0){
+      lastVolume = audio.volume;
+      audio.volume = 0;
+      volumeSlider.value = 0;
+    } else {
+      audio.volume = lastVolume || 0.8;
+      volumeSlider.value = audio.volume;
+    }
+    updateVolumeIcon();
+  });
+
+  function updateVolumeIcon(){
+    if(audio.volume === 0) volumeToggle.innerHTML = '\uD83D\uDD07';
+    else if(audio.volume < 0.4) volumeToggle.innerHTML = '\uD83D\uDD09';
+    else volumeToggle.innerHTML = '\uD83D\uDD0A';
+  }
+
+  // Format timestamp
+  function fmtTime(ts){
+    if(!ts) return '';
+    var d = new Date(ts * 1000);
+    var h = d.getHours();
+    var m = d.getMinutes();
+    return (h<10?'0':'')+h+':'+(m<10?'0':'')+m;
+  }
+
+  // Status polling
+  function fetchStatus(){
+    fetch('/status')
+      .then(function(r){return r.json()})
+      .then(function(data){
+        updateNowPlaying(data.now_streaming);
+        updateUpNext(data.upcoming);
+        updateJokes(data.running_jokes);
+        updateRecent(data.stream_log);
+        if(!isPlaying && data.now_streaming){
+          onAir.classList.add('visible');
+        }
+      })
+      .catch(function(){});
+  }
+
+  function updateNowPlaying(np){
+    if(!np) return;
+    var label = np.label || '';
+    var npLabel = document.getElementById('npLabel');
+    var npSublabel = document.getElementById('npSublabel');
+    var npIcon = document.getElementById('npIcon');
+    var playerNow = document.getElementById('playerNow');
+
+    if(label === currentLabel) return;
+    currentLabel = label;
+
+    // Fade out
+    npLabel.classList.add('updating');
+    playerNow.classList.add('updating');
+
+    setTimeout(function(){
+      npIcon.textContent = icon(np.type);
+
+      if(np.type === 'music'){
+        var parts = label.split(' \u2014 ');
+        if(parts.length === 2){
+          npLabel.textContent = parts[0];
+          npSublabel.textContent = parts[1];
+        } else {
+          npLabel.textContent = label;
+          npSublabel.textContent = '';
+        }
+      } else if(np.type === 'banter'){
+        npLabel.textContent = label ? label + ' are talking\u2026' : 'The hosts are talking\u2026';
+        npSublabel.textContent = '';
+      } else if(np.type === 'ad'){
+        npLabel.textContent = 'A word from our sponsors\u2026';
+        npSublabel.textContent = '';
+      } else {
+        npLabel.textContent = label;
+        npSublabel.textContent = '';
+      }
+
+      playerNow.textContent = label || 'Radio Itali';
+
+      // Fade in
+      npLabel.classList.remove('updating');
+      playerNow.classList.remove('updating');
+    }, 200);
+  }
+
+  function updateUpNext(upcoming){
+    var section = document.getElementById('upNextSection');
+    var list = document.getElementById('upNextList');
+    if(!upcoming || upcoming.length === 0){
+      section.style.display = 'none';
+      return;
+    }
+    section.style.display = 'block';
+    var items = upcoming.slice(0, 4);
+    var html = '';
+    for(var i = 0; i < items.length; i++){
+      html += '<div class="upcoming-item">' +
+        '<span class="item-icon">' + icon(items[i].type) + '</span>' +
+        '<span class="item-label">' + escHtml(items[i].label) + '</span>' +
+        '</div>';
+    }
+    list.innerHTML = html;
+  }
+
+  function updateJokes(jokes){
+    var section = document.getElementById('jokesSection');
+    var list = document.getElementById('jokesList');
+    if(!jokes || jokes.length === 0){
+      section.style.display = 'none';
+      return;
+    }
+    section.style.display = 'block';
+    var html = '';
+    for(var i = 0; i < jokes.length; i++){
+      html += '<div class="joke-item">\u201C' + escHtml(jokes[i]) + '\u201D</div>';
+    }
+    list.innerHTML = html;
+  }
+
+  function updateRecent(log){
+    var section = document.getElementById('recentSection');
+    var list = document.getElementById('recentList');
+    if(!log || log.length === 0){
+      section.style.display = 'none';
+      return;
+    }
+    section.style.display = 'block';
+    var items = log.slice().reverse().slice(0, 5);
+    var html = '';
+    for(var i = 0; i < items.length; i++){
+      html += '<div class="log-item">' +
+        '<span class="log-time">' + fmtTime(items[i].timestamp) + '</span>' +
+        '<span class="log-icon">' + icon(items[i].type) + '</span>' +
+        '<span class="log-label">' + escHtml(items[i].label) + '</span>' +
+        '</div>';
+    }
+    list.innerHTML = html;
+  }
+
+  function escHtml(s){
+    if(!s) return '';
+    return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  }
+
+  // Initial fetch + polling
+  fetchStatus();
+  setInterval(fetchStatus, 3000);
+})();
+</script>
+</body>
+</html>

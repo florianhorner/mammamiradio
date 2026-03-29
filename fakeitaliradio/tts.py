@@ -8,7 +8,10 @@ from uuid import uuid4
 import edge_tts
 
 from fakeitaliradio.models import AdScript, AdVoice, HostPersonality
-from fakeitaliradio.normalizer import concat_files, generate_sfx, generate_silence, normalize
+from fakeitaliradio.normalizer import (
+    concat_files, generate_bumper_jingle, generate_music_bed,
+    generate_sfx, generate_silence, mix_with_bed, normalize,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -66,14 +69,38 @@ async def synthesize_ad(
         await synthesize(script.brand, voice.voice, fallback_path)
         return fallback_path
 
+    # Assemble voice+sfx parts
     if len(parts) == 1:
-        return parts[0]
+        voice_path = parts[0]
+    else:
+        voice_path = tmp_dir / f"ad_voice_{uuid4().hex[:8]}.mp3"
+        await loop.run_in_executor(None, concat_files, parts, voice_path)
+        for p in parts:
+            p.unlink(missing_ok=True)
 
+    # Mix with music bed if mood is specified
+    mood = script.mood or "lounge"
     output_path = tmp_dir / f"ad_{uuid4().hex[:8]}.mp3"
-    await loop.run_in_executor(None, concat_files, parts, output_path)
-
-    for p in parts:
-        p.unlink(missing_ok=True)
+    try:
+        # Get voice duration for bed length (approximate: file size / bitrate)
+        voice_size = voice_path.stat().st_size
+        voice_duration = max(5.0, voice_size / (192 * 128))  # rough estimate
+        bed_path = tmp_dir / f"adbed_{uuid4().hex[:8]}.mp3"
+        await loop.run_in_executor(
+            None, generate_music_bed, bed_path, mood, voice_duration + 1.0,
+        )
+        await loop.run_in_executor(
+            None, mix_with_bed, voice_path, bed_path, output_path,
+        )
+        bed_path.unlink(missing_ok=True)
+        voice_path.unlink(missing_ok=True)
+        logger.info("Ad with music bed (%s): %s", mood, output_path.name)
+    except Exception as e:
+        logger.warning("Music bed mixing failed (%s), using voice-only: %s", mood, e)
+        # Fallback: just use the voice track without a bed
+        if voice_path != output_path:
+            import shutil
+            shutil.move(str(voice_path), str(output_path))
 
     return output_path
 
