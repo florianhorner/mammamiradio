@@ -205,9 +205,8 @@ def load_config(path: str = "radio.toml") -> StationConfig:
     ha_token = os.getenv("HA_TOKEN", "")
     if ha_section.enabled and not ha_token:
         import logging as _log
-        _log.getLogger(__name__).warning(
-            "Home Assistant enabled but no HA_TOKEN in environment"
-        )
+
+        _log.getLogger(__name__).warning("Home Assistant enabled but no HA_TOKEN in environment")
 
     config = StationConfig(
         station=StationSection(**station_raw),
