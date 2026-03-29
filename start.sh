@@ -19,7 +19,7 @@ if [ -n "$RUNTIME_JSON" ]; then
 else
     echo "Warning: could not resolve runtime config, using defaults" >&2
     FIFO="${FAKEITALIRADIO_FIFO_PATH:-/tmp/fakeitaliradio.pcm}"
-    GO_LIBRESPOT_BIN="${GO_LIBRESPOT_BIN:-/opt/homebrew/opt/go-librespot/bin/go-librespot}"
+    GO_LIBRESPOT_BIN="${GO_LIBRESPOT_BIN:-go-librespot}"
     HOST="${FAKEITALIRADIO_BIND_HOST:-127.0.0.1}"
     PORT="${FAKEITALIRADIO_PORT:-8000}"
 fi

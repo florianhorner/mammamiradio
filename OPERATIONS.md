@@ -8,7 +8,7 @@ That is the honest current state.
 
 - Python 3.11+
 - `ffmpeg` on `PATH`
-- optional `go-librespot` binary at the path configured in `radio.toml`
+- `go-librespot` binary on `PATH` (or at the path configured in `radio.toml`)
 - writable `tmp/` and `cache/` directories
 - persistent access to `/tmp/fakeitaliradio.pcm`
 - outbound network access for Spotify, Anthropic, and optional Home Assistant
