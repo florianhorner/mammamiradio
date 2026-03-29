@@ -326,12 +326,14 @@ async def search_tracks(request: Request, q: str = "", _: None = Depends(require
         tracks = []
         for t in results["tracks"]["items"]:
             artist = t["artists"][0]["name"] if t["artists"] else "Unknown"
-            tracks.append({
-                "title": t["name"],
-                "artist": artist,
-                "duration_ms": t["duration_ms"],
-                "spotify_id": t["id"],
-            })
+            tracks.append(
+                {
+                    "title": t["name"],
+                    "artist": artist,
+                    "duration_ms": t["duration_ms"],
+                    "spotify_id": t["id"],
+                }
+            )
         return {"results": tracks}
     except Exception as e:
         return {"results": [], "error": str(e)}
