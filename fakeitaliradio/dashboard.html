@@ -36,7 +36,7 @@
     background: var(--bg);
     color: var(--text);
     padding: 0 24px 96px;
-    max-width: 960px;
+    max-width: 1280px;
     margin: 0 auto;
     line-height: 1.5;
   }
@@ -200,7 +200,8 @@
   }
 
   /* ---- Grid Layout ---- */
-  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 20px; }
+  @media (max-width: 960px) { .grid { grid-template-columns: 1fr 1fr; } }
   @media (max-width: 640px) { .grid { grid-template-columns: 1fr; } }
 
   /* ---- Segment Log ---- */
@@ -453,7 +454,8 @@
       <div class="section-title">Up Next</div>
       <ul class="upcoming" id="upcoming"></ul>
     </div>
-
+  </div>
+  <div>
     <div class="section">
       <div class="section-title">Last Banter</div>
       <div class="script-box" id="banter">...</div>
