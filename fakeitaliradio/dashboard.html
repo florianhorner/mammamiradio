@@ -417,10 +417,17 @@
   and select <strong>fakeitaliradio</strong>. Music will use placeholders until connected.
 </div>
 
-<div class="playlist-input" style="display:flex;gap:8px;margin-bottom:12px;align-items:center">
-  <input id="playlist-url" type="text" placeholder="Paste Spotify playlist URL..." style="flex:1;background:var(--card);border:1px solid rgba(176,164,148,0.2);border-radius:6px;color:var(--cream);padding:8px 12px;font-size:13px;font-family:var(--font-body);outline:none" onfocus="this.style.borderColor='var(--terracotta)'" onblur="this.style.borderColor='rgba(176,164,148,0.2)'">
-  <button class="btn" onclick="loadPlaylist()">Load</button>
+<div style="display:flex;gap:8px;margin-bottom:8px">
+  <div style="flex:1;display:flex;gap:8px">
+    <input id="search-input" type="text" placeholder="Search songs..." style="flex:1;background:var(--card);border:1px solid rgba(176,164,148,0.2);border-radius:6px;color:var(--cream);padding:8px 12px;font-size:13px;font-family:var(--font-body);outline:none" onfocus="this.style.borderColor='var(--terracotta)'" onblur="this.style.borderColor='rgba(176,164,148,0.2)'" onkeydown="if(event.key==='Enter')searchTracks()">
+    <button class="btn" onclick="searchTracks()">Search</button>
+  </div>
+  <div style="display:flex;gap:8px">
+    <input id="playlist-url" type="text" placeholder="Playlist URL..." style="width:200px;background:var(--card);border:1px solid rgba(176,164,148,0.2);border-radius:6px;color:var(--cream);padding:8px 12px;font-size:13px;font-family:var(--font-body);outline:none" onfocus="this.style.borderColor='var(--terracotta)'" onblur="this.style.borderColor='rgba(176,164,148,0.2)'" onkeydown="if(event.key==='Enter')loadPlaylist()">
+    <button class="btn" onclick="loadPlaylist()">Load</button>
+  </div>
 </div>
+<div id="search-results" style="margin-bottom:12px"></div>
 
 <div class="controls">
   <button class="btn" onclick="doShuffle()">Shuffle</button>
@@ -706,6 +713,42 @@ async function refresh() {
   } catch (e) {
     console.error('refresh failed', e);
   }
+}
+
+async function searchTracks() {
+  const input = document.getElementById('search-input');
+  const q = input.value.trim();
+  if (!q) return;
+  const r = await fetch('/api/search?q=' + encodeURIComponent(q));
+  const d = await r.json();
+  const container = document.getElementById('search-results');
+  if (!d.results || !d.results.length) {
+    container.innerHTML = '<div style="font-size:12px;color:var(--muted);padding:4px 0">No results</div>';
+    setTimeout(() => { container.innerHTML = ''; }, 2000);
+    return;
+  }
+  container.innerHTML = '<ul style="list-style:none;background:var(--card);border:1px solid rgba(176,164,148,0.15);border-radius:6px;overflow:hidden">' +
+    d.results.map(t =>
+      '<li style="padding:8px 12px;border-bottom:1px solid rgba(122,143,109,0.08);display:flex;align-items:center;gap:8px;font-size:13px;color:var(--cream-dk)">' +
+        '<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' +
+          '<strong style="color:var(--cream)">' + escHtml(t.title) + '</strong> ' +
+          '<span style="color:var(--muted)">' + escHtml(t.artist) + '</span>' +
+        '</span>' +
+        '<button class="act-btn" style="opacity:1;padding:3px 8px" onclick=\'addTrack(' + JSON.stringify(t).replace(/'/g, "&#39;") + ',"next")\'>Play next</button>' +
+        '<button class="act-btn" style="opacity:1;padding:3px 8px" onclick=\'addTrack(' + JSON.stringify(t).replace(/'/g, "&#39;") + ',"end")\'>Add</button>' +
+      '</li>'
+    ).join('') + '</ul>';
+}
+
+async function addTrack(track, position) {
+  await fetch('/api/playlist/add', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({...track, position}),
+  });
+  document.getElementById('search-results').innerHTML = '';
+  document.getElementById('search-input').value = '';
+  refresh();
 }
 
 async function loadPlaylist() {
