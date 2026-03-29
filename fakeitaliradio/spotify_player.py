@@ -224,8 +224,8 @@ class SpotifyPlayer:
             logger.warning("Auto-transfer failed: %s", e)
 
     async def wait_for_auth(self, timeout: float = 120.0) -> bool:
-        deadline = asyncio.get_event_loop().time() + timeout
-        while asyncio.get_event_loop().time() < deadline:
+        deadline = asyncio.get_running_loop().time() + timeout
+        while asyncio.get_running_loop().time() < deadline:
             if await self.check_auth():
                 return True
             await asyncio.sleep(2.0)
