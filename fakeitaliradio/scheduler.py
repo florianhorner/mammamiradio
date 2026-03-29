@@ -53,8 +53,13 @@ def preview_upcoming(
             seg_type = SegmentType.MUSIC
 
         if seg_type == SegmentType.MUSIC:
-            t = tracks[track_idx % len(tracks)] if tracks else None
-            preview.append({"type": "music", "label": t.display if t else "?"})
+            real_idx = track_idx % len(tracks) if tracks else -1
+            t = tracks[real_idx] if tracks and real_idx >= 0 else None
+            preview.append({
+                "type": "music",
+                "label": t.display if t else "?",
+                "playlist_index": real_idx,
+            })
             track_idx += 1
             songs_since_banter += 1
             songs_since_ad += 1

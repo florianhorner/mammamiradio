@@ -77,9 +77,17 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   .upcoming { list-style: none; }
   .upcoming li {
     padding: 4px 0; font-size: 13px; color: #999;
-    display: flex; gap: 8px;
+    display: flex; gap: 6px; align-items: center;
   }
   .upcoming .num { color: #555; min-width: 18px; }
+  .upcoming .actions { margin-left: auto; display: flex; gap: 2px; opacity: 0.4; }
+  .upcoming li:hover .actions { opacity: 1; }
+  .act-btn {
+    background: none; border: 1px solid #333; border-radius: 3px;
+    color: #888; font-size: 10px; padding: 1px 5px; cursor: pointer;
+    font-family: inherit;
+  }
+  .act-btn:hover { border-color: #ff6b35; color: #ff6b35; }
 
   .script-box {
     background: #111; border: 1px solid #222; border-radius: 6px;
@@ -171,8 +179,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 </div>
 
 <div class="controls">
-  <button class="btn" onclick="doShuffle()">Shuffle Playlist</button>
-  <button class="btn" onclick="doSkip()">Skip Current</button>
+  <button class="btn" onclick="doShuffle()">Shuffle</button>
+  <button class="btn" onclick="doSkip()">Skip</button>
+  <button class="btn" onclick="doPurge()">Purge Queue</button>
 </div>
 
 <div class="now-playing" id="now-playing">
@@ -301,13 +310,22 @@ async function refresh() {
 
     // Upcoming (full schedule: music + banter + ads)
     const up = document.getElementById('upcoming');
-    up.innerHTML = (d.upcoming || []).map((e, i) =>
-      '<li>' +
+    up.innerHTML = (d.upcoming || []).map((e, i) => {
+      const isMusic = e.type === 'music' && e.playlist_index !== undefined;
+      const idx = e.playlist_index;
+      const actions = isMusic
+        ? '<span class="actions">' +
+            '<button class="act-btn" onclick="playNext(' + idx + ')" title="Play next">▲</button>' +
+            '<button class="act-btn" onclick="removeTrack(' + idx + ')" title="Remove">✕</button>' +
+          '</span>'
+        : '';
+      return '<li>' +
         '<span class="seg-icon ' + (cls[e.type] || '') + '" style="width:18px;height:18px;font-size:10px">' +
           (icons[e.type] || '?') + '</span> ' +
         '<span class="seg-label">' + e.label + '</span>' +
-      '</li>'
-    ).join('') || '<li>...</li>';
+        actions +
+      '</li>';
+    }).join('') || '<li>...</li>';
 
     // Show banter/ad scripts from the currently or most recently streamed segments
     const banter = document.getElementById('banter');
@@ -379,10 +397,33 @@ async function doShuffle() {
 async function doSkip() {
   await fetch('/api/skip', { method: 'POST' });
   const audio = document.getElementById('audio');
-  // Reload stream to skip to next segment
   audio.pause();
   audio.load();
   audio.play();
+  refresh();
+}
+
+async function doPurge() {
+  const r = await fetch('/api/purge', { method: 'POST' });
+  const d = await r.json();
+  refresh();
+}
+
+async function removeTrack(idx) {
+  await fetch('/api/playlist/remove', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({index: idx}),
+  });
+  refresh();
+}
+
+async function playNext(idx) {
+  await fetch('/api/playlist/move_to_next', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({index: idx}),
+  });
   refresh();
 }
 
@@ -485,24 +526,87 @@ async def shuffle_playlist(request: Request):
     import random
     state = request.app.state.station_state
     random.shuffle(state.playlist)
-    _update_upcoming_from_state(state)
     return {"ok": True, "message": "Playlist shuffled"}
 
 
 @router.post("/api/skip")
 async def skip_track(request: Request):
-    """Skip the currently streaming segment by draining the queue faster."""
+    """Skip the currently streaming segment."""
     state = request.app.state.station_state
     state.now_streaming = {"type": "skipping", "label": "Skipping...", "started": time.time()}
-    # The actual skip happens client-side by reloading the audio element
     return {"ok": True}
 
 
-def _update_upcoming_from_state(state):
-    """Recalculate upcoming tracks after shuffle."""
-    if not state.playlist:
-        return
-    state.upcoming_tracks = state.playlist[:8]
+@router.post("/api/purge")
+async def purge_queue(request: Request):
+    """Drain all pre-produced segments from the queue."""
+    q = request.app.state.queue
+    purged = 0
+    while not q.empty():
+        try:
+            seg = q.get_nowait()
+            seg.path.unlink(missing_ok=True)
+            q.task_done()
+            purged += 1
+        except Exception:
+            break
+    return {"ok": True, "purged": purged}
+
+
+@router.post("/api/playlist/remove")
+async def remove_track(request: Request):
+    """Remove a track from playlist by index."""
+    body = await request.json()
+    idx = body.get("index", -1)
+    state = request.app.state.station_state
+    if 0 <= idx < len(state.playlist):
+        removed = state.playlist.pop(idx)
+        return {"ok": True, "removed": removed.display}
+    return {"ok": False, "error": "Invalid index"}
+
+
+@router.post("/api/playlist/move")
+async def move_track(request: Request):
+    """Move a track in the playlist. body: {from: N, to: N}"""
+    body = await request.json()
+    src = body.get("from", -1)
+    dst = body.get("to", -1)
+    state = request.app.state.station_state
+    pl = state.playlist
+    if 0 <= src < len(pl) and 0 <= dst < len(pl):
+        track = pl.pop(src)
+        pl.insert(dst, track)
+        return {"ok": True, "moved": track.display}
+    return {"ok": False, "error": "Invalid indices"}
+
+
+@router.post("/api/playlist/move_to_next")
+async def move_to_next(request: Request):
+    """Move a track to play next (position 0 in upcoming)."""
+    body = await request.json()
+    idx = body.get("index", -1)
+    state = request.app.state.station_state
+    pl = state.playlist
+
+    # Find current position
+    current_idx = 0
+    if state.current_track:
+        for i, t in enumerate(pl):
+            if t.spotify_id == state.current_track.spotify_id:
+                current_idx = i
+                break
+
+    # The "next" position is current_idx + 1
+    next_pos = (current_idx + 1) % len(pl) if pl else 0
+
+    if 0 <= idx < len(pl):
+        track = pl.pop(idx)
+        # Adjust next_pos if we popped before it
+        if idx < next_pos:
+            next_pos -= 1
+        pl.insert(next_pos, track)
+        return {"ok": True, "moved": track.display, "to_position": next_pos}
+    return {"ok": False, "error": "Invalid index"}
 
 
 @router.get("/status")
