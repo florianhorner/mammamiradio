@@ -311,6 +311,36 @@ async def move_track(request: Request, _: None = Depends(require_admin_access)):
     return {"ok": False, "error": "Invalid indices"}
 
 
+@router.post("/api/playlist/load")
+async def load_playlist(request: Request, _: None = Depends(require_admin_access)):
+    """Load a new playlist from a Spotify URL and replace the current one."""
+    from fakeitaliradio.playlist import fetch_playlist
+
+    body = await request.json()
+    url = body.get("url", "").strip()
+    if not url:
+        return {"ok": False, "error": "No URL provided"}
+
+    config = request.app.state.config
+    state = request.app.state.station_state
+
+    # Temporarily override the playlist URL in config
+    original_url = config.playlist.spotify_url
+    config.playlist.spotify_url = url
+    try:
+        tracks = fetch_playlist(config)
+    except Exception as e:
+        config.playlist.spotify_url = original_url
+        return {"ok": False, "error": str(e)}
+
+    if not tracks:
+        config.playlist.spotify_url = original_url
+        return {"ok": False, "error": "No tracks found"}
+
+    state.playlist = tracks
+    return {"ok": True, "tracks": len(tracks), "url": url}
+
+
 @router.post("/api/playlist/move_to_next")
 async def move_to_next(request: Request, _: None = Depends(require_admin_access)):
     """Move a track to play next (position 0 in upcoming)."""
@@ -362,6 +392,7 @@ async def status(request: Request, _: None = Depends(require_admin_access)):
             "tracks_played": len(state.played_tracks),
             "uptime_sec": round(time.time() - start_time),
             "spotify_connected": state.spotify_connected,
+            "playlist_url": request.app.state.config.playlist.spotify_url or "",
             "produced_log": [{"type": e.type, "label": e.label, "timestamp": e.timestamp} for e in state.segment_log],
             "last_banter_script": state.last_banter_script,
             "last_ad_script": state.last_ad_script,

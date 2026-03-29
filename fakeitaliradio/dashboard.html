@@ -417,6 +417,11 @@
   and select <strong>fakeitaliradio</strong>. Music will use placeholders until connected.
 </div>
 
+<div class="playlist-input" style="display:flex;gap:8px;margin-bottom:12px;align-items:center">
+  <input id="playlist-url" type="text" placeholder="Paste Spotify playlist URL..." style="flex:1;background:var(--card);border:1px solid rgba(176,164,148,0.2);border-radius:6px;color:var(--cream);padding:8px 12px;font-size:13px;font-family:var(--font-body);outline:none" onfocus="this.style.borderColor='var(--terracotta)'" onblur="this.style.borderColor='rgba(176,164,148,0.2)'">
+  <button class="btn" onclick="loadPlaylist()">Load</button>
+</div>
+
 <div class="controls">
   <button class="btn" onclick="doShuffle()">Shuffle</button>
   <button class="btn" onclick="doSkip()">Skip</button>
@@ -552,6 +557,12 @@ async function refresh() {
 
     document.getElementById('connect-banner').style.display =
       d.spotify_connected ? 'none' : 'block';
+
+    // Show current playlist URL if set and input is empty
+    const plInput = document.getElementById('playlist-url');
+    if (d.playlist_url && !plInput.value && plInput.placeholder === 'Paste Spotify playlist URL...') {
+      plInput.placeholder = d.playlist_url;
+    }
 
     // Now streaming (what the listener actually hears)
     const ns = d.now_streaming || {};
@@ -695,6 +706,29 @@ async function refresh() {
   } catch (e) {
     console.error('refresh failed', e);
   }
+}
+
+async function loadPlaylist() {
+  const input = document.getElementById('playlist-url');
+  const url = input.value.trim();
+  if (!url) return;
+  input.disabled = true;
+  const r = await fetch('/api/playlist/load', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({url}),
+  });
+  const d = await r.json();
+  input.disabled = false;
+  if (d.ok) {
+    input.value = '';
+    input.placeholder = d.tracks + ' tracks loaded!';
+    setTimeout(() => { input.placeholder = 'Paste Spotify playlist URL...'; }, 3000);
+  } else {
+    input.placeholder = 'Error: ' + (d.error || 'unknown');
+    setTimeout(() => { input.placeholder = 'Paste Spotify playlist URL...'; }, 3000);
+  }
+  refresh();
 }
 
 async function doShuffle() {
