@@ -569,7 +569,7 @@ async function refresh() {
 
     // Show current playlist URL if set and input is empty
     const plInput = document.getElementById('playlist-url');
-    if (d.playlist_url && !plInput.value && plInput.placeholder === 'Paste Spotify playlist URL...') {
+    if (d.playlist_url && !plInput.value && plInput.placeholder === 'Playlist URL...') {
       plInput.placeholder = d.playlist_url;
     }
 
@@ -769,10 +769,10 @@ async function loadPlaylist() {
   if (d.ok) {
     input.value = '';
     input.placeholder = d.tracks + ' tracks loaded!';
-    setTimeout(() => { input.placeholder = 'Paste Spotify playlist URL...'; }, 3000);
+    setTimeout(() => { input.placeholder = 'Playlist URL...'; }, 3000);
   } else {
     input.placeholder = 'Error: ' + (d.error || 'unknown');
-    setTimeout(() => { input.placeholder = 'Paste Spotify playlist URL...'; }, 3000);
+    setTimeout(() => { input.placeholder = 'Playlist URL...'; }, 3000);
   }
   refresh();
 }

@@ -163,6 +163,9 @@ The Home Assistant token is never stored in `radio.toml`. Set it via `HA_TOKEN` 
 | `/api/playlist/remove` | POST | Admin | Remove track by index |
 | `/api/playlist/move` | POST | Admin | Move track with `{from, to}` |
 | `/api/playlist/move_to_next` | POST | Admin | Move track to position 0 in upcoming |
+| `/api/search` | GET | Admin | Search Spotify for tracks |
+| `/api/playlist/add` | POST | Admin | Add a track to the playlist |
+| `/api/playlist/load` | POST | Admin | Load a Spotify playlist by URL |
 
 ## Admin access
 
