@@ -72,11 +72,13 @@ ANTHROPIC_API_KEY=
 HA_TOKEN=
 ```
 
-### Run (one-click)
+### Run (macOS one-click)
 
-Double-click `Start Radio.command` in Finder. It starts the radio and opens the dashboard in your browser. Drag it to your Dock for a permanent launcher.
+```bash
+./setup-mac.sh
+```
 
-To stop: close the Terminal window, or double-click `Stop Radio.command`.
+This creates a `Radio Italì.app` you can drag to your Dock, plus `Dashboard.webloc` and `Listener.webloc` bookmark files. Double-click the app to start the radio and open the dashboard. Double-click `Stop Radio.command` to stop it.
 
 ### Run (terminal)
 
