@@ -45,7 +45,7 @@ cp .env.example .env
 ./start.sh
 ```
 
-`start.sh` handles the FIFO pipe, launches go-librespot in the background, and starts the FastAPI server with hot reload on port 8000.
+`start.sh` handles the FIFO pipe, launches go-librespot in the background, and starts the FastAPI server with hot reload on port 8000. By default it binds to `127.0.0.1`; override with `FAKEITALIRADIO_BIND_HOST` and `FAKEITALIRADIO_PORT`.
 
 ### Listen
 
@@ -78,7 +78,8 @@ See `radio.toml` for a fully commented example.
 | `/` | GET | Dashboard (control plane UI) |
 | `/listen` | GET | Listener (minimal playback UI) |
 | `/stream` | GET | Audio stream (infinite MP3) |
-| `/status` | GET | JSON: queue depth, uptime, now playing, logs |
+| `/public-status` | GET | Public listener status: now playing, recent stream log, upcoming |
+| `/status` | GET | Admin JSON: queue depth, uptime, now playing, logs |
 | `/api/shuffle` | POST | Shuffle the playlist |
 | `/api/skip` | POST | Skip the current segment |
 | `/api/purge` | POST | Drain all queued segments |
@@ -100,3 +101,12 @@ The scheduler cycles through them: a few songs, then banter, a few more, then an
 ## Dependencies
 
 FastAPI, Uvicorn, Spotipy, Anthropic SDK, edge-tts, yt-dlp, httpx, Pydantic. Full list in `pyproject.toml`.
+
+## Admin Access
+
+The listener surface (`/listen`, `/stream`, `/public-status`) is public. The control plane (`/`), admin status, logs, and playlist mutation routes are restricted:
+
+- If the app is bound to localhost, they are accessible from localhost without extra auth.
+- If you bind to a non-local interface, set `ADMIN_PASSWORD` or `ADMIN_TOKEN`.
+- `ADMIN_PASSWORD` uses HTTP Basic auth with `ADMIN_USERNAME` (default `admin`) and is the right choice for browser/dashboard access.
+- `ADMIN_TOKEN` can be sent via the `X-Radio-Admin-Token` header for scripted access to non-local admin routes.

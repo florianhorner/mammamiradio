@@ -51,3 +51,43 @@ def test_default_is_music():
     pacing = PacingSection(songs_between_banter=5, songs_between_ads=10)
     state = _make_state(segments_produced=2, songs_since_banter=1, songs_since_ad=1)
     assert next_segment_type(state, pacing) == SegmentType.MUSIC
+
+
+def test_reserve_next_track_rotates_upcoming_playlist():
+    state = StationState(playlist=[
+        Track(title="One", artist="A", duration_ms=1, spotify_id="1"),
+        Track(title="Two", artist="B", duration_ms=1, spotify_id="2"),
+        Track(title="Three", artist="C", duration_ms=1, spotify_id="3"),
+    ])
+
+    track = state.reserve_next_track()
+
+    assert track.spotify_id == "1"
+    assert [t.spotify_id for t in state.playlist] == ["2", "3", "1"]
+
+
+def test_preview_upcoming_uses_current_playlist_order():
+    from fakeitaliradio.scheduler import preview_upcoming
+
+    tracks = [
+        Track(title="One", artist="A", duration_ms=1, spotify_id="1"),
+        Track(title="Two", artist="B", duration_ms=1, spotify_id="2"),
+        Track(title="Three", artist="C", duration_ms=1, spotify_id="3"),
+    ]
+    state = StationState(
+        playlist=tracks,
+        segments_produced=1,
+        songs_since_banter=0,
+        songs_since_ad=0,
+        current_track=Track(title="Old", artist="Z", duration_ms=1, spotify_id="old"),
+    )
+    pacing = PacingSection(songs_between_banter=99, songs_between_ads=99)
+
+    preview = preview_upcoming(state, pacing, state.playlist, count=3)
+
+    assert [item["playlist_index"] for item in preview] == [0, 1, 2]
+    assert [item["label"] for item in preview] == [
+        "A – One",
+        "B – Two",
+        "C – Three",
+    ]

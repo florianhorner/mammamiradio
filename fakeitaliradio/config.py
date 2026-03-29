@@ -5,6 +5,7 @@ try:
 except ModuleNotFoundError:
     import tomli as tomllib
 from dataclasses import dataclass, field
+import ipaddress
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -68,9 +69,23 @@ class StationConfig:
     tmp_dir: Path = Path("tmp")
 
     # Secrets from env
+    bind_host: str = "127.0.0.1"
+    port: int = 8000
+    admin_username: str = "admin"
+    admin_password: str = ""
+    admin_token: str = ""
     spotify_client_id: str = ""
     spotify_client_secret: str = ""
     anthropic_api_key: str = ""
+
+
+def _is_loopback_host(host: str) -> bool:
+    if host in {"localhost", ""}:
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
 
 
 def _validate(config: StationConfig) -> None:
@@ -94,6 +109,12 @@ def _validate(config: StationConfig) -> None:
         log.warning("No ad brands configured — ad segments will be skipped")
     if not config.spotify_client_id or not config.spotify_client_secret:
         log.warning("No Spotify credentials — using demo playlist")
+    if not _is_loopback_host(config.bind_host) and not (
+        config.admin_password or config.admin_token
+    ):
+        errors.append(
+            "Non-local bind requires ADMIN_PASSWORD or ADMIN_TOKEN"
+        )
 
     if errors:
         raise ValueError("Config errors:\n  " + "\n  ".join(errors))
@@ -146,6 +167,11 @@ def load_config(path: str = "radio.toml") -> StationConfig:
         hosts=hosts,
         ads=AdsSection(brands=brands, voices=voices, sfx_dir=sfx_dir),
         audio=AudioSection(**raw.get("audio", {})),
+        bind_host=os.getenv("FAKEITALIRADIO_BIND_HOST", "127.0.0.1"),
+        port=int(os.getenv("FAKEITALIRADIO_PORT", "8000")),
+        admin_username=os.getenv("ADMIN_USERNAME", "admin"),
+        admin_password=os.getenv("ADMIN_PASSWORD", ""),
+        admin_token=os.getenv("ADMIN_TOKEN", ""),
         spotify_client_id=os.getenv("SPOTIFY_CLIENT_ID", ""),
         spotify_client_secret=os.getenv("SPOTIFY_CLIENT_SECRET", ""),
         anthropic_api_key=os.getenv("ANTHROPIC_API_KEY", ""),
