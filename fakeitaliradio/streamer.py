@@ -122,6 +122,23 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   @media (max-width: 600px) { .grid { grid-template-columns: 1fr; } }
 
   body { padding-bottom: 80px; }
+
+  .debug-toggle {
+    color: #555; font-size: 11px; cursor: pointer; margin-bottom: 8px;
+    user-select: none;
+  }
+  .debug-toggle:hover { color: #ff6b35; }
+  .debug-panel { display: none; }
+  .debug-panel.open { display: block; }
+  .debug-log {
+    background: #0d0d0d; border: 1px solid #222; border-radius: 4px;
+    padding: 8px; font-size: 11px; color: #888; line-height: 1.6;
+    max-height: 300px; overflow-y: auto; white-space: pre-wrap;
+    font-family: 'SF Mono', monospace;
+  }
+  .debug-log .err { color: #ff4444; }
+  .debug-log .warn { color: #ffaa00; }
+  .debug-log .info { color: #666; }
 </style>
 </head>
 <body>
@@ -190,6 +207,18 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       <div class="section-title">Running Jokes</div>
       <ul class="jokes" id="jokes"></ul>
     </div>
+  </div>
+</div>
+
+<div class="section">
+  <div class="debug-toggle" onclick="document.getElementById('debug').classList.toggle('open')">
+    ▶ Debug logs (click to expand)
+  </div>
+  <div class="debug-panel" id="debug">
+    <div class="section-title">go-librespot</div>
+    <div class="debug-log" id="debug-gl"></div>
+    <div class="section-title" style="margin-top:8px">Errors</div>
+    <div class="debug-log" id="debug-errors"></div>
   </div>
 </div>
 
@@ -315,6 +344,28 @@ async function refresh() {
       '<li>"' + j + '"</li>'
     ).join('') || '<li>No running jokes yet...</li>';
 
+    // Debug: go-librespot log
+    const gl = document.getElementById('debug-gl');
+    if (gl && d.go_librespot_log) {
+      gl.innerHTML = d.go_librespot_log.map(l => {
+        l = l.trim();
+        const cls = l.includes('error') ? 'err' : l.includes('warn') ? 'warn' : 'info';
+        return '<div class="' + cls + '">' + l.replace(/</g,'&lt;') + '</div>';
+      }).join('');
+      gl.scrollTop = gl.scrollHeight;
+    }
+
+    // Debug: errors
+    const errs = document.getElementById('debug-errors');
+    if (errs && d.producer_errors) {
+      errs.innerHTML = d.producer_errors.length
+        ? d.producer_errors.map(e =>
+            '<div class="err">' + e.type + ': ' + e.label + ' — ' +
+            (e.metadata.error || JSON.stringify(e.metadata)) + '</div>'
+          ).join('')
+        : '<div class="info">No errors</div>';
+    }
+
   } catch (e) {
     console.error('refresh failed', e);
   }
@@ -420,6 +471,14 @@ async def stream(request: Request):
     )
 
 
+@router.get("/api/logs")
+async def logs(lines: int = 50):
+    """Return recent go-librespot + producer logs."""
+    return {
+        "go_librespot": _tail_log("tmp/go-librespot.log", lines),
+    }
+
+
 @router.post("/api/shuffle")
 async def shuffle_playlist(request: Request):
     """Shuffle upcoming tracks."""
@@ -476,4 +535,18 @@ async def status(request: Request):
         "upcoming": preview_upcoming(state, config.pacing, state.playlist, count=5),
         "last_banter_script": state.last_banter_script,
         "last_ad_script": state.last_ad_script,
+        "go_librespot_log": _tail_log("tmp/go-librespot.log", 15),
+        "producer_errors": [
+            {"type": e.type, "label": e.label, "metadata": e.metadata}
+            for e in state.segment_log
+            if e.metadata.get("error")
+        ][-5:],
     }
+
+
+def _tail_log(path: str, lines: int = 15) -> list[str]:
+    try:
+        with open(path, "r") as f:
+            return f.readlines()[-lines:]
+    except Exception:
+        return []
