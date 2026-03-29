@@ -74,7 +74,7 @@ Return JSON:
             system=_build_system_prompt(config),
             messages=[{"role": "user", "content": prompt}],
         )
-        raw = resp.content[0].text.strip()
+        raw = resp.content[0].text.strip()  # type: ignore[union-attr]
         # Strip markdown fences if present
         if raw.startswith("```"):
             raw = raw.split("\n", 1)[1].rsplit("```", 1)[0].strip()
@@ -209,7 +209,7 @@ Return JSON:
             system=_build_system_prompt(config),
             messages=[{"role": "user", "content": prompt}],
         )
-        raw = resp.content[0].text.strip()
+        raw = resp.content[0].text.strip()  # type: ignore[union-attr]
         if raw.startswith("```"):
             raw = raw.split("\n", 1)[1].rsplit("```", 1)[0].strip()
         data = json.loads(raw)
