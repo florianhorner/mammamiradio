@@ -1,0 +1,45 @@
+[station]
+name = "Radio Italì"
+language = "it"
+theme = "late-night Milan talk radio, warm and nostalgic, two hosts who love cinema and 90s Italian pop"
+bitrate = 192
+
+[playlist]
+spotify_url = ""  # Leave empty to use liked songs, or paste a playlist URL you own
+shuffle = false
+
+[pacing]
+songs_between_banter = 2
+songs_between_ads = 4
+ad_spots_per_break = 1
+lookahead_segments = 3
+
+[[hosts]]
+name = "Marco"
+voice = "it-IT-DiegoNeural"
+style = "enthusiastic, lots of 90s references, slightly dorky, loves obscure cinema trivia"
+
+[[hosts]]
+name = "Giulia"
+voice = "it-IT-ElsaNeural"
+style = "dry wit, corrects Marco constantly, secretly loves the songs she claims to hate"
+
+[audio]
+sample_rate = 48000
+channels = 2
+bitrate = 192
+spotify_bitrate = 320
+fifo_path = "/tmp/fakeitaliradio.pcm"
+go_librespot_bin = "/opt/homebrew/opt/go-librespot/bin/go-librespot"
+go_librespot_port = 3678
+claude_model = "claude-haiku-4-5-20251001"
+
+[ads]
+brand_pool = [
+    "Caffè Misterioso",
+    "Autolavaggio Supremo",
+    "Pizzeria del Futuro",
+    "Profumo di Nonna",
+    "Scarpe Volanti",
+    "Gelato Infinito",
+]

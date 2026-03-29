@@ -1,0 +1,14 @@
+.env
+__pycache__/
+*.pyc
+cache/
+tmp/
+.venv/
+*.egg-info/
+dist/
+music/
+go-librespot/credentials.json
+go-librespot/lockfile
+go-librespot/state.json
+.spotify_token_cache
+.cache/

@@ -1,0 +1,22 @@
+[project]
+name = "fakeitaliradio"
+version = "0.1.0"
+description = "Fake Italian radio station engine"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.34",
+    "spotipy>=2.24",
+    "anthropic>=0.52",
+    "edge-tts>=7.0",
+    "yt-dlp>=2025.1",
+    "python-dotenv>=1.0",
+    "pydantic>=2.10",
+    "pydantic-settings>=2.7",
+    "httpx>=0.28",
+    "tomli>=2.0;python_version<'3.11'",
+]
+
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.backends._legacy:_Backend"
