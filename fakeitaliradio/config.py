@@ -50,6 +50,13 @@ class AudioSection:
 
 
 @dataclass
+class HomeAssistantSection:
+    enabled: bool = False
+    url: str = ""
+    poll_interval: int = 60  # seconds between state refreshes
+
+
+@dataclass
 class AdsSection:
     brands: list[AdBrand] = field(default_factory=list)
     voices: list[AdVoice] = field(default_factory=list)
@@ -64,6 +71,7 @@ class StationConfig:
     hosts: list[HostPersonality]
     ads: AdsSection
     audio: AudioSection = field(default_factory=AudioSection)
+    homeassistant: HomeAssistantSection = field(default_factory=HomeAssistantSection)
     cache_dir: Path = Path("cache")
     tmp_dir: Path = Path("tmp")
 
@@ -76,6 +84,7 @@ class StationConfig:
     spotify_client_id: str = ""
     spotify_client_secret: str = ""
     anthropic_api_key: str = ""
+    ha_token: str = ""
 
 
 def _is_loopback_host(host: str) -> bool:
@@ -172,6 +181,8 @@ def load_config(path: str = "radio.toml") -> StationConfig:
         else:
             station_raw.pop("bitrate")
 
+    ha_token = os.getenv("HA_TOKEN", "")
+
     config = StationConfig(
         station=StationSection(**station_raw),
         playlist=PlaylistSection(**raw.get("playlist", {})),
@@ -187,6 +198,7 @@ def load_config(path: str = "radio.toml") -> StationConfig:
         spotify_client_id=os.getenv("SPOTIFY_CLIENT_ID", ""),
         spotify_client_secret=os.getenv("SPOTIFY_CLIENT_SECRET", ""),
         anthropic_api_key=os.getenv("ANTHROPIC_API_KEY", ""),
+        ha_token=ha_token,
     )
     _validate(config)
     return config

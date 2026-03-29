@@ -33,6 +33,11 @@ go_librespot_bin = "/opt/homebrew/opt/go-librespot/bin/go-librespot"
 go_librespot_port = 3678
 claude_model = "claude-haiku-4-5-20251001"
 
+[homeassistant]
+enabled = true
+url = "https://ha.horner.io"
+poll_interval = 60  # seconds between state refreshes
+
 [ads]
 sfx_dir = "sfx"
 

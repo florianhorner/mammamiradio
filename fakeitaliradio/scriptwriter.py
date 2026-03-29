@@ -47,11 +47,20 @@ async def write_banter(
 
     host_names = {h.name: h for h in config.hosts}
 
+    # Home Assistant context — hosts may casually reference home state
+    ha_block = ""
+    if state.ha_context:
+        ha_block = f"""
+Smart home state (you may CASUALLY reference ONE of these — like glancing out a window.
+Don't force it. Only mention if it fits naturally. NEVER list multiple items.):
+{state.ha_context}
+"""
+
     prompt = f"""Write a short radio banter between the hosts. 2-4 exchanges total.
 
 Just played: {recent if recent else "opening of the show"}
 Running jokes to optionally callback: {jokes if jokes else "none yet, you may seed one"}
-
+{ha_block}
 Return JSON:
 {{"lines": [{{"host": "HostName", "text": "what they say"}}], "new_joke": "brief description of any new running joke or null"}}"""
 
@@ -129,6 +138,16 @@ async def write_ad(
     same_brand_ads = [
         e.summary for e in state.ad_history if e.brand == brand.name
     ][-3:]
+    # Home Assistant context for ads
+    ad_ha_block = ""
+    if state.ha_context:
+        ad_ha_block = (
+            "\nSmart home state (weave ONE detail into the ad if it fits — "
+            "e.g., reference the weather, what's happening at home. "
+            "Make it feel like the ad knows the listener's world.):\n"
+            + state.ha_context + "\n"
+        )
+
     campaign_context = ""
     if same_brand_ads:
         campaign_context = f"""
@@ -153,6 +172,7 @@ Recent ads from OTHER brands that aired (you may cleverly reference or mock thes
 
 Running jokes from the hosts: {jokes if jokes else "none"}
 Recently played music: {recent_tracks if recent_tracks else "show just started"}
+{ad_ha_block}
 
 RULES:
 - Absurd but delivered with COMPLETE sincerity. The product may be insane but the pitch is 100% professional.

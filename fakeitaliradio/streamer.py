@@ -355,6 +355,7 @@ async def status(request: Request, _: None = Depends(require_admin_access)):
         ],
         "last_banter_script": state.last_banter_script,
         "last_ad_script": state.last_ad_script,
+        "ha_context": state.ha_context if state.ha_context else None,
         "go_librespot_log": _tail_log("tmp/go-librespot.log", 15),
         "producer_errors": [
             {"type": e.type, "label": e.label, "metadata": e.metadata}

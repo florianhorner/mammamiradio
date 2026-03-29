@@ -9,6 +9,7 @@ from uuid import uuid4
 
 from fakeitaliradio.config import StationConfig
 from fakeitaliradio.downloader import download_track
+from fakeitaliradio.ha_context import HomeContext, fetch_home_context
 from fakeitaliradio.models import AdBrand, AdHistoryEntry, Segment, SegmentType, StationState
 from fakeitaliradio.normalizer import normalize, generate_silence
 from fakeitaliradio.scheduler import next_segment_type
@@ -42,6 +43,9 @@ async def run_producer(
 ) -> None:
     logger.info("Producer started. Playlist: %d tracks", len(state.playlist))
 
+    # Home Assistant context cache
+    ha_cache: HomeContext | None = None
+
     # Don't block on auth — start producing banter immediately,
     # check Spotify connection each time we need to play music
     if spotify_player:
@@ -59,6 +63,18 @@ async def run_producer(
 
         seg_type = next_segment_type(state, config.pacing)
         segment: Segment | None = None
+
+        # Refresh Home Assistant context for banter/ad segments
+        if config.homeassistant.enabled and config.ha_token and seg_type in (
+            SegmentType.BANTER, SegmentType.AD,
+        ):
+            ha_cache = await fetch_home_context(
+                ha_url=config.homeassistant.url,
+                ha_token=config.ha_token,
+                poll_interval=float(config.homeassistant.poll_interval),
+                _cache=ha_cache,
+            )
+            state.ha_context = ha_cache.summary
 
         try:
             if seg_type == SegmentType.MUSIC:
@@ -221,9 +237,8 @@ async def run_producer(
                 )
                 state.after_ad(brands=break_brands)
 
-        except (OSError, RuntimeError, FileNotFoundError,
-                subprocess.CalledProcessError) as e:
-            # Recoverable: network/ffmpeg/disk errors — insert silence, retry next loop
+        except Exception as e:
+            # Recoverable: network/ffmpeg/disk/httpx errors — insert silence, retry next loop
             logger.error("Failed to produce %s segment: %s", seg_type.value, e)
             state.failed_segments += 1
             silence_path = config.tmp_dir / f"silence_{uuid4().hex[:8]}.mp3"

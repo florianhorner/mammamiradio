@@ -113,6 +113,8 @@ class StationState:
     now_streaming: dict = field(default_factory=dict)
     # Stream-side log (when segments actually play, not when produced)
     stream_log: list[SegmentLogEntry] = field(default_factory=list)
+    # Home Assistant context (natural language summary of home state)
+    ha_context: str = ""
 
     def _log(self, seg_type: str, label: str, metadata: dict | None = None) -> None:
         self.segment_log.append(SegmentLogEntry(
