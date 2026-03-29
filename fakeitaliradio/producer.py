@@ -138,7 +138,7 @@ async def run_producer(
                 segment = Segment(
                     type=SegmentType.AD,
                     path=ad_path,
-                    metadata={"type": "ad", "brand": brand, "text": text},
+                    metadata={"type": "ad", "brand": brand, "text": text, "host": host.name},
                 )
                 state.after_ad(brand=brand)
 

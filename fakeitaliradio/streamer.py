@@ -205,19 +205,40 @@ async function refresh() {
     sp.textContent = d.spotify_connected ? 'ON' : 'OFF';
     sp.className = 'stat-value ' + (d.spotify_connected ? 'spotify-on' : 'spotify-off');
 
-    // Now playing
-    document.getElementById('np-track').textContent =
-      d.current_track || 'Waiting for first track...';
+    // Now streaming (what the listener actually hears)
+    const ns = d.now_streaming || {};
+    const npEl = document.getElementById('np-track');
+    const npMeta = document.getElementById('np-meta');
+    if (ns.label) {
+      npEl.textContent = ns.label;
+      npMeta.textContent = ns.type ? ns.type.toUpperCase() + ' — streaming now' : '';
+    } else {
+      npEl.textContent = 'Waiting for first segment...';
+      npMeta.textContent = 'Press play on the audio player below';
+    }
 
-    // Segment log (newest first)
+    // Stream log = what was ACTUALLY PLAYED (newest first)
     const log = document.getElementById('log');
-    log.innerHTML = (d.segment_log || []).reverse().map(e =>
-      '<li>' +
+    const streamLog = (d.stream_log || []).slice().reverse();
+    log.innerHTML = streamLog.map((e, i) =>
+      '<li' + (i === 0 ? ' style="color:#fff;font-weight:bold"' : '') + '>' +
         '<span class="seg-icon ' + (cls[e.type] || '') + '">' + (icons[e.type] || '?') + '</span>' +
         '<span class="seg-time">' + fmt(e.timestamp) + '</span>' +
-        '<span class="seg-label">' + e.label + '</span>' +
+        '<span class="seg-label">' + e.label + (i === 0 ? ' ← NOW' : '') + '</span>' +
       '</li>'
     ).join('');
+
+    // Show what's in queue (produced but not yet streamed)
+    const queueCount = d.queue_depth || 0;
+    const prodLog = d.produced_log || [];
+    const streamedCount = streamLog.length;
+    // Items in queue = last N produced items that haven't streamed yet
+    const queueItems = prodLog.slice(streamedCount);
+    if (queueItems.length > 0) {
+      log.innerHTML += '<li style="color:#555;padding-top:8px;border-top:1px solid #333">' +
+        '<span class="seg-icon" style="background:#333;color:#888">⏳</span>' +
+        '<span class="seg-label">In queue: ' + queueItems.map(e => e.label).join(', ') + '</span></li>';
+    }
 
     // Upcoming
     const up = document.getElementById('upcoming');
@@ -225,9 +246,15 @@ async function refresh() {
       '<li><span class="num">' + (i+1) + '.</span> ' + t + '</li>'
     ).join('') || '<li>...</li>';
 
-    // Banter
+    // Show banter/ad scripts from the currently or most recently streamed segments
     const banter = document.getElementById('banter');
-    if (d.last_banter_script && d.last_banter_script.length) {
+    // Find the most recent banter in stream_log
+    const lastBanter = streamLog.find(e => e.type === 'banter');
+    if (lastBanter && lastBanter.metadata && lastBanter.metadata.lines) {
+      banter.innerHTML = lastBanter.metadata.lines.map(l =>
+        '<div><span class="script-host">' + l.host + ':</span> ' + l.text + '</div>'
+      ).join('');
+    } else if (d.last_banter_script && d.last_banter_script.length) {
       banter.innerHTML = d.last_banter_script.map(l =>
         '<div><span class="script-host">' + l.host + ':</span> ' + l.text + '</div>'
       ).join('');
@@ -235,7 +262,13 @@ async function refresh() {
 
     // Ad
     const ad = document.getElementById('ad');
-    if (d.last_ad_script && d.last_ad_script.brand) {
+    const lastAd = streamLog.find(e => e.type === 'ad');
+    if (lastAd && lastAd.metadata && lastAd.metadata.text) {
+      ad.innerHTML =
+        '<div><span class="script-ad-brand">' + (lastAd.metadata.brand || '?') + '</span> ' +
+        '(read by ' + (lastAd.metadata.host || '?') + ')</div>' +
+        '<div style="margin-top:6px;color:#aaa">' + lastAd.metadata.text + '</div>';
+    } else if (d.last_ad_script && d.last_ad_script.brand) {
       ad.innerHTML =
         '<div><span class="script-ad-brand">' + d.last_ad_script.brand + '</span> ' +
         '(read by ' + d.last_ad_script.host + ')</div>' +
@@ -263,10 +296,12 @@ setInterval(refresh, 2000);
 async def _audio_generator(request: Request):
     CHUNK = 16384
     segment_queue = request.app.state.queue
+    state = request.app.state.station_state
 
     while True:
         if await request.is_disconnected():
             logger.info("Client disconnected")
+            state.now_streaming = {}
             break
 
         try:
@@ -277,8 +312,11 @@ async def _audio_generator(request: Request):
             logger.warning("Queue empty for 30s, waiting...")
             continue
 
+        # Mark this segment as NOW STREAMING
+        state.on_stream_segment(segment)
+
         logger.info(
-            "Streaming %s: %s",
+            ">>> NOW STREAMING %s: %s",
             segment.type.value,
             segment.metadata.get("title", segment.metadata),
         )
@@ -325,17 +363,23 @@ async def status(request: Request):
     return {
         "station": config.station.name,
         "queue_depth": segment_queue.qsize(),
-        "current_track": state.current_track.display
-        if state.current_track
-        else None,
         "segments_produced": state.segments_produced,
         "tracks_played": len(state.played_tracks),
         "running_jokes": state.running_jokes,
         "uptime_sec": round(time.time() - start_time),
         "spotify_connected": state.spotify_connected,
-        "segment_log": [
+        # What the listener hears RIGHT NOW
+        "now_streaming": state.now_streaming,
+        # What the producer has made (queued, waiting to stream)
+        "produced_log": [
             {"type": e.type, "label": e.label, "timestamp": e.timestamp}
             for e in state.segment_log
+        ],
+        # What has actually been streamed to the listener
+        "stream_log": [
+            {"type": e.type, "label": e.label, "timestamp": e.timestamp,
+             "metadata": e.metadata}
+            for e in state.stream_log
         ],
         "upcoming_tracks": [t.display for t in state.upcoming_tracks],
         "last_banter_script": state.last_banter_script,

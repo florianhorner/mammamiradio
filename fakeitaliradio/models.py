@@ -70,15 +70,35 @@ class StationState:
     last_banter_script: list[dict] = field(default_factory=list)
     last_ad_script: dict = field(default_factory=dict)
     spotify_connected: bool = False
+    # What the listener is hearing RIGHT NOW
+    now_streaming: dict = field(default_factory=dict)
+    # Stream-side log (when segments actually play, not when produced)
+    stream_log: list[SegmentLogEntry] = field(default_factory=list)
 
     def _log(self, seg_type: str, label: str, metadata: dict | None = None) -> None:
         self.segment_log.append(SegmentLogEntry(
             type=seg_type, label=label,
             timestamp=time.time(), metadata=metadata or {},
         ))
-        # Keep last 50
         if len(self.segment_log) > 50:
             self.segment_log = self.segment_log[-50:]
+
+    def on_stream_segment(self, segment: Segment) -> None:
+        """Called by the streamer when it starts sending a segment to the listener."""
+        seg_type = segment.type.value
+        label = segment.metadata.get("title", segment.metadata.get("brand", seg_type))
+        self.now_streaming = {
+            "type": seg_type,
+            "label": label,
+            "started": time.time(),
+            "metadata": segment.metadata,
+        }
+        self.stream_log.append(SegmentLogEntry(
+            type=seg_type, label=label,
+            timestamp=time.time(), metadata=segment.metadata,
+        ))
+        if len(self.stream_log) > 50:
+            self.stream_log = self.stream_log[-50:]
 
     def after_music(self, track: Track) -> None:
         self.played_tracks.append(track)
