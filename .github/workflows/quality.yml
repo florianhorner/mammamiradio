@@ -15,11 +15,12 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+          cache: pip
 
       - name: Install dependencies
         run: |
           pip install -e .
-          pip install ruff mypy pytest
+          pip install ruff==0.9.10 mypy==1.15.0 pytest
 
       - name: Ruff lint
         run: ruff check .
