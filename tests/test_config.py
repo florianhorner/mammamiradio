@@ -42,8 +42,8 @@ def test_homeassistant_section_loaded():
     toml_path = Path(__file__).parent.parent / "radio.toml"
     config = load_config(str(toml_path))
 
-    assert config.homeassistant.enabled is True
-    assert config.homeassistant.url == "https://ha.horner.io"
+    assert config.homeassistant.enabled is False
+    assert config.homeassistant.url == ""
     assert config.homeassistant.poll_interval == 60
 
 

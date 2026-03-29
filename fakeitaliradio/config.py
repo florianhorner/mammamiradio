@@ -59,7 +59,7 @@ class AudioSection:
     bitrate: int = 192
     spotify_bitrate: int = 320
     fifo_path: str = "/tmp/fakeitaliradio.pcm"
-    go_librespot_bin: str = "/opt/homebrew/opt/go-librespot/bin/go-librespot"
+    go_librespot_bin: str = "go-librespot"
     go_librespot_port: int = 3678
     claude_model: str = "claude-haiku-4-5-20251001"
 
