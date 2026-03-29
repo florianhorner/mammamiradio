@@ -7,7 +7,10 @@ import random
 import anthropic
 
 from fakeitaliradio.config import StationConfig
-from fakeitaliradio.models import HostPersonality, StationState
+from fakeitaliradio.models import (
+    AdBrand, AdPart, AdScript, AdVoice,
+    HostPersonality, StationState,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -84,21 +87,60 @@ Return JSON:
 
 
 async def write_ad(
-    brand: str, config: StationConfig
-) -> tuple[HostPersonality, str]:
+    brand: AdBrand,
+    voice: AdVoice,
+    state: StationState,
+    config: StationConfig,
+) -> AdScript:
     client = anthropic.AsyncAnthropic(api_key=config.anthropic_api_key)
 
-    host = random.choice(config.hosts)
-    prompt = f"""Write a short, entertaining fake radio ad read by {host.name} for the fictional brand "{brand}".
-15-20 seconds when read aloud. Funny, slightly absurd, totally fictional.
+    # Build context for cross-referencing
+    recent_ads = [
+        f"- {e.brand}: {e.summary}" for e in state.ad_history[-5:]
+    ] if state.ad_history else ["(nessuna pubblicità ancora)"]
+
+    jokes = state.running_jokes[-3:] if state.running_jokes else []
+    recent_tracks = [t.display for t in state.played_tracks[-3:]]
+
+    prompt = f"""Write a fake radio ad for the fictional brand "{brand.name}".
+Tagline: "{brand.tagline}"
+Category: {brand.category}
+
+The ad is read by {voice.name}, whose style is: {voice.style}
+
+IMPORTANT: {voice.name} is NOT one of the radio hosts. This is a separate commercial voice.
+
+Recent ads that aired (you may cleverly reference these but NEVER repeat them):
+{chr(10).join(recent_ads)}
+
+Running jokes from the hosts: {jokes if jokes else "none"}
+Recently played music: {recent_tracks if recent_tracks else "show just started"}
+
+RULES:
+- Absurd but delivered with complete sincerity. The product may be insane but the pitch is professional.
+- 15-25 seconds when read aloud. Keep each voice line under 30 words.
+- You may interleave sound effect cues between voice lines for a produced feel.
+- Available SFX types: "chime", "sweep", "ding", "cash_register", "whoosh"
+- ALL text must be in {config.station.language}.
+- You may reference what the hosts said or what previous ads claimed, GTA-radio style.
 
 Return JSON:
-{{"text": "the ad copy"}}"""
+{{
+  "parts": [
+    {{"type": "sfx", "sfx": "chime"}},
+    {{"type": "voice", "text": "Ad copy line here"}},
+    {{"type": "sfx", "sfx": "sweep"}},
+    {{"type": "voice", "text": "More ad copy"}},
+    {{"type": "pause", "duration": 0.5}},
+    {{"type": "voice", "text": "Tagline or disclaimer"}}
+  ],
+  "summary": "One sentence summary of this ad for future reference"
+}}"""
 
     try:
         resp = await client.messages.create(
             model=config.audio.claude_model,
-            max_tokens=300,
+            max_tokens=600,
             system=_build_system_prompt(config),
             messages=[{"role": "user", "content": prompt}],
         )
@@ -106,14 +148,33 @@ Return JSON:
         if raw.startswith("```"):
             raw = raw.split("\n", 1)[1].rsplit("```", 1)[0].strip()
         data = json.loads(raw)
-        logger.info("Generated ad for %s", brand)
-        return (host, data["text"])
+
+        parts = []
+        for p in data.get("parts", []):
+            parts.append(AdPart(
+                type=p.get("type", "voice"),
+                text=p.get("text", ""),
+                sfx=p.get("sfx", ""),
+                duration=p.get("duration", 0.0),
+            ))
+
+        # Ensure we have at least one voice part
+        if not any(p.type == "voice" for p in parts):
+            parts = [AdPart(type="voice", text=data.get("text", brand.tagline))]
+
+        summary = data.get("summary", f"Ad for {brand.name}")
+        logger.info("Generated structured ad for %s: %d parts", brand.name, len(parts))
+        return AdScript(brand=brand.name, parts=parts, summary=summary)
 
     except Exception as e:
         logger.error("Ad generation failed: %s", e)
         fallback = {
-            "it": f"{brand}. Perché te lo meriti.",
-            "en": f"{brand}. Because you deserve it.",
+            "it": f"{brand.name}. {brand.tagline or 'Perché te lo meriti.'}",
+            "en": f"{brand.name}. {brand.tagline or 'Because you deserve it.'}",
         }
         text = fallback.get(config.station.language, fallback["en"])
-        return (host, text)
+        return AdScript(
+            brand=brand.name,
+            parts=[AdPart(type="voice", text=text)],
+            summary=f"Fallback ad for {brand.name}",
+        )

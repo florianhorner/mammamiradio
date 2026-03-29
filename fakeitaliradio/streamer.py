@@ -101,6 +101,15 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   .player-bar audio { flex: 1; height: 32px; }
   .player-bar .label { color: #ff6b35; font-size: 13px; white-space: nowrap; }
 
+  .controls { display: flex; gap: 8px; margin-bottom: 16px; }
+  .btn {
+    background: #222; border: 1px solid #444; border-radius: 6px;
+    color: #e0e0e0; padding: 8px 16px; cursor: pointer; font-size: 13px;
+    font-family: inherit;
+  }
+  .btn:hover { background: #333; border-color: #ff6b35; }
+  .btn:active { background: #ff6b35; color: #000; }
+
   .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
   @media (max-width: 600px) { .grid { grid-template-columns: 1fr; } }
 
@@ -129,6 +138,11 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     <div class="stat-label">Spotify</div>
     <div class="stat-value" id="spotify">-</div>
   </div>
+</div>
+
+<div class="controls">
+  <button class="btn" onclick="doShuffle()">Shuffle Playlist</button>
+  <button class="btn" onclick="doSkip()">Skip Current</button>
 </div>
 
 <div class="now-playing" id="now-playing">
@@ -266,12 +280,12 @@ async function refresh() {
     if (lastAd && lastAd.metadata && lastAd.metadata.text) {
       ad.innerHTML =
         '<div><span class="script-ad-brand">' + (lastAd.metadata.brand || '?') + '</span> ' +
-        '(read by ' + (lastAd.metadata.host || '?') + ')</div>' +
+        '(voice: ' + (lastAd.metadata.voice || lastAd.metadata.host || '?') + ')</div>' +
         '<div style="margin-top:6px;color:#aaa">' + lastAd.metadata.text + '</div>';
     } else if (d.last_ad_script && d.last_ad_script.brand) {
       ad.innerHTML =
         '<div><span class="script-ad-brand">' + d.last_ad_script.brand + '</span> ' +
-        '(read by ' + d.last_ad_script.host + ')</div>' +
+        '(voice: ' + (d.last_ad_script.voice || d.last_ad_script.host || '?') + ')</div>' +
         '<div style="margin-top:6px;color:#aaa">' + d.last_ad_script.text + '</div>';
     }
 
@@ -284,6 +298,21 @@ async function refresh() {
   } catch (e) {
     console.error('refresh failed', e);
   }
+}
+
+async function doShuffle() {
+  await fetch('/api/shuffle', { method: 'POST' });
+  refresh();
+}
+
+async function doSkip() {
+  await fetch('/api/skip', { method: 'POST' });
+  const audio = document.getElementById('audio');
+  // Reload stream to skip to next segment
+  audio.pause();
+  audio.load();
+  audio.play();
+  refresh();
 }
 
 refresh();
@@ -369,6 +398,32 @@ async def stream(request: Request):
         headers=headers,
         media_type="audio/mpeg",
     )
+
+
+@router.post("/api/shuffle")
+async def shuffle_playlist(request: Request):
+    """Shuffle upcoming tracks."""
+    import random
+    state = request.app.state.station_state
+    random.shuffle(state.playlist)
+    _update_upcoming_from_state(state)
+    return {"ok": True, "message": "Playlist shuffled"}
+
+
+@router.post("/api/skip")
+async def skip_track(request: Request):
+    """Skip the currently streaming segment by draining the queue faster."""
+    state = request.app.state.station_state
+    state.now_streaming = {"type": "skipping", "label": "Skipping...", "started": time.time()}
+    # The actual skip happens client-side by reloading the audio element
+    return {"ok": True}
+
+
+def _update_upcoming_from_state(state):
+    """Recalculate upcoming tracks after shuffle."""
+    if not state.playlist:
+        return
+    state.upcoming_tracks = state.playlist[:8]
 
 
 @router.get("/status")

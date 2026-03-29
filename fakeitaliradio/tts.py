@@ -7,8 +7,8 @@ from uuid import uuid4
 
 import edge_tts
 
-from fakeitaliradio.models import HostPersonality
-from fakeitaliradio.normalizer import concat_files, normalize, generate_silence
+from fakeitaliradio.models import AdScript, AdVoice, HostPersonality
+from fakeitaliradio.normalizer import concat_files, generate_sfx, generate_silence, normalize
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +30,52 @@ async def synthesize(text: str, voice: str, output_path: Path) -> Path:
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(None, generate_silence, output_path, 2.0)
         return output_path
+
+
+async def synthesize_ad(
+    script: AdScript,
+    voice: AdVoice,
+    tmp_dir: Path,
+    sfx_dir: Path | None = None,
+) -> Path:
+    """Assemble a multi-part ad: voice segments + SFX + pauses into a single MP3."""
+    parts: list[Path] = []
+    loop = asyncio.get_running_loop()
+
+    for i, part in enumerate(script.parts):
+        part_path = tmp_dir / f"adpart_{uuid4().hex[:8]}.mp3"
+
+        if part.type == "voice" and part.text:
+            await synthesize(part.text, voice.voice, part_path)
+            parts.append(part_path)
+        elif part.type == "sfx" and part.sfx:
+            await loop.run_in_executor(
+                None, generate_sfx, part_path, part.sfx, sfx_dir,
+            )
+            parts.append(part_path)
+        elif part.type == "pause":
+            duration = part.duration if part.duration > 0 else 0.5
+            await loop.run_in_executor(
+                None, generate_silence, part_path, duration,
+            )
+            parts.append(part_path)
+
+    if not parts:
+        # Fallback: synthesize brand name
+        fallback_path = tmp_dir / f"ad_fallback_{uuid4().hex[:8]}.mp3"
+        await synthesize(script.brand, voice.voice, fallback_path)
+        return fallback_path
+
+    if len(parts) == 1:
+        return parts[0]
+
+    output_path = tmp_dir / f"ad_{uuid4().hex[:8]}.mp3"
+    await loop.run_in_executor(None, concat_files, parts, output_path)
+
+    for p in parts:
+        p.unlink(missing_ok=True)
+
+    return output_path
 
 
 async def synthesize_dialogue(

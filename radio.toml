@@ -35,11 +35,114 @@ go_librespot_port = 3678
 claude_model = "claude-haiku-4-5-20251001"
 
 [ads]
-brand_pool = [
-    "Caffè Misterioso",
-    "Autolavaggio Supremo",
-    "Pizzeria del Futuro",
-    "Profumo di Nonna",
-    "Scarpe Volanti",
-    "Gelato Infinito",
-]
+sfx_dir = "sfx"
+
+[[ads.brands]]
+name = "Negroni as a Service"
+tagline = "NaaS. Sempre in cloud, mai nel bicchiere."
+category = "tech"
+recurring = true
+
+[[ads.brands]]
+name = "Spaghetti Carbonara su Stecco"
+tagline = "La tradizione... portatile."
+category = "food"
+recurring = true
+
+[[ads.brands]]
+name = "Mausoleo Berlusconi"
+tagline = "Le donne in gonna entrano gratis. I bambini pagano doppio."
+category = "tourism"
+recurring = false
+
+[[ads.brands]]
+name = "Caffè Misterioso"
+tagline = "Il gusto che non capirai mai."
+category = "food"
+recurring = true
+
+[[ads.brands]]
+name = "Autolavaggio Supremo"
+tagline = "La tua macchina esce più pulita di te."
+category = "services"
+recurring = true
+
+[[ads.brands]]
+name = "Profumo di Nonna"
+tagline = "Ragù, naftalina, e un tocco di mistero."
+category = "beauty"
+recurring = true
+
+[[ads.brands]]
+name = "Scarpe Volanti"
+tagline = "Non corri. Voli. Poi cadi."
+category = "fashion"
+recurring = true
+
+[[ads.brands]]
+name = "Gelato Infinito"
+tagline = "Non finisce mai. Letteralmente. Abbiamo un problema."
+category = "food"
+recurring = true
+
+[[ads.brands]]
+name = "Pizzeria del Futuro"
+tagline = "Pizza stampata in 3D. Il sapore è opzionale."
+category = "food"
+recurring = true
+
+[[ads.brands]]
+name = "Assicurazione Fantasma"
+tagline = "Ti copriamo. Forse. Dipende dall'umore."
+category = "finance"
+recurring = true
+
+[[ads.brands]]
+name = "Palestra Domani"
+tagline = "Iscriviti oggi. Inizia domani. O dopodomani."
+category = "fitness"
+recurring = false
+
+[[ads.brands]]
+name = "Cravatte Titaniche"
+tagline = "Affonda con stile."
+category = "fashion"
+recurring = false
+
+[[ads.brands]]
+name = "Clinica Dentale Sorriso Forzato"
+tagline = "Non sorridi? Ti aiutiamo noi. Anche contro la tua volontà."
+category = "health"
+recurring = true
+
+[[ads.brands]]
+name = "Vino Quantistico"
+tagline = "Rosso e bianco allo stesso tempo, finché non lo assaggi."
+category = "food"
+recurring = false
+
+[[ads.brands]]
+name = "Taxi Poetico"
+tagline = "Ti portiamo dove vuoi. Ti recitiamo Dante lungo il tragitto."
+category = "services"
+recurring = false
+
+[[ads.voices]]
+name = "Roberto"
+voice = "it-IT-GianniNeural"
+style = "booming TV announcer, dramatic pauses, sells everything like it's the last day on earth"
+
+[[ads.voices]]
+name = "Palmira"
+voice = "it-IT-PalmiraNeural"
+style = "ASMR whisperer, unsettlingly intimate, makes toothpaste sound sensual"
+
+[[ads.voices]]
+name = "Rinaldo"
+voice = "it-IT-RinaldoNeural"
+style = "fast-talking disclaimer reader, buries the bad news in speed"
+
+[[ads.voices]]
+name = "Fiamma"
+voice = "it-IT-FiammaNeural"
+style = "overly enthusiastic infomercial host, everything is INCREDIBILE"

@@ -12,11 +12,22 @@ from fakeitaliradio.downloader import download_track
 from fakeitaliradio.models import Segment, SegmentType, StationState
 from fakeitaliradio.normalizer import normalize, generate_silence
 from fakeitaliradio.scheduler import next_segment_type
+from fakeitaliradio.models import AdBrand
 from fakeitaliradio.scriptwriter import write_ad, write_banter
 from fakeitaliradio.spotify_player import SpotifyPlayer, download_track_spotify
-from fakeitaliradio.tts import synthesize, synthesize_dialogue
+from fakeitaliradio.tts import synthesize, synthesize_ad, synthesize_dialogue
 
 logger = logging.getLogger(__name__)
+
+
+def _pick_brand(brands: list[AdBrand], ad_history: list) -> AdBrand:
+    """Pick a brand, avoiding the last 3 aired and weighting recurring brands higher."""
+    recent_names = {e.brand for e in ad_history[-3:]}
+    eligible = [b for b in brands if b.name not in recent_names]
+    if not eligible:
+        eligible = list(brands)  # allow repeats if pool exhausted
+    weights = [3 if b.recurring else 1 for b in eligible]
+    return random.choices(eligible, weights=weights, k=1)[0]
 
 
 def _update_upcoming(state: StationState, current_track: Track) -> None:
@@ -73,15 +84,16 @@ async def run_producer(
 
                 norm_path = config.tmp_dir / f"music_{uuid4().hex[:8]}.mp3"
 
-                # Check if Spotify is connected for this track
+                # Check Spotify connection (quick, non-blocking)
+                if spotify_player:
+                    await spotify_player.check_auth()
+                    state.spotify_connected = spotify_player._authenticated
+
                 use_spotify = (
                     spotify_player
                     and spotify_player._authenticated
                     and track.spotify_id
                     and not track.spotify_id.startswith("demo")
-                )
-                state.spotify_connected = bool(
-                    spotify_player and spotify_player._authenticated
                 )
 
                 if use_spotify:
@@ -89,16 +101,6 @@ async def run_producer(
                         spotify_player, track, norm_path
                     )
                 else:
-                    # Check auth in background (non-blocking)
-                    if spotify_player and not spotify_player._authenticated:
-                        try:
-                            authenticated = await spotify_player.wait_for_auth(timeout=1)
-                            if authenticated:
-                                logger.info("Spotify connected! Switching to real music.")
-                                state.spotify_connected = True
-                        except Exception:
-                            pass
-
                     # Fallback: local files / yt-dlp / placeholder
                     audio_path = await download_track(track, config.cache_dir, music_dir=Path("music"))
                     loop = asyncio.get_running_loop()
@@ -127,24 +129,45 @@ async def run_producer(
                 state.after_banter()
 
             elif seg_type == SegmentType.AD:
-                if not config.ads.brand_pool:
+                if not config.ads.brands:
                     logger.warning("No brands configured — skipping ad segment")
                     state.after_ad(brand="")
                     continue
-                brand = random.choice(config.ads.brand_pool)
-                logger.info("Producing AD: %s", brand)
 
-                host, text = await write_ad(brand, config)
-                ad_path = config.tmp_dir / f"ad_{uuid4().hex[:8]}.mp3"
-                await synthesize(text, host.voice, ad_path)
+                brand = _pick_brand(config.ads.brands, state.ad_history)
+                voice = random.choice(config.ads.voices) if config.ads.voices else None
+                logger.info("Producing AD: %s (voice: %s)", brand.name, voice.name if voice else "host")
 
-                state.last_ad_script = {"brand": brand, "host": host.name, "text": text}
+                if voice:
+                    # Use dedicated ad voice
+                    script = await write_ad(brand, voice, state, config)
+                    sfx_dir = Path(config.ads.sfx_dir) if config.ads.sfx_dir else None
+                    ad_path = await synthesize_ad(script, voice, config.tmp_dir, sfx_dir)
+                else:
+                    # Fallback: use a host voice (old behavior)
+                    from fakeitaliradio.models import AdVoice as _AV
+                    host = random.choice(config.hosts)
+                    fallback_voice = _AV(name=host.name, voice=host.voice, style=host.style)
+                    script = await write_ad(brand, fallback_voice, state, config)
+                    sfx_dir = Path(config.ads.sfx_dir) if config.ads.sfx_dir else None
+                    ad_path = await synthesize_ad(script, fallback_voice, config.tmp_dir, sfx_dir)
+
+                # Collect all voice text for dashboard display
+                voice_name = voice.name if voice else host.name
+                full_text = " ".join(p.text for p in script.parts if p.type == "voice" and p.text)
+                state.last_ad_script = {
+                    "brand": brand.name, "voice": voice_name,
+                    "text": full_text, "summary": script.summary,
+                }
                 segment = Segment(
                     type=SegmentType.AD,
                     path=ad_path,
-                    metadata={"type": "ad", "brand": brand, "text": text, "host": host.name},
+                    metadata={
+                        "type": "ad", "brand": brand.name,
+                        "text": full_text, "voice": voice_name,
+                    },
                 )
-                state.after_ad(brand=brand)
+                state.after_ad(brand=brand.name, summary=script.summary)
 
         except Exception as e:
             logger.error("Failed to produce %s segment: %s", seg_type.value, e)

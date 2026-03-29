@@ -20,7 +20,8 @@ def test_load_config_from_radio_toml():
     assert len(config.hosts) == 2
     assert config.hosts[0].name == "Marco"
     assert config.hosts[1].name == "Giulia"
-    assert len(config.ads.brand_pool) > 0
+    assert len(config.ads.brands) > 0
+    assert len(config.ads.voices) > 0
 
 
 def test_audio_section_loaded():
