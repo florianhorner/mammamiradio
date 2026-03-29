@@ -294,9 +294,15 @@ setInterval(refresh, 2000);
 
 
 async def _audio_generator(request: Request):
-    CHUNK = 16384
+    """Stream audio at playback rate so dashboard stays in sync with listener."""
+    CHUNK = 4096  # smaller chunks for tighter pacing
     segment_queue = request.app.state.queue
     state = request.app.state.station_state
+    config = request.app.state.config
+
+    # Throttle to bitrate so server stays in sync with what listener hears
+    bytes_per_sec = (config.station.bitrate * 1000) / 8  # 192kbps = 24000 B/s
+    chunk_duration = CHUNK / bytes_per_sec  # seconds per chunk
 
     while True:
         if await request.is_disconnected():
@@ -322,10 +328,21 @@ async def _audio_generator(request: Request):
         )
 
         try:
+            send_start = time.monotonic()
+            bytes_sent = 0
             with open(segment.path, "rb") as f:
                 while chunk := f.read(CHUNK):
                     yield chunk
-                    await asyncio.sleep(0)
+                    bytes_sent += len(chunk)
+
+                    # Throttle: sleep to match playback rate
+                    elapsed = time.monotonic() - send_start
+                    expected = bytes_sent / bytes_per_sec
+                    ahead = expected - elapsed
+                    if ahead > 0.01:
+                        await asyncio.sleep(ahead)
+                    else:
+                        await asyncio.sleep(0)
         finally:
             segment.path.unlink(missing_ok=True)
             segment_queue.task_done()

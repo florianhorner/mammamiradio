@@ -10,7 +10,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 import os
 
-from fakeitaliradio.models import HostPersonality
+from fakeitaliradio.models import AdBrand, AdVoice, HostPersonality
 
 load_dotenv()
 
@@ -51,7 +51,9 @@ class AudioSection:
 
 @dataclass
 class AdsSection:
-    brand_pool: list[str] = field(default_factory=list)
+    brands: list[AdBrand] = field(default_factory=list)
+    voices: list[AdVoice] = field(default_factory=list)
+    sfx_dir: str = "sfx"
 
 
 @dataclass
@@ -84,12 +86,39 @@ def load_config(path: str = "radio.toml") -> StationConfig:
         for h in raw.get("hosts", [])
     ]
 
+    # Parse ads section with structured brands and voices
+    ads_raw = raw.get("ads", {})
+    if "brand_pool" in ads_raw:
+        # Backward compat: convert flat string list to AdBrand objects
+        brands = [AdBrand(name=s, tagline="", category="general") for s in ads_raw["brand_pool"]]
+        voices = []
+        sfx_dir = ads_raw.get("sfx_dir", "sfx")
+    else:
+        brands = [
+            AdBrand(
+                name=b["name"],
+                tagline=b.get("tagline", ""),
+                category=b.get("category", "general"),
+                recurring=b.get("recurring", True),
+            )
+            for b in ads_raw.get("brands", [])
+        ]
+        voices = [
+            AdVoice(
+                name=v["name"],
+                voice=v["voice"],
+                style=v.get("style", ""),
+            )
+            for v in ads_raw.get("voices", [])
+        ]
+        sfx_dir = ads_raw.get("sfx_dir", "sfx")
+
     return StationConfig(
         station=StationSection(**raw.get("station", {})),
         playlist=PlaylistSection(**raw.get("playlist", {})),
         pacing=PacingSection(**raw.get("pacing", {})),
         hosts=hosts,
-        ads=AdsSection(**raw.get("ads", {})),
+        ads=AdsSection(brands=brands, voices=voices, sfx_dir=sfx_dir),
         audio=AudioSection(**raw.get("audio", {})),
         spotify_client_id=os.getenv("SPOTIFY_CLIENT_ID", ""),
         spotify_client_secret=os.getenv("SPOTIFY_CLIENT_SECRET", ""),

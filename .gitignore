@@ -11,4 +11,4 @@ go-librespot/credentials.json
 go-librespot/lockfile
 go-librespot/state.json
 .spotify_token_cache
-.cache/
+.cache

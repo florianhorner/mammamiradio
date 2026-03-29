@@ -39,6 +39,44 @@ class HostPersonality:
 
 
 @dataclass
+class AdBrand:
+    name: str
+    tagline: str
+    category: str = "general"
+    recurring: bool = True
+
+
+@dataclass
+class AdVoice:
+    name: str
+    voice: str  # edge-tts voice ID
+    style: str  # character description for the prompt
+
+
+@dataclass
+class AdPart:
+    type: str  # "voice", "sfx", "pause"
+    text: str = ""
+    voice: str = ""
+    sfx: str = ""  # "chime", "sweep", "ding", "cash_register", "whoosh"
+    duration: float = 0.0
+
+
+@dataclass
+class AdScript:
+    brand: str
+    parts: list[AdPart] = field(default_factory=list)
+    summary: str = ""  # 1-sentence for history/cross-ref
+
+
+@dataclass
+class AdHistoryEntry:
+    brand: str
+    summary: str
+    timestamp: float = 0.0
+
+
+@dataclass
 class Segment:
     type: SegmentType
     path: Path
@@ -69,6 +107,7 @@ class StationState:
     # Last banter/ad scripts for display
     last_banter_script: list[dict] = field(default_factory=list)
     last_ad_script: dict = field(default_factory=dict)
+    ad_history: list[AdHistoryEntry] = field(default_factory=list)
     spotify_connected: bool = False
     # What the listener is hearing RIGHT NOW
     now_streaming: dict = field(default_factory=dict)
@@ -113,10 +152,16 @@ class StationState:
         self.segments_produced += 1
         self._log("banter", "Host banter")
 
-    def after_ad(self, brand: str = "") -> None:
+    def after_ad(self, brand: str = "", summary: str = "") -> None:
         self.songs_since_ad = 0
         self.segments_produced += 1
         self._log("ad", f"Ad: {brand}" if brand else "Ad break")
+        if brand:
+            self.ad_history.append(AdHistoryEntry(
+                brand=brand, summary=summary, timestamp=time.time(),
+            ))
+            if len(self.ad_history) > 20:
+                self.ad_history = self.ad_history[-20:]
 
     def add_joke(self, joke: str) -> None:
         self.running_jokes.append(joke)

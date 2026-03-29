@@ -127,6 +127,10 @@ async def run_producer(
                 state.after_banter()
 
             elif seg_type == SegmentType.AD:
+                if not config.ads.brand_pool:
+                    logger.warning("No brands configured — skipping ad segment")
+                    state.after_ad(brand="")
+                    continue
                 brand = random.choice(config.ads.brand_pool)
                 logger.info("Producing AD: %s", brand)
 
