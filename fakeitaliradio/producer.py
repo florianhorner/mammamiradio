@@ -125,7 +125,6 @@ async def run_producer(
             elif seg_type == SegmentType.AD:
                 if not config.ads.brands:
                     logger.warning("No brands configured — skipping ad segment")
-                    state.after_ad(brand="")
                     continue
 
                 num_spots = max(1, config.pacing.ad_spots_per_break)
@@ -186,8 +185,8 @@ async def run_producer(
                     )
                     break_texts.append(full_text)
 
-                    # Record each ad in history immediately so next spot sees it
-                    state.after_ad(brand=brand.name, summary=script.summary)
+                    # Record each spot in history so next spot avoids the same brand
+                    state.record_ad_spot(brand=brand.name, summary=script.summary)
 
                     # Bumper jingle between spots (not after last one)
                     if spot_idx < num_spots - 1:
@@ -236,6 +235,7 @@ async def run_producer(
                         "spots": num_spots,
                     },
                 )
+                state.after_ad(brands=break_brands)
 
         except Exception as e:
             # Recoverable: network/ffmpeg/disk/httpx errors — insert silence, retry next loop

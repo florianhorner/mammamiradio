@@ -9,21 +9,38 @@ set -a
 set +a
 mkdir -p tmp
 
-# Ensure FIFO exists
-FIFO="/tmp/fakeitaliradio.pcm"
+# Resolve runtime settings from radio.toml + .env via the config helper
+RUNTIME_JSON="$(python -m fakeitaliradio.config runtime-json 2>/dev/null || true)"
+if [ -n "$RUNTIME_JSON" ]; then
+    FIFO="$(echo "$RUNTIME_JSON" | python -c 'import json,sys; print(json.load(sys.stdin)["fifo_path"])')"
+    GO_LIBRESPOT_BIN="$(echo "$RUNTIME_JSON" | python -c 'import json,sys; print(json.load(sys.stdin)["go_librespot_bin"])')"
+    HOST="$(echo "$RUNTIME_JSON" | python -c 'import json,sys; print(json.load(sys.stdin)["bind_host"])')"
+    PORT="$(echo "$RUNTIME_JSON" | python -c 'import json,sys; print(json.load(sys.stdin)["port"])')"
+else
+    echo "Warning: could not resolve runtime config, using defaults" >&2
+    FIFO="${FAKEITALIRADIO_FIFO_PATH:-/tmp/fakeitaliradio.pcm}"
+    GO_LIBRESPOT_BIN="${GO_LIBRESPOT_BIN:-/opt/homebrew/opt/go-librespot/bin/go-librespot}"
+    HOST="${FAKEITALIRADIO_BIND_HOST:-127.0.0.1}"
+    PORT="${FAKEITALIRADIO_PORT:-8000}"
+fi
+
 DRAIN_PID_FILE="tmp/fifo-drain.pid"
-HOST="${FAKEITALIRADIO_BIND_HOST:-127.0.0.1}"
-PORT="${FAKEITALIRADIO_PORT:-8000}"
+
+# Ensure FIFO exists
 [ -p "$FIFO" ] || (rm -f "$FIFO" && mkfifo "$FIFO")
 
-# Start go-librespot if not already running
+# Start go-librespot if not already running (tolerate missing binary)
 if ! pgrep -f "go-librespot.*fakeitaliradio" > /dev/null 2>&1; then
-    echo "Starting go-librespot..."
-    /opt/homebrew/opt/go-librespot/bin/go-librespot \
-        --config_dir go-librespot \
-        > /dev/null 2>tmp/go-librespot.log &
-    echo "go-librespot PID: $!"
-    echo "Select 'fakeitaliradio' in your Spotify app"
+    if [ -x "$GO_LIBRESPOT_BIN" ] || command -v "$GO_LIBRESPOT_BIN" > /dev/null 2>&1; then
+        echo "Starting go-librespot..."
+        "$GO_LIBRESPOT_BIN" \
+            --config_dir go-librespot \
+            > /dev/null 2>tmp/go-librespot.log &
+        echo "go-librespot PID: $!"
+        echo "Select 'fakeitaliradio' in your Spotify app"
+    else
+        echo "Warning: go-librespot not found at $GO_LIBRESPOT_BIN — running without Spotify" >&2
+    fi
 else
     echo "go-librespot already running ($(pgrep -f 'go-librespot.*fakeitaliradio'))"
 fi

@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from fakeitaliradio.config import load_config, AudioSection
+from fakeitaliradio.config import load_config, AudioSection, runtime_json
 
 
 def test_load_config_from_radio_toml():
@@ -14,7 +14,6 @@ def test_load_config_from_radio_toml():
 
     assert config.station.name == "Radio Ital\xec"
     assert config.station.language == "it"
-    assert config.station.bitrate == 192
     assert config.pacing.songs_between_banter == 2
     assert config.pacing.songs_between_ads == 4
     assert len(config.hosts) == 2
@@ -58,6 +57,23 @@ def test_loads_admin_env(monkeypatch):
     assert config.admin_username == "radio"
     assert config.admin_password == "secret"
     assert config.admin_token == "token123"
+
+
+def test_audio_bitrate_is_canonical():
+    """audio.bitrate is the single source of truth for bitrate."""
+    toml_path = Path(__file__).parent.parent / "radio.toml"
+    config = load_config(str(toml_path))
+    assert config.audio.bitrate == 192
+    assert not hasattr(config.station, "bitrate")
+
+
+def test_runtime_json_keys():
+    toml_path = Path(__file__).parent.parent / "radio.toml"
+    config = load_config(str(toml_path))
+    result = runtime_json(config)
+    assert "bind_host" in result
+    assert "fifo_path" in result
+    assert "go_librespot_bin" in result
 
 
 def test_non_local_bind_requires_admin_auth(monkeypatch):

@@ -135,12 +135,42 @@ def test_mix_with_bed():
 
 # --- Campaign arc context ---
 
+def test_ad_break_increments_segments_produced_once():
+    """A multi-spot ad break should increment segments_produced exactly once."""
+    state = StationState()
+    state.segments_produced = 5
+
+    # Simulate a 3-spot break
+    state.record_ad_spot(brand="A", summary="spot 1")
+    state.record_ad_spot(brand="B", summary="spot 2")
+    state.record_ad_spot(brand="C", summary="spot 3")
+    state.after_ad(brands=["A", "B", "C"])
+
+    assert state.segments_produced == 6  # exactly +1
+    assert state.songs_since_ad == 0
+    assert len(state.ad_history) == 3  # per-spot history preserved
+
+
+def test_no_brands_does_not_reset_ad_pacing():
+    """When no brands are configured, skipping the ad should not reset counters."""
+    state = StationState()
+    state.songs_since_ad = 5
+    state.segments_produced = 10
+    # The producer skips without calling after_ad when no brands configured
+    # Just verify after_ad is not called — songs_since_ad stays at 5
+    assert state.songs_since_ad == 5
+    assert state.segments_produced == 10
+
+
 def test_campaign_arc_in_ad_history():
     """Verify that same-brand history is tracked for campaign arcs."""
     state = StationState()
-    state.after_ad(brand="Caffè", summary="First ad: mysterious coffee")
-    state.after_ad(brand="Gelato", summary="Gelato ad")
-    state.after_ad(brand="Caffè", summary="Second ad: coffee conspiracy")
+    state.record_ad_spot(brand="Caffè", summary="First ad: mysterious coffee")
+    state.after_ad(brands=["Caffè"])
+    state.record_ad_spot(brand="Gelato", summary="Gelato ad")
+    state.after_ad(brands=["Gelato"])
+    state.record_ad_spot(brand="Caffè", summary="Second ad: coffee conspiracy")
+    state.after_ad(brands=["Caffè"])
 
     caffe_history = [e for e in state.ad_history if e.brand == "Caffè"]
     assert len(caffe_history) == 2

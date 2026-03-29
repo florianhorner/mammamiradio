@@ -4,6 +4,12 @@ AI-powered fake Italian radio station. Streams music from your Spotify library w
 
 Two hosts (configurable) riff on the tracks, keep running jokes alive across segments, and periodically cut to ad breaks for fictional brands like "Negroni as a Service." The whole thing streams as a live MP3 you can open in any browser or audio player.
 
+## Documentation
+
+- [ARCHITECTURE.md](ARCHITECTURE.md) explains the runtime, component boundaries, and the FIFO/go-librespot audio path.
+- [CONTRIBUTING.md](CONTRIBUTING.md) covers local setup, test commands, and manual smoke checks.
+- [CHANGELOG.md](CHANGELOG.md) tracks release notes from the current `0.1.0` baseline forward.
+
 ## How it works
 
 ```
@@ -29,8 +35,8 @@ The **producer** generates segments ahead of time (music, banter, or ads) and pu
 
 ```bash
 # Clone and install
-cd fake-radio-engine
-python -m venv .venv
+cd /path/to/fakeitaliradio
+python3.11 -m venv .venv
 source .venv/bin/activate
 pip install -e .
 
@@ -61,7 +67,7 @@ Everything lives in `radio.toml`. Key sections:
 
 | Section | What it controls |
 |---------|-----------------|
-| `[station]` | Name, language, theme description, bitrate |
+| `[station]` | Name, language, theme description |
 | `[playlist]` | Spotify playlist URL (or empty for liked songs), shuffle |
 | `[pacing]` | Songs between banter/ads, spots per ad break, lookahead depth |
 | `[[hosts]]` | Host personalities: name, Edge TTS voice, style description |
@@ -97,6 +103,20 @@ The producer generates three types of segments:
 - **Ad breaks**: Claude writes scripts for fictional brands. Multi-part audio with voice acting, SFX, bumper jingles, and music beds. Supports campaign arcs where the same brand gets callbacks across breaks.
 
 The scheduler cycles through them: a few songs, then banter, a few more, then an ad break. Pacing is configurable in `radio.toml`.
+
+## Project layout
+
+Core application files live in `fakeitaliradio/`. Everything else:
+
+| Path | What it is |
+|------|-----------|
+| `fakeitaliradio/` | Application runtime code |
+| `tests/` | pytest tests |
+| `radio.toml` | Station config (tracked, safe defaults) |
+| `.claude/skills/gstack` | Vendored agent/tooling support — not application code |
+| `tmp/` | Generated runtime audio and logs (gitignored) |
+| `cache/` | Downloaded/cached tracks (gitignored) |
+| `.context/` | Conductor agent collaboration artifacts (gitignored) |
 
 ## Dependencies
 

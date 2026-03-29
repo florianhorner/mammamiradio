@@ -110,10 +110,10 @@ class SpotifyPlayer:
         logger.info("FIFO drain thread stopped")
 
     def _is_golibrespot_running(self) -> bool:
-        """Check if go-librespot is already running externally (e.g., via start.sh)."""
+        """Check if go-librespot is running with our config dir (not any unrelated instance)."""
         try:
             result = subprocess.run(
-                ["pgrep", "-f", "go-librespot"],
+                ["pgrep", "-f", f"go-librespot.*{self._config_dir}"],
                 capture_output=True, text=True,
             )
             return result.returncode == 0

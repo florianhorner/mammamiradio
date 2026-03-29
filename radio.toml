@@ -2,7 +2,6 @@
 name = "Radio Italì"
 language = "it"
 theme = "late-night Milan talk radio, warm and nostalgic, two hosts who love cinema and 90s Italian pop"
-bitrate = 192
 
 [playlist]
 spotify_url = ""  # Leave empty to use liked songs, or paste a playlist URL you own
