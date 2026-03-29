@@ -1,3 +1,5 @@
+"""Text-to-speech assembly for host dialogue and produced ads."""
+
 from __future__ import annotations
 
 import asyncio
@@ -17,6 +19,7 @@ logger = logging.getLogger(__name__)
 
 
 async def synthesize(text: str, voice: str, output_path: Path) -> Path:
+    """Render text with Edge TTS, then normalize it to station output settings."""
     try:
         comm = edge_tts.Communicate(text, voice)
         raw_path = output_path.with_suffix(".raw.mp3")
@@ -109,6 +112,7 @@ async def synthesize_dialogue(
     lines: list[tuple[HostPersonality, str]],
     tmp_dir: Path,
 ) -> Path:
+    """Render each host line separately and stitch the exchange together."""
     parts: list[Path] = []
 
     for i, (host, text) in enumerate(lines):

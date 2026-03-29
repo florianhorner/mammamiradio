@@ -1,3 +1,5 @@
+"""Segment production pipeline for music, banter, and ad breaks."""
+
 from __future__ import annotations
 
 import asyncio
@@ -41,6 +43,7 @@ async def run_producer(
     config: StationConfig,
     spotify_player: SpotifyPlayer | None = None,
 ) -> None:
+    """Keep the lookahead queue filled with rendered segments for live playback."""
     logger.info("Producer started. Playlist: %d tracks", len(state.playlist))
 
     # Home Assistant context cache

@@ -1,3 +1,5 @@
+"""Prompt assembly and LLM calls for banter and ad copy generation."""
+
 from __future__ import annotations
 
 import json
@@ -16,6 +18,7 @@ logger = logging.getLogger(__name__)
 
 
 def _build_system_prompt(config: StationConfig) -> str:
+    """Build the shared station persona prompt used for every script request."""
     host_descriptions = "\n".join(
         f"- {h.name}: {h.style} (voice: {h.voice})"
         for h in config.hosts
@@ -40,6 +43,7 @@ Rules:
 async def write_banter(
     state: StationState, config: StationConfig
 ) -> list[tuple[HostPersonality, str]]:
+    """Generate short host banter with recent tracks, jokes, and home context."""
     client = anthropic.AsyncAnthropic(api_key=config.anthropic_api_key)
 
     recent = [t.display for t in state.played_tracks[-3:]]
@@ -124,6 +128,7 @@ async def write_ad(
     state: StationState,
     config: StationConfig,
 ) -> AdScript:
+    """Generate a structured fictional ad script for one brand/voice pairing."""
     client = anthropic.AsyncAnthropic(api_key=config.anthropic_api_key)
 
     # Build context for cross-referencing
