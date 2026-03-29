@@ -4,6 +4,21 @@ All notable changes to `fakeitaliradio` are documented here.
 
 The current version source of truth is `pyproject.toml`.
 
+## [Unreleased]
+
+### Added
+
+- Ruff linting and formatting config in `pyproject.toml` with auto-fixed violations across all Python files.
+- Mypy type checking config (lenient mode) to catch obvious type errors without blocking on untyped legacy code.
+- Pre-commit hooks for ruff lint and format (runs on every commit).
+- GitHub Actions CI workflow running ruff, mypy, and pytest on push/PR to main.
+- `TODOS.md` for tracking deferred work items.
+
+### Changed
+
+- Pinned ruff (0.9.10) and mypy (1.15.0) versions in CI to prevent surprise breakage from upstream releases.
+- Updated `CONTRIBUTING.md` with lint, format, and type-check commands.
+
 ## [0.1.1] - 2026-03-29
 
 ### Added
