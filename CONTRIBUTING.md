@@ -67,7 +67,23 @@ pytest tests/
 Notes:
 
 - `tests/test_ads.py` exercises audio helpers and needs FFmpeg installed.
-- There is no dedicated lint or formatter command checked into this repo today, so keep style aligned with the surrounding code and keep diffs tight.
+
+## Lint, format, and type check
+
+```bash
+ruff check .          # lint
+ruff check --fix .    # lint + auto-fix
+ruff format .         # format
+ruff format --check . # format check (CI mode)
+mypy fakeitaliradio/ tests/  # type check
+```
+
+To install pre-commit hooks locally:
+
+```bash
+pip install pre-commit
+pre-commit install
+```
 
 ## Manual smoke test
 
