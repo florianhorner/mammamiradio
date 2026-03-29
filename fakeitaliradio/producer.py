@@ -19,6 +19,25 @@ from fakeitaliradio.tts import synthesize, synthesize_dialogue
 logger = logging.getLogger(__name__)
 
 
+def _update_upcoming(state: StationState, current_track: Track) -> None:
+    """Update the upcoming tracks preview based on current position in playlist."""
+    try:
+        playlist = state.playlist
+        if not playlist:
+            return
+        # Find current track index
+        idx = next(
+            (i for i, t in enumerate(playlist) if t.spotify_id == current_track.spotify_id),
+            0,
+        )
+        upcoming = []
+        for j in range(1, 6):
+            upcoming.append(playlist[(idx + j) % len(playlist)])
+        state.upcoming_tracks = upcoming
+    except Exception:
+        pass
+
+
 async def run_producer(
     queue: asyncio.Queue[Segment],
     state: StationState,
@@ -46,6 +65,12 @@ async def run_producer(
                 track = next(track_iter)
                 logger.info("Producing MUSIC: %s", track.display)
 
+                # Update upcoming preview (peek next 5 tracks)
+                upcoming = []
+                temp_iter = itertools.tee(track_iter, 1)[0]
+                # Can't easily peek a cycle, so use playlist index
+                _update_upcoming(state, track)
+
                 norm_path = config.tmp_dir / f"music_{uuid4().hex[:8]}.mp3"
 
                 # Check if Spotify is connected for this track
@@ -54,6 +79,9 @@ async def run_producer(
                     and spotify_player._authenticated
                     and track.spotify_id
                     and not track.spotify_id.startswith("demo")
+                )
+                state.spotify_connected = bool(
+                    spotify_player and spotify_player._authenticated
                 )
 
                 if use_spotify:
@@ -67,6 +95,7 @@ async def run_producer(
                             authenticated = await spotify_player.wait_for_auth(timeout=1)
                             if authenticated:
                                 logger.info("Spotify connected! Switching to real music.")
+                                state.spotify_connected = True
                         except Exception:
                             pass
 
@@ -87,10 +116,13 @@ async def run_producer(
                 lines = await write_banter(state, config)
                 audio_path = await synthesize_dialogue(lines, config.tmp_dir)
 
+                state.last_banter_script = [
+                    {"host": h.name, "text": t} for h, t in lines
+                ]
                 segment = Segment(
                     type=SegmentType.BANTER,
                     path=audio_path,
-                    metadata={"type": "banter"},
+                    metadata={"type": "banter", "lines": state.last_banter_script},
                 )
                 state.after_banter()
 
@@ -102,12 +134,13 @@ async def run_producer(
                 ad_path = config.tmp_dir / f"ad_{uuid4().hex[:8]}.mp3"
                 await synthesize(text, host.voice, ad_path)
 
+                state.last_ad_script = {"brand": brand, "host": host.name, "text": text}
                 segment = Segment(
                     type=SegmentType.AD,
                     path=ad_path,
-                    metadata={"type": "ad", "brand": brand},
+                    metadata={"type": "ad", "brand": brand, "text": text},
                 )
-                state.after_ad()
+                state.after_ad(brand=brand)
 
         except Exception as e:
             logger.error("Failed to produce %s segment: %s", seg_type.value, e)
@@ -125,7 +158,7 @@ async def run_producer(
             elif seg_type == SegmentType.BANTER:
                 state.after_banter()
             elif seg_type == SegmentType.AD:
-                state.after_ad()
+                state.after_ad(brand="")
 
         if segment:
             await queue.put(segment)
