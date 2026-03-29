@@ -223,9 +223,8 @@ async def run_producer(
                     },
                 )
 
-        except (OSError, RuntimeError, FileNotFoundError,
-                subprocess.CalledProcessError) as e:
-            # Recoverable: network/ffmpeg/disk errors — insert silence, retry next loop
+        except Exception as e:
+            # Recoverable: network/ffmpeg/disk/httpx errors — insert silence, retry next loop
             logger.error("Failed to produce %s segment: %s", seg_type.value, e)
             state.failed_segments += 1
             silence_path = config.tmp_dir / f"silence_{uuid4().hex[:8]}.mp3"
