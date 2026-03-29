@@ -63,7 +63,11 @@ async def startup():
     _producer_task = asyncio.create_task(
         run_producer(queue, state, config, spotify_player=spotify_player)
     )
-    logger.info("Producer started. Stream at http://0.0.0.0:8000/stream")
+    logger.info(
+        "Producer started. Stream at http://%s:%d/stream",
+        config.bind_host,
+        config.bind_port,
+    )
 
 
 @app.on_event("shutdown")
@@ -76,4 +80,9 @@ async def shutdown():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("fakeitaliradio.main:app", host="0.0.0.0", port=8000)
+    app_config = load_config()
+    uvicorn.run(
+        "fakeitaliradio.main:app",
+        host=app_config.bind_host,
+        port=app_config.bind_port,
+    )

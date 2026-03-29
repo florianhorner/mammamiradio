@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import secrets
 import time
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse, StreamingResponse
 
 from fakeitaliradio.models import Segment
@@ -248,6 +249,12 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 const icons = { music: '♫', banter: '🎙', ad: '📢' };
 const cls = { music: 'seg-music', banter: 'seg-banter', ad: 'seg-ad' };
 
+function esc(s) {
+  const d = document.createElement('div');
+  d.textContent = s == null ? '' : String(s);
+  return d.innerHTML;
+}
+
 function fmt(ts) {
   if (!ts) return '';
   const d = new Date(ts * 1000);
@@ -259,6 +266,33 @@ function fmtUptime(s) {
   const m = Math.floor((s % 3600) / 60);
   if (h > 0) return h + 'h ' + m + 'm';
   return m + 'm ' + (s % 60) + 's';
+}
+
+let apiKeyCache;
+function getApiKey() {
+  if (apiKeyCache !== undefined) return apiKeyCache;
+
+  const params = new URLSearchParams(window.location.search);
+  const queryKey = params.get('key');
+  const storedKey = sessionStorage.getItem('dashboard_api_key');
+  const key = queryKey || storedKey || '';
+
+  if (queryKey) {
+    sessionStorage.setItem('dashboard_api_key', queryKey);
+    const cleanUrl = new URL(window.location.href);
+    cleanUrl.searchParams.delete('key');
+    window.history.replaceState({}, '', cleanUrl.toString());
+  }
+
+  apiKeyCache = key;
+  return key;
+}
+
+async function apiFetch(url, options = {}) {
+  const key = getApiKey();
+  const headers = { ...(options.headers || {}) };
+  if (key) headers['X-API-Key'] = key;
+  return fetch(url, { ...options, headers });
 }
 
 async function refresh() {
@@ -295,15 +329,17 @@ async function refresh() {
     const log = document.getElementById('log');
     const streamLog = (d.stream_log || []).slice().reverse();
     log.innerHTML = streamLog.map((e, i) =>
-      '<li' + (i === 0 ? ' style="color:#fff;font-weight:bold"' : '') + '>' +
-        '<span class="seg-icon ' + (cls[e.type] || '') + '">' + (icons[e.type] || '?') + '</span>' +
-        '<span class="seg-time">' + fmt(e.timestamp) + '</span>' +
-        '<span class="seg-label">' + e.label + (i === 0 ? ' ← NOW' : '') + '</span>' +
-      '</li>'
+      (() => {
+        const safeType = e.type in cls ? e.type : '';
+        return '<li' + (i === 0 ? ' style="color:#fff;font-weight:bold"' : '') + '>' +
+          '<span class="seg-icon ' + (cls[safeType] || '') + '">' + (icons[safeType] || '?') + '</span>' +
+          '<span class="seg-time">' + esc(fmt(e.timestamp)) + '</span>' +
+          '<span class="seg-label">' + esc(e.label) + (i === 0 ? ' ← NOW' : '') + '</span>' +
+        '</li>';
+      })()
     ).join('');
 
     // Show what's in queue (produced but not yet streamed)
-    const queueCount = d.queue_depth || 0;
     const prodLog = d.produced_log || [];
     const streamedCount = streamLog.length;
     // Items in queue = last N produced items that haven't streamed yet
@@ -311,24 +347,26 @@ async function refresh() {
     if (queueItems.length > 0) {
       log.innerHTML += '<li style="color:#555;padding-top:8px;border-top:1px solid #333">' +
         '<span class="seg-icon" style="background:#333;color:#888">⏳</span>' +
-        '<span class="seg-label">In queue: ' + queueItems.map(e => e.label).join(', ') + '</span></li>';
+        '<span class="seg-label">In queue: ' + queueItems.map(e => esc(e.label)).join(', ') + '</span></li>';
     }
 
     // Upcoming (full schedule: music + banter + ads)
     const up = document.getElementById('upcoming');
     up.innerHTML = (d.upcoming || []).map((e, i) => {
-      const isMusic = e.type === 'music' && e.playlist_index !== undefined;
-      const idx = e.playlist_index;
+      const idxNum = Number(e.playlist_index);
+      const hasIndex = Number.isInteger(idxNum) && idxNum >= 0;
+      const safeType = e.type in cls ? e.type : '';
+      const isMusic = safeType === 'music' && hasIndex;
       const actions = isMusic
         ? '<span class="actions">' +
-            '<button class="act-btn" onclick="playNext(' + idx + ')" title="Play next">▲</button>' +
-            '<button class="act-btn" onclick="removeTrack(' + idx + ')" title="Remove">✕</button>' +
+            '<button class="act-btn" onclick="playNext(' + idxNum + ')" title="Play next">▲</button>' +
+            '<button class="act-btn" onclick="removeTrack(' + idxNum + ')" title="Remove">✕</button>' +
           '</span>'
         : '';
       return '<li>' +
-        '<span class="seg-icon ' + (cls[e.type] || '') + '" style="width:18px;height:18px;font-size:10px">' +
-          (icons[e.type] || '?') + '</span> ' +
-        '<span class="seg-label">' + e.label + '</span>' +
+        '<span class="seg-icon ' + (cls[safeType] || '') + '" style="width:18px;height:18px;font-size:10px">' +
+          (icons[safeType] || '?') + '</span> ' +
+        '<span class="seg-label">' + esc(e.label) + '</span>' +
         actions +
       '</li>';
     }).join('') || '<li>...</li>';
@@ -339,12 +377,14 @@ async function refresh() {
     const lastBanter = streamLog.find(e => e.type === 'banter');
     if (lastBanter && lastBanter.metadata && lastBanter.metadata.lines) {
       banter.innerHTML = lastBanter.metadata.lines.map(l =>
-        '<div><span class="script-host">' + l.host + ':</span> ' + l.text + '</div>'
+        '<div><span class="script-host">' + esc(l.host) + ':</span> ' + esc(l.text) + '</div>'
       ).join('');
     } else if (d.last_banter_script && d.last_banter_script.length) {
       banter.innerHTML = d.last_banter_script.map(l =>
-        '<div><span class="script-host">' + l.host + ':</span> ' + l.text + '</div>'
+        '<div><span class="script-host">' + esc(l.host) + ':</span> ' + esc(l.text) + '</div>'
       ).join('');
+    } else {
+      banter.innerHTML = '...';
     }
 
     // Ad
@@ -352,46 +392,49 @@ async function refresh() {
     const lastAd = streamLog.find(e => e.type === 'ad');
     if (lastAd && lastAd.metadata && lastAd.metadata.text) {
       ad.innerHTML =
-        '<div><span class="script-ad-brand">' + (lastAd.metadata.brand || '?') + '</span> ' +
-        '(voice: ' + (lastAd.metadata.voice || lastAd.metadata.host || '?') + ')</div>' +
-        '<div style="margin-top:6px;color:#aaa">' + lastAd.metadata.text + '</div>';
+        '<div><span class="script-ad-brand">' + esc(lastAd.metadata.brand || '?') + '</span> ' +
+        '(voice: ' + esc(lastAd.metadata.voice || lastAd.metadata.host || '?') + ')</div>' +
+        '<div style="margin-top:6px;color:#aaa">' + esc(lastAd.metadata.text) + '</div>';
     } else if (d.last_ad_script && d.last_ad_script.brand) {
       ad.innerHTML =
-        '<div><span class="script-ad-brand">' + d.last_ad_script.brand + '</span> ' +
-        '(voice: ' + (d.last_ad_script.voice || d.last_ad_script.host || '?') + ')</div>' +
-        '<div style="margin-top:6px;color:#aaa">' + d.last_ad_script.text + '</div>';
+        '<div><span class="script-ad-brand">' + esc(d.last_ad_script.brand) + '</span> ' +
+        '(voice: ' + esc(d.last_ad_script.voice || d.last_ad_script.host || '?') + ')</div>' +
+        '<div style="margin-top:6px;color:#aaa">' + esc(d.last_ad_script.text) + '</div>';
+    } else {
+      ad.innerHTML = '...';
     }
 
     // Jokes
     const jokes = document.getElementById('jokes');
     jokes.innerHTML = (d.running_jokes || []).map(j =>
-      '<li>"' + j + '"</li>'
+      '<li>"' + esc(j) + '"</li>'
     ).join('') || '<li>No running jokes yet...</li>';
 
     // Debug: go-librespot log (parse structured log format)
     const gl = document.getElementById('debug-gl');
     if (gl && d.go_librespot_log) {
       gl.innerHTML = d.go_librespot_log.map(raw => {
-        raw = raw.trim();
+        raw = String(raw || '').trim();
         if (!raw) return '';
         // Parse: time="..." level=info msg="..." key="val"
         const timeM = raw.match(/time="([^"]+)"/);
-        const levelM = raw.match(/level=(\w+)/);
+        const levelM = raw.match(/level=(\\w+)/);
         const msgM = raw.match(/msg="([^"]+)"/);
         const ts = timeM ? timeM[1].split('T')[1]?.split('+')[0] || '' : '';
-        const lvl = levelM ? levelM[1] : 'info';
-        const msg = msgM ? msgM[1] : raw.replace(/</g,'&lt;');
+        const lvlRaw = levelM ? levelM[1].toLowerCase() : 'info';
+        const lvl = ['info', 'warning', 'error'].includes(lvlRaw) ? lvlRaw : 'info';
+        const msg = msgM ? msgM[1] : raw;
         // Extract extra fields (error=, uri=, etc.)
         const extras = [];
         const errM = raw.match(/error="([^"]+)"/);
         const uriM = raw.match(/uri="([^"]+)"/);
         if (errM) extras.push(errM[1]);
         if (uriM) extras.push(uriM[1].replace('spotify:track:',''));
-        const detail = extras.length ? '<span class="detail">' + extras.join(' ') + '</span>' : '';
+        const detail = extras.length ? '<span class="detail">' + esc(extras.join(' ')) + '</span>' : '';
         return '<div class="entry">' +
-          '<span class="ts">' + ts + '</span>' +
-          '<span class="lvl lvl-' + lvl + '">' + lvl.toUpperCase() + '</span>' +
-          '<span class="msg">' + msg + '</span>' +
+          '<span class="ts">' + esc(ts) + '</span>' +
+          '<span class="lvl lvl-' + lvl + '">' + esc(lvl.toUpperCase()) + '</span>' +
+          '<span class="msg">' + esc(msg) + '</span>' +
           detail + '</div>';
       }).join('');
       gl.scrollTop = gl.scrollHeight;
@@ -404,8 +447,8 @@ async function refresh() {
         ? d.producer_errors.map(e =>
             '<div class="entry">' +
               '<span class="lvl lvl-error">ERR</span>' +
-              '<span class="msg">' + e.type + ': ' + e.label + '</span>' +
-              '<span class="detail">' + (e.metadata.error || '') + '</span>' +
+              '<span class="msg">' + esc(e.type + ': ' + e.label) + '</span>' +
+              '<span class="detail">' + esc((e.metadata && e.metadata.error) || '') + '</span>' +
             '</div>'
           ).join('')
         : '<div class="entry"><span class="msg" style="color:#66aa66">No errors</span></div>';
@@ -417,12 +460,12 @@ async function refresh() {
 }
 
 async function doShuffle() {
-  await fetch('/api/shuffle', { method: 'POST' });
+  await apiFetch('/api/shuffle', { method: 'POST' });
   refresh();
 }
 
 async function doSkip() {
-  await fetch('/api/skip', { method: 'POST' });
+  await apiFetch('/api/skip', { method: 'POST' });
   const audio = document.getElementById('audio');
   audio.pause();
   audio.load();
@@ -431,13 +474,12 @@ async function doSkip() {
 }
 
 async function doPurge() {
-  const r = await fetch('/api/purge', { method: 'POST' });
-  const d = await r.json();
+  await apiFetch('/api/purge', { method: 'POST' });
   refresh();
 }
 
 async function removeTrack(idx) {
-  await fetch('/api/playlist/remove', {
+  await apiFetch('/api/playlist/remove', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({index: idx}),
@@ -446,7 +488,7 @@ async function removeTrack(idx) {
 }
 
 async function playNext(idx) {
-  await fetch('/api/playlist/move_to_next', {
+  await apiFetch('/api/playlist/move_to_next', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({index: idx}),
@@ -454,6 +496,7 @@ async function playNext(idx) {
   refresh();
 }
 
+getApiKey();
 refresh();
 setInterval(refresh, 2000);
 </script>
@@ -516,6 +559,16 @@ async def _audio_generator(request: Request):
             segment_queue.task_done()
 
 
+def _require_write_auth(request: Request) -> None:
+    expected_api_key = getattr(request.app.state.config, "dashboard_api_key", "")
+    if not expected_api_key:
+        return
+
+    provided_api_key = request.headers.get("x-api-key") or request.query_params.get("key")
+    if not provided_api_key or not secrets.compare_digest(provided_api_key, expected_api_key):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+
 @router.get("/", response_class=HTMLResponse)
 async def dashboard():
     return DASHBOARD_HTML
@@ -551,6 +604,7 @@ async def logs(lines: int = 50):
 async def shuffle_playlist(request: Request):
     """Shuffle upcoming tracks."""
     import random
+    _require_write_auth(request)
     state = request.app.state.station_state
     random.shuffle(state.playlist)
     return {"ok": True, "message": "Playlist shuffled"}
@@ -559,6 +613,7 @@ async def shuffle_playlist(request: Request):
 @router.post("/api/skip")
 async def skip_track(request: Request):
     """Skip the currently streaming segment."""
+    _require_write_auth(request)
     state = request.app.state.station_state
     state.now_streaming = {"type": "skipping", "label": "Skipping...", "started": time.time()}
     return {"ok": True}
@@ -567,6 +622,7 @@ async def skip_track(request: Request):
 @router.post("/api/purge")
 async def purge_queue(request: Request):
     """Drain all pre-produced segments from the queue."""
+    _require_write_auth(request)
     q = request.app.state.queue
     purged = 0
     while not q.empty():
@@ -583,18 +639,22 @@ async def purge_queue(request: Request):
 @router.post("/api/playlist/remove")
 async def remove_track(request: Request):
     """Remove a track from playlist by index."""
+    _require_write_auth(request)
     body = await request.json()
     idx = body.get("index", -1)
     state = request.app.state.station_state
-    if 0 <= idx < len(state.playlist):
-        removed = state.playlist.pop(idx)
-        return {"ok": True, "removed": removed.display}
-    return {"ok": False, "error": "Invalid index"}
+    if not (0 <= idx < len(state.playlist)):
+        raise HTTPException(status_code=400, detail="Invalid index")
+    if len(state.playlist) <= 1:
+        raise HTTPException(status_code=400, detail="Cannot remove the last track")
+    removed = state.playlist.pop(idx)
+    return {"ok": True, "removed": removed.display}
 
 
 @router.post("/api/playlist/move")
 async def move_track(request: Request):
     """Move a track in the playlist. body: {from: N, to: N}"""
+    _require_write_auth(request)
     body = await request.json()
     src = body.get("from", -1)
     dst = body.get("to", -1)
@@ -604,12 +664,13 @@ async def move_track(request: Request):
         track = pl.pop(src)
         pl.insert(dst, track)
         return {"ok": True, "moved": track.display}
-    return {"ok": False, "error": "Invalid indices"}
+    raise HTTPException(status_code=400, detail="Invalid indices")
 
 
 @router.post("/api/playlist/move_to_next")
 async def move_to_next(request: Request):
     """Move a track to play next (position 0 in upcoming)."""
+    _require_write_auth(request)
     body = await request.json()
     idx = body.get("index", -1)
     state = request.app.state.station_state
@@ -633,7 +694,7 @@ async def move_to_next(request: Request):
             next_pos -= 1
         pl.insert(next_pos, track)
         return {"ok": True, "moved": track.display, "to_position": next_pos}
-    return {"ok": False, "error": "Invalid index"}
+    raise HTTPException(status_code=400, detail="Invalid index")
 
 
 @router.get("/status")

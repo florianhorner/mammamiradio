@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import itertools
 import logging
 import random
 from pathlib import Path
@@ -9,7 +8,7 @@ from uuid import uuid4
 
 from fakeitaliradio.config import StationConfig
 from fakeitaliradio.downloader import download_track
-from fakeitaliradio.models import Segment, SegmentType, StationState
+from fakeitaliradio.models import Segment, SegmentType, StationState, Track
 from fakeitaliradio.normalizer import normalize, generate_silence
 from fakeitaliradio.scheduler import next_segment_type
 from fakeitaliradio.models import AdBrand
@@ -30,23 +29,43 @@ def _pick_brand(brands: list[AdBrand], ad_history: list) -> AdBrand:
     return random.choices(eligible, weights=weights, k=1)[0]
 
 
-def _update_upcoming(state: StationState, current_track: Track) -> None:
+def select_next_track(playlist: list[Track], current_track: Track | None) -> Track | None:
+    """Select next track from the current live playlist."""
+    if not playlist:
+        return None
+
+    if current_track:
+        for idx, track in enumerate(playlist):
+            if track.spotify_id == current_track.spotify_id:
+                return playlist[(idx + 1) % len(playlist)]
+    return playlist[0]
+
+
+def _update_upcoming(state: StationState, current_track: Track | None) -> None:
     """Update the upcoming tracks preview based on current position in playlist."""
-    try:
-        playlist = state.playlist
-        if not playlist:
-            return
-        # Find current track index
-        idx = next(
+    playlist = state.playlist
+    if not playlist:
+        state.upcoming_tracks = []
+        return
+
+    next_idx = 0
+    if current_track:
+        found_idx = next(
             (i for i, t in enumerate(playlist) if t.spotify_id == current_track.spotify_id),
-            0,
+            None,
         )
-        upcoming = []
-        for j in range(1, 6):
-            upcoming.append(playlist[(idx + j) % len(playlist)])
-        state.upcoming_tracks = upcoming
-    except Exception:
-        pass
+        if found_idx is None:
+            logger.debug(
+                "Current track %s not found in playlist; upcoming preview reset to start",
+                current_track.spotify_id,
+            )
+        else:
+            next_idx = (found_idx + 1) % len(playlist)
+
+    state.upcoming_tracks = [
+        playlist[(next_idx + j) % len(playlist)]
+        for j in range(5)
+    ]
 
 
 async def run_producer(
@@ -55,7 +74,6 @@ async def run_producer(
     config: StationConfig,
     spotify_player: SpotifyPlayer | None = None,
 ) -> None:
-    track_iter = itertools.cycle(state.playlist)
     logger.info("Producer started. Playlist: %d tracks", len(state.playlist))
 
     # Don't block on auth — start producing banter immediately,
@@ -75,16 +93,16 @@ async def run_producer(
 
         seg_type = next_segment_type(state, config.pacing)
         segment: Segment | None = None
+        track: Track | None = None
 
         try:
             if seg_type == SegmentType.MUSIC:
-                track = next(track_iter)
+                track = select_next_track(state.playlist, state.current_track)
+                if track is None:
+                    raise RuntimeError("Playlist is empty")
                 logger.info("Producing MUSIC: %s", track.display)
 
                 # Update upcoming preview (peek next 5 tracks)
-                upcoming = []
-                temp_iter = itertools.tee(track_iter, 1)[0]
-                # Can't easily peek a cycle, so use playlist index
                 _update_upcoming(state, track)
 
                 norm_path = config.tmp_dir / f"music_{uuid4().hex[:8]}.mp3"
@@ -181,7 +199,14 @@ async def run_producer(
                 metadata={"error": str(e)},
             )
             if seg_type == SegmentType.MUSIC:
-                state.after_music(next(track_iter))
+                if track is not None:
+                    state.after_music(track)
+                else:
+                    state.songs_since_banter += 1
+                    state.songs_since_ad += 1
+                    state.segments_produced += 1
+                    state._log("music", "Music unavailable", {"error": str(e)})
+                    _update_upcoming(state, state.current_track)
             elif seg_type == SegmentType.BANTER:
                 state.after_banter()
             elif seg_type == SegmentType.AD:

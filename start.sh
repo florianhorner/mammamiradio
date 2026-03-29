@@ -31,6 +31,8 @@ fi
 # Start uvicorn with reload (restarts on code changes, doesn't kill go-librespot)
 echo "Starting uvicorn with --reload..."
 source .venv/bin/activate
+HOST="${FAKEITALIRADIO_HOST:-127.0.0.1}"
+PORT="${FAKEITALIRADIO_PORT:-8000}"
 exec python -m uvicorn fakeitaliradio.main:app \
-    --host 0.0.0.0 --port 8000 \
+    --host "$HOST" --port "$PORT" \
     --reload --reload-dir fakeitaliradio

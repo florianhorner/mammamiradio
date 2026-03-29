@@ -18,6 +18,7 @@ import os
 import select
 import subprocess
 import threading
+import time
 from pathlib import Path
 
 import httpx
@@ -141,12 +142,21 @@ class SpotifyPlayer:
         ]
 
         logger.info("Starting go-librespot: %s", " ".join(cmd))
-        self._log_file = open(self.config.tmp_dir / "go-librespot.log", "w")
-        self._process = subprocess.Popen(
-            cmd,
-            stdout=subprocess.DEVNULL,
-            stderr=self._log_file,
-        )
+        try:
+            self._log_file = open(self.config.tmp_dir / "go-librespot.log", "w")
+            self._process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.DEVNULL,
+                stderr=self._log_file,
+            )
+        except Exception:
+            if self._log_file:
+                try:
+                    self._log_file.close()
+                except OSError:
+                    pass
+                self._log_file = None
+            raise
         logger.info("go-librespot started (PID %d)", self._process.pid)
 
     def stop(self) -> None:
@@ -289,27 +299,26 @@ class SpotifyPlayer:
         with self._capture_lock:
             self._capture_sink = ffmpeg_proc
 
-        # Tell Spotify to play
-        await self.play_track(track)
-
-        # Wait for ffmpeg to finish (it has a -t duration limit)
         def _wait_for_encode():
             try:
-                ffmpeg_proc.wait(timeout=track_duration_sec + 30)
+                # Keep capture open for the expected track duration.
+                time.sleep(track_duration_sec + 0.5)
+            finally:
+                # Stop redirecting and signal EOF to ffmpeg.
+                with self._capture_lock:
+                    self._capture_sink = None
+
+                if ffmpeg_proc.stdin:
+                    try:
+                        ffmpeg_proc.stdin.close()
+                    except OSError:
+                        pass
+
+            try:
+                ffmpeg_proc.wait(timeout=30)
             except subprocess.TimeoutExpired:
                 ffmpeg_proc.kill()
                 ffmpeg_proc.wait()
-
-            # Stop redirecting
-            with self._capture_lock:
-                self._capture_sink = None
-
-            # Close ffmpeg stdin if still open
-            if ffmpeg_proc.stdin:
-                try:
-                    ffmpeg_proc.stdin.close()
-                except OSError:
-                    pass
 
             if not output_path.exists() or output_path.stat().st_size < 1000:
                 stderr_text = ""
@@ -323,7 +332,24 @@ class SpotifyPlayer:
                 track.display, track_duration_sec, size / 1e6,
             )
 
-        await loop.run_in_executor(None, _wait_for_encode)
+        try:
+            # Tell Spotify to play
+            await self.play_track(track)
+            # Wait for ffmpeg to finish (it has a -t duration limit)
+            await loop.run_in_executor(None, _wait_for_encode)
+        except Exception:
+            with self._capture_lock:
+                self._capture_sink = None
+            if ffmpeg_proc.stdin:
+                try:
+                    ffmpeg_proc.stdin.close()
+                except OSError:
+                    pass
+            if ffmpeg_proc.poll() is None:
+                ffmpeg_proc.kill()
+                await loop.run_in_executor(None, ffmpeg_proc.wait)
+            raise
+
         return output_path
 
 
