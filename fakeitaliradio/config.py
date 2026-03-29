@@ -3,7 +3,7 @@ from __future__ import annotations
 try:
     import tomllib
 except ModuleNotFoundError:
-    import tomli as tomllib
+    import tomli as tomllib  # type: ignore[no-redef]
 import ipaddress
 import os
 from dataclasses import dataclass, field

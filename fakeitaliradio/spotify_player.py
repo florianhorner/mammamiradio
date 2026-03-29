@@ -242,7 +242,7 @@ class SpotifyPlayer:
         ]
 
         logger.info("Starting go-librespot: %s", " ".join(cmd))
-        self._log_file = open(self.config.tmp_dir / "go-librespot.log", "w")
+        self._log_file = open(self.config.tmp_dir / "go-librespot.log", "w")  # type: ignore[assignment]
         self._process = subprocess.Popen(
             cmd,
             stdout=subprocess.DEVNULL,

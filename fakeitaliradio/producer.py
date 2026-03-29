@@ -107,7 +107,7 @@ async def run_producer(
                 )
 
                 if use_spotify:
-                    audio_path = await download_track_spotify(spotify_player, track, norm_path)
+                    audio_path = await download_track_spotify(spotify_player, track, norm_path)  # type: ignore[arg-type]
                 else:
                     # Fallback: local files / yt-dlp / placeholder
                     audio_path = await download_track(track, config.cache_dir, music_dir=Path("music"))

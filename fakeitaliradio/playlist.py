@@ -49,7 +49,7 @@ def fetch_playlist(config: StationConfig) -> list[Track]:
     # Try playlist URL first
     playlist_id = _extract_playlist_id(config.playlist.spotify_url) if config.playlist.spotify_url else None
 
-    tracks: list[Track] = []
+    tracks: list[Track] = []  # type: ignore[no-redef]
 
     if playlist_id:
         try:
