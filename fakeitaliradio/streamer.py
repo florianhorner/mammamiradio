@@ -71,8 +71,10 @@ class LiveStreamHub:
 
 
 def _is_loopback_client(request: Request) -> bool:
-    host = request.client.host if request.client else ""
-    if host in {"localhost", ""}:
+    if not request.client:
+        return False
+    host = request.client.host
+    if host == "localhost":
         return True
     try:
         return ipaddress.ip_address(host).is_loopback
