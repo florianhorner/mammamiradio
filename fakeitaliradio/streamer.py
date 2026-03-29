@@ -8,6 +8,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, StreamingResponse
 
 from fakeitaliradio.models import Segment
+from fakeitaliradio.scheduler import preview_upcoming
 
 logger = logging.getLogger(__name__)
 
@@ -254,10 +255,14 @@ async function refresh() {
         '<span class="seg-label">In queue: ' + queueItems.map(e => e.label).join(', ') + '</span></li>';
     }
 
-    // Upcoming
+    // Upcoming (full schedule: music + banter + ads)
     const up = document.getElementById('upcoming');
-    up.innerHTML = (d.upcoming_tracks || []).map((t, i) =>
-      '<li><span class="num">' + (i+1) + '.</span> ' + t + '</li>'
+    up.innerHTML = (d.upcoming || []).map((e, i) =>
+      '<li>' +
+        '<span class="seg-icon ' + (cls[e.type] || '') + '" style="width:18px;height:18px;font-size:10px">' +
+          (icons[e.type] || '?') + '</span> ' +
+        '<span class="seg-label">' + e.label + '</span>' +
+      '</li>'
     ).join('') || '<li>...</li>';
 
     // Show banter/ad scripts from the currently or most recently streamed segments
@@ -453,7 +458,7 @@ async def status(request: Request):
              "metadata": e.metadata}
             for e in state.stream_log
         ],
-        "upcoming_tracks": [t.display for t in state.upcoming_tracks],
+        "upcoming": preview_upcoming(state, config.pacing, state.playlist, count=8),
         "last_banter_script": state.last_banter_script,
         "last_ad_script": state.last_ad_script,
     }

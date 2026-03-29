@@ -30,6 +30,10 @@ Hosts:
 Rules:
 - Keep each line under 30 words for natural speech pacing.
 - Be warm, funny, and authentic. Never break character.
+- Sound like REAL Italian radio. Use natural Italian exclamations and filler words freely:
+  basta, dai, ma va, figurati, mamma mia, allora, insomma, comunque, senti, guarda,
+  eh niente, vabbè, cioè, tipo, no?, dico io, madonna, oddio, aspetta aspetta.
+- Hosts interrupt each other, trail off, change topic mid-sentence. Real radio is messy.
 - Output ONLY valid JSON, no markdown fences or extra text."""
 
 
