@@ -4,6 +4,12 @@ AI-powered fake Italian radio station. Streams music from your Spotify library w
 
 Two hosts (configurable) riff on the tracks, keep running jokes alive across segments, and periodically cut to ad breaks for fictional brands like "Negroni as a Service." The whole thing streams as a live MP3 you can open in any browser or audio player.
 
+## Documentation
+
+- [ARCHITECTURE.md](ARCHITECTURE.md) explains the runtime, component boundaries, and the FIFO/go-librespot audio path.
+- [CONTRIBUTING.md](CONTRIBUTING.md) covers local setup, test commands, and manual smoke checks.
+- [CHANGELOG.md](CHANGELOG.md) tracks release notes from the current `0.1.0` baseline forward.
+
 ## How it works
 
 ```
@@ -29,8 +35,8 @@ The **producer** generates segments ahead of time (music, banter, or ads) and pu
 
 ```bash
 # Clone and install
-cd fake-radio-engine
-python -m venv .venv
+cd /path/to/fakeitaliradio
+python3.11 -m venv .venv
 source .venv/bin/activate
 pip install -e .
 

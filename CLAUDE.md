@@ -2,10 +2,18 @@
 
 Fake Italian radio station engine. Python 3.11+, FastAPI.
 
+## Docs
+
+- `README.md` - product overview and operator quick start
+- `ARCHITECTURE.md` - runtime flow, queue model, and Spotify audio path
+- `CONTRIBUTING.md` - local setup, tests, and smoke checks
+- `CHANGELOG.md` - release notes, starting from 0.1.0
+
 ## Commands
 
+- Setup: `python3.11 -m venv .venv && source .venv/bin/activate && pip install -e .`
 - Run: `./start.sh` (starts go-librespot + uvicorn with hot reload on :8000)
-- Run without go-librespot: `uvicorn fakeitaliradio.main:app --reload --reload-dir fakeitaliradio`
+- Run without go-librespot: `source .venv/bin/activate && python -m uvicorn fakeitaliradio.main:app --reload --reload-dir fakeitaliradio`
 - Test: `pytest tests/`
 - Install: `pip install -e .`
 
@@ -15,7 +23,7 @@ Fake Italian radio station engine. Python 3.11+, FastAPI.
 fakeitaliradio/
   main.py           — FastAPI app, startup/shutdown lifecycle, spawns producer
   config.py         — Loads radio.toml + .env, validates config
-  models.py         — Pydantic models: Track, Segment, StationState, HostPersonality, AdBrand
+  models.py         — Shared dataclasses: Track, Segment, StationState, HostPersonality, AdBrand
   producer.py       — Async producer loop: generates music/banter/ad segments, pushes to queue
   streamer.py       — FastAPI router: /stream, /status, /api/*, dashboard + listener HTML
   scheduler.py      — Decides next segment type based on pacing counters
