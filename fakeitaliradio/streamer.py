@@ -102,6 +102,13 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   .player-bar audio { flex: 1; height: 32px; }
   .player-bar .label { color: #ff6b35; font-size: 13px; white-space: nowrap; }
 
+  .connect-banner {
+    background: #331500; border: 1px solid #ff6b35; border-radius: 8px;
+    padding: 12px 16px; margin-bottom: 16px; display: none;
+    font-size: 13px; line-height: 1.5;
+  }
+  .connect-banner strong { color: #ff6b35; }
+
   .controls { display: flex; gap: 8px; margin-bottom: 16px; }
   .btn {
     background: #222; border: 1px solid #444; border-radius: 6px;
@@ -139,6 +146,11 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     <div class="stat-label">Spotify</div>
     <div class="stat-value" id="spotify">-</div>
   </div>
+</div>
+
+<div class="connect-banner" id="connect-banner">
+  <strong>Spotify not connected.</strong> Open Spotify app, tap the speaker icon,
+  and select <strong>fakeitaliradio</strong>. Music will use placeholders until connected.
 </div>
 
 <div class="controls">
@@ -219,6 +231,9 @@ async function refresh() {
     const sp = document.getElementById('spotify');
     sp.textContent = d.spotify_connected ? 'ON' : 'OFF';
     sp.className = 'stat-value ' + (d.spotify_connected ? 'spotify-on' : 'spotify-off');
+
+    document.getElementById('connect-banner').style.display =
+      d.spotify_connected ? 'none' : 'block';
 
     // Now streaming (what the listener actually hears)
     const ns = d.now_streaming || {};

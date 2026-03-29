@@ -64,6 +64,11 @@ async def run_producer(
         logger.info("go-librespot running. Select 'fakeitaliradio' in Spotify to enable real music.")
 
     while True:
+        # Always check Spotify auth (cheap HTTP call)
+        if spotify_player:
+            await spotify_player.check_auth()
+            state.spotify_connected = spotify_player._authenticated
+
         if queue.qsize() >= config.pacing.lookahead_segments:
             await asyncio.sleep(0.5)
             continue
@@ -83,11 +88,6 @@ async def run_producer(
                 _update_upcoming(state, track)
 
                 norm_path = config.tmp_dir / f"music_{uuid4().hex[:8]}.mp3"
-
-                # Check Spotify connection (quick, non-blocking)
-                if spotify_player:
-                    await spotify_player.check_auth()
-                    state.spotify_connected = spotify_player._authenticated
 
                 use_spotify = (
                     spotify_player

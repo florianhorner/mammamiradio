@@ -48,6 +48,7 @@ class SpotifyPlayer:
         self._drain_running = False
         self._capture_sink: subprocess.Popen | None = None  # ffmpeg stdin
         self._capture_lock = threading.Lock()
+        self._transfer_counter = 0
 
     def _ensure_fifo(self) -> None:
         if self._fifo_path.exists():
@@ -159,11 +160,49 @@ class SpotifyPlayer:
                     if data.get("username"):
                         if not self._authenticated:
                             logger.info("Spotify connected: %s", data["username"])
-                        self._authenticated = True
+                            self._authenticated = True
                         return True
         except Exception:
             pass
+
+        # Periodically try auto-transfer (every ~30 checks = ~15s)
+        if not self._authenticated:
+            self._transfer_counter += 1
+            if self._transfer_counter % 30 == 1:
+                await self._try_transfer_playback()
+
         return False
+
+    async def _try_transfer_playback(self) -> None:
+        """Use Spotify Web API to transfer playback to our device."""
+        try:
+            from fakeitaliradio.playlist import _get_spotify_oauth
+            sp = _get_spotify_oauth(self.config)
+
+            devices = sp.devices()
+            our_device = None
+            device_names = []
+            for d in devices.get("devices", []):
+                device_names.append(d.get("name", "?"))
+                if d.get("name") == "fakeitaliradio":
+                    our_device = d
+                    break
+
+            if our_device:
+                sp.transfer_playback(our_device["id"], force_play=False)
+                logger.info("Auto-transferred playback to fakeitaliradio (device %s)", our_device["id"])
+                # Wait a moment for go-librespot to register the connection
+                await asyncio.sleep(2)
+                self._authenticated = True
+            else:
+                logger.info(
+                    "fakeitaliradio not in Spotify devices yet (visible: %s). "
+                    "Select it manually in Spotify app.",
+                    ", ".join(device_names) or "none",
+                )
+
+        except Exception as e:
+            logger.warning("Auto-transfer failed: %s", e)
 
     async def wait_for_auth(self, timeout: float = 120.0) -> bool:
         deadline = asyncio.get_event_loop().time() + timeout
