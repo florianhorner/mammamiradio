@@ -20,10 +20,7 @@ logger = logging.getLogger(__name__)
 
 
 def _build_system_prompt(config: StationConfig) -> str:
-    host_descriptions = "\n".join(
-        f"- {h.name}: {h.style} (voice: {h.voice})"
-        for h in config.hosts
-    )
+    host_descriptions = "\n".join(f"- {h.name}: {h.style} (voice: {h.voice})" for h in config.hosts)
     return f"""You write scripts for a fake AI radio station called "{config.station.name}".
 The station language is {config.station.language}. ALL dialogue must be in {config.station.language}.
 Theme: {config.station.theme}
@@ -41,9 +38,7 @@ Rules:
 - Output ONLY valid JSON, no markdown fences or extra text."""
 
 
-async def write_banter(
-    state: StationState, config: StationConfig
-) -> list[tuple[HostPersonality, str]]:
+async def write_banter(state: StationState, config: StationConfig) -> list[tuple[HostPersonality, str]]:
     client = anthropic.AsyncAnthropic(api_key=config.anthropic_api_key)
 
     recent = [t.display for t in state.played_tracks[-3:]]
@@ -131,32 +126,31 @@ async def write_ad(
     client = anthropic.AsyncAnthropic(api_key=config.anthropic_api_key)
 
     # Build context for cross-referencing
-    recent_ads = [
-        f"- {e.brand}: {e.summary}" for e in state.ad_history[-5:]
-    ] if state.ad_history else ["(nessuna pubblicità ancora)"]
+    recent_ads = (
+        [f"- {e.brand}: {e.summary}" for e in state.ad_history[-5:]]
+        if state.ad_history
+        else ["(nessuna pubblicità ancora)"]
+    )
 
     jokes = state.running_jokes[-3:] if state.running_jokes else []
     recent_tracks = [t.display for t in state.played_tracks[-3:]]
 
     # Find same-brand history for campaign arcs
-    same_brand_ads = [
-        e.summary for e in state.ad_history if e.brand == brand.name
-    ][-3:]
+    same_brand_ads = [e.summary for e in state.ad_history if e.brand == brand.name][-3:]
     # Home Assistant context for ads
     ad_ha_block = ""
     if state.ha_context:
         ad_ha_block = (
             "\nSmart home state (weave ONE detail into the ad if it fits — "
             "e.g., reference the weather, what's happening at home. "
-            "Make it feel like the ad knows the listener's world.):\n"
-            + state.ha_context + "\n"
+            "Make it feel like the ad knows the listener's world.):\n" + state.ha_context + "\n"
         )
 
     campaign_context = ""
     if same_brand_ads:
         campaign_context = f"""
 CAMPAIGN ARC — This brand has advertised before on this station:
-{chr(10).join(f'- Previous ad: {s}' for s in same_brand_ads)}
+{chr(10).join(f"- Previous ad: {s}" for s in same_brand_ads)}
 BUILD ON THIS. Reference or contradict previous claims. Create a narrative arc:
 - If first follow-up: acknowledge the previous ad ("Come promesso..." / "Dopo il successo di...")
 - If ongoing campaign: escalate the absurdity, add plot twists, reveal scandals about the brand
@@ -217,12 +211,14 @@ Return JSON:
 
         parts = []
         for p in data.get("parts", []):
-            parts.append(AdPart(
-                type=p.get("type", "voice"),
-                text=p.get("text", ""),
-                sfx=p.get("sfx", ""),
-                duration=p.get("duration", 0.0),
-            ))
+            parts.append(
+                AdPart(
+                    type=p.get("type", "voice"),
+                    text=p.get("text", ""),
+                    sfx=p.get("sfx", ""),
+                    duration=p.get("duration", 0.0),
+                )
+            )
 
         # Ensure we have at least one voice part
         if not any(p.type == "voice" for p in parts):

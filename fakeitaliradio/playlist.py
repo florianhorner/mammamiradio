@@ -60,10 +60,14 @@ def fetch_playlist(config: StationConfig) -> list[Track]:
                     if not t or not t.get("id"):
                         continue
                     artist = t["artists"][0]["name"] if t["artists"] else "Unknown"
-                    tracks.append(Track(
-                        title=t["name"], artist=artist,
-                        duration_ms=t["duration_ms"], spotify_id=t["id"],
-                    ))
+                    tracks.append(
+                        Track(
+                            title=t["name"],
+                            artist=artist,
+                            duration_ms=t["duration_ms"],
+                            spotify_id=t["id"],
+                        )
+                    )
                 results = sp.next(results) if results.get("next") else None
             logger.info("Fetched %d tracks from playlist", len(tracks))
         except Exception as e:
@@ -84,10 +88,14 @@ def fetch_playlist(config: StationConfig) -> list[Track]:
                 if not t or not t.get("id"):
                     continue
                 artist = t["artists"][0]["name"] if t["artists"] else "Unknown"
-                tracks.append(Track(
-                    title=t["name"], artist=artist,
-                    duration_ms=t["duration_ms"], spotify_id=t["id"],
-                ))
+                tracks.append(
+                    Track(
+                        title=t["name"],
+                        artist=artist,
+                        duration_ms=t["duration_ms"],
+                        spotify_id=t["id"],
+                    )
+                )
             offset += limit
             if not results.get("next"):
                 break

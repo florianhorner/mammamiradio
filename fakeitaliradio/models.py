@@ -117,10 +117,14 @@ class StationState:
     ha_context: str = ""
 
     def _log(self, seg_type: str, label: str, metadata: dict | None = None) -> None:
-        self.segment_log.append(SegmentLogEntry(
-            type=seg_type, label=label,
-            timestamp=time.time(), metadata=metadata or {},
-        ))
+        self.segment_log.append(
+            SegmentLogEntry(
+                type=seg_type,
+                label=label,
+                timestamp=time.time(),
+                metadata=metadata or {},
+            )
+        )
         if len(self.segment_log) > 50:
             self.segment_log = self.segment_log[-50:]
 
@@ -134,10 +138,14 @@ class StationState:
             "started": time.time(),
             "metadata": segment.metadata,
         }
-        self.stream_log.append(SegmentLogEntry(
-            type=seg_type, label=label,
-            timestamp=time.time(), metadata=segment.metadata,
-        ))
+        self.stream_log.append(
+            SegmentLogEntry(
+                type=seg_type,
+                label=label,
+                timestamp=time.time(),
+                metadata=segment.metadata,
+            )
+        )
         if len(self.stream_log) > 50:
             self.stream_log = self.stream_log[-50:]
 
@@ -164,9 +172,13 @@ class StationState:
 
     def record_ad_spot(self, brand: str, summary: str = "") -> None:
         """Record a single ad spot in history (called per-spot within a break)."""
-        self.ad_history.append(AdHistoryEntry(
-            brand=brand, summary=summary, timestamp=time.time(),
-        ))
+        self.ad_history.append(
+            AdHistoryEntry(
+                brand=brand,
+                summary=summary,
+                timestamp=time.time(),
+            )
+        )
         if len(self.ad_history) > 20:
             self.ad_history = self.ad_history[-20:]
 

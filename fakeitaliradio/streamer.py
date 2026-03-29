@@ -18,13 +18,9 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 security = HTTPBasic(auto_error=False)
 
-DASHBOARD_HTML = (
-    __import__("pathlib").Path(__file__).with_name("dashboard.html").read_text()
-)
+DASHBOARD_HTML = __import__("pathlib").Path(__file__).with_name("dashboard.html").read_text()
 
-LISTENER_HTML = (
-    __import__("pathlib").Path(__file__).with_name("listener.html").read_text()
-)
+LISTENER_HTML = __import__("pathlib").Path(__file__).with_name("listener.html").read_text()
 
 
 class LiveStreamHub:
@@ -96,9 +92,8 @@ def require_admin_access(
     if config.admin_password:
         username = credentials.username if credentials else ""
         password = credentials.password if credentials else ""
-        if (
-            secrets.compare_digest(username, config.admin_username)
-            and secrets.compare_digest(password, config.admin_password)
+        if secrets.compare_digest(username, config.admin_username) and secrets.compare_digest(
+            password, config.admin_password
         ):
             return
 
@@ -241,6 +236,7 @@ async def logs(lines: int = 50, _: None = Depends(require_admin_access)):
 async def shuffle_playlist(request: Request, _: None = Depends(require_admin_access)):
     """Shuffle upcoming tracks."""
     import random
+
     state = request.app.state.station_state
     random.shuffle(state.playlist)
     return {"ok": True, "message": "Playlist shuffled"}
@@ -324,8 +320,7 @@ def _public_status_payload(request: Request) -> dict:
         "running_jokes": state.running_jokes,
         "now_streaming": state.now_streaming,
         "stream_log": [
-            {"type": e.type, "label": e.label, "timestamp": e.timestamp,
-             "metadata": e.metadata}
+            {"type": e.type, "label": e.label, "timestamp": e.timestamp, "metadata": e.metadata}
             for e in state.stream_log
         ],
         "upcoming": preview_upcoming(state, config.pacing, state.playlist, count=5),
@@ -343,26 +338,25 @@ async def status(request: Request, _: None = Depends(require_admin_access)):
     segment_queue = request.app.state.queue
     start_time = request.app.state.start_time
     payload = _public_status_payload(request)
-    payload.update({
-        "queue_depth": segment_queue.qsize(),
-        "segments_produced": state.segments_produced,
-        "tracks_played": len(state.played_tracks),
-        "uptime_sec": round(time.time() - start_time),
-        "spotify_connected": state.spotify_connected,
-        "produced_log": [
-            {"type": e.type, "label": e.label, "timestamp": e.timestamp}
-            for e in state.segment_log
-        ],
-        "last_banter_script": state.last_banter_script,
-        "last_ad_script": state.last_ad_script,
-        "ha_context": state.ha_context if state.ha_context else None,
-        "go_librespot_log": _tail_log("tmp/go-librespot.log", 15),
-        "producer_errors": [
-            {"type": e.type, "label": e.label, "metadata": e.metadata}
-            for e in state.segment_log
-            if e.metadata.get("error")
-        ][-5:],
-    })
+    payload.update(
+        {
+            "queue_depth": segment_queue.qsize(),
+            "segments_produced": state.segments_produced,
+            "tracks_played": len(state.played_tracks),
+            "uptime_sec": round(time.time() - start_time),
+            "spotify_connected": state.spotify_connected,
+            "produced_log": [{"type": e.type, "label": e.label, "timestamp": e.timestamp} for e in state.segment_log],
+            "last_banter_script": state.last_banter_script,
+            "last_ad_script": state.last_ad_script,
+            "ha_context": state.ha_context if state.ha_context else None,
+            "go_librespot_log": _tail_log("tmp/go-librespot.log", 15),
+            "producer_errors": [
+                {"type": e.type, "label": e.label, "metadata": e.metadata}
+                for e in state.segment_log
+                if e.metadata.get("error")
+            ][-5:],
+        }
+    )
     return payload
 
 

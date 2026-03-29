@@ -1,4 +1,5 @@
 """Tests for streamer bitrate sourcing and runtime config helper."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -26,8 +27,8 @@ def test_streamer_uses_audio_bitrate_for_throttle():
 def test_icy_br_uses_audio_bitrate():
     """The /stream ICY header must reference audio.bitrate."""
     src = (Path(__file__).parent.parent / "fakeitaliradio" / "streamer.py").read_text()
-    assert 'config.audio.bitrate' in src
-    assert 'config.station.bitrate' not in src
+    assert "config.audio.bitrate" in src
+    assert "config.station.bitrate" not in src
 
 
 def test_runtime_json_output():
@@ -36,8 +37,12 @@ def test_runtime_json_output():
     config = load_config(str(toml_path))
     result = runtime_json(config)
     assert set(result.keys()) == {
-        "bind_host", "port", "fifo_path",
-        "go_librespot_bin", "go_librespot_port", "tmp_dir",
+        "bind_host",
+        "port",
+        "fifo_path",
+        "go_librespot_bin",
+        "go_librespot_port",
+        "tmp_dir",
     }
     assert result["fifo_path"] == config.audio.fifo_path
     assert result["go_librespot_bin"] == config.audio.go_librespot_bin

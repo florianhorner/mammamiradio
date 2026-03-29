@@ -10,6 +10,7 @@ Solution: a persistent background thread drains the FIFO continuously.
 When we want to capture a track, we redirect the drain to ffmpeg's stdin.
 When we don't, we discard the data.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -75,6 +76,7 @@ class SpotifyPlayer:
                 if not self._drain_running:
                     break
                 import time
+
                 time.sleep(1)
                 continue
 
@@ -114,7 +116,8 @@ class SpotifyPlayer:
         try:
             result = subprocess.run(
                 ["pgrep", "-f", f"go-librespot.*{self._config_dir}"],
-                capture_output=True, text=True,
+                capture_output=True,
+                text=True,
             )
             return result.returncode == 0
         except Exception:
@@ -130,7 +133,8 @@ class SpotifyPlayer:
         try:
             result = subprocess.run(
                 ["pgrep", "-f", f"cat .*{self._fifo_path}"],
-                capture_output=True, text=True,
+                capture_output=True,
+                text=True,
             )
         except Exception:
             return []
@@ -150,7 +154,8 @@ class SpotifyPlayer:
         try:
             result = subprocess.run(
                 ["ps", "-p", str(pid), "-o", "command="],
-                capture_output=True, text=True,
+                capture_output=True,
+                text=True,
             )
         except Exception:
             return False
@@ -232,7 +237,8 @@ class SpotifyPlayer:
         self._external = False
         cmd = [
             self.config.audio.go_librespot_bin,
-            "--config_dir", str(self._config_dir),
+            "--config_dir",
+            str(self._config_dir),
         ]
 
         logger.info("Starting go-librespot: %s", " ".join(cmd))
@@ -254,7 +260,7 @@ class SpotifyPlayer:
             self._drain_thread.join(timeout=3)
             self._drain_thread = None
         # Only kill go-librespot if WE started it (not if external)
-        if self._process and not getattr(self, '_external', False):
+        if self._process and not getattr(self, "_external", False):
             self._process.terminate()
             try:
                 self._process.wait(timeout=5)
@@ -295,6 +301,7 @@ class SpotifyPlayer:
         """Use Spotify Web API to transfer playback to our device."""
         try:
             from fakeitaliradio.spotify_auth import get_spotify_client
+
             sp = get_spotify_client(self.config)
 
             devices = sp.devices()
@@ -314,8 +321,7 @@ class SpotifyPlayer:
                 self._authenticated = True
             else:
                 logger.info(
-                    "fakeitaliradio not in Spotify devices yet (visible: %s). "
-                    "Select it manually in Spotify app.",
+                    "fakeitaliradio not in Spotify devices yet (visible: %s). Select it manually in Spotify app.",
                     ", ".join(device_names) or "none",
                 )
 
@@ -350,9 +356,7 @@ class SpotifyPlayer:
         async with httpx.AsyncClient() as client:
             await client.post(f"{self._api_base}/player/pause")
 
-    async def capture_track_audio(
-        self, track: Track, output_path: Path, max_duration_sec: float = 300
-    ) -> Path:
+    async def capture_track_audio(self, track: Track, output_path: Path, max_duration_sec: float = 300) -> Path:
         """
         Play a track via Spotify, capture PCM from the drain thread, encode to MP3.
 
@@ -365,21 +369,35 @@ class SpotifyPlayer:
         # Start ffmpeg reading from stdin (pipe)
         def _start_ffmpeg():
             cmd = [
-                "ffmpeg", "-y",
-                "-f", "s16le",
-                "-ar", str(SAMPLE_RATE),
-                "-ac", str(CHANNELS),
-                "-t", str(track_duration_sec),
-                "-i", "pipe:0",
-                "-filter:a", "loudnorm=I=-16:LRA=11:TP=-1.5",
-                "-ar", str(self.config.audio.sample_rate),
-                "-ac", str(self.config.audio.channels),
-                "-b:a", f"{self.config.audio.bitrate}k",
-                "-f", "mp3", str(output_path),
+                "ffmpeg",
+                "-y",
+                "-f",
+                "s16le",
+                "-ar",
+                str(SAMPLE_RATE),
+                "-ac",
+                str(CHANNELS),
+                "-t",
+                str(track_duration_sec),
+                "-i",
+                "pipe:0",
+                "-filter:a",
+                "loudnorm=I=-16:LRA=11:TP=-1.5",
+                "-ar",
+                str(self.config.audio.sample_rate),
+                "-ac",
+                str(self.config.audio.channels),
+                "-b:a",
+                f"{self.config.audio.bitrate}k",
+                "-f",
+                "mp3",
+                str(output_path),
             ]
             return subprocess.Popen(
-                cmd, stdin=subprocess.PIPE,
-                stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+                cmd,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
             )
 
         ffmpeg_proc = await loop.run_in_executor(None, _start_ffmpeg)
@@ -419,14 +437,14 @@ class SpotifyPlayer:
             size = output_path.stat().st_size
             logger.info(
                 "Captured: %s (%.0fs, %.1fMB)",
-                track.display, track_duration_sec, size / 1e6,
+                track.display,
+                track_duration_sec,
+                size / 1e6,
             )
 
         await loop.run_in_executor(None, _wait_for_encode)
         return output_path
 
 
-async def download_track_spotify(
-    player: SpotifyPlayer, track: Track, output_path: Path
-) -> Path:
+async def download_track_spotify(player: SpotifyPlayer, track: Track, output_path: Path) -> Path:
     return await player.capture_track_audio(track, output_path)

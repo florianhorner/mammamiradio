@@ -1,4 +1,5 @@
 """Tests for StationState lifecycle methods and Track properties."""
+
 from __future__ import annotations
 
 from pathlib import Path

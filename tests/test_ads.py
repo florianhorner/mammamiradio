@@ -1,4 +1,5 @@
 """Tests for the ad system: brand picking, multi-ad breaks, music beds."""
+
 from __future__ import annotations
 
 import shutil
@@ -16,6 +17,7 @@ from fakeitaliradio.producer import _pick_brand
 from fakeitaliradio.scriptwriter import AD_BREAK_INTROS, AD_BREAK_OUTROS
 
 # --- _pick_brand tests ---
+
 
 def _make_brands():
     return [
@@ -61,6 +63,7 @@ def test_pick_brand_weights_recurring():
 
 # --- AdScript mood tests ---
 
+
 def test_ad_script_has_mood():
     script = AdScript(
         brand="Test",
@@ -76,6 +79,7 @@ def test_ad_script_mood_defaults_empty():
 
 
 # --- Ad break intro/outro phrases ---
+
 
 def test_ad_break_intros_exist():
     assert len(AD_BREAK_INTROS) >= 3
@@ -93,8 +97,10 @@ def test_ad_break_outros_exist():
 
 # --- Audio generation tests (require ffmpeg) ---
 
+
 def test_music_bed_generation():
     from fakeitaliradio.normalizer import generate_music_bed
+
     tmp = Path(tempfile.mkdtemp())
     try:
         for mood in ("dramatic", "lounge", "upbeat", "mysterious", "epic"):
@@ -107,6 +113,7 @@ def test_music_bed_generation():
 
 def test_bumper_jingle_generation():
     from fakeitaliradio.normalizer import generate_bumper_jingle
+
     tmp = Path(tempfile.mkdtemp())
     try:
         out = generate_bumper_jingle(tmp / "jingle.mp3")
@@ -126,6 +133,7 @@ def test_mix_with_bed():
         generate_tone,
         mix_with_bed,
     )
+
     tmp = Path(tempfile.mkdtemp())
     try:
         voice = generate_tone(tmp / "voice.mp3", 440, 2.0)
@@ -138,6 +146,7 @@ def test_mix_with_bed():
 
 
 # --- Campaign arc context ---
+
 
 def test_ad_break_increments_segments_produced_once():
     """A multi-spot ad break should increment segments_produced exactly once."""

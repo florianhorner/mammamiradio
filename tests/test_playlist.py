@@ -1,4 +1,5 @@
 """Tests for playlist module: demo tracks, URL extraction."""
+
 from __future__ import annotations
 
 from fakeitaliradio.playlist import DEMO_TRACKS, _extract_playlist_id

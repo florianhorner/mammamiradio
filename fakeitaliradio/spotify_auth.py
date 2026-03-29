@@ -7,6 +7,7 @@ def get_spotify_client(config: StationConfig):
     """Create an authenticated Spotify client via OAuth."""
     import spotipy
     from spotipy.oauth2 import SpotifyOAuth
+
     auth = SpotifyOAuth(
         client_id=config.spotify_client_id,
         client_secret=config.spotify_client_secret,

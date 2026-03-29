@@ -1,4 +1,5 @@
 """Tests for scheduler.preview_upcoming."""
+
 from __future__ import annotations
 
 from fakeitaliradio.config import PacingSection

@@ -13,12 +13,23 @@ logger = logging.getLogger(__name__)
 def _generate_placeholder(track: Track, out_path: Path) -> Path:
     """Generate a short placeholder track using ffmpeg tone + TTS announcement."""
     cmd = [
-        "ffmpeg", "-y",
-        "-f", "lavfi", "-i",
+        "ffmpeg",
+        "-y",
+        "-f",
+        "lavfi",
+        "-i",
         "sine=frequency=440:duration=30",
-        "-af", "volume=0.3",
-        "-ar", "48000", "-ac", "2", "-b:a", "192k",
-        "-f", "mp3", str(out_path),
+        "-af",
+        "volume=0.3",
+        "-ar",
+        "48000",
+        "-ac",
+        "2",
+        "-b:a",
+        "192k",
+        "-f",
+        "mp3",
+        str(out_path),
     ]
     _run_ffmpeg(cmd, f"placeholder for {track.display}")
     logger.info("Generated placeholder for: %s", track.display)
