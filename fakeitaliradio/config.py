@@ -10,13 +10,13 @@ from __future__ import annotations
 try:
     import tomllib
 except ModuleNotFoundError:
-    import tomli as tomllib
-from dataclasses import dataclass, field
+    import tomli as tomllib  # type: ignore[no-redef]
 import ipaddress
+import os
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from dotenv import load_dotenv
-import os
 
 from fakeitaliradio.models import AdBrand, AdVoice, HostPersonality
 
@@ -121,6 +121,7 @@ def _is_loopback_host(host: str) -> bool:
 def _validate(config: StationConfig) -> None:
     """Fail fast on bad config instead of cryptic runtime errors."""
     import logging
+
     log = logging.getLogger(__name__)
     errors = []
 
@@ -139,12 +140,8 @@ def _validate(config: StationConfig) -> None:
         log.warning("No ad brands configured — ad segments will be skipped")
     if not config.spotify_client_id or not config.spotify_client_secret:
         log.warning("No Spotify credentials — using demo playlist")
-    if not _is_loopback_host(config.bind_host) and not (
-        config.admin_password or config.admin_token
-    ):
-        errors.append(
-            "Non-local bind requires ADMIN_PASSWORD or ADMIN_TOKEN"
-        )
+    if not _is_loopback_host(config.bind_host) and not (config.admin_password or config.admin_token):
+        errors.append("Non-local bind requires ADMIN_PASSWORD or ADMIN_TOKEN")
 
     if errors:
         raise ValueError("Config errors:\n  " + "\n  ".join(errors))
@@ -196,9 +193,8 @@ def load_config(path: str = "radio.toml") -> StationConfig:
     audio_raw = dict(raw.get("audio", {}))
     if "bitrate" in station_raw:
         import logging as _log
-        _log.getLogger(__name__).warning(
-            "station.bitrate is deprecated — use audio.bitrate instead"
-        )
+
+        _log.getLogger(__name__).warning("station.bitrate is deprecated — use audio.bitrate instead")
         if "bitrate" not in audio_raw:
             audio_raw["bitrate"] = station_raw.pop("bitrate")
         else:
@@ -209,9 +205,8 @@ def load_config(path: str = "radio.toml") -> StationConfig:
     ha_token = os.getenv("HA_TOKEN", "")
     if ha_section.enabled and not ha_token:
         import logging as _log
-        _log.getLogger(__name__).warning(
-            "Home Assistant enabled but no HA_TOKEN in environment"
-        )
+
+        _log.getLogger(__name__).warning("Home Assistant enabled but no HA_TOKEN in environment")
 
     config = StationConfig(
         station=StationSection(**station_raw),
@@ -256,5 +251,5 @@ if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "runtime-json":
         print(json.dumps(runtime_json()))
     else:
-        print(f"Usage: python -m fakeitaliradio.config runtime-json", file=sys.stderr)
+        print("Usage: python -m fakeitaliradio.config runtime-json", file=sys.stderr)
         sys.exit(1)

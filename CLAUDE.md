@@ -18,6 +18,10 @@ Fake Italian radio station engine. Python 3.11+, FastAPI, FFmpeg, optional Spoti
 - Run full local stack: `./start.sh`
 - Run app only: `source .venv/bin/activate && python -m uvicorn fakeitaliradio.main:app --reload --reload-dir fakeitaliradio`
 - Test: `pytest tests/`
+- Lint: `ruff check .` (fix: `ruff check --fix .`)
+- Format: `ruff format .` (check: `ruff format --check .`)
+- Type check: `mypy fakeitaliradio/ tests/`
+- Pre-commit: `pip install pre-commit && pre-commit install`
 
 ## Environment
 

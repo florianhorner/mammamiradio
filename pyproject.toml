@@ -20,3 +20,29 @@ dependencies = [
 [build-system]
 requires = ["setuptools>=75"]
 build-backend = "setuptools.build_meta"
+
+[tool.ruff]
+target-version = "py311"
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W", "UP", "B", "SIM", "RUF"]
+ignore = ["B008", "RUF001", "SIM105", "SIM115"]
+
+[tool.ruff.lint.per-file-ignores]
+"fakeitaliradio/scriptwriter.py" = ["E501"]
+
+[tool.ruff.format]
+quote-style = "double"
+
+[tool.ruff.lint.isort]
+known-first-party = ["fakeitaliradio"]
+
+[tool.mypy]
+python_version = "3.11"
+check_untyped_defs = false
+ignore_missing_imports = true
+warn_return_any = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

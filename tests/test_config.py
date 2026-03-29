@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
-from fakeitaliradio.config import load_config, AudioSection, runtime_json
+from fakeitaliradio.config import AudioSection, load_config, runtime_json
 
 
 def test_load_config_from_radio_toml():

@@ -20,13 +20,9 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 security = HTTPBasic(auto_error=False)
 
-DASHBOARD_HTML = (
-    __import__("pathlib").Path(__file__).with_name("dashboard.html").read_text()
-)
+DASHBOARD_HTML = __import__("pathlib").Path(__file__).with_name("dashboard.html").read_text()
 
-LISTENER_HTML = (
-    __import__("pathlib").Path(__file__).with_name("listener.html").read_text()
-)
+LISTENER_HTML = __import__("pathlib").Path(__file__).with_name("listener.html").read_text()
 
 
 class LiveStreamHub:
@@ -107,9 +103,8 @@ def require_admin_access(
     if config.admin_password:
         username = credentials.username if credentials else ""
         password = credentials.password if credentials else ""
-        if (
-            secrets.compare_digest(username, config.admin_username)
-            and secrets.compare_digest(password, config.admin_password)
+        if secrets.compare_digest(username, config.admin_username) and secrets.compare_digest(
+            password, config.admin_password
         ):
             return
 
@@ -139,7 +134,7 @@ def require_admin_access(
 
 async def run_playback_loop(app) -> None:
     """Play queued segments on a single station timeline and fan out audio chunks."""
-    CHUNK = 4096
+    chunk_size = 4096
     segment_queue = app.state.queue
     skip_event = app.state.skip_event
     state = app.state.station_state
@@ -150,7 +145,7 @@ async def run_playback_loop(app) -> None:
     while True:
         try:
             segment: Segment = await asyncio.wait_for(segment_queue.get(), timeout=30.0)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             logger.warning("Queue empty for 30s, waiting...")
             continue
 
@@ -166,7 +161,7 @@ async def run_playback_loop(app) -> None:
             bytes_sent = 0
             skip_event.clear()
             with open(segment.path, "rb") as f:
-                while chunk := f.read(CHUNK):
+                while chunk := f.read(chunk_size):
                     if skip_event.is_set():
                         logger.info("Skipping current segment")
                         skip_event.clear()
@@ -199,7 +194,7 @@ async def _audio_generator(request: Request):
 
             try:
                 chunk = await asyncio.wait_for(listener_queue.get(), timeout=5.0)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 if not hub.has_listener(listener_id):
                     break
                 continue
@@ -255,6 +250,7 @@ async def logs(lines: int = 50, _: None = Depends(require_admin_access)):
 async def shuffle_playlist(request: Request, _: None = Depends(require_admin_access)):
     """Shuffle upcoming tracks."""
     import random
+
     state = request.app.state.station_state
     random.shuffle(state.playlist)
     return {"ok": True, "message": "Playlist shuffled"}
@@ -339,8 +335,7 @@ def _public_status_payload(request: Request) -> dict:
         "running_jokes": state.running_jokes,
         "now_streaming": state.now_streaming,
         "stream_log": [
-            {"type": e.type, "label": e.label, "timestamp": e.timestamp,
-             "metadata": e.metadata}
+            {"type": e.type, "label": e.label, "timestamp": e.timestamp, "metadata": e.metadata}
             for e in state.stream_log
         ],
         "upcoming": preview_upcoming(state, config.pacing, state.playlist, count=5),
@@ -360,33 +355,32 @@ async def status(request: Request, _: None = Depends(require_admin_access)):
     segment_queue = request.app.state.queue
     start_time = request.app.state.start_time
     payload = _public_status_payload(request)
-    payload.update({
-        "queue_depth": segment_queue.qsize(),
-        "segments_produced": state.segments_produced,
-        "tracks_played": len(state.played_tracks),
-        "uptime_sec": round(time.time() - start_time),
-        "spotify_connected": state.spotify_connected,
-        "produced_log": [
-            {"type": e.type, "label": e.label, "timestamp": e.timestamp}
-            for e in state.segment_log
-        ],
-        "last_banter_script": state.last_banter_script,
-        "last_ad_script": state.last_ad_script,
-        "ha_context": state.ha_context if state.ha_context else None,
-        "go_librespot_log": _tail_log("tmp/go-librespot.log", 15),
-        "producer_errors": [
-            {"type": e.type, "label": e.label, "metadata": e.metadata}
-            for e in state.segment_log
-            if e.metadata.get("error")
-        ][-5:],
-    })
+    payload.update(
+        {
+            "queue_depth": segment_queue.qsize(),
+            "segments_produced": state.segments_produced,
+            "tracks_played": len(state.played_tracks),
+            "uptime_sec": round(time.time() - start_time),
+            "spotify_connected": state.spotify_connected,
+            "produced_log": [{"type": e.type, "label": e.label, "timestamp": e.timestamp} for e in state.segment_log],
+            "last_banter_script": state.last_banter_script,
+            "last_ad_script": state.last_ad_script,
+            "ha_context": state.ha_context if state.ha_context else None,
+            "go_librespot_log": _tail_log("tmp/go-librespot.log", 15),
+            "producer_errors": [
+                {"type": e.type, "label": e.label, "metadata": e.metadata}
+                for e in state.segment_log
+                if e.metadata.get("error")
+            ][-5:],
+        }
+    )
     return payload
 
 
 def _tail_log(path: str, lines: int = 15) -> list[str]:
     """Return the last lines from a log file without raising on missing files."""
     try:
-        with open(path, "r") as f:
+        with open(path) as f:
             return f.readlines()[-lines:]
     except Exception:
         return []

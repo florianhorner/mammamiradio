@@ -11,8 +11,12 @@ import edge_tts
 
 from fakeitaliradio.models import AdScript, AdVoice, HostPersonality
 from fakeitaliradio.normalizer import (
-    concat_files, generate_bumper_jingle, generate_music_bed,
-    generate_sfx, generate_silence, mix_with_bed, normalize,
+    concat_files,
+    generate_music_bed,
+    generate_sfx,
+    generate_silence,
+    mix_with_bed,
+    normalize,
 )
 
 logger = logging.getLogger(__name__)
@@ -48,7 +52,7 @@ async def synthesize_ad(
     parts: list[Path] = []
     loop = asyncio.get_running_loop()
 
-    for i, part in enumerate(script.parts):
+    for _i, part in enumerate(script.parts):
         part_path = tmp_dir / f"adpart_{uuid4().hex[:8]}.mp3"
 
         if part.type == "voice" and part.text:
@@ -56,13 +60,20 @@ async def synthesize_ad(
             parts.append(part_path)
         elif part.type == "sfx" and part.sfx:
             await loop.run_in_executor(
-                None, generate_sfx, part_path, part.sfx, sfx_dir,
+                None,
+                generate_sfx,
+                part_path,
+                part.sfx,
+                sfx_dir,
             )
             parts.append(part_path)
         elif part.type == "pause":
             duration = part.duration if part.duration > 0 else 0.5
             await loop.run_in_executor(
-                None, generate_silence, part_path, duration,
+                None,
+                generate_silence,
+                part_path,
+                duration,
             )
             parts.append(part_path)
 
@@ -90,10 +101,18 @@ async def synthesize_ad(
         voice_duration = max(5.0, voice_size / (192 * 128))  # rough estimate
         bed_path = tmp_dir / f"adbed_{uuid4().hex[:8]}.mp3"
         await loop.run_in_executor(
-            None, generate_music_bed, bed_path, mood, voice_duration + 1.0,
+            None,
+            generate_music_bed,
+            bed_path,
+            mood,
+            voice_duration + 1.0,
         )
         await loop.run_in_executor(
-            None, mix_with_bed, voice_path, bed_path, output_path,
+            None,
+            mix_with_bed,
+            voice_path,
+            bed_path,
+            output_path,
         )
         bed_path.unlink(missing_ok=True)
         voice_path.unlink(missing_ok=True)
@@ -103,6 +122,7 @@ async def synthesize_ad(
         # Fallback: just use the voice track without a bed
         if voice_path != output_path:
             import shutil
+
             shutil.move(str(voice_path), str(output_path))
 
     return output_path
@@ -115,7 +135,7 @@ async def synthesize_dialogue(
     """Render each host line separately and stitch the exchange together."""
     parts: list[Path] = []
 
-    for i, (host, text) in enumerate(lines):
+    for _i, (host, text) in enumerate(lines):
         part_path = tmp_dir / f"line_{uuid4().hex[:8]}.mp3"
         await synthesize(text, host.voice, part_path)
         parts.append(part_path)

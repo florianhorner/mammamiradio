@@ -54,11 +54,13 @@ def test_default_is_music():
 
 
 def test_reserve_next_track_rotates_upcoming_playlist():
-    state = StationState(playlist=[
-        Track(title="One", artist="A", duration_ms=1, spotify_id="1"),
-        Track(title="Two", artist="B", duration_ms=1, spotify_id="2"),
-        Track(title="Three", artist="C", duration_ms=1, spotify_id="3"),
-    ])
+    state = StationState(
+        playlist=[
+            Track(title="One", artist="A", duration_ms=1, spotify_id="1"),
+            Track(title="Two", artist="B", duration_ms=1, spotify_id="2"),
+            Track(title="Three", artist="C", duration_ms=1, spotify_id="3"),
+        ]
+    )
 
     track = state.reserve_next_track()
 

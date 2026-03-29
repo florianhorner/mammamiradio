@@ -25,7 +25,7 @@ DEMO_TRACKS = [
 ]
 
 
-from fakeitaliradio.spotify_auth import get_spotify_client
+from fakeitaliradio.spotify_auth import get_spotify_client  # noqa: E402
 
 
 def _get_spotify_oauth(config: StationConfig):
@@ -53,7 +53,7 @@ def fetch_playlist(config: StationConfig) -> list[Track]:
     # Try playlist URL first
     playlist_id = _extract_playlist_id(config.playlist.spotify_url) if config.playlist.spotify_url else None
 
-    tracks: list[Track] = []
+    tracks: list[Track] = []  # type: ignore[no-redef]
 
     if playlist_id:
         try:
@@ -64,10 +64,14 @@ def fetch_playlist(config: StationConfig) -> list[Track]:
                     if not t or not t.get("id"):
                         continue
                     artist = t["artists"][0]["name"] if t["artists"] else "Unknown"
-                    tracks.append(Track(
-                        title=t["name"], artist=artist,
-                        duration_ms=t["duration_ms"], spotify_id=t["id"],
-                    ))
+                    tracks.append(
+                        Track(
+                            title=t["name"],
+                            artist=artist,
+                            duration_ms=t["duration_ms"],
+                            spotify_id=t["id"],
+                        )
+                    )
                 results = sp.next(results) if results.get("next") else None
             logger.info("Fetched %d tracks from playlist", len(tracks))
         except Exception as e:
@@ -88,10 +92,14 @@ def fetch_playlist(config: StationConfig) -> list[Track]:
                 if not t or not t.get("id"):
                     continue
                 artist = t["artists"][0]["name"] if t["artists"] else "Unknown"
-                tracks.append(Track(
-                    title=t["name"], artist=artist,
-                    duration_ms=t["duration_ms"], spotify_id=t["id"],
-                ))
+                tracks.append(
+                    Track(
+                        title=t["name"],
+                        artist=artist,
+                        duration_ms=t["duration_ms"],
+                        spotify_id=t["id"],
+                    )
+                )
             offset += limit
             if not results.get("next"):
                 break

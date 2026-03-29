@@ -80,7 +80,9 @@ ENTITY_LABELS = {
     "person.schnuffi": "Schnuffi",
     "lock.lock_ultra_8d3c": "Serratura porta d'ingresso",
     "input_button.foyer_fahrstuhl_fingerbot_push_button": "Ascensore (ultimo utilizzo)",
-    "binary_sensor.8_stockwerk_group_sensor_wohnzimmer_esszimmer_bar": "Presenza nel soggiorno/sala da pranzo/bar/cucina",
+    "binary_sensor.8_stockwerk_group_sensor_wohnzimmer_esszimmer_bar": (
+        "Presenza nel soggiorno/sala da pranzo/bar/cucina"
+    ),
     "input_select.bedroom_occupancy_state": "Camera da letto",
     "switch.bad_gross_waschmaschine_steckdose": "Lavatrice",
     "media_player.samsung_s95ca_65": "Televisore Samsung",
@@ -132,6 +134,7 @@ STATE_TRANSLATIONS = {
 @dataclass
 class HomeContext:
     """Snapshot of interesting home state, formatted for scriptwriter."""
+
     raw_states: dict[str, dict] = field(default_factory=dict)
     summary: str = ""
     timestamp: float = 0.0
@@ -176,7 +179,7 @@ def _format_state(entity_id: str, state_data: dict) -> str | None:
 
     # Dad joke — just show the joke
     if entity_id == "input_select.kaffee_dad_jokes":
-        return f"{label}: \"{state}\""
+        return f'{label}: "{state}"'
 
     # Default: translate the state
     translated = STATE_TRANSLATIONS.get(state, state)
@@ -221,11 +224,7 @@ async def fetch_home_context(
 
         # Filter to our curated entities
         entity_map = {e["entity_id"]: e for e in all_states}
-        relevant = {
-            eid: entity_map[eid]
-            for eid in ALL_ENTITIES
-            if eid in entity_map
-        }
+        relevant = {eid: entity_map[eid] for eid in ALL_ENTITIES if eid in entity_map}
 
         summary = _build_summary(relevant)
         context = HomeContext(

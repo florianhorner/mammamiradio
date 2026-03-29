@@ -5,20 +5,31 @@ from __future__ import annotations
 import asyncio
 import logging
 import random
-import subprocess
 from pathlib import Path
 from uuid import uuid4
 
 from fakeitaliradio.config import StationConfig
 from fakeitaliradio.downloader import download_track
 from fakeitaliradio.ha_context import HomeContext, fetch_home_context
-from fakeitaliradio.models import AdBrand, AdHistoryEntry, Segment, SegmentType, StationState
-from fakeitaliradio.normalizer import normalize, generate_silence
+from fakeitaliradio.models import (
+    AdBrand,
+    AdHistoryEntry,
+    Segment,
+    SegmentType,
+    StationState,
+)
+from fakeitaliradio.normalizer import (
+    concat_files,
+    generate_bumper_jingle,
+    generate_silence,
+    normalize,
+)
 from fakeitaliradio.scheduler import next_segment_type
-from fakeitaliradio.normalizer import concat_files, generate_bumper_jingle
 from fakeitaliradio.scriptwriter import (
-    AD_BREAK_INTROS, AD_BREAK_OUTROS,
-    write_ad, write_banter,
+    AD_BREAK_INTROS,
+    AD_BREAK_OUTROS,
+    write_ad,
+    write_banter,
 )
 from fakeitaliradio.spotify_player import SpotifyPlayer, download_track_spotify
 from fakeitaliradio.tts import synthesize, synthesize_ad, synthesize_dialogue
@@ -34,7 +45,6 @@ def _pick_brand(brands: list[AdBrand], ad_history: list) -> AdBrand:
         eligible = list(brands)  # allow repeats if pool exhausted
     weights = [3 if b.recurring else 1 for b in eligible]
     return random.choices(eligible, weights=weights, k=1)[0]
-
 
 
 async def run_producer(
@@ -68,8 +78,14 @@ async def run_producer(
         segment: Segment | None = None
 
         # Refresh Home Assistant context for banter/ad segments
-        if config.homeassistant.enabled and config.ha_token and seg_type in (
-            SegmentType.BANTER, SegmentType.AD,
+        if (
+            config.homeassistant.enabled
+            and config.ha_token
+            and seg_type
+            in (
+                SegmentType.BANTER,
+                SegmentType.AD,
+            )
         ):
             ha_cache = await fetch_home_context(
                 ha_url=config.homeassistant.url,
@@ -94,9 +110,7 @@ async def run_producer(
                 )
 
                 if use_spotify:
-                    audio_path = await download_track_spotify(
-                        spotify_player, track, norm_path
-                    )
+                    audio_path = await download_track_spotify(spotify_player, track, norm_path)  # type: ignore[arg-type]
                 else:
                     # Fallback: local files / yt-dlp / placeholder
                     audio_path = await download_track(track, config.cache_dir, music_dir=Path("music"))
@@ -115,9 +129,7 @@ async def run_producer(
                 lines = await write_banter(state, config)
                 audio_path = await synthesize_dialogue(lines, config.tmp_dir)
 
-                state.last_banter_script = [
-                    {"host": h.name, "text": t} for h, t in lines
-                ]
+                state.last_banter_script = [{"host": h.name, "text": t} for h, t in lines]
                 segment = Segment(
                     type=SegmentType.BANTER,
                     path=audio_path,
@@ -156,24 +168,27 @@ async def run_producer(
                     # Avoid brands used in this same break
                     brand = _pick_brand(
                         config.ads.brands,
-                        state.ad_history + [
-                            AdHistoryEntry(brand=b, summary="", timestamp=0)
-                            for b in used_brands_this_break
-                        ],
+                        state.ad_history
+                        + [AdHistoryEntry(brand=b, summary="", timestamp=0) for b in used_brands_this_break],
                     )
                     used_brands_this_break.append(brand.name)
 
                     voice = random.choice(config.ads.voices) if config.ads.voices else None
-                    logger.info("  Spot %d/%d: %s (voice: %s)",
-                                spot_idx + 1, num_spots, brand.name,
-                                voice.name if voice else "host")
+                    logger.info(
+                        "  Spot %d/%d: %s (voice: %s)",
+                        spot_idx + 1,
+                        num_spots,
+                        brand.name,
+                        voice.name if voice else "host",
+                    )
 
                     if voice:
                         script = await write_ad(brand, voice, state, config)
                         sfx_dir = Path(config.ads.sfx_dir) if config.ads.sfx_dir else None
                         ad_path = await synthesize_ad(script, voice, config.tmp_dir, sfx_dir)
                     else:
-                        from fakeitaliradio.models import AdVoice as _AV
+                        from fakeitaliradio.models import AdVoice as _AV  # noqa: N814
+
                         host = random.choice(config.hosts)
                         fallback_voice = _AV(name=host.name, voice=host.voice, style=host.style)
                         script = await write_ad(brand, fallback_voice, state, config)
@@ -183,9 +198,7 @@ async def run_producer(
                     break_parts.append(ad_path)
                     break_brands.append(brand.name)
                     break_summaries.append(script.summary)
-                    full_text = " ".join(
-                        p.text for p in script.parts if p.type == "voice" and p.text
-                    )
+                    full_text = " ".join(p.text for p in script.parts if p.type == "voice" and p.text)
                     break_texts.append(full_text)
 
                     # Record each spot in history so next spot avoids the same brand
@@ -195,7 +208,10 @@ async def run_producer(
                     if spot_idx < num_spots - 1:
                         between_bumper = config.tmp_dir / f"bumper_mid_{uuid4().hex[:8]}.mp3"
                         await loop.run_in_executor(
-                            None, generate_bumper_jingle, between_bumper, 0.8,
+                            None,
+                            generate_bumper_jingle,
+                            between_bumper,
+                            0.8,
                         )
                         break_parts.append(between_bumper)
 
@@ -217,7 +233,10 @@ async def run_producer(
                 else:
                     ad_break_path = config.tmp_dir / f"adbreak_{uuid4().hex[:8]}.mp3"
                     await loop.run_in_executor(
-                        None, concat_files, break_parts, ad_break_path,
+                        None,
+                        concat_files,
+                        break_parts,
+                        ad_break_path,
                     )
                     for p in break_parts:
                         p.unlink(missing_ok=True)
@@ -256,6 +275,4 @@ async def run_producer(
 
         if segment:
             await queue.put(segment)
-            logger.info(
-                "Queued %s (queue size: %d)", seg_type.value, queue.qsize()
-            )
+            logger.info("Queued %s (queue size: %d)", seg_type.value, queue.qsize())
