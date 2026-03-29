@@ -1,3 +1,5 @@
+"""Track acquisition helpers used when Spotify capture is unavailable."""
+
 from __future__ import annotations
 
 import asyncio
@@ -38,6 +40,7 @@ def _find_local(track: Track, music_dir: Path) -> Path | None:
 
 
 def _download_ytdlp(track: Track, cache_dir: Path) -> Path:
+    """Download the best-effort public audio match for a track via yt-dlp."""
     import yt_dlp
 
     query = f"ytsearch1:{track.artist} {track.title} official audio"
@@ -65,6 +68,7 @@ def _download_ytdlp(track: Track, cache_dir: Path) -> Path:
 
 
 def _download_sync(track: Track, cache_dir: Path, music_dir: Path) -> Path:
+    """Resolve a track from cache, local files, yt-dlp, or a placeholder tone."""
     out_path = cache_dir / f"{track.cache_key}.mp3"
     if out_path.exists():
         logger.info("Cache hit: %s", track.display)
@@ -87,6 +91,7 @@ def _download_sync(track: Track, cache_dir: Path, music_dir: Path) -> Path:
 
 
 async def download_track(track: Track, cache_dir: Path, music_dir: Path | None = None) -> Path:
+    """Run the synchronous download fallback chain off the event loop."""
     loop = asyncio.get_running_loop()
     _music_dir = music_dir or Path("music")
     return await loop.run_in_executor(None, _download_sync, track, cache_dir, _music_dir)

@@ -4,9 +4,17 @@ All notable changes to `fakeitaliradio` are documented here.
 
 The current version source of truth is `pyproject.toml`.
 
-## [Unreleased]
+## [0.1.1] - 2026-03-29
 
-- No unreleased changes yet.
+### Added
+
+- Dedicated repo docs for architecture, operations, troubleshooting, and contributing.
+- Inline module, class, and function documentation across the Python application code.
+
+### Changed
+
+- Expanded `README.md` and `CLAUDE.md` so setup, auth, fallback behavior, and runtime flow match the current code.
+- Kept `audio.bitrate` as the canonical bitrate setting in user-facing docs.
 
 ## [0.1.0] - 2026-03-29
 

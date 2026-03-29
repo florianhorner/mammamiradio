@@ -1,3 +1,5 @@
+"""Core data models shared across playback, scripting, and streaming."""
+
 from __future__ import annotations
 
 import re
@@ -8,6 +10,8 @@ from pathlib import Path
 
 
 class SegmentType(Enum):
+    """Kinds of segments that can appear on the station timeline."""
+
     MUSIC = "music"
     BANTER = "banter"
     AD = "ad"
@@ -15,6 +19,8 @@ class SegmentType(Enum):
 
 @dataclass
 class Track:
+    """A playable track sourced from Spotify, cache, or local files."""
+
     title: str
     artist: str
     duration_ms: int
@@ -23,16 +29,20 @@ class Track:
 
     @property
     def cache_key(self) -> str:
+        """Stable filesystem-friendly key used for caching fallback audio."""
         raw = f"{self.artist} {self.title}".lower()
         return re.sub(r"[^a-z0-9]+", "_", raw).strip("_")[:80]
 
     @property
     def display(self) -> str:
+        """Human-readable label used in logs and APIs."""
         return f"{self.artist} – {self.title}"
 
 
 @dataclass
 class HostPersonality:
+    """Prompt and TTS inputs that define an on-air host persona."""
+
     name: str
     voice: str
     style: str
@@ -40,6 +50,8 @@ class HostPersonality:
 
 @dataclass
 class AdBrand:
+    """A fictional advertiser that can recur across breaks."""
+
     name: str
     tagline: str
     category: str = "general"
@@ -48,6 +60,8 @@ class AdBrand:
 
 @dataclass
 class AdVoice:
+    """A non-host voice used to perform commercial copy."""
+
     name: str
     voice: str  # edge-tts voice ID
     style: str  # character description for the prompt
@@ -55,6 +69,8 @@ class AdVoice:
 
 @dataclass
 class AdPart:
+    """One structured unit inside an ad script: voice, SFX, or silence."""
+
     type: str  # "voice", "sfx", "pause"
     text: str = ""
     voice: str = ""
@@ -64,6 +80,8 @@ class AdPart:
 
 @dataclass
 class AdScript:
+    """Structured ad script returned by the LLM before audio synthesis."""
+
     brand: str
     parts: list[AdPart] = field(default_factory=list)
     summary: str = ""  # 1-sentence for history/cross-ref
@@ -72,6 +90,8 @@ class AdScript:
 
 @dataclass
 class AdHistoryEntry:
+    """Minimal history item used to build cross-ad campaign callbacks."""
+
     brand: str
     summary: str
     timestamp: float = 0.0
@@ -79,6 +99,8 @@ class AdHistoryEntry:
 
 @dataclass
 class Segment:
+    """A rendered audio file queued for live playback."""
+
     type: SegmentType
     path: Path
     duration_sec: float = 0.0
@@ -87,6 +109,8 @@ class Segment:
 
 @dataclass
 class SegmentLogEntry:
+    """Compact log event for produced or streamed segments."""
+
     type: str
     label: str
     timestamp: float = 0.0
@@ -95,6 +119,8 @@ class SegmentLogEntry:
 
 @dataclass
 class StationState:
+    """Mutable in-memory state shared by producer and streamer tasks."""
+
     playlist: list[Track] = field(default_factory=list)
     played_tracks: list[Track] = field(default_factory=list)
     songs_since_banter: int = 0
@@ -117,6 +143,7 @@ class StationState:
     ha_context: str = ""
 
     def _log(self, seg_type: str, label: str, metadata: dict | None = None) -> None:
+        """Append a bounded producer-side log entry."""
         self.segment_log.append(SegmentLogEntry(
             type=seg_type, label=label,
             timestamp=time.time(), metadata=metadata or {},
@@ -150,6 +177,7 @@ class StationState:
         return track
 
     def after_music(self, track: Track) -> None:
+        """Advance state after successfully queuing a music segment."""
         self.played_tracks.append(track)
         self.current_track = track
         self.songs_since_banter += 1
@@ -158,6 +186,7 @@ class StationState:
         self._log("music", track.display)
 
     def after_banter(self) -> None:
+        """Advance counters after successfully queuing host banter."""
         self.songs_since_banter = 0
         self.segments_produced += 1
         self._log("banter", "Host banter")
@@ -178,5 +207,6 @@ class StationState:
         self._log("ad", f"Ad: {label}")
 
     def add_joke(self, joke: str) -> None:
+        """Keep a short rolling buffer of running jokes for prompt callbacks."""
         self.running_jokes.append(joke)
         self.running_jokes = self.running_jokes[-5:]

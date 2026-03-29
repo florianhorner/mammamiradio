@@ -1,3 +1,5 @@
+"""Spotipy OAuth bootstrap for authenticated Spotify API access."""
+
 from __future__ import annotations
 
 from fakeitaliradio.config import StationConfig

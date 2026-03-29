@@ -1,81 +1,107 @@
 # Architecture
 
-`fakeitaliradio` is a single FastAPI process that keeps a radio station timeline alive in memory. One background task produces future segments, another streams the currently selected segment to every listener at real playback speed.
+`fakeitaliradio` is one FastAPI process with one shared station timeline in memory.
+
+One background task stays ahead and produces segments. Another reads the next ready segment and streams it to every connected listener at real playback speed.
 
 ## Runtime overview
 
 ```text
-Spotify Web API / demo playlist
-        |
-        v
-playlist.py --> StationState --> scheduler.py
-                                |
-                                v
-                      producer.py builds Segment files
-                                |
-                                v
-                      asyncio.Queue[Segment]
-                                |
-                                v
-streamer.py playback loop --> LiveStreamHub --> /stream and /listen
-        ^
-        |
- dashboard + admin APIs at /
+Spotify playlist / liked songs / demo tracks
+                |
+                v
+           playlist.py
+                |
+                v
+          StationState + scheduler.py
+                |
+                v
+        producer.py renders Segment files
+                |
+                v
+          asyncio.Queue[Segment]
+                |
+                v
+   streamer.py playback loop -> LiveStreamHub -> /stream and /listen
+                |
+                +-> /public-status and /status
 ```
 
-## Main flows
+## Startup flow
 
-### 1. Startup
+`fakeitaliradio.main:startup()` does five things:
 
-`fakeitaliradio.main` loads `radio.toml` plus `.env`, validates the config, fetches a playlist, and creates shared app state:
+1. Loads `radio.toml` and `.env` through `config.py`.
+2. Validates the config and applies legacy migration like `station.bitrate -> audio.bitrate`.
+3. Fetches the playlist from Spotify or falls back to demo tracks.
+4. Starts `SpotifyPlayer`, which owns go-librespot and the FIFO drain path.
+5. Creates shared app state, then launches:
+   - `run_producer()` to fill the lookahead queue
+   - `run_playback_loop()` to stream queued audio
 
-- `StationState` tracks playlist order, pacing counters, current scripts, logs, and ad history.
-- `asyncio.Queue` holds pre-rendered segment files.
-- `LiveStreamHub` fans MP3 chunks out to all active listeners.
-
-It then launches two long-running tasks:
-
-- `run_producer(...)` prebuilds future segments.
-- `run_playback_loop(...)` reads the queue and streams one segment at a time.
-
-### 2. Segment production
+## Segment production
 
 `scheduler.py` is the single source of truth for pacing:
 
-- first segment is always music
+- the first segment is always music
 - ad breaks trigger when `songs_since_ad >= songs_between_ads`
-- banter triggers when `songs_since_banter` crosses the configured threshold, with a small random jitter
+- banter triggers when `songs_since_banter` crosses the configured threshold, with a small random jitter outside preview mode
 
-`producer.py` turns that decision into audio:
+`producer.py` turns that pacing decision into actual audio files:
 
-- `MUSIC`: capture from Spotify when go-librespot is authenticated, otherwise fall back to local files, yt-dlp, or a generated placeholder tone
-- `BANTER`: ask Claude for host dialogue, then synthesize it with Edge TTS
-- `AD`: build a multi-part ad break with host intros/outros, bumper jingles, one or more spots, and campaign-history callbacks
+- `MUSIC`
+  - prefers Spotify capture when go-librespot is authenticated
+  - otherwise falls back to local `music/`, then `yt-dlp`, then a generated placeholder tone
+  - normalizes output before queueing
+- `BANTER`
+  - asks Claude for structured dialogue JSON
+  - synthesizes one line per host with Edge TTS
+  - preserves running jokes in `StationState`
+- `AD`
+  - picks brands with recurrence weighting and recent-brand avoidance
+  - builds a break from host intro, bumpers, one or more ad spots, and host outro
+  - records per-spot campaign history, but only increments `segments_produced` once per break
 
-Every produced segment becomes a temporary MP3 on disk and is pushed into the queue.
+Every produced segment becomes a temporary MP3 on disk and is pushed into `asyncio.Queue[Segment]`.
 
-### 3. Playback and fanout
+## Playback and fanout
 
-`streamer.py` pulls one `Segment` at a time from the queue, updates `StationState.now_streaming`, and reads the MP3 in chunks.
+`streamer.py` owns the live station timeline.
 
-The playback loop throttles chunk delivery to the configured bitrate. That is why the dashboard timeline stays aligned with what the listener actually hears instead of racing ahead as fast as the file can be read from disk.
+- `run_playback_loop()` pops the next `Segment`, marks it live in `StationState`, and reads the MP3 in chunks.
+- Chunk delivery is throttled to `config.audio.bitrate`, which is the single source of truth for stream pacing and ICY bitrate headers.
+- `LiveStreamHub` fans each chunk out to all listeners.
+- Slow listeners are dropped instead of stalling the whole station.
+- Temp segment files are deleted after playback finishes.
 
-`LiveStreamHub` keeps one queue per listener. Slow listeners are dropped instead of stalling the station for everyone else.
+Important design choice: there is one shared timeline. Listeners tune into the current live point, not their own private playback state.
 
 ## Spotify audio path
 
-The weird part is `spotify_player.py`.
+The strange part of this app is `spotify_player.py`.
 
-go-librespot writes raw PCM into a named pipe. On macOS that pipe needs a reader attached all the time or go-librespot starts throwing ENXIO and skips tracks. The fix is a persistent drain thread:
+go-librespot writes raw PCM into a named pipe. On macOS, that FIFO needs a reader attached all the time or go-librespot throws `ENXIO` and starts skipping tracks.
+
+The fix is a persistent drain path:
 
 1. keep the FIFO open and draining continuously
-2. when a track should be captured, redirect the drain into ffmpeg stdin
+2. when a track should be captured, redirect that drain into ffmpeg stdin
 3. encode the captured PCM to normalized MP3
-4. return to draining into `/dev/null` when capture ends
+4. return to draining without capture when the track ends
 
-`start.sh` also keeps a fallback `cat` process alive across uvicorn reloads so Spotify does not disconnect every time the app restarts in development.
+`start.sh` also keeps a fallback `cat` drain alive across uvicorn reloads so local development does not constantly break Spotify playback.
 
-## Surface area
+## Optional Home Assistant context
+
+If `[homeassistant].enabled = true` and `HA_TOKEN` is present:
+
+- `ha_context.py` polls the Home Assistant REST API
+- a curated set of entities is translated into short Italian-readable context
+- banter and ads may reference one ambient detail, like weather or who is home
+
+This is opportunistic context, not a hard dependency. Failures there should not stop the station.
+
+## Access model
 
 Public routes:
 
@@ -83,7 +109,7 @@ Public routes:
 - `/stream`
 - `/public-status`
 
-Admin routes and the dashboard:
+Admin routes:
 
 - `/`
 - `/status`
@@ -95,7 +121,25 @@ Admin routes and the dashboard:
 - `/api/playlist/move`
 - `/api/playlist/move_to_next`
 
-If the app stays on localhost, admin routes are available locally with no extra auth. If you bind to a non-local interface, config validation requires `ADMIN_PASSWORD` or `ADMIN_TOKEN`.
+Admin access is granted by one of:
+
+- localhost access, unless `ADMIN_PASSWORD` is configured
+- HTTP Basic auth via `ADMIN_USERNAME` and `ADMIN_PASSWORD`
+- token auth via `X-Radio-Admin-Token` or `admin_token` query param for non-local requests when only `ADMIN_TOKEN` is configured
+
+Non-local binds without admin auth are rejected during config validation.
+
+## Failure model
+
+This repo is biased toward "keep the station on air."
+
+- producer exceptions insert a short silence segment instead of crashing the app
+- script generation failures fall back to stock copy
+- missing Spotify auth falls back to demo or downloaded audio
+- missing Home Assistant context is ignored
+- missing ad brands disables ads rather than killing startup
+
+The rich path is richer, but the failure path still produces a stream.
 
 ## File map
 
@@ -105,7 +149,7 @@ If the app stays on localhost, admin routes are available locally with no extra 
 | `fakeitaliradio/config.py` | `radio.toml` and `.env` loading plus validation |
 | `fakeitaliradio/models.py` | shared dataclasses for tracks, segments, ads, and station state |
 | `fakeitaliradio/playlist.py` | Spotify playlist or liked-song fetch with demo fallback |
-| `fakeitaliradio/scheduler.py` | pacing rules and "up next" preview |
+| `fakeitaliradio/scheduler.py` | pacing rules and upcoming preview |
 | `fakeitaliradio/producer.py` | segment generation pipeline |
 | `fakeitaliradio/spotify_player.py` | go-librespot process management and FIFO capture |
 | `fakeitaliradio/downloader.py` | local-file, yt-dlp, and placeholder music fallback |
@@ -117,6 +161,6 @@ If the app stays on localhost, admin routes are available locally with no extra 
 
 ## Operational notes
 
-- Version metadata currently lives in `pyproject.toml`, not a dedicated `VERSION` file.
+- Version metadata lives in `pyproject.toml`.
 - Generated assets land in `tmp/` and `cache/`.
-- This app keeps station state in memory. Restarting the process resets counters, logs, and running jokes.
+- Station state is in memory. Restarting the process resets counters, logs, and running jokes.

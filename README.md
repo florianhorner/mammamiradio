@@ -1,132 +1,200 @@
 # fakeitaliradio
 
-AI-powered fake Italian radio station. Streams music from your Spotify library with AI-generated host banter and absurd fake ads, all in Italian.
+AI-powered fake Italian radio station. It streams a continuous MP3 from your Spotify library, layers in Claude-written host banter and absurd fake ads, and exposes both a control-plane dashboard and a public listener page.
 
-Two hosts (configurable) riff on the tracks, keep running jokes alive across segments, and periodically cut to ad breaks for fictional brands like "Negroni as a Service." The whole thing streams as a live MP3 you can open in any browser or audio player.
+The app is designed to degrade gracefully. If Spotify auth is missing, it falls back to a demo playlist. If go-librespot is unavailable, it can still synthesize a station from local files, `yt-dlp`, or generated placeholder audio. If Anthropic is unavailable, banter and ads fall back to short stock lines instead of crashing the station.
+
+## What it does
+
+- Streams a live MP3 station at `/stream`
+- Serves an admin dashboard at `/` and a public listener page at `/listen`
+- Rotates between music, host banter, and multi-spot ad breaks
+- Auto-transfers Spotify playback to the `fakeitaliradio` device when possible
+- Lets hosts reference live Home Assistant state when enabled
+- Supports playlist mutation from the dashboard: shuffle, skip, purge, remove, reorder, play-next
 
 ## Documentation
 
 - [ARCHITECTURE.md](ARCHITECTURE.md) explains the runtime, component boundaries, and the FIFO/go-librespot audio path.
 - [CONTRIBUTING.md](CONTRIBUTING.md) covers local setup, test commands, and manual smoke checks.
-- [CHANGELOG.md](CHANGELOG.md) tracks release notes from the current `0.1.0` baseline forward.
+- [TROUBLESHOOTING.md](TROUBLESHOOTING.md) covers the failures you are actually likely to hit.
+- [OPERATIONS.md](OPERATIONS.md) describes the current run and deploy reality.
+- [CHANGELOG.md](CHANGELOG.md) tracks release notes from the current baseline forward.
 
 ## How it works
 
-```
-Spotify (go-librespot) ──→ Producer ──→ Queue ──→ Streamer ──→ /stream (MP3)
-Claude (scripts)       ──↗               ↑
-Edge TTS (voices)      ──↗          Scheduler decides:
-FFmpeg (audio)         ──↗          music → banter → ads
+```text
+Spotify / liked songs / demo playlist -> Producer -> asyncio.Queue -> Playback loop -> /stream
+                                     |                                  |
+Claude -> banter/ad scripts ---------+                                  +-> /public-status, /status
+Edge TTS -> dialogue + ads ----------+
+FFmpeg -> normalize / mix / concat --+
+Home Assistant -> optional context --+
 ```
 
-The **producer** generates segments ahead of time (music, banter, or ads) and pushes them to an async queue. The **streamer** pulls segments from the queue and sends MP3 chunks to listeners, throttled to the playback bitrate so the dashboard stays in sync with what you hear. The **scheduler** decides what comes next based on pacing rules (e.g., banter every 2 songs, ads every 4).
+- `producer.py` keeps a few segments queued ahead of playback.
+- `scheduler.py` decides whether the next segment is music, banter, or an ad break.
+- `streamer.py` plays one station timeline and fans out MP3 chunks to all connected listeners.
+- `spotify_player.py` keeps a persistent reader on the go-librespot FIFO so macOS does not throw `ENXIO` and skip tracks.
 
 ## Quick start
 
 ### Prerequisites
 
 - Python 3.11+
-- [FFmpeg](https://ffmpeg.org/) (for audio processing)
-- [go-librespot](https://github.com/devgianlu/go-librespot) (for Spotify playback)
-- A Spotify account (free or premium)
-- An [Anthropic API key](https://console.anthropic.com/) (for Claude, used to write scripts)
+- FFmpeg
+- Optional: go-librespot, for real Spotify device playback and capture
+- Optional: Spotify client credentials, for your own playlist or liked songs
+- Optional: Anthropic API key, for non-fallback banter and ads
+- Optional: Home Assistant long-lived token, for ambient home-state references in scripts
 
 ### Setup
 
 ```bash
-# Clone and install
 cd /path/to/fakeitaliradio
 python3.11 -m venv .venv
 source .venv/bin/activate
 pip install -e .
-
-# Configure
 cp .env.example .env
-# Edit .env with your credentials:
-#   SPOTIFY_CLIENT_ID=
-#   SPOTIFY_CLIENT_SECRET=
-#   ANTHROPIC_API_KEY=
+```
 
-# Run
+Edit `.env` as needed:
+
+```dotenv
+FAKEITALIRADIO_BIND_HOST=127.0.0.1
+FAKEITALIRADIO_PORT=8000
+ADMIN_USERNAME=admin
+ADMIN_PASSWORD=
+ADMIN_TOKEN=
+SPOTIFY_CLIENT_ID=
+SPOTIFY_CLIENT_SECRET=
+ANTHROPIC_API_KEY=
+HA_TOKEN=
+```
+
+### Run
+
+```bash
 ./start.sh
 ```
 
-`start.sh` handles the FIFO pipe, launches go-librespot in the background, and starts the FastAPI server with hot reload on port 8000. By default it binds to `127.0.0.1`; override with `FAKEITALIRADIO_BIND_HOST` and `FAKEITALIRADIO_PORT`.
+`start.sh`:
 
-### Listen
+- creates the FIFO at `/tmp/fakeitaliradio.pcm`
+- starts `go-librespot` if it is not already running
+- keeps a fallback drain process alive across hot reloads
+- runs `uvicorn` with `--reload`
 
-- **Dashboard** (control plane): http://localhost:8000/
-- **Listener** (minimal player): http://localhost:8000/listen
-- **Raw stream**: http://localhost:8000/stream
+Open:
 
-On first run, open Spotify and select "fakeitaliradio" as your playback device. The station will auto-transfer playback if possible.
+- Dashboard: `http://localhost:8000/`
+- Listener: `http://localhost:8000/listen`
+- Raw stream: `http://localhost:8000/stream`
+
+On first full Spotify run, select `fakeitaliradio` as the playback device in Spotify. The app also tries to auto-transfer playback when the device appears.
+
+## Fallback behavior
+
+The station is intentionally resilient:
+
+| Missing dependency | What happens |
+| --- | --- |
+| Spotify client credentials | Uses a built-in demo Italian playlist |
+| go-librespot or Spotify device connection | Falls back to local files, then `yt-dlp`, then placeholder audio |
+| Anthropic API key or Claude request failure | Uses simple fallback banter or ad copy |
+| Home Assistant token or API failure | Continues without home context |
+| Ad brands missing | Skips ad generation instead of failing startup |
+
+If you keep a local `music/` directory with matching MP3s, the downloader will prefer that before trying `yt-dlp`.
 
 ## Configuration
 
-Everything lives in `radio.toml`. Key sections:
+Most station behavior lives in `radio.toml`.
+
+`audio.bitrate` is the canonical bitrate setting for encoding, playback throttling, and ICY headers.
 
 | Section | What it controls |
-|---------|-----------------|
-| `[station]` | Name, language, theme description |
-| `[playlist]` | Spotify playlist URL (or empty for liked songs), shuffle |
-| `[pacing]` | Songs between banter/ads, spots per ad break, lookahead depth |
-| `[[hosts]]` | Host personalities: name, Edge TTS voice, style description |
-| `[[ads.brands]]` | Fictional brands: name, tagline, category, recurring flag |
-| `[[ads.voices]]` | Commercial voice actors (separate from hosts) |
-| `[audio]` | Sample rate, bitrate, FIFO path, go-librespot settings, Claude model |
+| --- | --- |
+| `[station]` | Station name, language, theme |
+| `[playlist]` | Spotify playlist URL, shuffle behavior |
+| `[pacing]` | Songs between banter, songs between ads, spots per ad break, lookahead |
+| `[[hosts]]` | Host names, Edge voices, style/personality |
+| `[audio]` | Sample rate, channels, bitrate, FIFO path, go-librespot settings, Claude model |
+| `[homeassistant]` | Whether HA context is enabled, base URL, refresh interval |
+| `[[ads.brands]]` | Fictional brand pool, categories, recurring-campaign weighting |
+| `[[ads.voices]]` | Dedicated commercial voices for ads |
 
-See `radio.toml` for a fully commented example.
+The Home Assistant token is never stored in `radio.toml`. Set it via `HA_TOKEN` in `.env`.
 
-## API
+## Routes
 
-| Route | Method | Description |
-|-------|--------|-------------|
-| `/` | GET | Dashboard (control plane UI) |
-| `/listen` | GET | Listener (minimal playback UI) |
-| `/stream` | GET | Audio stream (infinite MP3) |
-| `/public-status` | GET | Public listener status: now playing, recent stream log, upcoming |
-| `/status` | GET | Admin JSON: queue depth, uptime, now playing, logs |
-| `/api/shuffle` | POST | Shuffle the playlist |
-| `/api/skip` | POST | Skip the current segment |
-| `/api/purge` | POST | Drain all queued segments |
-| `/api/playlist/remove` | POST | Remove a track by index |
-| `/api/playlist/move` | POST | Reorder a track (`{from, to}`) |
-| `/api/playlist/move_to_next` | POST | Move a track to play next |
-| `/api/logs` | GET | Recent go-librespot logs |
+| Route | Method | Access | Description |
+| --- | --- | --- | --- |
+| `/` | GET | Admin | Dashboard HTML |
+| `/listen` | GET | Public | Minimal player UI |
+| `/stream` | GET | Public | Infinite MP3 stream |
+| `/public-status` | GET | Public | Current segment, recent log, upcoming preview |
+| `/status` | GET | Admin | Full admin JSON: queue depth, uptime, scripts, HA context, errors |
+| `/api/logs` | GET | Admin | Recent go-librespot logs |
+| `/api/shuffle` | POST | Admin | Shuffle playlist |
+| `/api/skip` | POST | Admin | Skip current segment |
+| `/api/purge` | POST | Admin | Remove queued segments |
+| `/api/playlist/remove` | POST | Admin | Remove track by index |
+| `/api/playlist/move` | POST | Admin | Move track with `{from, to}` |
+| `/api/playlist/move_to_next` | POST | Admin | Move track to position 0 in upcoming |
 
-## Segments
+## Admin access
 
-The producer generates three types of segments:
+The public surface is `/listen`, `/stream`, and `/public-status`.
 
-- **Music**: Downloads track audio via Spotify (go-librespot FIFO capture) with yt-dlp and local file fallbacks. Normalized to target loudness.
-- **Banter**: Claude writes dialogue between hosts based on recent tracks and running jokes. Synthesized with Edge TTS, one voice per host.
-- **Ad breaks**: Claude writes scripts for fictional brands. Multi-part audio with voice acting, SFX, bumper jingles, and music beds. Supports campaign arcs where the same brand gets callbacks across breaks.
+Admin routes are:
 
-The scheduler cycles through them: a few songs, then banter, a few more, then an ad break. Pacing is configurable in `radio.toml`.
+- always allowed from localhost unless `ADMIN_PASSWORD` is set
+- protected everywhere by HTTP Basic auth when `ADMIN_PASSWORD` is set
+- protected off-localhost by `X-Radio-Admin-Token` or `?admin_token=...` when only `ADMIN_TOKEN` is set
+
+If you bind to a non-loopback host, the app requires either `ADMIN_PASSWORD` or `ADMIN_TOKEN` at startup.
 
 ## Project layout
 
-Core application files live in `fakeitaliradio/`. Everything else:
+```text
+fakeitaliradio/
+  main.py             FastAPI app startup/shutdown
+  config.py           radio.toml + env parsing and validation
+  producer.py         segment generation loop
+  streamer.py         routes, auth gates, playback fan-out
+  scheduler.py        segment selection and upcoming preview
+  spotify_player.py   go-librespot process + FIFO capture
+  playlist.py         Spotify playlist fetch + demo fallback
+  downloader.py       local file / yt-dlp / placeholder fallback
+  scriptwriter.py     Claude prompts for banter and ads
+  tts.py              Edge TTS synthesis
+  normalizer.py       FFmpeg helpers
+  ha_context.py       Home Assistant polling and formatting
+  models.py           core data models and station state
+  dashboard.html      admin UI
+  listener.html       public listener UI
+radio.toml            station config
+start.sh              local dev entrypoint
+tests/                pytest coverage
+```
 
-| Path | What it is |
-|------|-----------|
-| `fakeitaliradio/` | Application runtime code |
-| `tests/` | pytest tests |
-| `radio.toml` | Station config (tracked, safe defaults) |
-| `.claude/skills/gstack` | Vendored agent/tooling support — not application code |
-| `tmp/` | Generated runtime audio and logs (gitignored) |
-| `cache/` | Downloaded/cached tracks (gitignored) |
-| `.context/` | Conductor agent collaboration artifacts (gitignored) |
+## Development
 
-## Dependencies
+```bash
+pytest tests/
+```
 
-FastAPI, Uvicorn, Spotipy, Anthropic SDK, edge-tts, yt-dlp, httpx, Pydantic. Full list in `pyproject.toml`.
+Useful direct run:
 
-## Admin Access
+```bash
+source .venv/bin/activate
+python -m uvicorn fakeitaliradio.main:app --reload --reload-dir fakeitaliradio
+```
 
-The listener surface (`/listen`, `/stream`, `/public-status`) is public. The control plane (`/`), admin status, logs, and playlist mutation routes are restricted:
+Generated runtime directories:
 
-- If the app is bound to localhost, they are accessible from localhost without extra auth.
-- If you bind to a non-local interface, set `ADMIN_PASSWORD` or `ADMIN_TOKEN`.
-- `ADMIN_PASSWORD` uses HTTP Basic auth with `ADMIN_USERNAME` (default `admin`) and is the right choice for browser/dashboard access.
-- `ADMIN_TOKEN` can be sent via the `X-Radio-Admin-Token` header for scripted access to non-local admin routes.
+- `cache/` for downloaded audio
+- `tmp/` for normalized audio, logs, and temporary assets
+
+See `ARCHITECTURE.md` for runtime flow, `CONTRIBUTING.md` for local development, `TROUBLESHOOTING.md` for common failures, and `OPERATIONS.md` for the current run/deploy model.

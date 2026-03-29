@@ -38,6 +38,16 @@ def test_audio_section_loaded():
     assert config.audio.claude_model == "claude-haiku-4-5-20251001"
 
 
+def test_homeassistant_section_loaded():
+    """The [homeassistant] section should survive config loading."""
+    toml_path = Path(__file__).parent.parent / "radio.toml"
+    config = load_config(str(toml_path))
+
+    assert config.homeassistant.enabled is True
+    assert config.homeassistant.url == "https://ha.horner.io"
+    assert config.homeassistant.poll_interval == 60
+
+
 def test_audio_section_defaults():
     """AudioSection dataclass defaults should be sensible."""
     audio = AudioSection()
