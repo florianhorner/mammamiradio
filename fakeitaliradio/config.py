@@ -51,6 +51,13 @@ class AudioSection:
 
 
 @dataclass
+class HomeAssistantSection:
+    enabled: bool = False
+    url: str = ""
+    poll_interval: int = 60  # seconds between state refreshes
+
+
+@dataclass
 class AdsSection:
     brands: list[AdBrand] = field(default_factory=list)
     voices: list[AdVoice] = field(default_factory=list)
@@ -65,6 +72,7 @@ class StationConfig:
     hosts: list[HostPersonality]
     ads: AdsSection
     audio: AudioSection = field(default_factory=AudioSection)
+    homeassistant: HomeAssistantSection = field(default_factory=HomeAssistantSection)
     cache_dir: Path = Path("cache")
     tmp_dir: Path = Path("tmp")
 
@@ -77,6 +85,7 @@ class StationConfig:
     spotify_client_id: str = ""
     spotify_client_secret: str = ""
     anthropic_api_key: str = ""
+    ha_token: str = ""
 
 
 def _is_loopback_host(host: str) -> bool:
@@ -160,6 +169,17 @@ def load_config(path: str = "radio.toml") -> StationConfig:
         ]
         sfx_dir = ads_raw.get("sfx_dir", "sfx")
 
+    # Parse homeassistant section
+    ha_raw = raw.get("homeassistant", {})
+    ha_section = HomeAssistantSection(**ha_raw)
+    # Token always from env for security
+    ha_token = os.getenv("HA_TOKEN", "")
+    if ha_section.enabled and not ha_token:
+        import logging
+        logging.getLogger(__name__).warning(
+            "Home Assistant enabled but no HA_TOKEN in environment"
+        )
+
     config = StationConfig(
         station=StationSection(**raw.get("station", {})),
         playlist=PlaylistSection(**raw.get("playlist", {})),
@@ -167,6 +187,7 @@ def load_config(path: str = "radio.toml") -> StationConfig:
         hosts=hosts,
         ads=AdsSection(brands=brands, voices=voices, sfx_dir=sfx_dir),
         audio=AudioSection(**raw.get("audio", {})),
+        homeassistant=ha_section,
         bind_host=os.getenv("FAKEITALIRADIO_BIND_HOST", "127.0.0.1"),
         port=int(os.getenv("FAKEITALIRADIO_PORT", "8000")),
         admin_username=os.getenv("ADMIN_USERNAME", "admin"),
@@ -175,6 +196,7 @@ def load_config(path: str = "radio.toml") -> StationConfig:
         spotify_client_id=os.getenv("SPOTIFY_CLIENT_ID", ""),
         spotify_client_secret=os.getenv("SPOTIFY_CLIENT_SECRET", ""),
         anthropic_api_key=os.getenv("ANTHROPIC_API_KEY", ""),
+        ha_token=ha_token,
     )
     _validate(config)
     return config
