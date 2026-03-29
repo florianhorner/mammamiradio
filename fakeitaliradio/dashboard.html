@@ -759,22 +759,28 @@ async function loadPlaylist() {
   const url = input.value.trim();
   if (!url) return;
   input.disabled = true;
-  const r = await fetch('/api/playlist/load', {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({url}),
-  });
-  const d = await r.json();
-  input.disabled = false;
-  if (d.ok) {
-    input.value = '';
-    input.placeholder = d.tracks + ' tracks loaded!';
+  try {
+    const r = await fetch('/api/playlist/load', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({url}),
+    });
+    const d = await r.json();
+    if (d.ok) {
+      input.value = '';
+      input.placeholder = d.tracks + ' tracks loaded!';
+      setTimeout(() => { input.placeholder = 'Playlist URL...'; }, 3000);
+    } else {
+      input.placeholder = 'Error: ' + (d.error || 'unknown');
+      setTimeout(() => { input.placeholder = 'Playlist URL...'; }, 3000);
+    }
+    refresh();
+  } catch (e) {
+    input.placeholder = 'Network error';
     setTimeout(() => { input.placeholder = 'Playlist URL...'; }, 3000);
-  } else {
-    input.placeholder = 'Error: ' + (d.error || 'unknown');
-    setTimeout(() => { input.placeholder = 'Playlist URL...'; }, 3000);
+  } finally {
+    input.disabled = false;
   }
-  refresh();
 }
 
 async function doShuffle() {
