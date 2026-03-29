@@ -13,6 +13,14 @@ The app is designed to degrade gracefully. If Spotify auth is missing, it falls 
 - Lets hosts reference live Home Assistant state when enabled
 - Supports playlist mutation from the dashboard: shuffle, skip, purge, remove, reorder, play-next
 
+## Documentation
+
+- [ARCHITECTURE.md](ARCHITECTURE.md) explains the runtime, component boundaries, and the FIFO/go-librespot audio path.
+- [CONTRIBUTING.md](CONTRIBUTING.md) covers local setup, test commands, and manual smoke checks.
+- [TROUBLESHOOTING.md](TROUBLESHOOTING.md) covers the failures you are actually likely to hit.
+- [OPERATIONS.md](OPERATIONS.md) describes the current run and deploy reality.
+- [CHANGELOG.md](CHANGELOG.md) tracks release notes from the current baseline forward.
+
 ## How it works
 
 ```text
@@ -43,7 +51,8 @@ Home Assistant -> optional context --+
 ### Setup
 
 ```bash
-python -m venv .venv
+cd /path/to/fakeitaliradio
+python3.11 -m venv .venv
 source .venv/bin/activate
 pip install -e .
 cp .env.example .env
@@ -102,13 +111,15 @@ If you keep a local `music/` directory with matching MP3s, the downloader will p
 
 Most station behavior lives in `radio.toml`.
 
+`audio.bitrate` is the canonical bitrate setting for encoding, playback throttling, and ICY headers.
+
 | Section | What it controls |
 | --- | --- |
-| `[station]` | Station name, language, theme, stream bitrate |
+| `[station]` | Station name, language, theme |
 | `[playlist]` | Spotify playlist URL, shuffle behavior |
 | `[pacing]` | Songs between banter, songs between ads, spots per ad break, lookahead |
 | `[[hosts]]` | Host names, Edge voices, style/personality |
-| `[audio]` | Sample rate, channels, stream bitrate, FIFO path, go-librespot settings, Claude model |
+| `[audio]` | Sample rate, channels, bitrate, FIFO path, go-librespot settings, Claude model |
 | `[homeassistant]` | Whether HA context is enabled, base URL, refresh interval |
 | `[[ads.brands]]` | Fictional brand pool, categories, recurring-campaign weighting |
 | `[[ads.voices]]` | Dedicated commercial voices for ads |
@@ -177,7 +188,8 @@ pytest tests/
 Useful direct run:
 
 ```bash
-uvicorn fakeitaliradio.main:app --reload --reload-dir fakeitaliradio
+source .venv/bin/activate
+python -m uvicorn fakeitaliradio.main:app --reload --reload-dir fakeitaliradio
 ```
 
 Generated runtime directories:
@@ -185,4 +197,4 @@ Generated runtime directories:
 - `cache/` for downloaded audio
 - `tmp/` for normalized audio, logs, and temporary assets
 
-See `ARCHITECTURE.md` for the runtime data flow, `CONTRIBUTING.md` for local development, `TROUBLESHOOTING.md` for common failures, and `OPERATIONS.md` for the current run/deploy model.
+See `ARCHITECTURE.md` for runtime flow, `CONTRIBUTING.md` for local development, `TROUBLESHOOTING.md` for common failures, and `OPERATIONS.md` for the current run/deploy model.

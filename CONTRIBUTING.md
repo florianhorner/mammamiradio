@@ -1,81 +1,100 @@
 # Contributing
 
-This repo is small, but the moving parts are real: FastAPI, FFmpeg, Edge TTS, Spotify, Claude, and optional Home Assistant. Keep changes factual, testable, and boring in the good sense.
+This repo is small, but it has real moving parts: FastAPI, FFmpeg, Edge TTS, Spotify, Claude, and optional Home Assistant. The fastest way to break it is to change behavior without actually running the station.
+
+Do the local setup, run targeted tests, then do a quick listen-through.
+
+## Prerequisites
+
+- Python 3.11+
+- FFmpeg on your `PATH`
+- go-librespot if you want to test real Spotify playback
+- Spotify and Anthropic credentials if you want the full happy path
+
+You can still work on config, scheduler, most routes, and documentation without Spotify credentials. The app falls back to demo tracks when Spotify is not configured.
 
 ## Local setup
 
 ```bash
-python -m venv .venv
+python3.11 -m venv .venv
 source .venv/bin/activate
 pip install -e .
 cp .env.example .env
 ```
 
-Minimum useful `.env`:
+Then fill in whatever `.env` values you need:
 
-```dotenv
-FAKEITALIRADIO_BIND_HOST=127.0.0.1
-FAKEITALIRADIO_PORT=8000
-```
+- `SPOTIFY_CLIENT_ID` / `SPOTIFY_CLIENT_SECRET` for Spotify playlist access and playback transfer
+- `ANTHROPIC_API_KEY` for banter and ad script generation
+- `HA_TOKEN` for Home Assistant prompt context
+- `ADMIN_PASSWORD` or `ADMIN_TOKEN` if you plan to bind outside localhost
 
-Optional integrations:
+`radio.toml` is the main station config. That is where you change hosts, pacing, playlist source, ad brands, audio settings, and Home Assistant enablement.
 
-- Spotify: `SPOTIFY_CLIENT_ID`, `SPOTIFY_CLIENT_SECRET`
-- Claude: `ANTHROPIC_API_KEY`
-- Home Assistant: `HA_TOKEN`
-- Remote admin access: `ADMIN_PASSWORD` or `ADMIN_TOKEN`
+## Run the app
 
-## Running locally
-
-Full local stack:
+Full dev workflow:
 
 ```bash
 ./start.sh
 ```
 
-App only:
+That script:
+
+- creates the FIFO if needed
+- starts or reuses go-librespot
+- keeps a fallback FIFO reader alive across reloads
+- runs uvicorn with `--reload`
+
+If you only need the web app and background tasks:
 
 ```bash
-uvicorn fakeitaliradio.main:app --reload --reload-dir fakeitaliradio
+source .venv/bin/activate
+python -m uvicorn fakeitaliradio.main:app --reload --reload-dir fakeitaliradio
 ```
 
 Useful URLs:
 
-- `http://localhost:8000/`
-- `http://localhost:8000/listen`
-- `http://localhost:8000/stream`
-- `http://localhost:8000/public-status`
-- `http://localhost:8000/status`
+- `http://127.0.0.1:8000/`
+- `http://127.0.0.1:8000/listen`
+- `http://127.0.0.1:8000/stream`
+- `http://127.0.0.1:8000/public-status`
+- `http://127.0.0.1:8000/status`
 
 ## Tests
 
-Run the suite with:
+Fast tests:
+
+```bash
+pytest tests/test_config.py tests/test_scheduler.py
+```
+
+Full suite:
 
 ```bash
 pytest tests/
 ```
 
-Current coverage is focused on:
+Notes:
 
-- config validation
-- scheduler behavior
-- ad generation helpers and models
-- playlist fetching fallbacks
-- preview output
+- `tests/test_ads.py` exercises audio helpers and needs FFmpeg installed.
+- There is no dedicated lint or formatter command checked into this repo today. Keep style aligned with the surrounding code and keep diffs tight.
 
-If you change scheduling, route auth, or config validation, add or update tests in `tests/`.
+## Manual smoke test
 
-## Implementation notes
+After starting the app:
 
-- `radio.toml` is checked in and holds non-secret station behavior.
-- `.env` holds secrets and bind/auth config.
-- `tmp/` and `cache/` are runtime output, not source.
-- `dashboard.html` and `listener.html` are raw HTML templates loaded by `streamer.py`.
-- `start.sh` is part of the dev workflow, not just a convenience script. It preserves the FIFO/go-librespot setup across reloads.
+1. Open `http://127.0.0.1:8000/` and confirm the dashboard loads.
+2. Open `http://127.0.0.1:8000/listen` and confirm the listener page loads.
+3. Open `http://127.0.0.1:8000/stream` in a browser or player and confirm audio starts once the first segment is queued.
+4. Hit `/public-status` and confirm the upcoming list matches the current playlist order.
+5. Use the dashboard controls for skip, shuffle, purge, and playlist reorder.
+
+If you are testing the Spotify path, also open Spotify and select the `fakeitaliradio` device. If you are binding to `0.0.0.0`, set `ADMIN_PASSWORD` or `ADMIN_TOKEN` first or config validation will reject startup.
 
 ## Documentation expectations
 
-When behavior changes, update:
+When behavior changes, update the matching docs in the same change:
 
 - `README.md` for user-facing setup and route changes
 - `ARCHITECTURE.md` for runtime flow and system design changes

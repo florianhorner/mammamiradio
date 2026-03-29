@@ -7,7 +7,7 @@ This app has a lot of moving parts. Most failures reduce to five things: Python 
 Use the expected project environment:
 
 ```bash
-python -m venv .venv
+python3.11 -m venv .venv
 source .venv/bin/activate
 pip install -e .
 ./start.sh

@@ -34,7 +34,8 @@ def test_after_banter_resets_counter():
 
 def test_after_ad_resets_counter_and_tracks_history():
     state = StationState(songs_since_ad=4, segments_produced=5)
-    state.after_ad(brand="TestBrand", summary="A test ad")
+    state.record_ad_spot("TestBrand", "A test ad")
+    state.after_ad(brands=["TestBrand"])
 
     assert state.songs_since_ad == 0
     assert state.segments_produced == 6
@@ -45,7 +46,8 @@ def test_after_ad_resets_counter_and_tracks_history():
 def test_ad_history_capped_at_20():
     state = StationState()
     for i in range(25):
-        state.after_ad(brand=f"Brand{i}", summary=f"Ad {i}")
+        state.record_ad_spot(brand=f"Brand{i}", summary=f"Ad {i}")
+        state.after_ad(brands=[f"Brand{i}"])
     assert len(state.ad_history) == 20
     assert state.ad_history[0].brand == "Brand5"
 

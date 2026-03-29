@@ -1,59 +1,37 @@
 # Changelog
 
-This file summarizes what shipped in this repo so a human can scan it without reading 20 commits in `git log`.
+All notable changes to `fakeitaliradio` are documented here.
 
-## 0.1.1 - 2026-03-29
+The current version source of truth is `pyproject.toml`.
+
+## [0.1.1] - 2026-03-29
 
 ### Added
 
-- Home Assistant context injection for banter and ads, so hosts can reference live ambient home state when configured.
-- Dedicated architecture, operations, contributing, and troubleshooting docs.
-- In-code documentation across the Python app modules, state models, and runtime entry points.
+- Dedicated repo docs for architecture, operations, troubleshooting, and contributing.
+- Inline module, class, and function documentation across the Python application code.
 
 ### Changed
 
-- README and agent docs now match the actual runtime behavior, auth model, and fallback paths.
+- Expanded `README.md` and `CLAUDE.md` so setup, auth, fallback behavior, and runtime flow match the current code.
+- Kept `audio.bitrate` as the canonical bitrate setting in user-facing docs.
 
-## 0.1.0
+## [0.1.0] - 2026-03-29
 
-Initial usable release of `fakeitaliradio`.
+### Added
 
-### Core station
+- Start a local fake Italian radio station with an admin dashboard at `/`, a public listener page at `/listen`, and a raw MP3 stream at `/stream`.
+- Alternate songs with AI-written host banter and multi-spot fake ad breaks, including bumper jingles, custom ad voices, and recurring campaign callbacks.
+- Expose admin controls for shuffle, skip, queue purge, track removal, reordering, and "play next" from the web UI.
+- Provide public station status plus admin-only logs and debugging details for queue depth, recent playback, generated scripts, and go-librespot output.
 
-- FastAPI app with a continuous MP3 stream and shared live playback timeline.
-- Segment scheduler for music, banter, and ads.
-- Producer/consumer queue model with recovery via silence segments on transient failures.
-- Playlist support from Spotify playlists or liked songs, with demo fallback.
+### Changed
 
-### Streaming and UI
+- Prefer real Spotify playback through go-librespot when a user connects the `fakeitaliradio` device, but keep the station alive with liked songs, demo tracks, local files, yt-dlp, or placeholder audio when that path is unavailable.
+- Throttle stream output to the configured bitrate so the dashboard, listener, and actual audio timeline stay aligned.
+- Require admin auth when binding to a non-local interface, while keeping localhost development friction low.
 
-- Control-plane dashboard at `/`.
-- Public listener page at `/listen`.
-- Public and admin JSON status surfaces.
-- Stream pacing throttled to bitrate so the dashboard matches what listeners hear.
+### For contributors
 
-### Spotify integration
-
-- go-librespot capture via FIFO.
-- Persistent FIFO drain to avoid macOS `ENXIO` playback skips.
-- Auto-transfer support to the `fakeitaliradio` Spotify device.
-- `start.sh` workflow so go-librespot survives hot reload.
-
-### Audio generation
-
-- Claude-written banter between configurable hosts.
-- Fake ad generation with recurring brands, voice actors, bumper jingles, SFX, and music beds.
-- Edge TTS synthesis for hosts and ads.
-- FFmpeg normalization and assembly pipeline.
-
-### Controls and debugging
-
-- Queue controls: shuffle, skip, purge, remove, move, play-next.
-- Debug panel for go-librespot logs and producer errors.
-- Improved structured debug log readability.
-
-### Stability
-
-- Config validation with fast failure on invalid setups.
-- Recovery paths for producer exceptions and deprecated event loop usage.
-- Additional test coverage for config, models, scheduler, playlist, ads, and preview behavior.
+- Add pytest coverage for config validation, scheduler pacing, ad-brand selection, campaign history, and ffmpeg-backed audio helpers.
+- Ship a local dev entry point in `start.sh` plus template config in `.env.example` and `radio.toml`.

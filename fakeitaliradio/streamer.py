@@ -81,8 +81,10 @@ class LiveStreamHub:
 
 def _is_loopback_client(request: Request) -> bool:
     """Return whether the current request originated from localhost."""
-    host = request.client.host if request.client else ""
-    if host in {"localhost", ""}:
+    if not request.client:
+        return False
+    host = request.client.host
+    if host == "localhost":
         return True
     try:
         return ipaddress.ip_address(host).is_loopback
@@ -143,7 +145,7 @@ async def run_playback_loop(app) -> None:
     state = app.state.station_state
     config = app.state.config
     hub = app.state.stream_hub
-    bytes_per_sec = (config.station.bitrate * 1000) / 8
+    bytes_per_sec = (config.audio.bitrate * 1000) / 8
 
     while True:
         try:
@@ -230,7 +232,7 @@ async def stream(request: Request):
         "Content-Type": "audio/mpeg",
         "icy-name": config.station.name,
         "icy-genre": config.station.theme[:64],
-        "icy-br": str(config.station.bitrate),
+        "icy-br": str(config.audio.bitrate),
         "Cache-Control": "no-cache, no-store",
         "Connection": "keep-alive",
     }

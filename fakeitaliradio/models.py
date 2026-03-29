@@ -191,17 +191,20 @@ class StationState:
         self.segments_produced += 1
         self._log("banter", "Host banter")
 
-    def after_ad(self, brand: str = "", summary: str = "") -> None:
-        """Advance counters and campaign history after an ad spot is queued."""
+    def record_ad_spot(self, brand: str, summary: str = "") -> None:
+        """Record a single ad spot in history (called per-spot within a break)."""
+        self.ad_history.append(AdHistoryEntry(
+            brand=brand, summary=summary, timestamp=time.time(),
+        ))
+        if len(self.ad_history) > 20:
+            self.ad_history = self.ad_history[-20:]
+
+    def after_ad(self, brands: list[str] | None = None) -> None:
+        """Mark one full ad break as produced (called once per break, not per-spot)."""
         self.songs_since_ad = 0
         self.segments_produced += 1
-        self._log("ad", f"Ad: {brand}" if brand else "Ad break")
-        if brand:
-            self.ad_history.append(AdHistoryEntry(
-                brand=brand, summary=summary, timestamp=time.time(),
-            ))
-            if len(self.ad_history) > 20:
-                self.ad_history = self.ad_history[-20:]
+        label = ", ".join(brands) if brands else "Ad break"
+        self._log("ad", f"Ad: {label}")
 
     def add_joke(self, joke: str) -> None:
         """Keep a short rolling buffer of running jokes for prompt callbacks."""
