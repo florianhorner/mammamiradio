@@ -23,7 +23,7 @@ DEMO_TRACKS = [
 ]
 
 
-from fakeitaliradio.spotify_auth import get_spotify_client
+from fakeitaliradio.spotify_auth import get_spotify_client  # noqa: E402
 
 
 def _get_spotify_oauth(config: StationConfig):

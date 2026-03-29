@@ -9,8 +9,12 @@ import edge_tts
 
 from fakeitaliradio.models import AdScript, AdVoice, HostPersonality
 from fakeitaliradio.normalizer import (
-    concat_files, generate_bumper_jingle, generate_music_bed,
-    generate_sfx, generate_silence, mix_with_bed, normalize,
+    concat_files,
+    generate_music_bed,
+    generate_sfx,
+    generate_silence,
+    mix_with_bed,
+    normalize,
 )
 
 logger = logging.getLogger(__name__)
@@ -45,7 +49,7 @@ async def synthesize_ad(
     parts: list[Path] = []
     loop = asyncio.get_running_loop()
 
-    for i, part in enumerate(script.parts):
+    for _i, part in enumerate(script.parts):
         part_path = tmp_dir / f"adpart_{uuid4().hex[:8]}.mp3"
 
         if part.type == "voice" and part.text:
@@ -111,7 +115,7 @@ async def synthesize_dialogue(
 ) -> Path:
     parts: list[Path] = []
 
-    for i, (host, text) in enumerate(lines):
+    for _i, (host, text) in enumerate(lines):
         part_path = tmp_dir / f"line_{uuid4().hex[:8]}.mp3"
         await synthesize(text, host.voice, part_path)
         parts.append(part_path)

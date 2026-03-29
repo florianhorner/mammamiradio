@@ -3,20 +3,31 @@ from __future__ import annotations
 import asyncio
 import logging
 import random
-import subprocess
 from pathlib import Path
 from uuid import uuid4
 
 from fakeitaliradio.config import StationConfig
 from fakeitaliradio.downloader import download_track
 from fakeitaliradio.ha_context import HomeContext, fetch_home_context
-from fakeitaliradio.models import AdBrand, AdHistoryEntry, Segment, SegmentType, StationState
-from fakeitaliradio.normalizer import normalize, generate_silence
+from fakeitaliradio.models import (
+    AdBrand,
+    AdHistoryEntry,
+    Segment,
+    SegmentType,
+    StationState,
+)
+from fakeitaliradio.normalizer import (
+    concat_files,
+    generate_bumper_jingle,
+    generate_silence,
+    normalize,
+)
 from fakeitaliradio.scheduler import next_segment_type
-from fakeitaliradio.normalizer import concat_files, generate_bumper_jingle
 from fakeitaliradio.scriptwriter import (
-    AD_BREAK_INTROS, AD_BREAK_OUTROS,
-    write_ad, write_banter,
+    AD_BREAK_INTROS,
+    AD_BREAK_OUTROS,
+    write_ad,
+    write_banter,
 )
 from fakeitaliradio.spotify_player import SpotifyPlayer, download_track_spotify
 from fakeitaliradio.tts import synthesize, synthesize_ad, synthesize_dialogue
@@ -170,7 +181,7 @@ async def run_producer(
                         sfx_dir = Path(config.ads.sfx_dir) if config.ads.sfx_dir else None
                         ad_path = await synthesize_ad(script, voice, config.tmp_dir, sfx_dir)
                     else:
-                        from fakeitaliradio.models import AdVoice as _AV
+                        from fakeitaliradio.models import AdVoice as _AV  # noqa: N814
                         host = random.choice(config.hosts)
                         fallback_voice = _AV(name=host.name, voice=host.voice, style=host.style)
                         script = await write_ad(brand, fallback_voice, state, config)

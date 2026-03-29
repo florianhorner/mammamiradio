@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from fakeitaliradio.config import load_config, runtime_json, AudioSection
+from fakeitaliradio.config import load_config, runtime_json
 
 
 def test_streamer_uses_audio_bitrate_for_throttle():

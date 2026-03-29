@@ -15,7 +15,7 @@ def _generate_placeholder(track: Track, out_path: Path) -> Path:
     cmd = [
         "ffmpeg", "-y",
         "-f", "lavfi", "-i",
-        f"sine=frequency=440:duration=30",
+        "sine=frequency=440:duration=30",
         "-af", "volume=0.3",
         "-ar", "48000", "-ac", "2", "-b:a", "192k",
         "-f", "mp3", str(out_path),

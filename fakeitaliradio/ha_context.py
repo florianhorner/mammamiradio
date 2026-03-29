@@ -80,7 +80,9 @@ ENTITY_LABELS = {
     "person.schnuffi": "Schnuffi",
     "lock.lock_ultra_8d3c": "Serratura porta d'ingresso",
     "input_button.foyer_fahrstuhl_fingerbot_push_button": "Ascensore (ultimo utilizzo)",
-    "binary_sensor.8_stockwerk_group_sensor_wohnzimmer_esszimmer_bar": "Presenza nel soggiorno/sala da pranzo/bar/cucina",
+    "binary_sensor.8_stockwerk_group_sensor_wohnzimmer_esszimmer_bar": (
+        "Presenza nel soggiorno/sala da pranzo/bar/cucina"
+    ),
     "input_select.bedroom_occupancy_state": "Camera da letto",
     "switch.bad_gross_waschmaschine_steckdose": "Lavatrice",
     "media_player.samsung_s95ca_65": "Televisore Samsung",

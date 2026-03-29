@@ -128,7 +128,7 @@ def require_admin_access(
 
 async def run_playback_loop(app) -> None:
     """Play queued segments on a single station timeline and fan out audio chunks."""
-    CHUNK = 4096
+    chunk_size = 4096
     segment_queue = app.state.queue
     skip_event = app.state.skip_event
     state = app.state.station_state
@@ -139,7 +139,7 @@ async def run_playback_loop(app) -> None:
     while True:
         try:
             segment: Segment = await asyncio.wait_for(segment_queue.get(), timeout=30.0)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             logger.warning("Queue empty for 30s, waiting...")
             continue
 
@@ -155,7 +155,7 @@ async def run_playback_loop(app) -> None:
             bytes_sent = 0
             skip_event.clear()
             with open(segment.path, "rb") as f:
-                while chunk := f.read(CHUNK):
+                while chunk := f.read(chunk_size):
                     if skip_event.is_set():
                         logger.info("Skipping current segment")
                         skip_event.clear()
@@ -188,7 +188,7 @@ async def _audio_generator(request: Request):
 
             try:
                 chunk = await asyncio.wait_for(listener_queue.get(), timeout=5.0)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 if not hub.has_listener(listener_id):
                     break
                 continue
@@ -368,7 +368,7 @@ async def status(request: Request, _: None = Depends(require_admin_access)):
 
 def _tail_log(path: str, lines: int = 15) -> list[str]:
     try:
-        with open(path, "r") as f:
+        with open(path) as f:
             return f.readlines()[-lines:]
     except Exception:
         return []

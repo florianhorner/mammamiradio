@@ -8,8 +8,12 @@ import anthropic
 
 from fakeitaliradio.config import StationConfig
 from fakeitaliradio.models import (
-    AdBrand, AdPart, AdScript, AdVoice,
-    HostPersonality, StationState,
+    AdBrand,
+    AdPart,
+    AdScript,
+    AdVoice,
+    HostPersonality,
+    StationState,
 )
 
 logger = logging.getLogger(__name__)

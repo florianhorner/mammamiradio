@@ -219,7 +219,7 @@ def generate_bumper_jingle(output_path: Path, duration_sec: float = 1.2) -> Path
 def generate_silence(output_path: Path, duration_sec: float = 3.0) -> Path:
     cmd = [
         "ffmpeg", "-y",
-        "-f", "lavfi", "-i", f"anullsrc=r=48000:cl=stereo",
+        "-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo",
         "-t", str(duration_sec),
         "-b:a", "192k", "-f", "mp3", str(output_path),
     ]

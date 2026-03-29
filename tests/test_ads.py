@@ -4,16 +4,16 @@ from __future__ import annotations
 import shutil
 import tempfile
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
-
-import pytest
 
 from fakeitaliradio.models import (
-    AdBrand, AdHistoryEntry, AdPart, AdScript, AdVoice, StationState, Track,
+    AdBrand,
+    AdHistoryEntry,
+    AdPart,
+    AdScript,
+    StationState,
 )
 from fakeitaliradio.producer import _pick_brand
 from fakeitaliradio.scriptwriter import AD_BREAK_INTROS, AD_BREAK_OUTROS
-
 
 # --- _pick_brand tests ---
 
@@ -121,7 +121,11 @@ def test_bumper_jingle_generation():
 
 
 def test_mix_with_bed():
-    from fakeitaliradio.normalizer import generate_music_bed, generate_tone, mix_with_bed
+    from fakeitaliradio.normalizer import (
+        generate_music_bed,
+        generate_tone,
+        mix_with_bed,
+    )
     tmp = Path(tempfile.mkdtemp())
     try:
         voice = generate_tone(tmp / "voice.mp3", 440, 2.0)

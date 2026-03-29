@@ -4,12 +4,12 @@ try:
     import tomllib
 except ModuleNotFoundError:
     import tomli as tomllib
-from dataclasses import dataclass, field
 import ipaddress
+import os
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from dotenv import load_dotenv
-import os
 
 from fakeitaliradio.models import AdBrand, AdVoice, HostPersonality
 
@@ -225,5 +225,5 @@ if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "runtime-json":
         print(json.dumps(runtime_json()))
     else:
-        print(f"Usage: python -m fakeitaliradio.config runtime-json", file=sys.stderr)
+        print("Usage: python -m fakeitaliradio.config runtime-json", file=sys.stderr)
         sys.exit(1)
