@@ -1,12 +1,32 @@
 # Changelog
 
-All notable changes to `fakeitaliradio` are documented here.
+All notable changes to `mammamiradio` are documented here.
 
 The current version source of truth is `pyproject.toml`.
 
-## [Unreleased]
+## [1.0.0] - 2026-03-30
 
-No unreleased changes.
+### Added
+
+- **Run with Docker**: `docker compose up` and you have a radio station. No Python, no FFmpeg, works on Windows, Mac, and Linux.
+- **Home Assistant add-on**: Install from the HA add-on store, configure your API key, and the radio appears in your sidebar. Hosts automatically reference your home state (lights, temperature, who's home) with zero HA configuration.
+- **Dashboard works behind HA ingress**: The web UI detects its base path at runtime, so it works both at `/` and behind Home Assistant's ingress proxy.
+- **Configure via environment variables**: Override station name, Spotify playlist, Claude model, and HA settings without editing `radio.toml`. Useful for Docker and add-on deployments.
+- **Multi-arch Docker CI**: GitHub Actions builds amd64 + arm64 images on tag push, published to GHCR.
+
+### Changed
+
+- Admin tokens are now accepted only via the `X-Radio-Admin-Token` header. Query parameter auth (`?admin_token=...`) removed to prevent token leakage in browser history, server logs, and referer headers.
+- API error responses no longer expose internal exception details. Generic error messages are returned to clients while full details are logged server-side.
+
+### For contributors
+
+- `.dockerignore` for clean Docker builds.
+- `tests/test_config_env_overrides.py` covers all new env-var override paths (11 tests).
+- Pinned production dependency lockfile (`requirements.txt`) with SHA-256 hashes via `pip-compile`.
+- All GitHub Actions SHA-pinned to immutable commit hashes across all 3 workflow files.
+- Added `.github/CODEOWNERS` requiring review for workflow file changes.
+- Added gitleaks pre-commit hook for secret scanning before push.
 
 ## [0.3.0] - 2026-03-30
 
@@ -77,14 +97,14 @@ No unreleased changes.
 
 ### Added
 
-- Start a local fake Italian radio station with an admin dashboard at `/`, a public listener page at `/listen`, and a raw MP3 stream at `/stream`.
-- Alternate songs with AI-written host banter and multi-spot fake ad breaks, including bumper jingles, custom ad voices, and recurring campaign callbacks.
+- Start a local AI-powered Italian radio station with an admin dashboard at `/`, a public listener page at `/listen`, and a raw MP3 stream at `/stream`.
+- Alternate songs with AI-written host banter and multi-spot AI-generated ad breaks, including bumper jingles, custom ad voices, and recurring campaign callbacks.
 - Expose admin controls for shuffle, skip, queue purge, track removal, reordering, and "play next" from the web UI.
 - Provide public station status plus admin-only logs and debugging details for queue depth, recent playback, generated scripts, and go-librespot output.
 
 ### Changed
 
-- Prefer real Spotify playback through go-librespot when a user connects the `fakeitaliradio` device, but keep the station alive with liked songs, demo tracks, local files, yt-dlp, or placeholder audio when that path is unavailable.
+- Prefer real Spotify playback through go-librespot when a user connects the `mammamiradio` device, but keep the station alive with liked songs, demo tracks, local files, yt-dlp, or placeholder audio when that path is unavailable.
 - Throttle stream output to the configured bitrate so the dashboard, listener, and actual audio timeline stay aligned.
 - Require admin auth when binding to a non-local interface, while keeping localhost development friction low.
 

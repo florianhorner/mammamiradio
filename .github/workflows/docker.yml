@@ -1,0 +1,137 @@
+name: Docker
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Log in to Container Registry
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha
+
+      - name: Build and push
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  build-ha-addon:
+    runs-on: ubuntu-latest
+    needs: build-and-push
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      matrix:
+        include:
+          - arch: amd64
+            platform: linux/amd64
+            base_image: ghcr.io/home-assistant/amd64-base:3.20
+          - arch: aarch64
+            platform: linux/arm64
+            base_image: ghcr.io/home-assistant/aarch64-base:3.20
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Prepare HA add-on build context
+        run: |
+          cp -r mammamiradio/ ha-addon/mammamiradio/mammamiradio/
+          cp pyproject.toml ha-addon/mammamiradio/
+          cp radio.toml ha-addon/mammamiradio/
+
+      - name: Log in to Container Registry
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Build and push HA add-on (${{ matrix.arch }})
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: ha-addon/mammamiradio
+          platforms: ${{ matrix.platform }}
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/ha-addon/${{ matrix.arch }}:latest
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/ha-addon/${{ matrix.arch }}:${{ github.ref_name }}
+          build-args: |
+            BUILD_FROM=${{ matrix.base_image }}
+          cache-from: type=gha,scope=${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.arch }}
+
+  publish-ha-addon-manifest:
+    runs-on: ubuntu-latest
+    needs: build-ha-addon
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Log in to Container Registry
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create and push multi-arch manifest (latest)
+        run: |
+          docker manifest create \
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/ha-addon:latest \
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/ha-addon/amd64:latest \
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/ha-addon/aarch64:latest
+          docker manifest push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/ha-addon:latest
+
+      - name: Create and push multi-arch manifest (version)
+        run: |
+          docker manifest create \
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/ha-addon:${{ github.ref_name }} \
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/ha-addon/amd64:${{ github.ref_name }} \
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/ha-addon/aarch64:${{ github.ref_name }}
+          docker manifest push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/ha-addon:${{ github.ref_name }}

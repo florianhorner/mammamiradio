@@ -1,7 +1,7 @@
 [project]
-name = "fakeitaliradio"
-version = "0.3.0"
-description = "Fake Italian radio station engine"
+name = "mammamiradio"
+version = "1.0.0"
+description = "AI-powered Italian radio station engine"
 requires-python = ">=3.11"
 dependencies = [
     "fastapi>=0.115",
@@ -18,7 +18,7 @@ dependencies = [
 ]
 
 [tool.setuptools]
-packages = ["fakeitaliradio"]
+packages = ["mammamiradio"]
 
 [build-system]
 requires = ["setuptools>=75"]
@@ -33,13 +33,13 @@ select = ["E", "F", "I", "N", "W", "UP", "B", "SIM", "RUF"]
 ignore = ["B008", "RUF001", "SIM105", "SIM115"]
 
 [tool.ruff.lint.per-file-ignores]
-"fakeitaliradio/scriptwriter.py" = ["E501"]
+"mammamiradio/scriptwriter.py" = ["E501"]
 
 [tool.ruff.format]
 quote-style = "double"
 
 [tool.ruff.lint.isort]
-known-first-party = ["fakeitaliradio"]
+known-first-party = ["mammamiradio"]
 
 [tool.mypy]
 python_version = "3.11"
@@ -57,7 +57,7 @@ markers = [
 
 [tool.coverage.run]
 branch = true
-source = ["fakeitaliradio"]
+source = ["mammamiradio"]
 
 [tool.coverage.report]
 fail_under = 60

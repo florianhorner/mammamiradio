@@ -6,7 +6,7 @@
 <title>Radio Italì - Late-night Milan talk radio</title>
 <meta name="theme-color" content="#c4654a">
 <meta property="og:title" content="Radio Italì">
-<meta property="og:description" content="Late-night Milan talk radio — AI-powered fake Italian radio station">
+<meta property="og:description" content="Late-night Milan talk radio — Late-night AI-powered Italian radio station">
 <meta property="og:type" content="website">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='40' fill='%23c4654a'/><circle cx='50' cy='50' r='12' fill='%23f5efe6'/></svg>">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -453,6 +453,12 @@
 
 <script>
 (function(){
+  // Derive base path for HA ingress compatibility (empty string when accessed directly)
+  const _base = (() => {
+    const p = window.location.pathname.replace(/\/+$/, '');
+    // Listener is served at /listen, strip it to get the base
+    return p.endsWith('/listen') ? p.slice(0, -7) : (p === '' ? '' : p);
+  })();
   const audio = document.getElementById('radioAudio');
   const playBtn = document.getElementById('playBtn');
   const playIcon = document.getElementById('playIcon');
@@ -489,7 +495,7 @@
       audio.pause();
     } else {
       // Reload stream source each time to get live position
-      audio.src = '/stream';
+      audio.src = _base + '/stream';
       audio.load();
       audio.play().catch(function(){});
     }
@@ -556,7 +562,7 @@
 
   // Status polling
   function fetchStatus(){
-    fetch('/public-status')
+    fetch(_base + '/public-status')
       .then(function(r){return r.json()})
       .then(function(data){
         updateNowPlaying(data.now_streaming);

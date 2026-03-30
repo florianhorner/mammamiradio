@@ -46,11 +46,17 @@ That script:
 - keeps a fallback FIFO reader alive across reloads
 - runs uvicorn with `--reload`
 
+Or use Docker (no Python/FFmpeg setup needed):
+
+```bash
+docker compose up
+```
+
 If you only need the web app and background tasks:
 
 ```bash
 source .venv/bin/activate
-python -m uvicorn fakeitaliradio.main:app --reload --reload-dir fakeitaliradio
+python -m uvicorn mammamiradio.main:app --reload --reload-dir mammamiradio
 ```
 
 Useful URLs:
@@ -86,7 +92,7 @@ ruff check .          # lint
 ruff check --fix .    # lint + auto-fix
 ruff format .         # format
 ruff format --check . # format check (CI mode)
-mypy fakeitaliradio/ tests/  # type check
+mypy mammamiradio/ tests/  # type check
 ```
 
 To install pre-commit hooks locally:
@@ -106,7 +112,7 @@ After starting the app:
 4. Hit `/public-status` and confirm the upcoming list matches the current playlist order.
 5. Use the dashboard controls for skip, shuffle, purge, and playlist reorder.
 
-If you are testing the Spotify path, also open Spotify and select the `fakeitaliradio` device. If you are binding to `0.0.0.0`, set `ADMIN_PASSWORD` or `ADMIN_TOKEN` first or config validation will reject startup.
+If you are testing the Spotify path, also open Spotify and select the `mammamiradio` device. If you are binding to `0.0.0.0`, set `ADMIN_PASSWORD` or `ADMIN_TOKEN` first or config validation will reject startup.
 
 ## Documentation expectations
 

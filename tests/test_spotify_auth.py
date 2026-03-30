@@ -1,4 +1,4 @@
-"""Tests for fakeitaliradio.spotify_auth — Spotipy OAuth bootstrap."""
+"""Tests for mammamiradio.spotify_auth — Spotipy OAuth bootstrap."""
 
 from __future__ import annotations
 
@@ -92,10 +92,11 @@ def test_get_spotify_client(monkeypatch):
     monkeypatch.setitem(sys.modules, "spotipy", mock_spotipy)
     monkeypatch.setitem(sys.modules, "spotipy.oauth2", mock_spotipy.oauth2)
 
-    if "fakeitaliradio.spotify_auth" in sys.modules:
-        del sys.modules["fakeitaliradio.spotify_auth"]
+    # Force re-import to pick up mocked spotipy
+    if "mammamiradio.spotify_auth" in sys.modules:
+        del sys.modules["mammamiradio.spotify_auth"]
 
-    from fakeitaliradio.spotify_auth import get_spotify_client
+    from mammamiradio.spotify_auth import get_spotify_client
 
     config = _FakeConfig()
     get_spotify_client(config)
@@ -116,10 +117,10 @@ def test_get_spotify_client_passes_correct_scope(monkeypatch):
     monkeypatch.setitem(sys.modules, "spotipy", mock_spotipy)
     monkeypatch.setitem(sys.modules, "spotipy.oauth2", mock_spotipy.oauth2)
 
-    if "fakeitaliradio.spotify_auth" in sys.modules:
-        del sys.modules["fakeitaliradio.spotify_auth"]
+    if "mammamiradio.spotify_auth" in sys.modules:
+        del sys.modules["mammamiradio.spotify_auth"]
 
-    from fakeitaliradio.spotify_auth import get_spotify_client
+    from mammamiradio.spotify_auth import get_spotify_client
 
     config = _FakeConfig()
     get_spotify_client(config)
@@ -141,7 +142,7 @@ def test_addon_mode_cache_path(mock_spotify, mock_oauth):
     """Addon mode should use /data/.spotify_token_cache."""
     mock_oauth.return_value.cache_handler.get_cached_token.return_value = {"access_token": "x"}
 
-    from fakeitaliradio.spotify_auth import get_spotify_client
+    from mammamiradio.spotify_auth import get_spotify_client
 
     config = _FakeConfig(is_addon=True)
     get_spotify_client(config)
@@ -156,7 +157,7 @@ def test_addon_mode_no_browser(mock_spotify, mock_oauth):
     """Addon mode should disable browser opening."""
     mock_oauth.return_value.cache_handler.get_cached_token.return_value = {"access_token": "x"}
 
-    from fakeitaliradio.spotify_auth import get_spotify_client
+    from mammamiradio.spotify_auth import get_spotify_client
 
     config = _FakeConfig(is_addon=True)
     get_spotify_client(config)
@@ -172,7 +173,7 @@ def test_addon_mode_fallback_client_credentials(mock_spotify, mock_cc, mock_oaut
     """Addon mode with no cached token should fall back to client credentials."""
     mock_oauth.return_value.cache_handler.get_cached_token.return_value = None
 
-    from fakeitaliradio.spotify_auth import get_spotify_client
+    from mammamiradio.spotify_auth import get_spotify_client
 
     config = _FakeConfig(is_addon=True)
     get_spotify_client(config)
@@ -188,7 +189,7 @@ def test_addon_mode_fallback_client_credentials(mock_spotify, mock_cc, mock_oaut
 @patch("spotipy.Spotify")
 def test_non_addon_mode_opens_browser(mock_spotify, mock_oauth):
     """Non-addon mode should enable browser opening."""
-    from fakeitaliradio.spotify_auth import get_spotify_client
+    from mammamiradio.spotify_auth import get_spotify_client
 
     config = _FakeConfig(is_addon=False)
     get_spotify_client(config)

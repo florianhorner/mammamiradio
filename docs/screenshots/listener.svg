@@ -1,0 +1,103 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 390 780" width="390" height="780">
+  <defs>
+    <linearGradient id="topGrad" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#c4654a" stop-opacity="0.7"/>
+      <stop offset="50%" stop-color="#d4917a" stop-opacity="0.7"/>
+      <stop offset="100%" stop-color="#7a8f6d" stop-opacity="0.7"/>
+    </linearGradient>
+    <linearGradient id="playerFade" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#2a2320" stop-opacity="0"/>
+      <stop offset="20%" stop-color="#2a2320"/>
+      <stop offset="100%" stop-color="#3d3530"/>
+    </linearGradient>
+    <style>
+      @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@700&amp;family=Inter:wght@300;400;500;600&amp;display=swap');
+      .display { font-family: 'Playfair Display', Georgia, serif; }
+      .body { font-family: 'Inter', system-ui, sans-serif; }
+    </style>
+  </defs>
+
+  <!-- Background -->
+  <rect width="390" height="780" fill="#2a2320" rx="20"/>
+
+  <!-- Station Header -->
+  <text x="195" y="80" text-anchor="middle" fill="#faf3eb" font-size="36" font-weight="700" class="display">Radio Itali</text>
+  <text x="195" y="105" text-anchor="middle" fill="#b0a494" font-size="11" letter-spacing="2" class="body">LATE-NIGHT MILAN TALK RADIO</text>
+
+  <!-- ON AIR badge -->
+  <circle cx="160" cy="130" r="4" fill="#c4654a"/>
+  <text x="172" y="134" fill="#c4654a" font-size="9" font-weight="600" letter-spacing="2" class="body">ON AIR</text>
+
+  <!-- Now Playing Card -->
+  <rect x="24" y="160" width="342" height="160" rx="16" fill="#3d3530"/>
+  <rect x="24" y="160" width="342" height="3" rx="1.5" fill="url(#topGrad)"/>
+  <text x="48" y="190" fill="#b0a494" font-size="9" font-weight="600" letter-spacing="1.5" class="body">NOW PLAYING</text>
+  <text x="48" y="215" font-size="16" class="body">&#9835;</text>
+  <text x="48" y="248" fill="#faf3eb" font-size="22" font-weight="600" class="display">Volare</text>
+  <text x="48" y="272" fill="#d4917a" font-size="13" class="body">Domenico Modugno</text>
+
+  <!-- Equalizer bars -->
+  <rect x="48" y="292" width="4" height="12" rx="2" fill="#c4654a" opacity="0.6"/>
+  <rect x="55" y="284" width="4" height="20" rx="2" fill="#c4654a" opacity="0.7"/>
+  <rect x="62" y="290" width="4" height="14" rx="2" fill="#c4654a" opacity="0.5"/>
+  <rect x="69" y="280" width="4" height="24" rx="2" fill="#c4654a" opacity="0.8"/>
+  <rect x="76" y="288" width="4" height="16" rx="2" fill="#c4654a" opacity="0.6"/>
+
+  <!-- Up Next Section -->
+  <text x="24" y="355" fill="#e8dfd3" font-size="15" font-weight="600" class="display">Up next</text>
+
+  <!-- Up next items -->
+  <text x="38" y="385" font-size="13" class="body">&#127897;&#65039;</text>
+  <text x="62" y="385" fill="#e8dfd3" font-size="13" class="body">Marco &amp; Giulia are talking...</text>
+  <line x1="24" y1="396" x2="366" y2="396" stroke="#7a8f6d" stroke-opacity="0.2"/>
+
+  <text x="38" y="420" font-size="13" class="body">&#9835;</text>
+  <text x="62" y="420" fill="#e8dfd3" font-size="13" class="body">Nel Blu Dipinto Di Blu</text>
+  <line x1="24" y1="431" x2="366" y2="431" stroke="#7a8f6d" stroke-opacity="0.2"/>
+
+  <text x="38" y="455" font-size="13" class="body">&#9835;</text>
+  <text x="62" y="455" fill="#e8dfd3" font-size="13" class="body">That's Amore &#8212; Dean Martin</text>
+  <line x1="24" y1="466" x2="366" y2="466" stroke="#7a8f6d" stroke-opacity="0.2"/>
+
+  <text x="38" y="490" font-size="13" class="body">&#128226;</text>
+  <text x="62" y="490" fill="#e8dfd3" font-size="13" class="body">A word from our sponsors</text>
+
+  <!-- Callback Corner -->
+  <rect x="24" y="520" width="3" height="60" rx="1.5" fill="#c4654a"/>
+  <text x="38" y="538" fill="#d4917a" font-size="12" font-weight="600" letter-spacing="0.5" class="display">Callback corner</text>
+  <text x="38" y="558" fill="#b0a494" font-size="11" font-style="italic" class="body">"Marco's questionable risotto technique"</text>
+  <text x="38" y="576" fill="#b0a494" font-size="11" font-style="italic" class="body">"The espresso machine that judges you"</text>
+
+  <!-- Recently Played -->
+  <text x="24" y="618" fill="#e8dfd3" font-size="15" font-weight="600" class="display">Recently played</text>
+
+  <text x="24" y="645" fill="#b0a494" font-size="10" class="body">23:42</text>
+  <text x="68" y="645" font-size="12" class="body">&#9835;</text>
+  <text x="86" y="645" fill="#b0a494" font-size="11" font-weight="300" class="body">Con Te Partiro &#8212; Andrea Bocelli</text>
+
+  <text x="24" y="668" fill="#b0a494" font-size="10" class="body">23:37</text>
+  <text x="68" y="668" font-size="12" class="body">&#127897;&#65039;</text>
+  <text x="86" y="668" fill="#b0a494" font-size="11" font-weight="300" class="body">Marco &amp; Giulia</text>
+
+  <text x="24" y="691" fill="#b0a494" font-size="10" class="body">23:33</text>
+  <text x="68" y="691" font-size="12" class="body">&#9835;</text>
+  <text x="86" y="691" fill="#b0a494" font-size="11" font-weight="300" class="body">L'Italiano &#8212; Toto Cutugno</text>
+
+  <!-- Player Bar -->
+  <rect x="0" y="710" width="390" height="70" rx="0" fill="url(#playerFade)"/>
+
+  <!-- Play button -->
+  <circle cx="52" cy="745" r="28" fill="#c4654a"/>
+  <polygon points="44,733 44,757 64,745" fill="#faf3eb"/>
+
+  <!-- Player meta -->
+  <circle cx="92" cy="737" r="3" fill="#c4654a"/>
+  <text x="100" y="740" fill="#c4654a" font-size="8" font-weight="600" letter-spacing="1.5" class="body">LIVE</text>
+  <text x="92" y="757" fill="#e8dfd3" font-size="12" class="body">Volare &#8212; Domenico Modugno</text>
+
+  <!-- Volume -->
+  <text x="310" y="748" fill="#b0a494" font-size="13">&#128266;</text>
+  <rect x="330" y="744" width="40" height="4" rx="2" fill="#7a8f6d" opacity="0.3"/>
+  <rect x="330" y="744" width="30" height="4" rx="2" fill="#7a8f6d" opacity="0.6"/>
+  <circle cx="360" cy="746" r="7" fill="#7a8f6d"/>
+</svg>

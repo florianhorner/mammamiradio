@@ -6,8 +6,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from fakeitaliradio.config import load_config
-from fakeitaliradio.playlist import DEMO_TRACKS, fetch_playlist
+from mammamiradio.config import load_config
+from mammamiradio.playlist import DEMO_TRACKS, fetch_playlist
 
 
 @pytest.fixture()
@@ -74,7 +74,7 @@ def test_fetches_playlist_from_spotify(config_with_spotify):
     }
     mock_sp.next.return_value = None
 
-    with patch("fakeitaliradio.playlist.get_spotify_client", return_value=mock_sp):
+    with patch("mammamiradio.playlist.get_spotify_client", return_value=mock_sp):
         result = fetch_playlist(config_with_spotify)
 
     assert len(result) == 2
@@ -99,7 +99,7 @@ def test_fetches_playlist_paginated(config_with_spotify):
     mock_sp.playlist_tracks.return_value = page1
     mock_sp.next.side_effect = [page2, None]
 
-    with patch("fakeitaliradio.playlist.get_spotify_client", return_value=mock_sp):
+    with patch("mammamiradio.playlist.get_spotify_client", return_value=mock_sp):
         result = fetch_playlist(config_with_spotify)
 
     assert len(result) == 2
@@ -120,7 +120,7 @@ def test_playlist_fails_falls_back_to_liked_songs(config_with_spotify):
         "next": None,
     }
 
-    with patch("fakeitaliradio.playlist.get_spotify_client", return_value=mock_sp):
+    with patch("mammamiradio.playlist.get_spotify_client", return_value=mock_sp):
         result = fetch_playlist(config_with_spotify)
 
     assert len(result) == 1
@@ -139,7 +139,7 @@ def test_liked_songs_fails_returns_demo(config_with_spotify):
         "next": None,
     }
 
-    with patch("fakeitaliradio.playlist.get_spotify_client", return_value=mock_sp):
+    with patch("mammamiradio.playlist.get_spotify_client", return_value=mock_sp):
         result = fetch_playlist(config_with_spotify)
 
     assert len(result) == len(DEMO_TRACKS)
@@ -159,7 +159,7 @@ def test_empty_playlist_returns_demo(config_with_spotify):
         "next": None,
     }
 
-    with patch("fakeitaliradio.playlist.get_spotify_client", return_value=mock_sp):
+    with patch("mammamiradio.playlist.get_spotify_client", return_value=mock_sp):
         result = fetch_playlist(config_with_spotify)
 
     assert len(result) == len(DEMO_TRACKS)
@@ -180,7 +180,7 @@ def test_skips_tracks_without_id(config_with_spotify):
     }
     mock_sp.next.return_value = None
 
-    with patch("fakeitaliradio.playlist.get_spotify_client", return_value=mock_sp):
+    with patch("mammamiradio.playlist.get_spotify_client", return_value=mock_sp):
         result = fetch_playlist(config_with_spotify)
 
     assert len(result) == 1

@@ -4,15 +4,15 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from fakeitaliradio.config import load_config, runtime_json
-from fakeitaliradio.streamer import _inject_ingress_prefix
+from mammamiradio.config import load_config, runtime_json
+from mammamiradio.streamer import _inject_ingress_prefix
 
 
 def test_streamer_uses_audio_bitrate_for_throttle():
     """run_playback_loop reads config.audio.bitrate, not a station-level field."""
     import ast
 
-    src = (Path(__file__).parent.parent / "fakeitaliradio" / "streamer.py").read_text()
+    src = (Path(__file__).parent.parent / "mammamiradio" / "streamer.py").read_text()
     tree = ast.parse(src)
     # Find bytes_per_sec assignment inside run_playback_loop
     for node in ast.walk(tree):
@@ -27,7 +27,7 @@ def test_streamer_uses_audio_bitrate_for_throttle():
 
 def test_icy_br_uses_audio_bitrate():
     """The /stream ICY header must reference audio.bitrate."""
-    src = (Path(__file__).parent.parent / "fakeitaliradio" / "streamer.py").read_text()
+    src = (Path(__file__).parent.parent / "mammamiradio" / "streamer.py").read_text()
     assert "config.audio.bitrate" in src
     assert "config.station.bitrate" not in src
 

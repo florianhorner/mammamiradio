@@ -1,8 +1,6 @@
 # Operations
 
-This repo is local-first. There is no checked-in deploy target, container config, or platform-specific service definition.
-
-That is the honest current state.
+This repo supports three deployment models: Docker container, Home Assistant add-on, and local Python dev.
 
 ## What a real deployment needs
 
@@ -10,15 +8,15 @@ That is the honest current state.
 - `ffmpeg` on `PATH`
 - `go-librespot` binary on `PATH` (or at the path configured in `radio.toml`)
 - writable `tmp/` and `cache/` directories
-- persistent access to `/tmp/fakeitaliradio.pcm`
+- persistent access to `/tmp/mammamiradio.pcm`
 - outbound network access for Spotify, Anthropic, and optional Home Assistant
 
 ## Required secrets and config
 
 Environment:
 
-- `FAKEITALIRADIO_BIND_HOST`
-- `FAKEITALIRADIO_PORT`
+- `MAMMAMIRADIO_BIND_HOST`
+- `MAMMAMIRADIO_PORT`
 - `ADMIN_USERNAME`
 - `ADMIN_PASSWORD` or `ADMIN_TOKEN` for non-local access
 - `SPOTIFY_CLIENT_ID`
@@ -88,12 +86,27 @@ There is no blessed platform in this repo, but the sensible shape is:
 4. Persist `cache/`, `tmp/` where practical, and `.spotify_token_cache`.
 5. Monitor `tmp/go-librespot.log` and app logs.
 
+## Docker
+
+```bash
+docker compose up
+```
+
+The `Dockerfile` builds a standalone image with Python 3.11 and FFmpeg. The container runs as a non-root `radio` user. `docker-compose.yml` maps `.env` variables and mounts a persistent volume at `/data` for cache and temp files.
+
+`ADMIN_TOKEN` is required in `.env` (the container binds to `0.0.0.0`).
+
+## Home Assistant add-on
+
+The `ha-addon/` directory contains a complete HA add-on scaffold. Users add the repo URL in HA Settings > Add-ons > Repositories, then install "Mamma Mi Radio" from the store.
+
+The add-on entrypoint (`ha-addon/mammamiradio/rootfs/run.sh`) maps Supervisor-injected `$SUPERVISOR_TOKEN` to `HA_TOKEN`, auto-generates an `ADMIN_TOKEN`, reads add-on options from `/data/options.json`, and starts uvicorn.
+
+The dashboard is accessible via HA ingress (sidebar). The stream URL can be played on any HA media player.
+
 ## What is still not documented because it does not exist yet
 
-- no Dockerfile
 - no systemd unit
 - no launchd plist
 - no nginx or Caddy config
 - no Fly/Render/Vercel/Netlify config
-
-If you want a real deploy guide, the next step is to pick one target platform and codify it in the repo.

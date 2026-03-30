@@ -1,15 +1,29 @@
-# fakeitaliradio
+# mammamiradio
 
-AI-powered fake Italian radio station. It streams a continuous MP3 from your Spotify library, layers in Claude-written host banter and absurd fake ads, and exposes both a control-plane dashboard and a public listener page.
+AI-powered Italian radio station engine. It streams a continuous MP3 from your Spotify library, layers in Claude-written host banter and absurd AI-generated ads, and exposes both a control-plane dashboard and a public listener page.
 
 The app is designed to degrade gracefully. If Spotify auth is missing, it falls back to a demo playlist. If go-librespot is unavailable, it can still synthesize a station from local files, `yt-dlp`, or generated placeholder audio. If Anthropic is unavailable, banter and ads fall back to short stock lines instead of crashing the station.
+
+## Screenshots
+
+### Admin Dashboard
+
+The control plane at `/` lets you manage the station: queue depth, Spotify status, host personality sliders, segment log, upcoming queue, and live banter scripts.
+
+![Dashboard](docs/screenshots/dashboard.svg)
+
+### Listener Page
+
+The public listener at `/listen` is an art-deco styled player with now-playing info, up-next preview, callback corner, and recently-played log.
+
+![Listener](docs/screenshots/listener.svg)
 
 ## What it does
 
 - Streams a live MP3 station at `/stream`
 - Serves an admin dashboard at `/` and a public listener page at `/listen`
 - Rotates between music, host banter, and multi-spot ad breaks
-- Auto-transfers Spotify playback to the `fakeitaliradio` device when possible
+- Auto-transfers Spotify playback to the `mammamiradio` device when possible
 - Lets hosts reference live Home Assistant state when enabled
 - Supports playlist mutation from the dashboard: shuffle, skip, purge, remove, reorder, play-next
 
@@ -20,6 +34,7 @@ The app is designed to degrade gracefully. If Spotify auth is missing, it falls 
 - [TROUBLESHOOTING.md](TROUBLESHOOTING.md) covers the failures you are actually likely to hit.
 - [OPERATIONS.md](OPERATIONS.md) describes the current run and deploy reality.
 - [CHANGELOG.md](CHANGELOG.md) tracks release notes from the current baseline forward.
+- [ha-addon/README.md](ha-addon/README.md) covers Home Assistant add-on installation and usage.
 
 ## How it works
 
@@ -51,7 +66,7 @@ Home Assistant -> optional context --+
 ### Setup
 
 ```bash
-cd /path/to/fakeitaliradio
+cd /path/to/mammamiradio
 python3.11 -m venv .venv
 source .venv/bin/activate
 pip install -e .
@@ -61,8 +76,8 @@ cp .env.example .env
 Edit `.env` as needed:
 
 ```dotenv
-FAKEITALIRADIO_BIND_HOST=127.0.0.1
-FAKEITALIRADIO_PORT=8000
+MAMMAMIRADIO_BIND_HOST=127.0.0.1
+MAMMAMIRADIO_PORT=8000
 ADMIN_USERNAME=admin
 ADMIN_PASSWORD=
 ADMIN_TOKEN=
@@ -71,6 +86,33 @@ SPOTIFY_CLIENT_SECRET=
 ANTHROPIC_API_KEY=
 HA_TOKEN=
 ```
+
+### Run (Docker)
+
+The easiest way to run mammamiradio on any platform (Windows, Mac, Linux):
+
+```bash
+cp .env.example .env
+# Edit .env: set ADMIN_TOKEN and optionally ANTHROPIC_API_KEY, SPOTIFY_CLIENT_ID/SECRET
+docker compose up
+```
+
+Open `http://localhost:8000/` for the dashboard. `ADMIN_TOKEN` must be set in `.env` (the container binds to `0.0.0.0` and requires auth).
+
+### Run (Home Assistant add-on)
+
+If you run Home Assistant OS or Supervised:
+
+1. Go to **Settings > Add-ons > Add-on Store**
+2. Click the three dots menu > **Repositories**
+3. Paste: `https://github.com/florianhorner/fakeitaliradio`
+4. Find "Mamma Mi Radio" and click **Install**
+5. Configure your Anthropic API key (and optionally Spotify credentials) in the add-on settings
+6. Start the add-on — it appears in your sidebar
+
+The add-on automatically connects to Home Assistant, so the radio hosts reference your actual home state (lights, temperature, who's home) without any extra configuration.
+
+To play on speakers, use `media_player.play_media` with the stream URL, or add a button to your Lovelace dashboard.
 
 ### Run (macOS one-click)
 
@@ -88,7 +130,7 @@ This creates a `Radio Italì.app` you can drag to your Dock, plus `Dashboard.web
 
 `start.sh`:
 
-- creates the FIFO at `/tmp/fakeitaliradio.pcm`
+- creates the FIFO at `/tmp/mammamiradio.pcm`
 - starts `go-librespot` if it is not already running
 - keeps a fallback drain process alive across hot reloads
 - runs `uvicorn` with `--reload`
@@ -99,14 +141,14 @@ Open:
 - Listener: `http://localhost:8000/listen`
 - Raw stream: `http://localhost:8000/stream`
 
-On first full Spotify run, select `fakeitaliradio` as the playback device in Spotify. The app also tries to auto-transfer playback when the device appears.
+On first full Spotify run, select `mammamiradio` as the playback device in Spotify. The app also tries to auto-transfer playback when the device appears.
 
 ### Sharing with friends
 
 To let others listen on your network, bind to all interfaces and set an admin password:
 
 ```dotenv
-FAKEITALIRADIO_BIND_HOST=0.0.0.0
+MAMMAMIRADIO_BIND_HOST=0.0.0.0
 ADMIN_PASSWORD=your-secret-here
 ```
 
@@ -177,14 +219,14 @@ Admin routes are:
 
 - always allowed from localhost unless `ADMIN_PASSWORD` is set
 - protected everywhere by HTTP Basic auth when `ADMIN_PASSWORD` is set
-- protected off-localhost by `X-Radio-Admin-Token` or `?admin_token=...` when only `ADMIN_TOKEN` is set
+- protected off-localhost by `X-Radio-Admin-Token` header when only `ADMIN_TOKEN` is set
 
 If you bind to a non-loopback host, the app requires either `ADMIN_PASSWORD` or `ADMIN_TOKEN` at startup.
 
 ## Project layout
 
 ```text
-fakeitaliradio/
+mammamiradio/
   main.py             FastAPI app startup/shutdown
   config.py           radio.toml + env parsing and validation
   producer.py         segment generation loop
@@ -202,6 +244,9 @@ fakeitaliradio/
   listener.html       public listener UI
 radio.toml            station config
 start.sh              local dev entrypoint
+Dockerfile            standalone Docker image
+docker-compose.yml    one-command Docker run
+ha-addon/             Home Assistant add-on scaffold
 tests/                pytest coverage
 ```
 
@@ -215,7 +260,7 @@ Useful direct run:
 
 ```bash
 source .venv/bin/activate
-python -m uvicorn fakeitaliradio.main:app --reload --reload-dir fakeitaliradio
+python -m uvicorn mammamiradio.main:app --reload --reload-dir mammamiradio
 ```
 
 Generated runtime directories:

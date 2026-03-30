@@ -1,6 +1,6 @@
 # Architecture
 
-`fakeitaliradio` is one FastAPI process with one shared station timeline in memory.
+`mammamiradio` is one FastAPI process with one shared station timeline in memory.
 
 One background task stays ahead and produces segments. Another reads the next ready segment and streams it to every connected listener at real playback speed.
 
@@ -29,7 +29,7 @@ Spotify playlist / liked songs / demo tracks
 
 ## Startup flow
 
-`fakeitaliradio.main:startup()` does five things:
+`mammamiradio.main:startup()` does five things:
 
 1. Loads `radio.toml` and `.env` through `config.py`.
 2. Validates the config and applies legacy migration like `station.bitrate -> audio.bitrate`.
@@ -128,7 +128,7 @@ Admin access is granted by one of:
 
 - localhost access, unless `ADMIN_PASSWORD` is configured
 - HTTP Basic auth via `ADMIN_USERNAME` and `ADMIN_PASSWORD`
-- token auth via `X-Radio-Admin-Token` or `admin_token` query param for non-local requests when only `ADMIN_TOKEN` is configured
+- token auth via `X-Radio-Admin-Token` header for non-local requests when only `ADMIN_TOKEN` is configured
 
 Non-local binds without admin auth are rejected during config validation.
 
@@ -148,19 +148,29 @@ The rich path is richer, but the failure path still produces a stream.
 
 | Path | Responsibility |
 | --- | --- |
-| `fakeitaliradio/main.py` | app startup/shutdown and background task wiring |
-| `fakeitaliradio/config.py` | `radio.toml` and `.env` loading plus validation |
-| `fakeitaliradio/models.py` | shared dataclasses for tracks, segments, ads, and station state |
-| `fakeitaliradio/playlist.py` | Spotify playlist or liked-song fetch with demo fallback |
-| `fakeitaliradio/scheduler.py` | pacing rules and upcoming preview |
-| `fakeitaliradio/producer.py` | segment generation pipeline |
-| `fakeitaliradio/spotify_player.py` | go-librespot process management and FIFO capture |
-| `fakeitaliradio/downloader.py` | local-file, yt-dlp, and placeholder music fallback |
-| `fakeitaliradio/scriptwriter.py` | Claude prompts for banter and ad copy |
-| `fakeitaliradio/tts.py` | Edge TTS synthesis for voices and ad parts |
-| `fakeitaliradio/normalizer.py` | ffmpeg helpers for normalization, mixing, tones, and bumpers |
-| `fakeitaliradio/streamer.py` | HTTP routes, auth gating, playback loop, listener fanout |
+| `mammamiradio/main.py` | app startup/shutdown and background task wiring |
+| `mammamiradio/config.py` | `radio.toml` and `.env` loading plus validation |
+| `mammamiradio/models.py` | shared dataclasses for tracks, segments, ads, and station state |
+| `mammamiradio/playlist.py` | Spotify playlist or liked-song fetch with demo fallback |
+| `mammamiradio/scheduler.py` | pacing rules and upcoming preview |
+| `mammamiradio/producer.py` | segment generation pipeline |
+| `mammamiradio/spotify_player.py` | go-librespot process management and FIFO capture |
+| `mammamiradio/downloader.py` | local-file, yt-dlp, and placeholder music fallback |
+| `mammamiradio/scriptwriter.py` | Claude prompts for banter and ad copy |
+| `mammamiradio/tts.py` | Edge TTS synthesis for voices and ad parts |
+| `mammamiradio/normalizer.py` | ffmpeg helpers for normalization, mixing, tones, and bumpers |
+| `mammamiradio/streamer.py` | HTTP routes, auth gating, playback loop, listener fanout |
 | `start.sh` | local dev entry point with reload-safe go-librespot handling |
+
+## Deployment models
+
+The app runs in three modes:
+
+- **Local dev** via `start.sh` (manages go-librespot + FIFO + uvicorn with --reload)
+- **Docker container** via `Dockerfile` / `docker-compose.yml` (no go-librespot, runs as non-root user, persistent `/data` volume)
+- **Home Assistant add-on** via `ha-addon/mammamiradio/` (Alpine-based, Supervisor injects HA token, ingress proxies the dashboard into the HA sidebar)
+
+The HA add-on and Docker paths skip go-librespot and the FIFO. Music falls back to yt-dlp, local files, or placeholder audio. The ingress-compatible UI uses JavaScript base path detection so the dashboard works both at `/` and behind HA's ingress proxy.
 
 ## Operational notes
 

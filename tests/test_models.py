@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from fakeitaliradio.models import Segment, SegmentType, StationState, Track
+from mammamiradio.models import Segment, SegmentType, StationState, Track
 
 
 def _track(n: int = 1) -> Track:

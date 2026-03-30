@@ -2,7 +2,7 @@
 # Stop Radio Italì
 cd "$(dirname "$0")"
 
-pkill -f "uvicorn fakeitaliradio" 2>/dev/null && echo "Uvicorn stopped." || echo "Uvicorn was not running."
+pkill -f "uvicorn mammamiradio" 2>/dev/null && echo "Uvicorn stopped." || echo "Uvicorn was not running."
 
 # Clean up FIFO drain
 if [ -f tmp/fifo-drain.pid ]; then

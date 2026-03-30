@@ -12,8 +12,8 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 
-from fakeitaliradio.models import PersonalityAxes, Segment
-from fakeitaliradio.scheduler import preview_upcoming
+from mammamiradio.models import PersonalityAxes, Segment
+from mammamiradio.scheduler import preview_upcoming
 
 logger = logging.getLogger(__name__)
 
@@ -154,7 +154,7 @@ def require_admin_access(
         raise HTTPException(
             status_code=401,
             detail="Admin authentication required",
-            headers={"WWW-Authenticate": 'Basic realm="fakeitaliradio admin"'},
+            headers={"WWW-Authenticate": 'Basic realm="mammamiradio admin"'},
         )
 
     if config.admin_token:
@@ -362,7 +362,7 @@ async def search_tracks(request: Request, q: str = "", _: None = Depends(require
     if not q.strip():
         return {"results": []}
 
-    from fakeitaliradio.spotify_auth import get_spotify_client
+    from mammamiradio.spotify_auth import get_spotify_client
 
     config = request.app.state.config
     try:
@@ -381,13 +381,14 @@ async def search_tracks(request: Request, q: str = "", _: None = Depends(require
             )
         return {"results": tracks}
     except Exception as e:
-        return {"results": [], "error": str(e)}
+        logger.error("Search failed: %s", e)
+        return {"results": [], "error": "Search unavailable"}
 
 
 @router.post("/api/playlist/add")
 async def add_track(request: Request, _: None = Depends(require_admin_access)):
     """Add a track to the playlist."""
-    from fakeitaliradio.models import Track
+    from mammamiradio.models import Track
 
     body = await request.json()
     track = Track(
@@ -412,7 +413,7 @@ async def add_track(request: Request, _: None = Depends(require_admin_access)):
 @router.post("/api/playlist/load")
 async def load_playlist(request: Request, _: None = Depends(require_admin_access)):
     """Load a new playlist from a Spotify URL and replace the current one."""
-    from fakeitaliradio.playlist import fetch_playlist
+    from mammamiradio.playlist import fetch_playlist
 
     body = await request.json()
     url = body.get("url", "").strip()
@@ -429,7 +430,8 @@ async def load_playlist(request: Request, _: None = Depends(require_admin_access
         tracks = fetch_playlist(config)
     except Exception as e:
         config.playlist.spotify_url = original_url
-        return {"ok": False, "error": str(e)}
+        logger.error("Playlist load failed: %s", e)
+        return {"ok": False, "error": "Failed to load playlist"}
 
     if not tracks:
         config.playlist.spotify_url = original_url
@@ -481,7 +483,7 @@ async def update_host_personality(host_name: str, request: Request, _: None = De
 
     body = await request.json()
     valid_axes = PersonalityAxes.AXIS_NAMES
-    updates = {k: v for k, v in body.items() if k in valid_axes and isinstance(v, (int, float))}
+    updates = {k: v for k, v in body.items() if k in valid_axes and isinstance(v, int | float)}
     if not updates:
         raise HTTPException(status_code=400, detail=f"Provide at least one axis: {valid_axes}")
 

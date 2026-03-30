@@ -1,0 +1,19 @@
+configuration:
+  anthropic_api_key:
+    name: Anthropic API Key
+    description: Required for AI-generated banter and ads. Get one at console.anthropic.com. Without this, the station uses stock banter.
+  spotify_client_id:
+    name: Spotify Client ID
+    description: From developer.spotify.com/dashboard. Without this, the station uses a demo Italian playlist.
+  spotify_client_secret:
+    name: Spotify Client Secret
+    description: From developer.spotify.com/dashboard. Required alongside Client ID.
+  station_name:
+    name: Station Name
+    description: Your radio station's name (shown in the UI and stream metadata).
+  claude_model:
+    name: Claude Model
+    description: Which Claude model to use for script generation. Default is fast and cheap.
+  playlist_spotify_url:
+    name: Spotify Playlist URL
+    description: Spotify playlist URL to use. Leave empty to use your liked songs.

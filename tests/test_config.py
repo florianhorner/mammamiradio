@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 from unittest.mock import patch
 
-from fakeitaliradio.config import AudioSection, _apply_addon_options, _is_addon, load_config, runtime_json
+from mammamiradio.config import AudioSection, _apply_addon_options, _is_addon, load_config, runtime_json
 
 
 def test_load_config_from_radio_toml():
@@ -33,7 +33,7 @@ def test_audio_section_loaded():
     assert config.audio.channels == 2
     assert config.audio.bitrate == 192
     assert config.audio.spotify_bitrate == 320
-    assert config.audio.fifo_path == "/tmp/fakeitaliradio.pcm"
+    assert config.audio.fifo_path == "/tmp/mammamiradio.pcm"
     assert "go-librespot" in config.audio.go_librespot_bin
     assert config.audio.go_librespot_port == 3678
     assert config.audio.claude_model == "claude-haiku-4-5-20251001"
@@ -89,7 +89,7 @@ def test_runtime_json_keys():
 
 def test_non_local_bind_requires_admin_auth(monkeypatch):
     toml_path = Path(__file__).parent.parent / "radio.toml"
-    monkeypatch.setenv("FAKEITALIRADIO_BIND_HOST", "0.0.0.0")
+    monkeypatch.setenv("MAMMAMIRADIO_BIND_HOST", "0.0.0.0")
     monkeypatch.delenv("ADMIN_PASSWORD", raising=False)
     monkeypatch.delenv("ADMIN_TOKEN", raising=False)
 
@@ -132,7 +132,7 @@ def test_apply_addon_options(monkeypatch, tmp_path):
 
     import os
 
-    with patch("fakeitaliradio.config.Path") as mock_path_cls:
+    with patch("mammamiradio.config.Path") as mock_path_cls:
         mock_path_cls.return_value = options_file
         _apply_addon_options()
 
@@ -151,7 +151,7 @@ def test_apply_addon_options_no_override(monkeypatch, tmp_path):
 
     monkeypatch.setenv("SPOTIFY_CLIENT_ID", "from_env")
 
-    with patch("fakeitaliradio.config.Path") as mock_path_cls:
+    with patch("mammamiradio.config.Path") as mock_path_cls:
         mock_path_cls.return_value = options_file
         _apply_addon_options()
 
@@ -162,7 +162,7 @@ def test_apply_addon_options_no_override(monkeypatch, tmp_path):
 
 def test_apply_addon_options_missing_file(monkeypatch):
     """No /data/options.json should be a no-op."""
-    with patch("fakeitaliradio.config.Path") as mock_path_cls:
+    with patch("mammamiradio.config.Path") as mock_path_cls:
         mock_path_cls.return_value.exists.return_value = False
         _apply_addon_options()  # Should not raise
 
@@ -172,7 +172,7 @@ def test_apply_addon_options_invalid_json(monkeypatch, tmp_path):
     bad_file = tmp_path / "options.json"
     bad_file.write_text("not json{{{")
 
-    with patch("fakeitaliradio.config.Path") as mock_path_cls:
+    with patch("mammamiradio.config.Path") as mock_path_cls:
         mock_path_cls.return_value = bad_file
         _apply_addon_options()  # Should not raise
 
@@ -204,7 +204,7 @@ def test_addon_mode_skips_bind_auth(monkeypatch):
     """Addon mode should not require ADMIN_PASSWORD for non-local bind."""
     toml_path = Path(__file__).parent.parent / "radio.toml"
     monkeypatch.setenv("SUPERVISOR_TOKEN", "test_token")
-    monkeypatch.setenv("FAKEITALIRADIO_BIND_HOST", "0.0.0.0")
+    monkeypatch.setenv("MAMMAMIRADIO_BIND_HOST", "0.0.0.0")
     monkeypatch.delenv("ADMIN_PASSWORD", raising=False)
     monkeypatch.delenv("ADMIN_TOKEN", raising=False)
 

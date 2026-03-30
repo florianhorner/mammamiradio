@@ -1,4 +1,4 @@
-"""Configuration loading for fakeitaliradio.
+"""Configuration loading for mammamiradio.
 
 This module combines checked-in station settings from ``radio.toml`` with
 environment-sourced secrets and deployment overrides, then validates the
@@ -18,7 +18,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-from fakeitaliradio.models import AdBrand, AdVoice, HostPersonality, PersonalityAxes
+from mammamiradio.models import AdBrand, AdVoice, HostPersonality, PersonalityAxes
 
 load_dotenv()
 
@@ -58,7 +58,7 @@ class AudioSection:
     channels: int = 2
     bitrate: int = 192
     spotify_bitrate: int = 320
-    fifo_path: str = "/tmp/fakeitaliradio.pcm"
+    fifo_path: str = "/tmp/mammamiradio.pcm"
     go_librespot_bin: str = "go-librespot"
     go_librespot_config_dir: str = "go-librespot"
     go_librespot_port: int = 3678
@@ -244,8 +244,34 @@ def load_config(path: str = "radio.toml") -> StationConfig:
             station_raw.pop("bitrate")
 
     ha_raw = raw.get("homeassistant", {})
+    # Env-var overrides for HA add-on: HA_URL and HA_ENABLED
+    if os.getenv("HA_URL"):
+        ha_raw["url"] = os.getenv("HA_URL")
+    if os.getenv("HA_ENABLED", "").lower() in ("true", "1", "yes"):
+        ha_raw["enabled"] = True
     ha_section = HomeAssistantSection(**ha_raw)
     ha_token = os.getenv("HA_TOKEN", "")
+    # Auto-enable HA if token is present and URL is set (Docker/add-on convenience)
+    if ha_token and ha_section.url and not ha_section.enabled:
+        ha_section.enabled = True
+    if ha_section.enabled and not ha_token:
+        import logging as _log
+
+        _log.getLogger(__name__).warning("Home Assistant enabled but no HA_TOKEN in environment")
+
+    # Env-var overrides for Docker/HA add-on: station identity and playlist
+    if os.getenv("STATION_NAME"):
+        station_raw["name"] = os.getenv("STATION_NAME")
+    if os.getenv("STATION_THEME"):
+        station_raw["theme"] = os.getenv("STATION_THEME")
+    if os.getenv("PLAYLIST_SPOTIFY_URL"):
+        raw.setdefault("playlist", {})["spotify_url"] = os.getenv("PLAYLIST_SPOTIFY_URL")
+    if os.getenv("CLAUDE_MODEL"):
+        audio_raw["claude_model"] = os.getenv("CLAUDE_MODEL")
+
+    # Env-var overrides for cache/tmp directories (for Docker volume mounts)
+    cache_dir = Path(os.getenv("MAMMAMIRADIO_CACHE_DIR", "cache"))
+    tmp_dir = Path(os.getenv("MAMMAMIRADIO_TMP_DIR", "tmp"))
 
     config = StationConfig(
         station=StationSection(**station_raw),
@@ -255,8 +281,10 @@ def load_config(path: str = "radio.toml") -> StationConfig:
         ads=AdsSection(brands=brands, voices=voices, sfx_dir=sfx_dir),
         audio=AudioSection(**audio_raw),
         homeassistant=ha_section,
-        bind_host=os.getenv("FAKEITALIRADIO_BIND_HOST", "127.0.0.1"),
-        port=int(os.getenv("FAKEITALIRADIO_PORT", "8000")),
+        cache_dir=cache_dir,
+        tmp_dir=tmp_dir,
+        bind_host=os.getenv("MAMMAMIRADIO_BIND_HOST", "127.0.0.1"),
+        port=int(os.getenv("MAMMAMIRADIO_PORT", "8000")),
         admin_username=os.getenv("ADMIN_USERNAME", "admin"),
         admin_password=os.getenv("ADMIN_PASSWORD", ""),
         admin_token=os.getenv("ADMIN_TOKEN", ""),
@@ -307,5 +335,5 @@ if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "runtime-json":
         print(json.dumps(runtime_json()))
     else:
-        print("Usage: python -m fakeitaliradio.config runtime-json", file=sys.stderr)
+        print("Usage: python -m mammamiradio.config runtime-json", file=sys.stderr)
         sys.exit(1)
