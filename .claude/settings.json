@@ -1,0 +1,17 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "mcp__github__create_pull_request",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "git fetch origin main 2>/dev/null; BRANCH=$(jq -r '.tool_input.head' 2>/dev/null); [ -z \"$BRANCH\" ] || [ \"$BRANCH\" = \"null\" ] && BRANCH=$(git branch --show-current); if ! git merge-tree --write-tree origin/main \"$BRANCH\" >/dev/null 2>&1; then echo '{\"decision\":\"block\",\"reason\":\"Branch has merge conflicts with main. Run: git fetch origin main && git merge origin/main — resolve conflicts, commit, and push before creating the PR.\"}'; else echo '{\"decision\":\"allow\",\"reason\":\"Branch merges cleanly with main.\"}'; fi",
+            "timeout": 30,
+            "statusMessage": "Checking for merge conflicts with main..."
+          }
+        ]
+      }
+    ]
+  }
+}
