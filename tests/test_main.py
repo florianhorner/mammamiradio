@@ -1,4 +1,4 @@
-"""Tests for the FastAPI app lifecycle in fakeitaliradio/main.py."""
+"""Tests for the FastAPI app lifecycle in mammamiradio/main.py."""
 
 from __future__ import annotations
 
@@ -6,13 +6,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-MODULE = "fakeitaliradio.main"
+MODULE = "mammamiradio.main"
 
 
 @pytest.mark.asyncio
 async def test_startup_creates_state_and_tasks():
     """startup() loads config, fetches playlist, sets app.state, creates tasks."""
-    from fakeitaliradio.models import Track
+    from mammamiradio.models import Track
 
     mock_config = MagicMock()
     mock_config.station.name = "TestRadio"
@@ -33,7 +33,7 @@ async def test_startup_creates_state_and_tasks():
         patch(f"{MODULE}.run_producer", new_callable=AsyncMock),
         patch(f"{MODULE}.run_playback_loop", new_callable=AsyncMock),
     ):
-        from fakeitaliradio.main import app, startup
+        from mammamiradio.main import app, startup
 
         await startup()
 
@@ -48,7 +48,7 @@ async def test_startup_creates_state_and_tasks():
 @pytest.mark.asyncio
 async def test_startup_without_golibrespot():
     """startup() continues gracefully when go-librespot is unavailable."""
-    from fakeitaliradio.models import Track
+    from mammamiradio.models import Track
 
     mock_config = MagicMock()
     mock_config.station.name = "TestRadio"
@@ -67,7 +67,7 @@ async def test_startup_without_golibrespot():
         patch(f"{MODULE}.run_producer", new_callable=AsyncMock),
         patch(f"{MODULE}.run_playback_loop", new_callable=AsyncMock),
     ):
-        from fakeitaliradio.main import startup
+        from mammamiradio.main import startup
 
         # Should not raise even though SpotifyPlayer fails
         await startup()
@@ -76,7 +76,7 @@ async def test_startup_without_golibrespot():
 @pytest.mark.asyncio
 async def test_shutdown_cancels_tasks():
     """shutdown() cancels producer and playback tasks."""
-    import fakeitaliradio.main as main_mod
+    import mammamiradio.main as main_mod
 
     mock_task = MagicMock()
     mock_task.cancel = MagicMock()
@@ -85,7 +85,7 @@ async def test_shutdown_cancels_tasks():
     main_mod._playback_task = mock_task
     main_mod._spotify_player = None
 
-    from fakeitaliradio.main import shutdown
+    from mammamiradio.main import shutdown
 
     await shutdown()
 

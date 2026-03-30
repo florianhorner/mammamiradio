@@ -1,4 +1,4 @@
-"""Unit tests for the producer pipeline in fakeitaliradio/producer.py."""
+"""Unit tests for the producer pipeline in mammamiradio/producer.py."""
 
 from __future__ import annotations
 
@@ -8,18 +8,18 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from fakeitaliradio.config import load_config
-from fakeitaliradio.models import (
+from mammamiradio.config import load_config
+from mammamiradio.models import (
     HostPersonality,
     Segment,
     SegmentType,
     StationState,
     Track,
 )
-from fakeitaliradio.producer import run_producer
+from mammamiradio.producer import run_producer
 
 TOML_PATH = str(Path(__file__).parent.parent / "radio.toml")
-PRODUCER_MODULE = "fakeitaliradio.producer"
+PRODUCER_MODULE = "mammamiradio.producer"
 
 
 def _make_state() -> StationState:
@@ -35,13 +35,13 @@ def _make_config():
     config = load_config(TOML_PATH)
     config.pacing.lookahead_segments = 1
     config.homeassistant.enabled = False
-    config.tmp_dir = Path("/tmp/fakeitaliradio_test")
+    config.tmp_dir = Path("/tmp/mammamiradio_test")
     return config
 
 
 def _fake_path(*_args, **_kwargs) -> Path:
     """Return a dummy Path that satisfies type checks."""
-    return Path("/tmp/fakeitaliradio_test/fake.mp3")
+    return Path("/tmp/mammamiradio_test/fake.mp3")
 
 
 async def _run_until_queued(queue: asyncio.Queue, state: StationState, config, timeout: float = 5.0):

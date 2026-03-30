@@ -1,4 +1,4 @@
-"""Tests for fakeitaliradio.ha_context — Home Assistant context provider."""
+"""Tests for mammamiradio.ha_context — Home Assistant context provider."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from fakeitaliradio.ha_context import (
+from mammamiradio.ha_context import (
     HomeContext,
     _build_summary,
     _format_state,
@@ -176,7 +176,7 @@ async def test_fetch_calls_api_when_stale():
     mock_client.__aenter__ = AsyncMock(return_value=mock_client)
     mock_client.__aexit__ = AsyncMock(return_value=False)
 
-    with patch("fakeitaliradio.ha_context.httpx.AsyncClient", return_value=mock_client):
+    with patch("mammamiradio.ha_context.httpx.AsyncClient", return_value=mock_client):
         result = await fetch_home_context("http://ha:8123", "token", poll_interval=60.0, _cache=stale_cache)
 
     assert result is not stale_cache
@@ -193,7 +193,7 @@ async def test_fetch_returns_stale_cache_on_api_failure():
     mock_client.__aenter__ = AsyncMock(return_value=mock_client)
     mock_client.__aexit__ = AsyncMock(return_value=False)
 
-    with patch("fakeitaliradio.ha_context.httpx.AsyncClient", return_value=mock_client):
+    with patch("mammamiradio.ha_context.httpx.AsyncClient", return_value=mock_client):
         result = await fetch_home_context("http://ha:8123", "token", poll_interval=60.0, _cache=stale_cache)
 
     assert result is stale_cache
@@ -206,7 +206,7 @@ async def test_fetch_returns_empty_on_failure_no_cache():
     mock_client.__aenter__ = AsyncMock(return_value=mock_client)
     mock_client.__aexit__ = AsyncMock(return_value=False)
 
-    with patch("fakeitaliradio.ha_context.httpx.AsyncClient", return_value=mock_client):
+    with patch("mammamiradio.ha_context.httpx.AsyncClient", return_value=mock_client):
         result = await fetch_home_context("http://ha:8123", "token", poll_interval=60.0, _cache=None)
 
     assert result.summary == ""

@@ -20,7 +20,7 @@ If you run tests or the app from the system Python and see missing modules like 
 Possible causes:
 
 - Spotify credentials are missing
-- the `fakeitaliradio` playback device is not selected
+- the `mammamiradio` playback device is not selected
 - go-librespot did not start cleanly
 
 What the app does:
@@ -35,7 +35,7 @@ cat .env
 tail -n 50 tmp/go-librespot.log
 ```
 
-Then open Spotify and explicitly select the `fakeitaliradio` device.
+Then open Spotify and explicitly select the `mammamiradio` device.
 
 ## Spotify device does not appear
 
@@ -63,7 +63,7 @@ tail -n 100 tmp/go-librespot.log
 
 This is usually the FIFO problem.
 
-go-librespot writes PCM into `/tmp/fakeitaliradio.pcm`. If nothing is reading from that FIFO, macOS throws `ENXIO` and playback skips.
+go-librespot writes PCM into `/tmp/mammamiradio.pcm`. If nothing is reading from that FIFO, macOS throws `ENXIO` and playback skips.
 
 This repo works around that in two places:
 

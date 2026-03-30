@@ -1,7 +1,7 @@
-device_name: fakeitaliradio
+device_name: mammamiradio
 device_type: speaker
 audio_backend: pipe
-audio_output_pipe: /tmp/fakeitaliradio.pcm
+audio_output_pipe: /tmp/mammamiradio.pcm
 audio_output_pipe_format: s16le
 bitrate: 320
 volume_steps: 100

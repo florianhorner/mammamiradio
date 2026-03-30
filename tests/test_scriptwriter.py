@@ -7,8 +7,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from fakeitaliradio.config import load_config
-from fakeitaliradio.models import (
+from mammamiradio.config import load_config
+from mammamiradio.models import (
     AdBrand,
     AdScript,
     AdVoice,
@@ -16,7 +16,7 @@ from fakeitaliradio.models import (
     StationState,
     Track,
 )
-from fakeitaliradio.scriptwriter import _build_system_prompt, write_ad, write_banter
+from mammamiradio.scriptwriter import _build_system_prompt, write_ad, write_banter
 
 
 @pytest.fixture()
@@ -88,7 +88,7 @@ async def test_write_banter_parses_valid_json(config, state):
     )
     mock_cls = _mock_anthropic_response(response_json)
 
-    with patch("fakeitaliradio.scriptwriter.anthropic.AsyncAnthropic", mock_cls):
+    with patch("mammamiradio.scriptwriter.anthropic.AsyncAnthropic", mock_cls):
         result = await write_banter(state, config)
 
     assert len(result) == 2
@@ -112,7 +112,7 @@ async def test_write_banter_strips_markdown_fences(config, state):
     )
     mock_cls = _mock_anthropic_response(response_text)
 
-    with patch("fakeitaliradio.scriptwriter.anthropic.AsyncAnthropic", mock_cls):
+    with patch("mammamiradio.scriptwriter.anthropic.AsyncAnthropic", mock_cls):
         result = await write_banter(state, config)
 
     assert len(result) == 1
@@ -131,7 +131,7 @@ async def test_write_banter_adds_new_joke(config, state):
     mock_cls = _mock_anthropic_response(response_json)
 
     assert len(state.running_jokes) == 0
-    with patch("fakeitaliradio.scriptwriter.anthropic.AsyncAnthropic", mock_cls):
+    with patch("mammamiradio.scriptwriter.anthropic.AsyncAnthropic", mock_cls):
         await write_banter(state, config)
 
     assert "The traffic joke" in state.running_jokes
@@ -144,7 +144,7 @@ async def test_write_banter_falls_back_on_api_exception(config, state):
     mock_client.messages.create = AsyncMock(side_effect=Exception("API down"))
     mock_cls = MagicMock(return_value=mock_client)
 
-    with patch("fakeitaliradio.scriptwriter.anthropic.AsyncAnthropic", mock_cls):
+    with patch("mammamiradio.scriptwriter.anthropic.AsyncAnthropic", mock_cls):
         result = await write_banter(state, config)
 
     assert len(result) == 1
@@ -156,7 +156,7 @@ async def test_write_banter_falls_back_on_api_exception(config, state):
 async def test_write_banter_falls_back_on_malformed_json(config, state):
     mock_cls = _mock_anthropic_response("this is not valid json {{{")
 
-    with patch("fakeitaliradio.scriptwriter.anthropic.AsyncAnthropic", mock_cls):
+    with patch("mammamiradio.scriptwriter.anthropic.AsyncAnthropic", mock_cls):
         result = await write_banter(state, config)
 
     assert len(result) == 1
@@ -185,7 +185,7 @@ async def test_write_ad_returns_adscript(config, state):
     brand = AdBrand(name="TestBrand", tagline="Il meglio del meglio", category="food")
     voice = AdVoice(name="Voce Uno", voice="it-IT-IsabellaNeural", style="enthusiastic")
 
-    with patch("fakeitaliradio.scriptwriter.anthropic.AsyncAnthropic", mock_cls):
+    with patch("mammamiradio.scriptwriter.anthropic.AsyncAnthropic", mock_cls):
         result = await write_ad(brand, voice, state, config)
 
     assert isinstance(result, AdScript)
@@ -208,7 +208,7 @@ async def test_write_ad_falls_back_on_api_exception(config, state):
     brand = AdBrand(name="FallbackBrand", tagline="Sempre il top", category="tech")
     voice = AdVoice(name="Voce Due", voice="it-IT-DiegoNeural", style="calm")
 
-    with patch("fakeitaliradio.scriptwriter.anthropic.AsyncAnthropic", mock_cls):
+    with patch("mammamiradio.scriptwriter.anthropic.AsyncAnthropic", mock_cls):
         result = await write_ad(brand, voice, state, config)
 
     assert isinstance(result, AdScript)
@@ -236,7 +236,7 @@ async def test_write_ad_ensures_voice_part_when_llm_returns_none(config, state):
     brand = AdBrand(name="SilentBrand", tagline="Silenzio è oro", category="luxury")
     voice = AdVoice(name="Voce Tre", voice="it-IT-ElsaNeural", style="whispery")
 
-    with patch("fakeitaliradio.scriptwriter.anthropic.AsyncAnthropic", mock_cls):
+    with patch("mammamiradio.scriptwriter.anthropic.AsyncAnthropic", mock_cls):
         result = await write_ad(brand, voice, state, config)
 
     assert isinstance(result, AdScript)

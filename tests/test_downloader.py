@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from fakeitaliradio.models import Track
+from mammamiradio.models import Track
 
 
 @pytest.fixture()
@@ -33,14 +33,14 @@ def music_dir(tmp_path):
 
 
 def test_find_local_returns_none_when_dir_missing(track, tmp_path):
-    from fakeitaliradio.downloader import _find_local
+    from mammamiradio.downloader import _find_local
 
     result = _find_local(track, tmp_path / "nonexistent")
     assert result is None
 
 
 def test_find_local_returns_none_when_no_match(track, music_dir):
-    from fakeitaliradio.downloader import _find_local
+    from mammamiradio.downloader import _find_local
 
     (music_dir / "unrelated_song.mp3").touch()
     result = _find_local(track, music_dir)
@@ -48,7 +48,7 @@ def test_find_local_returns_none_when_no_match(track, music_dir):
 
 
 def test_find_local_matches_by_cache_key(track, music_dir):
-    from fakeitaliradio.downloader import _find_local
+    from mammamiradio.downloader import _find_local
 
     # Create a file whose name contains the cache_key
     mp3 = music_dir / f"{track.cache_key}.mp3"
@@ -58,7 +58,7 @@ def test_find_local_matches_by_cache_key(track, music_dir):
 
 
 def test_find_local_matches_by_title(track, music_dir):
-    from fakeitaliradio.downloader import _find_local
+    from mammamiradio.downloader import _find_local
 
     mp3 = music_dir / f"{track.title.lower()}.mp3"
     mp3.touch()
@@ -70,7 +70,7 @@ def test_find_local_matches_by_title(track, music_dir):
 
 
 def test_cache_hit_returns_immediately(track, cache_dir, music_dir):
-    from fakeitaliradio.downloader import _download_sync
+    from mammamiradio.downloader import _download_sync
 
     cached = cache_dir / f"{track.cache_key}.mp3"
     cached.write_text("fake audio")
@@ -83,7 +83,7 @@ def test_cache_hit_returns_immediately(track, cache_dir, music_dir):
 
 
 def test_local_file_found(track, cache_dir, music_dir):
-    from fakeitaliradio.downloader import _download_sync
+    from mammamiradio.downloader import _download_sync
 
     local_mp3 = music_dir / f"{track.cache_key}.mp3"
     local_mp3.write_text("local audio")
@@ -96,7 +96,7 @@ def test_local_file_found(track, cache_dir, music_dir):
 
 
 def test_ytdlp_success(track, cache_dir, music_dir):
-    from fakeitaliradio.downloader import _download_sync
+    from mammamiradio.downloader import _download_sync
 
     mock_ydl_instance = MagicMock()
     mock_ydl_instance.__enter__ = MagicMock(return_value=mock_ydl_instance)
@@ -123,7 +123,7 @@ def test_ytdlp_success(track, cache_dir, music_dir):
 
 
 def test_ytdlp_failure_falls_back_to_placeholder(track, cache_dir, music_dir):
-    from fakeitaliradio.downloader import _download_sync
+    from mammamiradio.downloader import _download_sync
 
     mock_yt_dlp = MagicMock()
     mock_ydl_instance = MagicMock()
@@ -134,7 +134,7 @@ def test_ytdlp_failure_falls_back_to_placeholder(track, cache_dir, music_dir):
 
     with (
         patch.dict(sys.modules, {"yt_dlp": mock_yt_dlp}),
-        patch("fakeitaliradio.downloader._run_ffmpeg") as mock_ffmpeg,
+        patch("mammamiradio.downloader._run_ffmpeg") as mock_ffmpeg,
     ):
         result = _download_sync(track, cache_dir, music_dir)
 
@@ -147,12 +147,12 @@ def test_ytdlp_failure_falls_back_to_placeholder(track, cache_dir, music_dir):
 
 
 def test_ytdlp_import_error_falls_back_to_placeholder(track, cache_dir, music_dir):
-    from fakeitaliradio.downloader import _download_sync
+    from mammamiradio.downloader import _download_sync
 
     # Remove yt_dlp from sys.modules if present so the lazy import triggers ImportError
     with (
         patch.dict(sys.modules, {"yt_dlp": None}),
-        patch("fakeitaliradio.downloader._run_ffmpeg") as mock_ffmpeg,
+        patch("mammamiradio.downloader._run_ffmpeg") as mock_ffmpeg,
     ):
         result = _download_sync(track, cache_dir, music_dir)
 
@@ -165,11 +165,11 @@ def test_ytdlp_import_error_falls_back_to_placeholder(track, cache_dir, music_di
 
 
 def test_generate_placeholder_calls_ffmpeg(track, tmp_path):
-    from fakeitaliradio.downloader import _generate_placeholder
+    from mammamiradio.downloader import _generate_placeholder
 
     out_path = tmp_path / "placeholder.mp3"
 
-    with patch("fakeitaliradio.downloader._run_ffmpeg") as mock_ffmpeg:
+    with patch("mammamiradio.downloader._run_ffmpeg") as mock_ffmpeg:
         result = _generate_placeholder(track, out_path)
 
     assert result == out_path
@@ -185,7 +185,7 @@ def test_generate_placeholder_calls_ffmpeg(track, tmp_path):
 
 @pytest.mark.asyncio
 async def test_download_track_async(track, cache_dir, music_dir):
-    from fakeitaliradio.downloader import download_track
+    from mammamiradio.downloader import download_track
 
     # Put a file in cache so the sync function returns immediately
     cached = cache_dir / f"{track.cache_key}.mp3"

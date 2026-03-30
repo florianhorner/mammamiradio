@@ -9,8 +9,8 @@ from uuid import uuid4
 
 import edge_tts
 
-from fakeitaliradio.models import AdScript, AdVoice, HostPersonality
-from fakeitaliradio.normalizer import (
+from mammamiradio.models import AdScript, AdVoice, HostPersonality
+from mammamiradio.normalizer import (
     concat_files,
     generate_music_bed,
     generate_sfx,

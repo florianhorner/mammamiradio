@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from fakeitaliradio.config import StationConfig
+from mammamiradio.config import StationConfig
 
 
 def get_spotify_client(config: StationConfig):

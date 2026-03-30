@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from fakeitaliradio.config import AudioSection, load_config, runtime_json
+from mammamiradio.config import AudioSection, load_config, runtime_json
 
 
 def test_load_config_from_radio_toml():
@@ -31,7 +31,7 @@ def test_audio_section_loaded():
     assert config.audio.channels == 2
     assert config.audio.bitrate == 192
     assert config.audio.spotify_bitrate == 320
-    assert config.audio.fifo_path == "/tmp/fakeitaliradio.pcm"
+    assert config.audio.fifo_path == "/tmp/mammamiradio.pcm"
     assert "go-librespot" in config.audio.go_librespot_bin
     assert config.audio.go_librespot_port == 3678
     assert config.audio.claude_model == "claude-haiku-4-5-20251001"
@@ -87,7 +87,7 @@ def test_runtime_json_keys():
 
 def test_non_local_bind_requires_admin_auth(monkeypatch):
     toml_path = Path(__file__).parent.parent / "radio.toml"
-    monkeypatch.setenv("FAKEITALIRADIO_BIND_HOST", "0.0.0.0")
+    monkeypatch.setenv("MAMMAMIRADIO_BIND_HOST", "0.0.0.0")
     monkeypatch.delenv("ADMIN_PASSWORD", raising=False)
     monkeypatch.delenv("ADMIN_TOKEN", raising=False)
 

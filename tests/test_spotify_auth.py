@@ -1,4 +1,4 @@
-"""Tests for fakeitaliradio.spotify_auth — Spotipy OAuth bootstrap."""
+"""Tests for mammamiradio.spotify_auth — Spotipy OAuth bootstrap."""
 
 from __future__ import annotations
 
@@ -83,10 +83,10 @@ def test_get_spotify_client(monkeypatch):
     monkeypatch.setitem(sys.modules, "spotipy.oauth2", mock_spotipy.oauth2)
 
     # Force re-import to pick up mocked spotipy
-    if "fakeitaliradio.spotify_auth" in sys.modules:
-        del sys.modules["fakeitaliradio.spotify_auth"]
+    if "mammamiradio.spotify_auth" in sys.modules:
+        del sys.modules["mammamiradio.spotify_auth"]
 
-    from fakeitaliradio.spotify_auth import get_spotify_client
+    from mammamiradio.spotify_auth import get_spotify_client
 
     config = _FakeConfig()
     get_spotify_client(config)
@@ -108,10 +108,10 @@ def test_get_spotify_client_passes_correct_scope(monkeypatch):
     monkeypatch.setitem(sys.modules, "spotipy", mock_spotipy)
     monkeypatch.setitem(sys.modules, "spotipy.oauth2", mock_spotipy.oauth2)
 
-    if "fakeitaliradio.spotify_auth" in sys.modules:
-        del sys.modules["fakeitaliradio.spotify_auth"]
+    if "mammamiradio.spotify_auth" in sys.modules:
+        del sys.modules["mammamiradio.spotify_auth"]
 
-    from fakeitaliradio.spotify_auth import get_spotify_client
+    from mammamiradio.spotify_auth import get_spotify_client
 
     config = _FakeConfig()
     get_spotify_client(config)
