@@ -1,6 +1,6 @@
 # Home Assistant Add-ons: Mamma Mi Radio
 
-Add-on repository for [fakeitaliradio](https://github.com/florianhorner/fakeitaliradio), an AI-powered fake Italian radio station.
+Add-on repository for [mammamiradio](https://github.com/florianhorner/fakeitaliradio), an AI-powered Italian radio station.
 
 ## Installation
 

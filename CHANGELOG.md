@@ -8,12 +8,16 @@ The current version source of truth is `pyproject.toml`.
 
 ### Added
 
-- **Docker support**: `Dockerfile` and `docker-compose.yml` for running on any platform (Windows, Mac, Linux) without Python/FFmpeg setup.
-- **Home Assistant add-on**: Full HA add-on scaffold in `ha-addon/mammamiradio/` with ingress support, automatic HA token injection, and configurable options UI.
-- **Ingress-compatible UI**: Dashboard and listener HTML now use dynamic base paths, working behind HA's ingress proxy and at the root path.
-- **Environment variable overrides**: `config.py` accepts `HA_URL`, `HA_ENABLED`, `STATION_NAME`, `STATION_THEME`, `PLAYLIST_SPOTIFY_URL`, `CLAUDE_MODEL`, `MAMMAMIRADIO_CACHE_DIR`, and `MAMMAMIRADIO_TMP_DIR` for Docker/add-on configuration without editing `radio.toml`.
-- **GitHub Actions Docker CI**: Multi-arch (amd64 + arm64) image builds on tag push, published to GHCR.
+- **Run with Docker**: `docker compose up` and you have a radio station. No Python, no FFmpeg, works on Windows, Mac, and Linux.
+- **Home Assistant add-on**: Install from the HA add-on store, configure your API key, and the radio appears in your sidebar. Hosts automatically reference your home state (lights, temperature, who's home) with zero HA configuration.
+- **Dashboard works behind HA ingress**: The web UI detects its base path at runtime, so it works both at `/` and behind Home Assistant's ingress proxy.
+- **Configure via environment variables**: Override station name, Spotify playlist, Claude model, and HA settings without editing `radio.toml`. Useful for Docker and add-on deployments.
+- **Multi-arch Docker CI**: GitHub Actions builds amd64 + arm64 images on tag push, published to GHCR.
+
+### For contributors
+
 - `.dockerignore` for clean Docker builds.
+- `tests/test_config_env_overrides.py` covers all new env-var override paths (11 tests).
 
 ## [0.2.0] - 2026-03-30
 
