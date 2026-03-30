@@ -20,6 +20,9 @@ dependencies = [
 [tool.setuptools]
 packages = ["mammamiradio"]
 
+[tool.setuptools.package-data]
+mammamiradio = ["*.html"]
+
 [build-system]
 requires = ["setuptools>=75"]
 build-backend = "setuptools.build_meta"
