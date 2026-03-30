@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
+from unittest.mock import patch
 
-from fakeitaliradio.config import AudioSection, load_config, runtime_json
+from fakeitaliradio.config import AudioSection, _apply_addon_options, _is_addon, load_config, runtime_json
 
 
 def test_load_config_from_radio_toml():
@@ -97,3 +99,115 @@ def test_non_local_bind_requires_admin_auth(monkeypatch):
         assert "Non-local bind requires ADMIN_PASSWORD or ADMIN_TOKEN" in str(exc)
     else:
         raise AssertionError("Expected config validation to fail for non-local bind without auth")
+
+
+# --- Addon detection tests ---
+
+
+def test_is_addon_with_supervisor_token(monkeypatch):
+    monkeypatch.setenv("SUPERVISOR_TOKEN", "abc123")
+    monkeypatch.delenv("HASSIO_TOKEN", raising=False)
+    assert _is_addon() is True
+
+
+def test_is_addon_with_hassio_token(monkeypatch):
+    monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+    monkeypatch.setenv("HASSIO_TOKEN", "xyz789")
+    assert _is_addon() is True
+
+
+def test_is_addon_without_tokens(monkeypatch):
+    monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+    monkeypatch.delenv("HASSIO_TOKEN", raising=False)
+    assert _is_addon() is False
+
+
+def test_apply_addon_options(monkeypatch, tmp_path):
+    options = {"spotify_client_id": "test_id", "spotify_client_secret": "test_secret"}
+    options_file = tmp_path / "options.json"
+    options_file.write_text(json.dumps(options))
+
+    monkeypatch.delenv("SPOTIFY_CLIENT_ID", raising=False)
+    monkeypatch.delenv("SPOTIFY_CLIENT_SECRET", raising=False)
+
+    import os
+
+    with patch("fakeitaliradio.config.Path") as mock_path_cls:
+        mock_path_cls.return_value = options_file
+        _apply_addon_options()
+
+    assert os.environ.get("SPOTIFY_CLIENT_ID") == "test_id"
+    assert os.environ.get("SPOTIFY_CLIENT_SECRET") == "test_secret"
+    # Cleanup
+    monkeypatch.delenv("SPOTIFY_CLIENT_ID", raising=False)
+    monkeypatch.delenv("SPOTIFY_CLIENT_SECRET", raising=False)
+
+
+def test_apply_addon_options_no_override(monkeypatch, tmp_path):
+    """Existing env vars should not be overridden by options.json."""
+    options = {"spotify_client_id": "from_options"}
+    options_file = tmp_path / "options.json"
+    options_file.write_text(json.dumps(options))
+
+    monkeypatch.setenv("SPOTIFY_CLIENT_ID", "from_env")
+
+    with patch("fakeitaliradio.config.Path") as mock_path_cls:
+        mock_path_cls.return_value = options_file
+        _apply_addon_options()
+
+    import os
+
+    assert os.environ["SPOTIFY_CLIENT_ID"] == "from_env"
+
+
+def test_apply_addon_options_missing_file(monkeypatch):
+    """No /data/options.json should be a no-op."""
+    with patch("fakeitaliradio.config.Path") as mock_path_cls:
+        mock_path_cls.return_value.exists.return_value = False
+        _apply_addon_options()  # Should not raise
+
+
+def test_apply_addon_options_invalid_json(monkeypatch, tmp_path):
+    """Invalid JSON should be a no-op, not crash."""
+    bad_file = tmp_path / "options.json"
+    bad_file.write_text("not json{{{")
+
+    with patch("fakeitaliradio.config.Path") as mock_path_cls:
+        mock_path_cls.return_value = bad_file
+        _apply_addon_options()  # Should not raise
+
+
+def test_addon_mode_overrides_paths(monkeypatch):
+    toml_path = Path(__file__).parent.parent / "radio.toml"
+    monkeypatch.setenv("SUPERVISOR_TOKEN", "test_token")
+
+    config = load_config(str(toml_path))
+
+    assert config.is_addon is True
+    assert config.cache_dir == Path("/data/cache")
+    assert config.tmp_dir == Path("/data/tmp")
+    assert config.audio.go_librespot_config_dir == "/data/go-librespot"
+
+
+def test_addon_mode_auto_enables_ha(monkeypatch):
+    toml_path = Path(__file__).parent.parent / "radio.toml"
+    monkeypatch.setenv("SUPERVISOR_TOKEN", "my_supervisor_token")
+
+    config = load_config(str(toml_path))
+
+    assert config.homeassistant.enabled is True
+    assert config.homeassistant.url == "http://supervisor/core"
+    assert config.ha_token == "my_supervisor_token"
+
+
+def test_addon_mode_skips_bind_auth(monkeypatch):
+    """Addon mode should not require ADMIN_PASSWORD for non-local bind."""
+    toml_path = Path(__file__).parent.parent / "radio.toml"
+    monkeypatch.setenv("SUPERVISOR_TOKEN", "test_token")
+    monkeypatch.setenv("FAKEITALIRADIO_BIND_HOST", "0.0.0.0")
+    monkeypatch.delenv("ADMIN_PASSWORD", raising=False)
+    monkeypatch.delenv("ADMIN_TOKEN", raising=False)
+
+    config = load_config(str(toml_path))  # Should not raise
+    assert config.is_addon is True
+    assert config.bind_host == "0.0.0.0"

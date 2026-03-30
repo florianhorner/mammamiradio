@@ -1,0 +1,17 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Connect to Fake Italian Radio",
+        "description": "Enter the host and port of your fakeitaliradio server. If the addon is installed, it will be auto-detected.",
+        "data": {
+          "host": "Host",
+          "port": "Port"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Could not connect to the radio server. Check the host and port."
+    }
+  }
+}

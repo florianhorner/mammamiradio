@@ -20,9 +20,30 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 security = HTTPBasic(auto_error=False)
 
-DASHBOARD_HTML = __import__("pathlib").Path(__file__).with_name("dashboard.html").read_text()
+_DASHBOARD_HTML = __import__("pathlib").Path(__file__).with_name("dashboard.html").read_text()
 
-LISTENER_HTML = __import__("pathlib").Path(__file__).with_name("listener.html").read_text()
+_LISTENER_HTML = __import__("pathlib").Path(__file__).with_name("listener.html").read_text()
+
+
+def _inject_ingress_prefix(html: str, prefix: str) -> str:
+    """Rewrite absolute URL references in HTML to work behind HA Ingress proxy.
+
+    The /api/ replacement must run first — if it runs after /stream or /status,
+    those replacements create strings containing '/api/...' (from the ingress
+    prefix itself) which then get double-replaced.
+    """
+    if not prefix:
+        return html
+    # Prefix-match rules first (to avoid double-replacing specific patterns)
+    html = html.replace("'/api/", f"'{prefix}/api/")
+    # Exact-match rules (these won't cascade because they match full quoted strings)
+    html = html.replace("'/stream'", f"'{prefix}/stream'")
+    html = html.replace("'/status'", f"'{prefix}/status'")
+    html = html.replace("'/public-status'", f"'{prefix}/public-status'")
+    html = html.replace('"/listen"', f'"{prefix}/listen"')
+    html = html.replace('href="/listen"', f'href="{prefix}/listen"')
+    html = html.replace('src="/stream"', f'src="{prefix}/stream"')
+    return html
 
 
 class LiveStreamHub:
@@ -94,9 +115,13 @@ def require_admin_access(
 ) -> None:
     """Authorize admin-only routes using token, basic auth, or loopback trust."""
     config = request.app.state.config
+
+    # Trust HA Ingress proxy — Supervisor handles authentication
+    if config.is_addon and request.headers.get("X-Ingress-Path"):
+        return
     is_loopback = _is_loopback_client(request)
     if config.admin_token:
-        token = request.headers.get("X-Radio-Admin-Token") or request.query_params.get("admin_token")
+        token = request.headers.get("X-Radio-Admin-Token")
         if token and secrets.compare_digest(token, config.admin_token):
             return
 
@@ -208,15 +233,17 @@ async def _audio_generator(request: Request):
 
 
 @router.get("/", response_class=HTMLResponse, dependencies=[Depends(require_admin_access)])
-async def dashboard():
+async def dashboard(request: Request):
     """Serve the authenticated control-plane dashboard."""
-    return DASHBOARD_HTML
+    prefix = request.headers.get("X-Ingress-Path", "")
+    return _inject_ingress_prefix(_DASHBOARD_HTML, prefix)
 
 
 @router.get("/listen", response_class=HTMLResponse)
-async def listener():
+async def listener(request: Request):
     """Serve the public listener UI."""
-    return LISTENER_HTML
+    prefix = request.headers.get("X-Ingress-Path", "")
+    return _inject_ingress_prefix(_LISTENER_HTML, prefix)
 
 
 @router.get("/stream")
@@ -239,10 +266,11 @@ async def stream(request: Request):
 
 
 @router.get("/api/logs")
-async def logs(lines: int = 50, _: None = Depends(require_admin_access)):
+async def logs(request: Request, lines: int = 50, _: None = Depends(require_admin_access)):
     """Return recent go-librespot + producer logs."""
+    config = request.app.state.config
     return {
-        "go_librespot": _tail_log("tmp/go-librespot.log", lines),
+        "go_librespot": _tail_log(str(config.tmp_dir / "go-librespot.log"), lines),
     }
 
 
@@ -351,6 +379,7 @@ async def public_status(request: Request):
 @router.get("/status")
 async def status(request: Request, _: None = Depends(require_admin_access)):
     """Return full admin diagnostics for the running station."""
+    config = request.app.state.config
     state = request.app.state.station_state
     segment_queue = request.app.state.queue
     start_time = request.app.state.start_time
@@ -366,7 +395,7 @@ async def status(request: Request, _: None = Depends(require_admin_access)):
             "last_banter_script": state.last_banter_script,
             "last_ad_script": state.last_ad_script,
             "ha_context": state.ha_context if state.ha_context else None,
-            "go_librespot_log": _tail_log("tmp/go-librespot.log", 15),
+            "go_librespot_log": _tail_log(str(config.tmp_dir / "go-librespot.log"), 15),
             "producer_errors": [
                 {"type": e.type, "label": e.label, "metadata": e.metadata}
                 for e in state.segment_log
