@@ -1,10 +1,11 @@
-"""Tests for streamer bitrate sourcing and runtime config helper."""
+"""Tests for streamer bitrate sourcing, runtime config helper, and ingress support."""
 
 from __future__ import annotations
 
 from pathlib import Path
 
 from mammamiradio.config import load_config, runtime_json
+from mammamiradio.streamer import _inject_ingress_prefix
 
 
 def test_streamer_uses_audio_bitrate_for_throttle():
@@ -66,3 +67,33 @@ style = "test"
     config = load_config(str(toml_file))
     assert config.audio.bitrate == 128
     assert not hasattr(config.station, "bitrate")
+
+
+# --- Ingress prefix injection tests ---
+
+
+def test_inject_ingress_prefix_empty():
+    """Empty prefix should return HTML unchanged."""
+    html = """<script>fetch('/stream')</script>"""
+    assert _inject_ingress_prefix(html, "") is html
+
+
+def test_inject_ingress_prefix_rewrites():
+    """Non-empty prefix should rewrite all URL patterns."""
+    prefix = "/api/hassio_ingress/abc123"
+    # Test each pattern individually to avoid cross-replacement issues
+    assert f"'{prefix}/stream'" in _inject_ingress_prefix("fetch('/stream')", prefix)
+    assert f"'{prefix}/status'" in _inject_ingress_prefix("fetch('/status')", prefix)
+    assert f"'{prefix}/public-status'" in _inject_ingress_prefix("fetch('/public-status')", prefix)
+    assert f"'{prefix}/api/skip'" in _inject_ingress_prefix("fetch('/api/skip')", prefix)
+    assert f'"{prefix}/listen"' in _inject_ingress_prefix('href="/listen"', prefix)
+    assert f'href="{prefix}/listen"' in _inject_ingress_prefix('href="/listen"', prefix)
+    assert f'src="{prefix}/stream"' in _inject_ingress_prefix('src="/stream"', prefix)
+
+
+def test_inject_ingress_prefix_no_false_positives():
+    """Prefix injection should not affect non-matching patterns."""
+    html = "some random text with /stream in prose"
+    result = _inject_ingress_prefix(html, "/prefix")
+    # Only quoted URL patterns are replaced, not bare text
+    assert result == html

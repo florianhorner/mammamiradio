@@ -28,6 +28,23 @@ The current version source of truth is `pyproject.toml`.
 - Added `.github/CODEOWNERS` requiring review for workflow file changes.
 - Added gitleaks pre-commit hook for secret scanning before push.
 
+## [0.3.0] - 2026-03-30
+
+### Added
+
+- Home Assistant addon: run fakeitaliradio as a supervised addon with one-click install from the HA Add-on Store. Includes Dockerfile, config schema, and GitHub Actions build pipeline for amd64/aarch64.
+- HACS custom integration: media player entity that auto-discovers the addon via the Supervisor API, shows current track info, and exposes the stream URL for relay to other speakers.
+- Addon-aware config: automatic detection of HA environment via `SUPERVISOR_TOKEN`, persistent paths under `/data/`, and `options.json` secret injection.
+- Ingress support: dashboard and listener pages rewrite URLs for HA's Ingress proxy, with auth handled by the Supervisor.
+- Spotify headless auth: addon mode disables browser-based OAuth and falls back to client credentials for public playlist access when no cached user token exists.
+- Tests for addon config detection, options parsing, ingress URL rewriting, auth bypass, and Spotify addon behavior.
+
+### Changed
+
+- `go_librespot_config_dir` is now configurable (addon uses `/data/go-librespot`).
+- Non-local bind auth check skipped in addon mode (Supervisor handles auth).
+- Log path references use `config.tmp_dir` instead of hardcoded `tmp/`.
+
 ## [0.2.0] - 2026-03-30
 
 ### Added

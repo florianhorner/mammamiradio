@@ -60,6 +60,7 @@ class AudioSection:
     spotify_bitrate: int = 320
     fifo_path: str = "/tmp/mammamiradio.pcm"
     go_librespot_bin: str = "go-librespot"
+    go_librespot_config_dir: str = "go-librespot"
     go_librespot_port: int = 3678
     claude_model: str = "claude-haiku-4-5-20251001"
 
@@ -106,6 +107,7 @@ class StationConfig:
     spotify_client_secret: str = ""
     anthropic_api_key: str = ""
     ha_token: str = ""
+    is_addon: bool = False
 
 
 def _is_loopback_host(host: str) -> bool:
@@ -116,6 +118,35 @@ def _is_loopback_host(host: str) -> bool:
         return ipaddress.ip_address(host).is_loopback
     except ValueError:
         return False
+
+
+def _is_addon() -> bool:
+    """Detect if running as a Home Assistant addon."""
+    return bool(os.getenv("SUPERVISOR_TOKEN") or os.getenv("HASSIO_TOKEN"))
+
+
+def _apply_addon_options() -> None:
+    """Read /data/options.json and set env vars for addon secrets."""
+    import json
+
+    options_path = Path("/data/options.json")
+    if not options_path.exists():
+        return
+    try:
+        options = json.loads(options_path.read_text())
+    except (json.JSONDecodeError, OSError):
+        return
+
+    env_map = {
+        "spotify_client_id": "SPOTIFY_CLIENT_ID",
+        "spotify_client_secret": "SPOTIFY_CLIENT_SECRET",
+        "anthropic_api_key": "ANTHROPIC_API_KEY",
+        "admin_password": "ADMIN_PASSWORD",
+    }
+    for opt_key, env_key in env_map.items():
+        val = options.get(opt_key, "")
+        if val and not os.getenv(env_key):
+            os.environ[env_key] = val
 
 
 def _validate(config: StationConfig) -> None:
@@ -136,11 +167,18 @@ def _validate(config: StationConfig) -> None:
 
     if not config.anthropic_api_key:
         log.warning("No ANTHROPIC_API_KEY — banter/ads will use fallback text")
+    if config.homeassistant.enabled and not config.ha_token:
+        log.warning("Home Assistant enabled but no HA_TOKEN in environment")
     if not config.ads.brands:
         log.warning("No ad brands configured — ad segments will be skipped")
     if not config.spotify_client_id or not config.spotify_client_secret:
         log.warning("No Spotify credentials — using demo playlist")
-    if not _is_loopback_host(config.bind_host) and not (config.admin_password or config.admin_token):
+    # Addon mode: Supervisor handles auth, skip non-local bind check
+    if (
+        not config.is_addon
+        and not _is_loopback_host(config.bind_host)
+        and not (config.admin_password or config.admin_token)
+    ):
         errors.append("Non-local bind requires ADMIN_PASSWORD or ADMIN_TOKEN")
 
     if errors:
@@ -149,6 +187,10 @@ def _validate(config: StationConfig) -> None:
 
 def load_config(path: str = "radio.toml") -> StationConfig:
     """Load ``radio.toml`` plus environment overrides into a validated config."""
+    addon_mode = _is_addon()
+    if addon_mode:
+        _apply_addon_options()
+
     with open(path, "rb") as f:
         raw = tomllib.load(f)
 
@@ -250,7 +292,24 @@ def load_config(path: str = "radio.toml") -> StationConfig:
         spotify_client_secret=os.getenv("SPOTIFY_CLIENT_SECRET", ""),
         anthropic_api_key=os.getenv("ANTHROPIC_API_KEY", ""),
         ha_token=ha_token,
+        is_addon=addon_mode,
     )
+
+    # Addon overrides: persistent paths, auto-enable HA, configurable go-librespot dir
+    if addon_mode:
+        import logging as _log
+
+        _log.getLogger(__name__).info("Running as Home Assistant addon")
+        config.cache_dir = Path("/data/cache")
+        config.tmp_dir = Path("/data/tmp")
+        config.audio.go_librespot_config_dir = "/data/go-librespot"
+        # Auto-enable HA context via Supervisor API
+        supervisor_token = os.getenv("SUPERVISOR_TOKEN") or os.getenv("HASSIO_TOKEN", "")
+        if supervisor_token:
+            config.homeassistant.enabled = True
+            config.homeassistant.url = "http://supervisor/core"
+            config.ha_token = supervisor_token
+
     _validate(config)
     return config
 

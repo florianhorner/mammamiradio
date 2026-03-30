@@ -43,7 +43,7 @@ class SpotifyPlayer:
         self.config = config
         self._process: subprocess.Popen | None = None
         self._authenticated = False
-        self._config_dir = Path("go-librespot")
+        self._config_dir = Path(config.audio.go_librespot_config_dir)
         self._log_file = None
         self._fifo_path = Path(config.audio.fifo_path)
         self._drain_pid_file = config.tmp_dir / "fifo-drain.pid"
