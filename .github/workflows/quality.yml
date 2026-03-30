@@ -23,7 +23,7 @@ jobs:
       - name: Install dependencies
         run: |
           pip install -e .
-          pip install ruff==0.9.10 mypy==1.15.0 pytest
+          pip install -r requirements-dev.txt
 
       - name: Ruff lint
         run: ruff check .
