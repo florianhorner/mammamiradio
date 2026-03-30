@@ -72,6 +72,33 @@ ANTHROPIC_API_KEY=
 HA_TOKEN=
 ```
 
+### Run (Docker)
+
+The easiest way to run fakeitaliradio on any platform (Windows, Mac, Linux):
+
+```bash
+cp .env.example .env
+# Edit .env with your API keys
+docker compose up
+```
+
+Open `http://localhost:8000/` for the dashboard.
+
+### Run (Home Assistant add-on)
+
+If you run Home Assistant OS or Supervised:
+
+1. Go to **Settings > Add-ons > Add-on Store**
+2. Click the three dots menu > **Repositories**
+3. Paste: `https://github.com/florianhorner/fakeitaliradio`
+4. Find "Fake Itali Radio" and click **Install**
+5. Configure your Anthropic API key (and optionally Spotify credentials) in the add-on settings
+6. Start the add-on — it appears in your sidebar
+
+The add-on automatically connects to Home Assistant, so the radio hosts reference your actual home state (lights, temperature, who's home) without any extra configuration.
+
+To play on speakers, use `media_player.play_media` with the stream URL, or add a button to your Lovelace dashboard.
+
 ### Run (macOS one-click)
 
 ```bash

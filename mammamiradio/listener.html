@@ -453,6 +453,12 @@
 
 <script>
 (function(){
+  // Derive base path for HA ingress compatibility (empty string when accessed directly)
+  const _base = (() => {
+    const p = window.location.pathname.replace(/\/+$/, '');
+    // Listener is served at /listen, strip it to get the base
+    return p.endsWith('/listen') ? p.slice(0, -7) : (p === '' ? '' : p);
+  })();
   const audio = document.getElementById('radioAudio');
   const playBtn = document.getElementById('playBtn');
   const playIcon = document.getElementById('playIcon');
@@ -489,7 +495,7 @@
       audio.pause();
     } else {
       // Reload stream source each time to get live position
-      audio.src = '/stream';
+      audio.src = _base + '/stream';
       audio.load();
       audio.play().catch(function(){});
     }
@@ -556,7 +562,7 @@
 
   // Status polling
   function fetchStatus(){
-    fetch('/public-status')
+    fetch(_base + '/public-status')
       .then(function(r){return r.json()})
       .then(function(data){
         updateNowPlaying(data.now_streaming);
