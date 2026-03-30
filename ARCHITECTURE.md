@@ -128,7 +128,7 @@ Admin access is granted by one of:
 
 - localhost access, unless `ADMIN_PASSWORD` is configured
 - HTTP Basic auth via `ADMIN_USERNAME` and `ADMIN_PASSWORD`
-- token auth via `X-Radio-Admin-Token` or `admin_token` query param for non-local requests when only `ADMIN_TOKEN` is configured
+- token auth via `X-Radio-Admin-Token` header for non-local requests when only `ADMIN_TOKEN` is configured
 
 Non-local binds without admin auth are rejected during config validation.
 

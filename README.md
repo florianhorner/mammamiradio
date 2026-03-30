@@ -205,7 +205,7 @@ Admin routes are:
 
 - always allowed from localhost unless `ADMIN_PASSWORD` is set
 - protected everywhere by HTTP Basic auth when `ADMIN_PASSWORD` is set
-- protected off-localhost by `X-Radio-Admin-Token` or `?admin_token=...` when only `ADMIN_TOKEN` is set
+- protected off-localhost by `X-Radio-Admin-Token` header when only `ADMIN_TOKEN` is set
 
 If you bind to a non-loopback host, the app requires either `ADMIN_PASSWORD` or `ADMIN_TOKEN` at startup.
 
