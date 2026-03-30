@@ -40,6 +40,16 @@ data:
 
 Or add a button to your Lovelace dashboard that triggers this automation.
 
+## Screenshots
+
+The dashboard gives you full control over the station — queue, host personalities, and live scripts:
+
+![Dashboard](../docs/screenshots/dashboard.svg)
+
+The listener page is a clean, mobile-friendly player for anyone on your network:
+
+![Listener](../docs/screenshots/listener.svg)
+
 ## What it does
 
 - Streams a continuous AI-generated Italian radio station

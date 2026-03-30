@@ -4,6 +4,20 @@ AI-powered Italian radio station engine. It streams a continuous MP3 from your S
 
 The app is designed to degrade gracefully. If Spotify auth is missing, it falls back to a demo playlist. If go-librespot is unavailable, it can still synthesize a station from local files, `yt-dlp`, or generated placeholder audio. If Anthropic is unavailable, banter and ads fall back to short stock lines instead of crashing the station.
 
+## Screenshots
+
+### Admin Dashboard
+
+The control plane at `/` lets you manage the station: queue depth, Spotify status, host personality sliders, segment log, upcoming queue, and live banter scripts.
+
+![Dashboard](docs/screenshots/dashboard.svg)
+
+### Listener Page
+
+The public listener at `/listen` is an art-deco styled player with now-playing info, up-next preview, callback corner, and recently-played log.
+
+![Listener](docs/screenshots/listener.svg)
+
 ## What it does
 
 - Streams a live MP3 station at `/stream`
