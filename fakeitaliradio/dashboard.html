@@ -664,23 +664,62 @@ let personalityDebounce = {};
 
 function renderPersonalityCards(hosts) {
   const container = document.getElementById('personality-cards');
-  container.innerHTML = hosts.map(h => {
-    const axes = Object.entries(h.personality).map(([axis, val]) => {
+  container.innerHTML = '';
+  hosts.forEach(h => {
+    const card = document.createElement('div');
+    card.className = 'personality-card';
+
+    const header = document.createElement('h3');
+    header.textContent = h.name;
+    const resetBtn = document.createElement('button');
+    resetBtn.className = 'reset-btn';
+    resetBtn.textContent = 'Reset';
+    resetBtn.addEventListener('click', () => resetPersonality(h.name));
+    header.appendChild(resetBtn);
+    card.appendChild(header);
+
+    Object.entries(h.personality).forEach(([axis, val]) => {
       const [lo, hi] = axisLabels[axis] || [axis, axis];
-      return '<div class="slider-row">' +
-        '<span class="slider-label">' + escHtml(axis) + '</span>' +
-        '<input type="range" min="0" max="100" value="' + val + '" ' +
-          'data-host="' + escHtml(h.name) + '" data-axis="' + axis + '" ' +
-          'oninput="onSliderChange(this)">' +
-        '<span class="slider-value" id="sv-' + escHtml(h.name) + '-' + axis + '">' + val + '</span>' +
-      '</div>' +
-      '<div class="slider-ends"><span>' + escHtml(lo) + '</span><span>' + escHtml(hi) + '</span></div>';
-    }).join('');
-    return '<div class="personality-card">' +
-      '<h3>' + escHtml(h.name) +
-        '<button class="reset-btn" onclick="resetPersonality(\'' + escHtml(h.name) + '\')">Reset</button>' +
-      '</h3>' + axes + '</div>';
-  }).join('');
+
+      const row = document.createElement('div');
+      row.className = 'slider-row';
+
+      const label = document.createElement('span');
+      label.className = 'slider-label';
+      label.textContent = axis;
+
+      const slider = document.createElement('input');
+      slider.type = 'range';
+      slider.min = '0';
+      slider.max = '100';
+      slider.value = val;
+      slider.dataset.host = h.name;
+      slider.dataset.axis = axis;
+      slider.addEventListener('input', function() { onSliderChange(this); });
+
+      const valSpan = document.createElement('span');
+      valSpan.className = 'slider-value';
+      valSpan.id = 'sv-' + h.name + '-' + axis;
+      valSpan.textContent = val;
+
+      row.appendChild(label);
+      row.appendChild(slider);
+      row.appendChild(valSpan);
+      card.appendChild(row);
+
+      const ends = document.createElement('div');
+      ends.className = 'slider-ends';
+      const loSpan = document.createElement('span');
+      loSpan.textContent = lo;
+      const hiSpan = document.createElement('span');
+      hiSpan.textContent = hi;
+      ends.appendChild(loSpan);
+      ends.appendChild(hiSpan);
+      card.appendChild(ends);
+    });
+
+    container.appendChild(card);
+  });
 }
 
 function onSliderChange(el) {
