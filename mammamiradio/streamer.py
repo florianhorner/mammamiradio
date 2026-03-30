@@ -436,7 +436,7 @@ async def update_host_personality(host_name: str, request: Request, _: None = De
 
     body = await request.json()
     valid_axes = PersonalityAxes.AXIS_NAMES
-    updates = {k: v for k, v in body.items() if k in valid_axes and isinstance(v, (int, float))}
+    updates = {k: v for k, v in body.items() if k in valid_axes and isinstance(v, int | float)}
     if not updates:
         raise HTTPException(status_code=400, detail=f"Provide at least one axis: {valid_axes}")
 
