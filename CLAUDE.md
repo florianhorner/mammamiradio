@@ -1,6 +1,6 @@
-# fakeitaliradio
+# mammamiradio
 
-Fake Italian radio station engine. Python 3.11+, FastAPI, FFmpeg, optional Spotify and Home Assistant integration.
+AI-powered Italian radio station engine. Python 3.11+, FastAPI, FFmpeg, optional Spotify and Home Assistant integration.
 
 ## Docs
 
@@ -16,16 +16,16 @@ Fake Italian radio station engine. Python 3.11+, FastAPI, FFmpeg, optional Spoti
 - Setup: `python3.11 -m venv .venv && source .venv/bin/activate && pip install -e .`
 - Install: `pip install -e .`
 - Run full local stack: `./start.sh`
-- Run app only: `source .venv/bin/activate && python -m uvicorn fakeitaliradio.main:app --reload --reload-dir fakeitaliradio`
+- Run app only: `source .venv/bin/activate && python -m uvicorn mammamiradio.main:app --reload --reload-dir mammamiradio`
 - Test: `pytest tests/`
 - Lint: `ruff check .` (fix: `ruff check --fix .`)
 - Format: `ruff format .` (check: `ruff format --check .`)
-- Type check: `mypy fakeitaliradio/ tests/`
+- Type check: `mypy mammamiradio/ tests/`
 - Pre-commit: `pip install pre-commit && pre-commit install`
 
 ## Environment
 
-- `FAKEITALIRADIO_BIND_HOST`, `FAKEITALIRADIO_PORT`: bind address and port
+- `MAMMAMIRADIO_BIND_HOST`, `MAMMAMIRADIO_PORT`: bind address and port
 - `ADMIN_USERNAME`, `ADMIN_PASSWORD`, `ADMIN_TOKEN`: admin auth
 - `SPOTIFY_CLIENT_ID`, `SPOTIFY_CLIENT_SECRET`: Spotify Web API access
 - `ANTHROPIC_API_KEY`: Claude banter/ad generation
@@ -44,7 +44,7 @@ Fake Italian radio station engine. Python 3.11+, FastAPI, FFmpeg, optional Spoti
 ## Project structure
 
 ```text
-fakeitaliradio/
+mammamiradio/
   main.py             FastAPI app startup/shutdown lifecycle
   config.py           radio.toml + .env parsing, validation, runtime-json helper
   models.py           shared data models and station state

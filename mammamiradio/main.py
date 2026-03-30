@@ -1,4 +1,4 @@
-"""FastAPI application entrypoint for the fakeitaliradio station."""
+"""FastAPI application entrypoint for the mammamiradio station."""
 
 from __future__ import annotations
 
@@ -8,21 +8,21 @@ import time
 
 from fastapi import FastAPI
 
-from fakeitaliradio.config import load_config
-from fakeitaliradio.models import StationState
-from fakeitaliradio.playlist import fetch_playlist
-from fakeitaliradio.producer import run_producer
-from fakeitaliradio.spotify_player import SpotifyPlayer
-from fakeitaliradio.streamer import LiveStreamHub, router, run_playback_loop
+from mammamiradio.config import load_config
+from mammamiradio.models import StationState
+from mammamiradio.playlist import fetch_playlist
+from mammamiradio.producer import run_producer
+from mammamiradio.spotify_player import SpotifyPlayer
+from mammamiradio.streamer import LiveStreamHub, router, run_playback_loop
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
     datefmt="%H:%M:%S",
 )
-logger = logging.getLogger("fakeitaliradio")
+logger = logging.getLogger("mammamiradio")
 
-app = FastAPI(title="fakeitaliradio")
+app = FastAPI(title="mammamiradio")
 app.include_router(router)
 
 _producer_task: asyncio.Task | None = None
@@ -51,7 +51,7 @@ async def startup():
         _spotify_player = SpotifyPlayer(config)
         _spotify_player.start()
         spotify_player = _spotify_player
-        logger.info("go-librespot started — select 'fakeitaliradio' in your Spotify app to connect")
+        logger.info("go-librespot started — select 'mammamiradio' in your Spotify app to connect")
     except Exception as e:
         logger.warning("Could not start go-librespot: %s — using fallback audio", e)
 
@@ -93,7 +93,7 @@ if __name__ == "__main__":
 
     config = load_config()
     uvicorn.run(
-        "fakeitaliradio.main:app",
+        "mammamiradio.main:app",
         host=config.bind_host,
         port=config.port,
     )

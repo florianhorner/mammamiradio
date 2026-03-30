@@ -1,4 +1,4 @@
-"""Unit tests for fakeitaliradio.normalizer with mocked subprocess (no real ffmpeg)."""
+"""Unit tests for mammamiradio.normalizer with mocked subprocess (no real ffmpeg)."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from fakeitaliradio.normalizer import (
+from mammamiradio.normalizer import (
     _run_ffmpeg,
     concat_files,
     generate_silence,
@@ -25,7 +25,7 @@ def mock_subprocess():
     completed.stderr = b""
     completed.stdout = b""
 
-    with patch("fakeitaliradio.normalizer.subprocess.run", return_value=completed) as mock_run:
+    with patch("mammamiradio.normalizer.subprocess.run", return_value=completed) as mock_run:
         yield mock_run, completed
 
 

@@ -32,7 +32,7 @@ jobs:
         run: ruff format --check .
 
       - name: Mypy
-        run: mypy fakeitaliradio/ tests/
+        run: mypy mammamiradio/ tests/
 
       - name: Pytest
         run: pytest

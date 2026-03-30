@@ -11,7 +11,7 @@ export PATH="/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:$PATH"
 set -a
 [ -f .env ] && source .env
 set +a
-PORT="${FAKEITALIRADIO_PORT:-8000}"
+PORT="${MAMMAMIRADIO_PORT:-8000}"
 
 # Bootstrap: install dependencies and venv if missing
 if [ ! -d .venv ]; then
@@ -52,7 +52,7 @@ if [ ! -d .venv ]; then
 fi
 
 # Start if not already running
-if pgrep -f "uvicorn fakeitaliradio" > /dev/null 2>&1; then
+if pgrep -f "uvicorn mammamiradio" > /dev/null 2>&1; then
     echo "Radio already running."
 else
     echo "Starting Radio Italì..."

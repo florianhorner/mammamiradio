@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import random
 
-from fakeitaliradio.config import PacingSection
-from fakeitaliradio.models import SegmentType, StationState
+from mammamiradio.config import PacingSection
+from mammamiradio.models import SegmentType, StationState
 
 
 def _decide(

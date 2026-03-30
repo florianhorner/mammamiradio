@@ -10,15 +10,15 @@ import httpx
 import pytest
 from fastapi import FastAPI
 
-from fakeitaliradio.config import load_config
-from fakeitaliradio.models import (
+from mammamiradio.config import load_config
+from mammamiradio.models import (
     HostPersonality,
     PersonalityAxes,
     StationState,
     Track,
 )
-from fakeitaliradio.scriptwriter import _build_system_prompt, _personality_modifier
-from fakeitaliradio.streamer import LiveStreamHub, router
+from mammamiradio.scriptwriter import _build_system_prompt, _personality_modifier
+from mammamiradio.streamer import LiveStreamHub, router
 
 TOML_PATH = str(Path(__file__).parent.parent / "radio.toml")
 

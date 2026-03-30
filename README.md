@@ -1,6 +1,6 @@
-# fakeitaliradio
+# mammamiradio
 
-AI-powered fake Italian radio station. It streams a continuous MP3 from your Spotify library, layers in Claude-written host banter and absurd fake ads, and exposes both a control-plane dashboard and a public listener page.
+AI-powered Italian radio station engine. It streams a continuous MP3 from your Spotify library, layers in Claude-written host banter and absurd AI-generated ads, and exposes both a control-plane dashboard and a public listener page.
 
 The app is designed to degrade gracefully. If Spotify auth is missing, it falls back to a demo playlist. If go-librespot is unavailable, it can still synthesize a station from local files, `yt-dlp`, or generated placeholder audio. If Anthropic is unavailable, banter and ads fall back to short stock lines instead of crashing the station.
 
@@ -9,7 +9,7 @@ The app is designed to degrade gracefully. If Spotify auth is missing, it falls 
 - Streams a live MP3 station at `/stream`
 - Serves an admin dashboard at `/` and a public listener page at `/listen`
 - Rotates between music, host banter, and multi-spot ad breaks
-- Auto-transfers Spotify playback to the `fakeitaliradio` device when possible
+- Auto-transfers Spotify playback to the `mammamiradio` device when possible
 - Lets hosts reference live Home Assistant state when enabled
 - Supports playlist mutation from the dashboard: shuffle, skip, purge, remove, reorder, play-next
 
@@ -51,7 +51,7 @@ Home Assistant -> optional context --+
 ### Setup
 
 ```bash
-cd /path/to/fakeitaliradio
+cd /path/to/mammamiradio
 python3.11 -m venv .venv
 source .venv/bin/activate
 pip install -e .
@@ -61,8 +61,8 @@ cp .env.example .env
 Edit `.env` as needed:
 
 ```dotenv
-FAKEITALIRADIO_BIND_HOST=127.0.0.1
-FAKEITALIRADIO_PORT=8000
+MAMMAMIRADIO_BIND_HOST=127.0.0.1
+MAMMAMIRADIO_PORT=8000
 ADMIN_USERNAME=admin
 ADMIN_PASSWORD=
 ADMIN_TOKEN=
@@ -88,7 +88,7 @@ This creates a `Radio Italì.app` you can drag to your Dock, plus `Dashboard.web
 
 `start.sh`:
 
-- creates the FIFO at `/tmp/fakeitaliradio.pcm`
+- creates the FIFO at `/tmp/mammamiradio.pcm`
 - starts `go-librespot` if it is not already running
 - keeps a fallback drain process alive across hot reloads
 - runs `uvicorn` with `--reload`
@@ -99,14 +99,14 @@ Open:
 - Listener: `http://localhost:8000/listen`
 - Raw stream: `http://localhost:8000/stream`
 
-On first full Spotify run, select `fakeitaliradio` as the playback device in Spotify. The app also tries to auto-transfer playback when the device appears.
+On first full Spotify run, select `mammamiradio` as the playback device in Spotify. The app also tries to auto-transfer playback when the device appears.
 
 ### Sharing with friends
 
 To let others listen on your network, bind to all interfaces and set an admin password:
 
 ```dotenv
-FAKEITALIRADIO_BIND_HOST=0.0.0.0
+MAMMAMIRADIO_BIND_HOST=0.0.0.0
 ADMIN_PASSWORD=your-secret-here
 ```
 
@@ -184,7 +184,7 @@ If you bind to a non-loopback host, the app requires either `ADMIN_PASSWORD` or 
 ## Project layout
 
 ```text
-fakeitaliradio/
+mammamiradio/
   main.py             FastAPI app startup/shutdown
   config.py           radio.toml + env parsing and validation
   producer.py         segment generation loop
@@ -215,7 +215,7 @@ Useful direct run:
 
 ```bash
 source .venv/bin/activate
-python -m uvicorn fakeitaliradio.main:app --reload --reload-dir fakeitaliradio
+python -m uvicorn mammamiradio.main:app --reload --reload-dir mammamiradio
 ```
 
 Generated runtime directories:

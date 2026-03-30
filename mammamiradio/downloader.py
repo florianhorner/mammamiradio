@@ -6,8 +6,8 @@ import asyncio
 import logging
 from pathlib import Path
 
-from fakeitaliradio.models import Track
-from fakeitaliradio.normalizer import _run_ffmpeg
+from mammamiradio.models import Track
+from mammamiradio.normalizer import _run_ffmpeg
 
 logger = logging.getLogger(__name__)
 

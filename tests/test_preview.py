@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from fakeitaliradio.config import PacingSection
-from fakeitaliradio.models import StationState, Track
-from fakeitaliradio.scheduler import preview_upcoming
+from mammamiradio.config import PacingSection
+from mammamiradio.models import StationState, Track
+from mammamiradio.scheduler import preview_upcoming
 
 
 def _tracks(n: int = 5) -> list[Track]:

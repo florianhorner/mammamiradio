@@ -25,8 +25,8 @@ from pathlib import Path
 
 import httpx
 
-from fakeitaliradio.config import StationConfig
-from fakeitaliradio.models import Track
+from mammamiradio.config import StationConfig
+from mammamiradio.models import Track
 
 logger = logging.getLogger(__name__)
 
@@ -305,7 +305,7 @@ class SpotifyPlayer:
     async def _try_transfer_playback(self) -> None:
         """Use Spotify Web API to transfer playback to our device."""
         try:
-            from fakeitaliradio.spotify_auth import get_spotify_client
+            from mammamiradio.spotify_auth import get_spotify_client
 
             sp = get_spotify_client(self.config)
 
@@ -314,19 +314,19 @@ class SpotifyPlayer:
             device_names = []
             for d in devices.get("devices", []):
                 device_names.append(d.get("name", "?"))
-                if d.get("name") == "fakeitaliradio":
+                if d.get("name") == "mammamiradio":
                     our_device = d
                     break
 
             if our_device:
                 sp.transfer_playback(our_device["id"], force_play=False)
-                logger.info("Auto-transferred playback to fakeitaliradio (device %s)", our_device["id"])
+                logger.info("Auto-transferred playback to mammamiradio (device %s)", our_device["id"])
                 # Wait a moment for go-librespot to register the connection
                 await asyncio.sleep(2)
                 self._authenticated = True
             else:
                 logger.info(
-                    "fakeitaliradio not in Spotify devices yet (visible: %s). Select it manually in Spotify app.",
+                    "mammamiradio not in Spotify devices yet (visible: %s). Select it manually in Spotify app.",
                     ", ".join(device_names) or "none",
                 )
 
