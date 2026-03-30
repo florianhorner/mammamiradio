@@ -15,3 +15,5 @@ go-librespot/state.json
 .claude/worktrees/
 *.app
 *.webloc
+.coverage
+htmlcov/
