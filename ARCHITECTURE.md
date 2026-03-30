@@ -162,6 +162,16 @@ The rich path is richer, but the failure path still produces a stream.
 | `mammamiradio/streamer.py` | HTTP routes, auth gating, playback loop, listener fanout |
 | `start.sh` | local dev entry point with reload-safe go-librespot handling |
 
+## Deployment models
+
+The app runs in three modes:
+
+- **Local dev** via `start.sh` (manages go-librespot + FIFO + uvicorn with --reload)
+- **Docker container** via `Dockerfile` / `docker-compose.yml` (no go-librespot, runs as non-root user, persistent `/data` volume)
+- **Home Assistant add-on** via `ha-addon/mammamiradio/` (Alpine-based, Supervisor injects HA token, ingress proxies the dashboard into the HA sidebar)
+
+The HA add-on and Docker paths skip go-librespot and the FIFO. Music falls back to yt-dlp, local files, or placeholder audio. The ingress-compatible UI uses JavaScript base path detection so the dashboard works both at `/` and behind HA's ingress proxy.
+
 ## Operational notes
 
 - Version metadata lives in `pyproject.toml`.

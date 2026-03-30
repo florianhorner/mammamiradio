@@ -46,6 +46,12 @@ That script:
 - keeps a fallback FIFO reader alive across reloads
 - runs uvicorn with `--reload`
 
+Or use Docker (no Python/FFmpeg setup needed):
+
+```bash
+docker compose up
+```
+
 If you only need the web app and background tasks:
 
 ```bash

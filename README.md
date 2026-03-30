@@ -20,6 +20,7 @@ The app is designed to degrade gracefully. If Spotify auth is missing, it falls 
 - [TROUBLESHOOTING.md](TROUBLESHOOTING.md) covers the failures you are actually likely to hit.
 - [OPERATIONS.md](OPERATIONS.md) describes the current run and deploy reality.
 - [CHANGELOG.md](CHANGELOG.md) tracks release notes from the current baseline forward.
+- [ha-addon/README.md](ha-addon/README.md) covers Home Assistant add-on installation and usage.
 
 ## How it works
 
@@ -74,15 +75,15 @@ HA_TOKEN=
 
 ### Run (Docker)
 
-The easiest way to run fakeitaliradio on any platform (Windows, Mac, Linux):
+The easiest way to run mammamiradio on any platform (Windows, Mac, Linux):
 
 ```bash
 cp .env.example .env
-# Edit .env with your API keys
+# Edit .env: set ADMIN_TOKEN and optionally ANTHROPIC_API_KEY, SPOTIFY_CLIENT_ID/SECRET
 docker compose up
 ```
 
-Open `http://localhost:8000/` for the dashboard.
+Open `http://localhost:8000/` for the dashboard. `ADMIN_TOKEN` must be set in `.env` (the container binds to `0.0.0.0` and requires auth).
 
 ### Run (Home Assistant add-on)
 
@@ -91,7 +92,7 @@ If you run Home Assistant OS or Supervised:
 1. Go to **Settings > Add-ons > Add-on Store**
 2. Click the three dots menu > **Repositories**
 3. Paste: `https://github.com/florianhorner/fakeitaliradio`
-4. Find "Fake Itali Radio" and click **Install**
+4. Find "Mamma Mi Radio" and click **Install**
 5. Configure your Anthropic API key (and optionally Spotify credentials) in the add-on settings
 6. Start the add-on — it appears in your sidebar
 
@@ -229,6 +230,9 @@ mammamiradio/
   listener.html       public listener UI
 radio.toml            station config
 start.sh              local dev entrypoint
+Dockerfile            standalone Docker image
+docker-compose.yml    one-command Docker run
+ha-addon/             Home Assistant add-on scaffold
 tests/                pytest coverage
 ```
 
