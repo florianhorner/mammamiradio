@@ -6,8 +6,8 @@ import logging
 import random
 import re
 
-from fakeitaliradio.config import StationConfig
-from fakeitaliradio.models import Track
+from mammamiradio.config import StationConfig
+from mammamiradio.models import Track
 
 logger = logging.getLogger(__name__)
 
@@ -25,7 +25,7 @@ DEMO_TRACKS = [
 ]
 
 
-from fakeitaliradio.spotify_auth import get_spotify_client  # noqa: E402
+from mammamiradio.spotify_auth import get_spotify_client  # noqa: E402
 
 
 def _get_spotify_oauth(config: StationConfig):

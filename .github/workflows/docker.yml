@@ -65,9 +65,9 @@ jobs:
 
       - name: Prepare HA add-on build context
         run: |
-          cp -r fakeitaliradio/ ha-addon/fakeitaliradio/fakeitaliradio/
-          cp pyproject.toml ha-addon/fakeitaliradio/
-          cp radio.toml ha-addon/fakeitaliradio/
+          cp -r mammamiradio/ ha-addon/mammamiradio/mammamiradio/
+          cp pyproject.toml ha-addon/mammamiradio/
+          cp radio.toml ha-addon/mammamiradio/
 
       - name: Log in to Container Registry
         uses: docker/login-action@v3
@@ -85,7 +85,7 @@ jobs:
       - name: Build and push HA add-on (amd64)
         uses: docker/build-push-action@v6
         with:
-          context: ha-addon/fakeitaliradio
+          context: ha-addon/mammamiradio
           platforms: linux/amd64,linux/arm64
           push: true
           tags: |

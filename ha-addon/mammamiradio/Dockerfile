@@ -8,7 +8,7 @@ WORKDIR /app
 
 # Copy application
 COPY rootfs/ /
-COPY fakeitaliradio/ fakeitaliradio/
+COPY mammamiradio/ mammamiradio/
 COPY pyproject.toml radio.toml ./
 
 # Install Python dependencies

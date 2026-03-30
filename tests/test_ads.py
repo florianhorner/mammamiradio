@@ -8,15 +8,15 @@ from pathlib import Path
 
 import pytest
 
-from fakeitaliradio.models import (
+from mammamiradio.models import (
     AdBrand,
     AdHistoryEntry,
     AdPart,
     AdScript,
     StationState,
 )
-from fakeitaliradio.producer import _pick_brand
-from fakeitaliradio.scriptwriter import AD_BREAK_INTROS, AD_BREAK_OUTROS
+from mammamiradio.producer import _pick_brand
+from mammamiradio.scriptwriter import AD_BREAK_INTROS, AD_BREAK_OUTROS
 
 # --- _pick_brand tests ---
 
@@ -102,7 +102,7 @@ def test_ad_break_outros_exist():
 
 @pytest.mark.requires_ffmpeg
 def test_music_bed_generation():
-    from fakeitaliradio.normalizer import generate_music_bed
+    from mammamiradio.normalizer import generate_music_bed
 
     tmp = Path(tempfile.mkdtemp())
     try:
@@ -116,7 +116,7 @@ def test_music_bed_generation():
 
 @pytest.mark.requires_ffmpeg
 def test_bumper_jingle_generation():
-    from fakeitaliradio.normalizer import generate_bumper_jingle
+    from mammamiradio.normalizer import generate_bumper_jingle
 
     tmp = Path(tempfile.mkdtemp())
     try:
@@ -133,7 +133,7 @@ def test_bumper_jingle_generation():
 
 @pytest.mark.requires_ffmpeg
 def test_mix_with_bed():
-    from fakeitaliradio.normalizer import (
+    from mammamiradio.normalizer import (
         generate_music_bed,
         generate_tone,
         mix_with_bed,

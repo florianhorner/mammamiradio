@@ -1,4 +1,4 @@
-"""Tests for fakeitaliradio.tts — TTS synthesis and ad/dialogue assembly."""
+"""Tests for mammamiradio.tts — TTS synthesis and ad/dialogue assembly."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from fakeitaliradio.models import AdPart, AdScript, AdVoice, HostPersonality
+from mammamiradio.models import AdPart, AdScript, AdVoice, HostPersonality
 
 
 def _touch(path: Path) -> Path:
@@ -56,13 +56,13 @@ def _mock_all(monkeypatch):
     mock_communicate = MagicMock(return_value=mock_comm_instance)
 
     with (
-        patch("fakeitaliradio.tts.edge_tts.Communicate", mock_communicate),
-        patch("fakeitaliradio.tts.normalize", side_effect=_normalize_side_effect) as mock_normalize,
-        patch("fakeitaliradio.tts.concat_files", side_effect=_concat_side_effect) as mock_concat,
-        patch("fakeitaliradio.tts.generate_music_bed", side_effect=_music_bed_side_effect) as mock_bed,
-        patch("fakeitaliradio.tts.generate_sfx", side_effect=_single_path_side_effect) as mock_sfx,
-        patch("fakeitaliradio.tts.generate_silence", side_effect=_single_path_side_effect) as mock_silence,
-        patch("fakeitaliradio.tts.mix_with_bed", side_effect=_mix_side_effect) as mock_mix,
+        patch("mammamiradio.tts.edge_tts.Communicate", mock_communicate),
+        patch("mammamiradio.tts.normalize", side_effect=_normalize_side_effect) as mock_normalize,
+        patch("mammamiradio.tts.concat_files", side_effect=_concat_side_effect) as mock_concat,
+        patch("mammamiradio.tts.generate_music_bed", side_effect=_music_bed_side_effect) as mock_bed,
+        patch("mammamiradio.tts.generate_sfx", side_effect=_single_path_side_effect) as mock_sfx,
+        patch("mammamiradio.tts.generate_silence", side_effect=_single_path_side_effect) as mock_silence,
+        patch("mammamiradio.tts.mix_with_bed", side_effect=_mix_side_effect) as mock_mix,
     ):
         yield {
             "Communicate": mock_communicate,
@@ -83,7 +83,7 @@ def _mock_all(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_synthesize_happy_path(_mock_all, tmp_path):
-    from fakeitaliradio.tts import synthesize
+    from mammamiradio.tts import synthesize
 
     output = tmp_path / "out.mp3"
     result = await synthesize("Ciao mondo", "it-IT-IsabellaNeural", output)
@@ -96,7 +96,7 @@ async def test_synthesize_happy_path(_mock_all, tmp_path):
 
 @pytest.mark.asyncio
 async def test_synthesize_error_falls_back_to_silence(_mock_all, tmp_path):
-    from fakeitaliradio.tts import synthesize
+    from mammamiradio.tts import synthesize
 
     _mock_all["comm_instance"].save = AsyncMock(side_effect=RuntimeError("network down"))
 
@@ -116,7 +116,7 @@ async def test_synthesize_error_falls_back_to_silence(_mock_all, tmp_path):
 
 @pytest.mark.asyncio
 async def test_synthesize_ad_voice_sfx_pause(_mock_all, tmp_path):
-    from fakeitaliradio.tts import synthesize_ad
+    from mammamiradio.tts import synthesize_ad
 
     script = AdScript(
         brand="EspressoPlus",
@@ -147,7 +147,7 @@ async def test_synthesize_ad_voice_sfx_pause(_mock_all, tmp_path):
 
 @pytest.mark.asyncio
 async def test_synthesize_ad_empty_parts_fallback(_mock_all, tmp_path):
-    from fakeitaliradio.tts import synthesize_ad
+    from mammamiradio.tts import synthesize_ad
 
     script = AdScript(brand="EmptyBrand", parts=[])
     voice = AdVoice(name="Announcer", voice="it-IT-DiegoNeural", style="warm")
@@ -161,7 +161,7 @@ async def test_synthesize_ad_empty_parts_fallback(_mock_all, tmp_path):
 
 @pytest.mark.asyncio
 async def test_synthesize_ad_music_bed_failure_voice_only(_mock_all, tmp_path):
-    from fakeitaliradio.tts import synthesize_ad
+    from mammamiradio.tts import synthesize_ad
 
     _mock_all["generate_music_bed"].side_effect = RuntimeError("ffmpeg broke")
 
@@ -186,7 +186,7 @@ async def test_synthesize_ad_music_bed_failure_voice_only(_mock_all, tmp_path):
 
 @pytest.mark.asyncio
 async def test_synthesize_dialogue_multiple_hosts(_mock_all, tmp_path):
-    from fakeitaliradio.tts import synthesize_dialogue
+    from mammamiradio.tts import synthesize_dialogue
 
     host_a = HostPersonality(name="Marco", voice="it-IT-DiegoNeural", style="energetic")
     host_b = HostPersonality(name="Giulia", voice="it-IT-IsabellaNeural", style="calm")
@@ -205,7 +205,7 @@ async def test_synthesize_dialogue_multiple_hosts(_mock_all, tmp_path):
 
 @pytest.mark.asyncio
 async def test_synthesize_dialogue_single_host(_mock_all, tmp_path):
-    from fakeitaliradio.tts import synthesize_dialogue
+    from mammamiradio.tts import synthesize_dialogue
 
     host = HostPersonality(name="Marco", voice="it-IT-DiegoNeural", style="energetic")
     lines = [(host, "Solo io oggi!")]

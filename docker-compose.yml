@@ -1,13 +1,13 @@
 services:
-  fakeitaliradio:
+  mammamiradio:
     build: .
     ports:
       - "8000:8000"
     environment:
-      - FAKEITALIRADIO_BIND_HOST=0.0.0.0
-      - FAKEITALIRADIO_PORT=8000
-      - FAKEITALIRADIO_CACHE_DIR=/data/cache
-      - FAKEITALIRADIO_TMP_DIR=/data/tmp
+      - MAMMAMIRADIO_BIND_HOST=0.0.0.0
+      - MAMMAMIRADIO_PORT=8000
+      - MAMMAMIRADIO_CACHE_DIR=/data/cache
+      - MAMMAMIRADIO_TMP_DIR=/data/tmp
       # Set an admin token for non-loopback access
       - ADMIN_TOKEN=${ADMIN_TOKEN:-changeme}
       # Optional: Anthropic API key for AI-generated banter/ads

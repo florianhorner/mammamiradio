@@ -8,31 +8,31 @@ import random
 from pathlib import Path
 from uuid import uuid4
 
-from fakeitaliradio.config import StationConfig
-from fakeitaliradio.downloader import download_track
-from fakeitaliradio.ha_context import HomeContext, fetch_home_context
-from fakeitaliradio.models import (
+from mammamiradio.config import StationConfig
+from mammamiradio.downloader import download_track
+from mammamiradio.ha_context import HomeContext, fetch_home_context
+from mammamiradio.models import (
     AdBrand,
     AdHistoryEntry,
     Segment,
     SegmentType,
     StationState,
 )
-from fakeitaliradio.normalizer import (
+from mammamiradio.normalizer import (
     concat_files,
     generate_bumper_jingle,
     generate_silence,
     normalize,
 )
-from fakeitaliradio.scheduler import next_segment_type
-from fakeitaliradio.scriptwriter import (
+from mammamiradio.scheduler import next_segment_type
+from mammamiradio.scriptwriter import (
     AD_BREAK_INTROS,
     AD_BREAK_OUTROS,
     write_ad,
     write_banter,
 )
-from fakeitaliradio.spotify_player import SpotifyPlayer, download_track_spotify
-from fakeitaliradio.tts import synthesize, synthesize_ad, synthesize_dialogue
+from mammamiradio.spotify_player import SpotifyPlayer, download_track_spotify
+from mammamiradio.tts import synthesize, synthesize_ad, synthesize_dialogue
 
 logger = logging.getLogger(__name__)
 
@@ -62,7 +62,7 @@ async def run_producer(
     # Don't block on auth — start producing banter immediately,
     # check Spotify connection each time we need to play music
     if spotify_player:
-        logger.info("go-librespot running. Select 'fakeitaliradio' in Spotify to enable real music.")
+        logger.info("go-librespot running. Select 'mammamiradio' in Spotify to enable real music.")
 
     while True:
         # Always check Spotify auth (cheap HTTP call)
@@ -187,7 +187,7 @@ async def run_producer(
                         sfx_dir = Path(config.ads.sfx_dir) if config.ads.sfx_dir else None
                         ad_path = await synthesize_ad(script, voice, config.tmp_dir, sfx_dir)
                     else:
-                        from fakeitaliradio.models import AdVoice as _AV  # noqa: N814
+                        from mammamiradio.models import AdVoice as _AV  # noqa: N814
 
                         host = random.choice(config.hosts)
                         fallback_voice = _AV(name=host.name, voice=host.voice, style=host.style)

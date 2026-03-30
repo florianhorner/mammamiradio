@@ -1,4 +1,4 @@
-"""Configuration loading for fakeitaliradio.
+"""Configuration loading for mammamiradio.
 
 This module combines checked-in station settings from ``radio.toml`` with
 environment-sourced secrets and deployment overrides, then validates the
@@ -18,7 +18,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-from fakeitaliradio.models import AdBrand, AdVoice, HostPersonality, PersonalityAxes
+from mammamiradio.models import AdBrand, AdVoice, HostPersonality, PersonalityAxes
 
 load_dotenv()
 
@@ -58,7 +58,7 @@ class AudioSection:
     channels: int = 2
     bitrate: int = 192
     spotify_bitrate: int = 320
-    fifo_path: str = "/tmp/fakeitaliradio.pcm"
+    fifo_path: str = "/tmp/mammamiradio.pcm"
     go_librespot_bin: str = "go-librespot"
     go_librespot_port: int = 3678
     claude_model: str = "claude-haiku-4-5-20251001"
@@ -228,8 +228,8 @@ def load_config(path: str = "radio.toml") -> StationConfig:
         audio_raw["claude_model"] = os.getenv("CLAUDE_MODEL")
 
     # Env-var overrides for cache/tmp directories (for Docker volume mounts)
-    cache_dir = Path(os.getenv("FAKEITALIRADIO_CACHE_DIR", "cache"))
-    tmp_dir = Path(os.getenv("FAKEITALIRADIO_TMP_DIR", "tmp"))
+    cache_dir = Path(os.getenv("MAMMAMIRADIO_CACHE_DIR", "cache"))
+    tmp_dir = Path(os.getenv("MAMMAMIRADIO_TMP_DIR", "tmp"))
 
     config = StationConfig(
         station=StationSection(**station_raw),
@@ -241,8 +241,8 @@ def load_config(path: str = "radio.toml") -> StationConfig:
         homeassistant=ha_section,
         cache_dir=cache_dir,
         tmp_dir=tmp_dir,
-        bind_host=os.getenv("FAKEITALIRADIO_BIND_HOST", "127.0.0.1"),
-        port=int(os.getenv("FAKEITALIRADIO_PORT", "8000")),
+        bind_host=os.getenv("MAMMAMIRADIO_BIND_HOST", "127.0.0.1"),
+        port=int(os.getenv("MAMMAMIRADIO_PORT", "8000")),
         admin_username=os.getenv("ADMIN_USERNAME", "admin"),
         admin_password=os.getenv("ADMIN_PASSWORD", ""),
         admin_token=os.getenv("ADMIN_TOKEN", ""),
@@ -276,5 +276,5 @@ if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "runtime-json":
         print(json.dumps(runtime_json()))
     else:
-        print("Usage: python -m fakeitaliradio.config runtime-json", file=sys.stderr)
+        print("Usage: python -m mammamiradio.config runtime-json", file=sys.stderr)
         sys.exit(1)

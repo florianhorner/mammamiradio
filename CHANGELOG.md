@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to `fakeitaliradio` are documented here.
+All notable changes to `mammamiradio` are documented here.
 
 The current version source of truth is `pyproject.toml`.
 
@@ -9,9 +9,9 @@ The current version source of truth is `pyproject.toml`.
 ### Added
 
 - **Docker support**: `Dockerfile` and `docker-compose.yml` for running on any platform (Windows, Mac, Linux) without Python/FFmpeg setup.
-- **Home Assistant add-on**: Full HA add-on scaffold in `ha-addon/` with ingress support, automatic HA token injection, and configurable options UI.
+- **Home Assistant add-on**: Full HA add-on scaffold in `ha-addon/mammamiradio/` with ingress support, automatic HA token injection, and configurable options UI.
 - **Ingress-compatible UI**: Dashboard and listener HTML now use dynamic base paths, working behind HA's ingress proxy and at the root path.
-- **Environment variable overrides**: `config.py` accepts `HA_URL`, `HA_ENABLED`, `STATION_NAME`, `STATION_THEME`, `PLAYLIST_SPOTIFY_URL`, `CLAUDE_MODEL`, `FAKEITALIRADIO_CACHE_DIR`, and `FAKEITALIRADIO_TMP_DIR` for Docker/add-on configuration without editing `radio.toml`.
+- **Environment variable overrides**: `config.py` accepts `HA_URL`, `HA_ENABLED`, `STATION_NAME`, `STATION_THEME`, `PLAYLIST_SPOTIFY_URL`, `CLAUDE_MODEL`, `MAMMAMIRADIO_CACHE_DIR`, and `MAMMAMIRADIO_TMP_DIR` for Docker/add-on configuration without editing `radio.toml`.
 - **GitHub Actions Docker CI**: Multi-arch (amd64 + arm64) image builds on tag push, published to GHCR.
 - `.dockerignore` for clean Docker builds.
 
@@ -67,14 +67,14 @@ The current version source of truth is `pyproject.toml`.
 
 ### Added
 
-- Start a local fake Italian radio station with an admin dashboard at `/`, a public listener page at `/listen`, and a raw MP3 stream at `/stream`.
-- Alternate songs with AI-written host banter and multi-spot fake ad breaks, including bumper jingles, custom ad voices, and recurring campaign callbacks.
+- Start a local AI-powered Italian radio station with an admin dashboard at `/`, a public listener page at `/listen`, and a raw MP3 stream at `/stream`.
+- Alternate songs with AI-written host banter and multi-spot AI-generated ad breaks, including bumper jingles, custom ad voices, and recurring campaign callbacks.
 - Expose admin controls for shuffle, skip, queue purge, track removal, reordering, and "play next" from the web UI.
 - Provide public station status plus admin-only logs and debugging details for queue depth, recent playback, generated scripts, and go-librespot output.
 
 ### Changed
 
-- Prefer real Spotify playback through go-librespot when a user connects the `fakeitaliradio` device, but keep the station alive with liked songs, demo tracks, local files, yt-dlp, or placeholder audio when that path is unavailable.
+- Prefer real Spotify playback through go-librespot when a user connects the `mammamiradio` device, but keep the station alive with liked songs, demo tracks, local files, yt-dlp, or placeholder audio when that path is unavailable.
 - Throttle stream output to the configured bitrate so the dashboard, listener, and actual audio timeline stay aligned.
 - Require admin auth when binding to a non-local interface, while keeping localhost development friction low.
 

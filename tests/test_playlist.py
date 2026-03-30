@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from fakeitaliradio.playlist import DEMO_TRACKS, _extract_playlist_id
+from mammamiradio.playlist import DEMO_TRACKS, _extract_playlist_id
 
 
 def test_demo_tracks_has_entries():

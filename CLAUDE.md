@@ -1,6 +1,6 @@
-# fakeitaliradio
+# mammamiradio
 
-Fake Italian radio station engine. Python 3.11+, FastAPI, FFmpeg, optional Spotify and Home Assistant integration.
+AI-powered Italian radio station engine. Python 3.11+, FastAPI, FFmpeg, optional Spotify and Home Assistant integration.
 
 ## Docs
 
@@ -16,11 +16,11 @@ Fake Italian radio station engine. Python 3.11+, FastAPI, FFmpeg, optional Spoti
 - Setup: `python3.11 -m venv .venv && source .venv/bin/activate && pip install -e .`
 - Install: `pip install -e .`
 - Run full local stack: `./start.sh`
-- Run app only: `source .venv/bin/activate && python -m uvicorn fakeitaliradio.main:app --reload --reload-dir fakeitaliradio`
+- Run app only: `source .venv/bin/activate && python -m uvicorn mammamiradio.main:app --reload --reload-dir mammamiradio`
 - Test: `pytest tests/`
 - Lint: `ruff check .` (fix: `ruff check --fix .`)
 - Format: `ruff format .` (check: `ruff format --check .`)
-- Type check: `mypy fakeitaliradio/ tests/`
+- Type check: `mypy mammamiradio/ tests/`
 - Pre-commit: `pip install pre-commit && pre-commit install`
 
 ## Docker / Home Assistant
@@ -29,16 +29,16 @@ Fake Italian radio station engine. Python 3.11+, FastAPI, FFmpeg, optional Spoti
 - `docker-compose.yml`: one-command run for non-HA users
 - `.dockerignore`: keeps builds clean
 - `ha-addon/`: Home Assistant add-on scaffold
-  - `ha-addon/fakeitaliradio/config.yaml`: add-on metadata, options schema, ingress config
-  - `ha-addon/fakeitaliradio/Dockerfile`: HA add-on image (Alpine-based)
-  - `ha-addon/fakeitaliradio/rootfs/run.sh`: entrypoint mapping Supervisor env vars
-  - `ha-addon/fakeitaliradio/translations/en.yaml`: UI labels for add-on options
+  - `ha-addon/mammamiradio/config.yaml`: add-on metadata, options schema, ingress config
+  - `ha-addon/mammamiradio/Dockerfile`: HA add-on image (Alpine-based)
+  - `ha-addon/mammamiradio/rootfs/run.sh`: entrypoint mapping Supervisor env vars
+  - `ha-addon/mammamiradio/translations/en.yaml`: UI labels for add-on options
 - `.github/workflows/docker.yml`: multi-arch Docker build CI
 
 ## Environment
 
-- `FAKEITALIRADIO_BIND_HOST`, `FAKEITALIRADIO_PORT`: bind address and port
-- `FAKEITALIRADIO_CACHE_DIR`, `FAKEITALIRADIO_TMP_DIR`: override cache/tmp directories (for Docker volumes)
+- `MAMMAMIRADIO_BIND_HOST`, `MAMMAMIRADIO_PORT`: bind address and port
+- `MAMMAMIRADIO_CACHE_DIR`, `MAMMAMIRADIO_TMP_DIR`: override cache/tmp directories (for Docker volumes)
 - `ADMIN_USERNAME`, `ADMIN_PASSWORD`, `ADMIN_TOKEN`: admin auth
 - `SPOTIFY_CLIENT_ID`, `SPOTIFY_CLIENT_SECRET`: Spotify Web API access
 - `ANTHROPIC_API_KEY`: Claude banter/ad generation
@@ -62,7 +62,7 @@ Fake Italian radio station engine. Python 3.11+, FastAPI, FFmpeg, optional Spoti
 ## Project structure
 
 ```text
-fakeitaliradio/
+mammamiradio/
   main.py             FastAPI app startup/shutdown lifecycle
   config.py           radio.toml + .env parsing, validation, runtime-json helper
   models.py           shared data models and station state

@@ -8,7 +8,7 @@ cd "$(dirname "$0")"
 set -a
 [ -f .env ] && source .env
 set +a
-PORT="${FAKEITALIRADIO_PORT:-8000}"
+PORT="${MAMMAMIRADIO_PORT:-8000}"
 
 echo "Building Radio Italì.app..."
 
@@ -18,13 +18,13 @@ on run
     set projectPath to do shell script "dirname " & quoted form of appPath
 
     -- Read port from .env
-    set portNum to do shell script "cd " & quoted form of projectPath & " && (. .env 2>/dev/null; echo ${FAKEITALIRADIO_PORT:-8000})"
+    set portNum to do shell script "cd " & quoted form of projectPath & " && (. .env 2>/dev/null; echo ${MAMMAMIRADIO_PORT:-8000})"
     set baseURL to "http://localhost:" & portNum
 
     -- Check if already running
     set isRunning to false
     try
-        do shell script "pgrep -f 'uvicorn fakeitaliradio'"
+        do shell script "pgrep -f 'uvicorn mammamiradio'"
         set isRunning to true
     end try
 
@@ -90,7 +90,7 @@ echo "  Dashboard.webloc  → Drag to browser bookmarks bar (admin controls)."
 echo "  Listener.webloc   → Drag to browser bookmarks bar (the player you share)."
 echo ""
 echo "  To share with friends on your network:"
-echo "    1. Set FAKEITALIRADIO_BIND_HOST=0.0.0.0 and ADMIN_PASSWORD=... in .env"
+echo "    1. Set MAMMAMIRADIO_BIND_HOST=0.0.0.0 and ADMIN_PASSWORD=... in .env"
 echo "    2. Re-run ./setup-mac.sh"
 echo "    3. Share http://$(ipconfig getifaddr en0 2>/dev/null || echo '<your-ip>'):${PORT}/listen"
 echo ""

@@ -10,15 +10,15 @@ That is the honest current state.
 - `ffmpeg` on `PATH`
 - `go-librespot` binary on `PATH` (or at the path configured in `radio.toml`)
 - writable `tmp/` and `cache/` directories
-- persistent access to `/tmp/fakeitaliradio.pcm`
+- persistent access to `/tmp/mammamiradio.pcm`
 - outbound network access for Spotify, Anthropic, and optional Home Assistant
 
 ## Required secrets and config
 
 Environment:
 
-- `FAKEITALIRADIO_BIND_HOST`
-- `FAKEITALIRADIO_PORT`
+- `MAMMAMIRADIO_BIND_HOST`
+- `MAMMAMIRADIO_PORT`
 - `ADMIN_USERNAME`
 - `ADMIN_PASSWORD` or `ADMIN_TOKEN` for non-local access
 - `SPOTIFY_CLIENT_ID`

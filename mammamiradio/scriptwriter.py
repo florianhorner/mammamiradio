@@ -8,8 +8,8 @@ import random
 
 import anthropic
 
-from fakeitaliradio.config import StationConfig
-from fakeitaliradio.models import (
+from mammamiradio.config import StationConfig
+from mammamiradio.models import (
     AdBrand,
     AdPart,
     AdScript,
