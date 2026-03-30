@@ -36,7 +36,7 @@
     background: var(--bg);
     color: var(--text);
     padding: 0 24px 96px;
-    max-width: 960px;
+    max-width: 1280px;
     margin: 0 auto;
     line-height: 1.5;
   }
@@ -157,6 +157,105 @@
     color: var(--bg);
   }
 
+  /* ---- Host Personality ---- */
+  .personality-section { margin-bottom: 20px; }
+  .personality-cards { display: flex; gap: 16px; flex-wrap: wrap; }
+  .personality-card {
+    background: var(--card);
+    border: 1px solid rgba(196, 101, 74, 0.12);
+    border-radius: 8px;
+    padding: 16px 20px;
+    flex: 1;
+    min-width: 280px;
+  }
+  .personality-card h3 {
+    font-family: var(--font-display);
+    font-size: 16px;
+    color: var(--cream);
+    margin-bottom: 12px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .personality-card h3 .reset-btn {
+    font-family: var(--font-body);
+    font-size: 10px;
+    font-weight: 600;
+    color: var(--muted);
+    background: none;
+    border: 1px solid rgba(176, 164, 148, 0.2);
+    border-radius: 4px;
+    padding: 3px 8px;
+    cursor: pointer;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    transition: border-color 0.15s, color 0.15s;
+  }
+  .personality-card h3 .reset-btn:hover {
+    border-color: var(--terracotta);
+    color: var(--terracotta);
+  }
+  .slider-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 8px;
+  }
+  .slider-label {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    width: 72px;
+    flex-shrink: 0;
+  }
+  .slider-row input[type="range"] {
+    flex: 1;
+    -webkit-appearance: none;
+    appearance: none;
+    height: 4px;
+    background: var(--bg2);
+    border-radius: 2px;
+    outline: none;
+  }
+  .slider-row input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: var(--terracotta);
+    cursor: pointer;
+    border: 2px solid var(--bg);
+  }
+  .slider-row input[type="range"]::-moz-range-thumb {
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: var(--terracotta);
+    cursor: pointer;
+    border: 2px solid var(--bg);
+  }
+  .slider-value {
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
+    color: var(--cream-dk);
+    width: 28px;
+    text-align: right;
+    flex-shrink: 0;
+  }
+  .slider-ends {
+    display: flex;
+    justify-content: space-between;
+    font-size: 9px;
+    color: var(--muted);
+    opacity: 0.6;
+    margin-top: -4px;
+    margin-bottom: 6px;
+    padding: 0 82px 0 82px;
+  }
+
   /* ---- Now Playing ---- */
   .now-playing {
     background: var(--card);
@@ -200,7 +299,8 @@
   }
 
   /* ---- Grid Layout ---- */
-  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 20px; }
+  @media (max-width: 960px) { .grid { grid-template-columns: 1fr 1fr; } }
   @media (max-width: 640px) { .grid { grid-template-columns: 1fr; } }
 
   /* ---- Segment Log ---- */
@@ -417,10 +517,27 @@
   and select <strong>fakeitaliradio</strong>. Music will use placeholders until connected.
 </div>
 
+<div style="display:flex;gap:8px;margin-bottom:8px">
+  <div style="flex:1;display:flex;gap:8px">
+    <input id="search-input" type="text" placeholder="Search songs..." style="flex:1;background:var(--card);border:1px solid rgba(176,164,148,0.2);border-radius:6px;color:var(--cream);padding:8px 12px;font-size:13px;font-family:var(--font-body);outline:none" onfocus="this.style.borderColor='var(--terracotta)'" onblur="this.style.borderColor='rgba(176,164,148,0.2)'" onkeydown="if(event.key==='Enter')searchTracks()">
+    <button class="btn" onclick="searchTracks()">Search</button>
+  </div>
+  <div style="display:flex;gap:8px">
+    <input id="playlist-url" type="text" placeholder="Playlist URL..." style="width:200px;background:var(--card);border:1px solid rgba(176,164,148,0.2);border-radius:6px;color:var(--cream);padding:8px 12px;font-size:13px;font-family:var(--font-body);outline:none" onfocus="this.style.borderColor='var(--terracotta)'" onblur="this.style.borderColor='rgba(176,164,148,0.2)'" onkeydown="if(event.key==='Enter')loadPlaylist()">
+    <button class="btn" onclick="loadPlaylist()">Load</button>
+  </div>
+</div>
+<div id="search-results" style="margin-bottom:12px"></div>
+
 <div class="controls">
   <button class="btn" onclick="doShuffle()">Shuffle</button>
   <button class="btn" onclick="doSkip()">Skip</button>
-  <button class="btn" onclick="doPurge()">Purge Queue</button>
+  <button class="btn" onclick="doPurge()" title="Discard pre-produced segments so the producer regenerates them">Clear Buffer</button>
+</div>
+
+<div class="personality-section">
+  <div class="section-title">Host Personality</div>
+  <div class="personality-cards" id="personality-cards">Loading...</div>
 </div>
 
 <div class="now-playing" id="now-playing">
@@ -441,7 +558,8 @@
       <div class="section-title">Up Next</div>
       <ul class="upcoming" id="upcoming"></ul>
     </div>
-
+  </div>
+  <div>
     <div class="section">
       <div class="section-title">Last Banter</div>
       <div class="script-box" id="banter">...</div>
@@ -535,6 +653,109 @@ function renderAdHtml(adData) {
   return '';
 }
 
+const axisLabels = {
+  energy: ['Mellow', 'Manic'],
+  chaos: ['On-topic', 'Chaotic'],
+  warmth: ['Dry', 'Warm'],
+  verbosity: ['Terse', 'Verbose'],
+  nostalgia: ['Present', 'Nostalgic'],
+};
+let personalityDebounce = {};
+
+function renderPersonalityCards(hosts) {
+  const container = document.getElementById('personality-cards');
+  container.innerHTML = '';
+  hosts.forEach(h => {
+    const card = document.createElement('div');
+    card.className = 'personality-card';
+
+    const header = document.createElement('h3');
+    header.textContent = h.name;
+    const resetBtn = document.createElement('button');
+    resetBtn.className = 'reset-btn';
+    resetBtn.textContent = 'Reset';
+    resetBtn.addEventListener('click', () => resetPersonality(h.name));
+    header.appendChild(resetBtn);
+    card.appendChild(header);
+
+    Object.entries(h.personality).forEach(([axis, val]) => {
+      const [lo, hi] = axisLabels[axis] || [axis, axis];
+
+      const row = document.createElement('div');
+      row.className = 'slider-row';
+
+      const label = document.createElement('span');
+      label.className = 'slider-label';
+      label.textContent = axis;
+
+      const slider = document.createElement('input');
+      slider.type = 'range';
+      slider.min = '0';
+      slider.max = '100';
+      slider.value = val;
+      slider.dataset.host = h.name;
+      slider.dataset.axis = axis;
+      slider.addEventListener('input', function() { onSliderChange(this); });
+
+      const valSpan = document.createElement('span');
+      valSpan.className = 'slider-value';
+      valSpan.id = 'sv-' + h.name + '-' + axis;
+      valSpan.textContent = val;
+
+      row.appendChild(label);
+      row.appendChild(slider);
+      row.appendChild(valSpan);
+      card.appendChild(row);
+
+      const ends = document.createElement('div');
+      ends.className = 'slider-ends';
+      const loSpan = document.createElement('span');
+      loSpan.textContent = lo;
+      const hiSpan = document.createElement('span');
+      hiSpan.textContent = hi;
+      ends.appendChild(loSpan);
+      ends.appendChild(hiSpan);
+      card.appendChild(ends);
+    });
+
+    container.appendChild(card);
+  });
+}
+
+function onSliderChange(el) {
+  const host = el.dataset.host;
+  const axis = el.dataset.axis;
+  const val = parseInt(el.value, 10);
+  document.getElementById('sv-' + host + '-' + axis).textContent = val;
+
+  const key = host + '-' + axis;
+  clearTimeout(personalityDebounce[key]);
+  personalityDebounce[key] = setTimeout(() => {
+    fetch('/api/hosts/' + encodeURIComponent(host) + '/personality', {
+      method: 'PATCH',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({[axis]: val}),
+    });
+  }, 300);
+}
+
+async function resetPersonality(hostName) {
+  await fetch('/api/hosts/' + encodeURIComponent(hostName) + '/personality/reset', {method: 'POST'});
+  loadPersonality();
+}
+
+async function loadPersonality() {
+  try {
+    const r = await fetch('/api/hosts');
+    const d = await r.json();
+    renderPersonalityCards(d.hosts);
+  } catch (e) {
+    console.error('personality load failed', e);
+  }
+}
+
+loadPersonality();
+
 async function refresh() {
   try {
     const r = await fetch('/status');
@@ -552,6 +773,12 @@ async function refresh() {
 
     document.getElementById('connect-banner').style.display =
       d.spotify_connected ? 'none' : 'block';
+
+    // Show current playlist URL if set and input is empty
+    const plInput = document.getElementById('playlist-url');
+    if (d.playlist_url && !plInput.value && plInput.placeholder === 'Playlist URL...') {
+      plInput.placeholder = d.playlist_url;
+    }
 
     // Now streaming (what the listener actually hears)
     const ns = d.now_streaming || {};
@@ -694,6 +921,72 @@ async function refresh() {
 
   } catch (e) {
     console.error('refresh failed', e);
+  }
+}
+
+async function searchTracks() {
+  const input = document.getElementById('search-input');
+  const q = input.value.trim();
+  if (!q) return;
+  const r = await fetch('/api/search?q=' + encodeURIComponent(q));
+  const d = await r.json();
+  const container = document.getElementById('search-results');
+  if (!d.results || !d.results.length) {
+    const msg = d.error ? 'Search unavailable (Spotify not configured)' : 'No results';
+    container.innerHTML = '<div style="font-size:12px;color:var(--muted);padding:4px 0">' + escHtml(msg) + '</div>';
+    setTimeout(() => { container.innerHTML = ''; }, 3000);
+    return;
+  }
+  container.innerHTML = '<ul style="list-style:none;background:var(--card);border:1px solid rgba(176,164,148,0.15);border-radius:6px;overflow:hidden">' +
+    d.results.map(t =>
+      '<li style="padding:8px 12px;border-bottom:1px solid rgba(122,143,109,0.08);display:flex;align-items:center;gap:8px;font-size:13px;color:var(--cream-dk)">' +
+        '<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' +
+          '<strong style="color:var(--cream)">' + escHtml(t.title) + '</strong> ' +
+          '<span style="color:var(--muted)">' + escHtml(t.artist) + '</span>' +
+        '</span>' +
+        '<button class="act-btn" style="opacity:1;padding:3px 8px" onclick=\'addTrack(' + JSON.stringify(t).replace(/'/g, "&#39;") + ',"next")\'>Play next</button>' +
+        '<button class="act-btn" style="opacity:1;padding:3px 8px" onclick=\'addTrack(' + JSON.stringify(t).replace(/'/g, "&#39;") + ',"end")\'>Add</button>' +
+      '</li>'
+    ).join('') + '</ul>';
+}
+
+async function addTrack(track, position) {
+  await fetch('/api/playlist/add', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({...track, position}),
+  });
+  document.getElementById('search-results').innerHTML = '';
+  document.getElementById('search-input').value = '';
+  refresh();
+}
+
+async function loadPlaylist() {
+  const input = document.getElementById('playlist-url');
+  const url = input.value.trim();
+  if (!url) return;
+  input.disabled = true;
+  try {
+    const r = await fetch('/api/playlist/load', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({url}),
+    });
+    const d = await r.json();
+    if (d.ok) {
+      input.value = '';
+      input.placeholder = d.tracks + ' tracks loaded!';
+      setTimeout(() => { input.placeholder = 'Playlist URL...'; }, 3000);
+    } else {
+      input.placeholder = 'Error: ' + (d.error || 'unknown');
+      setTimeout(() => { input.placeholder = 'Playlist URL...'; }, 3000);
+    }
+    refresh();
+  } catch (e) {
+    input.placeholder = 'Network error';
+    setTimeout(() => { input.placeholder = 'Playlist URL...'; }, 3000);
+  } finally {
+    input.disabled = false;
   }
 }
 

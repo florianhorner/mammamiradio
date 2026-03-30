@@ -10,12 +10,12 @@ set +a
 mkdir -p tmp
 
 # Resolve runtime settings from radio.toml + .env via the config helper
-RUNTIME_JSON="$(python -m fakeitaliradio.config runtime-json 2>/dev/null || true)"
+RUNTIME_JSON="$(.venv/bin/python -m fakeitaliradio.config runtime-json 2>/dev/null || true)"
 if [ -n "$RUNTIME_JSON" ]; then
-    FIFO="$(echo "$RUNTIME_JSON" | python -c 'import json,sys; print(json.load(sys.stdin)["fifo_path"])')"
-    GO_LIBRESPOT_BIN="$(echo "$RUNTIME_JSON" | python -c 'import json,sys; print(json.load(sys.stdin)["go_librespot_bin"])')"
-    HOST="$(echo "$RUNTIME_JSON" | python -c 'import json,sys; print(json.load(sys.stdin)["bind_host"])')"
-    PORT="$(echo "$RUNTIME_JSON" | python -c 'import json,sys; print(json.load(sys.stdin)["port"])')"
+    FIFO="$(echo "$RUNTIME_JSON" | .venv/bin/python -c 'import json,sys; print(json.load(sys.stdin)["fifo_path"])')"
+    GO_LIBRESPOT_BIN="$(echo "$RUNTIME_JSON" | .venv/bin/python -c 'import json,sys; print(json.load(sys.stdin)["go_librespot_bin"])')"
+    HOST="$(echo "$RUNTIME_JSON" | .venv/bin/python -c 'import json,sys; print(json.load(sys.stdin)["bind_host"])')"
+    PORT="$(echo "$RUNTIME_JSON" | .venv/bin/python -c 'import json,sys; print(json.load(sys.stdin)["port"])')"
 else
     echo "Warning: could not resolve runtime config, using defaults" >&2
     FIFO="${FAKEITALIRADIO_FIFO_PATH:-/tmp/fakeitaliradio.pcm}"

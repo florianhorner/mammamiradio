@@ -6,6 +6,8 @@ import shutil
 import tempfile
 from pathlib import Path
 
+import pytest
+
 from fakeitaliradio.models import (
     AdBrand,
     AdHistoryEntry,
@@ -98,6 +100,7 @@ def test_ad_break_outros_exist():
 # --- Audio generation tests (require ffmpeg) ---
 
 
+@pytest.mark.requires_ffmpeg
 def test_music_bed_generation():
     from fakeitaliradio.normalizer import generate_music_bed
 
@@ -111,6 +114,7 @@ def test_music_bed_generation():
         shutil.rmtree(tmp)
 
 
+@pytest.mark.requires_ffmpeg
 def test_bumper_jingle_generation():
     from fakeitaliradio.normalizer import generate_bumper_jingle
 
@@ -127,6 +131,7 @@ def test_bumper_jingle_generation():
         shutil.rmtree(tmp)
 
 
+@pytest.mark.requires_ffmpeg
 def test_mix_with_bed():
     from fakeitaliradio.normalizer import (
         generate_music_bed,

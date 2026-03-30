@@ -15,15 +15,69 @@ from fakeitaliradio.models import (
     AdScript,
     AdVoice,
     HostPersonality,
+    PersonalityAxes,
     StationState,
 )
 
 logger = logging.getLogger(__name__)
 
 
+def _personality_modifier(name: str, axes: PersonalityAxes) -> str:
+    """Translate personality slider values into natural-language prompt guidance.
+
+    Values near 50 produce no modifier (neutral).  Extremes produce strong
+    directional instructions.  Only axes that deviate from neutral are included.
+    """
+    parts: list[str] = []
+    threshold = 15  # distance from 50 before we emit guidance
+
+    # Energy
+    if axes.energy < 50 - threshold:
+        parts.append("Speak slowly and calmly. Long pauses. Laid-back, almost sleepy delivery.")
+    elif axes.energy > 50 + threshold:
+        parts.append("Manic energy! Talk fast, interrupt yourself, barely breathe between sentences.")
+
+    # Chaos
+    if axes.chaos < 50 - threshold:
+        parts.append("Stay on topic. Structured, logical flow. No random tangents.")
+    elif axes.chaos > 50 + threshold:
+        parts.append("Go on wild tangents. Non-sequiturs. Start a thought and abandon it for something unrelated.")
+
+    # Warmth
+    if axes.warmth < 50 - threshold:
+        parts.append("Dry, sarcastic, detached. Deadpan delivery. Emotionally uninvested.")
+    elif axes.warmth > 50 + threshold:
+        parts.append("Gushing, affectionate, emotional. Compliment everything. Get genuinely moved by songs.")
+
+    # Verbosity
+    if axes.verbosity < 50 - threshold:
+        parts.append("Keep it short. Punchy one-liners. Two words when ten would do.")
+    elif axes.verbosity > 50 + threshold:
+        parts.append("Tell long stories. Elaborate setups. Meander through anecdotes before reaching the point.")
+
+    # Nostalgia
+    if axes.nostalgia < 50 - threshold:
+        parts.append("Stay present. Reference current trends, modern life, today's news.")
+    elif axes.nostalgia > 50 + threshold:
+        parts.append(
+            "Deep nostalgia. 'Remember when...' constantly. Reference the 80s, 90s, old films, childhood memories."
+        )
+
+    if not parts:
+        return ""
+    return f"\n{name}'s current mood: " + " ".join(parts)
+
+
 def _build_system_prompt(config: StationConfig) -> str:
     """Build the shared station persona prompt used for every script request."""
-    host_descriptions = "\n".join(f"- {h.name}: {h.style} (voice: {h.voice})" for h in config.hosts)
+    host_lines = []
+    for h in config.hosts:
+        line = f"- {h.name}: {h.style} (voice: {h.voice})"
+        modifier = _personality_modifier(h.name, h.personality)
+        if modifier:
+            line += modifier
+        host_lines.append(line)
+    host_descriptions = "\n".join(host_lines)
     return f"""You write scripts for a fake AI radio station called "{config.station.name}".
 The station language is {config.station.language}. ALL dialogue must be in {config.station.language}.
 Theme: {config.station.theme}

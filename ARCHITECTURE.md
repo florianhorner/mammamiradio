@@ -120,6 +120,9 @@ Admin routes:
 - `/api/playlist/remove`
 - `/api/playlist/move`
 - `/api/playlist/move_to_next`
+- `/api/search`
+- `/api/playlist/add`
+- `/api/playlist/load`
 
 Admin access is granted by one of:
 

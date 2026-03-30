@@ -6,18 +6,43 @@ The current version source of truth is `pyproject.toml`.
 
 ## [Unreleased]
 
+No unreleased changes.
+
+## [0.2.0] - 2026-03-30
+
 ### Added
 
+- One-click macOS launcher: `Start Radio.command` bootstraps venv, installs deps, starts the radio, and opens the dashboard. `Stop Radio.command` to stop.
+- Search and add individual Spotify tracks from the dashboard.
+- Load a new Spotify playlist by URL from the dashboard.
+- Inline SVG favicon, OG tags, and `theme-color` on both listener and dashboard pages.
+- Sharing instructions for listeners on your network in README.
+- New API routes: `/api/search`, `/api/playlist/add`, `/api/playlist/load`.
 - Ruff linting and formatting config in `pyproject.toml` with auto-fixed violations across all Python files.
 - Mypy type checking config (lenient mode) to catch obvious type errors without blocking on untyped legacy code.
 - Pre-commit hooks for ruff lint and format (runs on every commit).
 - GitHub Actions CI workflow running ruff, mypy, and pytest on push/PR to main.
+- Comprehensive test suite raising coverage from 30% to 63%.
+- Automated dependency update infrastructure (Dependabot + merge workflow).
 - `TODOS.md` for tracking deferred work items.
 
 ### Changed
 
+- go-librespot default path changed from hardcoded Homebrew path to bare `go-librespot` (PATH lookup).
+- Home Assistant disabled by default in `radio.toml` with empty URL.
+- `start.sh` uses `.venv/bin/python` instead of system `python` for reliability.
+- Dashboard layout widened to 1280px max-width with 3-column grid.
+- "Purge Queue" renamed to "Clear Buffer" with descriptive tooltip.
+- Station name corrected to "Radio Itali" with grave accent across listener page.
 - Pinned ruff (0.9.10) and mypy (1.15.0) versions in CI to prevent surprise breakage from upstream releases.
 - Updated `CONTRIBUTING.md` with lint, format, and type-check commands.
+
+### Fixed
+
+- Playlist URL placeholder mismatch that prevented auto-populating the current playlist URL.
+- Playlist input stays permanently disabled if network request fails.
+- Search shows "No results" instead of cryptic error when Spotify is not configured.
+- Route documentation, placeholder text, and UI hardening fixes.
 
 ## [0.1.1] - 2026-03-29
 

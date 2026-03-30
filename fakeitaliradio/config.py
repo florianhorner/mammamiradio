@@ -18,7 +18,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-from fakeitaliradio.models import AdBrand, AdVoice, HostPersonality
+from fakeitaliradio.models import AdBrand, AdVoice, HostPersonality, PersonalityAxes
 
 load_dotenv()
 
@@ -199,6 +199,7 @@ def load_config(path: str = "radio.toml") -> StationConfig:
             name=h["name"],
             voice=h["voice"],
             style=h["style"],
+            personality=PersonalityAxes.from_dict(h.get("personality", {})),
         )
         for h in raw.get("hosts", [])
     ]

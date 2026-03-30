@@ -1,6 +1,6 @@
 [project]
 name = "fakeitaliradio"
-version = "0.1.1"
+version = "0.2.0"
 description = "Fake Italian radio station engine"
 requires-python = ">=3.11"
 dependencies = [
@@ -16,6 +16,9 @@ dependencies = [
     "httpx>=0.28",
     "tomli>=2.0;python_version<'3.11'",
 ]
+
+[tool.setuptools]
+packages = ["fakeitaliradio"]
 
 [build-system]
 requires = ["setuptools>=75"]
@@ -46,3 +49,21 @@ warn_return_any = false
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+asyncio_mode = "auto"
+addopts = "-m 'not requires_ffmpeg'"
+markers = [
+    "requires_ffmpeg: marks tests that need ffmpeg installed (run with '-m requires_ffmpeg')",
+]
+
+[tool.coverage.run]
+branch = true
+source = ["fakeitaliradio"]
+
+[tool.coverage.report]
+fail_under = 60
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.",
+]

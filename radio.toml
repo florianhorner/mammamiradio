@@ -17,11 +17,23 @@ lookahead_segments = 3
 name = "Marco"
 voice = "it-IT-DiegoNeural"
 style = "enthusiastic, lots of 90s references, slightly dorky, loves obscure cinema trivia"
+[hosts.personality]
+energy = 70
+chaos = 50
+warmth = 60
+verbosity = 40
+nostalgia = 80
 
 [[hosts]]
 name = "Giulia"
 voice = "it-IT-ElsaNeural"
 style = "dry wit, corrects Marco constantly, secretly loves the songs she claims to hate"
+[hosts.personality]
+energy = 45
+chaos = 35
+warmth = 40
+verbosity = 50
+nostalgia = 55
 
 [audio]
 sample_rate = 48000
