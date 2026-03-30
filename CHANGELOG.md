@@ -6,6 +6,10 @@ The current version source of truth is `pyproject.toml`.
 
 ## [Unreleased]
 
+No unreleased changes.
+
+## [0.2.0] - 2026-03-30
+
 ### Added
 
 - One-click macOS launcher: `Start Radio.command` bootstraps venv, installs deps, starts the radio, and opens the dashboard. `Stop Radio.command` to stop.
@@ -18,6 +22,8 @@ The current version source of truth is `pyproject.toml`.
 - Mypy type checking config (lenient mode) to catch obvious type errors without blocking on untyped legacy code.
 - Pre-commit hooks for ruff lint and format (runs on every commit).
 - GitHub Actions CI workflow running ruff, mypy, and pytest on push/PR to main.
+- Comprehensive test suite raising coverage from 30% to 63%.
+- Automated dependency update infrastructure (Dependabot + merge workflow).
 - `TODOS.md` for tracking deferred work items.
 
 ### Changed
@@ -36,6 +42,7 @@ The current version source of truth is `pyproject.toml`.
 - Playlist URL placeholder mismatch that prevented auto-populating the current playlist URL.
 - Playlist input stays permanently disabled if network request fails.
 - Search shows "No results" instead of cryptic error when Spotify is not configured.
+- Route documentation, placeholder text, and UI hardening fixes.
 
 ## [0.1.1] - 2026-03-29
 
