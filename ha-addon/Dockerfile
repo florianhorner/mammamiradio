@@ -2,7 +2,7 @@ ARG BUILD_FROM
 FROM ${BUILD_FROM}
 
 # FFmpeg and build deps for Python native extensions
-RUN apk add --no-cache ffmpeg build-base libffi-dev
+RUN apk add --no-cache ffmpeg build-base libffi-dev git
 
 # go-librespot: download pre-built binary for target arch (with checksum verification)
 ARG BUILD_ARCH
@@ -24,17 +24,14 @@ RUN set -ex; \
       echo "Unsupported arch for go-librespot: ${BUILD_ARCH} — Spotify will use fallback audio"; \
     fi
 
-# Copy application
+# Install mammamiradio from the repo
 WORKDIR /app
-COPY pyproject.toml .
-COPY mammamiradio/ mammamiradio/
+RUN pip install --no-cache-dir "mammamiradio @ git+https://github.com/florianhorner/mammamiradio.git"
+
+# Copy bundled config and entrypoint
 COPY radio.toml .
-COPY go-librespot/config.yml go-librespot/config.yml
-COPY ha-addon/run.sh /run.sh
-
-# Install Python dependencies
-RUN pip install --no-cache-dir -e .
-
+COPY go-librespot-config.yml go-librespot/config.yml
+COPY run.sh /run.sh
 RUN chmod +x /run.sh
 
 CMD ["/run.sh"]

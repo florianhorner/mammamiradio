@@ -1,12 +1,12 @@
 # Home Assistant Add-ons: Mamma Mi Radio
 
-Add-on repository for [mammamiradio](https://github.com/florianhorner/fakeitaliradio), an AI-powered Italian radio station.
+Add-on repository for [mammamiradio](https://github.com/florianhorner/mammamiradio), an AI-powered Italian radio station.
 
 ## Installation
 
 1. In Home Assistant, go to **Settings > Add-ons > Add-on Store**
 2. Click the three dots menu (top right) > **Repositories**
-3. Paste this URL: `https://github.com/florianhorner/fakeitaliradio`
+3. Paste this URL: `https://github.com/florianhorner/mammamiradio`
 4. Click **Add**, then find "Mamma Mi Radio" in the store
 5. Click **Install**
 

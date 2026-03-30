@@ -1,5 +1,5 @@
 #!/usr/bin/with-contenv bashio
-# Entrypoint for the fakeitaliradio Home Assistant addon
+# Entrypoint for the mammamiradio Home Assistant addon
 set -e
 cd /app
 
@@ -18,8 +18,8 @@ if bashio::config.exists 'admin_password' && bashio::config.has_value 'admin_pas
 fi
 
 # --- Bind to all interfaces (addon runs behind Supervisor proxy) ---
-export FAKEITALIRADIO_BIND_HOST="0.0.0.0"
-export FAKEITALIRADIO_PORT="8099"
+export MAMMAMIRADIO_BIND_HOST="0.0.0.0"
+export MAMMAMIRADIO_PORT="8099"
 
 # --- Persistent storage ---
 mkdir -p /data/cache /data/tmp /data/go-librespot
@@ -36,7 +36,7 @@ if [ ! -f /data/go-librespot/config.yml ]; then
 fi
 
 # --- FIFO setup ---
-FIFO="/tmp/fakeitaliradio.pcm"
+FIFO="/tmp/mammamiradio.pcm"
 [ -p "$FIFO" ] || (rm -f "$FIFO" && mkfifo "$FIFO")
 
 # --- Persistent FIFO drain (prevents ENXIO) — must start BEFORE go-librespot ---
@@ -46,12 +46,12 @@ cat "$FIFO" > /dev/null &
 if command -v go-librespot > /dev/null 2>&1; then
     bashio::log.info "Starting go-librespot..."
     go-librespot --config_dir /data/go-librespot > /dev/null 2>/data/tmp/go-librespot.log &
-    bashio::log.info "go-librespot started (PID $!) — select 'fakeitaliradio' in your Spotify app"
+    bashio::log.info "go-librespot started (PID $!) — select 'mammamiradio' in your Spotify app"
 else
     bashio::log.warning "go-librespot not available — Spotify will use fallback audio"
 fi
 
 # --- Launch the radio ---
 bashio::log.info "Starting Fake Italian Radio on port 8099..."
-exec python -m uvicorn fakeitaliradio.main:app \
+exec python -m uvicorn mammamiradio.main:app \
     --host 0.0.0.0 --port 8099

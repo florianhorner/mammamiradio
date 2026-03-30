@@ -1,7 +1,7 @@
-name: "Fake Italian Radio"
-description: "AI-powered fake Italian radio station with live MP3 streaming, Claude-written banter, and Home Assistant context"
-version: "0.1.1"
-slug: "fakeitaliradio"
+name: "Mamma Mi Radio"
+description: "AI-powered Italian radio station — streams Claude-generated banter, music, and ads with Home Assistant context"
+version: "1.0.0"
+slug: "mammamiradio"
 url: "https://github.com/florianhorner/mammamiradio"
 arch:
   - amd64
