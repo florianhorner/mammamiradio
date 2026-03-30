@@ -36,7 +36,7 @@
     background: var(--bg);
     color: var(--text);
     padding: 0 24px 96px;
-    max-width: 960px;
+    max-width: 1280px;
     margin: 0 auto;
     line-height: 1.5;
   }
@@ -200,7 +200,8 @@
   }
 
   /* ---- Grid Layout ---- */
-  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 20px; }
+  @media (max-width: 960px) { .grid { grid-template-columns: 1fr 1fr; } }
   @media (max-width: 640px) { .grid { grid-template-columns: 1fr; } }
 
   /* ---- Segment Log ---- */
@@ -417,10 +418,22 @@
   and select <strong>fakeitaliradio</strong>. Music will use placeholders until connected.
 </div>
 
+<div style="display:flex;gap:8px;margin-bottom:8px">
+  <div style="flex:1;display:flex;gap:8px">
+    <input id="search-input" type="text" placeholder="Search songs..." style="flex:1;background:var(--card);border:1px solid rgba(176,164,148,0.2);border-radius:6px;color:var(--cream);padding:8px 12px;font-size:13px;font-family:var(--font-body);outline:none" onfocus="this.style.borderColor='var(--terracotta)'" onblur="this.style.borderColor='rgba(176,164,148,0.2)'" onkeydown="if(event.key==='Enter')searchTracks()">
+    <button class="btn" onclick="searchTracks()">Search</button>
+  </div>
+  <div style="display:flex;gap:8px">
+    <input id="playlist-url" type="text" placeholder="Playlist URL..." style="width:200px;background:var(--card);border:1px solid rgba(176,164,148,0.2);border-radius:6px;color:var(--cream);padding:8px 12px;font-size:13px;font-family:var(--font-body);outline:none" onfocus="this.style.borderColor='var(--terracotta)'" onblur="this.style.borderColor='rgba(176,164,148,0.2)'" onkeydown="if(event.key==='Enter')loadPlaylist()">
+    <button class="btn" onclick="loadPlaylist()">Load</button>
+  </div>
+</div>
+<div id="search-results" style="margin-bottom:12px"></div>
+
 <div class="controls">
   <button class="btn" onclick="doShuffle()">Shuffle</button>
   <button class="btn" onclick="doSkip()">Skip</button>
-  <button class="btn" onclick="doPurge()">Purge Queue</button>
+  <button class="btn" onclick="doPurge()" title="Discard pre-produced segments so the producer regenerates them">Clear Buffer</button>
 </div>
 
 <div class="now-playing" id="now-playing">
@@ -441,7 +454,8 @@
       <div class="section-title">Up Next</div>
       <ul class="upcoming" id="upcoming"></ul>
     </div>
-
+  </div>
+  <div>
     <div class="section">
       <div class="section-title">Last Banter</div>
       <div class="script-box" id="banter">...</div>
@@ -552,6 +566,12 @@ async function refresh() {
 
     document.getElementById('connect-banner').style.display =
       d.spotify_connected ? 'none' : 'block';
+
+    // Show current playlist URL if set and input is empty
+    const plInput = document.getElementById('playlist-url');
+    if (d.playlist_url && !plInput.value && plInput.placeholder === 'Playlist URL...') {
+      plInput.placeholder = d.playlist_url;
+    }
 
     // Now streaming (what the listener actually hears)
     const ns = d.now_streaming || {};
@@ -694,6 +714,72 @@ async function refresh() {
 
   } catch (e) {
     console.error('refresh failed', e);
+  }
+}
+
+async function searchTracks() {
+  const input = document.getElementById('search-input');
+  const q = input.value.trim();
+  if (!q) return;
+  const r = await fetch('/api/search?q=' + encodeURIComponent(q));
+  const d = await r.json();
+  const container = document.getElementById('search-results');
+  if (!d.results || !d.results.length) {
+    const msg = d.error ? 'Search unavailable (Spotify not configured)' : 'No results';
+    container.innerHTML = '<div style="font-size:12px;color:var(--muted);padding:4px 0">' + escHtml(msg) + '</div>';
+    setTimeout(() => { container.innerHTML = ''; }, 3000);
+    return;
+  }
+  container.innerHTML = '<ul style="list-style:none;background:var(--card);border:1px solid rgba(176,164,148,0.15);border-radius:6px;overflow:hidden">' +
+    d.results.map(t =>
+      '<li style="padding:8px 12px;border-bottom:1px solid rgba(122,143,109,0.08);display:flex;align-items:center;gap:8px;font-size:13px;color:var(--cream-dk)">' +
+        '<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' +
+          '<strong style="color:var(--cream)">' + escHtml(t.title) + '</strong> ' +
+          '<span style="color:var(--muted)">' + escHtml(t.artist) + '</span>' +
+        '</span>' +
+        '<button class="act-btn" style="opacity:1;padding:3px 8px" onclick=\'addTrack(' + JSON.stringify(t).replace(/'/g, "&#39;") + ',"next")\'>Play next</button>' +
+        '<button class="act-btn" style="opacity:1;padding:3px 8px" onclick=\'addTrack(' + JSON.stringify(t).replace(/'/g, "&#39;") + ',"end")\'>Add</button>' +
+      '</li>'
+    ).join('') + '</ul>';
+}
+
+async function addTrack(track, position) {
+  await fetch('/api/playlist/add', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({...track, position}),
+  });
+  document.getElementById('search-results').innerHTML = '';
+  document.getElementById('search-input').value = '';
+  refresh();
+}
+
+async function loadPlaylist() {
+  const input = document.getElementById('playlist-url');
+  const url = input.value.trim();
+  if (!url) return;
+  input.disabled = true;
+  try {
+    const r = await fetch('/api/playlist/load', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({url}),
+    });
+    const d = await r.json();
+    if (d.ok) {
+      input.value = '';
+      input.placeholder = d.tracks + ' tracks loaded!';
+      setTimeout(() => { input.placeholder = 'Playlist URL...'; }, 3000);
+    } else {
+      input.placeholder = 'Error: ' + (d.error || 'unknown');
+      setTimeout(() => { input.placeholder = 'Playlist URL...'; }, 3000);
+    }
+    refresh();
+  } catch (e) {
+    input.placeholder = 'Network error';
+    setTimeout(() => { input.placeholder = 'Playlist URL...'; }, 3000);
+  } finally {
+    input.disabled = false;
   }
 }
 

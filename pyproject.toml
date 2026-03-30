@@ -17,6 +17,9 @@ dependencies = [
     "tomli>=2.0;python_version<'3.11'",
 ]
 
+[tool.setuptools]
+packages = ["fakeitaliradio"]
+
 [build-system]
 requires = ["setuptools>=75"]
 build-backend = "setuptools.build_meta"
