@@ -25,6 +25,19 @@ _DASHBOARD_HTML = __import__("pathlib").Path(__file__).with_name("dashboard.html
 _LISTENER_HTML = __import__("pathlib").Path(__file__).with_name("listener.html").read_text()
 
 
+import re as _re
+
+_INGRESS_PREFIX_RE = _re.compile(r"^/[a-zA-Z0-9/_-]+$")
+
+
+def _sanitize_ingress_prefix(prefix: str) -> str:
+    """Validate and sanitize the X-Ingress-Path header to prevent XSS."""
+    prefix = prefix.rstrip("/")
+    if not prefix or not _INGRESS_PREFIX_RE.match(prefix):
+        return ""
+    return prefix
+
+
 def _inject_ingress_prefix(html: str, prefix: str) -> str:
     """Rewrite absolute URL references in HTML to work behind HA Ingress proxy.
 
@@ -32,6 +45,7 @@ def _inject_ingress_prefix(html: str, prefix: str) -> str:
     those replacements create strings containing '/api/...' (from the ingress
     prefix itself) which then get double-replaced.
     """
+    prefix = _sanitize_ingress_prefix(prefix)
     if not prefix:
         return html
     # Prefix-match rules first (to avoid double-replacing specific patterns)
@@ -116,8 +130,11 @@ def require_admin_access(
     """Authorize admin-only routes using token, basic auth, or loopback trust."""
     config = request.app.state.config
 
-    # Trust HA Ingress proxy — Supervisor handles authentication
-    if config.is_addon and request.headers.get("X-Ingress-Path"):
+    # Trust HA Ingress proxy — Supervisor handles authentication.
+    # Only trust X-Ingress-Path from internal/loopback sources to prevent
+    # external clients from spoofing the header on the mapped port.
+    ingress_prefix = request.headers.get("X-Ingress-Path", "")
+    if config.is_addon and ingress_prefix and _is_loopback_client(request):
         return
     is_loopback = _is_loopback_client(request)
     if config.admin_token:
