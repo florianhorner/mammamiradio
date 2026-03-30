@@ -12,7 +12,7 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository_owner }}/mammamiradio-addon
+  IMAGE_BASE: ${{ github.repository_owner }}/mammamiradio-addon
 
 jobs:
   build:
@@ -26,8 +26,10 @@ jobs:
         include:
           - arch: amd64
             platform: linux/amd64
+            base: ghcr.io/home-assistant/amd64-base:3.20
           - arch: aarch64
             platform: linux/arm64
+            base: ghcr.io/home-assistant/aarch64-base:3.20
     steps:
       - uses: actions/checkout@v4
 
@@ -43,13 +45,12 @@ jobs:
 
       - uses: docker/build-push-action@v6
         with:
-          context: .
-          file: ha-addon/Dockerfile
+          context: ha-addon/mammamiradio
+          file: ha-addon/mammamiradio/Dockerfile
           platforms: ${{ matrix.platform }}
           push: true
           build-args: |
-            BUILD_FROM=ghcr.io/home-assistant/${{ matrix.arch }}-base-python:3.11
-            BUILD_ARCH=${{ matrix.arch }}
+            BUILD_FROM=${{ matrix.base }}
           tags: |
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-${{ matrix.arch }}:latest
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-${{ matrix.arch }}:${{ github.sha }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_BASE }}-${{ matrix.arch }}:latest
+            ${{ env.REGISTRY }}/${{ env.IMAGE_BASE }}-${{ matrix.arch }}:${{ github.sha }}
