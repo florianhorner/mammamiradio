@@ -6,7 +6,14 @@ The current version source of truth is `pyproject.toml`.
 
 ## [Unreleased]
 
-No unreleased changes.
+### Added
+
+- **Docker support**: `Dockerfile` and `docker-compose.yml` for running on any platform (Windows, Mac, Linux) without Python/FFmpeg setup.
+- **Home Assistant add-on**: Full HA add-on scaffold in `ha-addon/` with ingress support, automatic HA token injection, and configurable options UI.
+- **Ingress-compatible UI**: Dashboard and listener HTML now use dynamic base paths, working behind HA's ingress proxy and at the root path.
+- **Environment variable overrides**: `config.py` accepts `HA_URL`, `HA_ENABLED`, `STATION_NAME`, `STATION_THEME`, `PLAYLIST_SPOTIFY_URL`, `CLAUDE_MODEL`, `FAKEITALIRADIO_CACHE_DIR`, and `FAKEITALIRADIO_TMP_DIR` for Docker/add-on configuration without editing `radio.toml`.
+- **GitHub Actions Docker CI**: Multi-arch (amd64 + arm64) image builds on tag push, published to GHCR.
+- `.dockerignore` for clean Docker builds.
 
 ## [0.2.0] - 2026-03-30
 

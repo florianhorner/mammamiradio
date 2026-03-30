@@ -489,7 +489,7 @@
   </div>
   <div class="header-right">
     <span class="uptime" id="uptime">Loading...</span>
-    <a href="/listen" class="listener-link">Open listener view &rarr;</a>
+    <a id="listener-link" href="/listen" class="listener-link">Open listener view &rarr;</a>
   </div>
 </div>
 
@@ -601,11 +601,26 @@
 <div class="player-bar">
   <div class="label">LISTEN</div>
   <audio id="audio" controls preload="none">
-    <source src="/stream" type="audio/mpeg">
+    <source id="stream-source" src="/stream" type="audio/mpeg">
   </audio>
 </div>
 
 <script>
+// Derive base path for HA ingress compatibility (empty string when accessed directly)
+const _base = (() => {
+  const p = window.location.pathname.replace(/\/+$/, '');
+  // Dashboard is served at the root path, strip it
+  return p === '' ? '' : p;
+})();
+// Patch static elements with base path on load
+if (_base) {
+  document.addEventListener('DOMContentLoaded', () => {
+    const link = document.getElementById('listener-link');
+    if (link) link.href = _base + '/listen';
+    const src = document.getElementById('stream-source');
+    if (src) { src.src = _base + '/stream'; src.parentElement.load(); }
+  });
+}
 const icons = { music: '\u266B', banter: '\uD83C\uDF99', ad: '\uD83D\uDCE2' };
 const cls = { music: 'seg-music', banter: 'seg-banter', ad: 'seg-ad' };
 
@@ -731,7 +746,7 @@ function onSliderChange(el) {
   const key = host + '-' + axis;
   clearTimeout(personalityDebounce[key]);
   personalityDebounce[key] = setTimeout(() => {
-    fetch('/api/hosts/' + encodeURIComponent(host) + '/personality', {
+    fetch(_base + '/api/hosts/' + encodeURIComponent(host) + '/personality', {
       method: 'PATCH',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({[axis]: val}),
@@ -740,13 +755,13 @@ function onSliderChange(el) {
 }
 
 async function resetPersonality(hostName) {
-  await fetch('/api/hosts/' + encodeURIComponent(hostName) + '/personality/reset', {method: 'POST'});
+  await fetch(_base + '/api/hosts/' + encodeURIComponent(hostName) + '/personality/reset', {method: 'POST'});
   loadPersonality();
 }
 
 async function loadPersonality() {
   try {
-    const r = await fetch('/api/hosts');
+    const r = await fetch(_base + '/api/hosts');
     const d = await r.json();
     renderPersonalityCards(d.hosts);
   } catch (e) {
@@ -758,7 +773,7 @@ loadPersonality();
 
 async function refresh() {
   try {
-    const r = await fetch('/status');
+    const r = await fetch(_base + '/status');
     const d = await r.json();
 
     document.getElementById('uptime').textContent =
@@ -928,7 +943,7 @@ async function searchTracks() {
   const input = document.getElementById('search-input');
   const q = input.value.trim();
   if (!q) return;
-  const r = await fetch('/api/search?q=' + encodeURIComponent(q));
+  const r = await fetch(_base + '/api/search?q=' + encodeURIComponent(q));
   const d = await r.json();
   const container = document.getElementById('search-results');
   if (!d.results || !d.results.length) {
@@ -951,7 +966,7 @@ async function searchTracks() {
 }
 
 async function addTrack(track, position) {
-  await fetch('/api/playlist/add', {
+  await fetch(_base + '/api/playlist/add', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({...track, position}),
@@ -967,7 +982,7 @@ async function loadPlaylist() {
   if (!url) return;
   input.disabled = true;
   try {
-    const r = await fetch('/api/playlist/load', {
+    const r = await fetch(_base + '/api/playlist/load', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({url}),
@@ -991,12 +1006,12 @@ async function loadPlaylist() {
 }
 
 async function doShuffle() {
-  await fetch('/api/shuffle', { method: 'POST' });
+  await fetch(_base + '/api/shuffle', { method: 'POST' });
   refresh();
 }
 
 async function doSkip() {
-  await fetch('/api/skip', { method: 'POST' });
+  await fetch(_base + '/api/skip', { method: 'POST' });
   const audio = document.getElementById('audio');
   audio.pause();
   audio.load();
@@ -1005,13 +1020,13 @@ async function doSkip() {
 }
 
 async function doPurge() {
-  const r = await fetch('/api/purge', { method: 'POST' });
+  const r = await fetch(_base + '/api/purge', { method: 'POST' });
   const d = await r.json();
   refresh();
 }
 
 async function removeTrack(idx) {
-  await fetch('/api/playlist/remove', {
+  await fetch(_base + '/api/playlist/remove', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({index: idx}),
@@ -1020,7 +1035,7 @@ async function removeTrack(idx) {
 }
 
 async function playNext(idx) {
-  await fetch('/api/playlist/move_to_next', {
+  await fetch(_base + '/api/playlist/move_to_next', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({index: idx}),

@@ -23,13 +23,31 @@ Fake Italian radio station engine. Python 3.11+, FastAPI, FFmpeg, optional Spoti
 - Type check: `mypy fakeitaliradio/ tests/`
 - Pre-commit: `pip install pre-commit && pre-commit install`
 
+## Docker / Home Assistant
+
+- `Dockerfile`: standalone container image with Python 3.11 + FFmpeg
+- `docker-compose.yml`: one-command run for non-HA users
+- `.dockerignore`: keeps builds clean
+- `ha-addon/`: Home Assistant add-on scaffold
+  - `ha-addon/fakeitaliradio/config.yaml`: add-on metadata, options schema, ingress config
+  - `ha-addon/fakeitaliradio/Dockerfile`: HA add-on image (Alpine-based)
+  - `ha-addon/fakeitaliradio/rootfs/run.sh`: entrypoint mapping Supervisor env vars
+  - `ha-addon/fakeitaliradio/translations/en.yaml`: UI labels for add-on options
+- `.github/workflows/docker.yml`: multi-arch Docker build CI
+
 ## Environment
 
 - `FAKEITALIRADIO_BIND_HOST`, `FAKEITALIRADIO_PORT`: bind address and port
+- `FAKEITALIRADIO_CACHE_DIR`, `FAKEITALIRADIO_TMP_DIR`: override cache/tmp directories (for Docker volumes)
 - `ADMIN_USERNAME`, `ADMIN_PASSWORD`, `ADMIN_TOKEN`: admin auth
 - `SPOTIFY_CLIENT_ID`, `SPOTIFY_CLIENT_SECRET`: Spotify Web API access
 - `ANTHROPIC_API_KEY`: Claude banter/ad generation
 - `HA_TOKEN`: Home Assistant API token
+- `HA_URL`: Home Assistant API base URL (auto-set by HA add-on to `http://supervisor/core/api`)
+- `HA_ENABLED`: force-enable HA integration (`true`/`1`/`yes`)
+- `STATION_NAME`, `STATION_THEME`: override station identity from `radio.toml`
+- `PLAYLIST_SPOTIFY_URL`: override playlist URL from `radio.toml`
+- `CLAUDE_MODEL`: override Claude model from `radio.toml`
 
 ## Runtime behavior
 

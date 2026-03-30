@@ -1,0 +1,26 @@
+services:
+  fakeitaliradio:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      - FAKEITALIRADIO_BIND_HOST=0.0.0.0
+      - FAKEITALIRADIO_PORT=8000
+      - FAKEITALIRADIO_CACHE_DIR=/data/cache
+      - FAKEITALIRADIO_TMP_DIR=/data/tmp
+      # Set an admin token for non-loopback access
+      - ADMIN_TOKEN=${ADMIN_TOKEN:-changeme}
+      # Optional: Anthropic API key for AI-generated banter/ads
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      # Optional: Spotify credentials
+      - SPOTIFY_CLIENT_ID=${SPOTIFY_CLIENT_ID:-}
+      - SPOTIFY_CLIENT_SECRET=${SPOTIFY_CLIENT_SECRET:-}
+      # Optional: Home Assistant
+      - HA_TOKEN=${HA_TOKEN:-}
+      - HA_URL=${HA_URL:-}
+    volumes:
+      - radio-data:/data
+    restart: unless-stopped
+
+volumes:
+  radio-data:
