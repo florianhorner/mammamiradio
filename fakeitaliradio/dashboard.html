@@ -157,6 +157,105 @@
     color: var(--bg);
   }
 
+  /* ---- Host Personality ---- */
+  .personality-section { margin-bottom: 20px; }
+  .personality-cards { display: flex; gap: 16px; flex-wrap: wrap; }
+  .personality-card {
+    background: var(--card);
+    border: 1px solid rgba(196, 101, 74, 0.12);
+    border-radius: 8px;
+    padding: 16px 20px;
+    flex: 1;
+    min-width: 280px;
+  }
+  .personality-card h3 {
+    font-family: var(--font-display);
+    font-size: 16px;
+    color: var(--cream);
+    margin-bottom: 12px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .personality-card h3 .reset-btn {
+    font-family: var(--font-body);
+    font-size: 10px;
+    font-weight: 600;
+    color: var(--muted);
+    background: none;
+    border: 1px solid rgba(176, 164, 148, 0.2);
+    border-radius: 4px;
+    padding: 3px 8px;
+    cursor: pointer;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    transition: border-color 0.15s, color 0.15s;
+  }
+  .personality-card h3 .reset-btn:hover {
+    border-color: var(--terracotta);
+    color: var(--terracotta);
+  }
+  .slider-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 8px;
+  }
+  .slider-label {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    width: 72px;
+    flex-shrink: 0;
+  }
+  .slider-row input[type="range"] {
+    flex: 1;
+    -webkit-appearance: none;
+    appearance: none;
+    height: 4px;
+    background: var(--bg2);
+    border-radius: 2px;
+    outline: none;
+  }
+  .slider-row input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: var(--terracotta);
+    cursor: pointer;
+    border: 2px solid var(--bg);
+  }
+  .slider-row input[type="range"]::-moz-range-thumb {
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: var(--terracotta);
+    cursor: pointer;
+    border: 2px solid var(--bg);
+  }
+  .slider-value {
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
+    color: var(--cream-dk);
+    width: 28px;
+    text-align: right;
+    flex-shrink: 0;
+  }
+  .slider-ends {
+    display: flex;
+    justify-content: space-between;
+    font-size: 9px;
+    color: var(--muted);
+    opacity: 0.6;
+    margin-top: -4px;
+    margin-bottom: 6px;
+    padding: 0 82px 0 82px;
+  }
+
   /* ---- Now Playing ---- */
   .now-playing {
     background: var(--card);
@@ -436,6 +535,11 @@
   <button class="btn" onclick="doPurge()" title="Discard pre-produced segments so the producer regenerates them">Clear Buffer</button>
 </div>
 
+<div class="personality-section">
+  <div class="section-title">Host Personality</div>
+  <div class="personality-cards" id="personality-cards">Loading...</div>
+</div>
+
 <div class="now-playing" id="now-playing">
   <div class="section-label">Now Streaming</div>
   <div class="track" id="np-track">...</div>
@@ -548,6 +652,70 @@ function renderAdHtml(adData) {
 
   return '';
 }
+
+const axisLabels = {
+  energy: ['Mellow', 'Manic'],
+  chaos: ['On-topic', 'Chaotic'],
+  warmth: ['Dry', 'Warm'],
+  verbosity: ['Terse', 'Verbose'],
+  nostalgia: ['Present', 'Nostalgic'],
+};
+let personalityDebounce = {};
+
+function renderPersonalityCards(hosts) {
+  const container = document.getElementById('personality-cards');
+  container.innerHTML = hosts.map(h => {
+    const axes = Object.entries(h.personality).map(([axis, val]) => {
+      const [lo, hi] = axisLabels[axis] || [axis, axis];
+      return '<div class="slider-row">' +
+        '<span class="slider-label">' + escHtml(axis) + '</span>' +
+        '<input type="range" min="0" max="100" value="' + val + '" ' +
+          'data-host="' + escHtml(h.name) + '" data-axis="' + axis + '" ' +
+          'oninput="onSliderChange(this)">' +
+        '<span class="slider-value" id="sv-' + escHtml(h.name) + '-' + axis + '">' + val + '</span>' +
+      '</div>' +
+      '<div class="slider-ends"><span>' + escHtml(lo) + '</span><span>' + escHtml(hi) + '</span></div>';
+    }).join('');
+    return '<div class="personality-card">' +
+      '<h3>' + escHtml(h.name) +
+        '<button class="reset-btn" onclick="resetPersonality(\'' + escHtml(h.name) + '\')">Reset</button>' +
+      '</h3>' + axes + '</div>';
+  }).join('');
+}
+
+function onSliderChange(el) {
+  const host = el.dataset.host;
+  const axis = el.dataset.axis;
+  const val = parseInt(el.value, 10);
+  document.getElementById('sv-' + host + '-' + axis).textContent = val;
+
+  const key = host + '-' + axis;
+  clearTimeout(personalityDebounce[key]);
+  personalityDebounce[key] = setTimeout(() => {
+    fetch('/api/hosts/' + encodeURIComponent(host) + '/personality', {
+      method: 'PATCH',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({[axis]: val}),
+    });
+  }, 300);
+}
+
+async function resetPersonality(hostName) {
+  await fetch('/api/hosts/' + encodeURIComponent(hostName) + '/personality/reset', {method: 'POST'});
+  loadPersonality();
+}
+
+async function loadPersonality() {
+  try {
+    const r = await fetch('/api/hosts');
+    const d = await r.json();
+    renderPersonalityCards(d.hosts);
+  } catch (e) {
+    console.error('personality load failed', e);
+  }
+}
+
+loadPersonality();
 
 async function refresh() {
   try {

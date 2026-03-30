@@ -7,6 +7,7 @@ import time
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
+from typing import ClassVar
 
 
 class SegmentType(Enum):
@@ -40,12 +41,38 @@ class Track:
 
 
 @dataclass
+class PersonalityAxes:
+    """Tunable personality dimensions that shape how a host delivers dialogue.
+
+    Each axis is 0-100.  The default (50) produces neutral behaviour that
+    matches whatever the freeform ``style`` string already describes.
+    """
+
+    energy: int = 50
+    chaos: int = 50
+    warmth: int = 50
+    verbosity: int = 50
+    nostalgia: int = 50
+
+    AXIS_NAMES: ClassVar[list[str]] = ["energy", "chaos", "warmth", "verbosity", "nostalgia"]
+
+    def to_dict(self) -> dict[str, int]:
+        return {a: getattr(self, a) for a in self.AXIS_NAMES}
+
+    @classmethod
+    def from_dict(cls, d: dict[str, int]) -> PersonalityAxes:
+        kwargs = {k: max(0, min(100, int(v))) for k, v in d.items() if k in cls.AXIS_NAMES}
+        return cls(**kwargs)
+
+
+@dataclass
 class HostPersonality:
     """Prompt and TTS inputs that define an on-air host persona."""
 
     name: str
     voice: str
     style: str
+    personality: PersonalityAxes = field(default_factory=PersonalityAxes)
 
 
 @dataclass
