@@ -14,10 +14,19 @@ The current version source of truth is `pyproject.toml`.
 - **Configure via environment variables**: Override station name, Spotify playlist, Claude model, and HA settings without editing `radio.toml`. Useful for Docker and add-on deployments.
 - **Multi-arch Docker CI**: GitHub Actions builds amd64 + arm64 images on tag push, published to GHCR.
 
+### Changed
+
+- Admin tokens are now accepted only via the `X-Radio-Admin-Token` header. Query parameter auth (`?admin_token=...`) removed to prevent token leakage in browser history, server logs, and referer headers.
+- API error responses no longer expose internal exception details. Generic error messages are returned to clients while full details are logged server-side.
+
 ### For contributors
 
 - `.dockerignore` for clean Docker builds.
 - `tests/test_config_env_overrides.py` covers all new env-var override paths (11 tests).
+- Pinned production dependency lockfile (`requirements.txt`) with SHA-256 hashes via `pip-compile`.
+- All GitHub Actions SHA-pinned to immutable commit hashes across all 3 workflow files.
+- Added `.github/CODEOWNERS` requiring review for workflow file changes.
+- Added gitleaks pre-commit hook for secret scanning before push.
 
 ## [0.2.0] - 2026-03-30
 
