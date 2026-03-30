@@ -12,7 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 
-from fakeitaliradio.models import Segment
+from fakeitaliradio.models import PersonalityAxes, Segment
 from fakeitaliradio.scheduler import preview_upcoming
 
 logger = logging.getLogger(__name__)
@@ -407,6 +407,55 @@ async def move_to_next(request: Request, _: None = Depends(require_admin_access)
         pl.insert(0, track)
         return {"ok": True, "moved": track.display, "to_position": 0}
     return {"ok": False, "error": "Invalid index"}
+
+
+@router.get("/api/hosts")
+async def get_hosts(request: Request, _: None = Depends(require_admin_access)):
+    """Return all host configs including current personality slider values."""
+    config = request.app.state.config
+    return {
+        "hosts": [
+            {
+                "name": h.name,
+                "voice": h.voice,
+                "style": h.style,
+                "personality": h.personality.to_dict(),
+            }
+            for h in config.hosts
+        ]
+    }
+
+
+@router.patch("/api/hosts/{host_name}/personality")
+async def update_host_personality(host_name: str, request: Request, _: None = Depends(require_admin_access)):
+    """Update one or more personality axes for a host.  Takes effect on the next generated segment."""
+    config = request.app.state.config
+    host = next((h for h in config.hosts if h.name.lower() == host_name.lower()), None)
+    if not host:
+        raise HTTPException(status_code=404, detail=f"Host '{host_name}' not found")
+
+    body = await request.json()
+    valid_axes = PersonalityAxes.AXIS_NAMES
+    updates = {k: v for k, v in body.items() if k in valid_axes and isinstance(v, (int, float))}
+    if not updates:
+        raise HTTPException(status_code=400, detail=f"Provide at least one axis: {valid_axes}")
+
+    for axis, value in updates.items():
+        setattr(host.personality, axis, max(0, min(100, int(value))))
+
+    return {"ok": True, "host": host.name, "personality": host.personality.to_dict()}
+
+
+@router.post("/api/hosts/{host_name}/personality/reset")
+async def reset_host_personality(host_name: str, request: Request, _: None = Depends(require_admin_access)):
+    """Reset a host's personality sliders to neutral defaults (all 50)."""
+    config = request.app.state.config
+    host = next((h for h in config.hosts if h.name.lower() == host_name.lower()), None)
+    if not host:
+        raise HTTPException(status_code=404, detail=f"Host '{host_name}' not found")
+
+    host.personality = PersonalityAxes()
+    return {"ok": True, "host": host.name, "personality": host.personality.to_dict()}
 
 
 def _public_status_payload(request: Request) -> dict:
