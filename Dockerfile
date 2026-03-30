@@ -13,13 +13,15 @@ COPY mammamiradio/ mammamiradio/
 COPY radio.toml .
 RUN pip install --no-cache-dir .
 
-# Create default directories for cache, music, and temp files
-RUN mkdir -p /data/cache /data/music /data/tmp
+# Create non-root user and directories
+RUN useradd -r -s /bin/false radio \
+    && mkdir -p /data/cache /data/music /data/tmp \
+    && chown -R radio:radio /app /data
 
-# Default config: point cache/tmp at persistent /data
 ENV MAMMAMIRADIO_BIND_HOST=0.0.0.0
 ENV MAMMAMIRADIO_PORT=8000
 
+USER radio
 EXPOSE 8000
 
 # Standalone entrypoint — HA add-on overrides this with run.sh

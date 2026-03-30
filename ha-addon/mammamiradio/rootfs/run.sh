@@ -9,8 +9,9 @@ echo "[mammamiradio] Starting add-on..."
 OPTIONS_FILE="/data/options.json"
 if [ -f "$OPTIONS_FILE" ]; then
     # Extract options using Python (always available in the image)
+    # Uses shlex.quote to prevent shell injection from user-provided values
     eval "$(python3 -c "
-import json, os
+import json, shlex
 with open('$OPTIONS_FILE') as f:
     opts = json.load(f)
 for key in ('anthropic_api_key', 'spotify_client_id', 'spotify_client_secret',
@@ -18,7 +19,7 @@ for key in ('anthropic_api_key', 'spotify_client_id', 'spotify_client_secret',
     val = opts.get(key, '')
     if val:
         env_key = key.upper()
-        print(f'export {env_key}=\"{val}\"')
+        print(f'export {env_key}={shlex.quote(val)}')
 ")"
 fi
 
