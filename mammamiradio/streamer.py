@@ -96,7 +96,7 @@ def require_admin_access(
     config = request.app.state.config
     is_loopback = _is_loopback_client(request)
     if config.admin_token:
-        token = request.headers.get("X-Radio-Admin-Token") or request.query_params.get("admin_token")
+        token = request.headers.get("X-Radio-Admin-Token")
         if token and secrets.compare_digest(token, config.admin_token):
             return
 
@@ -336,7 +336,8 @@ async def search_tracks(request: Request, q: str = "", _: None = Depends(require
             )
         return {"results": tracks}
     except Exception as e:
-        return {"results": [], "error": str(e)}
+        logger.error("Search failed: %s", e)
+        return {"results": [], "error": "Search unavailable"}
 
 
 @router.post("/api/playlist/add")
@@ -384,7 +385,8 @@ async def load_playlist(request: Request, _: None = Depends(require_admin_access
         tracks = fetch_playlist(config)
     except Exception as e:
         config.playlist.spotify_url = original_url
-        return {"ok": False, "error": str(e)}
+        logger.error("Playlist load failed: %s", e)
+        return {"ok": False, "error": "Failed to load playlist"}
 
     if not tracks:
         config.playlist.spotify_url = original_url

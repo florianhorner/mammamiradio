@@ -99,7 +99,7 @@ The app rejects non-local binds without auth.
 Rules:
 
 - if `ADMIN_PASSWORD` is set, admin routes require HTTP Basic auth everywhere
-- if only `ADMIN_TOKEN` is set, non-local admin access requires `X-Radio-Admin-Token` or `?admin_token=...`
+- if only `ADMIN_TOKEN` is set, non-local admin access requires `X-Radio-Admin-Token` header
 - if neither is set, admin routes only work from localhost
 
 ## `ffmpeg` failures
