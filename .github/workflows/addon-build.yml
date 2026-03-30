@@ -5,14 +5,14 @@ on:
     branches: [main]
     paths:
       - "ha-addon/**"
-      - "fakeitaliradio/**"
+      - "mammamiradio/**"
       - "pyproject.toml"
       - "radio.toml"
   workflow_dispatch:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository_owner }}/fakeitaliradio-addon
+  IMAGE_NAME: ${{ github.repository_owner }}/mammamiradio-addon
 
 jobs:
   build:

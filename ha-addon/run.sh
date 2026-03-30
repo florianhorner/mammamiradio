@@ -52,6 +52,6 @@ else
 fi
 
 # --- Launch the radio ---
-bashio::log.info "Starting Fake Italian Radio on port 8099..."
+bashio::log.info "Starting Mamma Mi Radio on port 8099..."
 exec python -m uvicorn mammamiradio.main:app \
     --host 0.0.0.0 --port 8099

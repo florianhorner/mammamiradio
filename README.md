@@ -105,7 +105,7 @@ If you run Home Assistant OS or Supervised:
 
 1. Go to **Settings > Add-ons > Add-on Store**
 2. Click the three dots menu > **Repositories**
-3. Paste: `https://github.com/florianhorner/fakeitaliradio`
+3. Paste: `https://github.com/florianhorner/mammamiradio`
 4. Find "Mamma Mi Radio" and click **Install**
 5. Configure your Anthropic API key (and optionally Spotify credentials) in the add-on settings
 6. Start the add-on — it appears in your sidebar
