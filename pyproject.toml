@@ -47,8 +47,9 @@ warn_return_any = false
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+addopts = "-m 'not requires_ffmpeg'"
 markers = [
-    "requires_ffmpeg: marks tests that need ffmpeg installed (deselect with '-m \"not requires_ffmpeg\"')",
+    "requires_ffmpeg: marks tests that need ffmpeg installed (run with '-m requires_ffmpeg')",
 ]
 
 [tool.coverage.run]
