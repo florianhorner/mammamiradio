@@ -27,7 +27,7 @@ RUN set -ex; \
 # Copy application
 WORKDIR /app
 COPY pyproject.toml .
-COPY fakeitaliradio/ fakeitaliradio/
+COPY mammamiradio/ mammamiradio/
 COPY radio.toml .
 COPY go-librespot/config.yml go-librespot/config.yml
 COPY ha-addon/run.sh /run.sh
