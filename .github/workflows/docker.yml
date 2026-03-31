@@ -76,6 +76,10 @@ jobs:
         run: |
           cp -r mammamiradio/ ha-addon/mammamiradio/mammamiradio/
           cp pyproject.toml ha-addon/mammamiradio/
+
+      - name: Extract version (strip v prefix)
+        id: version
+        run: echo "number=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
           cp radio.toml ha-addon/mammamiradio/
 
       - name: Log in to Container Registry
@@ -99,7 +103,7 @@ jobs:
           push: true
           tags: |
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/ha-addon/${{ matrix.arch }}:latest
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/ha-addon/${{ matrix.arch }}:${{ github.ref_name }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/ha-addon/${{ matrix.arch }}:${{ steps.version.outputs.number }}
           build-args: |
             BUILD_FROM=${{ matrix.base_image }}
           cache-from: type=gha,scope=${{ matrix.arch }}
@@ -128,10 +132,14 @@ jobs:
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/ha-addon/aarch64:latest
           docker manifest push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/ha-addon:latest
 
+      - name: Extract version (strip v prefix)
+        id: version
+        run: echo "number=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
       - name: Create and push multi-arch manifest (version)
         run: |
           docker manifest create \
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/ha-addon:${{ github.ref_name }} \
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/ha-addon/amd64:${{ github.ref_name }} \
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/ha-addon/aarch64:${{ github.ref_name }}
-          docker manifest push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/ha-addon:${{ github.ref_name }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/ha-addon:${{ steps.version.outputs.number }} \
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/ha-addon/amd64:${{ steps.version.outputs.number }} \
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/ha-addon/aarch64:${{ steps.version.outputs.number }}
+          docker manifest push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/ha-addon:${{ steps.version.outputs.number }}
