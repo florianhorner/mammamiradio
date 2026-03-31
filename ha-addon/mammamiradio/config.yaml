@@ -3,7 +3,7 @@ description: AI-powered Italian radio station — streams Claude-generated bante
 slug: mammamiradio
 version: 1.0.0
 url: https://github.com/florianhorner/mammamiradio
-image: ghcr.io/florianhorner/mammamiradio/ha-addon/{arch}
+image: ghcr.io/florianhorner/mammamiradio-addon-{arch}
 arch:
   - amd64
   - aarch64
