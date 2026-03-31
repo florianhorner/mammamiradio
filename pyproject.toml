@@ -21,7 +21,7 @@ dependencies = [
 packages = ["mammamiradio"]
 
 [tool.setuptools.package-data]
-mammamiradio = ["*.html"]
+mammamiradio = ["*.html", "static/*"]
 
 [build-system]
 requires = ["setuptools>=75"]
