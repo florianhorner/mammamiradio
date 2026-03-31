@@ -76,11 +76,11 @@ jobs:
         run: |
           cp -r mammamiradio/ ha-addon/mammamiradio/mammamiradio/
           cp pyproject.toml ha-addon/mammamiradio/
+          cp radio.toml ha-addon/mammamiradio/
 
       - name: Extract version (strip v prefix)
         id: version
         run: echo "number=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
-          cp radio.toml ha-addon/mammamiradio/
 
       - name: Log in to Container Registry
         uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
