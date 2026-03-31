@@ -1,17 +1,18 @@
 ARG BUILD_FROM
 FROM ${BUILD_FROM}
 
-# Install Python 3.11, FFmpeg, pip, and git (for pip install from repo)
-RUN apk add --no-cache python3 py3-pip ffmpeg git
+# Install Python 3, FFmpeg, and pip
+RUN apk add --no-cache python3 py3-pip ffmpeg
 
 WORKDIR /app
 
-# Copy entrypoint and config
+# Copy entrypoint
 COPY rootfs/ /
 
-# Install mammamiradio from the git repo
-RUN pip3 install --no-cache-dir --break-system-packages \
-    "mammamiradio @ git+https://github.com/florianhorner/mammamiradio.git"
+# Copy source and install from local tree
+COPY pyproject.toml ./
+COPY mammamiradio/ ./mammamiradio/
+RUN pip3 install --no-cache-dir --break-system-packages .
 
 # Copy radio.toml default config
 COPY radio.toml ./
