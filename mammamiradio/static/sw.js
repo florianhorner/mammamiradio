@@ -30,8 +30,9 @@ self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
 
   // Never cache the audio stream or API calls
-  if (url.pathname === '/stream' || url.pathname.startsWith('/api/') ||
-      url.pathname === '/status' || url.pathname === '/public-status') {
+  // Use endsWith/includes to handle HA Ingress prefixed paths
+  if (url.pathname.endsWith('/stream') || url.pathname.includes('/api/') ||
+      url.pathname.endsWith('/status') || url.pathname.endsWith('/public-status')) {
     return;
   }
 

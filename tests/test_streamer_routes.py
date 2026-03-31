@@ -232,3 +232,51 @@ async def test_non_loopback_no_auth_configured_rejected():
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
         resp = await client.get("/status")
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# PWA static asset routes
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_sw_js_returns_javascript():
+    """GET /sw.js should return the service worker with correct content-type."""
+    app = _make_test_app()
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.get("/sw.js")
+    assert resp.status_code == 200
+    assert "javascript" in resp.headers["content-type"]
+    assert "CACHE_NAME" in resp.text
+
+
+@pytest.mark.asyncio
+async def test_static_manifest_returns_json():
+    """GET /static/manifest.json should serve the PWA manifest."""
+    app = _make_test_app()
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.get("/static/manifest.json")
+    assert resp.status_code == 200
+    assert "Radio" in resp.text
+
+
+@pytest.mark.asyncio
+async def test_static_nonexistent_returns_404():
+    """GET /static/nonexistent.txt should return 404."""
+    app = _make_test_app()
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.get("/static/nonexistent.txt")
+    assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_static_path_traversal_blocked():
+    """Path traversal attempts in /static/ should return 404."""
+    app = _make_test_app()
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.get("/static/../streamer.py")
+    assert resp.status_code == 404
