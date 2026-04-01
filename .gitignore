@@ -12,7 +12,7 @@ go-librespot/lockfile
 go-librespot/state.json
 .spotify_token_cache
 .cache
-.claude/worktrees/
+.claude/
 .gstack/
 *.app
 *.webloc
