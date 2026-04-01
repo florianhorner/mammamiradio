@@ -4,6 +4,19 @@ All notable changes to `mammamiradio` are documented here.
 
 The current version source of truth is `pyproject.toml`.
 
+## [1.1.1] - 2026-04-01
+
+### Fixed
+
+- **HA add-on install failure**: The `radio.toml` copy command was misplaced in the CI workflow, causing the Docker build to fail silently. Home Assistant showed "unknown error" on install.
+- **Watchdog health check**: Add-on now auto-restarts if the app crashes after startup. Supervisor pings `/listen` (public, no auth required).
+- **Least privilege**: Removed `hassio_api: true` from add-on config. The add-on only needs the Home Assistant Core API, not Supervisor-level access.
+- **Options parsing**: Replaced `eval "$(python3 ...)"` with `jq` reads in the entrypoint. Malformed `options.json` now warns and continues instead of crashing.
+- **Startup validation**: The add-on validates `radio.toml` and imports before launching uvicorn. Bad config shows a clear error in logs instead of a cryptic crash.
+- **Version sync**: CI now reads the version from `pyproject.toml` and patches `config.yaml` at build time. No more manual version sync between two files.
+- **CI cache keys**: Add-on build cache now includes Dockerfile and pyproject.toml hashes, preventing stale Alpine/pip layers.
+- **`workflow_dispatch` safety**: Manual CI runs no longer produce broken image tags. Falls back to reading version from `pyproject.toml` when no git tag is present.
+
 ## [1.1.0] - 2026-04-01
 
 ### Added

@@ -1,6 +1,6 @@
 [project]
 name = "mammamiradio"
-version = "1.1.0"
+version = "1.1.1"
 description = "AI-powered Italian radio station engine"
 requires-python = ">=3.11"
 dependencies = [
