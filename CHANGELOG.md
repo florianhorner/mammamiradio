@@ -4,6 +4,17 @@ All notable changes to `mammamiradio` are documented here.
 
 The current version source of truth is `pyproject.toml`.
 
+## [Unreleased]
+
+### Added
+
+- Custom logo and favicon: retro radio with Italian flag stripe and sound waves, using the Terracotta Sera palette. Replaces the plain circle favicon.
+- Logo displayed in both READMEs (main repo and HA add-on).
+- HA add-on `icon.png` (256px) and `logo.png` (512px) for the add-on store listing.
+- `apple-touch-icon` on dashboard and listener pages for iOS home screen bookmarks.
+- OG meta tags on the dashboard page for social sharing.
+- Canonical SVG source at `mammamiradio/logo.svg`.
+
 ## [1.0.0] - 2026-03-30
 
 ### Added
