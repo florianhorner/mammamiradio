@@ -7,9 +7,10 @@ import ipaddress
 import logging
 import secrets
 import time
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 
 from mammamiradio.models import PersonalityAxes, Segment
@@ -20,9 +21,12 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 security = HTTPBasic(auto_error=False)
 
-_DASHBOARD_HTML = __import__("pathlib").Path(__file__).with_name("dashboard.html").read_text()
+_PKG_DIR = Path(__file__).parent
+_STATIC_DIR = _PKG_DIR / "static"
 
-_LISTENER_HTML = __import__("pathlib").Path(__file__).with_name("listener.html").read_text()
+_DASHBOARD_HTML = _PKG_DIR.joinpath("dashboard.html").read_text()
+
+_LISTENER_HTML = _PKG_DIR.joinpath("listener.html").read_text()
 
 
 import re as _re
@@ -50,6 +54,8 @@ def _inject_ingress_prefix(html: str, prefix: str) -> str:
         return html
     # Prefix-match rules first (to avoid double-replacing specific patterns)
     html = html.replace("'/api/", f"'{prefix}/api/")
+    html = html.replace('"/static/', f'"{prefix}/static/')
+    html = html.replace("'/sw.js'", f"'{prefix}/sw.js'")
     # Exact-match rules (these won't cascade because they match full quoted strings)
     html = html.replace("'/stream'", f"'{prefix}/stream'")
     html = html.replace("'/status'", f"'{prefix}/status'")
@@ -110,6 +116,9 @@ class LiveStreamHub:
                 pass
 
 
+_HASSIO_NETWORK = ipaddress.ip_network("172.30.32.0/23")
+
+
 def _is_loopback_client(request: Request) -> bool:
     """Return whether the current request originated from localhost."""
     if not request.client:
@@ -123,6 +132,18 @@ def _is_loopback_client(request: Request) -> bool:
         return False
 
 
+def _is_hassio_or_loopback(request: Request) -> bool:
+    """Return True for loopback or the Hassio internal network."""
+    if _is_loopback_client(request):
+        return True
+    if not request.client:
+        return False
+    try:
+        return ipaddress.ip_address(request.client.host) in _HASSIO_NETWORK
+    except ValueError:
+        return False
+
+
 def require_admin_access(
     request: Request,
     credentials: HTTPBasicCredentials | None = Depends(security),
@@ -131,10 +152,10 @@ def require_admin_access(
     config = request.app.state.config
 
     # Trust HA Ingress proxy — Supervisor handles authentication.
-    # Only trust X-Ingress-Path from internal/loopback sources to prevent
-    # external clients from spoofing the header on the mapped port.
+    # Trust X-Ingress-Path from loopback or the Hassio internal network
+    # (172.30.32.0/23) to prevent external spoofing on the mapped port.
     ingress_prefix = request.headers.get("X-Ingress-Path", "")
-    if config.is_addon and ingress_prefix and _is_loopback_client(request):
+    if config.is_addon and ingress_prefix and _is_hassio_or_loopback(request):
         return
     is_loopback = _is_loopback_client(request)
     if config.admin_token:
@@ -261,6 +282,25 @@ async def listener(request: Request):
     """Serve the public listener UI."""
     prefix = request.headers.get("X-Ingress-Path", "")
     return _inject_ingress_prefix(_LISTENER_HTML, prefix)
+
+
+@router.get("/sw.js")
+async def service_worker():
+    """Serve the PWA service worker from root scope."""
+    return FileResponse(
+        _STATIC_DIR / "sw.js",
+        media_type="application/javascript",
+        headers={"Service-Worker-Allowed": "/", "Cache-Control": "no-cache"},
+    )
+
+
+@router.get("/static/{filename:path}")
+async def static_files(filename: str):
+    """Serve PWA static assets (manifest, icons)."""
+    filepath = (_STATIC_DIR / filename).resolve()
+    if not filepath.is_relative_to(_STATIC_DIR) or not filepath.is_file():
+        raise HTTPException(status_code=404, detail="Not found")
+    return FileResponse(filepath)
 
 
 @router.get("/stream")

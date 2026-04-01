@@ -97,3 +97,20 @@ def test_inject_ingress_prefix_no_false_positives():
     result = _inject_ingress_prefix(html, "/prefix")
     # Only quoted URL patterns are replaced, not bare text
     assert result == html
+
+
+def test_inject_ingress_prefix_rewrites_static_paths():
+    """Ingress prefix should rewrite /static/ asset references."""
+    prefix = "/api/hassio_ingress/abc123"
+    assert f'"{prefix}/static/manifest.json"' in _inject_ingress_prefix(
+        'href="/static/manifest.json"', prefix
+    )
+    assert f'"{prefix}/static/icon-192.svg"' in _inject_ingress_prefix(
+        'href="/static/icon-192.svg"', prefix
+    )
+
+
+def test_inject_ingress_prefix_rewrites_sw_path():
+    """Ingress prefix should rewrite /sw.js reference."""
+    prefix = "/api/hassio_ingress/abc123"
+    assert f"'{prefix}/sw.js'" in _inject_ingress_prefix("register('/sw.js')", prefix)

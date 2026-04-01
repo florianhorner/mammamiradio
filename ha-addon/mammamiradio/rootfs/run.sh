@@ -21,11 +21,17 @@ else
 fi
 
 # ---- Map Supervisor token to HA_TOKEN ----
+# Keep SUPERVISOR_TOKEN so _is_addon() detects addon mode
 if [ -n "$SUPERVISOR_TOKEN" ]; then
     export HA_TOKEN="$SUPERVISOR_TOKEN"
     export HA_URL="http://supervisor/core/api"
     export HA_ENABLED="true"
     echo "[mammamiradio] Home Assistant API access configured via Supervisor"
+elif [ -n "$HASSIO_TOKEN" ]; then
+    export HA_TOKEN="$HASSIO_TOKEN"
+    export HA_URL="http://supervisor/core/api"
+    export HA_ENABLED="true"
+    echo "[mammamiradio] Home Assistant API access configured via Supervisor (legacy token)"
 fi
 
 # ---- Bind to all interfaces (required for ingress) ----
