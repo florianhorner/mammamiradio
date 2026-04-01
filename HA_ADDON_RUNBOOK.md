@@ -25,8 +25,8 @@ Every step must succeed. A break at ANY point means the addon doesn't work.
 
 | File | Field | Example |
 |------|-------|---------|
-| `ha-addon/mammamiradio/config.yaml` | `version:` | `1.0.3` |
-| `pyproject.toml` | `version =` | `"1.0.3"` |
+| `ha-addon/mammamiradio/config.yaml` | `version:` | `1.1.0` |
+| `pyproject.toml` | `version =` | `"1.1.0"` |
 
 CI validates they match. If they don't, the build fails.
 
