@@ -77,33 +77,36 @@ def fetch_playlist(config: StationConfig) -> list[Track]:
         except Exception as e:
             logger.warning("Playlist fetch failed (%s) — falling back to liked songs", e)
 
-    # Fallback: use liked songs
+    # Fallback: use liked songs (requires user OAuth, skip with client credentials)
     if not tracks:
-        logger.info("Fetching liked songs from Spotify...")
-        offset = 0
-        limit = 50
-        max_tracks = 200  # cap for speed
-        while offset < max_tracks:
-            results = sp.current_user_saved_tracks(limit=limit, offset=offset)
-            if not results["items"]:
-                break
-            for item in results["items"]:
-                t = item["track"]
-                if not t or not t.get("id"):
-                    continue
-                artist = t["artists"][0]["name"] if t["artists"] else "Unknown"
-                tracks.append(
-                    Track(
-                        title=t["name"],
-                        artist=artist,
-                        duration_ms=t["duration_ms"],
-                        spotify_id=t["id"],
+        try:
+            logger.info("Fetching liked songs from Spotify...")
+            offset = 0
+            limit = 50
+            max_tracks = 200  # cap for speed
+            while offset < max_tracks:
+                results = sp.current_user_saved_tracks(limit=limit, offset=offset)
+                if not results["items"]:
+                    break
+                for item in results["items"]:
+                    t = item["track"]
+                    if not t or not t.get("id"):
+                        continue
+                    artist = t["artists"][0]["name"] if t["artists"] else "Unknown"
+                    tracks.append(
+                        Track(
+                            title=t["name"],
+                            artist=artist,
+                            duration_ms=t["duration_ms"],
+                            spotify_id=t["id"],
+                        )
                     )
-                )
-            offset += limit
-            if not results.get("next"):
-                break
-        logger.info("Fetched %d liked songs", len(tracks))
+                offset += limit
+                if not results.get("next"):
+                    break
+            logger.info("Fetched %d liked songs", len(tracks))
+        except Exception as e:
+            logger.warning("Liked songs fetch failed (%s) — using demo playlist", e)
 
     if not tracks:
         logger.warning("No Spotify tracks available — using demo playlist")
