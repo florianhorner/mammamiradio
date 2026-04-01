@@ -158,9 +158,7 @@ def _format_state(entity_id: str, state_data: dict) -> str | None:
     """Format a single entity state as a natural language line."""
     state = _sanitize_state_value(state_data.get("state", "unknown"))
     attrs = state_data.get("attributes", {})
-    label = ENTITY_LABELS.get(
-        entity_id, _sanitize_state_value(attrs.get("friendly_name", entity_id))
-    )
+    label = ENTITY_LABELS.get(entity_id, _sanitize_state_value(attrs.get("friendly_name", entity_id)))
 
     if state in ("unavailable", "unknown"):
         return None
