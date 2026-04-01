@@ -110,6 +110,9 @@ class LiveStreamHub:
                 pass
 
 
+_HASSIO_NETWORK = ipaddress.ip_network("172.30.32.0/23")
+
+
 def _is_loopback_client(request: Request) -> bool:
     """Return whether the current request originated from localhost."""
     if not request.client:
@@ -123,6 +126,18 @@ def _is_loopback_client(request: Request) -> bool:
         return False
 
 
+def _is_hassio_or_loopback(request: Request) -> bool:
+    """Return True for loopback or the Hassio internal network."""
+    if _is_loopback_client(request):
+        return True
+    if not request.client:
+        return False
+    try:
+        return ipaddress.ip_address(request.client.host) in _HASSIO_NETWORK
+    except ValueError:
+        return False
+
+
 def require_admin_access(
     request: Request,
     credentials: HTTPBasicCredentials | None = Depends(security),
@@ -131,10 +146,10 @@ def require_admin_access(
     config = request.app.state.config
 
     # Trust HA Ingress proxy — Supervisor handles authentication.
-    # Only trust X-Ingress-Path from internal/loopback sources to prevent
-    # external clients from spoofing the header on the mapped port.
+    # Trust X-Ingress-Path from loopback or the Hassio internal network
+    # (172.30.32.0/23) to prevent external spoofing on the mapped port.
     ingress_prefix = request.headers.get("X-Ingress-Path", "")
-    if config.is_addon and ingress_prefix and _is_loopback_client(request):
+    if config.is_addon and ingress_prefix and _is_hassio_or_loopback(request):
         return
     is_loopback = _is_loopback_client(request)
     if config.admin_token:
