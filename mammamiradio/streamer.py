@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import ipaddress
 import logging
+import re as _re
 import secrets
 import time
 
@@ -23,9 +24,6 @@ security = HTTPBasic(auto_error=False)
 _DASHBOARD_HTML = __import__("pathlib").Path(__file__).with_name("dashboard.html").read_text()
 
 _LISTENER_HTML = __import__("pathlib").Path(__file__).with_name("listener.html").read_text()
-
-
-import re as _re
 
 _INGRESS_PREFIX_RE = _re.compile(r"^/[a-zA-Z0-9/_-]+$")
 
