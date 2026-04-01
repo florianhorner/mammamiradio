@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="mammamiradio/logo.png" width="128" height="128" alt="Mamma Mi Radio logo">
+</p>
+
 # Home Assistant Add-ons: Mamma Mi Radio
 
 Add-on repository for [mammamiradio](https://github.com/florianhorner/mammamiradio), an AI-powered Italian radio station.

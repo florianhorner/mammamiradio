@@ -75,10 +75,10 @@ async def test_startup_without_golibrespot():
 
 @pytest.mark.asyncio
 async def test_shutdown_cancels_tasks():
-    """shutdown() cancels producer and playback tasks."""
+    """shutdown() cancels producer and playback tasks and awaits gather."""
     import mammamiradio.main as main_mod
 
-    mock_task = MagicMock()
+    mock_task = AsyncMock()
     mock_task.cancel = MagicMock()
 
     main_mod._producer_task = mock_task
@@ -87,9 +87,14 @@ async def test_shutdown_cancels_tasks():
 
     from mammamiradio.main import shutdown
 
-    await shutdown()
+    with patch("asyncio.gather", new_callable=AsyncMock) as mock_gather:
+        await shutdown()
 
     assert mock_task.cancel.call_count == 2
+    mock_gather.assert_called_once()
+    # Verify return_exceptions=True was passed
+    _, kwargs = mock_gather.call_args
+    assert kwargs.get("return_exceptions") is True
 
     # Cleanup
     main_mod._producer_task = None

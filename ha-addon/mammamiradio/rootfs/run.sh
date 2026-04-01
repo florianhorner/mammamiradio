@@ -10,29 +10,43 @@ OPTIONS_FILE="/data/options.json"
 if [ -f "$OPTIONS_FILE" ]; then
     # Extract options using Python (always available in the image)
     # Uses shlex.quote to prevent shell injection from user-provided values
-    eval "$(python3 -c "
-import json, shlex
-with open('$OPTIONS_FILE') as f:
-    opts = json.load(f)
+    # stderr goes to log file (NOT into eval'd variable) to prevent injection
+    OPTS_LOG="/tmp/opts-parse.log"
+    OPTS_EXPORT=$(python3 -c "
+import json, shlex, sys
+try:
+    with open('$OPTIONS_FILE') as f:
+        opts = json.load(f)
+except (json.JSONDecodeError, OSError) as e:
+    print(f'FATAL: corrupt options.json: {e}', file=sys.stderr)
+    sys.exit(1)
 for key in ('anthropic_api_key', 'spotify_client_id', 'spotify_client_secret',
             'station_name', 'claude_model', 'playlist_spotify_url'):
     val = opts.get(key, '')
     if val:
         env_key = key.upper()
-        print(f'export {env_key}={shlex.quote(val)}')
-")"
+        print(f'export {env_key}={shlex.quote(str(val))}')
+" 2>"$OPTS_LOG")
+    OPTS_RC=$?
+    if [ $OPTS_RC -ne 0 ]; then
+        echo "[mammamiradio] FATAL: Failed to parse options.json"
+        cat "$OPTS_LOG" 2>/dev/null
+        exit 1
+    fi
+    eval "$OPTS_EXPORT"
 fi
 
 # ---- Map Supervisor token to HA_TOKEN ----
 # Keep SUPERVISOR_TOKEN so _is_addon() detects addon mode
+# Note: HA_URL must NOT include /api — ha_context.py appends it
 if [ -n "$SUPERVISOR_TOKEN" ]; then
     export HA_TOKEN="$SUPERVISOR_TOKEN"
-    export HA_URL="http://supervisor/core/api"
+    export HA_URL="http://supervisor/core"
     export HA_ENABLED="true"
     echo "[mammamiradio] Home Assistant API access configured via Supervisor"
 elif [ -n "$HASSIO_TOKEN" ]; then
     export HA_TOKEN="$HASSIO_TOKEN"
-    export HA_URL="http://supervisor/core/api"
+    export HA_URL="http://supervisor/core"
     export HA_ENABLED="true"
     echo "[mammamiradio] Home Assistant API access configured via Supervisor (legacy token)"
 fi
@@ -52,11 +66,23 @@ export MAMMAMIRADIO_CACHE_DIR="/data/cache"
 export MAMMAMIRADIO_TMP_DIR="/data/tmp"
 
 # ---- Ensure directories exist ----
-mkdir -p /data/cache /data/music /data/tmp
+mkdir -p /data/cache /data/music /data/tmp /data/go-librespot
+
+# ---- Initialize go-librespot config (only on first install, preserves auth state) ----
+if [ ! -f /data/go-librespot/config.yml ]; then
+    cp /defaults/go-librespot-config.yml /data/go-librespot/config.yml
+    echo "[mammamiradio] Initialized go-librespot config"
+fi
+
+# ---- Validate critical files exist ----
+if [ ! -f /app/radio.toml ]; then
+    echo "[mammamiradio] ERROR: /app/radio.toml not found — image may be corrupt"
+    exit 1
+fi
 
 echo "[mammamiradio] Station: ${STATION_NAME:-Radio Italì}"
 echo "[mammamiradio] Starting uvicorn on 0.0.0.0:8000..."
 
 cd /app
 exec python3 -m uvicorn mammamiradio.main:app \
-    --host 0.0.0.0 --port 8000
+    --host 0.0.0.0 --port 8000 --no-access-log

@@ -8,6 +8,7 @@ AI-powered Italian radio station engine. Python 3.11+, FastAPI, FFmpeg, optional
 - `ARCHITECTURE.md` - runtime flow, queue model, and Spotify audio path
 - `CONTRIBUTING.md` - local setup, tests, and smoke checks
 - `TROUBLESHOOTING.md` - common failures and recovery paths
+- `HA_ADDON_RUNBOOK.md` - addon release process, config contract, pre-merge checklist
 - `OPERATIONS.md` - runtime assumptions and deploy reality
 - `CHANGELOG.md` - release notes
 
@@ -83,6 +84,14 @@ radio.toml            station config
 start.sh              dev entrypoint with reload-safe FIFO drain handling
 tests/                pytest coverage
 ```
+
+## Brand assets
+
+- **Logo SVG**: `mammamiradio/logo.svg` — canonical vector source (variant G: classic radio with Italian flag stripe and sound waves)
+- **Palette**: Terracotta Sera — charcoal `#2a2320`, terracotta `#c4654a`, dusty rose `#d4917a`, sage `#7a8f6d`, cream `#f5efe6`
+- **Favicon**: inline SVG data URI in `dashboard.html` and `listener.html` (simplified version of logo)
+- **HA add-on icon**: `ha-addon/mammamiradio/icon.png` (256px) and `logo.png` (512px), rasterized from the SVG
+- To regenerate PNGs from SVG: `cairosvg mammamiradio/logo.svg -o icon.png -W 256 -H 256`
 
 ## Notes for future edits
 

@@ -5,6 +5,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Radio Italì — Control Plane</title>
 <meta name="theme-color" content="#c4654a">
+<meta property="og:title" content="Radio Italì — Control Plane">
+<meta property="og:description" content="AI-powered Italian radio station — admin dashboard">
+<meta property="og:type" content="website">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <link rel="manifest" href="/static/manifest.json">
@@ -488,6 +491,7 @@
 
 <div class="header">
   <div class="header-left">
+    <svg width="32" height="32" viewBox="0 0 100 100" style="vertical-align: middle; margin-right: 4px;"><rect width="100" height="100" rx="12" fill="#2a2320"/><rect x="14" y="32" width="72" height="50" rx="6" fill="#c4654a"/><rect x="14" y="32" width="24" height="4" fill="#7a8f6d"/><rect x="38" y="32" width="24" height="4" fill="#f5efe6"/><rect x="62" y="32" width="24" height="4" fill="#c4654a"/><rect x="18" y="40" width="64" height="38" rx="4" fill="#3a3230"/><circle cx="42" cy="61" r="16" fill="#2a2320" stroke="#d4917a" stroke-width="1"/><circle cx="42" cy="61" r="3" fill="#c4654a"/><circle cx="70" cy="61" r="6" fill="#d4917a"/><circle cx="70" cy="61" r="2" fill="#f5efe6"/><line x1="72" y1="32" x2="80" y2="14" stroke="#d4917a" stroke-width="2" stroke-linecap="round"/><path d="M86 48 A3 6 0 0 1 86 64" fill="none" stroke="#f5efe6" stroke-width="2" stroke-linecap="round" opacity="0.8"/><path d="M90 44 A4 8 0 0 1 90 68" fill="none" stroke="#f5efe6" stroke-width="1.5" stroke-linecap="round" opacity="0.5"/></svg>
     <h1>Radio Ital&igrave;</h1>
     <span class="header-dash">Control Plane</span>
   </div>
@@ -635,6 +639,8 @@ function fmt(ts) {
 }
 
 function fmtUptime(s) {
+  if (s == null || isNaN(s)) return 'starting...';
+  s = Math.floor(s);
   const h = Math.floor(s / 3600);
   const m = Math.floor((s % 3600) / 60);
   if (h > 0) return h + 'h ' + m + 'm';

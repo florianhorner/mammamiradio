@@ -1,17 +1,32 @@
 ARG BUILD_FROM
 FROM ${BUILD_FROM}
 
-# Install Python 3, FFmpeg, pip, and git (needed for pip install from repo)
-RUN apk add --no-cache python3 py3-pip ffmpeg git
+# Install Python 3, FFmpeg, and pip
+RUN apk add --no-cache python3 py3-pip ffmpeg
+
+# Install go-librespot for Spotify Connect support
+ARG BUILD_ARCH
+RUN set -eux; \
+    GL_VERSION="0.7.1"; \
+    case "${BUILD_ARCH}" in \
+        amd64)  GL_ARCH="x86_64" ;; \
+        aarch64) GL_ARCH="arm64" ;; \
+        *)      echo "Unsupported arch: ${BUILD_ARCH}" && exit 1 ;; \
+    esac; \
+    wget -qO /tmp/go-librespot.tar.gz \
+        "https://github.com/devgianlu/go-librespot/releases/download/v${GL_VERSION}/go-librespot_linux_${GL_ARCH}.tar.gz" && \
+    tar -xzf /tmp/go-librespot.tar.gz -C /usr/local/bin go-librespot && \
+    chmod +x /usr/local/bin/go-librespot && \
+    rm /tmp/go-librespot.tar.gz
 
 WORKDIR /app
 
 # Copy entrypoint
 COPY rootfs/ /
 
-# Install mammamiradio from the git repo (source lives at repo root, not in this build context)
-RUN pip3 install --no-cache-dir --break-system-packages \
-    "mammamiradio @ git+https://github.com/florianhorner/mammamiradio.git"
+# Install mammamiradio from local source (CI copies it into build context)
+COPY pyproject.toml mammamiradio/ ./
+RUN pip3 install --no-cache-dir --break-system-packages .
 
 # Copy radio.toml default config
 COPY radio.toml ./
@@ -19,7 +34,13 @@ COPY radio.toml ./
 # Create persistent directories
 RUN mkdir -p /data/cache /data/music /data/tmp
 
+# Stage default go-librespot config (run.sh copies to /data/ only if missing)
+COPY go-librespot-config.yml /defaults/go-librespot-config.yml
+
 # Make run script executable
 RUN chmod a+x /run.sh
+
+# Validate the install works
+RUN python3 -c "import mammamiradio; print('mammamiradio installed OK')"
 
 CMD ["/run.sh"]

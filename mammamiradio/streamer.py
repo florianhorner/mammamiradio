@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import ipaddress
 import logging
+import re as _re
 import secrets
 import time
 from pathlib import Path
@@ -28,9 +29,6 @@ _DASHBOARD_HTML = _PKG_DIR.joinpath("dashboard.html").read_text()
 
 _LISTENER_HTML = _PKG_DIR.joinpath("listener.html").read_text()
 
-
-import re as _re
-
 _INGRESS_PREFIX_RE = _re.compile(r"^/[a-zA-Z0-9/_-]+$")
 
 
@@ -43,15 +41,16 @@ def _sanitize_ingress_prefix(prefix: str) -> str:
 
 
 def _inject_ingress_prefix(html: str, prefix: str) -> str:
-    """Rewrite absolute URL references in HTML to work behind HA Ingress proxy.
+    """Rewrite static HTML attribute URLs to work behind HA Ingress proxy.
 
-    The /api/ replacement must run first — if it runs after /stream or /status,
-    those replacements create strings containing '/api/...' (from the ingress
-    prefix itself) which then get double-replaced.
+    Only rewrites HTML attributes (href=, src=) — JavaScript API calls use the
+    client-side ``_base`` variable derived from ``window.location.pathname``,
+    so JS string literals must NOT be replaced here to avoid double-prefixing.
     """
     prefix = _sanitize_ingress_prefix(prefix)
     if not prefix:
         return html
+    # Static HTML attributes only — JS handles its own URLs via _base
     # Prefix-match rules first (to avoid double-replacing specific patterns)
     html = html.replace("'/api/", f"'{prefix}/api/")
     html = html.replace('"/static/', f'"{prefix}/static/')

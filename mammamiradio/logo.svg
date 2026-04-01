@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <rect width="512" height="512" rx="64" fill="#2a2320"/>
+  <!-- Radio body (D's classic shape) -->
+  <rect x="70" y="170" width="372" height="260" rx="28" fill="#c4654a"/>
+  <!-- Italian flag stripe across top (from F) -->
+  <rect x="70" y="170" width="124" height="22" fill="#7a8f6d"/>
+  <rect x="70" y="170" width="14" height="22" rx="10" fill="#7a8f6d"/>
+  <rect x="194" y="170" width="124" height="22" fill="#f5efe6"/>
+  <rect x="318" y="170" width="124" height="22" fill="#c4654a"/>
+  <rect x="428" y="170" width="14" height="22" rx="10" fill="#c4654a"/>
+  <!-- Inner face -->
+  <rect x="90" y="208" width="332" height="202" rx="20" fill="#3a3230"/>
+  <!-- Speaker grille (big, left, from D) -->
+  <circle cx="215" cy="315" r="82" fill="#2a2320" stroke="#d4917a" stroke-width="5"/>
+  <circle cx="215" cy="315" r="62" fill="none" stroke="#c4654a" stroke-width="2.5" opacity="0.35"/>
+  <circle cx="215" cy="315" r="42" fill="none" stroke="#c4654a" stroke-width="2.5" opacity="0.25"/>
+  <circle cx="215" cy="315" r="22" fill="none" stroke="#c4654a" stroke-width="2.5" opacity="0.2"/>
+  <circle cx="215" cy="315" r="8" fill="#c4654a"/>
+  <!-- Frequency display (from D, simplified) -->
+  <rect x="320" y="230" width="84" height="36" rx="6" fill="#2a2320"/>
+  <rect x="328" y="240" width="40" height="5" rx="2" fill="#7a8f6d" opacity="0.7"/>
+  <rect x="328" y="250" width="24" height="3" rx="1" fill="#d4917a" opacity="0.5"/>
+  <!-- Big tuning knob -->
+  <circle cx="362" cy="320" r="30" fill="#d4917a"/>
+  <circle cx="362" cy="320" r="12" fill="#f5efe6"/>
+  <!-- Small knob -->
+  <circle cx="362" cy="385" r="16" fill="#d4917a"/>
+  <circle cx="362" cy="385" r="6" fill="#f5efe6"/>
+  <!-- Antenna -->
+  <line x1="370" y1="170" x2="415" y2="65" stroke="#d4917a" stroke-width="7" stroke-linecap="round"/>
+  <circle cx="415" cy="61" r="7" fill="#c4654a"/>
+  <!-- Sound waves (from F, right side) -->
+  <path d="M450 270 A14 28 0 0 1 450 340" fill="none" stroke="#f5efe6" stroke-width="7" stroke-linecap="round" opacity="0.8"/>
+  <path d="M470 255 A18 38 0 0 1 470 355" fill="none" stroke="#f5efe6" stroke-width="6" stroke-linecap="round" opacity="0.5"/>
+  <path d="M488 242 A20 45 0 0 1 488 368" fill="none" stroke="#f5efe6" stroke-width="5" stroke-linecap="round" opacity="0.3"/>
+  <!-- Feet -->
+  <rect x="125" y="430" width="46" height="14" rx="5" fill="#d4917a"/>
+  <rect x="340" y="430" width="46" height="14" rx="5" fill="#d4917a"/>
+</svg>

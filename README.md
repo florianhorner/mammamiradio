@@ -1,6 +1,10 @@
-# mammamiradio
+<p align="center">
+  <img src="mammamiradio/logo.svg" width="128" height="128" alt="Mamma Mi Radio logo">
+</p>
 
-AI-powered Italian radio station engine. It streams a continuous MP3 from your Spotify library, layers in Claude-written host banter and absurd AI-generated ads, and exposes both a control-plane dashboard and a public listener page.
+<h1 align="center">mammamiradio</h1>
+
+<p align="center">AI-powered Italian radio station engine. It streams a continuous MP3 from your Spotify library, layers in Claude-written host banter and absurd AI-generated ads, and exposes both a control-plane dashboard and a public listener page.</p>
 
 The app is designed to degrade gracefully. If Spotify auth is missing, it falls back to a demo playlist. If go-librespot is unavailable, it can still synthesize a station from local files, `yt-dlp`, or generated placeholder audio. If Anthropic is unavailable, banter and ads fall back to short stock lines instead of crashing the station.
 

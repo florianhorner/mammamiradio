@@ -38,11 +38,17 @@ async def startup():
     config = load_config()
     logger.info("Station: %s (%s)", config.station.name, config.station.language)
 
-    config.tmp_dir.mkdir(exist_ok=True)
-    config.cache_dir.mkdir(exist_ok=True)
+    config.tmp_dir.mkdir(parents=True, exist_ok=True)
+    config.cache_dir.mkdir(parents=True, exist_ok=True)
 
     logger.info("Fetching playlist: %s", config.playlist.spotify_url)
-    tracks = fetch_playlist(config)
+    try:
+        tracks = fetch_playlist(config)
+    except Exception as e:
+        logger.error("Playlist fetch crashed: %s — using demo playlist", e)
+        from mammamiradio.playlist import DEMO_TRACKS
+
+        tracks = list(DEMO_TRACKS)
     logger.info("Loaded %d tracks", len(tracks))
 
     # Start go-librespot for Spotify audio
@@ -80,10 +86,15 @@ async def shutdown():
     """Stop background workers and close shared streaming resources."""
     if _spotify_player:
         _spotify_player.stop()
+    tasks_to_cancel = []
     if _producer_task:
         _producer_task.cancel()
+        tasks_to_cancel.append(_producer_task)
     if _playback_task:
         _playback_task.cancel()
+        tasks_to_cancel.append(_playback_task)
+    if tasks_to_cancel:
+        await asyncio.gather(*tasks_to_cancel, return_exceptions=True)
     if hasattr(app.state, "stream_hub"):
         app.state.stream_hub.close()
 
