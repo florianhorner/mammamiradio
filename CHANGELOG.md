@@ -27,7 +27,8 @@ The current version source of truth is `pyproject.toml`.
 
 ### Fixed
 
-- Removed `host_network: true` from HA addon — was exposing unauthenticated endpoints to LAN
+- Re-enabled `host_network: true` — required for go-librespot mDNS (Spotify Connect discovery). Admin endpoints protected by auto-generated `ADMIN_TOKEN`
+- Fixed ingress double-prefix bug: `_inject_ingress_prefix` was rewriting JS string literals (e.g. `'/api/'`, `'/status'`) that the client-side `_base` variable already handles, causing all API requests to 404 behind HA ingress
 - Sanitize HA entity state values before injecting into Claude prompts (truncate, filter injection patterns, wrap in data delimiters)
 - Pin all GitHub Actions in addon-build.yml to SHA hashes (supply chain hardening)
 - HA addon config.yaml schema uses `password?` type for secrets (masked in UI)

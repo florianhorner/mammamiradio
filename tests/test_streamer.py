@@ -86,13 +86,16 @@ def test_inject_ingress_prefix_rewrites_html_attributes():
     assert f'src="{prefix}/stream"' in _inject_ingress_prefix('src="/stream"', prefix)
 
 
-def test_inject_ingress_prefix_rewrites_quoted_paths():
-    """Quoted path patterns in HTML are rewritten for ingress."""
+def test_inject_ingress_prefix_does_not_rewrite_js_strings():
+    """Single-quoted JS strings must NOT be rewritten — _base handles them."""
     prefix = "/api/hassio_ingress/abc123"
-    # Quoted paths get prefixed for ingress routing
-    assert f"'{prefix}/stream'" in _inject_ingress_prefix("src='/stream'", prefix)
-    assert f"'{prefix}/status'" in _inject_ingress_prefix("href='/status'", prefix)
-    assert f"'{prefix}/api/" in _inject_ingress_prefix("fetch('/api/skip')", prefix)
+    # JS patterns like _base + '/stream' must stay untouched
+    js = "_base + '/stream'"
+    assert _inject_ingress_prefix(js, prefix) == js
+    js2 = "_base + '/status'"
+    assert _inject_ingress_prefix(js2, prefix) == js2
+    js3 = "fetch(_base + '/api/skip')"
+    assert _inject_ingress_prefix(js3, prefix) == js3
 
 
 def test_inject_ingress_prefix_no_false_positives():
