@@ -33,8 +33,8 @@ CI validates they match. If they don't, the build fails.
 **How to bump:**
 ```bash
 # Both files, same version, same commit
-sed -i '' 's/^version:.*/version: 1.0.3/' ha-addon/mammamiradio/config.yaml
-sed -i '' 's/^version = .*/version = "1.0.3"/' pyproject.toml
+sed -i '' 's/^version:.*/version: X.Y.Z/' ha-addon/mammamiradio/config.yaml
+sed -i '' 's/^version = .*/version = "X.Y.Z"/' pyproject.toml
 ```
 
 ## Config options: the contract
