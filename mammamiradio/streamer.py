@@ -50,18 +50,14 @@ def _inject_ingress_prefix(html: str, prefix: str) -> str:
     prefix = _sanitize_ingress_prefix(prefix)
     if not prefix:
         return html
-    # Static HTML attributes only — JS handles its own URLs via _base
-    # Prefix-match rules first (to avoid double-replacing specific patterns)
-    html = html.replace("'/api/", f"'{prefix}/api/")
-    html = html.replace('"/static/', f'"{prefix}/static/')
-    html = html.replace("'/sw.js'", f"'{prefix}/sw.js'")
-    # Exact-match rules (these won't cascade because they match full quoted strings)
-    html = html.replace("'/stream'", f"'{prefix}/stream'")
-    html = html.replace("'/status'", f"'{prefix}/status'")
-    html = html.replace("'/public-status'", f"'{prefix}/public-status'")
-    html = html.replace('"/listen"', f'"{prefix}/listen"')
+    # Only rewrite HTML attributes (double-quoted href=, src=) and standalone JS
+    # paths without _base. NEVER rewrite single-quoted JS strings that use _base
+    # (e.g. _base + '/api/hosts') — that causes double-prefixing.
+    html = html.replace('href="/static/', f'href="{prefix}/static/')
     html = html.replace('href="/listen"', f'href="{prefix}/listen"')
     html = html.replace('src="/stream"', f'src="{prefix}/stream"')
+    # Service worker registration is standalone (no _base), needs rewriting
+    html = html.replace("'/sw.js'", f"'{prefix}/sw.js'")
     return html
 
 
