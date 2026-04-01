@@ -4,16 +4,27 @@ All notable changes to `mammamiradio` are documented here.
 
 The current version source of truth is `pyproject.toml`.
 
-## [Unreleased]
+## [1.0.3] - 2026-04-01
 
 ### Added
 
-- Custom logo and favicon: retro radio with Italian flag stripe and sound waves, using the Terracotta Sera palette. Replaces the plain circle favicon.
-- Logo displayed in both READMEs (main repo and HA add-on).
-- HA add-on `icon.png` (256px) and `logo.png` (512px) for the add-on store listing.
-- `apple-touch-icon` on dashboard and listener pages for iOS home screen bookmarks.
-- OG meta tags on the dashboard page for social sharing.
-- Canonical SVG source at `mammamiradio/logo.svg`.
+- Custom logo and favicon: retro radio with Italian flag stripe, Terracotta Sera palette
+- Logo in READMEs, HA addon store listing (icon.png + logo.png), apple-touch-icon, OG tags
+- go-librespot bundled in HA addon Docker image for Spotify Connect support
+- HA addon runbook and addon-specific documentation
+
+### Changed
+
+- HA addon Dockerfile builds from local source (CI copies files into build context) instead of pip installing from git
+- Improved producer segment production logging and error handling
+- HA addon run.sh extracts all config options including claude_model and playlist_spotify_url
+
+### Fixed
+
+- Removed `host_network: true` from HA addon — was exposing unauthenticated endpoints to LAN
+- Sanitize HA entity state values before injecting into Claude prompts (truncate, filter injection patterns, wrap in data delimiters)
+- Pin all GitHub Actions in addon-build.yml to SHA hashes (supply chain hardening)
+- HA addon config.yaml schema uses `password?` type for secrets (masked in UI)
 
 ## [1.0.0] - 2026-03-30
 

@@ -10,22 +10,26 @@ OPTIONS_FILE="/data/options.json"
 if [ -f "$OPTIONS_FILE" ]; then
     # Extract options using Python (always available in the image)
     # Uses shlex.quote to prevent shell injection from user-provided values
-    # Validates JSON before processing — logs error if corrupt
+    # stderr goes to log file (NOT into eval'd variable) to prevent injection
     OPTS_EXPORT=$(python3 -c "
 import json, shlex, sys
 try:
     with open('$OPTIONS_FILE') as f:
         opts = json.load(f)
 except (json.JSONDecodeError, OSError) as e:
-    print(f'echo \"[mammamiradio] WARNING: Failed to read options.json: {e}\"', file=sys.stdout)
-    sys.exit(0)
+    print(f'[mammamiradio] FATAL: corrupt options.json: {e}', file=sys.stderr)
+    sys.exit(1)
 for key in ('anthropic_api_key', 'spotify_client_id', 'spotify_client_secret',
             'station_name', 'claude_model', 'playlist_spotify_url'):
     val = opts.get(key, '')
     if val:
         env_key = key.upper()
         print(f'export {env_key}={shlex.quote(str(val))}')
-" 2>&1)
+" 2>/dev/null)
+    if [ $? -ne 0 ]; then
+        echo "[mammamiradio] FATAL: Failed to parse options.json — check addon configuration"
+        exit 1
+    fi
     eval "$OPTS_EXPORT"
 fi
 
@@ -59,7 +63,13 @@ export MAMMAMIRADIO_CACHE_DIR="/data/cache"
 export MAMMAMIRADIO_TMP_DIR="/data/tmp"
 
 # ---- Ensure directories exist ----
-mkdir -p /data/cache /data/music /data/tmp
+mkdir -p /data/cache /data/music /data/tmp /data/go-librespot
+
+# ---- Initialize go-librespot config (only on first install, preserves auth state) ----
+if [ ! -f /data/go-librespot/config.yml ]; then
+    cp /defaults/go-librespot-config.yml /data/go-librespot/config.yml
+    echo "[mammamiradio] Initialized go-librespot config"
+fi
 
 # ---- Validate critical files exist ----
 if [ ! -f /app/radio.toml ]; then
