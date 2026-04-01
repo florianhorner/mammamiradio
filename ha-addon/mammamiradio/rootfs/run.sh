@@ -11,13 +11,14 @@ if [ -f "$OPTIONS_FILE" ]; then
     # Extract options using Python (always available in the image)
     # Uses shlex.quote to prevent shell injection from user-provided values
     # stderr goes to log file (NOT into eval'd variable) to prevent injection
+    OPTS_LOG="/tmp/opts-parse.log"
     OPTS_EXPORT=$(python3 -c "
 import json, shlex, sys
 try:
     with open('$OPTIONS_FILE') as f:
         opts = json.load(f)
 except (json.JSONDecodeError, OSError) as e:
-    print(f'[mammamiradio] FATAL: corrupt options.json: {e}', file=sys.stderr)
+    print(f'FATAL: corrupt options.json: {e}', file=sys.stderr)
     sys.exit(1)
 for key in ('anthropic_api_key', 'spotify_client_id', 'spotify_client_secret',
             'station_name', 'claude_model', 'playlist_spotify_url'):
@@ -25,9 +26,11 @@ for key in ('anthropic_api_key', 'spotify_client_id', 'spotify_client_secret',
     if val:
         env_key = key.upper()
         print(f'export {env_key}={shlex.quote(str(val))}')
-" 2>/dev/null)
-    if [ $? -ne 0 ]; then
-        echo "[mammamiradio] FATAL: Failed to parse options.json — check addon configuration"
+" 2>"$OPTS_LOG")
+    OPTS_RC=$?
+    if [ $OPTS_RC -ne 0 ]; then
+        echo "[mammamiradio] FATAL: Failed to parse options.json"
+        cat "$OPTS_LOG" 2>/dev/null
         exit 1
     fi
     eval "$OPTS_EXPORT"

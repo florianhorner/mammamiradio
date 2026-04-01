@@ -44,8 +44,8 @@ jobs:
 
       - name: Validate addon options are mapped in run.sh
         run: |
-          # Extract option keys from config.yaml schema
-          SCHEMA_KEYS=$(grep -E '^\s+\w+:' ha-addon/mammamiradio/config.yaml | grep -A999 '^schema:' | tail -n +2 | awk -F: '{print $1}' | tr -d ' ')
+          # Extract option keys from config.yaml schema section
+          SCHEMA_KEYS=$(sed -n '/^schema:/,/^[^ ]/p' ha-addon/mammamiradio/config.yaml | grep -E '^\s+\w+:' | awk -F: '{print $1}' | tr -d ' ')
           # Check each key is referenced in run.sh
           MISSING=""
           for key in $SCHEMA_KEYS; do
@@ -107,6 +107,7 @@ jobs:
           push: true
           build-args: |
             BUILD_FROM=${{ matrix.base }}
+            BUILD_ARCH=${{ matrix.arch }}
           tags: |
             ${{ env.REGISTRY }}/${{ env.IMAGE_BASE }}-${{ matrix.arch }}:${{ steps.version.outputs.version }}
             ${{ env.REGISTRY }}/${{ env.IMAGE_BASE }}-${{ matrix.arch }}:latest

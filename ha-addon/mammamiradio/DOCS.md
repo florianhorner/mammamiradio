@@ -176,6 +176,6 @@ Browser: http://ha:8123/api/hassio_ingress/<token>/
 ## Known limitations
 
 - **No user OAuth in addon mode**: Liked songs and private playlists require user OAuth flow, which needs a browser redirect. Not practical in addon mode. Use a public playlist URL instead.
-- **go-librespot credentials not persistent on first install**: The first Spotify Connect pairing stores credentials in `/data/go-librespot/`. If `/data` is wiped, re-pair.
+- **go-librespot credentials persist across updates**: The default config is staged at `/defaults/go-librespot-config.yml` and only copied to `/data/go-librespot/config.yml` on first install. Updates preserve Spotify auth state. If `/data` is wiped, the addon re-initializes the config on next start.
 - **`host_network: true` is broad**: Required for mDNS/zeroconf discovery. Side effect: addon can reach any LAN device and port 8000 is exposed on the host.
 - **Access logs disabled**: `--no-access-log` prevents stream listener requests from flooding the Supervisor log. If you need request debugging, remove this flag in `run.sh`.
