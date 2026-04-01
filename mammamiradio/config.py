@@ -122,7 +122,11 @@ def _is_loopback_host(host: str) -> bool:
 
 def _is_addon() -> bool:
     """Detect if running as a Home Assistant addon."""
-    return bool(os.getenv("SUPERVISOR_TOKEN") or os.getenv("HASSIO_TOKEN"))
+    return bool(
+        os.getenv("SUPERVISOR_TOKEN")
+        or os.getenv("HASSIO_TOKEN")
+        or Path("/data/options.json").exists()
+    )
 
 
 def _apply_addon_options() -> None:
