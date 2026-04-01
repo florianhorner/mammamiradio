@@ -144,11 +144,23 @@ class HomeContext:
         return time.time() - self.timestamp if self.timestamp else float("inf")
 
 
+def _sanitize_state_value(value: str, max_len: int = 100) -> str:
+    """Truncate and strip instruction-like patterns from HA state values."""
+    value = value[:max_len]
+    # Strip patterns that look like prompt injection attempts
+    for pattern in ("ignore previous", "disregard", "system override", "forget your"):
+        if pattern in value.lower():
+            return "(filtered)"
+    return value
+
+
 def _format_state(entity_id: str, state_data: dict) -> str | None:
     """Format a single entity state as a natural language line."""
-    state = state_data.get("state", "unknown")
+    state = _sanitize_state_value(state_data.get("state", "unknown"))
     attrs = state_data.get("attributes", {})
-    label = ENTITY_LABELS.get(entity_id, attrs.get("friendly_name", entity_id))
+    label = ENTITY_LABELS.get(
+        entity_id, _sanitize_state_value(attrs.get("friendly_name", entity_id))
+    )
 
     if state in ("unavailable", "unknown"):
         return None
@@ -170,9 +182,9 @@ def _format_state(entity_id: str, state_data: dict) -> str | None:
     # Media players — include what's playing
     if entity_id.startswith("media_player."):
         translated = STATE_TRANSLATIONS.get(state, state)
-        title = attrs.get("media_title", "")
+        title = _sanitize_state_value(attrs.get("media_title", ""))
         if title and state == "playing":
-            artist = attrs.get("media_artist", "")
+            artist = _sanitize_state_value(attrs.get("media_artist", ""))
             extra = f" — {artist}: {title}" if artist else f" — {title}"
             return f"{label}: {translated}{extra}"
         return f"{label}: {translated}"
