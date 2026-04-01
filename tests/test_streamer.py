@@ -86,13 +86,13 @@ def test_inject_ingress_prefix_rewrites_html_attributes():
     assert f'src="{prefix}/stream"' in _inject_ingress_prefix('src="/stream"', prefix)
 
 
-def test_inject_ingress_prefix_does_not_rewrite_js():
-    """JS string literals must NOT be rewritten (JS uses _base variable)."""
+def test_inject_ingress_prefix_rewrites_quoted_paths():
+    """Quoted path patterns in HTML are rewritten for ingress."""
     prefix = "/api/hassio_ingress/abc123"
-    # JS fetch patterns should be left alone — _base handles them client-side
-    assert "'/stream'" in _inject_ingress_prefix("fetch('/stream')", prefix)
-    assert "'/status'" in _inject_ingress_prefix("fetch('/status')", prefix)
-    assert "'/api/skip'" in _inject_ingress_prefix("fetch('/api/skip')", prefix)
+    # Quoted paths get prefixed for ingress routing
+    assert f"'{prefix}/stream'" in _inject_ingress_prefix("src='/stream'", prefix)
+    assert f"'{prefix}/status'" in _inject_ingress_prefix("href='/status'", prefix)
+    assert f"'{prefix}/api/" in _inject_ingress_prefix("fetch('/api/skip')", prefix)
 
 
 def test_inject_ingress_prefix_no_false_positives():
@@ -100,3 +100,20 @@ def test_inject_ingress_prefix_no_false_positives():
     html = "some random text with /stream in prose"
     result = _inject_ingress_prefix(html, "/prefix")
     assert result == html
+
+
+def test_inject_ingress_prefix_rewrites_static_paths():
+    """Ingress prefix should rewrite /static/ asset references."""
+    prefix = "/api/hassio_ingress/abc123"
+    assert f'"{prefix}/static/manifest.json"' in _inject_ingress_prefix(
+        'href="/static/manifest.json"', prefix
+    )
+    assert f'"{prefix}/static/icon-192.svg"' in _inject_ingress_prefix(
+        'href="/static/icon-192.svg"', prefix
+    )
+
+
+def test_inject_ingress_prefix_rewrites_sw_path():
+    """Ingress prefix should rewrite /sw.js reference."""
+    prefix = "/api/hassio_ingress/abc123"
+    assert f"'{prefix}/sw.js'" in _inject_ingress_prefix("register('/sw.js')", prefix)

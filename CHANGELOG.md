@@ -4,10 +4,16 @@ All notable changes to `mammamiradio` are documented here.
 
 The current version source of truth is `pyproject.toml`.
 
-## [1.0.3] - 2026-04-01
+## [1.1.0] - 2026-04-01
 
 ### Added
 
+- **PWA support**: Install Radio Italì as a mobile app from your browser. Manifest, service worker, and app icons included.
+- **Lock screen controls**: MediaSession API integration shows song title, artist, and Radio Italì artwork on your lock screen. Play/pause works from lock screen and notification shade.
+- **Install prompt**: Chromium browsers get a native install banner; iOS shows manual "Add to Home Screen" instructions.
+- **Offline resilience**: Service worker caches the app shell. If you lose connection, you see an offline status and the stream auto-reconnects with exponential backoff.
+- **Static file serving**: New `/static/` route serves PWA assets (manifest, icons) with path traversal protection. `/sw.js` served at root for service worker scope.
+- **HA Ingress compatibility**: Service worker uses `endsWith`/`includes` path matching so caching works correctly behind Home Assistant's ingress proxy.
 - Custom logo and favicon: retro radio with Italian flag stripe, Terracotta Sera palette
 - Logo in READMEs, HA addon store listing (icon.png + logo.png), apple-touch-icon, OG tags
 - go-librespot bundled in HA addon Docker image for Spotify Connect support
@@ -25,6 +31,10 @@ The current version source of truth is `pyproject.toml`.
 - Sanitize HA entity state values before injecting into Claude prompts (truncate, filter injection patterns, wrap in data delimiters)
 - Pin all GitHub Actions in addon-build.yml to SHA hashes (supply chain hardening)
 - HA addon config.yaml schema uses `password?` type for secrets (masked in UI)
+
+### For contributors
+
+- 6 new tests: service worker route, manifest route, 404 for missing static files, path traversal blocked, ingress prefix rewriting for static paths and sw.js.
 
 ## [1.0.0] - 2026-03-30
 

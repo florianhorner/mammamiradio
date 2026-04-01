@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 192 192">
+  <rect width="192" height="192" rx="32" fill="#2a2320"/>
+  <circle cx="96" cy="96" r="64" fill="#c4654a"/>
+  <circle cx="96" cy="96" r="20" fill="#f5efe6"/>
+  <!-- Radio waves -->
+  <path d="M130 62a48 48 0 0 1 0 68" fill="none" stroke="#f5efe6" stroke-width="4" stroke-linecap="round" opacity="0.7"/>
+  <path d="M140 52a64 64 0 0 1 0 88" fill="none" stroke="#f5efe6" stroke-width="4" stroke-linecap="round" opacity="0.4"/>
+</svg>
