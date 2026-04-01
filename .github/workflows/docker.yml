@@ -78,6 +78,12 @@ jobs:
           cp pyproject.toml ha-addon/mammamiradio/
           cp radio.toml ha-addon/mammamiradio/
 
+      - name: Sync version from pyproject.toml into config.yaml
+        run: |
+          VERSION=$(python3 -c "import tomllib, pathlib; print(tomllib.loads(pathlib.Path('pyproject.toml').read_text())['project']['version'])")
+          sed -i "s/^version: .*/version: ${VERSION}/" ha-addon/mammamiradio/config.yaml
+          echo "Synced add-on version to ${VERSION}"
+
       - name: Extract version (strip v prefix)
         id: version
         run: echo "number=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
@@ -106,8 +112,8 @@ jobs:
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/ha-addon/${{ matrix.arch }}:${{ steps.version.outputs.number }}
           build-args: |
             BUILD_FROM=${{ matrix.base_image }}
-          cache-from: type=gha,scope=${{ matrix.arch }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.arch }}
+          cache-from: type=gha,scope=${{ matrix.arch }}-${{ hashFiles('ha-addon/mammamiradio/Dockerfile', 'pyproject.toml') }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.arch }}-${{ hashFiles('ha-addon/mammamiradio/Dockerfile', 'pyproject.toml') }}
 
   publish-ha-addon-manifest:
     runs-on: ubuntu-latest

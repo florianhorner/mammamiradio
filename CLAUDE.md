@@ -34,6 +34,7 @@ AI-powered Italian radio station engine. Python 3.11+, FastAPI, FFmpeg, optional
   - `ha-addon/mammamiradio/rootfs/run.sh`: entrypoint mapping Supervisor env vars
   - `ha-addon/mammamiradio/translations/en.yaml`: UI labels for add-on options
 - `.github/workflows/docker.yml`: multi-arch Docker build CI
+  - **Image path convention**: `config.yaml` `image:` field must match the CI push path `ghcr.io/{repo}/ha-addon/{arch}`. If either changes, update the other.
 
 ## Environment
 

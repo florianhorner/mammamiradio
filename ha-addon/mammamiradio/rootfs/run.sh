@@ -8,19 +8,14 @@ echo "[mammamiradio] Starting add-on..."
 # ---- Read add-on options from /data/options.json ----
 OPTIONS_FILE="/data/options.json"
 if [ -f "$OPTIONS_FILE" ]; then
-    # Extract options using Python (always available in the image)
-    # Uses shlex.quote to prevent shell injection from user-provided values
-    eval "$(python3 -c "
-import json, shlex
-with open('$OPTIONS_FILE') as f:
-    opts = json.load(f)
-for key in ('anthropic_api_key', 'spotify_client_id', 'spotify_client_secret',
-            'station_name', 'claude_model', 'playlist_spotify_url'):
-    val = opts.get(key, '')
-    if val:
-        env_key = key.upper()
-        print(f'export {env_key}={shlex.quote(val)}')
-")"
+    for key in anthropic_api_key spotify_client_id spotify_client_secret \
+               station_name claude_model playlist_spotify_url; do
+        val=$(jq -r --arg k "$key" '.[$k] // empty' "$OPTIONS_FILE")
+        if [ -n "$val" ]; then
+            env_key=$(echo "$key" | tr '[:lower:]' '[:upper:]')
+            export "$env_key=$val"
+        fi
+    done
 fi
 
 # ---- Map Supervisor token to HA_TOKEN ----
@@ -49,8 +44,15 @@ export MAMMAMIRADIO_TMP_DIR="/data/tmp"
 mkdir -p /data/cache /data/music /data/tmp
 
 echo "[mammamiradio] Station: ${STATION_NAME:-Radio Italì}"
-echo "[mammamiradio] Starting uvicorn on 0.0.0.0:8000..."
 
+# ---- Validate config before launching ----
 cd /app
+echo "[mammamiradio] Validating configuration..."
+if ! python3 -c "from mammamiradio.config import load_config; load_config()"; then
+    echo "[mammamiradio] ERROR: Configuration validation failed — check add-on logs above"
+    exit 1
+fi
+
+echo "[mammamiradio] Starting uvicorn on 0.0.0.0:8000..."
 exec python3 -m uvicorn mammamiradio.main:app \
     --host 0.0.0.0 --port 8000

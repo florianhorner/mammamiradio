@@ -1,8 +1,8 @@
 ARG BUILD_FROM
 FROM ${BUILD_FROM}
 
-# Install Python 3, FFmpeg, and pip
-RUN apk add --no-cache python3 py3-pip ffmpeg
+# Install Python 3, FFmpeg, pip, and jq (for options.json parsing)
+RUN apk add --no-cache python3 py3-pip ffmpeg jq
 
 WORKDIR /app
 
