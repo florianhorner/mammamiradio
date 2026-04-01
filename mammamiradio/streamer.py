@@ -39,22 +39,16 @@ def _sanitize_ingress_prefix(prefix: str) -> str:
 
 
 def _inject_ingress_prefix(html: str, prefix: str) -> str:
-    """Rewrite absolute URL references in HTML to work behind HA Ingress proxy.
+    """Rewrite static HTML attribute URLs to work behind HA Ingress proxy.
 
-    The /api/ replacement must run first — if it runs after /stream or /status,
-    those replacements create strings containing '/api/...' (from the ingress
-    prefix itself) which then get double-replaced.
+    Only rewrites HTML attributes (href=, src=) — JavaScript API calls use the
+    client-side ``_base`` variable derived from ``window.location.pathname``,
+    so JS string literals must NOT be replaced here to avoid double-prefixing.
     """
     prefix = _sanitize_ingress_prefix(prefix)
     if not prefix:
         return html
-    # Prefix-match rules first (to avoid double-replacing specific patterns)
-    html = html.replace("'/api/", f"'{prefix}/api/")
-    # Exact-match rules (these won't cascade because they match full quoted strings)
-    html = html.replace("'/stream'", f"'{prefix}/stream'")
-    html = html.replace("'/status'", f"'{prefix}/status'")
-    html = html.replace("'/public-status'", f"'{prefix}/public-status'")
-    html = html.replace('"/listen"', f'"{prefix}/listen"')
+    # Static HTML attributes only — JS handles its own URLs via _base
     html = html.replace('href="/listen"', f'href="{prefix}/listen"')
     html = html.replace('src="/stream"', f'src="{prefix}/stream"')
     return html

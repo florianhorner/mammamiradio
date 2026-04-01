@@ -78,22 +78,25 @@ def test_inject_ingress_prefix_empty():
     assert _inject_ingress_prefix(html, "") is html
 
 
-def test_inject_ingress_prefix_rewrites():
-    """Non-empty prefix should rewrite all URL patterns."""
+def test_inject_ingress_prefix_rewrites_html_attributes():
+    """Non-empty prefix should rewrite static HTML attributes only."""
     prefix = "/api/hassio_ingress/abc123"
-    # Test each pattern individually to avoid cross-replacement issues
-    assert f"'{prefix}/stream'" in _inject_ingress_prefix("fetch('/stream')", prefix)
-    assert f"'{prefix}/status'" in _inject_ingress_prefix("fetch('/status')", prefix)
-    assert f"'{prefix}/public-status'" in _inject_ingress_prefix("fetch('/public-status')", prefix)
-    assert f"'{prefix}/api/skip'" in _inject_ingress_prefix("fetch('/api/skip')", prefix)
-    assert f'"{prefix}/listen"' in _inject_ingress_prefix('href="/listen"', prefix)
+    # Static HTML attributes are rewritten
     assert f'href="{prefix}/listen"' in _inject_ingress_prefix('href="/listen"', prefix)
     assert f'src="{prefix}/stream"' in _inject_ingress_prefix('src="/stream"', prefix)
+
+
+def test_inject_ingress_prefix_does_not_rewrite_js():
+    """JS string literals must NOT be rewritten (JS uses _base variable)."""
+    prefix = "/api/hassio_ingress/abc123"
+    # JS fetch patterns should be left alone — _base handles them client-side
+    assert "'/stream'" in _inject_ingress_prefix("fetch('/stream')", prefix)
+    assert "'/status'" in _inject_ingress_prefix("fetch('/status')", prefix)
+    assert "'/api/skip'" in _inject_ingress_prefix("fetch('/api/skip')", prefix)
 
 
 def test_inject_ingress_prefix_no_false_positives():
     """Prefix injection should not affect non-matching patterns."""
     html = "some random text with /stream in prose"
     result = _inject_ingress_prefix(html, "/prefix")
-    # Only quoted URL patterns are replaced, not bare text
     assert result == html

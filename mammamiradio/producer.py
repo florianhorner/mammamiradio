@@ -232,14 +232,16 @@ async def run_producer(
                     ad_break_path = break_parts[0]
                 else:
                     ad_break_path = config.tmp_dir / f"adbreak_{uuid4().hex[:8]}.mp3"
-                    await loop.run_in_executor(
-                        None,
-                        concat_files,
-                        break_parts,
-                        ad_break_path,
-                    )
-                    for p in break_parts:
-                        p.unlink(missing_ok=True)
+                    try:
+                        await loop.run_in_executor(
+                            None,
+                            concat_files,
+                            break_parts,
+                            ad_break_path,
+                        )
+                    finally:
+                        for p in break_parts:
+                            p.unlink(missing_ok=True)
 
                 # Dashboard display: show all brands in the break
                 state.last_ad_script = {
@@ -263,9 +265,20 @@ async def run_producer(
             # Recoverable: network/ffmpeg/disk/httpx errors — insert silence, retry next loop
             logger.error("Failed to produce %s segment: %s", seg_type.value, e)
             state.failed_segments += 1
+            # Backoff on persistent failures to avoid CPU-burning tight loop
+            consecutive = state.failed_segments
+            if consecutive > 1:
+                backoff = min(30.0, 2.0 ** min(consecutive, 5))
+                logger.warning("Consecutive failures: %d — backing off %.0fs", consecutive, backoff)
+                await asyncio.sleep(backoff)
             silence_path = config.tmp_dir / f"silence_{uuid4().hex[:8]}.mp3"
-            loop = asyncio.get_running_loop()
-            await loop.run_in_executor(None, generate_silence, silence_path, 5.0)
+            try:
+                loop = asyncio.get_running_loop()
+                await loop.run_in_executor(None, generate_silence, silence_path, 5.0)
+            except Exception as silence_err:
+                logger.error("Cannot generate silence (ffmpeg broken?): %s", silence_err)
+                await asyncio.sleep(10)
+                continue
             segment = Segment(
                 type=seg_type,
                 path=silence_path,
@@ -274,5 +287,7 @@ async def run_producer(
             # Do NOT advance state counters — failed segment doesn't count
 
         if segment:
+            if "error" not in segment.metadata:
+                state.failed_segments = 0  # Reset backoff on success
             await queue.put(segment)
             logger.info("Queued %s (queue size: %d)", seg_type.value, queue.qsize())

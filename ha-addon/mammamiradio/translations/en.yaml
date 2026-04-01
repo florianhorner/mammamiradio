@@ -12,8 +12,8 @@ configuration:
     name: Station Name
     description: Your radio station's name (shown in the UI and stream metadata).
   claude_model:
-    name: Claude Model
-    description: Which Claude model to use for script generation. Default is fast and cheap.
+    name: AI Model
+    description: "Haiku: fast and cheap. Sonnet: balanced. Opus: highest quality but slower."
   playlist_spotify_url:
     name: Spotify Playlist URL
-    description: Spotify playlist URL to use. Leave empty to use your liked songs.
+    description: Spotify playlist URL to seed your music library. Leave empty to use demo tracks.

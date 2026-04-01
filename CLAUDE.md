@@ -8,6 +8,7 @@ AI-powered Italian radio station engine. Python 3.11+, FastAPI, FFmpeg, optional
 - `ARCHITECTURE.md` - runtime flow, queue model, and Spotify audio path
 - `CONTRIBUTING.md` - local setup, tests, and smoke checks
 - `TROUBLESHOOTING.md` - common failures and recovery paths
+- `HA_ADDON_RUNBOOK.md` - addon release process, config contract, pre-merge checklist
 - `OPERATIONS.md` - runtime assumptions and deploy reality
 - `CHANGELOG.md` - release notes
 
