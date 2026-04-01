@@ -7,7 +7,7 @@ echo "[mammamiradio] Starting add-on..."
 
 # ---- Read add-on options from /data/options.json ----
 OPTIONS_FILE="/data/options.json"
-if [ -f "$OPTIONS_FILE" ]; then
+if [ -f "$OPTIONS_FILE" ] && jq empty "$OPTIONS_FILE" 2>/dev/null; then
     for key in anthropic_api_key spotify_client_id spotify_client_secret \
                station_name claude_model playlist_spotify_url; do
         val=$(jq -r --arg k "$key" '.[$k] // empty' "$OPTIONS_FILE")
@@ -16,6 +16,8 @@ if [ -f "$OPTIONS_FILE" ]; then
             export "$env_key=$val"
         fi
     done
+else
+    echo "[mammamiradio] WARNING: options.json missing or malformed, using defaults"
 fi
 
 # ---- Map Supervisor token to HA_TOKEN ----

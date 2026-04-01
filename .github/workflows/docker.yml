@@ -78,15 +78,19 @@ jobs:
           cp pyproject.toml ha-addon/mammamiradio/
           cp radio.toml ha-addon/mammamiradio/
 
-      - name: Sync version from pyproject.toml into config.yaml
-        run: |
-          VERSION=$(python3 -c "import tomllib, pathlib; print(tomllib.loads(pathlib.Path('pyproject.toml').read_text())['project']['version'])")
-          sed -i "s/^version: .*/version: ${VERSION}/" ha-addon/mammamiradio/config.yaml
-          echo "Synced add-on version to ${VERSION}"
-
       - name: Extract version (strip v prefix)
         id: version
-        run: echo "number=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+        run: |
+          if [[ "$GITHUB_REF_NAME" == v* ]]; then
+            echo "number=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          else
+            echo "number=$(grep -oP '(?<=^version = ")[^"]+' pyproject.toml)" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Sync version into config.yaml
+        run: |
+          sed -i "s/^version: .*/version: ${{ steps.version.outputs.number }}/" ha-addon/mammamiradio/config.yaml
+          echo "Synced add-on version to ${{ steps.version.outputs.number }}"
 
       - name: Log in to Container Registry
         uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3

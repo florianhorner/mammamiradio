@@ -17,7 +17,7 @@ ports:
   8000/tcp: null
 ports_description:
   8000/tcp: Web UI and stream
-watchdog: http://[HOST]:[PORT:8000]/
+watchdog: http://[HOST]:[PORT:8000]/listen
 map:
   - addon_config:rw
 options:
