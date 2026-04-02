@@ -83,7 +83,10 @@ def claim_process(
 def _pid_command(pid: int) -> str | None:
     try:
         result = subprocess.run(
-            ["ps", "-p", str(pid), "-o", "command="],
+            # `ps -o command=` may truncate long command lines on Linux CI, which
+            # makes our ownership check drop a valid go-librespot process. `ww`
+            # asks for the full, untruncated command line.
+            ["ps", "ww", "-p", str(pid), "-o", "command="],
             capture_output=True,
             text=True,
             check=False,

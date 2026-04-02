@@ -77,3 +77,40 @@ def test_read_owned_pid_removes_stale_state(tmp_path):
 
     assert read_owned_pid(runtime.state_file, runtime.fingerprint) is None
     assert not runtime.state_file.exists()
+
+
+def test_read_owned_pid_uses_wide_ps_output(tmp_path, monkeypatch):
+    runtime = build_go_librespot_runtime(
+        go_librespot_bin=str(tmp_path / "go-librespot"),
+        config_dir=tmp_path / "deep" / "nested" / "cfg",
+        fifo_path=tmp_path / "mammamiradio.pcm",
+        port=3678,
+        tmp_dir=tmp_path / "tmp",
+    )
+    runtime.state_file.parent.mkdir(parents=True, exist_ok=True)
+    runtime.state_file.write_text(
+        json.dumps(
+            {
+                "pid": 1234,
+                "fingerprint": runtime.fingerprint,
+                "go_librespot_bin": runtime.go_librespot_bin,
+                "config_dir": str(runtime.config_dir),
+            }
+        )
+    )
+
+    calls: list[list[str]] = []
+
+    def fake_run(cmd, capture_output, text, check):
+        calls.append(cmd)
+        return subprocess.CompletedProcess(
+            args=cmd,
+            returncode=0,
+            stdout=f"/bin/sh {runtime.go_librespot_bin} --config_dir {runtime.config_dir}\n",
+            stderr="",
+        )
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    assert read_owned_pid(runtime.state_file, runtime.fingerprint) == 1234
+    assert calls == [["ps", "ww", "-p", "1234", "-o", "command="]]
