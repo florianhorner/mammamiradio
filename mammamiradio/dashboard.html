@@ -306,7 +306,8 @@
   }
 
   /* ---- Grid Layout ---- */
-  .grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 20px; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 20px; overflow: hidden; }
+  .grid > div { min-width: 0; }
   @media (max-width: 960px) { .grid { grid-template-columns: 1fr 1fr; } }
   @media (max-width: 640px) { .grid { grid-template-columns: 1fr; } }
 
@@ -477,6 +478,144 @@
   .debug-log .msg { color: var(--cream-dk); }
   .debug-log .detail { color: var(--muted); font-size: 11px; margin-left: 4px; opacity: 0.7; }
 
+  /* ---- Trigger Buttons ---- */
+  .trigger-bar {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 18px;
+    flex-wrap: wrap;
+    align-items: center;
+  }
+  .trigger-btn {
+    background: var(--card);
+    border: 1px solid rgba(196, 101, 74, 0.3);
+    border-radius: 6px;
+    color: var(--terracotta);
+    padding: 8px 16px;
+    cursor: pointer;
+    font-size: 13px;
+    font-family: var(--font-body);
+    font-weight: 600;
+    transition: all 0.2s;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .trigger-btn:hover {
+    background: var(--terracotta);
+    color: var(--bg);
+    border-color: var(--terracotta);
+  }
+  .trigger-btn:active { transform: scale(0.97); }
+  .trigger-btn.pending {
+    background: rgba(196, 101, 74, 0.15);
+    border-color: var(--terracotta);
+    animation: pulse-border 1.5s ease-in-out infinite;
+  }
+  @keyframes pulse-border {
+    0%, 100% { border-color: rgba(196, 101, 74, 0.3); }
+    50% { border-color: var(--terracotta); }
+  }
+
+  /* ---- Pacing Controls ---- */
+  .pacing-section {
+    background: var(--card);
+    border: 1px solid rgba(196, 101, 74, 0.12);
+    border-radius: 8px;
+    padding: 14px 18px;
+    margin-bottom: 18px;
+  }
+  .pacing-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 8px;
+  }
+  .pacing-row:last-child { margin-bottom: 0; }
+  .pacing-label {
+    font-size: 12px;
+    color: var(--cream-dk);
+    min-width: 140px;
+    flex-shrink: 0;
+  }
+  .pacing-row input[type="range"] {
+    flex: 1;
+    accent-color: var(--terracotta);
+    height: 4px;
+  }
+  .pacing-value {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--terracotta);
+    min-width: 28px;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
+  .pacing-counter {
+    font-size: 11px;
+    color: var(--muted);
+    min-width: 50px;
+    text-align: right;
+  }
+
+  /* ---- Consumption Metrics ---- */
+  .consumption-bar {
+    display: flex;
+    gap: 12px;
+    margin-bottom: 18px;
+    flex-wrap: wrap;
+  }
+  .consumption-stat {
+    background: var(--card);
+    border: 1px solid rgba(196, 101, 74, 0.12);
+    border-radius: 8px;
+    padding: 10px 14px;
+    flex: 1;
+    min-width: 100px;
+  }
+  .consumption-label {
+    font-size: 9px;
+    font-weight: 600;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+  }
+  .consumption-value {
+    font-size: 16px;
+    font-weight: 700;
+    color: var(--dusty-rose);
+    margin-top: 2px;
+    font-variant-numeric: tabular-nums;
+  }
+  .consumption-detail {
+    font-size: 10px;
+    color: var(--muted);
+    margin-top: 2px;
+  }
+
+  /* ---- Toast Notification ---- */
+  .toast {
+    position: fixed;
+    bottom: 72px;
+    right: 24px;
+    background: var(--card);
+    border: 1px solid var(--terracotta);
+    border-radius: 8px;
+    padding: 10px 16px;
+    color: var(--cream);
+    font-size: 13px;
+    font-family: var(--font-body);
+    z-index: 200;
+    opacity: 0;
+    transform: translateY(8px);
+    transition: opacity 0.3s, transform 0.3s;
+    pointer-events: none;
+  }
+  .toast.show {
+    opacity: 1;
+    transform: translateY(0);
+  }
+
   /* ---- Responsive ---- */
   @media (max-width: 640px) {
     body { padding: 0 16px 96px; }
@@ -507,7 +646,7 @@
     <div class="stat-value" id="queue">-</div>
   </div>
   <div class="stat">
-    <div class="stat-label">Segments</div>
+    <div class="stat-label">Produced</div>
     <div class="stat-value" id="segments">-</div>
   </div>
   <div class="stat">
@@ -540,7 +679,57 @@
 <div class="controls">
   <button class="btn" onclick="doShuffle()">Shuffle</button>
   <button class="btn" onclick="doSkip()">Skip</button>
-  <button class="btn" onclick="doPurge()" title="Discard pre-produced segments so the producer regenerates them">Clear Buffer</button>
+  <button class="btn" onclick="doPurge()" title="Discard pre-produced items so the producer regenerates them">Clear Buffer</button>
+</div>
+
+<div class="trigger-bar">
+  <span style="font-size:11px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:0.06em">Trigger:</span>
+  <button class="trigger-btn" id="trigger-banter" onclick="triggerSegment('banter')">&#127897; Banter</button>
+  <button class="trigger-btn" id="trigger-ad" onclick="triggerSegment('ad')">&#128226; Ad Break</button>
+  <span id="trigger-status" style="font-size:11px;color:var(--muted);margin-left:4px"></span>
+</div>
+
+<div class="pacing-section">
+  <div style="font-size:11px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:10px">Pacing</div>
+  <div class="pacing-row">
+    <span class="pacing-label">Songs between banter</span>
+    <input type="range" min="1" max="8" value="2" id="pacing-banter" oninput="onPacingChange()">
+    <span class="pacing-value" id="pacing-banter-val">2</span>
+    <span class="pacing-counter" id="pacing-banter-counter"></span>
+  </div>
+  <div class="pacing-row">
+    <span class="pacing-label">Songs between ads</span>
+    <input type="range" min="1" max="12" value="4" id="pacing-ads" oninput="onPacingChange()">
+    <span class="pacing-value" id="pacing-ads-val">4</span>
+    <span class="pacing-counter" id="pacing-ads-counter"></span>
+  </div>
+  <div class="pacing-row">
+    <span class="pacing-label">Spots per ad break</span>
+    <input type="range" min="1" max="5" value="2" id="pacing-spots" oninput="onPacingChange()">
+    <span class="pacing-value" id="pacing-spots-val">2</span>
+  </div>
+</div>
+
+<div class="consumption-bar" id="consumption-bar">
+  <div class="consumption-stat">
+    <div class="consumption-label">API Calls</div>
+    <div class="consumption-value" id="cons-calls">0</div>
+  </div>
+  <div class="consumption-stat">
+    <div class="consumption-label">Input Tokens</div>
+    <div class="consumption-value" id="cons-input">0</div>
+    <div class="consumption-detail" id="cons-input-cost"></div>
+  </div>
+  <div class="consumption-stat">
+    <div class="consumption-label">Output Tokens</div>
+    <div class="consumption-value" id="cons-output">0</div>
+    <div class="consumption-detail" id="cons-output-cost"></div>
+  </div>
+  <div class="consumption-stat">
+    <div class="consumption-label">Est. Cost</div>
+    <div class="consumption-value" id="cons-cost">$0.00</div>
+    <div class="consumption-detail" id="cons-model"></div>
+  </div>
 </div>
 
 <div class="personality-section">
@@ -605,6 +794,8 @@
     <div class="debug-log" id="debug-errors"></div>
   </div>
 </div>
+
+<div class="toast" id="toast"></div>
 
 <div class="player-bar">
   <div class="label">LISTEN</div>
@@ -760,7 +951,7 @@ function onSliderChange(el) {
       method: 'PATCH',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({[axis]: val}),
-    });
+    }).then(() => showToast(host + ': ' + axis + ' \u2192 ' + val + ' (next banter)'));
   }, 300);
 }
 
@@ -892,6 +1083,49 @@ async function refresh() {
     jokes.innerHTML = (d.running_jokes || []).map(j =>
       '<li>\u201C' + escHtml(j) + '\u201D</li>'
     ).join('') || '<li>No running jokes yet...</li>';
+
+    // Pacing controls — sync from server on first load, then show live counters
+    if (d.pacing) {
+      if (!pacingLoaded) {
+        document.getElementById('pacing-banter').value = d.pacing.songs_between_banter;
+        document.getElementById('pacing-banter-val').textContent = d.pacing.songs_between_banter;
+        document.getElementById('pacing-ads').value = d.pacing.songs_between_ads;
+        document.getElementById('pacing-ads-val').textContent = d.pacing.songs_between_ads;
+        document.getElementById('pacing-spots').value = d.pacing.ad_spots_per_break;
+        document.getElementById('pacing-spots-val').textContent = d.pacing.ad_spots_per_break;
+        pacingLoaded = true;
+      }
+      document.getElementById('pacing-banter-counter').textContent =
+        d.pacing.songs_since_banter + '/' + d.pacing.songs_between_banter;
+      document.getElementById('pacing-ads-counter').textContent =
+        d.pacing.songs_since_ad + '/' + d.pacing.songs_between_ads;
+    }
+
+    // Trigger status
+    const triggerStatus = document.getElementById('trigger-status');
+    if (d.force_pending) {
+      triggerStatus.textContent = d.force_pending + ' pending...';
+      document.getElementById('trigger-' + d.force_pending)?.classList.add('pending');
+    } else {
+      triggerStatus.textContent = '';
+      document.getElementById('trigger-banter')?.classList.remove('pending');
+      document.getElementById('trigger-ad')?.classList.remove('pending');
+    }
+
+    // Consumption metrics
+    if (d.consumption) {
+      const c = d.consumption;
+      document.getElementById('cons-calls').textContent = c.api_calls;
+      document.getElementById('cons-input').textContent = fmtTokens(c.input_tokens);
+      document.getElementById('cons-output').textContent = fmtTokens(c.output_tokens);
+      const cost = estimateCost(c.input_tokens, c.output_tokens);
+      document.getElementById('cons-cost').textContent = '$' + cost.toFixed(3);
+      document.getElementById('cons-input-cost').textContent =
+        '$' + (c.input_tokens * 0.80 / 1000000).toFixed(4);
+      document.getElementById('cons-output-cost').textContent =
+        '$' + (c.output_tokens * 4.0 / 1000000).toFixed(4);
+      document.getElementById('cons-model').textContent = 'Haiku 4.5 pricing';
+    }
 
     // Home Assistant context
     const haCtx = document.getElementById('ha-context');
@@ -1051,6 +1285,69 @@ async function playNext(idx) {
     body: JSON.stringify({index: idx}),
   });
   refresh();
+}
+
+// ---- Toast notification ----
+function showToast(msg, duration) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  clearTimeout(t._timer);
+  t._timer = setTimeout(() => t.classList.remove('show'), duration || 2000);
+}
+
+// ---- Trigger segments on demand ----
+async function triggerSegment(type) {
+  const btn = document.getElementById('trigger-' + type);
+  btn.classList.add('pending');
+  const r = await fetch(_base + '/api/trigger', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({type}),
+  });
+  const d = await r.json();
+  if (d.ok) {
+    showToast((type === 'banter' ? '\uD83C\uDF99' : '\uD83D\uDCE2') + ' ' + type.charAt(0).toUpperCase() + type.slice(1) + ' queued next');
+    document.getElementById('trigger-status').textContent = type + ' pending...';
+  }
+  setTimeout(() => { btn.classList.remove('pending'); refresh(); }, 1500);
+}
+
+// ---- Pacing controls ----
+let pacingDebounce = null;
+let pacingLoaded = false;
+function onPacingChange() {
+  const b = document.getElementById('pacing-banter');
+  const a = document.getElementById('pacing-ads');
+  const s = document.getElementById('pacing-spots');
+  document.getElementById('pacing-banter-val').textContent = b.value;
+  document.getElementById('pacing-ads-val').textContent = a.value;
+  document.getElementById('pacing-spots-val').textContent = s.value;
+
+  clearTimeout(pacingDebounce);
+  pacingDebounce = setTimeout(() => {
+    fetch(_base + '/api/pacing', {
+      method: 'PATCH',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        songs_between_banter: parseInt(b.value),
+        songs_between_ads: parseInt(a.value),
+        ad_spots_per_break: parseInt(s.value),
+      }),
+    }).then(() => showToast('Pacing updated'));
+  }, 400);
+}
+
+// ---- Consumption metrics formatting ----
+function fmtTokens(n) {
+  if (n >= 1000000) return (n / 1000000).toFixed(1) + 'M';
+  if (n >= 1000) return (n / 1000).toFixed(1) + 'k';
+  return String(n);
+}
+
+// Haiku 4.5 pricing: $0.80/MTok input, $4/MTok output
+function estimateCost(input, output) {
+  return (input * 0.80 + output * 4.0) / 1000000;
 }
 
 refresh();

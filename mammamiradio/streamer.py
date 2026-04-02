@@ -14,7 +14,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 
-from mammamiradio.models import PersonalityAxes, Segment
+from mammamiradio.models import PersonalityAxes, Segment, SegmentType
 from mammamiradio.scheduler import preview_upcoming
 
 logger = logging.getLogger(__name__)
@@ -364,6 +364,50 @@ async def purge_queue(request: Request, _: None = Depends(require_admin_access))
     return {"ok": True, "purged": purged}
 
 
+@router.post("/api/trigger")
+async def trigger_segment(request: Request, _: None = Depends(require_admin_access)):
+    """Force the next produced segment to be banter or ad."""
+    body = await request.json()
+    seg_type = body.get("type", "").lower()
+    valid = {"banter": SegmentType.BANTER, "ad": SegmentType.AD}
+    if seg_type not in valid:
+        return {"ok": False, "error": f"type must be one of: {list(valid.keys())}"}
+
+    state = request.app.state.station_state
+    state.force_next = valid[seg_type]
+    return {"ok": True, "triggered": seg_type}
+
+
+@router.get("/api/pacing")
+async def get_pacing(request: Request, _: None = Depends(require_admin_access)):
+    """Return current pacing settings."""
+    config = request.app.state.config
+    return {
+        "songs_between_banter": config.pacing.songs_between_banter,
+        "songs_between_ads": config.pacing.songs_between_ads,
+        "ad_spots_per_break": config.pacing.ad_spots_per_break,
+    }
+
+
+@router.patch("/api/pacing")
+async def update_pacing(request: Request, _: None = Depends(require_admin_access)):
+    """Update pacing settings in real-time."""
+    config = request.app.state.config
+    body = await request.json()
+    if "songs_between_banter" in body:
+        config.pacing.songs_between_banter = max(1, int(body["songs_between_banter"]))
+    if "songs_between_ads" in body:
+        config.pacing.songs_between_ads = max(1, int(body["songs_between_ads"]))
+    if "ad_spots_per_break" in body:
+        config.pacing.ad_spots_per_break = max(1, min(5, int(body["ad_spots_per_break"])))
+    return {
+        "ok": True,
+        "songs_between_banter": config.pacing.songs_between_banter,
+        "songs_between_ads": config.pacing.songs_between_ads,
+        "ad_spots_per_break": config.pacing.ad_spots_per_break,
+    }
+
+
 @router.post("/api/playlist/remove")
 async def remove_track(request: Request, _: None = Depends(require_admin_access)):
     """Remove a track from playlist by index."""
@@ -588,6 +632,20 @@ async def status(request: Request, _: None = Depends(require_admin_access)):
                 for e in state.segment_log
                 if e.metadata.get("error")
             ][-5:],
+            "pacing": {
+                "songs_between_banter": config.pacing.songs_between_banter,
+                "songs_between_ads": config.pacing.songs_between_ads,
+                "ad_spots_per_break": config.pacing.ad_spots_per_break,
+                "songs_since_banter": state.songs_since_banter,
+                "songs_since_ad": state.songs_since_ad,
+            },
+            "consumption": {
+                "api_calls": state.api_calls,
+                "input_tokens": state.api_input_tokens,
+                "output_tokens": state.api_output_tokens,
+                "tts_characters": state.tts_characters,
+            },
+            "force_pending": state.force_next.value if state.force_next else None,
         }
     )
     return payload

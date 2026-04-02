@@ -74,7 +74,13 @@ async def run_producer(
             await asyncio.sleep(0.5)
             continue
 
-        seg_type = next_segment_type(state, config.pacing)
+        # Check for forced trigger first, otherwise use scheduler
+        if state.force_next is not None:
+            seg_type = state.force_next
+            state.force_next = None
+            logger.info("Forced trigger: %s", seg_type.value)
+        else:
+            seg_type = next_segment_type(state, config.pacing)
         segment: Segment | None = None
 
         # Refresh Home Assistant context for banter/ad segments

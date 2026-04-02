@@ -132,6 +132,11 @@ Return JSON:
             messages=[{"role": "user", "content": prompt}],
         )
         raw = resp.content[0].text.strip()  # type: ignore[union-attr]
+        # Track consumption
+        if hasattr(resp, "usage") and resp.usage:
+            state.api_calls += 1
+            state.api_input_tokens += resp.usage.input_tokens
+            state.api_output_tokens += resp.usage.output_tokens
         # Strip markdown fences if present
         if raw.startswith("```"):
             raw = raw.split("\n", 1)[1].rsplit("```", 1)[0].strip()
@@ -270,6 +275,11 @@ Return JSON:
             messages=[{"role": "user", "content": prompt}],
         )
         raw = resp.content[0].text.strip()  # type: ignore[union-attr]
+        # Track consumption
+        if hasattr(resp, "usage") and resp.usage:
+            state.api_calls += 1
+            state.api_input_tokens += resp.usage.input_tokens
+            state.api_output_tokens += resp.usage.output_tokens
         if raw.startswith("```"):
             raw = raw.split("\n", 1)[1].rsplit("```", 1)[0].strip()
         data = json.loads(raw)
