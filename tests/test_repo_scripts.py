@@ -48,13 +48,13 @@ def test_check_commit_msg_rejects_non_conventional_prefix(tmp_path: Path) -> Non
 def test_check_version_sync_uses_staged_versions(tmp_path: Path) -> None:
     _init_git_repo(tmp_path)
     _write(tmp_path / "ha-addon/mammamiradio/config.yaml", 'version: "1.0.0"\n')
-    _write(tmp_path / "pyproject.toml", '[project]\nversion = "1.0.0"\n')
+    _write(tmp_path / "pyproject.toml", '[project]\nname = "mammamiradio"\nversion = "1.0.0"\n')
     _run(["git", "add", "ha-addon/mammamiradio/config.yaml", "pyproject.toml"], cwd=tmp_path)
     _run(["git", "commit", "-qm", "init"], cwd=tmp_path)
 
     _write(tmp_path / "ha-addon/mammamiradio/config.yaml", 'version: "1.1.0"\n')
     _run(["git", "add", "ha-addon/mammamiradio/config.yaml"], cwd=tmp_path)
-    _write(tmp_path / "pyproject.toml", '[project]\nversion = "1.1.0"\n')
+    _write(tmp_path / "pyproject.toml", '[project]\nname = "mammamiradio"\nversion = "1.1.0"\n')
 
     result = _run(["bash", str(CHECK_VERSION_SYNC)], cwd=tmp_path)
 
@@ -67,12 +67,12 @@ def test_check_version_sync_uses_staged_versions(tmp_path: Path) -> None:
 def test_check_version_sync_passes_when_index_matches(tmp_path: Path) -> None:
     _init_git_repo(tmp_path)
     _write(tmp_path / "ha-addon/mammamiradio/config.yaml", 'version: "1.0.0"\n')
-    _write(tmp_path / "pyproject.toml", '[project]\nversion = "1.0.0"\n')
+    _write(tmp_path / "pyproject.toml", '[project]\nname = "mammamiradio"\nversion = "1.0.0"\n')
     _run(["git", "add", "ha-addon/mammamiradio/config.yaml", "pyproject.toml"], cwd=tmp_path)
     _run(["git", "commit", "-qm", "init"], cwd=tmp_path)
 
     _write(tmp_path / "ha-addon/mammamiradio/config.yaml", 'version: "1.1.0"\n')
-    _write(tmp_path / "pyproject.toml", '[project]\nversion = "1.1.0"\n')
+    _write(tmp_path / "pyproject.toml", '[project]\nname = "mammamiradio"\nversion = "1.1.0"\n')
     _run(["git", "add", "ha-addon/mammamiradio/config.yaml", "pyproject.toml"], cwd=tmp_path)
 
     result = _run(["bash", str(CHECK_VERSION_SYNC)], cwd=tmp_path)

@@ -4,6 +4,22 @@ All notable changes to `mammamiradio` are documented here.
 
 The current version source of truth is `pyproject.toml`.
 
+## [1.1.1] - 2026-04-02
+
+### Changed
+
+- Pre-commit now installs both `pre-commit` and `commit-msg` hooks so conventional commit messages and addon version sync are enforced locally before push.
+- Added `scripts/validate-addon.sh` as a local HA addon smoke check covering version sync, config wiring, Dockerfile safety, translations, and ingress safety.
+
+### Fixed
+
+- `scripts/check-version-sync.sh` now reads staged file contents from the git index, so partially staged commits cannot bypass the version-sync guard.
+- `scripts/validate-addon.sh` now fails if `_inject_ingress_prefix` rewrites single-quoted JavaScript paths, while still allowing the service worker path rewrite needed for ingress.
+
+### For contributors
+
+- Added regression tests for the staged-version hook behavior and the ingress validator so these local safeguards do not silently regress.
+
 ## [1.1.0] - 2026-04-01
 
 ### Added

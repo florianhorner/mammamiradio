@@ -10,7 +10,7 @@ if ! echo "$STAGED" | grep -qE '(ha-addon/mammamiradio/config\.yaml|pyproject\.t
 fi
 
 ADDON_VER=$(git show :ha-addon/mammamiradio/config.yaml | awk '/^version:/{print $2}' | tr -d '"' | head -1)
-PYPROJECT_VER=$(git show :pyproject.toml | sed -n 's/^version *= *"//;s/".*//p' | head -1)
+PYPROJECT_VER=$(git show :pyproject.toml | sed -n 's/^version *= *"\([^"]*\)".*/\1/p' | head -1)
 
 if [ "$ADDON_VER" != "$PYPROJECT_VER" ]; then
     echo "ERROR: Version mismatch!"
