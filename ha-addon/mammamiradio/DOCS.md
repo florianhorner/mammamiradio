@@ -24,13 +24,14 @@ HA Supervisor
 
 ## Startup sequence
 
-1. `run.sh` reads `/data/options.json`, exports env vars
-2. `run.sh` starts uvicorn
-3. FastAPI startup loads `radio.toml`, fetches playlist from Spotify
-4. If Spotify API fails, falls back to demo playlist (10 built-in tracks)
-5. Starts go-librespot for Spotify Connect
-6. If go-librespot fails, falls back to local files / yt-dlp / placeholder tones
-7. Starts producer and playback tasks
+1. `run.sh` reads `/data/options.json` and exports env vars for the addon runtime.
+2. `run.sh` syncs `/data/go-librespot/config.yml` from the shipped defaults so the current `device_name` is present before app startup.
+3. `run.sh` starts uvicorn.
+4. FastAPI startup in `mammamiradio/main.py` loads `radio.toml`.
+5. `mammamiradio/main.py` initializes go-librespot and Spotify setup before calling `fetch_playlist()`.
+6. If `fetch_playlist()` or Spotify API auth fails, the app falls back to the demo playlist (10 built-in tracks).
+7. If go-librespot fails, playback falls back to local files, yt-dlp, or placeholder tones.
+8. Producer and playback tasks start once startup initialization completes.
 
 **Startup timeout**: `config.yaml` sets `timeout: 300` (5 minutes). The first boot is slow because it fetches the playlist and renders the first segment. If the addon is killed during startup, check the Supervisor log — a timeout kill looks like `Container terminated` with no error from the app.
 
@@ -135,7 +136,7 @@ HA Supervisor
   |     ADMIN_TOKEN=(auto-generated)
   |
   +-- config.py reads env vars, applies addon overrides
-        go_librespot_config_dir -> /data/go-librespot
+        go_librespot_config_dir -> /data/go-librespot  (inside the add-on container)
         homeassistant.url -> http://supervisor/core
 ```
 
@@ -176,6 +177,6 @@ Browser: http://ha:8123/api/hassio_ingress/<token>/
 ## Known limitations
 
 - **No user OAuth in addon mode**: Liked songs and private playlists require user OAuth flow, which needs a browser redirect. Not practical in addon mode. Use a public playlist URL instead.
-- **go-librespot credentials persist across updates**: The default config is staged at `/defaults/go-librespot-config.yml` and only copied to `/data/go-librespot/config.yml` on first install. Updates preserve Spotify auth state. If `/data` is wiped, the addon re-initializes the config on next start.
+- **go-librespot credentials persist across updates**: The default config is staged at `/defaults/go-librespot-config.yml`. On boot, the addon ensures `/data/go-librespot/config.yml` exists and refreshes only the `device_name` field to match the shipped default. That path is inside the add-on container, not on the host machine. Credentials/state files beside it still persist across updates. If `/data` is wiped, the addon re-initializes the config on next start.
 - **`host_network: true` is broad**: Required for mDNS/zeroconf discovery. Side effect: addon can reach any LAN device and port 8000 is exposed on the host.
 - **Access logs disabled**: `--no-access-log` prevents stream listener requests from flooding the Supervisor log. If you need request debugging, remove this flag in `run.sh`.

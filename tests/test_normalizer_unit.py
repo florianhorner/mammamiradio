@@ -187,6 +187,23 @@ def test_generate_sweep_builds_command(mock_subprocess):
 
     cmd = mock_run.call_args[0][0]
     assert cmd[0] == "ffmpeg"
-    # Should contain sine source with the default start frequency
     joined = " ".join(cmd)
-    assert "sine=frequency=200" in joined
+    assert "aevalsrc=" in joined
+    assert "(t/0.8)" in joined
+    assert "log(10)" in joined or "log(10.0)" in joined
+
+
+def test_generate_sweep_same_frequency_uses_tone(mock_subprocess):
+    with patch("mammamiradio.normalizer.generate_tone", return_value=Path("/tmp/tone.mp3")) as mock_tone:
+        result = generate_sweep(Path("/tmp/tone.mp3"), start_hz=440, end_hz=440, duration_sec=0.3)
+
+    assert result == Path("/tmp/tone.mp3")
+    mock_tone.assert_called_once_with(Path("/tmp/tone.mp3"), freq_hz=440, duration_sec=0.3)
+
+
+@pytest.mark.requires_ffmpeg
+def test_generate_sweep_with_ffmpeg(tmp_path):
+    out = generate_sweep(tmp_path / "sweep.mp3", start_hz=200, end_hz=2000, duration_sec=0.2)
+
+    assert out.exists()
+    assert out.stat().st_size > 1000

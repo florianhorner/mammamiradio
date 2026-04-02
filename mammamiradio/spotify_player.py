@@ -26,6 +26,8 @@ from pathlib import Path
 import httpx
 
 from mammamiradio.config import StationConfig
+from mammamiradio.go_librespot_config import load_go_librespot_device_name
+from mammamiradio.go_librespot_runtime import build_go_librespot_runtime, read_owned_pid
 from mammamiradio.models import Track
 
 logger = logging.getLogger(__name__)
@@ -44,10 +46,18 @@ class SpotifyPlayer:
         self._process: subprocess.Popen | None = None
         self._authenticated = False
         self._config_dir = Path(config.audio.go_librespot_config_dir)
+        self._device_name = load_go_librespot_device_name(self._config_dir)
         self._log_file = None
         self._fifo_path = Path(config.audio.fifo_path)
         self._drain_pid_file = config.tmp_dir / "fifo-drain.pid"
         self._api_base = f"http://127.0.0.1:{config.audio.go_librespot_port}"
+        self._go_librespot_runtime = build_go_librespot_runtime(
+            go_librespot_bin=config.audio.go_librespot_bin,
+            config_dir=self._config_dir,
+            fifo_path=self._fifo_path,
+            port=config.audio.go_librespot_port,
+            tmp_dir=config.tmp_dir,
+        )
 
         # Persistent FIFO drain
         self._drain_thread: threading.Thread | None = None
@@ -55,6 +65,10 @@ class SpotifyPlayer:
         self._capture_sink: subprocess.Popen | None = None  # ffmpeg stdin
         self._capture_lock = threading.Lock()
         self._transfer_counter = 0
+
+    @property
+    def device_name(self) -> str:
+        return self._device_name
 
     def _ensure_fifo(self) -> None:
         """Create or repair the PCM FIFO used by go-librespot output."""
@@ -115,16 +129,15 @@ class SpotifyPlayer:
         logger.info("FIFO drain thread stopped")
 
     def _is_golibrespot_running(self) -> bool:
-        """Check if go-librespot is running with our config dir (not any unrelated instance)."""
-        try:
-            result = subprocess.run(
-                ["pgrep", "-f", f"go-librespot.*{self._config_dir}"],
-                capture_output=True,
-                text=True,
-            )
-            return result.returncode == 0
-        except Exception:
+        """Check whether start.sh already owns a compatible go-librespot process."""
+        pid = read_owned_pid(
+            self._go_librespot_runtime.state_file,
+            self._go_librespot_runtime.fingerprint,
+        )
+        if pid is None:
             return False
+        self._external_pid = pid
+        return True
 
     def _read_fallback_drain_pid(self) -> int | None:
         try:
@@ -314,19 +327,20 @@ class SpotifyPlayer:
             device_names = []
             for d in devices.get("devices", []):
                 device_names.append(d.get("name", "?"))
-                if d.get("name") == "mammamiradio":
+                if d.get("name") == self._device_name:
                     our_device = d
                     break
 
             if our_device:
                 sp.transfer_playback(our_device["id"], force_play=False)
-                logger.info("Auto-transferred playback to mammamiradio (device %s)", our_device["id"])
+                logger.info("Auto-transferred playback to %s (device %s)", self._device_name, our_device["id"])
                 # Wait a moment for go-librespot to register the connection
                 await asyncio.sleep(2)
                 self._authenticated = True
             else:
                 logger.info(
-                    "mammamiradio not in Spotify devices yet (visible: %s). Select it manually in Spotify app.",
+                    "%s not in Spotify devices yet (visible: %s). Select it manually in Spotify app.",
+                    self._device_name,
                     ", ".join(device_names) or "none",
                 )
 

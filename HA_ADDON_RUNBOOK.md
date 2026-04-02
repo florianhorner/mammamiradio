@@ -74,6 +74,14 @@ The addon Dockerfile installs mammamiradio from LOCAL source copied by CI into t
 
 CI copies `mammamiradio/`, `pyproject.toml`, and `radio.toml` into `ha-addon/mammamiradio/` before building.
 
+Before every commit or push that touches addon packaging, run:
+
+```bash
+scripts/test-addon-local.sh
+```
+
+That command stages the same local-source build context as CI and runs the add-on image build locally. If this command fails, do not push.
+
 ## Image path
 
 HA expects images at:
@@ -89,7 +97,7 @@ The standalone Docker image (for non-HA users) is separate: `ghcr.io/florianhorn
 
 Before merging ANY change that touches addon files:
 
-- [ ] `./scripts/validate-addon.sh` passes (`--build` if you changed Docker/build plumbing)
+- [ ] `scripts/test-addon-local.sh` passes locally
 - [ ] Version bumped in both files (if this is a release)
 - [ ] `ruff check . && ruff format --check .` passes
 - [ ] `pytest tests/` passes (200+ tests)

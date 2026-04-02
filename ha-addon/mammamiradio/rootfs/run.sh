@@ -68,11 +68,14 @@ export MAMMAMIRADIO_TMP_DIR="/data/tmp"
 # ---- Ensure directories exist ----
 mkdir -p /data/cache /data/music /data/tmp /data/go-librespot
 
-# ---- Initialize go-librespot config (only on first install, preserves auth state) ----
-if [ ! -f /data/go-librespot/config.yml ]; then
-    cp /defaults/go-librespot-config.yml /data/go-librespot/config.yml
-    echo "[mammamiradio] Initialized go-librespot config"
-fi
+# ---- Initialize go-librespot config and keep device_name aligned with the shipped default ----
+SYNC_MSG="$(python3 -m mammamiradio.go_librespot_config sync \
+    /defaults/go-librespot-config.yml \
+    /data/go-librespot/config.yml 2>&1)" || {
+    echo "[mammamiradio] ERROR: go-librespot config sync failed: $SYNC_MSG"
+    exit 1
+}
+echo "[mammamiradio] $SYNC_MSG"
 
 # ---- Validate critical files exist ----
 if [ ! -f /app/radio.toml ]; then

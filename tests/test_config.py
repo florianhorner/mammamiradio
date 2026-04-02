@@ -85,6 +85,17 @@ def test_runtime_json_keys():
     assert "bind_host" in result
     assert "fifo_path" in result
     assert "go_librespot_bin" in result
+    assert "go_librespot_config_dir" in result
+
+
+def test_runtime_json_includes_resolved_go_librespot_config_dir():
+    toml_path = Path(__file__).parent.parent / "radio.toml"
+    config = load_config(str(toml_path))
+    config.audio.go_librespot_config_dir = "custom-go-librespot"
+
+    result = runtime_json(config)
+
+    assert result["go_librespot_config_dir"] == "custom-go-librespot"
 
 
 def test_non_local_bind_requires_admin_auth(monkeypatch):

@@ -42,6 +42,7 @@ def test_runtime_json_output():
         "port",
         "fifo_path",
         "go_librespot_bin",
+        "go_librespot_config_dir",
         "go_librespot_port",
         "tmp_dir",
     }

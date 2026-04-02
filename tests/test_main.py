@@ -74,6 +74,43 @@ async def test_startup_without_golibrespot():
 
 
 @pytest.mark.asyncio
+async def test_startup_starts_spotify_before_fetching_playlist():
+    from mammamiradio.models import Track
+
+    order: list[str] = []
+    mock_config = MagicMock()
+    mock_config.station.name = "TestRadio"
+    mock_config.station.language = "it"
+    mock_config.playlist.spotify_url = "spotify:test"
+    mock_config.bind_host = "127.0.0.1"
+    mock_config.port = 8000
+    mock_config.pacing.lookahead_segments = 3
+    mock_config.tmp_dir = MagicMock()
+    mock_config.cache_dir = MagicMock()
+
+    mock_player = MagicMock()
+    mock_player.device_name = "mammamiradio"
+    mock_player.start.side_effect = lambda: order.append("spotify")
+
+    def _fetch_playlist(_config):
+        order.append("playlist")
+        return [Track(title="S", artist="A", duration_ms=1, spotify_id="x")]
+
+    with (
+        patch(f"{MODULE}.load_config", return_value=mock_config),
+        patch(f"{MODULE}.fetch_playlist", side_effect=_fetch_playlist),
+        patch(f"{MODULE}.SpotifyPlayer", return_value=mock_player),
+        patch(f"{MODULE}.run_producer", new_callable=AsyncMock),
+        patch(f"{MODULE}.run_playback_loop", new_callable=AsyncMock),
+    ):
+        from mammamiradio.main import startup
+
+        await startup()
+
+    assert order[:2] == ["spotify", "playlist"]
+
+
+@pytest.mark.asyncio
 async def test_shutdown_cancels_tasks():
     """shutdown() cancels producer and playback tasks and awaits gather."""
     import mammamiradio.main as main_mod

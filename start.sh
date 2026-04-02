@@ -7,42 +7,73 @@ cd "$(dirname "$0")"
 set -a
 [ -f .env ] && source .env
 set +a
-mkdir -p tmp
 
-# Resolve runtime settings from radio.toml + .env via the config helper
-RUNTIME_JSON="$(.venv/bin/python -m mammamiradio.config runtime-json 2>/dev/null || true)"
-if [ -n "$RUNTIME_JSON" ]; then
-    FIFO="$(echo "$RUNTIME_JSON" | .venv/bin/python -c 'import json,sys; print(json.load(sys.stdin)["fifo_path"])')"
-    GO_LIBRESPOT_BIN="$(echo "$RUNTIME_JSON" | .venv/bin/python -c 'import json,sys; print(json.load(sys.stdin)["go_librespot_bin"])')"
-    HOST="$(echo "$RUNTIME_JSON" | .venv/bin/python -c 'import json,sys; print(json.load(sys.stdin)["bind_host"])')"
-    PORT="$(echo "$RUNTIME_JSON" | .venv/bin/python -c 'import json,sys; print(json.load(sys.stdin)["port"])')"
-else
-    echo "Warning: could not resolve runtime config, using defaults" >&2
-    FIFO="${MAMMAMIRADIO_FIFO_PATH:-/tmp/mammamiradio.pcm}"
-    GO_LIBRESPOT_BIN="${GO_LIBRESPOT_BIN:-go-librespot}"
-    HOST="${MAMMAMIRADIO_BIND_HOST:-127.0.0.1}"
-    PORT="${MAMMAMIRADIO_PORT:-8000}"
+PYTHON_BIN=".venv/bin/python"
+if [ ! -x "$PYTHON_BIN" ]; then
+    echo "FATAL: $PYTHON_BIN not found. Create the project virtualenv before running start.sh." >&2
+    exit 1
 fi
 
-DRAIN_PID_FILE="tmp/fifo-drain.pid"
+fail_runtime() {
+    echo "FATAL: $1" >&2
+    exit 1
+}
+
+run_python_or_fail() {
+    local err_file output
+    err_file="$(mktemp)"
+    if ! output="$("$PYTHON_BIN" "$@" 2>"$err_file")"; then
+        fail_runtime "$(cat "$err_file")"
+    fi
+    rm -f "$err_file"
+    printf '%s' "$output"
+}
+
+cleanup_claim_failure() {
+    local pid="$1"
+    kill -TERM "$pid" 2>/dev/null || true
+    sleep 1
+    kill -0 "$pid" 2>/dev/null && kill -KILL "$pid" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || true
+    rm -f "$GO_LIBRESPOT_STATE_FILE"
+    fail_runtime "failed to claim go-librespot ownership"
+}
+
+# Resolve all runtime settings in a single Python invocation (avoids 16 separate spawns)
+STARTUP_ENV="$(run_python_or_fail -m mammamiradio.config startup-env)"
+eval "$STARTUP_ENV"
+
+mkdir -p "$TMP_DIR"
+DRAIN_PID_FILE="$TMP_DIR/fifo-drain.pid"
+GO_LIBRESPOT_LOG="$TMP_DIR/go-librespot.log"
+
+echo "Using go-librespot config dir: $GO_LIBRESPOT_CONFIG_DIR"
 
 # Ensure FIFO exists
 [ -p "$FIFO" ] || (rm -f "$FIFO" && mkfifo "$FIFO")
 
 # Start go-librespot if not already running (tolerate missing binary)
-if ! pgrep -f "go-librespot.*mammamiradio" > /dev/null 2>&1; then
+if [ -z "$GOLIBRESPOT_OWNED_PID" ]; then
     if [ -x "$GO_LIBRESPOT_BIN" ] || command -v "$GO_LIBRESPOT_BIN" > /dev/null 2>&1; then
         echo "Starting go-librespot..."
         "$GO_LIBRESPOT_BIN" \
-            --config_dir go-librespot \
-            > /dev/null 2>tmp/go-librespot.log &
-        echo "go-librespot PID: $!"
-        echo "Select 'mammamiradio' in your Spotify app"
+            --config_dir "$GO_LIBRESPOT_CONFIG_DIR" \
+            > /dev/null 2>"$GO_LIBRESPOT_LOG" &
+        GO_PID=$!
+        if ! "$PYTHON_BIN" -m mammamiradio.go_librespot_runtime claim \
+            "$GO_LIBRESPOT_STATE_FILE" \
+            "$GO_PID" \
+            "$GO_LIBRESPOT_FINGERPRINT" \
+            "$GO_LIBRESPOT_BIN" \
+            "$GO_LIBRESPOT_CONFIG_DIR"; then
+            cleanup_claim_failure "$GO_PID"
+        fi
+        echo "go-librespot PID: $GO_PID"
     else
         echo "Warning: go-librespot not found at $GO_LIBRESPOT_BIN — running without Spotify" >&2
     fi
 else
-    echo "go-librespot already running ($(pgrep -f 'go-librespot.*mammamiradio'))"
+    echo "go-librespot already running ($GOLIBRESPOT_OWNED_PID)"
 fi
 
 # Start fallback FIFO drain. The app will reclaim this on startup and restore it

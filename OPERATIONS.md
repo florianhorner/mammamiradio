@@ -27,7 +27,8 @@ Environment:
 Static config:
 
 - `radio.toml`
-- `go-librespot/config.yml`
+- local dev: `go-librespot/config.yml`
+- Home Assistant add-on only: `/data/go-librespot/config.yml` inside the add-on container
 
 ## Runtime outputs
 
@@ -50,6 +51,14 @@ That script matters because it:
 - starts go-librespot if not already running
 - keeps a fallback FIFO drain alive across reloads
 - launches uvicorn
+
+If you need to verify which go-librespot config directory the app resolved for the current environment, run:
+
+```bash
+.venv/bin/python -m mammamiradio.config runtime-json
+```
+
+Local dev should report `go-librespot`. Home Assistant add-on mode reports `/data/go-librespot`.
 
 If you replace it in production, your replacement needs to preserve the FIFO + go-librespot behavior or you will reintroduce the macOS-style skip problems this repo already worked around.
 
