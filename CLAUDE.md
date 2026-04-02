@@ -18,12 +18,15 @@ AI-powered Italian radio station engine. Python 3.11+, FastAPI, FFmpeg, optional
 - Install: `pip install -e .`
 - Run full local stack: `./start.sh`
 - Run app only: `source .venv/bin/activate && python -m uvicorn mammamiradio.main:app --reload --reload-dir mammamiradio`
-- Test: `pytest tests/`
+- Test: `pytest tests/` or `make test` (with coverage)
+- Test watch: `make test-watch` (re-runs on file save)
 - Test HA add-on build locally: `scripts/test-addon-local.sh`
 - Lint: `ruff check .` (fix: `ruff check --fix .`)
 - Format: `ruff format .` (check: `ruff format --check .`)
 - Type check: `mypy mammamiradio/ tests/`
-- Pre-commit: `pip install pre-commit && pre-commit install --hook-type pre-commit --hook-type pre-push`
+- All checks: `make check` (lint + typecheck + test)
+- Pre-commit: `pip install pre-commit && pre-commit install --hook-type pre-commit --hook-type pre-push --hook-type commit-msg`
+- **Validate addon before push**: `./scripts/validate-addon.sh` (add `--build` for Docker build test)
 
 ## Docker / Home Assistant
 
@@ -41,6 +44,7 @@ AI-powered Italian radio station engine. Python 3.11+, FastAPI, FFmpeg, optional
 
 - `MAMMAMIRADIO_BIND_HOST`, `MAMMAMIRADIO_PORT`: bind address and port
 - `MAMMAMIRADIO_CACHE_DIR`, `MAMMAMIRADIO_TMP_DIR`: override cache/tmp directories (for Docker volumes)
+- `LOG_LEVEL`: override log verbosity (`DEBUG`, `INFO`, `WARNING`, `ERROR`; default `INFO`)
 - `ADMIN_USERNAME`, `ADMIN_PASSWORD`, `ADMIN_TOKEN`: admin auth
 - `SPOTIFY_CLIENT_ID`, `SPOTIFY_CLIENT_SECRET`: Spotify Web API access
 - `ANTHROPIC_API_KEY`: Claude banter/ad generation

@@ -600,6 +600,27 @@ def _public_status_payload(request: Request) -> dict:
     }
 
 
+@router.get("/healthz")
+async def healthz(request: Request):
+    """Unauthenticated liveness probe — is the process alive?"""
+    start_time = getattr(request.app.state, "start_time", None)
+    uptime = round(time.time() - start_time, 1) if start_time else 0
+    return {"status": "ok", "uptime_s": uptime}
+
+
+@router.get("/readyz")
+async def readyz(request: Request):
+    """Unauthenticated readiness probe — is the station ready to stream?"""
+    start_time = getattr(request.app.state, "start_time", None)
+    queue = getattr(request.app.state, "queue", None)
+    queue_depth = queue.qsize() if queue else -1
+    return {
+        "status": "ready" if queue_depth > 0 else "starting",
+        "queue_depth": queue_depth,
+        "uptime_s": round(time.time() - start_time, 1) if start_time else 0,
+    }
+
+
 @router.get("/public-status")
 async def public_status(request: Request):
     """Return listener-safe station metadata and upcoming segment previews."""

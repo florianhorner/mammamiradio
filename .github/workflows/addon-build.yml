@@ -65,6 +65,7 @@ jobs:
       contents: read
       packages: write
     strategy:
+      fail-fast: false
       matrix:
         arch: [amd64, aarch64]
         include:
