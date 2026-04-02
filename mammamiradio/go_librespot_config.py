@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import codecs
 import re
 import shutil
 import sys
@@ -34,7 +35,10 @@ def _parse_yaml_scalar(value: str) -> str:
         unquoted = raw[1:-1]
         if raw[0] == "'":
             return unquoted.replace("''", "'")
-        return unquoted.replace('\\"', '"')
+        try:
+            return codecs.decode(unquoted, "unicode_escape")
+        except Exception:
+            return unquoted
     return raw
 
 

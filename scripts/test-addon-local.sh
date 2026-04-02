@@ -3,7 +3,7 @@
 # Mirrors the validation steps in .github/workflows/addon-build.yml plus
 # additional checks derived from real production failures.
 #
-# Usage: ./scripts/validate-addon.sh [--build]
+# Usage: ./scripts/test-addon-local.sh [--build]
 #   --build    Also build the Docker image locally (slow, requires Docker)
 set -euo pipefail
 
@@ -151,12 +151,14 @@ fi
 
 # ---- 9. Translations cover all options ----
 echo "9. Translations"
+trans_errors=0
 for key in $SCHEMA_KEYS; do
     if ! grep -q "$key" ha-addon/mammamiradio/translations/en.yaml 2>/dev/null; then
         fail "Translation missing for option: $key"
+        trans_errors=$((trans_errors + 1))
     fi
 done
-if [ $errors -eq 0 ]; then
+if [ $trans_errors -eq 0 ]; then
     pass "All options have translations"
 fi
 
@@ -235,7 +237,7 @@ if [ "${1:-}" = "--build" ]; then
 
     # Simulate CI: copy source into build context
     TMPCTX=$(mktemp -d)
-    trap "rm -rf $TMPCTX" EXIT
+    trap 'rm -rf "$TMPCTX"' EXIT
     cp -r ha-addon/mammamiradio/* "$TMPCTX/"
     cp -r mammamiradio/ "$TMPCTX/mammamiradio/"
     cp pyproject.toml "$TMPCTX/"

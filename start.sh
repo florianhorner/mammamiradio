@@ -14,14 +14,33 @@ if [ ! -x "$PYTHON_BIN" ]; then
     exit 1
 fi
 
-# Resolve all runtime settings in a single Python invocation (avoids 16 separate spawns)
-STARTUP_ERR="$(mktemp)"
-if ! STARTUP_ENV="$("$PYTHON_BIN" -m mammamiradio.config startup-env 2>"$STARTUP_ERR")"; then
-    echo "FATAL: could not resolve runtime config: $(cat "$STARTUP_ERR")" >&2
-    rm -f "$STARTUP_ERR"
+fail_runtime() {
+    echo "FATAL: $1" >&2
     exit 1
-fi
-rm -f "$STARTUP_ERR"
+}
+
+run_python_or_fail() {
+    local err_file output
+    err_file="$(mktemp)"
+    if ! output="$("$PYTHON_BIN" "$@" 2>"$err_file")"; then
+        fail_runtime "$(cat "$err_file")"
+    fi
+    rm -f "$err_file"
+    printf '%s' "$output"
+}
+
+cleanup_claim_failure() {
+    local pid="$1"
+    kill -TERM "$pid" 2>/dev/null || true
+    sleep 1
+    kill -0 "$pid" 2>/dev/null && kill -KILL "$pid" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || true
+    rm -f "$GO_LIBRESPOT_STATE_FILE"
+    fail_runtime "failed to claim go-librespot ownership"
+}
+
+# Resolve all runtime settings in a single Python invocation (avoids 16 separate spawns)
+STARTUP_ENV="$(run_python_or_fail -m mammamiradio.config startup-env)"
 eval "$STARTUP_ENV"
 
 mkdir -p "$TMP_DIR"
@@ -41,12 +60,14 @@ if [ -z "$GOLIBRESPOT_OWNED_PID" ]; then
             --config_dir "$GO_LIBRESPOT_CONFIG_DIR" \
             > /dev/null 2>"$GO_LIBRESPOT_LOG" &
         GO_PID=$!
-        "$PYTHON_BIN" -m mammamiradio.go_librespot_runtime claim \
+        if ! "$PYTHON_BIN" -m mammamiradio.go_librespot_runtime claim \
             "$GO_LIBRESPOT_STATE_FILE" \
             "$GO_PID" \
             "$GO_LIBRESPOT_FINGERPRINT" \
             "$GO_LIBRESPOT_BIN" \
-            "$GO_LIBRESPOT_CONFIG_DIR"
+            "$GO_LIBRESPOT_CONFIG_DIR"; then
+            cleanup_claim_failure "$GO_PID"
+        fi
         echo "go-librespot PID: $GO_PID"
     else
         echo "Warning: go-librespot not found at $GO_LIBRESPOT_BIN — running without Spotify" >&2

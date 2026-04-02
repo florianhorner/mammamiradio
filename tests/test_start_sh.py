@@ -165,7 +165,7 @@ def test_start_sh_fails_closed_when_runtime_json_fails(tmp_path):
     )
 
     assert result.returncode != 0
-    assert "FATAL: could not resolve runtime config: runtime-json exploded" in result.stderr
+    assert "FATAL: runtime-json exploded" in result.stderr
     assert not runtime_tmp.exists()
     assert not (workspace / "uvicorn.log").exists()
 
@@ -201,7 +201,7 @@ while true; do sleep 1; done
     }
 
     drain_pid = None
-    state: dict[str, int | str] = {}
+    state: dict[str, object] = {}
     try:
         first = _run_start_sh(workspace, env)
         assert first.returncode == 0
@@ -220,5 +220,76 @@ while true; do sleep 1; done
         if drain_pid_file.exists():
             drain_pid = int(drain_pid_file.read_text().strip())
     finally:
-        _stop_pid(state.get("pid") if state else None)
+        _stop_pid(int(state["pid"]) if state.get("pid") is not None else None)
         _stop_pid(drain_pid)
+
+
+def test_start_sh_cleans_up_go_librespot_when_claim_fails(tmp_path):
+    workspace = _make_start_workspace(tmp_path)
+    runtime_tmp = workspace / "runtime-tmp"
+    config_dir = workspace / "go-librespot"
+    config_dir.mkdir()
+    fifo_path = workspace / "mammamiradio.pcm"
+    go_librespot_log = workspace / "go-librespot-invocations.log"
+    launcher = workspace / "fake-go-librespot"
+    claim_state = workspace / "claim-attempted"
+    _write(
+        launcher,
+        """#!/bin/sh
+trap '' HUP
+echo "$$ $*" >> "$FAKE_GO_LIBRESPOT_INVOCATIONS"
+trap 'exit 0' TERM INT
+while true; do sleep 1; done
+""",
+    )
+    launcher.chmod(0o755)
+    _write(
+        workspace / "mammamiradio" / "go_librespot_runtime.py",
+        """
+import os
+import sys
+from pathlib import Path
+from types import SimpleNamespace
+
+
+def build_go_librespot_runtime(go_bin, config_dir, fifo, port, tmp_dir):
+    return SimpleNamespace(
+        config_dir=Path(config_dir),
+        port=port,
+        tmp_dir=Path(tmp_dir),
+        fingerprint="fake-fingerprint",
+        state_file=Path(tmp_dir) / "go-librespot.state.json",
+    )
+
+
+def read_owned_pid(state_file, fingerprint):
+    return None
+
+if __name__ == "__main__":
+    if len(sys.argv) > 1 and sys.argv[1] == "claim":
+        Path(os.environ["FAKE_CLAIM_MARKER"]).write_text("attempted\\n")
+        raise SystemExit(7)
+    raise SystemExit(0)
+""".lstrip(),
+    )
+
+    result = _run_start_sh(
+        workspace,
+        {
+            **os.environ,
+            "FAKE_TMP_DIR": str(runtime_tmp),
+            "FAKE_FIFO_PATH": str(fifo_path),
+            "FAKE_GO_LIBRESPOT_BIN": str(launcher),
+            "FAKE_GO_LIBRESPOT_CONFIG_DIR": str(config_dir),
+            "FAKE_GO_LIBRESPOT_INVOCATIONS": str(go_librespot_log),
+            "FAKE_CLAIM_MARKER": str(claim_state),
+            "FAKE_UVICORN_LOG": str(workspace / "uvicorn.log"),
+        },
+    )
+
+    assert result.returncode != 0
+    assert "FATAL: failed to claim go-librespot ownership" in result.stderr
+    assert claim_state.exists()
+    state_file = runtime_tmp / "go-librespot.state.json"
+    assert not state_file.exists()
+    assert subprocess.run(["pgrep", "-f", str(launcher)], capture_output=True).returncode != 0

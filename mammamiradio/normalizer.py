@@ -124,9 +124,9 @@ def generate_sweep(output_path: Path, start_hz: float = 200, end_hz: float = 200
     fade_str = f"{fade:g}"
     fade_out_start = f"{max(duration_sec - fade, 0):g}"
     ratio = end_hz / start_hz
-    start_hz_str = f"{start_hz:g}"
-    duration_str = f"{duration_sec:g}"
-    ratio_str = f"{ratio:g}"
+    start_hz_str = format(start_hz, ".12g")
+    duration_str = format(duration_sec, ".12g")
+    ratio_str = format(ratio, ".12g")
     chirp_expr = f"0.2*sin(2*PI*{start_hz_str}*{duration_str}/log({ratio_str})*(({ratio_str})^(t/{duration_str})-1))"
     cmd = [
         "ffmpeg",
