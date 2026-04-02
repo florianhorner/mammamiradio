@@ -168,6 +168,13 @@ class StationState:
     stream_log: list[SegmentLogEntry] = field(default_factory=list)
     # Home Assistant context (natural language summary of home state)
     ha_context: str = ""
+    # Force-trigger: producer will use this type instead of scheduler for the next segment
+    force_next: SegmentType | None = None
+    # Consumption metrics
+    api_calls: int = 0
+    api_input_tokens: int = 0
+    api_output_tokens: int = 0
+    tts_characters: int = 0
 
     def _log(self, seg_type: str, label: str, metadata: dict | None = None) -> None:
         """Append a bounded producer-side log entry."""
