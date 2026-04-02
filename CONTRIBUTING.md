@@ -84,6 +84,13 @@ pytest tests/
 Notes:
 
 - `tests/test_ads.py` exercises audio helpers and needs FFmpeg installed.
+- Home Assistant add-on changes must also pass the local add-on build check:
+
+```bash
+scripts/test-addon-local.sh
+```
+
+That command stages the add-on build context exactly like CI, then runs a local container build. If it fails locally, do not commit or push.
 
 ## Lint, format, and type check
 
@@ -99,16 +106,10 @@ To install pre-commit hooks locally:
 
 ```bash
 pip install pre-commit
-pre-commit install --hook-type pre-commit --hook-type commit-msg
+pre-commit install --hook-type pre-commit --hook-type pre-push
 ```
 
-Before pushing changes that touch the Home Assistant addon, run:
-
-```bash
-./scripts/validate-addon.sh
-```
-
-Add `--build` if you also want a local Docker build smoke test.
+The repo wires `scripts/test-addon-local.sh` into both `pre-commit` and `pre-push` for files that can break the Home Assistant add-on build. Docker Desktop or Podman must be installed or those hooks will fail.
 
 ## Manual smoke test
 

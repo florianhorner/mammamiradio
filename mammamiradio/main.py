@@ -41,6 +41,16 @@ async def startup():
     config.tmp_dir.mkdir(parents=True, exist_ok=True)
     config.cache_dir.mkdir(parents=True, exist_ok=True)
 
+    # Start go-librespot for Spotify audio
+    spotify_player = None
+    try:
+        _spotify_player = SpotifyPlayer(config)
+        _spotify_player.start()
+        spotify_player = _spotify_player
+        logger.info("go-librespot started — select '%s' in your Spotify app to connect", _spotify_player.device_name)
+    except Exception as e:
+        logger.warning("Could not start go-librespot: %s — using fallback audio", e)
+
     logger.info("Fetching playlist: %s", config.playlist.spotify_url)
     try:
         tracks = fetch_playlist(config)
@@ -50,16 +60,6 @@ async def startup():
 
         tracks = list(DEMO_TRACKS)
     logger.info("Loaded %d tracks", len(tracks))
-
-    # Start go-librespot for Spotify audio
-    spotify_player = None
-    try:
-        _spotify_player = SpotifyPlayer(config)
-        _spotify_player.start()
-        spotify_player = _spotify_player
-        logger.info("go-librespot started — select 'mammamiradio' in your Spotify app to connect")
-    except Exception as e:
-        logger.warning("Could not start go-librespot: %s — using fallback audio", e)
 
     state = StationState(playlist=tracks)
     queue: asyncio.Queue = asyncio.Queue(maxsize=config.pacing.lookahead_segments + 2)

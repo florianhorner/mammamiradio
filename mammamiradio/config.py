@@ -323,6 +323,7 @@ def runtime_json(config: StationConfig | None = None) -> dict:
         "port": config.port,
         "fifo_path": config.audio.fifo_path,
         "go_librespot_bin": config.audio.go_librespot_bin,
+        "go_librespot_config_dir": config.audio.go_librespot_config_dir,
         "go_librespot_port": config.audio.go_librespot_port,
         "tmp_dir": str(config.tmp_dir),
     }

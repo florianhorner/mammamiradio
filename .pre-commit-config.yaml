@@ -13,16 +13,10 @@ repos:
 
   - repo: local
     hooks:
-      - id: commit-msg-conventional
-        name: conventional commit message
-        entry: scripts/check-commit-msg.sh
-        language: script
-        stages: [commit-msg]
-        always_run: true
-
-      - id: version-sync
-        name: config.yaml/pyproject.toml version sync
-        entry: scripts/check-version-sync.sh
-        language: script
-        stages: [pre-commit]
-        always_run: true
+      - id: ha-addon-local-build
+        name: ha-addon local build
+        entry: scripts/test-addon-local.sh
+        language: system
+        pass_filenames: false
+        stages: [pre-commit, pre-push]
+        files: ^(ha-addon/mammamiradio/|mammamiradio/|pyproject\.toml|radio\.toml|\.github/workflows/addon-build\.yml)

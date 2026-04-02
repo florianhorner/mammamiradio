@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import subprocess
 from pathlib import Path
 
@@ -112,17 +113,30 @@ def generate_tone(output_path: Path, freq_hz: float = 880, duration_sec: float =
 
 def generate_sweep(output_path: Path, start_hz: float = 200, end_hz: float = 2000, duration_sec: float = 0.8) -> Path:
     """Generate a frequency sweep (radio transition whoosh)."""
+    if start_hz <= 0 or end_hz <= 0:
+        raise ValueError("Sweep frequencies must be positive")
+    if duration_sec <= 0:
+        raise ValueError("Sweep duration must be positive")
+    if math.isclose(start_hz, end_hz):
+        return generate_tone(output_path, freq_hz=start_hz, duration_sec=duration_sec)
+
     fade = min(0.1, duration_sec / 4)
+    fade_str = f"{fade:g}"
+    fade_out_start = f"{max(duration_sec - fade, 0):g}"
+    ratio = end_hz / start_hz
+    start_hz_str = f"{start_hz:g}"
+    duration_str = f"{duration_sec:g}"
+    ratio_str = f"{ratio:g}"
+    chirp_expr = f"0.2*sin(2*PI*{start_hz_str}*{duration_str}/log({ratio_str})*(({ratio_str})^(t/{duration_str})-1))"
     cmd = [
         "ffmpeg",
         "-y",
         "-f",
         "lavfi",
         "-i",
-        f"sine=frequency={start_hz}:duration={duration_sec}:sample_rate=48000",
+        f"aevalsrc={chirp_expr}|{chirp_expr}:d={duration_str}:s=48000:c=stereo",
         "-af",
-        f"asetrate=48000*({end_hz}/{start_hz})^(t/{duration_sec}),aresample=48000,"
-        f"afade=t=in:d={fade},afade=t=out:st={duration_sec - fade}:d={fade}",
+        f"afade=t=in:d={fade_str},afade=t=out:st={fade_out_start}:d={fade_str}",
         "-ar",
         "48000",
         "-ac",

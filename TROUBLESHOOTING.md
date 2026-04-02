@@ -59,6 +59,22 @@ Then inspect:
 tail -n 100 tmp/go-librespot.log
 ```
 
+## `cat /data/go-librespot/config.yml` says "No such file or directory"
+
+That path only exists in Home Assistant add-on mode, inside the add-on container.
+
+If you are running the app locally on macOS or Linux, use:
+
+```bash
+cat go-librespot/config.yml
+```
+
+If you are not sure which path the app is using, inspect the resolved runtime config:
+
+```bash
+.venv/bin/python -m mammamiradio.config runtime-json
+```
+
 ## Tracks skip instantly on macOS
 
 This is usually the FIFO problem.
