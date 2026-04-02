@@ -16,6 +16,7 @@ from fastapi.security import HTTPBasic, HTTPBasicCredentials
 
 from mammamiradio.models import PersonalityAxes, Segment, SegmentType
 from mammamiradio.scheduler import preview_upcoming
+from mammamiradio.setup_status import addon_options_snippet, build_setup_status, classify_station_mode
 
 logger = logging.getLogger(__name__)
 
@@ -326,6 +327,33 @@ async def logs(request: Request, lines: int = 50, _: None = Depends(require_admi
     }
 
 
+@router.get("/api/setup/status")
+async def setup_status(request: Request, _: None = Depends(require_admin_access)):
+    """Return the current first-run setup snapshot for onboarding."""
+    config = request.app.state.config
+    state = request.app.state.station_state
+    return build_setup_status(config, state)
+
+
+@router.post("/api/setup/recheck")
+async def setup_recheck(request: Request, _: None = Depends(require_admin_access)):
+    """Force a fresh setup snapshot with live Spotify probe.
+
+    The probe makes a synchronous Spotify API call, so we run it off the
+    event loop to avoid stalling the audio stream for connected listeners.
+    """
+    config = request.app.state.config
+    state = request.app.state.station_state
+    return await asyncio.to_thread(build_setup_status, config, state, probe=True)
+
+
+@router.get("/api/setup/addon-snippet")
+async def setup_addon_snippet(request: Request, _: None = Depends(require_admin_access)):
+    """Return a copy-friendly HA add-on configuration snippet."""
+    config = request.app.state.config
+    return {"snippet": addon_options_snippet(config)}
+
+
 @router.post("/api/shuffle")
 async def shuffle_playlist(request: Request, _: None = Depends(require_admin_access)):
     """Shuffle upcoming tracks."""
@@ -634,6 +662,7 @@ async def status(request: Request, _: None = Depends(require_admin_access)):
     state = request.app.state.station_state
     segment_queue = request.app.state.queue
     start_time = request.app.state.start_time
+    station_mode = classify_station_mode(config, state)
     payload = _public_status_payload(request)
     payload.update(
         {
@@ -648,6 +677,7 @@ async def status(request: Request, _: None = Depends(require_admin_access)):
             "last_ad_script": state.last_ad_script,
             "ha_context": state.ha_context if state.ha_context else None,
             "go_librespot_log": _tail_log(str(config.tmp_dir / "go-librespot.log"), 15),
+            "station_mode": station_mode,
             "producer_errors": [
                 {"type": e.type, "label": e.label, "metadata": e.metadata}
                 for e in state.segment_log

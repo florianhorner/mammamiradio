@@ -56,7 +56,55 @@ Home Assistant -> optional context --+
 - `streamer.py` plays one station timeline and fans out MP3 chunks to all connected listeners.
 - `spotify_player.py` keeps a persistent reader on the go-librespot FIFO so macOS does not throw `ENXIO` and skip tracks.
 
+## First run in 4 steps
+
+These are the exact four ideas the app should teach on first run. Same labels in the docs, same labels in the UI.
+
+### 1. Choose your run mode
+
+Pick the path you are actually using:
+
+- Home Assistant add-on
+- Docker
+- macOS app
+- Local dev
+
+This matters because config does not live in the same place for every path.
+
+### 2. Connect the essentials
+
+What is required vs optional:
+
+- Spotify: required for real Spotify radio
+- Playlist URL: required for a predictable first station, especially in the HA add-on
+- Anthropic: optional for AI banter and ads
+- Home Assistant: optional outside add-on mode
+
+If you skip Spotify, the station should say `Demo Mode`, not quietly pretend setup succeeded.
+
+### 3. Run preflight checks
+
+Before you trust the dashboard, verify the live app can actually do the job:
+
+- `ffmpeg` available
+- `go-librespot` available
+- Spotify playlist probe works
+- current loaded playlist is real or demo
+- Spotify Connect device is live or still waiting
+
+### 4. Launch your first station
+
+You should know what you are about to hear before the control plane opens:
+
+- `Real Spotify Mode`
+- `Demo Mode`
+- `Degraded`
+
+The dashboard should keep showing that mode after launch so there is no ambiguity later.
+
 ## Quick start
+
+The app now treats first run as setup, not as "the dashboard happened to load". If the dashboard opens in demo or degraded mode, believe the banner.
 
 ### Prerequisites
 
@@ -107,12 +155,14 @@ Open `http://localhost:8000/` for the dashboard. `ADMIN_TOKEN` must be set in `.
 
 If you run Home Assistant OS or Supervised:
 
-1. Go to **Settings > Add-ons > Add-on Store**
+1. **Choose your run mode**: go to **Settings > Add-ons > Add-on Store**
 2. Click the three dots menu > **Repositories**
 3. Paste: `https://github.com/florianhorner/mammamiradio`
 4. Find "Mamma Mi Radio" and click **Install**
-5. Configure your Anthropic API key (and optionally Spotify credentials) in the add-on settings
-6. Start the add-on — it appears in your sidebar
+5. **Connect the essentials** in Add-on Configuration:
+   `spotify_client_id`, `spotify_client_secret`, `playlist_spotify_url`, and optionally `anthropic_api_key`
+6. **Run preflight checks** by starting the add-on and opening the dashboard
+7. **Launch your first station** once the app tells you whether you are in `Real Spotify Mode`, `Demo Mode`, or `Degraded`
 
 The add-on automatically connects to Home Assistant, so the radio hosts reference your actual home state (lights, temperature, who's home) without any extra configuration.
 

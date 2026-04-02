@@ -29,6 +29,7 @@ from mammamiradio.config import StationConfig
 from mammamiradio.go_librespot_config import load_go_librespot_device_name
 from mammamiradio.go_librespot_runtime import build_go_librespot_runtime, read_owned_pid
 from mammamiradio.models import Track
+from mammamiradio.setup_status import resolve_go_librespot_bin
 
 logger = logging.getLogger(__name__)
 
@@ -253,7 +254,7 @@ class SpotifyPlayer:
 
         self._external = False
         cmd = [
-            self.config.audio.go_librespot_bin,
+            self._resolve_go_librespot_bin(),
             "--config_dir",
             str(self._config_dir),
         ]
@@ -266,6 +267,16 @@ class SpotifyPlayer:
             stderr=self._log_file,
         )
         logger.info("go-librespot started (PID %d)", self._process.pid)
+
+    def _resolve_go_librespot_bin(self) -> str:
+        """Find a working go-librespot binary even when PATH is stripped down."""
+        configured = self.config.audio.go_librespot_bin
+        resolved = resolve_go_librespot_bin(configured)
+        if resolved:
+            if resolved != configured:
+                logger.info("Resolved go-librespot outside configured PATH: %s", resolved)
+            return resolved
+        raise FileNotFoundError(f"go-librespot binary not found: {configured}")
 
     def stop(self) -> None:
         """Stop capture helpers and terminate go-librespot if we launched it."""
@@ -307,11 +318,14 @@ class SpotifyPlayer:
         except Exception:
             pass
 
+        if self._authenticated:
+            logger.info("Spotify disconnected from mammamiradio")
+        self._authenticated = False
+
         # Periodically try auto-transfer (every ~30 checks = ~15s)
-        if not self._authenticated:
-            self._transfer_counter += 1
-            if self._transfer_counter % 30 == 1:
-                await self._try_transfer_playback()
+        self._transfer_counter += 1
+        if self._transfer_counter % 30 == 1:
+            await self._try_transfer_playback()
 
         return False
 

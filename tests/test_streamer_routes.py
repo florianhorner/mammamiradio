@@ -145,6 +145,7 @@ async def test_get_dashboard_loopback_no_password():
         resp = await client.get("/")
     assert resp.status_code == 200
     assert "text/html" in resp.headers["content-type"]
+    assert "First Run Setup" in resp.text
 
 
 @pytest.mark.asyncio
@@ -159,6 +160,57 @@ async def test_public_status_returns_json():
     assert "now_streaming" in body
     assert "upcoming" in body
     assert "stream_log" in body
+
+
+@pytest.mark.asyncio
+async def test_setup_status_returns_onboarding_payload():
+    app = _make_test_app()
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.get("/api/setup/status")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "detected_mode" in body
+    assert "essentials" in body
+    assert "preflight_checks" in body
+    assert "launch" in body
+    assert "signature" in body
+
+
+@pytest.mark.asyncio
+async def test_status_includes_station_mode():
+    app = _make_test_app()
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.get("/status")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "station_mode" in body
+    assert "id" in body["station_mode"]
+
+
+@pytest.mark.asyncio
+async def test_setup_recheck_returns_onboarding_payload():
+    app = _make_test_app()
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.post("/api/setup/recheck")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "detected_mode" in body
+    assert "station_mode" in body
+    assert "signature" in body
+
+
+@pytest.mark.asyncio
+async def test_addon_snippet_returns_snippet():
+    app = _make_test_app()
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.get("/api/setup/addon-snippet")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "snippet" in body
 
 
 @pytest.mark.asyncio

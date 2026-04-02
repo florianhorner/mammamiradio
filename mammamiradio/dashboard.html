@@ -27,11 +27,12 @@
     --cream-dk: #e8dfd3;
     --terracotta: #c4654a;
     --dusty-rose: #d4917a;
-    --sage: #7a8f6d;
+    --golden: #d4a574;
     --text: #faf3eb;
     --muted: #b0a494;
     --error: #c44a4a;
     --warning: #c4a04a;
+    --ok: #2563EB;
     --font-display: 'Playfair Display', Georgia, serif;
     --font-body: 'Inter', system-ui, -apple-system, sans-serif;
   }
@@ -123,7 +124,7 @@
     margin-top: 2px;
     color: var(--cream);
   }
-  .spotify-on { color: var(--sage); }
+  .spotify-on { color: var(--golden); }
   .spotify-off { color: var(--error); }
 
   /* ---- Connect Banner ---- */
@@ -139,6 +140,322 @@
     color: var(--cream-dk);
   }
   .connect-banner strong { color: var(--terracotta); }
+
+  .mode-banner {
+    display: none;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    background: rgba(37, 99, 235, 0.08);
+    border: 1px solid rgba(37, 99, 235, 0.28);
+    border-radius: 10px;
+    padding: 12px 16px;
+    margin-bottom: 16px;
+  }
+  .mode-banner[data-mode="demo"] {
+    background: rgba(196, 160, 74, 0.08);
+    border-color: rgba(196, 160, 74, 0.3);
+  }
+  .mode-banner[data-mode="degraded"] {
+    background: rgba(196, 74, 74, 0.08);
+    border-color: rgba(196, 74, 74, 0.28);
+  }
+  .mode-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    border-radius: 999px;
+    padding: 4px 10px;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    background: rgba(37, 99, 235, 0.18);
+    color: var(--ok);
+    margin-bottom: 6px;
+  }
+  .mode-banner[data-mode="demo"] .mode-pill {
+    background: rgba(196, 160, 74, 0.16);
+    color: var(--warning);
+  }
+  .mode-banner[data-mode="degraded"] .mode-pill {
+    background: rgba(196, 74, 74, 0.15);
+    color: var(--error);
+  }
+  .mode-banner-copy {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .mode-banner-title {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--cream);
+  }
+  .mode-banner-detail {
+    font-size: 12px;
+    color: var(--muted);
+  }
+
+  body.setup-open { overflow: hidden; }
+  .setup-gate {
+    position: fixed;
+    inset: 0;
+    background:
+      radial-gradient(circle at top left, rgba(212, 145, 122, 0.18), transparent 35%),
+      linear-gradient(180deg, rgba(42, 35, 32, 0.94), rgba(42, 35, 32, 0.98));
+    backdrop-filter: blur(10px);
+    z-index: 300;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+  }
+  .setup-gate.open { display: flex; }
+  .setup-panel {
+    width: min(920px, 100%);
+    max-height: calc(100vh - 48px);
+    overflow: auto;
+    background: linear-gradient(180deg, rgba(53, 47, 42, 0.98), rgba(42, 35, 32, 0.98));
+    border: 1px solid rgba(212, 145, 122, 0.22);
+    border-radius: 18px;
+    box-shadow: 0 24px 60px rgba(0, 0, 0, 0.35);
+    padding: 28px;
+  }
+  .setup-kicker {
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--terracotta);
+    margin-bottom: 8px;
+  }
+  .setup-topbar {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+    margin-bottom: 18px;
+  }
+  .setup-title {
+    font-family: var(--font-display);
+    font-size: 34px;
+    line-height: 1.1;
+    color: var(--cream);
+    margin-bottom: 8px;
+  }
+  .setup-subtitle {
+    font-size: 14px;
+    color: var(--muted);
+    max-width: 680px;
+  }
+  .setup-progress {
+    width: 100%;
+    height: 8px;
+    border-radius: 999px;
+    background: rgba(245, 239, 230, 0.08);
+    overflow: hidden;
+    margin-bottom: 14px;
+  }
+  .setup-progress > span {
+    display: block;
+    height: 100%;
+    width: 25%;
+    border-radius: 999px;
+    background: linear-gradient(90deg, var(--terracotta), var(--dusty-rose));
+    transition: width 0.2s ease;
+  }
+  .setup-stepper {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 20px;
+    flex-wrap: wrap;
+  }
+  .setup-step-chip {
+    border-radius: 999px;
+    border: 1px solid rgba(176, 164, 148, 0.2);
+    padding: 6px 10px;
+    font-size: 11px;
+    color: var(--muted);
+  }
+  .setup-step-chip.active {
+    border-color: rgba(196, 101, 74, 0.5);
+    color: var(--cream);
+    background: rgba(196, 101, 74, 0.12);
+  }
+  .setup-body {
+    min-height: 360px;
+  }
+  .setup-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 16px;
+  }
+  .setup-grid.one {
+    grid-template-columns: 1fr;
+  }
+  .setup-card {
+    background: rgba(42, 35, 32, 0.74);
+    border: 1px solid rgba(176, 164, 148, 0.16);
+    border-radius: 12px;
+    padding: 16px;
+  }
+  .setup-card.selected {
+    border-color: rgba(196, 101, 74, 0.6);
+    box-shadow: inset 0 0 0 1px rgba(196, 101, 74, 0.2);
+  }
+  .setup-card h3 {
+    font-size: 16px;
+    color: var(--cream);
+    margin-bottom: 6px;
+  }
+  .setup-card p {
+    font-size: 13px;
+    color: var(--muted);
+    line-height: 1.6;
+  }
+  .setup-card .surface {
+    margin-top: 10px;
+    font-size: 11px;
+    color: var(--dusty-rose);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+  }
+  .setup-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    border-radius: 999px;
+    padding: 4px 10px;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    margin-bottom: 10px;
+  }
+  .setup-badge.configured, .setup-badge.ok {
+    background: rgba(37, 99, 235, 0.16);
+    color: var(--ok);
+  }
+  .setup-badge.missing, .setup-badge.warn {
+    background: rgba(196, 160, 74, 0.14);
+    color: var(--warning);
+  }
+  .setup-badge.invalid, .setup-badge.fail {
+    background: rgba(196, 74, 74, 0.14);
+    color: var(--error);
+  }
+  .setup-badge.skipped, .setup-badge.degraded {
+    background: rgba(176, 164, 148, 0.12);
+    color: var(--muted);
+  }
+  .setup-meta {
+    display: grid;
+    gap: 8px;
+    margin-top: 12px;
+  }
+  .setup-meta div {
+    font-size: 12px;
+    color: var(--cream-dk);
+    line-height: 1.5;
+  }
+  .setup-meta strong {
+    color: var(--cream);
+  }
+  .setup-checklist {
+    display: grid;
+    gap: 12px;
+  }
+  .setup-check {
+    display: flex;
+    gap: 12px;
+    align-items: flex-start;
+    background: rgba(42, 35, 32, 0.68);
+    border: 1px solid rgba(176, 164, 148, 0.14);
+    border-radius: 12px;
+    padding: 14px 16px;
+  }
+  .setup-check-dot {
+    width: 12px;
+    height: 12px;
+    border-radius: 999px;
+    margin-top: 5px;
+    flex-shrink: 0;
+    background: var(--muted);
+  }
+  .setup-check-dot.ok { background: var(--ok); }
+  .setup-check-dot.warn { background: var(--warning); }
+  .setup-check-dot.fail { background: var(--error); }
+  .setup-check-title {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--cream);
+    margin-bottom: 3px;
+  }
+  .setup-check-detail {
+    font-size: 12px;
+    color: var(--muted);
+    line-height: 1.6;
+  }
+  .setup-note {
+    margin-top: 16px;
+    padding: 12px 14px;
+    border-radius: 10px;
+    background: rgba(196, 101, 74, 0.08);
+    border: 1px solid rgba(196, 101, 74, 0.22);
+    font-size: 13px;
+    color: var(--cream-dk);
+    line-height: 1.6;
+  }
+  .setup-code {
+    margin-top: 14px;
+    background: #1f1a17;
+    border: 1px solid rgba(176, 164, 148, 0.16);
+    border-radius: 10px;
+    padding: 12px 14px;
+    font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+    font-size: 12px;
+    white-space: pre-wrap;
+    color: var(--cream-dk);
+  }
+  .setup-actions {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    margin-top: 24px;
+    flex-wrap: wrap;
+  }
+  .setup-actions-left, .setup-actions-right {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+  .setup-ghost {
+    background: transparent;
+    border: 1px solid rgba(176, 164, 148, 0.2);
+    border-radius: 8px;
+    color: var(--cream-dk);
+    padding: 10px 14px;
+    font-size: 13px;
+    cursor: pointer;
+    transition: border-color 0.15s, color 0.15s, background 0.15s;
+  }
+  .setup-ghost:hover {
+    border-color: rgba(212, 145, 122, 0.4);
+    color: var(--cream);
+    background: rgba(176, 164, 148, 0.06);
+  }
+  .setup-primary {
+    background: var(--terracotta);
+    border-color: var(--terracotta);
+    color: var(--bg);
+    font-weight: 700;
+  }
+  .setup-primary:hover {
+    background: var(--dusty-rose);
+    border-color: var(--dusty-rose);
+    color: var(--bg);
+  }
 
   /* ---- Controls ---- */
   .controls { display: flex; gap: 8px; margin-bottom: 18px; }
@@ -333,7 +650,7 @@
     font-size: 11px;
     flex-shrink: 0;
   }
-  .seg-music { background: rgba(122, 143, 109, 0.25); color: var(--sage); }
+  .seg-music { background: rgba(212, 165, 116, 0.25); color: var(--golden); }
   .seg-banter { background: rgba(196, 101, 74, 0.2); color: var(--terracotta); }
   .seg-ad { background: rgba(212, 145, 122, 0.2); color: var(--dusty-rose); }
   .seg-time {
@@ -474,7 +791,7 @@
   }
   .debug-log .lvl-error { background: rgba(196, 74, 74, 0.15); color: var(--error); }
   .debug-log .lvl-warning { background: rgba(196, 160, 74, 0.15); color: var(--warning); }
-  .debug-log .lvl-info { background: rgba(122, 143, 109, 0.15); color: var(--sage); }
+  .debug-log .lvl-info { background: rgba(212, 165, 116, 0.15); color: var(--golden); }
   .debug-log .msg { color: var(--cream-dk); }
   .debug-log .detail { color: var(--muted); font-size: 11px; margin-left: 4px; opacity: 0.7; }
 
@@ -623,10 +940,39 @@
     h1 { font-size: 22px; }
     .stat { min-width: 0; padding: 10px 12px; }
     .stat-value { font-size: 18px; }
+    .setup-panel { padding: 20px; }
+    .setup-title { font-size: 28px; }
+    .setup-grid { grid-template-columns: 1fr; }
+    .mode-banner { flex-direction: column; align-items: flex-start; }
   }
 </style>
 </head>
 <body>
+
+<div class="setup-gate" id="setup-gate">
+  <div class="setup-panel">
+    <div class="setup-topbar">
+      <div>
+        <div class="setup-kicker">First Run Setup</div>
+        <div class="setup-title" id="setup-title">Let's get this station ready.</div>
+        <div class="setup-subtitle" id="setup-subtitle"></div>
+      </div>
+      <button class="setup-ghost" type="button" onclick="openSetupGate(true)">Refresh setup</button>
+    </div>
+    <div class="setup-progress"><span id="setup-progress-fill"></span></div>
+    <div class="setup-stepper" id="setup-stepper"></div>
+    <div class="setup-body" id="setup-body"></div>
+    <div class="setup-actions">
+      <div class="setup-actions-left">
+        <button class="setup-ghost" id="setup-back" type="button" onclick="prevSetupStep()">Back</button>
+        <button class="setup-ghost" id="setup-secondary" type="button"></button>
+      </div>
+      <div class="setup-actions-right">
+        <button class="btn setup-primary" id="setup-primary" type="button"></button>
+      </div>
+    </div>
+  </div>
+</div>
 
 <div class="header">
   <div class="header-left">
@@ -638,6 +984,15 @@
     <span class="uptime" id="uptime">Loading...</span>
     <a id="listener-link" href="/listen" class="listener-link">Open listener view &rarr;</a>
   </div>
+</div>
+
+<div class="mode-banner" id="mode-banner">
+  <div class="mode-banner-copy">
+    <div class="mode-pill" id="mode-pill">Demo Mode</div>
+    <div class="mode-banner-title" id="mode-banner-title"></div>
+    <div class="mode-banner-detail" id="mode-banner-detail"></div>
+  </div>
+  <button class="btn" type="button" onclick="openSetupGate(true)">Review setup</button>
 </div>
 
 <div class="status-bar">
@@ -822,6 +1177,259 @@ if (_base) {
 }
 const icons = { music: '\u266B', banter: '\uD83C\uDF99', ad: '\uD83D\uDCE2' };
 const cls = { music: 'seg-music', banter: 'seg-banter', ad: 'seg-ad' };
+const setupStepLabels = [
+  'Choose your run mode',
+  'Connect the essentials',
+  'Run preflight checks',
+  'Launch your first station',
+];
+let setupState = null;
+let setupStep = 1;
+let selectedRunMode = null;
+
+
+function setupAckKey(signature) {
+  return 'mammamiradio_setup_ack_' + signature;
+}
+
+function isSetupAcknowledged(payload) {
+  try {
+    return !!window.localStorage.getItem(setupAckKey(payload.signature));
+  } catch (_e) {
+    return false;
+  }
+}
+
+function acknowledgeSetup(payload) {
+  try {
+    window.localStorage.setItem(setupAckKey(payload.signature), '1');
+  } catch (_e) {}
+}
+
+function showSetupGate() {
+  document.body.classList.add('setup-open');
+  document.getElementById('setup-gate').classList.add('open');
+}
+
+function hideSetupGate() {
+  document.body.classList.remove('setup-open');
+  document.getElementById('setup-gate').classList.remove('open');
+}
+
+function statusBadgeLabel(status) {
+  switch (status) {
+    case 'configured': return '\u2713 Configured';
+    case 'missing': return '\u25B3 Missing';
+    case 'invalid': return '\u2717 Needs Fix';
+    case 'degraded': return '\u25B3 Degraded';
+    case 'skipped': return '\u2014 Skipped';
+    case 'ok': return '\u2713 OK';
+    case 'warn': return '\u25B3 Check';
+    case 'fail': return '\u2717 Fail';
+    default: return status;
+  }
+}
+
+function setSelectedMode(modeId) {
+  selectedRunMode = modeId;
+  renderSetup();
+}
+
+function renderSetupStepper() {
+  const stepper = document.getElementById('setup-stepper');
+  stepper.innerHTML = setupStepLabels.map((label, idx) =>
+    '<div class="setup-step-chip ' + (idx + 1 === setupStep ? 'active' : '') + '">' +
+      (idx + 1) + '. ' + escHtml(label) +
+    '</div>'
+  ).join('');
+  document.getElementById('setup-progress-fill').style.width = (setupStep * 25) + '%';
+}
+
+function renderRunModes() {
+  return '<div class="setup-grid">' + (setupState.available_modes || []).map(mode =>
+    '<button type="button" class="setup-card ' + (selectedRunMode === mode.id ? 'selected' : '') + '"' +
+      ' onclick="setSelectedMode(\'' + escHtml(mode.id) + '\')" style="text-align:left;cursor:pointer">' +
+      '<div class="setup-badge ' + (mode.detected ? 'configured' : 'skipped') + '">' +
+        (mode.detected ? 'Detected' : 'Available') +
+      '</div>' +
+      '<h3>' + escHtml(mode.label) + '</h3>' +
+      '<p>' + escHtml(mode.description) + '</p>' +
+      '<div class="surface">' + escHtml(mode.surface) + '</div>' +
+    '</button>'
+  ).join('') + '</div>' +
+  '<div class="setup-note">We are not changing your runtime here. This just picks the right setup instructions so the next screens stop talking in riddles.</div>';
+}
+
+function renderEssentials() {
+  const modeId = selectedRunMode || setupState.detected_mode;
+  let html = '<div class="setup-grid">';
+  (setupState.essentials || []).forEach(item => {
+    const where = item.where && item.where[modeId] ? item.where[modeId] : 'your current config surface';
+    html += '<div class="setup-card">' +
+      '<div class="setup-badge ' + escHtml(item.status) + '">' + escHtml(statusBadgeLabel(item.status)) + '</div>' +
+      '<h3>' + escHtml(item.label) + '</h3>' +
+      '<p>' + escHtml(item.required_label) + '</p>' +
+      '<div class="setup-meta">' +
+        '<div><strong>What we found:</strong> ' + escHtml(item.summary) + '</div>' +
+        '<div><strong>Next action:</strong> ' + escHtml(item.next_action) + '</div>' +
+        '<div><strong>Where:</strong> ' + escHtml(where) + '</div>' +
+        '<div><strong>If you skip it:</strong> ' + escHtml(item.skip_outcome) + '</div>' +
+      '</div>' +
+    '</div>';
+  });
+  html += '</div>';
+  html += '<div class="setup-note">If you change add-on options or env vars outside this page, restart the service first. Then come back here and click Re-check.</div>';
+  if (modeId === 'ha_addon' && setupState.addon_options_snippet) {
+    html += '<div class="setup-code">' + escHtml(setupState.addon_options_snippet) + '</div>';
+  }
+  return html;
+}
+
+function renderPreflight() {
+  let html = '<div class="setup-checklist">';
+  (setupState.preflight_checks || []).forEach(check => {
+    html += '<div class="setup-check">' +
+      '<span class="setup-check-dot ' + escHtml(check.status) + '"></span>' +
+      '<div>' +
+        '<div class="setup-check-title">' + escHtml(check.label) + '</div>' +
+        '<div class="setup-check-detail">' + escHtml(check.detail) + '</div>' +
+      '</div>' +
+    '</div>';
+  });
+  html += '</div>';
+  html += '<div class="setup-note">This screen checks what the running app can actually do right now. It is the truth serum. If something still says demo or degraded, the dashboard should not pretend otherwise.</div>';
+  return html;
+}
+
+function renderLaunch() {
+  const mode = setupState.station_mode || {};
+  const tone = mode.id === 'real_spotify' ? 'configured' : mode.id === 'demo' ? 'missing' : 'degraded';
+  return '<div class="setup-grid one">' +
+    '<div class="setup-card">' +
+      '<div class="setup-badge ' + escHtml(tone) + '">' + escHtml(mode.label || 'Station mode') + '</div>' +
+      '<h3>' + escHtml(setupState.launch.headline) + '</h3>' +
+      '<p>' + escHtml(setupState.launch.detail) + '</p>' +
+      '<div class="setup-meta">' +
+        '<div><strong>After launch:</strong> ' + escHtml(setupState.launch.post_launch) + '</div>' +
+        '<div><strong>Current mode:</strong> ' + escHtml((mode.label || '') + ' - ' + (mode.detail || '')) + '</div>' +
+      '</div>' +
+    '</div>' +
+  '</div>';
+}
+
+function renderSetup() {
+  if (!setupState) return;
+  renderSetupStepper();
+
+  const title = document.getElementById('setup-title');
+  const subtitle = document.getElementById('setup-subtitle');
+  const body = document.getElementById('setup-body');
+  const back = document.getElementById('setup-back');
+  const secondary = document.getElementById('setup-secondary');
+  const primary = document.getElementById('setup-primary');
+
+  if (setupStep === 1) {
+    title.textContent = 'Choose the setup path that matches this run.';
+    subtitle.textContent = 'We detect the most likely environment first so the next steps can tell you exactly where config lives.';
+    body.innerHTML = renderRunModes();
+    back.style.visibility = 'hidden';
+    secondary.style.display = 'none';
+    primary.textContent = 'Continue';
+    primary.onclick = () => nextSetupStep();
+  } else if (setupStep === 2) {
+    title.textContent = 'Connect the essentials before the dashboard tries to be clever.';
+    subtitle.textContent = 'This is the missing piece today. The app should tell you what is required, what is optional, and what happens if you skip something.';
+    body.innerHTML = renderEssentials();
+    back.style.visibility = 'visible';
+    secondary.style.display = 'none';
+    primary.textContent = 'Continue';
+    primary.onclick = () => nextSetupStep();
+  } else if (setupStep === 3) {
+    title.textContent = 'Run preflight checks against the live app.';
+    subtitle.textContent = 'These checks look at what the running service can actually do, not just whether a field exists somewhere in config.';
+    body.innerHTML = renderPreflight();
+    back.style.visibility = 'visible';
+    secondary.style.display = 'inline-flex';
+    secondary.textContent = 'Re-check';
+    secondary.onclick = () => openSetupGate(true);
+    primary.textContent = 'Continue';
+    primary.onclick = () => nextSetupStep();
+  } else {
+    title.textContent = 'Launch your first station.';
+    subtitle.textContent = 'No mystery, no fake green lights. You should know exactly what you are about to hear before the control plane opens.';
+    body.innerHTML = renderLaunch();
+    back.style.visibility = 'visible';
+    secondary.style.display = 'inline-flex';
+    secondary.textContent = 'Review checks';
+    secondary.onclick = () => { setupStep = 3; renderSetup(); };
+    primary.textContent = setupState.launch.cta;
+    primary.onclick = () => startStationFromSetup();
+  }
+}
+
+function nextSetupStep() {
+  setupStep = Math.min(4, setupStep + 1);
+  renderSetup();
+}
+
+function prevSetupStep() {
+  setupStep = Math.max(1, setupStep - 1);
+  renderSetup();
+}
+
+async function openSetupGate(force) {
+  setupStep = 1;
+  if (setupState && !force) {
+    renderSetup();
+    showSetupGate();
+    return;
+  }
+  await loadSetup(!!force);
+}
+
+async function loadSetup(force) {
+  try {
+    const response = await fetch(_base + '/api/setup/' + (force ? 'recheck' : 'status'), {
+      method: force ? 'POST' : 'GET',
+      headers: {'Content-Type': 'application/json'},
+    });
+    setupState = await response.json();
+    if (!selectedRunMode) selectedRunMode = setupState.detected_mode;
+    renderSetup();
+    if (force || (setupState.onboarding_required && !isSetupAcknowledged(setupState))) {
+      showSetupGate();
+    } else {
+      hideSetupGate();
+    }
+  } catch (e) {
+    console.error('setup load failed', e);
+    hideSetupGate();
+  }
+}
+
+function startStationFromSetup() {
+  if (setupState) acknowledgeSetup(setupState);
+  hideSetupGate();
+  const audio = document.getElementById('audio');
+  if (audio) {
+    audio.load();
+    audio.play().catch(() => {});
+  }
+  refresh();
+}
+
+function updateModeBanner(mode) {
+  const banner = document.getElementById('mode-banner');
+  if (!mode || !mode.id) {
+    banner.style.display = 'none';
+    return;
+  }
+  banner.style.display = 'flex';
+  banner.dataset.mode = mode.id;
+  document.getElementById('mode-pill').textContent = mode.label;
+  document.getElementById('mode-banner-title').textContent = mode.summary || '';
+  document.getElementById('mode-banner-detail').textContent = mode.detail || '';
+}
 
 function fmt(ts) {
   if (!ts) return '';
@@ -971,11 +1579,13 @@ async function loadPersonality() {
 }
 
 loadPersonality();
+loadSetup(false);
 
 async function refresh() {
   try {
     const r = await fetch(_base + '/status');
     const d = await r.json();
+    updateModeBanner(d.station_mode);
 
     document.getElementById('uptime').textContent =
       'Uptime: ' + fmtUptime(d.uptime_sec);
@@ -987,8 +1597,18 @@ async function refresh() {
     sp.textContent = d.spotify_connected ? 'ON' : 'OFF';
     sp.className = 'stat-value ' + (d.spotify_connected ? 'spotify-on' : 'spotify-off');
 
-    document.getElementById('connect-banner').style.display =
-      d.spotify_connected ? 'none' : 'block';
+    const connectBanner = document.getElementById('connect-banner');
+    if (d.station_mode && d.station_mode.id === 'demo') {
+      connectBanner.style.display = 'block';
+      connectBanner.innerHTML =
+        '<strong>Demo mode is active.</strong> The station is using the built-in playlist until you add Spotify credentials and a real playlist.';
+    } else if (d.spotify_connected) {
+      connectBanner.style.display = 'none';
+    } else {
+      connectBanner.style.display = 'block';
+      connectBanner.innerHTML =
+        '<strong>Spotify not connected.</strong> Open Spotify, tap the speaker icon, and select <strong>mammamiradio</strong>. If you changed config outside the app, restart first and then click <strong>Review setup</strong>.';
+    }
 
     // Show current playlist URL if set and input is empty
     const plInput = document.getElementById('playlist-url');
@@ -1175,7 +1795,7 @@ async function refresh() {
               '<span class="detail">' + escHtml(e.metadata.error || '') + '</span>' +
             '</div>'
           ).join('')
-        : '<div class="entry"><span class="msg" style="color:var(--sage)">No errors</span></div>';
+        : '<div class="entry"><span class="msg" style="color:var(--golden)">No errors</span></div>';
     }
 
   } catch (e) {
