@@ -25,7 +25,8 @@ WORKDIR /app
 COPY rootfs/ /
 
 # Install mammamiradio from local source (CI copies it into build context)
-COPY pyproject.toml mammamiradio/ ./
+COPY pyproject.toml ./
+COPY mammamiradio/ ./mammamiradio/
 RUN pip3 install --no-cache-dir --break-system-packages .
 
 # Copy radio.toml default config

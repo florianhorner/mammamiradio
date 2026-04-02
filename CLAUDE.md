@@ -22,7 +22,8 @@ AI-powered Italian radio station engine. Python 3.11+, FastAPI, FFmpeg, optional
 - Lint: `ruff check .` (fix: `ruff check --fix .`)
 - Format: `ruff format .` (check: `ruff format --check .`)
 - Type check: `mypy mammamiradio/ tests/`
-- Pre-commit: `pip install pre-commit && pre-commit install`
+- Pre-commit: `pip install pre-commit && pre-commit install --hook-type pre-commit --hook-type commit-msg`
+- **Validate addon before push**: `./scripts/validate-addon.sh` (add `--build` for Docker build test)
 
 ## Docker / Home Assistant
 
@@ -99,6 +100,23 @@ tests/                pytest coverage
 - `start.sh` is part of the runtime contract, not just a convenience script.
 - `radio.toml` is the source of truth for hosts, pacing, ad brands, audio settings, and Home Assistant enablement. Secrets stay in `.env`.
 - If you change routes, config keys, auth rules, or fallback behavior, update the matching docs in the same change.
+
+## Commit conventions
+
+All commits must use conventional prefixes: `feat:`, `fix:`, `refactor:`, `test:`, `chore:`, `docs:`, `security:`, `ci:`, `deps:`, `style:`, `release:`, `merge:`, `perf:`, `revert:`. Optional scope: `fix(addon): ...`. Enforced by pre-commit hook.
+
+## HA addon change rules
+
+These rules exist because we burned 10 PRs in a single night fixing cascading addon failures. Never again.
+
+1. **Batch all addon changes into one branch.** Never ship a chain of fix PRs where each one fixes the last. Test the full chain, merge once.
+2. **Run `./scripts/validate-addon.sh` before pushing.** It checks version sync, options mapping, Dockerfile safety, and 10+ other things that have caused real failures.
+3. **Three-file contract:** Adding a new addon option requires changes in the same commit to: `config.yaml` (schema), `run.sh` (extraction), `translations/en.yaml` (labels).
+4. **Never COPY to /data/ in the Dockerfile.** It overwrites persistent volumes on addon update.
+5. **Never use 2>&1 in run.sh eval contexts.** Stderr from Python gets eval'd as shell commands.
+6. **`_inject_ingress_prefix` must only replace double-quoted HTML attributes (href=, src=), never single-quoted JS strings.** JS strings use the `_base` variable which already contains the ingress prefix. Replacing them causes double-prefixed URLs and 404s.
+7. **host_network must be true.** go-librespot needs mDNS/zeroconf for Spotify Connect discovery.
+8. **Version bumps must update both `ha-addon/mammamiradio/config.yaml` and `pyproject.toml` in the same commit.** Enforced by pre-commit hook.
 
 ## Skill routing
 

@@ -10,3 +10,19 @@ repos:
     rev: v8.21.2
     hooks:
       - id: gitleaks
+
+  - repo: local
+    hooks:
+      - id: commit-msg-conventional
+        name: conventional commit message
+        entry: scripts/check-commit-msg.sh
+        language: script
+        stages: [commit-msg]
+        always_run: true
+
+      - id: version-sync
+        name: config.yaml/pyproject.toml version sync
+        entry: scripts/check-version-sync.sh
+        language: script
+        stages: [pre-commit]
+        always_run: true
