@@ -1,22 +1,27 @@
 .PHONY: dev test test-watch lint format typecheck check validate
 
+PYTHON := .venv/bin/python
+PYTEST := $(PYTHON) -m pytest
+RUFF := .venv/bin/ruff
+MYPY := .venv/bin/mypy
+
 dev:
 	./start.sh
 
 test:
-	pytest --cov=mammamiradio --cov-report=term-missing
+	$(PYTEST) --cov=mammamiradio --cov-report=term-missing
 
 test-watch:
-	ptw -- --cov=mammamiradio -x
+	$(PYTHON) -m pytest_watch -- --cov=mammamiradio -x
 
 lint:
-	ruff check .
+	$(RUFF) check .
 
 format:
-	ruff format .
+	$(RUFF) format .
 
 typecheck:
-	mypy mammamiradio/ tests/
+	$(MYPY) mammamiradio/ tests/
 
 check: lint typecheck test
 	@echo "All checks passed"

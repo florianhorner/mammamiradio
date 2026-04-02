@@ -350,7 +350,7 @@ async def test_search_spotify_success():
         }
     }
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
-    with patch("mammamiradio.streamer.get_spotify_client", return_value=mock_sp):
+    with patch("mammamiradio.spotify_auth.get_spotify_client", return_value=mock_sp):
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
             resp = await client.get("/api/search?q=Found")
     assert resp.status_code == 200
@@ -363,7 +363,7 @@ async def test_search_spotify_success():
 async def test_search_spotify_failure():
     app = _make_test_app()
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
-    with patch("mammamiradio.streamer.get_spotify_client", side_effect=Exception("no creds")):
+    with patch("mammamiradio.spotify_auth.get_spotify_client", side_effect=Exception("no creds")):
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
             resp = await client.get("/api/search?q=test")
     assert resp.status_code == 200
@@ -381,7 +381,7 @@ async def test_load_playlist_success():
     app = _make_test_app()
     new_tracks = [Track(title="New A", artist="NA", duration_ms=200_000, spotify_id="na1")]
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
-    with patch("mammamiradio.streamer.fetch_playlist", return_value=new_tracks):
+    with patch("mammamiradio.playlist.fetch_playlist", return_value=new_tracks):
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
             resp = await client.post("/api/playlist/load", json={"url": "https://open.spotify.com/playlist/xyz"})
     assert resp.status_code == 200
@@ -405,7 +405,7 @@ async def test_load_playlist_no_url():
 async def test_load_playlist_fetch_failure():
     app = _make_test_app()
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
-    with patch("mammamiradio.streamer.fetch_playlist", side_effect=Exception("API error")):
+    with patch("mammamiradio.playlist.fetch_playlist", side_effect=Exception("API error")):
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
             resp = await client.post("/api/playlist/load", json={"url": "https://spotify.com/playlist/bad"})
     assert resp.status_code == 200
@@ -416,7 +416,7 @@ async def test_load_playlist_fetch_failure():
 async def test_load_playlist_empty_result():
     app = _make_test_app()
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
-    with patch("mammamiradio.streamer.fetch_playlist", return_value=[]):
+    with patch("mammamiradio.playlist.fetch_playlist", return_value=[]):
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
             resp = await client.post("/api/playlist/load", json={"url": "https://spotify.com/playlist/empty"})
     assert resp.status_code == 200
@@ -503,15 +503,19 @@ async def test_token_auth_non_loopback_with_valid_token():
 async def test_stream_returns_audio_headers():
     app = _make_test_app()
     transport = httpx.ASGITransport(app=app)
-    async with (
-        httpx.AsyncClient(transport=transport, base_url="http://testserver") as client,
-        client.stream("GET", "/stream") as resp,
-    ):
-        assert resp.status_code == 200
-        assert resp.headers["content-type"] == "audio/mpeg"
-        assert "icy-name" in resp.headers
-        assert "icy-br" in resp.headers
-        # Don't read body — just check headers
+
+    async def fake_audio_generator(_request):
+        yield b"frame"
+
+    with patch("mammamiradio.streamer._audio_generator", fake_audio_generator):
+        async with (
+            httpx.AsyncClient(transport=transport, base_url="http://testserver") as client,
+            client.stream("GET", "/stream") as resp,
+        ):
+            assert resp.status_code == 200
+            assert resp.headers["content-type"] == "audio/mpeg"
+            assert "icy-name" in resp.headers
+            assert "icy-br" in resp.headers
 
 
 # ---------------------------------------------------------------------------

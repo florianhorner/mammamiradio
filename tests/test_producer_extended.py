@@ -12,8 +12,8 @@ from mammamiradio.config import load_config
 from mammamiradio.models import (
     AdBrand,
     AdHistoryEntry,
+    AdPart,
     AdScript,
-    AdScriptPart,
     AdVoice,
     HostPersonality,
     Segment,
@@ -79,7 +79,7 @@ async def _run_until_queued(
 
 
 def test_pick_brand_avoids_recent():
-    brands = [AdBrand(name="A"), AdBrand(name="B"), AdBrand(name="C")]
+    brands = [AdBrand(name="A", tagline="a"), AdBrand(name="B", tagline="b"), AdBrand(name="C", tagline="c")]
     history = [
         AdHistoryEntry(brand="A", summary="", timestamp=0),
         AdHistoryEntry(brand="B", summary="", timestamp=0),
@@ -92,8 +92,8 @@ def test_pick_brand_avoids_recent():
 
 def test_pick_brand_prefers_recurring():
     brands = [
-        AdBrand(name="R1", recurring=True),
-        AdBrand(name="NR1", recurring=False),
+        AdBrand(name="R1", tagline="r1", recurring=True),
+        AdBrand(name="NR1", tagline="nr1", recurring=False),
     ]
     # Run many times — recurring should appear more often
     results = [_pick_brand(brands, []).name for _ in range(100)]
@@ -101,7 +101,12 @@ def test_pick_brand_prefers_recurring():
 
 
 def test_pick_brand_skips_last_three():
-    brands = [AdBrand(name="A"), AdBrand(name="B"), AdBrand(name="C"), AdBrand(name="D")]
+    brands = [
+        AdBrand(name="A", tagline="a"),
+        AdBrand(name="B", tagline="b"),
+        AdBrand(name="C", tagline="c"),
+        AdBrand(name="D", tagline="d"),
+    ]
     history = [
         AdHistoryEntry(brand="A", summary="", timestamp=0),
         AdHistoryEntry(brand="B", summary="", timestamp=0),
@@ -128,8 +133,9 @@ async def test_ad_break_segment_queued(tmp_path):
     queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
 
     fake_script = AdScript(
+        brand="TestBrand",
         summary="Test ad",
-        parts=[AdScriptPart(type="voice", text="Buy TestBrand today!")],
+        parts=[AdPart(type="voice", text="Buy TestBrand today!")],
     )
 
     with (
@@ -189,14 +195,15 @@ async def test_ad_break_skipped_without_brands(tmp_path):
 async def test_ad_break_host_fallback_voice(tmp_path):
     state = _make_state()
     config = _make_config(tmp_path)
-    config.ads.brands = [AdBrand(name="HostBrand")]
+    config.ads.brands = [AdBrand(name="HostBrand", tagline="host-brand")]
     config.ads.voices = []  # No dedicated ad voices → use host voice
     config.pacing.ad_spots_per_break = 1
     queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
 
     fake_script = AdScript(
+        brand="HostBrand",
         summary="Host ad",
-        parts=[AdScriptPart(type="voice", text="Host reads the ad")],
+        parts=[AdPart(type="voice", text="Host reads the ad")],
     )
 
     with (

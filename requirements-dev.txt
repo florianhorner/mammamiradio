@@ -6,3 +6,4 @@ pytest-cov
 pytest-xdist
 pytest-randomly
 pytest-timeout
+pytest-watch
