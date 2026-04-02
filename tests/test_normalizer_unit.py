@@ -189,8 +189,8 @@ def test_generate_sweep_builds_command(mock_subprocess):
     assert cmd[0] == "ffmpeg"
     joined = " ".join(cmd)
     assert "aevalsrc=" in joined
-    assert "(t/0.8)" in joined
-    assert "log(10)" in joined or "log(10.0)" in joined
+    assert "0.2*sin(2*PI*200*0.8/log(10)*((10)^(t/0.8)-1))" in joined
+    assert ":c=stereo" in joined
 
 
 def test_generate_sweep_same_frequency_uses_tone(mock_subprocess):

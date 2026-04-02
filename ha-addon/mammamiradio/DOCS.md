@@ -2,6 +2,47 @@
 
 Operational guide for the Home Assistant add-on. Covers architecture, failure modes, and recovery.
 
+## First run in 4 steps
+
+This add-on should teach setup in this order. If the product says something else, the product is wrong.
+
+### 1. Choose your run mode
+
+For this document, the run mode is `Home Assistant add-on`.
+
+That sounds obvious, but it matters because the real config surface is the Add-on Configuration screen, not the dashboard itself.
+
+### 2. Connect the essentials
+
+Before you expect real Spotify radio, fill in:
+
+- `spotify_client_id`
+- `spotify_client_secret`
+- `playlist_spotify_url`
+- optional: `anthropic_api_key`
+
+If these are missing, the app should say `Demo Mode` or `Degraded`. Silent fallback is not acceptable.
+
+### 3. Run preflight checks
+
+After saving add-on options, restart the add-on, then verify:
+
+- `ffmpeg` is available
+- `go-librespot` started
+- Spotify playlist probe works
+- the app loaded real tracks instead of demo tracks
+- the `mammamiradio` Spotify Connect device appears
+
+### 4. Launch your first station
+
+Only after those checks pass should the control plane feel "ready".
+
+The user should know which of these states they are entering:
+
+- `Real Spotify Mode`
+- `Demo Mode`
+- `Degraded`
+
 ## Architecture
 
 ```

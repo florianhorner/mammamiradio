@@ -18,3 +18,4 @@ go-librespot/state.json
 *.webloc
 .coverage
 htmlcov/
+.playwright-cli/

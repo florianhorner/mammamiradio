@@ -23,6 +23,13 @@ def _make_config(config_dir: Path, tmp_path: Path) -> MagicMock:
     return config
 
 
+@pytest.fixture
+def player(tmp_path):
+    config_dir = tmp_path / "go-librespot"
+    config_dir.mkdir()
+    return SpotifyPlayer(_make_config(config_dir, tmp_path))
+
+
 @pytest.mark.asyncio
 async def test_try_transfer_playback_uses_configured_device_name(tmp_path):
     config_dir = tmp_path / "go-librespot"
@@ -91,3 +98,48 @@ def test_spotify_player_detects_owned_external_process(tmp_path):
                 break
             time.sleep(0.1)
         proc.wait(timeout=1)
+
+
+def test_resolve_go_librespot_bin_from_path(player):
+    with patch("mammamiradio.spotify_player.resolve_go_librespot_bin", return_value="/opt/bin/go-librespot"):
+        assert player._resolve_go_librespot_bin() == "/opt/bin/go-librespot"
+
+
+def test_resolve_go_librespot_bin_from_common_locations(player):
+    with patch("mammamiradio.spotify_player.resolve_go_librespot_bin", return_value="/usr/local/bin/go-librespot"):
+        assert player._resolve_go_librespot_bin() == "/usr/local/bin/go-librespot"
+
+
+def test_resolve_go_librespot_bin_raises_when_missing(player):
+    with (
+        patch("mammamiradio.spotify_player.resolve_go_librespot_bin", return_value=None),
+        pytest.raises(FileNotFoundError),
+    ):
+        player._resolve_go_librespot_bin()
+
+
+@pytest.mark.asyncio
+async def test_check_auth_clears_stale_authenticated_state(player):
+    class Response:
+        status_code = 503
+
+        @staticmethod
+        def json():
+            return {}
+
+    class FakeClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+        async def get(self, *args, **kwargs):
+            return Response()
+
+    player._authenticated = True
+
+    with patch("httpx.AsyncClient", return_value=FakeClient()):
+        assert await player.check_auth() is False
+
+    assert player._authenticated is False
