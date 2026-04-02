@@ -1,5 +1,5 @@
-ruff==0.15.8
-mypy==1.19.1
+ruff==0.15.9
+mypy==1.20.0
 pytest
 pytest-asyncio
 pytest-cov
