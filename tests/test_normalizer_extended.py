@@ -134,7 +134,8 @@ def test_generate_sfx_sweep(mock_subprocess):
     generate_sfx(out, "sweep")
     cmd = mock_run.call_args[0][0]
     joined = " ".join(cmd)
-    assert "sine=frequency=300" in joined
+    assert "aevalsrc=" in joined
+    assert "0.2*sin(2*PI*300*0.6/log(10)*((10)^(t/0.6)-1))" in joined
 
 
 def test_generate_sfx_whoosh(mock_subprocess):
