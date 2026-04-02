@@ -55,7 +55,7 @@ fi
 # ---- 2. Image path format ----
 echo "2. Image path"
 IMAGE=$(grep '^image:' ha-addon/mammamiradio/config.yaml | awk '{print $2}')
-OWNER=$(gh api user -q .login 2>/dev/null || git remote get-url origin | sed 's|.*github.com[:/]||;s|/.*||')
+OWNER=$(git remote get-url origin 2>/dev/null | sed 's|.*github.com[:/]||;s|/.*||' || gh api user -q .login 2>/dev/null || echo "unknown")
 EXPECTED="ghcr.io/${OWNER}/mammamiradio-addon-{arch}"
 if [ "$IMAGE" = "$EXPECTED" ]; then
     pass "Image path: $IMAGE"

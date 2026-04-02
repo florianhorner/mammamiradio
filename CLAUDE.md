@@ -103,7 +103,7 @@ tests/                pytest coverage
 
 ## Commit conventions
 
-All commits must use conventional prefixes: `feat:`, `fix:`, `refactor:`, `test:`, `chore:`, `docs:`, `security:`, `ci:`, `deps:`, `style:`, `release:`, `perf:`, `revert:`. Optional scope: `fix(addon): ...`. Enforced by pre-commit hook.
+All commits must use conventional prefixes: `feat:`, `fix:`, `refactor:`, `test:`, `chore:`, `docs:`, `security:`, `ci:`, `deps:`, `style:`, `release:`, `merge:`, `perf:`, `revert:`. Optional scope: `fix(addon): ...`. Enforced by pre-commit hook.
 
 ## HA addon change rules
 
