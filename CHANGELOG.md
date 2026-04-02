@@ -8,17 +8,18 @@ The current version source of truth is `pyproject.toml`.
 
 ### Changed
 
-- Pre-commit now installs both `pre-commit` and `commit-msg` hooks so conventional commit messages and addon version sync are enforced locally before push.
-- Added `scripts/validate-addon.sh` as a local HA addon smoke check covering version sync, config wiring, Dockerfile safety, translations, and ingress safety.
+- Local guardrails now catch addon issues before you push. Pre-commit hooks enforce conventional commit messages and version sync. `./scripts/validate-addon.sh` runs 13+ checks (version parity, config wiring, Dockerfile safety, translations, ingress rewrite safety) so CI failures are caught locally first.
 
 ### Fixed
 
-- `scripts/check-version-sync.sh` now reads staged file contents from the git index, so partially staged commits cannot bypass the version-sync guard.
-- `scripts/validate-addon.sh` now fails if `_inject_ingress_prefix` rewrites single-quoted JavaScript paths, while still allowing the service worker path rewrite needed for ingress.
+- Version-sync hook reads from the git index instead of the working tree, so partially staged commits can no longer bypass the version check.
+- Addon validation script derives the image owner from the git remote (not `gh api user`), so contributors no longer get false image-path mismatches.
+- Empty version parsing now fails fast with a clear error instead of silently passing.
 
 ### For contributors
 
-- Added regression tests for the staged-version hook behavior and the ingress validator so these local safeguards do not silently regress.
+- Regression tests for the staged-version hook and the ingress rewrite validator.
+- `CLAUDE.md` commit prefix docs now match the hook allowlist (added `merge:`).
 
 ## [1.1.0] - 2026-04-01
 
