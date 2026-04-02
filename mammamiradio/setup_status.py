@@ -8,6 +8,7 @@ import os
 import platform
 import shutil
 from pathlib import Path
+from typing import Any
 
 from mammamiradio.config import StationConfig
 from mammamiradio.models import StationState
@@ -75,9 +76,9 @@ def detect_run_mode(config: StationConfig) -> dict:
     else:
         detected = "local"
 
-    modes: list[dict[str, object]] = []
+    modes: list[dict[str, Any]] = []
     for mode in RUN_MODES:
-        entry: dict[str, object] = dict(mode)
+        entry: dict[str, Any] = dict(mode)
         entry["detected"] = mode["id"] == detected
         modes.append(entry)
 
