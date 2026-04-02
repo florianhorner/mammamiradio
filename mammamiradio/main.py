@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import time
 
 from fastapi import FastAPI
@@ -16,7 +17,7 @@ from mammamiradio.spotify_player import SpotifyPlayer
 from mammamiradio.streamer import LiveStreamHub, router, run_playback_loop
 
 logging.basicConfig(
-    level=logging.INFO,
+    level=getattr(logging, os.getenv("LOG_LEVEL", "INFO").upper(), logging.INFO),
     format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
     datefmt="%H:%M:%S",
 )

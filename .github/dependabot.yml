@@ -4,6 +4,12 @@ updates:
     directory: "/"
     schedule:
       interval: weekly
+      day: monday
+    groups:
+      dev-tools:
+        patterns: ["ruff", "mypy", "pytest*"]
+      core:
+        patterns: ["fastapi", "uvicorn", "anthropic", "spotipy"]
     labels:
       - dependencies
     commit-message:

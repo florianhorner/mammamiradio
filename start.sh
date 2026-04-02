@@ -100,4 +100,5 @@ echo "Starting uvicorn with --reload..."
 source .venv/bin/activate
 exec python -m uvicorn mammamiradio.main:app \
     --host "$HOST" --port "$PORT" \
-    --reload --reload-dir mammamiradio
+    --reload --reload-dir mammamiradio \
+    --reload-include "*.toml"

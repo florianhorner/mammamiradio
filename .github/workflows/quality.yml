@@ -35,4 +35,4 @@ jobs:
         run: mypy mammamiradio/ tests/
 
       - name: Pytest
-        run: pytest
+        run: pytest -n auto --cov=mammamiradio --cov-report=term-missing --cov-fail-under=60
