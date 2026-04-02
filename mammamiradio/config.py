@@ -329,12 +329,44 @@ def runtime_json(config: StationConfig | None = None) -> dict:
     }
 
 
+def startup_env(config: StationConfig | None = None) -> str:
+    """Emit all shell variables start.sh needs in one shot, avoiding repeated Python spawns."""
+    import shlex
+
+    from mammamiradio.go_librespot_runtime import build_go_librespot_runtime, read_owned_pid
+
+    rt = runtime_json(config)
+    glr = build_go_librespot_runtime(
+        go_librespot_bin=rt["go_librespot_bin"],
+        config_dir=rt["go_librespot_config_dir"],
+        fifo_path=rt["fifo_path"],
+        port=rt["go_librespot_port"],
+        tmp_dir=rt["tmp_dir"],
+    )
+    owned_pid = read_owned_pid(glr.state_file, glr.fingerprint)
+    lines = [
+        f"HOST={shlex.quote(rt['bind_host'])}",
+        f"PORT={shlex.quote(str(rt['port']))}",
+        f"FIFO={shlex.quote(rt['fifo_path'])}",
+        f"GO_LIBRESPOT_BIN={shlex.quote(rt['go_librespot_bin'])}",
+        f"GO_LIBRESPOT_CONFIG_DIR={shlex.quote(str(glr.config_dir))}",
+        f"GO_LIBRESPOT_PORT={shlex.quote(str(glr.port))}",
+        f"TMP_DIR={shlex.quote(str(glr.tmp_dir))}",
+        f"GO_LIBRESPOT_FINGERPRINT={shlex.quote(glr.fingerprint)}",
+        f"GO_LIBRESPOT_STATE_FILE={shlex.quote(str(glr.state_file))}",
+        f"GOLIBRESPOT_OWNED_PID={shlex.quote(str(owned_pid) if owned_pid else '')}",
+    ]
+    return "\n".join(lines)
+
+
 if __name__ == "__main__":
     import json
     import sys
 
     if len(sys.argv) > 1 and sys.argv[1] == "runtime-json":
         print(json.dumps(runtime_json()))
+    elif len(sys.argv) > 1 and sys.argv[1] == "startup-env":
+        print(startup_env())
     else:
-        print("Usage: python -m mammamiradio.config runtime-json", file=sys.stderr)
+        print("Usage: python -m mammamiradio.config {runtime-json|startup-env}", file=sys.stderr)
         sys.exit(1)

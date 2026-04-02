@@ -27,25 +27,36 @@ def _make_start_workspace(tmp_path: Path) -> Path:
     _write(
         workspace / "mammamiradio" / "config.py",
         """
-import json
 import os
+import shlex
 import sys
 
-if len(sys.argv) > 1 and sys.argv[1] == "runtime-json":
+from mammamiradio.go_librespot_runtime import build_go_librespot_runtime, read_owned_pid
+
+if len(sys.argv) > 1 and sys.argv[1] == "startup-env":
     message = os.getenv("FAKE_RUNTIME_FAIL", "")
     if message:
         print(message, file=sys.stderr)
         raise SystemExit(2)
-    payload = {
-        "bind_host": "127.0.0.1",
-        "port": 8000,
-        "fifo_path": os.environ["FAKE_FIFO_PATH"],
-        "go_librespot_bin": os.environ["FAKE_GO_LIBRESPOT_BIN"],
-        "go_librespot_config_dir": os.environ["FAKE_GO_LIBRESPOT_CONFIG_DIR"],
-        "go_librespot_port": int(os.environ.get("FAKE_GO_LIBRESPOT_PORT", "3678")),
-        "tmp_dir": os.environ["FAKE_TMP_DIR"],
-    }
-    print(json.dumps(payload))
+    fifo = os.environ["FAKE_FIFO_PATH"]
+    go_bin = os.environ["FAKE_GO_LIBRESPOT_BIN"]
+    config_dir = os.environ["FAKE_GO_LIBRESPOT_CONFIG_DIR"]
+    port = int(os.environ.get("FAKE_GO_LIBRESPOT_PORT", "3678"))
+    tmp_dir = os.environ["FAKE_TMP_DIR"]
+    glr = build_go_librespot_runtime(go_bin, config_dir, fifo, port, tmp_dir)
+    owned = read_owned_pid(glr.state_file, glr.fingerprint)
+    pairs = [
+        ("HOST", "127.0.0.1"), ("PORT", "8000"),
+        ("FIFO", fifo), ("GO_LIBRESPOT_BIN", go_bin),
+        ("GO_LIBRESPOT_CONFIG_DIR", str(glr.config_dir)),
+        ("GO_LIBRESPOT_PORT", str(glr.port)),
+        ("TMP_DIR", str(glr.tmp_dir)),
+        ("GO_LIBRESPOT_FINGERPRINT", glr.fingerprint),
+        ("GO_LIBRESPOT_STATE_FILE", str(glr.state_file)),
+        ("GOLIBRESPOT_OWNED_PID", str(owned) if owned else ""),
+    ]
+    for k, v in pairs:
+        print(f"{k}={shlex.quote(v)}")
     raise SystemExit(0)
 
 print("unsupported", file=sys.stderr)

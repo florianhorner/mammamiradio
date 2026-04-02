@@ -33,50 +33,25 @@ def build_go_librespot_runtime(
     port: int,
     tmp_dir: Path | str,
 ) -> GoLibrespotRuntime:
-    normalized_config_dir = _normalize_path(config_dir)
-    normalized_fifo_path = _normalize_path(fifo_path)
-    normalized_tmp_dir = _normalize_path(tmp_dir)
+    config_dir = _normalize_path(config_dir)
+    fifo_path = _normalize_path(fifo_path)
+    tmp_dir = _normalize_path(tmp_dir)
     payload = {
         "go_librespot_bin": go_librespot_bin,
-        "config_dir": str(normalized_config_dir),
-        "fifo_path": str(normalized_fifo_path),
-        "port": int(port),
+        "config_dir": str(config_dir),
+        "fifo_path": str(fifo_path),
+        "port": port,
     }
     fingerprint = hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()
     return GoLibrespotRuntime(
-        go_librespot_bin=go_librespot_bin,
-        config_dir=normalized_config_dir,
-        fifo_path=normalized_fifo_path,
-        port=int(port),
-        tmp_dir=normalized_tmp_dir,
-        fingerprint=fingerprint,
-        state_file=normalized_tmp_dir / "go-librespot.state.json",
-    )
-
-
-def describe_runtime(
-    go_librespot_bin: str,
-    config_dir: Path | str,
-    fifo_path: Path | str,
-    port: int,
-    tmp_dir: Path | str,
-) -> dict[str, str | int]:
-    runtime = build_go_librespot_runtime(
         go_librespot_bin=go_librespot_bin,
         config_dir=config_dir,
         fifo_path=fifo_path,
         port=port,
         tmp_dir=tmp_dir,
+        fingerprint=fingerprint,
+        state_file=tmp_dir / "go-librespot.state.json",
     )
-    return {
-        "go_librespot_bin": runtime.go_librespot_bin,
-        "config_dir": str(runtime.config_dir),
-        "fifo_path": str(runtime.fifo_path),
-        "port": runtime.port,
-        "tmp_dir": str(runtime.tmp_dir),
-        "fingerprint": runtime.fingerprint,
-        "state_file": str(runtime.state_file),
-    }
 
 
 def _read_state_file(state_file: Path | str) -> dict | None:
@@ -84,25 +59,6 @@ def _read_state_file(state_file: Path | str) -> dict | None:
         return json.loads(Path(state_file).read_text())
     except (FileNotFoundError, OSError, json.JSONDecodeError):
         return None
-
-
-def _write_state_file(
-    state_file: Path | str,
-    *,
-    pid: int,
-    fingerprint: str,
-    go_librespot_bin: str,
-    config_dir: Path | str,
-) -> None:
-    state_path = Path(state_file)
-    state_path.parent.mkdir(parents=True, exist_ok=True)
-    payload = {
-        "pid": int(pid),
-        "fingerprint": fingerprint,
-        "go_librespot_bin": go_librespot_bin,
-        "config_dir": str(_normalize_path(config_dir)),
-    }
-    state_path.write_text(json.dumps(payload, sort_keys=True))
 
 
 def claim_process(
@@ -113,13 +69,15 @@ def claim_process(
     go_librespot_bin: str,
     config_dir: Path | str,
 ) -> None:
-    _write_state_file(
-        state_file,
-        pid=pid,
-        fingerprint=fingerprint,
-        go_librespot_bin=go_librespot_bin,
-        config_dir=config_dir,
-    )
+    state_path = Path(state_file)
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "pid": pid,
+        "fingerprint": fingerprint,
+        "go_librespot_bin": go_librespot_bin,
+        "config_dir": str(_normalize_path(config_dir)),
+    }
+    state_path.write_text(json.dumps(payload, sort_keys=True))
 
 
 def _pid_command(pid: int) -> str | None:
@@ -184,17 +142,6 @@ def read_owned_pid(state_file: Path | str, fingerprint: str) -> int | None:
 def main(argv: list[str] | None = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
 
-    if len(args) == 6 and args[0] == "describe":
-        payload = describe_runtime(
-            go_librespot_bin=args[1],
-            config_dir=args[2],
-            fifo_path=args[3],
-            port=int(args[4]),
-            tmp_dir=args[5],
-        )
-        print(json.dumps(payload, sort_keys=True))
-        return 0
-
     if len(args) == 6 and args[0] == "claim":
         claim_process(
             args[1],
@@ -213,8 +160,7 @@ def main(argv: list[str] | None = None) -> int:
 
     print(
         "Usage: python -m mammamiradio.go_librespot_runtime "
-        "{describe <bin> <config-dir> <fifo-path> <port> <tmp-dir>"
-        "|claim <state-file> <pid> <fingerprint> <bin> <config-dir>"
+        "{claim <state-file> <pid> <fingerprint> <bin> <config-dir>"
         "|owned-pid <state-file> <fingerprint>}",
         file=sys.stderr,
     )

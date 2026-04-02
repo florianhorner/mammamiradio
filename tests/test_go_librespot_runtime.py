@@ -7,13 +7,12 @@ from pathlib import Path
 from mammamiradio.go_librespot_runtime import (
     build_go_librespot_runtime,
     claim_process,
-    describe_runtime,
     read_owned_pid,
 )
 
 
-def test_describe_runtime_normalizes_paths(tmp_path):
-    payload = describe_runtime(
+def test_build_runtime_normalizes_paths(tmp_path):
+    runtime = build_go_librespot_runtime(
         go_librespot_bin="go-librespot",
         config_dir=tmp_path / "cfg",
         fifo_path=Path(".") / tmp_path.name / "fifo",
@@ -21,9 +20,9 @@ def test_describe_runtime_normalizes_paths(tmp_path):
         tmp_dir=tmp_path / "tmp",
     )
 
-    assert Path(payload["config_dir"]).is_absolute()
-    assert Path(payload["fifo_path"]).is_absolute()
-    assert Path(payload["state_file"]).name == "go-librespot.state.json"
+    assert runtime.config_dir.is_absolute()
+    assert runtime.fifo_path.is_absolute()
+    assert runtime.state_file.name == "go-librespot.state.json"
 
 
 def test_claim_process_and_read_owned_pid(tmp_path):

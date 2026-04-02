@@ -14,70 +14,15 @@ if [ ! -x "$PYTHON_BIN" ]; then
     exit 1
 fi
 
-json_field() {
-    printf '%s' "$1" | "$PYTHON_BIN" -c "import json,sys; print(json.load(sys.stdin)[sys.argv[1]])" "$2"
-}
-
-fail_runtime() {
-    echo "FATAL: could not resolve runtime config: $1" >&2
+# Resolve all runtime settings in a single Python invocation (avoids 16 separate spawns)
+STARTUP_ERR="$(mktemp)"
+if ! STARTUP_ENV="$("$PYTHON_BIN" -m mammamiradio.config startup-env 2>"$STARTUP_ERR")"; then
+    echo "FATAL: could not resolve runtime config: $(cat "$STARTUP_ERR")" >&2
+    rm -f "$STARTUP_ERR"
     exit 1
-}
-
-# Resolve runtime settings from radio.toml + .env via the config helper
-RUNTIME_ERR="$(mktemp)"
-if ! RUNTIME_JSON="$("$PYTHON_BIN" -m mammamiradio.config runtime-json 2>"$RUNTIME_ERR")"; then
-    fail_runtime "$(cat "$RUNTIME_ERR")"
 fi
-rm -f "$RUNTIME_ERR"
-
-if ! FIFO="$(json_field "$RUNTIME_JSON" "fifo_path" 2>/dev/null)"; then
-    fail_runtime "runtime-json did not include fifo_path"
-fi
-if ! GO_LIBRESPOT_BIN="$(json_field "$RUNTIME_JSON" "go_librespot_bin" 2>/dev/null)"; then
-    fail_runtime "runtime-json did not include go_librespot_bin"
-fi
-if ! GO_LIBRESPOT_CONFIG_DIR="$(json_field "$RUNTIME_JSON" "go_librespot_config_dir" 2>/dev/null)"; then
-    fail_runtime "runtime-json did not include go_librespot_config_dir"
-fi
-if ! GO_LIBRESPOT_PORT="$(json_field "$RUNTIME_JSON" "go_librespot_port" 2>/dev/null)"; then
-    fail_runtime "runtime-json did not include go_librespot_port"
-fi
-if ! TMP_DIR="$(json_field "$RUNTIME_JSON" "tmp_dir" 2>/dev/null)"; then
-    fail_runtime "runtime-json did not include tmp_dir"
-fi
-if ! HOST="$(json_field "$RUNTIME_JSON" "bind_host" 2>/dev/null)"; then
-    fail_runtime "runtime-json did not include bind_host"
-fi
-if ! PORT="$(json_field "$RUNTIME_JSON" "port" 2>/dev/null)"; then
-    fail_runtime "runtime-json did not include port"
-fi
-
-RUNTIME_ERR="$(mktemp)"
-if ! GO_LIBRESPOT_RUNTIME_JSON="$("$PYTHON_BIN" -m mammamiradio.go_librespot_runtime describe \
-    "$GO_LIBRESPOT_BIN" \
-    "$GO_LIBRESPOT_CONFIG_DIR" \
-    "$FIFO" \
-    "$GO_LIBRESPOT_PORT" \
-    "$TMP_DIR" 2>"$RUNTIME_ERR")"; then
-    fail_runtime "$(cat "$RUNTIME_ERR")"
-fi
-rm -f "$RUNTIME_ERR"
-
-if ! GO_LIBRESPOT_CONFIG_DIR="$(json_field "$GO_LIBRESPOT_RUNTIME_JSON" "config_dir" 2>/dev/null)"; then
-    fail_runtime "go-librespot runtime did not include config_dir"
-fi
-if ! FIFO="$(json_field "$GO_LIBRESPOT_RUNTIME_JSON" "fifo_path" 2>/dev/null)"; then
-    fail_runtime "go-librespot runtime did not include fifo_path"
-fi
-if ! TMP_DIR="$(json_field "$GO_LIBRESPOT_RUNTIME_JSON" "tmp_dir" 2>/dev/null)"; then
-    fail_runtime "go-librespot runtime did not include tmp_dir"
-fi
-if ! GO_LIBRESPOT_FINGERPRINT="$(json_field "$GO_LIBRESPOT_RUNTIME_JSON" "fingerprint" 2>/dev/null)"; then
-    fail_runtime "go-librespot runtime did not include fingerprint"
-fi
-if ! GO_LIBRESPOT_STATE_FILE="$(json_field "$GO_LIBRESPOT_RUNTIME_JSON" "state_file" 2>/dev/null)"; then
-    fail_runtime "go-librespot runtime did not include state_file"
-fi
+rm -f "$STARTUP_ERR"
+eval "$STARTUP_ENV"
 
 mkdir -p "$TMP_DIR"
 DRAIN_PID_FILE="$TMP_DIR/fifo-drain.pid"
@@ -89,10 +34,7 @@ echo "Using go-librespot config dir: $GO_LIBRESPOT_CONFIG_DIR"
 [ -p "$FIFO" ] || (rm -f "$FIFO" && mkfifo "$FIFO")
 
 # Start go-librespot if not already running (tolerate missing binary)
-golibrespot_pid="$("$PYTHON_BIN" -m mammamiradio.go_librespot_runtime owned-pid \
-    "$GO_LIBRESPOT_STATE_FILE" \
-    "$GO_LIBRESPOT_FINGERPRINT" 2>/dev/null || true)"
-if [ -z "$golibrespot_pid" ]; then
+if [ -z "$GOLIBRESPOT_OWNED_PID" ]; then
     if [ -x "$GO_LIBRESPOT_BIN" ] || command -v "$GO_LIBRESPOT_BIN" > /dev/null 2>&1; then
         echo "Starting go-librespot..."
         "$GO_LIBRESPOT_BIN" \
@@ -110,7 +52,7 @@ if [ -z "$golibrespot_pid" ]; then
         echo "Warning: go-librespot not found at $GO_LIBRESPOT_BIN — running without Spotify" >&2
     fi
 else
-    echo "go-librespot already running ($golibrespot_pid)"
+    echo "go-librespot already running ($GOLIBRESPOT_OWNED_PID)"
 fi
 
 # Start fallback FIFO drain. The app will reclaim this on startup and restore it
