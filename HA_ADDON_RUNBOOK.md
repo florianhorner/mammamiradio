@@ -89,6 +89,7 @@ The standalone Docker image (for non-HA users) is separate: `ghcr.io/florianhorn
 
 Before merging ANY change that touches addon files:
 
+- [ ] `./scripts/validate-addon.sh` passes (`--build` if you changed Docker/build plumbing)
 - [ ] Version bumped in both files (if this is a release)
 - [ ] `ruff check . && ruff format --check .` passes
 - [ ] `pytest tests/` passes (200+ tests)

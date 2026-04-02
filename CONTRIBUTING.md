@@ -99,8 +99,16 @@ To install pre-commit hooks locally:
 
 ```bash
 pip install pre-commit
-pre-commit install
+pre-commit install --hook-type pre-commit --hook-type commit-msg
 ```
+
+Before pushing changes that touch the Home Assistant addon, run:
+
+```bash
+./scripts/validate-addon.sh
+```
+
+Add `--build` if you also want a local Docker build smoke test.
 
 ## Manual smoke test
 
