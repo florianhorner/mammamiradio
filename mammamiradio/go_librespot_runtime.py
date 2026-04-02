@@ -161,9 +161,9 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if len(args) == 3 and args[0] == "owned-pid":
-        pid = read_owned_pid(args[1], args[2])
-        if pid is not None:
-            print(pid)
+        owned_pid = read_owned_pid(args[1], args[2])
+        if owned_pid is not None:
+            print(owned_pid)
         return 0
 
     print(
