@@ -146,9 +146,14 @@ def main(argv: list[str] | None = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
 
     if len(args) == 6 and args[0] == "claim":
+        try:
+            pid = int(args[2])
+        except ValueError:
+            print(f"Invalid PID: {args[2]}", file=sys.stderr)
+            return 1
         claim_process(
             args[1],
-            pid=int(args[2]),
+            pid=pid,
             fingerprint=args[3],
             go_librespot_bin=args[4],
             config_dir=args[5],
