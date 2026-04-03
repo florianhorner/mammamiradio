@@ -4,6 +4,15 @@
 set -e
 cd "$(dirname "$0")"
 
+fail_setup() {
+    echo "FATAL: $1" >&2
+    exit 1
+}
+
+command -v osacompile >/dev/null 2>&1 || fail_setup "osacompile not found. Run this script on macOS with AppleScript tools installed."
+[ -f .env ] || fail_setup ".env not found. Copy .env.example to .env and fill in the required settings first."
+[ -x .venv/bin/python ] || fail_setup ".venv/bin/python not found. Create the virtualenv and install dependencies before running setup-mac.sh."
+
 # Read port from .env if it exists
 set -a
 [ -f .env ] && source .env
