@@ -67,7 +67,7 @@ AI-powered Italian radio station engine. Python 3.11+, FastAPI, FFmpeg, optional
 - If Anthropic fails, banter and ad generation fall back to short stock copy.
 - If Home Assistant is enabled and `HA_TOKEN` is present, banter and ads may reference current home state.
 - `audio.bitrate` is the single source of truth for encoding, ICY headers, and playback throttling.
-- Source switching via `/api/spotify/source/select` purges the queue, skips the current segment, and begins playback from the new source immediately.
+- Source switching via `/api/spotify/source/select` or `/api/playlist/load` purges the queue, skips the current segment, and begins playback from the new source immediately.
 - The source picker (playlist/liked_songs selection) is only available in local/macOS mode; addon/Docker modes are restricted to URL loading.
 - Non-local binds require `ADMIN_PASSWORD` or `ADMIN_TOKEN`.
 
