@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import threading
 import time
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -16,6 +18,11 @@ from mammamiradio.models import Segment, SegmentType, StationState, Track
 from mammamiradio.streamer import LiveStreamHub, router
 
 TOML_PATH = str(Path(__file__).parent.parent / "radio.toml")
+
+
+def _basic_auth_header(username: str = "admin", password: str = "secret") -> dict[str, str]:
+    token = base64.b64encode(f"{username}:{password}".encode()).decode("ascii")
+    return {"Authorization": f"Basic {token}"}
 
 
 def _make_test_app(*, admin_password: str = "", admin_token: str = "", is_addon: bool = False) -> FastAPI:
@@ -39,6 +46,7 @@ def _make_test_app(*, admin_password: str = "", admin_token: str = "", is_addon:
 
     app.state.queue = asyncio.Queue()
     app.state.skip_event = asyncio.Event()
+    app.state.source_switch_lock = asyncio.Lock()
     app.state.stream_hub = LiveStreamHub()
     app.state.station_state = state
     app.state.config = config
@@ -609,6 +617,59 @@ async def test_source_select_persistence_failure_nonfatal():
     assert app.state.station_state.playlist[0].title == "New"
 
 
+@pytest.mark.asyncio
+async def test_source_select_requests_are_serialized():
+    app = _make_test_app()
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    load_started = asyncio.Event()
+    release_first = threading.Event()
+    call_order: list[str] = []
+    loop = asyncio.get_running_loop()
+
+    first_tracks = [Track(title="First", artist="A", duration_ms=180_000, spotify_id="first")]
+    second_tracks = [Track(title="Second", artist="B", duration_ms=180_000, spotify_id="second")]
+
+    def fake_load_explicit_source(_config, source):
+        call_order.append(source.source_id)
+        if source.source_id == "first":
+            loop.call_soon_threadsafe(load_started.set)
+            release_first.wait()
+            return (
+                first_tracks,
+                MagicMock(kind="playlist", source_id="first", url="", label="First", track_count=1, selected_at=1.0),
+            )
+        return (
+            second_tracks,
+            MagicMock(kind="playlist", source_id="second", url="", label="Second", track_count=1, selected_at=2.0),
+        )
+
+    with (
+        patch("mammamiradio.streamer.load_explicit_source", side_effect=fake_load_explicit_source),
+        patch("mammamiradio.streamer.write_persisted_source") as write_mock,
+    ):
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            first_task = asyncio.create_task(
+                client.post("/api/spotify/source/select", json={"kind": "playlist", "source_id": "first"})
+            )
+            await asyncio.wait_for(load_started.wait(), timeout=1)
+            second_task = asyncio.create_task(
+                client.post("/api/spotify/source/select", json={"kind": "playlist", "source_id": "second"})
+            )
+            await asyncio.sleep(0.05)
+            assert call_order == ["first"]
+            release_first.set()
+            first_resp, second_resp = await asyncio.gather(first_task, second_task)
+
+    assert first_resp.status_code == 200
+    assert second_resp.status_code == 200
+    assert first_resp.json()["ok"] is True
+    assert second_resp.json()["ok"] is True
+    assert call_order == ["first", "second"]
+    assert app.state.station_state.playlist[0].title == "Second"
+    assert app.state.station_state.playlist_source.source_id == "second"
+    assert write_mock.call_count == 2
+
+
 # ---------------------------------------------------------------------------
 # Search tracks
 # ---------------------------------------------------------------------------
@@ -773,6 +834,53 @@ async def test_hassio_ingress_spoofed_external():
 
 
 @pytest.mark.asyncio
+async def test_basic_auth_mutation_requires_same_origin_or_csrf():
+    app = _make_test_app(admin_password="secret")
+    transport = httpx.ASGITransport(app=app, client=("10.0.0.1", 9999))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.post("/api/shuffle", headers=_basic_auth_header())
+    assert resp.status_code == 403
+    assert "Cross-site admin write blocked" in resp.text
+
+
+@pytest.mark.asyncio
+async def test_basic_auth_mutation_allows_same_origin():
+    app = _make_test_app(admin_password="secret")
+    transport = httpx.ASGITransport(app=app, client=("10.0.0.1", 9999))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.post(
+            "/api/shuffle",
+            headers={**_basic_auth_header(), "Origin": "http://testserver"},
+        )
+    assert resp.status_code == 200
+    assert resp.json()["ok"] is True
+
+
+@pytest.mark.asyncio
+async def test_basic_auth_mutation_allows_csrf_token_without_origin():
+    app = _make_test_app(admin_password="secret")
+    transport = httpx.ASGITransport(app=app, client=("10.0.0.1", 9999))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        dashboard = await client.get("/", headers=_basic_auth_header())
+        assert dashboard.status_code == 200
+        resp = await client.post(
+            "/api/shuffle",
+            headers={**_basic_auth_header(), "X-Radio-CSRF-Token": app.state.csrf_token},
+        )
+    assert resp.status_code == 200
+    assert resp.json()["ok"] is True
+
+
+@pytest.mark.asyncio
+async def test_token_auth_mutation_skips_csrf_requirement():
+    app = _make_test_app(admin_token="tok-123")
+    transport = httpx.ASGITransport(app=app, client=("10.0.0.1", 9999))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.post("/api/shuffle", headers={"X-Radio-Admin-Token": "tok-123"})
+    assert resp.status_code == 200
+
+
+@pytest.mark.asyncio
 async def test_token_auth_on_loopback_no_password():
     """Token-only auth: loopback should be trusted even with wrong token."""
     app = _make_test_app(admin_token="tok-123")
@@ -823,6 +931,18 @@ async def test_stream_returns_audio_headers():
             assert resp.headers["content-type"] == "audio/mpeg"
             assert "icy-name" in resp.headers
             assert "icy-br" in resp.headers
+
+
+@pytest.mark.asyncio
+async def test_listener_page_registers_service_worker_inside_main_script():
+    app = _make_test_app()
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.get("/listen")
+
+    assert resp.status_code == 200
+    assert "navigator.serviceWorker.register(_base + '/static/sw.js')" in resp.text
+    assert "</script>\n<script>\nif ('serviceWorker' in navigator)" not in resp.text
 
 
 # ---------------------------------------------------------------------------

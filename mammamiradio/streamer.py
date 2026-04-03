@@ -9,13 +9,20 @@ import re as _re
 import secrets
 import time
 from pathlib import Path
+from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 
 from mammamiradio.models import PersonalityAxes, PlaylistSource, Segment, SegmentType
-from mammamiradio.playlist import ExplicitSourceError, list_user_playlists, load_explicit_source, write_persisted_source
+from mammamiradio.playlist import (
+    ExplicitSourceError,
+    list_user_playlists,
+    load_explicit_source,
+    supports_user_sources,
+    write_persisted_source,
+)
 from mammamiradio.scheduler import preview_upcoming
 from mammamiradio.setup_status import addon_options_snippet, build_setup_status, classify_station_mode
 
@@ -32,10 +39,8 @@ _DASHBOARD_HTML = _PKG_DIR.joinpath("dashboard.html").read_text()
 _LISTENER_HTML = _PKG_DIR.joinpath("listener.html").read_text()
 
 _INGRESS_PREFIX_RE = _re.compile(r"^/[a-zA-Z0-9/_-]+$")
-
-
-def _supports_user_sources(config) -> bool:
-    return not config.is_addon and not Path("/.dockerenv").exists()
+_MUTATING_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
+_CSRF_TOKEN_PLACEHOLDER = "__MAMMAMIRADIO_CSRF_TOKEN__"
 
 
 def _purge_segment_queue(q) -> int:
@@ -61,9 +66,7 @@ def _apply_loaded_source(
     config = request.app.state.config
     state = request.app.state.station_state
 
-    state.playlist = tracks
-    state.playlist_source = resolved_source
-    state.startup_source_error = ""
+    state.switch_playlist(tracks, resolved_source)
 
     # Synchronise URL config: only keep it for URL sources
     if resolved_source.kind == "url":
@@ -147,6 +150,69 @@ def _inject_ingress_prefix(html: str, prefix: str) -> str:
     # Service worker registration is standalone (no _base), needs rewriting
     html = html.replace("'/sw.js'", f"'{prefix}/sw.js'")
     return html
+
+
+def _get_csrf_token(app) -> str:
+    token = getattr(app.state, "csrf_token", "")
+    if not token:
+        token = secrets.token_urlsafe(32)
+        app.state.csrf_token = token
+    return token
+
+
+def _inject_csrf_token(html: str, token: str) -> str:
+    return html.replace(_CSRF_TOKEN_PLACEHOLDER, token)
+
+
+def _same_origin(request: Request, candidate: str) -> bool:
+    parsed = urlparse(candidate)
+    if not parsed.scheme or not parsed.netloc:
+        return False
+    request_url = request.url
+
+    # Normalize ports: None means the default for the scheme (80/443)
+    def _effective_port(port, scheme: str) -> int:
+        if port is not None:
+            return port
+        return 443 if scheme == "https" else 80
+
+    return (
+        parsed.scheme == request_url.scheme
+        and parsed.hostname == request_url.hostname
+        and _effective_port(parsed.port, parsed.scheme) == _effective_port(request_url.port, request_url.scheme)
+    )
+
+
+def _enforce_csrf_for_basic_auth(request: Request, credentials: HTTPBasicCredentials | None, config) -> None:
+    if request.method.upper() not in _MUTATING_METHODS:
+        return
+    if _is_loopback_client(request):
+        return
+
+    ingress_prefix = request.headers.get("X-Ingress-Path", "")
+    if config.is_addon and ingress_prefix and _is_hassio_or_loopback(request):
+        return
+    if config.admin_token and request.headers.get("X-Radio-Admin-Token"):
+        return
+    if not config.admin_password or not credentials:
+        return
+
+    csrf_token = request.headers.get("X-Radio-CSRF-Token", "")
+    if csrf_token and secrets.compare_digest(csrf_token, _get_csrf_token(request.app)):
+        return
+
+    origin = request.headers.get("Origin", "")
+    if origin and _same_origin(request, origin):
+        return
+
+    referer = request.headers.get("Referer", "")
+    if referer and _same_origin(request, referer):
+        return
+
+    raise HTTPException(
+        status_code=403,
+        detail="Cross-site admin write blocked. Reload the dashboard and retry.",
+    )
 
 
 class LiveStreamHub:
@@ -252,6 +318,7 @@ def require_admin_access(
         if secrets.compare_digest(username, config.admin_username) and secrets.compare_digest(
             password, config.admin_password
         ):
+            _enforce_csrf_for_basic_auth(request, credentials, config)
             return
 
     if config.admin_password:
@@ -357,7 +424,9 @@ async def _audio_generator(request: Request):
 async def dashboard(request: Request):
     """Serve the authenticated control-plane dashboard."""
     prefix = request.headers.get("X-Ingress-Path", "")
-    return _inject_ingress_prefix(_DASHBOARD_HTML, prefix)
+    html = _inject_ingress_prefix(_DASHBOARD_HTML, prefix)
+    html = _inject_csrf_token(html, _get_csrf_token(request.app))
+    return html
 
 
 @router.get("/listen", response_class=HTMLResponse)
@@ -601,7 +670,7 @@ async def spotify_source_options(request: Request, _: None = Depends(require_adm
     config = request.app.state.config
     state = request.app.state.station_state
     capabilities = {
-        "supports_user_sources": _supports_user_sources(config),
+        "supports_user_sources": supports_user_sources(config),
         "supports_url_source": True,
         "reason": "",
     }
@@ -658,33 +727,35 @@ async def spotify_source_select(request: Request, _: None = Depends(require_admi
 
     config = request.app.state.config
     state = request.app.state.station_state
+    source_switch_lock = request.app.state.source_switch_lock
 
-    # Server-side capability enforcement
-    if kind in {"playlist", "liked_songs"} and not _supports_user_sources(config):
-        return {
-            "ok": False,
-            "error": "This run mode only supports playlist URL loading right now.",
-            "current_source": _serialize_source(state.playlist_source),
-        }
+    async with source_switch_lock:
+        # Server-side capability enforcement
+        if kind in {"playlist", "liked_songs"} and not supports_user_sources(config):
+            return {
+                "ok": False,
+                "error": "This run mode only supports playlist URL loading right now.",
+                "current_source": _serialize_source(state.playlist_source),
+            }
 
-    try:
-        tracks, resolved_source = await asyncio.to_thread(load_explicit_source, config, source)
-    except ExplicitSourceError as exc:
-        return {"ok": False, "error": str(exc), "current_source": _serialize_source(state.playlist_source)}
-    except Exception as exc:
-        logger.error("Source selection failed: %s", exc)
-        return {
-            "ok": False,
-            "error": "Failed to load selected source",
-            "current_source": _serialize_source(state.playlist_source),
-        }
+        try:
+            tracks, resolved_source = await asyncio.to_thread(load_explicit_source, config, source)
+        except ExplicitSourceError as exc:
+            return {"ok": False, "error": str(exc), "current_source": _serialize_source(state.playlist_source)}
+        except Exception as exc:
+            logger.error("Source selection failed: %s", exc)
+            return {
+                "ok": False,
+                "error": "Failed to load selected source",
+                "current_source": _serialize_source(state.playlist_source),
+            }
 
-    result = _apply_loaded_source(request, tracks, resolved_source)
-    try:
-        await asyncio.to_thread(write_persisted_source, config.cache_dir, resolved_source)
-    except Exception:
-        logger.warning("Failed to persist source selection, live switch still applied")
-    return result
+        result = _apply_loaded_source(request, tracks, resolved_source)
+        try:
+            await asyncio.to_thread(write_persisted_source, config.cache_dir, resolved_source)
+        except Exception:
+            logger.warning("Failed to persist source selection, live switch still applied")
+        return result
 
 
 @router.post("/api/playlist/load")
@@ -695,21 +766,23 @@ async def load_playlist(request: Request, _: None = Depends(require_admin_access
     if not url:
         return {"ok": False, "error": "No URL provided"}
     config = request.app.state.config
+    source_switch_lock = request.app.state.source_switch_lock
     source = PlaylistSource(kind="url", url=url)
-    try:
-        tracks, resolved_source = await asyncio.to_thread(load_explicit_source, config, source)
-    except ExplicitSourceError as exc:
-        return {"ok": False, "error": str(exc)}
-    except Exception as exc:
-        logger.error("Playlist load failed: %s", exc)
-        return {"ok": False, "error": "Failed to load playlist"}
+    async with source_switch_lock:
+        try:
+            tracks, resolved_source = await asyncio.to_thread(load_explicit_source, config, source)
+        except ExplicitSourceError as exc:
+            return {"ok": False, "error": str(exc)}
+        except Exception as exc:
+            logger.error("Playlist load failed: %s", exc)
+            return {"ok": False, "error": "Failed to load playlist"}
 
-    _apply_loaded_source(request, tracks, resolved_source)
-    try:
-        await asyncio.to_thread(write_persisted_source, config.cache_dir, resolved_source)
-    except Exception:
-        logger.warning("Failed to persist playlist load, live switch still applied")
-    return {"ok": True, "tracks": len(tracks), "url": url}
+        _apply_loaded_source(request, tracks, resolved_source)
+        try:
+            await asyncio.to_thread(write_persisted_source, config.cache_dir, resolved_source)
+        except Exception:
+            logger.warning("Failed to persist playlist load, live switch still applied")
+        return {"ok": True, "tracks": len(tracks), "url": url}
 
 
 @router.post("/api/playlist/move_to_next")
