@@ -12,7 +12,7 @@ from typing import Any
 
 from mammamiradio.config import StationConfig
 from mammamiradio.models import StationState
-from mammamiradio.playlist import _extract_playlist_id
+from mammamiradio.playlist import _extract_playlist_id, supports_user_sources
 
 RUN_MODES = [
     {
@@ -226,9 +226,9 @@ def build_setup_status(config: StationConfig, state: StationState, *, probe: boo
     else:
         playlist_probe_status, playlist_probe_detail = "skipped", "Skipped — click Re-check to probe Spotify."
     station_mode = classify_station_mode(config, state, demo_playlist=demo_playlist, go_bin=go_bin)
+    playlist_source_active = bool(state.playlist_source and state.playlist_source.kind != "demo" and not demo_playlist)
 
-    mode_id = mode["detected"]
-    supports_user_sources = mode_id in {"local", "macos"}
+    _supports = supports_user_sources(config)
     essentials = [
         {
             "key": "spotify",
@@ -241,8 +241,16 @@ def build_setup_status(config: StationConfig, state: StationState, *, probe: boo
                 if config.spotify_client_id and config.spotify_client_secret
                 else "No Spotify credentials found. The app will use demo tracks instead."
             ),
-            "next_action": "Add SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET, then re-check.",
-            "skip_outcome": "If you skip this, mammamiradio stays in demo mode.",
+            "next_action": (
+                "Open Spotify and select the mammamiradio device to finish the live playback path."
+                if config.spotify_client_id and config.spotify_client_secret
+                else "Add SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET, then re-check."
+            ),
+            "skip_outcome": (
+                "Credentials are already configured. Without the device handoff, playback stays degraded."
+                if config.spotify_client_id and config.spotify_client_secret
+                else "If you skip this, mammamiradio stays in demo mode."
+            ),
             "where": {
                 "ha_addon": "Add-on Configuration",
                 "docker": ".env used by docker compose",
@@ -255,21 +263,35 @@ def build_setup_status(config: StationConfig, state: StationState, *, probe: boo
             "label": "Choose your music",
             "required": True,
             "required_label": "Required for a predictable first station",
-            "status": playlist_probe_status,
+            "status": ("configured" if playlist_source_active else playlist_probe_status),
             "summary": (
-                "Connect Spotify, then choose one of your playlists or use Liked Songs."
-                if supports_user_sources
+                (
+                    "Current source: "
+                    + (
+                        state.playlist_source.label
+                        if state.playlist_source and state.playlist_source.label
+                        else "Spotify source"
+                    )
+                    + "."
+                )
+                if playlist_source_active
+                else "Connect Spotify, then choose one of your playlists or use Liked Songs."
+                if _supports
                 else "This run mode only supports the advanced playlist URL fallback for now."
             ),
             "next_action": (
-                "Open the dashboard setup flow, connect Spotify, and choose your music source."
-                if supports_user_sources
+                "Nothing to do unless you want to switch sources."
+                if playlist_source_active
+                else "Open the dashboard setup flow, connect Spotify, and choose your music source."
+                if _supports
                 else "Paste a public Spotify playlist URL into PLAYLIST_SPOTIFY_URL."
                 if not config.playlist.spotify_url
                 else "Make sure the playlist is public or owned by the authenticated Spotify account."
             ),
             "skip_outcome": (
-                "Without this, startup may fall back to demo tracks."
+                "A real source is already active."
+                if playlist_source_active
+                else "Without this, startup may fall back to demo tracks."
                 if config.is_addon
                 else "Without this, startup may fall back to demo tracks until you explicitly choose a source."
             ),
@@ -408,7 +430,7 @@ def build_setup_status(config: StationConfig, state: StationState, *, probe: boo
             else "Start Station Anyway"
         ),
         "post_launch": (
-            "You will land in the control plane and the player will try to start immediately."
+            "You will land in the control plane. Open the listener view when you want to hear the live station."
             if station_mode["id"] == "real_spotify"
             else "You will land in the control plane with a clear mode banner so nothing is ambiguous."
         ),
@@ -426,7 +448,7 @@ def build_setup_status(config: StationConfig, state: StationState, *, probe: boo
 
     return {
         "detected_mode": mode["detected"],
-        "supports_user_sources": supports_user_sources,
+        "supports_user_sources": _supports,
         "available_modes": mode["modes"],
         "station_mode": station_mode,
         "onboarding_required": onboarding_required,

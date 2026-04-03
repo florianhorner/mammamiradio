@@ -3,7 +3,7 @@ from __future__ import annotations
 from unittest.mock import MagicMock, patch
 
 from mammamiradio.config import load_config
-from mammamiradio.models import StationState, Track
+from mammamiradio.models import PlaylistSource, StationState, Track
 from mammamiradio.setup_status import (
     _playlist_is_demo,
     _probe_playlist_url,
@@ -102,6 +102,53 @@ def test_build_setup_status_local_promotes_source_picker_copy():
     assert payload["supports_user_sources"] is True
     assert playlist_item["label"] == "Choose your music"
     assert "Liked Songs" in playlist_item["summary"]
+
+
+def test_build_setup_status_reflects_active_playlist_source_without_probe():
+    config = load_config()
+    config.spotify_client_id = "id"
+    config.spotify_client_secret = "secret"
+    config.anthropic_api_key = "sk-ant"
+    state = StationState(
+        playlist=[Track(title="OSSESSIONE", artist="Samurai Jay", duration_ms=180_000, spotify_id="track1")],
+        spotify_connected=False,
+        playlist_source=PlaylistSource(kind="url", label="mamma mi radio", source_id="abc123", track_count=50),
+    )
+
+    with (
+        patch("mammamiradio.setup_status.detect_run_mode", return_value={"detected": "macos", "modes": []}),
+        patch("mammamiradio.setup_status.resolve_go_librespot_bin", return_value="/usr/local/bin/go-librespot"),
+    ):
+        payload = build_setup_status(config, state)
+
+    spotify_item = next(item for item in payload["essentials"] if item["key"] == "spotify")
+    playlist_item = next(item for item in payload["essentials"] if item["key"] == "playlist")
+
+    assert spotify_item["status"] == "configured"
+    assert "mammamiradio device" in spotify_item["next_action"]
+    assert playlist_item["status"] == "configured"
+    assert playlist_item["summary"] == "Current source: mamma mi radio."
+    assert playlist_item["next_action"] == "Nothing to do unless you want to switch sources."
+    assert playlist_item["skip_outcome"] == "A real source is already active."
+
+
+def test_build_setup_status_real_spotify_launch_copy_points_to_listener_view():
+    config = load_config()
+    config.spotify_client_id = "id"
+    config.spotify_client_secret = "secret"
+    state = StationState(
+        playlist=[Track(title="Real Song", artist="Artist", duration_ms=180_000, spotify_id="spotify123")],
+        spotify_connected=True,
+    )
+
+    with (
+        patch("mammamiradio.setup_status.detect_run_mode", return_value={"detected": "macos", "modes": []}),
+        patch("mammamiradio.setup_status.resolve_go_librespot_bin", return_value="/usr/local/bin/go-librespot"),
+    ):
+        payload = build_setup_status(config, state)
+
+    assert payload["station_mode"]["id"] == "real_spotify"
+    assert "listener view" in payload["launch"]["post_launch"]
 
 
 # --- detect_run_mode ---

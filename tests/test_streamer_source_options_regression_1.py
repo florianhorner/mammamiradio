@@ -31,6 +31,7 @@ def _make_test_app(*, is_addon: bool = False) -> FastAPI:
 
     app.state.queue = asyncio.Queue()
     app.state.skip_event = asyncio.Event()
+    app.state.source_switch_lock = asyncio.Lock()
     app.state.stream_hub = LiveStreamHub()
     app.state.station_state = StationState(
         playlist=[
@@ -48,7 +49,7 @@ async def test_source_options_disable_picker_when_spotify_auth_is_unavailable():
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
 
     with (
-        patch("mammamiradio.streamer._supports_user_sources", return_value=True),
+        patch("mammamiradio.streamer.supports_user_sources", return_value=True),
         patch("mammamiradio.streamer.list_user_playlists", side_effect=Exception("No client_id")),
     ):
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:

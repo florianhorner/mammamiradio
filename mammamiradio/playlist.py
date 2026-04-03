@@ -196,7 +196,7 @@ def read_persisted_source(cache_dir: Path) -> PlaylistSource | None:
 
 
 def write_persisted_source(cache_dir: Path, source: PlaylistSource) -> None:
-    """Persist the last selected playlist source to cache."""
+    """Persist the last selected playlist source to cache (atomic write)."""
     path = cache_dir / PERSISTED_SOURCE_FILENAME
     payload = {
         "kind": source.kind,
@@ -206,7 +206,9 @@ def write_persisted_source(cache_dir: Path, source: PlaylistSource) -> None:
         "track_count": source.track_count,
         "selected_at": source.selected_at,
     }
-    path.write_text(json.dumps(payload, indent=2, sort_keys=True))
+    tmp = path.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(payload, indent=2, sort_keys=True))
+    tmp.replace(path)
 
 
 def _fetch_tracks_from_playlist_id(sp, playlist_id: str) -> tuple[list[Track], str]:
@@ -214,13 +216,13 @@ def _fetch_tracks_from_playlist_id(sp, playlist_id: str) -> tuple[list[Track], s
     playlist_meta = sp.playlist(playlist_id, fields="name")
     label = playlist_meta.get("name") or "Spotify playlist"
     results = sp.playlist_tracks(playlist_id)
-    while results:
+    while results and len(tracks) < _MAX_PLAYLIST_TRACKS:
         for item in results.get("items", []):
             track = _track_from_spotify_item(item)
             if track:
                 tracks.append(track)
         results = sp.next(results) if results.get("next") else None
-    return tracks, label
+    return tracks[:_MAX_PLAYLIST_TRACKS], label
 
 
 def _fetch_liked_tracks(sp, max_tracks: int = 200) -> list[Track]:
@@ -241,14 +243,23 @@ def _fetch_liked_tracks(sp, max_tracks: int = 200) -> list[Track]:
     return tracks
 
 
+def supports_user_sources(config: StationConfig) -> bool:
+    """Return True when the run mode supports Spotify source picker (local/macOS only)."""
+    return not config.is_addon and not Path("/.dockerenv").exists()
+
+
+_MAX_PLAYLISTS = 500
+_MAX_PLAYLIST_TRACKS = 500
+
+
 def list_user_playlists(config: StationConfig, limit: int = 50) -> list[dict]:
-    """List available user playlists for explicit source selection."""
-    if config.is_addon or Path("/.dockerenv").exists():
+    """List available user playlists for explicit source selection (capped at 500)."""
+    if not supports_user_sources(config):
         return []
     sp = _get_spotify_oauth(config)
     playlists: list[dict] = []
     results = sp.current_user_playlists(limit=limit)
-    while results:
+    while results and len(playlists) < _MAX_PLAYLISTS:
         for item in results.get("items", []):
             if not item or not item.get("id"):
                 continue
@@ -261,7 +272,7 @@ def list_user_playlists(config: StationConfig, limit: int = 50) -> list[dict]:
                 }
             )
         results = sp.next(results) if results.get("next") else None
-    return playlists
+    return playlists[:_MAX_PLAYLISTS]
 
 
 def load_explicit_source(config: StationConfig, source: PlaylistSource) -> tuple[list[Track], PlaylistSource]:
