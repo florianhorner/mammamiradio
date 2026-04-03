@@ -57,12 +57,14 @@ AI-powered Italian radio station engine. Python 3.11+, FastAPI, FFmpeg, optional
 
 ## Runtime behavior
 
-- Startup loads `radio.toml`, validates config, fetches the playlist, starts go-librespot if possible, then launches producer and playback tasks.
+- Startup loads `radio.toml`, validates config, restores persisted source selection from `cache/playlist_source.json`, fetches the playlist, starts go-librespot if possible, then launches producer and playback tasks.
 - If Spotify credentials are missing, the app uses a built-in demo playlist.
 - If go-librespot is unavailable or not authenticated, music falls back to local `music/` files, then `yt-dlp`, then placeholder tones.
 - If Anthropic fails, banter and ad generation fall back to short stock copy.
 - If Home Assistant is enabled and `HA_TOKEN` is present, banter and ads may reference current home state.
 - `audio.bitrate` is the single source of truth for encoding, ICY headers, and playback throttling.
+- Source switching via `/api/spotify/source/select` purges the queue, skips the current segment, and begins playback from the new source immediately.
+- The source picker (playlist/liked_songs selection) is only available in local/macOS mode; addon/Docker modes are restricted to URL loading.
 - Non-local binds require `ADMIN_PASSWORD` or `ADMIN_TOKEN`.
 
 ## Project structure

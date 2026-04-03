@@ -33,7 +33,7 @@ Spotify playlist / liked songs / demo tracks
 
 1. Loads `radio.toml` and `.env` through `config.py`.
 2. Validates the config and applies legacy migration like `station.bitrate -> audio.bitrate`.
-3. Fetches the playlist from Spotify or falls back to demo tracks.
+3. Restores persisted source selection from `cache/playlist_source.json`, then fetches the playlist (by source kind: playlist, liked songs, or URL) from Spotify or falls back to demo tracks.
 4. Starts `SpotifyPlayer`, which owns go-librespot and the FIFO drain path.
 5. Creates shared app state, then launches:
    - `run_producer()` to fill the lookahead queue
@@ -123,6 +123,8 @@ Admin routes:
 - `/api/search`
 - `/api/playlist/add`
 - `/api/playlist/load`
+- `/api/spotify/source-options`
+- `/api/spotify/source/select`
 
 Admin access is granted by one of:
 

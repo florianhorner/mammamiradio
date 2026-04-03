@@ -130,6 +130,9 @@ After starting the app:
 3. Open `http://127.0.0.1:8000/stream` in a browser or player and confirm audio starts once the first segment is queued.
 4. Hit `/public-status` and confirm the upcoming list matches the current playlist order.
 5. Use the dashboard controls for skip, shuffle, purge, and playlist reorder.
+6. If running locally with Spotify credentials, click "Refresh sources" on the dashboard and verify playlists load.
+7. Select a playlist or "Liked Songs" and verify the station cuts over immediately (old audio stops, new source begins).
+8. Restart the app and verify the last selected source restores automatically.
 
 If you are testing the Spotify path, also open Spotify and select the `mammamiradio` device. If you are binding to `0.0.0.0`, set `ADMIN_PASSWORD` or `ADMIN_TOKEN` first or config validation will reject startup.
 

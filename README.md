@@ -235,7 +235,7 @@ Most station behavior lives in `radio.toml`.
 | Section | What it controls |
 | --- | --- |
 | `[station]` | Station name, language, theme |
-| `[playlist]` | Spotify playlist URL, shuffle behavior |
+| `[playlist]` | Spotify playlist URL, source selection, shuffle behavior |
 | `[pacing]` | Songs between banter, songs between ads, spots per ad break, lookahead |
 | `[[hosts]]` | Host names, Edge voices, style/personality |
 | `[audio]` | Sample rate, channels, bitrate, FIFO path, go-librespot settings, Claude model |
@@ -263,7 +263,9 @@ The Home Assistant token is never stored in `radio.toml`. Set it via `HA_TOKEN` 
 | `/api/playlist/move_to_next` | POST | Admin | Move track to position 0 in upcoming |
 | `/api/search` | GET | Admin | Search Spotify for tracks |
 | `/api/playlist/add` | POST | Admin | Add a track to the playlist |
-| `/api/playlist/load` | POST | Admin | Load a Spotify playlist by URL |
+| `/api/playlist/load` | POST | Admin | Load a Spotify playlist by URL (legacy compatibility) |
+| `/api/spotify/source-options` | GET | Admin | Available sources: user playlists, Liked Songs |
+| `/api/spotify/source/select` | POST | Admin | Switch source to playlist, liked_songs, or URL |
 
 ## Admin access
 
