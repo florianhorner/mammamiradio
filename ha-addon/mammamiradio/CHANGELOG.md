@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.1.3
+
+### Fixed
+
+- Conductor workspace setup now uses repo-owned lifecycle scripts instead of relying on an interactive shell snippet that could break before bootstrap starts.
+
 ## 1.1.2
 
 ### Added

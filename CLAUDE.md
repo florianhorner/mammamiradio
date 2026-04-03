@@ -104,6 +104,7 @@ tests/                pytest coverage
 - `start.sh` is part of the runtime contract, not just a convenience script.
 - `radio.toml` is the source of truth for hosts, pacing, ad brands, audio settings, and Home Assistant enablement. Secrets stay in `.env`.
 - If you change routes, config keys, auth rules, or fallback behavior, update the matching docs in the same change.
+- `conductor.json` and `scripts/conductor-*.sh` define Conductor workspace setup/run/archive behavior. Commit those files, but keep `.context/` runtime state out of git.
 
 ## Skill routing
 
