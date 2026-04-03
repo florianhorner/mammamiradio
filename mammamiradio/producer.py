@@ -153,7 +153,8 @@ async def run_producer(
 
             elif seg_type == SegmentType.AD:
                 if not config.ads.brands:
-                    logger.warning("No brands configured — skipping ad segment")
+                    logger.warning("No brands configured — skipping ad, resetting ad pacing counter")
+                    state.songs_since_ad = 0
                     continue
 
                 num_spots = max(1, config.pacing.ad_spots_per_break)
