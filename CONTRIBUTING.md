@@ -22,6 +22,16 @@ pip install -e .
 cp .env.example .env
 ```
 
+## Conductor workspaces
+
+This repo uses [`conductor.json`](conductor.json) for workspace lifecycle.
+
+- `scripts/conductor-setup.sh` bootstraps the workspace venv and dev dependencies
+- `scripts/conductor-run.sh` starts the app with workspace-scoped runtime paths under `.context/conductor`
+- `scripts/conductor-archive.sh` cleans up workspace runtime state when the workspace is archived
+
+These files are part of the repo contract and should stay in git. Runtime artifacts under `.context/` should not.
+
 Then fill in whatever `.env` values you need:
 
 - `SPOTIFY_CLIENT_ID` / `SPOTIFY_CLIENT_SECRET` for Spotify playlist access and playback transfer
