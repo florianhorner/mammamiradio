@@ -283,7 +283,8 @@ async def run_producer(
                 await loop.run_in_executor(None, generate_silence, silence_path, 5.0)
             except Exception as silence_err:
                 logger.error("Cannot generate silence (ffmpeg broken?): %s", silence_err)
-                await asyncio.sleep(10)
+                # Retry quickly so a transient ffmpeg failure does not stall the stream.
+                await asyncio.sleep(0.5)
                 continue
             segment = Segment(
                 type=seg_type,
