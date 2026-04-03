@@ -38,6 +38,62 @@ def _supports_user_sources(config) -> bool:
     return not config.is_addon and not Path("/.dockerenv").exists()
 
 
+def _purge_segment_queue(q) -> int:
+    """Drain all pre-produced segments from the queue and unlink temp files."""
+    purged = 0
+    while not q.empty():
+        try:
+            seg = q.get_nowait()
+            seg.path.unlink(missing_ok=True)
+            q.task_done()
+            purged += 1
+        except Exception:
+            break
+    return purged
+
+
+def _apply_loaded_source(
+    request,
+    tracks: list,
+    resolved_source,
+) -> dict:
+    """Atomically swap the station source and trigger immediate cutover."""
+    config = request.app.state.config
+    state = request.app.state.station_state
+
+    state.playlist = tracks
+    state.playlist_source = resolved_source
+    state.startup_source_error = ""
+
+    # Synchronise URL config: only keep it for URL sources
+    if resolved_source.kind == "url":
+        config.playlist.spotify_url = resolved_source.url
+    else:
+        config.playlist.spotify_url = ""
+
+    # Immediate cutover: purge queued segments and skip current playback
+    purged = _purge_segment_queue(request.app.state.queue)
+    skipped = False
+    if state.now_streaming:
+        request.app.state.skip_event.set()
+        skipped = True
+
+    logger.info(
+        "Loaded source %s: %s (%d tracks), purged %d queued segments%s",
+        resolved_source.kind,
+        resolved_source.label or "unnamed",
+        len(tracks),
+        purged,
+        ", skipped current segment" if skipped else "",
+    )
+
+    return {
+        "ok": True,
+        "source": _serialize_source(resolved_source),
+        "preview": _preview_tracks(tracks),
+    }
+
+
 def _serialize_source(source: PlaylistSource | None) -> dict | None:
     if not source:
         return None
@@ -410,16 +466,7 @@ async def skip_track(request: Request, _: None = Depends(require_admin_access)):
 @router.post("/api/purge")
 async def purge_queue(request: Request, _: None = Depends(require_admin_access)):
     """Drain all pre-produced segments from the queue."""
-    q = request.app.state.queue
-    purged = 0
-    while not q.empty():
-        try:
-            seg = q.get_nowait()
-            seg.path.unlink(missing_ok=True)
-            q.task_done()
-            purged += 1
-        except Exception:
-            break
+    purged = _purge_segment_queue(request.app.state.queue)
     return {"ok": True, "purged": purged}
 
 
@@ -611,6 +658,15 @@ async def spotify_source_select(request: Request, _: None = Depends(require_admi
 
     config = request.app.state.config
     state = request.app.state.station_state
+
+    # Server-side capability enforcement
+    if kind in {"playlist", "liked_songs"} and not _supports_user_sources(config):
+        return {
+            "ok": False,
+            "error": "This run mode only supports playlist URL loading right now.",
+            "current_source": _serialize_source(state.playlist_source),
+        }
+
     try:
         tracks, resolved_source = await asyncio.to_thread(load_explicit_source, config, source)
     except ExplicitSourceError as exc:
@@ -623,17 +679,12 @@ async def spotify_source_select(request: Request, _: None = Depends(require_admi
             "current_source": _serialize_source(state.playlist_source),
         }
 
-    state.playlist = tracks
-    state.playlist_source = resolved_source
-    state.startup_source_error = ""
-    if resolved_source.kind == "url":
-        config.playlist.spotify_url = resolved_source.url
-    await asyncio.to_thread(write_persisted_source, config.cache_dir, resolved_source)
-    return {
-        "ok": True,
-        "source": _serialize_source(resolved_source),
-        "preview": _preview_tracks(tracks),
-    }
+    result = _apply_loaded_source(request, tracks, resolved_source)
+    try:
+        await asyncio.to_thread(write_persisted_source, config.cache_dir, resolved_source)
+    except Exception:
+        logger.warning("Failed to persist source selection, live switch still applied")
+    return result
 
 
 @router.post("/api/playlist/load")
@@ -644,7 +695,6 @@ async def load_playlist(request: Request, _: None = Depends(require_admin_access
     if not url:
         return {"ok": False, "error": "No URL provided"}
     config = request.app.state.config
-    state = request.app.state.station_state
     source = PlaylistSource(kind="url", url=url)
     try:
         tracks, resolved_source = await asyncio.to_thread(load_explicit_source, config, source)
@@ -654,11 +704,11 @@ async def load_playlist(request: Request, _: None = Depends(require_admin_access
         logger.error("Playlist load failed: %s", exc)
         return {"ok": False, "error": "Failed to load playlist"}
 
-    state.playlist = tracks
-    state.playlist_source = resolved_source
-    state.startup_source_error = ""
-    config.playlist.spotify_url = resolved_source.url
-    await asyncio.to_thread(write_persisted_source, config.cache_dir, resolved_source)
+    _apply_loaded_source(request, tracks, resolved_source)
+    try:
+        await asyncio.to_thread(write_persisted_source, config.cache_dir, resolved_source)
+    except Exception:
+        logger.warning("Failed to persist playlist load, live switch still applied")
     return {"ok": True, "tracks": len(tracks), "url": url}
 
 

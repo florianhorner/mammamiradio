@@ -24,6 +24,8 @@ def _make_test_app(*, is_addon: bool = False) -> FastAPI:
 
     config = load_config(TOML_PATH)
     config.is_addon = is_addon
+    config.spotify_client_id = ""
+    config.spotify_client_secret = ""
     config.cache_dir = Path("/tmp/mammamiradio-test-cache")
     config.cache_dir.mkdir(parents=True, exist_ok=True)
 
