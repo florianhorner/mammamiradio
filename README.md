@@ -14,13 +14,13 @@ The app is designed to degrade gracefully. If Spotify auth is missing, it falls 
 
 The control plane at `/` lets you manage the station: queue depth, Spotify status, host personality sliders, segment log, upcoming queue, and live banter scripts.
 
-![Dashboard](docs/screenshots/dashboard.svg)
+![Dashboard](docs/screenshots/dashboard.png)
 
 ### Listener Page
 
 The public listener at `/listen` is an art-deco styled player with now-playing info, up-next preview, callback corner, and recently-played log.
 
-![Listener](docs/screenshots/listener.svg)
+![Listener](docs/screenshots/listener.png)
 
 ## What it does
 
@@ -130,6 +130,8 @@ Edit `.env` as needed:
 ```dotenv
 MAMMAMIRADIO_BIND_HOST=127.0.0.1
 MAMMAMIRADIO_PORT=8000
+MAMMAMIRADIO_FIFO_PATH=/tmp/mammamiradio.pcm
+MAMMAMIRADIO_GO_LIBRESPOT_CONFIG_DIR=go-librespot
 ADMIN_USERNAME=admin
 ADMIN_PASSWORD=
 ADMIN_TOKEN=
@@ -197,6 +199,14 @@ Open:
 
 On first full Spotify run, select `mammamiradio` as the playback device in Spotify. The app also tries to auto-transfer playback when the device appears.
 
+### Run (Conductor)
+
+This repo ships a shared [`conductor.json`](conductor.json) for Conductor workspaces.
+
+- setup creates `.venv`, installs app plus dev dependencies, and symlinks `.env` from `$CONDUCTOR_ROOT_PATH` when available
+- run delegates to `./start.sh`, binds to `$CONDUCTOR_PORT`, and isolates FIFO/cache/tmp/go-librespot state under `.context/conductor/`
+- archive stops workspace-owned helper processes and removes the workspace runtime state
+
 ### Sharing with friends
 
 To let others listen on your network, bind to all interfaces and set an admin password:
@@ -252,9 +262,14 @@ The Home Assistant token is never stored in `radio.toml`. Set it via `HA_TOKEN` 
 | `/` | GET | Admin | Dashboard HTML |
 | `/listen` | GET | Public | Minimal player UI |
 | `/stream` | GET | Public | Infinite MP3 stream |
+| `/healthz` | GET | Public | Liveness probe with process uptime |
+| `/readyz` | GET | Public | Readiness probe with queue depth and startup status |
 | `/public-status` | GET | Public | Current segment, recent log, upcoming preview |
 | `/status` | GET | Admin | Full admin JSON: queue depth, uptime, scripts, HA context, errors |
 | `/api/logs` | GET | Admin | Recent go-librespot logs |
+| `/api/setup/status` | GET | Admin | First-run setup status, detected run mode, and station mode |
+| `/api/setup/recheck` | POST | Admin | Re-run setup probes for Spotify, FFmpeg, and go-librespot |
+| `/api/setup/addon-snippet` | GET | Admin | Copy-friendly Home Assistant add-on config snippet |
 | `/api/shuffle` | POST | Admin | Shuffle playlist |
 | `/api/skip` | POST | Admin | Skip current segment |
 | `/api/purge` | POST | Admin | Remove queued segments |
@@ -305,6 +320,12 @@ tests/                pytest coverage
 ```
 
 ## Development
+
+```bash
+make test
+```
+
+Or run pytest directly:
 
 ```bash
 pytest tests/

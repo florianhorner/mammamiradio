@@ -266,6 +266,14 @@ def load_config(path: str = "radio.toml") -> StationConfig:
         station_raw["theme"] = os.getenv("STATION_THEME")
     if os.getenv("PLAYLIST_SPOTIFY_URL"):
         raw.setdefault("playlist", {})["spotify_url"] = os.getenv("PLAYLIST_SPOTIFY_URL")
+    if os.getenv("MAMMAMIRADIO_FIFO_PATH"):
+        audio_raw["fifo_path"] = os.getenv("MAMMAMIRADIO_FIFO_PATH")
+    if os.getenv("MAMMAMIRADIO_GO_LIBRESPOT_BIN"):
+        audio_raw["go_librespot_bin"] = os.getenv("MAMMAMIRADIO_GO_LIBRESPOT_BIN")
+    if os.getenv("MAMMAMIRADIO_GO_LIBRESPOT_CONFIG_DIR"):
+        audio_raw["go_librespot_config_dir"] = os.getenv("MAMMAMIRADIO_GO_LIBRESPOT_CONFIG_DIR")
+    if os.getenv("MAMMAMIRADIO_GO_LIBRESPOT_PORT"):
+        audio_raw["go_librespot_port"] = int(os.getenv("MAMMAMIRADIO_GO_LIBRESPOT_PORT", "3678"))
     if os.getenv("CLAUDE_MODEL"):
         audio_raw["claude_model"] = os.getenv("CLAUDE_MODEL")
 
