@@ -115,6 +115,11 @@ The app now treats first run as setup, not as "the dashboard happened to load". 
 - Optional: Anthropic API key, for Claude-generated banter and ads (falls back to stock copy without it)
 - Optional: Home Assistant long-lived token, for ambient home-state references in scripts
 
+> **How the Spotify pieces fit together:**
+> Three things connect the station to Spotify, each doing a different job.
+> **Developer credentials** (client ID + secret) talk to the Spotify Web API for metadata only: what tracks are in a playlist, your library, search results, and track info so the hosts can reference what is playing. **go-librespot** is a Spotify Connect receiver that streams actual audio, the same way a Chromecast or Sonos speaker does. **Device selection** is the manual step: open your Spotify app, tap the device picker, and choose `mammamiradio` so Spotify routes audio to go-librespot. A **playlist share link** is an alternative to the source picker, letting you paste a URL instead of browsing playlists interactively.
+> Each layer degrades independently. No credentials means demo tracks. No go-librespot means downloaded or local audio. No device selection means the station waits in degraded mode. The station always produces a stream. See [ARCHITECTURE.md](ARCHITECTURE.md#how-spotify-integration-works) for the full breakdown.
+
 ### Setup
 
 ```bash
