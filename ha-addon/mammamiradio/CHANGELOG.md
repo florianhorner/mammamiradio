@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.5.0-beta.1
+
+### Added
+
+- Source switching now triggers immediate cutover with queue purge and playback skip.
+- Server-side enforcement prevents picker-style source selection in addon mode; URL loading still works.
+
+### Fixed
+
+- Producer recovery stall when go-librespot restarts mid-segment.
+
 ## 1.1.3
 
 ### Fixed

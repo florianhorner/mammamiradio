@@ -4,6 +4,27 @@ All notable changes to `mammamiradio` are documented here.
 
 The current version source of truth is `pyproject.toml`.
 
+## [1.5.0-beta.1] - 2026-04-03
+
+### Added
+
+- Spotify source picker: choose from your playlists or Liked Songs directly in the dashboard (local/macOS mode only).
+- Persisted source selection: the station restores your last chosen source on restart via `cache/playlist_source.json`.
+- New API routes: `GET /api/spotify/source-options` and `POST /api/spotify/source/select` for programmatic source switching.
+
+### Changed
+
+- Source switching now triggers immediate cutover: queued segments are purged and current playback is skipped so the new source starts right away.
+- Switching to a non-URL source clears stale playlist URL state from config and status payloads.
+- Server-side capability enforcement: picker-style source kinds (`playlist`, `liked_songs`) are rejected in addon/Docker mode.
+- `POST /api/playlist/load` now uses the same shared cutover path as `source/select` for consistent behavior.
+
+### Fixed
+
+- Producer recovery stall when go-librespot restarts mid-segment.
+- `setup-mac.sh` now fails fast on missing prerequisites instead of silently continuing.
+- Flaky `test_source_options_disable_picker_when_spotify_auth_is_unavailable` test caused by leaked Spotify credentials from local `.env`.
+
 ## [1.1.3] - 2026-04-03
 
 ### Added
