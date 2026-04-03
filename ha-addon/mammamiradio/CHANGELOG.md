@@ -1,12 +1,6 @@
 # Changelog
 
-## 1.1.3
-
-### Fixed
-
-- Conductor workspace setup now uses repo-owned lifecycle scripts instead of relying on an interactive shell snippet that could break before bootstrap starts.
-
-## 1.1.2
+## 1.2.0
 
 ### Added
 
@@ -22,6 +16,12 @@
 
 - Add-on setup checks now resolve the default Apple Silicon Homebrew `go-librespot` path correctly when PATH is sparse.
 - Spotify setup rechecks clear stale connection state and can use cached user auth when probing playlists, so the add-on reports `Demo Mode`, `Degraded`, and `Real Spotify Mode` more accurately.
+
+## 1.1.3
+
+### Fixed
+
+- Conductor workspace setup now uses repo-owned lifecycle scripts instead of relying on an interactive shell snippet that could break before bootstrap starts.
 
 ## 1.1.1
 

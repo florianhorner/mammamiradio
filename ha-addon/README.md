@@ -18,16 +18,23 @@ Add-on repository for [mammamiradio](https://github.com/florianhorner/mammamirad
 
 After installing, go to the add-on's **Configuration** tab:
 
-- **Anthropic API Key** (recommended): Enables AI-generated banter and ads. Get one at [console.anthropic.com](https://console.anthropic.com). Without this, the station uses stock banter lines.
-- **Spotify Client ID / Secret** (optional): From [developer.spotify.com](https://developer.spotify.com/dashboard). Without these, the station uses a built-in demo Italian playlist.
+- **Anthropic API Key** (optional): Enables AI-generated banter and ads. Get one at [console.anthropic.com](https://console.anthropic.com). Without this, the station uses stock banter lines.
+- **Spotify Client ID / Secret**: From [developer.spotify.com](https://developer.spotify.com/dashboard). Without these, the station uses a built-in demo Italian playlist.
 - **Station Name**: Customize your station's name (default: "Radio Italì").
-- **Spotify Playlist URL** (optional): A specific Spotify playlist to use.
+- **Spotify Playlist URL**: The public playlist to use on first run. In add-on mode this is the reliable path because browser-based user OAuth is not part of the add-on flow.
 
 ## Usage
 
 1. Start the add-on
-2. Click **Open Web UI** in the sidebar (or the add-on info page) to access the dashboard
-3. The stream is available at the add-on's `/stream` endpoint for use with HA media players
+2. Click **Open Web UI** in the sidebar (or the add-on info page)
+3. Follow the same four setup steps shown in the dashboard:
+   - choose the `Home Assistant add-on` run mode
+   - connect Spotify credentials and a playlist URL
+   - run the preflight checks
+   - confirm whether the station is in `Real Spotify Mode`, `Demo Mode`, or `Degraded`
+4. Use the add-on's `/stream` endpoint with HA media players once the mode banner matches what you expect
+
+The add-on also exposes unauthenticated `/healthz` and `/readyz` probes for monitoring. The richer setup checks live behind the admin UI at `/api/setup/status`, `/api/setup/recheck`, and `/api/setup/addon-snippet`.
 
 ### Playing on speakers
 
@@ -48,11 +55,11 @@ Or add a button to your Lovelace dashboard that triggers this automation.
 
 The dashboard gives you full control over the station — queue, host personalities, and live scripts:
 
-![Dashboard](../docs/screenshots/dashboard.svg)
+![Dashboard](../docs/screenshots/dashboard.png)
 
 The listener page is a clean, mobile-friendly player for anyone on your network:
 
-![Listener](../docs/screenshots/listener.svg)
+![Listener](../docs/screenshots/listener.png)
 
 ## What it does
 
