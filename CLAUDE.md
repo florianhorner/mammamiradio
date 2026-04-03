@@ -54,6 +54,10 @@ AI-powered Italian radio station engine. Python 3.11+, FastAPI, FFmpeg, optional
 - `STATION_NAME`, `STATION_THEME`: override station identity from `radio.toml`
 - `PLAYLIST_SPOTIFY_URL`: override playlist URL from `radio.toml`
 - `CLAUDE_MODEL`: override Claude model from `radio.toml`
+- `MAMMAMIRADIO_FIFO_PATH`: override go-librespot FIFO path
+- `MAMMAMIRADIO_GO_LIBRESPOT_BIN`: override go-librespot binary path
+- `MAMMAMIRADIO_GO_LIBRESPOT_CONFIG_DIR`: override go-librespot config directory
+- `MAMMAMIRADIO_GO_LIBRESPOT_PORT`: override go-librespot API port (default `3678`)
 
 ## Runtime behavior
 
@@ -85,6 +89,7 @@ mammamiradio/
   normalizer.py       FFmpeg helpers for normalize, mix, concat, and generated SFX
   tts.py              Edge TTS synthesis for hosts and ads
   ha_context.py       Home Assistant polling and Italian state formatting
+  setup_status.py     First-run onboarding and setup status classification
   dashboard.html      dashboard HTML served at /
   listener.html       listener HTML served at /listen
 radio.toml            station config

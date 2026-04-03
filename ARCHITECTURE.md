@@ -134,6 +134,14 @@ Admin access is granted by one of:
 
 Non-local binds without admin auth are rejected during config validation.
 
+### CSRF protection
+
+Mutating admin requests (POST/PUT/PATCH/DELETE) over non-loopback networks must pass a CSRF check. The dashboard injects a per-session token via `__MAMMAMIRADIO_CSRF_TOKEN__` placeholder replacement. Requests are allowed if any of: the CSRF token header matches, the Origin or Referer is same-origin, the request uses token auth (`X-Radio-Admin-Token`), or the request comes through HA ingress. Loopback clients are exempt.
+
+### Source switch concurrency
+
+`source_switch_lock` (asyncio.Lock on `app.state`) serializes `/api/spotify/source/select` and `/api/playlist/load` so only one source change runs at a time. The producer uses a `playlist_revision` counter on `StationState` to detect and discard segments generated for a stale source.
+
 ## Failure model
 
 This repo is biased toward "keep the station on air."

@@ -106,6 +106,8 @@ Admin routes:
 - `/api/search`
 - `/api/playlist/add`
 - `/api/playlist/load`
+- `/api/spotify/source-options`
+- `/api/spotify/source/select`
 
 ## Recommended production shape
 
