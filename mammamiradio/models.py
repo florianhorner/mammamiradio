@@ -41,6 +41,18 @@ class Track:
 
 
 @dataclass
+class PlaylistSource:
+    """The user-visible source backing the currently loaded playlist."""
+
+    kind: str
+    source_id: str = ""
+    url: str = ""
+    label: str = ""
+    track_count: int = 0
+    selected_at: float = 0.0
+
+
+@dataclass
 class PersonalityAxes:
     """Tunable personality dimensions that shape how a host delivers dialogue.
 
@@ -162,6 +174,8 @@ class StationState:
     last_ad_script: dict = field(default_factory=dict)
     ad_history: list[AdHistoryEntry] = field(default_factory=list)
     spotify_connected: bool = False
+    playlist_source: PlaylistSource | None = None
+    startup_source_error: str = ""
     # What the listener is hearing RIGHT NOW
     now_streaming: dict = field(default_factory=dict)
     # Stream-side log (when segments actually play, not when produced)

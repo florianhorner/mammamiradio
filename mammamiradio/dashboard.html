@@ -1019,14 +1019,33 @@
   and select <strong>mammamiradio</strong>. Music will use placeholders until connected.
 </div>
 
+<div class="setup-card" style="margin-bottom:12px">
+  <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap">
+    <div>
+      <h3 style="margin-bottom:4px">Choose your music</h3>
+      <p id="source-options-summary">Connect Spotify to load one of your playlists, use Liked Songs, or paste a playlist link as the advanced fallback.</p>
+      <div id="current-source-label" class="surface" style="margin-top:8px">Current source: loading...</div>
+    </div>
+    <button class="btn" type="button" onclick="loadSourceOptions()">Refresh sources</button>
+  </div>
+  <div id="source-options" style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px"></div>
+  <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">
+    <button class="btn" type="button" id="liked-songs-btn" onclick="selectLikedSongs()">Use my Liked Songs</button>
+    <select id="playlist-select" style="min-width:260px;background:var(--card);border:1px solid rgba(176,164,148,0.2);border-radius:6px;color:var(--cream);padding:8px 12px;font-size:13px;font-family:var(--font-body);outline:none">
+      <option value="">Choose one of my playlists</option>
+    </select>
+    <button class="btn" type="button" id="playlist-select-btn" onclick="selectPlaylist()">Load playlist</button>
+  </div>
+</div>
+
 <div style="display:flex;gap:8px;margin-bottom:8px">
   <div style="flex:1;display:flex;gap:8px">
     <input id="search-input" type="text" placeholder="Search songs..." style="flex:1;background:var(--card);border:1px solid rgba(176,164,148,0.2);border-radius:6px;color:var(--cream);padding:8px 12px;font-size:13px;font-family:var(--font-body);outline:none" onfocus="this.style.borderColor='var(--terracotta)'" onblur="this.style.borderColor='rgba(176,164,148,0.2)'" onkeydown="if(event.key==='Enter')searchTracks()">
     <button class="btn" onclick="searchTracks()">Search</button>
   </div>
   <div style="display:flex;gap:8px">
-    <input id="playlist-url" type="text" placeholder="Playlist URL..." style="width:200px;background:var(--card);border:1px solid rgba(176,164,148,0.2);border-radius:6px;color:var(--cream);padding:8px 12px;font-size:13px;font-family:var(--font-body);outline:none" onfocus="this.style.borderColor='var(--terracotta)'" onblur="this.style.borderColor='rgba(176,164,148,0.2)'" onkeydown="if(event.key==='Enter')loadPlaylist()">
-    <button class="btn" onclick="loadPlaylist()">Load</button>
+    <input id="playlist-url" type="text" placeholder="Paste playlist link (advanced)" style="width:260px;background:var(--card);border:1px solid rgba(176,164,148,0.2);border-radius:6px;color:var(--cream);padding:8px 12px;font-size:13px;font-family:var(--font-body);outline:none" onfocus="this.style.borderColor='var(--terracotta)'" onblur="this.style.borderColor='rgba(176,164,148,0.2)'" onkeydown="if(event.key==='Enter')loadPlaylist()">
+    <button class="btn" id="playlist-url-btn" onclick="loadPlaylist()">Paste playlist link</button>
   </div>
 </div>
 <div id="search-results" style="margin-bottom:12px"></div>
@@ -1186,6 +1205,7 @@ const setupStepLabels = [
 let setupState = null;
 let setupStep = 1;
 let selectedRunMode = null;
+let sourceOptionsState = null;
 
 
 function setupAckKey(signature) {
@@ -1578,8 +1598,107 @@ async function loadPersonality() {
   }
 }
 
+function updateCurrentSourceLabel(source) {
+  const el = document.getElementById('current-source-label');
+  if (!source || !source.kind) {
+    el.textContent = 'Current source: none selected';
+    return;
+  }
+  const label = source.label || source.kind;
+  const count = source.track_count ? ' (' + source.track_count + ' tracks)' : '';
+  el.textContent = 'Current source: ' + label + count;
+}
+
+function renderSourceOptions(payload) {
+  sourceOptionsState = payload;
+  updateCurrentSourceLabel(payload.current_source);
+  const summary = document.getElementById('source-options-summary');
+  const chips = document.getElementById('source-options');
+  const select = document.getElementById('playlist-select');
+  const likedBtn = document.getElementById('liked-songs-btn');
+  const playlistBtn = document.getElementById('playlist-select-btn');
+  const urlInput = document.getElementById('playlist-url');
+  const urlBtn = document.getElementById('playlist-url-btn');
+  const canUsePicker = !!(payload.ok && payload.capabilities && payload.capabilities.supports_user_sources);
+  const canUseUrlFallback = !!(payload.ok && payload.capabilities && payload.capabilities.supports_url_source);
+
+  summary.textContent = canUsePicker
+    ? 'Connect Spotify, choose one of your playlists, use Liked Songs, or keep the advanced playlist-link fallback.'
+    : (payload.capabilities.reason || 'Spotify source picker is not available in this run mode yet. Use the advanced playlist link fallback.');
+
+  likedBtn.disabled = !canUsePicker;
+  playlistBtn.disabled = !canUsePicker;
+  select.disabled = !canUsePicker;
+  urlInput.disabled = !canUseUrlFallback;
+  urlBtn.disabled = !canUseUrlFallback;
+  select.innerHTML = '<option value="">Choose one of my playlists</option>';
+  (payload.playlists || []).forEach(item => {
+    const option = document.createElement('option');
+    option.value = item.id;
+    option.textContent = item.label + (item.track_count ? ' (' + item.track_count + ')' : '');
+    option.dataset.label = item.label;
+    select.appendChild(option);
+  });
+
+  const tags = [];
+  if (canUsePicker) tags.push('<span class="setup-badge configured">Spotify picker ready</span>');
+  else if (canUseUrlFallback) tags.push('<span class="setup-badge degraded">URL fallback only</span>');
+  else tags.push('<span class="setup-badge degraded">Spotify auth required</span>');
+  if (payload.current_source && payload.current_source.kind) {
+    tags.push('<span class="setup-badge skipped">' + escHtml(payload.current_source.kind) + '</span>');
+  }
+  chips.innerHTML = tags.join('');
+}
+
+async function loadSourceOptions() {
+  try {
+    const r = await fetch(_base + '/api/spotify/source-options');
+    const d = await r.json();
+    renderSourceOptions(d);
+  } catch (e) {
+    console.error('source options load failed', e);
+  }
+}
+
+async function selectLikedSongs() {
+  await selectSource({kind: 'liked_songs', label: 'Liked Songs'});
+}
+
+async function selectPlaylist() {
+  const select = document.getElementById('playlist-select');
+  const option = select.options[select.selectedIndex];
+  if (!select.value) {
+    showToast('Pick a playlist first');
+    return;
+  }
+  await selectSource({kind: 'playlist', source_id: select.value, label: option.dataset.label || option.textContent});
+}
+
+async function selectSource(payload) {
+  try {
+    const r = await fetch(_base + '/api/spotify/source/select', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(payload),
+    });
+    const d = await r.json();
+    if (!d.ok) {
+      showToast(d.error || 'Source selection failed');
+      return;
+    }
+    updateCurrentSourceLabel(d.source);
+    await loadSourceOptions();
+    showToast('Loaded ' + (d.source.label || d.source.kind));
+    refresh();
+  } catch (e) {
+    console.error('source select failed', e);
+    showToast('Source selection failed');
+  }
+}
+
 loadPersonality();
 loadSetup(false);
+loadSourceOptions();
 
 async function refresh() {
   try {
@@ -1601,7 +1720,7 @@ async function refresh() {
     if (d.station_mode && d.station_mode.id === 'demo') {
       connectBanner.style.display = 'block';
       connectBanner.innerHTML =
-        '<strong>Demo mode is active.</strong> The station is using the built-in playlist until you add Spotify credentials and a real playlist.';
+        '<strong>Demo mode is active.</strong> The station is using the built-in playlist until you add Spotify credentials and choose a real music source.';
     } else if (d.spotify_connected) {
       connectBanner.style.display = 'none';
     } else {
@@ -1612,7 +1731,8 @@ async function refresh() {
 
     // Show current playlist URL if set and input is empty
     const plInput = document.getElementById('playlist-url');
-    if (d.playlist_url && !plInput.value && plInput.placeholder === 'Playlist URL...') {
+    if (d.playlist_source) updateCurrentSourceLabel(d.playlist_source);
+    if (d.playlist_url && !plInput.value && plInput.placeholder === 'Paste playlist link (advanced)') {
       plInput.placeholder = d.playlist_url;
     }
 
@@ -1855,15 +1975,16 @@ async function loadPlaylist() {
     if (d.ok) {
       input.value = '';
       input.placeholder = d.tracks + ' tracks loaded!';
-      setTimeout(() => { input.placeholder = 'Playlist URL...'; }, 3000);
+      setTimeout(() => { input.placeholder = 'Paste playlist link (advanced)'; }, 3000);
+      loadSourceOptions();
     } else {
       input.placeholder = 'Error: ' + (d.error || 'unknown');
-      setTimeout(() => { input.placeholder = 'Playlist URL...'; }, 3000);
+      setTimeout(() => { input.placeholder = 'Paste playlist link (advanced)'; }, 3000);
     }
     refresh();
   } catch (e) {
     input.placeholder = 'Network error';
-    setTimeout(() => { input.placeholder = 'Playlist URL...'; }, 3000);
+    setTimeout(() => { input.placeholder = 'Paste playlist link (advanced)'; }, 3000);
   } finally {
     input.disabled = false;
   }

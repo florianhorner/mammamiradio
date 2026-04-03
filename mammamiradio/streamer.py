@@ -14,7 +14,8 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 
-from mammamiradio.models import PersonalityAxes, Segment, SegmentType
+from mammamiradio.models import PersonalityAxes, PlaylistSource, Segment, SegmentType
+from mammamiradio.playlist import ExplicitSourceError, list_user_playlists, load_explicit_source, write_persisted_source
 from mammamiradio.scheduler import preview_upcoming
 from mammamiradio.setup_status import addon_options_snippet, build_setup_status, classify_station_mode
 
@@ -31,6 +32,36 @@ _DASHBOARD_HTML = _PKG_DIR.joinpath("dashboard.html").read_text()
 _LISTENER_HTML = _PKG_DIR.joinpath("listener.html").read_text()
 
 _INGRESS_PREFIX_RE = _re.compile(r"^/[a-zA-Z0-9/_-]+$")
+
+
+def _supports_user_sources(config) -> bool:
+    return not config.is_addon and not Path("/.dockerenv").exists()
+
+
+def _serialize_source(source: PlaylistSource | None) -> dict | None:
+    if not source:
+        return None
+    return {
+        "kind": source.kind,
+        "source_id": source.source_id,
+        "url": source.url,
+        "label": source.label,
+        "track_count": source.track_count,
+        "selected_at": source.selected_at,
+    }
+
+
+def _preview_tracks(tracks: list, limit: int = 3) -> dict:
+    return {
+        "track_count": len(tracks),
+        "tracks": [{"title": track.title, "artist": track.artist} for track in tracks[:limit]],
+    }
+
+
+def _source_options_reason(config, exc: Exception) -> str:
+    if not config.spotify_client_id or not config.spotify_client_secret:
+        return "Add Spotify credentials first. Then the source picker and playlist link tools will unlock."
+    return f"Spotify auth is not ready yet: {exc}"
 
 
 def _sanitize_ingress_prefix(prefix: str) -> str:
@@ -517,34 +548,117 @@ async def add_track(request: Request, _: None = Depends(require_admin_access)):
     return {"ok": True, "added": track.display, "position": position}
 
 
+@router.get("/api/spotify/source-options")
+async def spotify_source_options(request: Request, _: None = Depends(require_admin_access)):
+    """Return available source selection options for the current run mode."""
+    config = request.app.state.config
+    state = request.app.state.station_state
+    capabilities = {
+        "supports_user_sources": _supports_user_sources(config),
+        "supports_url_source": True,
+        "reason": "",
+    }
+    if not capabilities["supports_user_sources"]:
+        capabilities["reason"] = "Spotify source picker is only available in local/macOS mode right now."
+        return {
+            "ok": True,
+            "capabilities": capabilities,
+            "account": {"connected": False, "display_name": ""},
+            "current_source": _serialize_source(state.playlist_source),
+            "playlists": [],
+            "liked_songs": {"available": False, "label": "Liked Songs"},
+        }
+
+    try:
+        playlists = await asyncio.to_thread(list_user_playlists, config)
+    except Exception as exc:
+        return {
+            "ok": False,
+            "capabilities": {
+                **capabilities,
+                "supports_user_sources": False,
+                "reason": _source_options_reason(config, exc),
+            },
+            "account": {"connected": False, "display_name": ""},
+            "current_source": _serialize_source(state.playlist_source),
+            "playlists": [],
+            "liked_songs": {"available": False, "label": "Liked Songs"},
+        }
+
+    return {
+        "ok": True,
+        "capabilities": capabilities,
+        "account": {"connected": True, "display_name": "Spotify account"},
+        "current_source": _serialize_source(state.playlist_source),
+        "playlists": playlists,
+        "liked_songs": {"available": True, "label": "Liked Songs"},
+    }
+
+
+@router.post("/api/spotify/source/select")
+async def spotify_source_select(request: Request, _: None = Depends(require_admin_access)):
+    """Load a selected source and atomically swap the station playlist on success."""
+    body = await request.json()
+    kind = str(body.get("kind", "")).strip()
+    source = PlaylistSource(
+        kind=kind,
+        source_id=str(body.get("source_id", "")).strip(),
+        url=str(body.get("url", "")).strip(),
+        label=str(body.get("label", "")).strip(),
+    )
+    if kind not in {"playlist", "liked_songs", "url"}:
+        return {"ok": False, "error": "kind must be one of: playlist, liked_songs, url"}
+
+    config = request.app.state.config
+    state = request.app.state.station_state
+    try:
+        tracks, resolved_source = await asyncio.to_thread(load_explicit_source, config, source)
+    except ExplicitSourceError as exc:
+        return {"ok": False, "error": str(exc), "current_source": _serialize_source(state.playlist_source)}
+    except Exception as exc:
+        logger.error("Source selection failed: %s", exc)
+        return {
+            "ok": False,
+            "error": "Failed to load selected source",
+            "current_source": _serialize_source(state.playlist_source),
+        }
+
+    state.playlist = tracks
+    state.playlist_source = resolved_source
+    state.startup_source_error = ""
+    if resolved_source.kind == "url":
+        config.playlist.spotify_url = resolved_source.url
+    await asyncio.to_thread(write_persisted_source, config.cache_dir, resolved_source)
+    return {
+        "ok": True,
+        "source": _serialize_source(resolved_source),
+        "preview": _preview_tracks(tracks),
+    }
+
+
 @router.post("/api/playlist/load")
 async def load_playlist(request: Request, _: None = Depends(require_admin_access)):
     """Load a new playlist from a Spotify URL and replace the current one."""
-    from mammamiradio.playlist import fetch_playlist
-
     body = await request.json()
     url = body.get("url", "").strip()
     if not url:
         return {"ok": False, "error": "No URL provided"}
-
     config = request.app.state.config
     state = request.app.state.station_state
-
-    # Temporarily override the playlist URL in config
-    original_url = config.playlist.spotify_url
-    config.playlist.spotify_url = url
+    source = PlaylistSource(kind="url", url=url)
     try:
-        tracks = fetch_playlist(config)
-    except Exception as e:
-        config.playlist.spotify_url = original_url
-        logger.error("Playlist load failed: %s", e)
+        tracks, resolved_source = await asyncio.to_thread(load_explicit_source, config, source)
+    except ExplicitSourceError as exc:
+        return {"ok": False, "error": str(exc)}
+    except Exception as exc:
+        logger.error("Playlist load failed: %s", exc)
         return {"ok": False, "error": "Failed to load playlist"}
 
-    if not tracks:
-        config.playlist.spotify_url = original_url
-        return {"ok": False, "error": "No tracks found"}
-
     state.playlist = tracks
+    state.playlist_source = resolved_source
+    state.startup_source_error = ""
+    config.playlist.spotify_url = resolved_source.url
+    await asyncio.to_thread(write_persisted_source, config.cache_dir, resolved_source)
     return {"ok": True, "tracks": len(tracks), "url": url}
 
 
@@ -620,6 +734,7 @@ def _public_status_payload(request: Request) -> dict:
         "station": config.station.name,
         "running_jokes": state.running_jokes,
         "now_streaming": state.now_streaming,
+        "current_source": _serialize_source(state.playlist_source),
         "stream_log": [
             {"type": e.type, "label": e.label, "timestamp": e.timestamp, "metadata": e.metadata}
             for e in state.stream_log
@@ -672,6 +787,7 @@ async def status(request: Request, _: None = Depends(require_admin_access)):
             "uptime_sec": round(time.time() - start_time),
             "spotify_connected": state.spotify_connected,
             "playlist_url": request.app.state.config.playlist.spotify_url or "",
+            "playlist_source": _serialize_source(state.playlist_source),
             "produced_log": [{"type": e.type, "label": e.label, "timestamp": e.timestamp} for e in state.segment_log],
             "last_banter_script": state.last_banter_script,
             "last_ad_script": state.last_ad_script,

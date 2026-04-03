@@ -82,7 +82,26 @@ def test_build_setup_status_returns_expected_shape_for_addon():
     assert payload["essentials"][0]["key"] == "spotify"
     assert payload["preflight_checks"][0]["key"] == "ffmpeg"
     assert "playlist_spotify_url" in payload["addon_options_snippet"]
+    assert payload["supports_user_sources"] is False
     assert payload["signature"]
+
+
+def test_build_setup_status_local_promotes_source_picker_copy():
+    config = load_config()
+    config.spotify_client_id = "id"
+    config.spotify_client_secret = "secret"
+    state = _real_state()
+
+    with (
+        patch("mammamiradio.setup_status.detect_run_mode", return_value={"detected": "local", "modes": []}),
+        patch("mammamiradio.setup_status.resolve_go_librespot_bin", return_value="/usr/local/bin/go-librespot"),
+    ):
+        payload = build_setup_status(config, state)
+
+    playlist_item = next(item for item in payload["essentials"] if item["key"] == "playlist")
+    assert payload["supports_user_sources"] is True
+    assert playlist_item["label"] == "Choose your music"
+    assert "Liked Songs" in playlist_item["summary"]
 
 
 # --- detect_run_mode ---

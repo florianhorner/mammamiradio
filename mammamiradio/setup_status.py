@@ -177,9 +177,7 @@ def classify_station_mode(
             "id": "demo",
             "label": "Demo Mode",
             "summary": "The station is intentionally running built-in demo tracks.",
-            "detail": (
-                "Add Spotify credentials and a playlist when you want real music instead of the bundled demo set."
-            ),
+            "detail": ("Add Spotify credentials, then choose a playlist, liked songs, or an advanced playlist URL."),
         }
 
     if not demo_playlist and state.spotify_connected and go_bin:
@@ -195,7 +193,7 @@ def classify_station_mode(
             "id": "degraded",
             "label": "Degraded",
             "summary": "The station fell back to demo tracks because the Spotify path is not fully working yet.",
-            "detail": "Fix the missing Spotify setup items below, then re-run preflight.",
+            "detail": state.startup_source_error or "Fix the missing Spotify setup items below, then re-run preflight.",
         }
 
     return {
@@ -229,6 +227,8 @@ def build_setup_status(config: StationConfig, state: StationState, *, probe: boo
         playlist_probe_status, playlist_probe_detail = "skipped", "Skipped — click Re-check to probe Spotify."
     station_mode = classify_station_mode(config, state, demo_playlist=demo_playlist, go_bin=go_bin)
 
+    mode_id = mode["detected"]
+    supports_user_sources = mode_id in {"local", "macos"}
     essentials = [
         {
             "key": "spotify",
@@ -252,26 +252,32 @@ def build_setup_status(config: StationConfig, state: StationState, *, probe: boo
         },
         {
             "key": "playlist",
-            "label": "Playlist Source",
+            "label": "Choose your music",
             "required": True,
             "required_label": "Required for a predictable first station",
             "status": playlist_probe_status,
-            "summary": playlist_probe_detail,
+            "summary": (
+                "Connect Spotify, then choose one of your playlists or use Liked Songs."
+                if supports_user_sources
+                else "This run mode only supports the advanced playlist URL fallback for now."
+            ),
             "next_action": (
-                "Paste a public Spotify playlist URL into PLAYLIST_SPOTIFY_URL."
+                "Open the dashboard setup flow, connect Spotify, and choose your music source."
+                if supports_user_sources
+                else "Paste a public Spotify playlist URL into PLAYLIST_SPOTIFY_URL."
                 if not config.playlist.spotify_url
                 else "Make sure the playlist is public or owned by the authenticated Spotify account."
             ),
             "skip_outcome": (
-                "Without this, first run may fall back to demo tracks."
+                "Without this, startup may fall back to demo tracks."
                 if config.is_addon
-                else "Without this, local runs may try liked songs later or fall back to demo."
+                else "Without this, startup may fall back to demo tracks until you explicitly choose a source."
             ),
             "where": {
-                "ha_addon": "Add-on Configuration, field: playlist_spotify_url",
-                "docker": ".env entry: PLAYLIST_SPOTIFY_URL",
-                "macos": "the launcher-generated .env file",
-                "local": ".env or radio.toml",
+                "ha_addon": "Dashboard advanced fallback or Add-on Configuration, field: playlist_spotify_url",
+                "docker": "Dashboard advanced fallback or .env entry: PLAYLIST_SPOTIFY_URL",
+                "macos": "Dashboard source picker",
+                "local": "Dashboard source picker",
             },
         },
         {
@@ -368,7 +374,15 @@ def build_setup_status(config: StationConfig, state: StationState, *, probe: boo
             "detail": (
                 "The station currently has demo tracks loaded."
                 if demo_playlist
-                else "The station currently has non-demo Spotify tracks loaded."
+                else "The station currently uses "
+                + (
+                    state.playlist_source.label
+                    if state.playlist_source and state.playlist_source.label
+                    else state.playlist_source.kind
+                    if state.playlist_source
+                    else "a Spotify source"
+                )
+                + "."
             ),
         },
         {
@@ -412,6 +426,7 @@ def build_setup_status(config: StationConfig, state: StationState, *, probe: boo
 
     return {
         "detected_mode": mode["detected"],
+        "supports_user_sources": supports_user_sources,
         "available_modes": mode["modes"],
         "station_mode": station_mode,
         "onboarding_required": onboarding_required,

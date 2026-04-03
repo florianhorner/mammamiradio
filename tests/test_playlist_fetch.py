@@ -1,4 +1,4 @@
-"""Tests for playlist.fetch_playlist: Spotify integration and fallback behavior."""
+"""Tests for playlist loading behavior."""
 
 from __future__ import annotations
 
@@ -7,7 +7,8 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from mammamiradio.config import load_config
-from mammamiradio.playlist import DEMO_TRACKS, fetch_playlist
+from mammamiradio.models import PlaylistSource
+from mammamiradio.playlist import DEMO_TRACKS, fetch_playlist, fetch_startup_playlist, load_explicit_source
 
 
 @pytest.fixture()
@@ -185,3 +186,79 @@ def test_skips_tracks_without_id(config_with_spotify):
 
     assert len(result) == 1
     assert result[0].title == "Good"
+
+
+def test_load_explicit_playlist_source_success(config_with_spotify):
+    mock_sp = MagicMock()
+    mock_sp.playlist.return_value = {"name": "Roadtrip Italia"}
+    mock_sp.playlist_tracks.return_value = {
+        "items": [_make_spotify_track("Canzone Uno", "Artista A", "id1")],
+        "next": None,
+    }
+
+    with patch("mammamiradio.playlist.get_spotify_client", return_value=mock_sp):
+        tracks, source = load_explicit_source(
+            config_with_spotify,
+            PlaylistSource(kind="playlist", source_id="abc123", label="Roadtrip Italia"),
+        )
+
+    assert len(tracks) == 1
+    assert source.kind == "playlist"
+    assert source.source_id == "abc123"
+    assert source.track_count == 1
+
+
+def test_load_explicit_liked_songs_success(config_with_spotify):
+    mock_sp = MagicMock()
+    mock_sp.current_user_saved_tracks.return_value = {
+        "items": [_make_spotify_track("Liked Song", "Liked Artist", "liked1")],
+        "next": None,
+    }
+
+    with patch("mammamiradio.playlist.get_spotify_client", return_value=mock_sp):
+        tracks, source = load_explicit_source(
+            config_with_spotify,
+            PlaylistSource(kind="liked_songs", label="Liked Songs"),
+        )
+
+    assert len(tracks) == 1
+    assert source.kind == "liked_songs"
+    assert source.track_count == 1
+
+
+def test_explicit_source_does_not_fall_back_on_failure(config_with_spotify):
+    mock_sp = MagicMock()
+    mock_sp.playlist.return_value = {"name": "Private Playlist"}
+    mock_sp.playlist_tracks.side_effect = Exception("403")
+    mock_sp.current_user_saved_tracks.return_value = {
+        "items": [_make_spotify_track("Liked Song", "Liked Artist", "liked1")],
+        "next": None,
+    }
+
+    with (
+        patch("mammamiradio.playlist.get_spotify_client", return_value=mock_sp),
+        pytest.raises(Exception, match="Failed to load selected playlist"),
+    ):
+        load_explicit_source(
+            config_with_spotify,
+            PlaylistSource(kind="playlist", source_id="abc123", label="Private Playlist"),
+        )
+
+    mock_sp.current_user_saved_tracks.assert_not_called()
+
+
+def test_fetch_startup_playlist_restores_persisted_source(config_with_spotify):
+    mock_sp = MagicMock()
+    mock_sp.playlist.return_value = {"name": "Roadtrip Italia"}
+    mock_sp.playlist_tracks.return_value = {
+        "items": [_make_spotify_track("Canzone Uno", "Artista A", "id1")],
+        "next": None,
+    }
+    persisted = PlaylistSource(kind="playlist", source_id="abc123", label="Roadtrip Italia")
+
+    with patch("mammamiradio.playlist.get_spotify_client", return_value=mock_sp):
+        tracks, source, error = fetch_startup_playlist(config_with_spotify, persisted)
+
+    assert len(tracks) == 1
+    assert source.kind == "playlist"
+    assert error == ""
