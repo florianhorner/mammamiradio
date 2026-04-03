@@ -161,6 +161,7 @@ class StationState:
     """Mutable in-memory state shared by producer and streamer tasks."""
 
     playlist: list[Track] = field(default_factory=list)
+    playlist_revision: int = 0
     played_tracks: list[Track] = field(default_factory=list)
     songs_since_banter: int = 0
     songs_since_ad: int = 0
@@ -189,6 +190,18 @@ class StationState:
     api_input_tokens: int = 0
     api_output_tokens: int = 0
     tts_characters: int = 0
+
+    def switch_playlist(self, tracks: list[Track], source: PlaylistSource | None = None) -> None:
+        """Replace the active playlist and bump revision counter.
+
+        In-flight producer segments are discarded on next commit check.
+        """
+        self.playlist_revision += 1
+        self.playlist = tracks
+        self.playlist_source = source
+        self.startup_source_error = ""
+        self.songs_since_banter = 0
+        self.songs_since_ad = 0
 
     def _log(self, seg_type: str, label: str, metadata: dict | None = None) -> None:
         """Append a bounded producer-side log entry."""

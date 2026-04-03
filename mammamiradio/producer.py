@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import random
+from collections.abc import Callable
 from pathlib import Path
 from uuid import uuid4
 
@@ -82,6 +83,8 @@ async def run_producer(
         else:
             seg_type = next_segment_type(state, config.pacing)
         segment: Segment | None = None
+        generation_revision = state.playlist_revision
+        success_callback: Callable[[], None] | None = None
 
         # Refresh Home Assistant context for banter/ad segments
         if (
@@ -128,7 +131,12 @@ async def run_producer(
                     path=norm_path,
                     metadata={"title": track.display},
                 )
-                state.after_music(track)
+                _bound_track = track
+
+                def _music_callback(_t=_bound_track) -> None:
+                    state.after_music(_t)
+
+                success_callback = _music_callback
 
             elif seg_type == SegmentType.BANTER:
                 logger.info("Producing BANTER")
@@ -141,7 +149,7 @@ async def run_producer(
                     path=audio_path,
                     metadata={"type": "banter", "lines": state.last_banter_script},
                 )
-                state.after_banter()
+                success_callback = state.after_banter
 
             elif seg_type == SegmentType.AD:
                 if not config.ads.brands:
@@ -265,7 +273,12 @@ async def run_producer(
                         "spots": num_spots,
                     },
                 )
-                state.after_ad(brands=break_brands)
+                _bound_brands = break_brands
+
+                def _ad_callback(_b=_bound_brands) -> None:
+                    state.after_ad(brands=_b)
+
+                success_callback = _ad_callback
 
         except Exception as e:
             # Recoverable: network/ffmpeg/disk/httpx errors — insert silence, retry next loop
@@ -294,7 +307,13 @@ async def run_producer(
             # Do NOT advance state counters — failed segment doesn't count
 
         if segment:
+            if generation_revision != state.playlist_revision:
+                logger.info("Discarding stale %s segment after playlist source switch", seg_type.value)
+                segment.path.unlink(missing_ok=True)
+                continue
             if "error" not in segment.metadata:
+                if success_callback:
+                    success_callback()
                 state.failed_segments = 0  # Reset backoff on success
             await queue.put(segment)
             logger.info("Queued %s (queue size: %d)", seg_type.value, queue.qsize())

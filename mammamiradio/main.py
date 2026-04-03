@@ -81,6 +81,7 @@ async def startup():
     # Set app.state for streamer access
     app.state.queue = queue
     app.state.skip_event = asyncio.Event()
+    app.state.source_switch_lock = asyncio.Lock()
     app.state.stream_hub = LiveStreamHub()
     app.state.station_state = state
     app.state.config = config
