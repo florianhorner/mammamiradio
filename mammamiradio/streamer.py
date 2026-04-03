@@ -192,7 +192,8 @@ def _enforce_csrf_for_basic_auth(request: Request, credentials: HTTPBasicCredent
     ingress_prefix = request.headers.get("X-Ingress-Path", "")
     if config.is_addon and ingress_prefix and _is_hassio_or_loopback(request):
         return
-    if config.admin_token and request.headers.get("X-Radio-Admin-Token"):
+    admin_token_header = request.headers.get("X-Radio-Admin-Token", "")
+    if config.admin_token and admin_token_header and secrets.compare_digest(admin_token_header, config.admin_token):
         return
     if not config.admin_password or not credentials:
         return

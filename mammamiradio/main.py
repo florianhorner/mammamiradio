@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import secrets
 import time
 
 from fastapi import FastAPI
@@ -82,6 +83,7 @@ async def startup():
     app.state.queue = queue
     app.state.skip_event = asyncio.Event()
     app.state.source_switch_lock = asyncio.Lock()
+    app.state.csrf_token = secrets.token_urlsafe(32)
     app.state.stream_hub = LiveStreamHub()
     app.state.station_state = state
     app.state.config = config
