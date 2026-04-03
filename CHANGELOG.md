@@ -19,10 +19,10 @@ The current version source of truth is `pyproject.toml`.
 ### Changed
 
 - Source switching now triggers immediate cutover: queued segments are purged and current playback is skipped so the new source starts right away.
-- Source switch and playlist load endpoints are serialized behind an asyncio lock to prevent concurrent modification.
-- Producer discards in-flight segments when a playlist source switch happens mid-generation.
+- Concurrent source switches are serialized so rapid clicks cannot corrupt station state.
+- The producer detects source changes mid-generation and discards stale segments instead of queuing them.
 - Switching to a non-URL source clears stale playlist URL state from config and status payloads.
-- Server-side capability enforcement: picker-style source kinds (`playlist`, `liked_songs`) are rejected in addon/Docker mode.
+- In addon/Docker mode, the interactive source picker is disabled server-side; use the playlist URL field instead.
 - Setup status now reflects real source state instead of contradicting configured credentials.
 - Admin dashboard no longer embeds an audio player, preventing duplicate streams from a second tab.
 - Persisted source writes use atomic file replacement to avoid corruption.
@@ -34,7 +34,7 @@ The current version source of truth is `pyproject.toml`.
 - Listener page `_base is not defined` JS error from service worker scope.
 - Producer recovery stall when go-librespot restarts mid-segment.
 - `setup-mac.sh` now fails fast on missing prerequisites instead of silently continuing.
-- Flaky `test_source_options_disable_picker_when_spotify_auth_is_unavailable` test caused by leaked Spotify credentials from local `.env`.
+- Flaky test caused by leaked Spotify credentials from local `.env`.
 
 ## [1.2.0] - 2026-04-02
 

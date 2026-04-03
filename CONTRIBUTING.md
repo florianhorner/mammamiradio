@@ -134,7 +134,7 @@ After starting the app:
 7. Select a playlist or "Liked Songs" and verify the station cuts over immediately (old audio stops, new source begins).
 8. Restart the app and verify the last selected source restores automatically.
 
-If you are testing the Spotify path, also open Spotify and select the `mammamiradio` device. If you are binding to `0.0.0.0`, set `ADMIN_PASSWORD` or `ADMIN_TOKEN` first or config validation will reject startup.
+If you are testing the Spotify path, also open Spotify and select the `mammamiradio` device. If you are binding to `0.0.0.0`, set `ADMIN_PASSWORD` or `ADMIN_TOKEN` first or config validation will reject startup. Non-loopback admin requests with basic auth also require CSRF validation (the dashboard handles this automatically via injected tokens).
 
 ## Documentation expectations
 
