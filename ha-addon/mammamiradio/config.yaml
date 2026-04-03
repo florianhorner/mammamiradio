@@ -9,6 +9,7 @@ arch:
   - aarch64
 init: false
 timeout: 300
+healthcheck: http://[HOST]:[PORT:8000]/healthz
 host_network: true
 homeassistant_api: true
 hassio_api: true

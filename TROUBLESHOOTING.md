@@ -15,6 +15,17 @@ pip install -e .
 
 If you run tests or the app from the system Python and see missing modules like `dotenv`, you are not in the repo environment.
 
+If the dashboard is in the first-run setup flow, trust the banner. The station now classifies itself as `Real Spotify Mode`, `Demo Mode`, or `Degraded` instead of pretending startup is fine.
+
+Useful probe endpoints:
+
+```bash
+curl http://127.0.0.1:8000/healthz
+curl http://127.0.0.1:8000/readyz
+```
+
+`/healthz` just answers "is the process alive?". `/readyz` answers "has the queue filled enough to stream yet?" and returns `starting` until at least one segment is ready.
+
 ## The app starts but there is no real music
 
 Possible causes:
@@ -36,6 +47,15 @@ tail -n 50 tmp/go-librespot.log
 ```
 
 Then open Spotify and explicitly select the `mammamiradio` device.
+
+If you want the same checks the dashboard runs, hit the admin setup probe:
+
+```bash
+curl --user "$ADMIN_USERNAME:$ADMIN_PASSWORD" http://127.0.0.1:8000/api/setup/status
+curl --user "$ADMIN_USERNAME:$ADMIN_PASSWORD" -X POST http://127.0.0.1:8000/api/setup/recheck
+```
+
+If you use token auth instead of basic auth, send `X-Radio-Admin-Token`.
 
 ## Source picker not available
 
@@ -70,6 +90,8 @@ Then inspect:
 ```bash
 tail -n 100 tmp/go-librespot.log
 ```
+
+On Apple Silicon or stripped `PATH` environments, the setup checker now also searches common binary locations like `/opt/homebrew/bin/go-librespot`. If the dashboard still says the binary is missing, that path is probably wrong or the file is not executable.
 
 ## `cat /data/go-librespot/config.yml` says "No such file or directory"
 
@@ -130,6 +152,8 @@ Rules:
 - if only `ADMIN_TOKEN` is set, non-local admin access requires `X-Radio-Admin-Token` header
 - if neither is set, admin routes only work from localhost
 
+Health probes are the exception. `/healthz` and `/readyz` stay unauthenticated so Docker, Home Assistant, and external monitors can poll them without admin credentials.
+
 ## `ffmpeg` failures
 
 Audio rendering depends on `ffmpeg` for normalization, concatenation, SFX, beds, and silence generation.
@@ -151,4 +175,11 @@ Use:
 ```bash
 source .venv/bin/activate
 pytest tests/
+```
+
+Or use the repo commands that now mirror CI:
+
+```bash
+make test
+make check
 ```

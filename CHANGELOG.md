@@ -25,21 +25,7 @@ The current version source of truth is `pyproject.toml`.
 - `setup-mac.sh` now fails fast on missing prerequisites instead of silently continuing.
 - Flaky `test_source_options_disable_picker_when_spotify_auth_is_unavailable` test caused by leaked Spotify credentials from local `.env`.
 
-## [1.1.3] - 2026-04-03
-
-### Added
-
-- Native Conductor workspace lifecycle hooks via `conductor.json`, including repo-owned setup, run, and archive scripts for workspace bootstrapping and cleanup.
-
-### Changed
-
-- Contributor docs now explain that `conductor.json` and `scripts/conductor-*.sh` are committed repo infrastructure, while `.context/` stays runtime-only.
-
-### Fixed
-
-- Conductor workspace setup no longer depends on a bash snippet surviving interactive `zsh` execution, so new workspaces bootstrap the project venv reliably.
-
-## [1.1.2] - 2026-04-02
+## [1.2.0] - 2026-04-02
 
 ### Added
 
@@ -58,6 +44,20 @@ The current version source of truth is `pyproject.toml`.
 - Spotify auto-transfer now uses the configured go-librespot device name, and runtime ownership checks no longer rely on loose `pgrep` matching.
 - Apple Silicon and stripped-PATH installs now resolve `go-librespot` correctly during setup checks, and stale Spotify auth state no longer leaves the dashboard claiming the wrong station mode.
 - Setup rechecks can use cached user Spotify auth for private playlists, and the sweep-regression tests now match the runtime chirp implementation shipped in the hardening work.
+
+## [1.1.3] - 2026-04-03
+
+### Added
+
+- Native Conductor workspace lifecycle hooks via `conductor.json`, including repo-owned setup, run, and archive scripts for workspace bootstrapping and cleanup.
+
+### Changed
+
+- Contributor docs now explain that `conductor.json` and `scripts/conductor-*.sh` are committed repo infrastructure, while `.context/` stays runtime-only.
+
+### Fixed
+
+- Conductor workspace setup no longer depends on a bash snippet surviving interactive `zsh` execution, so new workspaces bootstrap the project venv reliably.
 
 ## [1.1.1] - 2026-04-02
 
