@@ -5,16 +5,25 @@ from __future__ import annotations
 import asyncio
 import ipaddress
 import logging
+import os
 import re as _re
 import secrets
 import time
 from pathlib import Path
+from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 
-from mammamiradio.models import PersonalityAxes, Segment, SegmentType
+from mammamiradio.models import PersonalityAxes, PlaylistSource, Segment, SegmentType
+from mammamiradio.playlist import (
+    ExplicitSourceError,
+    list_user_playlists,
+    load_explicit_source,
+    supports_user_sources,
+    write_persisted_source,
+)
 from mammamiradio.scheduler import preview_upcoming
 from mammamiradio.setup_status import addon_options_snippet, build_setup_status, classify_station_mode
 
@@ -31,6 +40,88 @@ _DASHBOARD_HTML = _PKG_DIR.joinpath("dashboard.html").read_text()
 _LISTENER_HTML = _PKG_DIR.joinpath("listener.html").read_text()
 
 _INGRESS_PREFIX_RE = _re.compile(r"^/[a-zA-Z0-9/_-]+$")
+_MUTATING_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
+_CSRF_TOKEN_PLACEHOLDER = "__MAMMAMIRADIO_CSRF_TOKEN__"
+
+
+def _purge_segment_queue(q) -> int:
+    """Drain all pre-produced segments from the queue and unlink temp files."""
+    purged = 0
+    while not q.empty():
+        try:
+            seg = q.get_nowait()
+            seg.path.unlink(missing_ok=True)
+            q.task_done()
+            purged += 1
+        except Exception:
+            break
+    return purged
+
+
+def _apply_loaded_source(
+    request,
+    tracks: list,
+    resolved_source,
+) -> dict:
+    """Atomically swap the station source and trigger immediate cutover."""
+    config = request.app.state.config
+    state = request.app.state.station_state
+
+    state.switch_playlist(tracks, resolved_source)
+
+    # Synchronise URL config: only keep it for URL sources
+    if resolved_source.kind == "url":
+        config.playlist.spotify_url = resolved_source.url
+    else:
+        config.playlist.spotify_url = ""
+
+    # Immediate cutover: purge queued segments and skip current playback
+    purged = _purge_segment_queue(request.app.state.queue)
+    skipped = False
+    if state.now_streaming:
+        request.app.state.skip_event.set()
+        skipped = True
+
+    logger.info(
+        "Loaded source %s: %s (%d tracks), purged %d queued segments%s",
+        resolved_source.kind,
+        resolved_source.label or "unnamed",
+        len(tracks),
+        purged,
+        ", skipped current segment" if skipped else "",
+    )
+
+    return {
+        "ok": True,
+        "source": _serialize_source(resolved_source),
+        "preview": _preview_tracks(tracks),
+    }
+
+
+def _serialize_source(source: PlaylistSource | None) -> dict | None:
+    if not source:
+        return None
+    return {
+        "kind": source.kind,
+        "source_id": source.source_id,
+        "url": source.url,
+        "label": source.label,
+        "track_count": source.track_count,
+        "selected_at": source.selected_at,
+    }
+
+
+def _preview_tracks(tracks: list, limit: int = 3) -> dict:
+    return {
+        "track_count": len(tracks),
+        "tracks": [{"title": track.title, "artist": track.artist} for track in tracks[:limit]],
+    }
+
+
+def _source_options_reason(config, exc: Exception) -> str:
+    if not config.spotify_client_id or not config.spotify_client_secret:
+        return "Add Spotify credentials first. Then the source picker and playlist link tools will unlock."
+    return f"Spotify auth is not ready yet: {exc}"
 
 
 def _sanitize_ingress_prefix(prefix: str) -> str:
@@ -60,6 +151,70 @@ def _inject_ingress_prefix(html: str, prefix: str) -> str:
     # Service worker registration is standalone (no _base), needs rewriting
     html = html.replace("'/sw.js'", f"'{prefix}/sw.js'")
     return html
+
+
+def _get_csrf_token(app) -> str:
+    token = getattr(app.state, "csrf_token", "")
+    if not token:
+        token = secrets.token_urlsafe(32)
+        app.state.csrf_token = token
+    return token
+
+
+def _inject_csrf_token(html: str, token: str) -> str:
+    return html.replace(_CSRF_TOKEN_PLACEHOLDER, token)
+
+
+def _same_origin(request: Request, candidate: str) -> bool:
+    parsed = urlparse(candidate)
+    if not parsed.scheme or not parsed.netloc:
+        return False
+    request_url = request.url
+
+    # Normalize ports: None means the default for the scheme (80/443)
+    def _effective_port(port, scheme: str) -> int:
+        if port is not None:
+            return port
+        return 443 if scheme == "https" else 80
+
+    return (
+        parsed.scheme == request_url.scheme
+        and parsed.hostname == request_url.hostname
+        and _effective_port(parsed.port, parsed.scheme) == _effective_port(request_url.port, request_url.scheme)
+    )
+
+
+def _enforce_csrf_for_basic_auth(request: Request, credentials: HTTPBasicCredentials | None, config) -> None:
+    if request.method.upper() not in _MUTATING_METHODS:
+        return
+    if _is_loopback_client(request):
+        return
+
+    ingress_prefix = request.headers.get("X-Ingress-Path", "")
+    if config.is_addon and ingress_prefix and _is_hassio_or_loopback(request):
+        return
+    admin_token_header = request.headers.get("X-Radio-Admin-Token", "")
+    if config.admin_token and admin_token_header and secrets.compare_digest(admin_token_header, config.admin_token):
+        return
+    if not config.admin_password or not credentials:
+        return
+
+    csrf_token = request.headers.get("X-Radio-CSRF-Token", "")
+    if csrf_token and secrets.compare_digest(csrf_token, _get_csrf_token(request.app)):
+        return
+
+    origin = request.headers.get("Origin", "")
+    if origin and _same_origin(request, origin):
+        return
+
+    referer = request.headers.get("Referer", "")
+    if referer and _same_origin(request, referer):
+        return
+
+    raise HTTPException(
+        status_code=403,
+        detail="Cross-site admin write blocked. Reload the dashboard and retry.",
+    )
 
 
 class LiveStreamHub:
@@ -165,6 +320,7 @@ def require_admin_access(
         if secrets.compare_digest(username, config.admin_username) and secrets.compare_digest(
             password, config.admin_password
         ):
+            _enforce_csrf_for_basic_auth(request, credentials, config)
             return
 
     if config.admin_password:
@@ -270,7 +426,9 @@ async def _audio_generator(request: Request):
 async def dashboard(request: Request):
     """Serve the authenticated control-plane dashboard."""
     prefix = request.headers.get("X-Ingress-Path", "")
-    return _inject_ingress_prefix(_DASHBOARD_HTML, prefix)
+    html = _inject_ingress_prefix(_DASHBOARD_HTML, prefix)
+    html = _inject_csrf_token(html, _get_csrf_token(request.app))
+    return html
 
 
 @router.get("/listen", response_class=HTMLResponse)
@@ -379,16 +537,7 @@ async def skip_track(request: Request, _: None = Depends(require_admin_access)):
 @router.post("/api/purge")
 async def purge_queue(request: Request, _: None = Depends(require_admin_access)):
     """Drain all pre-produced segments from the queue."""
-    q = request.app.state.queue
-    purged = 0
-    while not q.empty():
-        try:
-            seg = q.get_nowait()
-            seg.path.unlink(missing_ok=True)
-            q.task_done()
-            purged += 1
-        except Exception:
-            break
+    purged = _purge_segment_queue(request.app.state.queue)
     return {"ok": True, "purged": purged}
 
 
@@ -434,6 +583,70 @@ async def update_pacing(request: Request, _: None = Depends(require_admin_access
         "songs_between_ads": config.pacing.songs_between_ads,
         "ad_spots_per_break": config.pacing.ad_spots_per_break,
     }
+
+
+@router.post("/api/credentials")
+async def save_credentials(request: Request, _: None = Depends(require_admin_access)):
+    """Write credentials to .env and apply them live without a restart."""
+    body = await request.json()
+    config = request.app.state.config
+
+    # Allowed keys and their mapping to env var name and live config attribute
+    allowed: dict[str, tuple[str, str | None]] = {
+        "spotify_client_id": ("SPOTIFY_CLIENT_ID", "spotify_client_id"),
+        "spotify_client_secret": ("SPOTIFY_CLIENT_SECRET", "spotify_client_secret"),
+        "anthropic_api_key": ("ANTHROPIC_API_KEY", "anthropic_api_key"),
+        "playlist_spotify_url": ("PLAYLIST_SPOTIFY_URL", None),
+    }
+
+    updates: dict[str, str] = {}
+    for field, (env_key, config_attr) in allowed.items():
+        if field not in body:
+            continue
+        value = str(body[field]).strip()
+        updates[env_key] = value
+        os.environ[env_key] = value
+        if config_attr:
+            setattr(config, config_attr, value)
+        else:
+            # playlist_spotify_url lives on a nested object
+            config.playlist.spotify_url = value
+
+    if not updates:
+        return {"ok": False, "error": "No recognised credential fields in request"}
+
+    # Atomically update .env file (create if missing)
+    env_path = Path(".env")
+    try:
+        existing = env_path.read_text() if env_path.exists() else ""
+    except OSError:
+        existing = ""
+
+    lines = existing.splitlines()
+    written: set[str] = set()
+    new_lines: list[str] = []
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("#") or "=" not in stripped:
+            new_lines.append(line)
+            continue
+        key = stripped.split("=", 1)[0].strip()
+        if key in updates:
+            new_lines.append(f'{key}="{updates[key]}"')
+            written.add(key)
+        else:
+            new_lines.append(line)
+
+    for key, value in updates.items():
+        if key not in written:
+            new_lines.append(f'{key}="{value}"')
+
+    tmp = env_path.with_suffix(".env.tmp")
+    tmp.write_text("\n".join(new_lines) + "\n")
+    tmp.replace(env_path)
+
+    logger.info("Credentials saved to .env: %s", ", ".join(updates.keys()))
+    return {"ok": True, "saved": list(updates.keys())}
 
 
 @router.post("/api/playlist/remove")
@@ -517,35 +730,125 @@ async def add_track(request: Request, _: None = Depends(require_admin_access)):
     return {"ok": True, "added": track.display, "position": position}
 
 
+@router.get("/api/spotify/source-options")
+async def spotify_source_options(request: Request, _: None = Depends(require_admin_access)):
+    """Return available source selection options for the current run mode."""
+    config = request.app.state.config
+    state = request.app.state.station_state
+    capabilities = {
+        "supports_user_sources": supports_user_sources(config),
+        "supports_url_source": True,
+        "reason": "",
+    }
+    if not capabilities["supports_user_sources"]:
+        capabilities["reason"] = "Spotify source picker is only available in local/macOS mode right now."
+        return {
+            "ok": True,
+            "capabilities": capabilities,
+            "account": {"connected": False, "display_name": ""},
+            "current_source": _serialize_source(state.playlist_source),
+            "playlists": [],
+            "liked_songs": {"available": False, "label": "Liked Songs"},
+        }
+
+    try:
+        playlists = await asyncio.to_thread(list_user_playlists, config)
+    except Exception as exc:
+        return {
+            "ok": False,
+            "capabilities": {
+                **capabilities,
+                "supports_user_sources": False,
+                "reason": _source_options_reason(config, exc),
+            },
+            "account": {"connected": False, "display_name": ""},
+            "current_source": _serialize_source(state.playlist_source),
+            "playlists": [],
+            "liked_songs": {"available": False, "label": "Liked Songs"},
+        }
+
+    return {
+        "ok": True,
+        "capabilities": capabilities,
+        "account": {"connected": True, "display_name": "Spotify account"},
+        "current_source": _serialize_source(state.playlist_source),
+        "playlists": playlists,
+        "liked_songs": {"available": True, "label": "Liked Songs"},
+    }
+
+
+@router.post("/api/spotify/source/select")
+async def spotify_source_select(request: Request, _: None = Depends(require_admin_access)):
+    """Load a selected source and atomically swap the station playlist on success."""
+    body = await request.json()
+    kind = str(body.get("kind", "")).strip()
+    source = PlaylistSource(
+        kind=kind,
+        source_id=str(body.get("source_id", "")).strip(),
+        url=str(body.get("url", "")).strip(),
+        label=str(body.get("label", "")).strip(),
+    )
+    if kind not in {"playlist", "liked_songs", "url"}:
+        return {"ok": False, "error": "kind must be one of: playlist, liked_songs, url"}
+
+    config = request.app.state.config
+    state = request.app.state.station_state
+    source_switch_lock = request.app.state.source_switch_lock
+
+    async with source_switch_lock:
+        # Server-side capability enforcement
+        if kind in {"playlist", "liked_songs"} and not supports_user_sources(config):
+            return {
+                "ok": False,
+                "error": "This run mode only supports playlist URL loading right now.",
+                "current_source": _serialize_source(state.playlist_source),
+            }
+
+        try:
+            tracks, resolved_source = await asyncio.to_thread(load_explicit_source, config, source)
+        except ExplicitSourceError as exc:
+            return {"ok": False, "error": str(exc), "current_source": _serialize_source(state.playlist_source)}
+        except Exception as exc:
+            logger.error("Source selection failed: %s", exc)
+            return {
+                "ok": False,
+                "error": "Failed to load selected source",
+                "current_source": _serialize_source(state.playlist_source),
+            }
+
+        result = _apply_loaded_source(request, tracks, resolved_source)
+        try:
+            await asyncio.to_thread(write_persisted_source, config.cache_dir, resolved_source)
+        except Exception:
+            logger.warning("Failed to persist source selection, live switch still applied")
+        return result
+
+
 @router.post("/api/playlist/load")
 async def load_playlist(request: Request, _: None = Depends(require_admin_access)):
     """Load a new playlist from a Spotify URL and replace the current one."""
-    from mammamiradio.playlist import fetch_playlist
-
     body = await request.json()
     url = body.get("url", "").strip()
     if not url:
         return {"ok": False, "error": "No URL provided"}
-
     config = request.app.state.config
-    state = request.app.state.station_state
+    source_switch_lock = request.app.state.source_switch_lock
+    source = PlaylistSource(kind="url", url=url)
+    async with source_switch_lock:
+        try:
+            tracks, resolved_source = await asyncio.to_thread(load_explicit_source, config, source)
+        except ExplicitSourceError as exc:
+            return {"ok": False, "error": str(exc)}
+        except Exception as exc:
+            logger.error("Playlist load failed: %s", exc)
+            return {"ok": False, "error": "Failed to load playlist"}
 
-    # Temporarily override the playlist URL in config
-    original_url = config.playlist.spotify_url
-    config.playlist.spotify_url = url
-    try:
-        tracks = fetch_playlist(config)
-    except Exception as e:
-        config.playlist.spotify_url = original_url
-        logger.error("Playlist load failed: %s", e)
-        return {"ok": False, "error": "Failed to load playlist"}
-
-    if not tracks:
-        config.playlist.spotify_url = original_url
-        return {"ok": False, "error": "No tracks found"}
-
-    state.playlist = tracks
-    return {"ok": True, "tracks": len(tracks), "url": url}
+        _apply_loaded_source(request, tracks, resolved_source)
+        try:
+            await asyncio.to_thread(write_persisted_source, config.cache_dir, resolved_source)
+        except Exception:
+            logger.warning("Failed to persist playlist load, live switch still applied")
+        return {"ok": True, "tracks": len(tracks), "url": url}
 
 
 @router.post("/api/playlist/move_to_next")
@@ -620,6 +923,7 @@ def _public_status_payload(request: Request) -> dict:
         "station": config.station.name,
         "running_jokes": state.running_jokes,
         "now_streaming": state.now_streaming,
+        "current_source": _serialize_source(state.playlist_source),
         "stream_log": [
             {"type": e.type, "label": e.label, "timestamp": e.timestamp, "metadata": e.metadata}
             for e in state.stream_log
@@ -672,6 +976,7 @@ async def status(request: Request, _: None = Depends(require_admin_access)):
             "uptime_sec": round(time.time() - start_time),
             "spotify_connected": state.spotify_connected,
             "playlist_url": request.app.state.config.playlist.spotify_url or "",
+            "playlist_source": _serialize_source(state.playlist_source),
             "produced_log": [{"type": e.type, "label": e.label, "timestamp": e.timestamp} for e in state.segment_log],
             "last_banter_script": state.last_banter_script,
             "last_ad_script": state.last_ad_script,

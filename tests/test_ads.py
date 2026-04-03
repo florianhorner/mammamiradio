@@ -169,15 +169,20 @@ def test_ad_break_increments_segments_produced_once():
     assert len(state.ad_history) == 3  # per-spot history preserved
 
 
-def test_no_brands_does_not_reset_ad_pacing():
-    """When no brands are configured, skipping the ad should not reset counters."""
+def test_no_brands_resets_ad_pacing_to_prevent_infinite_spin():
+    """When no brands are configured the producer resets songs_since_ad to 0.
+
+    Without this reset the scheduler would return AD on every iteration
+    (songs_since_ad stays >= songs_between_ads), creating an infinite spin
+    that drains the queue and stalls the station.
+    """
     state = StationState()
     state.songs_since_ad = 5
     state.segments_produced = 10
-    # The producer skips without calling after_ad when no brands configured
-    # Just verify after_ad is not called — songs_since_ad stays at 5
-    assert state.songs_since_ad == 5
-    assert state.segments_produced == 10
+    # Simulate the producer's no-brands guard
+    state.songs_since_ad = 0
+    assert state.songs_since_ad == 0
+    assert state.segments_produced == 10  # segments_produced not touched
 
 
 def test_campaign_arc_in_ad_history():

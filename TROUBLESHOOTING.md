@@ -57,6 +57,18 @@ curl --user "$ADMIN_USERNAME:$ADMIN_PASSWORD" -X POST http://127.0.0.1:8000/api/
 
 If you use token auth instead of basic auth, send `X-Radio-Admin-Token`.
 
+## Source picker not available
+
+The Spotify source picker (playlists, Liked Songs) is only available in local/macOS mode. In Docker or Home Assistant add-on mode, use the playlist URL field instead.
+
+If the picker loads but shows no playlists:
+
+- Verify `SPOTIFY_CLIENT_ID` and `SPOTIFY_CLIENT_SECRET` are set
+- Check the dashboard for an auth prompt and complete the OAuth flow
+- Check `/status` for `startup_source_error` details
+
+The app persists the last selected source to `cache/playlist_source.json` and restores it on restart. If a persisted source fails to load, the app falls back to the configured URL or demo tracks.
+
 ## Spotify device does not appear
 
 `spotify_auth.py` uses a local callback at `http://127.0.0.1:8888/callback` and requests playback-control scopes. If the OAuth flow never completed, device transfer will not work.

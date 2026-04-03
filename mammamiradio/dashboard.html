@@ -10,6 +10,7 @@
 <meta property="og:type" content="website">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="mammamiradio-csrf-token" content="__MAMMAMIRADIO_CSRF_TOKEN__">
 <link rel="manifest" href="/static/manifest.json">
 <link rel="icon" href="/static/icon-192.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="/static/icon-192.svg">
@@ -22,6 +23,7 @@
   :root {
     --bg: #2a2320;
     --bg2: #3d3530;
+    --panel: rgba(53, 47, 42, 0.86);
     --card: #352f2a;
     --cream: #f5efe6;
     --cream-dk: #e8dfd3;
@@ -41,12 +43,24 @@
 
   body {
     font-family: var(--font-body);
-    background: var(--bg);
+    background:
+      radial-gradient(circle at top left, rgba(212, 145, 122, 0.15), transparent 32%),
+      radial-gradient(circle at 85% 8%, rgba(122, 143, 109, 0.12), transparent 26%),
+      linear-gradient(180deg, #2b241f 0%, #221d1a 100%);
     color: var(--text);
     padding: 0 24px 96px;
     max-width: 1280px;
     margin: 0 auto;
     line-height: 1.5;
+    min-height: 100vh;
+  }
+  body > :not(.setup-gate) { transition: filter 0.22s ease, opacity 0.22s ease, transform 0.22s ease; }
+  body.setup-open > :not(.setup-gate) {
+    filter: blur(16px);
+    opacity: 0.08;
+    transform: scale(0.985);
+    pointer-events: none;
+    user-select: none;
   }
 
   /* ---- Header ---- */
@@ -103,13 +117,14 @@
     flex-wrap: wrap;
   }
   .stat {
-    background: var(--card);
-    border: 1px solid rgba(196, 101, 74, 0.12);
+    background: linear-gradient(180deg, rgba(53, 47, 42, 0.96), rgba(45, 39, 34, 0.94));
+    border: 1px solid rgba(196, 101, 74, 0.18);
     border-top: 3px solid var(--terracotta);
-    border-radius: 8px;
+    border-radius: 12px;
     padding: 12px 16px;
     min-width: 110px;
     flex: 1;
+    box-shadow: 0 16px 30px rgba(0, 0, 0, 0.14);
   }
   .stat-label {
     font-size: 10px;
@@ -130,9 +145,9 @@
   /* ---- Connect Banner ---- */
   .connect-banner {
     background: rgba(196, 101, 74, 0.08);
-    border: 1px solid rgba(196, 101, 74, 0.35);
-    border-radius: 8px;
-    padding: 12px 16px;
+    border: 1px solid rgba(196, 101, 74, 0.28);
+    border-radius: 12px;
+    padding: 14px 16px;
     margin-bottom: 16px;
     display: none;
     font-size: 13px;
@@ -148,9 +163,10 @@
     gap: 16px;
     background: rgba(37, 99, 235, 0.08);
     border: 1px solid rgba(37, 99, 235, 0.28);
-    border-radius: 10px;
-    padding: 12px 16px;
+    border-radius: 14px;
+    padding: 14px 16px;
     margin-bottom: 16px;
+    box-shadow: 0 14px 28px rgba(0, 0, 0, 0.12);
   }
   .mode-banner[data-mode="demo"] {
     background: rgba(196, 160, 74, 0.08);
@@ -219,8 +235,8 @@
     background: linear-gradient(180deg, rgba(53, 47, 42, 0.98), rgba(42, 35, 32, 0.98));
     border: 1px solid rgba(212, 145, 122, 0.22);
     border-radius: 18px;
-    box-shadow: 0 24px 60px rgba(0, 0, 0, 0.35);
-    padding: 28px;
+    box-shadow: 0 30px 80px rgba(0, 0, 0, 0.42);
+    padding: 30px;
   }
   .setup-kicker {
     font-size: 11px;
@@ -418,6 +434,59 @@
     white-space: pre-wrap;
     color: var(--cream-dk);
   }
+  .cred-form {
+    margin-top: 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .cred-row {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .cred-label {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--muted);
+  }
+  .cred-input {
+    background: rgba(0,0,0,0.3);
+    border: 1px solid rgba(176, 164, 148, 0.25);
+    border-radius: 6px;
+    padding: 7px 10px;
+    color: var(--cream);
+    font-size: 13px;
+    font-family: 'SF Mono', 'Fira Code', monospace;
+    width: 100%;
+    box-sizing: border-box;
+    outline: none;
+  }
+  .cred-input:focus {
+    border-color: rgba(196, 101, 74, 0.6);
+  }
+  .cred-save-btn {
+    margin-top: 4px;
+    align-self: flex-start;
+    background: var(--terra);
+    color: #fff;
+    border: none;
+    border-radius: 6px;
+    padding: 7px 18px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    letter-spacing: 0.02em;
+  }
+  .cred-save-btn:hover { background: #b55843; }
+  .cred-status {
+    font-size: 12px;
+    color: var(--muted);
+    margin-left: 8px;
+    align-self: center;
+  }
   .setup-actions {
     display: flex;
     justify-content: space-between;
@@ -459,6 +528,14 @@
 
   /* ---- Controls ---- */
   .controls { display: flex; gap: 8px; margin-bottom: 18px; }
+  .surface-card {
+    background: linear-gradient(180deg, rgba(53, 47, 42, 0.92), rgba(43, 37, 33, 0.94));
+    border: 1px solid rgba(176, 164, 148, 0.12);
+    border-radius: 16px;
+    padding: 18px 20px;
+    box-shadow: 0 18px 40px rgba(0, 0, 0, 0.18);
+    margin-bottom: 18px;
+  }
   .btn {
     background: var(--card);
     border: 1px solid rgba(176, 164, 148, 0.2);
@@ -485,9 +562,9 @@
   .personality-section { margin-bottom: 20px; }
   .personality-cards { display: flex; gap: 16px; flex-wrap: wrap; }
   .personality-card {
-    background: var(--card);
-    border: 1px solid rgba(196, 101, 74, 0.12);
-    border-radius: 8px;
+    background: rgba(42, 35, 32, 0.72);
+    border: 1px solid rgba(196, 101, 74, 0.16);
+    border-radius: 12px;
     padding: 16px 20px;
     flex: 1;
     min-width: 280px;
@@ -582,12 +659,13 @@
 
   /* ---- Now Playing ---- */
   .now-playing {
-    background: var(--card);
-    border: 1px solid rgba(196, 101, 74, 0.12);
+    background: linear-gradient(180deg, rgba(53, 47, 42, 0.96), rgba(44, 38, 33, 0.96));
+    border: 1px solid rgba(196, 101, 74, 0.18);
     border-left: 4px solid var(--terracotta);
-    border-radius: 8px;
-    padding: 16px 20px;
+    border-radius: 12px;
+    padding: 18px 20px;
     margin-bottom: 20px;
+    box-shadow: 0 18px 34px rgba(0, 0, 0, 0.16);
   }
   .now-playing .section-label {
     font-size: 10px;
@@ -623,7 +701,7 @@
   }
 
   /* ---- Grid Layout ---- */
-  .grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 20px; overflow: hidden; }
+  .grid { display: grid; grid-template-columns: 1.2fr 1fr 1fr; gap: 20px; overflow: hidden; }
   .grid > div { min-width: 0; }
   @media (max-width: 960px) { .grid { grid-template-columns: 1fr 1fr; } }
   @media (max-width: 640px) { .grid { grid-template-columns: 1fr; } }
@@ -729,12 +807,14 @@
     bottom: 0;
     left: 0;
     right: 0;
-    background: var(--bg2);
-    border-top: 2px solid var(--terracotta);
+    background: linear-gradient(180deg, rgba(61, 53, 48, 0.98), rgba(42, 35, 32, 0.98));
+    border-top: 1px solid rgba(196, 101, 74, 0.26);
     padding: 10px 24px;
     display: flex;
     align-items: center;
+    justify-content: space-between;
     gap: 16px;
+    flex-wrap: wrap;
     z-index: 100;
   }
   .player-bar .label {
@@ -745,10 +825,18 @@
     white-space: nowrap;
     flex-shrink: 0;
   }
-  .player-bar audio {
+  .player-bar-copy {
     flex: 1;
-    height: 32px;
-    border-radius: 4px;
+    min-width: 220px;
+  }
+  .player-bar-title {
+    color: var(--cream);
+    font-size: 14px;
+    font-weight: 600;
+  }
+  .player-bar-detail {
+    color: var(--muted);
+    font-size: 12px;
   }
 
   /* ---- Debug Panel ---- */
@@ -944,6 +1032,7 @@
     .setup-title { font-size: 28px; }
     .setup-grid { grid-template-columns: 1fr; }
     .mode-banner { flex-direction: column; align-items: flex-start; }
+    .surface-card { padding: 16px; border-radius: 14px; }
   }
 </style>
 </head>
@@ -1019,14 +1108,34 @@
   and select <strong>mammamiradio</strong>. Music will use placeholders until connected.
 </div>
 
+<div class="setup-card surface-card" style="margin-bottom:12px">
+  <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap">
+    <div>
+      <h3 style="margin-bottom:4px">Choose your music</h3>
+      <p id="source-options-summary">Connect Spotify to load one of your playlists, use Liked Songs, or paste a playlist link as the advanced fallback.</p>
+      <div id="current-source-label" class="surface" style="margin-top:8px">Current source: loading...</div>
+    </div>
+    <button class="btn" type="button" onclick="loadSourceOptions()">Refresh sources</button>
+  </div>
+  <div id="source-options" style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px"></div>
+  <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">
+    <button class="btn" type="button" id="liked-songs-btn" onclick="selectLikedSongs()">Use my Liked Songs</button>
+    <select id="playlist-select" style="min-width:260px;background:var(--card);border:1px solid rgba(176,164,148,0.2);border-radius:6px;color:var(--cream);padding:8px 12px;font-size:13px;font-family:var(--font-body);outline:none">
+      <option value="">Choose one of my playlists</option>
+    </select>
+    <button class="btn" type="button" id="playlist-select-btn" onclick="selectPlaylist()">Load playlist</button>
+  </div>
+</div>
+
+<div class="surface-card" style="padding-bottom:12px">
 <div style="display:flex;gap:8px;margin-bottom:8px">
   <div style="flex:1;display:flex;gap:8px">
     <input id="search-input" type="text" placeholder="Search songs..." style="flex:1;background:var(--card);border:1px solid rgba(176,164,148,0.2);border-radius:6px;color:var(--cream);padding:8px 12px;font-size:13px;font-family:var(--font-body);outline:none" onfocus="this.style.borderColor='var(--terracotta)'" onblur="this.style.borderColor='rgba(176,164,148,0.2)'" onkeydown="if(event.key==='Enter')searchTracks()">
     <button class="btn" onclick="searchTracks()">Search</button>
   </div>
   <div style="display:flex;gap:8px">
-    <input id="playlist-url" type="text" placeholder="Playlist URL..." style="width:200px;background:var(--card);border:1px solid rgba(176,164,148,0.2);border-radius:6px;color:var(--cream);padding:8px 12px;font-size:13px;font-family:var(--font-body);outline:none" onfocus="this.style.borderColor='var(--terracotta)'" onblur="this.style.borderColor='rgba(176,164,148,0.2)'" onkeydown="if(event.key==='Enter')loadPlaylist()">
-    <button class="btn" onclick="loadPlaylist()">Load</button>
+    <input id="playlist-url" type="text" placeholder="Paste playlist link (advanced)" style="width:260px;background:var(--card);border:1px solid rgba(176,164,148,0.2);border-radius:6px;color:var(--cream);padding:8px 12px;font-size:13px;font-family:var(--font-body);outline:none" onfocus="this.style.borderColor='var(--terracotta)'" onblur="this.style.borderColor='rgba(176,164,148,0.2)'" onkeydown="if(event.key==='Enter')loadPlaylist()">
+    <button class="btn" id="playlist-url-btn" onclick="loadPlaylist()">Paste playlist link</button>
   </div>
 </div>
 <div id="search-results" style="margin-bottom:12px"></div>
@@ -1086,8 +1195,9 @@
     <div class="consumption-detail" id="cons-model"></div>
   </div>
 </div>
+</div>
 
-<div class="personality-section">
+<div class="personality-section surface-card">
   <div class="section-title">Host Personality</div>
   <div class="personality-cards" id="personality-cards">Loading...</div>
 </div>
@@ -1098,7 +1208,7 @@
   <div class="meta" id="np-meta"></div>
 </div>
 
-<div class="grid">
+<div class="grid surface-card">
   <div>
     <div class="section">
       <div class="section-title">Segment History</div>
@@ -1154,9 +1264,11 @@
 
 <div class="player-bar">
   <div class="label">LISTEN</div>
-  <audio id="audio" controls preload="none">
-    <source id="stream-source" src="/stream" type="audio/mpeg">
-  </audio>
+  <div class="player-bar-copy">
+    <div class="player-bar-title">Playback stays in the public listener view.</div>
+    <div class="player-bar-detail">The admin panel is silent on purpose so one extra tab does not create a duplicate stream.</div>
+  </div>
+  <a id="listener-bar-link" href="/listen" class="btn" style="text-decoration:none;display:inline-flex;align-items:center;">Open listener view</a>
 </div>
 
 <script>
@@ -1171,8 +1283,8 @@ if (_base) {
   document.addEventListener('DOMContentLoaded', () => {
     const link = document.getElementById('listener-link');
     if (link) link.href = _base + '/listen';
-    const src = document.getElementById('stream-source');
-    if (src) { src.src = _base + '/stream'; src.parentElement.load(); }
+    const barLink = document.getElementById('listener-bar-link');
+    if (barLink) barLink.href = _base + '/listen';
   });
 }
 const icons = { music: '\u266B', banter: '\uD83C\uDF99', ad: '\uD83D\uDCE2' };
@@ -1186,6 +1298,18 @@ const setupStepLabels = [
 let setupState = null;
 let setupStep = 1;
 let selectedRunMode = null;
+let sourceOptionsState = null;
+const csrfToken = document.querySelector('meta[name="mammamiradio-csrf-token"]')?.content || '';
+const _nativeFetch = window.fetch.bind(window);
+window.fetch = (input, init = {}) => {
+  const request = new Request(input, init);
+  if (csrfToken && ['POST', 'PUT', 'PATCH', 'DELETE'].includes(request.method.toUpperCase())) {
+    const headers = new Headers(request.headers);
+    headers.set('X-Radio-CSRF-Token', csrfToken);
+    return _nativeFetch(input, {...init, headers});
+  }
+  return _nativeFetch(input, init);
+};
 
 
 function setupAckKey(signature) {
@@ -1260,27 +1384,106 @@ function renderRunModes() {
   '<div class="setup-note">We are not changing your runtime here. This just picks the right setup instructions so the next screens stop talking in riddles.</div>';
 }
 
+function renderCredentialForm(key) {
+  const fields = {
+    spotify: [
+      { id: 'cred-spotify-id', name: 'spotify_client_id', label: 'Client ID', type: 'text' },
+      { id: 'cred-spotify-secret', name: 'spotify_client_secret', label: 'Client Secret', type: 'password' },
+    ],
+    anthropic: [
+      { id: 'cred-anthropic-key', name: 'anthropic_api_key', label: 'API Key', type: 'password' },
+    ],
+    playlist: [
+      { id: 'cred-playlist-url', name: 'playlist_spotify_url', label: 'Spotify Playlist URL', type: 'text' },
+    ],
+  };
+  const defs = fields[key];
+  if (!defs) return '';
+  let html = '<div class="cred-form" id="cred-form-' + key + '">';
+  defs.forEach(f => {
+    html += '<div class="cred-row">' +
+      '<label class="cred-label" for="' + f.id + '">' + escHtml(f.label) + '</label>' +
+      '<input class="cred-input" id="' + f.id + '" type="' + f.type + '" autocomplete="off" placeholder="Paste here" />' +
+    '</div>';
+  });
+  html += '<button class="cred-save-btn" onclick="saveCredentials(\'' + key + '\')">Save</button>' +
+    '<span class="cred-status" id="cred-status-' + key + '"></span>' +
+  '</div>';
+  return html;
+}
+
+async function saveCredentials(key) {
+  const fieldMap = {
+    spotify: ['cred-spotify-id', 'cred-spotify-secret'],
+    anthropic: ['cred-anthropic-key'],
+    playlist: ['cred-playlist-url'],
+  };
+  const nameMap = {
+    'cred-spotify-id': 'spotify_client_id',
+    'cred-spotify-secret': 'spotify_client_secret',
+    'cred-anthropic-key': 'anthropic_api_key',
+    'cred-playlist-url': 'playlist_spotify_url',
+  };
+  const ids = fieldMap[key] || [];
+  const payload = {};
+  for (const id of ids) {
+    const el = document.getElementById(id);
+    if (el && el.value.trim()) payload[nameMap[id]] = el.value.trim();
+  }
+  if (!Object.keys(payload).length) {
+    const s = document.getElementById('cred-status-' + key);
+    if (s) s.textContent = 'Nothing entered.';
+    return;
+  }
+  const statusEl = document.getElementById('cred-status-' + key);
+  if (statusEl) statusEl.textContent = 'Saving...';
+  try {
+    const r = await fetch(_base + '/api/credentials', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(payload),
+    });
+    const data = await r.json();
+    if (data.ok) {
+      if (statusEl) statusEl.textContent = 'Saved. Reloading setup...';
+      setTimeout(() => openSetupGate(true), 800);
+    } else {
+      if (statusEl) statusEl.textContent = 'Error: ' + (data.error || 'unknown');
+    }
+  } catch (e) {
+    if (statusEl) statusEl.textContent = 'Request failed.';
+  }
+}
+
 function renderEssentials() {
   const modeId = selectedRunMode || setupState.detected_mode;
+  const isAddon = modeId === 'ha_addon';
   let html = '<div class="setup-grid">';
   (setupState.essentials || []).forEach(item => {
     const where = item.where && item.where[modeId] ? item.where[modeId] : 'your current config surface';
+    const isMissing = item.status === 'missing';
+    const showForm = isMissing && !isAddon && ['spotify', 'anthropic', 'playlist'].includes(item.key);
     html += '<div class="setup-card">' +
       '<div class="setup-badge ' + escHtml(item.status) + '">' + escHtml(statusBadgeLabel(item.status)) + '</div>' +
       '<h3>' + escHtml(item.label) + '</h3>' +
       '<p>' + escHtml(item.required_label) + '</p>' +
       '<div class="setup-meta">' +
         '<div><strong>What we found:</strong> ' + escHtml(item.summary) + '</div>' +
-        '<div><strong>Next action:</strong> ' + escHtml(item.next_action) + '</div>' +
-        '<div><strong>Where:</strong> ' + escHtml(where) + '</div>' +
+        (showForm
+          ? renderCredentialForm(item.key)
+          : '<div><strong>Next action:</strong> ' + escHtml(item.next_action) + '</div>' +
+            '<div><strong>Where:</strong> ' + escHtml(where) + '</div>'
+        ) +
         '<div><strong>If you skip it:</strong> ' + escHtml(item.skip_outcome) + '</div>' +
       '</div>' +
     '</div>';
   });
   html += '</div>';
-  html += '<div class="setup-note">If you change add-on options or env vars outside this page, restart the service first. Then come back here and click Re-check.</div>';
-  if (modeId === 'ha_addon' && setupState.addon_options_snippet) {
-    html += '<div class="setup-code">' + escHtml(setupState.addon_options_snippet) + '</div>';
+  if (isAddon) {
+    html += '<div class="setup-note">If you change add-on options or env vars outside this page, restart the service first. Then come back here and click Re-check.</div>';
+    if (setupState.addon_options_snippet) {
+      html += '<div class="setup-code">' + escHtml(setupState.addon_options_snippet) + '</div>';
+    }
   }
   return html;
 }
@@ -1410,11 +1613,6 @@ async function loadSetup(force) {
 function startStationFromSetup() {
   if (setupState) acknowledgeSetup(setupState);
   hideSetupGate();
-  const audio = document.getElementById('audio');
-  if (audio) {
-    audio.load();
-    audio.play().catch(() => {});
-  }
   refresh();
 }
 
@@ -1578,8 +1776,108 @@ async function loadPersonality() {
   }
 }
 
+function updateCurrentSourceLabel(source) {
+  const el = document.getElementById('current-source-label');
+  if (!source || !source.kind) {
+    el.textContent = 'Current source: none selected';
+    return;
+  }
+  const label = source.label || source.kind;
+  const count = source.track_count ? ' (' + source.track_count + ' tracks)' : '';
+  el.textContent = 'Current source: ' + label + count;
+}
+
+function renderSourceOptions(payload) {
+  sourceOptionsState = payload;
+  updateCurrentSourceLabel(payload.current_source);
+  const summary = document.getElementById('source-options-summary');
+  const chips = document.getElementById('source-options');
+  const select = document.getElementById('playlist-select');
+  const likedBtn = document.getElementById('liked-songs-btn');
+  const playlistBtn = document.getElementById('playlist-select-btn');
+  const urlInput = document.getElementById('playlist-url');
+  const urlBtn = document.getElementById('playlist-url-btn');
+  const caps = payload.capabilities || {};
+  const canUsePicker = !!(payload.ok && caps.supports_user_sources);
+  const canUseUrlFallback = !!caps.supports_url_source;
+
+  summary.textContent = canUsePicker
+    ? 'Connect Spotify, choose one of your playlists, use Liked Songs, or keep the advanced playlist-link fallback.'
+    : (caps.reason || 'Spotify source picker is not available in this run mode yet. Use the advanced playlist link fallback.');
+
+  likedBtn.disabled = !canUsePicker;
+  playlistBtn.disabled = !canUsePicker;
+  select.disabled = !canUsePicker;
+  urlInput.disabled = !canUseUrlFallback;
+  urlBtn.disabled = !canUseUrlFallback;
+  select.innerHTML = '<option value="">Choose one of my playlists</option>';
+  (payload.playlists || []).forEach(item => {
+    const option = document.createElement('option');
+    option.value = item.id;
+    option.textContent = item.label + (item.track_count ? ' (' + item.track_count + ')' : '');
+    option.dataset.label = item.label;
+    select.appendChild(option);
+  });
+
+  const tags = [];
+  if (canUsePicker) tags.push('<span class="setup-badge configured">Spotify picker ready</span>');
+  else if (canUseUrlFallback) tags.push('<span class="setup-badge degraded">URL fallback only</span>');
+  else tags.push('<span class="setup-badge degraded">Spotify auth required</span>');
+  if (payload.current_source && payload.current_source.kind) {
+    tags.push('<span class="setup-badge skipped">' + escHtml(payload.current_source.kind) + '</span>');
+  }
+  chips.innerHTML = tags.join('');
+}
+
+async function loadSourceOptions() {
+  try {
+    const r = await fetch(_base + '/api/spotify/source-options');
+    const d = await r.json();
+    renderSourceOptions(d);
+  } catch (e) {
+    console.error('source options load failed', e);
+  }
+}
+
+async function selectLikedSongs() {
+  await selectSource({kind: 'liked_songs', label: 'Liked Songs'});
+}
+
+async function selectPlaylist() {
+  const select = document.getElementById('playlist-select');
+  const option = select.options[select.selectedIndex];
+  if (!select.value) {
+    showToast('Pick a playlist first');
+    return;
+  }
+  await selectSource({kind: 'playlist', source_id: select.value, label: option.dataset.label || option.textContent});
+}
+
+async function selectSource(payload) {
+  try {
+    const r = await fetch(_base + '/api/spotify/source/select', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(payload),
+    });
+    const d = await r.json();
+    if (!d.ok) {
+      showToast(d.error || 'Source selection failed');
+      return;
+    }
+    updateCurrentSourceLabel(d.source);
+    await loadSourceOptions();
+    showToast('Loaded ' + (d.source.label || d.source.kind));
+    refresh();
+  } catch (e) {
+    console.error('source select failed', e);
+    showToast('Source selection failed');
+  }
+}
+
 loadPersonality();
 loadSetup(false);
+loadSourceOptions();
 
 async function refresh() {
   try {
@@ -1601,7 +1899,7 @@ async function refresh() {
     if (d.station_mode && d.station_mode.id === 'demo') {
       connectBanner.style.display = 'block';
       connectBanner.innerHTML =
-        '<strong>Demo mode is active.</strong> The station is using the built-in playlist until you add Spotify credentials and a real playlist.';
+        '<strong>Demo mode is active.</strong> The station is using the built-in playlist until you add Spotify credentials and choose a real music source.';
     } else if (d.spotify_connected) {
       connectBanner.style.display = 'none';
     } else {
@@ -1612,7 +1910,8 @@ async function refresh() {
 
     // Show current playlist URL if set and input is empty
     const plInput = document.getElementById('playlist-url');
-    if (d.playlist_url && !plInput.value && plInput.placeholder === 'Playlist URL...') {
+    if (d.playlist_source) updateCurrentSourceLabel(d.playlist_source);
+    if (d.playlist_url && !plInput.value && plInput.placeholder === 'Paste playlist link (advanced)') {
       plInput.placeholder = d.playlist_url;
     }
 
@@ -1625,7 +1924,7 @@ async function refresh() {
       npMeta.textContent = ns.type ? ns.type.toUpperCase() + ' \u2014 streaming now' : '';
     } else {
       npEl.textContent = 'Waiting for first segment...';
-      npMeta.textContent = 'Press play on the audio player below';
+      npMeta.textContent = 'Open the listener view to hear the live station';
     }
 
     // Stream log = what was ACTUALLY PLAYED (newest first)
@@ -1855,15 +2154,16 @@ async function loadPlaylist() {
     if (d.ok) {
       input.value = '';
       input.placeholder = d.tracks + ' tracks loaded!';
-      setTimeout(() => { input.placeholder = 'Playlist URL...'; }, 3000);
+      setTimeout(() => { input.placeholder = 'Paste playlist link (advanced)'; }, 3000);
+      loadSourceOptions();
     } else {
       input.placeholder = 'Error: ' + (d.error || 'unknown');
-      setTimeout(() => { input.placeholder = 'Playlist URL...'; }, 3000);
+      setTimeout(() => { input.placeholder = 'Paste playlist link (advanced)'; }, 3000);
     }
     refresh();
   } catch (e) {
     input.placeholder = 'Network error';
-    setTimeout(() => { input.placeholder = 'Playlist URL...'; }, 3000);
+    setTimeout(() => { input.placeholder = 'Paste playlist link (advanced)'; }, 3000);
   } finally {
     input.disabled = false;
   }
@@ -1876,10 +2176,6 @@ async function doShuffle() {
 
 async function doSkip() {
   await fetch(_base + '/api/skip', { method: 'POST' });
-  const audio = document.getElementById('audio');
-  audio.pause();
-  audio.load();
-  audio.play();
   refresh();
 }
 
@@ -1975,7 +2271,7 @@ setInterval(refresh, 2000);
 </script>
 <script>
 if ('serviceWorker' in navigator) {
-  navigator.serviceWorker.register('/sw.js').catch(function(){});
+  navigator.serviceWorker.register(_base + '/static/sw.js').catch(function(){});
 }
 </script>
 </body>

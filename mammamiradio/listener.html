@@ -38,12 +38,15 @@
   html{font-size:16px;-webkit-font-smoothing:antialiased}
 
   body{
-    background:var(--bg);
+    background:
+      radial-gradient(circle at top center, rgba(212,145,122,0.12), transparent 28%),
+      radial-gradient(circle at 20% 0%, rgba(122,143,109,0.12), transparent 22%),
+      linear-gradient(180deg,#2a2320 0%,#241f1b 100%);
     color:var(--cream);
     font-family:var(--font-body);
     line-height:1.6;
     min-height:100vh;
-    padding-bottom:100px;
+    padding-bottom:160px;
     overflow-x:hidden;
   }
 
@@ -97,17 +100,20 @@
     max-width:640px;
     margin:0 auto;
     padding:0 1.25rem;
+    display:grid;
+    gap:1rem;
   }
 
   /* ---- Now Playing ---- */
   .now-playing{
-    background:var(--bg2);
-    border-radius:16px;
+    background:linear-gradient(180deg,rgba(61,53,48,0.96),rgba(50,44,40,0.94));
+    border:1px solid rgba(212,145,122,0.16);
+    border-radius:20px;
     padding:2rem 1.75rem;
-    margin-bottom:1.5rem;
     position:relative;
     overflow:hidden;
     transition:background 0.3s;
+    box-shadow:0 24px 48px rgba(0,0,0,0.18);
   }
   .now-playing::before{
     content:'';
@@ -180,7 +186,11 @@
 
   /* ---- Section cards ---- */
   .section-card{
-    margin-bottom:1.5rem;
+    background:rgba(61,53,48,0.48);
+    border:1px solid rgba(122,143,109,0.16);
+    border-radius:18px;
+    padding:1.1rem 1.1rem 0.2rem;
+    backdrop-filter:blur(8px);
   }
   .section-title{
     font-family:var(--font-display);
@@ -235,9 +245,11 @@
 
   /* Running Jokes */
   .jokes-section{
+    background:rgba(61,53,48,0.36);
+    border:1px solid rgba(212,145,122,0.14);
+    border-radius:18px;
     border-left:3px solid var(--terracotta);
-    padding-left:1rem;
-    margin-bottom:1.5rem;
+    padding:1rem 1rem 0.9rem;
   }
   .jokes-title{
     font-family:var(--font-display);
@@ -259,17 +271,26 @@
   .player-bar{
     position:fixed;
     bottom:0;left:0;right:0;
-    background:linear-gradient(180deg,rgba(42,35,32,0.0) 0%,var(--bg) 12%,var(--bg2) 100%);
-    padding:1.5rem 0 0;
+    background:none;
+    padding:1rem 1rem calc(env(safe-area-inset-bottom, 0px) + 1rem);
     z-index:100;
+    display:flex;
+    justify-content:center;
+    pointer-events:none;
   }
   .player-inner{
-    max-width:640px;
+    width:min(640px,100%);
     margin:0 auto;
-    padding:0 1.25rem 1.25rem;
+    padding:0.95rem 1.15rem;
     display:flex;
     align-items:center;
     gap:1rem;
+    border:1px solid rgba(212,145,122,0.18);
+    border-radius:20px;
+    background:linear-gradient(180deg,rgba(61,53,48,0.92),rgba(50,44,40,0.96));
+    box-shadow:0 18px 45px rgba(0,0,0,0.24);
+    backdrop-filter:blur(12px);
+    pointer-events:auto;
   }
   .play-btn{
     width:56px;height:56px;
@@ -375,6 +396,12 @@
     .station-header{padding-top:3.5rem}
     .now-playing{padding:2.5rem 2.25rem}
     .volume-slider{width:100px}
+  }
+  @media(max-width:640px){
+    body{padding-bottom:180px}
+    .section-card,.jokes-section{border-radius:16px}
+    .player-bar{padding-left:0.75rem;padding-right:0.75rem}
+    .player-inner{border-radius:18px}
   }
   @media(max-width:380px){
     .volume-wrap{display:none}
@@ -691,12 +718,11 @@
   // Initial fetch + polling
   fetchStatus();
   setInterval(fetchStatus, 3000);
+
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register(_base + '/static/sw.js').catch(function(){});
+  }
 })();
-</script>
-<script>
-if ('serviceWorker' in navigator) {
-  navigator.serviceWorker.register('/sw.js').catch(function(){});
-}
 </script>
 </body>
 </html>

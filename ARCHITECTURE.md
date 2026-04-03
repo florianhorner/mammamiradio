@@ -33,7 +33,7 @@ Spotify playlist / liked songs / demo tracks
 
 1. Loads `radio.toml` and `.env` through `config.py`.
 2. Validates the config and applies legacy migration like `station.bitrate -> audio.bitrate`.
-3. Fetches the playlist from Spotify or falls back to demo tracks.
+3. Restores persisted source selection from `cache/playlist_source.json`, then fetches the playlist (by source kind: playlist, liked songs, or URL) from Spotify or falls back to demo tracks.
 4. Starts `SpotifyPlayer`, which owns go-librespot and the FIFO drain path.
 5. Creates shared app state, then launches:
    - `run_producer()` to fill the lookahead queue
@@ -76,9 +76,53 @@ Every produced segment becomes a temporary MP3 on disk and is pushed into `async
 
 Important design choice: there is one shared timeline. Listeners tune into the current live point, not their own private playback state.
 
-## Spotify audio path
+## How Spotify integration works
 
-The strange part of this app is `spotify_player.py`.
+Three separate pieces connect the station to Spotify. Each does a different job, and the station degrades gracefully when any piece is missing.
+
+### Spotify Developer credentials (client ID + secret)
+
+These authenticate the app against the **Spotify Web API** via Spotipy. The Web API is read-only metadata: it tells the app what music exists but never delivers audio. With credentials configured the app can:
+
+- fetch track lists from any playlist URL
+- browse the authenticated user's own playlists and Liked Songs (source picker)
+- search the Spotify catalog from the dashboard
+- read track names, artists, and durations so the hosts can reference what is playing
+
+Without credentials the app falls back to a built-in demo playlist of Italian tracks. The demo playlist has hardcoded metadata so banter still references real song names.
+
+### go-librespot (audio capture)
+
+go-librespot is an open-source Spotify Connect receiver. It registers itself as a playback device (like a Chromecast or Sonos speaker) and streams actual audio from Spotify's servers. The app starts go-librespot at boot, and `spotify_player.py` captures PCM from its FIFO pipe, encodes it to MP3, and hands it to the producer.
+
+Without go-librespot (or if it fails to start), the app knows what tracks to play but cannot get the audio. It falls back to downloading via `yt-dlp`, then to local files in `music/`, then to generated placeholder tones.
+
+### Device selection in Spotify ("select mammamiradio")
+
+Starting go-librespot creates the device, but Spotify does not automatically route audio to it. The user must open their Spotify app, tap the device picker (the speaker/devices icon), and select the mammamiradio device. This is the same gesture as picking any other Connect speaker. Until this step is done, go-librespot is running but idle and the setup status shows Spotify Connect as "Degraded."
+
+### Playlist URL (share link)
+
+A shortcut that bypasses the source picker entirely. The user copies a playlist share link from Spotify (Share > Copy link) and pastes it into `PLAYLIST_SPOTIFY_URL` or the dashboard's URL load field. This works in all deployment modes including the HA add-on and Docker, where the interactive picker is disabled.
+
+### The full chain
+
+```
+Developer creds          go-librespot             Spotify app
+(Web API: metadata)      (Connect: audio)         (device selection)
+       |                       |                        |
+       v                       v                        v
+  "what to play"    +    "the actual sound"    +   "route audio here"
+       |                       |                        |
+       +-----------> producer.py <----------------------+
+                         |
+                         v
+                   radio stream
+```
+
+Each layer is independent. Missing credentials means demo tracks. Missing go-librespot means downloaded or local audio. Missing device selection means the app waits in degraded mode until the user connects. The station always produces a stream.
+
+## Spotify audio path (FIFO details)
 
 go-librespot writes raw PCM into a named pipe. On macOS, that FIFO needs a reader attached all the time or go-librespot throws `ENXIO` and starts skipping tracks.
 
@@ -123,6 +167,8 @@ Admin routes:
 - `/api/search`
 - `/api/playlist/add`
 - `/api/playlist/load`
+- `/api/spotify/source-options`
+- `/api/spotify/source/select`
 
 Admin access is granted by one of:
 
@@ -131,6 +177,14 @@ Admin access is granted by one of:
 - token auth via `X-Radio-Admin-Token` header for non-local requests when only `ADMIN_TOKEN` is configured
 
 Non-local binds without admin auth are rejected during config validation.
+
+### CSRF protection
+
+Mutating admin requests (POST/PUT/PATCH/DELETE) over non-loopback networks must pass a CSRF check. The dashboard injects a per-session token via `__MAMMAMIRADIO_CSRF_TOKEN__` placeholder replacement. Requests are allowed if any of: the CSRF token header matches, the Origin or Referer is same-origin, the request uses token auth (`X-Radio-Admin-Token`), or the request comes through HA ingress. Loopback clients are exempt.
+
+### Source switch concurrency
+
+`source_switch_lock` (asyncio.Lock on `app.state`) serializes `/api/spotify/source/select` and `/api/playlist/load` so only one source change runs at a time. Both endpoints trigger immediate cutover: the segment queue is purged, the current segment is skipped, and playback begins from the new source. The producer uses a `playlist_revision` counter on `StationState` to detect and discard segments generated for a stale source.
 
 ## Failure model
 

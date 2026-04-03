@@ -4,6 +4,38 @@ All notable changes to `mammamiradio` are documented here.
 
 The current version source of truth is `pyproject.toml`.
 
+## [1.5.0-beta] - 2026-04-03
+
+### Added
+
+- Spotify source picker: choose from your playlists or Liked Songs directly in the dashboard (local/macOS mode only).
+- Persisted source selection: the station restores your last chosen source on restart via `cache/playlist_source.json`.
+- New API routes: `GET /api/spotify/source-options` and `POST /api/spotify/source/select` for programmatic source switching.
+- CSRF protection for admin mutating endpoints when accessed over non-loopback networks.
+- Personality sliders in the dashboard for tuning host energy, chaos, warmth, verbosity, and nostalgia.
+- Conductor workspace support with lifecycle scripts for multi-agent development.
+- Dependabot automerge workflow for dependency updates.
+
+### Changed
+
+- Source switching now triggers immediate cutover: queued segments are purged and current playback is skipped so the new source starts right away.
+- Concurrent source switches are serialized so rapid clicks cannot corrupt station state.
+- The producer detects source changes mid-generation and discards stale segments instead of queuing them.
+- Switching to a non-URL source clears stale playlist URL state from config and status payloads.
+- In addon/Docker mode, the interactive source picker is disabled server-side; use the playlist URL field instead.
+- Setup status now reflects real source state instead of contradicting configured credentials.
+- Admin dashboard no longer embeds an audio player, preventing duplicate streams from a second tab.
+- Persisted source writes use atomic file replacement to avoid corruption.
+
+### Fixed
+
+- Spotify playlist fetch returned zero tracks when API items were nested under `item` key.
+- Source picker showed 0 tracks for user playlists due to wrong count field.
+- Listener page `_base is not defined` JS error from service worker scope.
+- Producer recovery stall when go-librespot restarts mid-segment.
+- `setup-mac.sh` now fails fast on missing prerequisites instead of silently continuing.
+- Flaky test caused by leaked Spotify credentials from local `.env`.
+
 ## [1.2.0] - 2026-04-02
 
 ### Added

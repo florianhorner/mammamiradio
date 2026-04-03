@@ -5,13 +5,14 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import secrets
 import time
 
 from fastapi import FastAPI
 
 from mammamiradio.config import load_config
 from mammamiradio.models import StationState
-from mammamiradio.playlist import fetch_playlist
+from mammamiradio.playlist import DEMO_TRACKS, fetch_startup_playlist, read_persisted_source
 from mammamiradio.producer import run_producer
 from mammamiradio.spotify_player import SpotifyPlayer
 from mammamiradio.streamer import LiveStreamHub, router, run_playback_loop
@@ -52,22 +53,37 @@ async def startup():
     except Exception as e:
         logger.warning("Could not start go-librespot: %s — using fallback audio", e)
 
-    logger.info("Fetching playlist: %s", config.playlist.spotify_url)
+    persisted_source = read_persisted_source(config.cache_dir)
+    logger.info("Fetching startup playlist")
     try:
-        tracks = fetch_playlist(config)
+        tracks, playlist_source, startup_source_error = fetch_startup_playlist(config, persisted_source)
     except Exception as e:
         logger.error("Playlist fetch crashed: %s — using demo playlist", e)
-        from mammamiradio.playlist import DEMO_TRACKS
-
         tracks = list(DEMO_TRACKS)
+        from mammamiradio.models import PlaylistSource
+
+        playlist_source = PlaylistSource(
+            kind="demo",
+            source_id="demo",
+            label="Built-in demo playlist",
+            track_count=len(tracks),
+            selected_at=time.time(),
+        )
+        startup_source_error = str(e)
     logger.info("Loaded %d tracks", len(tracks))
 
-    state = StationState(playlist=tracks)
+    state = StationState(
+        playlist=tracks,
+        playlist_source=playlist_source,
+        startup_source_error=startup_source_error,
+    )
     queue: asyncio.Queue = asyncio.Queue(maxsize=config.pacing.lookahead_segments + 2)
 
     # Set app.state for streamer access
     app.state.queue = queue
     app.state.skip_event = asyncio.Event()
+    app.state.source_switch_lock = asyncio.Lock()
+    app.state.csrf_token = secrets.token_urlsafe(32)
     app.state.stream_hub = LiveStreamHub()
     app.state.station_state = state
     app.state.config = config

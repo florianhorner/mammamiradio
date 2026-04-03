@@ -54,15 +54,21 @@ AI-powered Italian radio station engine. Python 3.11+, FastAPI, FFmpeg, optional
 - `STATION_NAME`, `STATION_THEME`: override station identity from `radio.toml`
 - `PLAYLIST_SPOTIFY_URL`: override playlist URL from `radio.toml`
 - `CLAUDE_MODEL`: override Claude model from `radio.toml`
+- `MAMMAMIRADIO_FIFO_PATH`: override go-librespot FIFO path
+- `MAMMAMIRADIO_GO_LIBRESPOT_BIN`: override go-librespot binary path
+- `MAMMAMIRADIO_GO_LIBRESPOT_CONFIG_DIR`: override go-librespot config directory
+- `MAMMAMIRADIO_GO_LIBRESPOT_PORT`: override go-librespot API port (default `3678`)
 
 ## Runtime behavior
 
-- Startup loads `radio.toml`, validates config, fetches the playlist, starts go-librespot if possible, then launches producer and playback tasks.
+- Startup loads `radio.toml`, validates config, starts go-librespot if possible, restores persisted source selection from `cache/playlist_source.json`, fetches the playlist, then launches producer and playback tasks.
 - If Spotify credentials are missing, the app uses a built-in demo playlist.
 - If go-librespot is unavailable or not authenticated, music falls back to local `music/` files, then `yt-dlp`, then placeholder tones.
 - If Anthropic fails, banter and ad generation fall back to short stock copy.
 - If Home Assistant is enabled and `HA_TOKEN` is present, banter and ads may reference current home state.
 - `audio.bitrate` is the single source of truth for encoding, ICY headers, and playback throttling.
+- Source switching via `/api/spotify/source/select` or `/api/playlist/load` purges the queue, skips the current segment, and begins playback from the new source immediately.
+- The source picker (playlist/liked_songs selection) is only available in local/macOS mode; addon/Docker modes are restricted to URL loading.
 - Non-local binds require `ADMIN_PASSWORD` or `ADMIN_TOKEN`.
 
 ## Project structure
@@ -83,6 +89,7 @@ mammamiradio/
   normalizer.py       FFmpeg helpers for normalize, mix, concat, and generated SFX
   tts.py              Edge TTS synthesis for hosts and ads
   ha_context.py       Home Assistant polling and Italian state formatting
+  setup_status.py     First-run onboarding and setup status classification
   dashboard.html      dashboard HTML served at /
   listener.html       listener HTML served at /listen
 radio.toml            station config

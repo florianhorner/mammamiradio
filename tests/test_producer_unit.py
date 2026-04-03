@@ -11,6 +11,7 @@ import pytest
 from mammamiradio.config import load_config
 from mammamiradio.models import (
     HostPersonality,
+    PlaylistSource,
     Segment,
     SegmentType,
     StationState,
@@ -143,3 +144,61 @@ async def test_error_recovery_queues_silence():
     assert seg.type == SegmentType.MUSIC
     assert "error" in seg.metadata
     assert state.failed_segments >= 1
+
+
+@pytest.mark.asyncio
+async def test_source_switch_discards_stale_music_segment(tmp_path):
+    """A source switch should invalidate any in-flight music from the previous playlist."""
+    old_track = Track(title="Old Song", artist="Old Artist", duration_ms=200_000, spotify_id="old1")
+    new_track = Track(title="New Song", artist="New Artist", duration_ms=200_000, spotify_id="new1")
+    state = StationState(playlist=[old_track])
+    config = _make_config()
+    config.tmp_dir = tmp_path
+    config.cache_dir = tmp_path
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+
+    first_download_started = asyncio.Event()
+    allow_first_download = asyncio.Event()
+    second_download_started = asyncio.Event()
+    source_audio = tmp_path / "source.mp3"
+    source_audio.write_bytes(b"fake audio")
+    download_calls = 0
+
+    async def fake_download(track, cache_dir, music_dir=None):
+        nonlocal download_calls
+        download_calls += 1
+        if download_calls == 1:
+            assert track == old_track
+            first_download_started.set()
+            await allow_first_download.wait()
+            return source_audio
+        assert track == new_track
+        second_download_started.set()
+        await asyncio.Event().wait()
+
+    def fake_normalize(src: Path, dst: Path) -> None:
+        dst.write_bytes(Path(src).read_bytes())
+
+    with (
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.MUSIC),
+        patch(f"{PRODUCER_MODULE}.download_track", new_callable=AsyncMock, side_effect=fake_download),
+        patch(f"{PRODUCER_MODULE}.normalize", side_effect=fake_normalize),
+        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+    ):
+        task = asyncio.create_task(run_producer(queue, state, config))
+        try:
+            await asyncio.wait_for(first_download_started.wait(), timeout=1.0)
+            state.switch_playlist(
+                [new_track],
+                PlaylistSource(kind="playlist", source_id="new", label="New Source"),
+            )
+            allow_first_download.set()
+            await asyncio.wait_for(second_download_started.wait(), timeout=1.0)
+            assert queue.empty()
+            assert state.played_tracks == []
+        finally:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass

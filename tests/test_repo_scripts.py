@@ -211,3 +211,10 @@ def _inject_ingress_prefix(html: str, prefix: str) -> str:
 
     assert result.returncode == 0
     assert "radio.toml is valid TOML" in result.stdout
+
+
+def test_addon_dockerfile_verifies_go_librespot_checksum() -> None:
+    dockerfile = (ROOT / "ha-addon" / "mammamiradio" / "Dockerfile").read_text()
+
+    assert "GL_SHA256" in dockerfile
+    assert "sha256sum -c -" in dockerfile

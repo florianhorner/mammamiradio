@@ -1,5 +1,24 @@
 # Changelog
 
+## 1.5.0-beta
+
+### Added
+
+- Source switching now triggers immediate cutover with queue purge and playback skip.
+- CSRF protection for admin endpoints accessed over non-loopback networks.
+- Server-side enforcement prevents picker-style source selection in addon mode; URL loading still works.
+
+### Changed
+
+- Setup status now accurately reflects configured Spotify credentials and active source state.
+- Persisted source writes use atomic file replacement to prevent corruption on restart.
+
+### Fixed
+
+- Spotify playlist fetch returned zero tracks when API items were nested under `item` key.
+- Producer recovery stall when go-librespot restarts mid-segment.
+- Listener page JS error from service worker scope (`_base is not defined`).
+
 ## 1.2.0
 
 ### Added

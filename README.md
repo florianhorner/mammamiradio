@@ -115,6 +115,11 @@ The app now treats first run as setup, not as "the dashboard happened to load". 
 - Optional: Anthropic API key, for Claude-generated banter and ads (falls back to stock copy without it)
 - Optional: Home Assistant long-lived token, for ambient home-state references in scripts
 
+> **How the Spotify pieces fit together:**
+> Three things connect the station to Spotify, each doing a different job.
+> **Developer credentials** (client ID + secret) talk to the Spotify Web API for metadata only: what tracks are in a playlist, your library, search results, and track info so the hosts can reference what is playing. **go-librespot** is a Spotify Connect receiver that streams actual audio, the same way a Chromecast or Sonos speaker does. **Device selection** is the manual step: open your Spotify app, tap the device picker, and choose `mammamiradio` so Spotify routes audio to go-librespot. A **playlist share link** is an alternative to the source picker, letting you paste a URL instead of browsing playlists interactively.
+> Each layer degrades independently. No credentials means demo tracks. No go-librespot means downloaded or local audio. No device selection means the station waits in degraded mode. The station always produces a stream. See [ARCHITECTURE.md](ARCHITECTURE.md#how-spotify-integration-works) for the full breakdown.
+
 ### Setup
 
 ```bash
@@ -245,7 +250,7 @@ Most station behavior lives in `radio.toml`.
 | Section | What it controls |
 | --- | --- |
 | `[station]` | Station name, language, theme |
-| `[playlist]` | Spotify playlist URL, shuffle behavior |
+| `[playlist]` | Spotify playlist URL, source selection, shuffle behavior |
 | `[pacing]` | Songs between banter, songs between ads, spots per ad break, lookahead |
 | `[[hosts]]` | Host names, Edge voices, style/personality |
 | `[audio]` | Sample rate, channels, bitrate, FIFO path, go-librespot settings, Claude model |
@@ -278,7 +283,9 @@ The Home Assistant token is never stored in `radio.toml`. Set it via `HA_TOKEN` 
 | `/api/playlist/move_to_next` | POST | Admin | Move track to position 0 in upcoming |
 | `/api/search` | GET | Admin | Search Spotify for tracks |
 | `/api/playlist/add` | POST | Admin | Add a track to the playlist |
-| `/api/playlist/load` | POST | Admin | Load a Spotify playlist by URL |
+| `/api/playlist/load` | POST | Admin | Load a Spotify playlist by URL (legacy compatibility) |
+| `/api/spotify/source-options` | GET | Admin | Available sources: user playlists, Liked Songs |
+| `/api/spotify/source/select` | POST | Admin | Switch source to playlist, liked_songs, or URL |
 
 ## Admin access
 

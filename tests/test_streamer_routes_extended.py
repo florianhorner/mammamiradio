@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import threading
 import time
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -18,6 +20,11 @@ from mammamiradio.streamer import LiveStreamHub, router
 TOML_PATH = str(Path(__file__).parent.parent / "radio.toml")
 
 
+def _basic_auth_header(username: str = "admin", password: str = "secret") -> dict[str, str]:
+    token = base64.b64encode(f"{username}:{password}".encode()).decode("ascii")
+    return {"Authorization": f"Basic {token}"}
+
+
 def _make_test_app(*, admin_password: str = "", admin_token: str = "", is_addon: bool = False) -> FastAPI:
     app = FastAPI()
     app.include_router(router)
@@ -26,6 +33,8 @@ def _make_test_app(*, admin_password: str = "", admin_token: str = "", is_addon:
     config.admin_password = admin_password
     config.admin_token = admin_token
     config.is_addon = is_addon
+    config.cache_dir = Path("/tmp/mammamiradio-test-cache")
+    config.cache_dir.mkdir(parents=True, exist_ok=True)
 
     state = StationState(
         playlist=[
@@ -37,6 +46,7 @@ def _make_test_app(*, admin_password: str = "", admin_token: str = "", is_addon:
 
     app.state.queue = asyncio.Queue()
     app.state.skip_event = asyncio.Event()
+    app.state.source_switch_lock = asyncio.Lock()
     app.state.stream_hub = LiveStreamHub()
     app.state.station_state = state
     app.state.config = config
@@ -318,6 +328,348 @@ async def test_add_track_missing_spotify_id():
     assert resp.json()["ok"] is False
 
 
+@pytest.mark.asyncio
+async def test_source_options_returns_headless_fallback():
+    app = _make_test_app(is_addon=True)
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.get("/api/spotify/source-options")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ok"] is True
+    assert body["capabilities"]["supports_user_sources"] is False
+
+
+@pytest.mark.asyncio
+async def test_source_options_returns_playlists_when_available():
+    app = _make_test_app()
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    with patch(
+        "mammamiradio.streamer.list_user_playlists",
+        return_value=[{"id": "abc", "label": "Roadtrip", "track_count": 12}],
+    ):
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            resp = await client.get("/api/spotify/source-options")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ok"] is True
+    assert body["playlists"][0]["id"] == "abc"
+
+
+@pytest.mark.asyncio
+async def test_source_select_success_swaps_playlist_and_persists():
+    app = _make_test_app()
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    new_tracks = [Track(title="Roadtrip", artist="Artist", duration_ms=180_000, spotify_id="new1")]
+    with (
+        patch(
+            "mammamiradio.streamer.load_explicit_source",
+            return_value=(
+                new_tracks,
+                MagicMock(kind="playlist", source_id="abc", url="", label="Roadtrip", track_count=1, selected_at=1.0),
+            ),
+        ),
+        patch("mammamiradio.streamer.write_persisted_source") as write_mock,
+    ):
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            resp = await client.post("/api/spotify/source/select", json={"kind": "playlist", "source_id": "abc"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ok"] is True
+    assert app.state.station_state.playlist[0].title == "Roadtrip"
+    write_mock.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_source_select_failure_keeps_previous_playlist():
+    app = _make_test_app()
+    original_title = app.state.station_state.playlist[0].title
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    with patch("mammamiradio.streamer.load_explicit_source", side_effect=Exception("boom")):
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            resp = await client.post("/api/spotify/source/select", json={"kind": "playlist", "source_id": "abc"})
+    assert resp.status_code == 200
+    assert resp.json()["ok"] is False
+    assert app.state.station_state.playlist[0].title == original_title
+
+
+@pytest.mark.asyncio
+async def test_playlist_load_compatibility_wrapper_uses_url_selection():
+    app = _make_test_app()
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    new_tracks = [Track(title="From URL", artist="Artist", duration_ms=180_000, spotify_id="new1")]
+    with (
+        patch(
+            "mammamiradio.streamer.load_explicit_source",
+            return_value=(
+                new_tracks,
+                MagicMock(
+                    kind="url",
+                    source_id="abc",
+                    url="https://open.spotify.com/playlist/abc",
+                    label="From URL",
+                    track_count=1,
+                    selected_at=1.0,
+                ),
+            ),
+        ) as load_mock,
+        patch("mammamiradio.streamer.write_persisted_source"),
+    ):
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            resp = await client.post("/api/playlist/load", json={"url": "https://open.spotify.com/playlist/abc"})
+    assert resp.status_code == 200
+    assert resp.json()["ok"] is True
+    source_arg = load_mock.call_args.args[1]
+    assert source_arg.kind == "url"
+
+
+# ---------------------------------------------------------------------------
+# Source selection — immediate cutover, URL cleanup, capability enforcement
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_source_select_purges_queue_and_skips():
+    app = _make_test_app()
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    # Seed the queue with a fake segment
+    seg = Segment(type=SegmentType.MUSIC, path=Path("/tmp/fake-seg.mp3"), duration_sec=10.0)
+    app.state.queue.put_nowait(seg)
+    app.state.station_state.now_streaming = {"type": "music", "label": "Old Song", "started": time.time()}
+
+    new_tracks = [Track(title="New", artist="A", duration_ms=180_000, spotify_id="n1")]
+    with (
+        patch(
+            "mammamiradio.streamer.load_explicit_source",
+            return_value=(
+                new_tracks,
+                MagicMock(kind="playlist", source_id="abc", url="", label="New PL", track_count=1, selected_at=1.0),
+            ),
+        ),
+        patch("mammamiradio.streamer.write_persisted_source"),
+    ):
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            resp = await client.post("/api/spotify/source/select", json={"kind": "playlist", "source_id": "abc"})
+    assert resp.status_code == 200
+    assert resp.json()["ok"] is True
+    assert app.state.queue.empty()
+    assert app.state.skip_event.is_set()
+
+
+@pytest.mark.asyncio
+async def test_source_select_no_skip_when_nothing_streaming():
+    app = _make_test_app()
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    app.state.station_state.now_streaming = {}
+
+    new_tracks = [Track(title="New", artist="A", duration_ms=180_000, spotify_id="n1")]
+    with (
+        patch(
+            "mammamiradio.streamer.load_explicit_source",
+            return_value=(
+                new_tracks,
+                MagicMock(kind="playlist", source_id="abc", url="", label="PL", track_count=1, selected_at=1.0),
+            ),
+        ),
+        patch("mammamiradio.streamer.write_persisted_source"),
+    ):
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            resp = await client.post("/api/spotify/source/select", json={"kind": "playlist", "source_id": "abc"})
+    assert resp.json()["ok"] is True
+    assert not app.state.skip_event.is_set()
+
+
+@pytest.mark.asyncio
+async def test_source_select_clears_stale_url():
+    app = _make_test_app()
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    app.state.config.playlist.spotify_url = "https://open.spotify.com/playlist/old"
+
+    new_tracks = [Track(title="Liked", artist="A", duration_ms=180_000, spotify_id="n1")]
+    with (
+        patch(
+            "mammamiradio.streamer.load_explicit_source",
+            return_value=(
+                new_tracks,
+                MagicMock(
+                    kind="liked_songs",
+                    source_id="liked_songs",
+                    url="",
+                    label="Liked Songs",
+                    track_count=1,
+                    selected_at=1.0,
+                ),
+            ),
+        ),
+        patch("mammamiradio.streamer.write_persisted_source"),
+    ):
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            resp = await client.post("/api/spotify/source/select", json={"kind": "liked_songs"})
+    assert resp.json()["ok"] is True
+    assert app.state.config.playlist.spotify_url == ""
+
+
+@pytest.mark.asyncio
+async def test_source_select_rejects_playlist_in_addon_mode():
+    app = _make_test_app(is_addon=True)
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    original_playlist = list(app.state.station_state.playlist)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.post("/api/spotify/source/select", json={"kind": "playlist", "source_id": "abc"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ok"] is False
+    assert "URL loading" in body["error"]
+    assert app.state.station_state.playlist == original_playlist
+
+
+@pytest.mark.asyncio
+async def test_source_select_rejects_liked_songs_in_addon_mode():
+    app = _make_test_app(is_addon=True)
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.post("/api/spotify/source/select", json={"kind": "liked_songs"})
+    assert resp.json()["ok"] is False
+    assert "URL loading" in resp.json()["error"]
+
+
+@pytest.mark.asyncio
+async def test_source_select_allows_url_in_addon_mode():
+    app = _make_test_app(is_addon=True)
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    new_tracks = [Track(title="URL Track", artist="A", duration_ms=180_000, spotify_id="u1")]
+    with (
+        patch(
+            "mammamiradio.streamer.load_explicit_source",
+            return_value=(
+                new_tracks,
+                MagicMock(
+                    kind="url",
+                    source_id="",
+                    url="https://open.spotify.com/playlist/xyz",
+                    label="URL PL",
+                    track_count=1,
+                    selected_at=1.0,
+                ),
+            ),
+        ),
+        patch("mammamiradio.streamer.write_persisted_source"),
+    ):
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            resp = await client.post(
+                "/api/spotify/source/select",
+                json={"kind": "url", "url": "https://open.spotify.com/playlist/xyz"},
+            )
+    assert resp.json()["ok"] is True
+
+
+@pytest.mark.asyncio
+async def test_playlist_load_purges_queue_and_skips():
+    app = _make_test_app()
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    seg = Segment(type=SegmentType.MUSIC, path=Path("/tmp/fake-seg2.mp3"), duration_sec=10.0)
+    app.state.queue.put_nowait(seg)
+    app.state.station_state.now_streaming = {"type": "music", "label": "Playing", "started": time.time()}
+
+    new_tracks = [Track(title="URL Track", artist="A", duration_ms=180_000, spotify_id="u1")]
+    with (
+        patch(
+            "mammamiradio.streamer.load_explicit_source",
+            return_value=(
+                new_tracks,
+                MagicMock(
+                    kind="url",
+                    source_id="",
+                    url="https://open.spotify.com/playlist/abc",
+                    label="URL PL",
+                    track_count=1,
+                    selected_at=1.0,
+                ),
+            ),
+        ),
+        patch("mammamiradio.streamer.write_persisted_source"),
+    ):
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            resp = await client.post("/api/playlist/load", json={"url": "https://open.spotify.com/playlist/abc"})
+    assert resp.json()["ok"] is True
+    assert app.state.queue.empty()
+    assert app.state.skip_event.is_set()
+
+
+@pytest.mark.asyncio
+async def test_source_select_persistence_failure_nonfatal():
+    app = _make_test_app()
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    new_tracks = [Track(title="New", artist="A", duration_ms=180_000, spotify_id="n1")]
+    with (
+        patch(
+            "mammamiradio.streamer.load_explicit_source",
+            return_value=(
+                new_tracks,
+                MagicMock(kind="playlist", source_id="abc", url="", label="PL", track_count=1, selected_at=1.0),
+            ),
+        ),
+        patch("mammamiradio.streamer.write_persisted_source", side_effect=OSError("disk full")),
+    ):
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            resp = await client.post("/api/spotify/source/select", json={"kind": "playlist", "source_id": "abc"})
+    assert resp.json()["ok"] is True
+    assert app.state.station_state.playlist[0].title == "New"
+
+
+@pytest.mark.asyncio
+async def test_source_select_requests_are_serialized():
+    app = _make_test_app()
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    load_started = asyncio.Event()
+    release_first = threading.Event()
+    call_order: list[str] = []
+    loop = asyncio.get_running_loop()
+
+    first_tracks = [Track(title="First", artist="A", duration_ms=180_000, spotify_id="first")]
+    second_tracks = [Track(title="Second", artist="B", duration_ms=180_000, spotify_id="second")]
+
+    def fake_load_explicit_source(_config, source):
+        call_order.append(source.source_id)
+        if source.source_id == "first":
+            loop.call_soon_threadsafe(load_started.set)
+            release_first.wait()
+            return (
+                first_tracks,
+                MagicMock(kind="playlist", source_id="first", url="", label="First", track_count=1, selected_at=1.0),
+            )
+        return (
+            second_tracks,
+            MagicMock(kind="playlist", source_id="second", url="", label="Second", track_count=1, selected_at=2.0),
+        )
+
+    with (
+        patch("mammamiradio.streamer.load_explicit_source", side_effect=fake_load_explicit_source),
+        patch("mammamiradio.streamer.write_persisted_source") as write_mock,
+    ):
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            first_task = asyncio.create_task(
+                client.post("/api/spotify/source/select", json={"kind": "playlist", "source_id": "first"})
+            )
+            await asyncio.wait_for(load_started.wait(), timeout=1)
+            second_task = asyncio.create_task(
+                client.post("/api/spotify/source/select", json={"kind": "playlist", "source_id": "second"})
+            )
+            await asyncio.sleep(0.05)
+            assert call_order == ["first"]
+            release_first.set()
+            first_resp, second_resp = await asyncio.gather(first_task, second_task)
+
+    assert first_resp.status_code == 200
+    assert second_resp.status_code == 200
+    assert first_resp.json()["ok"] is True
+    assert second_resp.json()["ok"] is True
+    assert call_order == ["first", "second"]
+    assert app.state.station_state.playlist[0].title == "Second"
+    assert app.state.station_state.playlist_source.source_id == "second"
+    assert write_mock.call_count == 2
+
+
 # ---------------------------------------------------------------------------
 # Search tracks
 # ---------------------------------------------------------------------------
@@ -381,7 +733,23 @@ async def test_load_playlist_success():
     app = _make_test_app()
     new_tracks = [Track(title="New A", artist="NA", duration_ms=200_000, spotify_id="na1")]
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
-    with patch("mammamiradio.playlist.fetch_playlist", return_value=new_tracks):
+    with (
+        patch(
+            "mammamiradio.streamer.load_explicit_source",
+            return_value=(
+                new_tracks,
+                MagicMock(
+                    kind="url",
+                    source_id="xyz",
+                    url="https://open.spotify.com/playlist/xyz",
+                    label="New A",
+                    track_count=1,
+                    selected_at=1.0,
+                ),
+            ),
+        ),
+        patch("mammamiradio.streamer.write_persisted_source"),
+    ):
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
             resp = await client.post("/api/playlist/load", json={"url": "https://open.spotify.com/playlist/xyz"})
     assert resp.status_code == 200
@@ -405,7 +773,7 @@ async def test_load_playlist_no_url():
 async def test_load_playlist_fetch_failure():
     app = _make_test_app()
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
-    with patch("mammamiradio.playlist.fetch_playlist", side_effect=Exception("API error")):
+    with patch("mammamiradio.streamer.load_explicit_source", side_effect=Exception("API error")):
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
             resp = await client.post("/api/playlist/load", json={"url": "https://spotify.com/playlist/bad"})
     assert resp.status_code == 200
@@ -466,6 +834,53 @@ async def test_hassio_ingress_spoofed_external():
 
 
 @pytest.mark.asyncio
+async def test_basic_auth_mutation_requires_same_origin_or_csrf():
+    app = _make_test_app(admin_password="secret")
+    transport = httpx.ASGITransport(app=app, client=("10.0.0.1", 9999))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.post("/api/shuffle", headers=_basic_auth_header())
+    assert resp.status_code == 403
+    assert "Cross-site admin write blocked" in resp.text
+
+
+@pytest.mark.asyncio
+async def test_basic_auth_mutation_allows_same_origin():
+    app = _make_test_app(admin_password="secret")
+    transport = httpx.ASGITransport(app=app, client=("10.0.0.1", 9999))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.post(
+            "/api/shuffle",
+            headers={**_basic_auth_header(), "Origin": "http://testserver"},
+        )
+    assert resp.status_code == 200
+    assert resp.json()["ok"] is True
+
+
+@pytest.mark.asyncio
+async def test_basic_auth_mutation_allows_csrf_token_without_origin():
+    app = _make_test_app(admin_password="secret")
+    transport = httpx.ASGITransport(app=app, client=("10.0.0.1", 9999))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        dashboard = await client.get("/", headers=_basic_auth_header())
+        assert dashboard.status_code == 200
+        resp = await client.post(
+            "/api/shuffle",
+            headers={**_basic_auth_header(), "X-Radio-CSRF-Token": app.state.csrf_token},
+        )
+    assert resp.status_code == 200
+    assert resp.json()["ok"] is True
+
+
+@pytest.mark.asyncio
+async def test_token_auth_mutation_skips_csrf_requirement():
+    app = _make_test_app(admin_token="tok-123")
+    transport = httpx.ASGITransport(app=app, client=("10.0.0.1", 9999))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.post("/api/shuffle", headers={"X-Radio-Admin-Token": "tok-123"})
+    assert resp.status_code == 200
+
+
+@pytest.mark.asyncio
 async def test_token_auth_on_loopback_no_password():
     """Token-only auth: loopback should be trusted even with wrong token."""
     app = _make_test_app(admin_token="tok-123")
@@ -516,6 +931,18 @@ async def test_stream_returns_audio_headers():
             assert resp.headers["content-type"] == "audio/mpeg"
             assert "icy-name" in resp.headers
             assert "icy-br" in resp.headers
+
+
+@pytest.mark.asyncio
+async def test_listener_page_registers_service_worker_inside_main_script():
+    app = _make_test_app()
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.get("/listen")
+
+    assert resp.status_code == 200
+    assert "navigator.serviceWorker.register(_base + '/static/sw.js')" in resp.text
+    assert "</script>\n<script>\nif ('serviceWorker' in navigator)" not in resp.text
 
 
 # ---------------------------------------------------------------------------
