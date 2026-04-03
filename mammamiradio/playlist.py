@@ -47,7 +47,12 @@ def _extract_playlist_id(url: str) -> str | None:
 
 
 def _track_from_spotify_item(item: dict) -> Track | None:
-    track = item.get("track") if isinstance(item, dict) else None
+    if not isinstance(item, dict):
+        return None
+
+    # Spotify playlist items can arrive either as {"track": {...}} or
+    # as {"item": {...}} depending on the endpoint/response shape.
+    track = item.get("track") or item.get("item")
     if not track or not track.get("id"):
         return None
     artist = track["artists"][0]["name"] if track.get("artists") else "Unknown"
@@ -169,21 +174,25 @@ def read_persisted_source(cache_dir: Path) -> PlaylistSource | None:
         payload = json.loads(path.read_text())
     except FileNotFoundError:
         return None
-    except (OSError, json.JSONDecodeError, TypeError, ValueError):
+    except (OSError, json.JSONDecodeError):
         logger.warning("Persisted playlist source is unreadable: %s", path)
         return None
 
     if not isinstance(payload, dict) or not payload.get("kind"):
         return None
 
-    return PlaylistSource(
-        kind=str(payload.get("kind", "")),
-        source_id=str(payload.get("source_id", "")),
-        url=str(payload.get("url", "")),
-        label=str(payload.get("label", "")),
-        track_count=int(payload.get("track_count", 0) or 0),
-        selected_at=float(payload.get("selected_at", 0.0) or 0.0),
-    )
+    try:
+        return PlaylistSource(
+            kind=str(payload.get("kind", "")),
+            source_id=str(payload.get("source_id", "")),
+            url=str(payload.get("url", "")),
+            label=str(payload.get("label", "")),
+            track_count=int(payload.get("track_count", 0) or 0),
+            selected_at=float(payload.get("selected_at", 0.0) or 0.0),
+        )
+    except (TypeError, ValueError):
+        logger.warning("Persisted playlist source has invalid fields: %s", path)
+        return None
 
 
 def write_persisted_source(cache_dir: Path, source: PlaylistSource) -> None:
@@ -243,11 +252,12 @@ def list_user_playlists(config: StationConfig, limit: int = 50) -> list[dict]:
         for item in results.get("items", []):
             if not item or not item.get("id"):
                 continue
+            track_total = item.get("tracks", {}).get("total") or item.get("items", {}).get("total") or 0
             playlists.append(
                 {
                     "id": item["id"],
                     "label": item.get("name") or "Spotify playlist",
-                    "track_count": item.get("tracks", {}).get("total", 0),
+                    "track_count": track_total,
                 }
             )
         results = sp.next(results) if results.get("next") else None

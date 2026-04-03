@@ -13,6 +13,7 @@ from mammamiradio.playlist import (
     DEMO_TRACKS,
     fetch_playlist,
     fetch_startup_playlist,
+    list_user_playlists,
     load_explicit_source,
     read_persisted_source,
 )
@@ -45,9 +46,9 @@ def _make_spotify_track(name: str, artist: str, track_id: str, duration_ms: int 
 
 
 def _make_spotify_item_track(name: str, artist: str, track_id: str, duration_ms: int = 200000):
-    """Build a Spotify playlist item that returns data under `item`."""
+    """Build a Spotify playlist item that returns data under `track`."""
     return {
-        "item": {
+        "track": {
             "name": name,
             "artists": [{"name": artist}],
             "duration_ms": duration_ms,
@@ -316,3 +317,23 @@ def test_read_persisted_source_ignores_invalid_numeric_fields(tmp_path):
     (tmp_path / "playlist_source.json").write_text(json.dumps(payload))
 
     assert read_persisted_source(tmp_path) is None
+
+
+def test_list_user_playlists_reads_item_totals_from_current_spotify_shape(config_with_spotify):
+    mock_sp = MagicMock()
+    mock_sp.current_user_playlists.return_value = {
+        "items": [
+            {"id": "abc123", "name": "mamma mi radio", "items": {"total": 50}},
+            {"id": "def456", "name": "Late Night Drive", "tracks": {"total": 12}},
+        ],
+        "next": None,
+    }
+    mock_sp.next.return_value = None
+
+    with patch("mammamiradio.playlist.get_spotify_client", return_value=mock_sp):
+        playlists = list_user_playlists(config_with_spotify)
+
+    assert playlists == [
+        {"id": "abc123", "label": "mamma mi radio", "track_count": 50},
+        {"id": "def456", "label": "Late Night Drive", "track_count": 12},
+    ]
