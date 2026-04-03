@@ -1658,12 +1658,13 @@ function renderSourceOptions(payload) {
   const playlistBtn = document.getElementById('playlist-select-btn');
   const urlInput = document.getElementById('playlist-url');
   const urlBtn = document.getElementById('playlist-url-btn');
-  const canUsePicker = !!(payload.ok && payload.capabilities && payload.capabilities.supports_user_sources);
-  const canUseUrlFallback = !!(payload.capabilities && payload.capabilities.supports_url_source);
+  const caps = payload.capabilities || {};
+  const canUsePicker = !!(payload.ok && caps.supports_user_sources);
+  const canUseUrlFallback = !!caps.supports_url_source;
 
   summary.textContent = canUsePicker
     ? 'Connect Spotify, choose one of your playlists, use Liked Songs, or keep the advanced playlist-link fallback.'
-    : (payload.capabilities.reason || 'Spotify source picker is not available in this run mode yet. Use the advanced playlist link fallback.');
+    : (caps.reason || 'Spotify source picker is not available in this run mode yet. Use the advanced playlist link fallback.');
 
   likedBtn.disabled = !canUsePicker;
   playlistBtn.disabled = !canUsePicker;

@@ -47,7 +47,10 @@ async def test_source_options_disable_picker_when_spotify_auth_is_unavailable():
     app = _make_test_app()
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
 
-    with patch("mammamiradio.streamer.list_user_playlists", side_effect=Exception("No client_id")):
+    with (
+        patch("mammamiradio.streamer._supports_user_sources", return_value=True),
+        patch("mammamiradio.streamer.list_user_playlists", side_effect=Exception("No client_id")),
+    ):
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
             resp = await client.get("/api/spotify/source-options")
 

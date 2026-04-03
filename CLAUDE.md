@@ -57,7 +57,7 @@ AI-powered Italian radio station engine. Python 3.11+, FastAPI, FFmpeg, optional
 
 ## Runtime behavior
 
-- Startup loads `radio.toml`, validates config, restores persisted source selection from `cache/playlist_source.json`, fetches the playlist, starts go-librespot if possible, then launches producer and playback tasks.
+- Startup loads `radio.toml`, validates config, starts go-librespot if possible, restores persisted source selection from `cache/playlist_source.json`, fetches the playlist, then launches producer and playback tasks.
 - If Spotify credentials are missing, the app uses a built-in demo playlist.
 - If go-librespot is unavailable or not authenticated, music falls back to local `music/` files, then `yt-dlp`, then placeholder tones.
 - If Anthropic fails, banter and ad generation fall back to short stock copy.

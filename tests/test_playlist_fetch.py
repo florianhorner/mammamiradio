@@ -2,13 +2,20 @@
 
 from __future__ import annotations
 
+import json
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from mammamiradio.config import load_config
 from mammamiradio.models import PlaylistSource
-from mammamiradio.playlist import DEMO_TRACKS, fetch_playlist, fetch_startup_playlist, load_explicit_source
+from mammamiradio.playlist import (
+    DEMO_TRACKS,
+    fetch_playlist,
+    fetch_startup_playlist,
+    load_explicit_source,
+    read_persisted_source,
+)
 
 
 @pytest.fixture()
@@ -29,6 +36,18 @@ def _make_spotify_track(name: str, artist: str, track_id: str, duration_ms: int 
     """Build a Spotify API track item dict."""
     return {
         "track": {
+            "name": name,
+            "artists": [{"name": artist}],
+            "duration_ms": duration_ms,
+            "id": track_id,
+        }
+    }
+
+
+def _make_spotify_item_track(name: str, artist: str, track_id: str, duration_ms: int = 200000):
+    """Build a Spotify playlist item that returns data under `item`."""
+    return {
+        "item": {
             "name": name,
             "artists": [{"name": artist}],
             "duration_ms": duration_ms,
@@ -106,6 +125,26 @@ def test_fetches_playlist_paginated(config_with_spotify):
     assert len(result) == 2
     assert result[0].title == "Track 1"
     assert result[1].title == "Track 2"
+
+
+def test_fetches_playlist_when_spotify_returns_item_shape(config_with_spotify):
+    mock_sp = MagicMock()
+    mock_sp.playlist.return_value = {"name": "Roadtrip Italia"}
+    mock_sp.playlist_tracks.return_value = {
+        "items": [
+            _make_spotify_item_track("OSSESSIONE", "Samurai Jay", "track1"),
+            _make_spotify_item_track("DAVVERODAVVERO", "Artie 5ive", "track2"),
+        ],
+        "next": None,
+    }
+    mock_sp.next.return_value = None
+
+    with patch("mammamiradio.playlist.get_spotify_client", return_value=mock_sp):
+        result = fetch_playlist(config_with_spotify)
+
+    assert len(result) == 2
+    assert result[0].title == "OSSESSIONE"
+    assert result[1].spotify_id == "track2"
 
 
 # --- Playlist fetch fails → falls back to liked songs ---
@@ -254,11 +293,26 @@ def test_fetch_startup_playlist_restores_persisted_source(config_with_spotify):
         "items": [_make_spotify_track("Canzone Uno", "Artista A", "id1")],
         "next": None,
     }
-    persisted = PlaylistSource(kind="playlist", source_id="abc123", label="Roadtrip Italia")
+    persisted = PlaylistSource(kind="playlist", source_id="persisted999", label="Roadtrip Italia")
 
     with patch("mammamiradio.playlist.get_spotify_client", return_value=mock_sp):
         tracks, source, error = fetch_startup_playlist(config_with_spotify, persisted)
 
     assert len(tracks) == 1
     assert source.kind == "playlist"
+    assert source.source_id == "persisted999"
     assert error == ""
+    mock_sp.playlist_tracks.assert_called_once_with("persisted999")
+
+
+def test_read_persisted_source_ignores_invalid_numeric_fields(tmp_path):
+    payload = {
+        "kind": "playlist",
+        "source_id": "abc123",
+        "label": "Roadtrip Italia",
+        "track_count": "not-a-number",
+        "selected_at": 1.0,
+    }
+    (tmp_path / "playlist_source.json").write_text(json.dumps(payload))
+
+    assert read_persisted_source(tmp_path) is None
