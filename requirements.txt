@@ -142,9 +142,9 @@ annotated-types==0.7.0 \
     --hash=sha256:1f02e8b43a8fbbc3f3e0d4f0f4bfc8131bcb4eebe8849b8e5c773f3a1c582a53 \
     --hash=sha256:aff07c09a53a08bc8cfccb9c85b05f1aa9a2a6f23728d790723543408344ce89
     # via pydantic
-anthropic==0.86.0 \
-    --hash=sha256:60023a7e879aa4fbb1fed99d487fe407b2ebf6569603e5047cfe304cebdaa0e5 \
-    --hash=sha256:9d2bbd339446acce98858c5627d33056efe01f70435b22b63546fe7edae0cd57
+anthropic==0.88.0 \
+    --hash=sha256:71898b32332bc75d9739bc10095288d40a29605da6d00da2fe832b1aa036552f \
+    --hash=sha256:f4c7f6863d08c869913516f08d658fe53caaf8bcc4fbea3218df343d2a876c58
     # via mammamiradio (pyproject.toml)
 anyio==4.13.0 \
     --hash=sha256:08b310f9e24a9594186fd75b4f73f4a4152069e3853f1ed8bfbf58369f4ad708 \
@@ -313,9 +313,9 @@ edge-tts==7.2.8 \
     --hash=sha256:361fe48ce7ef613adbe30f664e3765dd71029c6cb57427279eff8ad6df2eb211 \
     --hash=sha256:fcf185a0d527a0d2d003f9d5841facc1d5e0e7b3b88d5df9c32990402c6b8cd0
     # via mammamiradio (pyproject.toml)
-fastapi==0.135.2 \
-    --hash=sha256:0af0447d541867e8db2a6a25c23a8c4bd80e2394ac5529bd87501bbb9e240ca5 \
-    --hash=sha256:88a832095359755527b7f63bb4c6bc9edb8329a026189eed83d6c1afcf419d56
+fastapi==0.135.3 \
+    --hash=sha256:9b0f590c813acd13d0ab43dd8494138eb58e484bfac405db1f3187cfc5810d98 \
+    --hash=sha256:bd6d7caf1a2bdd8d676843cdcd2287729572a1ef524fc4d65c17ae002a1be654
     # via mammamiradio (pyproject.toml)
 frozenlist==1.8.0 \
     --hash=sha256:0325024fe97f94c41c08872db482cf8ac4800d80e79222c6b0b7b162d5b13686 \
