@@ -434,6 +434,59 @@
     white-space: pre-wrap;
     color: var(--cream-dk);
   }
+  .cred-form {
+    margin-top: 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .cred-row {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .cred-label {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--muted);
+  }
+  .cred-input {
+    background: rgba(0,0,0,0.3);
+    border: 1px solid rgba(176, 164, 148, 0.25);
+    border-radius: 6px;
+    padding: 7px 10px;
+    color: var(--cream);
+    font-size: 13px;
+    font-family: 'SF Mono', 'Fira Code', monospace;
+    width: 100%;
+    box-sizing: border-box;
+    outline: none;
+  }
+  .cred-input:focus {
+    border-color: rgba(196, 101, 74, 0.6);
+  }
+  .cred-save-btn {
+    margin-top: 4px;
+    align-self: flex-start;
+    background: var(--terra);
+    color: #fff;
+    border: none;
+    border-radius: 6px;
+    padding: 7px 18px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    letter-spacing: 0.02em;
+  }
+  .cred-save-btn:hover { background: #b55843; }
+  .cred-status {
+    font-size: 12px;
+    color: var(--muted);
+    margin-left: 8px;
+    align-self: center;
+  }
   .setup-actions {
     display: flex;
     justify-content: space-between;
@@ -1331,27 +1384,106 @@ function renderRunModes() {
   '<div class="setup-note">We are not changing your runtime here. This just picks the right setup instructions so the next screens stop talking in riddles.</div>';
 }
 
+function renderCredentialForm(key) {
+  const fields = {
+    spotify: [
+      { id: 'cred-spotify-id', name: 'spotify_client_id', label: 'Client ID', type: 'text' },
+      { id: 'cred-spotify-secret', name: 'spotify_client_secret', label: 'Client Secret', type: 'password' },
+    ],
+    anthropic: [
+      { id: 'cred-anthropic-key', name: 'anthropic_api_key', label: 'API Key', type: 'password' },
+    ],
+    playlist: [
+      { id: 'cred-playlist-url', name: 'playlist_spotify_url', label: 'Spotify Playlist URL', type: 'text' },
+    ],
+  };
+  const defs = fields[key];
+  if (!defs) return '';
+  let html = '<div class="cred-form" id="cred-form-' + key + '">';
+  defs.forEach(f => {
+    html += '<div class="cred-row">' +
+      '<label class="cred-label" for="' + f.id + '">' + escHtml(f.label) + '</label>' +
+      '<input class="cred-input" id="' + f.id + '" type="' + f.type + '" autocomplete="off" placeholder="Paste here" />' +
+    '</div>';
+  });
+  html += '<button class="cred-save-btn" onclick="saveCredentials(\'' + key + '\')">Save</button>' +
+    '<span class="cred-status" id="cred-status-' + key + '"></span>' +
+  '</div>';
+  return html;
+}
+
+async function saveCredentials(key) {
+  const fieldMap = {
+    spotify: ['cred-spotify-id', 'cred-spotify-secret'],
+    anthropic: ['cred-anthropic-key'],
+    playlist: ['cred-playlist-url'],
+  };
+  const nameMap = {
+    'cred-spotify-id': 'spotify_client_id',
+    'cred-spotify-secret': 'spotify_client_secret',
+    'cred-anthropic-key': 'anthropic_api_key',
+    'cred-playlist-url': 'playlist_spotify_url',
+  };
+  const ids = fieldMap[key] || [];
+  const payload = {};
+  for (const id of ids) {
+    const el = document.getElementById(id);
+    if (el && el.value.trim()) payload[nameMap[id]] = el.value.trim();
+  }
+  if (!Object.keys(payload).length) {
+    const s = document.getElementById('cred-status-' + key);
+    if (s) s.textContent = 'Nothing entered.';
+    return;
+  }
+  const statusEl = document.getElementById('cred-status-' + key);
+  if (statusEl) statusEl.textContent = 'Saving...';
+  try {
+    const r = await fetch(_base + '/api/credentials', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(payload),
+    });
+    const data = await r.json();
+    if (data.ok) {
+      if (statusEl) statusEl.textContent = 'Saved. Reloading setup...';
+      setTimeout(() => openSetupGate(true), 800);
+    } else {
+      if (statusEl) statusEl.textContent = 'Error: ' + (data.error || 'unknown');
+    }
+  } catch (e) {
+    if (statusEl) statusEl.textContent = 'Request failed.';
+  }
+}
+
 function renderEssentials() {
   const modeId = selectedRunMode || setupState.detected_mode;
+  const isAddon = modeId === 'ha_addon';
   let html = '<div class="setup-grid">';
   (setupState.essentials || []).forEach(item => {
     const where = item.where && item.where[modeId] ? item.where[modeId] : 'your current config surface';
+    const isMissing = item.status === 'missing';
+    const showForm = isMissing && !isAddon && ['spotify', 'anthropic', 'playlist'].includes(item.key);
     html += '<div class="setup-card">' +
       '<div class="setup-badge ' + escHtml(item.status) + '">' + escHtml(statusBadgeLabel(item.status)) + '</div>' +
       '<h3>' + escHtml(item.label) + '</h3>' +
       '<p>' + escHtml(item.required_label) + '</p>' +
       '<div class="setup-meta">' +
         '<div><strong>What we found:</strong> ' + escHtml(item.summary) + '</div>' +
-        '<div><strong>Next action:</strong> ' + escHtml(item.next_action) + '</div>' +
-        '<div><strong>Where:</strong> ' + escHtml(where) + '</div>' +
+        (showForm
+          ? renderCredentialForm(item.key)
+          : '<div><strong>Next action:</strong> ' + escHtml(item.next_action) + '</div>' +
+            '<div><strong>Where:</strong> ' + escHtml(where) + '</div>'
+        ) +
         '<div><strong>If you skip it:</strong> ' + escHtml(item.skip_outcome) + '</div>' +
       '</div>' +
     '</div>';
   });
   html += '</div>';
-  html += '<div class="setup-note">If you change add-on options or env vars outside this page, restart the service first. Then come back here and click Re-check.</div>';
-  if (modeId === 'ha_addon' && setupState.addon_options_snippet) {
-    html += '<div class="setup-code">' + escHtml(setupState.addon_options_snippet) + '</div>';
+  if (isAddon) {
+    html += '<div class="setup-note">If you change add-on options or env vars outside this page, restart the service first. Then come back here and click Re-check.</div>';
+    if (setupState.addon_options_snippet) {
+      html += '<div class="setup-code">' + escHtml(setupState.addon_options_snippet) + '</div>';
+    }
   }
   return html;
 }

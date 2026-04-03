@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import ipaddress
 import logging
+import os
 import re as _re
 import secrets
 import time
@@ -582,6 +583,70 @@ async def update_pacing(request: Request, _: None = Depends(require_admin_access
         "songs_between_ads": config.pacing.songs_between_ads,
         "ad_spots_per_break": config.pacing.ad_spots_per_break,
     }
+
+
+@router.post("/api/credentials")
+async def save_credentials(request: Request, _: None = Depends(require_admin_access)):
+    """Write credentials to .env and apply them live without a restart."""
+    body = await request.json()
+    config = request.app.state.config
+
+    # Allowed keys and their mapping to env var name and live config attribute
+    allowed: dict[str, tuple[str, str | None]] = {
+        "spotify_client_id": ("SPOTIFY_CLIENT_ID", "spotify_client_id"),
+        "spotify_client_secret": ("SPOTIFY_CLIENT_SECRET", "spotify_client_secret"),
+        "anthropic_api_key": ("ANTHROPIC_API_KEY", "anthropic_api_key"),
+        "playlist_spotify_url": ("PLAYLIST_SPOTIFY_URL", None),
+    }
+
+    updates: dict[str, str] = {}
+    for field, (env_key, config_attr) in allowed.items():
+        if field not in body:
+            continue
+        value = str(body[field]).strip()
+        updates[env_key] = value
+        os.environ[env_key] = value
+        if config_attr:
+            setattr(config, config_attr, value)
+        else:
+            # playlist_spotify_url lives on a nested object
+            config.playlist.spotify_url = value
+
+    if not updates:
+        return {"ok": False, "error": "No recognised credential fields in request"}
+
+    # Atomically update .env file (create if missing)
+    env_path = Path(".env")
+    try:
+        existing = env_path.read_text() if env_path.exists() else ""
+    except OSError:
+        existing = ""
+
+    lines = existing.splitlines()
+    written: set[str] = set()
+    new_lines: list[str] = []
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("#") or "=" not in stripped:
+            new_lines.append(line)
+            continue
+        key = stripped.split("=", 1)[0].strip()
+        if key in updates:
+            new_lines.append(f'{key}="{updates[key]}"')
+            written.add(key)
+        else:
+            new_lines.append(line)
+
+    for key, value in updates.items():
+        if key not in written:
+            new_lines.append(f'{key}="{value}"')
+
+    tmp = env_path.with_suffix(".env.tmp")
+    tmp.write_text("\n".join(new_lines) + "\n")
+    tmp.replace(env_path)
+
+    logger.info("Credentials saved to .env: %s", ", ".join(updates.keys()))
+    return {"ok": True, "saved": list(updates.keys())}
 
 
 @router.post("/api/playlist/remove")
