@@ -29,10 +29,22 @@ def _estimate_duration(path: Path) -> float:
     return max(5.0, path.stat().st_size / (192 * 128))
 
 
-async def synthesize(text: str, voice: str, output_path: Path, *, rate: str = "+0%", pitch: str = "+0Hz") -> Path:
+async def synthesize(
+    text: str,
+    voice: str,
+    output_path: Path,
+    *,
+    rate: str | None = None,
+    pitch: str | None = None,
+) -> Path:
     """Render text with Edge TTS, then normalize it to station output settings."""
     try:
-        comm = edge_tts.Communicate(text, voice, rate=rate, pitch=pitch)
+        kwargs: dict[str, str] = {}
+        if rate:
+            kwargs["rate"] = rate
+        if pitch:
+            kwargs["pitch"] = pitch
+        comm = edge_tts.Communicate(text, voice, **kwargs)
         raw_path = output_path.with_suffix(".raw.mp3")
         await comm.save(str(raw_path))
 

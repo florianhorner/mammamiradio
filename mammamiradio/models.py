@@ -375,13 +375,13 @@ class Capabilities:
 
     @property
     def tier_label(self) -> str:
-        """Display name for the current tier."""
+        """Display name for the current tier — station language, not product language."""
         if self.spotify_connected and self.spotify_api and self.anthropic:
-            return "Full AI Radio"
+            return "Live Broadcast"
         if self.spotify_connected and self.spotify_api:
-            return "Your Music"
+            return "Your Station"
         if self.spotify_connected:
-            return "Your Music"
+            return "Your Station"
         if self.anthropic:
-            return "Demo Radio + AI Banter"
-        return "Demo Radio"
+            return "On Air"
+        return "On Air"

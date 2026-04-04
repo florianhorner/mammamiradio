@@ -261,11 +261,11 @@
   <a id="listener-link" href="/listen" class="listener-link">Open listener &rarr;</a>
 </div>
 
-<div class="tier-badge" id="tier-badge" data-tier="demo" aria-live="polite">Demo Radio</div>
+<div class="tier-badge" id="tier-badge" data-tier="demo" aria-live="polite">On Air</div>
 
 <!-- Radio dial (shown before first data, stays visible as ambient UI) -->
 <div class="radio-dial" id="radio-dial">
-  <div class="dial-label" id="dial-label">Tuning in...</div>
+  <div class="dial-label" id="dial-label">Searching for signal...</div>
   <div class="dial-band" onclick="togglePlay()">
     <div class="dial-ticks" id="dial-ticks"></div>
     <div class="dial-marks">
@@ -279,8 +279,8 @@
 
 <!-- Connect Spotify hero (when spotify_connected=false) — ABOVE now playing -->
 <div class="connect-hero" id="connect-card" style="display:none">
-  <h2>Connect Your Spotify</h2>
-  <div class="subtitle">Three taps and your music becomes a live Italian radio station.</div>
+  <h2>Make This Station Yours</h2>
+  <div class="subtitle">Your music. Your hosts. Your station.</div>
   <div class="connect-steps">
     <div class="connect-step">
       <div class="step-num">Step 1</div>
@@ -342,10 +342,10 @@
   <button class="btn btn-sm btn-ghost" onclick="doPurge()">Clear Buffer</button>
 </div>
 
-<!-- Unlock AI DJ (when anthropic=false) -->
+<!-- Bring hosts to life (when anthropic=false) -->
 <div class="card" id="unlock-ai" style="display:none">
-  <h3>Unlock AI DJ</h3>
-  <p>You're hearing pre-recorded hosts. Add an Anthropic API key for live AI-generated banter about your playlist, the weather, and your home.</p>
+  <h3>Bring the Hosts to Life</h3>
+  <p>Live banter, fake ads, dedications, and glorious Italian nonsense — generated just for your listening session.</p>
   <input class="input" id="anthropic-key" type="password" placeholder="Paste Anthropic API key" autocomplete="off">
   <button class="btn btn-sm" style="margin-top:8px" onclick="saveAnthropicKey()">Save</button>
   <span class="card-muted" id="anthropic-status"></span>
@@ -353,8 +353,8 @@
 
 <!-- Connect Home (when ha=false) -->
 <div class="card" id="connect-ha" style="display:none">
-  <h3>Connect Your Home</h3>
-  <p>Enable Home Assistant integration so your hosts reference real home state. Set <code>HA_TOKEN</code> and enable in <code>radio.toml</code>.</p>
+  <h3>Let the Hosts See Your Home</h3>
+  <p>The hosts can reference your lights, temperature, and who just walked in. Connect Home Assistant to make the station aware of your world.</p>
 </div>
 
 <!-- Advanced settings (hidden by default) -->
@@ -412,6 +412,156 @@ let firstDataReceived = false;
 let connectStartTime = null;
 let wasConnected = false;
 let _lastTier = null;
+
+// --- Radio Dial Controller ---
+const DEMO_FREQ = 94.7;
+const USER_FREQ = 101.3;
+let _dialFreq = 87.5;
+let _dialTarget = DEMO_FREQ;
+let _dialState = 'searching'; // searching | locking | locked | shifting
+let _dialAnimFrame = null;
+let _audioCtx = null;
+let _noiseGain = null;
+let _noiseSource = null;
+
+function _initDialTicks() {
+  const el = document.getElementById('dial-ticks');
+  if (!el || el.children.length) return;
+  for (let i = 0; i < 41; i++) el.appendChild(document.createElement('i'));
+}
+
+function _freqToPercent(f) {
+  return ((f - 87.5) / (108 - 87.5)) * 100;
+}
+
+function _setNeedle(freq) {
+  _dialFreq = freq;
+  const pct = Math.max(2, Math.min(98, _freqToPercent(freq)));
+  document.getElementById('dial-needle').style.left = pct + '%';
+  document.getElementById('dial-freq-val').textContent = freq.toFixed(1);
+}
+
+function _startStatic() {
+  if (_audioCtx) return;
+  try {
+    _audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    const bufSize = _audioCtx.sampleRate * 2;
+    const buf = _audioCtx.createBuffer(1, bufSize, _audioCtx.sampleRate);
+    const data = buf.getChannelData(0);
+    for (let i = 0; i < bufSize; i++) data[i] = Math.random() * 2 - 1;
+    _noiseSource = _audioCtx.createBufferSource();
+    _noiseSource.buffer = buf;
+    _noiseSource.loop = true;
+    const filter = _audioCtx.createBiquadFilter();
+    filter.type = 'bandpass';
+    filter.frequency.value = 800;
+    filter.Q.value = 0.5;
+    _noiseGain = _audioCtx.createGain();
+    _noiseGain.gain.value = 0.06;
+    _noiseSource.connect(filter).connect(_noiseGain).connect(_audioCtx.destination);
+    _noiseSource.start();
+  } catch (e) { /* Web Audio not available */ }
+}
+
+function _setStaticVolume(vol) {
+  if (_noiseGain) _noiseGain.gain.setTargetAtTime(vol, _audioCtx.currentTime, 0.1);
+}
+
+function _stopStatic() {
+  _setStaticVolume(0);
+  setTimeout(() => {
+    if (_noiseSource) { try { _noiseSource.stop(); } catch(e){} _noiseSource = null; }
+    if (_audioCtx) { _audioCtx.close(); _audioCtx = null; }
+    _noiseGain = null;
+  }, 500);
+}
+
+function _dialSeek() {
+  if (_dialState === 'searching') {
+    // Sweep back and forth, gradually approaching target
+    const jitter = (Math.random() - 0.5) * 12;
+    const approach = (_dialTarget - _dialFreq) * 0.08 + jitter * 0.3;
+    _setNeedle(Math.max(87.5, Math.min(108, _dialFreq + approach)));
+    _setStaticVolume(0.06 + Math.abs(_dialFreq - _dialTarget) * 0.003);
+    _dialAnimFrame = setTimeout(_dialSeek, 200 + Math.random() * 300);
+  }
+}
+
+function _dialLock(target, label, statusText) {
+  _dialState = 'locking';
+  _dialTarget = target;
+  const needle = document.getElementById('dial-needle');
+  needle.classList.remove('seeking');
+  needle.classList.add('locked');
+
+  // Overshoot then settle
+  const overshoot = target + (Math.random() > 0.5 ? 1.2 : -1.2);
+  _setNeedle(overshoot);
+  _setStaticVolume(0.04);
+
+  setTimeout(() => {
+    _setNeedle(target + 0.3);
+    _setStaticVolume(0.02);
+  }, 400);
+
+  setTimeout(() => {
+    _setNeedle(target);
+    _setStaticVolume(0);
+    _dialState = 'locked';
+    document.getElementById('dial-label').textContent = label;
+    document.getElementById('dial-status').textContent = statusText;
+    setTimeout(_stopStatic, 1500);
+  }, 800);
+}
+
+function _dialShiftTo(target, label, statusText) {
+  if (_dialState === 'shifting') return;
+  _dialState = 'shifting';
+  _startStatic();
+  _setStaticVolume(0.08);
+  const needle = document.getElementById('dial-needle');
+  needle.classList.remove('locked');
+  needle.classList.add('seeking');
+  document.getElementById('dial-status').textContent = 'Retuning...';
+
+  // Sweep to new frequency
+  let step = 0;
+  const steps = 6;
+  const from = _dialFreq;
+  const overshoot = target + (target > from ? 1.5 : -1.5);
+
+  function animate() {
+    step++;
+    if (step <= steps / 2) {
+      const t = step / (steps / 2);
+      _setNeedle(from + (overshoot - from) * t);
+      _setStaticVolume(0.08 - t * 0.02);
+    } else if (step <= steps) {
+      const t = (step - steps / 2) / (steps / 2);
+      _setNeedle(overshoot + (target - overshoot) * t);
+      _setStaticVolume(0.04 - t * 0.04);
+    }
+    if (step < steps) {
+      setTimeout(animate, 250);
+    } else {
+      _setNeedle(target);
+      needle.classList.remove('seeking');
+      needle.classList.add('locked');
+      _dialState = 'locked';
+      document.getElementById('dial-label').textContent = label;
+      document.getElementById('dial-status').textContent = statusText;
+      _stopStatic();
+    }
+  }
+  setTimeout(animate, 200);
+}
+
+// Initialize dial on load
+_initDialTicks();
+_startStatic();
+const _seekNeedle = document.getElementById('dial-needle');
+if (_seekNeedle) _seekNeedle.classList.add('seeking');
+_dialSeek();
 
 function escHtml(v) { return String(v ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 
@@ -491,21 +641,30 @@ function updateCards() {
   document.getElementById('unlock-ai').style.display = (c.spotify_connected && !c.anthropic) ? '' : 'none';
   document.getElementById('connect-ha').style.display = (c.spotify_connected && !c.ha) ? '' : 'none';
 
-  // Transition ceremony: demo -> connected
+  // Transition ceremony: demo -> connected (dial shifts to new frequency)
   if (c.spotify_connected && !wasConnected) {
     wasConnected = true;
-    const name = caps.spotify_username || '';
-    showTransition(name ? 'Benvenuto, ' + name + '!' : 'Benvenuto!', 2500);
+    const rawName = caps.spotify_username || '';
+    // Hide hash-like internal Spotify IDs — only show human-readable names
+    const name = (rawName.length > 20 && !/\s/.test(rawName)) ? '' : rawName;
+    _dialShiftTo(USER_FREQ, name || 'Your Music', 'Spotify connected');
+    setTimeout(() => showTransition(name ? 'Benvenuto, ' + name + '!' : 'Benvenuto!', 2500), 1600);
   }
 }
 
 function updateStatus(d) {
-  // Hide loading, show content
+  // Lock the dial on first data — signal found
   if (!firstDataReceived) {
     firstDataReceived = true;
-    document.getElementById('loading-state').style.display = 'none';
+    if (_dialAnimFrame) { clearTimeout(_dialAnimFrame); _dialAnimFrame = null; }
+    _dialLock(DEMO_FREQ, 'Radio Ital\u00EC', 'Signal locked');
     document.getElementById('now-playing').style.display = '';
     connectStartTime = Date.now();
+    // Auto-start stream on first click
+    if (!_wantsPlay) {
+      _wantsPlay = true;
+      setTimeout(_startStream, 1200); // start after dial locks
+    }
   }
 
   // Uptime

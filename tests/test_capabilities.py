@@ -33,31 +33,31 @@ def _state(**overrides):
 def test_tier_demo():
     c = Capabilities()
     assert c.tier == "demo"
-    assert c.tier_label == "Demo Radio"
+    assert c.tier_label == "On Air"
 
 
 def test_tier_demo_ai():
     c = Capabilities(anthropic=True)
     assert c.tier == "demo_ai"
-    assert c.tier_label == "Demo Radio + AI Banter"
+    assert c.tier_label == "On Air"
 
 
 def test_tier_your_music_basic():
     c = Capabilities(spotify_connected=True)
     assert c.tier == "your_music_basic"
-    assert c.tier_label == "Your Music"
+    assert c.tier_label == "Your Station"
 
 
 def test_tier_your_music_full():
     c = Capabilities(spotify_connected=True, spotify_api=True)
     assert c.tier == "your_music_full"
-    assert c.tier_label == "Your Music"
+    assert c.tier_label == "Your Station"
 
 
 def test_tier_full_ai():
     c = Capabilities(spotify_connected=True, spotify_api=True, anthropic=True)
     assert c.tier == "full_ai"
-    assert c.tier_label == "Full AI Radio"
+    assert c.tier_label == "Live Broadcast"
 
 
 def test_tier_connected_with_anthropic_no_api():
@@ -162,7 +162,7 @@ def test_capabilities_to_dict_shape():
     assert d["capabilities"]["anthropic"] is True
     assert d["capabilities"]["ha"] is False
     assert d["tier"] == "your_music_basic"
-    assert d["tier_label"] == "Your Music"
+    assert d["tier_label"] == "Your Station"
 
 
 # --- All 16 flag combinations produce valid tiers ---
