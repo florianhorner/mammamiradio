@@ -833,10 +833,11 @@ function _dialShiftTo(target, label, statusText) {
   _setSignalBars(1);
   // Re-expand dial if it was collapsed
   const dial = document.getElementById('radio-dial');
-  dial.style.display = '';
-  dial.style.transition = 'opacity 0.6s ease, transform 0.6s ease';
+  dial.style.overflow = '';
+  dial.style.maxHeight = '';
+  dial.style.marginTop = '20px';
+  dial.style.transition = 'opacity 0.6s ease';
   dial.style.opacity = '1';
-  dial.style.transform = 'scaleY(1)';
 
   // Smooth sweep using requestAnimationFrame
   const from = _dialFreq;
@@ -872,13 +873,20 @@ function _dialShiftTo(target, label, statusText) {
       document.getElementById('dial-status').textContent = statusText;
       _setSignalBars(5);
       _stopStatic();
-      // Re-collapse dial after the shift settles — GPU-composited
+      // Collapse dial after shift settles: fade opacity, then slide height down
       setTimeout(() => {
-        dial.style.transformOrigin = 'top center';
-        dial.style.transition = 'opacity 2s ease, transform 2s cubic-bezier(0.22, 1, 0.36, 1)';
+        dial.style.transition = 'opacity 1.4s ease';
         dial.style.opacity = '0';
-        dial.style.transform = 'scaleY(0)';
-        setTimeout(() => { dial.style.display = 'none'; }, 2200);
+        setTimeout(() => {
+          // Capture exact height before collapsing so the slide is smooth
+          const h = dial.getBoundingClientRect().height;
+          dial.style.overflow = 'hidden';
+          dial.style.maxHeight = h + 'px';
+          void dial.offsetHeight; // force reflow so transition picks up start value
+          dial.style.transition = 'max-height 0.6s cubic-bezier(0.4,0,0.6,1), margin-top 0.6s ease';
+          dial.style.maxHeight = '0';
+          dial.style.marginTop = '0';
+        }, 1500);
       }, 2000);
     }
   }
