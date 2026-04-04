@@ -4,10 +4,17 @@ All notable changes to `mammamiradio` are documented here.
 
 The current version source of truth is `pyproject.toml`.
 
-## [1.5.0-beta] - 2026-04-03
+## [1.5.0] - 2026-04-04
 
 ### Added
 
+- **Signature Ad System**: ads are now a full creative sub-format with 6 ad formats (classic pitch, testimonial, duo scene, live remote, late-night whisper, institutional PSA), sonic worlds per category, role-based speaker casting, and per-brand campaign memory with escalation rules.
+- 6 new SFX types (tape stop, hotline beep, mandolin sting, ice clink, startup synth, register hit) and 8 new music beds (tarantella pop, cheap synth romance, suspicious jazz, discount techno, plus environment beds for cafe, beach, showroom, stadium, and more).
+- Brand motif generation: recurring brands get a short audio jingle built from their sonic signature, prepended to each ad spot.
+- Environment bed layering: ads can have a quiet ambient bed (cafe noise, highway hum) mixed under the voice before the music bed.
+- Multi-voice ad support: duo scenes and testimonials cast two distinct speakers with role-based voice resolution.
+- Campaign spines in `radio.toml`: each recurring brand can define a premise, escalation rule, preferred format pool, sonic signature, and spokesperson.
+- `concat_files` now properly inserts silence gaps between segments (previously the `silence_ms` parameter was accepted but unused).
 - Spotify source picker: choose from your playlists or Liked Songs directly in the dashboard (local/macOS mode only).
 - Persisted source selection: the station restores your last chosen source on restart via `cache/playlist_source.json`.
 - New API routes: `GET /api/spotify/source-options` and `POST /api/spotify/source/select` for programmatic source switching.
@@ -18,23 +25,26 @@ The current version source of truth is `pyproject.toml`.
 
 ### Changed
 
+- Ad generation prompt rewritten around explicit format selection, speaker role descriptions, and sonic world cues instead of one generic prompt.
+- `write_ad()` now accepts a voice dict (role->AdVoice) instead of a single voice, enabling multi-speaker ads.
+- `synthesize_ad()` resolves voice per-part by role, with graceful fallback to the first voice in the dict.
+- Ad history now tracks format and sonic signature alongside brand and summary, enabling format rotation and campaign continuity.
+- LLM ad summaries are now instructed to be in English for consistent campaign arc tracking.
+- SFX type list in the LLM prompt is now generated from a single source of truth (`AVAILABLE_SFX_TYPES` in normalizer.py).
 - Source switching now triggers immediate cutover: queued segments are purged and current playback is skipped so the new source starts right away.
 - Concurrent source switches are serialized so rapid clicks cannot corrupt station state.
 - The producer detects source changes mid-generation and discards stale segments instead of queuing them.
-- Switching to a non-URL source clears stale playlist URL state from config and status payloads.
 - In addon/Docker mode, the interactive source picker is disabled server-side; use the playlist URL field instead.
-- Setup status now reflects real source state instead of contradicting configured credentials.
-- Admin dashboard no longer embeds an audio player, preventing duplicate streams from a second tab.
-- Persisted source writes use atomic file replacement to avoid corruption.
 
 ### Fixed
 
+- Category-based sonic world defaults no longer share mutable references across calls (prevented silent state corruption).
+- Duo scenes and testimonials with only one role in the LLM output are demoted to classic pitch instead of producing broken multi-voice audio.
+- `_estimate_duration` helper used consistently instead of inline formula duplication.
 - Spotify playlist fetch returned zero tracks when API items were nested under `item` key.
 - Source picker showed 0 tracks for user playlists due to wrong count field.
 - Listener page `_base is not defined` JS error from service worker scope.
 - Producer recovery stall when go-librespot restarts mid-segment.
-- `setup-mac.sh` now fails fast on missing prerequisites instead of silently continuing.
-- Flaky test caused by leaked Spotify credentials from local `.env`.
 
 ## [1.2.0] - 2026-04-02
 

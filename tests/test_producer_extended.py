@@ -11,17 +11,19 @@ import pytest
 from mammamiradio.config import load_config
 from mammamiradio.models import (
     AdBrand,
+    AdFormat,
     AdHistoryEntry,
     AdPart,
     AdScript,
     AdVoice,
+    CampaignSpine,
     HostPersonality,
     Segment,
     SegmentType,
     StationState,
     Track,
 )
-from mammamiradio.producer import _pick_brand, run_producer
+from mammamiradio.producer import _cast_voices, _pick_brand, _select_ad_creative, run_producer
 
 TOML_PATH = str(Path(__file__).parent.parent / "radio.toml")
 MODULE = "mammamiradio.producer"
@@ -379,3 +381,148 @@ async def test_success_resets_failure_counter(tmp_path):
         await _run_until_queued(queue, state, config)
 
     assert state.failed_segments == 0
+
+
+# ---------------------------------------------------------------------------
+# Signature ad system: _select_ad_creative and _cast_voices
+# ---------------------------------------------------------------------------
+
+
+def test_select_ad_creative_uses_format_pool():
+    """When brand has a campaign.format_pool, format is picked from it."""
+    brand = AdBrand(
+        name="Test",
+        tagline="T",
+        campaign=CampaignSpine(format_pool=["late_night_whisper", "institutional_psa"]),
+    )
+    state = StationState()
+    config = _make_config(Path("/tmp"))
+    config.ads.voices = [
+        AdVoice(name="A", voice="v1", style="s", role="hammer"),
+        AdVoice(name="B", voice="v2", style="s", role="seductress"),
+    ]
+
+    for _ in range(20):
+        fmt, _sonic, _roles = _select_ad_creative(brand, state, config)
+        assert fmt in ("late_night_whisper", "institutional_psa")
+
+
+def test_select_ad_creative_default_format():
+    """Brand without campaign gets a format from the full list."""
+    brand = AdBrand(name="Test", tagline="T")
+    state = StationState()
+    config = _make_config(Path("/tmp"))
+
+    fmt, _sonic, _roles = _select_ad_creative(brand, state, config)
+    all_formats = [f.value for f in AdFormat]
+    assert fmt in all_formats
+
+
+def test_select_ad_creative_voice_count_guard():
+    """With < 2 voices, duo_scene and testimonial should be excluded."""
+    brand = AdBrand(
+        name="Test",
+        tagline="T",
+        campaign=CampaignSpine(format_pool=["duo_scene", "testimonial", "classic_pitch"]),
+    )
+    state = StationState()
+    config = _make_config(Path("/tmp"))
+    config.ads.voices = [AdVoice(name="Solo", voice="v1", style="s")]  # only 1 voice
+
+    for _ in range(20):
+        fmt, _sonic, _roles = _select_ad_creative(brand, state, config)
+        assert fmt not in ("duo_scene", "testimonial")
+
+
+def test_select_ad_creative_speaker_count():
+    """duo_scene should request 2 roles."""
+    brand = AdBrand(
+        name="Test",
+        tagline="T",
+        campaign=CampaignSpine(format_pool=["duo_scene"], spokesperson="hammer"),
+    )
+    state = StationState()
+    config = _make_config(Path("/tmp"))
+    config.ads.voices = [
+        AdVoice(name="A", voice="v1", style="s", role="hammer"),
+        AdVoice(name="B", voice="v2", style="s", role="maniac"),
+    ]
+
+    fmt, _sonic, roles = _select_ad_creative(brand, state, config)
+    assert fmt == "duo_scene"
+    assert len(roles) == 2
+
+
+def test_cast_voices_with_spokesperson():
+    """Brand with spokesperson gets that role's voice as primary."""
+    brand = AdBrand(
+        name="Test",
+        tagline="T",
+        campaign=CampaignSpine(spokesperson="hammer"),
+    )
+    config = _make_config(Path("/tmp"))
+    config.ads.voices = [
+        AdVoice(name="Roberto", voice="it-IT-GianniNeural", style="booming", role="hammer"),
+        AdVoice(name="Fiamma", voice="it-IT-FiammaNeural", style="enthusiastic", role="maniac"),
+    ]
+
+    voice_map = _cast_voices(brand, config, ["hammer"])
+    assert "hammer" in voice_map
+    assert voice_map["hammer"].name == "Roberto"
+
+
+def test_cast_voices_fallback_random():
+    """When no voice matches a role, a random voice is used."""
+    brand = AdBrand(name="Test", tagline="T")
+    config = _make_config(Path("/tmp"))
+    config.ads.voices = [
+        AdVoice(name="Roberto", voice="it-IT-GianniNeural", style="booming", role="hammer"),
+    ]
+
+    voice_map = _cast_voices(brand, config, ["unknown_role"])
+    assert "unknown_role" in voice_map
+    assert voice_map["unknown_role"].name == "Roberto"  # only option
+
+
+def test_select_ad_creative_avoids_last_format():
+    """_select_ad_creative avoids the last-used format for a brand."""
+    brand = AdBrand(
+        name="Test",
+        tagline="T",
+        campaign=CampaignSpine(format_pool=["classic_pitch", "live_remote"]),
+    )
+    state = StationState()
+    config = _make_config(Path("/tmp"))
+
+    # Seed history so last format for this brand was classic_pitch
+    state.ad_history.append(AdHistoryEntry(brand="Test", summary="test", timestamp=0.0, format="classic_pitch"))
+
+    # With only 2 options and last-used excluded, should always pick live_remote
+    for _ in range(20):
+        fmt, _sonic, _roles = _select_ad_creative(brand, state, config)
+        assert fmt == "live_remote"
+
+
+def test_select_ad_creative_category_sonic_defaults():
+    """Brand without campaign but with known category gets _CATEGORY_SONIC defaults."""
+    brand = AdBrand(name="Test", tagline="T", category="food")
+    state = StationState()
+    config = _make_config(Path("/tmp"))
+
+    _fmt, sonic, _roles = _select_ad_creative(brand, state, config)
+    assert sonic.environment == "cafe"
+    assert sonic.music_bed == "tarantella_pop"
+    assert sonic.transition_motif == "register_hit"
+
+
+def test_cast_voices_host_fallback():
+    """When no ad voices are configured, _cast_voices falls back to a host voice."""
+    brand = AdBrand(name="Test", tagline="T")
+    config = _make_config(Path("/tmp"))
+    config.ads.voices = []  # no ad voices
+
+    voice_map = _cast_voices(brand, config, ["hammer"])
+    assert "hammer" in voice_map
+    # Should be one of the configured hosts
+    host_names = {h.name for h in config.hosts}
+    assert voice_map["hammer"].name in host_names

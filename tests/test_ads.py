@@ -10,9 +10,13 @@ import pytest
 
 from mammamiradio.models import (
     AdBrand,
+    AdFormat,
     AdHistoryEntry,
     AdPart,
     AdScript,
+    AdVoice,
+    CampaignSpine,
+    SonicWorld,
     StationState,
 )
 from mammamiradio.producer import _pick_brand
@@ -199,3 +203,86 @@ def test_campaign_arc_in_ad_history():
     assert len(caffe_history) == 2
     assert "mysterious" in caffe_history[0].summary
     assert "conspiracy" in caffe_history[1].summary
+
+
+# --- Signature ad system model tests ---
+
+
+def test_ad_format_enum_values():
+    """All 6 ad format values exist."""
+    assert len(AdFormat) == 6
+    assert AdFormat.CLASSIC_PITCH == "classic_pitch"
+    assert AdFormat.TESTIMONIAL == "testimonial"
+    assert AdFormat.DUO_SCENE == "duo_scene"
+    assert AdFormat.LIVE_REMOTE == "live_remote"
+    assert AdFormat.LATE_NIGHT_WHISPER == "late_night_whisper"
+    assert AdFormat.INSTITUTIONAL_PSA == "institutional_psa"
+
+
+def test_sonic_world_defaults():
+    sw = SonicWorld()
+    assert sw.environment == ""
+    assert sw.music_bed == "lounge"
+    assert sw.transition_motif == "chime"
+    assert sw.sonic_signature == ""
+
+
+def test_campaign_spine_defaults():
+    cs = CampaignSpine()
+    assert cs.premise == ""
+    assert cs.sonic_signature == ""
+    assert cs.format_pool == []
+    assert cs.spokesperson == ""
+    assert cs.escalation_rule == ""
+
+
+def test_ad_brand_with_campaign():
+    campaign = CampaignSpine(
+        premise="Test premise",
+        sonic_signature="ice_clink+startup_synth",
+        format_pool=["classic_pitch", "duo_scene"],
+        spokesperson="hammer",
+    )
+    brand = AdBrand(name="Test", tagline="Tag", campaign=campaign)
+    assert brand.campaign is not None
+    assert brand.campaign.premise == "Test premise"
+    assert len(brand.campaign.format_pool) == 2
+
+
+def test_ad_brand_without_campaign_compat():
+    """Old-style brand without campaign still works."""
+    brand = AdBrand(name="Old", tagline="T")
+    assert brand.campaign is None
+    assert brand.recurring is True
+
+
+def test_ad_script_format_and_sonic():
+    script = AdScript(
+        brand="Test",
+        parts=[AdPart(type="voice", text="hello")],
+        format="duo_scene",
+        sonic=SonicWorld(environment="cafe", music_bed="suspicious_jazz"),
+        roles_used=["hammer", "maniac"],
+    )
+    assert script.format == "duo_scene"
+    assert script.sonic.environment == "cafe"
+    assert script.sonic.music_bed == "suspicious_jazz"
+    assert script.roles_used == ["hammer", "maniac"]
+
+
+def test_ad_history_tracks_format():
+    state = StationState()
+    state.record_ad_spot(brand="A", summary="test", format="duo_scene", sonic_signature="ice_clink")
+    assert state.ad_history[-1].format == "duo_scene"
+    assert state.ad_history[-1].sonic_signature == "ice_clink"
+
+
+def test_ad_part_with_role():
+    part = AdPart(type="voice", text="hello", role="hammer", environment="cafe")
+    assert part.role == "hammer"
+    assert part.environment == "cafe"
+
+
+def test_ad_voice_with_role():
+    voice = AdVoice(name="Roberto", voice="it-IT-GianniNeural", style="booming", role="hammer")
+    assert voice.role == "hammer"

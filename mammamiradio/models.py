@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 import time
 from dataclasses import dataclass, field
-from enum import Enum
+from enum import Enum, StrEnum
 from pathlib import Path
 from typing import ClassVar
 
@@ -87,6 +87,43 @@ class HostPersonality:
     personality: PersonalityAxes = field(default_factory=PersonalityAxes)
 
 
+class AdFormat(StrEnum):
+    """Available ad creative formats that shape how the joke is delivered."""
+
+    CLASSIC_PITCH = "classic_pitch"
+    TESTIMONIAL = "testimonial"
+    DUO_SCENE = "duo_scene"
+    LIVE_REMOTE = "live_remote"
+    LATE_NIGHT_WHISPER = "late_night_whisper"
+    INSTITUTIONAL_PSA = "institutional_psa"
+
+    @property
+    def voice_count(self) -> int:
+        """Number of distinct voices this format needs."""
+        return 2 if self in (AdFormat.DUO_SCENE, AdFormat.TESTIMONIAL) else 1
+
+
+@dataclass
+class SonicWorld:
+    """Sonic palette for an ad: environment, music bed, and transition motif."""
+
+    environment: str = ""
+    music_bed: str = "lounge"
+    transition_motif: str = "chime"
+    sonic_signature: str = ""  # e.g. "ice_clink+startup_synth" for brand motif generation
+
+
+@dataclass
+class CampaignSpine:
+    """Per-brand creative memory that shapes recurring ad campaigns."""
+
+    premise: str = ""
+    sonic_signature: str = ""  # e.g. "ice_clink+startup_synth"
+    format_pool: list[str] = field(default_factory=list)
+    spokesperson: str = ""  # speaker role name
+    escalation_rule: str = ""  # natural language for prompt
+
+
 @dataclass
 class AdBrand:
     """A fictional advertiser that can recur across breaks."""
@@ -95,6 +132,7 @@ class AdBrand:
     tagline: str
     category: str = "general"
     recurring: bool = True
+    campaign: CampaignSpine | None = None
 
 
 @dataclass
@@ -104,17 +142,20 @@ class AdVoice:
     name: str
     voice: str  # edge-tts voice ID
     style: str  # character description for the prompt
+    role: str = ""  # speaker role: "hammer", "seductress", etc.
 
 
 @dataclass
 class AdPart:
-    """One structured unit inside an ad script: voice, SFX, or silence."""
+    """One structured unit inside an ad script: voice, SFX, pause, or environment."""
 
-    type: str  # "voice", "sfx", "pause"
+    type: str  # "voice", "sfx", "pause", "environment"
     text: str = ""
     voice: str = ""
-    sfx: str = ""  # "chime", "sweep", "ding", "cash_register", "whoosh"
+    sfx: str = ""
     duration: float = 0.0
+    role: str = ""  # which speaker role delivers this part
+    environment: str = ""  # environment cue for ambience
 
 
 @dataclass
@@ -123,8 +164,11 @@ class AdScript:
 
     brand: str
     parts: list[AdPart] = field(default_factory=list)
-    summary: str = ""  # 1-sentence for history/cross-ref
-    mood: str = ""  # music bed mood: "dramatic", "lounge", "upbeat", "mysterious", "epic"
+    summary: str = ""
+    mood: str = ""  # legacy alias, set to sonic.music_bed
+    format: str = "classic_pitch"
+    sonic: SonicWorld = field(default_factory=SonicWorld)
+    roles_used: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -134,6 +178,8 @@ class AdHistoryEntry:
     brand: str
     summary: str
     timestamp: float = 0.0
+    format: str = ""
+    sonic_signature: str = ""
 
 
 @dataclass
@@ -260,13 +306,21 @@ class StationState:
         self.segments_produced += 1
         self._log("banter", "Host banter")
 
-    def record_ad_spot(self, brand: str, summary: str = "") -> None:
+    def record_ad_spot(
+        self,
+        brand: str,
+        summary: str = "",
+        format: str = "",
+        sonic_signature: str = "",
+    ) -> None:
         """Record a single ad spot in history (called per-spot within a break)."""
         self.ad_history.append(
             AdHistoryEntry(
                 brand=brand,
                 summary=summary,
                 timestamp=time.time(),
+                format=format,
+                sonic_signature=sonic_signature,
             )
         )
         if len(self.ad_history) > 20:

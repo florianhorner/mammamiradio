@@ -18,7 +18,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-from mammamiradio.models import AdBrand, AdVoice, HostPersonality, PersonalityAxes
+from mammamiradio.models import AdBrand, AdVoice, CampaignSpine, HostPersonality, PersonalityAxes
 
 load_dotenv()
 
@@ -212,20 +212,33 @@ def load_config(path: str = "radio.toml") -> StationConfig:
         voices = []
         sfx_dir = ads_raw.get("sfx_dir", "sfx")
     else:
-        brands = [
-            AdBrand(
-                name=b["name"],
-                tagline=b.get("tagline", ""),
-                category=b.get("category", "general"),
-                recurring=b.get("recurring", True),
+        brands = []
+        for b in ads_raw.get("brands", []):
+            campaign_raw = b.get("campaign")
+            campaign = None
+            if campaign_raw and isinstance(campaign_raw, dict):
+                campaign = CampaignSpine(
+                    premise=campaign_raw.get("premise", ""),
+                    sonic_signature=campaign_raw.get("sonic_signature", ""),
+                    format_pool=campaign_raw.get("format_pool", []),
+                    spokesperson=campaign_raw.get("spokesperson", ""),
+                    escalation_rule=campaign_raw.get("escalation_rule", ""),
+                )
+            brands.append(
+                AdBrand(
+                    name=b["name"],
+                    tagline=b.get("tagline", ""),
+                    category=b.get("category", "general"),
+                    recurring=b.get("recurring", True),
+                    campaign=campaign,
+                )
             )
-            for b in ads_raw.get("brands", [])
-        ]
         voices = [
             AdVoice(
                 name=v["name"],
                 voice=v["voice"],
                 style=v.get("style", ""),
+                role=v.get("role", ""),
             )
             for v in ads_raw.get("voices", [])
         ]

@@ -224,7 +224,7 @@ The app runs in three modes:
 - **Docker container** via `Dockerfile` / `docker-compose.yml` (no go-librespot, runs as non-root user, persistent `/data` volume)
 - **Home Assistant add-on** via `ha-addon/mammamiradio/` (Alpine-based, Supervisor injects HA token, ingress proxies the dashboard into the HA sidebar)
 
-The HA add-on and Docker paths skip go-librespot and the FIFO. Music falls back to yt-dlp, local files, or placeholder audio. The ingress-compatible UI uses JavaScript base path detection so the dashboard works both at `/` and behind HA's ingress proxy.
+The HA add-on bundles go-librespot and supports full Spotify playback. Users link their Spotify account via an OAuth flow in the dashboard (`/spotify/auth`), which stores tokens at `/data/.spotify_token_cache`. Once authenticated, the addon can auto-transfer playback to the go-librespot device and capture audio via the FIFO pipe. If Spotify is not configured or authenticated, music falls back to yt-dlp, local files, or placeholder audio. The standalone Docker image does not include go-librespot. The ingress-compatible UI uses JavaScript base path detection so the dashboard works both at `/` and behind HA's ingress proxy.
 
 ## Operational notes
 
