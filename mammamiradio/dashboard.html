@@ -156,16 +156,25 @@ h1 {
   margin-bottom: 12px;
 }
 .dial-band {
-  position: relative; height: 48px;
-  background: var(--shadow);
-  border: 1px solid rgba(245,237,216,0.08);
-  border-radius: 6px;
+  position: relative; height: 52px;
+  background: linear-gradient(180deg, #1a120e 0%, #0e0906 100%);
+  border: 1px solid rgba(245,237,216,0.1);
+  border-radius: 8px;
   margin: 0 auto; max-width: 480px;
   overflow: hidden; cursor: pointer;
+  box-shadow: inset 0 1px 3px rgba(0,0,0,0.5), 0 1px 0 rgba(245,237,216,0.05);
 }
 .dial-band::before {
   content: ''; position: absolute; inset: 0;
-  background: linear-gradient(180deg, rgba(244,208,72,0.07) 0%, transparent 50%);
+  background:
+    linear-gradient(180deg, rgba(244,208,72,0.08) 0%, transparent 40%),
+    repeating-linear-gradient(90deg, rgba(245,237,216,0.02) 0px, rgba(245,237,216,0.02) 1px, transparent 1px, transparent 12px);
+  pointer-events: none;
+}
+.dial-band::after {
+  content: ''; position: absolute; inset: 0;
+  background: radial-gradient(ellipse at var(--needle-x, 35%) 50%, rgba(244,208,72,0.06) 0%, transparent 40%);
+  pointer-events: none; transition: background 0.3s;
 }
 .dial-marks {
   position: absolute; inset: 0;
@@ -184,7 +193,7 @@ h1 {
   background: linear-gradient(180deg, var(--lancia2), rgba(160,32,24,0.5));
   border-radius: 1px;
   box-shadow: 0 0 8px rgba(184,44,32,1), 0 0 20px rgba(184,44,32,0.5);
-  left: 15%; transition: left 0.3s cubic-bezier(0.25, 0.46, 0.45, 0.94), box-shadow 0.4s ease;
+  left: 51%; transition: left 0.3s cubic-bezier(0.25, 0.46, 0.45, 0.94), box-shadow 0.4s ease;
   z-index: 2;
 }
 .dial-needle::before {
@@ -194,7 +203,7 @@ h1 {
   box-shadow: 0 0 10px rgba(184,44,32,0.9), 0 0 20px rgba(184,44,32,0.4);
 }
 .dial-needle.seeking {
-  transition: left 0.5s cubic-bezier(0.22, 1, 0.36, 1), box-shadow 0.4s ease;
+  transition: left 0.12s linear, box-shadow 0.4s ease;
 }
 .dial-needle.locked {
   transition: left 0.8s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.6s ease;
@@ -283,18 +292,41 @@ h1 {
   padding-left: 14px;
 }
 
+/* ── ALBUM ART ── */
+.album-art {
+  width: 44px; height: 44px; border-radius: 6px;
+  object-fit: cover; flex-shrink: 0;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+}
+.album-art-bg {
+  position: absolute; inset: 0; border-radius: inherit;
+  background-size: cover; background-position: center;
+  filter: blur(30px) saturate(1.2); opacity: 0.15;
+  transition: background-image 1s ease, opacity 1s ease;
+  pointer-events: none; z-index: 0;
+}
+.now-playing { position: relative; overflow: hidden; }
+.now-playing > *:not(.album-art-bg) { position: relative; z-index: 1; }
+
 /* ── PLAY BUTTON ── */
 .play-btn {
-  width: 44px; height: 44px; border-radius: 50%;
+  width: 48px; height: 48px; border-radius: 50%;
   background: var(--sun2); border: none;
-  color: var(--shadow); font-size: 16px;
+  color: var(--shadow); font-size: 17px;
   cursor: pointer; display: flex; align-items: center; justify-content: center;
   flex-shrink: 0;
-  box-shadow: 0 4px 18px rgba(236,204,48,0.45);
-  transition: background 0.15s, box-shadow 0.15s;
+  box-shadow: 0 4px 20px rgba(236,204,48,0.5), 0 0 0 6px rgba(236,204,48,0.1), 0 0 28px rgba(236,204,48,0.2);
+  transition: background 0.2s, box-shadow 0.3s, transform 0.15s;
 }
-.play-btn:hover { background: var(--sun); }
-.play-btn.playing { background: var(--ok); color: #fff; box-shadow: 0 4px 18px rgba(37,99,235,0.4); }
+.play-btn:hover {
+  background: var(--sun);
+  box-shadow: 0 0 16px rgba(244,208,72,0.6), 0 0 36px rgba(244,208,72,0.25);
+  transform: scale(1.05);
+}
+.play-btn.playing {
+  background: var(--sun2); color: var(--shadow);
+  box-shadow: 0 0 16px rgba(236,204,48,0.6), 0 0 32px rgba(236,204,48,0.3), 0 0 48px rgba(236,204,48,0.1);
+}
 
 /* ── CARDS (generic) ── */
 .card {
@@ -372,6 +404,43 @@ h1 {
   text-shadow: 0 2px 20px rgba(42,16,8,0.5);
 }
 
+/* ── WAVEFORM — golden bars, all bounce independently ── */
+.waveform {
+  display: flex; align-items: center; gap: 3px;
+  height: 28px; padding-left: 14px; margin-top: 18px;
+}
+.wb {
+  width: 3px; border-radius: 2px;
+  background: rgba(240,200,64,0.45);
+  animation: wv var(--d) ease-in-out infinite alternate;
+  animation-delay: var(--dl);
+}
+.waveform.paused .wb { animation-play-state: paused; }
+@keyframes wv { from { height: 3px; } to { height: var(--h); } }
+
+/* ── TICKER — inline beneath player, fade edges ── */
+.ticker-wrap {
+  position: relative; overflow: hidden;
+  background: rgba(42,16,8,0.2);
+  border-bottom: 1px solid rgba(245,237,216,0.1);
+  -webkit-mask-image: linear-gradient(90deg, transparent 0%, black 6%, black 94%, transparent 100%);
+  mask-image: linear-gradient(90deg, transparent 0%, black 6%, black 94%, transparent 100%);
+}
+.ticker {
+  display: flex; white-space: nowrap;
+  padding: 10px 0;
+  animation: ticker-scroll 32s linear infinite;
+}
+.ticker span {
+  font-size: 11px; font-style: italic; font-family: var(--font-display);
+  color: rgba(245,237,216,0.5); padding: 0 8px;
+}
+.ticker span::before { content: '\00B7'; margin-right: 8px; color: rgba(240,200,64,0.4); }
+@keyframes ticker-scroll {
+  0% { transform: translateX(0); }
+  100% { transform: translateX(-50%); }
+}
+
 /* ── TOAST ── */
 .toast {
   position: fixed; bottom: 80px; left: 50%; transform: translateX(-50%);
@@ -394,9 +463,9 @@ h1 {
 <div class="header">
   <div class="header-left">
     <h1>MammaMiRadio</h1>
-    <span class="header-sub" id="uptime">loading...</span>
+    <span class="header-sub">96.7 FM &middot; Milano</span>
   </div>
-  <a id="listener-link" href="/listen" class="listener-link">Open listener &rarr;</a>
+  <span class="header-sub" id="uptime" style="opacity:0.4"></span>
 </div>
 
 <div class="tier-badge" id="tier-badge" data-tier="demo" aria-live="polite">On Air</div>
@@ -415,25 +484,31 @@ h1 {
   <div class="dial-status" id="dial-status">Searching for signal...</div>
 </div>
 
-<!-- Connect Spotify hero (when spotify_connected=false) — ABOVE now playing -->
-<div class="connect-hero" id="connect-card" style="display:none">
-  <h2>Make This Station Yours</h2>
-  <div class="subtitle">Your music. Your hosts. Your station.</div>
-  <div class="connect-steps">
-    <div class="connect-step">
-      <div class="icon">&#128241;</div>
-      <div class="text">Open Spotify</div>
-    </div>
-    <div class="connect-step">
-      <div class="icon">&#128266;</div>
-      <div class="text">Tap the speaker icon</div>
-    </div>
-    <div class="connect-step">
-      <div class="icon">&#128251;</div>
-      <div class="text">Choose <strong id="device-name">MammaMiRadio</strong></div>
+<!-- Now playing (dominates — the radio is playing before any decisions) -->
+<div class="now-playing" id="now-playing" style="display:none">
+  <div class="album-art-bg" id="album-art-bg"></div>
+  <div class="label">Now Streaming</div>
+  <div style="display:flex;align-items:center;gap:12px;padding-left:14px;margin-top:6px">
+    <img class="album-art" id="album-art" src="" alt="" style="display:none">
+    <button class="play-btn" id="play-btn" onclick="togglePlay()" aria-label="Play radio">&#9654;</button>
+    <div style="flex:1">
+      <div class="track" id="np-track">...</div>
+      <div class="meta" id="np-meta"></div>
     </div>
   </div>
-  <div class="connect-status-line"><span class="pulse-dot"></span> <span id="connect-status">Listening for you...</span></div>
+  <div class="waveform paused" id="waveform"></div>
+  <audio id="radio-audio" preload="none"></audio>
+</div>
+
+<!-- Ticker — scrolling Italian local colour, shown once station data arrives -->
+<div class="ticker-wrap" id="ticker-wrap" style="display:none">
+  <div class="ticker" id="ticker"></div>
+</div>
+
+<!-- Connect Spotify (secondary — below now playing, subtle) -->
+<div class="card" id="connect-card" style="display:none">
+  <h3>Bring Your Records</h3>
+  <p>Open Spotify, tap the speaker icon, choose <strong id="device-name">MammaMiRadio</strong>.</p>
 </div>
 
 <!-- Connect timeout (after 60s with no connection) -->
@@ -441,19 +516,6 @@ h1 {
   <h3>Having trouble?</h3>
   <p>Make sure your phone and this device are on the same WiFi network. The station needs to be discoverable for Spotify to find it.</p>
   <button class="btn btn-sm" onclick="openAdvancedSetup()">Advanced options</button>
-</div>
-
-<!-- Now playing (always visible once data arrives) -->
-<div class="now-playing" id="now-playing" style="display:none">
-  <div class="label">Now Streaming</div>
-  <div style="display:flex;align-items:center;gap:12px;padding-left:14px;margin-top:6px">
-    <button class="play-btn" id="play-btn" onclick="togglePlay()" aria-label="Play radio">&#9654;</button>
-    <div style="flex:1">
-      <div class="track" id="np-track">...</div>
-      <div class="meta" id="np-meta"></div>
-    </div>
-  </div>
-  <audio id="radio-audio" preload="none"></audio>
 </div>
 
 <!-- Queue (collapsed, 3 items) -->
@@ -551,7 +613,7 @@ let _lastTier = null;
 // --- Radio Dial Controller ---
 const DEMO_FREQ = 94.7;
 const USER_FREQ = 101.3;
-let _dialFreq = 87.5;
+let _dialFreq = 98.0; // start mid-band so sweeps use the full range
 let _dialTarget = DEMO_FREQ;
 let _dialState = 'searching'; // searching | locking | locked | shifting
 let _dialAnimFrame = null;
@@ -572,60 +634,112 @@ function _freqToPercent(f) {
 function _setNeedle(freq) {
   _dialFreq = freq;
   const pct = Math.max(2, Math.min(98, _freqToPercent(freq)));
-  document.getElementById('dial-needle').style.left = pct + '%';
+  const needle = document.getElementById('dial-needle');
+  needle.style.left = pct + '%';
+  // Move the ambient glow to follow the needle
+  document.querySelector('.dial-band').style.setProperty('--needle-x', pct + '%');
   document.getElementById('dial-freq-val').textContent = freq.toFixed(1);
 }
+
+let _crackleSource = null;
+let _crackleGain = null;
 
 function _startStatic() {
   if (_audioCtx) return;
   try {
     _audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-    const bufSize = _audioCtx.sampleRate * 2;
-    const buf = _audioCtx.createBuffer(1, bufSize, _audioCtx.sampleRate);
+    const sr = _audioCtx.sampleRate;
+
+    // Layer 1: broadband FM static (shaped white noise)
+    const bufSize = sr * 2;
+    const buf = _audioCtx.createBuffer(1, bufSize, sr);
     const data = buf.getChannelData(0);
     for (let i = 0; i < bufSize; i++) data[i] = Math.random() * 2 - 1;
     _noiseSource = _audioCtx.createBufferSource();
     _noiseSource.buffer = buf;
     _noiseSource.loop = true;
-    const filter = _audioCtx.createBiquadFilter();
-    filter.type = 'bandpass';
-    filter.frequency.value = 800;
-    filter.Q.value = 0.5;
+    // FM radio static: bandpass centered around 1.2kHz with moderate Q
+    const bp1 = _audioCtx.createBiquadFilter();
+    bp1.type = 'bandpass'; bp1.frequency.value = 1200; bp1.Q.value = 0.7;
+    // Add a second highpass to cut the mud
+    const hp = _audioCtx.createBiquadFilter();
+    hp.type = 'highpass'; hp.frequency.value = 400;
     _noiseGain = _audioCtx.createGain();
-    _noiseGain.gain.value = 0.06;
-    _noiseSource.connect(filter).connect(_noiseGain).connect(_audioCtx.destination);
+    _noiseGain.gain.value = 0.04;
+    _noiseSource.connect(bp1).connect(hp).connect(_noiseGain).connect(_audioCtx.destination);
     _noiseSource.start();
+
+    // Layer 2: crackle pops (impulsive noise, like real FM tuning)
+    const crackBuf = _audioCtx.createBuffer(1, sr * 2, sr);
+    const crackData = crackBuf.getChannelData(0);
+    for (let i = 0; i < crackData.length; i++) {
+      // Sparse impulses — random pops
+      crackData[i] = Math.random() < 0.003 ? (Math.random() - 0.5) * 2 : 0;
+    }
+    _crackleSource = _audioCtx.createBufferSource();
+    _crackleSource.buffer = crackBuf;
+    _crackleSource.loop = true;
+    const crackFilter = _audioCtx.createBiquadFilter();
+    crackFilter.type = 'highpass'; crackFilter.frequency.value = 2000;
+    _crackleGain = _audioCtx.createGain();
+    _crackleGain.gain.value = 0.08;
+    _crackleSource.connect(crackFilter).connect(_crackleGain).connect(_audioCtx.destination);
+    _crackleSource.start();
   } catch (e) { /* Web Audio not available */ }
 }
 
 function _setStaticVolume(vol) {
-  if (_noiseGain) _noiseGain.gain.setTargetAtTime(vol, _audioCtx.currentTime, 0.1);
+  if (!_audioCtx) return;
+  const t = _audioCtx.currentTime;
+  if (_noiseGain) _noiseGain.gain.setTargetAtTime(vol, t, 0.05);
+  if (_crackleGain) _crackleGain.gain.setTargetAtTime(vol * 2.5, t, 0.05);
 }
 
 function _stopStatic() {
   _setStaticVolume(0);
   setTimeout(() => {
     if (_noiseSource) { try { _noiseSource.stop(); } catch(e){} _noiseSource = null; }
+    if (_crackleSource) { try { _crackleSource.stop(); } catch(e){} _crackleSource = null; }
     if (_audioCtx) { _audioCtx.close(); _audioCtx = null; }
-    _noiseGain = null;
-  }, 500);
+    _noiseGain = null; _crackleGain = null;
+  }, 600);
 }
 
-let _dialVelocity = 0.8;
+let _dialVelocity = 0.3;
+let _lastSeekTime = 0;
+let _seekElapsed = 0;
 
-function _dialSeek() {
-  if (_dialState === 'searching') {
-    // Organic drift — momentum-based, like a real tuning knob
-    const pull = (_dialTarget - _dialFreq) * 0.03;
-    const drift = (Math.random() - 0.5) * 1.5;
-    _dialVelocity = _dialVelocity * 0.85 + pull + drift * 0.15;
-    _dialVelocity = Math.max(-2, Math.min(2, _dialVelocity));
-    const next = Math.max(87.5, Math.min(108, _dialFreq + _dialVelocity));
-    _setNeedle(next);
-    const dist = Math.abs(_dialFreq - _dialTarget);
-    _setStaticVolume(0.03 + dist * 0.004);
-    _dialAnimFrame = setTimeout(_dialSeek, 120);
-  }
+function _dialSeek(timestamp) {
+  if (_dialState !== 'searching') return;
+  if (!_lastSeekTime) _lastSeekTime = timestamp;
+  const dt = (timestamp - _lastSeekTime) / 1000;
+  _lastSeekTime = timestamp;
+  _seekElapsed += dt;
+
+  // Phase 1 (first ~4s): big lazy sweeps across the whole band, barely any pull
+  // Phase 2 (4-8s): start homing in, sweep narrows
+  // Phase 3 (8s+): close in on target
+  const phase = Math.min(_seekElapsed / 8, 1); // 0→1 over 8 seconds
+  const springK = 0.01 + phase * 0.08;         // very weak → moderate pull
+  const noiseAmp = 1.2 - phase * 0.7;          // big drift → small drift
+  const damping = 0.97 - phase * 0.03;         // very smooth → slightly tighter
+
+  // Slow sine wave adds a broad sweep feel
+  const sweep = Math.sin(_seekElapsed * 0.4) * (3 - phase * 2.5);
+
+  const pull = (_dialTarget - _dialFreq) * springK;
+  const noise = (Math.random() - 0.5) * noiseAmp;
+  _dialVelocity = (_dialVelocity + pull + noise * 0.08 + sweep * 0.02) * damping;
+  _dialVelocity = Math.max(-1.5, Math.min(1.5, _dialVelocity));
+  const next = Math.max(88, Math.min(107.5, _dialFreq + _dialVelocity));
+  _setNeedle(next);
+
+  // Static: louder when far from target, with crackle bursts
+  const dist = Math.abs(_dialFreq - _dialTarget);
+  const baseVol = 0.015 + dist * 0.004;
+  _setStaticVolume(baseVol);
+
+  _dialAnimFrame = requestAnimationFrame(_dialSeek);
 }
 
 function _dialLock(target, label, statusText) {
@@ -635,15 +749,20 @@ function _dialLock(target, label, statusText) {
   needle.classList.remove('seeking');
   needle.classList.add('locked');
 
-  // Overshoot then settle
-  const overshoot = target + (Math.random() > 0.5 ? 1.2 : -1.2);
-  _setNeedle(overshoot);
+  // Slow lock-in: overshoot → drift back → micro-overshoot → settle
+  const over1 = target + (Math.random() > 0.5 ? 1.6 : -1.6);
+  _setNeedle(over1);
   _setStaticVolume(0.04);
 
   setTimeout(() => {
-    _setNeedle(target + 0.3);
-    _setStaticVolume(0.02);
-  }, 400);
+    _setNeedle(target - 0.5);
+    _setStaticVolume(0.025);
+  }, 700);
+
+  setTimeout(() => {
+    _setNeedle(target + 0.2);
+    _setStaticVolume(0.01);
+  }, 1400);
 
   setTimeout(() => {
     _setNeedle(target);
@@ -651,39 +770,53 @@ function _dialLock(target, label, statusText) {
     _dialState = 'locked';
     document.getElementById('dial-label').textContent = label;
     document.getElementById('dial-status').textContent = statusText;
-    setTimeout(_stopStatic, 1500);
-  }, 800);
+  }, 2000);
+
+  // Fade static out gently
+  setTimeout(_stopStatic, 3000);
 }
 
 function _dialShiftTo(target, label, statusText) {
   if (_dialState === 'shifting') return;
   _dialState = 'shifting';
   _startStatic();
-  _setStaticVolume(0.08);
+  _setStaticVolume(0.07);
   const needle = document.getElementById('dial-needle');
   needle.classList.remove('locked');
   needle.classList.add('seeking');
   document.getElementById('dial-status').textContent = 'Retuning...';
+  // Re-expand dial if it was collapsed
+  const dial = document.getElementById('radio-dial');
+  dial.style.display = '';
+  dial.style.transition = 'opacity 0.6s ease, transform 0.6s ease';
+  dial.style.opacity = '1';
+  dial.style.transform = 'scaleY(1)';
 
-  // Sweep to new frequency
-  let step = 0;
-  const steps = 6;
+  // Smooth sweep using requestAnimationFrame
   const from = _dialFreq;
-  const overshoot = target + (target > from ? 1.5 : -1.5);
+  const overshoot = target + (target > from ? 1.8 : -1.8);
+  const totalMs = 2000;
+  const startTime = performance.now();
 
-  function animate() {
-    step++;
-    if (step <= steps / 2) {
-      const t = step / (steps / 2);
-      _setNeedle(from + (overshoot - from) * t);
-      _setStaticVolume(0.08 - t * 0.02);
-    } else if (step <= steps) {
-      const t = (step - steps / 2) / (steps / 2);
-      _setNeedle(overshoot + (target - overshoot) * t);
-      _setStaticVolume(0.04 - t * 0.04);
+  function animate(now) {
+    const elapsed = now - startTime;
+    const t = Math.min(elapsed / totalMs, 1);
+    // Ease: overshoot then settle (cubic bezier approximation)
+    let freq;
+    if (t < 0.5) {
+      const p = t / 0.5;
+      freq = from + (overshoot - from) * (p * p * (3 - 2 * p));
+    } else {
+      const p = (t - 0.5) / 0.5;
+      freq = overshoot + (target - overshoot) * (p * p * (3 - 2 * p));
     }
-    if (step < steps) {
-      setTimeout(animate, 250);
+    _setNeedle(freq);
+    // Crackling peaks in the middle, fades at edges
+    const midness = 1 - Math.abs(t - 0.4) * 2.5;
+    _setStaticVolume(Math.max(0, 0.06 * midness));
+
+    if (t < 1) {
+      requestAnimationFrame(animate);
     } else {
       _setNeedle(target);
       needle.classList.remove('seeking');
@@ -692,9 +825,17 @@ function _dialShiftTo(target, label, statusText) {
       document.getElementById('dial-label').textContent = label;
       document.getElementById('dial-status').textContent = statusText;
       _stopStatic();
+      // Re-collapse dial after the shift settles — GPU-composited
+      setTimeout(() => {
+        dial.style.transformOrigin = 'top center';
+        dial.style.transition = 'opacity 2s ease, transform 2s cubic-bezier(0.22, 1, 0.36, 1)';
+        dial.style.opacity = '0';
+        dial.style.transform = 'scaleY(0)';
+        setTimeout(() => { dial.style.display = 'none'; }, 2200);
+      }, 2000);
     }
   }
-  setTimeout(animate, 200);
+  requestAnimationFrame(animate);
 }
 
 // Initialize dial on load
@@ -702,7 +843,7 @@ _initDialTicks();
 _startStatic();
 const _seekNeedle = document.getElementById('dial-needle');
 if (_seekNeedle) _seekNeedle.classList.add('seeking');
-_dialSeek();
+requestAnimationFrame(_dialSeek);
 
 function escHtml(v) { return String(v ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 
@@ -754,33 +895,29 @@ function updateCards() {
     document.getElementById('connect-trouble').style.display = 'none';
   }
 
-  // Playlist card (only when connected)
+  // Playlist card (only when connected AND has spotify_api for browsing)
   const playlistCard = document.getElementById('playlist-card');
-  playlistCard.style.display = c.spotify_connected ? '' : 'none';
-  if (c.spotify_connected) {
+  playlistCard.style.display = (c.spotify_connected && c.spotify_api) ? '' : 'none';
+  if (c.spotify_connected && c.spotify_api) {
     const content = document.getElementById('playlist-content');
-    if (c.spotify_api) {
-      content.innerHTML =
-        '<p>Browse your playlists or paste a link.</p>' +
-        '<div style="display:flex;gap:8px;flex-wrap:wrap">' +
-          '<select class="input" id="playlist-select" style="flex:1;min-width:200px"><option value="">Choose a playlist</option></select>' +
-          '<button class="btn btn-sm" onclick="selectPlaylist()">Load</button>' +
-        '</div>' +
-        '<div style="margin-top:8px;display:flex;gap:8px">' +
-          '<button class="btn btn-sm btn-ghost" onclick="selectLikedSongs()">Use Liked Songs</button>' +
-        '</div>';
-    } else {
-      content.innerHTML =
-        '<p>Your music is playing. Control what plays from the Spotify app — the radio takes over between songs.</p>';
-    }
+    content.innerHTML =
+      '<p>Browse your playlists or paste a link.</p>' +
+      '<div style="display:flex;gap:8px;flex-wrap:wrap">' +
+        '<select class="input" id="playlist-select" style="flex:1;min-width:200px"><option value="">Choose a playlist</option></select>' +
+        '<button class="btn btn-sm" onclick="selectPlaylist()">Load</button>' +
+      '</div>' +
+      '<div style="margin-top:8px;display:flex;gap:8px">' +
+        '<button class="btn btn-sm btn-ghost" onclick="selectLikedSongs()">Use Liked Songs</button>' +
+      '</div>';
   }
 
   // Controls (only after Spotify connected)
   document.getElementById('controls').style.display = c.spotify_connected ? '' : 'none';
 
-  // Unlock AI and Connect HA — only show after Spotify is connected
+  // Unlock AI — only when connected and no anthropic key
   document.getElementById('unlock-ai').style.display = (c.spotify_connected && !c.anthropic) ? '' : 'none';
-  document.getElementById('connect-ha').style.display = (c.spotify_connected && !c.ha) ? '' : 'none';
+  // HA card hidden by default — it's a power-user feature, not onboarding
+  document.getElementById('connect-ha').style.display = 'none';
 
   // Transition ceremony: demo -> connected (dial shifts to new frequency)
   if (c.spotify_connected && !wasConnected) {
@@ -797,10 +934,21 @@ function updateStatus(d) {
   // Lock the dial on first data — signal found
   if (!firstDataReceived) {
     firstDataReceived = true;
-    if (_dialAnimFrame) { clearTimeout(_dialAnimFrame); _dialAnimFrame = null; }
+    if (_dialAnimFrame) { cancelAnimationFrame(_dialAnimFrame); _dialAnimFrame = null; }
     _dialLock(DEMO_FREQ, 'Radio Ital\u00EC', 'Signal locked');
+    // Collapse dial gently — GPU-composited transform for smooth animation
+    setTimeout(() => {
+      const dial = document.getElementById('radio-dial');
+      dial.style.transformOrigin = 'top center';
+      dial.style.transition = 'opacity 2s ease, transform 2s cubic-bezier(0.22, 1, 0.36, 1)';
+      dial.style.opacity = '0';
+      dial.style.transform = 'scaleY(0)';
+      // After transition ends, remove from flow
+      setTimeout(() => { dial.style.display = 'none'; }, 2200);
+    }, 5000);
     document.getElementById('now-playing').style.display = '';
     connectStartTime = Date.now();
+    _initTicker();
     // Auto-start stream on first click
     if (!_wantsPlay) {
       _wantsPlay = true;
@@ -820,6 +968,18 @@ function updateStatus(d) {
   const ns = d.now_streaming || {};
   document.getElementById('np-track').textContent = ns.label || 'Waiting for first segment...';
   document.getElementById('np-meta').textContent = ns.type ? ns.type.toUpperCase() + ' — streaming now' : '';
+
+  // Album art — thumbnail + blurred background wash
+  const artUrl = (ns.metadata && ns.metadata.album_art) || '';
+  const artEl = document.getElementById('album-art');
+  const artBg = document.getElementById('album-art-bg');
+  if (artUrl) {
+    artEl.src = artUrl; artEl.style.display = '';
+    artBg.style.backgroundImage = 'url(' + artUrl + ')'; artBg.style.opacity = '0.15';
+  } else {
+    artEl.style.display = 'none';
+    artBg.style.opacity = '0';
+  }
 
   // Queue (only after Spotify connected — golden path: "nothing else to look at")
   const upcoming = d.upcoming || [];
@@ -865,6 +1025,7 @@ function togglePlay() {
     audio.src = '';
     btn.textContent = '\u25B6';
     btn.classList.remove('playing');
+    _syncEq();
   }
 }
 
@@ -875,6 +1036,7 @@ function _startStream() {
   audio.play().catch(() => {});
   btn.textContent = '\u23F8';
   btn.classList.add('playing');
+  _syncEq();
 }
 
 // Auto-reconnect on stream error (hot reload, network blip)
@@ -992,6 +1154,50 @@ async function saveAdvancedCredentials() {
 // Start polling
 refresh();
 setInterval(refresh, 5000);
+// --- Waveform — golden bars, each bouncing independently ---
+(function() {
+  const wv = document.getElementById('waveform');
+  if (!wv) return;
+  for (let i = 0; i < 36; i++) {
+    const b = document.createElement('div');
+    b.className = 'wb';
+    const h = 4 + Math.random() * 20;
+    b.style.cssText = `--h:${h}px;--d:${(0.45 + Math.random() * 0.85).toFixed(2)}s;--dl:${(Math.random() * 0.7).toFixed(2)}s;height:${Math.round(h * 0.4)}px`;
+    wv.appendChild(b);
+  }
+})();
+
+// Sync waveform with play state
+function _syncEq() {
+  const wv = document.getElementById('waveform');
+  if (!wv) return;
+  wv.classList.toggle('paused', !_wantsPlay);
+}
+</script>
+
+<script>
+// Populate and show ticker after first data
+function _initTicker() {
+  const items = [
+    'Milano 22\u00B0 soleggiato',
+    'Traffico A4: scorrevole',
+    'Roma 24\u00B0 parzialmente nuvoloso',
+    'Serie A: Napoli 2 \u2013 Juventus 1',
+    'Borsa: FTSE MIB +0.8%',
+    'Firenze 20\u00B0 sereno',
+    'Autostrada A1: rallentamenti zona Bologna',
+    'Napoli 25\u00B0 bel tempo',
+    'Torino 18\u00B0 coperto',
+    'Mare: Liguria calmo, Adriatico mosso',
+    'Palermo 27\u00B0 sole splendido',
+    'Prossimo treno Roma\u2013Milano: 14:35',
+  ];
+  const ticker = document.getElementById('ticker');
+  // Duplicate items so the scroll loops seamlessly
+  const html = items.concat(items).map(t => '<span>' + t + '</span>').join('');
+  ticker.innerHTML = html;
+  document.getElementById('ticker-wrap').style.display = '';
+}
 </script>
 </body>
 </html>
