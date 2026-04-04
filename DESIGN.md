@@ -221,21 +221,90 @@ color: rgba(245,237,216,0.4);   /* muted for structural labels */
 ### Play button
 
 Golden sun — not red, not orange. The sun in the image is yellow-gold.
+The outer ring (`0 0 0 6px`) gives it a halo effect — like light bleeding around the sun.
 
 ```css
 .play-btn {
-  width: 44px; height: 44px; border-radius: 50%;
+  width: 48px; height: 48px; border-radius: 50%;
   background: var(--sun2);   /* #ECCC30 */
   color: var(--shadow);      /* dark text — readable */
-  box-shadow: 0 4px 18px rgba(236,204,48,0.45);
+  box-shadow:
+    0 4px 20px rgba(236,204,48,0.5),     /* drop shadow */
+    0 0 0 6px rgba(236,204,48,0.1),      /* outer ring halo */
+    0 0 28px rgba(236,204,48,0.2);       /* diffuse bloom */
+}
+.play-btn:hover {
+  box-shadow:
+    0 4px 24px rgba(244,208,72,0.65),
+    0 0 0 8px rgba(244,208,72,0.14),
+    0 0 36px rgba(244,208,72,0.25);
+  transform: scale(1.05);
 }
 .play-btn.playing {
-  background: var(--ok);     /* #2563EB — blue when active */
+  background: var(--ok);     /* #2563EB — blue when streaming */
   color: #fff;
+  box-shadow: 0 4px 20px rgba(37,99,235,0.5), 0 0 0 6px rgba(37,99,235,0.1);
 }
 ```
 
 **Never use green for the playing state.** Blue (`--ok`) only.
+
+### Waveform
+
+36 golden bars, each bouncing on its own random interval. All the same color — no
+played/upcoming progress. The randomness is the visual.
+
+```css
+.waveform { display: flex; align-items: center; gap: 3px; height: 28px; padding-left: 14px; margin-top: 18px; }
+.wb { width: 3px; border-radius: 2px; background: rgba(240,200,64,0.45); animation: wv var(--d) ease-in-out infinite alternate; animation-delay: var(--dl); }
+@keyframes wv { from { height: 3px; } to { height: var(--h); } }
+```
+
+Generated with JS — each bar gets randomized `--h`, `--d`, `--dl` CSS props:
+
+```js
+for (let i = 0; i < 36; i++) {
+  const b = document.createElement('div');
+  b.className = 'wb';
+  const h = 4 + Math.random() * 20;
+  b.style.cssText = `--h:${h}px;--d:${(0.45+Math.random()*0.85).toFixed(2)}s;--dl:${(Math.random()*0.7).toFixed(2)}s;height:${Math.round(h*0.4)}px`;
+  wv.appendChild(b);
+}
+```
+
+Add `.paused` class on the `.waveform` element when not playing; pair with:
+`waveform.paused .wb { animation-play-state: paused; }`
+
+### Ticker (flow text beneath player)
+
+Inline in the document flow, right after the now-playing card. Uses CSS `mask-image`
+to fade the text at both edges — avoids hard clipping.
+
+```css
+.ticker-wrap {
+  position: relative; overflow: hidden;
+  background: rgba(42,16,8,0.2);
+  border-bottom: 1px solid rgba(245,237,216,0.1);
+  -webkit-mask-image: linear-gradient(90deg, transparent 0%, black 6%, black 94%, transparent 100%);
+  mask-image: linear-gradient(90deg, transparent 0%, black 6%, black 94%, transparent 100%);
+}
+.ticker {
+  display: flex; white-space: nowrap;
+  padding: 10px 0;
+  animation: ticker-scroll 32s linear infinite;
+}
+.ticker span {
+  font-size: 11px; font-style: italic; font-family: 'Playfair Display', serif;
+  color: rgba(245,237,216,0.5); padding: 0 8px;
+}
+.ticker span::before { content: '·'; margin-right: 8px; color: rgba(240,200,64,0.4); }
+@keyframes ticker-scroll { from{transform:translateX(0)} to{transform:translateX(-50%)} }
+```
+
+Content: duplicate the item array so the scroll loops seamlessly (50% scroll = full loop).
+Show on `display:none` initially; reveal once station data arrives via `_initTicker()`.
+
+**Never use `position: fixed` for the ticker** — it should feel like part of the player, not a news header.
 
 ### FM dial band
 
@@ -409,6 +478,7 @@ but check that the stream embed and now-playing elements remain fully functional
 | HA add-on icon | `ha-addon/mammamiradio/icon.png` (256px) |
 | HA logo | `ha-addon/mammamiradio/logo.png` (512px) |
 | Volare reference image | `.context/attachments/image-v1.jpg` |
+| Prototype HTML | `/tmp/platinum-designs/variant-VOLARE.html` — the approved design iteration (not committed, local only) |
 
 To regenerate HA add-on PNGs from SVG:
 ```bash
