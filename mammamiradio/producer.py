@@ -278,7 +278,11 @@ async def run_producer(
                     audio_path, banter_path = await asyncio.gather(capture_task, banter_task)
 
                     # Queue: user's song first
-                    music_seg = Segment(type=SegmentType.MUSIC, path=audio_path, metadata={"title": current.display})
+                    music_seg = Segment(
+                        type=SegmentType.MUSIC,
+                        path=audio_path,
+                        metadata={"title": current.display, "album_art": current.album_art},
+                    )
                     await queue.put(music_seg)
                     state.after_music(current)
                     logger.info("Autoplay queued: %s", current.display)
@@ -362,7 +366,7 @@ async def run_producer(
                 segment = Segment(
                     type=SegmentType.MUSIC,
                     path=norm_path,
-                    metadata={"title": track.display},
+                    metadata={"title": track.display, "album_art": track.album_art},
                 )
                 _bound_track = track
 

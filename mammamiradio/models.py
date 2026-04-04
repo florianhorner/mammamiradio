@@ -28,6 +28,7 @@ class Track:
     spotify_id: str
     local_path: Path | None = None
     position_ms: int = 0
+    album_art: str = ""
 
     @property
     def cache_key(self) -> str:

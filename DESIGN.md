@@ -392,7 +392,54 @@ Dark interior, cream text, golden focus ring.
 
 ---
 
+## Approved look — do not drift from this
+
+The current dashboard design was iterated to an approved state. These elements are correct
+and should be preserved exactly when touching related code:
+
+- **Background**: warm orange-red sunset gradient — large, atmospheric, dominant. Not dark.
+- **Cards**: deep opaque sienna surfaces — solid depth, no transparency.
+- **Waveform**: 36 golden bars bouncing independently — organic, not a progress bar.
+- **Ticker**: Playfair italic Italian text flowing left below the player — unhurried (32s loop).
+- **Play button**: golden with three-layer glow (drop shadow + outer ring + diffuse bloom).
+- **Dial needle**: Lancia red glow, overshoot-and-settle locking animation.
+
+When in doubt: reference the file at `/tmp/platinum-designs/variant-VOLARE.html` and
+the Volare record cover image at `.context/attachments/image-v1.jpg`.
+
+---
+
 ## Motion
+
+### Ticker scroll
+
+32 seconds for a full loop. This is intentionally **slow** — it's ambient information, not
+urgent news. The text should feel like it's drifting past, not racing. Do not speed it up.
+
+The `ease-in-out infinite` on the individual bar animations and `linear infinite` on the
+ticker scroll are different by design:
+- Ticker: `linear` — constant, hypnotic drift
+- Waveform bars: `ease-in-out alternate` — each bar breathes, bounces at its own pace
+
+The mask-image fade (6% either side) means the text appears and disappears softly — never
+hard-clips at the edge.
+
+### Waveform smoothness
+
+Each bar has randomized `--d` (duration: 0.45–1.3s) and `--dl` (delay: 0–0.7s) so they
+never sync up. The lack of synchronization is what makes it look organic rather than
+mechanical. Do not regularize the timing.
+
+Initial bar height is set to ~40% of max (`height: Math.round(h * 0.4)`) so bars start
+mid-height and can bounce both up and down. Starting at 0 would make them all jump from
+the bottom on load — too abrupt.
+
+### Track title change
+
+When the now-playing track updates (`np-track` textContent change), the new text simply
+replaces inline. No slide or fade needed — the Playfair Display italic at 20px has enough
+visual presence that the eye catches it without animation. Adding a transition would
+compete with the waveform motion.
 
 ### Radio dial seeking
 

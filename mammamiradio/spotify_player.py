@@ -420,6 +420,7 @@ class SpotifyPlayer:
                     artist=artist,
                     duration_ms=t.get("duration", 0),
                     spotify_id=spotify_id,
+                    album_art=t.get("album_cover_url", ""),
                 )
                 track.position_ms = t.get("position", 0)
                 return track
