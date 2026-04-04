@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import shutil
 from pathlib import Path
 from uuid import uuid4
 
@@ -12,6 +13,7 @@ import edge_tts
 from mammamiradio.models import AdScript, AdVoice, HostPersonality
 from mammamiradio.normalizer import (
     concat_files,
+    generate_brand_motif,
     generate_music_bed,
     generate_sfx,
     generate_silence,
@@ -20,6 +22,11 @@ from mammamiradio.normalizer import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _estimate_duration(path: Path) -> float:
+    """Rough duration estimate from file size at 192kbps."""
+    return max(5.0, path.stat().st_size / (192 * 128))
 
 
 async def synthesize(text: str, voice: str, output_path: Path) -> Path:
@@ -44,86 +51,110 @@ async def synthesize(text: str, voice: str, output_path: Path) -> Path:
 
 async def synthesize_ad(
     script: AdScript,
-    voice: AdVoice,
+    voices: dict[str, AdVoice],
     tmp_dir: Path,
     sfx_dir: Path | None = None,
 ) -> Path:
-    """Assemble a multi-part ad: voice segments + SFX + pauses into a single MP3."""
-    parts: list[Path] = []
-    loop = asyncio.get_running_loop()
+    """Assemble a multi-part ad: voice segments + SFX + pauses into a single MP3.
 
+    Voices is a role->AdVoice map. Parts with a role field use the matching voice;
+    parts without a role use the first voice in the dict.
+    """
+    ad_parts: list[Path] = []
+    loop = asyncio.get_running_loop()
+    default_voice = next(iter(voices.values()))
+
+    # 1. Brand motif (prepend only, skip on failure)
+    sonic_sig = script.sonic.sonic_signature if script.sonic else ""
+    if sonic_sig:
+        try:
+            motif_path = tmp_dir / f"motif_{uuid4().hex[:8]}.mp3"
+            await loop.run_in_executor(None, generate_brand_motif, motif_path, sonic_sig, sfx_dir)
+            ad_parts.append(motif_path)
+        except Exception as e:
+            logger.warning("Brand motif generation failed, skipping: %s", e)
+
+    # 2. Assemble voice + SFX + pause + environment parts
+    voice_sfx_parts: list[Path] = []
     for _i, part in enumerate(script.parts):
         part_path = tmp_dir / f"adpart_{uuid4().hex[:8]}.mp3"
 
         if part.type == "voice" and part.text:
-            await synthesize(part.text, voice.voice, part_path)
-            parts.append(part_path)
+            # Resolve voice by role
+            voice_for_part = voices.get(part.role, default_voice) if part.role else default_voice
+            await synthesize(part.text, voice_for_part.voice, part_path)
+            voice_sfx_parts.append(part_path)
         elif part.type == "sfx" and part.sfx:
-            await loop.run_in_executor(
-                None,
-                generate_sfx,
-                part_path,
-                part.sfx,
-                sfx_dir,
-            )
-            parts.append(part_path)
+            await loop.run_in_executor(None, generate_sfx, part_path, part.sfx, sfx_dir)
+            voice_sfx_parts.append(part_path)
         elif part.type == "pause":
             duration = part.duration if part.duration > 0 else 0.5
-            await loop.run_in_executor(
-                None,
-                generate_silence,
-                part_path,
-                duration,
-            )
-            parts.append(part_path)
+            await loop.run_in_executor(None, generate_silence, part_path, duration)
+            voice_sfx_parts.append(part_path)
+        elif part.type == "environment":
+            # Environment cues are handled via the bed mixing below
+            pass
 
-    if not parts:
+    if not voice_sfx_parts:
         # Fallback: synthesize brand name
         fallback_path = tmp_dir / f"ad_fallback_{uuid4().hex[:8]}.mp3"
-        await synthesize(script.brand, voice.voice, fallback_path)
+        await synthesize(script.brand, default_voice.voice, fallback_path)
         return fallback_path
 
-    # Assemble voice+sfx parts
-    if len(parts) == 1:
-        voice_path = parts[0]
+    # Concatenate voice+sfx parts
+    if len(voice_sfx_parts) == 1:
+        voice_path = voice_sfx_parts[0]
     else:
         voice_path = tmp_dir / f"ad_voice_{uuid4().hex[:8]}.mp3"
-        await loop.run_in_executor(None, concat_files, parts, voice_path)
-        for p in parts:
+        await loop.run_in_executor(None, concat_files, voice_sfx_parts, voice_path)
+        for p in voice_sfx_parts:
             p.unlink(missing_ok=True)
 
-    # Mix with music bed if mood is specified
-    mood = script.mood or "lounge"
+    # 3. Layer environment bed if present (quieter than music bed)
+    env_name = script.sonic.environment if script.sonic else ""
+    if env_name:
+        try:
+            voice_duration = _estimate_duration(voice_path)
+            env_bed_path = tmp_dir / f"envbed_{uuid4().hex[:8]}.mp3"
+            await loop.run_in_executor(None, generate_music_bed, env_bed_path, env_name, voice_duration + 1.0)
+            env_mixed_path = tmp_dir / f"envmix_{uuid4().hex[:8]}.mp3"
+            await loop.run_in_executor(None, mix_with_bed, voice_path, env_bed_path, env_mixed_path, 0.06)
+            env_bed_path.unlink(missing_ok=True)
+            voice_path.unlink(missing_ok=True)
+            voice_path = env_mixed_path
+        except Exception as e:
+            logger.warning("Environment bed mixing failed (%s), continuing without: %s", env_name, e)
+
+    # 4. Mix with music bed
+    mood = script.mood or (script.sonic.music_bed if script.sonic else "lounge")
     output_path = tmp_dir / f"ad_{uuid4().hex[:8]}.mp3"
     try:
-        # Get voice duration for bed length (approximate: file size / bitrate)
-        voice_size = voice_path.stat().st_size
-        voice_duration = max(5.0, voice_size / (192 * 128))  # rough estimate
+        voice_duration = _estimate_duration(voice_path)
         bed_path = tmp_dir / f"adbed_{uuid4().hex[:8]}.mp3"
-        await loop.run_in_executor(
-            None,
-            generate_music_bed,
-            bed_path,
-            mood,
-            voice_duration + 1.0,
-        )
-        await loop.run_in_executor(
-            None,
-            mix_with_bed,
-            voice_path,
-            bed_path,
-            output_path,
-        )
+        await loop.run_in_executor(None, generate_music_bed, bed_path, mood, voice_duration + 1.0)
+        await loop.run_in_executor(None, mix_with_bed, voice_path, bed_path, output_path)
         bed_path.unlink(missing_ok=True)
         voice_path.unlink(missing_ok=True)
         logger.info("Ad with music bed (%s): %s", mood, output_path.name)
     except Exception as e:
         logger.warning("Music bed mixing failed (%s), using voice-only: %s", mood, e)
-        # Fallback: just use the voice track without a bed
         if voice_path != output_path:
-            import shutil
-
             shutil.move(str(voice_path), str(output_path))
+
+    # 5. Prepend brand motif if we have one
+    if ad_parts:
+        ad_parts.append(output_path)
+        final_path = tmp_dir / f"ad_final_{uuid4().hex[:8]}.mp3"
+        try:
+            await loop.run_in_executor(None, concat_files, ad_parts, final_path, 100)
+            for p in ad_parts:
+                p.unlink(missing_ok=True)
+            return final_path
+        except Exception as e:
+            logger.warning("Motif concat failed, using ad without motif: %s", e)
+            for p in ad_parts[:-1]:
+                p.unlink(missing_ok=True)
+            return output_path
 
     return output_path
 

@@ -13,6 +13,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from mammamiradio.normalizer import (
+    generate_brand_motif,
     generate_bumper_jingle,
     generate_music_bed,
     generate_sfx,
@@ -284,3 +285,182 @@ def test_generate_bumper_jingle_custom_duration(mock_subprocess):
     # -t flag with custom duration
     t_idx = cmd.index("-t")
     assert cmd[t_idx + 1] == "0.8"
+
+
+# ---------------------------------------------------------------------------
+# New music bed types (signature ad system)
+# ---------------------------------------------------------------------------
+
+
+def test_generate_music_bed_tarantella_pop(mock_subprocess):
+    mock_run, _ = mock_subprocess
+    out = Path("/tmp/bed.mp3")
+    generate_music_bed(out, "tarantella_pop", 5.0)
+    cmd = mock_run.call_args[0][0]
+    joined = " ".join(cmd)
+    assert "sine=frequency=523" in joined
+
+
+def test_generate_music_bed_cheap_synth_romance(mock_subprocess):
+    mock_run, _ = mock_subprocess
+    out = Path("/tmp/bed.mp3")
+    generate_music_bed(out, "cheap_synth_romance", 5.0)
+    cmd = mock_run.call_args[0][0]
+    joined = " ".join(cmd)
+    assert "sine=frequency=300" in joined
+
+
+def test_generate_music_bed_suspicious_jazz(mock_subprocess):
+    mock_run, _ = mock_subprocess
+    out = Path("/tmp/bed.mp3")
+    generate_music_bed(out, "suspicious_jazz", 5.0)
+    cmd = mock_run.call_args[0][0]
+    joined = " ".join(cmd)
+    assert "sine=frequency=220" in joined
+    assert "sine=frequency=277" in joined
+
+
+def test_generate_music_bed_discount_techno(mock_subprocess):
+    mock_run, _ = mock_subprocess
+    out = Path("/tmp/bed.mp3")
+    generate_music_bed(out, "discount_techno", 5.0)
+    cmd = mock_run.call_args[0][0]
+    joined = " ".join(cmd)
+    assert "sine=frequency=440" in joined
+    assert "sine=frequency=880" in joined
+
+
+def test_generate_music_bed_environment_cafe(mock_subprocess):
+    mock_run, _ = mock_subprocess
+    out = Path("/tmp/bed.mp3")
+    generate_music_bed(out, "cafe", 5.0)
+    cmd = mock_run.call_args[0][0]
+    joined = " ".join(cmd)
+    assert "sine=frequency=180" in joined
+
+
+# ---------------------------------------------------------------------------
+# New SFX types (signature ad system)
+# ---------------------------------------------------------------------------
+
+
+def test_generate_sfx_tape_stop(mock_subprocess):
+    mock_run, _ = mock_subprocess
+    out = Path("/tmp/sfx.mp3")
+    generate_sfx(out, "tape_stop")
+    cmd = mock_run.call_args[0][0]
+    joined = " ".join(cmd)
+    # Descending sweep (2000 -> 80)
+    assert "aevalsrc=" in joined
+
+
+def test_generate_sfx_hotline_beep(mock_subprocess):
+    mock_run, _ = mock_subprocess
+    out = Path("/tmp/sfx.mp3")
+    generate_sfx(out, "hotline_beep")
+    cmd = mock_run.call_args[0][0]
+    joined = " ".join(cmd)
+    assert "1336" in joined
+
+
+def test_generate_sfx_mandolin_sting(mock_subprocess):
+    mock_run, _ = mock_subprocess
+    out = Path("/tmp/sfx.mp3")
+    generate_sfx(out, "mandolin_sting")
+    cmd = mock_run.call_args[0][0]
+    joined = " ".join(cmd)
+    assert "aevalsrc=" in joined
+
+
+def test_generate_sfx_ice_clink(mock_subprocess):
+    mock_run, _ = mock_subprocess
+    out = Path("/tmp/sfx.mp3")
+    generate_sfx(out, "ice_clink")
+    cmd = mock_run.call_args[0][0]
+    joined = " ".join(cmd)
+    assert "2400" in joined
+
+
+def test_generate_sfx_startup_synth(mock_subprocess):
+    mock_run, _ = mock_subprocess
+    out = Path("/tmp/sfx.mp3")
+    generate_sfx(out, "startup_synth")
+    cmd = mock_run.call_args[0][0]
+    joined = " ".join(cmd)
+    assert "aevalsrc=" in joined
+
+
+def test_generate_sfx_register_hit(mock_subprocess):
+    """register_hit is an alias for cash_register."""
+    mock_run, _ = mock_subprocess
+    out = Path("/tmp/sfx.mp3")
+    generate_sfx(out, "register_hit")
+    cmd = mock_run.call_args[0][0]
+    joined = " ".join(cmd)
+    assert "1200" in joined
+
+
+# ---------------------------------------------------------------------------
+# mix_with_bed volume_scale (signature ad system)
+# ---------------------------------------------------------------------------
+
+
+def test_mix_with_bed_custom_volume_scale(mock_subprocess):
+    mock_run, _ = mock_subprocess
+    voice = Path("/tmp/voice.mp3")
+    bed = Path("/tmp/bed.mp3")
+    out = Path("/tmp/mixed.mp3")
+
+    mix_with_bed(voice, bed, out, volume_scale=0.06)
+    cmd = mock_run.call_args[0][0]
+    joined = " ".join(cmd)
+    assert "volume=0.06" in joined
+
+
+# ---------------------------------------------------------------------------
+# generate_brand_motif (signature ad system)
+# ---------------------------------------------------------------------------
+
+
+def test_generate_brand_motif_parses_and_concats(tmp_path, mock_subprocess):
+    mock_run, completed = mock_subprocess
+
+    def _create_output(cmd, **kwargs):
+        for i, arg in enumerate(cmd):
+            if arg == "-f" and i + 1 < len(cmd) and cmd[i + 1] == "mp3":
+                Path(cmd[-1]).parent.mkdir(parents=True, exist_ok=True)
+                Path(cmd[-1]).write_bytes(b"\x00" * 64)
+                break
+        return completed
+
+    mock_run.side_effect = _create_output
+
+    out = tmp_path / "motif.mp3"
+    generate_brand_motif(out, "ice_clink+startup_synth")
+    # Should have called ffmpeg multiple times (2 SFX + concat)
+    assert mock_run.call_count >= 2
+
+
+def test_generate_brand_motif_single_component(tmp_path, mock_subprocess):
+    mock_run, completed = mock_subprocess
+
+    # Make subprocess.run create the output file so shutil.move can find it
+    def _create_output(cmd, **kwargs):
+        for i, arg in enumerate(cmd):
+            if arg == "-f" and i + 1 < len(cmd) and cmd[i + 1] == "mp3":
+                # The output path is the last argument
+                Path(cmd[-1]).parent.mkdir(parents=True, exist_ok=True)
+                Path(cmd[-1]).write_bytes(b"\x00" * 64)
+                break
+        return completed
+
+    mock_run.side_effect = _create_output
+
+    out = tmp_path / "motif.mp3"
+    generate_brand_motif(out, "chime")
+    assert out.exists()
+
+
+def test_generate_brand_motif_empty_signature_raises():
+    with pytest.raises(ValueError, match="Empty sonic_signature"):
+        generate_brand_motif(Path("/tmp/motif.mp3"), "")

@@ -222,3 +222,48 @@ def test_addon_mode_skips_bind_auth(monkeypatch):
     config = load_config(str(toml_path))  # Should not raise
     assert config.is_addon is True
     assert config.bind_host == "0.0.0.0"
+
+
+# ---------------------------------------------------------------------------
+# Campaign spine and voice role parsing
+# ---------------------------------------------------------------------------
+
+
+def test_load_config_parses_campaign_spines():
+    """Brands with [ads.brands.campaign] sub-tables should have CampaignSpine."""
+    toml_path = Path(__file__).parent.parent / "radio.toml"
+    config = load_config(str(toml_path))
+
+    # Negroni as a Service has a campaign spine
+    negroni = next(b for b in config.ads.brands if b.name == "Negroni as a Service")
+    assert negroni.campaign is not None
+    assert "cloud" in negroni.campaign.premise.lower()
+    assert negroni.campaign.sonic_signature == "ice_clink+startup_synth"
+    assert "classic_pitch" in negroni.campaign.format_pool
+    assert negroni.campaign.spokesperson == "hammer"
+
+
+def test_load_config_brands_without_campaign():
+    """Brands without campaign sub-tables should have campaign=None."""
+    toml_path = Path(__file__).parent.parent / "radio.toml"
+    config = load_config(str(toml_path))
+
+    # Mausoleo Berlusconi has no campaign
+    mausoleo = next(b for b in config.ads.brands if b.name == "Mausoleo Berlusconi")
+    assert mausoleo.campaign is None
+
+
+def test_load_config_parses_voice_roles():
+    """Voices with role field should have it populated."""
+    toml_path = Path(__file__).parent.parent / "radio.toml"
+    config = load_config(str(toml_path))
+
+    roberto = next(v for v in config.ads.voices if v.name == "Roberto")
+    assert roberto.role == "hammer"
+
+    palmira = next(v for v in config.ads.voices if v.name == "Palmira")
+    assert palmira.role == "seductress"
+
+    # New voices
+    marzio = next(v for v in config.ads.voices if v.name == "Dottore Marzio")
+    assert marzio.role == "bureaucrat"

@@ -11,15 +11,87 @@ import anthropic
 from mammamiradio.config import StationConfig
 from mammamiradio.models import (
     AdBrand,
+    AdFormat,
     AdPart,
     AdScript,
     AdVoice,
     HostPersonality,
     PersonalityAxes,
+    SonicWorld,
     StationState,
 )
+from mammamiradio.normalizer import AVAILABLE_SFX_TYPES
 
 logger = logging.getLogger(__name__)
+
+# --- Ad creative system constants ---
+
+AD_FORMATS: dict[str, str] = {
+    AdFormat.CLASSIC_PITCH: (
+        "One aggressive announcer delivers the pitch. Fast close, clean joke. "
+        "Structure: hook -> build tension -> deliver the pitch -> fast tagline or disclaimer. "
+        "Single speaker. Confident, polished, slightly unhinged sincerity."
+    ),
+    AdFormat.TESTIMONIAL: (
+        "A fake customer testimonial followed by an announcer button. Two speakers: "
+        "the WITNESS delivers their suspiciously specific praise, then the main speaker "
+        "wraps with a tagline. The witness should sound rehearsed but trying to sound natural."
+    ),
+    AdFormat.DUO_SCENE: (
+        "Two characters in a scene, arguing or negotiating. One is clearly losing the argument. "
+        "The comedy comes from the dynamic between them. End with a product plug that resolves "
+        "(or fails to resolve) the conflict. Two speakers with distinct roles."
+    ),
+    AdFormat.LIVE_REMOTE: (
+        "A field reporter at a ridiculous location or event related to the brand. "
+        "Background chaos implied. The reporter struggles to maintain professionalism. "
+        "Single speaker pretending to be on-location. Use environment cues."
+    ),
+    AdFormat.LATE_NIGHT_WHISPER: (
+        "Intimate, sensual, slightly cursed. ASMR energy. The product is described "
+        "with inappropriate levels of tenderness. Slow pacing, dramatic pauses. "
+        "Single speaker. Think late-night Italian TV shopping meets poetry."
+    ),
+    AdFormat.INSTITUTIONAL_PSA: (
+        "Serious public-service announcement tone for something completely deranged. "
+        "Official language, bureaucratic gravitas, absurd content. "
+        "Single speaker. The contrast between tone and subject IS the joke."
+    ),
+}
+
+SPEAKER_ROLES: dict[str, str] = {
+    "hammer": "The Hammer: booming national TV voice, dramatic pauses, sells the apocalypse with a smile",
+    "seductress": "The Seductress: whisper-ASMR menace, makes everything sound inappropriately intimate",
+    "bureaucrat": "The Bureaucrat: dry official notice voice, reads absurd things with total sincerity",
+    "maniac": "The Maniac: oversold shopping-channel energy, everything is THE GREATEST THING EVER",
+    "witness": "The Witness: fake customer testimonial, suspiciously specific, clearly reading a script",
+    "disclaimer_goblin": "The Disclaimer Goblin: ultra-fast legal cleanup, buries the bad news in speed",
+}
+
+SONIC_ENVIRONMENTS: dict[str, str] = {
+    "cafe": "Italian cafe ambience, espresso machine hissing, distant chatter",
+    "motorway": "Highway noise, car engine hum, wind rushing past",
+    "beach": "Mediterranean beach, waves lapping, distant seagulls",
+    "showroom": "Echoey showroom floor, polished surfaces, muzak undertone",
+    "stadium": "Crowd roar, echo of announcer PA system",
+    "luxury_spa": "Zen water trickling, soft chimes, hushed whispers",
+    "occult_basement": "Dripping water, distant chanting, candle-flicker ambience",
+    "shopping_channel": "Bright studio energy, phone ringing, audience gasps",
+}
+
+SONIC_MUSIC_BEDS: dict[str, str] = {
+    "lounge": "warm mid-frequency hum, gentle modulation",
+    "tarantella_pop": "fast bright rhythm, Italian folk-pop energy",
+    "cheap_synth_romance": "mid frequencies, slow tremolo, warm synth pads",
+    "overblown_epic": "layered low+high drones, cinematic grandiosity",
+    "suspicious_jazz": "detuned intervals, slow modulation, noir vibes",
+    "discount_techno": "fast pulse, rapid tremolo, budget club energy",
+    # Legacy moods kept as aliases
+    "dramatic": "low rumbling drone with slow LFO",
+    "upbeat": "bright rhythmic pulse",
+    "mysterious": "dark filtered noise with reverb feel",
+    "epic": "layered low+high drones",
+}
 
 
 def _personality_modifier(name: str, axes: PersonalityAxes) -> str:
@@ -185,12 +257,15 @@ AD_BREAK_OUTROS = [
 
 async def write_ad(
     brand: AdBrand,
-    voice: AdVoice,
+    voices: dict[str, AdVoice],
     state: StationState,
     config: StationConfig,
+    ad_format: str = "classic_pitch",
+    sonic: SonicWorld | None = None,
 ) -> AdScript:
-    """Generate a structured fictional ad script for one brand/voice pairing."""
+    """Generate a structured fictional ad script for one brand with role-based voices."""
     client = anthropic.AsyncAnthropic(api_key=config.anthropic_api_key)
+    sonic = sonic or SonicWorld()
 
     # Build context for cross-referencing
     recent_ads = (
@@ -204,6 +279,7 @@ async def write_ad(
 
     # Find same-brand history for campaign arcs
     same_brand_ads = [e.summary for e in state.ad_history if e.brand == brand.name][-3:]
+
     # Home Assistant context for ads
     ad_ha_block = ""
     if state.ha_context:
@@ -226,17 +302,52 @@ BUILD ON THIS. Reference or contradict previous claims. Create a narrative arc:
 - If ongoing campaign: escalate the absurdity, add plot twists, reveal scandals about the brand
 - Think GTA radio: each ad for the same brand is an episode in a saga"""
 
+    # Campaign spine context
+    spine_context = ""
+    if brand.campaign:
+        spine_context = f"""
+CAMPAIGN SPINE:
+- Core premise: {brand.campaign.premise}
+- Escalation rule: {brand.campaign.escalation_rule}"""
+
+    # Build speaker descriptions for the prompt
+    speaker_lines = []
+    for role_name, voice in voices.items():
+        role_desc = SPEAKER_ROLES.get(role_name, f"Commercial voice: {voice.style}")
+        speaker_lines.append(f"- {role_name.upper()} ({voice.name}): {role_desc}")
+    speakers_block = "\n".join(speaker_lines)
+
+    # Format description
+    format_desc = AD_FORMATS.get(ad_format, AD_FORMATS[AdFormat.CLASSIC_PITCH])
+
+    # Sonic world description
+    env_desc = SONIC_ENVIRONMENTS.get(sonic.environment, "")
+    env_line = f"\n- Environment: {sonic.environment} — {env_desc}" if sonic.environment else ""
+
+    # Available SFX (single source of truth from normalizer)
+    sfx_types = ", ".join(f'"{t}"' for t in AVAILABLE_SFX_TYPES)
+
+    role_names = list(voices.keys())
+
     prompt = f"""Write a fake radio ad for the fictional brand "{brand.name}".
 Tagline: "{brand.tagline}"
 Category: {brand.category}
 
-The ad is read by {voice.name}, whose style is: {voice.style}
+AD FORMAT: {ad_format}
+{format_desc}
 
-IMPORTANT: {voice.name} is NOT one of the radio hosts. This is a separate commercial voice.
+SONIC WORLD:{env_line}
+- Music bed: {sonic.music_bed}
+- Transition motif: {sonic.transition_motif}
+
+SPEAKERS:
+{speakers_block}
+
+IMPORTANT: These are NOT radio hosts. These are separate commercial voices.
+{campaign_context}{spine_context}
 
 Recent ads from OTHER brands that aired (you may cleverly reference or mock these):
 {chr(10).join(recent_ads)}
-{campaign_context}
 
 Running jokes from the hosts: {jokes if jokes else "none"}
 Recently played music: {recent_tracks if recent_tracks else "show just started"}
@@ -246,31 +357,30 @@ RULES:
 - Absurd but delivered with COMPLETE sincerity. The product may be insane but the pitch is 100% professional.
 - Think Italian TV shopping channel meets GTA radio meets Silvio Berlusconi's fever dream.
 - 15-25 seconds when read aloud. Keep each voice line under 30 words.
-- Structure the ad like a REAL produced commercial: open with a hook or SFX, build tension, deliver the pitch, end with a fast disclaimer or tagline.
-- You may interleave sound effect cues between voice lines for a produced feel.
-- Available SFX types: "chime", "sweep", "ding", "cash_register", "whoosh"
+- Follow the ad format rules above. Use the assigned speakers by their role names.
+- You may interleave sound effect cues and environment cues between voice lines.
+- Available SFX types: {sfx_types}
 - ALL text must be in {config.station.language}.
-- You may reference what the hosts said, what other ads claimed, or current music — GTA-radio style cross-pollination.
-- The mood field determines background music: "dramatic" for serious/dark products, "lounge" for luxury/lifestyle, "upbeat" for exciting offers, "mysterious" for weird products, "epic" for grandiose claims.
+- You may reference what the hosts said, what other ads claimed, or current music.
 
 Return JSON:
 {{
   "parts": [
-    {{"type": "sfx", "sfx": "chime"}},
-    {{"type": "voice", "text": "Ad copy line here"}},
+    {{"type": "sfx", "sfx": "{sonic.transition_motif}"}},
+    {{"type": "voice", "text": "Ad copy line here", "role": "{role_names[0]}"}},
     {{"type": "sfx", "sfx": "sweep"}},
-    {{"type": "voice", "text": "More ad copy"}},
+    {{"type": "voice", "text": "More ad copy", "role": "{role_names[-1]}"}},
     {{"type": "pause", "duration": 0.5}},
-    {{"type": "voice", "text": "Tagline or fast disclaimer"}}
+    {{"type": "voice", "text": "Fast disclaimer", "role": "{role_names[-1]}"}}
   ],
-  "mood": "lounge",
-  "summary": "One sentence summary of this ad for future reference"
+  "mood": "{sonic.music_bed}",
+  "summary": "One sentence summary IN ENGLISH for internal tracking"
 }}"""
 
     try:
         resp = await client.messages.create(
             model=config.audio.claude_model,
-            max_tokens=600,
+            max_tokens=800,
             system=_build_system_prompt(config),
             messages=[{"role": "user", "content": prompt}],
         )
@@ -292,6 +402,8 @@ Return JSON:
                     text=p.get("text", ""),
                     sfx=p.get("sfx", ""),
                     duration=p.get("duration", 0.0),
+                    role=p.get("role", ""),
+                    environment=p.get("environment", ""),
                 )
             )
 
@@ -299,10 +411,32 @@ Return JSON:
         if not any(p.type == "voice" for p in parts):
             parts = [AdPart(type="voice", text=data.get("text", brand.tagline))]
 
+        # Light validation: demote single-role duo_scenes
+        roles_found = {p.role for p in parts if p.type == "voice" and p.role}
+        actual_format = ad_format
+        if ad_format in (AdFormat.DUO_SCENE, AdFormat.TESTIMONIAL) and len(roles_found) < 2:
+            actual_format = AdFormat.CLASSIC_PITCH
+            logger.info("Demoted %s to classic_pitch (only %d role(s) in output)", ad_format, len(roles_found))
+
         summary = data.get("summary", f"Ad for {brand.name}")
-        mood = data.get("mood", "lounge")
-        logger.info("Generated structured ad for %s: %d parts, mood=%s", brand.name, len(parts), mood)
-        return AdScript(brand=brand.name, parts=parts, summary=summary, mood=mood)
+        mood = data.get("mood", sonic.music_bed)
+        logger.info(
+            "Generated ad for %s: format=%s, %d parts, mood=%s, roles=%s",
+            brand.name,
+            actual_format,
+            len(parts),
+            mood,
+            roles_found or "default",
+        )
+        return AdScript(
+            brand=brand.name,
+            parts=parts,
+            summary=summary,
+            mood=mood,
+            format=actual_format,
+            sonic=sonic,
+            roles_used=sorted(roles_found),
+        )
 
     except Exception as e:
         logger.error("Ad generation failed: %s", e)
@@ -315,4 +449,6 @@ Return JSON:
             brand=brand.name,
             parts=[AdPart(type="voice", text=text)],
             summary=f"Fallback ad for {brand.name}",
+            format=ad_format,
+            sonic=sonic,
         )

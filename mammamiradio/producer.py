@@ -6,6 +6,7 @@ import asyncio
 import logging
 import random
 from collections.abc import Callable
+from dataclasses import replace
 from pathlib import Path
 from uuid import uuid4
 
@@ -14,9 +15,12 @@ from mammamiradio.downloader import download_track
 from mammamiradio.ha_context import HomeContext, fetch_home_context
 from mammamiradio.models import (
     AdBrand,
+    AdFormat,
     AdHistoryEntry,
+    AdVoice,
     Segment,
     SegmentType,
+    SonicWorld,
     StationState,
 )
 from mammamiradio.normalizer import (
@@ -46,6 +50,137 @@ def _pick_brand(brands: list[AdBrand], ad_history: list) -> AdBrand:
         eligible = list(brands)  # allow repeats if pool exhausted
     weights = [3 if b.recurring else 1 for b in eligible]
     return random.choices(eligible, weights=weights, k=1)[0]
+
+
+# Default sonic palettes by brand category
+_CATEGORY_SONIC: dict[str, SonicWorld] = {
+    "tech": SonicWorld(environment="shopping_channel", music_bed="discount_techno", transition_motif="startup_synth"),
+    "food": SonicWorld(environment="cafe", music_bed="tarantella_pop", transition_motif="register_hit"),
+    "fashion": SonicWorld(environment="showroom", music_bed="suspicious_jazz", transition_motif="whoosh"),
+    "beauty": SonicWorld(environment="luxury_spa", music_bed="cheap_synth_romance", transition_motif="mandolin_sting"),
+    "services": SonicWorld(environment="motorway", music_bed="lounge", transition_motif="chime"),
+    "finance": SonicWorld(environment="", music_bed="suspicious_jazz", transition_motif="hotline_beep"),
+    "health": SonicWorld(environment="", music_bed="lounge", transition_motif="ding"),
+    "fitness": SonicWorld(environment="stadium", music_bed="upbeat", transition_motif="whoosh"),
+    "tourism": SonicWorld(environment="beach", music_bed="tarantella_pop", transition_motif="mandolin_sting"),
+}
+
+# Default roles needed per format
+_FORMAT_ROLES: dict[str, list[str]] = {
+    AdFormat.CLASSIC_PITCH: ["hammer"],
+    AdFormat.TESTIMONIAL: ["witness", "hammer"],
+    AdFormat.DUO_SCENE: ["hammer", "maniac"],
+    AdFormat.LIVE_REMOTE: ["hammer"],
+    AdFormat.LATE_NIGHT_WHISPER: ["seductress"],
+    AdFormat.INSTITUTIONAL_PSA: ["bureaucrat"],
+}
+
+ALL_FORMATS = [f.value for f in AdFormat]
+
+
+def _select_ad_creative(
+    brand: AdBrand,
+    state: StationState,
+    config: StationConfig,
+) -> tuple[str, SonicWorld, list[str]]:
+    """Pick the ad format, sonic world, and needed speaker roles for this spot.
+
+    Voice-count guard: if fewer than 2 distinct voices are available, multi-voice
+    formats (duo_scene, testimonial) are excluded from candidates.
+    """
+    # Determine available distinct voices
+    num_voices = len(config.ads.voices) if config.ads.voices else 1
+
+    # Pick format
+    if brand.campaign and brand.campaign.format_pool:
+        candidates = list(brand.campaign.format_pool)
+    else:
+        candidates = list(ALL_FORMATS)
+
+    # Voice-count guard: exclude multi-voice formats if < 2 voices
+    if num_voices < 2:
+        candidates = [f for f in candidates if AdFormat(f).voice_count < 2]
+        if not candidates:
+            candidates = [AdFormat.CLASSIC_PITCH]
+
+    # Avoid last-used format for this brand
+    brand_history = [e for e in state.ad_history if e.brand == brand.name]
+    if brand_history:
+        last_format = brand_history[-1].format
+        if last_format and len(candidates) > 1:
+            candidates = [f for f in candidates if f != last_format] or candidates
+
+    ad_format = random.choice(candidates)
+
+    # Pick sonic world
+    if brand.campaign and brand.campaign.sonic_signature:
+        cat_sonic = _CATEGORY_SONIC.get(brand.category, SonicWorld())
+        sonic = SonicWorld(
+            environment=cat_sonic.environment,
+            music_bed=cat_sonic.music_bed,
+            transition_motif=brand.campaign.sonic_signature.split("+")[0],
+            sonic_signature=brand.campaign.sonic_signature,
+        )
+    elif brand.category in _CATEGORY_SONIC:
+        sonic = replace(_CATEGORY_SONIC[brand.category])
+    else:
+        sonic = SonicWorld()
+
+    # Determine needed roles
+    if brand.campaign and brand.campaign.spokesperson:
+        primary_role = brand.campaign.spokesperson
+        default_roles = _FORMAT_ROLES.get(ad_format, ["hammer"])
+        if AdFormat(ad_format).voice_count >= 2:
+            # Primary is the spokesperson, secondary is the other role
+            secondary = [r for r in default_roles if r != primary_role]
+            roles = [primary_role] + (secondary if secondary else [default_roles[-1]])
+        else:
+            roles = [primary_role]
+    else:
+        roles = _FORMAT_ROLES.get(ad_format, ["hammer"])
+
+    return ad_format, sonic, roles
+
+
+def _cast_voices(
+    brand: AdBrand,
+    config: StationConfig,
+    roles_needed: list[str],
+) -> dict[str, AdVoice]:
+    """Map needed speaker roles to actual AdVoice instances.
+
+    Falls back to random voice from pool if no voice matches a needed role.
+    """
+    voices = config.ads.voices
+    if not voices:
+        # No voices configured, use a host as fallback
+        host = random.choice(config.hosts)
+        fallback = AdVoice(name=host.name, voice=host.voice, style=host.style)
+        return {roles_needed[0] if roles_needed else "default": fallback}
+
+    # Build role->voice index
+    role_index: dict[str, AdVoice] = {}
+    for v in voices:
+        if v.role:
+            role_index[v.role] = v
+
+    result: dict[str, AdVoice] = {}
+    used_voices: set[str] = set()
+
+    for role in roles_needed:
+        if role in role_index:
+            result[role] = role_index[role]
+            used_voices.add(role_index[role].name)
+        else:
+            # Fallback: pick a random voice not already used
+            available = [v for v in voices if v.name not in used_voices]
+            if not available:
+                available = list(voices)
+            pick = random.choice(available)
+            result[role] = pick
+            used_voices.add(pick.name)
+
+    return result
 
 
 async def run_producer(
@@ -177,8 +312,12 @@ async def run_producer(
                 await loop.run_in_executor(None, generate_bumper_jingle, bumper_in)
                 break_parts.append(bumper_in)
 
+                # Ad spot creative pipeline:
+                #   _pick_brand -> _select_ad_creative -> _cast_voices -> write_ad -> synthesize_ad
+
                 # 3. Individual ad spots
                 used_brands_this_break: list[str] = []
+                break_formats: list[str] = []
                 for spot_idx in range(num_spots):
                     # Avoid brands used in this same break
                     brand = _pick_brand(
@@ -188,36 +327,45 @@ async def run_producer(
                     )
                     used_brands_this_break.append(brand.name)
 
-                    voice = random.choice(config.ads.voices) if config.ads.voices else None
+                    # Creative selection and voice casting
+                    ad_format, sonic, roles_needed = _select_ad_creative(brand, state, config)
+                    voice_map = _cast_voices(brand, config, roles_needed)
+
                     logger.info(
-                        "  Spot %d/%d: %s (voice: %s)",
+                        "  Spot %d/%d: %s (format=%s, roles=%s)",
                         spot_idx + 1,
                         num_spots,
                         brand.name,
-                        voice.name if voice else "host",
+                        ad_format,
+                        list(voice_map.keys()),
                     )
 
-                    if voice:
-                        script = await write_ad(brand, voice, state, config)
-                        sfx_dir = Path(config.ads.sfx_dir) if config.ads.sfx_dir else None
-                        ad_path = await synthesize_ad(script, voice, config.tmp_dir, sfx_dir)
-                    else:
-                        from mammamiradio.models import AdVoice as _AV  # noqa: N814
+                    sfx_dir = Path(config.ads.sfx_dir) if config.ads.sfx_dir else None
 
-                        host = random.choice(config.hosts)
-                        fallback_voice = _AV(name=host.name, voice=host.voice, style=host.style)
-                        script = await write_ad(brand, fallback_voice, state, config)
-                        sfx_dir = Path(config.ads.sfx_dir) if config.ads.sfx_dir else None
-                        ad_path = await synthesize_ad(script, fallback_voice, config.tmp_dir, sfx_dir)
+                    script = await write_ad(
+                        brand,
+                        voice_map,
+                        state,
+                        config,
+                        ad_format=ad_format,
+                        sonic=sonic,
+                    )
+                    ad_path = await synthesize_ad(script, voice_map, config.tmp_dir, sfx_dir)
 
                     break_parts.append(ad_path)
                     break_brands.append(brand.name)
                     break_summaries.append(script.summary)
+                    break_formats.append(script.format)
                     full_text = " ".join(p.text for p in script.parts if p.type == "voice" and p.text)
                     break_texts.append(full_text)
 
-                    # Record each spot in history so next spot avoids the same brand
-                    state.record_ad_spot(brand=brand.name, summary=script.summary)
+                    # Record each spot in history with format and sonic info
+                    state.record_ad_spot(
+                        brand=brand.name,
+                        summary=script.summary,
+                        format=script.format,
+                        sonic_signature=brand.campaign.sonic_signature if brand.campaign else "",
+                    )
 
                     # Bumper jingle between spots (not after last one)
                     if spot_idx < num_spots - 1:
@@ -263,6 +411,7 @@ async def run_producer(
                     "brands": break_brands,
                     "texts": break_texts,
                     "summaries": break_summaries,
+                    "formats": break_formats,
                     "spots": num_spots,
                 }
                 segment = Segment(

@@ -13,7 +13,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, StreamingResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 
 from mammamiradio.models import PersonalityAxes, PlaylistSource, Segment, SegmentType
@@ -147,6 +147,7 @@ def _inject_ingress_prefix(html: str, prefix: str) -> str:
     # (e.g. _base + '/api/hosts') — that causes double-prefixing.
     html = html.replace('href="/static/', f'href="{prefix}/static/')
     html = html.replace('href="/listen"', f'href="{prefix}/listen"')
+    html = html.replace('href="/spotify/auth"', f'href="{prefix}/spotify/auth"')
     html = html.replace('src="/stream"', f'src="{prefix}/stream"')
     # Service worker registration is standalone (no _base), needs rewriting
     html = html.replace("'/sw.js'", f"'{prefix}/sw.js'")
@@ -503,6 +504,89 @@ async def setup_recheck(request: Request, _: None = Depends(require_admin_access
     config = request.app.state.config
     state = request.app.state.station_state
     return await asyncio.to_thread(build_setup_status, config, state, probe=True)
+
+
+@router.post("/api/setup/save-keys", dependencies=[Depends(require_admin_access)])
+async def save_keys(request: Request):
+    """Save API credentials to .env (or addon options.json) and update the live config."""
+    body = await request.json()
+    config = request.app.state.config
+
+    allowed = {"SPOTIFY_CLIENT_ID", "SPOTIFY_CLIENT_SECRET", "ANTHROPIC_API_KEY", "PLAYLIST_SPOTIFY_URL"}
+    updates = {k: v.strip() for k, v in body.items() if k in allowed and isinstance(v, str) and v.strip()}
+
+    if not updates:
+        return {"ok": False, "error": "No keys provided"}
+
+    # Persist to disk
+    if config.is_addon:
+        _save_addon_options(updates)
+    else:
+        _save_dotenv(updates)
+
+    # Update env + live config so re-check sees the values immediately
+    for k, v in updates.items():
+        os.environ[k] = v
+    if "SPOTIFY_CLIENT_ID" in updates:
+        config.spotify_client_id = updates["SPOTIFY_CLIENT_ID"]
+    if "SPOTIFY_CLIENT_SECRET" in updates:
+        config.spotify_client_secret = updates["SPOTIFY_CLIENT_SECRET"]
+    if "ANTHROPIC_API_KEY" in updates:
+        config.anthropic_api_key = updates["ANTHROPIC_API_KEY"]
+    if "PLAYLIST_SPOTIFY_URL" in updates:
+        config.playlist.spotify_url = updates["PLAYLIST_SPOTIFY_URL"]
+
+    return {"ok": True, "saved": list(updates.keys())}
+
+
+def _save_dotenv(updates: dict[str, str]) -> None:
+    """Write key=value pairs to .env, updating existing keys or appending new ones."""
+    env_path = Path(".env")
+    lines = env_path.read_text().splitlines() if env_path.exists() else []
+
+    written = set()
+    new_lines = []
+    for line in lines:
+        stripped = line.strip()
+        if stripped and not stripped.startswith("#") and "=" in stripped:
+            key = stripped.split("=", 1)[0].strip()
+            if key in updates:
+                new_lines.append(f"{key}={updates[key]}")
+                written.add(key)
+                continue
+        new_lines.append(line)
+
+    for key, value in updates.items():
+        if key not in written:
+            new_lines.append(f"{key}={value}")
+
+    env_path.write_text("\n".join(new_lines) + "\n")
+
+
+def _save_addon_options(updates: dict[str, str]) -> None:
+    """Update /data/options.json with new credential values."""
+    import json as _json
+
+    options_path = Path("/data/options.json")
+    options = {}
+    if options_path.exists():
+        try:
+            options = _json.loads(options_path.read_text())
+        except (ValueError, OSError):
+            pass
+
+    key_map = {
+        "SPOTIFY_CLIENT_ID": "spotify_client_id",
+        "SPOTIFY_CLIENT_SECRET": "spotify_client_secret",
+        "ANTHROPIC_API_KEY": "anthropic_api_key",
+        "PLAYLIST_SPOTIFY_URL": "playlist_spotify_url",
+    }
+    for env_key, value in updates.items():
+        opt_key = key_map.get(env_key)
+        if opt_key:
+            options[opt_key] = value
+
+    options_path.write_text(_json.dumps(options, indent=2))
 
 
 @router.get("/api/setup/addon-snippet")
@@ -1005,6 +1089,123 @@ async def status(request: Request, _: None = Depends(require_admin_access)):
         }
     )
     return payload
+
+
+def _detect_callback_url(request: Request) -> str:
+    """Build the Spotify OAuth callback URL from the current request's origin."""
+    ingress_prefix = _sanitize_ingress_prefix(request.headers.get("X-Ingress-Path", ""))
+    scheme = request.headers.get("X-Forwarded-Proto", str(request.url.scheme))
+    host = request.headers.get("X-Forwarded-Host") or request.headers.get("Host") or "localhost:8000"
+    return f"{scheme}://{host}{ingress_prefix}/spotify/callback"
+
+
+def _read_oauth_state(tmp_dir: Path) -> tuple[str, str]:
+    """Read OAuth state + callback URL from disk (survives server reload)."""
+    import json
+
+    state_file = tmp_dir / "spotify-oauth-state.json"
+    try:
+        data = json.loads(state_file.read_text())
+        return data.get("state", ""), data.get("callback_url", "")
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return "", ""
+
+
+def _write_oauth_state(tmp_dir: Path, state: str, callback_url: str) -> None:
+    """Persist OAuth state to disk so it survives server reload."""
+    import json
+
+    state_file = tmp_dir / "spotify-oauth-state.json"
+    state_file.write_text(json.dumps({"state": state, "callback_url": callback_url}))
+
+
+def _clear_oauth_state(tmp_dir: Path) -> None:
+    (tmp_dir / "spotify-oauth-state.json").unlink(missing_ok=True)
+
+
+@router.get("/spotify/auth", dependencies=[Depends(require_admin_access)])
+async def spotify_auth_start(request: Request):
+    """Start Spotify OAuth — redirects browser to Spotify authorization page."""
+    from mammamiradio.spotify_auth import build_auth_url
+
+    config = request.app.state.config
+    if not config.spotify_client_id or not config.spotify_client_secret:
+        raise HTTPException(400, "Configure spotify_client_id and spotify_client_secret first")
+
+    callback_url = _detect_callback_url(request)
+    state = secrets.token_urlsafe(32)
+
+    _write_oauth_state(config.tmp_dir, state, callback_url)
+
+    auth_url = build_auth_url(config, callback_url, state=state)
+    logger.info("Spotify OAuth started, callback=%s", callback_url)
+    return RedirectResponse(auth_url, status_code=302)
+
+
+@router.get("/spotify/callback")
+async def spotify_auth_callback(
+    request: Request,
+    code: str = "",
+    error: str = "",
+    state: str = "",
+):
+    """Handle Spotify OAuth callback after user authorization."""
+    from urllib.parse import quote
+
+    from mammamiradio.spotify_auth import exchange_code
+
+    config = request.app.state.config
+    prefix = _sanitize_ingress_prefix(request.headers.get("X-Ingress-Path", ""))
+    dashboard = f"{prefix}/"
+
+    if error:
+        logger.warning("Spotify OAuth error from provider: %s", error)
+        return RedirectResponse(f"{dashboard}?spotify=error&detail={quote(error)}", status_code=302)
+
+    expected_state, callback_url = _read_oauth_state(config.tmp_dir)
+    if not state or not expected_state or not secrets.compare_digest(state, expected_state):
+        logger.warning("Spotify OAuth state mismatch (server reloaded?)")
+        return RedirectResponse(f"{dashboard}?spotify=error&detail=invalid_state", status_code=302)
+
+    _clear_oauth_state(config.tmp_dir)
+
+    if not code or not callback_url:
+        logger.warning("Spotify OAuth callback missing code or callback_url")
+        return RedirectResponse(f"{dashboard}?spotify=error&detail=missing_params", status_code=302)
+
+    success = await asyncio.to_thread(exchange_code, config, code, callback_url)
+    if success:
+        logger.info("Spotify OAuth completed successfully")
+        return RedirectResponse(f"{dashboard}?spotify=connected", status_code=302)
+
+    logger.error("Spotify OAuth token exchange failed")
+    return RedirectResponse(f"{dashboard}?spotify=error&detail=token_exchange_failed", status_code=302)
+
+
+@router.get("/api/spotify/auth-status", dependencies=[Depends(require_admin_access)])
+async def spotify_auth_status(request: Request):
+    """Return Spotify OAuth status for the dashboard."""
+    from mammamiradio.spotify_auth import has_user_token
+
+    config = request.app.state.config
+    has_creds = bool(config.spotify_client_id and config.spotify_client_secret)
+    has_token = await asyncio.to_thread(has_user_token, config) if has_creds else False
+    callback_url = _detect_callback_url(request)
+    return {
+        "has_credentials": has_creds,
+        "has_user_token": has_token,
+        "callback_url": callback_url,
+    }
+
+
+@router.post("/api/spotify/disconnect", dependencies=[Depends(require_admin_access)])
+async def spotify_disconnect(request: Request):
+    """Clear cached Spotify user token."""
+    from mammamiradio.spotify_auth import clear_user_token
+
+    config = request.app.state.config
+    clear_user_token(config)
+    return {"ok": True}
 
 
 def _tail_log(path: str, lines: int = 15) -> list[str]:

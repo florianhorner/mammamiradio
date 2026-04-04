@@ -134,13 +134,13 @@ def test_concat_multiple_files_builds_filter_graph(mock_subprocess):
 
     cmd = mock_run.call_args[0][0]
     assert cmd[0] == "ffmpeg"
-    # Should have three -i inputs
+    # 3 audio files + 2 silence segments (default silence_ms=300) = 5 inputs
     i_count = sum(1 for c in cmd if c == "-i")
-    assert i_count == 3
-    # Filter graph with concat
+    assert i_count == 5
+    # Filter graph with concat (5 streams: 3 audio + 2 silence)
     filter_idx = cmd.index("-filter_complex")
     filter_str = cmd[filter_idx + 1]
-    assert "concat=n=3:v=0:a=1" in filter_str
+    assert "concat=n=5:v=0:a=1" in filter_str
     assert "[0:a]" in filter_str
     assert "[1:a]" in filter_str
     assert "[2:a]" in filter_str

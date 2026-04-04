@@ -10,13 +10,14 @@ import pytest
 from mammamiradio.config import load_config
 from mammamiradio.models import (
     AdBrand,
+    AdFormat,
     AdScript,
     AdVoice,
     HostPersonality,
     StationState,
     Track,
 )
-from mammamiradio.scriptwriter import _build_system_prompt, write_ad, write_banter
+from mammamiradio.scriptwriter import AD_FORMATS, SPEAKER_ROLES, _build_system_prompt, write_ad, write_banter
 
 
 @pytest.fixture()
@@ -183,10 +184,10 @@ async def test_write_ad_returns_adscript(config, state):
     mock_cls = _mock_anthropic_response(response_json)
 
     brand = AdBrand(name="TestBrand", tagline="Il meglio del meglio", category="food")
-    voice = AdVoice(name="Voce Uno", voice="it-IT-IsabellaNeural", style="enthusiastic")
+    voices = {"default": AdVoice(name="Voce Uno", voice="it-IT-IsabellaNeural", style="enthusiastic")}
 
     with patch("mammamiradio.scriptwriter.anthropic.AsyncAnthropic", mock_cls):
-        result = await write_ad(brand, voice, state, config)
+        result = await write_ad(brand, voices, state, config)
 
     assert isinstance(result, AdScript)
     assert result.brand == "TestBrand"
@@ -206,10 +207,10 @@ async def test_write_ad_falls_back_on_api_exception(config, state):
     mock_cls = MagicMock(return_value=mock_client)
 
     brand = AdBrand(name="FallbackBrand", tagline="Sempre il top", category="tech")
-    voice = AdVoice(name="Voce Due", voice="it-IT-DiegoNeural", style="calm")
+    voices = {"default": AdVoice(name="Voce Due", voice="it-IT-DiegoNeural", style="calm")}
 
     with patch("mammamiradio.scriptwriter.anthropic.AsyncAnthropic", mock_cls):
-        result = await write_ad(brand, voice, state, config)
+        result = await write_ad(brand, voices, state, config)
 
     assert isinstance(result, AdScript)
     assert result.brand == "FallbackBrand"
@@ -234,11 +235,114 @@ async def test_write_ad_ensures_voice_part_when_llm_returns_none(config, state):
     mock_cls = _mock_anthropic_response(response_json)
 
     brand = AdBrand(name="SilentBrand", tagline="Silenzio è oro", category="luxury")
-    voice = AdVoice(name="Voce Tre", voice="it-IT-ElsaNeural", style="whispery")
+    voices = {"default": AdVoice(name="Voce Tre", voice="it-IT-ElsaNeural", style="whispery")}
 
     with patch("mammamiradio.scriptwriter.anthropic.AsyncAnthropic", mock_cls):
-        result = await write_ad(brand, voice, state, config)
+        result = await write_ad(brand, voices, state, config)
 
     assert isinstance(result, AdScript)
     voice_parts = [p for p in result.parts if p.type == "voice"]
     assert len(voice_parts) >= 1
+
+
+# --- Signature ad system tests ---
+
+
+def test_ad_formats_constant_is_well_formed():
+    """AD_FORMATS dict has an entry for every AdFormat enum value."""
+    for fmt in AdFormat:
+        assert fmt.value in AD_FORMATS
+        assert isinstance(AD_FORMATS[fmt.value], str)
+        assert len(AD_FORMATS[fmt.value]) > 20  # meaningful description
+
+
+def test_speaker_roles_constant():
+    """SPEAKER_ROLES has entries for the core roles."""
+    for role in ("hammer", "seductress", "bureaucrat", "maniac", "witness", "disclaimer_goblin"):
+        assert role in SPEAKER_ROLES
+
+
+@pytest.mark.asyncio
+async def test_write_ad_multi_role_json(config, state):
+    """write_ad parses multi-role JSON from LLM."""
+    response_json = json.dumps(
+        {
+            "parts": [
+                {"type": "voice", "text": "Io sono il venditore!", "role": "hammer"},
+                {"type": "sfx", "sfx": "chime"},
+                {"type": "voice", "text": "Io sono il cliente!", "role": "witness"},
+            ],
+            "mood": "suspicious_jazz",
+            "summary": "A duo ad",
+        }
+    )
+    mock_cls = _mock_anthropic_response(response_json)
+
+    brand = AdBrand(name="DuoBrand", tagline="Due voci", category="tech")
+    voices = {
+        "hammer": AdVoice(name="Roberto", voice="it-IT-GianniNeural", style="booming", role="hammer"),
+        "witness": AdVoice(name="Testimonia", voice="it-IT-ElsaNeural", style="fake customer", role="witness"),
+    }
+
+    with patch("mammamiradio.scriptwriter.anthropic.AsyncAnthropic", mock_cls):
+        result = await write_ad(brand, voices, state, config, ad_format="duo_scene")
+
+    assert isinstance(result, AdScript)
+    roles = {p.role for p in result.parts if p.type == "voice" and p.role}
+    assert "hammer" in roles
+    assert "witness" in roles
+    assert result.roles_used == sorted(roles)
+
+
+@pytest.mark.asyncio
+async def test_write_ad_legacy_json_compat(config, state):
+    """write_ad handles old-format JSON (no role field on parts)."""
+    response_json = json.dumps(
+        {
+            "parts": [
+                {"type": "voice", "text": "Compra ora!"},
+                {"type": "sfx", "sfx": "chime"},
+            ],
+            "mood": "lounge",
+            "summary": "Simple ad",
+        }
+    )
+    mock_cls = _mock_anthropic_response(response_json)
+
+    brand = AdBrand(name="OldBrand", tagline="Tag", category="food")
+    voices = {"default": AdVoice(name="Ann", voice="it-IT-DiegoNeural", style="warm")}
+
+    with patch("mammamiradio.scriptwriter.anthropic.AsyncAnthropic", mock_cls):
+        result = await write_ad(brand, voices, state, config)
+
+    assert isinstance(result, AdScript)
+    assert result.parts[0].role == ""  # no role in legacy JSON
+    assert result.format == "classic_pitch"  # default
+
+
+@pytest.mark.asyncio
+async def test_write_ad_demotes_duo_scene_with_single_role(config, state):
+    """duo_scene with only 1 role in LLM output should be demoted to classic_pitch."""
+    response_json = json.dumps(
+        {
+            "parts": [
+                {"type": "voice", "text": "Solo io parlo!", "role": "hammer"},
+                {"type": "sfx", "sfx": "sweep"},
+                {"type": "voice", "text": "Ancora io!", "role": "hammer"},
+            ],
+            "mood": "upbeat",
+            "summary": "Single-role duo attempt",
+        }
+    )
+    mock_cls = _mock_anthropic_response(response_json)
+
+    brand = AdBrand(name="DemoteBrand", tagline="Tag", category="tech")
+    voices = {
+        "hammer": AdVoice(name="Roberto", voice="it-IT-GianniNeural", style="booming", role="hammer"),
+        "maniac": AdVoice(name="Fiamma", voice="it-IT-FiammaNeural", style="enthusiastic", role="maniac"),
+    }
+
+    with patch("mammamiradio.scriptwriter.anthropic.AsyncAnthropic", mock_cls):
+        result = await write_ad(brand, voices, state, config, ad_format="duo_scene")
+
+    assert result.format == "classic_pitch"  # demoted from duo_scene

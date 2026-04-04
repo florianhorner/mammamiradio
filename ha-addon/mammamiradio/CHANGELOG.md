@@ -1,23 +1,24 @@
 # Changelog
 
-## 1.5.0-beta
+## 1.5.0
 
 ### Added
 
+- Signature Ad System: 6 ad formats, sonic worlds, role-based speaker casting, campaign memory with escalation rules, brand motifs, and environment beds.
+- Multi-voice ad support for duo scenes and testimonials.
 - Source switching now triggers immediate cutover with queue purge and playback skip.
 - CSRF protection for admin endpoints accessed over non-loopback networks.
-- Server-side enforcement prevents picker-style source selection in addon mode; URL loading still works.
 
 ### Changed
 
+- Ad generation uses format-specific prompts with sonic world cues and role-based voice casting.
 - Setup status now accurately reflects configured Spotify credentials and active source state.
-- Persisted source writes use atomic file replacement to prevent corruption on restart.
 
 ### Fixed
 
+- Category sonic world defaults no longer share mutable references across calls.
 - Spotify playlist fetch returned zero tracks when API items were nested under `item` key.
 - Producer recovery stall when go-librespot restarts mid-segment.
-- Listener page JS error from service worker scope (`_base is not defined`).
 
 ## 1.2.0
 
