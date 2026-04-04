@@ -41,6 +41,21 @@ from mammamiradio.tts import synthesize, synthesize_ad, synthesize_dialogue
 
 logger = logging.getLogger(__name__)
 
+# Directory for pre-bundled banter and ad clips that ship with the package.
+# These provide station personality on day 1 without an Anthropic API key.
+_DEMO_ASSETS_DIR = Path(__file__).parent / "demo_assets"
+
+
+def _pick_canned_clip(subdir: str) -> Path | None:
+    """Pick a random pre-bundled clip from demo_assets/{subdir}/."""
+    clip_dir = _DEMO_ASSETS_DIR / subdir
+    if not clip_dir.is_dir():
+        return None
+    clips = list(clip_dir.glob("*.mp3"))
+    if not clips:
+        return None
+    return random.choice(clips)
+
 
 def _pick_brand(brands: list[AdBrand], ad_history: list) -> AdBrand:
     """Pick a brand, avoiding the last 3 aired and weighting recurring brands higher."""
@@ -188,6 +203,7 @@ async def run_producer(
     state: StationState,
     config: StationConfig,
     spotify_player: SpotifyPlayer | None = None,
+    skip_event: asyncio.Event | None = None,
 ) -> None:
     """Keep the lookahead queue filled with rendered segments for live playback."""
     logger.info("Producer started. Playlist: %d tracks", len(state.playlist))
@@ -200,11 +216,75 @@ async def run_producer(
     if spotify_player:
         logger.info("go-librespot running. Select 'mammamiradio' in Spotify to enable real music.")
 
+    was_spotify_connected = False
+
     while True:
         # Always check Spotify auth (cheap HTTP call)
         if spotify_player:
             await spotify_player.check_auth()
             state.spotify_connected = spotify_player._authenticated
+
+        # Autoplay: when Spotify just connected, capture the current track
+        # and generate personalized banter about it IN PARALLEL (the WTF moment)
+        if spotify_player and state.spotify_connected and not was_spotify_connected:
+            was_spotify_connected = True
+            current = await spotify_player.get_current_track()
+            if current:
+                logger.info("Autoplay: capturing %s + generating banter in parallel", current.display)
+                # Skip whatever is currently streaming and purge queued demo segments
+                if skip_event:
+                    skip_event.set()
+                while not queue.empty():
+                    try:
+                        queue.get_nowait()
+                    except Exception:
+                        break
+
+                norm_path = config.tmp_dir / f"music_{uuid4().hex[:8]}.mp3"
+
+                # Generate banter about THIS specific song while capturing audio
+                async def _generate_welcome_banter(track=current):
+                    try:
+                        canned = _pick_canned_clip("banter") if not config.anthropic_api_key else None
+                        if canned:
+                            state.last_banter_script = [{"host": "Radio", "text": "(pre-recorded banter)"}]
+                            return canned
+                        lines = await write_banter(state, config)
+                        audio = await synthesize_dialogue(lines, config.tmp_dir)
+                        state.last_banter_script = [{"host": h.name, "text": t} for h, t in lines]
+                        logger.info("Welcome banter ready (references %s)", track.display)
+                        return audio
+                    except Exception as exc:
+                        logger.warning("Welcome banter generation failed: %s", exc)
+                        return None
+
+                try:
+                    # Run both in parallel — capture takes song duration,
+                    # banter generation takes ~5-10s. Banter finishes first.
+                    capture_task = spotify_player.capture_current_audio(current, norm_path)
+                    banter_task = _generate_welcome_banter()
+                    audio_path, banter_path = await asyncio.gather(capture_task, banter_task)
+
+                    # Queue: user's song first
+                    music_seg = Segment(type=SegmentType.MUSIC, path=audio_path, metadata={"title": current.display})
+                    await queue.put(music_seg)
+                    state.after_music(current)
+                    logger.info("Autoplay queued: %s", current.display)
+
+                    # Then the personalized banter (the WTF moment)
+                    if banter_path:
+                        banter_seg = Segment(
+                            type=SegmentType.BANTER,
+                            path=banter_path,
+                            metadata={"type": "banter", "lines": state.last_banter_script},
+                        )
+                        await queue.put(banter_seg)
+                        state.after_banter()
+                        logger.info("Welcome banter queued after %s", current.display)
+                except Exception as exc:
+                    logger.warning("Autoplay failed: %s", exc)
+        if not state.spotify_connected:
+            was_spotify_connected = False
 
         if queue.qsize() >= config.pacing.lookahead_segments:
             await asyncio.sleep(0.5)
@@ -254,7 +334,13 @@ async def run_producer(
                 )
 
                 if use_spotify:
-                    audio_path = await download_track_spotify(spotify_player, track, norm_path)  # type: ignore[arg-type]
+                    try:
+                        audio_path = await download_track_spotify(spotify_player, track, norm_path)  # type: ignore[arg-type]
+                    except Exception as exc:
+                        logger.warning("Spotify capture failed, falling back to local: %s", exc)
+                        audio_path = await download_track(track, config.cache_dir, music_dir=Path("music"))
+                        loop = asyncio.get_running_loop()
+                        await loop.run_in_executor(None, normalize, audio_path, norm_path)
                 else:
                     # Fallback: local files / yt-dlp / placeholder
                     audio_path = await download_track(track, config.cache_dir, music_dir=Path("music"))
@@ -275,10 +361,20 @@ async def run_producer(
 
             elif seg_type == SegmentType.BANTER:
                 logger.info("Producing BANTER")
-                lines = await write_banter(state, config)
-                audio_path = await synthesize_dialogue(lines, config.tmp_dir)
 
-                state.last_banter_script = [{"host": h.name, "text": t} for h, t in lines]
+                canned = None
+                if not config.anthropic_api_key:
+                    canned = _pick_canned_clip("banter")
+
+                if canned:
+                    logger.info("Using pre-bundled banter clip: %s", canned.name)
+                    audio_path = canned
+                    state.last_banter_script = [{"host": "Radio", "text": "(pre-recorded banter)"}]
+                else:
+                    lines = await write_banter(state, config)
+                    audio_path = await synthesize_dialogue(lines, config.tmp_dir)
+                    state.last_banter_script = [{"host": h.name, "text": t} for h, t in lines]
+
                 segment = Segment(
                     type=SegmentType.BANTER,
                     path=audio_path,

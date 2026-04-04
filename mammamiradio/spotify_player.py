@@ -17,6 +17,7 @@ import asyncio
 import logging
 import os
 import select
+import shutil
 import signal
 import subprocess
 import threading
@@ -29,7 +30,30 @@ from mammamiradio.config import StationConfig
 from mammamiradio.go_librespot_config import load_go_librespot_device_name
 from mammamiradio.go_librespot_runtime import build_go_librespot_runtime, read_owned_pid
 from mammamiradio.models import Track
-from mammamiradio.setup_status import resolve_go_librespot_bin
+
+GO_LIBRESPOT_CANDIDATES = (
+    "/opt/homebrew/bin/go-librespot",
+    "/usr/local/bin/go-librespot",
+    "/usr/bin/go-librespot",
+    "/bin/go-librespot",
+)
+
+
+def resolve_go_librespot_bin(configured: str) -> str | None:
+    """Find a working go-librespot binary even when PATH is sparse."""
+    if os.path.isabs(configured) and os.access(configured, os.X_OK):
+        return configured
+
+    discovered = shutil.which(configured)
+    if discovered:
+        return discovered
+
+    for candidate in GO_LIBRESPOT_CANDIDATES:
+        if os.access(candidate, os.X_OK):
+            return candidate
+
+    return None
+
 
 logger = logging.getLogger(__name__)
 
@@ -331,6 +355,8 @@ class SpotifyPlayer:
 
     async def _try_transfer_playback(self) -> None:
         """Use Spotify Web API to transfer playback to our device."""
+        if not self.config.spotify_client_id:
+            return  # Web API needs client_id; skip silently
         try:
             from mammamiradio.spotify_auth import get_spotify_client
 
@@ -371,6 +397,103 @@ class SpotifyPlayer:
 
         logger.warning("No user connected within %.0fs", timeout)
         return False
+
+    async def get_current_track(self) -> Track | None:
+        """Read what go-librespot is currently playing, if anything."""
+        try:
+            async with httpx.AsyncClient() as client:
+                resp = await client.get(f"{self._api_base}/status", timeout=2.0)
+                if resp.status_code != 200:
+                    return None
+                data = resp.json()
+                t = data.get("track")
+                if not t or not t.get("uri"):
+                    return None
+                # Extract Spotify ID from URI (spotify:track:XXXX)
+                uri = t["uri"]
+                spotify_id = uri.split(":")[-1] if uri.startswith("spotify:track:") else None
+                if not spotify_id:
+                    return None
+                artist = t.get("artist_names", ["Unknown"])[0] if t.get("artist_names") else "Unknown"
+                track = Track(
+                    title=t.get("name", "Unknown"),
+                    artist=artist,
+                    duration_ms=t.get("duration", 0),
+                    spotify_id=spotify_id,
+                )
+                track.position_ms = t.get("position", 0)
+                return track
+        except Exception:
+            return None
+
+    async def capture_current_audio(self, track: Track, output_path: Path) -> Path:
+        """Capture audio already playing on go-librespot (no play_track call).
+
+        Used for autoplay: the user's current song continues, we just capture it.
+        """
+        remaining_ms = track.duration_ms - track.position_ms
+        remaining_sec = max(remaining_ms / 1000.0, 5.0)  # at least 5s
+        remaining_sec = min(remaining_sec, 300.0)
+
+        loop = asyncio.get_running_loop()
+
+        def _start_ffmpeg():
+            cmd = [
+                "ffmpeg",
+                "-y",
+                "-f",
+                "s16le",
+                "-ar",
+                str(SAMPLE_RATE),
+                "-ac",
+                str(CHANNELS),
+                "-t",
+                str(remaining_sec),
+                "-i",
+                "pipe:0",
+                "-filter:a",
+                "afade=t=in:d=0.3,loudnorm=I=-16:LRA=11:TP=-1.5",
+                "-ar",
+                str(self.config.audio.sample_rate),
+                "-ac",
+                str(self.config.audio.channels),
+                "-b:a",
+                f"{self.config.audio.bitrate}k",
+                "-f",
+                "mp3",
+                str(output_path),
+            ]
+            return subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+
+        ffmpeg_proc = await loop.run_in_executor(None, _start_ffmpeg)
+
+        with self._capture_lock:
+            self._capture_sink = ffmpeg_proc
+
+        # Do NOT call play_track — song is already playing
+
+        def _wait_for_encode():
+            try:
+                ffmpeg_proc.wait(timeout=remaining_sec + 30)
+            except subprocess.TimeoutExpired:
+                ffmpeg_proc.kill()
+                ffmpeg_proc.wait()
+            with self._capture_lock:
+                self._capture_sink = None
+            if ffmpeg_proc.stdin:
+                try:
+                    ffmpeg_proc.stdin.close()
+                except OSError:
+                    pass
+            if not output_path.exists() or output_path.stat().st_size < 1000:
+                stderr_text = ""
+                if ffmpeg_proc.stderr:
+                    stderr_text = ffmpeg_proc.stderr.read().decode(errors="replace")[-300:]
+                raise RuntimeError(f"Autoplay capture failed: {stderr_text}")
+            logger.info("Autoplay captured: %s (%.0fs remaining)", track.display, remaining_sec)
+
+        await loop.run_in_executor(None, _wait_for_encode)
+        return output_path
 
     async def play_track(self, track: Track) -> None:
         """Ask go-librespot to start playback for one Spotify track URI."""

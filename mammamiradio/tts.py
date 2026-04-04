@@ -29,10 +29,10 @@ def _estimate_duration(path: Path) -> float:
     return max(5.0, path.stat().st_size / (192 * 128))
 
 
-async def synthesize(text: str, voice: str, output_path: Path) -> Path:
+async def synthesize(text: str, voice: str, output_path: Path, *, rate: str = "+0%", pitch: str = "+0Hz") -> Path:
     """Render text with Edge TTS, then normalize it to station output settings."""
     try:
-        comm = edge_tts.Communicate(text, voice)
+        comm = edge_tts.Communicate(text, voice, rate=rate, pitch=pitch)
         raw_path = output_path.with_suffix(".raw.mp3")
         await comm.save(str(raw_path))
 
@@ -118,7 +118,7 @@ async def synthesize_ad(
             env_bed_path = tmp_dir / f"envbed_{uuid4().hex[:8]}.mp3"
             await loop.run_in_executor(None, generate_music_bed, env_bed_path, env_name, voice_duration + 1.0)
             env_mixed_path = tmp_dir / f"envmix_{uuid4().hex[:8]}.mp3"
-            await loop.run_in_executor(None, mix_with_bed, voice_path, env_bed_path, env_mixed_path, 0.06)
+            await loop.run_in_executor(None, mix_with_bed, voice_path, env_bed_path, env_mixed_path, 0.10)
             env_bed_path.unlink(missing_ok=True)
             voice_path.unlink(missing_ok=True)
             voice_path = env_mixed_path
@@ -132,7 +132,7 @@ async def synthesize_ad(
         voice_duration = _estimate_duration(voice_path)
         bed_path = tmp_dir / f"adbed_{uuid4().hex[:8]}.mp3"
         await loop.run_in_executor(None, generate_music_bed, bed_path, mood, voice_duration + 1.0)
-        await loop.run_in_executor(None, mix_with_bed, voice_path, bed_path, output_path)
+        await loop.run_in_executor(None, mix_with_bed, voice_path, bed_path, output_path, 0.20)
         bed_path.unlink(missing_ok=True)
         voice_path.unlink(missing_ok=True)
         logger.info("Ad with music bed (%s): %s", mood, output_path.name)
@@ -159,6 +159,21 @@ async def synthesize_ad(
     return output_path
 
 
+def _prosody_for_host(host: HostPersonality) -> dict[str, str]:
+    """Derive TTS rate/pitch adjustments from personality axes."""
+    kwargs: dict[str, str] = {}
+    p = host.personality
+    if p.energy > 60:
+        kwargs["rate"] = "+10%"
+    elif p.energy < 40:
+        kwargs["rate"] = "-10%"
+    if p.warmth > 60:
+        kwargs["pitch"] = "-5Hz"
+    elif p.warmth < 40:
+        kwargs["pitch"] = "+5Hz"
+    return kwargs
+
+
 async def synthesize_dialogue(
     lines: list[tuple[HostPersonality, str]],
     tmp_dir: Path,
@@ -168,7 +183,8 @@ async def synthesize_dialogue(
 
     for _i, (host, text) in enumerate(lines):
         part_path = tmp_dir / f"line_{uuid4().hex[:8]}.mp3"
-        await synthesize(text, host.voice, part_path)
+        prosody = _prosody_for_host(host)
+        await synthesize(text, host.voice, part_path, **prosody)
         parts.append(part_path)
 
     if len(parts) == 1:

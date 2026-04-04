@@ -16,16 +16,16 @@ from mammamiradio.spotify_auth import get_spotify_client
 logger = logging.getLogger(__name__)
 
 DEMO_TRACKS = [
-    Track(title="Con te partiro", artist="Andrea Bocelli", duration_ms=250000, spotify_id="demo1"),
-    Track(title="Volare", artist="Domenico Modugno", duration_ms=210000, spotify_id="demo2"),
-    Track(title="L'italiano", artist="Toto Cutugno", duration_ms=240000, spotify_id="demo3"),
-    Track(title="Sapore di sale", artist="Gino Paoli", duration_ms=180000, spotify_id="demo4"),
-    Track(title="Felicita", artist="Al Bano e Romina Power", duration_ms=230000, spotify_id="demo5"),
-    Track(title="Gloria", artist="Umberto Tozzi", duration_ms=260000, spotify_id="demo6"),
-    Track(title="Azzurro", artist="Adriano Celentano", duration_ms=200000, spotify_id="demo7"),
-    Track(title="Nel blu dipinto di blu", artist="Domenico Modugno", duration_ms=195000, spotify_id="demo8"),
-    Track(title="Ti amo", artist="Umberto Tozzi", duration_ms=220000, spotify_id="demo9"),
-    Track(title="La solitudine", artist="Laura Pausini", duration_ms=275000, spotify_id="demo10"),
+    Track(title="Zitti e buoni", artist="Maneskin", duration_ms=211000, spotify_id="demo1"),
+    Track(title="Supermodel", artist="Maneskin", duration_ms=204000, spotify_id="demo2"),
+    Track(title="Tango", artist="Tananai", duration_ms=185000, spotify_id="demo3"),
+    Track(title="Cenere", artist="Lazza", duration_ms=203000, spotify_id="demo4"),
+    Track(title="Musica leggerissima", artist="Colapesce, Dimartino", duration_ms=215000, spotify_id="demo5"),
+    Track(title="Mon Amour", artist="Annalisa", duration_ms=177000, spotify_id="demo6"),
+    Track(title="Splash", artist="Mahmood", duration_ms=192000, spotify_id="demo7"),
+    Track(title="Sinceramente", artist="Annalisa", duration_ms=198000, spotify_id="demo8"),
+    Track(title="Storie brevi", artist="Tananai, Annalisa", duration_ms=210000, spotify_id="demo9"),
+    Track(title="Casa mia", artist="Ghali", duration_ms=195000, spotify_id="demo10"),
 ]
 
 PERSISTED_SOURCE_FILENAME = "playlist_source.json"

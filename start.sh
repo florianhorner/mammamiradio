@@ -52,6 +52,19 @@ echo "Using go-librespot config dir: $GO_LIBRESPOT_CONFIG_DIR"
 # Ensure FIFO exists
 [ -p "$FIFO" ] || (rm -f "$FIFO" && mkfifo "$FIFO")
 
+# Sync go-librespot config (ensures device_name is correct)
+"$PYTHON_BIN" -m mammamiradio.go_librespot_config sync \
+    go-librespot/config.yml "$GO_LIBRESPOT_CONFIG_DIR/config.yml" 2>/dev/null || true
+
+# Patch runtime overrides (FIFO path and API port) into the workspace config
+_GL_CFG="$GO_LIBRESPOT_CONFIG_DIR/config.yml"
+if [ -f "$_GL_CFG" ]; then
+    sed -i '' "s|audio_output_pipe:.*|audio_output_pipe: $FIFO|" "$_GL_CFG"
+    if [ -n "${GO_LIBRESPOT_PORT:-}" ]; then
+        sed -i '' "s|port:.*|port: $GO_LIBRESPOT_PORT|" "$_GL_CFG"
+    fi
+fi
+
 # Start go-librespot if not already running (tolerate missing binary)
 if [ -z "$GOLIBRESPOT_OWNED_PID" ]; then
     if [ -x "$GO_LIBRESPOT_BIN" ] || command -v "$GO_LIBRESPOT_BIN" > /dev/null 2>&1; then
@@ -101,4 +114,4 @@ source .venv/bin/activate
 exec python -m uvicorn mammamiradio.main:app \
     --host "$HOST" --port "$PORT" \
     --reload --reload-dir mammamiradio \
-    --reload-include "*.toml"
+    --reload-include "*.toml" --reload-include "*.html"

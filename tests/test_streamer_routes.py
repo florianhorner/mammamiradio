@@ -145,7 +145,7 @@ async def test_get_dashboard_loopback_no_password():
         resp = await client.get("/")
     assert resp.status_code == 200
     assert "text/html" in resp.headers["content-type"]
-    assert "First Run Setup" in resp.text
+    assert "MammaMiRadio" in resp.text
 
 
 @pytest.mark.asyncio

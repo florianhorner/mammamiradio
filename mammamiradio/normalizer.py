@@ -330,28 +330,44 @@ def mix_with_bed(voice_path: Path, bed_path: Path, output_path: Path, volume_sca
     return output_path
 
 
-def generate_bumper_jingle(output_path: Path, duration_sec: float = 1.2) -> Path:
-    """Generate a short radio bumper jingle (ascending chime pattern)."""
+def generate_bumper_jingle(output_path: Path, duration_sec: float = 1.5) -> Path:
+    """Generate a short radio bumper jingle (ascending + descending chime pattern)."""
     fade = min(0.1, duration_sec / 4)
+    note_dur = duration_sec / 6
     cmd = [
         "ffmpeg",
         "-y",
         "-f",
         "lavfi",
         "-i",
-        f"sine=frequency=523:duration={duration_sec * 0.3}",  # C5
+        f"sine=frequency=523:duration={note_dur}",  # C5 up
         "-f",
         "lavfi",
         "-i",
-        f"sine=frequency=659:duration={duration_sec * 0.3}",  # E5
+        f"sine=frequency=659:duration={note_dur}",  # E5 up
         "-f",
         "lavfi",
         "-i",
-        f"sine=frequency=784:duration={duration_sec * 0.4}",  # G5
+        f"sine=frequency=784:duration={note_dur}",  # G5 peak
+        "-f",
+        "lavfi",
+        "-i",
+        f"sine=frequency=1047:duration={note_dur}",  # C6 peak
+        "-f",
+        "lavfi",
+        "-i",
+        f"sine=frequency=784:duration={note_dur}",  # G5 down
+        "-f",
+        "lavfi",
+        "-i",
+        f"sine=frequency=659:duration={note_dur * 1.2}",  # E5 resolve
         "-filter_complex",
-        f"[0:a]adelay=0|0[a];[1:a]adelay={int(duration_sec * 300)}|{int(duration_sec * 300)}[b];"
-        f"[2:a]adelay={int(duration_sec * 600)}|{int(duration_sec * 600)}[c];"
-        f"[a][b][c]amix=inputs=3:duration=longest,"
+        f"[0:a]adelay=0|0[a];[1:a]adelay={int(note_dur * 1000)}|{int(note_dur * 1000)}[b];"
+        f"[2:a]adelay={int(note_dur * 2000)}|{int(note_dur * 2000)}[c];"
+        f"[3:a]adelay={int(note_dur * 3000)}|{int(note_dur * 3000)}[d];"
+        f"[4:a]adelay={int(note_dur * 4000)}|{int(note_dur * 4000)}[e];"
+        f"[5:a]adelay={int(note_dur * 5000)}|{int(note_dur * 5000)}[f];"
+        f"[a][b][c][d][e][f]amix=inputs=6:duration=longest,volume=1.8,"
         f"afade=t=in:d={fade},afade=t=out:st={duration_sec - fade}:d={fade}[out]",
         "-map",
         "[out]",

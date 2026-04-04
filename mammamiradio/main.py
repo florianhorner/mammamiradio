@@ -90,7 +90,9 @@ async def startup():
     app.state.start_time = time.time()
 
     _playback_task = asyncio.create_task(run_playback_loop(app))
-    _producer_task = asyncio.create_task(run_producer(queue, state, config, spotify_player=spotify_player))
+    _producer_task = asyncio.create_task(
+        run_producer(queue, state, config, spotify_player=spotify_player, skip_event=app.state.skip_event)
+    )
     logger.info(
         "Producer started. Stream at http://%s:%d/stream",
         config.bind_host,

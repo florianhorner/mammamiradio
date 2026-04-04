@@ -16,6 +16,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, StreamingResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 
+from mammamiradio.capabilities import capabilities_to_dict, get_capabilities
 from mammamiradio.models import PersonalityAxes, PlaylistSource, Segment, SegmentType
 from mammamiradio.playlist import (
     ExplicitSourceError,
@@ -594,6 +595,43 @@ async def setup_addon_snippet(request: Request, _: None = Depends(require_admin_
     """Return a copy-friendly HA add-on configuration snippet."""
     config = request.app.state.config
     return {"snippet": addon_options_snippet(config)}
+
+
+@router.get("/api/capabilities")
+async def capabilities(request: Request, _: None = Depends(require_admin_access)):
+    """Return current capability flags and derived tier.
+
+    This is the new API that replaces the multi-step setup wizard payload.
+    The dashboard uses these flags to show/hide cards and determine the
+    current feature tier (Demo Radio / Your Music / Full AI Radio).
+    """
+    config = request.app.state.config
+    state = request.app.state.station_state
+    caps = get_capabilities(config, state)
+    result = capabilities_to_dict(caps)
+
+    now = state.now_streaming or {}
+    result["now_playing"] = now
+    result["connect_status"] = "connected" if state.spotify_connected else "waiting"
+    try:
+        from mammamiradio.go_librespot_config import load_go_librespot_device_name
+
+        result["connect_device_name"] = load_go_librespot_device_name(config.audio.go_librespot_config_dir)
+    except Exception:
+        result["connect_device_name"] = "MammaMiRadio"
+
+    # Spotify username for welcome message
+    result["spotify_username"] = ""
+    if state.spotify_connected:
+        try:
+            import httpx as _httpx
+
+            r = _httpx.get(f"http://127.0.0.1:{config.audio.go_librespot_port}/status", timeout=1.0)
+            if r.status_code == 200:
+                result["spotify_username"] = r.json().get("username", "")
+        except Exception:
+            pass
+    return result
 
 
 @router.post("/api/shuffle")

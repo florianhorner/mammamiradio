@@ -27,6 +27,7 @@ class Track:
     duration_ms: int
     spotify_id: str
     local_path: Path | None = None
+    position_ms: int = 0
 
     @property
     def cache_key(self) -> str:
@@ -337,3 +338,50 @@ class StationState:
         """Keep a short rolling buffer of running jokes for prompt callbacks."""
         self.running_jokes.append(joke)
         self.running_jokes = self.running_jokes[-5:]
+
+
+@dataclass(frozen=True)
+class Capabilities:
+    """Runtime capability flags derived from config + live state.
+
+    These replace the old 64-state mode system with independent boolean flags.
+    UI tier labels are derived from the flags for display only.
+    """
+
+    spotify_connected: bool = False
+    """go-librespot zeroconf auth active (streaming and playback control work)."""
+
+    spotify_api: bool = False
+    """Spotify Client ID/secret present (playlist browsing, search, metadata)."""
+
+    anthropic: bool = False
+    """Anthropic API key available for live Claude-generated banter and ads."""
+
+    ha: bool = False
+    """Home Assistant token present and integration enabled."""
+
+    @property
+    def tier(self) -> str:
+        """Derive a human-friendly tier label from capability flags."""
+        if self.spotify_connected and self.spotify_api and self.anthropic:
+            return "full_ai"
+        if self.spotify_connected and self.spotify_api:
+            return "your_music_full"
+        if self.spotify_connected:
+            return "your_music_basic"
+        if self.anthropic:
+            return "demo_ai"
+        return "demo"
+
+    @property
+    def tier_label(self) -> str:
+        """Display name for the current tier."""
+        if self.spotify_connected and self.spotify_api and self.anthropic:
+            return "Full AI Radio"
+        if self.spotify_connected and self.spotify_api:
+            return "Your Music"
+        if self.spotify_connected:
+            return "Your Music"
+        if self.anthropic:
+            return "Demo Radio + AI Banter"
+        return "Demo Radio"

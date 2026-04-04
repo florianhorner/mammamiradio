@@ -270,6 +270,8 @@ async def test_music_uses_spotify_when_authenticated(tmp_path):
     mock_player = MagicMock()
     mock_player._authenticated = True
     mock_player.check_auth = AsyncMock()
+    mock_player.get_current_track = AsyncMock(return_value=None)  # no autoplay track
+    mock_player.capture_current_audio = AsyncMock()
 
     with (
         patch(f"{MODULE}.next_segment_type", return_value=SegmentType.MUSIC),
@@ -290,6 +292,7 @@ async def test_music_falls_back_when_spotify_not_authenticated(tmp_path):
     mock_player = MagicMock()
     mock_player._authenticated = False
     mock_player.check_auth = AsyncMock()
+    mock_player.get_current_track = AsyncMock(return_value=None)
 
     with (
         patch(f"{MODULE}.next_segment_type", return_value=SegmentType.MUSIC),

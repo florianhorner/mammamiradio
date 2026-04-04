@@ -169,6 +169,11 @@ Rules:
 
 async def write_banter(state: StationState, config: StationConfig) -> list[tuple[HostPersonality, str]]:
     """Generate short host banter with recent tracks, jokes, and home context."""
+    if not config.anthropic_api_key:
+        host = random.choice(config.hosts)
+        fallback = {"it": "E torniamo alla musica!", "en": "And back to the music!"}
+        return [(host, fallback.get(config.station.language, fallback["en"]))]
+
     client = anthropic.AsyncAnthropic(api_key=config.anthropic_api_key)
 
     recent = [t.display for t in state.played_tracks[-3:]]

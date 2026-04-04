@@ -62,9 +62,12 @@ AI-powered Italian radio station engine. Python 3.11+, FastAPI, FFmpeg, optional
 ## Runtime behavior
 
 - Startup loads `radio.toml`, validates config, starts go-librespot if possible, restores persisted source selection from `cache/playlist_source.json`, fetches the playlist, then launches producer and playback tasks.
-- If Spotify credentials are missing, the app uses a built-in demo playlist.
+- **Capability flags** (`spotify_connected`, `spotify_api`, `anthropic`, `ha`) replace the old 64-state mode system. Each flag is independent. The dashboard derives a tier label from them: Demo Radio, Your Music, Full AI Radio.
+- Demo-first: if no Spotify credentials exist, the app boots immediately with built-in demo tracks and pre-bundled banter clips. No wizard, no gates.
+- **Spotify Connect (zeroconf):** go-librespot advertises via mDNS. Users tap "MammaMiRadio" in their Spotify app to connect. This handles streaming auth without any Client ID/secret. Playlist browsing still requires Client ID/secret (Web API scopes not available via zeroconf).
+- If Anthropic key is missing, banter uses pre-bundled clips from `demo_assets/banter/` instead of calling Claude.
 - If go-librespot is unavailable or not authenticated, music falls back to local `music/` files, then `yt-dlp`, then placeholder tones.
-- If Anthropic fails, banter and ad generation fall back to short stock copy.
+- If Anthropic fails mid-session, banter and ad generation fall back to short stock copy.
 - If Home Assistant is enabled and `HA_TOKEN` is present, banter and ads may reference current home state.
 - `audio.bitrate` is the single source of truth for encoding, ICY headers, and playback throttling.
 - Source switching via `/api/spotify/source/select` or `/api/playlist/load` purges the queue, skips the current segment, and begins playback from the new source immediately.
@@ -89,9 +92,11 @@ mammamiradio/
   normalizer.py       FFmpeg helpers for normalize, mix, concat, and generated SFX
   tts.py              Edge TTS synthesis for hosts and ads
   ha_context.py       Home Assistant polling and Italian state formatting
-  setup_status.py     First-run onboarding and setup status classification
-  dashboard.html      dashboard HTML served at /
-  listener.html       listener HTML served at /listen
+  capabilities.py     Capability flags (spotify_connected, spotify_api, anthropic, ha) and tier derivation
+  setup_status.py     Legacy setup status classification (kept for /status endpoint compat)
+  dashboard.html      Capability-flag-driven dashboard served at /
+  listener.html       Listener HTML served at /listen
+  demo_assets/        Pre-bundled banter clips, ads, music, and jingles for demo-first boot
 radio.toml            station config
 start.sh              dev entrypoint with reload-safe FIFO drain handling
 tests/                pytest coverage
