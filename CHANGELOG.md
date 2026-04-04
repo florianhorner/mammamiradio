@@ -4,6 +4,33 @@ All notable changes to `mammamiradio` are documented here.
 
 The current version source of truth is `pyproject.toml`.
 
+## [Unreleased]
+
+### Added
+
+- **Capability flags**: `Capabilities` frozen dataclass and `capabilities.py` replace the 64-state mode system. Four independent flags (`spotify_connected`, `spotify_api`, `anthropic`, `ha`) derive a tier label. New `GET /api/capabilities` endpoint.
+- **Demo-first boot**: station starts instantly with zero config. Demo playlist updated to current Italian chart tracks (Maneskin, Annalisa, Tananai, Lazza, Ghali).
+- **Autoplay on Spotify Connect**: when a user taps "MammaMiRadio" in Spotify, the producer captures the currently playing song and generates personalized welcome banter referencing it — both in parallel.
+- **`capture_current_audio()`**: captures audio already playing on go-librespot without issuing a `play_track` call.
+- **`get_current_track()`**: reads current track metadata from go-librespot `/status` API.
+- **Embedded dashboard player**: play button + auto-reconnect on hot reload. Stream starts on first click anywhere.
+
+### Changed
+
+- **Dashboard redesigned**: 640px single-column, capability-driven cards, connect hero card, tier badge with pulse animation on upgrade.
+- **Voice differentiation**: SSML prosody (rate/pitch) derived from personality axes. Marco → GianniNeural (booming), personality axes widened for contrast.
+- **Louder ad breaks**: 6-note bumper jingle (1.5s, 1.8x volume), music bed 0.12→0.20, env bed 0.06→0.10.
+- **go-librespot config sync**: `start.sh` syncs device name, FIFO path, and API port on startup.
+- **Autoplay fade-in**: 300ms fade-in on captured audio smooths the handover from demo.
+- **Sine wave fallback removed**: last-resort placeholder generates silence instead of 440Hz tone.
+- **`start.sh` reload**: uvicorn now watches `*.html` files for hot reload.
+
+### Fixed
+
+- Auto-transfer no longer spams logs when no Spotify Client ID is configured.
+- Banter generation no longer errors when no Anthropic key is set (early return with fallback text).
+- Banter TTS failure gracefully skips the segment instead of crashing the producer loop.
+
 ## [1.5.0] - 2026-04-04
 
 ### Added

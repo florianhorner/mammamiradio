@@ -164,19 +164,19 @@ def test_ytdlp_import_error_falls_back_to_placeholder(track, cache_dir, music_di
 # --- _generate_placeholder ---
 
 
-def test_generate_placeholder_calls_ffmpeg(track, tmp_path):
-    from mammamiradio.downloader import _generate_placeholder
+def test_generate_silence_calls_ffmpeg(track, tmp_path):
+    from mammamiradio.downloader import _generate_silence
 
-    out_path = tmp_path / "placeholder.mp3"
+    out_path = tmp_path / "silence.mp3"
 
     with patch("mammamiradio.downloader._run_ffmpeg") as mock_ffmpeg:
-        result = _generate_placeholder(track, out_path)
+        result = _generate_silence(track, out_path)
 
     assert result == out_path
     mock_ffmpeg.assert_called_once()
-    # Verify the ffmpeg command includes expected arguments
     cmd = mock_ffmpeg.call_args[0][0]
     assert "ffmpeg" in cmd[0]
+    assert "anullsrc" in " ".join(cmd)
     assert str(out_path) in cmd
 
 

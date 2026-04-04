@@ -46,15 +46,27 @@ logger = logging.getLogger(__name__)
 _DEMO_ASSETS_DIR = Path(__file__).parent / "demo_assets"
 
 
+_recently_played_clips: list[str] = []
+
+
 def _pick_canned_clip(subdir: str) -> Path | None:
-    """Pick a random pre-bundled clip from demo_assets/{subdir}/."""
+    """Pick a pre-bundled clip from demo_assets/{subdir}/, avoiding recent repeats."""
     clip_dir = _DEMO_ASSETS_DIR / subdir
     if not clip_dir.is_dir():
         return None
     clips = list(clip_dir.glob("*.mp3"))
     if not clips:
         return None
-    return random.choice(clips)
+    # Avoid recently played clips
+    eligible = [c for c in clips if c.name not in _recently_played_clips]
+    if not eligible:
+        _recently_played_clips.clear()
+        eligible = clips
+    pick = random.choice(eligible)
+    _recently_played_clips.append(pick.name)
+    if len(_recently_played_clips) > len(clips):
+        _recently_played_clips.pop(0)
+    return pick
 
 
 def _pick_brand(brands: list[AdBrand], ad_history: list) -> AdBrand:
@@ -371,9 +383,13 @@ async def run_producer(
                     audio_path = canned
                     state.last_banter_script = [{"host": "Radio", "text": "(pre-recorded banter)"}]
                 else:
-                    lines = await write_banter(state, config)
-                    audio_path = await synthesize_dialogue(lines, config.tmp_dir)
-                    state.last_banter_script = [{"host": h.name, "text": t} for h, t in lines]
+                    try:
+                        lines = await write_banter(state, config)
+                        audio_path = await synthesize_dialogue(lines, config.tmp_dir)
+                        state.last_banter_script = [{"host": h.name, "text": t} for h, t in lines]
+                    except Exception as exc:
+                        logger.warning("Banter TTS failed, skipping segment: %s", exc)
+                        continue
 
                 segment = Segment(
                     type=SegmentType.BANTER,

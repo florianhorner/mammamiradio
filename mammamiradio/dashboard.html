@@ -64,9 +64,11 @@
   .listener-link:hover { text-decoration: underline; }
 
   /* Tier badge */
-  .tier-badge { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; padding: 4px 10px; border-radius: 4px; margin-bottom: 16px; }
+  .tier-badge { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; padding: 4px 10px; border-radius: 4px; margin-bottom: 16px; transition: background 0.6s ease, color 0.6s ease; }
   .tier-badge[data-tier="demo"], .tier-badge[data-tier="demo_ai"] { background: var(--terracotta); color: var(--cream); }
   .tier-badge[data-tier="your_music_basic"], .tier-badge[data-tier="your_music_full"], .tier-badge[data-tier="full_ai"] { background: var(--ok); color: #fff; }
+  @keyframes tier-pulse { 0% { transform: scale(1); } 50% { transform: scale(1.1); } 100% { transform: scale(1); } }
+  .tier-pulse { animation: tier-pulse 0.4s ease; }
 
   /* Cards */
   .card { background: var(--card); border-radius: 8px; padding: 16px; margin-bottom: 12px; }
@@ -90,11 +92,85 @@
   .play-btn:hover { background: var(--dusty-rose); }
   .play-btn.playing { background: var(--ok); }
 
-  /* Loading state */
-  .loading { text-align: center; padding: 40px 16px; }
-  .loading .wave { font-size: 32px; animation: pulse 1.5s ease-in-out infinite; }
+  /* Radio dial */
+  .radio-dial {
+    padding: 32px 0 16px;
+    text-align: center;
+  }
+  .dial-label {
+    font-family: var(--font-display);
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    color: var(--muted);
+    margin-bottom: 12px;
+  }
+  .dial-band {
+    position: relative;
+    height: 48px;
+    background: linear-gradient(90deg, rgba(196,101,74,0.08), rgba(196,101,74,0.15), rgba(196,101,74,0.08));
+    border: 1px solid rgba(196,101,74,0.25);
+    border-radius: 8px;
+    margin: 0 auto;
+    max-width: 480px;
+    overflow: hidden;
+    cursor: pointer;
+  }
+  .dial-marks {
+    position: absolute; inset: 0;
+    display: flex; align-items: flex-end; justify-content: space-between;
+    padding: 0 12px 4px;
+    pointer-events: none;
+  }
+  .dial-marks span {
+    font-size: 9px; color: rgba(245,239,230,0.35);
+    font-variant-numeric: tabular-nums;
+  }
+  .dial-ticks {
+    position: absolute; top: 6px; left: 12px; right: 12px; height: 14px;
+    display: flex; justify-content: space-between; pointer-events: none;
+  }
+  .dial-ticks i {
+    width: 1px; height: 100%; background: rgba(245,239,230,0.12);
+    font-style: normal;
+  }
+  .dial-ticks i:nth-child(5n) { height: 100%; background: rgba(245,239,230,0.22); }
+  .dial-needle {
+    position: absolute;
+    top: 2px; bottom: 2px;
+    width: 3px;
+    background: var(--terracotta);
+    border-radius: 2px;
+    box-shadow: 0 0 8px rgba(196,101,74,0.6), 0 0 16px rgba(196,101,74,0.3);
+    left: 15%;
+    transition: left 0.15s ease-out;
+    z-index: 2;
+  }
+  .dial-needle.seeking {
+    transition: left 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
+  }
+  .dial-needle.locked {
+    transition: left 0.6s cubic-bezier(0.22, 0.61, 0.36, 1);
+    box-shadow: 0 0 12px rgba(196,101,74,0.8), 0 0 24px rgba(196,101,74,0.4);
+  }
+  .dial-freq {
+    font-family: var(--font-display);
+    font-size: 20px;
+    font-weight: 700;
+    color: var(--cream);
+    margin-top: 10px;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: 0.02em;
+  }
+  .dial-freq .unit { font-size: 12px; font-weight: 400; color: var(--muted); margin-left: 2px; }
+  .dial-status {
+    font-size: 12px;
+    color: var(--dusty-rose);
+    margin-top: 4px;
+    min-height: 18px;
+  }
   @keyframes pulse { 0%, 100% { opacity: 0.4; } 50% { opacity: 1; } }
-  .loading .label { font-size: 14px; color: var(--muted); margin-top: 8px; }
 
   /* Connect hero */
   .connect-hero {
@@ -187,10 +263,18 @@
 
 <div class="tier-badge" id="tier-badge" data-tier="demo" aria-live="polite">Demo Radio</div>
 
-<!-- Loading state (shown before first data) -->
-<div class="loading" id="loading-state">
-  <div class="wave">&#128251;</div>
-  <div class="label">Tuning in...</div>
+<!-- Radio dial (shown before first data, stays visible as ambient UI) -->
+<div class="radio-dial" id="radio-dial">
+  <div class="dial-label" id="dial-label">Tuning in...</div>
+  <div class="dial-band" onclick="togglePlay()">
+    <div class="dial-ticks" id="dial-ticks"></div>
+    <div class="dial-marks">
+      <span>87.5</span><span>92</span><span>96</span><span>100</span><span>104</span><span>108</span>
+    </div>
+    <div class="dial-needle" id="dial-needle"></div>
+  </div>
+  <div class="dial-freq"><span id="dial-freq-val">--.-</span><span class="unit">MHz</span></div>
+  <div class="dial-status" id="dial-status">Searching for signal...</div>
 </div>
 
 <!-- Connect Spotify hero (when spotify_connected=false) — ABOVE now playing -->
@@ -327,6 +411,7 @@ let caps = null;
 let firstDataReceived = false;
 let connectStartTime = null;
 let wasConnected = false;
+let _lastTier = null;
 
 function escHtml(v) { return String(v ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 
@@ -351,8 +436,16 @@ function updateCards() {
 
   // Tier badge
   const badge = document.getElementById('tier-badge');
+  const tierChanged = _lastTier !== null && _lastTier !== tier;
   badge.dataset.tier = tier;
   badge.textContent = caps.tier_label;
+  if (tierChanged) {
+    badge.classList.remove('tier-pulse');
+    void badge.offsetWidth;
+    badge.classList.add('tier-pulse');
+    badge.addEventListener('animationend', () => badge.classList.remove('tier-pulse'), { once: true });
+  }
+  _lastTier = tier;
 
   // Connect card
   document.getElementById('connect-card').style.display = c.spotify_connected ? 'none' : '';
