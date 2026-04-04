@@ -3,10 +3,10 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Radio Italì — Control Plane</title>
-<meta name="theme-color" content="#c4654a">
-<meta property="og:title" content="Radio Italì — Control Plane">
-<meta property="og:description" content="AI-powered Italian radio station — admin dashboard">
+<title>MammaMiRadio</title>
+<meta name="theme-color" content="#D45228">
+<meta property="og:title" content="MammaMiRadio">
+<meta property="og:description" content="AI-powered Italian radio station">
 <meta property="og:type" content="website">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -16,246 +16,384 @@
 <link rel="apple-touch-icon" href="/static/icon-192.svg">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,600;0,700;1,400&family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,600;0,700;1,400;1,700&family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
 <style>
-  *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+*, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+html { font-size: 15px; -webkit-font-smoothing: antialiased; }
 
-  :root {
-    --bg: #2a2320;
-    --bg2: #3d3530;
-    --panel: rgba(53, 47, 42, 0.86);
-    --card: #352f2a;
-    --cream: #f5efe6;
-    --cream-dk: #e8dfd3;
-    --terracotta: #c4654a;
-    --dusty-rose: #d4917a;
-    --golden: #d4a574;
-    --text: #faf3eb;
-    --muted: #b0a494;
-    --error: #c44a4a;
-    --warning: #c4a04a;
-    --ok: #2563EB;
-    --font-display: 'Playfair Display', Georgia, serif;
-    --font-body: 'Inter', system-ui, -apple-system, sans-serif;
-  }
+/* ── VOLARE PALETTE — from the record cover, +10% warmth ── */
+:root {
+  /* Sky — warm orange-red sunset (dominant bg) */
+  --sky1:   #C44020;   /* deep horizon red */
+  --sky2:   #D45228;   /* mid sunset orange */
+  --sky3:   #E07038;   /* bright amber-orange */
 
-  html { font-size: 15px; -webkit-font-smoothing: antialiased; }
+  /* Sun — golden highlight */
+  --sun:    #F4D048;
+  --sun2:   #ECCC30;
 
-  body {
-    font-family: var(--font-body);
-    background:
-      radial-gradient(circle at top left, rgba(212, 145, 122, 0.15), transparent 32%),
-      radial-gradient(circle at 85% 8%, rgba(122, 143, 109, 0.12), transparent 26%),
-      linear-gradient(180deg, #2b241f 0%, #221d1a 100%);
-    color: var(--text);
-    padding: 0 16px 96px;
-    max-width: 640px;
-    margin: 0 auto;
-    line-height: 1.5;
-    min-height: 100vh;
-  }
+  /* Buildings in shadow — card surfaces */
+  --sienna: #823218;
+  --sienna2:#924020;
+  --sienna3:#A04A24;
 
-  /* Header */
-  .header { display: flex; align-items: baseline; justify-content: space-between; padding: 24px 0 8px; border-bottom: 1px solid rgba(122, 143, 109, 0.2); margin-bottom: 16px; flex-wrap: wrap; gap: 8px; }
-  .header-left { display: flex; align-items: baseline; gap: 10px; }
-  h1 { font-family: var(--font-display); font-size: 24px; font-weight: 700; color: var(--cream); }
-  .header-sub { font-size: 12px; color: var(--muted); }
-  .listener-link { font-size: 12px; color: var(--dusty-rose); text-decoration: none; }
-  .listener-link:hover { text-decoration: underline; }
+  /* Road — mid-tone */
+  --road:   #A86838;
 
-  /* Tier badge */
-  .tier-badge { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; padding: 4px 10px; border-radius: 4px; margin-bottom: 16px; transition: background 0.6s ease, color 0.6s ease; }
-  .tier-badge[data-tier="demo"], .tier-badge[data-tier="demo_ai"] { background: var(--terracotta); color: var(--cream); }
-  .tier-badge[data-tier="your_music_basic"], .tier-badge[data-tier="your_music_full"], .tier-badge[data-tier="full_ai"] { background: var(--ok); color: #fff; }
-  @keyframes tier-pulse { 0% { transform: scale(1); } 50% { transform: scale(1.1); } 100% { transform: scale(1); } }
-  .tier-pulse { animation: tier-pulse 0.4s ease; }
+  /* Cream — record sleeve border, text */
+  --cream:  #F5EDD8;
+  --cream-dk: #EADDC4;
 
-  /* Cards */
-  .card { background: var(--card); border-radius: 8px; padding: 16px; margin-bottom: 12px; }
-  .card h3 { font-size: 14px; font-weight: 600; margin-bottom: 6px; }
-  .card p { font-size: 13px; color: var(--cream-dk); margin-bottom: 8px; }
-  .card-muted { font-size: 12px; color: var(--muted); }
+  /* Silhouette — palm trees, deepest dark */
+  --shadow: #2A1008;
 
-  /* Now playing */
-  .now-playing { background: var(--card); border-radius: 8px; padding: 16px; margin-bottom: 12px; border-left: 3px solid var(--terracotta); }
-  .now-playing .label { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin-bottom: 4px; }
-  .now-playing .track { font-size: 16px; font-weight: 600; color: var(--cream); }
-  .now-playing .meta { font-size: 12px; color: var(--muted); margin-top: 2px; }
+  /* Lancia red — primary interactive */
+  --lancia: #A02018;
+  --lancia2:#B82C20;
 
-  /* Play button */
-  .play-btn {
-    width: 44px; height: 44px; border-radius: 50%;
-    background: var(--terracotta); border: none; color: var(--cream);
-    font-size: 18px; cursor: pointer; display: flex; align-items: center; justify-content: center;
-    flex-shrink: 0; transition: background 0.15s;
-  }
-  .play-btn:hover { background: var(--dusty-rose); }
-  .play-btn.playing { background: var(--ok); }
+  /* Semantic (keep blue for success — red-green colorblind) */
+  --ok:      #2563EB;
+  --error:   #c44a4a;
+  --warning: #c4a04a;
+  --muted:   rgba(245,237,216,0.45);
 
-  /* Radio dial */
-  .radio-dial {
-    padding: 32px 0 16px;
-    text-align: center;
-  }
-  .dial-label {
-    font-family: var(--font-display);
-    font-size: 11px;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.12em;
-    color: var(--muted);
-    margin-bottom: 12px;
-  }
-  .dial-band {
-    position: relative;
-    height: 48px;
-    background: linear-gradient(90deg, rgba(196,101,74,0.08), rgba(196,101,74,0.15), rgba(196,101,74,0.08));
-    border: 1px solid rgba(196,101,74,0.25);
-    border-radius: 8px;
-    margin: 0 auto;
-    max-width: 480px;
-    overflow: hidden;
-    cursor: pointer;
-  }
-  .dial-marks {
-    position: absolute; inset: 0;
-    display: flex; align-items: flex-end; justify-content: space-between;
-    padding: 0 12px 4px;
-    pointer-events: none;
-  }
-  .dial-marks span {
-    font-size: 9px; color: rgba(245,239,230,0.35);
-    font-variant-numeric: tabular-nums;
-  }
-  .dial-ticks {
-    position: absolute; top: 6px; left: 12px; right: 12px; height: 14px;
-    display: flex; justify-content: space-between; pointer-events: none;
-  }
-  .dial-ticks i {
-    width: 1px; height: 100%; background: rgba(245,239,230,0.12);
-    font-style: normal;
-  }
-  .dial-ticks i:nth-child(5n) { height: 100%; background: rgba(245,239,230,0.22); }
-  .dial-needle {
-    position: absolute;
-    top: 2px; bottom: 2px;
-    width: 3px;
-    background: var(--terracotta);
-    border-radius: 2px;
-    box-shadow: 0 0 8px rgba(196,101,74,0.6), 0 0 16px rgba(196,101,74,0.3);
-    left: 15%;
-    transition: left 0.15s ease-out;
-    z-index: 2;
-  }
-  .dial-needle.seeking {
-    transition: left 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
-  }
-  .dial-needle.locked {
-    transition: left 0.6s cubic-bezier(0.22, 0.61, 0.36, 1);
-    box-shadow: 0 0 12px rgba(196,101,74,0.8), 0 0 24px rgba(196,101,74,0.4);
-  }
-  .dial-freq {
-    font-family: var(--font-display);
-    font-size: 20px;
-    font-weight: 700;
-    color: var(--cream);
-    margin-top: 10px;
-    font-variant-numeric: tabular-nums;
-    letter-spacing: 0.02em;
-  }
-  .dial-freq .unit { font-size: 12px; font-weight: 400; color: var(--muted); margin-left: 2px; }
-  .dial-status {
-    font-size: 12px;
-    color: var(--dusty-rose);
-    margin-top: 4px;
-    min-height: 18px;
-  }
-  @keyframes pulse { 0%, 100% { opacity: 0.4; } 50% { opacity: 1; } }
+  --font-display: 'Playfair Display', Georgia, serif;
+  --font-body: 'Inter', system-ui, -apple-system, sans-serif;
+}
 
-  /* Connect hero */
-  .connect-hero {
-    background: linear-gradient(180deg, rgba(196, 101, 74, 0.12), rgba(42, 35, 32, 0.95));
-    border: 2px solid var(--terracotta);
-    border-radius: 16px;
-    padding: 28px 20px;
-    text-align: center;
-    margin-bottom: 16px;
-  }
-  .connect-hero h2 {
-    font-family: var(--font-display);
-    font-size: 22px;
-    font-weight: 700;
-    color: var(--cream);
-    margin: 0 0 6px;
-  }
-  .connect-hero .subtitle {
-    font-size: 14px;
-    color: var(--dusty-rose);
-    margin-bottom: 20px;
-  }
-  .connect-steps { display: flex; gap: 12px; justify-content: center; margin: 0 0 16px; flex-wrap: wrap; }
-  .connect-step {
-    text-align: center;
-    flex: 1;
-    min-width: 80px;
-    background: rgba(245, 239, 230, 0.06);
-    border-radius: 10px;
-    padding: 12px 8px;
-  }
-  .connect-step .step-num { font-size: 10px; font-weight: 600; color: var(--terracotta); letter-spacing: 0.08em; text-transform: uppercase; margin-bottom: 4px; }
-  .connect-step .icon { font-size: 32px; margin-bottom: 4px; }
-  .connect-step .text { font-size: 12px; color: var(--cream); font-weight: 500; }
-  .connect-status-line { display: flex; align-items: center; justify-content: center; gap: 8px; font-size: 13px; color: var(--muted); }
-  .connect-status-line .pulse-dot {
-    width: 8px; height: 8px; border-radius: 50%; background: var(--terracotta);
-    animation: pulse 1.5s ease-in-out infinite;
-  }
+body {
+  font-family: var(--font-body);
+  color: var(--cream);
+  line-height: 1.5;
+  min-height: 100vh;
+  /* Sunset gradient — warm, orange-red dominant */
+  background:
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='200' height='200' filter='url(%23n)' opacity='0.05'/%3E%3C/svg%3E") repeat,
+    linear-gradient(175deg, #C44020 0%, #D45228 25%, #E07038 55%, #CC5A30 80%, #B04020 100%);
+  padding: 0 16px 96px;
+  max-width: 640px;
+  margin: 0 auto;
+}
 
-  /* Queue */
-  .queue { list-style: none; }
-  .queue li { font-size: 13px; padding: 4px 0; color: var(--cream-dk); border-bottom: 1px solid rgba(176, 164, 148, 0.1); }
-  .queue li:last-child { border-bottom: none; }
+/* Soft sun glow top-right */
+body::before {
+  content: '';
+  position: fixed; top: -80px; right: 25%; z-index: 0;
+  width: 300px; height: 300px; border-radius: 50%;
+  background: radial-gradient(circle, rgba(244,208,72,0.3) 0%, rgba(240,160,40,0.12) 40%, transparent 70%);
+  pointer-events: none;
+}
 
-  /* Buttons */
-  .btn { display: inline-flex; align-items: center; justify-content: center; padding: 8px 16px; font-size: 13px; font-weight: 500; font-family: var(--font-body); border: none; border-radius: 6px; background: var(--terracotta); color: var(--cream); cursor: pointer; min-height: 44px; min-width: 44px; }
-  .btn:hover { filter: brightness(1.1); }
-  .btn-ghost { background: transparent; border: 1px solid rgba(176, 164, 148, 0.3); color: var(--cream-dk); }
-  .btn-sm { padding: 6px 12px; font-size: 12px; min-height: 36px; }
+/* ── HEADER ── */
+.header {
+  position: relative; z-index: 1;
+  display: flex; align-items: baseline; justify-content: space-between;
+  padding: 28px 0 12px;
+  border-bottom: 1px solid rgba(245,237,216,0.18);
+  margin-bottom: 20px;
+  flex-wrap: wrap; gap: 8px;
+}
+.header-left { display: flex; align-items: baseline; gap: 10px; }
+h1 {
+  font-family: var(--font-display);
+  font-size: 36px; font-weight: 700; font-style: italic;
+  color: var(--cream); line-height: 0.92; letter-spacing: -0.02em;
+  text-shadow: 0 2px 20px rgba(42,16,8,0.4);
+}
+.header-sub {
+  font-family: var(--font-display);
+  font-size: 11px; font-style: italic;
+  color: rgba(245,237,216,0.45);
+}
+.listener-link {
+  font-size: 11px; font-style: italic; font-family: var(--font-display);
+  color: rgba(245,237,216,0.55); text-decoration: none;
+  border: 1px solid rgba(245,237,216,0.2);
+  padding: 3px 10px; border-radius: 20px;
+}
+.listener-link:hover { color: var(--cream); border-color: rgba(245,237,216,0.4); }
 
-  /* Controls bar */
-  .controls { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
+/* ── TIER BADGE ── */
+.tier-badge {
+  position: relative; z-index: 1;
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 10px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: 0.12em; padding: 4px 12px; border-radius: 20px;
+  margin-bottom: 20px;
+  background: rgba(42,16,8,0.35);
+  border: 1px solid rgba(245,237,216,0.22);
+  color: var(--cream);
+  transition: background 0.6s ease, color 0.6s ease;
+}
+.tier-badge[data-tier="your_music_basic"],
+.tier-badge[data-tier="your_music_full"],
+.tier-badge[data-tier="full_ai"] {
+  background: var(--ok); color: #fff; border-color: transparent;
+}
+@keyframes tier-pulse { 0% { transform: scale(1); opacity: 0.7; } 40% { transform: scale(1.1); opacity: 1; } 100% { transform: scale(1); opacity: 1; } }
+.tier-pulse { animation: tier-pulse 0.6s cubic-bezier(0.22, 1, 0.36, 1); }
 
-  /* Input */
-  .input { background: var(--card); border: 1px solid rgba(176, 164, 148, 0.2); border-radius: 6px; color: var(--cream); padding: 8px 12px; font-size: 13px; font-family: var(--font-body); outline: none; width: 100%; min-height: 44px; }
-  .input:focus { border-color: var(--terracotta); }
+/* ── RADIO DIAL ── */
+.radio-dial {
+  position: relative; z-index: 1;
+  padding: 24px 0 16px;
+  text-align: center;
+  background: var(--sienna2);
+  border-top: 2px solid rgba(236,204,48,0.55);
+  border-radius: 10px;
+  padding: 22px 22px 18px;
+  margin-bottom: 14px;
+}
+.radio-dial::before {
+  content: '';
+  position: absolute; top: -1px; left: 22px; right: 22px; height: 2px;
+  background: linear-gradient(90deg, transparent, rgba(244,208,72,0.7), transparent);
+}
+.dial-label {
+  font-family: var(--font-display);
+  font-size: 10px; font-weight: 600; text-transform: uppercase;
+  letter-spacing: 0.15em; color: rgba(245,237,216,0.4);
+  margin-bottom: 12px;
+}
+.dial-band {
+  position: relative; height: 48px;
+  background: var(--shadow);
+  border: 1px solid rgba(245,237,216,0.08);
+  border-radius: 6px;
+  margin: 0 auto; max-width: 480px;
+  overflow: hidden; cursor: pointer;
+}
+.dial-band::before {
+  content: ''; position: absolute; inset: 0;
+  background: linear-gradient(180deg, rgba(244,208,72,0.07) 0%, transparent 50%);
+}
+.dial-marks {
+  position: absolute; inset: 0;
+  display: flex; align-items: flex-end; justify-content: space-between;
+  padding: 0 12px 4px; pointer-events: none;
+}
+.dial-marks span { font-size: 9px; color: rgba(245,237,216,0.3); font-variant-numeric: tabular-nums; }
+.dial-ticks {
+  position: absolute; top: 6px; left: 12px; right: 12px; height: 14px;
+  display: flex; justify-content: space-between; pointer-events: none;
+}
+.dial-ticks i { width: 1px; height: 100%; background: rgba(245,237,216,0.1); font-style: normal; }
+.dial-ticks i:nth-child(5n) { height: 100%; background: rgba(245,237,216,0.2); }
+.dial-needle {
+  position: absolute; top: 2px; bottom: 2px; width: 2px;
+  background: linear-gradient(180deg, var(--lancia2), rgba(160,32,24,0.5));
+  border-radius: 1px;
+  box-shadow: 0 0 8px rgba(184,44,32,1), 0 0 20px rgba(184,44,32,0.5);
+  left: 15%; transition: left 0.3s cubic-bezier(0.25, 0.46, 0.45, 0.94), box-shadow 0.4s ease;
+  z-index: 2;
+}
+.dial-needle::before {
+  content: ''; position: absolute; top: -3px; left: -4px;
+  width: 10px; height: 10px; border-radius: 50%;
+  background: var(--lancia2);
+  box-shadow: 0 0 10px rgba(184,44,32,0.9), 0 0 20px rgba(184,44,32,0.4);
+}
+.dial-needle.seeking {
+  transition: left 0.5s cubic-bezier(0.22, 1, 0.36, 1), box-shadow 0.4s ease;
+}
+.dial-needle.locked {
+  transition: left 0.8s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.6s ease;
+  box-shadow: 0 0 14px rgba(184,44,32,1), 0 0 30px rgba(184,44,32,0.5), 0 0 4px rgba(245,237,216,0.3);
+}
+.dial-freq {
+  font-family: var(--font-display);
+  font-size: 22px; font-weight: 700; color: var(--cream);
+  margin-top: 12px; font-variant-numeric: tabular-nums; letter-spacing: 0.02em;
+}
+.dial-freq .unit { font-size: 12px; font-weight: 400; color: rgba(245,237,216,0.4); margin-left: 3px; }
+.dial-status {
+  font-size: 11px; color: var(--sun2); margin-top: 5px; min-height: 18px;
+}
+@keyframes pulse { 0%, 100% { opacity: 0.4; } 50% { opacity: 1; } }
 
-  /* Status icons — color + shape, accessible */
-  .status-ok::before { content: "\2713"; color: var(--ok); margin-right: 4px; }
-  .status-warn::before { content: "\25B3"; color: var(--warning); margin-right: 4px; }
-  .status-err::before { content: "\2717"; color: var(--error); margin-right: 4px; }
-  .status-wait::before { content: "\25CB"; color: var(--muted); margin-right: 4px; }
+/* ── CONNECT HERO ── */
+.connect-hero {
+  position: relative; z-index: 1;
+  background: var(--sienna);
+  border: 1px solid rgba(245,237,216,0.1);
+  border-top: 2px solid var(--lancia2);
+  border-radius: 10px;
+  padding: 24px 22px;
+  margin-bottom: 14px;
+}
+.connect-hero::before {
+  content: ''; position: absolute; top: -1px; left: 22px; right: 22px; height: 2px;
+  background: linear-gradient(90deg, transparent, rgba(184,44,32,0.7), transparent);
+}
+.connect-hero h2 {
+  font-family: var(--font-display);
+  font-size: 22px; font-weight: 700; font-style: italic;
+  color: var(--cream); margin: 0 0 6px;
+}
+.connect-hero .subtitle {
+  font-size: 13px; color: rgba(245,237,216,0.55); margin-bottom: 20px; line-height: 1.6;
+}
+.connect-steps {
+  display: flex; gap: 10px; justify-content: center;
+  margin: 0 0 18px; flex-wrap: wrap;
+}
+.connect-step {
+  text-align: center; flex: 1; min-width: 80px;
+  background: rgba(42,16,8,0.25);
+  border: 1px solid rgba(245,237,216,0.1);
+  border-radius: 8px; padding: 12px 8px;
+}
+.connect-step .step-num { display: none; }
+.connect-step .icon { font-size: 28px; margin-bottom: 5px; }
+.connect-step .text { font-size: 11px; color: var(--cream); font-weight: 500; }
+.connect-status-line {
+  display: flex; align-items: center; justify-content: center;
+  gap: 8px; font-size: 12px; color: rgba(245,237,216,0.5);
+}
+.connect-status-line .pulse-dot {
+  width: 7px; height: 7px; border-radius: 50%; background: var(--lancia2);
+  animation: pulse 1.5s ease-in-out infinite;
+}
 
-  /* Transition overlay */
-  .transition-overlay { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; background: rgba(42, 35, 32, 0.92); z-index: 100; opacity: 0; pointer-events: none; transition: opacity 0.3s; }
-  .transition-overlay.show { opacity: 1; pointer-events: auto; }
-  .transition-overlay h2 { font-family: var(--font-display); font-size: 28px; color: var(--cream); }
+/* ── NOW PLAYING ── */
+.now-playing {
+  position: relative; z-index: 1;
+  background: var(--sienna);
+  border-radius: 10px;
+  padding: 20px;
+  margin-bottom: 14px;
+  border-top: 2px solid rgba(236,204,48,0.5);
+}
+.now-playing::before {
+  content: ''; position: absolute; top: 0; left: 0; bottom: 0; width: 3px; border-radius: 10px 0 0 10px;
+  background: linear-gradient(180deg, var(--sun2) 0%, rgba(236,204,48,0.1) 100%);
+}
+.now-playing .label {
+  font-size: 9px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: 0.18em; color: var(--sun2); margin-bottom: 5px;
+  padding-left: 14px;
+}
+.now-playing .track {
+  font-family: var(--font-display);
+  font-size: 20px; font-weight: 700; color: var(--cream);
+  padding-left: 14px;
+}
+.now-playing .meta {
+  font-size: 11px; color: rgba(245,237,216,0.45); margin-top: 2px;
+  padding-left: 14px;
+}
 
-  /* Toast */
-  .toast { position: fixed; bottom: 80px; left: 50%; transform: translateX(-50%); background: var(--card); color: var(--cream); padding: 10px 20px; border-radius: 8px; font-size: 13px; opacity: 0; transition: opacity 0.3s; pointer-events: none; z-index: 50; }
-  .toast.show { opacity: 1; }
+/* ── PLAY BUTTON ── */
+.play-btn {
+  width: 44px; height: 44px; border-radius: 50%;
+  background: var(--sun2); border: none;
+  color: var(--shadow); font-size: 16px;
+  cursor: pointer; display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
+  box-shadow: 0 4px 18px rgba(236,204,48,0.45);
+  transition: background 0.15s, box-shadow 0.15s;
+}
+.play-btn:hover { background: var(--sun); }
+.play-btn.playing { background: var(--ok); color: #fff; box-shadow: 0 4px 18px rgba(37,99,235,0.4); }
 
-  /* Responsive */
-  @media (max-width: 480px) {
-    body { padding: 0 12px 80px; }
-    h1 { font-size: 20px; }
-  }
+/* ── CARDS (generic) ── */
+.card {
+  position: relative; z-index: 1;
+  background: var(--sienna2);
+  border: 1px solid rgba(245,237,216,0.08);
+  border-top: 1px solid rgba(245,237,216,0.14);
+  border-radius: 8px; padding: 18px; margin-bottom: 12px;
+}
+.card h3 { font-size: 14px; font-weight: 600; margin-bottom: 6px; color: var(--cream); }
+.card p { font-size: 13px; color: rgba(245,237,216,0.65); margin-bottom: 8px; line-height: 1.6; }
+.card-muted { font-size: 11px; color: rgba(245,237,216,0.4); }
+
+/* ── QUEUE ── */
+.queue { list-style: none; }
+.queue li {
+  font-size: 13px; padding: 4px 0; color: rgba(245,237,216,0.7);
+  border-bottom: 1px solid rgba(245,237,216,0.08);
+}
+.queue li:last-child { border-bottom: none; }
+
+/* ── BUTTONS ── */
+.btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  padding: 8px 16px; font-size: 13px; font-weight: 600;
+  font-family: var(--font-body); border: none; border-radius: 6px;
+  background: var(--sun2); color: var(--shadow);
+  cursor: pointer; min-height: 44px; min-width: 44px;
+  box-shadow: 0 2px 12px rgba(236,204,48,0.3);
+  transition: background 0.15s;
+}
+.btn:hover { background: var(--sun); }
+.btn-ghost {
+  background: rgba(245,237,216,0.08);
+  border: 1px solid rgba(245,237,216,0.2);
+  color: rgba(245,237,216,0.7);
+  box-shadow: none;
+}
+.btn-ghost:hover { background: rgba(245,237,216,0.14); color: var(--cream); }
+.btn-sm { padding: 6px 12px; font-size: 12px; min-height: 36px; }
+
+/* ── CONTROLS BAR ── */
+.controls {
+  position: relative; z-index: 1;
+  display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px;
+}
+
+/* ── INPUT ── */
+.input {
+  background: rgba(42,16,8,0.4);
+  border: 1px solid rgba(245,237,216,0.2);
+  border-radius: 6px; color: var(--cream);
+  padding: 8px 12px; font-size: 13px; font-family: var(--font-body);
+  outline: none; width: 100%; min-height: 44px;
+}
+.input:focus { border-color: rgba(236,204,48,0.6); }
+
+/* ── STATUS ICONS — color+shape, accessible ── */
+.status-ok::before    { content: "\2713"; color: var(--ok); margin-right: 4px; }
+.status-warn::before  { content: "\25B3"; color: var(--warning); margin-right: 4px; }
+.status-err::before   { content: "\2717"; color: var(--error); margin-right: 4px; }
+.status-wait::before  { content: "\25CB"; color: var(--muted); margin-right: 4px; }
+
+/* ── TRANSITION OVERLAY ── */
+.transition-overlay {
+  position: fixed; inset: 0;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(196,64,32,0.85);
+  z-index: 100; opacity: 0; pointer-events: none; transition: opacity 0.3s;
+}
+.transition-overlay.show { opacity: 1; pointer-events: auto; }
+.transition-overlay h2 {
+  font-family: var(--font-display);
+  font-size: 32px; font-style: italic; color: var(--cream);
+  text-shadow: 0 2px 20px rgba(42,16,8,0.5);
+}
+
+/* ── TOAST ── */
+.toast {
+  position: fixed; bottom: 80px; left: 50%; transform: translateX(-50%);
+  background: var(--sienna); color: var(--cream);
+  border: 1px solid rgba(245,237,216,0.15);
+  padding: 10px 20px; border-radius: 8px; font-size: 13px;
+  opacity: 0; transition: opacity 0.3s; pointer-events: none; z-index: 50;
+}
+.toast.show { opacity: 1; }
+
+/* ── RESPONSIVE ── */
+@media (max-width: 480px) {
+  body { padding: 0 12px 80px; }
+  h1 { font-size: 28px; }
+}
 </style>
 </head>
 <body>
 
 <div class="header">
   <div class="header-left">
-    <h1>Radio Ital&igrave;</h1>
+    <h1>MammaMiRadio</h1>
     <span class="header-sub" id="uptime">loading...</span>
   </div>
   <a id="listener-link" href="/listen" class="listener-link">Open listener &rarr;</a>
@@ -283,37 +421,34 @@
   <div class="subtitle">Your music. Your hosts. Your station.</div>
   <div class="connect-steps">
     <div class="connect-step">
-      <div class="step-num">Step 1</div>
       <div class="icon">&#128241;</div>
       <div class="text">Open Spotify</div>
     </div>
     <div class="connect-step">
-      <div class="step-num">Step 2</div>
       <div class="icon">&#128266;</div>
-      <div class="text">Tap Devices</div>
+      <div class="text">Tap the speaker icon</div>
     </div>
     <div class="connect-step">
-      <div class="step-num">Step 3</div>
       <div class="icon">&#128251;</div>
-      <div class="text">Select <strong id="device-name">MammaMiRadio</strong></div>
+      <div class="text">Choose <strong id="device-name">MammaMiRadio</strong></div>
     </div>
   </div>
-  <div class="connect-status-line"><span class="pulse-dot"></span> <span id="connect-status">Waiting for connection...</span></div>
+  <div class="connect-status-line"><span class="pulse-dot"></span> <span id="connect-status">Listening for you...</span></div>
 </div>
 
 <!-- Connect timeout (after 60s with no connection) -->
 <div class="card" id="connect-trouble" style="display:none">
   <h3>Having trouble?</h3>
-  <p>Make sure your device is on the same WiFi network. If you're running Docker, you may need <code>network_mode: host</code>.</p>
-  <button class="btn btn-sm" onclick="openAdvancedSetup()">Try manual setup</button>
+  <p>Make sure your phone and this device are on the same WiFi network. The station needs to be discoverable for Spotify to find it.</p>
+  <button class="btn btn-sm" onclick="openAdvancedSetup()">Advanced options</button>
 </div>
 
 <!-- Now playing (always visible once data arrives) -->
 <div class="now-playing" id="now-playing" style="display:none">
-  <div style="display:flex;align-items:center;gap:12px">
+  <div class="label">Now Streaming</div>
+  <div style="display:flex;align-items:center;gap:12px;padding-left:14px;margin-top:6px">
     <button class="play-btn" id="play-btn" onclick="togglePlay()" aria-label="Play radio">&#9654;</button>
     <div style="flex:1">
-      <div class="label">Now Streaming</div>
       <div class="track" id="np-track">...</div>
       <div class="meta" id="np-meta"></div>
     </div>
@@ -339,14 +474,14 @@
 <div class="controls" id="controls" style="display:none">
   <button class="btn btn-sm" onclick="doShuffle()">Shuffle</button>
   <button class="btn btn-sm" onclick="doSkip()">Skip</button>
-  <button class="btn btn-sm btn-ghost" onclick="doPurge()">Clear Buffer</button>
+  <button class="btn btn-sm btn-ghost" onclick="doPurge()">Fresh Start</button>
 </div>
 
 <!-- Bring hosts to life (when anthropic=false) -->
 <div class="card" id="unlock-ai" style="display:none">
   <h3>Bring the Hosts to Life</h3>
   <p>Live banter, fake ads, dedications, and glorious Italian nonsense — generated just for your listening session.</p>
-  <input class="input" id="anthropic-key" type="password" placeholder="Paste Anthropic API key" autocomplete="off">
+  <input class="input" id="anthropic-key" type="password" placeholder="Paste your AI key here" autocomplete="off">
   <button class="btn btn-sm" style="margin-top:8px" onclick="saveAnthropicKey()">Save</button>
   <span class="card-muted" id="anthropic-status"></span>
 </div>
@@ -361,16 +496,16 @@
 <div class="card" id="advanced-card" style="display:none">
   <h3>Advanced Settings</h3>
   <div style="margin-bottom:8px">
-    <label class="card-muted" for="cred-spotify-id">Spotify Client ID</label>
-    <input class="input" id="cred-spotify-id" type="text" placeholder="Client ID" autocomplete="off">
+    <label class="card-muted" for="cred-spotify-id">Spotify App ID</label>
+    <input class="input" id="cred-spotify-id" type="text" placeholder="From your Spotify developer app" autocomplete="off">
   </div>
   <div style="margin-bottom:8px">
-    <label class="card-muted" for="cred-spotify-secret">Spotify Client Secret</label>
-    <input class="input" id="cred-spotify-secret" type="password" placeholder="Client Secret" autocomplete="off">
+    <label class="card-muted" for="cred-spotify-secret">Spotify App Secret</label>
+    <input class="input" id="cred-spotify-secret" type="password" placeholder="From your Spotify developer app" autocomplete="off">
   </div>
   <div style="margin-bottom:8px">
-    <label class="card-muted" for="playlist-url-input">Playlist URL</label>
-    <input class="input" id="playlist-url-input" type="text" placeholder="https://open.spotify.com/playlist/..." autocomplete="off">
+    <label class="card-muted" for="playlist-url-input">Playlist link</label>
+    <input class="input" id="playlist-url-input" type="text" placeholder="Paste a Spotify playlist link" autocomplete="off">
   </div>
   <button class="btn btn-sm" onclick="saveAdvancedCredentials()">Save</button>
   <span class="card-muted" id="advanced-status"></span>
@@ -476,14 +611,20 @@ function _stopStatic() {
   }, 500);
 }
 
+let _dialVelocity = 0.8;
+
 function _dialSeek() {
   if (_dialState === 'searching') {
-    // Sweep back and forth, gradually approaching target
-    const jitter = (Math.random() - 0.5) * 12;
-    const approach = (_dialTarget - _dialFreq) * 0.08 + jitter * 0.3;
-    _setNeedle(Math.max(87.5, Math.min(108, _dialFreq + approach)));
-    _setStaticVolume(0.06 + Math.abs(_dialFreq - _dialTarget) * 0.003);
-    _dialAnimFrame = setTimeout(_dialSeek, 200 + Math.random() * 300);
+    // Organic drift — momentum-based, like a real tuning knob
+    const pull = (_dialTarget - _dialFreq) * 0.03;
+    const drift = (Math.random() - 0.5) * 1.5;
+    _dialVelocity = _dialVelocity * 0.85 + pull + drift * 0.15;
+    _dialVelocity = Math.max(-2, Math.min(2, _dialVelocity));
+    const next = Math.max(87.5, Math.min(108, _dialFreq + _dialVelocity));
+    _setNeedle(next);
+    const dist = Math.abs(_dialFreq - _dialTarget);
+    _setStaticVolume(0.03 + dist * 0.004);
+    _dialAnimFrame = setTimeout(_dialSeek, 120);
   }
 }
 

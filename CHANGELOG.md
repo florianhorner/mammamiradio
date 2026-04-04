@@ -17,6 +17,7 @@ The current version source of truth is `pyproject.toml`.
 
 ### Changed
 
+- **Dashboard Volare theme**: warm Italian sunset palette — orange-red dominant background, deep sienna card surfaces, golden sun accent (#F4D048), Lancia-red FM dial needle with glow. Playfair Display italic station name. All JS/API logic preserved.
 - **Dashboard redesigned**: 640px single-column, capability-driven cards, connect hero card, tier badge with pulse animation on upgrade.
 - **Voice differentiation**: SSML prosody (rate/pitch) derived from personality axes. Marco → GianniNeural (booming), personality axes widened for contrast.
 - **Louder ad breaks**: 6-note bumper jingle (1.5s, 1.8x volume), music bed 0.12→0.20, env bed 0.06→0.10.
