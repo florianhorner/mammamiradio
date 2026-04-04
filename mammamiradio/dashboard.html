@@ -19,7 +19,14 @@
 <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,600;0,700;1,400;1,700&family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
 <style>
 *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
-html { font-size: 15px; -webkit-font-smoothing: antialiased; }
+html {
+  font-size: 15px; -webkit-font-smoothing: antialiased;
+  min-height: 100vh;
+  /* Sunset gradient fills full viewport — not clipped to body width */
+  background:
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='200' height='200' filter='url(%23n)' opacity='0.055'/%3E%3C/svg%3E") repeat,
+    linear-gradient(175deg, #B83C1C 0%, #C84820 25%, #D46030 55%, #C05028 80%, #A03820 100%);
+}
 
 /* ── VOLARE PALETTE — from the record cover, +10% warmth ── */
 :root {
@@ -65,41 +72,48 @@ body {
   font-family: var(--font-body);
   color: var(--cream);
   line-height: 1.5;
-  min-height: 100vh;
-  /* Sunset gradient — warm, orange-red dominant */
-  background:
-    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='200' height='200' filter='url(%23n)' opacity='0.05'/%3E%3C/svg%3E") repeat,
-    linear-gradient(175deg, #C44020 0%, #D45228 25%, #E07038 55%, #CC5A30 80%, #B04020 100%);
   padding: 0 16px 96px;
   max-width: 480px;
   margin: 0 auto;
 }
 
-/* Soft sun glow top-right */
+/* Golden sun glow top-right, like the record cover */
 body::before {
   content: '';
-  position: fixed; top: -80px; right: 25%; z-index: 0;
-  width: 300px; height: 300px; border-radius: 50%;
-  background: radial-gradient(circle, rgba(244,208,72,0.3) 0%, rgba(240,160,40,0.12) 40%, transparent 70%);
+  position: fixed; top: -80px; right: 30%; z-index: 0;
+  width: 280px; height: 280px; border-radius: 50%;
+  background: radial-gradient(circle, rgba(240,200,64,0.28) 0%, rgba(240,160,40,0.1) 40%, transparent 70%);
   pointer-events: none;
 }
 
-/* ── HEADER ── */
+/* ── HEADER / MASTHEAD ── */
 .header {
   position: relative; z-index: 1;
-  display: flex; align-items: baseline; justify-content: space-between;
-  padding: 28px 0 12px;
-  border-bottom: 1px solid rgba(245,237,216,0.18);
-  margin-bottom: 20px;
-  flex-wrap: wrap; gap: 8px;
+  display: flex; align-items: flex-start; justify-content: space-between;
+  padding: 28px 0 24px;
+  border-bottom: 1px solid rgba(245,237,216,0.15);
+  margin-bottom: 0;
 }
-.header-left { display: flex; align-items: baseline; gap: 10px; }
+.header-left { display: flex; flex-direction: column; gap: 0; }
 h1 {
   font-family: var(--font-display);
-  font-size: 36px; font-weight: 700; font-style: italic;
+  font-size: 42px; font-weight: 700; font-style: italic;
   color: var(--cream); line-height: 0.92; letter-spacing: -0.02em;
   text-shadow: 0 2px 20px rgba(42,16,8,0.4);
 }
+.live-chip {
+  display: flex; align-items: center; gap: 5px; margin-top: 6px;
+  padding: 5px 12px; border-radius: 20px;
+  background: rgba(42,16,8,0.3); border: 1px solid rgba(245,237,216,0.25);
+  font-size: 9px; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase;
+  color: var(--cream);
+}
+.live-dot {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--sun); box-shadow: 0 0 8px var(--sun);
+  animation: blink 1.4s ease-in-out infinite;
+}
+@keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.25} }
 .header-sub {
   font-family: var(--font-display);
   font-size: 11px; font-style: italic;
@@ -268,38 +282,41 @@ h1 {
 
 /* ── NOW PLAYING ── */
 .now-playing {
-  position: relative; z-index: 1;
+  position: relative; z-index: 1; overflow: hidden;
   background: var(--sienna);
-  border-radius: 10px;
-  padding: 20px;
-  margin-bottom: 14px;
-  border-top: 2px solid rgba(236,204,48,0.5);
+  border-top: 2px solid var(--sun2);
+  border-bottom: 1px solid rgba(42,16,8,0.3);
+  padding: 24px 24px 20px;
+  margin-bottom: 0;
 }
 .now-playing::before {
-  content: ''; position: absolute; top: 0; left: 0; bottom: 0; width: 3px; border-radius: 10px 0 0 10px;
+  content: '';
+  position: absolute; top: -1px; left: 24px; right: 24px; height: 2px;
+  background: linear-gradient(90deg, transparent, var(--sun), transparent);
+}
+.now-playing::after {
+  content: '';
+  position: absolute; top: 0; left: 0; bottom: 0; width: 3px;
   background: linear-gradient(180deg, var(--sun2) 0%, rgba(236,204,48,0.1) 100%);
 }
-.now-playing .label {
-  font-size: 9px; font-weight: 700; text-transform: uppercase;
-  letter-spacing: 0.18em; color: var(--sun2); margin-bottom: 5px;
-  padding-left: 14px;
+.np-body { padding-left: 14px; }
+.np-eyebrow {
+  font-size: 9px; font-weight: 700; letter-spacing: 0.2em; text-transform: uppercase;
+  color: var(--sun2); margin-bottom: 10px;
 }
-.now-playing .track {
+.np-track {
   font-family: var(--font-display);
-  font-size: 20px; font-weight: 700; color: var(--cream);
-  padding-left: 14px;
+  font-size: 32px; font-weight: 700; line-height: 1.05;
+  color: var(--cream); margin-bottom: 3px;
 }
-.now-playing .meta {
-  font-size: 11px; color: rgba(245,237,216,0.45); margin-top: 2px;
-  padding-left: 14px;
+.np-artist {
+  font-family: var(--font-display);
+  font-size: 13px; font-style: italic;
+  color: rgba(245,237,216,0.6); margin-bottom: 20px;
 }
+.np-controls { display: flex; align-items: center; gap: 13px; }
 
-/* ── ALBUM ART ── */
-.album-art {
-  width: 44px; height: 44px; border-radius: 6px;
-  object-fit: cover; flex-shrink: 0;
-  box-shadow: 0 2px 8px rgba(0,0,0,0.3);
-}
+/* ── ALBUM ART BG — subtle tint, keep for JS ── */
 .album-art-bg {
   position: absolute; inset: 0; border-radius: inherit;
   background-size: cover; background-position: center;
@@ -307,7 +324,6 @@ h1 {
   transition: background-image 1s ease, opacity 1s ease;
   pointer-events: none; z-index: 0;
 }
-.now-playing { position: relative; overflow: hidden; }
 .now-playing > *:not(.album-art-bg) { position: relative; z-index: 1; }
 
 /* ── PLAY BUTTON ── */
@@ -433,11 +449,11 @@ h1 {
   padding: 10px 0;
   animation: ticker-scroll 32s linear infinite;
 }
-.ticker span {
+.ticker .ti {
   font-size: 11px; font-style: italic; font-family: var(--font-display);
-  color: rgba(245,237,216,0.5); padding: 0 8px;
+  color: rgba(245,237,216,0.5); padding: 0 6px;
 }
-.ticker span::before { content: '\00B7'; margin-right: 8px; color: rgba(240,200,64,0.4); }
+.ticker .ts { color: rgba(240,200,64,0.4); }
 @keyframes ticker-scroll {
   0% { transform: translateX(0); }
   100% { transform: translateX(-50%); }
@@ -466,12 +482,14 @@ h1 {
   <div class="header-left">
     <h1>MammaMiRadio</h1>
   </div>
+  <div class="live-chip" aria-live="polite">
+    <div class="live-dot"></div>
+    <span id="tier-badge" data-tier="demo">On Air</span>
+  </div>
 </div>
 
-<div class="tier-badge" id="tier-badge" data-tier="demo" aria-live="polite">On Air</div>
-
 <!-- Radio dial (shown before first data, stays visible as ambient UI) -->
-<div class="dial-card" id="radio-dial">
+<div class="dial-card" id="radio-dial" style="margin-top:20px">
   <div class="dial-header">
     <div>
       <div class="dial-label" id="dial-label">Searching for signal...</div>
@@ -500,19 +518,18 @@ h1 {
   </div>
 </div>
 
-<!-- Now playing (dominates — the radio is playing before any decisions) -->
+<!-- Now playing -->
 <div class="now-playing" id="now-playing" style="display:none">
   <div class="album-art-bg" id="album-art-bg"></div>
-  <div class="label">Now Streaming</div>
-  <div style="display:flex;align-items:center;gap:12px;padding-left:14px;margin-top:6px">
-    <img class="album-art" id="album-art" src="" alt="" style="display:none">
-    <button class="play-btn" id="play-btn" onclick="togglePlay()" aria-label="Play radio">&#9654;</button>
-    <div style="flex:1">
-      <div class="track" id="np-track">...</div>
-      <div class="meta" id="np-meta"></div>
+  <div class="np-body">
+    <div class="np-eyebrow">Now Playing</div>
+    <div class="np-track" id="np-track">...</div>
+    <div class="np-artist" id="np-meta"></div>
+    <div class="np-controls">
+      <button class="play-btn" id="play-btn" onclick="togglePlay()" aria-label="Play radio">&#9654;</button>
     </div>
+    <div class="waveform paused" id="waveform"></div>
   </div>
-  <div class="waveform paused" id="waveform"></div>
   <audio id="radio-audio" preload="none"></audio>
 </div>
 
@@ -1210,7 +1227,7 @@ function _initTicker() {
   ];
   const ticker = document.getElementById('ticker');
   // Duplicate items so the scroll loops seamlessly
-  const html = items.concat(items).map(t => '<span>' + t + '</span>').join('');
+  const html = items.concat(items).map(t => '<span class="ti">' + t + '</span><span class="ts"> · </span>').join('');
   ticker.innerHTML = html;
   document.getElementById('ticker-wrap').style.display = '';
 }
