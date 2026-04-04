@@ -105,10 +105,18 @@ tests/                pytest coverage
 ## Brand assets
 
 - **Logo SVG**: `mammamiradio/logo.svg` — canonical vector source (variant G: classic radio with Italian flag stripe and sound waves)
-- **Palette**: Terracotta Sera — charcoal `#2a2320`, terracotta `#c4654a`, dusty rose `#d4917a`, sage `#7a8f6d`, cream `#f5efe6`
+- **Palette**: Volare — warm Italian sunset. See `DESIGN.md` for the full design system.
+  - Background: orange-red sunset gradient (`#C44020 → #D45228 → #E07038`)
+  - Cards: deep sienna (`#823218`, `#924020`) — buildings in shadow
+  - Accent: golden sun (`#F4D048`, `#ECCC30`) — play button, active borders
+  - Interactive: Lancia red (`#B82C20`) — FM dial needle, connect border
+  - Text: cream (`#F5EDD8`)
+  - Success/connected: blue (`#2563EB`) — never green (colorblind)
+- **Typography**: Playfair Display italic (station name, display text) + Inter (body)
 - **Favicon**: inline SVG data URI in `dashboard.html` and `listener.html` (simplified version of logo)
 - **HA add-on icon**: `ha-addon/mammamiradio/icon.png` (256px) and `logo.png` (512px), rasterized from the SVG
 - To regenerate PNGs from SVG: `cairosvg mammamiradio/logo.svg -o icon.png -W 256 -H 256`
+- **Full design system**: `DESIGN.md` — colors, typography, components, motion, anti-patterns
 
 ## Notes for future edits
 
