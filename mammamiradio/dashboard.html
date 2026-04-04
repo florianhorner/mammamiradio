@@ -463,9 +463,7 @@ h1 {
 <div class="header">
   <div class="header-left">
     <h1>MammaMiRadio</h1>
-    <span class="header-sub">96.7 FM &middot; Milano</span>
   </div>
-  <span class="header-sub" id="uptime" style="opacity:0.4"></span>
 </div>
 
 <div class="tier-badge" id="tier-badge" data-tier="demo" aria-live="polite">On Air</div>
@@ -954,14 +952,6 @@ function updateStatus(d) {
       _wantsPlay = true;
       setTimeout(_startStream, 1200); // start after dial locks
     }
-  }
-
-  // Uptime
-  if (d.uptime_sec != null) {
-    const s = Math.floor(d.uptime_sec);
-    const h = Math.floor(s / 3600);
-    const m = Math.floor((s % 3600) / 60);
-    document.getElementById('uptime').textContent = h > 0 ? h + 'h ' + m + 'm' : m + 'm ' + (s % 60) + 's';
   }
 
   // Now playing
