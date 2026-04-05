@@ -445,7 +445,7 @@ async def test_write_news_flash_strips_markdown_fences(config, state):
         patch("mammamiradio.scriptwriter._anthropic_client", None),
         patch("mammamiradio.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
     ):
-        host, text, category = await write_news_flash(state, config)
+        _host, text, _category = await write_news_flash(state, config)
 
     assert text == "Traffico bloccato."
 
@@ -504,6 +504,6 @@ async def test_write_transition_strips_markdown_fences(config, state):
         patch("mammamiradio.scriptwriter._anthropic_client", None),
         patch("mammamiradio.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
     ):
-        host, text = await write_transition(state, config)
+        _host, text = await write_transition(state, config)
 
     assert text == "Che bel pezzo..."
