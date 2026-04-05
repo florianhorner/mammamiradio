@@ -11,6 +11,9 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
+# Shared FFmpeg output arguments for consistent MP3 encoding across all generators.
+_MP3_OUTPUT_ARGS: list[str] = ["-ar", "48000", "-ac", "2", "-b:a", "192k", "-f", "mp3"]
+
 # Canonical list of supported SFX types (synthetic fallbacks).
 # Pre-recorded files in sfx_dir can extend this, but this list is what the
 # LLM prompt advertises as available.
@@ -68,11 +71,19 @@ def normalize(input_path: Path, output_path: Path, config=None) -> Path:
     return output_path
 
 
-def concat_files(paths: list[Path], output_path: Path, silence_ms: int = 300) -> Path:
+def concat_files(
+    paths: list[Path],
+    output_path: Path,
+    silence_ms: int = 300,
+    loudnorm: bool = True,
+) -> Path:
     """Concatenate rendered parts into a single MP3 segment.
 
     When silence_ms > 0, short silence gaps are inserted between each part
     using the FFmpeg anullsrc filter for a more produced feel.
+
+    Set loudnorm=False when all inputs are already normalized to skip the
+    expensive EBU R128 loudness pass (~1-3s saved per concat).
     """
     if len(paths) == 1:
         return paths[0]
@@ -82,14 +93,12 @@ def concat_files(paths: list[Path], output_path: Path, silence_ms: int = 300) ->
     silence_dur = silence_ms / 1000.0
 
     if silence_ms > 0 and len(paths) > 1:
-        # Interleave silence segments between audio parts
         stream_idx = 0
         for i, p in enumerate(paths):
             inputs.extend(["-i", str(p)])
             filter_parts.append(f"[{stream_idx}:a]")
             stream_idx += 1
             if i < len(paths) - 1:
-                # Generate inline silence via lavfi
                 inputs.extend(["-f", "lavfi", "-i", f"anullsrc=r=48000:cl=stereo,atrim=duration={silence_dur}"])
                 filter_parts.append(f"[{stream_idx}:a]")
                 stream_idx += 1
@@ -100,7 +109,8 @@ def concat_files(paths: list[Path], output_path: Path, silence_ms: int = 300) ->
             filter_parts.append(f"[{i}:a]")
         total_streams = len(paths)
 
-    filter_str = "".join(filter_parts) + f"concat=n={total_streams}:v=0:a=1[out]"
+    norm_filter = ",loudnorm=I=-16:LRA=11:TP=-1.5" if loudnorm else ""
+    filter_str = "".join(filter_parts) + f"concat=n={total_streams}:v=0:a=1{norm_filter}[out]"
 
     cmd = [
         "ffmpeg",
@@ -312,7 +322,7 @@ def mix_with_bed(voice_path: Path, bed_path: Path, output_path: Path, volume_sca
         "-i",
         str(bed_path),
         "-filter_complex",
-        f"[1:a]volume={volume_scale}[bed];[0:a][bed]amix=inputs=2:duration=first:dropout_transition=2[out]",
+        f"[1:a]volume={volume_scale}[bed];[0:a][bed]amix=inputs=2:duration=first:dropout_transition=2,loudnorm=I=-16:LRA=11:TP=-1.5[out]",
         "-map",
         "[out]",
         "-ar",
@@ -330,28 +340,44 @@ def mix_with_bed(voice_path: Path, bed_path: Path, output_path: Path, volume_sca
     return output_path
 
 
-def generate_bumper_jingle(output_path: Path, duration_sec: float = 1.2) -> Path:
-    """Generate a short radio bumper jingle (ascending chime pattern)."""
+def generate_bumper_jingle(output_path: Path, duration_sec: float = 1.5) -> Path:
+    """Generate a short radio bumper jingle (ascending + descending chime pattern)."""
     fade = min(0.1, duration_sec / 4)
+    note_dur = duration_sec / 6
     cmd = [
         "ffmpeg",
         "-y",
         "-f",
         "lavfi",
         "-i",
-        f"sine=frequency=523:duration={duration_sec * 0.3}",  # C5
+        f"sine=frequency=523:duration={note_dur}",  # C5 up
         "-f",
         "lavfi",
         "-i",
-        f"sine=frequency=659:duration={duration_sec * 0.3}",  # E5
+        f"sine=frequency=659:duration={note_dur}",  # E5 up
         "-f",
         "lavfi",
         "-i",
-        f"sine=frequency=784:duration={duration_sec * 0.4}",  # G5
+        f"sine=frequency=784:duration={note_dur}",  # G5 peak
+        "-f",
+        "lavfi",
+        "-i",
+        f"sine=frequency=1047:duration={note_dur}",  # C6 peak
+        "-f",
+        "lavfi",
+        "-i",
+        f"sine=frequency=784:duration={note_dur}",  # G5 down
+        "-f",
+        "lavfi",
+        "-i",
+        f"sine=frequency=659:duration={note_dur * 1.2}",  # E5 resolve
         "-filter_complex",
-        f"[0:a]adelay=0|0[a];[1:a]adelay={int(duration_sec * 300)}|{int(duration_sec * 300)}[b];"
-        f"[2:a]adelay={int(duration_sec * 600)}|{int(duration_sec * 600)}[c];"
-        f"[a][b][c]amix=inputs=3:duration=longest,"
+        f"[0:a]adelay=0|0[a];[1:a]adelay={int(note_dur * 1000)}|{int(note_dur * 1000)}[b];"
+        f"[2:a]adelay={int(note_dur * 2000)}|{int(note_dur * 2000)}[c];"
+        f"[3:a]adelay={int(note_dur * 3000)}|{int(note_dur * 3000)}[d];"
+        f"[4:a]adelay={int(note_dur * 4000)}|{int(note_dur * 4000)}[e];"
+        f"[5:a]adelay={int(note_dur * 5000)}|{int(note_dur * 5000)}[f];"
+        f"[a][b][c][d][e][f]amix=inputs=6:duration=longest,volume=1.8,"
         f"afade=t=in:d={fade},afade=t=out:st={duration_sec - fade}:d={fade}[out]",
         "-map",
         "[out]",
@@ -409,6 +435,148 @@ def generate_brand_motif(output_path: Path, sonic_signature: str, sfx_dir: Path 
         raise
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
+
+
+def crossfade_voice_over_music(
+    music_path: Path,
+    voice_path: Path,
+    output_path: Path,
+    tail_seconds: float = 8.0,
+    voice_volume: float = 1.0,
+    music_fade_volume: float = 0.3,
+) -> Path:
+    """Overlay voice on the tail of a music track, fading music down underneath.
+
+    Takes the last `tail_seconds` of the music, fades it to `music_fade_volume`,
+    and mixes the voice on top. The result is a "DJ talking over the outro" effect.
+    """
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-sseof",
+        f"-{tail_seconds}",
+        "-i",
+        str(music_path),
+        "-i",
+        str(voice_path),
+        "-filter_complex",
+        f"[0:a]afade=t=out:st=0:d={tail_seconds},volume={music_fade_volume}[music];"
+        f"[1:a]volume={voice_volume},adelay=1500|1500[voice];"
+        f"[music][voice]amix=inputs=2:duration=longest:dropout_transition=2,"
+        f"loudnorm=I=-16:LRA=11:TP=-1.5[out]",
+        "-map",
+        "[out]",
+        *_MP3_OUTPUT_ARGS,
+        str(output_path),
+    ]
+    _run_ffmpeg(cmd, "crossfade voice over music")
+    logger.info("Crossfade voice over music -> %s", output_path.name)
+    return output_path
+
+
+def generate_station_id_bed(
+    output_path: Path,
+    duration_sec: float = 3.0,
+    motif_notes: list[int] | None = None,
+) -> Path:
+    """Generate a short musical sting for station ID: ascending chord + reverb tail.
+
+    Uses the Rhodes-style motif notes from [sonic_brand].motif_notes in radio.toml.
+    The last note sustains longer for a reverb tail effect.
+    """
+    notes = (motif_notes or [523, 659, 784, 1047])[:8]  # cap at 8 notes (ffmpeg label limit)
+    note_dur = duration_sec / len(notes)
+    fade = min(0.15, duration_sec / 5)
+
+    # Build lavfi inputs — last note sustains longer
+    inputs: list[str] = []
+    for i, freq in enumerate(notes):
+        dur = duration_sec * 0.6 if i == len(notes) - 1 else note_dur
+        inputs.extend(["-f", "lavfi", "-i", f"sine=frequency={freq}:duration={dur}"])
+
+    # Build filter: stagger each note with adelay, mix, add echo
+    labels = "abcdefgh"[: len(notes)]
+    filter_parts = []
+    for i, label in enumerate(labels):
+        delay_ms = int(note_dur * 400 * i)
+        filter_parts.append(f"[{i}:a]adelay={delay_ms}|{delay_ms}[{label}]")
+
+    mix_inputs = "".join(f"[{ch}]" for ch in labels)
+    filter_parts.append(
+        f"{mix_inputs}amix=inputs={len(notes)}:duration=longest,volume=1.5,"
+        f"aecho=0.8:0.7:40|80:0.3|0.2,"
+        f"afade=t=in:d={fade},afade=t=out:st={duration_sec - fade * 2}:d={fade * 2}[out]"
+    )
+
+    cmd = [
+        "ffmpeg",
+        "-y",
+        *inputs,
+        "-filter_complex",
+        ";".join(filter_parts),
+        "-map",
+        "[out]",
+        *_MP3_OUTPUT_ARGS,
+        "-t",
+        str(duration_sec),
+        str(output_path),
+    ]
+    _run_ffmpeg(cmd, "station ID bed")
+    logger.info("Generated station ID bed: %s", output_path.name)
+    return output_path
+
+
+def mix_voice_with_sting(
+    voice_path: Path,
+    sting_path: Path,
+    output_path: Path,
+) -> Path:
+    """Mix a voice tag centered over a musical sting, with the sting quieter underneath."""
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-i",
+        str(sting_path),
+        "-i",
+        str(voice_path),
+        "-filter_complex",
+        "[0:a]volume=0.6[bed];"
+        "[1:a]adelay=400|400,volume=1.2[voice];"
+        "[bed][voice]amix=inputs=2:duration=longest:dropout_transition=1,"
+        "loudnorm=I=-16:LRA=11:TP=-1.5[out]",
+        "-map",
+        "[out]",
+        *_MP3_OUTPUT_ARGS,
+        str(output_path),
+    ]
+    _run_ffmpeg(cmd, "mix voice with sting")
+    logger.info("Mixed voice + sting -> %s", output_path.name)
+    return output_path
+
+
+def normalize_ad(input_path: Path, output_path: Path) -> Path:
+    """Broadcast-style processing for ad audio: compression, treble boost, slight loudness bump.
+
+    Real radio ads are heavily compressed and brighter than music/banter.
+    This makes ads instantly recognizable as "commercial" even before content registers.
+    """
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-i",
+        str(input_path),
+        "-vn",
+        "-af",
+        # Chain: compressor (heavy, broadcast-style) -> treble boost -> loudness bump
+        "acompressor=threshold=-20dB:ratio=6:attack=5:release=50:makeup=4,"
+        "treble=gain=3:frequency=3000,"
+        "loudnorm=I=-14:LRA=7:TP=-1.0",
+        *_MP3_OUTPUT_ARGS,
+        str(output_path),
+    ]
+    _run_ffmpeg(cmd, f"normalize_ad {input_path.name}")
+    logger.info("Ad broadcast processing: %s -> %s", input_path.name, output_path.name)
+    return output_path
 
 
 def generate_silence(output_path: Path, duration_sec: float = 3.0) -> Path:

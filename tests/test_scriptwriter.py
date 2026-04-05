@@ -17,7 +17,15 @@ from mammamiradio.models import (
     StationState,
     Track,
 )
-from mammamiradio.scriptwriter import AD_FORMATS, SPEAKER_ROLES, _build_system_prompt, write_ad, write_banter
+from mammamiradio.scriptwriter import (
+    AD_FORMATS,
+    SPEAKER_ROLES,
+    _build_system_prompt,
+    write_ad,
+    write_banter,
+    write_news_flash,
+    write_transition,
+)
 
 
 @pytest.fixture()
@@ -89,7 +97,10 @@ async def test_write_banter_parses_valid_json(config, state):
     )
     mock_cls = _mock_anthropic_response(response_json)
 
-    with patch("mammamiradio.scriptwriter.anthropic.AsyncAnthropic", mock_cls):
+    with (
+        patch("mammamiradio.scriptwriter._anthropic_client", None),
+        patch("mammamiradio.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
+    ):
         result = await write_banter(state, config)
 
     assert len(result) == 2
@@ -113,7 +124,10 @@ async def test_write_banter_strips_markdown_fences(config, state):
     )
     mock_cls = _mock_anthropic_response(response_text)
 
-    with patch("mammamiradio.scriptwriter.anthropic.AsyncAnthropic", mock_cls):
+    with (
+        patch("mammamiradio.scriptwriter._anthropic_client", None),
+        patch("mammamiradio.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
+    ):
         result = await write_banter(state, config)
 
     assert len(result) == 1
@@ -132,7 +146,10 @@ async def test_write_banter_adds_new_joke(config, state):
     mock_cls = _mock_anthropic_response(response_json)
 
     assert len(state.running_jokes) == 0
-    with patch("mammamiradio.scriptwriter.anthropic.AsyncAnthropic", mock_cls):
+    with (
+        patch("mammamiradio.scriptwriter._anthropic_client", None),
+        patch("mammamiradio.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
+    ):
         await write_banter(state, config)
 
     assert "The traffic joke" in state.running_jokes
@@ -145,7 +162,10 @@ async def test_write_banter_falls_back_on_api_exception(config, state):
     mock_client.messages.create = AsyncMock(side_effect=Exception("API down"))
     mock_cls = MagicMock(return_value=mock_client)
 
-    with patch("mammamiradio.scriptwriter.anthropic.AsyncAnthropic", mock_cls):
+    with (
+        patch("mammamiradio.scriptwriter._anthropic_client", None),
+        patch("mammamiradio.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
+    ):
         result = await write_banter(state, config)
 
     assert len(result) == 1
@@ -157,7 +177,10 @@ async def test_write_banter_falls_back_on_api_exception(config, state):
 async def test_write_banter_falls_back_on_malformed_json(config, state):
     mock_cls = _mock_anthropic_response("this is not valid json {{{")
 
-    with patch("mammamiradio.scriptwriter.anthropic.AsyncAnthropic", mock_cls):
+    with (
+        patch("mammamiradio.scriptwriter._anthropic_client", None),
+        patch("mammamiradio.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
+    ):
         result = await write_banter(state, config)
 
     assert len(result) == 1
@@ -186,7 +209,10 @@ async def test_write_ad_returns_adscript(config, state):
     brand = AdBrand(name="TestBrand", tagline="Il meglio del meglio", category="food")
     voices = {"default": AdVoice(name="Voce Uno", voice="it-IT-IsabellaNeural", style="enthusiastic")}
 
-    with patch("mammamiradio.scriptwriter.anthropic.AsyncAnthropic", mock_cls):
+    with (
+        patch("mammamiradio.scriptwriter._anthropic_client", None),
+        patch("mammamiradio.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
+    ):
         result = await write_ad(brand, voices, state, config)
 
     assert isinstance(result, AdScript)
@@ -209,7 +235,10 @@ async def test_write_ad_falls_back_on_api_exception(config, state):
     brand = AdBrand(name="FallbackBrand", tagline="Sempre il top", category="tech")
     voices = {"default": AdVoice(name="Voce Due", voice="it-IT-DiegoNeural", style="calm")}
 
-    with patch("mammamiradio.scriptwriter.anthropic.AsyncAnthropic", mock_cls):
+    with (
+        patch("mammamiradio.scriptwriter._anthropic_client", None),
+        patch("mammamiradio.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
+    ):
         result = await write_ad(brand, voices, state, config)
 
     assert isinstance(result, AdScript)
@@ -237,7 +266,10 @@ async def test_write_ad_ensures_voice_part_when_llm_returns_none(config, state):
     brand = AdBrand(name="SilentBrand", tagline="Silenzio è oro", category="luxury")
     voices = {"default": AdVoice(name="Voce Tre", voice="it-IT-ElsaNeural", style="whispery")}
 
-    with patch("mammamiradio.scriptwriter.anthropic.AsyncAnthropic", mock_cls):
+    with (
+        patch("mammamiradio.scriptwriter._anthropic_client", None),
+        patch("mammamiradio.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
+    ):
         result = await write_ad(brand, voices, state, config)
 
     assert isinstance(result, AdScript)
@@ -284,7 +316,10 @@ async def test_write_ad_multi_role_json(config, state):
         "witness": AdVoice(name="Testimonia", voice="it-IT-ElsaNeural", style="fake customer", role="witness"),
     }
 
-    with patch("mammamiradio.scriptwriter.anthropic.AsyncAnthropic", mock_cls):
+    with (
+        patch("mammamiradio.scriptwriter._anthropic_client", None),
+        patch("mammamiradio.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
+    ):
         result = await write_ad(brand, voices, state, config, ad_format="duo_scene")
 
     assert isinstance(result, AdScript)
@@ -312,7 +347,10 @@ async def test_write_ad_legacy_json_compat(config, state):
     brand = AdBrand(name="OldBrand", tagline="Tag", category="food")
     voices = {"default": AdVoice(name="Ann", voice="it-IT-DiegoNeural", style="warm")}
 
-    with patch("mammamiradio.scriptwriter.anthropic.AsyncAnthropic", mock_cls):
+    with (
+        patch("mammamiradio.scriptwriter._anthropic_client", None),
+        patch("mammamiradio.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
+    ):
         result = await write_ad(brand, voices, state, config)
 
     assert isinstance(result, AdScript)
@@ -342,7 +380,130 @@ async def test_write_ad_demotes_duo_scene_with_single_role(config, state):
         "maniac": AdVoice(name="Fiamma", voice="it-IT-FiammaNeural", style="enthusiastic", role="maniac"),
     }
 
-    with patch("mammamiradio.scriptwriter.anthropic.AsyncAnthropic", mock_cls):
+    with (
+        patch("mammamiradio.scriptwriter._anthropic_client", None),
+        patch("mammamiradio.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
+    ):
         result = await write_ad(brand, voices, state, config, ad_format="duo_scene")
 
     assert result.format == "classic_pitch"  # demoted from duo_scene
+
+
+# --- write_news_flash tests ---
+
+
+@pytest.mark.asyncio
+async def test_write_news_flash_returns_tuple(config, state):
+    response_json = json.dumps({"text": "NOTIZIA BOMBA: i treni arrivano in orario."})
+    mock_cls = _mock_anthropic_response(response_json)
+
+    with (
+        patch("mammamiradio.scriptwriter._anthropic_client", None),
+        patch("mammamiradio.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
+    ):
+        result = await write_news_flash(state, config, category="breaking")
+
+    host, text, category = result
+    assert isinstance(host, HostPersonality)
+    assert text == "NOTIZIA BOMBA: i treni arrivano in orario."
+    assert category == "breaking"
+
+
+@pytest.mark.asyncio
+async def test_write_news_flash_no_key_returns_fallback(config, state):
+    config.anthropic_api_key = ""
+    host, text, category = await write_news_flash(state, config)
+    assert isinstance(host, HostPersonality)
+    assert "ultima ora" in text.lower() or len(text) > 0
+    assert isinstance(category, str)
+
+
+@pytest.mark.asyncio
+async def test_write_news_flash_api_exception_returns_fallback(config, state):
+    mock_client = MagicMock()
+    mock_client.messages = MagicMock()
+    mock_client.messages.create = AsyncMock(side_effect=Exception("network error"))
+    mock_cls = MagicMock(return_value=mock_client)
+
+    with (
+        patch("mammamiradio.scriptwriter._anthropic_client", None),
+        patch("mammamiradio.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
+    ):
+        host, text, category = await write_news_flash(state, config, category="sports")
+
+    assert isinstance(host, HostPersonality)
+    assert isinstance(text, str) and len(text) > 0
+    assert category == "sports"
+
+
+@pytest.mark.asyncio
+async def test_write_news_flash_strips_markdown_fences(config, state):
+    response_text = '```json\n{"text": "Traffico bloccato."}\n```'
+    mock_cls = _mock_anthropic_response(response_text)
+
+    with (
+        patch("mammamiradio.scriptwriter._anthropic_client", None),
+        patch("mammamiradio.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
+    ):
+        _host, text, _category = await write_news_flash(state, config)
+
+    assert text == "Traffico bloccato."
+
+
+# --- write_transition tests ---
+
+
+@pytest.mark.asyncio
+async def test_write_transition_returns_host_and_text(config, state):
+    state.played_tracks = [Track(title="L'Estate", artist="Vivaldi", duration_ms=180000, spotify_id="v1")]
+    response_json = json.dumps({"text": "Bellissima... e adesso una pausa."})
+    mock_cls = _mock_anthropic_response(response_json)
+
+    with (
+        patch("mammamiradio.scriptwriter._anthropic_client", None),
+        patch("mammamiradio.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
+    ):
+        host, text = await write_transition(state, config, next_segment="ad")
+
+    assert isinstance(host, HostPersonality)
+    assert text == "Bellissima... e adesso una pausa."
+
+
+@pytest.mark.asyncio
+async def test_write_transition_no_key_returns_fallback(config, state):
+    config.anthropic_api_key = ""
+    for next_seg, expected in [("banter", "Allora..."), ("ad", "E adesso..."), ("news_flash", "Attenzione...")]:
+        host, text = await write_transition(state, config, next_segment=next_seg)
+        assert isinstance(host, HostPersonality)
+        assert text == expected
+
+
+@pytest.mark.asyncio
+async def test_write_transition_api_exception_returns_fallback(config, state):
+    mock_client = MagicMock()
+    mock_client.messages = MagicMock()
+    mock_client.messages.create = AsyncMock(side_effect=Exception("timeout"))
+    mock_cls = MagicMock(return_value=mock_client)
+
+    with (
+        patch("mammamiradio.scriptwriter._anthropic_client", None),
+        patch("mammamiradio.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
+    ):
+        host, text = await write_transition(state, config, next_segment="banter")
+
+    assert isinstance(host, HostPersonality)
+    assert text == "Allora..."
+
+
+@pytest.mark.asyncio
+async def test_write_transition_strips_markdown_fences(config, state):
+    response_text = '```json\n{"text": "Che bel pezzo..."}\n```'
+    mock_cls = _mock_anthropic_response(response_text)
+
+    with (
+        patch("mammamiradio.scriptwriter._anthropic_client", None),
+        patch("mammamiradio.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
+    ):
+        _host, text = await write_transition(state, config)
+
+    assert text == "Che bel pezzo..."

@@ -3,10 +3,10 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Radio Italì — Control Plane</title>
-<meta name="theme-color" content="#c4654a">
-<meta property="og:title" content="Radio Italì — Control Plane">
-<meta property="og:description" content="AI-powered Italian radio station — admin dashboard">
+<title>MammaMiRadio</title>
+<meta name="theme-color" content="#D45228">
+<meta property="og:title" content="MammaMiRadio">
+<meta property="og:description" content="AI-powered Italian radio station">
 <meta property="og:type" content="website">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -16,1289 +16,670 @@
 <link rel="apple-touch-icon" href="/static/icon-192.svg">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,600;0,700;1,400&family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,600;0,700;1,400;1,700&family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
 <style>
-  *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+*, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+html {
+  font-size: 15px; -webkit-font-smoothing: antialiased;
+  min-height: 100vh;
+  /* Sunset gradient fills full viewport — not clipped to body width */
+  background:
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='200' height='200' filter='url(%23n)' opacity='0.055'/%3E%3C/svg%3E") repeat,
+    linear-gradient(175deg, #B83C1C 0%, #C84820 25%, #D46030 55%, #C05028 80%, #A03820 100%);
+}
 
-  :root {
-    --bg: #2a2320;
-    --bg2: #3d3530;
-    --panel: rgba(53, 47, 42, 0.86);
-    --card: #352f2a;
-    --cream: #f5efe6;
-    --cream-dk: #e8dfd3;
-    --terracotta: #c4654a;
-    --dusty-rose: #d4917a;
-    --golden: #d4a574;
-    --text: #faf3eb;
-    --muted: #b0a494;
-    --error: #c44a4a;
-    --warning: #c4a04a;
-    --ok: #2563EB;
-    --font-display: 'Playfair Display', Georgia, serif;
-    --font-body: 'Inter', system-ui, -apple-system, sans-serif;
-  }
+/* ── VOLARE PALETTE — from the record cover, +10% warmth ── */
+:root {
+  /* Sky — warm orange-red sunset (dominant bg) */
+  --sky1:   #C44020;   /* deep horizon red */
+  --sky2:   #D45228;   /* mid sunset orange */
+  --sky3:   #E07038;   /* bright amber-orange */
 
-  html { font-size: 15px; -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
+  /* Sun — golden highlight */
+  --sun:    #F4D048;
+  --sun2:   #ECCC30;
 
-  body {
-    font-family: var(--font-body);
-    background:
-      radial-gradient(circle at top left, rgba(212, 145, 122, 0.15), transparent 32%),
-      radial-gradient(circle at 85% 8%, rgba(122, 143, 109, 0.12), transparent 26%),
-      linear-gradient(180deg, #2b241f 0%, #221d1a 100%);
-    color: var(--text);
-    padding: 0 24px 96px;
-    max-width: 1280px;
-    margin: 0 auto;
-    line-height: 1.5;
-    min-height: 100vh;
-  }
-  body > :not(.setup-gate) { transition: filter 0.22s ease, opacity 0.22s ease, transform 0.22s ease; }
-  body.setup-open > :not(.setup-gate) {
-    filter: blur(16px);
-    opacity: 0.08;
-    transform: scale(0.985);
-    pointer-events: none;
-    user-select: none;
-  }
+  /* Buildings in shadow — card surfaces */
+  --sienna: #823218;
+  --sienna2:#924020;
+  --sienna3:#A04A24;
 
-  /* ---- Header ---- */
-  .header {
-    display: flex;
-    align-items: baseline;
-    justify-content: space-between;
-    padding: 28px 0 6px;
-    border-bottom: 1px solid rgba(122, 143, 109, 0.2);
-    margin-bottom: 20px;
-    flex-wrap: wrap;
-    gap: 8px;
-  }
-  .header-left { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
-  h1 {
-    font-family: var(--font-display);
-    font-size: 26px;
-    font-weight: 700;
-    color: var(--cream);
-    letter-spacing: 0.01em;
-  }
-  .header-dash {
-    font-family: var(--font-body);
-    font-size: 13px;
-    font-weight: 400;
-    color: var(--muted);
-    letter-spacing: 0.04em;
-  }
-  .header-right {
-    display: flex;
-    align-items: center;
-    gap: 16px;
-    font-size: 12px;
-  }
-  .uptime {
-    color: var(--muted);
-    font-variant-numeric: tabular-nums;
-    font-size: 12px;
-  }
-  .listener-link {
-    color: var(--dusty-rose);
-    text-decoration: none;
-    font-size: 12px;
-    font-weight: 500;
-    transition: color 0.15s;
-  }
-  .listener-link:hover { color: var(--terracotta); }
+  /* Road — mid-tone */
+  --road:   #A86838;
 
-  /* ---- Stats Bar ---- */
-  .status-bar {
-    display: flex;
-    gap: 12px;
-    margin-bottom: 20px;
-    flex-wrap: wrap;
-  }
-  .stat {
-    background: linear-gradient(180deg, rgba(53, 47, 42, 0.96), rgba(45, 39, 34, 0.94));
-    border: 1px solid rgba(196, 101, 74, 0.18);
-    border-top: 3px solid var(--terracotta);
-    border-radius: 12px;
-    padding: 12px 16px;
-    min-width: 110px;
-    flex: 1;
-    box-shadow: 0 16px 30px rgba(0, 0, 0, 0.14);
-  }
-  .stat-label {
-    font-size: 10px;
-    font-weight: 600;
-    color: var(--muted);
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-  }
-  .stat-value {
-    font-size: 22px;
-    font-weight: 700;
-    margin-top: 2px;
-    color: var(--cream);
-  }
-  .spotify-on { color: var(--golden); }
-  .spotify-off { color: var(--error); }
+  /* Cream — record sleeve border, text */
+  --cream:  #F5EDD8;
+  --cream-dk: #EADDC4;
 
-  /* ---- Connect Banner ---- */
-  .connect-banner {
-    background: rgba(196, 101, 74, 0.08);
-    border: 1px solid rgba(196, 101, 74, 0.28);
-    border-radius: 12px;
-    padding: 14px 16px;
-    margin-bottom: 16px;
-    display: none;
-    font-size: 13px;
-    line-height: 1.6;
-    color: var(--cream-dk);
-  }
-  .connect-banner strong { color: var(--terracotta); }
+  /* Silhouette — palm trees, deepest dark */
+  --shadow: #2A1008;
 
-  .mode-banner {
-    display: none;
-    align-items: center;
-    justify-content: space-between;
-    gap: 16px;
-    background: rgba(37, 99, 235, 0.08);
-    border: 1px solid rgba(37, 99, 235, 0.28);
-    border-radius: 14px;
-    padding: 14px 16px;
-    margin-bottom: 16px;
-    box-shadow: 0 14px 28px rgba(0, 0, 0, 0.12);
-  }
-  .mode-banner[data-mode="demo"] {
-    background: rgba(196, 160, 74, 0.08);
-    border-color: rgba(196, 160, 74, 0.3);
-  }
-  .mode-banner[data-mode="degraded"] {
-    background: rgba(196, 74, 74, 0.08);
-    border-color: rgba(196, 74, 74, 0.28);
-  }
-  .mode-pill {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    border-radius: 999px;
-    padding: 4px 10px;
-    font-size: 11px;
-    font-weight: 700;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-    background: rgba(37, 99, 235, 0.18);
-    color: var(--ok);
-    margin-bottom: 6px;
-  }
-  .mode-banner[data-mode="demo"] .mode-pill {
-    background: rgba(196, 160, 74, 0.16);
-    color: var(--warning);
-  }
-  .mode-banner[data-mode="degraded"] .mode-pill {
-    background: rgba(196, 74, 74, 0.15);
-    color: var(--error);
-  }
-  .mode-banner-copy {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-  }
-  .mode-banner-title {
-    font-size: 14px;
-    font-weight: 600;
-    color: var(--cream);
-  }
-  .mode-banner-detail {
-    font-size: 12px;
-    color: var(--muted);
-  }
+  /* Lancia red — primary interactive */
+  --lancia: #A02018;
+  --lancia2:#B82C20;
 
-  body.setup-open { overflow: hidden; }
-  .setup-gate {
-    position: fixed;
-    inset: 0;
-    background:
-      radial-gradient(circle at top left, rgba(212, 145, 122, 0.18), transparent 35%),
-      linear-gradient(180deg, rgba(42, 35, 32, 0.94), rgba(42, 35, 32, 0.98));
-    backdrop-filter: blur(10px);
-    z-index: 300;
-    display: none;
-    align-items: center;
-    justify-content: center;
-    padding: 24px;
-  }
-  .setup-gate.open { display: flex; }
-  .setup-panel {
-    width: min(920px, 100%);
-    max-height: calc(100vh - 48px);
-    overflow: auto;
-    background: linear-gradient(180deg, rgba(53, 47, 42, 0.98), rgba(42, 35, 32, 0.98));
-    border: 1px solid rgba(212, 145, 122, 0.22);
-    border-radius: 18px;
-    box-shadow: 0 30px 80px rgba(0, 0, 0, 0.42);
-    padding: 30px;
-  }
-  .setup-kicker {
-    font-size: 11px;
-    font-weight: 700;
-    letter-spacing: 0.12em;
-    text-transform: uppercase;
-    color: var(--terracotta);
-    margin-bottom: 8px;
-  }
-  .setup-topbar {
-    display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: 16px;
-    margin-bottom: 18px;
-  }
-  .setup-title {
-    font-family: var(--font-display);
-    font-size: 34px;
-    line-height: 1.1;
-    color: var(--cream);
-    margin-bottom: 8px;
-  }
-  .setup-subtitle {
-    font-size: 14px;
-    color: var(--muted);
-    max-width: 680px;
-  }
-  .setup-progress {
-    width: 100%;
-    height: 8px;
-    border-radius: 999px;
-    background: rgba(245, 239, 230, 0.08);
-    overflow: hidden;
-    margin-bottom: 14px;
-  }
-  .setup-progress > span {
-    display: block;
-    height: 100%;
-    width: 25%;
-    border-radius: 999px;
-    background: linear-gradient(90deg, var(--terracotta), var(--dusty-rose));
-    transition: width 0.2s ease;
-  }
-  .setup-stepper {
-    display: flex;
-    gap: 8px;
-    margin-bottom: 20px;
-    flex-wrap: wrap;
-  }
-  .setup-step-chip {
-    border-radius: 999px;
-    border: 1px solid rgba(176, 164, 148, 0.2);
-    padding: 6px 10px;
-    font-size: 11px;
-    color: var(--muted);
-  }
-  .setup-step-chip.active {
-    border-color: rgba(196, 101, 74, 0.5);
-    color: var(--cream);
-    background: rgba(196, 101, 74, 0.12);
-  }
-  .setup-body {
-    min-height: 360px;
-  }
-  .setup-grid {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 16px;
-  }
-  .setup-grid.one {
-    grid-template-columns: 1fr;
-  }
-  .setup-card {
-    background: rgba(42, 35, 32, 0.74);
-    border: 1px solid rgba(176, 164, 148, 0.16);
-    border-radius: 12px;
-    padding: 16px;
-  }
-  .setup-card.selected {
-    border-color: rgba(196, 101, 74, 0.6);
-    box-shadow: inset 0 0 0 1px rgba(196, 101, 74, 0.2);
-  }
-  .setup-card h3 {
-    font-size: 16px;
-    color: var(--cream);
-    margin-bottom: 6px;
-  }
-  .setup-card p {
-    font-size: 13px;
-    color: var(--muted);
-    line-height: 1.6;
-  }
-  .setup-card .surface {
-    margin-top: 10px;
-    font-size: 11px;
-    color: var(--dusty-rose);
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-  }
-  .setup-badge {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    border-radius: 999px;
-    padding: 4px 10px;
-    font-size: 10px;
-    font-weight: 700;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-    margin-bottom: 10px;
-  }
-  .setup-badge.configured, .setup-badge.ok {
-    background: rgba(37, 99, 235, 0.16);
-    color: var(--ok);
-  }
-  .setup-badge.missing, .setup-badge.warn {
-    background: rgba(196, 160, 74, 0.14);
-    color: var(--warning);
-  }
-  .setup-badge.invalid, .setup-badge.fail {
-    background: rgba(196, 74, 74, 0.14);
-    color: var(--error);
-  }
-  .setup-badge.skipped, .setup-badge.degraded {
-    background: rgba(176, 164, 148, 0.12);
-    color: var(--muted);
-  }
-  .setup-meta {
-    display: grid;
-    gap: 8px;
-    margin-top: 12px;
-  }
-  .setup-meta div {
-    font-size: 12px;
-    color: var(--cream-dk);
-    line-height: 1.5;
-  }
-  .setup-meta strong {
-    color: var(--cream);
-  }
-  .setup-checklist {
-    display: grid;
-    gap: 12px;
-  }
-  .setup-check {
-    display: flex;
-    gap: 12px;
-    align-items: flex-start;
-    background: rgba(42, 35, 32, 0.68);
-    border: 1px solid rgba(176, 164, 148, 0.14);
-    border-radius: 12px;
-    padding: 14px 16px;
-  }
-  .setup-check-dot {
-    width: 12px;
-    height: 12px;
-    border-radius: 999px;
-    margin-top: 5px;
-    flex-shrink: 0;
-    background: var(--muted);
-  }
-  .setup-check-dot.ok { background: var(--ok); }
-  .setup-check-dot.warn { background: var(--warning); }
-  .setup-check-dot.fail { background: var(--error); }
-  .setup-check-title {
-    font-size: 14px;
-    font-weight: 600;
-    color: var(--cream);
-    margin-bottom: 3px;
-  }
-  .setup-check-detail {
-    font-size: 12px;
-    color: var(--muted);
-    line-height: 1.6;
-  }
-  .setup-note {
-    margin-top: 16px;
-    padding: 12px 14px;
-    border-radius: 10px;
-    background: rgba(196, 101, 74, 0.08);
-    border: 1px solid rgba(196, 101, 74, 0.22);
-    font-size: 13px;
-    color: var(--cream-dk);
-    line-height: 1.6;
-  }
-  .setup-code {
-    margin-top: 14px;
-    background: #1f1a17;
-    border: 1px solid rgba(176, 164, 148, 0.16);
-    border-radius: 10px;
-    padding: 12px 14px;
-    font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
-    font-size: 12px;
-    white-space: pre-wrap;
-    color: var(--cream-dk);
-  }
-  .cred-form {
-    margin-top: 10px;
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-  }
-  .cred-row {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-  }
-  .cred-label {
-    font-size: 11px;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-    color: var(--muted);
-  }
-  .cred-input {
-    background: rgba(0,0,0,0.3);
-    border: 1px solid rgba(176, 164, 148, 0.25);
-    border-radius: 6px;
-    padding: 7px 10px;
-    color: var(--cream);
-    font-size: 13px;
-    font-family: 'SF Mono', 'Fira Code', monospace;
-    width: 100%;
-    box-sizing: border-box;
-    outline: none;
-  }
-  .cred-input:focus {
-    border-color: rgba(196, 101, 74, 0.6);
-  }
-  .cred-save-btn {
-    margin-top: 4px;
-    align-self: flex-start;
-    background: var(--terra);
-    color: #fff;
-    border: none;
-    border-radius: 6px;
-    padding: 7px 18px;
-    font-size: 13px;
-    font-weight: 600;
-    cursor: pointer;
-    letter-spacing: 0.02em;
-  }
-  .cred-save-btn:hover { background: #b55843; }
-  .cred-status {
-    font-size: 12px;
-    color: var(--muted);
-    margin-left: 8px;
-    align-self: center;
-  }
-  .setup-actions {
-    display: flex;
-    justify-content: space-between;
-    gap: 12px;
-    margin-top: 24px;
-    flex-wrap: wrap;
-  }
-  .setup-actions-left, .setup-actions-right {
-    display: flex;
-    gap: 10px;
-    flex-wrap: wrap;
-  }
-  .setup-ghost {
-    background: transparent;
-    border: 1px solid rgba(176, 164, 148, 0.2);
-    border-radius: 8px;
-    color: var(--cream-dk);
-    padding: 10px 14px;
-    font-size: 13px;
-    cursor: pointer;
-    transition: border-color 0.15s, color 0.15s, background 0.15s;
-  }
-  .setup-ghost:hover {
-    border-color: rgba(212, 145, 122, 0.4);
-    color: var(--cream);
-    background: rgba(176, 164, 148, 0.06);
-  }
-  .setup-primary {
-    background: var(--terracotta);
-    border-color: var(--terracotta);
-    color: var(--bg);
-    font-weight: 700;
-  }
-  .setup-primary:hover {
-    background: var(--dusty-rose);
-    border-color: var(--dusty-rose);
-    color: var(--bg);
-  }
+  /* Semantic (keep blue for success — red-green colorblind) */
+  --ok:      #2563EB;
+  --error:   #c44a4a;
+  --warning: #c4a04a;
+  --muted:   rgba(245,237,216,0.45);
 
-  /* ---- Controls ---- */
-  .controls { display: flex; gap: 8px; margin-bottom: 18px; }
-  .surface-card {
-    background: linear-gradient(180deg, rgba(53, 47, 42, 0.92), rgba(43, 37, 33, 0.94));
-    border: 1px solid rgba(176, 164, 148, 0.12);
-    border-radius: 16px;
-    padding: 18px 20px;
-    box-shadow: 0 18px 40px rgba(0, 0, 0, 0.18);
-    margin-bottom: 18px;
-  }
-  .btn {
-    background: var(--card);
-    border: 1px solid rgba(176, 164, 148, 0.2);
-    border-radius: 6px;
-    color: var(--cream-dk);
-    padding: 8px 18px;
-    cursor: pointer;
-    font-size: 13px;
-    font-family: var(--font-body);
-    font-weight: 500;
-    transition: border-color 0.15s, background 0.15s, color 0.15s;
-  }
-  .btn:hover {
-    border-color: var(--terracotta);
-    color: var(--cream);
-  }
-  .btn:active {
-    background: var(--terracotta);
-    border-color: var(--terracotta);
-    color: var(--bg);
-  }
+  --font-display: 'Playfair Display', Georgia, serif;
+  --font-body: 'Inter', system-ui, -apple-system, sans-serif;
+}
 
-  /* ---- Host Personality ---- */
-  .personality-section { margin-bottom: 20px; }
-  .personality-cards { display: flex; gap: 16px; flex-wrap: wrap; }
-  .personality-card {
-    background: rgba(42, 35, 32, 0.72);
-    border: 1px solid rgba(196, 101, 74, 0.16);
-    border-radius: 12px;
-    padding: 16px 20px;
-    flex: 1;
-    min-width: 280px;
-  }
-  .personality-card h3 {
-    font-family: var(--font-display);
-    font-size: 16px;
-    color: var(--cream);
-    margin-bottom: 12px;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-  }
-  .personality-card h3 .reset-btn {
-    font-family: var(--font-body);
-    font-size: 10px;
-    font-weight: 600;
-    color: var(--muted);
-    background: none;
-    border: 1px solid rgba(176, 164, 148, 0.2);
-    border-radius: 4px;
-    padding: 3px 8px;
-    cursor: pointer;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    transition: border-color 0.15s, color 0.15s;
-  }
-  .personality-card h3 .reset-btn:hover {
-    border-color: var(--terracotta);
-    color: var(--terracotta);
-  }
-  .slider-row {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    margin-bottom: 8px;
-  }
-  .slider-label {
-    font-size: 11px;
-    font-weight: 600;
-    color: var(--muted);
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-    width: 72px;
-    flex-shrink: 0;
-  }
-  .slider-row input[type="range"] {
-    flex: 1;
-    -webkit-appearance: none;
-    appearance: none;
-    height: 4px;
-    background: var(--bg2);
-    border-radius: 2px;
-    outline: none;
-  }
-  .slider-row input[type="range"]::-webkit-slider-thumb {
-    -webkit-appearance: none;
-    appearance: none;
-    width: 14px;
-    height: 14px;
-    border-radius: 50%;
-    background: var(--terracotta);
-    cursor: pointer;
-    border: 2px solid var(--bg);
-  }
-  .slider-row input[type="range"]::-moz-range-thumb {
-    width: 14px;
-    height: 14px;
-    border-radius: 50%;
-    background: var(--terracotta);
-    cursor: pointer;
-    border: 2px solid var(--bg);
-  }
-  .slider-value {
-    font-size: 12px;
-    font-variant-numeric: tabular-nums;
-    color: var(--cream-dk);
-    width: 28px;
-    text-align: right;
-    flex-shrink: 0;
-  }
-  .slider-ends {
-    display: flex;
-    justify-content: space-between;
-    font-size: 9px;
-    color: var(--muted);
-    opacity: 0.6;
-    margin-top: -4px;
-    margin-bottom: 6px;
-    padding: 0 82px 0 82px;
-  }
+body {
+  font-family: var(--font-body);
+  color: var(--cream);
+  line-height: 1.5;
+  padding: 0 16px 96px;
+  max-width: 480px;
+  margin: 0 auto;
+}
 
-  /* ---- Now Playing ---- */
-  .now-playing {
-    background: linear-gradient(180deg, rgba(53, 47, 42, 0.96), rgba(44, 38, 33, 0.96));
-    border: 1px solid rgba(196, 101, 74, 0.18);
-    border-left: 4px solid var(--terracotta);
-    border-radius: 12px;
-    padding: 18px 20px;
-    margin-bottom: 20px;
-    box-shadow: 0 18px 34px rgba(0, 0, 0, 0.16);
-  }
-  .now-playing .section-label {
-    font-size: 10px;
-    font-weight: 600;
-    color: var(--terracotta);
-    text-transform: uppercase;
-    letter-spacing: 0.1em;
-    margin-bottom: 6px;
-  }
-  .now-playing .track {
-    font-size: 17px;
-    font-weight: 600;
-    color: var(--cream);
-    line-height: 1.4;
-  }
-  .now-playing .meta {
-    font-size: 12px;
-    color: var(--muted);
-    margin-top: 3px;
-  }
+/* Golden sun glow top-right, like the record cover */
+body::before {
+  content: '';
+  position: fixed; top: -80px; right: 30%; z-index: 0;
+  width: 280px; height: 280px; border-radius: 50%;
+  background: radial-gradient(circle, rgba(240,200,64,0.28) 0%, rgba(240,160,40,0.1) 40%, transparent 70%);
+  pointer-events: none;
+}
 
-  /* ---- Section Titles ---- */
-  .section { margin-bottom: 20px; }
-  .section-title {
-    font-size: 11px;
-    font-weight: 600;
-    color: var(--terracotta);
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-    margin-bottom: 8px;
-    padding-bottom: 6px;
-    border-bottom: 1px solid rgba(122, 143, 109, 0.15);
-  }
+/* ── HEADER / MASTHEAD ── */
+.header {
+  position: relative; z-index: 1;
+  display: flex; align-items: flex-start; justify-content: space-between;
+  padding: 28px 0 24px;
+  border-bottom: 1px solid rgba(245,237,216,0.15);
+  margin-bottom: 0;
+}
+.header-left { display: flex; flex-direction: column; gap: 0; }
+h1 {
+  font-family: var(--font-display);
+  font-size: 42px; font-weight: 700; font-style: italic;
+  color: var(--cream); line-height: 0.92; letter-spacing: -0.02em;
+  text-shadow: 0 2px 20px rgba(42,16,8,0.4);
+}
+.station-sub {
+  font-family: var(--font-display);
+  font-size: 12px; font-weight: 400; font-style: italic;
+  color: rgba(245,237,216,0.65); margin-top: 6px;
+}
+.live-chip {
+  display: flex; align-items: center; gap: 5px; margin-top: 6px;
+  padding: 5px 12px; border-radius: 20px;
+  background: rgba(42,16,8,0.3); border: 1px solid rgba(245,237,216,0.25);
+  font-size: 9px; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase;
+  color: var(--cream);
+}
+.live-dot {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--sun); box-shadow: 0 0 8px var(--sun);
+  animation: blink 1.4s ease-in-out infinite;
+}
+@keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.25} }
+.header-sub {
+  font-family: var(--font-display);
+  font-size: 11px; font-style: italic;
+  color: rgba(245,237,216,0.45);
+}
+.listener-link {
+  font-size: 11px; font-style: italic; font-family: var(--font-display);
+  color: rgba(245,237,216,0.55); text-decoration: none;
+  border: 1px solid rgba(245,237,216,0.2);
+  padding: 3px 10px; border-radius: 20px;
+}
+.listener-link:hover { color: var(--cream); border-color: rgba(245,237,216,0.4); }
 
-  /* ---- Grid Layout ---- */
-  .grid { display: grid; grid-template-columns: 1.2fr 1fr 1fr; gap: 20px; overflow: hidden; }
-  .grid > div { min-width: 0; }
-  @media (max-width: 960px) { .grid { grid-template-columns: 1fr 1fr; } }
-  @media (max-width: 640px) { .grid { grid-template-columns: 1fr; } }
+/* ── TIER BADGE ── */
+.tier-badge {
+  position: relative; z-index: 1;
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 10px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: 0.12em; padding: 4px 12px; border-radius: 20px;
+  margin-bottom: 20px;
+  background: rgba(42,16,8,0.35);
+  border: 1px solid rgba(245,237,216,0.22);
+  color: var(--cream);
+  transition: background 0.6s ease, color 0.6s ease;
+}
 
-  /* ---- Segment Log ---- */
-  .segment-log { list-style: none; }
-  .segment-log li {
-    padding: 5px 0;
-    border-bottom: 1px solid rgba(122, 143, 109, 0.08);
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    font-size: 13px;
-    color: var(--cream-dk);
-  }
-  .segment-log li:last-child { border-bottom: none; }
-  .seg-icon {
-    width: 22px;
-    height: 22px;
-    border-radius: 4px;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 11px;
-    flex-shrink: 0;
-  }
-  .seg-music { background: rgba(212, 165, 116, 0.25); color: var(--golden); }
-  .seg-banter { background: rgba(196, 101, 74, 0.2); color: var(--terracotta); }
-  .seg-ad { background: rgba(212, 145, 122, 0.2); color: var(--dusty-rose); }
-  .seg-time {
-    color: var(--muted);
-    font-size: 11px;
-    min-width: 44px;
-    font-variant-numeric: tabular-nums;
-    flex-shrink: 0;
-  }
-  .seg-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .seg-now-tag {
-    font-size: 9px;
-    font-weight: 700;
-    color: var(--terracotta);
-    letter-spacing: 0.05em;
-    flex-shrink: 0;
-  }
+@keyframes tier-pulse { 0% { transform: scale(1); opacity: 0.7; } 40% { transform: scale(1.1); opacity: 1; } 100% { transform: scale(1); opacity: 1; } }
+.tier-pulse { animation: tier-pulse 0.6s cubic-bezier(0.22, 1, 0.36, 1); }
 
-  /* ---- Upcoming ---- */
-  .upcoming { list-style: none; }
-  .upcoming li {
-    padding: 5px 0;
-    font-size: 13px;
-    color: var(--cream-dk);
-    display: flex;
-    gap: 6px;
-    align-items: center;
-    border-bottom: 1px solid rgba(122, 143, 109, 0.06);
-  }
-  .upcoming li:last-child { border-bottom: none; }
-  .upcoming .actions { margin-left: auto; display: flex; gap: 3px; opacity: 0; transition: opacity 0.15s; }
-  .upcoming li:hover .actions { opacity: 1; }
-  .act-btn {
-    background: none;
-    border: 1px solid rgba(176, 164, 148, 0.25);
-    border-radius: 4px;
-    color: var(--muted);
-    font-size: 10px;
-    padding: 2px 6px;
-    cursor: pointer;
-    font-family: var(--font-body);
-    transition: border-color 0.15s, color 0.15s;
-  }
-  .act-btn:hover {
-    border-color: var(--terracotta);
-    color: var(--terracotta);
-  }
+/* ── RADIO DIAL ── */
+.dial-card {
+  background: var(--sienna2);
+  border: 1px solid rgba(245,237,216,0.1);
+  border-top: 2px solid rgba(236,204,48,0.5);
+  border-radius: 10px; padding: 20px 22px;
+  margin-bottom: 14px; position: relative;
+}
+.dial-card::before {
+  content: ''; position: absolute; top: -1px; left: 22px; right: 22px; height: 2px;
+  background: linear-gradient(90deg, transparent, rgba(240,200,64,0.6), transparent);
+}
+.dial-header { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 16px; }
+.dial-label {
+  font-size: 9px; font-weight: 600; letter-spacing: 0.2em; text-transform: uppercase;
+  color: rgba(245,237,216,0.4); margin-bottom: 4px;
+}
+.dial-freq {
+  font-family: var(--font-display);
+  font-size: 28px; font-weight: 400; color: var(--cream);
+  font-variant-numeric: tabular-nums; line-height: 1;
+}
+.dial-freq .unit { font-family: 'Inter', sans-serif; font-size: 11px; color: rgba(245,237,216,0.4); margin-left: 3px; }
+.dial-status { font-size: 10px; color: var(--sun2); margin-top: 5px; min-height: 16px; }
+.signal-bars { display: flex; align-items: flex-end; gap: 3px; height: 22px; }
+.sb { width: 5px; border-radius: 1px; background: rgba(240,200,64,0.18); transition: background 0.4s ease; }
+.sb.on { background: var(--sun2); }
+.sb:nth-child(1){height:5px}.sb:nth-child(2){height:9px}
+.sb:nth-child(3){height:13px}.sb:nth-child(4){height:17px}.sb:nth-child(5){height:22px}
+.dial-band {
+  position: relative; height: 56px;
+  background: var(--shadow);
+  border: 1px solid rgba(245,237,216,0.08); border-radius: 5px; overflow: hidden;
+  cursor: pointer;
+}
+.dial-band::before {
+  content: ''; position: absolute; inset: 0;
+  background:
+    repeating-linear-gradient(180deg, transparent 0px, transparent 3px, rgba(0,0,0,0.12) 3px, rgba(0,0,0,0.12) 4px),
+    linear-gradient(180deg, rgba(240,200,64,0.06) 0%, transparent 40%);
+  pointer-events: none;
+}
+.dial-band::after {
+  content: ''; position: absolute; inset: 0;
+  background: radial-gradient(ellipse at var(--needle-x, 40%) 50%, rgba(244,208,72,0.08) 0%, transparent 40%);
+  pointer-events: none; transition: background 0.3s;
+}
+.dial-scale {
+  position: absolute; top: 0; left: 12px; right: 12px; bottom: 0;
+  display: flex; align-items: flex-end; justify-content: space-between; padding-bottom: 5px;
+  pointer-events: none;
+}
+.sm { display: flex; flex-direction: column; align-items: center; gap: 3px; }
+.sm span { font-size: 8px; color: rgba(245,237,216,0.25); font-variant-numeric: tabular-nums; }
+.sm .tick { width: 1px; height: 10px; background: rgba(245,237,216,0.14); }
+.sm.major span { color: rgba(245,237,216,0.55); font-weight: 500; }
+.sm.major .tick { height: 18px; background: rgba(245,237,216,0.25); }
+.sm.active span { color: var(--sun); font-weight: 700; font-size: 9px; }
+.sm.active .tick { height: 24px; background: var(--sun); }
+.dial-fine {
+  position: absolute; top: 7px; left: 12px; right: 12px; height: 7px;
+  display: flex; justify-content: space-between; pointer-events: none;
+}
+.dial-fine i { width: 1px; height: 100%; background: rgba(245,237,216,0.05); font-style: normal; }
+.dial-needle {
+  position: absolute; top: 2px; bottom: 2px; width: 2px;
+  background: linear-gradient(180deg, var(--lancia2), rgba(160,32,24,0.5));
+  border-radius: 1px;
+  box-shadow: 0 0 8px rgba(184,44,32,1), 0 0 20px rgba(184,44,32,0.5);
+  left: 40%; transition: left 0.3s cubic-bezier(0.25, 0.46, 0.45, 0.94), box-shadow 0.4s ease;
+  z-index: 2;
+}
+.dial-needle::before {
+  content: ''; position: absolute; top: -4px; left: -4px;
+  width: 10px; height: 10px; border-radius: 50%;
+  background: var(--lancia2);
+  box-shadow: 0 0 10px rgba(184,44,32,0.9), 0 0 20px rgba(184,44,32,0.4);
+}
+.needle-lbl {
+  position: absolute; top: -20px; left: 50%; transform: translateX(-50%);
+  font-size: 8px; font-weight: 700; letter-spacing: 0.06em; white-space: nowrap;
+  color: rgba(245,237,216,0.6);
+}
+.dial-needle.seeking {
+  transition: left 0.12s linear, box-shadow 0.4s ease;
+}
+.dial-needle.locked {
+  transition: left 0.8s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.6s ease;
+  box-shadow: 0 0 14px rgba(184,44,32,1), 0 0 30px rgba(184,44,32,0.5), 0 0 4px rgba(245,237,216,0.3);
+}
+.dial-status {
+  font-size: 10px; color: var(--sun2); margin-top: 5px; min-height: 16px;
+}
+@keyframes pulse { 0%, 100% { opacity: 0.4; } 50% { opacity: 1; } }
 
-  /* ---- Script Boxes ---- */
-  .script-box {
-    background: rgba(42, 35, 32, 0.6);
-    border: 1px solid rgba(122, 143, 109, 0.12);
-    border-radius: 6px;
-    padding: 12px 14px;
-    font-size: 13px;
-    line-height: 1.7;
-    color: var(--cream-dk);
-  }
-  .script-box div + div { margin-top: 4px; }
-  .script-host { color: var(--terracotta); font-weight: 600; }
-  .script-ad-brand { color: var(--dusty-rose); font-weight: 600; }
+/* ── NOW PLAYING ── */
+.now-playing {
+  position: relative; z-index: 1; overflow: hidden;
+  background: var(--sienna);
+  border-top: 2px solid var(--sun2);
+  border-bottom: 1px solid rgba(42,16,8,0.3);
+  padding: 24px 24px 22px;
+  margin-top: 20px; margin-bottom: 0;
+}
+.now-playing::before {
+  content: '';
+  position: absolute; top: -1px; left: 24px; right: 24px; height: 2px;
+  background: linear-gradient(90deg, transparent, var(--sun), transparent);
+}
+.now-playing::after {
+  content: '';
+  position: absolute; top: 0; left: 0; bottom: 0; width: 3px;
+  background: linear-gradient(180deg, var(--sun2) 0%, rgba(236,204,48,0.1) 100%);
+}
+.np-body { padding-left: 14px; }
+.np-eyebrow {
+  font-size: 9px; font-weight: 700; letter-spacing: 0.2em; text-transform: uppercase;
+  color: var(--sun2); margin-bottom: 12px;
+}
+.np-controls { display: flex; align-items: center; gap: 14px; margin-bottom: 0; }
+.np-text { flex: 1; }
+.np-track-wrap { overflow: hidden; margin-bottom: 3px; }
+.np-track {
+  font-size: 22px; font-weight: 700; line-height: 1.15;
+  color: var(--cream); white-space: nowrap; display: inline-block;
+}
+@keyframes np-marquee { 0% { transform: translateX(0); } 100% { transform: translateX(-50%); } }
+.np-track.scrolling { animation: np-marquee var(--marquee-dur, 10s) linear infinite; }
+.np-artist {
+  font-size: 12px; color: rgba(245,237,216,0.5); margin-bottom: 2px;
+}
 
-  /* ---- Jokes ---- */
-  .jokes { list-style: none; }
-  .jokes li {
-    padding: 3px 0;
-    font-size: 12px;
-    color: var(--muted);
-    font-style: italic;
-    line-height: 1.5;
-  }
+/* ── ALBUM ART BG — subtle tint, keep for JS ── */
+.album-art-bg {
+  position: absolute; inset: 0; border-radius: inherit;
+  background-size: cover; background-position: center;
+  filter: blur(30px) saturate(1.2); opacity: 0.15;
+  transition: background-image 1s ease, opacity 1s ease;
+  pointer-events: none; z-index: 0;
+}
+.now-playing > *:not(.album-art-bg) { position: relative; z-index: 1; }
 
-  /* ---- Player Bar ---- */
-  .player-bar {
-    position: fixed;
-    bottom: 0;
-    left: 0;
-    right: 0;
-    background: linear-gradient(180deg, rgba(61, 53, 48, 0.98), rgba(42, 35, 32, 0.98));
-    border-top: 1px solid rgba(196, 101, 74, 0.26);
-    padding: 10px 24px;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 16px;
-    flex-wrap: wrap;
-    z-index: 100;
-  }
-  .player-bar .label {
-    color: var(--terracotta);
-    font-size: 11px;
-    font-weight: 700;
-    letter-spacing: 0.1em;
-    white-space: nowrap;
-    flex-shrink: 0;
-  }
-  .player-bar-copy {
-    flex: 1;
-    min-width: 220px;
-  }
-  .player-bar-title {
-    color: var(--cream);
-    font-size: 14px;
-    font-weight: 600;
-  }
-  .player-bar-detail {
-    color: var(--muted);
-    font-size: 12px;
-  }
+/* ── PLAY BUTTON ── */
+.play-btn {
+  width: 48px; height: 48px; border-radius: 50%;
+  background: #E8B828; border: none;
+  color: var(--shadow); font-size: 17px;
+  cursor: pointer; display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
+  box-shadow: 0 4px 20px rgba(236,204,48,0.5), 0 0 0 6px rgba(236,204,48,0.1), 0 0 28px rgba(236,204,48,0.2);
+  transition: background 0.2s, box-shadow 0.3s, transform 0.15s;
+}
+.play-btn:hover {
+  background: var(--sun);
+  box-shadow: 0 0 16px rgba(244,208,72,0.6), 0 0 36px rgba(244,208,72,0.25);
+  transform: scale(1.05);
+}
+.play-btn.playing {
+  background: var(--sun2); color: var(--shadow);
+  box-shadow: 0 0 16px rgba(236,204,48,0.6), 0 0 32px rgba(236,204,48,0.3), 0 0 48px rgba(236,204,48,0.1);
+}
 
-  /* ---- Debug Panel ---- */
-  .debug-section { margin-top: 8px; }
-  .debug-toggle {
-    color: var(--muted);
-    font-size: 12px;
-    cursor: pointer;
-    user-select: none;
-    padding: 6px 0;
-    transition: color 0.15s;
-  }
-  .debug-toggle:hover { color: var(--terracotta); }
-  .debug-panel { display: none; }
-  .debug-panel.open { display: block; }
-  .debug-log {
-    background: #1e1a17;
-    border: 1px solid rgba(122, 143, 109, 0.1);
-    border-radius: 6px;
-    padding: 10px 12px;
-    font-size: 12px;
-    color: var(--muted);
-    line-height: 1.8;
-    max-height: 350px;
-    overflow-y: auto;
-    font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
-  }
-  .debug-log .entry {
-    padding: 2px 0;
-    border-bottom: 1px solid rgba(122, 143, 109, 0.05);
-  }
-  .debug-log .ts { color: var(--muted); font-size: 11px; margin-right: 6px; opacity: 0.6; }
-  .debug-log .lvl {
-    font-size: 10px;
-    font-weight: 700;
-    padding: 1px 5px;
-    border-radius: 3px;
-    margin-right: 6px;
-    letter-spacing: 0.03em;
-  }
-  .debug-log .lvl-error { background: rgba(196, 74, 74, 0.15); color: var(--error); }
-  .debug-log .lvl-warning { background: rgba(196, 160, 74, 0.15); color: var(--warning); }
-  .debug-log .lvl-info { background: rgba(212, 165, 116, 0.15); color: var(--golden); }
-  .debug-log .msg { color: var(--cream-dk); }
-  .debug-log .detail { color: var(--muted); font-size: 11px; margin-left: 4px; opacity: 0.7; }
+/* ── CARDS (generic) ── */
+.card {
+  position: relative; z-index: 1;
+  background: var(--sienna2);
+  border: 1px solid rgba(245,237,216,0.08);
+  border-top: 1px solid rgba(245,237,216,0.14);
+  border-radius: 8px; padding: 18px; margin-bottom: 12px;
+}
+.card h3 { font-size: 14px; font-weight: 600; margin-bottom: 6px; color: var(--cream); }
+.card p { font-size: 13px; color: rgba(245,237,216,0.65); margin-bottom: 8px; line-height: 1.6; }
+.card-muted { font-size: 11px; color: rgba(245,237,216,0.4); }
 
-  /* ---- Trigger Buttons ---- */
-  .trigger-bar {
-    display: flex;
-    gap: 8px;
-    margin-bottom: 18px;
-    flex-wrap: wrap;
-    align-items: center;
-  }
-  .trigger-btn {
-    background: var(--card);
-    border: 1px solid rgba(196, 101, 74, 0.3);
-    border-radius: 6px;
-    color: var(--terracotta);
-    padding: 8px 16px;
-    cursor: pointer;
-    font-size: 13px;
-    font-family: var(--font-body);
-    font-weight: 600;
-    transition: all 0.2s;
-    display: flex;
-    align-items: center;
-    gap: 6px;
-  }
-  .trigger-btn:hover {
-    background: var(--terracotta);
-    color: var(--bg);
-    border-color: var(--terracotta);
-  }
-  .trigger-btn:active { transform: scale(0.97); }
-  .trigger-btn.pending {
-    background: rgba(196, 101, 74, 0.15);
-    border-color: var(--terracotta);
-    animation: pulse-border 1.5s ease-in-out infinite;
-  }
-  @keyframes pulse-border {
-    0%, 100% { border-color: rgba(196, 101, 74, 0.3); }
-    50% { border-color: var(--terracotta); }
-  }
+/* ── QUEUE ── */
+.queue { list-style: none; }
+.queue li {
+  font-size: 13px; padding: 4px 0; color: rgba(245,237,216,0.7);
+  border-bottom: 1px solid rgba(245,237,216,0.08);
+}
+.queue li:last-child { border-bottom: none; }
 
-  /* ---- Pacing Controls ---- */
-  .pacing-section {
-    background: var(--card);
-    border: 1px solid rgba(196, 101, 74, 0.12);
-    border-radius: 8px;
-    padding: 14px 18px;
-    margin-bottom: 18px;
-  }
-  .pacing-row {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    margin-bottom: 8px;
-  }
-  .pacing-row:last-child { margin-bottom: 0; }
-  .pacing-label {
-    font-size: 12px;
-    color: var(--cream-dk);
-    min-width: 140px;
-    flex-shrink: 0;
-  }
-  .pacing-row input[type="range"] {
-    flex: 1;
-    accent-color: var(--terracotta);
-    height: 4px;
-  }
-  .pacing-value {
-    font-size: 13px;
-    font-weight: 600;
-    color: var(--terracotta);
-    min-width: 28px;
-    text-align: right;
-    font-variant-numeric: tabular-nums;
-  }
-  .pacing-counter {
-    font-size: 11px;
-    color: var(--muted);
-    min-width: 50px;
-    text-align: right;
-  }
+/* ── BUTTONS ── */
+.btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  padding: 8px 16px; font-size: 13px; font-weight: 600;
+  font-family: var(--font-body); border: none; border-radius: 6px;
+  background: var(--sun2); color: var(--shadow);
+  cursor: pointer; min-height: 44px; min-width: 44px;
+  box-shadow: 0 2px 12px rgba(236,204,48,0.3);
+  transition: background 0.15s;
+}
+.btn:hover { background: var(--sun); }
+.btn-ghost {
+  background: rgba(245,237,216,0.08);
+  border: 1px solid rgba(245,237,216,0.2);
+  color: rgba(245,237,216,0.7);
+  box-shadow: none;
+}
+.btn-ghost:hover { background: rgba(245,237,216,0.14); color: var(--cream); }
+.btn-sm { padding: 6px 12px; font-size: 12px; min-height: 36px; }
 
-  /* ---- Consumption Metrics ---- */
-  .consumption-bar {
-    display: flex;
-    gap: 12px;
-    margin-bottom: 18px;
-    flex-wrap: wrap;
-  }
-  .consumption-stat {
-    background: var(--card);
-    border: 1px solid rgba(196, 101, 74, 0.12);
-    border-radius: 8px;
-    padding: 10px 14px;
-    flex: 1;
-    min-width: 100px;
-  }
-  .consumption-label {
-    font-size: 9px;
-    font-weight: 600;
-    color: var(--muted);
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-  }
-  .consumption-value {
-    font-size: 16px;
-    font-weight: 700;
-    color: var(--dusty-rose);
-    margin-top: 2px;
-    font-variant-numeric: tabular-nums;
-  }
-  .consumption-detail {
-    font-size: 10px;
-    color: var(--muted);
-    margin-top: 2px;
-  }
+/* ── CONTROLS BAR ── */
+.controls {
+  position: relative; z-index: 1;
+  display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px;
+}
 
-  /* ---- Toast Notification ---- */
-  .toast {
-    position: fixed;
-    bottom: 72px;
-    right: 24px;
-    background: var(--card);
-    border: 1px solid var(--terracotta);
-    border-radius: 8px;
-    padding: 10px 16px;
-    color: var(--cream);
-    font-size: 13px;
-    font-family: var(--font-body);
-    z-index: 200;
-    opacity: 0;
-    transform: translateY(8px);
-    transition: opacity 0.3s, transform 0.3s;
-    pointer-events: none;
-  }
-  .toast.show {
-    opacity: 1;
-    transform: translateY(0);
-  }
+/* ── INPUT ── */
+.input {
+  background: rgba(42,16,8,0.4);
+  border: 1px solid rgba(245,237,216,0.2);
+  border-radius: 6px; color: var(--cream);
+  padding: 8px 12px; font-size: 13px; font-family: var(--font-body);
+  outline: none; width: 100%; min-height: 44px;
+}
+.input:focus { border-color: rgba(236,204,48,0.6); }
 
-  /* ---- Responsive ---- */
-  @media (max-width: 640px) {
-    body { padding: 0 16px 96px; }
-    .header { padding-top: 20px; }
-    h1 { font-size: 22px; }
-    .stat { min-width: 0; padding: 10px 12px; }
-    .stat-value { font-size: 18px; }
-    .setup-panel { padding: 20px; }
-    .setup-title { font-size: 28px; }
-    .setup-grid { grid-template-columns: 1fr; }
-    .mode-banner { flex-direction: column; align-items: flex-start; }
-    .surface-card { padding: 16px; border-radius: 14px; }
-  }
+/* ── STATUS ICONS — color+shape, accessible ── */
+.status-ok::before    { content: "\2713"; color: var(--ok); margin-right: 4px; }
+.status-warn::before  { content: "\25B3"; color: var(--warning); margin-right: 4px; }
+.status-err::before   { content: "\2717"; color: var(--error); margin-right: 4px; }
+.status-wait::before  { content: "\25CB"; color: var(--muted); margin-right: 4px; }
+
+/* ── TRANSITION OVERLAY ── */
+.transition-overlay {
+  position: fixed; inset: 0;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(196,64,32,0.85);
+  z-index: 100; opacity: 0; pointer-events: none; transition: opacity 0.3s;
+}
+.transition-overlay.show { opacity: 1; pointer-events: auto; }
+.transition-overlay h2 {
+  font-family: var(--font-display);
+  font-size: 32px; font-style: italic; color: var(--cream);
+  text-shadow: 0 2px 20px rgba(42,16,8,0.5);
+}
+
+/* ── WAVEFORM — golden bars, all bounce independently ── */
+.waveform {
+  display: flex; align-items: center; gap: 3px;
+  height: 20px; margin-top: 8px;
+}
+.wb {
+  width: 3px; border-radius: 2px;
+  background: rgba(240,200,64,0.45);
+  animation: wv var(--d) ease-in-out infinite alternate;
+  animation-delay: var(--dl);
+}
+.waveform.paused .wb { animation-play-state: paused; }
+@keyframes wv { from { height: 3px; } to { height: var(--h); } }
+
+/* ── TICKER — inline beneath player, fade edges ── */
+.ticker-wrap {
+  position: relative; overflow: hidden;
+  background: rgba(42,16,8,0.2);
+  border-bottom: 1px solid rgba(245,237,216,0.1);
+  -webkit-mask-image: linear-gradient(90deg, transparent 0%, black 6%, black 94%, transparent 100%);
+  mask-image: linear-gradient(90deg, transparent 0%, black 6%, black 94%, transparent 100%);
+}
+.ticker {
+  display: flex; white-space: nowrap;
+  padding: 10px 0;
+  animation: ticker-scroll 32s linear infinite;
+}
+.ticker .ti {
+  font-size: 11px; font-style: italic; font-family: var(--font-display);
+  color: rgba(245,237,216,0.5); padding: 0 6px;
+}
+.ticker .ts { color: rgba(240,200,64,0.4); }
+@keyframes ticker-scroll {
+  0% { transform: translateX(0); }
+  100% { transform: translateX(-50%); }
+}
+
+/* ── CONNECT CTA — cream contrast card ── */
+.connect-cta {
+  position: relative; z-index: 1;
+  background: var(--cream);
+  border-radius: 10px;
+  padding: 16px 20px;
+  margin-bottom: 12px;
+  display: flex; align-items: center; gap: 14px;
+  cursor: pointer;
+  border-left: 4px solid var(--sun);
+  box-shadow: 0 2px 16px rgba(42,16,8,0.2);
+  transition: transform 0.15s ease, box-shadow 0.2s ease;
+}
+.connect-cta:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 24px rgba(42,16,8,0.3);
+}
+.connect-cta .cta-icon {
+  font-size: 22px; flex-shrink: 0;
+}
+.connect-cta .cta-text {
+  flex: 1;
+}
+.connect-cta .cta-headline {
+  font-family: var(--font-display);
+  font-size: 17px; font-weight: 700; font-style: italic;
+  color: var(--shadow); line-height: 1.2; margin-bottom: 2px;
+}
+.connect-cta .cta-sub {
+  font-size: 11px; color: rgba(42,16,8,0.55);
+}
+.connect-cta .cta-arrow {
+  font-size: 16px; color: rgba(42,16,8,0.3);
+  transition: transform 0.15s ease;
+}
+.connect-cta:hover .cta-arrow { transform: translateX(3px); }
+
+/* ── HELP ICON — collapsed (?) ── */
+.help-toggle {
+  display: flex; align-items: center; justify-content: center; gap: 4px;
+  background: none; border: none; cursor: pointer;
+  font-size: 11px; color: rgba(245,237,216,0.35);
+  padding: 6px 0; margin: 0 auto 12px;
+  font-family: var(--font-body);
+  transition: color 0.15s;
+}
+.help-toggle:hover { color: rgba(245,237,216,0.65); }
+.help-toggle .help-q {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 16px; height: 16px; border-radius: 50%;
+  border: 1px solid rgba(245,237,216,0.25);
+  font-size: 10px; font-weight: 700;
+}
+.help-popover {
+  display: none;
+  background: var(--sienna);
+  border: 1px solid rgba(245,237,216,0.12);
+  border-radius: 8px; padding: 14px 16px;
+  margin-bottom: 12px; font-size: 12px;
+  color: rgba(245,237,216,0.6); line-height: 1.6;
+}
+.help-popover.open { display: block; }
+.help-popover .help-advanced {
+  display: inline-block; margin-top: 8px;
+  font-size: 11px; color: rgba(245,237,216,0.4);
+  text-decoration: underline; cursor: pointer;
+  background: none; border: none; padding: 0;
+  font-family: var(--font-body);
+}
+.help-popover .help-advanced:hover { color: rgba(245,237,216,0.7); }
+
+/* ── TICKER CTA ITEM — golden highlight ── */
+.ticker .ti.ticker-cta {
+  color: var(--sun2);
+  cursor: pointer;
+  transition: color 0.2s;
+}
+.ticker .ti.ticker-cta:hover {
+  color: var(--sun);
+}
+.ticker .ts.ticker-cta-sep {
+  color: var(--sun2);
+}
+
+/* ── TOAST ── */
+.toast {
+  position: fixed; bottom: 80px; left: 50%; transform: translateX(-50%);
+  background: var(--sienna); color: var(--cream);
+  border: 1px solid rgba(245,237,216,0.15);
+  padding: 10px 20px; border-radius: 8px; font-size: 13px;
+  opacity: 0; transition: opacity 0.3s; pointer-events: none; z-index: 50;
+}
+.toast.show { opacity: 1; }
+
+/* ── RESPONSIVE ── */
+@media (max-width: 480px) {
+  body { padding: 0 12px 80px; }
+  h1 { font-size: 28px; }
+}
 </style>
 </head>
 <body>
 
-<div class="setup-gate" id="setup-gate">
-  <div class="setup-panel">
-    <div class="setup-topbar">
-      <div>
-        <div class="setup-kicker">First Run Setup</div>
-        <div class="setup-title" id="setup-title">Let's get this station ready.</div>
-        <div class="setup-subtitle" id="setup-subtitle"></div>
-      </div>
-      <button class="setup-ghost" type="button" onclick="openSetupGate(true)">Refresh setup</button>
-    </div>
-    <div class="setup-progress"><span id="setup-progress-fill"></span></div>
-    <div class="setup-stepper" id="setup-stepper"></div>
-    <div class="setup-body" id="setup-body"></div>
-    <div class="setup-actions">
-      <div class="setup-actions-left">
-        <button class="setup-ghost" id="setup-back" type="button" onclick="prevSetupStep()">Back</button>
-        <button class="setup-ghost" id="setup-secondary" type="button"></button>
-      </div>
-      <div class="setup-actions-right">
-        <button class="btn setup-primary" id="setup-primary" type="button"></button>
-      </div>
-    </div>
-  </div>
-</div>
-
 <div class="header">
   <div class="header-left">
-    <svg width="32" height="32" viewBox="0 0 100 100" style="vertical-align: middle; margin-right: 4px;"><rect width="100" height="100" rx="12" fill="#2a2320"/><rect x="14" y="32" width="72" height="50" rx="6" fill="#c4654a"/><rect x="14" y="32" width="24" height="4" fill="#7a8f6d"/><rect x="38" y="32" width="24" height="4" fill="#f5efe6"/><rect x="62" y="32" width="24" height="4" fill="#c4654a"/><rect x="18" y="40" width="64" height="38" rx="4" fill="#3a3230"/><circle cx="42" cy="61" r="16" fill="#2a2320" stroke="#d4917a" stroke-width="1"/><circle cx="42" cy="61" r="3" fill="#c4654a"/><circle cx="70" cy="61" r="6" fill="#d4917a"/><circle cx="70" cy="61" r="2" fill="#f5efe6"/><line x1="72" y1="32" x2="80" y2="14" stroke="#d4917a" stroke-width="2" stroke-linecap="round"/><path d="M86 48 A3 6 0 0 1 86 64" fill="none" stroke="#f5efe6" stroke-width="2" stroke-linecap="round" opacity="0.8"/><path d="M90 44 A4 8 0 0 1 90 68" fill="none" stroke="#f5efe6" stroke-width="1.5" stroke-linecap="round" opacity="0.5"/></svg>
-    <h1>Radio Ital&igrave;</h1>
-    <span class="header-dash">Control Plane</span>
+    <h1>MammaMiRadio</h1>
+    <div class="station-sub">96.7 FM &middot; Milano &middot; Est. 1987</div>
   </div>
-  <div class="header-right">
-    <span class="uptime" id="uptime">Loading...</span>
-    <a id="listener-link" href="/listen" class="listener-link">Open listener view &rarr;</a>
-  </div>
-</div>
-
-<div class="mode-banner" id="mode-banner">
-  <div class="mode-banner-copy">
-    <div class="mode-pill" id="mode-pill">Demo Mode</div>
-    <div class="mode-banner-title" id="mode-banner-title"></div>
-    <div class="mode-banner-detail" id="mode-banner-detail"></div>
-  </div>
-  <button class="btn" type="button" onclick="openSetupGate(true)">Review setup</button>
-</div>
-
-<div class="status-bar">
-  <div class="stat">
-    <div class="stat-label">Queue</div>
-    <div class="stat-value" id="queue">-</div>
-  </div>
-  <div class="stat">
-    <div class="stat-label">Produced</div>
-    <div class="stat-value" id="segments">-</div>
-  </div>
-  <div class="stat">
-    <div class="stat-label">Tracks</div>
-    <div class="stat-value" id="tracks">-</div>
-  </div>
-  <div class="stat">
-    <div class="stat-label">Spotify</div>
-    <div class="stat-value" id="spotify">-</div>
+  <div class="live-chip" aria-live="polite">
+    <div class="live-dot"></div>
+    <span id="tier-badge" data-tier="demo">On Air</span>
   </div>
 </div>
 
-<div class="connect-banner" id="connect-banner">
-  <strong>Spotify not connected.</strong> Open Spotify app, tap the speaker icon,
-  and select <strong>mammamiradio</strong>. Music will use placeholders until connected.
-</div>
-
-<div class="setup-card surface-card" style="margin-bottom:12px">
-  <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap">
+<!-- Radio dial (shown before first data, stays visible as ambient UI) -->
+<div class="dial-card" id="radio-dial" style="margin-top:20px">
+  <div class="dial-header">
     <div>
-      <h3 style="margin-bottom:4px">Choose your music</h3>
-      <p id="source-options-summary">Connect Spotify to load one of your playlists, use Liked Songs, or paste a playlist link as the advanced fallback.</p>
-      <div id="current-source-label" class="surface" style="margin-top:8px">Current source: loading...</div>
-    </div>
-    <button class="btn" type="button" onclick="loadSourceOptions()">Refresh sources</button>
-  </div>
-  <div id="source-options" style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px"></div>
-  <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">
-    <button class="btn" type="button" id="liked-songs-btn" onclick="selectLikedSongs()">Use my Liked Songs</button>
-    <select id="playlist-select" style="min-width:260px;background:var(--card);border:1px solid rgba(176,164,148,0.2);border-radius:6px;color:var(--cream);padding:8px 12px;font-size:13px;font-family:var(--font-body);outline:none">
-      <option value="">Choose one of my playlists</option>
-    </select>
-    <button class="btn" type="button" id="playlist-select-btn" onclick="selectPlaylist()">Load playlist</button>
-  </div>
-</div>
-
-<div class="surface-card" style="padding-bottom:12px">
-<div style="display:flex;gap:8px;margin-bottom:8px">
-  <div style="flex:1;display:flex;gap:8px">
-    <input id="search-input" type="text" placeholder="Search songs..." style="flex:1;background:var(--card);border:1px solid rgba(176,164,148,0.2);border-radius:6px;color:var(--cream);padding:8px 12px;font-size:13px;font-family:var(--font-body);outline:none" onfocus="this.style.borderColor='var(--terracotta)'" onblur="this.style.borderColor='rgba(176,164,148,0.2)'" onkeydown="if(event.key==='Enter')searchTracks()">
-    <button class="btn" onclick="searchTracks()">Search</button>
-  </div>
-  <div style="display:flex;gap:8px">
-    <input id="playlist-url" type="text" placeholder="Paste playlist link (advanced)" style="width:260px;background:var(--card);border:1px solid rgba(176,164,148,0.2);border-radius:6px;color:var(--cream);padding:8px 12px;font-size:13px;font-family:var(--font-body);outline:none" onfocus="this.style.borderColor='var(--terracotta)'" onblur="this.style.borderColor='rgba(176,164,148,0.2)'" onkeydown="if(event.key==='Enter')loadPlaylist()">
-    <button class="btn" id="playlist-url-btn" onclick="loadPlaylist()">Paste playlist link</button>
-  </div>
-</div>
-<div id="search-results" style="margin-bottom:12px"></div>
-
-<div class="controls">
-  <button class="btn" onclick="doShuffle()">Shuffle</button>
-  <button class="btn" onclick="doSkip()">Skip</button>
-  <button class="btn" onclick="doPurge()" title="Discard pre-produced items so the producer regenerates them">Clear Buffer</button>
-</div>
-
-<div class="trigger-bar">
-  <span style="font-size:11px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:0.06em">Trigger:</span>
-  <button class="trigger-btn" id="trigger-banter" onclick="triggerSegment('banter')">&#127897; Banter</button>
-  <button class="trigger-btn" id="trigger-ad" onclick="triggerSegment('ad')">&#128226; Ad Break</button>
-  <span id="trigger-status" style="font-size:11px;color:var(--muted);margin-left:4px"></span>
-</div>
-
-<div class="pacing-section">
-  <div style="font-size:11px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:10px">Pacing</div>
-  <div class="pacing-row">
-    <span class="pacing-label">Songs between banter</span>
-    <input type="range" min="1" max="8" value="2" id="pacing-banter" oninput="onPacingChange()">
-    <span class="pacing-value" id="pacing-banter-val">2</span>
-    <span class="pacing-counter" id="pacing-banter-counter"></span>
-  </div>
-  <div class="pacing-row">
-    <span class="pacing-label">Songs between ads</span>
-    <input type="range" min="1" max="12" value="4" id="pacing-ads" oninput="onPacingChange()">
-    <span class="pacing-value" id="pacing-ads-val">4</span>
-    <span class="pacing-counter" id="pacing-ads-counter"></span>
-  </div>
-  <div class="pacing-row">
-    <span class="pacing-label">Spots per ad break</span>
-    <input type="range" min="1" max="5" value="2" id="pacing-spots" oninput="onPacingChange()">
-    <span class="pacing-value" id="pacing-spots-val">2</span>
-  </div>
-</div>
-
-<div class="consumption-bar" id="consumption-bar">
-  <div class="consumption-stat">
-    <div class="consumption-label">API Calls</div>
-    <div class="consumption-value" id="cons-calls">0</div>
-  </div>
-  <div class="consumption-stat">
-    <div class="consumption-label">Input Tokens</div>
-    <div class="consumption-value" id="cons-input">0</div>
-    <div class="consumption-detail" id="cons-input-cost"></div>
-  </div>
-  <div class="consumption-stat">
-    <div class="consumption-label">Output Tokens</div>
-    <div class="consumption-value" id="cons-output">0</div>
-    <div class="consumption-detail" id="cons-output-cost"></div>
-  </div>
-  <div class="consumption-stat">
-    <div class="consumption-label">Est. Cost</div>
-    <div class="consumption-value" id="cons-cost">$0.00</div>
-    <div class="consumption-detail" id="cons-model"></div>
-  </div>
-</div>
-</div>
-
-<div class="personality-section surface-card">
-  <div class="section-title">Host Personality</div>
-  <div class="personality-cards" id="personality-cards">Loading...</div>
-</div>
-
-<div class="now-playing" id="now-playing">
-  <div class="section-label">Now Streaming</div>
-  <div class="track" id="np-track">...</div>
-  <div class="meta" id="np-meta"></div>
-</div>
-
-<div class="grid surface-card">
-  <div>
-    <div class="section">
-      <div class="section-title">Segment History</div>
-      <ul class="segment-log" id="log"></ul>
+      <div class="dial-label" id="dial-label">Searching for signal...</div>
+      <div class="dial-freq"><span id="dial-freq-val">--.-</span><span class="unit">MHz</span></div>
+      <div class="dial-status" id="dial-status">Searching for signal...</div>
     </div>
   </div>
-  <div>
-    <div class="section">
-      <div class="section-title">Up Next</div>
-      <ul class="upcoming" id="upcoming"></ul>
+  <div class="dial-band" onclick="togglePlay()">
+    <div class="dial-fine" id="dial-ticks"></div>
+    <div class="dial-scale">
+      <div class="sm major"><div class="tick"></div><span>88</span></div>
+      <div class="sm"><div class="tick"></div><span>90</span></div>
+      <div class="sm major"><div class="tick"></div><span>92</span></div>
+      <div class="sm"><div class="tick"></div><span>94</span></div>
+      <div class="sm major" id="dial-active-mark"><div class="tick"></div><span>96.7</span></div>
+      <div class="sm"><div class="tick"></div><span>99</span></div>
+      <div class="sm major"><div class="tick"></div><span>101</span></div>
+      <div class="sm"><div class="tick"></div><span>104</span></div>
+      <div class="sm major"><div class="tick"></div><span>107</span></div>
     </div>
-  </div>
-  <div>
-    <div class="section">
-      <div class="section-title">Last Banter</div>
-      <div class="script-box" id="banter">...</div>
-    </div>
-
-    <div class="section">
-      <div class="section-title">Last Ad</div>
-      <div class="script-box" id="ad">...</div>
-    </div>
-
-    <div class="section">
-      <div class="section-title">Running Jokes</div>
-      <ul class="jokes" id="jokes"></ul>
-    </div>
+    <div class="dial-needle" id="dial-needle"><div class="needle-lbl">MammaMiRadio</div></div>
   </div>
 </div>
 
-<div class="debug-section">
-  <div class="debug-toggle" onclick="document.getElementById('ha-panel').classList.toggle('open')">
-    &#9654; Home Assistant context
+<!-- Now playing -->
+<div class="now-playing" id="now-playing" style="display:none">
+  <div class="album-art-bg" id="album-art-bg"></div>
+  <div class="np-body">
+    <div class="np-eyebrow">Now Playing</div>
+    <div class="np-controls">
+      <button class="play-btn" id="play-btn" onclick="togglePlay()" aria-label="Play radio">&#9654;</button>
+      <div class="np-text">
+        <div class="np-track-wrap">
+          <div class="np-track" id="np-track">...</div>
+        </div>
+        <div class="np-artist" id="np-meta"></div>
+        <div class="waveform paused" id="waveform"></div>
+      </div>
+    </div>
   </div>
-  <div class="debug-panel" id="ha-panel">
-    <pre class="debug-log" id="ha-context" style="white-space:pre-wrap;font-size:12px;padding:8px;"></pre>
+  <audio id="radio-audio" preload="none"></audio>
+</div>
+
+<!-- Ticker — scrolling Italian local colour, shown once station data arrives -->
+<div class="ticker-wrap" id="ticker-wrap" style="display:none">
+  <div class="ticker" id="ticker"></div>
+</div>
+
+<!-- Connect Spotify — cream contrast card (Option C) -->
+<div class="connect-cta" id="connect-card" style="display:none" onclick="window.open('spotify:', '_blank')" role="button" tabindex="0">
+  <div class="cta-icon">🎵</div>
+  <div class="cta-text">
+    <div class="cta-headline">Your music. Same hosts.</div>
+    <div class="cta-sub">Open Spotify and connect to <strong id="device-name">MammaMiRadio</strong></div>
+  </div>
+  <div class="cta-arrow">›</div>
+</div>
+
+<!-- Help — collapsed (?) icon, expands to troubleshooting + advanced -->
+<button class="help-toggle" id="help-toggle" style="display:none" onclick="toggleHelp()">
+  <span class="help-q">?</span> Having trouble connecting?
+</button>
+<div class="help-popover" id="help-popover">
+  <p>Make sure your phone and this device are on the same WiFi network. Open Spotify, tap the speaker icon, and choose MammaMiRadio.</p>
+  <button class="help-advanced" onclick="openAdvancedSetup()">Advanced options</button>
+</div>
+
+<!-- Queue (collapsed, 3 items) -->
+<div class="card" id="queue-card" style="display:none">
+  <h3>Up Next</h3>
+  <ul class="queue" id="queue-list"></ul>
+</div>
+
+<!-- Playlist management (when spotify_connected=true) -->
+<div class="card" id="playlist-card" style="display:none">
+  <h3>Choose your music</h3>
+  <div id="playlist-content">
+    <!-- Populated by JS: playlist picker or URL paste depending on spotify_api -->
   </div>
 </div>
 
-<div class="debug-section">
-  <div class="debug-toggle" onclick="document.getElementById('debug').classList.toggle('open')">
-    &#9654; Debug logs (click to expand)
+<!-- Controls -->
+<div class="controls" id="controls" style="display:none">
+  <button class="btn btn-sm" onclick="doShuffle()">Shuffle</button>
+  <button class="btn btn-sm" onclick="doSkip()">Skip</button>
+  <button class="btn btn-sm btn-ghost" onclick="doPurge()">Fresh Start</button>
+</div>
+
+<!-- Bring hosts to life (when anthropic=false) -->
+<div class="card" id="unlock-ai" style="display:none">
+  <h3>Bring the Hosts to Life</h3>
+  <p>Live banter, fake ads, dedications, and glorious Italian nonsense — generated just for your listening session.</p>
+  <input class="input" id="anthropic-key" type="password" placeholder="Paste your AI key here" autocomplete="off">
+  <button class="btn btn-sm" style="margin-top:8px" onclick="saveAnthropicKey()">Save</button>
+  <span class="card-muted" id="anthropic-status"></span>
+</div>
+
+<!-- Connect Home (when ha=false) -->
+<div class="card" id="connect-ha" style="display:none">
+  <h3>Let the Hosts See Your Home</h3>
+  <p>The hosts can reference your lights, temperature, and who just walked in. Connect Home Assistant to make the station aware of your world.</p>
+</div>
+
+<!-- Advanced settings (hidden by default) -->
+<div class="card" id="advanced-card" style="display:none">
+  <h3>Advanced Settings</h3>
+  <div style="margin-bottom:8px">
+    <label class="card-muted" for="cred-spotify-id">Spotify App ID</label>
+    <input class="input" id="cred-spotify-id" type="text" placeholder="From your Spotify developer app" autocomplete="off">
   </div>
-  <div class="debug-panel" id="debug">
-    <div class="section-title">go-librespot</div>
-    <div class="debug-log" id="debug-gl"></div>
-    <div class="section-title" style="margin-top:10px">Errors</div>
-    <div class="debug-log" id="debug-errors"></div>
+  <div style="margin-bottom:8px">
+    <label class="card-muted" for="cred-spotify-secret">Spotify App Secret</label>
+    <input class="input" id="cred-spotify-secret" type="password" placeholder="From your Spotify developer app" autocomplete="off">
   </div>
+  <div style="margin-bottom:8px">
+    <label class="card-muted" for="playlist-url-input">Playlist link</label>
+    <input class="input" id="playlist-url-input" type="text" placeholder="Paste a Spotify playlist link" autocomplete="off">
+  </div>
+  <button class="btn btn-sm" onclick="saveAdvancedCredentials()">Save</button>
+  <span class="card-muted" id="advanced-status"></span>
+</div>
+
+<!-- Transition overlay -->
+<div class="transition-overlay" id="transition-overlay">
+  <h2 id="transition-text"></h2>
 </div>
 
 <div class="toast" id="toast"></div>
 
-<div class="player-bar">
-  <div class="label">LISTEN</div>
-  <div class="player-bar-copy">
-    <div class="player-bar-title">Playback stays in the public listener view.</div>
-    <div class="player-bar-detail">The admin panel is silent on purpose so one extra tab does not create a duplicate stream.</div>
-  </div>
-  <a id="listener-bar-link" href="/listen" class="btn" style="text-decoration:none;display:inline-flex;align-items:center;">Open listener view</a>
-</div>
-
 <script>
-// Derive base path for HA ingress compatibility (empty string when accessed directly)
 const _base = (() => {
   const p = window.location.pathname.replace(/\/+$/, '');
-  // Dashboard is served at the root path, strip it
   return p === '' ? '' : p;
 })();
-// Patch static elements with base path on load
 if (_base) {
   document.addEventListener('DOMContentLoaded', () => {
     const link = document.getElementById('listener-link');
     if (link) link.href = _base + '/listen';
-    const barLink = document.getElementById('listener-bar-link');
-    if (barLink) barLink.href = _base + '/listen';
   });
 }
-const icons = { music: '\u266B', banter: '\uD83C\uDF99', ad: '\uD83D\uDCE2' };
-const cls = { music: 'seg-music', banter: 'seg-banter', ad: 'seg-ad' };
-const setupStepLabels = [
-  'Choose your run mode',
-  'Connect the essentials',
-  'Run preflight checks',
-  'Launch your first station',
-];
-let setupState = null;
-let setupStep = 1;
-let selectedRunMode = null;
-let sourceOptionsState = null;
+
 const csrfToken = document.querySelector('meta[name="mammamiradio-csrf-token"]')?.content || '';
 const _nativeFetch = window.fetch.bind(window);
 window.fetch = (input, init = {}) => {
@@ -1311,967 +692,678 @@ window.fetch = (input, init = {}) => {
   return _nativeFetch(input, init);
 };
 
+let caps = null;
+let firstDataReceived = false;
+let connectStartTime = null;
+let wasConnected = false;
+let _lastTier = null;
 
-function setupAckKey(signature) {
-  return 'mammamiradio_setup_ack_' + signature;
+// --- Radio Dial Controller ---
+const DEMO_FREQ = 94.7;
+const USER_FREQ = 101.3;
+let _dialFreq = 98.0; // start mid-band so sweeps use the full range
+let _dialTarget = DEMO_FREQ;
+let _dialState = 'searching'; // searching | locking | locked | shifting
+let _dialCollapseTimer = null;
+let _dialCollapseHideTimer = null;
+let _dialAnimFrame = null;
+let _audioCtx = null;
+let _noiseGain = null;
+let _noiseSource = null;
+
+function _initDialTicks() {
+  const el = document.getElementById('dial-ticks');
+  if (!el || el.children.length) return;
+  for (let i = 0; i < 41; i++) el.appendChild(document.createElement('i'));
 }
 
-function isSetupAcknowledged(payload) {
+function _setSignalBars(n) {
+  const bars = document.querySelectorAll('#signal-bars .sb');
+  bars.forEach((b, i) => b.classList.toggle('on', i < n));
+}
+
+function _freqToPercent(f) {
+  return ((f - 87.5) / (108 - 87.5)) * 100;
+}
+
+function _setNeedle(freq) {
+  _dialFreq = freq;
+  const pct = Math.max(2, Math.min(98, _freqToPercent(freq)));
+  const needle = document.getElementById('dial-needle');
+  needle.style.left = pct + '%';
+  // Move the ambient glow to follow the needle
+  document.querySelector('.dial-band').style.setProperty('--needle-x', pct + '%');
+  document.getElementById('dial-freq-val').textContent = freq.toFixed(1);
+}
+
+let _crackleSource = null;
+let _crackleGain = null;
+
+function _startStatic() {
+  if (_audioCtx && _audioCtx.state !== 'closed') return;
+  if (_audioCtx) { _audioCtx = null; _noiseGain = null; _crackleGain = null; }
   try {
-    return !!window.localStorage.getItem(setupAckKey(payload.signature));
-  } catch (_e) {
-    return false;
-  }
+    _audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    const sr = _audioCtx.sampleRate;
+
+    // Layer 1: broadband FM static (shaped white noise)
+    const bufSize = sr * 2;
+    const buf = _audioCtx.createBuffer(1, bufSize, sr);
+    const data = buf.getChannelData(0);
+    for (let i = 0; i < bufSize; i++) data[i] = Math.random() * 2 - 1;
+    _noiseSource = _audioCtx.createBufferSource();
+    _noiseSource.buffer = buf;
+    _noiseSource.loop = true;
+    // FM radio static: bandpass centered around 1.2kHz with moderate Q
+    const bp1 = _audioCtx.createBiquadFilter();
+    bp1.type = 'bandpass'; bp1.frequency.value = 1200; bp1.Q.value = 0.7;
+    // Add a second highpass to cut the mud
+    const hp = _audioCtx.createBiquadFilter();
+    hp.type = 'highpass'; hp.frequency.value = 400;
+    _noiseGain = _audioCtx.createGain();
+    _noiseGain.gain.value = 0.04;
+    _noiseSource.connect(bp1).connect(hp).connect(_noiseGain).connect(_audioCtx.destination);
+    _noiseSource.start();
+
+    // Layer 2: crackle pops (impulsive noise, like real FM tuning)
+    const crackBuf = _audioCtx.createBuffer(1, sr * 2, sr);
+    const crackData = crackBuf.getChannelData(0);
+    for (let i = 0; i < crackData.length; i++) {
+      // Sparse impulses — random pops
+      crackData[i] = Math.random() < 0.003 ? (Math.random() - 0.5) * 2 : 0;
+    }
+    _crackleSource = _audioCtx.createBufferSource();
+    _crackleSource.buffer = crackBuf;
+    _crackleSource.loop = true;
+    const crackFilter = _audioCtx.createBiquadFilter();
+    crackFilter.type = 'highpass'; crackFilter.frequency.value = 2000;
+    _crackleGain = _audioCtx.createGain();
+    _crackleGain.gain.value = 0.08;
+    _crackleSource.connect(crackFilter).connect(_crackleGain).connect(_audioCtx.destination);
+    _crackleSource.start();
+  } catch (e) { /* Web Audio not available */ }
 }
 
-function acknowledgeSetup(payload) {
-  try {
-    window.localStorage.setItem(setupAckKey(payload.signature), '1');
-  } catch (_e) {}
+function _setStaticVolume(vol) {
+  if (!_audioCtx) return;
+  const t = _audioCtx.currentTime;
+  if (_noiseGain) _noiseGain.gain.setTargetAtTime(vol, t, 0.05);
+  if (_crackleGain) _crackleGain.gain.setTargetAtTime(vol * 2.5, t, 0.05);
 }
 
-function showSetupGate() {
-  document.body.classList.add('setup-open');
-  document.getElementById('setup-gate').classList.add('open');
+function _stopStatic() {
+  _setStaticVolume(0);
+  setTimeout(() => {
+    if (_noiseSource) { try { _noiseSource.stop(); } catch(e){} _noiseSource = null; }
+    if (_crackleSource) { try { _crackleSource.stop(); } catch(e){} _crackleSource = null; }
+    if (_audioCtx) { _audioCtx.close(); _audioCtx = null; }
+    _noiseGain = null; _crackleGain = null;
+  }, 600);
 }
 
-function hideSetupGate() {
-  document.body.classList.remove('setup-open');
-  document.getElementById('setup-gate').classList.remove('open');
+let _dialVelocity = 0.3;
+let _lastSeekTime = 0;
+let _seekElapsed = 0;
+
+function _dialSeek(timestamp) {
+  if (_dialState !== 'searching') return;
+  if (!_lastSeekTime) _lastSeekTime = timestamp;
+  const dt = (timestamp - _lastSeekTime) / 1000;
+  _lastSeekTime = timestamp;
+  _seekElapsed += dt;
+
+  // Phase 1 (first ~4s): big lazy sweeps across the whole band, barely any pull
+  // Phase 2 (4-8s): start homing in, sweep narrows
+  // Phase 3 (8s+): close in on target
+  const phase = Math.min(_seekElapsed / 8, 1); // 0→1 over 8 seconds
+  const springK = 0.01 + phase * 0.08;         // very weak → moderate pull
+  const noiseAmp = 1.2 - phase * 0.7;          // big drift → small drift
+  const damping = 0.97 - phase * 0.03;         // very smooth → slightly tighter
+
+  // Slow sine wave adds a broad sweep feel
+  const sweep = Math.sin(_seekElapsed * 0.4) * (3 - phase * 2.5);
+
+  const pull = (_dialTarget - _dialFreq) * springK;
+  const noise = (Math.random() - 0.5) * noiseAmp;
+  _dialVelocity = (_dialVelocity + pull + noise * 0.08 + sweep * 0.02) * damping;
+  _dialVelocity = Math.max(-1.5, Math.min(1.5, _dialVelocity));
+  const next = Math.max(88, Math.min(107.5, _dialFreq + _dialVelocity));
+  _setNeedle(next);
+
+  // Static: louder when far from target, with crackle bursts
+  const dist = Math.abs(_dialFreq - _dialTarget);
+  const baseVol = 0.015 + dist * 0.004;
+  _setStaticVolume(baseVol);
+
+  _dialAnimFrame = requestAnimationFrame(_dialSeek);
 }
 
-function statusBadgeLabel(status) {
-  switch (status) {
-    case 'configured': return '\u2713 Configured';
-    case 'missing': return '\u25B3 Missing';
-    case 'invalid': return '\u2717 Needs Fix';
-    case 'degraded': return '\u25B3 Degraded';
-    case 'skipped': return '\u2014 Skipped';
-    case 'ok': return '\u2713 OK';
-    case 'warn': return '\u25B3 Check';
-    case 'fail': return '\u2717 Fail';
-    default: return status;
-  }
+function _dialLock(target, label, statusText) {
+  _dialState = 'locking';
+  _dialTarget = target;
+  const needle = document.getElementById('dial-needle');
+  needle.classList.remove('seeking');
+  needle.classList.add('locked');
+
+  // Slow lock-in: overshoot → drift back → micro-overshoot → settle
+  const over1 = target + (Math.random() > 0.5 ? 1.6 : -1.6);
+  _setNeedle(over1);
+  _setStaticVolume(0.04);
+
+  setTimeout(() => {
+    _setNeedle(target - 0.5);
+    _setStaticVolume(0.025);
+  }, 700);
+
+  setTimeout(() => {
+    _setNeedle(target + 0.2);
+    _setStaticVolume(0.01);
+  }, 1400);
+
+  setTimeout(() => {
+    _setNeedle(target);
+    _setStaticVolume(0);
+    _dialState = 'locked';
+    document.getElementById('dial-label').textContent = label;
+    document.getElementById('dial-status').textContent = statusText;
+    _setSignalBars(5);
+  }, 2000);
+
+  // Fade static out gently
+  setTimeout(_stopStatic, 3000);
 }
 
-function setSelectedMode(modeId) {
-  selectedRunMode = modeId;
-  renderSetup();
-}
+function _dialShiftTo(target, label, statusText) {
+  if (_dialState === 'shifting') return;
+  _dialState = 'shifting';
+  _startStatic();
+  _setStaticVolume(0.07);
+  const needle = document.getElementById('dial-needle');
+  needle.classList.remove('locked');
+  needle.classList.add('seeking');
+  document.getElementById('dial-status').textContent = 'Retuning...';
+  _setSignalBars(1);
+  // Cancel any pending collapse and re-expand
+  if (_dialCollapseTimer) { clearTimeout(_dialCollapseTimer); _dialCollapseTimer = null; }
+  if (_dialCollapseHideTimer) { clearTimeout(_dialCollapseHideTimer); _dialCollapseHideTimer = null; }
+  const dial = document.getElementById('radio-dial');
+  dial.style.overflow = '';
+  dial.style.maxHeight = '';
+  dial.style.marginTop = '20px';
+  dial.style.transition = 'opacity 0.6s ease';
+  dial.style.opacity = '1';
 
-function renderSetupStepper() {
-  const stepper = document.getElementById('setup-stepper');
-  stepper.innerHTML = setupStepLabels.map((label, idx) =>
-    '<div class="setup-step-chip ' + (idx + 1 === setupStep ? 'active' : '') + '">' +
-      (idx + 1) + '. ' + escHtml(label) +
-    '</div>'
-  ).join('');
-  document.getElementById('setup-progress-fill').style.width = (setupStep * 25) + '%';
-}
+  // Smooth sweep using requestAnimationFrame
+  const from = _dialFreq;
+  const overshoot = target + (target > from ? 1.8 : -1.8);
+  const totalMs = 2000;
+  const startTime = performance.now();
 
-function renderRunModes() {
-  return '<div class="setup-grid">' + (setupState.available_modes || []).map(mode =>
-    '<button type="button" class="setup-card ' + (selectedRunMode === mode.id ? 'selected' : '') + '"' +
-      ' onclick="setSelectedMode(\'' + escHtml(mode.id) + '\')" style="text-align:left;cursor:pointer">' +
-      '<div class="setup-badge ' + (mode.detected ? 'configured' : 'skipped') + '">' +
-        (mode.detected ? 'Detected' : 'Available') +
-      '</div>' +
-      '<h3>' + escHtml(mode.label) + '</h3>' +
-      '<p>' + escHtml(mode.description) + '</p>' +
-      '<div class="surface">' + escHtml(mode.surface) + '</div>' +
-    '</button>'
-  ).join('') + '</div>' +
-  '<div class="setup-note">We are not changing your runtime here. This just picks the right setup instructions so the next screens stop talking in riddles.</div>';
-}
-
-function renderCredentialForm(key) {
-  const fields = {
-    spotify: [
-      { id: 'cred-spotify-id', name: 'spotify_client_id', label: 'Client ID', type: 'text' },
-      { id: 'cred-spotify-secret', name: 'spotify_client_secret', label: 'Client Secret', type: 'password' },
-    ],
-    anthropic: [
-      { id: 'cred-anthropic-key', name: 'anthropic_api_key', label: 'API Key', type: 'password' },
-    ],
-    playlist: [
-      { id: 'cred-playlist-url', name: 'playlist_spotify_url', label: 'Spotify Playlist URL', type: 'text' },
-    ],
-  };
-  const defs = fields[key];
-  if (!defs) return '';
-  let html = '<div class="cred-form" id="cred-form-' + key + '">';
-  defs.forEach(f => {
-    html += '<div class="cred-row">' +
-      '<label class="cred-label" for="' + f.id + '">' + escHtml(f.label) + '</label>' +
-      '<input class="cred-input" id="' + f.id + '" type="' + f.type + '" autocomplete="off" placeholder="Paste here" />' +
-    '</div>';
-  });
-  html += '<button class="cred-save-btn" onclick="saveCredentials(\'' + key + '\')">Save</button>' +
-    '<span class="cred-status" id="cred-status-' + key + '"></span>' +
-  '</div>';
-  return html;
-}
-
-async function saveCredentials(key) {
-  const fieldMap = {
-    spotify: ['cred-spotify-id', 'cred-spotify-secret'],
-    anthropic: ['cred-anthropic-key'],
-    playlist: ['cred-playlist-url'],
-  };
-  const nameMap = {
-    'cred-spotify-id': 'spotify_client_id',
-    'cred-spotify-secret': 'spotify_client_secret',
-    'cred-anthropic-key': 'anthropic_api_key',
-    'cred-playlist-url': 'playlist_spotify_url',
-  };
-  const ids = fieldMap[key] || [];
-  const payload = {};
-  for (const id of ids) {
-    const el = document.getElementById(id);
-    if (el && el.value.trim()) payload[nameMap[id]] = el.value.trim();
-  }
-  if (!Object.keys(payload).length) {
-    const s = document.getElementById('cred-status-' + key);
-    if (s) s.textContent = 'Nothing entered.';
-    return;
-  }
-  const statusEl = document.getElementById('cred-status-' + key);
-  if (statusEl) statusEl.textContent = 'Saving...';
-  try {
-    const r = await fetch(_base + '/api/credentials', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify(payload),
-    });
-    const data = await r.json();
-    if (data.ok) {
-      if (statusEl) statusEl.textContent = 'Saved. Reloading setup...';
-      setTimeout(() => openSetupGate(true), 800);
+  function animate(now) {
+    const elapsed = now - startTime;
+    const t = Math.min(elapsed / totalMs, 1);
+    // Ease: overshoot then settle (cubic bezier approximation)
+    let freq;
+    if (t < 0.5) {
+      const p = t / 0.5;
+      freq = from + (overshoot - from) * (p * p * (3 - 2 * p));
     } else {
-      if (statusEl) statusEl.textContent = 'Error: ' + (data.error || 'unknown');
+      const p = (t - 0.5) / 0.5;
+      freq = overshoot + (target - overshoot) * (p * p * (3 - 2 * p));
     }
-  } catch (e) {
-    if (statusEl) statusEl.textContent = 'Request failed.';
+    _setNeedle(freq);
+    // Crackling peaks in the middle, fades at edges
+    const midness = 1 - Math.abs(t - 0.4) * 2.5;
+    _setStaticVolume(Math.max(0, 0.06 * midness));
+
+    if (t < 1) {
+      requestAnimationFrame(animate);
+    } else {
+      _setNeedle(target);
+      needle.classList.remove('seeking');
+      needle.classList.add('locked');
+      _dialState = 'locked';
+      document.getElementById('dial-label').textContent = label;
+      document.getElementById('dial-status').textContent = statusText;
+      _setSignalBars(5);
+      _stopStatic();
+      // Collapse dial after shift settles: fade opacity, then slide height down
+      setTimeout(() => {
+        dial.style.transition = 'opacity 1.4s ease';
+        dial.style.opacity = '0';
+        setTimeout(() => {
+          // Capture exact height before collapsing so the slide is smooth
+          const h = dial.getBoundingClientRect().height;
+          dial.style.overflow = 'hidden';
+          dial.style.maxHeight = h + 'px';
+          void dial.offsetHeight; // force reflow so transition picks up start value
+          dial.style.transition = 'max-height 0.6s cubic-bezier(0.4,0,0.6,1), margin-top 0.6s ease';
+          dial.style.maxHeight = '0';
+          dial.style.marginTop = '0';
+        }, 1500);
+      }, 2000);
+    }
+  }
+  requestAnimationFrame(animate);
+}
+
+// Initialize dial on load
+_initDialTicks();
+_startStatic();
+const _seekNeedle = document.getElementById('dial-needle');
+if (_seekNeedle) _seekNeedle.classList.add('seeking');
+requestAnimationFrame(_dialSeek);
+
+function escHtml(v) { return String(v ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+let _lastTrackLabel = null;
+function _updateNowPlaying(ns) {
+  const label = ns.label || 'Waiting for first segment...';
+  const type = ns.type || '';
+  const trackEl = document.getElementById('np-track');
+  const metaEl = document.getElementById('np-meta');
+
+  // Parse artist and title from "Artist – Title" format used for music segments
+  let displayTitle = label;
+  let displayArtist = '';
+  if (type === 'music' && label.includes(' \u2013 ')) {
+    const idx = label.indexOf(' \u2013 ');
+    displayArtist = label.slice(0, idx);
+    displayTitle = label.slice(idx + 3);
+  } else if (type === 'banter') {
+    displayArtist = 'Malamie Radio';
+  } else if (type === 'ad') {
+    displayArtist = (ns.metadata && ns.metadata.brand) ? ns.metadata.brand : 'Sponsored';
+  }
+  metaEl.textContent = displayArtist;
+
+  // Only re-trigger marquee check when label actually changes
+  if (label === _lastTrackLabel) return;
+  _lastTrackLabel = label;
+
+  const wrap = trackEl.parentElement;
+  trackEl.classList.remove('scrolling');
+  trackEl.textContent = displayTitle;
+
+  // Detect overflow after paint and animate if needed
+  requestAnimationFrame(() => {
+    if (wrap && trackEl.scrollWidth > wrap.clientWidth + 2) {
+      const dur = Math.max(6, Math.round(trackEl.scrollWidth / 60));
+      trackEl.style.setProperty('--marquee-dur', dur + 's');
+      trackEl.textContent = displayTitle + '\u2003\u2022\u2003' + displayTitle;
+      trackEl.classList.add('scrolling');
+    }
+  });
+}
+
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 2500);
+}
+
+function showTransition(text, durationMs) {
+  const el = document.getElementById('transition-overlay');
+  document.getElementById('transition-text').textContent = text;
+  el.classList.add('show');
+  setTimeout(() => el.classList.remove('show'), durationMs || 2000);
+}
+
+function updateCards() {
+  if (!caps) return;
+  const c = caps.capabilities;
+  const tier = caps.tier;
+
+  // Tier badge
+  const badge = document.getElementById('tier-badge');
+  const tierChanged = _lastTier !== null && _lastTier !== tier;
+  badge.dataset.tier = tier;
+  badge.textContent = caps.tier_label;
+  if (tierChanged) {
+    badge.classList.remove('tier-pulse');
+    void badge.offsetWidth;
+    badge.classList.add('tier-pulse');
+    badge.addEventListener('animationend', () => badge.classList.remove('tier-pulse'), { once: true });
+  }
+  _lastTier = tier;
+
+  // Connect CTA card + help toggle
+  const showConnect = !c.spotify_connected;
+  document.getElementById('connect-card').style.display = showConnect ? '' : 'none';
+  document.getElementById('help-toggle').style.display = showConnect ? '' : 'none';
+  if (!showConnect) {
+    document.getElementById('help-popover').classList.remove('open');
+  }
+  if (caps.connect_device_name) {
+    document.getElementById('device-name').textContent = caps.connect_device_name;
+  }
+
+  // Show help toggle after 60s as a subtle nudge (but it's always visible)
+  if (!c.spotify_connected && connectStartTime) {
+    const elapsed = (Date.now() - connectStartTime) / 1000;
+    if (elapsed > 60) {
+      document.getElementById('help-toggle').style.color = 'rgba(245,237,216,0.55)';
+    }
+  }
+
+  // Playlist card (only when connected AND has spotify_api for browsing)
+  const playlistCard = document.getElementById('playlist-card');
+  playlistCard.style.display = (c.spotify_connected && c.spotify_api) ? '' : 'none';
+  if (c.spotify_connected && c.spotify_api) {
+    const content = document.getElementById('playlist-content');
+    content.innerHTML =
+      '<p>Browse your playlists or paste a link.</p>' +
+      '<div style="display:flex;gap:8px;flex-wrap:wrap">' +
+        '<select class="input" id="playlist-select" style="flex:1;min-width:200px"><option value="">Choose a playlist</option></select>' +
+        '<button class="btn btn-sm" onclick="selectPlaylist()">Load</button>' +
+      '</div>' +
+      '<div style="margin-top:8px;display:flex;gap:8px">' +
+        '<button class="btn btn-sm btn-ghost" onclick="selectLikedSongs()">Use Liked Songs</button>' +
+      '</div>';
+  }
+
+  // Controls (only after Spotify connected)
+  document.getElementById('controls').style.display = c.spotify_connected ? '' : 'none';
+
+  // Unlock AI — only when connected and no anthropic key
+  document.getElementById('unlock-ai').style.display = (c.spotify_connected && !c.anthropic) ? '' : 'none';
+  // HA card hidden by default — it's a power-user feature, not onboarding
+  document.getElementById('connect-ha').style.display = 'none';
+
+  // Transition ceremony: demo -> connected (dial shifts to new frequency)
+  if (c.spotify_connected && !wasConnected) {
+    wasConnected = true;
+    const rawName = caps.spotify_username || '';
+    // Hide hash-like internal Spotify IDs — only show human-readable names
+    const name = (rawName.length > 20 && !/\s/.test(rawName)) ? '' : rawName;
+    _dialShiftTo(USER_FREQ, name || 'Your Music', 'Spotify connected');
+    setTimeout(() => showTransition(name ? 'Benvenuto, ' + escHtml(name) + '!' : 'Benvenuto!', 2500), 1600);
   }
 }
 
-function renderEssentials() {
-  const modeId = selectedRunMode || setupState.detected_mode;
-  const isAddon = modeId === 'ha_addon';
-  let html = '<div class="setup-grid">';
-  (setupState.essentials || []).forEach(item => {
-    const where = item.where && item.where[modeId] ? item.where[modeId] : 'your current config surface';
-    const isMissing = item.status === 'missing';
-    const showForm = isMissing && !isAddon && ['spotify', 'anthropic', 'playlist'].includes(item.key);
-    html += '<div class="setup-card">' +
-      '<div class="setup-badge ' + escHtml(item.status) + '">' + escHtml(statusBadgeLabel(item.status)) + '</div>' +
-      '<h3>' + escHtml(item.label) + '</h3>' +
-      '<p>' + escHtml(item.required_label) + '</p>' +
-      '<div class="setup-meta">' +
-        '<div><strong>What we found:</strong> ' + escHtml(item.summary) + '</div>' +
-        (showForm
-          ? renderCredentialForm(item.key)
-          : '<div><strong>Next action:</strong> ' + escHtml(item.next_action) + '</div>' +
-            '<div><strong>Where:</strong> ' + escHtml(where) + '</div>'
-        ) +
-        '<div><strong>If you skip it:</strong> ' + escHtml(item.skip_outcome) + '</div>' +
-      '</div>' +
-    '</div>';
-  });
-  html += '</div>';
-  if (isAddon) {
-    html += '<div class="setup-note">If you change add-on options or env vars outside this page, restart the service first. Then come back here and click Re-check.</div>';
-    if (setupState.addon_options_snippet) {
-      html += '<div class="setup-code">' + escHtml(setupState.addon_options_snippet) + '</div>';
+function updateStatus(d) {
+  // Lock the dial on first data — signal found
+  if (!firstDataReceived) {
+    firstDataReceived = true;
+    if (_dialAnimFrame) { cancelAnimationFrame(_dialAnimFrame); _dialAnimFrame = null; }
+    _dialLock(DEMO_FREQ, 'Malamie Radio', 'Signal locked');
+    // Collapse dial gently — fade then height-slide (same pattern as _dialShiftTo)
+    _dialCollapseTimer = setTimeout(() => {
+      const dial = document.getElementById('radio-dial');
+      dial.style.transition = 'opacity 1.4s ease';
+      dial.style.opacity = '0';
+      _dialCollapseHideTimer = setTimeout(() => {
+        const h = dial.getBoundingClientRect().height;
+        dial.style.overflow = 'hidden';
+        dial.style.maxHeight = h + 'px';
+        void dial.offsetHeight;
+        dial.style.transition = 'max-height 0.6s cubic-bezier(0.4,0,0.6,1), margin-top 0.6s ease';
+        dial.style.maxHeight = '0';
+        dial.style.marginTop = '0';
+      }, 1500);
+    }, 5000);
+    document.getElementById('now-playing').style.display = '';
+    connectStartTime = Date.now();
+    _initTicker();
+    // Auto-start stream on first click
+    if (!_wantsPlay) {
+      _wantsPlay = true;
+      setTimeout(_startStream, 1200); // start after dial locks
     }
   }
-  return html;
-}
 
-function renderPreflight() {
-  let html = '<div class="setup-checklist">';
-  (setupState.preflight_checks || []).forEach(check => {
-    html += '<div class="setup-check">' +
-      '<span class="setup-check-dot ' + escHtml(check.status) + '"></span>' +
-      '<div>' +
-        '<div class="setup-check-title">' + escHtml(check.label) + '</div>' +
-        '<div class="setup-check-detail">' + escHtml(check.detail) + '</div>' +
-      '</div>' +
-    '</div>';
-  });
-  html += '</div>';
-  html += '<div class="setup-note">This screen checks what the running app can actually do right now. It is the truth serum. If something still says demo or degraded, the dashboard should not pretend otherwise.</div>';
-  return html;
-}
+  // Now playing
+  const ns = d.now_streaming || {};
+  _updateNowPlaying(ns);
 
-function renderLaunch() {
-  const mode = setupState.station_mode || {};
-  const tone = mode.id === 'real_spotify' ? 'configured' : mode.id === 'demo' ? 'missing' : 'degraded';
-  return '<div class="setup-grid one">' +
-    '<div class="setup-card">' +
-      '<div class="setup-badge ' + escHtml(tone) + '">' + escHtml(mode.label || 'Station mode') + '</div>' +
-      '<h3>' + escHtml(setupState.launch.headline) + '</h3>' +
-      '<p>' + escHtml(setupState.launch.detail) + '</p>' +
-      '<div class="setup-meta">' +
-        '<div><strong>After launch:</strong> ' + escHtml(setupState.launch.post_launch) + '</div>' +
-        '<div><strong>Current mode:</strong> ' + escHtml((mode.label || '') + ' - ' + (mode.detail || '')) + '</div>' +
-      '</div>' +
-    '</div>' +
-  '</div>';
-}
+  // Album art — blurred background wash (thumbnail removed in redesign)
+  const artUrl = (ns.metadata && ns.metadata.album_art) || '';
+  const artBg = document.getElementById('album-art-bg');
+  if (artBg) {
+    if (artUrl) {
+      artBg.style.backgroundImage = 'url(' + artUrl + ')'; artBg.style.opacity = '0.15';
+    } else {
+      artBg.style.opacity = '0';
+    }
+  }
 
-function renderSetup() {
-  if (!setupState) return;
-  renderSetupStepper();
-
-  const title = document.getElementById('setup-title');
-  const subtitle = document.getElementById('setup-subtitle');
-  const body = document.getElementById('setup-body');
-  const back = document.getElementById('setup-back');
-  const secondary = document.getElementById('setup-secondary');
-  const primary = document.getElementById('setup-primary');
-
-  if (setupStep === 1) {
-    title.textContent = 'Choose the setup path that matches this run.';
-    subtitle.textContent = 'We detect the most likely environment first so the next steps can tell you exactly where config lives.';
-    body.innerHTML = renderRunModes();
-    back.style.visibility = 'hidden';
-    secondary.style.display = 'none';
-    primary.textContent = 'Continue';
-    primary.onclick = () => nextSetupStep();
-  } else if (setupStep === 2) {
-    title.textContent = 'Connect the essentials before the dashboard tries to be clever.';
-    subtitle.textContent = 'This is the missing piece today. The app should tell you what is required, what is optional, and what happens if you skip something.';
-    body.innerHTML = renderEssentials();
-    back.style.visibility = 'visible';
-    secondary.style.display = 'none';
-    primary.textContent = 'Continue';
-    primary.onclick = () => nextSetupStep();
-  } else if (setupStep === 3) {
-    title.textContent = 'Run preflight checks against the live app.';
-    subtitle.textContent = 'These checks look at what the running service can actually do, not just whether a field exists somewhere in config.';
-    body.innerHTML = renderPreflight();
-    back.style.visibility = 'visible';
-    secondary.style.display = 'inline-flex';
-    secondary.textContent = 'Re-check';
-    secondary.onclick = () => openSetupGate(true);
-    primary.textContent = 'Continue';
-    primary.onclick = () => nextSetupStep();
+  // Queue (only after Spotify connected — golden path: "nothing else to look at")
+  const upcoming = d.upcoming || [];
+  const queueCard = document.getElementById('queue-card');
+  const isConnected = caps && caps.capabilities && caps.capabilities.spotify_connected;
+  if (upcoming.length && isConnected) {
+    queueCard.style.display = '';
+    document.getElementById('queue-list').innerHTML = upcoming.slice(0, 3).map(e =>
+      '<li>' + escHtml(e.label || e.type || '?') + '</li>'
+    ).join('');
   } else {
-    title.textContent = 'Launch your first station.';
-    subtitle.textContent = 'No mystery, no fake green lights. You should know exactly what you are about to hear before the control plane opens.';
-    body.innerHTML = renderLaunch();
-    back.style.visibility = 'visible';
-    secondary.style.display = 'inline-flex';
-    secondary.textContent = 'Review checks';
-    secondary.onclick = () => { setupStep = 3; renderSetup(); };
-    primary.textContent = setupState.launch.cta;
-    primary.onclick = () => startStationFromSetup();
+    queueCard.style.display = 'none';
   }
 }
-
-function nextSetupStep() {
-  setupStep = Math.min(4, setupStep + 1);
-  renderSetup();
-}
-
-function prevSetupStep() {
-  setupStep = Math.max(1, setupStep - 1);
-  renderSetup();
-}
-
-async function openSetupGate(force) {
-  setupStep = 1;
-  if (setupState && !force) {
-    renderSetup();
-    showSetupGate();
-    return;
-  }
-  await loadSetup(!!force);
-}
-
-async function loadSetup(force) {
-  try {
-    const response = await fetch(_base + '/api/setup/' + (force ? 'recheck' : 'status'), {
-      method: force ? 'POST' : 'GET',
-      headers: {'Content-Type': 'application/json'},
-    });
-    setupState = await response.json();
-    if (!selectedRunMode) selectedRunMode = setupState.detected_mode;
-    renderSetup();
-    if (force || (setupState.onboarding_required && !isSetupAcknowledged(setupState))) {
-      showSetupGate();
-    } else {
-      hideSetupGate();
-    }
-  } catch (e) {
-    console.error('setup load failed', e);
-    hideSetupGate();
-  }
-}
-
-function startStationFromSetup() {
-  if (setupState) acknowledgeSetup(setupState);
-  hideSetupGate();
-  refresh();
-}
-
-function updateModeBanner(mode) {
-  const banner = document.getElementById('mode-banner');
-  if (!mode || !mode.id) {
-    banner.style.display = 'none';
-    return;
-  }
-  banner.style.display = 'flex';
-  banner.dataset.mode = mode.id;
-  document.getElementById('mode-pill').textContent = mode.label;
-  document.getElementById('mode-banner-title').textContent = mode.summary || '';
-  document.getElementById('mode-banner-detail').textContent = mode.detail || '';
-}
-
-function fmt(ts) {
-  if (!ts) return '';
-  const d = new Date(ts * 1000);
-  return d.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
-}
-
-function fmtUptime(s) {
-  if (s == null || isNaN(s)) return 'starting...';
-  s = Math.floor(s);
-  const h = Math.floor(s / 3600);
-  const m = Math.floor((s % 3600) / 60);
-  if (h > 0) return h + 'h ' + m + 'm';
-  return m + 'm ' + (s % 60) + 's';
-}
-
-function escHtml(value) {
-  return String(value ?? '')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
-}
-
-function renderAdHtml(adData) {
-  if (!adData) return '';
-
-  if (adData.brand && adData.text) {
-    return '<div><span class="script-ad-brand">' + escHtml(adData.brand) + '</span> ' +
-      '(voice: ' + escHtml(adData.voice || adData.host || '?') + ')</div>' +
-      '<div style="margin-top:6px;color:var(--cream-dk)">' + escHtml(adData.text) + '</div>';
-  }
-
-  if (Array.isArray(adData.brands) && adData.brands.length) {
-    const brands = adData.brands.map(escHtml).join(', ');
-    const texts = Array.isArray(adData.texts)
-      ? adData.texts.map(text =>
-          '<div style="margin-top:6px;color:var(--cream-dk)">' + escHtml(text) + '</div>'
-        ).join('')
-      : '';
-    return '<div><span class="script-ad-brand">' + brands + '</span></div>' + texts;
-  }
-
-  return '';
-}
-
-const axisLabels = {
-  energy: ['Mellow', 'Manic'],
-  chaos: ['On-topic', 'Chaotic'],
-  warmth: ['Dry', 'Warm'],
-  verbosity: ['Terse', 'Verbose'],
-  nostalgia: ['Present', 'Nostalgic'],
-};
-let personalityDebounce = {};
-
-function renderPersonalityCards(hosts) {
-  const container = document.getElementById('personality-cards');
-  container.innerHTML = '';
-  hosts.forEach(h => {
-    const card = document.createElement('div');
-    card.className = 'personality-card';
-
-    const header = document.createElement('h3');
-    header.textContent = h.name;
-    const resetBtn = document.createElement('button');
-    resetBtn.className = 'reset-btn';
-    resetBtn.textContent = 'Reset';
-    resetBtn.addEventListener('click', () => resetPersonality(h.name));
-    header.appendChild(resetBtn);
-    card.appendChild(header);
-
-    Object.entries(h.personality).forEach(([axis, val]) => {
-      const [lo, hi] = axisLabels[axis] || [axis, axis];
-
-      const row = document.createElement('div');
-      row.className = 'slider-row';
-
-      const label = document.createElement('span');
-      label.className = 'slider-label';
-      label.textContent = axis;
-
-      const slider = document.createElement('input');
-      slider.type = 'range';
-      slider.min = '0';
-      slider.max = '100';
-      slider.value = val;
-      slider.dataset.host = h.name;
-      slider.dataset.axis = axis;
-      slider.addEventListener('input', function() { onSliderChange(this); });
-
-      const valSpan = document.createElement('span');
-      valSpan.className = 'slider-value';
-      valSpan.id = 'sv-' + h.name + '-' + axis;
-      valSpan.textContent = val;
-
-      row.appendChild(label);
-      row.appendChild(slider);
-      row.appendChild(valSpan);
-      card.appendChild(row);
-
-      const ends = document.createElement('div');
-      ends.className = 'slider-ends';
-      const loSpan = document.createElement('span');
-      loSpan.textContent = lo;
-      const hiSpan = document.createElement('span');
-      hiSpan.textContent = hi;
-      ends.appendChild(loSpan);
-      ends.appendChild(hiSpan);
-      card.appendChild(ends);
-    });
-
-    container.appendChild(card);
-  });
-}
-
-function onSliderChange(el) {
-  const host = el.dataset.host;
-  const axis = el.dataset.axis;
-  const val = parseInt(el.value, 10);
-  document.getElementById('sv-' + host + '-' + axis).textContent = val;
-
-  const key = host + '-' + axis;
-  clearTimeout(personalityDebounce[key]);
-  personalityDebounce[key] = setTimeout(() => {
-    fetch(_base + '/api/hosts/' + encodeURIComponent(host) + '/personality', {
-      method: 'PATCH',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({[axis]: val}),
-    }).then(() => showToast(host + ': ' + axis + ' \u2192 ' + val + ' (next banter)'));
-  }, 300);
-}
-
-async function resetPersonality(hostName) {
-  await fetch(_base + '/api/hosts/' + encodeURIComponent(hostName) + '/personality/reset', {method: 'POST'});
-  loadPersonality();
-}
-
-async function loadPersonality() {
-  try {
-    const r = await fetch(_base + '/api/hosts');
-    const d = await r.json();
-    renderPersonalityCards(d.hosts);
-  } catch (e) {
-    console.error('personality load failed', e);
-  }
-}
-
-function updateCurrentSourceLabel(source) {
-  const el = document.getElementById('current-source-label');
-  if (!source || !source.kind) {
-    el.textContent = 'Current source: none selected';
-    return;
-  }
-  const label = source.label || source.kind;
-  const count = source.track_count ? ' (' + source.track_count + ' tracks)' : '';
-  el.textContent = 'Current source: ' + label + count;
-}
-
-function renderSourceOptions(payload) {
-  sourceOptionsState = payload;
-  updateCurrentSourceLabel(payload.current_source);
-  const summary = document.getElementById('source-options-summary');
-  const chips = document.getElementById('source-options');
-  const select = document.getElementById('playlist-select');
-  const likedBtn = document.getElementById('liked-songs-btn');
-  const playlistBtn = document.getElementById('playlist-select-btn');
-  const urlInput = document.getElementById('playlist-url');
-  const urlBtn = document.getElementById('playlist-url-btn');
-  const caps = payload.capabilities || {};
-  const canUsePicker = !!(payload.ok && caps.supports_user_sources);
-  const canUseUrlFallback = !!caps.supports_url_source;
-
-  summary.textContent = canUsePicker
-    ? 'Connect Spotify, choose one of your playlists, use Liked Songs, or keep the advanced playlist-link fallback.'
-    : (caps.reason || 'Spotify source picker is not available in this run mode yet. Use the advanced playlist link fallback.');
-
-  likedBtn.disabled = !canUsePicker;
-  playlistBtn.disabled = !canUsePicker;
-  select.disabled = !canUsePicker;
-  urlInput.disabled = !canUseUrlFallback;
-  urlBtn.disabled = !canUseUrlFallback;
-  select.innerHTML = '<option value="">Choose one of my playlists</option>';
-  (payload.playlists || []).forEach(item => {
-    const option = document.createElement('option');
-    option.value = item.id;
-    option.textContent = item.label + (item.track_count ? ' (' + item.track_count + ')' : '');
-    option.dataset.label = item.label;
-    select.appendChild(option);
-  });
-
-  const tags = [];
-  if (canUsePicker) tags.push('<span class="setup-badge configured">Spotify picker ready</span>');
-  else if (canUseUrlFallback) tags.push('<span class="setup-badge degraded">URL fallback only</span>');
-  else tags.push('<span class="setup-badge degraded">Spotify auth required</span>');
-  if (payload.current_source && payload.current_source.kind) {
-    tags.push('<span class="setup-badge skipped">' + escHtml(payload.current_source.kind) + '</span>');
-  }
-  chips.innerHTML = tags.join('');
-}
-
-async function loadSourceOptions() {
-  try {
-    const r = await fetch(_base + '/api/spotify/source-options');
-    const d = await r.json();
-    renderSourceOptions(d);
-  } catch (e) {
-    console.error('source options load failed', e);
-  }
-}
-
-async function selectLikedSongs() {
-  await selectSource({kind: 'liked_songs', label: 'Liked Songs'});
-}
-
-async function selectPlaylist() {
-  const select = document.getElementById('playlist-select');
-  const option = select.options[select.selectedIndex];
-  if (!select.value) {
-    showToast('Pick a playlist first');
-    return;
-  }
-  await selectSource({kind: 'playlist', source_id: select.value, label: option.dataset.label || option.textContent});
-}
-
-async function selectSource(payload) {
-  try {
-    const r = await fetch(_base + '/api/spotify/source/select', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify(payload),
-    });
-    const d = await r.json();
-    if (!d.ok) {
-      showToast(d.error || 'Source selection failed');
-      return;
-    }
-    updateCurrentSourceLabel(d.source);
-    await loadSourceOptions();
-    showToast('Loaded ' + (d.source.label || d.source.kind));
-    refresh();
-  } catch (e) {
-    console.error('source select failed', e);
-    showToast('Source selection failed');
-  }
-}
-
-loadPersonality();
-loadSetup(false);
-loadSourceOptions();
 
 async function refresh() {
   try {
-    const r = await fetch(_base + '/status');
-    const d = await r.json();
-    updateModeBanner(d.station_mode);
-
-    document.getElementById('uptime').textContent =
-      'Uptime: ' + fmtUptime(d.uptime_sec);
-    document.getElementById('queue').textContent = d.queue_depth;
-    document.getElementById('segments').textContent = d.segments_produced;
-    document.getElementById('tracks').textContent = d.tracks_played;
-
-    const sp = document.getElementById('spotify');
-    sp.textContent = d.spotify_connected ? 'ON' : 'OFF';
-    sp.className = 'stat-value ' + (d.spotify_connected ? 'spotify-on' : 'spotify-off');
-
-    const connectBanner = document.getElementById('connect-banner');
-    if (d.station_mode && d.station_mode.id === 'demo') {
-      connectBanner.style.display = 'block';
-      connectBanner.innerHTML =
-        '<strong>Demo mode is active.</strong> The station is using the built-in playlist until you add Spotify credentials and choose a real music source.';
-    } else if (d.spotify_connected) {
-      connectBanner.style.display = 'none';
-    } else {
-      connectBanner.style.display = 'block';
-      connectBanner.innerHTML =
-        '<strong>Spotify not connected.</strong> Open Spotify, tap the speaker icon, and select <strong>mammamiradio</strong>. If you changed config outside the app, restart first and then click <strong>Review setup</strong>.';
-    }
-
-    // Show current playlist URL if set and input is empty
-    const plInput = document.getElementById('playlist-url');
-    if (d.playlist_source) updateCurrentSourceLabel(d.playlist_source);
-    if (d.playlist_url && !plInput.value && plInput.placeholder === 'Paste playlist link (advanced)') {
-      plInput.placeholder = d.playlist_url;
-    }
-
-    // Now streaming (what the listener actually hears)
-    const ns = d.now_streaming || {};
-    const npEl = document.getElementById('np-track');
-    const npMeta = document.getElementById('np-meta');
-    if (ns.label) {
-      npEl.textContent = ns.label;
-      npMeta.textContent = ns.type ? ns.type.toUpperCase() + ' \u2014 streaming now' : '';
-    } else {
-      npEl.textContent = 'Waiting for first segment...';
-      npMeta.textContent = 'Open the listener view to hear the live station';
-    }
-
-    // Stream log = what was ACTUALLY PLAYED (newest first)
-    const log = document.getElementById('log');
-    const streamLog = (d.stream_log || []).slice().reverse();
-    log.innerHTML = streamLog.map((e, i) =>
-      '<li' + (i === 0 ? ' style="color:var(--cream);font-weight:600"' : '') + '>' +
-        '<span class="seg-icon ' + (cls[e.type] || '') + '">' + (icons[e.type] || '?') + '</span>' +
-        '<span class="seg-time">' + fmt(e.timestamp) + '</span>' +
-        '<span class="seg-label">' + escHtml(e.label) + '</span>' +
-        (i === 0 ? '<span class="seg-now-tag">\u2190 NOW</span>' : '') +
-      '</li>'
-    ).join('');
-
-    // Show what's in queue (produced but not yet streamed)
-    const queueCount = d.queue_depth || 0;
-    const prodLog = d.produced_log || [];
-    const streamedCount = streamLog.length;
-    // Items in queue = last N produced items that haven't streamed yet
-    const queueItems = prodLog.slice(streamedCount);
-    if (queueItems.length > 0) {
-      log.innerHTML += '<li style="color:var(--muted);padding-top:8px;border-top:1px solid rgba(122,143,109,0.15)">' +
-        '<span class="seg-icon" style="background:rgba(176,164,148,0.12);color:var(--muted)">\u23F3</span>' +
-        '<span class="seg-label">In queue: ' +
-          queueItems.map(e => escHtml(e.label)).join(', ') +
-        '</span></li>';
-    }
-
-    // Upcoming (full schedule: music + banter + ads)
-    const up = document.getElementById('upcoming');
-    up.innerHTML = (d.upcoming || []).map((e, i) => {
-      const isMusic = e.type === 'music' && e.playlist_index !== undefined;
-      const idx = e.playlist_index;
-      const actions = isMusic
-        ? '<span class="actions">' +
-            '<button class="act-btn" onclick="playNext(' + idx + ')" title="Play next">\u25B2</button>' +
-            '<button class="act-btn" onclick="removeTrack(' + idx + ')" title="Remove">\u2715</button>' +
-          '</span>'
-        : '';
-      return '<li>' +
-        '<span class="seg-icon ' + (cls[e.type] || '') + '" style="width:18px;height:18px;font-size:10px">' +
-          (icons[e.type] || '?') + '</span> ' +
-        '<span class="seg-label">' + escHtml(e.label) + '</span>' +
-        actions +
-      '</li>';
-    }).join('') || '<li>...</li>';
-
-    // Show banter/ad scripts from the currently or most recently streamed segments
-    const banter = document.getElementById('banter');
-    // Find the most recent banter in stream_log
-    const lastBanter = streamLog.find(e => e.type === 'banter');
-    if (lastBanter && lastBanter.metadata && lastBanter.metadata.lines) {
-      banter.innerHTML = lastBanter.metadata.lines.map(l =>
-        '<div><span class="script-host">' + escHtml(l.host) + ':</span> ' + escHtml(l.text) + '</div>'
-      ).join('');
-    } else if (d.last_banter_script && d.last_banter_script.length) {
-      banter.innerHTML = d.last_banter_script.map(l =>
-        '<div><span class="script-host">' + escHtml(l.host) + ':</span> ' + escHtml(l.text) + '</div>'
-      ).join('');
-    }
-
-    // Ad
-    const ad = document.getElementById('ad');
-    const lastAd = streamLog.find(e => e.type === 'ad');
-    const lastAdHtml = lastAd && lastAd.metadata ? renderAdHtml(lastAd.metadata) : '';
-    const fallbackAdHtml = renderAdHtml(d.last_ad_script);
-    if (lastAdHtml) {
-      ad.innerHTML = lastAdHtml;
-    } else if (fallbackAdHtml) {
-      ad.innerHTML = fallbackAdHtml;
-    }
-
-    // Jokes
-    const jokes = document.getElementById('jokes');
-    jokes.innerHTML = (d.running_jokes || []).map(j =>
-      '<li>\u201C' + escHtml(j) + '\u201D</li>'
-    ).join('') || '<li>No running jokes yet...</li>';
-
-    // Pacing controls — sync from server on first load, then show live counters
-    if (d.pacing) {
-      if (!pacingLoaded) {
-        document.getElementById('pacing-banter').value = d.pacing.songs_between_banter;
-        document.getElementById('pacing-banter-val').textContent = d.pacing.songs_between_banter;
-        document.getElementById('pacing-ads').value = d.pacing.songs_between_ads;
-        document.getElementById('pacing-ads-val').textContent = d.pacing.songs_between_ads;
-        document.getElementById('pacing-spots').value = d.pacing.ad_spots_per_break;
-        document.getElementById('pacing-spots-val').textContent = d.pacing.ad_spots_per_break;
-        pacingLoaded = true;
-      }
-      document.getElementById('pacing-banter-counter').textContent =
-        d.pacing.songs_since_banter + '/' + d.pacing.songs_between_banter;
-      document.getElementById('pacing-ads-counter').textContent =
-        d.pacing.songs_since_ad + '/' + d.pacing.songs_between_ads;
-    }
-
-    // Trigger status
-    const triggerStatus = document.getElementById('trigger-status');
-    if (d.force_pending) {
-      triggerStatus.textContent = d.force_pending + ' pending...';
-      document.getElementById('trigger-' + d.force_pending)?.classList.add('pending');
-    } else {
-      triggerStatus.textContent = '';
-      document.getElementById('trigger-banter')?.classList.remove('pending');
-      document.getElementById('trigger-ad')?.classList.remove('pending');
-    }
-
-    // Consumption metrics
-    if (d.consumption) {
-      const c = d.consumption;
-      document.getElementById('cons-calls').textContent = c.api_calls;
-      document.getElementById('cons-input').textContent = fmtTokens(c.input_tokens);
-      document.getElementById('cons-output').textContent = fmtTokens(c.output_tokens);
-      const cost = estimateCost(c.input_tokens, c.output_tokens);
-      document.getElementById('cons-cost').textContent = '$' + cost.toFixed(3);
-      document.getElementById('cons-input-cost').textContent =
-        '$' + (c.input_tokens * 0.80 / 1000000).toFixed(4);
-      document.getElementById('cons-output-cost').textContent =
-        '$' + (c.output_tokens * 4.0 / 1000000).toFixed(4);
-      document.getElementById('cons-model').textContent = 'Haiku 4.5 pricing';
-    }
-
-    // Home Assistant context
-    const haCtx = document.getElementById('ha-context');
-    if (haCtx) {
-      haCtx.textContent = d.ha_context || 'Home Assistant not connected';
-    }
-
-    // Debug: go-librespot log (parse structured log format)
-    const gl = document.getElementById('debug-gl');
-    if (gl && d.go_librespot_log) {
-      gl.innerHTML = d.go_librespot_log.map(raw => {
-        raw = raw.trim();
-        if (!raw) return '';
-        // Parse: time="..." level=info msg="..." key="val"
-        const timeM = raw.match(/time="([^"]+)"/);
-        const levelM = raw.match(/level=(\w+)/);
-        const msgM = raw.match(/msg="([^"]+)"/);
-        const ts = timeM ? timeM[1].split('T')[1]?.split('+')[0] || '' : '';
-        const lvl = ['error', 'warning', 'info'].includes(levelM?.[1]) ? levelM[1] : 'info';
-        const msg = escHtml(msgM ? msgM[1] : raw);
-        // Extract extra fields (error=, uri=, etc.)
-        const extras = [];
-        const errM = raw.match(/error="([^"]+)"/);
-        const uriM = raw.match(/uri="([^"]+)"/);
-        if (errM) extras.push(errM[1]);
-        if (uriM) extras.push(uriM[1].replace('spotify:track:',''));
-        const detail = extras.length
-          ? '<span class="detail">' + extras.map(escHtml).join(' ') + '</span>'
-          : '';
-        return '<div class="entry">' +
-          '<span class="ts">' + escHtml(ts) + '</span>' +
-          '<span class="lvl lvl-' + lvl + '">' + escHtml(lvl.toUpperCase()) + '</span>' +
-          '<span class="msg">' + msg + '</span>' +
-          detail + '</div>';
-      }).join('');
-      gl.scrollTop = gl.scrollHeight;
-    }
-
-    // Debug: producer errors
-    const errs = document.getElementById('debug-errors');
-    if (errs && d.producer_errors) {
-      errs.innerHTML = d.producer_errors.length
-        ? d.producer_errors.map(e =>
-            '<div class="entry">' +
-              '<span class="lvl lvl-error">ERR</span>' +
-              '<span class="msg">' + escHtml(e.type) + ': ' + escHtml(e.label) + '</span>' +
-              '<span class="detail">' + escHtml(e.metadata.error || '') + '</span>' +
-            '</div>'
-          ).join('')
-        : '<div class="entry"><span class="msg" style="color:var(--golden)">No errors</span></div>';
-    }
-
+    const [statusResp, capsResp] = await Promise.all([
+      fetch(_base + '/status'),
+      fetch(_base + '/api/capabilities'),
+    ]);
+    const statusData = await statusResp.json();
+    const capsData = await capsResp.json();
+    caps = capsData;
+    updateStatus(statusData);
+    updateCards();
   } catch (e) {
     console.error('refresh failed', e);
   }
 }
 
-async function searchTracks() {
-  const input = document.getElementById('search-input');
-  const q = input.value.trim();
-  if (!q) return;
-  const r = await fetch(_base + '/api/search?q=' + encodeURIComponent(q));
-  const d = await r.json();
-  const container = document.getElementById('search-results');
-  if (!d.results || !d.results.length) {
-    const msg = d.error ? 'Search unavailable (Spotify not configured)' : 'No results';
-    container.innerHTML = '<div style="font-size:12px;color:var(--muted);padding:4px 0">' + escHtml(msg) + '</div>';
-    setTimeout(() => { container.innerHTML = ''; }, 3000);
-    return;
+let _wantsPlay = false;
+
+function togglePlay() {
+  const audio = document.getElementById('radio-audio');
+  const btn = document.getElementById('play-btn');
+  if (audio.paused || !_wantsPlay) {
+    _wantsPlay = true;
+    _startStream();
+  } else {
+    _wantsPlay = false;
+    audio.pause();
+    audio.src = '';
+    btn.textContent = '\u25B6';
+    btn.classList.remove('playing');
+    _syncEq();
   }
-  container.innerHTML = '<ul style="list-style:none;background:var(--card);border:1px solid rgba(176,164,148,0.15);border-radius:6px;overflow:hidden">' +
-    d.results.map(t =>
-      '<li style="padding:8px 12px;border-bottom:1px solid rgba(122,143,109,0.08);display:flex;align-items:center;gap:8px;font-size:13px;color:var(--cream-dk)">' +
-        '<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' +
-          '<strong style="color:var(--cream)">' + escHtml(t.title) + '</strong> ' +
-          '<span style="color:var(--muted)">' + escHtml(t.artist) + '</span>' +
-        '</span>' +
-        '<button class="act-btn" style="opacity:1;padding:3px 8px" onclick=\'addTrack(' + JSON.stringify(t).replace(/'/g, "&#39;") + ',"next")\'>Play next</button>' +
-        '<button class="act-btn" style="opacity:1;padding:3px 8px" onclick=\'addTrack(' + JSON.stringify(t).replace(/'/g, "&#39;") + ',"end")\'>Add</button>' +
-      '</li>'
-    ).join('') + '</ul>';
 }
 
-async function addTrack(track, position) {
-  await fetch(_base + '/api/playlist/add', {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({...track, position}),
+function _startStream() {
+  const audio = document.getElementById('radio-audio');
+  const btn = document.getElementById('play-btn');
+  audio.src = _base + '/stream';
+  audio.play().catch(() => {});
+  btn.textContent = '\u23F8';
+  btn.classList.add('playing');
+  _syncEq();
+}
+
+// Auto-reconnect on stream error (hot reload, network blip)
+document.addEventListener('DOMContentLoaded', () => {
+  const audio = document.getElementById('radio-audio');
+  audio.addEventListener('error', () => {
+    if (_wantsPlay) setTimeout(_startStream, 2000);
   });
-  document.getElementById('search-results').innerHTML = '';
-  document.getElementById('search-input').value = '';
-  refresh();
-}
+  audio.addEventListener('ended', () => {
+    if (_wantsPlay) setTimeout(_startStream, 1000);
+  });
 
-async function loadPlaylist() {
-  const input = document.getElementById('playlist-url');
-  const url = input.value.trim();
-  if (!url) return;
-  input.disabled = true;
-  try {
-    const r = await fetch(_base + '/api/playlist/load', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({url}),
-    });
-    const d = await r.json();
-    if (d.ok) {
-      input.value = '';
-      input.placeholder = d.tracks + ' tracks loaded!';
-      setTimeout(() => { input.placeholder = 'Paste playlist link (advanced)'; }, 3000);
-      loadSourceOptions();
-    } else {
-      input.placeholder = 'Error: ' + (d.error || 'unknown');
-      setTimeout(() => { input.placeholder = 'Paste playlist link (advanced)'; }, 3000);
+  // Auto-start stream on first interaction anywhere on the page
+  function _autoStartOnce() {
+    if (!_wantsPlay && firstDataReceived) {
+      _wantsPlay = true;
+      _startStream();
     }
-    refresh();
-  } catch (e) {
-    input.placeholder = 'Network error';
-    setTimeout(() => { input.placeholder = 'Paste playlist link (advanced)'; }, 3000);
-  } finally {
-    input.disabled = false;
+    document.removeEventListener('click', _autoStartOnce);
+    document.removeEventListener('touchstart', _autoStartOnce);
   }
-}
+  document.addEventListener('click', _autoStartOnce);
+  document.addEventListener('touchstart', _autoStartOnce);
+});
 
 async function doShuffle() {
   await fetch(_base + '/api/shuffle', { method: 'POST' });
-  refresh();
+  showToast('Shuffled');
 }
 
 async function doSkip() {
   await fetch(_base + '/api/skip', { method: 'POST' });
-  refresh();
+  showToast('Skipped');
 }
 
 async function doPurge() {
-  const r = await fetch(_base + '/api/purge', { method: 'POST' });
-  const d = await r.json();
-  refresh();
+  await fetch(_base + '/api/purge', { method: 'POST' });
+  showToast('Buffer cleared');
 }
 
-async function removeTrack(idx) {
-  await fetch(_base + '/api/playlist/remove', {
+async function loadPlaylistUrl() {
+  const url = document.getElementById('playlist-url-quick')?.value?.trim();
+  if (!url) return;
+  const r = await fetch(_base + '/api/playlist/load', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({index: idx}),
-  });
-  refresh();
-}
-
-async function playNext(idx) {
-  await fetch(_base + '/api/playlist/move_to_next', {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({index: idx}),
-  });
-  refresh();
-}
-
-// ---- Toast notification ----
-function showToast(msg, duration) {
-  const t = document.getElementById('toast');
-  t.textContent = msg;
-  t.classList.add('show');
-  clearTimeout(t._timer);
-  t._timer = setTimeout(() => t.classList.remove('show'), duration || 2000);
-}
-
-// ---- Trigger segments on demand ----
-async function triggerSegment(type) {
-  const btn = document.getElementById('trigger-' + type);
-  btn.classList.add('pending');
-  const r = await fetch(_base + '/api/trigger', {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({type}),
+    body: JSON.stringify({url}),
   });
   const d = await r.json();
-  if (d.ok) {
-    showToast((type === 'banter' ? '\uD83C\uDF99' : '\uD83D\uDCE2') + ' ' + type.charAt(0).toUpperCase() + type.slice(1) + ' queued next');
-    document.getElementById('trigger-status').textContent = type + ' pending...';
-  }
-  setTimeout(() => { btn.classList.remove('pending'); refresh(); }, 1500);
+  showToast(d.ok ? 'Playlist loaded' : (d.error || 'Failed'));
 }
 
-// ---- Pacing controls ----
-let pacingDebounce = null;
-let pacingLoaded = false;
-function onPacingChange() {
-  const b = document.getElementById('pacing-banter');
-  const a = document.getElementById('pacing-ads');
-  const s = document.getElementById('pacing-spots');
-  document.getElementById('pacing-banter-val').textContent = b.value;
-  document.getElementById('pacing-ads-val').textContent = a.value;
-  document.getElementById('pacing-spots-val').textContent = s.value;
-
-  clearTimeout(pacingDebounce);
-  pacingDebounce = setTimeout(() => {
-    fetch(_base + '/api/pacing', {
-      method: 'PATCH',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({
-        songs_between_banter: parseInt(b.value),
-        songs_between_ads: parseInt(a.value),
-        ad_spots_per_break: parseInt(s.value),
-      }),
-    }).then(() => showToast('Pacing updated'));
-  }, 400);
+async function selectPlaylist() {
+  const sel = document.getElementById('playlist-select');
+  if (!sel?.value) return;
+  const r = await fetch(_base + '/api/spotify/source/select', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({source_id: sel.value, kind: 'playlist'}),
+  });
+  const d = await r.json();
+  showToast(d.ok ? 'Playlist loaded' : (d.error || 'Failed'));
 }
 
-// ---- Consumption metrics formatting ----
-function fmtTokens(n) {
-  if (n >= 1000000) return (n / 1000000).toFixed(1) + 'M';
-  if (n >= 1000) return (n / 1000).toFixed(1) + 'k';
-  return String(n);
+async function selectLikedSongs() {
+  const r = await fetch(_base + '/api/spotify/source/select', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({kind: 'liked_songs'}),
+  });
+  const d = await r.json();
+  showToast(d.ok ? 'Liked Songs loaded' : (d.error || 'Failed'));
 }
 
-// Haiku 4.5 pricing: $0.80/MTok input, $4/MTok output
-function estimateCost(input, output) {
-  return (input * 0.80 + output * 4.0) / 1000000;
+async function saveAnthropicKey() {
+  const key = document.getElementById('anthropic-key')?.value?.trim();
+  if (!key) return;
+  const statusEl = document.getElementById('anthropic-status');
+  statusEl.textContent = 'Saving...';
+  const r = await fetch(_base + '/api/credentials', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({anthropic_api_key: key}),
+  });
+  const d = await r.json();
+  statusEl.textContent = d.ok ? 'Saved! Reloading...' : (d.error || 'Failed');
+  if (d.ok) setTimeout(refresh, 1000);
 }
 
+function toggleHelp() {
+  document.getElementById('help-popover').classList.toggle('open');
+}
+
+function openAdvancedSetup() {
+  document.getElementById('advanced-card').style.display = '';
+}
+
+async function saveAdvancedCredentials() {
+  const payload = {};
+  const id = document.getElementById('cred-spotify-id')?.value?.trim();
+  const secret = document.getElementById('cred-spotify-secret')?.value?.trim();
+  const url = document.getElementById('playlist-url-input')?.value?.trim();
+  if (id) payload.spotify_client_id = id;
+  if (secret) payload.spotify_client_secret = secret;
+  if (url) payload.playlist_spotify_url = url;
+  if (!Object.keys(payload).length) return;
+  const statusEl = document.getElementById('advanced-status');
+  statusEl.textContent = 'Saving...';
+  const r = await fetch(_base + '/api/credentials', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(payload),
+  });
+  const d = await r.json();
+  statusEl.textContent = d.ok ? 'Saved! Reloading...' : (d.error || 'Failed');
+  if (d.ok) setTimeout(refresh, 1000);
+}
+
+// Start polling
 refresh();
-setInterval(refresh, 2000);
+setInterval(refresh, 5000);
+// --- Waveform — golden bars, each bouncing independently ---
+(function() {
+  const wv = document.getElementById('waveform');
+  if (!wv) return;
+  for (let i = 0; i < 36; i++) {
+    const b = document.createElement('div');
+    b.className = 'wb';
+    const h = 4 + Math.random() * 20;
+    b.style.cssText = `--h:${h}px;--d:${(0.45 + Math.random() * 0.85).toFixed(2)}s;--dl:${(Math.random() * 0.7).toFixed(2)}s;height:${Math.round(h * 0.4)}px`;
+    wv.appendChild(b);
+  }
+})();
+
+// Sync waveform with play state
+function _syncEq() {
+  const wv = document.getElementById('waveform');
+  if (!wv) return;
+  wv.classList.toggle('paused', !_wantsPlay);
+}
 </script>
+
 <script>
-if ('serviceWorker' in navigator) {
-  navigator.serviceWorker.register(_base + '/static/sw.js').catch(function(){});
+// Populate and show ticker after first data
+function _initTicker() {
+  const items = [
+    'Milano 22\u00B0 soleggiato',
+    'Traffico A4: scorrevole',
+    'Roma 24\u00B0 parzialmente nuvoloso',
+    'Serie A: Napoli 2 \u2013 Juventus 1',
+    'Borsa: FTSE MIB +0.8%',
+    'Firenze 20\u00B0 sereno',
+    'Autostrada A1: rallentamenti zona Bologna',
+    'Napoli 25\u00B0 bel tempo',
+    'Torino 18\u00B0 coperto',
+    'Mare: Liguria calmo, Adriatico mosso',
+    'Palermo 27\u00B0 sole splendido',
+    'Prossimo treno Roma\u2013Milano: 14:35',
+  ];
+  // Inject Spotify CTA into ticker if not connected
+  const isConnected = caps && caps.capabilities && caps.capabilities.spotify_connected;
+  if (!isConnected) {
+    // Insert the CTA after every ~4 items as ambient reinforcement
+    items.splice(4, 0, '\u266B Porta i tuoi dischi \u2014 connetti Spotify');
+    items.splice(10, 0, '\u266B Your music, same hosts \u2014 connect Spotify');
+  }
+
+  const ticker = document.getElementById('ticker');
+  // Duplicate items so the scroll loops seamlessly
+  const ctaText1 = '\u266B Porta i tuoi dischi \u2014 connetti Spotify';
+  const ctaText2 = '\u266B Your music, same hosts \u2014 connect Spotify';
+  const html = items.concat(items).map(t => {
+    const isCta = (t === ctaText1 || t === ctaText2);
+    const tiClass = isCta ? 'ti ticker-cta' : 'ti';
+    const tsClass = isCta ? 'ts ticker-cta-sep' : 'ts';
+    const onclick = isCta ? ' onclick="document.getElementById(\'connect-card\').scrollIntoView({behavior:\'smooth\'})"' : '';
+    return '<span class="' + tiClass + '"' + onclick + '>' + t + '</span><span class="' + tsClass + '"> · </span>';
+  }).join('');
+  ticker.innerHTML = html;
+  document.getElementById('ticker-wrap').style.display = '';
 }
 </script>
 </body>

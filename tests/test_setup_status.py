@@ -287,10 +287,10 @@ def test_probe_playlist_url_uses_cached_user_token_for_private_playlists():
 
 def test_resolve_go_librespot_bin_checks_opt_homebrew_before_usr_local():
     with (
-        patch("mammamiradio.setup_status.shutil.which", return_value=None),
-        patch("mammamiradio.setup_status.os.path.isabs", return_value=False),
+        patch("mammamiradio.spotify_player.shutil.which", return_value=None),
+        patch("mammamiradio.spotify_player.os.path.isabs", return_value=False),
         patch(
-            "mammamiradio.setup_status.os.access",
+            "mammamiradio.spotify_player.os.access",
             side_effect=lambda path, mode: path == "/opt/homebrew/bin/go-librespot",
         ),
     ):

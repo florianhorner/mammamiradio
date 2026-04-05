@@ -245,7 +245,10 @@ async def test_ha_context_refreshed_for_banter(tmp_path):
     with (
         patch(f"{MODULE}.next_segment_type", return_value=SegmentType.BANTER),
         patch(f"{MODULE}.write_banter", new_callable=AsyncMock, return_value=banter_lines),
+        patch(f"{MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora...")),
+        patch(f"{MODULE}.synthesize", new_callable=AsyncMock, return_value=_fake_path()),
         patch(f"{MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(f"{MODULE}.concat_files", return_value=_fake_path()),
         patch(f"{MODULE}.fetch_home_context", new_callable=AsyncMock, return_value=mock_context) as mock_fetch,
     ):
         await _run_until_queued(queue, state, config)
@@ -270,6 +273,8 @@ async def test_music_uses_spotify_when_authenticated(tmp_path):
     mock_player = MagicMock()
     mock_player._authenticated = True
     mock_player.check_auth = AsyncMock()
+    mock_player.get_current_track = AsyncMock(return_value=None)  # no autoplay track
+    mock_player.capture_current_audio = AsyncMock()
 
     with (
         patch(f"{MODULE}.next_segment_type", return_value=SegmentType.MUSIC),
@@ -290,6 +295,7 @@ async def test_music_falls_back_when_spotify_not_authenticated(tmp_path):
     mock_player = MagicMock()
     mock_player._authenticated = False
     mock_player.check_auth = AsyncMock()
+    mock_player.get_current_track = AsyncMock(return_value=None)
 
     with (
         patch(f"{MODULE}.next_segment_type", return_value=SegmentType.MUSIC),

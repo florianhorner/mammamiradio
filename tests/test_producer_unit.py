@@ -17,7 +17,7 @@ from mammamiradio.models import (
     StationState,
     Track,
 )
-from mammamiradio.producer import run_producer
+from mammamiradio.producer import SHAREWARE_CANNED_LIMIT, _pick_canned_clip, run_producer
 
 TOML_PATH = str(Path(__file__).parent.parent / "radio.toml")
 PRODUCER_MODULE = "mammamiradio.producer"
@@ -107,7 +107,10 @@ async def test_banter_segment_queued():
     with (
         patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.BANTER),
         patch(f"{PRODUCER_MODULE}.write_banter", new_callable=AsyncMock, return_value=banter_lines),
+        patch(f"{PRODUCER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora...")),
+        patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, return_value=_fake_path()),
         patch(f"{PRODUCER_MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(f"{PRODUCER_MODULE}.concat_files", return_value=_fake_path()),
         patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
     ):
         await _run_until_queued(queue, state, config)
@@ -202,3 +205,45 @@ async def test_source_switch_discards_stale_music_segment(tmp_path):
                 await task
             except asyncio.CancelledError:
                 pass
+
+
+# ---------------------------------------------------------------------------
+# Shareware trial: canned clip limit
+# ---------------------------------------------------------------------------
+
+
+def test_pick_canned_clip_respects_shareware_limit(tmp_path):
+    """After SHAREWARE_CANNED_LIMIT clips streamed, _pick_canned_clip returns None for banter."""
+    from mammamiradio import producer
+
+    # Create fake banter clips
+    banter_dir = tmp_path / "banter"
+    banter_dir.mkdir()
+    for i in range(5):
+        (banter_dir / f"clip_{i}.mp3").write_bytes(b"\x00" * 100)
+
+    # Temporarily override demo assets dir and clear caches
+    orig = producer._DEMO_ASSETS_DIR
+    producer._DEMO_ASSETS_DIR = tmp_path
+    producer._recently_played_clips.clear()
+    producer._canned_clip_cache.clear()
+
+    try:
+        state = StationState()
+
+        # Under limit: should return a clip
+        assert _pick_canned_clip("banter", state=state) is not None
+
+        # At limit: should return None
+        state.canned_clips_streamed = SHAREWARE_CANNED_LIMIT
+        assert _pick_canned_clip("banter", state=state) is None
+
+        # Welcome clips are NOT subject to the limit
+        welcome_dir = tmp_path / "welcome"
+        welcome_dir.mkdir()
+        (welcome_dir / "welcome_1.mp3").write_bytes(b"\x00" * 100)
+        assert _pick_canned_clip("welcome", state=state) is not None
+    finally:
+        producer._DEMO_ASSETS_DIR = orig
+        producer._recently_played_clips.clear()
+        producer._canned_clip_cache.clear()

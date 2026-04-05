@@ -23,8 +23,8 @@ def _normalize_side_effect(input_path, output_path, config=None):
     return output_path
 
 
-def _concat_side_effect(paths, output_path, silence_ms=300):
-    """Side-effect for concat_files(paths, output_path, silence_ms)."""
+def _concat_side_effect(paths, output_path, silence_ms=300, loudnorm=True):
+    """Side-effect for concat_files(paths, output_path, silence_ms, loudnorm)."""
     _touch(output_path)
     return output_path
 
@@ -91,24 +91,66 @@ async def test_synthesize_happy_path(_mock_all, tmp_path):
     result = await synthesize("Ciao mondo", "it-IT-IsabellaNeural", output)
 
     assert result == output
-    _mock_all["Communicate"].assert_called_once_with("Ciao mondo", "it-IT-IsabellaNeural")
+    _mock_all["Communicate"].assert_called_once_with("Ciao mondo", "it-IT-IsabellaNeural", rate="+0%", pitch="+0Hz")
     _mock_all["comm_instance"].save.assert_awaited_once()
     _mock_all["normalize"].assert_called_once()
 
 
 @pytest.mark.asyncio
-async def test_synthesize_error_falls_back_to_silence(_mock_all, tmp_path):
+async def test_synthesize_error_retries_fallback_voice(_mock_all, tmp_path):
+    """When primary voice fails, synthesize should retry with DiegoNeural before silence."""
     from mammamiradio.tts import synthesize
 
-    _mock_all["comm_instance"].save = AsyncMock(side_effect=RuntimeError("network down"))
+    call_count = 0
+
+    async def _save_fail_then_succeed(path):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            raise RuntimeError("primary voice down")
+        _touch(Path(path))
+
+    _mock_all["comm_instance"].save = AsyncMock(side_effect=_save_fail_then_succeed)
+
+    output = tmp_path / "out.mp3"
+    result = await synthesize("Ciao", "it-IT-GianniNeural", output)
+
+    assert result == output
+    # Should have been called twice: once for primary, once for fallback
+    assert _mock_all["Communicate"].call_count == 2
+    second_call = _mock_all["Communicate"].call_args_list[1]
+    assert second_call[0][1] == "it-IT-DiegoNeural"
+    _mock_all["generate_silence"].assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_synthesize_error_falls_back_to_silence(_mock_all, tmp_path):
+    """When both primary and fallback voices fail, generate silence."""
+    from mammamiradio.tts import synthesize
+
+    _mock_all["comm_instance"].save = AsyncMock(side_effect=RuntimeError("all voices down"))
 
     output = tmp_path / "out.mp3"
     result = await synthesize("Ciao", "it-IT-IsabellaNeural", output)
 
     assert result == output
     _mock_all["generate_silence"].assert_called_once()
-    # normalize should NOT have been called since edge_tts failed first
-    _mock_all["normalize"].assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_synthesize_diego_skips_fallback_retry(_mock_all, tmp_path):
+    """When DiegoNeural itself fails, don't retry with DiegoNeural again."""
+    from mammamiradio.tts import synthesize
+
+    _mock_all["comm_instance"].save = AsyncMock(side_effect=RuntimeError("diego down"))
+
+    output = tmp_path / "out.mp3"
+    result = await synthesize("Ciao", "it-IT-DiegoNeural", output)
+
+    assert result == output
+    # Should only be called once (no self-retry)
+    assert _mock_all["Communicate"].call_count == 1
+    _mock_all["generate_silence"].assert_called_once()
 
 
 # ---------------------------------------------------------------------------
@@ -157,7 +199,7 @@ async def test_synthesize_ad_empty_parts_fallback(_mock_all, tmp_path):
     result = await synthesize_ad(script, voices, tmp_path)
 
     # Should have synthesized the brand name as fallback
-    _mock_all["Communicate"].assert_called_once_with("EmptyBrand", "it-IT-DiegoNeural")
+    _mock_all["Communicate"].assert_called_once_with("EmptyBrand", "it-IT-DiegoNeural", rate="+0%", pitch="+0Hz")
     assert result.exists()
 
 
@@ -228,7 +270,7 @@ async def test_synthesize_ad_role_resolution_fallback(_mock_all, tmp_path):
     result = await synthesize_ad(script, voices, tmp_path)
     assert result.exists()
     # Should use first voice (hammer) since "unknown_role" not in dict
-    _mock_all["Communicate"].assert_called_once_with("Ciao!", "it-IT-GianniNeural")
+    _mock_all["Communicate"].assert_called_once_with("Ciao!", "it-IT-GianniNeural", rate="+0%", pitch="+0Hz")
 
 
 @pytest.mark.asyncio

@@ -1,11 +1,37 @@
 [station]
-name = "Radio Italì"
+name = "Malamie Radio"
 language = "it"
-theme = "late-night Milan talk radio, warm and nostalgic, two hosts who love cinema and 90s Italian pop"
+theme = "unhinged late-night Italian shock radio broadcasting from somewhere between Windor and Vergen. Two hosts who roast each other, roast the listeners, roast Italy itself. Think Le Iene meets GTA radio. Absurd traffic reports about burning Lamborghinis, breaking news about pizza dough exported to Russia, and sports flashes delivered like a Serie A commentator having a meltdown. Edgy, chaotic, over the top — but always unmistakably Italian."
+
+[sonic_brand]
+tagline = "Da Windor a Vergen, la voce che non si spegne mai!"
+geography = "Windor, Vergen"
+# Full station ident — plays at top of hour and after ad breaks
+full_ident = "Malamie Radio... da Windor a Vergen, la voce che non si spegne mai!"
+# Short sung jingle — plays before banter segments
+short_sting = "Malamie..."
+# Sweeper lines — short voice drops between songs
+sweepers = [
+    "Malamie Radio.",
+    "Windor, Vergen... e tutto il mondo che ascolta.",
+    "Sei su Malamie.",
+    "La radio che tua nonna non approverebbe.",
+    "Da Windor a Vergen, nessuno è al sicuro.",
+]
+# Rhodes motif: C5 → E5 → G5 → C6 (ascending major arpeggio)
+motif_notes = [523, 659, 784, 1047]
+# Sweeper voice — uses a host voice for station idents
+sweeper_voice = "it-IT-GiuseppeMultilingualNeural"
+# Probability of inserting a sweeper after a music segment (0.0–1.0)
+sweeper_probability = 0.25
 
 [playlist]
 spotify_url = ""  # Leave empty to use liked songs, or paste a playlist URL you own
-shuffle = false
+shuffle = true
+allow_explicit = true   # false = skip tracks marked explicit by Spotify
+repeat_cooldown = 5     # Min songs before the same track can replay
+artist_cooldown = 3     # Min songs before the same artist replays
+max_artist_per_hour = 3 # Hard cap on same artist within ~60 min window
 
 [pacing]
 songs_between_banter = 2
@@ -15,25 +41,25 @@ lookahead_segments = 3
 
 [[hosts]]
 name = "Marco"
-voice = "it-IT-DiegoNeural"
-style = "enthusiastic, lots of 90s references, slightly dorky, loves obscure cinema trivia"
+voice = "it-IT-GiuseppeMultilingualNeural"
+style = "manic energy, says things he shouldn't on air, conspiracy theories about Italian food, gets way too personal about listeners' lives, drops obscure cinema references nobody asked for, once got suspended for a week (he's proud of it)"
 [hosts.personality]
-energy = 70
-chaos = 50
+energy = 90
+chaos = 80
 warmth = 60
 verbosity = 40
-nostalgia = 80
+nostalgia = 75
 
 [[hosts]]
 name = "Giulia"
-voice = "it-IT-ElsaNeural"
-style = "dry wit, corrects Marco constantly, secretly loves the songs she claims to hate"
+voice = "it-IT-IsabellaNeural"
+style = "razor-sharp sarcasm, openly judges the playlist, delivers devastating one-liners with zero emotion, pretends she's too good for this station but clearly loves it, will burn any caller who says something stupid"
 [hosts.personality]
-energy = 45
+energy = 40
 chaos = 35
-warmth = 40
+warmth = 20
 verbosity = 50
-nostalgia = 55
+nostalgia = 30
 
 [audio]
 sample_rate = 48000
@@ -44,6 +70,7 @@ fifo_path = "/tmp/mammamiradio.pcm"
 go_librespot_bin = "go-librespot"
 go_librespot_port = 3678
 claude_model = "claude-haiku-4-5-20251001"
+claude_creative_model = "claude-opus-4-6"
 
 [homeassistant]
 enabled = false
@@ -205,31 +232,31 @@ recurring = false
 
 [[ads.voices]]
 name = "Roberto"
-voice = "it-IT-GianniNeural"
+voice = "it-IT-DiegoNeural"
 style = "booming TV announcer, dramatic pauses, sells everything like it's the last day on earth"
 role = "hammer"
 
 [[ads.voices]]
 name = "Palmira"
-voice = "it-IT-PalmiraNeural"
+voice = "it-IT-IsabellaNeural"
 style = "ASMR whisperer, unsettlingly intimate, makes toothpaste sound sensual"
 role = "seductress"
 
 [[ads.voices]]
 name = "Rinaldo"
-voice = "it-IT-RinaldoNeural"
+voice = "it-IT-DiegoNeural"
 style = "fast-talking disclaimer reader, buries the bad news in speed"
 role = "disclaimer_goblin"
 
 [[ads.voices]]
 name = "Fiamma"
-voice = "it-IT-FiammaNeural"
+voice = "it-IT-ElsaNeural"
 style = "overly enthusiastic infomercial host, everything is INCREDIBILE"
 role = "maniac"
 
 [[ads.voices]]
 name = "Dottore Marzio"
-voice = "it-IT-DiegoNeural"
+voice = "it-IT-GiuseppeMultilingualNeural"
 style = "dry official government notice voice, reads absurd regulations with total sincerity"
 role = "bureaucrat"
 

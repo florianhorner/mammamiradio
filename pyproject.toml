@@ -9,11 +9,11 @@ dependencies = [
     "spotipy>=2.24",
     "anthropic>=0.52",
     "edge-tts>=7.0",
-    "yt-dlp>=2025.1",
     "python-dotenv>=1.0",
     "pydantic>=2.10",
     "pydantic-settings>=2.7",
     "httpx>=0.28",
+    "aiosqlite>=0.20",
     "tomli>=2.0;python_version<'3.11'",
 ]
 
@@ -21,7 +21,7 @@ dependencies = [
 packages = ["mammamiradio"]
 
 [tool.setuptools.package-data]
-mammamiradio = ["*.html", "static/*"]
+mammamiradio = ["*.html", "static/*", "demo_assets/**/*"]
 
 [build-system]
 requires = ["setuptools>=75"]
@@ -37,6 +37,7 @@ ignore = ["B008", "RUF001", "SIM105", "SIM115"]
 
 [tool.ruff.lint.per-file-ignores]
 "mammamiradio/scriptwriter.py" = ["E501"]
+"tests/test_scriptwriter.py" = ["E501"]
 
 [tool.ruff.format]
 quote-style = "double"

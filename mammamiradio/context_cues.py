@@ -1,0 +1,434 @@
+"""Temporal and behavioral context signals for uncanny host awareness.
+
+Computes time-of-day vibes, day-of-week energy, listener behavior hints, and
+lightly local Italian cultural references. These are injected into banter and
+transition prompts so the LLM can produce eerily context-aware lines without
+ever touching real user data.
+
+Design rules:
+- Never reference specific addresses, real listener names, or private data.
+- Use broad regional/cultural cues (weather vibes, football season, food calendar).
+- Behavioral hints describe common situations, not observed user behavior.
+- Fourth-wall bends are rare (max 1 per ~10 banter segments) and always deniable.
+"""
+
+from __future__ import annotations
+
+import datetime
+import random
+
+# ---------------------------------------------------------------------------
+# Time-of-day show segments
+# ---------------------------------------------------------------------------
+
+_SHOW_SEGMENTS: dict[str, dict] = {
+    "early_morning": {
+        "hours": range(5, 8),
+        "name": "L'Alba dei Dannati",
+        "vibe": "barely awake, first espresso energy, existential dread about the day ahead",
+        "mood_cues": [
+            "chi ascolta a quest'ora ha qualcosa da nascondere",
+            "il caffè non è ancora entrato in circolo",
+            "sveglia brutale, colazione discutibile",
+            "i vicini dormono ancora, beati loro",
+        ],
+    },
+    "morning": {
+        "hours": range(8, 12),
+        "name": "Mattina Pericolosa",
+        "vibe": "commute chaos, office dread, school drop-off trauma, caffeine hitting",
+        "mood_cues": [
+            "bloccati nel traffico, come ogni giorno",
+            "la riunione delle nove che poteva essere un'email",
+            "già pensando al pranzo e sono le dieci",
+            "il collega che parla troppo forte al telefono",
+        ],
+    },
+    "lunch": {
+        "hours": range(12, 14),
+        "name": "Pausa Pranzo Sacra",
+        "vibe": "sacred Italian lunch break, food opinions at maximum intensity, afternoon slump approaching",
+        "mood_cues": [
+            "la pausa pranzo è un diritto umano",
+            "chi mangia al desk è un criminale",
+            "il piatto del giorno sospetto della mensa",
+            "quel sonnolenza post-pasta che ti distrugge",
+        ],
+    },
+    "afternoon": {
+        "hours": range(14, 18),
+        "name": "Il Pomeriggio Infinito",
+        "vibe": "post-lunch coma, watching the clock, pretending to work, afternoon caffè",
+        "mood_cues": [
+            "le tre del pomeriggio, l'ora più inutile",
+            "stai fingendo di lavorare, lo sappiamo",
+            "il secondo caffè della giornata, necessario come l'aria",
+            "mancano ancora ore alla libertà",
+        ],
+    },
+    "evening": {
+        "hours": range(18, 21),
+        "name": "L'Aperitivo Selvaggio",
+        "vibe": "work is over, aperitivo hour, cooking dinner, decompression, evening plans",
+        "mood_cues": [
+            "finalmente liberi, o almeno quasi",
+            "l'aperitivo come terapia psicologica",
+            "cosa cuciniamo stasera, il dibattito eterno",
+            "la TV del vicino troppo alta, come sempre",
+        ],
+    },
+    "late_evening": {
+        "hours": range(21, 24),
+        "name": "Frequenza Notturna",
+        "vibe": "couch time, night owl energy, intimate late-night radio, slightly unhinged",
+        "mood_cues": [
+            "chi ascolta a quest'ora ha fatto le sue scelte",
+            "il divano ti ha inghiottito, non lottare",
+            "domani sarà un problema di domani",
+            "la notte porta consiglio, o almeno buona musica",
+        ],
+    },
+    "deep_night": {
+        "hours": range(0, 5),
+        "name": "Radio Fantasma",
+        "vibe": "insomnia radio, cursed hours, who is even awake, confessional energy",
+        "mood_cues": [
+            "le tre di notte, siamo solo noi",
+            "se sei sveglio a quest'ora, rispetto",
+            "la radio come compagnia nell'insonnia",
+            "il mondo dorme, noi no, e forse c'è un problema",
+        ],
+    },
+}
+
+# ---------------------------------------------------------------------------
+# Day-of-week energy
+# ---------------------------------------------------------------------------
+
+_DAY_VIBES: dict[int, dict] = {
+    0: {  # Monday
+        "label": "Lunedì — Controllo Danni",
+        "energy": "survival mode, weekend hangover, mandatory optimism nobody believes",
+        "cues": [
+            "lunedì, il giorno che nessuno ha chiesto",
+            "il weekend è già un ricordo lontano",
+            "cinque giorni alla libertà, ma chi li conta",
+        ],
+    },
+    1: {  # Tuesday
+        "label": "Martedì — Il Giorno Invisibile",
+        "energy": "the forgotten day, neither beginning nor end, pure limbo",
+        "cues": [
+            "martedì, il giorno che non esiste",
+            "troppo lontani dal weekend in entrambe le direzioni",
+        ],
+    },
+    2: {  # Wednesday
+        "label": "Mercoledì — Metà Sentenza",
+        "energy": "halfway point, small victory, downhill from here",
+        "cues": [
+            "metà settimana, si vede la luce",
+            "mercoledì, il giorno in cui capisci che ce la puoi fare",
+        ],
+    },
+    3: {  # Thursday
+        "label": "Giovedì — Pre-Venerdì",
+        "energy": "almost-Friday energy, plans forming, anticipation building",
+        "cues": [
+            "giovedì, il venerdì dei bugiardi",
+            "domani è venerdì, resisti",
+        ],
+    },
+    4: {  # Friday
+        "label": "Venerdì — Pre-Game Set",
+        "energy": "maximum anticipation, half-working, weekend planning, aperitivo countdown",
+        "cues": [
+            "venerdì! Il giorno più bello dopo sabato e domenica",
+            "stasera si esce, o almeno si finge di voler uscire",
+            "l'ultimo giorno di lavoro, se Dio vuole",
+        ],
+    },
+    5: {  # Saturday
+        "label": "Sabato — Giornata Libera",
+        "energy": "freedom, late wakeup, errands and leisure, no rules",
+        "cues": [
+            "sabato, il giorno senza sveglia",
+            "nessuno ti può dire cosa fare oggi",
+            "la spesa al supermercato come sport estremo",
+        ],
+    },
+    6: {  # Sunday
+        "label": "Domenica — Slow Spin",
+        "energy": "lazy Sunday, existential dread creeping in by evening, family lunch trauma",
+        "cues": [
+            "domenica, il giorno del pranzo infinito",
+            "la sera di domenica, quando la tristezza colpisce",
+            "domani si ricomincia, ma per ora il divano è sacro",
+        ],
+    },
+}
+
+# ---------------------------------------------------------------------------
+# Lightly local Italian cultural cues (no private data, no exact locations)
+# ---------------------------------------------------------------------------
+
+_CULTURAL_CUES = [
+    "il vicino che taglia l'erba alle otto di mattina",
+    "la moka che fischia come una locomotiva",
+    "un altro giorno di bicicletta sotto la pioggia",
+    "il motorino del ragazzo sotto casa",
+    "il profumo di ragù che sale dalle scale",
+    "la signora al balcone che osserva tutto",
+    "il bar sotto casa con il caffè perfetto",
+    "la discussione eterna su quale pizzeria è migliore",
+    "il parcheggio selvaggio sotto il sole",
+    "qualcuno sta friggendo qualcosa e tutto il palazzo lo sa",
+]
+
+# ---------------------------------------------------------------------------
+# Behavioral uncanny cues (common enough to feel like coincidence)
+# ---------------------------------------------------------------------------
+
+_BEHAVIORAL_CUES = [
+    "ci hai messo in pausa e sei tornato — ti abbiamo aspettato",
+    "abbiamo la sensazione che non stai ascoltando davvero, ma va bene",
+    "stai facendo finta di lavorare mentre ci ascolti? Rispettabile",
+    "se hai alzato il volume per questa canzone, abbiamo notato",
+    "ci ascolti da un po' ormai, non ti giudichiamo",
+    "se ti sei appena seduto, tempismo perfetto",
+    "stai cucinando? Lo sentiamo. No, scherzo. O forse no.",
+    "la tua giornata sta andando esattamente come la immaginiamo",
+]
+
+# ---------------------------------------------------------------------------
+# Fourth-wall bends (rare, always deniable)
+# ---------------------------------------------------------------------------
+
+_FOURTH_WALL = [
+    "A volte sembra troppo su misura, vero? Coincidenza. Probabilmente.",
+    "Se questa canzone ti ha colpito esattamente adesso, è solo caso. Forse.",
+    "No, non ti stiamo guardando. Non possiamo. Credo.",
+    "Ti sei mai chiesto come facciamo a sapere queste cose? Neanche noi.",
+    "Questa è una radio vera. Normale. Niente di strano. Continua ad ascoltare.",
+]
+
+# ---------------------------------------------------------------------------
+# Taste-aware host lines keyed by listener pattern
+# ---------------------------------------------------------------------------
+
+_TASTE_LINES: dict[str, list[str]] = {
+    "restless_skipper": [
+        "Hai le dita pronte sul tasto skip, lo sappiamo. Questa volta resisti.",
+        "Ok ok, questa volta arriviamo al punto subito — niente intro di tre minuti.",
+        "Sì, abbiamo visto che salti tutto. Questa la teniamo corta, promesso.",
+        "Continui a saltare, ma noi continuiamo a provarci. Chi è più testardo?",
+    ],
+    "rides_every_song": [
+        "Tu sì che hai pazienza. Ascolti tutto fino alla fine. Rispetto.",
+        "Non hai mai saltato una canzone? Sei il nostro ascoltatore preferito.",
+        "Ci fidiamo di te — se una canzone non ti piace, soffri in silenzio come un vero italiano.",
+        "Ascoltatore modello. Se esistesse un premio, lo vinceresti.",
+    ],
+    "bails_on_intros": [
+        "Molli tutto dopo dieci secondi? Ecco un pezzo che parte sparato.",
+        "L'intro ti annoia? Questa attacca subito con il ritornello, fidati.",
+        "Sappiamo che non hai pazienza per le intro. Neanche noi, onestamente.",
+        "Se non ti prende nei primi cinque secondi, hai già cambiato. Sfida accettata.",
+    ],
+    "ballad_lover": [
+        "Non salti mai le ballate. Lo sappiamo. Ne abbiamo una per te.",
+        "Il romanticone della situazione. Non preoccuparti, il tuo segreto è al sicuro.",
+        "Dici che ti piace il rock, ma poi ogni ballata la ascolti fino alla fine.",
+        "Ecco un pezzo lento. Sappiamo che non toccherai i comandi.",
+    ],
+    "energy_seeker": [
+        "Vuoi ritmo? Abbiamo ritmo. Il piede batte già, lo sentiamo da qui.",
+        "Pezzi lenti? Giammai. Ecco qualcosa che ti tiene sveglio.",
+        "L'energia alta è il tuo combustibile. Tieni duro, arriva un pezzo che spacca.",
+        "Hai bisogno di BPM alti per funzionare. Noi capiamo.",
+    ],
+}
+
+# ---------------------------------------------------------------------------
+# Psychic predictions — stated BEFORE a track, verified AFTER
+# ---------------------------------------------------------------------------
+
+_PSYCHIC_PREDICTIONS: list[dict] = [
+    {
+        "text": "Non toccherai i comandi per questa.",
+        "verify": "completed",
+        "pattern": "rides_every_song",
+    },
+    {
+        "text": "Questa la salterai, ma dovevamo provarci.",
+        "verify": "skipped",
+        "pattern": "restless_skipper",
+    },
+    {
+        "text": "Scommettiamo che alzi il volume per il ritornello?",
+        "verify": "completed",
+        "pattern": "energy_seeker",
+    },
+    {
+        "text": "Questa non la salti. Lo sappiamo. Lo sai anche tu.",
+        "verify": "completed",
+        "pattern": "ballad_lover",
+    },
+    {
+        "text": "Dieci secondi. Se arrivi a dieci secondi, hai già battuto il record.",
+        "verify": "completed",
+        "pattern": "bails_on_intros",
+    },
+    {
+        "text": "Ti sfidiamo: ascolta tutta l'intro senza saltare.",
+        "verify": "completed",
+        "pattern": "bails_on_intros",
+    },
+    {
+        "text": "Questa è una di quelle che fingi di non conoscere ma canti sotto la doccia.",
+        "verify": "completed",
+        "pattern": "",
+    },
+    {
+        "text": "Tra trenta secondi saprai se questa canzone è per te. Noi lo sappiamo già.",
+        "verify": "completed",
+        "pattern": "",
+    },
+]
+
+# ---------------------------------------------------------------------------
+# Taste mirror intro lines (for the suspiciously accurate set)
+# ---------------------------------------------------------------------------
+
+_TASTE_MIRROR_INTROS = [
+    "E adesso... il set sospettosamente accurato. Non chiedeteci come facciamo a saperlo.",
+    "Tre canzoni scelte con precisione chirurgica. Coincidenza? Forse. Probabilmente no.",
+    "Questo blocco musicale vi conoscerà meglio del vostro terapeuta.",
+    "Il set che sa cosa volete prima che lo sappiate voi. Inquietante? Un po'. Ma funziona.",
+    "Ecco la sezione 'come fate a sapere cosa mi piace'. Spoiler: non lo sappiamo. O forse sì.",
+]
+
+
+def pick_taste_line(patterns: list[str]) -> str:
+    """Pick a host line matching the listener's detected patterns."""
+    for pat in patterns:
+        if pat in _TASTE_LINES:
+            return random.choice(_TASTE_LINES[pat])
+    return ""
+
+
+def pick_psychic_prediction(patterns: list[str]) -> dict | None:
+    """Pick a prediction matching the listener's behavior, or a generic one."""
+    matching = [p for p in _PSYCHIC_PREDICTIONS if p["pattern"] in patterns or not p["pattern"]]
+    return random.choice(matching) if matching else None
+
+
+def pick_taste_mirror_intro() -> str:
+    """Pick an intro line for the taste mirror segment."""
+    return random.choice(_TASTE_MIRROR_INTROS)
+
+
+# ---------------------------------------------------------------------------
+# Seasonal / calendar cues
+# ---------------------------------------------------------------------------
+
+_SEASONAL_CUES: dict[int, list[str]] = {
+    1: ["gennaio, il mese delle buone intenzioni già infrante", "fa freddo, l'inverno non perdona"],
+    2: ["febbraio, il mese più corto ma sembra il più lungo"],
+    3: ["marzo, la primavera che promette e non mantiene"],
+    4: ["aprile, allergici del mondo unitevi"],
+    5: ["maggio, il mese dei ponti e delle scuse per non lavorare"],
+    6: ["giugno, l'estate si avvicina, il corpo no"],
+    7: ["luglio, chi è ancora in città merita rispetto"],
+    8: ["agosto, l'Italia si ferma, e forse dovremmo farlo anche noi"],
+    9: ["settembre, si ricomincia, che vuol dire?"],
+    10: ["ottobre, la stagione delle castagne e della malinconia"],
+    11: ["novembre, il mese del grigio permanente"],
+    12: ["dicembre, panettone o pandoro, la guerra infinita"],
+}
+
+
+# ---------------------------------------------------------------------------
+# Public API: compute context block for prompt injection
+# ---------------------------------------------------------------------------
+
+
+def compute_context_block(
+    segments_produced: int = 0,
+    listener_paused: bool = False,
+) -> str:
+    """Build a natural-language context block for LLM banter prompts.
+
+    Returns a formatted string with temporal, cultural, and behavioral cues
+    that the LLM can weave into host dialogue. The cues are broad enough
+    to feel like coincidence, never specific enough to be surveillance.
+
+    Args:
+        segments_produced: how many segments have aired (for fourth-wall pacing)
+        listener_paused: whether the listener recently paused and resumed
+    """
+    now = datetime.datetime.now()
+    hour = now.hour
+    weekday = now.weekday()
+    month = now.month
+
+    # Find current show segment
+    segment = None
+    for seg in _SHOW_SEGMENTS.values():
+        if hour in seg["hours"]:
+            segment = seg
+            break
+    if segment is None:
+        segment = _SHOW_SEGMENTS["deep_night"]
+
+    day = _DAY_VIBES[weekday]
+
+    # Pick cues (randomize to avoid repetition across segments)
+    time_cue = random.choice(segment["mood_cues"])
+    day_cue = random.choice(day["cues"])
+    cultural_cue = random.choice(_CULTURAL_CUES)
+    seasonal_cues = _SEASONAL_CUES.get(month, [])
+    seasonal_cue = random.choice(seasonal_cues) if seasonal_cues else ""
+
+    # Behavioral cue: only sometimes (30% chance)
+    behavioral_cue = ""
+    if listener_paused:
+        behavioral_cue = _BEHAVIORAL_CUES[0]  # the pause-specific one
+    elif random.random() < 0.3:
+        behavioral_cue = random.choice(_BEHAVIORAL_CUES[1:])
+
+    # Fourth-wall: rare (once every ~10 segments, and only if >5 segments in)
+    fourth_wall = ""
+    if segments_produced > 5 and random.random() < 0.1:
+        fourth_wall = random.choice(_FOURTH_WALL)
+
+    # Weekend vs weekday flag
+    is_weekend = weekday >= 5
+
+    lines = [
+        f"SHOW SEGMENT: {segment['name']}",
+        f"Time vibe: {segment['vibe']}",
+        f"Day energy: {day['label']} — {day['energy']}",
+        f"It is {'weekend' if is_weekend else 'a weekday'}, {now.strftime('%H:%M')}.",
+        "",
+        "AVAILABLE CONTEXT CUES (use at most ONE naturally, don't force it):",
+        f'- Time-of-day: "{time_cue}"',
+        f'- Day-of-week: "{day_cue}"',
+        f'- Local vibe: "{cultural_cue}"',
+    ]
+
+    if seasonal_cue:
+        lines.append(f'- Seasonal: "{seasonal_cue}"')
+    if behavioral_cue:
+        lines.append(f'- Listener hint: "{behavioral_cue}"')
+    if fourth_wall:
+        lines.append(f'- Fourth wall (USE SPARINGLY, max once per session): "{fourth_wall}"')
+
+    lines.append("")
+    lines.append(
+        "CONTEXT RULES: These cues should feel like casual observations, not data readouts. "
+        "Use at most ONE per banter segment. The goal is a subtle 'are they talking to me?' feeling, "
+        "never 'they are watching me'. If a cue doesn't fit naturally, skip it entirely."
+    )
+
+    return "\n".join(lines)

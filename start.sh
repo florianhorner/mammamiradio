@@ -52,6 +52,27 @@ echo "Using go-librespot config dir: $GO_LIBRESPOT_CONFIG_DIR"
 # Ensure FIFO exists
 [ -p "$FIFO" ] || (rm -f "$FIFO" && mkfifo "$FIFO")
 
+# Sync go-librespot config (ensures device_name is correct)
+"$PYTHON_BIN" -m mammamiradio.go_librespot_config sync \
+    go-librespot/config.yml "$GO_LIBRESPOT_CONFIG_DIR/config.yml" 2>/dev/null || true
+
+# Patch runtime overrides (FIFO path and API port) into the workspace config
+_GL_CFG="$GO_LIBRESPOT_CONFIG_DIR/config.yml"
+if [ -f "$_GL_CFG" ]; then
+    if [[ "$OSTYPE" == darwin* ]]; then
+        sed -i '' "s|audio_output_pipe:.*|audio_output_pipe: $FIFO|" "$_GL_CFG"
+    else
+        sed -i "s|audio_output_pipe:.*|audio_output_pipe: $FIFO|" "$_GL_CFG"
+    fi
+    if [ -n "${GO_LIBRESPOT_PORT:-}" ]; then
+        if [[ "$OSTYPE" == darwin* ]]; then
+            sed -i '' "s|port:.*|port: $GO_LIBRESPOT_PORT|" "$_GL_CFG"
+        else
+            sed -i "s|port:.*|port: $GO_LIBRESPOT_PORT|" "$_GL_CFG"
+        fi
+    fi
+fi
+
 # Start go-librespot if not already running (tolerate missing binary)
 if [ -z "$GOLIBRESPOT_OWNED_PID" ]; then
     if [ -x "$GO_LIBRESPOT_BIN" ] || command -v "$GO_LIBRESPOT_BIN" > /dev/null 2>&1; then
@@ -95,10 +116,21 @@ else
     echo "FIFO drain PID: $!"
 fi
 
+# Pre-flight: check if the port is already in use by a stale process
+if command -v lsof > /dev/null 2>&1; then
+    STALE_PID="$(lsof -ti :"$PORT" 2>/dev/null | head -1 || true)"
+    if [ -n "$STALE_PID" ]; then
+        echo "WARNING: Port $PORT held by PID $STALE_PID — reclaiming..." >&2
+        kill -TERM "$STALE_PID" 2>/dev/null || true
+        sleep 1
+        kill -0 "$STALE_PID" 2>/dev/null && kill -KILL "$STALE_PID" 2>/dev/null || true
+    fi
+fi
+
 # Start uvicorn with reload (restarts on code changes, doesn't kill go-librespot)
 echo "Starting uvicorn with --reload..."
 source .venv/bin/activate
 exec python -m uvicorn mammamiradio.main:app \
     --host "$HOST" --port "$PORT" \
     --reload --reload-dir mammamiradio \
-    --reload-include "*.toml"
+    --reload-include "*.toml" --reload-include "*.html"

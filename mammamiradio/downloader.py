@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from pathlib import Path
 
 from mammamiradio.models import Track
@@ -12,29 +13,39 @@ from mammamiradio.normalizer import _run_ffmpeg
 logger = logging.getLogger(__name__)
 
 
-def _generate_placeholder(track: Track, out_path: Path) -> Path:
-    """Generate a short placeholder track using ffmpeg tone + TTS announcement."""
+_DEMO_ASSETS_DIR = Path(__file__).parent / "demo_assets" / "music"
+
+
+def _find_demo_asset(track: Track) -> Path | None:
+    """Check bundled demo_assets/music/ for a matching MP3."""
+    if not _DEMO_ASSETS_DIR.exists():
+        return None
+    for f in _DEMO_ASSETS_DIR.glob("*.mp3"):
+        name = f.stem.lower()
+        if track.cache_key in name or track.title.lower() in name:
+            return f
+    return None
+
+
+def _generate_silence(track: Track, out_path: Path) -> Path:
+    """Generate brief silence as last-resort fallback (no sine wave tone)."""
     cmd = [
         "ffmpeg",
         "-y",
         "-f",
         "lavfi",
         "-i",
-        "sine=frequency=440:duration=30",
-        "-af",
-        "volume=0.3",
-        "-ar",
-        "48000",
-        "-ac",
-        "2",
+        "anullsrc=r=48000:cl=stereo",
+        "-t",
+        "5",
         "-b:a",
         "192k",
         "-f",
         "mp3",
         str(out_path),
     ]
-    _run_ffmpeg(cmd, f"placeholder for {track.display}")
-    logger.info("Generated placeholder for: %s", track.display)
+    _run_ffmpeg(cmd, f"silence for {track.display}")
+    logger.info("Generated silence placeholder for: %s", track.display)
     return out_path
 
 
@@ -85,20 +96,29 @@ def _download_sync(track: Track, cache_dir: Path, music_dir: Path) -> Path:
         logger.info("Cache hit: %s", track.display)
         return out_path
 
-    # 1. Check local music/ directory
+    # 1. Check bundled demo assets
+    demo = _find_demo_asset(track)
+    if demo:
+        logger.info("Demo asset: %s -> %s", track.display, demo)
+        return demo
+
+    # 2. Check local music/ directory
     local = _find_local(track, music_dir)
     if local:
         logger.info("Local file: %s -> %s", track.display, local)
         return local
 
-    # 2. Try yt-dlp
-    try:
-        return _download_ytdlp(track, cache_dir)
-    except Exception as e:
-        logger.warning("yt-dlp failed for %s: %s — using placeholder", track.display, e)
+    # 3. Try yt-dlp (opt-in only, disabled by default for copyright safety)
+    if os.getenv("MAMMAMIRADIO_ALLOW_YTDLP", "false").lower() in ("true", "1", "yes"):
+        try:
+            return _download_ytdlp(track, cache_dir)
+        except Exception as e:
+            logger.warning("yt-dlp failed for %s: %s — using silence", track.display, e)
+    else:
+        logger.info("yt-dlp disabled for %s (set MAMMAMIRADIO_ALLOW_YTDLP=true to enable)", track.display)
 
-    # 3. Fallback: generate placeholder audio
-    return _generate_placeholder(track, out_path)
+    # 4. Fallback: brief silence (never a sine wave tone)
+    return _generate_silence(track, out_path)
 
 
 async def download_track(track: Track, cache_dir: Path, music_dir: Path | None = None) -> Path:

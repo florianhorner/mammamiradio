@@ -51,20 +51,30 @@ def get_spotify_client(config: StationConfig):
         open_browser=not config.is_addon,
     )
 
-    # If no cached user token, fall back to client credentials
-    # (works for public playlist fetching, no user auth needed)
+    # If cached user token exists, use it (supports liked songs, private playlists)
     token_info = auth.cache_handler.get_cached_token()
-    if not token_info:
-        if not config.is_addon:
-            # Local dev: Spotipy will prompt for browser auth
-            return spotipy.Spotify(auth_manager=auth)
+    if token_info:
+        return spotipy.Spotify(auth_manager=auth)
+
+    # No user token: try client credentials first (public playlists, no browser popup)
+    try:
         cc_auth = SpotifyClientCredentials(
             client_id=config.spotify_client_id,
             client_secret=config.spotify_client_secret,
         )
         return spotipy.Spotify(auth_manager=cc_auth)
+    except Exception:
+        pass
 
-    return spotipy.Spotify(auth_manager=auth)
+    # Last resort: full OAuth flow (will open browser on local dev)
+    if not config.is_addon:
+        return spotipy.Spotify(auth_manager=auth)
+
+    cc_auth = SpotifyClientCredentials(
+        client_id=config.spotify_client_id,
+        client_secret=config.spotify_client_secret,
+    )
+    return spotipy.Spotify(auth_manager=cc_auth)
 
 
 def build_auth_url(config: StationConfig, redirect_uri: str, state: str | None = None) -> str:

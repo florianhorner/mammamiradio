@@ -27,7 +27,7 @@ options:
   anthropic_api_key: ""
   spotify_client_id: ""
   spotify_client_secret: ""
-  station_name: "Radio Italì"
+  station_name: "Malamie Radio"
   claude_model: "claude-haiku-4-5-20251001"
   playlist_spotify_url: ""
 schema:

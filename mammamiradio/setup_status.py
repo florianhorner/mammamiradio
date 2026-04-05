@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import platform
 import shutil
 from pathlib import Path
@@ -13,6 +12,7 @@ from typing import Any
 from mammamiradio.config import StationConfig
 from mammamiradio.models import StationState
 from mammamiradio.playlist import _extract_playlist_id, supports_user_sources
+from mammamiradio.spotify_player import resolve_go_librespot_bin
 
 RUN_MODES = [
     {
@@ -40,29 +40,6 @@ RUN_MODES = [
         "surface": ".env and radio.toml",
     },
 ]
-
-GO_LIBRESPOT_CANDIDATES = (
-    "/opt/homebrew/bin/go-librespot",
-    "/usr/local/bin/go-librespot",
-    "/usr/bin/go-librespot",
-    "/bin/go-librespot",
-)
-
-
-def resolve_go_librespot_bin(configured: str) -> str | None:
-    """Find a working go-librespot binary even when PATH is sparse."""
-    if os.path.isabs(configured) and os.access(configured, os.X_OK):
-        return configured
-
-    discovered = shutil.which(configured)
-    if discovered:
-        return discovered
-
-    for candidate in GO_LIBRESPOT_CANDIDATES:
-        if os.access(candidate, os.X_OK):
-            return candidate
-
-    return None
 
 
 def detect_run_mode(config: StationConfig) -> dict:

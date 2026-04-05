@@ -76,6 +76,32 @@ Every produced segment becomes a temporary MP3 on disk and is pushed into `async
 
 Important design choice: there is one shared timeline. Listeners tune into the current live point, not their own private playback state.
 
+## Capability flags
+
+The old setup wizard classified the station into named modes from a combinatorial state space. The new system uses four independent boolean flags in a frozen `Capabilities` dataclass (`mammamiradio/models.py`, with detection and serialization in `mammamiradio/capabilities.py`):
+
+| Flag | Source | What it enables |
+| --- | --- | --- |
+| `spotify_connected` | go-librespot zeroconf auth | Real music playback and autoplay |
+| `spotify_api` | Client ID + secret present | Playlist browsing, search, metadata |
+| `anthropic` | `ANTHROPIC_API_KEY` present | Live Claude-generated banter and ads |
+| `ha` | `HA_TOKEN` + integration enabled | Ambient home context in banter |
+
+The dashboard derives a tier label from these flags: Demo Radio, Your Music, Full AI Radio. Each flag is independent. `GET /api/capabilities` returns flags, tier, a guided `next_step` hint (what the user should do next), now-playing state, and connect device name.
+
+## Autoplay flow
+
+When a Spotify user taps "MammaMiRadio" in their device picker, the producer detects `spotify_connected` transitioning to true and triggers autoplay:
+
+1. Read the currently playing track from go-librespot's `/status` API.
+2. Purge queued demo segments and skip the current stream segment.
+3. Launch two tasks in parallel:
+   - **Audio capture**: `capture_current_audio()` reads PCM from the FIFO for the remaining song duration. No `play_track` call — the song continues uninterrupted.
+   - **Welcome banter**: `write_banter()` generates dialogue referencing the user's current song.
+4. Queue the captured song, then the personalized banter.
+
+The listener hears their own music continue seamlessly, followed by hosts commenting on it.
+
 ## How Spotify integration works
 
 Three separate pieces connect the station to Spotify. Each does a different job, and the station degrades gracefully when any piece is missing.

@@ -106,6 +106,9 @@ Admin routes:
 - `/api/search`
 - `/api/playlist/add`
 - `/api/playlist/load`
+- `/api/capabilities`
+- `/api/credentials`
+- `/api/trigger`
 - `/api/spotify/source-options`
 - `/api/spotify/source/select`
 

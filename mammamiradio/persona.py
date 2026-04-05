@@ -1,0 +1,218 @@
+"""Listener persona persistence — the mythology the hosts build about you."""
+
+from __future__ import annotations
+
+import json
+import logging
+import re
+import time
+from dataclasses import dataclass, field
+from pathlib import Path
+
+import aiosqlite
+
+logger = logging.getLogger(__name__)
+
+# Session gap threshold — 10 minutes of no listeners = new session
+SESSION_GAP_SECONDS = 600
+
+# Max chars per persona field entry
+MAX_FIELD_ENTRY_LEN = 200
+
+# Persona size threshold for compression
+PERSONA_SIZE_LIMIT = 2048
+
+
+def _sanitize(text: str) -> str:
+    """Strip potentially harmful characters and cap length."""
+    text = re.sub(r"[<>{}]", "", text)
+    return text[:MAX_FIELD_ENTRY_LEN]
+
+
+def _sanitize_list(items: list) -> list[str]:
+    """Sanitize a list of persona entries."""
+    if not isinstance(items, list):
+        return []
+    return [_sanitize(str(item)) for item in items if item]
+
+
+@dataclass
+class ListenerPersona:
+    """In-memory representation of the listener's persona."""
+
+    motifs: list[str] = field(default_factory=list)
+    theories: list[str] = field(default_factory=list)
+    running_jokes: list[str] = field(default_factory=list)
+    callbacks: list[dict] = field(default_factory=list)
+    personality_guesses: list[str] = field(default_factory=list)
+    session_count: int = 0
+    last_session: str = ""
+
+    @property
+    def callback_budget(self) -> int:
+        """How many callbacks the hosts should reference per break."""
+        return min(self.session_count, 5)
+
+    def to_prompt_context(self) -> str:
+        """Format persona for inclusion in a Claude prompt."""
+        parts = []
+        if self.motifs:
+            parts.append(f"Music motifs: {', '.join(self.motifs[-5:])}")
+        if self.theories:
+            parts.append(f"Theories about the listener: {', '.join(self.theories[-5:])}")
+        if self.running_jokes:
+            parts.append(f"Running jokes: {', '.join(self.running_jokes[-3:])}")
+        if self.callbacks and self.callback_budget > 0:
+            recent = self.callbacks[-self.callback_budget :]
+            cb_strs = [f"{c.get('song', '?')} ({c.get('context', '')})" for c in recent]
+            parts.append(f"Past songs to reference: {', '.join(cb_strs)}")
+        if self.personality_guesses:
+            parts.append(f"Personality guesses: {', '.join(self.personality_guesses[-3:])}")
+        parts.append(f"Sessions so far: {self.session_count}")
+        return "\n".join(parts) if parts else "First-time listener. No history yet."
+
+    def json_size(self) -> int:
+        """Approximate byte size of the persona as JSON."""
+        return len(json.dumps(self.__dict__, default=str))
+
+
+class PersonaStore:
+    """Async SQLite-backed persona storage."""
+
+    def __init__(self, db_path: Path):
+        self.db_path = db_path
+        self._last_listener_at: float = 0.0
+        self._session_id: str = ""
+
+    async def get_persona(self) -> ListenerPersona:
+        """Read the current listener persona from SQLite."""
+        async with aiosqlite.connect(str(self.db_path)) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute("SELECT * FROM listener_persona WHERE id = 1")
+            row = await cursor.fetchone()
+
+            if not row:
+                return ListenerPersona()
+
+            return ListenerPersona(
+                motifs=json.loads(row["motifs"] or "[]"),
+                theories=json.loads(row["theories"] or "[]"),
+                running_jokes=json.loads(row["running_jokes"] or "[]"),
+                callbacks=json.loads(row["callbacks"] or "[]"),
+                personality_guesses=json.loads(row["personality_guesses"] or "[]"),
+                session_count=row["session_count"] or 0,
+                last_session=row["last_session"] or "",
+            )
+
+    async def update_persona(self, updates: dict) -> None:
+        """Apply persona_updates from a Claude response. Validates and sanitizes."""
+        if not isinstance(updates, dict):
+            logger.error("Invalid persona_updates type: %s", type(updates))
+            return
+
+        try:
+            persona = await self.get_persona()
+
+            new_theories = _sanitize_list(updates.get("new_theories", []))
+            new_jokes = _sanitize_list(updates.get("new_jokes", []))
+            callbacks_used = updates.get("callbacks_used", [])
+
+            if new_theories:
+                persona.theories = (persona.theories + new_theories)[-10:]
+            if new_jokes:
+                persona.running_jokes = (persona.running_jokes + new_jokes)[-5:]
+            if isinstance(callbacks_used, list):
+                for cb in callbacks_used:
+                    if isinstance(cb, str):
+                        persona.callbacks.append({"song": cb, "context": "", "date": time.strftime("%Y-%m-%d")})
+                persona.callbacks = persona.callbacks[-20:]
+
+            async with aiosqlite.connect(str(self.db_path)) as db:
+                await db.execute(
+                    """INSERT INTO listener_persona (id, motifs, theories, running_jokes,
+                       callbacks, personality_guesses, session_count, updated_at)
+                       VALUES (1, ?, ?, ?, ?, ?, ?, datetime('now'))
+                       ON CONFLICT(id) DO UPDATE SET
+                       theories = excluded.theories,
+                       running_jokes = excluded.running_jokes,
+                       callbacks = excluded.callbacks,
+                       updated_at = excluded.updated_at""",
+                    (
+                        json.dumps(persona.motifs),
+                        json.dumps(persona.theories),
+                        json.dumps(persona.running_jokes),
+                        json.dumps(persona.callbacks),
+                        json.dumps(persona.personality_guesses),
+                        persona.session_count,
+                    ),
+                )
+                await db.commit()
+                logger.info(
+                    "Persona updated: +%d theories, +%d jokes",
+                    len(new_theories),
+                    len(new_jokes),
+                )
+
+        except Exception:
+            logger.exception("Failed to update persona")
+
+    async def record_play(self, track_youtube_id: str, session_id: str, host_script: str | None = None) -> None:
+        """Record a track play in history."""
+        try:
+            async with aiosqlite.connect(str(self.db_path)) as db:
+                # Look up track_id
+                cursor = await db.execute("SELECT id FROM tracks WHERE youtube_id = ?", (track_youtube_id,))
+                row = await cursor.fetchone()
+                track_id = row[0] if row else None
+
+                await db.execute(
+                    "INSERT INTO play_history (track_id, session_id, host_script) VALUES (?, ?, ?)",
+                    (track_id, session_id, host_script),
+                )
+                await db.commit()
+        except Exception:
+            logger.exception("Failed to record play")
+
+    async def get_recent_plays(self, n: int = 10) -> list[dict]:
+        """Get recent play history for dedup and host context."""
+        try:
+            async with aiosqlite.connect(str(self.db_path)) as db:
+                db.row_factory = aiosqlite.Row
+                cursor = await db.execute(
+                    """SELECT ph.played_at, t.title, t.artist, t.youtube_id
+                       FROM play_history ph
+                       LEFT JOIN tracks t ON ph.track_id = t.id
+                       ORDER BY ph.id DESC LIMIT ?""",
+                    (n,),
+                )
+                rows = await cursor.fetchall()
+                return [dict(r) for r in rows]
+        except Exception:
+            logger.exception("Failed to get recent plays")
+            return []
+
+    def maybe_new_session(self) -> bool:
+        """Check if enough time has passed to consider this a new session.
+
+        Returns True if session_count should be incremented.
+        """
+        now = time.time()
+        if self._last_listener_at == 0.0 or (now - self._last_listener_at) > SESSION_GAP_SECONDS:
+            self._last_listener_at = now
+            self._session_id = f"s{int(now)}"
+            return True
+        self._last_listener_at = now
+        return False
+
+    async def increment_session(self) -> None:
+        """Bump session_count in the database."""
+        try:
+            async with aiosqlite.connect(str(self.db_path)) as db:
+                await db.execute(
+                    "UPDATE listener_persona SET session_count = session_count + 1, "
+                    "last_session = datetime('now') WHERE id = 1"
+                )
+                await db.commit()
+                logger.info("New listening session started")
+        except Exception:
+            logger.exception("Failed to increment session")

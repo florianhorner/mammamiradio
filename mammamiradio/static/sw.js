@@ -1,4 +1,4 @@
-// Service Worker for Radio Italì PWA
+// Service Worker for Malamie Radio PWA
 const CACHE_NAME = 'radio-itali-v1';
 const PRECACHE_URLS = [
   '/listen',

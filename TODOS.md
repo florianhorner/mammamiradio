@@ -1,5 +1,25 @@
 # TODOs
 
+## P1: Product positioning decision
+The product is stuck between "self-hosted household radio engine" and "consumer product with shareware upsell." Both CEO and Eng dual voices flagged this independently. Until this is decided, onboarding, monetization, and multi-tenancy work is built on sand.
+**Action:** Interview 5 potential users (cafe owners, HA enthusiasts, music hobbyists). Decide: household engine or consumer product.
+**Source:** /autoplan review, 2026-04-04
+
+## P2: Competitive landscape document
+Spotify AI DJ exists (launched 2023, expanding languages). No contingency plan if Spotify ships Italian DJ or expands the feature. ElevenLabs and Cartesia are commoditizing expressive TTS.
+**Action:** Write a 1-page competitive landscape. Define the moat (HA context? Italian authenticity? Self-hosted?). Set a trigger: "If Spotify launches X, we pivot to Y."
+**Source:** /autoplan CEO dual voices, 2026-04-04
+
+## P2: Invest in HA context as differentiator
+All three review phases flagged: HA context is the only moat Spotify DJ cannot copy. The plan invests zero in it. Current HA integration (ha_context.py) is already structured but underutilized.
+**Action:** Make HA context more visible in banter/ads. Add weather-aware, time-aware, and room-aware content prompts. Surface HA state in dashboard.
+**Source:** /autoplan cross-phase theme, 2026-04-04
+
+## P2: Distribution strategy
+No landing page, no hosted demo, no analytics, no invite loop. The product has no way to be discovered. PR readiness != adoption readiness.
+**Action:** Create a landing page with embedded demo player. Add basic analytics (segment counts, session duration). Consider Spotify embed integration.
+**Source:** /autoplan CEO review, 2026-04-04
+
 ## P2: Narrow add-on detection
 Current state: `_is_addon()` in `mammamiradio/config.py` treats `/data/options.json` as sufficient proof of add-on mode.
 

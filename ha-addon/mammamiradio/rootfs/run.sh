@@ -83,7 +83,7 @@ if [ ! -f /app/radio.toml ]; then
     exit 1
 fi
 
-echo "[mammamiradio] Station: ${STATION_NAME:-Radio Italì}"
+echo "[mammamiradio] Station: ${STATION_NAME:-Malamie Radio}"
 echo "[mammamiradio] Starting uvicorn on 0.0.0.0:8000..."
 
 cd /app

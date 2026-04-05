@@ -11,6 +11,7 @@ from mammamiradio.config import load_config
 from mammamiradio.models import PlaylistSource
 from mammamiradio.playlist import (
     DEMO_TRACKS,
+    _track_from_spotify_item,
     fetch_playlist,
     fetch_startup_playlist,
     list_user_playlists,
@@ -30,6 +31,7 @@ def config_with_spotify():
     cfg.spotify_client_id = "test-client-id"
     cfg.spotify_client_secret = "test-client-secret"
     cfg.playlist.spotify_url = "https://open.spotify.com/playlist/abc123"
+    cfg.playlist.shuffle = False
     return cfg
 
 
@@ -337,3 +339,111 @@ def test_list_user_playlists_reads_item_totals_from_current_spotify_shape(config
         {"id": "abc123", "label": "mamma mi radio", "track_count": 50},
         {"id": "def456", "label": "Late Night Drive", "track_count": 12},
     ]
+
+
+# --- _track_from_spotify_item tests ---
+
+
+class TestTrackFromSpotifyItem:
+    """Unit tests for the _track_from_spotify_item helper."""
+
+    def test_track_from_spotify_item_extracts_album(self):
+        item = {
+            "track": {
+                "id": "abc",
+                "name": "Song",
+                "duration_ms": 200000,
+                "artists": [{"name": "Artist"}],
+                "album": {"name": "Great Album"},
+                "explicit": False,
+                "popularity": 50,
+            }
+        }
+        track = _track_from_spotify_item(item)
+        assert track is not None
+        assert track.album == "Great Album"
+
+    def test_track_from_spotify_item_extracts_explicit(self):
+        item = {
+            "track": {
+                "id": "abc",
+                "name": "Song",
+                "duration_ms": 200000,
+                "artists": [{"name": "Artist"}],
+                "album": {"name": "Album"},
+                "explicit": True,
+                "popularity": 50,
+            }
+        }
+        track = _track_from_spotify_item(item)
+        assert track is not None
+        assert track.explicit is True
+
+    def test_track_from_spotify_item_explicit_missing_defaults_false(self):
+        item = {
+            "track": {
+                "id": "abc",
+                "name": "Song",
+                "duration_ms": 200000,
+                "artists": [{"name": "Artist"}],
+                "album": {"name": "Album"},
+            }
+        }
+        track = _track_from_spotify_item(item)
+        assert track is not None
+        assert track.explicit is False
+
+    def test_track_from_spotify_item_extracts_popularity(self):
+        item = {
+            "track": {
+                "id": "abc",
+                "name": "Song",
+                "duration_ms": 200000,
+                "artists": [{"name": "Artist"}],
+                "album": {"name": "Album"},
+                "explicit": False,
+                "popularity": 75,
+            }
+        }
+        track = _track_from_spotify_item(item)
+        assert track is not None
+        assert track.popularity == 75
+
+    def test_track_from_spotify_item_popularity_missing_defaults_zero(self):
+        item = {
+            "track": {
+                "id": "abc",
+                "name": "Song",
+                "duration_ms": 200000,
+                "artists": [{"name": "Artist"}],
+            }
+        }
+        track = _track_from_spotify_item(item)
+        assert track is not None
+        assert track.popularity == 0
+
+    def test_track_from_spotify_item_album_missing(self):
+        item = {
+            "track": {
+                "id": "abc",
+                "name": "Song",
+                "duration_ms": 200000,
+                "artists": [{"name": "Artist"}],
+            }
+        }
+        track = _track_from_spotify_item(item)
+        assert track is not None
+        assert track.album == ""
+
+    def test_track_from_spotify_item_returns_none_for_none(self):
+        assert _track_from_spotify_item(None) is None
+
+    def test_track_from_spotify_item_returns_none_for_no_id(self):
+        item = {
+            "track": {
+                "name": "Song",
+                "duration_ms": 200000,
+                "artists": [{"name": "Artist"}],
+            }
+        }
+        assert _track_from_spotify_item(item) is None

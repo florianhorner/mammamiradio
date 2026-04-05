@@ -16,16 +16,11 @@ from mammamiradio.spotify_auth import get_spotify_client
 logger = logging.getLogger(__name__)
 
 DEMO_TRACKS = [
-    Track(title="Con te partiro", artist="Andrea Bocelli", duration_ms=250000, spotify_id="demo1"),
-    Track(title="Volare", artist="Domenico Modugno", duration_ms=210000, spotify_id="demo2"),
-    Track(title="L'italiano", artist="Toto Cutugno", duration_ms=240000, spotify_id="demo3"),
-    Track(title="Sapore di sale", artist="Gino Paoli", duration_ms=180000, spotify_id="demo4"),
-    Track(title="Felicita", artist="Al Bano e Romina Power", duration_ms=230000, spotify_id="demo5"),
-    Track(title="Gloria", artist="Umberto Tozzi", duration_ms=260000, spotify_id="demo6"),
-    Track(title="Azzurro", artist="Adriano Celentano", duration_ms=200000, spotify_id="demo7"),
-    Track(title="Nel blu dipinto di blu", artist="Domenico Modugno", duration_ms=195000, spotify_id="demo8"),
-    Track(title="Ti amo", artist="Umberto Tozzi", duration_ms=220000, spotify_id="demo9"),
-    Track(title="La solitudine", artist="Laura Pausini", duration_ms=275000, spotify_id="demo10"),
+    Track(title="Tarantella", artist="Musica Tradizionale", duration_ms=180000, spotify_id="demo1"),
+    Track(title="La Danza", artist="Gioachino Rossini", duration_ms=210000, spotify_id="demo2"),
+    Track(title="Brindisi", artist="Giuseppe Verdi", duration_ms=195000, spotify_id="demo3"),
+    Track(title="Una Voce Poco Fa", artist="Gioachino Rossini", duration_ms=240000, spotify_id="demo4"),
+    Track(title="Core 'Ngrato", artist="Salvatore Cardillo", duration_ms=220000, spotify_id="demo5"),
 ]
 
 PERSISTED_SOURCE_FILENAME = "playlist_source.json"
@@ -56,11 +51,15 @@ def _track_from_spotify_item(item: dict) -> Track | None:
     if not track or not track.get("id"):
         return None
     artist = track["artists"][0]["name"] if track.get("artists") else "Unknown"
+    album = track.get("album", {}).get("name", "") if isinstance(track.get("album"), dict) else ""
     return Track(
         title=track["name"],
         artist=artist,
         duration_ms=track["duration_ms"],
         spotify_id=track["id"],
+        album=album,
+        explicit=bool(track.get("explicit", False)),
+        popularity=int(track.get("popularity", 0) or 0),
     )
 
 

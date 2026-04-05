@@ -58,13 +58,17 @@ AI-powered Italian radio station engine. Python 3.11+, FastAPI, FFmpeg, optional
 - `MAMMAMIRADIO_GO_LIBRESPOT_BIN`: override go-librespot binary path
 - `MAMMAMIRADIO_GO_LIBRESPOT_CONFIG_DIR`: override go-librespot config directory
 - `MAMMAMIRADIO_GO_LIBRESPOT_PORT`: override go-librespot API port (default `3678`)
+- `MAMMAMIRADIO_ALLOW_YTDLP`: enable yt-dlp fallback for demo tracks (`true`/`1`/`yes`; default: disabled for copyright safety)
 
 ## Runtime behavior
 
 - Startup loads `radio.toml`, validates config, starts go-librespot if possible, restores persisted source selection from `cache/playlist_source.json`, fetches the playlist, then launches producer and playback tasks.
-- If Spotify credentials are missing, the app uses a built-in demo playlist.
+- **Capability flags** (`spotify_connected`, `spotify_api`, `anthropic`, `ha`) replace the old 64-state mode system. Each flag is independent. The dashboard derives a tier label from them: Demo Radio, Your Music, Full AI Radio. `GET /api/capabilities` returns flags, tier, and a `next_step` hint guiding the user toward the next setup action.
+- Demo-first: if no Spotify credentials exist, the app boots immediately with built-in demo tracks and pre-bundled banter clips. No wizard, no gates.
+- **Spotify Connect (zeroconf):** go-librespot advertises via mDNS. Users tap "MammaMiRadio" in their Spotify app to connect. This handles streaming auth without any Client ID/secret. Playlist browsing still requires Client ID/secret (Web API scopes not available via zeroconf).
+- If Anthropic key is missing, banter uses pre-bundled clips from `demo_assets/banter/` instead of calling Claude.
 - If go-librespot is unavailable or not authenticated, music falls back to local `music/` files, then `yt-dlp`, then placeholder tones.
-- If Anthropic fails, banter and ad generation fall back to short stock copy.
+- If Anthropic fails mid-session, banter and ad generation fall back to short stock copy.
 - If Home Assistant is enabled and `HA_TOKEN` is present, banter and ads may reference current home state.
 - `audio.bitrate` is the single source of truth for encoding, ICY headers, and playback throttling.
 - Source switching via `/api/spotify/source/select` or `/api/playlist/load` purges the queue, skips the current segment, and begins playback from the new source immediately.
@@ -89,9 +93,16 @@ mammamiradio/
   normalizer.py       FFmpeg helpers for normalize, mix, concat, and generated SFX
   tts.py              Edge TTS synthesis for hosts and ads
   ha_context.py       Home Assistant polling and Italian state formatting
-  setup_status.py     First-run onboarding and setup status classification
-  dashboard.html      dashboard HTML served at /
-  listener.html       listener HTML served at /listen
+  capabilities.py     Capability flags (spotify_connected, spotify_api, anthropic, ha), tier derivation, and next_step hints
+  persona.py          Listener behavior profiling (skip rate, energy preference) for banter prompts
+  sync.py             go-librespot config synchronization from radio.toml
+  context_cues.py     Time-of-day and cultural context for banter/ad prompts
+  track_rationale.py  "Why this track?" rationale generation for listener UI
+  setup_status.py     Legacy setup status classification (kept for /status endpoint compat)
+  dashboard.html      Capability-flag-driven dashboard served at /
+  admin.html          Admin control room panel
+  listener.html       Listener HTML served at /listen
+  demo_assets/        Pre-bundled banter clips, ads, music, and jingles for demo-first boot
 radio.toml            station config
 start.sh              dev entrypoint with reload-safe FIFO drain handling
 tests/                pytest coverage
@@ -100,10 +111,18 @@ tests/                pytest coverage
 ## Brand assets
 
 - **Logo SVG**: `mammamiradio/logo.svg` — canonical vector source (variant G: classic radio with Italian flag stripe and sound waves)
-- **Palette**: Terracotta Sera — charcoal `#2a2320`, terracotta `#c4654a`, dusty rose `#d4917a`, sage `#7a8f6d`, cream `#f5efe6`
+- **Palette**: Volare — warm Italian sunset. See `DESIGN.md` for the full design system.
+  - Background: orange-red sunset gradient (`#C44020 → #D45228 → #E07038`)
+  - Cards: deep sienna (`#823218`, `#924020`) — buildings in shadow
+  - Accent: golden sun (`#F4D048`, `#ECCC30`) — play button, active borders
+  - Interactive: Lancia red (`#B82C20`) — FM dial needle, connect border
+  - Text: cream (`#F5EDD8`)
+  - Success/connected: blue (`#2563EB`) — never green (colorblind)
+- **Typography**: Playfair Display italic (station name, display text) + Inter (body)
 - **Favicon**: inline SVG data URI in `dashboard.html` and `listener.html` (simplified version of logo)
 - **HA add-on icon**: `ha-addon/mammamiradio/icon.png` (256px) and `logo.png` (512px), rasterized from the SVG
 - To regenerate PNGs from SVG: `cairosvg mammamiradio/logo.svg -o icon.png -W 256 -H 256`
+- **Full design system**: `DESIGN.md` — colors, typography, components, motion, anti-patterns
 
 ## Notes for future edits
 

@@ -4,6 +4,40 @@ All notable changes to `mammamiradio` are documented here.
 
 The current version source of truth is `pyproject.toml`.
 
+## [Unreleased]
+
+### Added
+
+- **Capability flags**: `Capabilities` frozen dataclass and `capabilities.py` replace the 64-state mode system. Four independent flags (`spotify_connected`, `spotify_api`, `anthropic`, `ha`) derive a tier label. `GET /api/capabilities` returns flags, tier, guided next-step hint, and connect status.
+- **Demo-first boot**: station starts instantly with zero config. Built-in demo playlist of classic Italian tracks plays while you set up Spotify.
+- **Shareware trial**: first 3 banter clips use pre-bundled audio. After the trial, the station prompts for an Anthropic API key to unlock live AI hosts.
+- **Autoplay on Spotify Connect**: when a user taps the station in Spotify, the producer captures the currently playing song and generates personalized welcome banter referencing it, both in parallel.
+- **`capture_current_audio()`**: captures audio already playing on go-librespot without issuing a `play_track` call.
+- **`get_current_track()`**: reads current track metadata from go-librespot `/status` API.
+- **Embedded dashboard player**: play button + auto-reconnect on hot reload. Stream starts on first click anywhere.
+- **Listener persona system**: `persona.py` tracks aggregate listening patterns (skip rate, energy preference, ballad loyalty) and feeds them into banter prompts for eerily on-point host commentary.
+- **Config sync module**: `sync.py` synchronizes go-librespot device name, FIFO path, and API port from `radio.toml` into the go-librespot config on startup.
+- **Ephemeral segment flag**: `Segment.ephemeral` controls whether segment audio files are cleaned up after playback.
+
+### Changed
+
+- **Dashboard Volare theme**: warm Italian sunset palette — orange-red dominant background, deep sienna card surfaces, golden sun accent (#F4D048), Lancia-red FM dial needle with glow. Playfair Display italic station name. All JS/API logic preserved.
+- **Dashboard redesigned**: 640px single-column, capability-driven cards, connect hero card, tier badge with pulse animation on upgrade.
+- **Voice differentiation**: SSML prosody (rate/pitch) derived from personality axes. Marco → GianniNeural (booming), personality axes widened for contrast.
+- **Louder ad breaks**: 6-note bumper jingle (1.5s, 1.8x volume), music bed 0.12→0.20, env bed 0.06→0.10.
+- **go-librespot config sync**: `start.sh` syncs device name, FIFO path, and API port on startup.
+- **Autoplay fade-in**: 300ms fade-in on captured audio smooths the handover from demo.
+- **Sine wave fallback removed**: last-resort placeholder generates silence instead of 440Hz tone.
+- **`start.sh` reload**: uvicorn now watches `*.html` files for hot reload.
+
+### Fixed
+
+- Auto-transfer no longer spams logs when no Spotify Client ID is configured.
+- Banter generation no longer errors when no Anthropic key is set (early return with fallback text).
+- Banter TTS failure gracefully skips the segment instead of crashing the producer loop.
+- Spotify audio capture failures now fall back to local download instead of crashing the producer.
+- `start.sh` reclaims stale ports on startup instead of failing with "address already in use".
+
 ## [1.5.0] - 2026-04-04
 
 ### Added

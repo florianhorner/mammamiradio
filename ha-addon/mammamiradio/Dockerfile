@@ -42,6 +42,11 @@ COPY go-librespot-config.yml /defaults/go-librespot-config.yml
 # Make run script executable
 RUN chmod a+x /run.sh
 
+# Run as non-root user (security hardening)
+RUN adduser -D -h /app radio && \
+    chown -R radio:radio /app /data /defaults
+USER radio
+
 # Validate the install works
 RUN python3 -c "import mammamiradio; print('mammamiradio installed OK')"
 

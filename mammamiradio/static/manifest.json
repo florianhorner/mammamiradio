@@ -1,6 +1,6 @@
 {
-  "name": "Radio Italì",
-  "short_name": "Radio Italì",
+  "name": "Malamie Radio",
+  "short_name": "Malamie Radio",
   "description": "Late-night AI-powered Italian radio station",
   "start_url": "/listen",
   "display": "standalone",

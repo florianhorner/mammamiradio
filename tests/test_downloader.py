@@ -95,7 +95,29 @@ def test_local_file_found(track, cache_dir, music_dir):
 # --- _download_sync: yt-dlp success ---
 
 
-def test_ytdlp_success(track, cache_dir, music_dir):
+def test_ytdlp_disabled_by_default(track, cache_dir, music_dir):
+    """yt-dlp should NOT run when MAMMAMIRADIO_ALLOW_YTDLP is unset."""
+    import os
+
+    from mammamiradio.downloader import _download_sync
+
+    env = os.environ.copy()
+    env.pop("MAMMAMIRADIO_ALLOW_YTDLP", None)
+
+    with (
+        patch.dict(os.environ, env, clear=True),
+        patch("mammamiradio.downloader._run_ffmpeg") as mock_ffmpeg,
+    ):
+        _download_sync(track, cache_dir, music_dir)
+
+    # Should fall through to silence, never touching yt-dlp
+    mock_ffmpeg.assert_called_once()
+
+
+def test_ytdlp_success_when_enabled(track, cache_dir, music_dir):
+    """yt-dlp runs when MAMMAMIRADIO_ALLOW_YTDLP=true."""
+    import os
+
     from mammamiradio.downloader import _download_sync
 
     mock_ydl_instance = MagicMock()
@@ -112,7 +134,10 @@ def test_ytdlp_success(track, cache_dir, music_dir):
     mock_yt_dlp = MagicMock()
     mock_yt_dlp.YoutubeDL.return_value = mock_ydl_instance
 
-    with patch.dict(sys.modules, {"yt_dlp": mock_yt_dlp}):
+    with (
+        patch.dict(os.environ, {"MAMMAMIRADIO_ALLOW_YTDLP": "true"}),
+        patch.dict(sys.modules, {"yt_dlp": mock_yt_dlp}),
+    ):
         result = _download_sync(track, cache_dir, music_dir)
 
     assert result == cache_dir / f"{track.cache_key}.mp3"
@@ -123,6 +148,8 @@ def test_ytdlp_success(track, cache_dir, music_dir):
 
 
 def test_ytdlp_failure_falls_back_to_placeholder(track, cache_dir, music_dir):
+    import os
+
     from mammamiradio.downloader import _download_sync
 
     mock_yt_dlp = MagicMock()
@@ -133,6 +160,7 @@ def test_ytdlp_failure_falls_back_to_placeholder(track, cache_dir, music_dir):
     mock_yt_dlp.YoutubeDL.return_value = mock_ydl_instance
 
     with (
+        patch.dict(os.environ, {"MAMMAMIRADIO_ALLOW_YTDLP": "true"}),
         patch.dict(sys.modules, {"yt_dlp": mock_yt_dlp}),
         patch("mammamiradio.downloader._run_ffmpeg") as mock_ffmpeg,
     ):
@@ -147,10 +175,13 @@ def test_ytdlp_failure_falls_back_to_placeholder(track, cache_dir, music_dir):
 
 
 def test_ytdlp_import_error_falls_back_to_placeholder(track, cache_dir, music_dir):
+    import os
+
     from mammamiradio.downloader import _download_sync
 
     # Remove yt_dlp from sys.modules if present so the lazy import triggers ImportError
     with (
+        patch.dict(os.environ, {"MAMMAMIRADIO_ALLOW_YTDLP": "true"}),
         patch.dict(sys.modules, {"yt_dlp": None}),
         patch("mammamiradio.downloader._run_ffmpeg") as mock_ffmpeg,
     ):
@@ -164,19 +195,19 @@ def test_ytdlp_import_error_falls_back_to_placeholder(track, cache_dir, music_di
 # --- _generate_placeholder ---
 
 
-def test_generate_placeholder_calls_ffmpeg(track, tmp_path):
-    from mammamiradio.downloader import _generate_placeholder
+def test_generate_silence_calls_ffmpeg(track, tmp_path):
+    from mammamiradio.downloader import _generate_silence
 
-    out_path = tmp_path / "placeholder.mp3"
+    out_path = tmp_path / "silence.mp3"
 
     with patch("mammamiradio.downloader._run_ffmpeg") as mock_ffmpeg:
-        result = _generate_placeholder(track, out_path)
+        result = _generate_silence(track, out_path)
 
     assert result == out_path
     mock_ffmpeg.assert_called_once()
-    # Verify the ffmpeg command includes expected arguments
     cmd = mock_ffmpeg.call_args[0][0]
     assert "ffmpeg" in cmd[0]
+    assert "anullsrc" in " ".join(cmd)
     assert str(out_path) in cmd
 
 

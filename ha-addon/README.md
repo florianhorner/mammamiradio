@@ -20,7 +20,7 @@ After installing, go to the add-on's **Configuration** tab:
 
 - **Anthropic API Key** (optional): Enables AI-generated banter and ads. Get one at [console.anthropic.com](https://console.anthropic.com). Without this, the station uses stock banter lines.
 - **Spotify Client ID / Secret**: From [developer.spotify.com](https://developer.spotify.com/dashboard). Without these, the station uses a built-in demo Italian playlist.
-- **Station Name**: Customize your station's name (default: "Radio Italì").
+- **Station Name**: Customize your station's name (default: "Malamie Radio").
 - **Spotify Playlist URL**: The public playlist to use on first run. In add-on mode this is the reliable path because browser-based user OAuth is not part of the add-on flow.
 
 ## Usage
