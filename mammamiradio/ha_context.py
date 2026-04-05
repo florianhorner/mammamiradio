@@ -207,6 +207,18 @@ def _build_summary(states: dict[str, dict]) -> str:
     return "\n".join(lines) if lines else ""
 
 
+_ha_client: httpx.AsyncClient | None = None
+_ha_cache: HomeContext | None = None
+
+
+def _get_ha_client() -> httpx.AsyncClient:
+    """Return a reusable async HTTP client for HA API calls."""
+    global _ha_client
+    if _ha_client is None or _ha_client.is_closed:
+        _ha_client = httpx.AsyncClient(timeout=10.0)
+    return _ha_client
+
+
 async def fetch_home_context(
     ha_url: str,
     ha_token: str,
@@ -216,21 +228,26 @@ async def fetch_home_context(
     """Fetch current home state from HA REST API.
 
     Returns cached result if fresher than poll_interval seconds.
+    Uses module-level cache for persistence across calls, with the
+    _cache parameter as a fallback for backward compatibility.
     """
-    if _cache and _cache.age_seconds < poll_interval:
-        return _cache
+    global _ha_cache
+    # Prefer explicitly passed cache, then module-level cache
+    effective_cache = _cache or _ha_cache
+    if effective_cache and effective_cache.age_seconds < poll_interval:
+        return effective_cache
 
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.get(
-                f"{ha_url.rstrip('/')}/api/states",
-                headers={
-                    "Authorization": f"Bearer {ha_token}",
-                    "Content-Type": "application/json",
-                },
-            )
-            resp.raise_for_status()
-            all_states = resp.json()
+        client = _get_ha_client()
+        resp = await client.get(
+            f"{ha_url.rstrip('/')}/api/states",
+            headers={
+                "Authorization": f"Bearer {ha_token}",
+                "Content-Type": "application/json",
+            },
+        )
+        resp.raise_for_status()
+        all_states = resp.json()
 
         # Filter to our curated entities
         entity_map = {e["entity_id"]: e for e in all_states}
@@ -242,12 +259,13 @@ async def fetch_home_context(
             summary=summary,
             timestamp=time.time(),
         )
+        _ha_cache = context
         logger.info("Fetched HA context: %d entities", len(relevant))
         return context
 
     except Exception as e:
         logger.warning("Failed to fetch HA context: %s", e)
         # Return stale cache if available, otherwise empty
-        if _cache:
-            return _cache
+        if effective_cache:
+            return effective_cache
         return HomeContext()
