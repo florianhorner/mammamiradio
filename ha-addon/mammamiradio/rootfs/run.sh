@@ -12,7 +12,7 @@ if [ -f "$OPTIONS_FILE" ]; then
     # Uses shlex.quote to prevent shell injection from user-provided values
     # stderr goes to log file (NOT into eval'd variable) to prevent injection
     OPTS_LOG="/tmp/opts-parse.log"
-    OPTS_EXPORT=$(python3 -c "
+    if ! OPTS_EXPORT=$(python3 -c "
 import json, shlex, sys
 try:
     with open('$OPTIONS_FILE') as f:
@@ -26,14 +26,12 @@ for key in ('anthropic_api_key', 'openai_api_key', 'spotify_client_id', 'spotify
     if val:
         env_key = key.upper()
         print(f'export {env_key}={shlex.quote(str(val))}')
-" 2>"$OPTS_LOG")
-    OPTS_RC=$?
-    if [ $OPTS_RC -ne 0 ]; then
-        echo "[mammamiradio] FATAL: Failed to parse options.json"
+" 2>"$OPTS_LOG"); then
+        echo "[mammamiradio] WARNING: Failed to parse options.json, continuing with defaults"
         cat "$OPTS_LOG" 2>/dev/null
-        exit 1
+    else
+        eval "$OPTS_EXPORT"
     fi
-    eval "$OPTS_EXPORT"
 fi
 
 # ---- Map Supervisor token to HA_TOKEN ----
@@ -64,14 +62,23 @@ fi
 # ---- Point cache/tmp at persistent /data ----
 export MAMMAMIRADIO_CACHE_DIR="/data/cache"
 export MAMMAMIRADIO_TMP_DIR="/data/tmp"
+export MAMMAMIRADIO_GO_LIBRESPOT_CONFIG_DIR="/data/go-librespot"
 
 # ---- Ensure directories exist ----
-mkdir -p /data/cache /data/music /data/tmp /data/go-librespot
+if ! mkdir -p /data/cache /data/music /data/tmp /data/go-librespot 2>/tmp/mammamiradio-data-mkdir.err; then
+    FALLBACK_BASE="/tmp/mammamiradio-data"
+    echo "[mammamiradio] WARNING: /data is not writable ($(cat /tmp/mammamiradio-data-mkdir.err 2>/dev/null || echo unknown error))"
+    echo "[mammamiradio] WARNING: Falling back to $FALLBACK_BASE (state will not persist across restarts)"
+    export MAMMAMIRADIO_CACHE_DIR="$FALLBACK_BASE/cache"
+    export MAMMAMIRADIO_TMP_DIR="$FALLBACK_BASE/tmp"
+    export MAMMAMIRADIO_GO_LIBRESPOT_CONFIG_DIR="$FALLBACK_BASE/go-librespot"
+    mkdir -p "$MAMMAMIRADIO_CACHE_DIR" "$FALLBACK_BASE/music" "$MAMMAMIRADIO_TMP_DIR" "$MAMMAMIRADIO_GO_LIBRESPOT_CONFIG_DIR"
+fi
 
 # ---- Initialize go-librespot config and keep device_name aligned with the shipped default ----
 SYNC_MSG="$(python3 -m mammamiradio.go_librespot_config sync \
     /defaults/go-librespot-config.yml \
-    /data/go-librespot/config.yml 2>&1)" || {
+    "$MAMMAMIRADIO_GO_LIBRESPOT_CONFIG_DIR/config.yml" 2>&1)" || {
     echo "[mammamiradio] ERROR: go-librespot config sync failed: $SYNC_MSG"
     exit 1
 }

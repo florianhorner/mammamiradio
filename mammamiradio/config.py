@@ -360,9 +360,9 @@ def load_config(path: str = "radio.toml") -> StationConfig:
         import logging as _log
 
         _log.getLogger(__name__).info("Running as Home Assistant addon")
-        config.cache_dir = Path("/data/cache")
-        config.tmp_dir = Path("/data/tmp")
-        config.audio.go_librespot_config_dir = "/data/go-librespot"
+        config.cache_dir = Path(os.getenv("MAMMAMIRADIO_CACHE_DIR", "/data/cache"))
+        config.tmp_dir = Path(os.getenv("MAMMAMIRADIO_TMP_DIR", "/data/tmp"))
+        config.audio.go_librespot_config_dir = os.getenv("MAMMAMIRADIO_GO_LIBRESPOT_CONFIG_DIR", "/data/go-librespot")
         # Auto-enable HA context via Supervisor API
         supervisor_token = os.getenv("SUPERVISOR_TOKEN") or os.getenv("HASSIO_TOKEN", "")
         if supervisor_token:
