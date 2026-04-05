@@ -97,18 +97,60 @@ async def test_synthesize_happy_path(_mock_all, tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_synthesize_error_falls_back_to_silence(_mock_all, tmp_path):
+async def test_synthesize_error_retries_fallback_voice(_mock_all, tmp_path):
+    """When primary voice fails, synthesize should retry with DiegoNeural before silence."""
     from mammamiradio.tts import synthesize
 
-    _mock_all["comm_instance"].save = AsyncMock(side_effect=RuntimeError("network down"))
+    call_count = 0
+
+    async def _save_fail_then_succeed(path):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            raise RuntimeError("primary voice down")
+        _touch(Path(path))
+
+    _mock_all["comm_instance"].save = AsyncMock(side_effect=_save_fail_then_succeed)
+
+    output = tmp_path / "out.mp3"
+    result = await synthesize("Ciao", "it-IT-GianniNeural", output)
+
+    assert result == output
+    # Should have been called twice: once for primary, once for fallback
+    assert _mock_all["Communicate"].call_count == 2
+    second_call = _mock_all["Communicate"].call_args_list[1]
+    assert second_call[0][1] == "it-IT-DiegoNeural"
+    _mock_all["generate_silence"].assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_synthesize_error_falls_back_to_silence(_mock_all, tmp_path):
+    """When both primary and fallback voices fail, generate silence."""
+    from mammamiradio.tts import synthesize
+
+    _mock_all["comm_instance"].save = AsyncMock(side_effect=RuntimeError("all voices down"))
 
     output = tmp_path / "out.mp3"
     result = await synthesize("Ciao", "it-IT-IsabellaNeural", output)
 
     assert result == output
     _mock_all["generate_silence"].assert_called_once()
-    # normalize should NOT have been called since edge_tts failed first
-    _mock_all["normalize"].assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_synthesize_diego_skips_fallback_retry(_mock_all, tmp_path):
+    """When DiegoNeural itself fails, don't retry with DiegoNeural again."""
+    from mammamiradio.tts import synthesize
+
+    _mock_all["comm_instance"].save = AsyncMock(side_effect=RuntimeError("diego down"))
+
+    output = tmp_path / "out.mp3"
+    result = await synthesize("Ciao", "it-IT-DiegoNeural", output)
+
+    assert result == output
+    # Should only be called once (no self-retry)
+    assert _mock_all["Communicate"].call_count == 1
+    _mock_all["generate_silence"].assert_called_once()
 
 
 # ---------------------------------------------------------------------------

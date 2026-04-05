@@ -49,8 +49,20 @@ _DEMO_ASSETS_DIR = Path(__file__).parent / "demo_assets"
 _recently_played_clips: list[str] = []
 
 
-def _pick_canned_clip(subdir: str) -> Path | None:
-    """Pick a pre-bundled clip from demo_assets/{subdir}/, avoiding recent repeats."""
+SHAREWARE_CANNED_LIMIT = 3
+
+
+def _pick_canned_clip(subdir: str, *, state: StationState | None = None) -> Path | None:
+    """Pick a pre-bundled clip from demo_assets/{subdir}/, avoiding recent repeats.
+
+    For banter clips, respects the shareware trial limit: after SHAREWARE_CANNED_LIMIT
+    clips have been streamed to the listener, returns None to force TTS fallback.
+    Welcome clips are not subject to the limit.
+    """
+    # Shareware gate: stop serving canned banter after the trial limit
+    if subdir == "banter" and state and state.canned_clips_streamed >= SHAREWARE_CANNED_LIMIT:
+        logger.info("Shareware limit reached (%d clips streamed), forcing TTS", state.canned_clips_streamed)
+        return None
     clip_dir = _DEMO_ASSETS_DIR / subdir
     if not clip_dir.is_dir():
         return None
@@ -257,7 +269,7 @@ async def run_producer(
                 # Generate banter about THIS specific song while capturing audio
                 async def _generate_welcome_banter(track=current):
                     try:
-                        canned = _pick_canned_clip("banter") if not config.anthropic_api_key else None
+                        canned = _pick_canned_clip("banter", state=state) if not config.anthropic_api_key else None
                         if canned:
                             state.last_banter_script = [{"host": "Radio", "text": "(pre-recorded banter)"}]
                             return canned
@@ -271,13 +283,25 @@ async def run_producer(
                         return None
 
                 try:
+                    # Queue a pre-recorded welcome clip FIRST (the DJ interrupts)
+                    welcome_clip = _pick_canned_clip("welcome")
+                    if welcome_clip:
+                        welcome_seg = Segment(
+                            type=SegmentType.BANTER,
+                            path=welcome_clip,
+                            metadata={"type": "welcome", "canned": True},
+                        )
+                        await queue.put(welcome_seg)
+                        state.after_banter()
+                        logger.info("Welcome clip queued: %s", welcome_clip.name)
+
                     # Run both in parallel — capture takes song duration,
                     # banter generation takes ~5-10s. Banter finishes first.
                     capture_task = spotify_player.capture_current_audio(current, norm_path)
                     banter_task = _generate_welcome_banter()
                     audio_path, banter_path = await asyncio.gather(capture_task, banter_task)
 
-                    # Queue: user's song first
+                    # Queue: user's song
                     music_seg = Segment(
                         type=SegmentType.MUSIC,
                         path=audio_path,
@@ -287,7 +311,7 @@ async def run_producer(
                     state.after_music(current)
                     logger.info("Autoplay queued: %s", current.display)
 
-                    # Then the personalized banter (the WTF moment)
+                    # Then the personalized banter about the song (the WTF moment)
                     if banter_path:
                         banter_seg = Segment(
                             type=SegmentType.BANTER,
@@ -299,6 +323,7 @@ async def run_producer(
                         logger.info("Welcome banter queued after %s", current.display)
                 except Exception as exc:
                     logger.warning("Autoplay failed: %s", exc)
+                    was_spotify_connected = False  # allow retry on next loop
         if not state.spotify_connected:
             was_spotify_connected = False
 
@@ -380,7 +405,7 @@ async def run_producer(
 
                 canned = None
                 if not config.anthropic_api_key:
-                    canned = _pick_canned_clip("banter")
+                    canned = _pick_canned_clip("banter", state=state)
 
                 if canned:
                     logger.info("Using pre-bundled banter clip: %s", canned.name)
@@ -398,7 +423,7 @@ async def run_producer(
                 segment = Segment(
                     type=SegmentType.BANTER,
                     path=audio_path,
-                    metadata={"type": "banter", "lines": state.last_banter_script},
+                    metadata={"type": "banter", "lines": state.last_banter_script, "canned": canned is not None},
                 )
                 success_callback = state.after_banter
 

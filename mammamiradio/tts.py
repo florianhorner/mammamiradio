@@ -55,7 +55,27 @@ async def synthesize(
         logger.info("Synthesized: %s (%s)", output_path.name, voice)
         return output_path
     except Exception as e:
-        logger.error("TTS failed: %s", e)
+        logger.error("TTS failed with %s: %s", voice, e)
+        # Retry with a fallback voice before resorting to silence
+        fallback = "it-IT-DiegoNeural"
+        if voice != fallback:
+            try:
+                logger.info("Retrying TTS with fallback voice: %s", fallback)
+                fb_kwargs: dict[str, str] = {}
+                if rate:
+                    fb_kwargs["rate"] = rate
+                if pitch:
+                    fb_kwargs["pitch"] = pitch
+                comm = edge_tts.Communicate(text, fallback, **fb_kwargs)
+                raw_path = output_path.with_suffix(".raw.mp3")
+                await comm.save(str(raw_path))
+                loop = asyncio.get_running_loop()
+                await loop.run_in_executor(None, normalize, raw_path, output_path)
+                raw_path.unlink(missing_ok=True)
+                logger.info("Fallback synthesized: %s (%s)", output_path.name, fallback)
+                return output_path
+            except Exception as e2:
+                logger.error("Fallback TTS also failed: %s", e2)
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(None, generate_silence, output_path, 2.0)
         return output_path
@@ -97,7 +117,10 @@ async def synthesize_ad(
             await synthesize(part.text, voice_for_part.voice, part_path)
             voice_sfx_parts.append(part_path)
         elif part.type == "sfx" and part.sfx:
-            await loop.run_in_executor(None, generate_sfx, part_path, part.sfx, sfx_dir)
+            from mammamiradio.normalizer import AVAILABLE_SFX_TYPES
+
+            sfx_name = part.sfx if part.sfx in AVAILABLE_SFX_TYPES else "chime"
+            await loop.run_in_executor(None, generate_sfx, part_path, sfx_name, sfx_dir)
             voice_sfx_parts.append(part_path)
         elif part.type == "pause":
             duration = part.duration if part.duration > 0 else 0.5

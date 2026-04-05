@@ -145,6 +145,7 @@ class SpotifyPlayer:
             except OSError as e:
                 if self._drain_running:
                     logger.warning("FIFO read error: %s (reopening)", e)
+                    time.sleep(0.5)
             finally:
                 try:
                     os.close(fd)
@@ -339,8 +340,8 @@ class SpotifyPlayer:
                             logger.info("Spotify connected: %s", data["username"])
                             self._authenticated = True
                         return True
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("check_auth HTTP error: %s", exc)
 
         if self._authenticated:
             logger.info("Spotify disconnected from mammamiradio")
@@ -434,7 +435,7 @@ class SpotifyPlayer:
         """
         remaining_ms = track.duration_ms - track.position_ms
         remaining_sec = max(remaining_ms / 1000.0, 5.0)  # at least 5s
-        remaining_sec = min(remaining_sec, 300.0)
+        remaining_sec = min(remaining_sec, 45.0)  # cap at 45s — don't block the producer
 
         loop = asyncio.get_running_loop()
 
@@ -453,7 +454,7 @@ class SpotifyPlayer:
                 "-i",
                 "pipe:0",
                 "-filter:a",
-                "afade=t=in:d=0.3,loudnorm=I=-16:LRA=11:TP=-1.5",
+                f"afade=t=in:d=0.3,afade=t=out:st={max(remaining_sec - 2, 1)}:d=2,volume=1.0",
                 "-ar",
                 str(self.config.audio.sample_rate),
                 "-ac",
@@ -542,7 +543,7 @@ class SpotifyPlayer:
                 "-i",
                 "pipe:0",
                 "-filter:a",
-                "loudnorm=I=-16:LRA=11:TP=-1.5",
+                "volume=1.0",
                 "-ar",
                 str(self.config.audio.sample_rate),
                 "-ac",

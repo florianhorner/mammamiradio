@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from pathlib import Path
 
 from mammamiradio.models import Track
@@ -107,11 +108,14 @@ def _download_sync(track: Track, cache_dir: Path, music_dir: Path) -> Path:
         logger.info("Local file: %s -> %s", track.display, local)
         return local
 
-    # 3. Try yt-dlp
-    try:
-        return _download_ytdlp(track, cache_dir)
-    except Exception as e:
-        logger.warning("yt-dlp failed for %s: %s — using silence", track.display, e)
+    # 3. Try yt-dlp (opt-in only, disabled by default for copyright safety)
+    if os.getenv("MAMMAMIRADIO_ALLOW_YTDLP", "false").lower() in ("true", "1", "yes"):
+        try:
+            return _download_ytdlp(track, cache_dir)
+        except Exception as e:
+            logger.warning("yt-dlp failed for %s: %s — using silence", track.display, e)
+    else:
+        logger.info("yt-dlp disabled for %s (set MAMMAMIRADIO_ALLOW_YTDLP=true to enable)", track.display)
 
     # 4. Fallback: brief silence (never a sine wave tone)
     return _generate_silence(track, out_path)

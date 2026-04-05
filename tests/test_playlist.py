@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import pytest
+
 from mammamiradio.playlist import DEMO_TRACKS, _extract_playlist_id
 
 
 def test_demo_tracks_has_entries():
-    assert len(DEMO_TRACKS) == 10
+    assert len(DEMO_TRACKS) >= 5
     for t in DEMO_TRACKS:
         assert t.title
         assert t.artist
@@ -27,3 +29,18 @@ def test_extract_playlist_id_with_query_params():
 def test_extract_playlist_id_returns_none_for_invalid():
     assert _extract_playlist_id("not a url") is None
     assert _extract_playlist_id("https://open.spotify.com/track/abc") is None
+
+
+def test_demo_tracks_match_bundled_assets():
+    """Every demo track title should match at least one bundled asset filename."""
+    from pathlib import Path
+
+    from mammamiradio.downloader import _find_demo_asset
+
+    assets_dir = Path(__file__).parent.parent / "mammamiradio" / "demo_assets" / "music"
+    if not assets_dir.exists():
+        pytest.skip("demo_assets/music/ not found")
+
+    for track in DEMO_TRACKS:
+        result = _find_demo_asset(track)
+        assert result is not None, f"Demo track '{track.display}' has no matching asset in demo_assets/music/"

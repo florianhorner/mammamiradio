@@ -183,12 +183,15 @@ Every card surface is **opaque sienna**, never semi-transparent. Transparency ca
 }
 ```
 
-**Primary cards** (now-playing, connect hero) use `--sienna` (`#823218`) — slightly darker.
+**Primary cards** (now-playing) use `--sienna` (`#823218`) — slightly darker.
+
+**Exception — the Connect CTA card** uses an inverted cream palette (see [Connect CTA](#connect-cta)
+below). This is the *only* card that breaks the sienna rule, deliberately, to create visual
+hierarchy between the upgrade prompt and everything else.
 
 **Top accent border pattern** for featured cards:
 ```css
 border-top: 2px solid rgba(236,204,48,0.5);  /* golden — for now-playing */
-border-top: 2px solid var(--lancia2);         /* red — for connect hero */
 ```
 
 With a matching gradient pseudo-element:
@@ -306,6 +309,66 @@ Show on `display:none` initially; reveal once station data arrives via `_initTic
 
 **Never use `position: fixed` for the ticker** — it should feel like part of the player, not a news header.
 
+**Ticker CTA injection**: when Spotify is not connected, two golden CTA items are mixed
+into the ticker among the ambient Italian text: "♫ Porta i tuoi dischi — connetti Spotify"
+and "♫ Your music, same hosts — connect Spotify". These use `--sun2` color instead of the
+normal muted cream, making them stand out without breaking the ambient feel. Clicking scrolls
+to the connect card. CTA items are removed once Spotify connects.
+
+```css
+.ticker .ti.ticker-cta { color: var(--sun2); cursor: pointer; }
+.ticker .ti.ticker-cta:hover { color: var(--sun); }
+```
+
+### Connect CTA (cream contrast card)
+
+The Spotify connect prompt uses an **inverted cream card** — the only light-background element
+in the UI. This deliberately breaks the sienna card pattern to create visual hierarchy: the
+upgrade CTA must never look like a regular card or an error state.
+
+```css
+.connect-cta {
+  background: var(--cream);        /* #F5EDD8 — inverted from normal cards */
+  border-left: 4px solid var(--sun);  /* golden accent stripe */
+  border-radius: 10px;
+  padding: 16px 20px;
+  display: flex; align-items: center; gap: 14px;
+  box-shadow: 0 2px 16px rgba(42,16,8,0.2);
+}
+```
+
+- **Headline**: Playfair Display 17px bold italic, `--shadow` dark text
+- **Subtitle**: Inter 11px, `rgba(42,16,8,0.55)`
+- **Hover**: `translateY(-1px)` lift with deeper shadow
+- **Icon**: music note emoji left, chevron arrow right
+- Hidden when `spotify_connected` is true
+
+**Design rationale**: the council review identified that the old "Bring Your Records" card
+had identical visual weight to the "Having trouble?" error state. The cream card solves this
+with a single CSS-level change — no layout restructuring needed.
+
+### Help toggle (collapsed troubleshooting)
+
+Troubleshooting is demoted from a full card to a `(?)` icon with expandable popover.
+This prevents the error/help state from competing with the upgrade CTA.
+
+```css
+.help-toggle {
+  font-size: 11px; color: rgba(245,237,216,0.35);
+  /* centered, minimal — not a card */
+}
+.help-popover {
+  background: var(--sienna);
+  border: 1px solid rgba(245,237,216,0.12);
+  border-radius: 8px; padding: 14px 16px;
+}
+```
+
+- Toggle text: "(?) Having trouble connecting?"
+- Popover contains WiFi instructions + "Advanced options" link
+- After 60s without connection, toggle text brightens to `rgba(245,237,216,0.55)`
+- "Advanced options" is *only* accessible through this path — never shown as a standalone button
+
 ### FM dial band
 
 Dark interior only — this is the one place `--shadow` (`#2A1008`) is correct.
@@ -399,8 +462,10 @@ and should be preserved exactly when touching related code:
 
 - **Background**: warm orange-red sunset gradient — large, atmospheric, dominant. Not dark.
 - **Cards**: deep opaque sienna surfaces — solid depth, no transparency.
+- **Connect CTA**: cream contrast card — the one deliberate exception to sienna cards. Golden left stripe, Playfair italic headline, dark text on cream. Must pop.
+- **Help toggle**: `(?)` icon, not a card. Troubleshooting and advanced options live behind this toggle only.
 - **Waveform**: 36 golden bars bouncing independently — organic, not a progress bar.
-- **Ticker**: Playfair italic Italian text flowing left below the player — unhurried (32s loop).
+- **Ticker**: Playfair italic Italian text flowing left below the player — unhurried (32s loop). Golden CTA items injected when Spotify is disconnected.
 - **Play button**: golden with three-layer glow (drop shadow + outer ring + diffuse bloom).
 - **Dial needle**: Lancia red glow, overshoot-and-settle locking animation.
 
@@ -488,7 +553,8 @@ Used for "Benvenuto!" on Spotify connect. Keep the warm overlay, not dark.
 | Never green for success / connected / playing | Red-green colorblind. Use `--ok` (#2563EB) |
 | Never cold grey or charcoal as the dominant background | This is Italian radio, not a SaaS dashboard |
 | Never Inter for the station name | Always Playfair Display italic |
-| Never light backgrounds on cards | Cards are "buildings in shadow" — they must be darker than the sky |
+| Never light backgrounds on cards (except Connect CTA) | Cards are "buildings in shadow" — the cream CTA is the sole exception, for hierarchy |
+| Never a full card for troubleshooting/error states | Demote to `(?)` toggle — error UI must never compete with upgrade prompts |
 | Always pair semantic color with a shape icon | `.status-ok::before { content: "✓" }` — not color alone |
 
 ---

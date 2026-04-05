@@ -185,7 +185,9 @@ h1 {
 }
 .dial-band::before {
   content: ''; position: absolute; inset: 0;
-  background: linear-gradient(180deg, rgba(240,200,64,0.06) 0%, transparent 40%);
+  background:
+    repeating-linear-gradient(180deg, transparent 0px, transparent 3px, rgba(0,0,0,0.12) 3px, rgba(0,0,0,0.12) 4px),
+    linear-gradient(180deg, rgba(240,200,64,0.06) 0%, transparent 40%);
   pointer-events: none;
 }
 .dial-band::after {
@@ -241,50 +243,6 @@ h1 {
 }
 @keyframes pulse { 0%, 100% { opacity: 0.4; } 50% { opacity: 1; } }
 
-/* ── CONNECT HERO ── */
-.connect-hero {
-  position: relative; z-index: 1;
-  background: var(--sienna);
-  border: 1px solid rgba(245,237,216,0.1);
-  border-top: 2px solid var(--lancia2);
-  border-radius: 10px;
-  padding: 24px 22px;
-  margin-bottom: 14px;
-}
-.connect-hero::before {
-  content: ''; position: absolute; top: -1px; left: 22px; right: 22px; height: 2px;
-  background: linear-gradient(90deg, transparent, rgba(184,44,32,0.7), transparent);
-}
-.connect-hero h2 {
-  font-family: var(--font-display);
-  font-size: 22px; font-weight: 700; font-style: italic;
-  color: var(--cream); margin: 0 0 6px;
-}
-.connect-hero .subtitle {
-  font-size: 13px; color: rgba(245,237,216,0.55); margin-bottom: 20px; line-height: 1.6;
-}
-.connect-steps {
-  display: flex; gap: 10px; justify-content: center;
-  margin: 0 0 18px; flex-wrap: wrap;
-}
-.connect-step {
-  text-align: center; flex: 1; min-width: 80px;
-  background: rgba(42,16,8,0.25);
-  border: 1px solid rgba(245,237,216,0.1);
-  border-radius: 8px; padding: 12px 8px;
-}
-.connect-step .step-num { display: none; }
-.connect-step .icon { font-size: 28px; margin-bottom: 5px; }
-.connect-step .text { font-size: 11px; color: var(--cream); font-weight: 500; }
-.connect-status-line {
-  display: flex; align-items: center; justify-content: center;
-  gap: 8px; font-size: 12px; color: rgba(245,237,216,0.5);
-}
-.connect-status-line .pulse-dot {
-  width: 7px; height: 7px; border-radius: 50%; background: var(--lancia2);
-  animation: pulse 1.5s ease-in-out infinite;
-}
-
 /* ── NOW PLAYING ── */
 .now-playing {
   position: relative; z-index: 1; overflow: hidden;
@@ -311,10 +269,13 @@ h1 {
 }
 .np-controls { display: flex; align-items: center; gap: 14px; margin-bottom: 0; }
 .np-text { flex: 1; }
+.np-track-wrap { overflow: hidden; margin-bottom: 3px; }
 .np-track {
   font-size: 22px; font-weight: 700; line-height: 1.15;
-  color: var(--cream); margin-bottom: 3px;
+  color: var(--cream); white-space: nowrap; display: inline-block;
 }
+@keyframes np-marquee { 0% { transform: translateX(0); } 100% { transform: translateX(-50%); } }
+.np-track.scrolling { animation: np-marquee var(--marquee-dur, 10s) linear infinite; }
 .np-artist {
   font-size: 12px; color: rgba(245,237,216,0.5); margin-bottom: 2px;
 }
@@ -462,6 +423,90 @@ h1 {
   100% { transform: translateX(-50%); }
 }
 
+/* ── CONNECT CTA — cream contrast card ── */
+.connect-cta {
+  position: relative; z-index: 1;
+  background: var(--cream);
+  border-radius: 10px;
+  padding: 16px 20px;
+  margin-bottom: 12px;
+  display: flex; align-items: center; gap: 14px;
+  cursor: pointer;
+  border-left: 4px solid var(--sun);
+  box-shadow: 0 2px 16px rgba(42,16,8,0.2);
+  transition: transform 0.15s ease, box-shadow 0.2s ease;
+}
+.connect-cta:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 24px rgba(42,16,8,0.3);
+}
+.connect-cta .cta-icon {
+  font-size: 22px; flex-shrink: 0;
+}
+.connect-cta .cta-text {
+  flex: 1;
+}
+.connect-cta .cta-headline {
+  font-family: var(--font-display);
+  font-size: 17px; font-weight: 700; font-style: italic;
+  color: var(--shadow); line-height: 1.2; margin-bottom: 2px;
+}
+.connect-cta .cta-sub {
+  font-size: 11px; color: rgba(42,16,8,0.55);
+}
+.connect-cta .cta-arrow {
+  font-size: 16px; color: rgba(42,16,8,0.3);
+  transition: transform 0.15s ease;
+}
+.connect-cta:hover .cta-arrow { transform: translateX(3px); }
+
+/* ── HELP ICON — collapsed (?) ── */
+.help-toggle {
+  display: flex; align-items: center; justify-content: center; gap: 4px;
+  background: none; border: none; cursor: pointer;
+  font-size: 11px; color: rgba(245,237,216,0.35);
+  padding: 6px 0; margin: 0 auto 12px;
+  font-family: var(--font-body);
+  transition: color 0.15s;
+}
+.help-toggle:hover { color: rgba(245,237,216,0.65); }
+.help-toggle .help-q {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 16px; height: 16px; border-radius: 50%;
+  border: 1px solid rgba(245,237,216,0.25);
+  font-size: 10px; font-weight: 700;
+}
+.help-popover {
+  display: none;
+  background: var(--sienna);
+  border: 1px solid rgba(245,237,216,0.12);
+  border-radius: 8px; padding: 14px 16px;
+  margin-bottom: 12px; font-size: 12px;
+  color: rgba(245,237,216,0.6); line-height: 1.6;
+}
+.help-popover.open { display: block; }
+.help-popover .help-advanced {
+  display: inline-block; margin-top: 8px;
+  font-size: 11px; color: rgba(245,237,216,0.4);
+  text-decoration: underline; cursor: pointer;
+  background: none; border: none; padding: 0;
+  font-family: var(--font-body);
+}
+.help-popover .help-advanced:hover { color: rgba(245,237,216,0.7); }
+
+/* ── TICKER CTA ITEM — golden highlight ── */
+.ticker .ti.ticker-cta {
+  color: var(--sun2);
+  cursor: pointer;
+  transition: color 0.2s;
+}
+.ticker .ti.ticker-cta:hover {
+  color: var(--sun);
+}
+.ticker .ts.ticker-cta-sep {
+  color: var(--sun2);
+}
+
 /* ── TOAST ── */
 .toast {
   position: fixed; bottom: 80px; left: 50%; transform: translateX(-50%);
@@ -526,7 +571,9 @@ h1 {
     <div class="np-controls">
       <button class="play-btn" id="play-btn" onclick="togglePlay()" aria-label="Play radio">&#9654;</button>
       <div class="np-text">
-        <div class="np-track" id="np-track">...</div>
+        <div class="np-track-wrap">
+          <div class="np-track" id="np-track">...</div>
+        </div>
         <div class="np-artist" id="np-meta"></div>
         <div class="waveform paused" id="waveform"></div>
       </div>
@@ -540,17 +587,23 @@ h1 {
   <div class="ticker" id="ticker"></div>
 </div>
 
-<!-- Connect Spotify (secondary — below now playing, subtle) -->
-<div class="card" id="connect-card" style="display:none">
-  <h3>Bring Your Records</h3>
-  <p>Open Spotify, tap the speaker icon, choose <strong id="device-name">MammaMiRadio</strong>.</p>
+<!-- Connect Spotify — cream contrast card (Option C) -->
+<div class="connect-cta" id="connect-card" style="display:none" onclick="window.open('spotify:', '_blank')" role="button" tabindex="0">
+  <div class="cta-icon">🎵</div>
+  <div class="cta-text">
+    <div class="cta-headline">Your music. Same hosts.</div>
+    <div class="cta-sub">Open Spotify and connect to <strong id="device-name">MammaMiRadio</strong></div>
+  </div>
+  <div class="cta-arrow">›</div>
 </div>
 
-<!-- Connect timeout (after 60s with no connection) -->
-<div class="card" id="connect-trouble" style="display:none">
-  <h3>Having trouble?</h3>
-  <p>Make sure your phone and this device are on the same WiFi network. The station needs to be discoverable for Spotify to find it.</p>
-  <button class="btn btn-sm" onclick="openAdvancedSetup()">Advanced options</button>
+<!-- Help — collapsed (?) icon, expands to troubleshooting + advanced -->
+<button class="help-toggle" id="help-toggle" style="display:none" onclick="toggleHelp()">
+  <span class="help-q">?</span> Having trouble connecting?
+</button>
+<div class="help-popover" id="help-popover">
+  <p>Make sure your phone and this device are on the same WiFi network. Open Spotify, tap the speaker icon, and choose MammaMiRadio.</p>
+  <button class="help-advanced" onclick="openAdvancedSetup()">Advanced options</button>
 </div>
 
 <!-- Queue (collapsed, 3 items) -->
@@ -651,6 +704,8 @@ const USER_FREQ = 101.3;
 let _dialFreq = 98.0; // start mid-band so sweeps use the full range
 let _dialTarget = DEMO_FREQ;
 let _dialState = 'searching'; // searching | locking | locked | shifting
+let _dialCollapseTimer = null;
+let _dialCollapseHideTimer = null;
 let _dialAnimFrame = null;
 let _audioCtx = null;
 let _noiseGain = null;
@@ -685,7 +740,8 @@ let _crackleSource = null;
 let _crackleGain = null;
 
 function _startStatic() {
-  if (_audioCtx) return;
+  if (_audioCtx && _audioCtx.state !== 'closed') return;
+  if (_audioCtx) { _audioCtx = null; _noiseGain = null; _crackleGain = null; }
   try {
     _audioCtx = new (window.AudioContext || window.webkitAudioContext)();
     const sr = _audioCtx.sampleRate;
@@ -827,7 +883,9 @@ function _dialShiftTo(target, label, statusText) {
   needle.classList.add('seeking');
   document.getElementById('dial-status').textContent = 'Retuning...';
   _setSignalBars(1);
-  // Re-expand dial if it was collapsed
+  // Cancel any pending collapse and re-expand
+  if (_dialCollapseTimer) { clearTimeout(_dialCollapseTimer); _dialCollapseTimer = null; }
+  if (_dialCollapseHideTimer) { clearTimeout(_dialCollapseHideTimer); _dialCollapseHideTimer = null; }
   const dial = document.getElementById('radio-dial');
   dial.style.overflow = '';
   dial.style.maxHeight = '';
@@ -898,6 +956,46 @@ requestAnimationFrame(_dialSeek);
 
 function escHtml(v) { return String(v ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 
+let _lastTrackLabel = null;
+function _updateNowPlaying(ns) {
+  const label = ns.label || 'Waiting for first segment...';
+  const type = ns.type || '';
+  const trackEl = document.getElementById('np-track');
+  const metaEl = document.getElementById('np-meta');
+
+  // Parse artist and title from "Artist – Title" format used for music segments
+  let displayTitle = label;
+  let displayArtist = '';
+  if (type === 'music' && label.includes(' \u2013 ')) {
+    const idx = label.indexOf(' \u2013 ');
+    displayArtist = label.slice(0, idx);
+    displayTitle = label.slice(idx + 3);
+  } else if (type === 'banter') {
+    displayArtist = 'Radio Ital\u00EC';
+  } else if (type === 'ad') {
+    displayArtist = (ns.metadata && ns.metadata.brand) ? ns.metadata.brand : 'Sponsored';
+  }
+  metaEl.textContent = displayArtist;
+
+  // Only re-trigger marquee check when label actually changes
+  if (label === _lastTrackLabel) return;
+  _lastTrackLabel = label;
+
+  const wrap = trackEl.parentElement;
+  trackEl.classList.remove('scrolling');
+  trackEl.textContent = displayTitle;
+
+  // Detect overflow after paint and animate if needed
+  requestAnimationFrame(() => {
+    if (wrap && trackEl.scrollWidth > wrap.clientWidth + 2) {
+      const dur = Math.max(6, Math.round(trackEl.scrollWidth / 60));
+      trackEl.style.setProperty('--marquee-dur', dur + 's');
+      trackEl.textContent = displayTitle + '\u2003\u2022\u2003' + displayTitle;
+      trackEl.classList.add('scrolling');
+    }
+  });
+}
+
 function showToast(msg) {
   const t = document.getElementById('toast');
   t.textContent = msg;
@@ -930,20 +1028,23 @@ function updateCards() {
   }
   _lastTier = tier;
 
-  // Connect card
-  document.getElementById('connect-card').style.display = c.spotify_connected ? 'none' : '';
+  // Connect CTA card + help toggle
+  const showConnect = !c.spotify_connected;
+  document.getElementById('connect-card').style.display = showConnect ? '' : 'none';
+  document.getElementById('help-toggle').style.display = showConnect ? '' : 'none';
+  if (!showConnect) {
+    document.getElementById('help-popover').classList.remove('open');
+  }
   if (caps.connect_device_name) {
     document.getElementById('device-name').textContent = caps.connect_device_name;
   }
 
-  // Connect timeout
+  // Show help toggle after 60s as a subtle nudge (but it's always visible)
   if (!c.spotify_connected && connectStartTime) {
     const elapsed = (Date.now() - connectStartTime) / 1000;
-    document.getElementById('connect-trouble').style.display = elapsed > 60 ? '' : 'none';
-    document.getElementById('connect-status').textContent =
-      elapsed > 60 ? 'Still waiting...' : 'Waiting for connection...';
-  } else {
-    document.getElementById('connect-trouble').style.display = 'none';
+    if (elapsed > 60) {
+      document.getElementById('help-toggle').style.color = 'rgba(245,237,216,0.55)';
+    }
   }
 
   // Playlist card (only when connected AND has spotify_api for browsing)
@@ -977,7 +1078,7 @@ function updateCards() {
     // Hide hash-like internal Spotify IDs — only show human-readable names
     const name = (rawName.length > 20 && !/\s/.test(rawName)) ? '' : rawName;
     _dialShiftTo(USER_FREQ, name || 'Your Music', 'Spotify connected');
-    setTimeout(() => showTransition(name ? 'Benvenuto, ' + name + '!' : 'Benvenuto!', 2500), 1600);
+    setTimeout(() => showTransition(name ? 'Benvenuto, ' + escHtml(name) + '!' : 'Benvenuto!', 2500), 1600);
   }
 }
 
@@ -987,15 +1088,20 @@ function updateStatus(d) {
     firstDataReceived = true;
     if (_dialAnimFrame) { cancelAnimationFrame(_dialAnimFrame); _dialAnimFrame = null; }
     _dialLock(DEMO_FREQ, 'Radio Ital\u00EC', 'Signal locked');
-    // Collapse dial gently — GPU-composited transform for smooth animation
-    setTimeout(() => {
+    // Collapse dial gently — fade then height-slide (same pattern as _dialShiftTo)
+    _dialCollapseTimer = setTimeout(() => {
       const dial = document.getElementById('radio-dial');
-      dial.style.transformOrigin = 'top center';
-      dial.style.transition = 'opacity 2s ease, transform 2s cubic-bezier(0.22, 1, 0.36, 1)';
+      dial.style.transition = 'opacity 1.4s ease';
       dial.style.opacity = '0';
-      dial.style.transform = 'scaleY(0)';
-      // After transition ends, remove from flow
-      setTimeout(() => { dial.style.display = 'none'; }, 2200);
+      _dialCollapseHideTimer = setTimeout(() => {
+        const h = dial.getBoundingClientRect().height;
+        dial.style.overflow = 'hidden';
+        dial.style.maxHeight = h + 'px';
+        void dial.offsetHeight;
+        dial.style.transition = 'max-height 0.6s cubic-bezier(0.4,0,0.6,1), margin-top 0.6s ease';
+        dial.style.maxHeight = '0';
+        dial.style.marginTop = '0';
+      }, 1500);
     }, 5000);
     document.getElementById('now-playing').style.display = '';
     connectStartTime = Date.now();
@@ -1009,19 +1115,17 @@ function updateStatus(d) {
 
   // Now playing
   const ns = d.now_streaming || {};
-  document.getElementById('np-track').textContent = ns.label || 'Waiting for first segment...';
-  document.getElementById('np-meta').textContent = ns.type ? ns.type.toUpperCase() + ' — streaming now' : '';
+  _updateNowPlaying(ns);
 
-  // Album art — thumbnail + blurred background wash
+  // Album art — blurred background wash (thumbnail removed in redesign)
   const artUrl = (ns.metadata && ns.metadata.album_art) || '';
-  const artEl = document.getElementById('album-art');
   const artBg = document.getElementById('album-art-bg');
-  if (artUrl) {
-    artEl.src = artUrl; artEl.style.display = '';
-    artBg.style.backgroundImage = 'url(' + artUrl + ')'; artBg.style.opacity = '0.15';
-  } else {
-    artEl.style.display = 'none';
-    artBg.style.opacity = '0';
+  if (artBg) {
+    if (artUrl) {
+      artBg.style.backgroundImage = 'url(' + artUrl + ')'; artBg.style.opacity = '0.15';
+    } else {
+      artBg.style.opacity = '0';
+    }
   }
 
   // Queue (only after Spotify connected — golden path: "nothing else to look at")
@@ -1169,6 +1273,10 @@ async function saveAnthropicKey() {
   if (d.ok) setTimeout(refresh, 1000);
 }
 
+function toggleHelp() {
+  document.getElementById('help-popover').classList.toggle('open');
+}
+
 function openAdvancedSetup() {
   document.getElementById('advanced-card').style.display = '';
 }
@@ -1235,9 +1343,25 @@ function _initTicker() {
     'Palermo 27\u00B0 sole splendido',
     'Prossimo treno Roma\u2013Milano: 14:35',
   ];
+  // Inject Spotify CTA into ticker if not connected
+  const isConnected = caps && caps.capabilities && caps.capabilities.spotify_connected;
+  if (!isConnected) {
+    // Insert the CTA after every ~4 items as ambient reinforcement
+    items.splice(4, 0, '\u266B Porta i tuoi dischi \u2014 connetti Spotify');
+    items.splice(10, 0, '\u266B Your music, same hosts \u2014 connect Spotify');
+  }
+
   const ticker = document.getElementById('ticker');
   // Duplicate items so the scroll loops seamlessly
-  const html = items.concat(items).map(t => '<span class="ti">' + t + '</span><span class="ts"> · </span>').join('');
+  const ctaText1 = '\u266B Porta i tuoi dischi \u2014 connetti Spotify';
+  const ctaText2 = '\u266B Your music, same hosts \u2014 connect Spotify';
+  const html = items.concat(items).map(t => {
+    const isCta = (t === ctaText1 || t === ctaText2);
+    const tiClass = isCta ? 'ti ticker-cta' : 'ti';
+    const tsClass = isCta ? 'ts ticker-cta-sep' : 'ts';
+    const onclick = isCta ? ' onclick="document.getElementById(\'connect-card\').scrollIntoView({behavior:\'smooth\'})"' : '';
+    return '<span class="' + tiClass + '"' + onclick + '>' + t + '</span><span class="' + tsClass + '"> · </span>';
+  }).join('');
   ticker.innerHTML = html;
   document.getElementById('ticker-wrap').style.display = '';
 }

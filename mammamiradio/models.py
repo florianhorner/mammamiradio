@@ -233,6 +233,8 @@ class StationState:
     ha_context: str = ""
     # Force-trigger: producer will use this type instead of scheduler for the next segment
     force_next: SegmentType | None = None
+    # Shareware trial: counts canned banter clips actually streamed to listener
+    canned_clips_streamed: int = 0
     # Consumption metrics
     api_calls: int = 0
     api_input_tokens: int = 0
@@ -268,6 +270,9 @@ class StationState:
         """Called by the streamer when it starts sending a segment to the listener."""
         seg_type = segment.type.value
         label = segment.metadata.get("title", segment.metadata.get("brand", seg_type))
+        # Track canned banter clips at stream time (shareware trial)
+        if segment.metadata.get("canned"):
+            self.canned_clips_streamed += 1
         self.now_streaming = {
             "type": seg_type,
             "label": label,

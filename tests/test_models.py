@@ -92,3 +92,30 @@ def test_track_cache_key():
 def test_track_display():
     t = _track()
     assert t.display == "Artist 1 – Song 1"
+
+
+def test_on_stream_segment_counts_canned_clips():
+    """Canned banter clips are counted at stream time for shareware trial."""
+    state = StationState()
+
+    # Non-canned segment should not increment
+    seg1 = Segment(
+        type=SegmentType.BANTER,
+        path=Path("/tmp/tts.mp3"),
+        metadata={"type": "banter", "canned": False},
+    )
+    state.on_stream_segment(seg1)
+    assert state.canned_clips_streamed == 0
+
+    # Canned segment should increment
+    seg2 = Segment(
+        type=SegmentType.BANTER,
+        path=Path("/tmp/canned.mp3"),
+        metadata={"type": "banter", "canned": True},
+    )
+    state.on_stream_segment(seg2)
+    assert state.canned_clips_streamed == 1
+
+    # Another canned
+    state.on_stream_segment(seg2)
+    assert state.canned_clips_streamed == 2

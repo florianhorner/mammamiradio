@@ -631,6 +631,15 @@ async def capabilities(request: Request, _: None = Depends(require_admin_access)
                 result["spotify_username"] = r.json().get("username", "")
         except Exception:
             pass
+
+    # Shareware trial state
+    from mammamiradio.producer import SHAREWARE_CANNED_LIMIT
+
+    result["trial"] = {
+        "canned_clips_streamed": state.canned_clips_streamed,
+        "limit": SHAREWARE_CANNED_LIMIT,
+        "exhausted": state.canned_clips_streamed >= SHAREWARE_CANNED_LIMIT,
+    }
     return result
 
 

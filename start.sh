@@ -108,6 +108,17 @@ else
     echo "FIFO drain PID: $!"
 fi
 
+# Pre-flight: check if the port is already in use by a stale process
+if command -v lsof > /dev/null 2>&1; then
+    STALE_PID="$(lsof -ti :"$PORT" 2>/dev/null | head -1 || true)"
+    if [ -n "$STALE_PID" ]; then
+        echo "WARNING: Port $PORT held by PID $STALE_PID — reclaiming..." >&2
+        kill -TERM "$STALE_PID" 2>/dev/null || true
+        sleep 1
+        kill -0 "$STALE_PID" 2>/dev/null && kill -KILL "$STALE_PID" 2>/dev/null || true
+    fi
+fi
+
 # Start uvicorn with reload (restarts on code changes, doesn't kill go-librespot)
 echo "Starting uvicorn with --reload..."
 source .venv/bin/activate

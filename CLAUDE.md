@@ -58,6 +58,7 @@ AI-powered Italian radio station engine. Python 3.11+, FastAPI, FFmpeg, optional
 - `MAMMAMIRADIO_GO_LIBRESPOT_BIN`: override go-librespot binary path
 - `MAMMAMIRADIO_GO_LIBRESPOT_CONFIG_DIR`: override go-librespot config directory
 - `MAMMAMIRADIO_GO_LIBRESPOT_PORT`: override go-librespot API port (default `3678`)
+- `MAMMAMIRADIO_ALLOW_YTDLP`: enable yt-dlp fallback for demo tracks (`true`/`1`/`yes`; default: disabled for copyright safety)
 
 ## Runtime behavior
 
