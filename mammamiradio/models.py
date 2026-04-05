@@ -6,6 +6,7 @@ import math
 import random
 import re
 import time
+from collections import deque
 from dataclasses import dataclass, field
 from enum import Enum, StrEnum
 from pathlib import Path
@@ -228,7 +229,7 @@ class ListenerProfile:
     songs_played: int = 0
     songs_skipped: int = 0
     # Rolling window of (was_skipped, duration_ms, genre_hint) for last 20 tracks
-    recent_outcomes: list[dict] = field(default_factory=list)
+    recent_outcomes: deque[dict] = field(default_factory=lambda: deque(maxlen=20))
     # Last psychic prediction made + whether it was correct
     last_prediction: str = ""
     last_prediction_correct: bool | None = None
@@ -249,7 +250,7 @@ class ListenerProfile:
             return []
 
         labels: list[str] = []
-        recent = self.recent_outcomes[-10:]
+        recent = list(self.recent_outcomes)[-10:]
         skips = [r for r in recent if r.get("skipped")]
 
         # Skip patterns
@@ -300,8 +301,6 @@ class ListenerProfile:
                 "track": track_display,
             }
         )
-        if len(self.recent_outcomes) > 20:
-            self.recent_outcomes = self.recent_outcomes[-20:]
 
     def describe_for_prompt(self) -> str:
         """Natural-language summary of listener patterns for LLM injection."""
@@ -347,29 +346,29 @@ class StationState:
 
     playlist: list[Track] = field(default_factory=list)
     playlist_revision: int = 0
-    played_tracks: list[Track] = field(default_factory=list)
+    played_tracks: deque[Track] = field(default_factory=lambda: deque(maxlen=50))
     songs_since_banter: int = 0
     songs_since_ad: int = 0
     songs_since_news: int = 0
     segments_since_station_id: int = 0
     segments_since_time_check: int = 0
-    running_jokes: list[str] = field(default_factory=list)
+    running_jokes: deque[str] = field(default_factory=lambda: deque(maxlen=5))
     current_track: Track | None = None
     segments_produced: int = 0
     failed_segments: int = 0
-    segment_log: list[SegmentLogEntry] = field(default_factory=list)
+    segment_log: deque[SegmentLogEntry] = field(default_factory=lambda: deque(maxlen=50))
     listener: ListenerProfile = field(default_factory=ListenerProfile)
     # Last banter/ad scripts for display
     last_banter_script: list[dict] = field(default_factory=list)
     last_ad_script: dict = field(default_factory=dict)
-    ad_history: list[AdHistoryEntry] = field(default_factory=list)
+    ad_history: deque[AdHistoryEntry] = field(default_factory=lambda: deque(maxlen=20))
     spotify_connected: bool = False
     playlist_source: PlaylistSource | None = None
     startup_source_error: str = ""
     # What the listener is hearing RIGHT NOW
     now_streaming: dict = field(default_factory=dict)
     # Stream-side log (when segments actually play, not when produced)
-    stream_log: list[SegmentLogEntry] = field(default_factory=list)
+    stream_log: deque[SegmentLogEntry] = field(default_factory=lambda: deque(maxlen=50))
     # Home Assistant context (natural language summary of home state)
     ha_context: str = ""
     # Force-trigger: producer will use this type instead of scheduler for the next segment
@@ -405,8 +404,6 @@ class StationState:
                 metadata=metadata or {},
             )
         )
-        if len(self.segment_log) > 50:
-            self.segment_log = self.segment_log[-50:]
 
     def on_stream_segment(self, segment: Segment) -> None:
         """Called by the streamer when it starts sending a segment to the listener."""
@@ -439,8 +436,6 @@ class StationState:
                 metadata=segment.metadata,
             )
         )
-        if len(self.stream_log) > 50:
-            self.stream_log = self.stream_log[-50:]
 
     def reserve_next_track(self) -> Track:
         """Legacy FIFO rotation — use select_next_track() for weighted shuffle."""
@@ -547,8 +542,6 @@ class StationState:
     def after_music(self, track: Track) -> None:
         """Advance state after successfully queuing a music segment."""
         self.played_tracks.append(track)
-        if len(self.played_tracks) > 50:
-            self.played_tracks = self.played_tracks[-50:]
         self.current_track = track
         self.songs_since_banter += 1
         self.songs_since_ad += 1
@@ -588,8 +581,6 @@ class StationState:
                 sonic_signature=sonic_signature,
             )
         )
-        if len(self.ad_history) > 20:
-            self.ad_history = self.ad_history[-20:]
 
     def after_ad(self, brands: list[str] | None = None) -> None:
         """Mark one full ad break as produced (called once per break, not per-spot)."""
@@ -618,7 +609,6 @@ class StationState:
     def add_joke(self, joke: str) -> None:
         """Keep a short rolling buffer of running jokes for prompt callbacks."""
         self.running_jokes.append(joke)
-        self.running_jokes = self.running_jokes[-5:]
 
 
 @dataclass(frozen=True)

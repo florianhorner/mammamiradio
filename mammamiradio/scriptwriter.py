@@ -266,8 +266,8 @@ async def write_banter(state: StationState, config: StationConfig) -> list[tuple
 
     client = _get_client(config.anthropic_api_key)
 
-    recent = [_sanitize_prompt_data(t.display) for t in state.played_tracks[-3:]]
-    jokes = state.running_jokes[-3:] if state.running_jokes else []
+    recent = [_sanitize_prompt_data(t.display) for t in list(state.played_tracks)[-3:]]
+    jokes = list(state.running_jokes)[-3:] if state.running_jokes else []
 
     host_names = {h.name: h for h in config.hosts}
 
@@ -423,8 +423,8 @@ async def write_news_flash(
         category = random.choice(list(NEWS_FLASH_CATEGORIES.keys()))
     cat_desc = NEWS_FLASH_CATEGORIES.get(category, NEWS_FLASH_CATEGORIES["breaking"])
 
-    recent_tracks = [_sanitize_prompt_data(t.display) for t in state.played_tracks[-3:]]
-    jokes = state.running_jokes[-3:] if state.running_jokes else []
+    recent_tracks = [_sanitize_prompt_data(t.display) for t in list(state.played_tracks)[-3:]]
+    jokes = list(state.running_jokes)[-3:] if state.running_jokes else []
 
     # Sports flashes always go to the more manic host, others random
     if category == "sports":
@@ -565,13 +565,13 @@ async def write_ad(
 
     # Build context for cross-referencing
     recent_ads = (
-        [f"- {e.brand}: {e.summary}" for e in state.ad_history[-5:]]
+        [f"- {e.brand}: {e.summary}" for e in list(state.ad_history)[-5:]]
         if state.ad_history
         else ["(nessuna pubblicità ancora)"]
     )
 
-    jokes = state.running_jokes[-3:] if state.running_jokes else []
-    recent_tracks = [_sanitize_prompt_data(t.display) for t in state.played_tracks[-3:]]
+    jokes = list(state.running_jokes)[-3:] if state.running_jokes else []
+    recent_tracks = [_sanitize_prompt_data(t.display) for t in list(state.played_tracks)[-3:]]
 
     # Find same-brand history for campaign arcs
     same_brand_ads = [e.summary for e in state.ad_history if e.brand == brand.name][-3:]

@@ -159,7 +159,8 @@ async def test_fetch_returns_cached_if_fresh():
         summary="cached",
         timestamp=time.time(),
     )
-    result = await fetch_home_context("http://ha:8123", "token", poll_interval=60.0, _cache=cache)
+    with patch("mammamiradio.ha_context._ha_cache", None):
+        result = await fetch_home_context("http://ha:8123", "token", poll_interval=60.0, _cache=cache)
     assert result is cache
 
 
@@ -173,10 +174,11 @@ async def test_fetch_calls_api_when_stale():
 
     mock_client = AsyncMock()
     mock_client.get.return_value = mock_resp
-    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-    mock_client.__aexit__ = AsyncMock(return_value=False)
 
-    with patch("mammamiradio.ha_context.httpx.AsyncClient", return_value=mock_client):
+    with (
+        patch("mammamiradio.ha_context._get_ha_client", return_value=mock_client),
+        patch("mammamiradio.ha_context._ha_cache", None),
+    ):
         result = await fetch_home_context("http://ha:8123", "token", poll_interval=60.0, _cache=stale_cache)
 
     assert result is not stale_cache
@@ -190,10 +192,11 @@ async def test_fetch_returns_stale_cache_on_api_failure():
 
     mock_client = AsyncMock()
     mock_client.get.side_effect = RuntimeError("connection refused")
-    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-    mock_client.__aexit__ = AsyncMock(return_value=False)
 
-    with patch("mammamiradio.ha_context.httpx.AsyncClient", return_value=mock_client):
+    with (
+        patch("mammamiradio.ha_context._get_ha_client", return_value=mock_client),
+        patch("mammamiradio.ha_context._ha_cache", None),
+    ):
         result = await fetch_home_context("http://ha:8123", "token", poll_interval=60.0, _cache=stale_cache)
 
     assert result is stale_cache
@@ -203,10 +206,11 @@ async def test_fetch_returns_stale_cache_on_api_failure():
 async def test_fetch_returns_empty_on_failure_no_cache():
     mock_client = AsyncMock()
     mock_client.get.side_effect = RuntimeError("connection refused")
-    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-    mock_client.__aexit__ = AsyncMock(return_value=False)
 
-    with patch("mammamiradio.ha_context.httpx.AsyncClient", return_value=mock_client):
+    with (
+        patch("mammamiradio.ha_context._get_ha_client", return_value=mock_client),
+        patch("mammamiradio.ha_context._ha_cache", None),
+    ):
         result = await fetch_home_context("http://ha:8123", "token", poll_interval=60.0, _cache=None)
 
     assert result.summary == ""
