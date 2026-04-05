@@ -91,7 +91,7 @@ async def test_synthesize_happy_path(_mock_all, tmp_path):
     result = await synthesize("Ciao mondo", "it-IT-IsabellaNeural", output)
 
     assert result == output
-    _mock_all["Communicate"].assert_called_once_with("Ciao mondo", "it-IT-IsabellaNeural")
+    _mock_all["Communicate"].assert_called_once_with("Ciao mondo", "it-IT-IsabellaNeural", rate="+0%", pitch="+0Hz")
     _mock_all["comm_instance"].save.assert_awaited_once()
     _mock_all["normalize"].assert_called_once()
 
@@ -199,7 +199,7 @@ async def test_synthesize_ad_empty_parts_fallback(_mock_all, tmp_path):
     result = await synthesize_ad(script, voices, tmp_path)
 
     # Should have synthesized the brand name as fallback
-    _mock_all["Communicate"].assert_called_once_with("EmptyBrand", "it-IT-DiegoNeural")
+    _mock_all["Communicate"].assert_called_once_with("EmptyBrand", "it-IT-DiegoNeural", rate="+0%", pitch="+0Hz")
     assert result.exists()
 
 
@@ -270,7 +270,7 @@ async def test_synthesize_ad_role_resolution_fallback(_mock_all, tmp_path):
     result = await synthesize_ad(script, voices, tmp_path)
     assert result.exists()
     # Should use first voice (hammer) since "unknown_role" not in dict
-    _mock_all["Communicate"].assert_called_once_with("Ciao!", "it-IT-GianniNeural")
+    _mock_all["Communicate"].assert_called_once_with("Ciao!", "it-IT-GianniNeural", rate="+0%", pitch="+0Hz")
 
 
 @pytest.mark.asyncio
