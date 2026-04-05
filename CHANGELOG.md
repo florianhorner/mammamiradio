@@ -6,6 +6,14 @@ The current version source of truth is `pyproject.toml`.
 
 ## [1.5.1] - 2026-04-05
 
+### Added
+
+- **OpenAI TTS engine for hosts**: hosts can now use OpenAI's `gpt-4o-mini-tts` as an alternative to Edge TTS via `engine = "openai"` in `radio.toml`. Marco defaults to the `onyx` voice, giving him distinct vocal DNA from Giulia.
+- **Personality-aware TTS instructions**: OpenAI voice synthesis uses host personality axes (energy, warmth, chaos) to shape delivery style, not just a static prompt.
+- **Edge fallback voice**: hosts with `engine = "openai"` can specify `edge_fallback_voice` so they fall back to their original voice (not a stranger) when OpenAI is unavailable.
+- **Singleton OpenAI client**: connection pool reused across all TTS calls for better latency.
+- **HA addon OpenAI support**: `OPENAI_API_KEY` now included in addon secret hydration.
+
 ### Changed
 
 - **Richer ad SFX**: cash register, whoosh, mandolin sting, and ice clink now use layered tones with exponential decay envelopes and noise transients instead of plain sine waves.

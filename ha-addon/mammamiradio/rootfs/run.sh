@@ -20,7 +20,7 @@ try:
 except (json.JSONDecodeError, OSError) as e:
     print(f'FATAL: corrupt options.json: {e}', file=sys.stderr)
     sys.exit(1)
-for key in ('anthropic_api_key', 'spotify_client_id', 'spotify_client_secret',
+for key in ('anthropic_api_key', 'openai_api_key', 'spotify_client_id', 'spotify_client_secret',
             'station_name', 'claude_model', 'playlist_spotify_url'):
     val = opts.get(key, '')
     if val:

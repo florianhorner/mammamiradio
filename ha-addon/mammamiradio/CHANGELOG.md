@@ -2,6 +2,12 @@
 
 ## 1.5.1
 
+### Added
+
+- OpenAI gpt-4o-mini-tts as second TTS engine for host voices. Marco now uses a distinct voice from Giulia.
+- `OPENAI_API_KEY` supported in addon options for voice synthesis.
+- Personality-aware TTS instructions shape how OpenAI voices deliver lines.
+
 ### Changed
 
 - Richer ad SFX (cash register, whoosh, mandolin sting, ice clink) with layered tones and noise transients.

@@ -25,6 +25,7 @@ map:
   - addon_config:rw
 options:
   anthropic_api_key: ""
+  openai_api_key: ""
   spotify_client_id: ""
   spotify_client_secret: ""
   station_name: "Malamie Radio"
@@ -32,6 +33,7 @@ options:
   playlist_spotify_url: ""
 schema:
   anthropic_api_key: password?
+  openai_api_key: password?
   spotify_client_id: password?
   spotify_client_secret: password?
   station_name: str?

@@ -2,6 +2,9 @@ configuration:
   anthropic_api_key:
     name: Anthropic API Key
     description: Required for AI-generated banter and ads. Get one at console.anthropic.com. Without this, the station uses stock banter.
+  openai_api_key:
+    name: OpenAI API Key
+    description: Enables gpt-4o-mini-tts voice for hosts configured with engine="openai". Get one at platform.openai.com. Without this, all hosts use Edge TTS.
   spotify_client_id:
     name: Spotify Client ID
     description: From developer.spotify.com/dashboard. Without this, the station uses a demo Italian playlist.

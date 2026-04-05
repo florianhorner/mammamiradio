@@ -12,6 +12,7 @@ dependencies = [
     "python-dotenv>=1.0",
     "pydantic>=2.10",
     "pydantic-settings>=2.7",
+    "openai>=1.0",
     "httpx>=0.28",
     "aiosqlite>=0.20",
     "tomli>=2.0;python_version<'3.11'",

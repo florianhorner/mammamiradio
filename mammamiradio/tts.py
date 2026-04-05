@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import shutil
 from pathlib import Path
 from uuid import uuid4
@@ -24,10 +25,99 @@ from mammamiradio.normalizer import (
 
 logger = logging.getLogger(__name__)
 
+# Default instructions for OpenAI TTS voice
+_OPENAI_TTS_INSTRUCTIONS = "Speak like a charismatic Italian radio host. Warm, energetic, natural pacing."
+
+# Cache: personality hash → instructions string (personality doesn't change mid-session)
+_instructions_cache: dict[int, str] = {}
+
+# Singleton OpenAI client — reuses HTTP connection pool across calls
+_openai_client = None
+_openai_client_key: str = ""
+
+
+def _openai_instructions_for_host(host: HostPersonality) -> str:
+    """Build OpenAI TTS instructions from host personality axes and style.
+
+    Cached by personality hash since axes don't change mid-session.
+    """
+    cache_key = hash((host.personality.energy, host.personality.warmth, host.personality.chaos))
+    if cache_key in _instructions_cache:
+        return _instructions_cache[cache_key]
+
+    parts = ["Speak like a charismatic Italian radio host."]
+    p = host.personality
+    if p.energy > 60:
+        parts.append("High energy, fast pacing, explosive delivery.")
+    elif p.energy < 40:
+        parts.append("Calm, measured, deliberate pacing.")
+    if p.warmth > 60:
+        parts.append("Warm and inviting tone.")
+    elif p.warmth < 40:
+        parts.append("Cool, detached, razor-sharp delivery.")
+    if p.chaos > 60:
+        parts.append("Unpredictable rhythm, dramatic shifts in intensity.")
+    result = " ".join(parts)
+    _instructions_cache[cache_key] = result
+    return result
+
 
 def _estimate_duration(path: Path) -> float:
     """Rough duration estimate from file size at 192kbps."""
     return max(5.0, path.stat().st_size / (192 * 128))
+
+
+def _get_openai_client(api_key: str):
+    """Return a singleton OpenAI client, reusing the connection pool.
+
+    Recreates the client only if the API key changes (e.g. env reload).
+    """
+    global _openai_client, _openai_client_key
+    if _openai_client is not None and _openai_client_key == api_key:
+        return _openai_client
+    from openai import OpenAI
+
+    _openai_client = OpenAI(api_key=api_key)
+    _openai_client_key = api_key
+    return _openai_client
+
+
+async def synthesize_openai(
+    text: str,
+    voice: str,
+    output_path: Path,
+    *,
+    instructions: str = "",
+) -> Path:
+    """Render text with OpenAI gpt-4o-mini-tts, then normalize to station settings."""
+    api_key = os.getenv("OPENAI_API_KEY", "")
+    if not api_key:
+        raise RuntimeError("OPENAI_API_KEY not set")
+
+    client = _get_openai_client(api_key)
+    loop = asyncio.get_running_loop()
+
+    def _call_openai() -> bytes:
+        response = client.audio.speech.create(
+            model="gpt-4o-mini-tts",
+            voice=voice,
+            input=text,
+            instructions=instructions or _OPENAI_TTS_INSTRUCTIONS,
+        )
+        return response.content
+
+    raw_path = output_path.with_suffix(".raw.mp3")
+    audio_bytes = await asyncio.wait_for(
+        loop.run_in_executor(None, _call_openai),
+        timeout=30.0,
+    )
+    raw_path.write_bytes(audio_bytes)
+
+    await loop.run_in_executor(None, normalize, raw_path, output_path)
+    raw_path.unlink(missing_ok=True)
+
+    logger.info("Synthesized (OpenAI): %s (%s)", output_path.name, voice)
+    return output_path
 
 
 async def synthesize(
@@ -37,8 +127,27 @@ async def synthesize(
     *,
     rate: str | None = None,
     pitch: str | None = None,
+    engine: str = "edge",
+    edge_fallback_voice: str = "",
+    openai_instructions: str = "",
 ) -> Path:
-    """Render text with Edge TTS, then normalize it to station output settings."""
+    """Render text via the chosen TTS engine, then normalize to station output settings.
+
+    engine="openai" uses OpenAI gpt-4o-mini-tts. Falls back to edge-tts if
+    OPENAI_API_KEY is missing. When falling back, uses edge_fallback_voice if set.
+    """
+    if engine == "openai":
+        if os.getenv("OPENAI_API_KEY", ""):
+            try:
+                return await synthesize_openai(text, voice, output_path, instructions=openai_instructions)
+            except Exception as e:
+                logger.warning("OpenAI TTS failed, falling back to edge-tts: %s", e)
+        else:
+            logger.debug("OpenAI TTS requested but OPENAI_API_KEY not set, using edge-tts")
+        # Use edge fallback voice when falling back from OpenAI
+        if edge_fallback_voice:
+            voice = edge_fallback_voice
+
     try:
         comm = edge_tts.Communicate(text, voice, rate=rate or "+0%", pitch=pitch or "+0Hz")
         raw_path = output_path.with_suffix(".raw.mp3")
@@ -244,7 +353,15 @@ async def synthesize_dialogue(
     parts = list(
         await asyncio.gather(
             *(
-                synthesize(text, host.voice, path, **_prosody_for_host(host))
+                synthesize(
+                    text,
+                    host.voice,
+                    path,
+                    **_prosody_for_host(host),
+                    engine=host.engine,
+                    edge_fallback_voice=host.edge_fallback_voice,
+                    openai_instructions=_openai_instructions_for_host(host),
+                )
                 for (host, text), path in zip(lines, paths, strict=False)
             )
         )
