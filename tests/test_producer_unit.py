@@ -107,7 +107,10 @@ async def test_banter_segment_queued():
     with (
         patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.BANTER),
         patch(f"{PRODUCER_MODULE}.write_banter", new_callable=AsyncMock, return_value=banter_lines),
+        patch(f"{PRODUCER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora...")),
+        patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, return_value=_fake_path()),
         patch(f"{PRODUCER_MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(f"{PRODUCER_MODULE}.concat_files", return_value=_fake_path()),
         patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
     ):
         await _run_until_queued(queue, state, config)
