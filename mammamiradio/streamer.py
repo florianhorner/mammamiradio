@@ -43,6 +43,20 @@ _LISTENER_HTML = _PKG_DIR.joinpath("listener.html").read_text()
 _ADMIN_HTML = _PKG_DIR.joinpath("admin.html").read_text()
 
 _INGRESS_PREFIX_RE = _re.compile(r"^/[a-zA-Z0-9/_-]+$")
+
+# Cache ingress-injected HTML to avoid repeated string replacements on every request.
+# Key: (html_id, prefix) → injected HTML. Typically 1-2 entries per page.
+_injected_html_cache: dict[tuple[str, str], str] = {}
+
+
+def _get_injected_html(html_id: str, html: str, prefix: str) -> str:
+    """Return ingress-injected HTML, cached by (page, prefix)."""
+    key = (html_id, prefix)
+    if key not in _injected_html_cache:
+        _injected_html_cache[key] = _inject_ingress_prefix(html, prefix)
+    return _injected_html_cache[key]
+
+
 _MUTATING_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 _CSRF_TOKEN_PLACEHOLDER = "__MAMMAMIRADIO_CSRF_TOKEN__"
 
@@ -397,10 +411,8 @@ async def run_playback_loop(app) -> None:
                     elapsed = time.monotonic() - send_start
                     expected = bytes_sent / bytes_per_sec
                     ahead = expected - elapsed
-                    if ahead > 0.01:
+                    if ahead > 0.005:
                         await asyncio.sleep(ahead)
-                    else:
-                        await asyncio.sleep(0)
         finally:
             if segment.ephemeral:
                 segment.path.unlink(missing_ok=True)
@@ -436,7 +448,7 @@ async def _audio_generator(request: Request):
 async def dashboard(request: Request):
     """Serve the authenticated control-plane dashboard."""
     prefix = request.headers.get("X-Ingress-Path", "")
-    html = _inject_ingress_prefix(_DASHBOARD_HTML, prefix)
+    html = _get_injected_html("dashboard", _DASHBOARD_HTML, prefix)
     html = _inject_csrf_token(html, _get_csrf_token(request.app))
     return html
 
@@ -445,7 +457,7 @@ async def dashboard(request: Request):
 async def admin_panel(request: Request):
     """Serve the admin control room panel."""
     prefix = request.headers.get("X-Ingress-Path", "")
-    html = _inject_ingress_prefix(_ADMIN_HTML, prefix)
+    html = _get_injected_html("admin", _ADMIN_HTML, prefix)
     html = _inject_csrf_token(html, _get_csrf_token(request.app))
     return html
 
@@ -454,7 +466,7 @@ async def admin_panel(request: Request):
 async def listener(request: Request):
     """Serve the public listener UI."""
     prefix = request.headers.get("X-Ingress-Path", "")
-    return _inject_ingress_prefix(_LISTENER_HTML, prefix)
+    return _get_injected_html("listener", _LISTENER_HTML, prefix)
 
 
 @router.get("/sw.js")
@@ -1091,7 +1103,7 @@ def _public_status_payload(request: Request) -> dict:
     config = request.app.state.config
     return {
         "station": config.station.name,
-        "running_jokes": state.running_jokes,
+        "running_jokes": list(state.running_jokes),
         "now_streaming": state.now_streaming,
         "current_source": _serialize_source(state.playlist_source),
         "stream_log": [
