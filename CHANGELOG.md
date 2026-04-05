@@ -12,6 +12,11 @@ The current version source of truth is `pyproject.toml`.
 - Home Assistant context uses a reusable `httpx.AsyncClient` singleton and module-level cache instead of creating a new HTTP client per poll.
 - Dashboard and admin HTML injection results are cached by ingress prefix, avoiding repeated string replacements per request.
 - Playback throttle threshold tightened from 10ms to 5ms for smoother audio delivery.
+- **Richer ad SFX**: cash register, whoosh, mandolin sting, and ice clink now use layered tones with exponential decay envelopes and noise transients instead of plain sine waves.
+- **Better bumper jingles**: melody notes now have plucked envelopes and velocity variation over a sustained C-major pad, with a multi-tap echo tail.
+- **Music beds with warmth**: all moods use 4 harmonic layers (root, third, detuned chorus, fifth) instead of 2 bare sines, with per-mood tremolo rates and reverb. Suspicious jazz has a walking bass line.
+- **Punchier ad processing**: `normalize_ad()` uses heavier compression (ratio 8:1, -24dB threshold), presence + air boost, and a 120Hz mud cut for louder, brighter commercials that pop against music.
+- **FFmpeg performance**: collapsed multi-input sine generators into single `aevalsrc` expressions across all SFX and music bed functions (up to 8 inputs reduced to 1), cutting filter graph overhead.
 
 ### Fixed
 

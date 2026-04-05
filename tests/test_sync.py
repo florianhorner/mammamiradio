@@ -83,8 +83,21 @@ def test_load_cached_tracks_skips_missing_files(tmp_path):
     assert tracks == []
 
 
+def _ensure_yt_dlp_mock():
+    """Install a mock yt_dlp module in sys.modules so ``import yt_dlp`` succeeds
+    even when the real package is not installed (e.g. CI)."""
+    import sys
+    import types
+
+    if "yt_dlp" not in sys.modules:
+        mod = types.ModuleType("yt_dlp")
+        mod.YoutubeDL = MagicMock()  # type: ignore[attr-defined]
+        sys.modules["yt_dlp"] = mod
+
+
 def test_sync_playlist_blocking_returns_empty_on_no_entries(tmp_path):
     """_sync_playlist_blocking returns [] when yt-dlp info has no 'entries' key."""
+    _ensure_yt_dlp_mock()
     from mammamiradio.sync import _sync_playlist_blocking
 
     db_path = tmp_path / "radio.db"
@@ -108,6 +121,7 @@ def test_sync_playlist_blocking_returns_empty_on_no_entries(tmp_path):
 
 def test_sync_playlist_blocking_returns_empty_on_null_info(tmp_path):
     """_sync_playlist_blocking returns [] when yt-dlp returns None."""
+    _ensure_yt_dlp_mock()
     from mammamiradio.sync import _sync_playlist_blocking
 
     db_path = tmp_path / "radio.db"

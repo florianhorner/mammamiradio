@@ -6,6 +6,11 @@
 
 - Internal data structures use bounded deques for automatic memory management.
 - Home Assistant polling uses a reusable HTTP client (fewer connections, faster polls).
+- Richer ad SFX (cash register, whoosh, mandolin sting, ice clink) with layered tones and noise transients.
+- Better bumper jingles with plucked envelopes, velocity variation, pad, and echo tail.
+- Warmer music beds with 4 harmonic layers, per-mood tremolo, and reverb. Jazz bed has walking bass.
+- Punchier ad broadcast processing (heavier compression, presence/air boost, mud cut).
+- FFmpeg performance: multi-input filter graphs collapsed into single expressions.
 
 ### Fixed
 
