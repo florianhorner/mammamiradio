@@ -27,7 +27,7 @@ load_dotenv()
 class StationSection:
     """Station identity and public stream metadata."""
 
-    name: str = "Radio Italì"
+    name: str = "Malamie Radio"
     language: str = "it"
     theme: str = ""
 
@@ -37,7 +37,11 @@ class PlaylistSection:
     """Playlist source selection and ordering preferences."""
 
     spotify_url: str = ""
-    shuffle: bool = False
+    shuffle: bool = True
+    allow_explicit: bool = True
+    repeat_cooldown: int = 5
+    artist_cooldown: int = 3
+    max_artist_per_hour: int = 3
 
 
 @dataclass
@@ -63,6 +67,7 @@ class AudioSection:
     go_librespot_config_dir: str = "go-librespot"
     go_librespot_port: int = 3678
     claude_model: str = "claude-haiku-4-5-20251001"
+    claude_creative_model: str = "claude-opus-4-6"
 
 
 @dataclass
@@ -72,6 +77,20 @@ class HomeAssistantSection:
     enabled: bool = False
     url: str = ""
     poll_interval: int = 60  # seconds between state refreshes
+
+
+@dataclass
+class SonicBrandSection:
+    """Station sonic identity: jingles, sweepers, and motif configuration."""
+
+    tagline: str = ""
+    geography: str = ""
+    full_ident: str = ""
+    short_sting: str = ""
+    sweepers: list[str] = field(default_factory=list)
+    motif_notes: list[int] = field(default_factory=lambda: [523, 659, 784, 1047])
+    sweeper_voice: str = ""
+    sweeper_probability: float = 0.25
 
 
 @dataclass
@@ -92,6 +111,7 @@ class StationConfig:
     pacing: PacingSection
     hosts: list[HostPersonality]
     ads: AdsSection
+    sonic_brand: SonicBrandSection = field(default_factory=SonicBrandSection)
     audio: AudioSection = field(default_factory=AudioSection)
     homeassistant: HomeAssistantSection = field(default_factory=HomeAssistantSection)
     cache_dir: Path = Path("cache")
@@ -251,6 +271,7 @@ def load_config(path: str = "radio.toml") -> StationConfig:
         import logging as _log
 
         _log.getLogger(__name__).warning("station.bitrate is deprecated — use audio.bitrate instead")
+        # pop() cleans station_raw so StationSection(**station_raw) won't get an unexpected kwarg
         if "bitrate" not in audio_raw:
             audio_raw["bitrate"] = station_raw.pop("bitrate")
         else:
@@ -289,10 +310,22 @@ def load_config(path: str = "radio.toml") -> StationConfig:
         audio_raw["go_librespot_port"] = int(os.getenv("MAMMAMIRADIO_GO_LIBRESPOT_PORT", "3678"))
     if os.getenv("CLAUDE_MODEL"):
         audio_raw["claude_model"] = os.getenv("CLAUDE_MODEL")
+    if os.getenv("CLAUDE_CREATIVE_MODEL"):
+        audio_raw["claude_creative_model"] = os.getenv("CLAUDE_CREATIVE_MODEL")
 
     # Env-var overrides for cache/tmp directories (for Docker volume mounts)
     cache_dir = Path(os.getenv("MAMMAMIRADIO_CACHE_DIR", "cache"))
     tmp_dir = Path(os.getenv("MAMMAMIRADIO_TMP_DIR", "tmp"))
+
+    # Parse sonic brand section
+    sonic_brand_raw = raw.get("sonic_brand", {})
+    sonic_brand_sweepers = sonic_brand_raw.pop("sweepers", [])
+    sonic_brand_motif = sonic_brand_raw.pop("motif_notes", [523, 659, 784, 1047])
+    sonic_brand = SonicBrandSection(
+        **sonic_brand_raw,
+        sweepers=sonic_brand_sweepers,
+        motif_notes=sonic_brand_motif,
+    )
 
     config = StationConfig(
         station=StationSection(**station_raw),
@@ -300,6 +333,7 @@ def load_config(path: str = "radio.toml") -> StationConfig:
         pacing=PacingSection(**raw.get("pacing", {})),
         hosts=hosts,
         ads=AdsSection(brands=brands, voices=voices, sfx_dir=sfx_dir),
+        sonic_brand=sonic_brand,
         audio=AudioSection(**audio_raw),
         homeassistant=ha_section,
         cache_dir=cache_dir,

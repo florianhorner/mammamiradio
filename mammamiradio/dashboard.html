@@ -971,7 +971,7 @@ function _updateNowPlaying(ns) {
     displayArtist = label.slice(0, idx);
     displayTitle = label.slice(idx + 3);
   } else if (type === 'banter') {
-    displayArtist = 'Radio Ital\u00EC';
+    displayArtist = 'Malamie Radio';
   } else if (type === 'ad') {
     displayArtist = (ns.metadata && ns.metadata.brand) ? ns.metadata.brand : 'Sponsored';
   }
@@ -1087,7 +1087,7 @@ function updateStatus(d) {
   if (!firstDataReceived) {
     firstDataReceived = true;
     if (_dialAnimFrame) { cancelAnimationFrame(_dialAnimFrame); _dialAnimFrame = null; }
-    _dialLock(DEMO_FREQ, 'Radio Ital\u00EC', 'Signal locked');
+    _dialLock(DEMO_FREQ, 'Malamie Radio', 'Signal locked');
     // Collapse dial gently — fade then height-slide (same pattern as _dialShiftTo)
     _dialCollapseTimer = setTimeout(() => {
       const dial = document.getElementById('radio-dial');

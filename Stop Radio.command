@@ -1,5 +1,5 @@
 #!/bin/bash
-# Stop Radio Italì
+# Stop Malamie Radio
 cd "$(dirname "$0")"
 
 pkill -f "uvicorn mammamiradio" 2>/dev/null && echo "Uvicorn stopped." || echo "Uvicorn was not running."
@@ -12,7 +12,7 @@ if [ -f tmp/fifo-drain.pid ]; then
 fi
 
 echo ""
-echo "Radio Italì stopped. go-librespot left running (reusable on next start)."
+echo "Malamie Radio stopped. go-librespot left running (reusable on next start)."
 echo ""
 echo "Press any key to close."
 read -n 1

@@ -13,7 +13,7 @@ def test_load_config_from_radio_toml():
     toml_path = Path(__file__).parent.parent / "radio.toml"
     config = load_config(str(toml_path))
 
-    assert config.station.name == "Radio Ital\xec"
+    assert config.station.name == "Malamie Radio"
     assert config.station.language == "it"
     assert config.pacing.songs_between_banter == 2
     assert config.pacing.songs_between_ads == 4

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import datetime
 import logging
 import random
 from collections.abc import Callable
@@ -25,8 +26,12 @@ from mammamiradio.models import (
 )
 from mammamiradio.normalizer import (
     concat_files,
+    crossfade_voice_over_music,
     generate_bumper_jingle,
     generate_silence,
+    generate_station_id_bed,
+    generate_tone,
+    mix_voice_with_sting,
     normalize,
 )
 from mammamiradio.scheduler import next_segment_type
@@ -35,8 +40,11 @@ from mammamiradio.scriptwriter import (
     AD_BREAK_OUTROS,
     write_ad,
     write_banter,
+    write_news_flash,
+    write_transition,
 )
 from mammamiradio.spotify_player import SpotifyPlayer, download_track_spotify
+from mammamiradio.track_rationale import classify_track_crate, generate_track_rationale
 from mammamiradio.tts import synthesize, synthesize_ad, synthesize_dialogue
 
 logger = logging.getLogger(__name__)
@@ -46,8 +54,59 @@ logger = logging.getLogger(__name__)
 _DEMO_ASSETS_DIR = Path(__file__).parent / "demo_assets"
 
 
+# Tracks the most recent music file to avoid repeated glob scans on every banter.
+_last_music_file: Path | None = None
+
+
+def _set_last_music_file(path: Path) -> None:
+    """Update the cached last music file (called after each music segment)."""
+    global _last_music_file
+    _last_music_file = path
+
+
+def _latest_music_file(tmp_dir: Path) -> Path | None:
+    """Return the most recently written music_*.mp3, using cached path when available."""
+    if _last_music_file and _last_music_file.exists():
+        return _last_music_file
+    # Fallback: scan directory (only on first call or after cache invalidation)
+    files = list(tmp_dir.glob("music_*.mp3"))
+    if not files:
+        return None
+    return max(files, key=lambda p: p.stat().st_mtime)
+
+
+async def _try_crossfade(
+    voice_path: Path,
+    config: StationConfig,
+    output_path: Path,
+    tail_seconds: float = 8.0,
+) -> Path:
+    """Attempt to crossfade voice over the last music file. Returns voice_path on failure."""
+    last_music = _latest_music_file(config.tmp_dir)
+    if not last_music or not last_music.exists():
+        return voice_path
+    try:
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(
+            None,
+            crossfade_voice_over_music,
+            last_music,
+            voice_path,
+            output_path,
+            tail_seconds,
+        )
+        voice_path.unlink(missing_ok=True)
+        logger.info("Crossfade over %s", last_music.name)
+        return output_path
+    except Exception as exc:
+        logger.warning("Crossfade failed, using standalone: %s", exc)
+        return voice_path
+
+
 _recently_played_clips: list[str] = []
 
+# Cache directory listings for demo asset clips (avoid repeated glob on every call).
+_canned_clip_cache: dict[str, list[Path]] = {}
 
 SHAREWARE_CANNED_LIMIT = 3
 
@@ -63,10 +122,10 @@ def _pick_canned_clip(subdir: str, *, state: StationState | None = None) -> Path
     if subdir == "banter" and state and state.canned_clips_streamed >= SHAREWARE_CANNED_LIMIT:
         logger.info("Shareware limit reached (%d clips streamed), forcing TTS", state.canned_clips_streamed)
         return None
-    clip_dir = _DEMO_ASSETS_DIR / subdir
-    if not clip_dir.is_dir():
-        return None
-    clips = list(clip_dir.glob("*.mp3"))
+    if subdir not in _canned_clip_cache:
+        clip_dir = _DEMO_ASSETS_DIR / subdir
+        _canned_clip_cache[subdir] = list(clip_dir.glob("*.mp3")) if clip_dir.is_dir() else []
+    clips = _canned_clip_cache[subdir]
     if not clips:
         return None
     # Avoid recently played clips
@@ -260,7 +319,9 @@ async def run_producer(
                     skip_event.set()
                 while not queue.empty():
                     try:
-                        queue.get_nowait()
+                        discarded = queue.get_nowait()
+                        if discarded.ephemeral:
+                            discarded.path.unlink(missing_ok=True)
                     except Exception:
                         break
 
@@ -290,18 +351,35 @@ async def run_producer(
                             type=SegmentType.BANTER,
                             path=welcome_clip,
                             metadata={"type": "welcome", "canned": True},
+                            ephemeral=False,
                         )
                         await queue.put(welcome_seg)
                         state.after_banter()
                         logger.info("Welcome clip queued: %s", welcome_clip.name)
 
-                    # Run both in parallel — capture takes song duration,
-                    # banter generation takes ~5-10s. Banter finishes first.
-                    capture_task = spotify_player.capture_current_audio(current, norm_path)
-                    banter_task = _generate_welcome_banter()
-                    audio_path, banter_path = await asyncio.gather(capture_task, banter_task)
+                    # Run capture and banter in parallel, but don't block the
+                    # queue on capture — enqueue segments as they become ready
+                    # so listeners never hit dead air.
+                    capture_task = asyncio.ensure_future(spotify_player.capture_current_audio(current, norm_path))
+                    banter_task = asyncio.ensure_future(_generate_welcome_banter())
 
-                    # Queue: user's song
+                    # Banter finishes first (~5-10s) — enqueue it while capture continues
+                    banter_path = await banter_task
+                    if banter_path:
+                        # canned clips live under demo_assets/; generated audio goes to tmp_dir
+                        _is_canned = "demo_assets" in str(banter_path)
+                        banter_seg = Segment(
+                            type=SegmentType.BANTER,
+                            path=banter_path,
+                            metadata={"type": "banter", "lines": state.last_banter_script},
+                            ephemeral=not _is_canned,
+                        )
+                        await queue.put(banter_seg)
+                        state.after_banter()
+                        logger.info("Welcome banter queued after welcome clip")
+
+                    # Now wait for capture to finish and queue the music
+                    audio_path = await capture_task
                     music_seg = Segment(
                         type=SegmentType.MUSIC,
                         path=audio_path,
@@ -310,17 +388,6 @@ async def run_producer(
                     await queue.put(music_seg)
                     state.after_music(current)
                     logger.info("Autoplay queued: %s", current.display)
-
-                    # Then the personalized banter about the song (the WTF moment)
-                    if banter_path:
-                        banter_seg = Segment(
-                            type=SegmentType.BANTER,
-                            path=banter_path,
-                            metadata={"type": "banter", "lines": state.last_banter_script},
-                        )
-                        await queue.put(banter_seg)
-                        state.after_banter()
-                        logger.info("Welcome banter queued after %s", current.display)
                 except Exception as exc:
                     logger.warning("Autoplay failed: %s", exc)
                     was_spotify_connected = False  # allow retry on next loop
@@ -362,7 +429,12 @@ async def run_producer(
 
         try:
             if seg_type == SegmentType.MUSIC:
-                track = state.reserve_next_track()
+                track = state.select_next_track(
+                    allow_explicit=config.playlist.allow_explicit,
+                    repeat_cooldown=config.playlist.repeat_cooldown,
+                    artist_cooldown=config.playlist.artist_cooldown,
+                    max_artist_per_hour=config.playlist.max_artist_per_hour,
+                )
                 logger.info("Producing MUSIC: %s", track.display)
 
                 norm_path = config.tmp_dir / f"music_{uuid4().hex[:8]}.mp3"
@@ -388,12 +460,26 @@ async def run_producer(
                     loop = asyncio.get_running_loop()
                     await loop.run_in_executor(None, normalize, audio_path, norm_path)
 
+                # Generate "Why this track?" rationale for listener UI
+                rationale = generate_track_rationale(
+                    track,
+                    source=state.playlist_source,
+                    listener=state.listener,
+                )
+                crate = classify_track_crate(track, state.playlist_source)
+
                 segment = Segment(
                     type=SegmentType.MUSIC,
                     path=norm_path,
-                    metadata={"title": track.display, "album_art": track.album_art},
+                    metadata={
+                        "title": track.display,
+                        "album_art": track.album_art,
+                        "rationale": rationale,
+                        "crate": crate,
+                    },
                 )
                 _bound_track = track
+                _set_last_music_file(norm_path)
 
                 def _music_callback(_t=_bound_track) -> None:
                     state.after_music(_t)
@@ -413,9 +499,44 @@ async def run_producer(
                     state.last_banter_script = [{"host": "Radio", "text": "(pre-recorded banter)"}]
                 else:
                     try:
-                        lines = await write_banter(state, config)
-                        audio_path = await synthesize_dialogue(lines, config.tmp_dir)
-                        state.last_banter_script = [{"host": h.name, "text": t} for h, t in lines]
+                        # Generate transition voice + banter in parallel
+                        transition_task = write_transition(state, config, next_segment="banter")
+                        banter_task = write_banter(state, config)
+                        (trans_host, trans_text), lines = await asyncio.gather(transition_task, banter_task)
+
+                        # Synthesize transition + dialogue in parallel
+                        trans_voice_path = config.tmp_dir / f"trans_{uuid4().hex[:8]}.mp3"
+                        prosody: dict[str, str] = {}
+                        if trans_host.personality.energy > 50:
+                            prosody["rate"] = "+5%"
+
+                        async def _do_transition(
+                            _text=trans_text,
+                            _host=trans_host,
+                            _path=trans_voice_path,
+                            _prosody=prosody,
+                        ):
+                            await synthesize(_text, _host.voice, _path, **_prosody)
+                            xfade_out = config.tmp_dir / f"banter_trans_{uuid4().hex[:8]}.mp3"
+                            return await _try_crossfade(_path, config, xfade_out)
+
+                        trans_voice_path, banter_path = await asyncio.gather(
+                            _do_transition(),
+                            synthesize_dialogue(lines, config.tmp_dir),
+                        )
+
+                        # Concat: transition + banter (both pre-normalized)
+                        audio_path = config.tmp_dir / f"banter_full_{uuid4().hex[:8]}.mp3"
+                        loop = asyncio.get_running_loop()
+                        await loop.run_in_executor(
+                            None, concat_files, [trans_voice_path, banter_path], audio_path, 200, False
+                        )
+                        trans_voice_path.unlink(missing_ok=True)
+                        banter_path.unlink(missing_ok=True)
+
+                        state.last_banter_script = [
+                            {"host": trans_host.name, "text": trans_text, "type": "transition"},
+                        ] + [{"host": h.name, "text": t} for h, t in lines]
                     except Exception as exc:
                         logger.warning("Banter TTS failed, skipping segment: %s", exc)
                         continue
@@ -424,8 +545,146 @@ async def run_producer(
                     type=SegmentType.BANTER,
                     path=audio_path,
                     metadata={"type": "banter", "lines": state.last_banter_script, "canned": canned is not None},
+                    ephemeral=canned is None,
                 )
                 success_callback = state.after_banter
+
+            elif seg_type == SegmentType.NEWS_FLASH:
+                logger.info("Producing NEWS FLASH")
+
+                try:
+                    host, text, category = await write_news_flash(state, config)
+                    flash_path = config.tmp_dir / f"flash_{uuid4().hex[:8]}.mp3"
+
+                    # Synthesize with extra energy for sports
+                    flash_prosody: dict[str, str] = {}
+                    if category == "sports":
+                        flash_prosody = {"rate": "+25%", "pitch": "+12Hz"}
+                    elif category == "traffic":
+                        flash_prosody = {"rate": "+10%"}
+
+                    await synthesize(text, host.voice, flash_path, **flash_prosody)
+
+                    # Try to overlay on the tail of the last music segment
+                    crossfade_out = config.tmp_dir / f"flash_transition_{uuid4().hex[:8]}.mp3"
+                    audio_path = await _try_crossfade(flash_path, config, crossfade_out, tail_seconds=6.0)
+
+                    state.last_banter_script = [{"host": host.name, "text": text, "type": "news_flash"}]
+                except Exception as exc:
+                    logger.warning("News flash TTS failed, skipping: %s", exc)
+                    continue
+
+                segment = Segment(
+                    type=SegmentType.NEWS_FLASH,
+                    path=audio_path,
+                    metadata={"type": "news_flash", "category": category, "host": host.name},
+                )
+
+                _bound_cat = category
+
+                def _news_callback(_c=_bound_cat) -> None:
+                    state.after_news_flash(_c)
+
+                success_callback = _news_callback
+
+            elif seg_type == SegmentType.STATION_ID:
+                logger.info("Producing STATION ID")
+                sb = config.sonic_brand
+                # Use full ident text, or fall back to station name
+                ident_text = sb.full_ident or config.station.name
+
+                try:
+                    # Generate voice tag + musical sting in parallel
+                    voice_path = config.tmp_dir / f"stid_voice_{uuid4().hex[:8]}.mp3"
+                    sting_path = config.tmp_dir / f"stid_sting_{uuid4().hex[:8]}.mp3"
+
+                    # Use configured sweeper voice, or a random host
+                    sweeper_voice = sb.sweeper_voice
+                    if not sweeper_voice:
+                        sweeper_voice = random.choice(config.hosts).voice
+                    loop = asyncio.get_running_loop()
+
+                    voice_task = synthesize(ident_text, sweeper_voice, voice_path)
+                    sting_task = loop.run_in_executor(None, generate_station_id_bed, sting_path, 3.0, sb.motif_notes)
+                    await asyncio.gather(voice_task, sting_task)
+
+                    # Mix voice over sting
+                    audio_path = config.tmp_dir / f"stid_{uuid4().hex[:8]}.mp3"
+                    await loop.run_in_executor(None, mix_voice_with_sting, voice_path, sting_path, audio_path)
+                    voice_path.unlink(missing_ok=True)
+                    sting_path.unlink(missing_ok=True)
+                except Exception as exc:
+                    logger.warning("Station ID generation failed: %s", exc)
+                    continue
+
+                segment = Segment(
+                    type=SegmentType.STATION_ID,
+                    path=audio_path,
+                    metadata={"type": "station_id", "text": ident_text},
+                )
+                success_callback = state.after_station_id
+
+            elif seg_type == SegmentType.SWEEPER:
+                logger.info("Producing SWEEPER")
+                sb = config.sonic_brand
+
+                try:
+                    sweeper_text = random.choice(sb.sweepers) if sb.sweepers else config.station.name
+
+                    sweeper_voice = sb.sweeper_voice
+                    if not sweeper_voice:
+                        sweeper_voice = random.choice(config.hosts).voice
+
+                    audio_path = config.tmp_dir / f"sweeper_{uuid4().hex[:8]}.mp3"
+                    await synthesize(sweeper_text, sweeper_voice, audio_path)
+                except Exception as exc:
+                    logger.warning("Sweeper generation failed: %s", exc)
+                    continue
+
+                segment = Segment(
+                    type=SegmentType.SWEEPER,
+                    path=audio_path,
+                    metadata={"type": "sweeper", "text": sweeper_text},
+                )
+                success_callback = state.after_sweeper
+
+            elif seg_type == SegmentType.TIME_CHECK:
+                logger.info("Producing TIME CHECK")
+                now = datetime.datetime.now()
+                hour = now.hour
+                minute = now.minute
+                station_name = config.station.name
+                # Italian grammar: "È l'una" for 1:00/13:00, "Sono le N" otherwise
+                hour_str = "È l'una" if hour in (1, 13) else f"Sono le {hour}"
+                if minute == 0:
+                    time_text = f"{hour_str} su {station_name}."
+                else:
+                    time_text = f"{hour_str} e {minute} su {station_name}."
+
+                try:
+                    voice_path = config.tmp_dir / f"time_voice_{uuid4().hex[:8]}.mp3"
+                    chime_path = config.tmp_dir / f"time_chime_{uuid4().hex[:8]}.mp3"
+                    host = random.choice(config.hosts)
+                    loop = asyncio.get_running_loop()
+                    # Voice + chime in parallel (independent)
+                    await asyncio.gather(
+                        synthesize(time_text, host.voice, voice_path),
+                        loop.run_in_executor(None, generate_tone, chime_path, 1047, 0.3),
+                    )
+                    audio_path = config.tmp_dir / f"time_{uuid4().hex[:8]}.mp3"
+                    await loop.run_in_executor(None, concat_files, [chime_path, voice_path], audio_path, 200, False)
+                    chime_path.unlink(missing_ok=True)
+                    voice_path.unlink(missing_ok=True)
+                except Exception as exc:
+                    logger.warning("Time check generation failed: %s", exc)
+                    continue
+
+                segment = Segment(
+                    type=SegmentType.TIME_CHECK,
+                    path=audio_path,
+                    metadata={"type": "time_check", "time": time_text},
+                )
+                success_callback = state.after_time_check
 
             elif seg_type == SegmentType.AD:
                 if not config.ads.brands:
@@ -440,38 +699,22 @@ async def run_producer(
                 break_summaries: list[str] = []
                 break_texts: list[str] = []
 
-                # 1. Host tease intro
-                intro_text = random.choice(AD_BREAK_INTROS)
-                intro_host = random.choice(config.hosts)
-                intro_path = config.tmp_dir / f"ad_intro_{uuid4().hex[:8]}.mp3"
-                await synthesize(intro_text, intro_host.voice, intro_path)
-                break_parts.append(intro_path)
-
-                # 2. Opening bumper jingle
-                bumper_in = config.tmp_dir / f"bumper_in_{uuid4().hex[:8]}.mp3"
                 loop = asyncio.get_running_loop()
-                await loop.run_in_executor(None, generate_bumper_jingle, bumper_in)
-                break_parts.append(bumper_in)
+                sfx_dir = Path(config.ads.sfx_dir) if config.ads.sfx_dir else None
 
-                # Ad spot creative pipeline:
-                #   _pick_brand -> _select_ad_creative -> _cast_voices -> write_ad -> synthesize_ad
-
-                # 3. Individual ad spots
+                # ── Pre-compute brand selections (pure sync, no I/O) ──
                 used_brands_this_break: list[str] = []
                 break_formats: list[str] = []
+                spot_params = []
                 for spot_idx in range(num_spots):
-                    # Avoid brands used in this same break
                     brand = _pick_brand(
                         config.ads.brands,
                         state.ad_history
                         + [AdHistoryEntry(brand=b, summary="", timestamp=0) for b in used_brands_this_break],
                     )
                     used_brands_this_break.append(brand.name)
-
-                    # Creative selection and voice casting
                     ad_format, sonic, roles_needed = _select_ad_creative(brand, state, config)
                     voice_map = _cast_voices(brand, config, roles_needed)
-
                     logger.info(
                         "  Spot %d/%d: %s (format=%s, roles=%s)",
                         spot_idx + 1,
@@ -480,58 +723,100 @@ async def run_producer(
                         ad_format,
                         list(voice_map.keys()),
                     )
+                    spot_params.append((brand, ad_format, sonic, voice_map))
 
-                    sfx_dir = Path(config.ads.sfx_dir) if config.ads.sfx_dir else None
+                # ── PHASE 1: Fan out intro pipeline + all LLM calls + bumpers in parallel ──
+                # These are all independent: intro doesn't need scripts, scripts don't need bumpers
 
-                    script = await write_ad(
-                        brand,
-                        voice_map,
-                        state,
-                        config,
-                        ad_format=ad_format,
-                        sonic=sonic,
+                async def _build_intro():
+                    """Intro: transition LLM → TTS → crossfade + promo tag."""
+                    parts = []
+                    try:
+                        ihost, itext = await write_transition(state, config, next_segment="ad")
+                    except Exception:
+                        ihost = random.choice(config.hosts)
+                        itext = random.choice(AD_BREAK_INTROS)
+                    ipath = config.tmp_dir / f"ad_intro_{uuid4().hex[:8]}.mp3"
+                    await synthesize(itext, ihost.voice, ipath)
+                    xout = config.tmp_dir / f"ad_trans_{uuid4().hex[:8]}.mp3"
+                    ipath = await _try_crossfade(ipath, config, xout)
+                    parts.append(ipath)
+                    # Promo compliance tag
+                    try:
+                        ppath = config.tmp_dir / f"promo_tag_{uuid4().hex[:8]}.mp3"
+                        pvoice = config.ads.voices[0].voice if config.ads.voices else ihost.voice
+                        await synthesize("Messaggio promozionale.", pvoice, ppath, rate="+40%", pitch="-10Hz")
+                        parts.append(ppath)
+                    except Exception:
+                        pass
+                    return parts
+
+                async def _build_bumpers(_num_spots=num_spots, _loop=loop):
+                    """Opening bumper + all mid-spot bumpers in parallel."""
+                    bumper_in = config.tmp_dir / f"bumper_in_{uuid4().hex[:8]}.mp3"
+                    mid_bumpers = [
+                        config.tmp_dir / f"bumper_mid_{uuid4().hex[:8]}.mp3" for _ in range(max(0, _num_spots - 1))
+                    ]
+                    tasks = [_loop.run_in_executor(None, generate_bumper_jingle, bumper_in)]
+                    for mb in mid_bumpers:
+                        tasks.append(_loop.run_in_executor(None, generate_bumper_jingle, mb, 0.8))
+                    await asyncio.gather(*tasks)
+                    return bumper_in, mid_bumpers
+
+                # Fan out: intro + LLM scripts + bumpers all in parallel
+                intro_parts, scripts, (bumper_in, mid_bumpers) = await asyncio.gather(
+                    _build_intro(),
+                    asyncio.gather(
+                        *(
+                            write_ad(brand, vm, state, config, ad_format=af, sonic=sn)
+                            for brand, af, sn, vm in spot_params
+                        )
+                    ),
+                    _build_bumpers(),
+                )
+
+                # ── PHASE 2: Fan out all ad TTS synthesis in parallel ──
+                ad_paths = await asyncio.gather(
+                    *(
+                        synthesize_ad(script, vm, config.tmp_dir, sfx_dir)
+                        for script, (_, _, _, vm) in zip(scripts, spot_params, strict=False)
                     )
-                    ad_path = await synthesize_ad(script, voice_map, config.tmp_dir, sfx_dir)
+                )
 
+                # ── PHASE 3: Assemble break_parts in order ──
+                break_parts.extend(intro_parts)
+                break_parts.append(bumper_in)
+
+                for spot_idx, (script, ad_path) in enumerate(zip(scripts, ad_paths, strict=False)):
+                    brand = spot_params[spot_idx][0]
                     break_parts.append(ad_path)
                     break_brands.append(brand.name)
                     break_summaries.append(script.summary)
                     break_formats.append(script.format)
                     full_text = " ".join(p.text for p in script.parts if p.type == "voice" and p.text)
                     break_texts.append(full_text)
-
-                    # Record each spot in history with format and sonic info
                     state.record_ad_spot(
                         brand=brand.name,
                         summary=script.summary,
                         format=script.format,
                         sonic_signature=brand.campaign.sonic_signature if brand.campaign else "",
                     )
+                    if spot_idx < num_spots - 1 and spot_idx < len(mid_bumpers):
+                        break_parts.append(mid_bumpers[spot_idx])
 
-                    # Bumper jingle between spots (not after last one)
-                    if spot_idx < num_spots - 1:
-                        between_bumper = config.tmp_dir / f"bumper_mid_{uuid4().hex[:8]}.mp3"
-                        await loop.run_in_executor(
-                            None,
-                            generate_bumper_jingle,
-                            between_bumper,
-                            0.8,
-                        )
-                        break_parts.append(between_bumper)
-
-                # 4. Closing bumper jingle
+                # ── PHASE 4: Closing bumper + outro in parallel ──
                 bumper_out = config.tmp_dir / f"bumper_out_{uuid4().hex[:8]}.mp3"
-                await loop.run_in_executor(None, generate_bumper_jingle, bumper_out)
-                break_parts.append(bumper_out)
-
-                # 5. Host tease outro
-                outro_text = random.choice(AD_BREAK_OUTROS)
                 outro_host = random.choice(config.hosts)
                 outro_path = config.tmp_dir / f"ad_outro_{uuid4().hex[:8]}.mp3"
-                await synthesize(outro_text, outro_host.voice, outro_path)
+                outro_text = random.choice(AD_BREAK_OUTROS)
+                await asyncio.gather(
+                    loop.run_in_executor(None, generate_bumper_jingle, bumper_out),
+                    synthesize(outro_text, outro_host.voice, outro_path),
+                )
+                break_parts.append(bumper_out)
                 break_parts.append(outro_path)
 
-                # 6. Concat everything into one ad break segment
+                # ── PHASE 5: Final concat (skip loudnorm — all parts pre-normalized) ──
                 if len(break_parts) == 1:
                     ad_break_path = break_parts[0]
                 else:
@@ -542,6 +827,8 @@ async def run_producer(
                             concat_files,
                             break_parts,
                             ad_break_path,
+                            300,
+                            False,
                         )
                     finally:
                         for p in break_parts:

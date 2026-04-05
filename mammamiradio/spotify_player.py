@@ -76,6 +76,7 @@ class SpotifyPlayer:
         self._fifo_path = Path(config.audio.fifo_path)
         self._drain_pid_file = config.tmp_dir / "fifo-drain.pid"
         self._api_base = f"http://127.0.0.1:{config.audio.go_librespot_port}"
+        self._http = httpx.AsyncClient(timeout=2.0)  # Reuse TCP connections
         self._go_librespot_runtime = build_go_librespot_runtime(
             go_librespot_bin=config.audio.go_librespot_bin,
             config_dir=self._config_dir,
@@ -331,15 +332,14 @@ class SpotifyPlayer:
     async def check_auth(self) -> bool:
         """Quick single check if Spotify user is connected."""
         try:
-            async with httpx.AsyncClient() as client:
-                resp = await client.get(f"{self._api_base}/status", timeout=2.0)
-                if resp.status_code == 200:
-                    data = resp.json()
-                    if data.get("username"):
-                        if not self._authenticated:
-                            logger.info("Spotify connected: %s", data["username"])
-                            self._authenticated = True
-                        return True
+            resp = await self._http.get(f"{self._api_base}/status")
+            if resp.status_code == 200:
+                data = resp.json()
+                if data.get("username"):
+                    if not self._authenticated:
+                        logger.info("Spotify connected: %s", data["username"])
+                        self._authenticated = True
+                    return True
         except Exception as exc:
             logger.debug("check_auth HTTP error: %s", exc)
 
@@ -402,29 +402,28 @@ class SpotifyPlayer:
     async def get_current_track(self) -> Track | None:
         """Read what go-librespot is currently playing, if anything."""
         try:
-            async with httpx.AsyncClient() as client:
-                resp = await client.get(f"{self._api_base}/status", timeout=2.0)
-                if resp.status_code != 200:
-                    return None
-                data = resp.json()
-                t = data.get("track")
-                if not t or not t.get("uri"):
-                    return None
-                # Extract Spotify ID from URI (spotify:track:XXXX)
-                uri = t["uri"]
-                spotify_id = uri.split(":")[-1] if uri.startswith("spotify:track:") else None
-                if not spotify_id:
-                    return None
-                artist = t.get("artist_names", ["Unknown"])[0] if t.get("artist_names") else "Unknown"
-                track = Track(
-                    title=t.get("name", "Unknown"),
-                    artist=artist,
-                    duration_ms=t.get("duration", 0),
-                    spotify_id=spotify_id,
-                    album_art=t.get("album_cover_url", ""),
-                )
-                track.position_ms = t.get("position", 0)
-                return track
+            resp = await self._http.get(f"{self._api_base}/status")
+            if resp.status_code != 200:
+                return None
+            data = resp.json()
+            t = data.get("track")
+            if not t or not t.get("uri"):
+                return None
+            # Extract Spotify ID from URI (spotify:track:XXXX)
+            uri = t["uri"]
+            spotify_id = uri.split(":")[-1] if uri.startswith("spotify:track:") else None
+            if not spotify_id:
+                return None
+            artist = t.get("artist_names", ["Unknown"])[0] if t.get("artist_names") else "Unknown"
+            track = Track(
+                title=t.get("name", "Unknown"),
+                artist=artist,
+                duration_ms=t.get("duration", 0),
+                spotify_id=spotify_id,
+                album_art=t.get("album_cover_url", ""),
+            )
+            track.position_ms = t.get("position", 0)
+            return track
         except Exception:
             return None
 
@@ -500,22 +499,20 @@ class SpotifyPlayer:
     async def play_track(self, track: Track) -> None:
         """Ask go-librespot to start playback for one Spotify track URI."""
         uri = f"spotify:track:{track.spotify_id}"
-        async with httpx.AsyncClient() as client:
-            resp = await client.post(
-                f"{self._api_base}/player/play",
-                json={"uri": uri},
-                timeout=10.0,
-            )
-            if resp.status_code in (200, 204):
-                logger.info("Playing via Spotify: %s", track.display)
-            else:
-                logger.error("Play failed (%d): %s", resp.status_code, resp.text)
-                raise RuntimeError(f"go-librespot play failed: {resp.status_code}")
+        resp = await self._http.post(
+            f"{self._api_base}/player/play",
+            json={"uri": uri},
+            timeout=10.0,
+        )
+        if resp.status_code in (200, 204):
+            logger.info("Playing via Spotify: %s", track.display)
+        else:
+            logger.error("Play failed (%d): %s", resp.status_code, resp.text)
+            raise RuntimeError(f"go-librespot play failed: {resp.status_code}")
 
     async def pause(self) -> None:
         """Pause the currently playing Spotify track, if any."""
-        async with httpx.AsyncClient() as client:
-            await client.post(f"{self._api_base}/player/pause")
+        await self._http.post(f"{self._api_base}/player/pause")
 
     async def capture_track_audio(self, track: Track, output_path: Path, max_duration_sec: float = 300) -> Path:
         """

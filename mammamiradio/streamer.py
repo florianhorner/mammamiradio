@@ -40,6 +40,8 @@ _DASHBOARD_HTML = _PKG_DIR.joinpath("dashboard.html").read_text()
 
 _LISTENER_HTML = _PKG_DIR.joinpath("listener.html").read_text()
 
+_ADMIN_HTML = _PKG_DIR.joinpath("admin.html").read_text()
+
 _INGRESS_PREFIX_RE = _re.compile(r"^/[a-zA-Z0-9/_-]+$")
 _MUTATING_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 _CSRF_TOKEN_PLACEHOLDER = "__MAMMAMIRADIO_CSRF_TOKEN__"
@@ -326,15 +328,20 @@ def require_admin_access(
             return
 
     if config.admin_password:
+        client_ip = request.client.host if request.client else "unknown"
+        logger.warning("Failed admin auth attempt from %s", client_ip)
         raise HTTPException(
             status_code=401,
             detail="Admin authentication required",
             headers={"WWW-Authenticate": 'Basic realm="mammamiradio admin"'},
         )
 
+    # Token matched above would have returned; reaching here means the token was absent or wrong
     if config.admin_token:
         if is_loopback:
             return
+        client_ip = request.client.host if request.client else "unknown"
+        logger.warning("Missing admin token from %s", client_ip)
         raise HTTPException(
             status_code=401,
             detail="X-Radio-Admin-Token required",
@@ -357,7 +364,7 @@ async def run_playback_loop(app) -> None:
     state = app.state.station_state
     config = app.state.config
     hub = app.state.stream_hub
-    bytes_per_sec = (config.audio.bitrate * 1000) / 8
+    bytes_per_sec = (config.audio.bitrate * 1000) / 8  # bitrate is in kbps; convert to bytes/sec
 
     while True:
         try:
@@ -430,6 +437,15 @@ async def dashboard(request: Request):
     """Serve the authenticated control-plane dashboard."""
     prefix = request.headers.get("X-Ingress-Path", "")
     html = _inject_ingress_prefix(_DASHBOARD_HTML, prefix)
+    html = _inject_csrf_token(html, _get_csrf_token(request.app))
+    return html
+
+
+@router.get("/admin", response_class=HTMLResponse, dependencies=[Depends(require_admin_access)])
+async def admin_panel(request: Request):
+    """Serve the admin control room panel."""
+    prefix = request.headers.get("X-Ingress-Path", "")
+    html = _inject_ingress_prefix(_ADMIN_HTML, prefix)
     html = _inject_csrf_token(html, _get_csrf_token(request.app))
     return html
 
@@ -520,11 +536,12 @@ async def save_keys(request: Request):
     if not updates:
         return {"ok": False, "error": "No keys provided"}
 
-    # Persist to disk
+    # Persist to disk (async-wrapped to avoid blocking the event loop)
+    loop = asyncio.get_running_loop()
     if config.is_addon:
-        _save_addon_options(updates)
+        await loop.run_in_executor(None, _save_addon_options, updates)
     else:
-        _save_dotenv(updates)
+        await loop.run_in_executor(None, _save_dotenv, updates)
 
     # Update env + live config so re-check sees the values immediately
     for k, v in updates.items():
@@ -546,21 +563,24 @@ def _save_dotenv(updates: dict[str, str]) -> None:
     env_path = Path(".env")
     lines = env_path.read_text().splitlines() if env_path.exists() else []
 
+    # Sanitize values: strip newlines to prevent env injection
+    safe_updates = {k: v.replace("\n", "").replace("\r", "") for k, v in updates.items()}
+
     written = set()
     new_lines = []
     for line in lines:
         stripped = line.strip()
         if stripped and not stripped.startswith("#") and "=" in stripped:
             key = stripped.split("=", 1)[0].strip()
-            if key in updates:
-                new_lines.append(f"{key}={updates[key]}")
+            if key in safe_updates:
+                new_lines.append(f'{key}="{safe_updates[key]}"')
                 written.add(key)
                 continue
         new_lines.append(line)
 
-    for key, value in updates.items():
+    for key, value in safe_updates.items():
         if key not in written:
-            new_lines.append(f"{key}={value}")
+            new_lines.append(f'{key}="{value}"')
 
     env_path.write_text("\n".join(new_lines) + "\n")
 
@@ -627,7 +647,7 @@ async def capabilities(request: Request, _: None = Depends(require_admin_access)
         try:
             import httpx as _httpx
 
-            r = _httpx.get(f"http://127.0.0.1:{config.audio.go_librespot_port}/status", timeout=1.0)
+            r = await _httpx.AsyncClient().get(f"http://127.0.0.1:{config.audio.go_librespot_port}/status", timeout=1.0)
             if r.status_code == 200:
                 result["spotify_username"] = r.json().get("username", "")
         except Exception:
@@ -661,6 +681,17 @@ async def skip_track(request: Request, _: None = Depends(require_admin_access)):
     if not state.now_streaming:
         return {"ok": False, "error": "Nothing is currently streaming"}
 
+    # Record skip in listener profile if this was a music segment
+    now_seg = state.now_streaming
+    if now_seg.get("type") == "music" and hasattr(state, "listener"):
+        started = now_seg.get("started", time.time())
+        listen_sec = time.time() - started
+        state.listener.record_outcome(
+            skipped=True,
+            listen_sec=listen_sec,
+            track_display=now_seg.get("label", ""),
+        )
+
     request.app.state.skip_event.set()
     state.now_streaming = {"type": "skipping", "label": "Skipping...", "started": time.time()}
     return {"ok": True}
@@ -675,10 +706,10 @@ async def purge_queue(request: Request, _: None = Depends(require_admin_access))
 
 @router.post("/api/trigger")
 async def trigger_segment(request: Request, _: None = Depends(require_admin_access)):
-    """Force the next produced segment to be banter or ad."""
+    """Force the next produced segment to be banter, ad, or news flash."""
     body = await request.json()
     seg_type = body.get("type", "").lower()
-    valid = {"banter": SegmentType.BANTER, "ad": SegmentType.AD}
+    valid = {"banter": SegmentType.BANTER, "ad": SegmentType.AD, "news_flash": SegmentType.NEWS_FLASH}
     if seg_type not in valid:
         return {"ok": False, "error": f"type must be one of: {list(valid.keys())}"}
 
@@ -747,35 +778,39 @@ async def save_credentials(request: Request, _: None = Depends(require_admin_acc
     if not updates:
         return {"ok": False, "error": "No recognised credential fields in request"}
 
-    # Atomically update .env file (create if missing)
-    env_path = Path(".env")
-    try:
-        existing = env_path.read_text() if env_path.exists() else ""
-    except OSError:
-        existing = ""
+    # Atomically update .env file (async-wrapped to avoid blocking event loop)
+    def _write_env_atomic() -> None:
+        env_path = Path(".env")
+        try:
+            existing = env_path.read_text() if env_path.exists() else ""
+        except OSError:
+            existing = ""
 
-    lines = existing.splitlines()
-    written: set[str] = set()
-    new_lines: list[str] = []
-    for line in lines:
-        stripped = line.strip()
-        if stripped.startswith("#") or "=" not in stripped:
-            new_lines.append(line)
-            continue
-        key = stripped.split("=", 1)[0].strip()
-        if key in updates:
-            new_lines.append(f'{key}="{updates[key]}"')
-            written.add(key)
-        else:
-            new_lines.append(line)
+        lines = existing.splitlines()
+        written: set[str] = set()
+        new_lines: list[str] = []
+        for line in lines:
+            stripped = line.strip()
+            if stripped.startswith("#") or "=" not in stripped:
+                new_lines.append(line)
+                continue
+            key = stripped.split("=", 1)[0].strip()
+            if key in updates:
+                new_lines.append(f'{key}="{updates[key]}"')
+                written.add(key)
+            else:
+                new_lines.append(line)
 
-    for key, value in updates.items():
-        if key not in written:
-            new_lines.append(f'{key}="{value}"')
+        for key, value in updates.items():
+            if key not in written:
+                new_lines.append(f'{key}="{value}"')
 
-    tmp = env_path.with_suffix(".env.tmp")
-    tmp.write_text("\n".join(new_lines) + "\n")
-    tmp.replace(env_path)
+        tmp = env_path.with_suffix(".env.tmp")
+        tmp.write_text("\n".join(new_lines) + "\n")
+        tmp.replace(env_path)
+
+    loop = asyncio.get_running_loop()
+    await loop.run_in_executor(None, _write_env_atomic)
 
     logger.info("Credentials saved to .env: %s", ", ".join(updates.keys()))
     return {"ok": True, "saved": list(updates.keys())}
@@ -1134,6 +1169,10 @@ async def status(request: Request, _: None = Depends(require_admin_access)):
                 "tts_characters": state.tts_characters,
             },
             "force_pending": state.force_next.value if state.force_next else None,
+            "playlist": [
+                {"title": t.title, "artist": t.artist, "display": t.display, "spotify_id": t.spotify_id}
+                for t in state.playlist[:100]
+            ],
         }
     )
     return payload
@@ -1257,9 +1296,12 @@ async def spotify_disconnect(request: Request):
 
 
 def _tail_log(path: str, lines: int = 15) -> list[str]:
-    """Return the last lines from a log file without raising on missing files."""
+    """Return the last lines from a log file efficiently (seek from end)."""
     try:
-        with open(path) as f:
-            return f.readlines()[-lines:]
+        with open(path, "rb") as f:
+            f.seek(0, 2)
+            size = f.tell()
+            f.seek(max(0, size - 8192))
+            return f.read().decode(errors="replace").splitlines()[-lines:]
     except Exception:
         return []

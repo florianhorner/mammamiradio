@@ -964,8 +964,8 @@ def test_tail_log_with_content(tmp_path):
     log_file.write_text("line1\nline2\nline3\nline4\n")
     result = _tail_log(str(log_file), lines=2)
     assert len(result) == 2
-    assert "line3\n" in result
-    assert "line4\n" in result
+    assert "line3" in result
+    assert "line4" in result
 
 
 # ---------------------------------------------------------------------------

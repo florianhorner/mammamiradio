@@ -59,9 +59,17 @@ echo "Using go-librespot config dir: $GO_LIBRESPOT_CONFIG_DIR"
 # Patch runtime overrides (FIFO path and API port) into the workspace config
 _GL_CFG="$GO_LIBRESPOT_CONFIG_DIR/config.yml"
 if [ -f "$_GL_CFG" ]; then
-    sed -i '' "s|audio_output_pipe:.*|audio_output_pipe: $FIFO|" "$_GL_CFG"
+    if [[ "$OSTYPE" == darwin* ]]; then
+        sed -i '' "s|audio_output_pipe:.*|audio_output_pipe: $FIFO|" "$_GL_CFG"
+    else
+        sed -i "s|audio_output_pipe:.*|audio_output_pipe: $FIFO|" "$_GL_CFG"
+    fi
     if [ -n "${GO_LIBRESPOT_PORT:-}" ]; then
-        sed -i '' "s|port:.*|port: $GO_LIBRESPOT_PORT|" "$_GL_CFG"
+        if [[ "$OSTYPE" == darwin* ]]; then
+            sed -i '' "s|port:.*|port: $GO_LIBRESPOT_PORT|" "$_GL_CFG"
+        else
+            sed -i "s|port:.*|port: $GO_LIBRESPOT_PORT|" "$_GL_CFG"
+        fi
     fi
 fi
 

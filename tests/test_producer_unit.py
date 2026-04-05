@@ -219,10 +219,11 @@ def test_pick_canned_clip_respects_shareware_limit(tmp_path):
     for i in range(5):
         (banter_dir / f"clip_{i}.mp3").write_bytes(b"\x00" * 100)
 
-    # Temporarily override demo assets dir
+    # Temporarily override demo assets dir and clear caches
     orig = producer._DEMO_ASSETS_DIR
     producer._DEMO_ASSETS_DIR = tmp_path
     producer._recently_played_clips.clear()
+    producer._canned_clip_cache.clear()
 
     try:
         state = StationState()
@@ -242,3 +243,4 @@ def test_pick_canned_clip_respects_shareware_limit(tmp_path):
     finally:
         producer._DEMO_ASSETS_DIR = orig
         producer._recently_played_clips.clear()
+        producer._canned_clip_cache.clear()

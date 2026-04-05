@@ -22,6 +22,37 @@ def get_capabilities(config: StationConfig, state: StationState) -> Capabilities
     )
 
 
+def next_step(caps: Capabilities) -> dict:
+    """Return a single guided hint for the dashboard to show the user.
+
+    Priority order matches value to the listener experience:
+    Spotify creds → Spotify Connect → Anthropic key → all set.
+    """
+    if not caps.spotify_api:
+        return {
+            "key": "add_spotify",
+            "message": "Add Spotify credentials to play your music",
+            "action": "open_settings",
+        }
+    if not caps.spotify_connected:
+        return {
+            "key": "connect_spotify",
+            "message": "Open Spotify and select this station as your playback device",
+            "action": "wait",
+        }
+    if not caps.anthropic:
+        return {
+            "key": "add_anthropic",
+            "message": "Add an Anthropic API key to unlock AI hosts",
+            "action": "open_settings",
+        }
+    return {
+        "key": "all_set",
+        "message": "",
+        "action": "none",
+    }
+
+
 def capabilities_to_dict(caps: Capabilities) -> dict:
     """Serialize capabilities for the ``/api/capabilities`` JSON response."""
     return {
@@ -33,4 +64,5 @@ def capabilities_to_dict(caps: Capabilities) -> dict:
         },
         "tier": caps.tier,
         "tier_label": caps.tier_label,
+        "next_step": next_step(caps),
     }

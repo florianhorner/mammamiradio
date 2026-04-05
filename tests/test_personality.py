@@ -89,12 +89,12 @@ class TestConfigPersonality:
     def test_radio_toml_loads_personality(self):
         config = load_config(TOML_PATH)
         marco = next(h for h in config.hosts if h.name == "Marco")
-        assert marco.personality.energy == 80
-        assert marco.personality.nostalgia == 85
+        assert marco.personality.energy == 90
+        assert marco.personality.nostalgia == 75
 
         giulia = next(h for h in config.hosts if h.name == "Giulia")
-        assert giulia.personality.energy == 35
-        assert giulia.personality.warmth == 30
+        assert giulia.personality.energy == 40
+        assert giulia.personality.warmth == 20
 
 
 # ---------------------------------------------------------------------------
@@ -186,8 +186,8 @@ class TestBuildSystemPrompt:
     def test_prompt_still_includes_base_style(self):
         config = load_config(TOML_PATH)
         prompt = _build_system_prompt(config)
-        assert "enthusiastic" in prompt  # Marco's base style
-        assert "dry wit" in prompt  # Giulia's base style
+        assert "manic energy" in prompt  # Marco's base style
+        assert "razor-sharp sarcasm" in prompt  # Giulia's base style
 
 
 # ---------------------------------------------------------------------------
@@ -247,7 +247,7 @@ class TestHostsAPI:
         assert data["personality"]["energy"] == 95
         assert data["personality"]["chaos"] == 10
         # Other axes unchanged
-        assert data["personality"]["warmth"] == 70  # Marco's configured default
+        assert data["personality"]["warmth"] == 60  # Marco's configured default
 
     async def test_patch_personality_clamps_values(self):
         app = _make_test_app()

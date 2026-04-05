@@ -23,8 +23,8 @@ def _normalize_side_effect(input_path, output_path, config=None):
     return output_path
 
 
-def _concat_side_effect(paths, output_path, silence_ms=300):
-    """Side-effect for concat_files(paths, output_path, silence_ms)."""
+def _concat_side_effect(paths, output_path, silence_ms=300, loudnorm=True):
+    """Side-effect for concat_files(paths, output_path, silence_ms, loudnorm)."""
     _touch(output_path)
     return output_path
 

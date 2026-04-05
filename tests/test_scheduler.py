@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import random
 
+import pytest
+
 from mammamiradio.config import PacingSection
 from mammamiradio.models import SegmentType, StationState, Track
 
@@ -68,6 +70,86 @@ def test_reserve_next_track_rotates_upcoming_playlist():
     assert [t.spotify_id for t in state.playlist] == ["2", "3", "1"]
 
 
+def test_select_next_track_returns_from_pool():
+    """select_next_track picks a track from the playlist pool."""
+    tracks = [
+        Track(title="A", artist="Art1", duration_ms=1, spotify_id="a"),
+        Track(title="B", artist="Art2", duration_ms=1, spotify_id="b"),
+        Track(title="C", artist="Art3", duration_ms=1, spotify_id="c"),
+    ]
+    state = StationState(playlist=tracks)
+    pick = state.select_next_track()
+    assert pick in tracks
+
+
+def test_select_next_track_avoids_recently_played():
+    """Tracks in the repeat_cooldown window should not be picked when alternatives exist."""
+    tracks = [
+        Track(title="A", artist="Art1", duration_ms=1, spotify_id="a"),
+        Track(title="B", artist="Art2", duration_ms=1, spotify_id="b"),
+        Track(title="C", artist="Art3", duration_ms=1, spotify_id="c"),
+    ]
+    state = StationState(
+        playlist=tracks,
+        played_tracks=[tracks[0], tracks[1]],
+    )
+    # With repeat_cooldown=2, tracks a and b were played in last 2 — only c eligible
+    picks = {state.select_next_track(repeat_cooldown=2).spotify_id for _ in range(20)}
+    assert picks == {"c"}
+
+
+def test_select_next_track_avoids_same_artist():
+    """Artist cooldown should prevent back-to-back same artist."""
+    tracks = [
+        Track(title="Hit1", artist="SameArtist", duration_ms=1, spotify_id="s1"),
+        Track(title="Hit2", artist="SameArtist", duration_ms=1, spotify_id="s2"),
+        Track(title="Other", artist="DiffArtist", duration_ms=1, spotify_id="d1"),
+    ]
+    state = StationState(
+        playlist=tracks,
+        played_tracks=[tracks[0]],  # SameArtist just played
+    )
+    picks = {state.select_next_track(artist_cooldown=1).spotify_id for _ in range(20)}
+    assert picks == {"d1"}
+
+
+def test_select_next_track_filters_explicit():
+    """allow_explicit=False should skip explicit tracks."""
+    tracks = [
+        Track(title="Clean", artist="A", duration_ms=1, spotify_id="c1", explicit=False),
+        Track(title="Dirty", artist="B", duration_ms=1, spotify_id="e1", explicit=True),
+    ]
+    state = StationState(playlist=tracks)
+    picks = {state.select_next_track(allow_explicit=False).spotify_id for _ in range(20)}
+    assert picks == {"c1"}
+
+
+def test_select_next_track_relaxes_on_small_pool():
+    """When all tracks are filtered out, fallback should still return something."""
+    tracks = [
+        Track(title="Only", artist="Solo", duration_ms=1, spotify_id="only"),
+    ]
+    state = StationState(
+        playlist=tracks,
+        played_tracks=[tracks[0]],  # Just played the only track
+    )
+    # Despite repeat_cooldown, should still return the track (relaxed filters)
+    pick = state.select_next_track(repeat_cooldown=5)
+    assert pick.spotify_id == "only"
+
+
+def test_select_next_track_does_not_mutate_playlist():
+    """select_next_track should not modify the playlist (unlike reserve_next_track)."""
+    tracks = [
+        Track(title="A", artist="A", duration_ms=1, spotify_id="a"),
+        Track(title="B", artist="B", duration_ms=1, spotify_id="b"),
+    ]
+    state = StationState(playlist=list(tracks))
+    state.select_next_track()
+    assert len(state.playlist) == 2
+    assert [t.spotify_id for t in state.playlist] == ["a", "b"]
+
+
 def test_preview_upcoming_uses_current_playlist_order():
     from mammamiradio.scheduler import preview_upcoming
 
@@ -93,3 +175,71 @@ def test_preview_upcoming_uses_current_playlist_order():
         "B – Two",
         "C – Three",
     ]
+
+
+def test_select_next_track_uses_cache_key_not_spotify_id():
+    """Two tracks with same spotify_id='' but different titles have distinct cache_keys."""
+    tracks = [
+        Track(title="Song Alpha", artist="Art1", duration_ms=1, spotify_id=""),
+        Track(title="Song Beta", artist="Art2", duration_ms=1, spotify_id=""),
+    ]
+    state = StationState(
+        playlist=tracks,
+        played_tracks=[tracks[0]],  # Only "Song Alpha" played
+    )
+    # repeat_cooldown=1 means last 1 played track is excluded by cache_key.
+    # If identity were spotify_id (both ""), BOTH would be excluded. With cache_key, only Alpha is.
+    picks = {state.select_next_track(repeat_cooldown=1, artist_cooldown=0).cache_key for _ in range(20)}
+    assert tracks[1].cache_key in picks
+
+
+def test_select_next_track_max_artist_per_hour():
+    """max_artist_per_hour caps how often one artist appears in the rolling hour window."""
+    tracks = [
+        Track(title="A1", artist="ArtistA", duration_ms=1, spotify_id="a1"),
+        Track(title="A2", artist="ArtistA", duration_ms=1, spotify_id="a2"),
+        Track(title="A3", artist="ArtistA", duration_ms=1, spotify_id="a3"),
+        Track(title="B1", artist="ArtistB", duration_ms=1, spotify_id="b1"),
+    ]
+    # Simulate 3 ArtistA tracks already played in the hour window
+    state = StationState(
+        playlist=tracks,
+        played_tracks=[
+            Track(title="A1", artist="ArtistA", duration_ms=1, spotify_id="a1"),
+            Track(title="A2", artist="ArtistA", duration_ms=1, spotify_id="a2"),
+            Track(title="A3", artist="ArtistA", duration_ms=1, spotify_id="a3"),
+        ],
+    )
+    # With max_artist_per_hour=3, ArtistA is at the cap → only ArtistB eligible
+    picks = {
+        state.select_next_track(repeat_cooldown=0, artist_cooldown=0, max_artist_per_hour=3).spotify_id
+        for _ in range(30)
+    }
+    assert picks == {"b1"}
+
+
+def test_select_next_track_never_played_bonus():
+    """Never-played tracks get a 1.2x bonus and should be picked more often."""
+    random.seed(12345)
+    played_a = Track(title="Played A", artist="X", duration_ms=1, spotify_id="pa")
+    played_b = Track(title="Played B", artist="Y", duration_ms=1, spotify_id="pb")
+    fresh = Track(title="Fresh One", artist="Z", duration_ms=1, spotify_id="fr")
+    tracks = [played_a, played_b, fresh]
+    # Build played history: both A and B played multiple times recently
+    played_history = [played_a, played_b] * 5
+    state = StationState(playlist=tracks, played_tracks=played_history)
+
+    counts: dict[str, int] = {}
+    for _ in range(200):
+        pick = state.select_next_track(repeat_cooldown=0, artist_cooldown=0)
+        counts[pick.spotify_id] = counts.get(pick.spotify_id, 0) + 1
+
+    # The fresh track should dominate due to 1.2x bonus + recency penalty on played tracks
+    assert counts.get("fr", 0) > 120, f"Expected fresh track picked >60%, got {counts}"
+
+
+def test_select_next_track_empty_playlist_raises():
+    """Empty playlist should raise RuntimeError."""
+    state = StationState(playlist=[])
+    with pytest.raises(RuntimeError, match="Playlist is empty"):
+        state.select_next_track()

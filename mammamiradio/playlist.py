@@ -51,11 +51,15 @@ def _track_from_spotify_item(item: dict) -> Track | None:
     if not track or not track.get("id"):
         return None
     artist = track["artists"][0]["name"] if track.get("artists") else "Unknown"
+    album = track.get("album", {}).get("name", "") if isinstance(track.get("album"), dict) else ""
     return Track(
         title=track["name"],
         artist=artist,
         duration_ms=track["duration_ms"],
         spotify_id=track["id"],
+        album=album,
+        explicit=bool(track.get("explicit", False)),
+        popularity=int(track.get("popularity", 0) or 0),
     )
 
 

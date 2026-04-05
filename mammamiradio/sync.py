@@ -81,8 +81,6 @@ def _sync_playlist_blocking(
     import yt_dlp
 
     cache_dir.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(db_path))
-    conn.row_factory = sqlite3.Row
 
     # Extract playlist info without downloading
     extract_opts: dict = {
@@ -111,12 +109,13 @@ def _sync_playlist_blocking(
 
     if not info or "entries" not in info:
         logger.error("Failed to extract playlist — no entries found")
-        conn.close()
         return []
 
     entries = list(info["entries"] or [])
     logger.info("Playlist has %d tracks", len(entries))
 
+    conn = sqlite3.connect(str(db_path))
+    conn.row_factory = sqlite3.Row
     tracks: list[Track] = []
 
     for entry in entries:
@@ -219,6 +218,7 @@ def _sync_playlist_blocking(
             continue
 
     conn.close()
+
     logger.info("Sync complete: %d tracks available", len(tracks))
     return tracks
 

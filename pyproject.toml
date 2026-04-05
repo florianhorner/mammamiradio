@@ -37,6 +37,7 @@ ignore = ["B008", "RUF001", "SIM105", "SIM115"]
 
 [tool.ruff.lint.per-file-ignores]
 "mammamiradio/scriptwriter.py" = ["E501"]
+"tests/test_scriptwriter.py" = ["E501"]
 
 [tool.ruff.format]
 quote-style = "double"

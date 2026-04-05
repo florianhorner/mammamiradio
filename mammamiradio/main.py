@@ -43,6 +43,20 @@ async def startup():
     config.tmp_dir.mkdir(parents=True, exist_ok=True)
     config.cache_dir.mkdir(parents=True, exist_ok=True)
 
+    # Dependency checks with install hints
+    import shutil
+
+    if not shutil.which("ffmpeg"):
+        logger.warning(
+            "FFmpeg not found — audio generation will fail. "
+            "Install: brew install ffmpeg (macOS) or apt install ffmpeg (Linux)"
+        )
+    if not shutil.which(config.audio.go_librespot_bin):
+        logger.info(
+            "go-librespot not found — Spotify Connect disabled, using demo/local audio. "
+            "Install: brew install go-librespot (macOS) or download from github.com/devgianlu/go-librespot"
+        )
+
     # Start go-librespot for Spotify audio
     spotify_player = None
     try:
@@ -88,6 +102,18 @@ async def startup():
     app.state.station_state = state
     app.state.config = config
     app.state.start_time = time.time()
+
+    # Pre-queue a welcome clip so listeners hear audio instantly (no 2-5s gap)
+    from mammamiradio.models import Segment, SegmentType
+    from mammamiradio.producer import _pick_canned_clip
+
+    welcome = _pick_canned_clip("welcome")
+    if not welcome:
+        welcome = _pick_canned_clip("banter", state=state)
+    if welcome:
+        await queue.put(Segment(type=SegmentType.BANTER, path=welcome, metadata={"type": "welcome", "canned": True}))
+        state.after_banter()
+        logger.info("Pre-queued welcome clip for instant playback")
 
     _playback_task = asyncio.create_task(run_playback_loop(app))
     _producer_task = asyncio.create_task(
