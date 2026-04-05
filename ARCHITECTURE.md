@@ -55,14 +55,20 @@ Spotify playlist / liked songs / demo tracks
   - normalizes output before queueing
 - `BANTER`
   - asks Claude for structured dialogue JSON
-  - synthesizes one line per host with Edge TTS
+  - synthesizes one line per host via the configured TTS engine (see [TTS architecture](#tts-architecture) below)
   - preserves running jokes in `StationState`
 - `AD`
   - picks brands with recurrence weighting and recent-brand avoidance
+  - selects one of 6 ad formats: classic pitch, testimonial, duo scene, live remote, late-night whisper, or institutional PSA
+  - resolves a sonic world (SFX, music bed mood, environment bed) per brand category
+  - casts speakers by role — duo scenes and testimonials use two distinct voices with role-based resolution
+  - generates a brand motif jingle for recurring brands from their sonic signature
   - builds a break from host intro, bumpers, one or more ad spots, and host outro
-  - records per-spot campaign history, but only increments `segments_produced` once per break
+  - records per-spot campaign history (format, sonic signature, summary) for format rotation and campaign arc continuity
 
 Every produced segment becomes a temporary MP3 on disk and is pushed into `asyncio.Queue[Segment]`.
+
+Bounded state lists (`played_tracks`, `running_jokes`, `segment_log`, `stream_log`, `ad_history`, `recent_outcomes`) use `deque(maxlen=N)` for automatic memory management — no manual truncation needed.
 
 ## Playback and fanout
 
@@ -161,6 +167,18 @@ The fix is a persistent drain path:
 
 `start.sh` also keeps a fallback `cat` drain alive across uvicorn reloads so local development does not constantly break Spotify playback.
 
+## TTS architecture
+
+Each host declares a TTS engine in `radio.toml`: `engine = "edge"` (default) or `engine = "openai"`.
+
+**Edge TTS** (Microsoft): free, no API key. Each host maps to an Azure Neural voice (e.g., `it-IT-GiuseppeNeural`). SSML prosody tags (rate, pitch) are derived from the host's personality axes for voice differentiation.
+
+**OpenAI TTS** (`gpt-4o-mini-tts`): requires `OPENAI_API_KEY`. Each host maps to an OpenAI voice (e.g., `onyx`). Personality-aware delivery instructions are generated from the host's energy, warmth, and chaos axes — the model interprets these as acting direction, not just static parameters.
+
+Fallback chain: OpenAI failure → `edge_fallback_voice` (so the host falls back to their own Edge voice, not a stranger) → stock pre-bundled clips.
+
+A singleton `openai.AsyncOpenAI` client is reused across all TTS calls for connection pool efficiency.
+
 ## Optional Home Assistant context
 
 If `[homeassistant].enabled = true` and `HA_TOKEN` is present:
@@ -237,7 +255,11 @@ The rich path is richer, but the failure path still produces a stream.
 | `mammamiradio/spotify_player.py` | go-librespot process management and FIFO capture |
 | `mammamiradio/downloader.py` | local-file, yt-dlp, and placeholder music fallback |
 | `mammamiradio/scriptwriter.py` | Claude prompts for banter and ad copy |
-| `mammamiradio/tts.py` | Edge TTS synthesis for voices and ad parts |
+| `mammamiradio/tts.py` | TTS synthesis (Edge TTS + OpenAI gpt-4o-mini-tts) |
+| `mammamiradio/capabilities.py` | Capability flags, tier derivation, and next-step hints |
+| `mammamiradio/persona.py` | Listener behavior profiling for banter prompts |
+| `mammamiradio/sync.py` | go-librespot config synchronization from radio.toml |
+| `mammamiradio/context_cues.py` | Time-of-day and cultural context for prompts |
 | `mammamiradio/normalizer.py` | ffmpeg helpers for normalization, mixing, tones, and bumpers |
 | `mammamiradio/streamer.py` | HTTP routes, auth gating, playback loop, listener fanout |
 | `start.sh` | local dev entry point with reload-safe go-librespot handling |

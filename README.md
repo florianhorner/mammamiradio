@@ -113,6 +113,7 @@ The app now treats first run as setup, not as "the dashboard happened to load". 
 - Spotify client credentials (client ID and secret from [Spotify Developer Dashboard](https://developer.spotify.com/dashboard))
 - go-librespot, for real Spotify device playback and capture
 - Optional: Anthropic API key, for Claude-generated banter and ads (falls back to stock copy without it)
+- Optional: OpenAI API key, for `gpt-4o-mini-tts` host voices (falls back to Edge TTS without it)
 - Optional: Home Assistant long-lived token, for ambient home-state references in scripts
 
 > **How the Spotify pieces fit together:**
@@ -143,6 +144,7 @@ ADMIN_TOKEN=
 SPOTIFY_CLIENT_ID=
 SPOTIFY_CLIENT_SECRET=
 ANTHROPIC_API_KEY=
+OPENAI_API_KEY=
 HA_TOKEN=
 ```
 
@@ -236,6 +238,7 @@ The station is intentionally resilient:
 | Spotify client credentials | Uses a built-in demo Italian playlist |
 | go-librespot or Spotify device connection | Falls back to local files, then `yt-dlp`, then placeholder audio |
 | Anthropic API key or Claude request failure | Uses simple fallback banter or ad copy |
+| OpenAI API key missing or request failure | Falls back to Edge TTS voice for that host |
 | Home Assistant token or API failure | Continues without home context |
 | Ad brands missing | Skips ad generation instead of failing startup |
 
@@ -252,7 +255,7 @@ Most station behavior lives in `radio.toml`.
 | `[station]` | Station name, language, theme |
 | `[playlist]` | Spotify playlist URL, source selection, shuffle behavior |
 | `[pacing]` | Songs between banter, songs between ads, spots per ad break, lookahead |
-| `[[hosts]]` | Host names, Edge voices, style/personality |
+| `[[hosts]]` | Host names, TTS engine (`edge` or `openai`), voices, style/personality |
 | `[audio]` | Sample rate, channels, bitrate, FIFO path, go-librespot settings, Claude model |
 | `[homeassistant]` | Whether HA context is enabled, base URL, refresh interval |
 | `[[ads.brands]]` | Fictional brand pool, categories, recurring-campaign weighting |
@@ -286,6 +289,15 @@ The Home Assistant token is never stored in `radio.toml`. Set it via `HA_TOKEN` 
 | `/api/playlist/load` | POST | Admin | Load a Spotify playlist by URL (legacy compatibility) |
 | `/api/spotify/source-options` | GET | Admin | Available sources: user playlists, Liked Songs |
 | `/api/spotify/source/select` | POST | Admin | Switch source to playlist, liked_songs, or URL |
+| `/api/spotify/auth-status` | GET | Admin | Spotify OAuth connection state |
+| `/api/spotify/disconnect` | POST | Admin | Revoke Spotify connection |
+| `/api/hosts` | GET | Admin | List hosts with personality settings |
+| `/api/hosts/{name}/personality/reset` | POST | Admin | Reset host personality to defaults |
+| `/api/pacing` | GET | Admin | Current pacing configuration |
+| `/api/setup/save-keys` | POST | Admin | Save API keys via dashboard |
+| `/api/capabilities` | GET | Public | Capability flags, tier, next-step hint, connect status |
+| `/api/trigger` | POST | Admin | Trigger segment production |
+| `/api/credentials` | POST | Admin | Update credentials at runtime |
 
 ## Admin access
 
@@ -312,7 +324,7 @@ mammamiradio/
   playlist.py         Spotify playlist fetch + demo fallback
   downloader.py       local file / yt-dlp / placeholder fallback
   scriptwriter.py     Claude prompts for banter and ads
-  tts.py              Edge TTS synthesis
+  tts.py              TTS synthesis (Edge TTS + OpenAI gpt-4o-mini-tts)
   normalizer.py       FFmpeg helpers
   ha_context.py       Home Assistant polling and formatting
   models.py           core data models and station state
