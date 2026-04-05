@@ -198,7 +198,7 @@ async def test_source_switch_discards_stale_music_segment(tmp_path):
             allow_first_download.set()
             await asyncio.wait_for(second_download_started.wait(), timeout=1.0)
             assert queue.empty()
-            assert state.played_tracks == []
+            assert len(state.played_tracks) == 0
         finally:
             task.cancel()
             try:
