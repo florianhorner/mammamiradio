@@ -100,7 +100,7 @@ def concat_files(paths: list[Path], output_path: Path, silence_ms: int = 300) ->
             filter_parts.append(f"[{i}:a]")
         total_streams = len(paths)
 
-    filter_str = "".join(filter_parts) + f"concat=n={total_streams}:v=0:a=1[out]"
+    filter_str = "".join(filter_parts) + f"concat=n={total_streams}:v=0:a=1,loudnorm=I=-16:LRA=11:TP=-1.5[out]"
 
     cmd = [
         "ffmpeg",
@@ -312,7 +312,7 @@ def mix_with_bed(voice_path: Path, bed_path: Path, output_path: Path, volume_sca
         "-i",
         str(bed_path),
         "-filter_complex",
-        f"[1:a]volume={volume_scale}[bed];[0:a][bed]amix=inputs=2:duration=first:dropout_transition=2[out]",
+        f"[1:a]volume={volume_scale}[bed];[0:a][bed]amix=inputs=2:duration=first:dropout_transition=2,loudnorm=I=-16:LRA=11:TP=-1.5[out]",
         "-map",
         "[out]",
         "-ar",
