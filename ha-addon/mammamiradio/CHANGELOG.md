@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.5.1
+
+### Changed
+
+- Internal data structures use bounded deques for automatic memory management.
+- Home Assistant polling uses a reusable HTTP client (fewer connections, faster polls).
+
+### Fixed
+
+- Status API no longer crashes when serializing internal data structures.
+
 ## 1.5.0
 
 ### Added

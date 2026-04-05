@@ -4,6 +4,24 @@ All notable changes to `mammamiradio` are documented here.
 
 The current version source of truth is `pyproject.toml`.
 
+## [1.5.1] - 2026-04-05
+
+### Changed
+
+- Bounded lists (`played_tracks`, `running_jokes`, `segment_log`, `stream_log`, `ad_history`, `recent_outcomes`) now use `deque(maxlen=N)` instead of manual truncation, removing 6 redundant trim blocks.
+- Home Assistant context uses a reusable `httpx.AsyncClient` singleton and module-level cache instead of creating a new HTTP client per poll.
+- Dashboard and admin HTML injection results are cached by ingress prefix, avoiding repeated string replacements per request.
+- Playback throttle threshold tightened from 10ms to 5ms for smoother audio delivery.
+
+### Fixed
+
+- `running_jokes` deque is now converted to `list()` before JSON serialization in the status API, preventing `TypeError` on every `/api/status` call.
+- Deque fields are wrapped with `list()` before slicing in scriptwriter (deque doesn't support `[-N:]` syntax).
+
+### Added
+
+- 30 new tests covering news flash generation, TTS prosody, crossfade audio, scheduler counters, admin CSRF, trigger endpoint, dialogue synthesis, and API client caching.
+
 ## [Unreleased]
 
 ### Added
