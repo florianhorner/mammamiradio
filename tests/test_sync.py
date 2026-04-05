@@ -5,7 +5,16 @@ from __future__ import annotations
 import sqlite3
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from mammamiradio.sync import init_db, load_cached_tracks
+
+try:
+    import yt_dlp  # noqa: F401
+
+    _has_yt_dlp = True
+except ModuleNotFoundError:
+    _has_yt_dlp = False
 
 
 def test_init_db_creates_tables(tmp_path):
@@ -83,6 +92,7 @@ def test_load_cached_tracks_skips_missing_files(tmp_path):
     assert tracks == []
 
 
+@pytest.mark.skipif(not _has_yt_dlp, reason="yt-dlp not installed")
 def test_sync_playlist_blocking_returns_empty_on_no_entries(tmp_path):
     """_sync_playlist_blocking returns [] when yt-dlp info has no 'entries' key."""
     from mammamiradio.sync import _sync_playlist_blocking
@@ -106,6 +116,7 @@ def test_sync_playlist_blocking_returns_empty_on_no_entries(tmp_path):
     assert result == []
 
 
+@pytest.mark.skipif(not _has_yt_dlp, reason="yt-dlp not installed")
 def test_sync_playlist_blocking_returns_empty_on_null_info(tmp_path):
     """_sync_playlist_blocking returns [] when yt-dlp returns None."""
     from mammamiradio.sync import _sync_playlist_blocking
