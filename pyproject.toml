@@ -13,6 +13,7 @@ dependencies = [
     "pydantic>=2.10",
     "pydantic-settings>=2.7",
     "httpx>=0.28",
+    "aiosqlite>=0.20",
     "tomli>=2.0;python_version<'3.11'",
 ]
 

@@ -25,7 +25,8 @@ class Track:
     title: str
     artist: str
     duration_ms: int
-    spotify_id: str
+    spotify_id: str = ""
+    youtube_id: str = ""
     local_path: Path | None = None
     position_ms: int = 0
     album_art: str = ""
@@ -192,6 +193,7 @@ class Segment:
     path: Path
     duration_sec: float = 0.0
     metadata: dict = field(default_factory=dict)
+    ephemeral: bool = True
 
 
 @dataclass

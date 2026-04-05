@@ -395,7 +395,8 @@ async def run_playback_loop(app) -> None:
                     else:
                         await asyncio.sleep(0)
         finally:
-            segment.path.unlink(missing_ok=True)
+            if segment.ephemeral:
+                segment.path.unlink(missing_ok=True)
             segment_queue.task_done()
 
 
