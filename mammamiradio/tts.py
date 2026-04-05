@@ -39,12 +39,7 @@ async def synthesize(
 ) -> Path:
     """Render text with Edge TTS, then normalize it to station output settings."""
     try:
-        kwargs: dict[str, str] = {}
-        if rate:
-            kwargs["rate"] = rate
-        if pitch:
-            kwargs["pitch"] = pitch
-        comm = edge_tts.Communicate(text, voice, **kwargs)
+        comm = edge_tts.Communicate(text, voice, rate=rate or "+0%", pitch=pitch or "+0Hz")
         raw_path = output_path.with_suffix(".raw.mp3")
         await comm.save(str(raw_path))
 
@@ -61,12 +56,7 @@ async def synthesize(
         if voice != fallback:
             try:
                 logger.info("Retrying TTS with fallback voice: %s", fallback)
-                fb_kwargs: dict[str, str] = {}
-                if rate:
-                    fb_kwargs["rate"] = rate
-                if pitch:
-                    fb_kwargs["pitch"] = pitch
-                comm = edge_tts.Communicate(text, fallback, **fb_kwargs)
+                comm = edge_tts.Communicate(text, fallback, rate=rate or "+0%", pitch=pitch or "+0Hz")
                 raw_path = output_path.with_suffix(".raw.mp3")
                 await comm.save(str(raw_path))
                 loop = asyncio.get_running_loop()
