@@ -6,6 +6,7 @@ import asyncio
 import datetime
 import logging
 import random
+from collections import deque
 from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
@@ -103,7 +104,7 @@ async def _try_crossfade(
         return voice_path
 
 
-_recently_played_clips: list[str] = []
+_recently_played_clips: deque[str] = deque(maxlen=50)
 
 # Cache directory listings for demo asset clips (avoid repeated glob on every call).
 _canned_clip_cache: dict[str, list[Path]] = {}
@@ -135,14 +136,12 @@ def _pick_canned_clip(subdir: str, *, state: StationState | None = None) -> Path
         eligible = clips
     pick = random.choice(eligible)
     _recently_played_clips.append(pick.name)
-    if len(_recently_played_clips) > len(clips):
-        _recently_played_clips.pop(0)
     return pick
 
 
 def _pick_brand(brands: list[AdBrand], ad_history: list) -> AdBrand:
     """Pick a brand, avoiding the last 3 aired and weighting recurring brands higher."""
-    recent_names = {e.brand for e in ad_history[-3:]}
+    recent_names = {e.brand for e in list(ad_history)[-3:]}
     eligible = [b for b in brands if b.name not in recent_names]
     if not eligible:
         eligible = list(brands)  # allow repeats if pool exhausted
@@ -709,7 +708,7 @@ async def run_producer(
                 for spot_idx in range(num_spots):
                     brand = _pick_brand(
                         config.ads.brands,
-                        state.ad_history
+                        list(state.ad_history)
                         + [AdHistoryEntry(brand=b, summary="", timestamp=0) for b in used_brands_this_break],
                     )
                     used_brands_this_break.append(brand.name)
