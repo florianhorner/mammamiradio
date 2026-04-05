@@ -201,6 +201,21 @@ def test_addon_mode_overrides_paths(monkeypatch):
     assert config.audio.go_librespot_config_dir == "/data/go-librespot"
 
 
+def test_addon_mode_respects_env_path_overrides(monkeypatch):
+    toml_path = Path(__file__).parent.parent / "radio.toml"
+    monkeypatch.setenv("SUPERVISOR_TOKEN", "test_token")
+    monkeypatch.setenv("MAMMAMIRADIO_CACHE_DIR", "/tmp/mammamiradio-data/cache")
+    monkeypatch.setenv("MAMMAMIRADIO_TMP_DIR", "/tmp/mammamiradio-data/tmp")
+    monkeypatch.setenv("MAMMAMIRADIO_GO_LIBRESPOT_CONFIG_DIR", "/tmp/mammamiradio-data/go-librespot")
+
+    config = load_config(str(toml_path))
+
+    assert config.is_addon is True
+    assert config.cache_dir == Path("/tmp/mammamiradio-data/cache")
+    assert config.tmp_dir == Path("/tmp/mammamiradio-data/tmp")
+    assert config.audio.go_librespot_config_dir == "/tmp/mammamiradio-data/go-librespot"
+
+
 def test_addon_mode_auto_enables_ha(monkeypatch):
     toml_path = Path(__file__).parent.parent / "radio.toml"
     monkeypatch.setenv("SUPERVISOR_TOKEN", "my_supervisor_token")

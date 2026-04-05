@@ -4,6 +4,15 @@ All notable changes to `mammamiradio` are documented here.
 
 The current version source of truth is `pyproject.toml`.
 
+## [2.0.1] - 2026-04-06
+
+### Fixed
+
+- Home Assistant add-on no longer crash-loops when `/data/options.json` is unreadable or malformed. Startup now logs the parse error and continues with defaults.
+- Add-on startup no longer hard-fails when `/data` is not writable. It falls back to `/tmp/mammamiradio-data` so uvicorn can still boot and ingress can connect.
+- Add-on runtime paths now honor `MAMMAMIRADIO_CACHE_DIR`, `MAMMAMIRADIO_TMP_DIR`, and `MAMMAMIRADIO_GO_LIBRESPOT_CONFIG_DIR` in add-on mode, preventing hardcoded path mismatches.
+- `go-librespot` config sync now uses the resolved runtime config directory instead of a hardcoded `/data/go-librespot/config.yml` target.
+
 ## [2.0.0] - 2026-04-05
 
 This is a major release. The station now boots instantly with zero config, progressively unlocks capabilities as you add API keys, and sounds dramatically better.

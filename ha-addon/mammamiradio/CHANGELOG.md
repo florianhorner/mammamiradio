@@ -1,5 +1,14 @@
 # Changelog
 
+## 2.0.1
+
+### Fixed
+
+- Add-on startup no longer exits immediately when `/data/options.json` is unreadable or invalid JSON. The error is logged and startup continues with defaults.
+- Add-on startup no longer hard-fails when `/data` is not writable. It falls back to `/tmp/mammamiradio-data` so the web server can still start.
+- Add-on runtime path overrides are now respected for cache/tmp/go-librespot config directories, avoiding hardcoded `/data` assumptions.
+- `go-librespot` config sync now writes to the resolved runtime config directory.
+
 ## 2.0.0
 
 Major release. The station now boots instantly with zero config and progressively unlocks capabilities.
