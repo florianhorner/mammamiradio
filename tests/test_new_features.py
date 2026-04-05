@@ -469,8 +469,6 @@ async def test_synthesize_dialogue_passes_loudnorm_false(tmp_path):
 
     # Verify concat_files was called with loudnorm=False
     mock_concat.assert_called_once()
-    _, kwargs = mock_concat.call_args
-    # It's called positionally: concat_files(parts, output_path, 300, False)
     call_args = mock_concat.call_args
     # The 4th positional arg (index 3) should be False (loudnorm)
     assert call_args[0][3] is False or call_args.kwargs.get("loudnorm") is False
