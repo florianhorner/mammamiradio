@@ -126,6 +126,7 @@ class StationConfig:
     spotify_client_id: str = ""
     spotify_client_secret: str = ""
     anthropic_api_key: str = ""
+    openai_api_key: str = ""
     ha_token: str = ""
     is_addon: bool = False
 
@@ -161,6 +162,7 @@ def _apply_addon_options() -> None:
         "spotify_client_id": "SPOTIFY_CLIENT_ID",
         "spotify_client_secret": "SPOTIFY_CLIENT_SECRET",
         "anthropic_api_key": "ANTHROPIC_API_KEY",
+        "openai_api_key": "OPENAI_API_KEY",
         "admin_password": "ADMIN_PASSWORD",
     }
     for opt_key, env_key in env_map.items():
@@ -220,6 +222,8 @@ def load_config(path: str = "radio.toml") -> StationConfig:
             voice=h["voice"],
             style=h["style"],
             personality=PersonalityAxes.from_dict(h.get("personality", {})),
+            engine=h.get("engine", "edge"),
+            edge_fallback_voice=h.get("edge_fallback_voice", ""),
         )
         for h in raw.get("hosts", [])
     ]
@@ -346,6 +350,7 @@ def load_config(path: str = "radio.toml") -> StationConfig:
         spotify_client_id=os.getenv("SPOTIFY_CLIENT_ID", ""),
         spotify_client_secret=os.getenv("SPOTIFY_CLIENT_SECRET", ""),
         anthropic_api_key=os.getenv("ANTHROPIC_API_KEY", ""),
+        openai_api_key=os.getenv("OPENAI_API_KEY", ""),
         ha_token=ha_token,
         is_addon=addon_mode,
     )

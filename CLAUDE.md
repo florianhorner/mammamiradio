@@ -48,6 +48,7 @@ AI-powered Italian radio station engine. Python 3.11+, FastAPI, FFmpeg, optional
 - `ADMIN_USERNAME`, `ADMIN_PASSWORD`, `ADMIN_TOKEN`: admin auth
 - `SPOTIFY_CLIENT_ID`, `SPOTIFY_CLIENT_SECRET`: Spotify Web API access
 - `ANTHROPIC_API_KEY`: Claude banter/ad generation
+- `OPENAI_API_KEY`: OpenAI gpt-4o-mini-tts voice synthesis (hosts with `engine = "openai"`; falls back to edge-tts if missing)
 - `HA_TOKEN`: Home Assistant API token
 - `HA_URL`: Home Assistant API base URL (auto-set by HA add-on to `http://supervisor/core/api`)
 - `HA_ENABLED`: force-enable HA integration (`true`/`1`/`yes`)

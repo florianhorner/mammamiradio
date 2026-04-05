@@ -41,7 +41,9 @@ lookahead_segments = 3
 
 [[hosts]]
 name = "Marco"
-voice = "it-IT-GiuseppeMultilingualNeural"
+voice = "onyx"
+engine = "openai"
+edge_fallback_voice = "it-IT-GiuseppeMultilingualNeural"
 style = "manic energy, says things he shouldn't on air, conspiracy theories about Italian food, gets way too personal about listeners' lives, drops obscure cinema references nobody asked for, once got suspended for a week (he's proud of it)"
 [hosts.personality]
 energy = 90

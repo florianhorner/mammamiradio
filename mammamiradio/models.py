@@ -97,6 +97,8 @@ class HostPersonality:
     voice: str
     style: str
     personality: PersonalityAxes = field(default_factory=PersonalityAxes)
+    engine: str = "edge"  # "edge" for edge-tts, "openai" for OpenAI gpt-4o-mini-tts
+    edge_fallback_voice: str = ""  # edge-tts voice used when OpenAI engine falls back
 
 
 class AdFormat(StrEnum):

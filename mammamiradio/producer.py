@@ -516,7 +516,14 @@ async def run_producer(
                             _path=trans_voice_path,
                             _prosody=prosody,
                         ):
-                            await synthesize(_text, _host.voice, _path, **_prosody)
+                            await synthesize(
+                                _text,
+                                _host.voice,
+                                _path,
+                                **_prosody,
+                                engine=_host.engine,
+                                edge_fallback_voice=_host.edge_fallback_voice,
+                            )
                             xfade_out = config.tmp_dir / f"banter_trans_{uuid4().hex[:8]}.mp3"
                             return await _try_crossfade(_path, config, xfade_out)
 
@@ -563,7 +570,14 @@ async def run_producer(
                     elif category == "traffic":
                         flash_prosody = {"rate": "+10%"}
 
-                    await synthesize(text, host.voice, flash_path, **flash_prosody)
+                    await synthesize(
+                        text,
+                        host.voice,
+                        flash_path,
+                        **flash_prosody,
+                        engine=host.engine,
+                        edge_fallback_voice=host.edge_fallback_voice,
+                    )
 
                     # Try to overlay on the tail of the last music segment
                     crossfade_out = config.tmp_dir / f"flash_transition_{uuid4().hex[:8]}.mp3"
@@ -632,11 +646,22 @@ async def run_producer(
                     sweeper_text = random.choice(sb.sweepers) if sb.sweepers else config.station.name
 
                     sweeper_voice = sb.sweeper_voice
+                    sweeper_engine = "edge"
+                    sweeper_fallback = ""
                     if not sweeper_voice:
-                        sweeper_voice = random.choice(config.hosts).voice
+                        sweeper_host = random.choice(config.hosts)
+                        sweeper_voice = sweeper_host.voice
+                        sweeper_engine = sweeper_host.engine
+                        sweeper_fallback = sweeper_host.edge_fallback_voice
 
                     audio_path = config.tmp_dir / f"sweeper_{uuid4().hex[:8]}.mp3"
-                    await synthesize(sweeper_text, sweeper_voice, audio_path)
+                    await synthesize(
+                        sweeper_text,
+                        sweeper_voice,
+                        audio_path,
+                        engine=sweeper_engine,
+                        edge_fallback_voice=sweeper_fallback,
+                    )
                 except Exception as exc:
                     logger.warning("Sweeper generation failed: %s", exc)
                     continue
@@ -737,15 +762,36 @@ async def run_producer(
                         ihost = random.choice(config.hosts)
                         itext = random.choice(AD_BREAK_INTROS)
                     ipath = config.tmp_dir / f"ad_intro_{uuid4().hex[:8]}.mp3"
-                    await synthesize(itext, ihost.voice, ipath)
+                    await synthesize(
+                        itext,
+                        ihost.voice,
+                        ipath,
+                        engine=ihost.engine,
+                        edge_fallback_voice=ihost.edge_fallback_voice,
+                    )
                     xout = config.tmp_dir / f"ad_trans_{uuid4().hex[:8]}.mp3"
                     ipath = await _try_crossfade(ipath, config, xout)
                     parts.append(ipath)
                     # Promo compliance tag
                     try:
                         ppath = config.tmp_dir / f"promo_tag_{uuid4().hex[:8]}.mp3"
-                        pvoice = config.ads.voices[0].voice if config.ads.voices else ihost.voice
-                        await synthesize("Messaggio promozionale.", pvoice, ppath, rate="+40%", pitch="-10Hz")
+                        if config.ads.voices:
+                            pvoice = config.ads.voices[0].voice
+                            pengine = "edge"
+                            pfallback = ""
+                        else:
+                            pvoice = ihost.voice
+                            pengine = ihost.engine
+                            pfallback = ihost.edge_fallback_voice
+                        await synthesize(
+                            "Messaggio promozionale.",
+                            pvoice,
+                            ppath,
+                            rate="+40%",
+                            pitch="-10Hz",
+                            engine=pengine,
+                            edge_fallback_voice=pfallback,
+                        )
                         parts.append(ppath)
                     except Exception:
                         pass
