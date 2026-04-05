@@ -70,7 +70,7 @@ fifo_path = "/tmp/mammamiradio.pcm"
 go_librespot_bin = "go-librespot"
 go_librespot_port = 3678
 claude_model = "claude-haiku-4-5-20251001"
-claude_creative_model = "claude-sonnet-4-6"
+claude_creative_model = "claude-opus-4-6"
 
 [homeassistant]
 enabled = false

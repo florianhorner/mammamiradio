@@ -78,7 +78,7 @@ Important design choice: there is one shared timeline. Listeners tune into the c
 
 ## Capability flags
 
-The old setup wizard classified the station into named modes from a combinatorial state space. The new system uses four independent boolean flags in a frozen `Capabilities` dataclass (`mammamiradio/capabilities.py`):
+The old setup wizard classified the station into named modes from a combinatorial state space. The new system uses four independent boolean flags in a frozen `Capabilities` dataclass (`mammamiradio/models.py`, with detection and serialization in `mammamiradio/capabilities.py`):
 
 | Flag | Source | What it enables |
 | --- | --- | --- |
@@ -87,7 +87,7 @@ The old setup wizard classified the station into named modes from a combinatoria
 | `anthropic` | `ANTHROPIC_API_KEY` present | Live Claude-generated banter and ads |
 | `ha` | `HA_TOKEN` + integration enabled | Ambient home context in banter |
 
-The dashboard derives a tier label from these flags: Demo Radio, Your Music, Full AI Radio. Each flag is independent. `GET /api/capabilities` returns flags, tier, now-playing state, and connect device name.
+The dashboard derives a tier label from these flags: Demo Radio, Your Music, Full AI Radio. Each flag is independent. `GET /api/capabilities` returns flags, tier, a guided `next_step` hint (what the user should do next), now-playing state, and connect device name.
 
 ## Autoplay flow
 

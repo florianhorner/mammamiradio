@@ -63,7 +63,7 @@ AI-powered Italian radio station engine. Python 3.11+, FastAPI, FFmpeg, optional
 ## Runtime behavior
 
 - Startup loads `radio.toml`, validates config, starts go-librespot if possible, restores persisted source selection from `cache/playlist_source.json`, fetches the playlist, then launches producer and playback tasks.
-- **Capability flags** (`spotify_connected`, `spotify_api`, `anthropic`, `ha`) replace the old 64-state mode system. Each flag is independent. The dashboard derives a tier label from them: Demo Radio, Your Music, Full AI Radio.
+- **Capability flags** (`spotify_connected`, `spotify_api`, `anthropic`, `ha`) replace the old 64-state mode system. Each flag is independent. The dashboard derives a tier label from them: Demo Radio, Your Music, Full AI Radio. `GET /api/capabilities` returns flags, tier, and a `next_step` hint guiding the user toward the next setup action.
 - Demo-first: if no Spotify credentials exist, the app boots immediately with built-in demo tracks and pre-bundled banter clips. No wizard, no gates.
 - **Spotify Connect (zeroconf):** go-librespot advertises via mDNS. Users tap "MammaMiRadio" in their Spotify app to connect. This handles streaming auth without any Client ID/secret. Playlist browsing still requires Client ID/secret (Web API scopes not available via zeroconf).
 - If Anthropic key is missing, banter uses pre-bundled clips from `demo_assets/banter/` instead of calling Claude.
@@ -93,9 +93,14 @@ mammamiradio/
   normalizer.py       FFmpeg helpers for normalize, mix, concat, and generated SFX
   tts.py              Edge TTS synthesis for hosts and ads
   ha_context.py       Home Assistant polling and Italian state formatting
-  capabilities.py     Capability flags (spotify_connected, spotify_api, anthropic, ha) and tier derivation
+  capabilities.py     Capability flags (spotify_connected, spotify_api, anthropic, ha), tier derivation, and next_step hints
+  persona.py          Listener behavior profiling (skip rate, energy preference) for banter prompts
+  sync.py             go-librespot config synchronization from radio.toml
+  context_cues.py     Time-of-day and cultural context for banter/ad prompts
+  track_rationale.py  "Why this track?" rationale generation for listener UI
   setup_status.py     Legacy setup status classification (kept for /status endpoint compat)
   dashboard.html      Capability-flag-driven dashboard served at /
+  admin.html          Admin control room panel
   listener.html       Listener HTML served at /listen
   demo_assets/        Pre-bundled banter clips, ads, music, and jingles for demo-first boot
 radio.toml            station config
