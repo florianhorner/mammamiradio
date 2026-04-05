@@ -49,6 +49,18 @@ When you add an option to the HA addon configuration UI, you must update THREE f
 
 CI validates that every schema key appears in run.sh. If you add to config.yaml but forget run.sh, the build fails.
 
+Current config options:
+
+| Option | Schema type | Env var |
+|--------|-------------|---------|
+| `anthropic_api_key` | `password?` | `ANTHROPIC_API_KEY` |
+| `openai_api_key` | `password?` | `OPENAI_API_KEY` |
+| `spotify_client_id` | `str?` | `SPOTIFY_CLIENT_ID` |
+| `spotify_client_secret` | `password?` | `SPOTIFY_CLIENT_SECRET` |
+| `station_name` | `str?` | `STATION_NAME` |
+| `claude_model` | `str?` | `CLAUDE_MODEL` |
+| `playlist_spotify_url` | `str?` | `PLAYLIST_SPOTIFY_URL` |
+
 The option extraction in run.sh uses a single Python script that reads keys from `/data/options.json` and exports them as env vars with UPPER_CASE names. To add a new option:
 
 1. Add to the `for key in (...)` tuple in run.sh

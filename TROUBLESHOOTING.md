@@ -132,6 +132,18 @@ Check:
 - outbound network access is available
 - `/status` or the dashboard shows recent producer errors
 
+## Host voice sounds different than expected
+
+If a host configured with `engine = "openai"` sounds like a different voice, OpenAI TTS likely failed and the host fell back to Edge TTS.
+
+Check:
+
+- `OPENAI_API_KEY` is set in `.env` (or addon options)
+- Look for `Falling back to edge-tts` in logs
+- `/status` may show TTS errors in the producer log
+
+Each OpenAI host can define `edge_fallback_voice` in `radio.toml` so they fall back to their own Edge voice rather than a stranger's.
+
 ## Home Assistant references never show up
 
 Check:

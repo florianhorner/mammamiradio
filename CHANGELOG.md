@@ -4,70 +4,66 @@ All notable changes to `mammamiradio` are documented here.
 
 The current version source of truth is `pyproject.toml`.
 
-## [1.5.1] - 2026-04-05
+## [2.0.0] - 2026-04-05
+
+This is a major release. The station now boots instantly with zero config, progressively unlocks capabilities as you add API keys, and sounds dramatically better.
+
+### Breaking
+
+- **Capability flags replace mode system**: the old 64-state mode field is gone. Four independent flags (`spotify_connected`, `spotify_api`, `anthropic`, `ha`) derive a tier label (Demo Radio → Your Music → Full AI Radio). Integrations reading the old mode field must switch to `GET /api/capabilities`.
 
 ### Added
 
-- **OpenAI TTS engine for hosts**: hosts can now use OpenAI's `gpt-4o-mini-tts` as an alternative to Edge TTS via `engine = "openai"` in `radio.toml`. Marco defaults to the `onyx` voice, giving him distinct vocal DNA from Giulia.
-- **Personality-aware TTS instructions**: OpenAI voice synthesis uses host personality axes (energy, warmth, chaos) to shape delivery style, not just a static prompt.
-- **Edge fallback voice**: hosts with `engine = "openai"` can specify `edge_fallback_voice` so they fall back to their original voice (not a stranger) when OpenAI is unavailable.
-- **Singleton OpenAI client**: connection pool reused across all TTS calls for better latency.
-- **HA addon OpenAI support**: `OPENAI_API_KEY` now included in addon secret hydration.
+- **Demo-first boot**: station starts instantly with zero config. Built-in demo playlist of classic Italian tracks plays while you set up Spotify. First 3 banter clips use pre-bundled audio, then prompt for an Anthropic API key.
+- **OpenAI TTS engine for hosts**: hosts can use OpenAI's `gpt-4o-mini-tts` as an alternative to Edge TTS via `engine = "openai"` in `radio.toml`. Personality-aware delivery instructions shape each host's voice from their energy, warmth, and chaos axes.
+- **Signature Ad System**: 6 ad formats (classic pitch, testimonial, duo scene, live remote, late-night whisper, institutional PSA), sonic worlds per category, role-based multi-voice casting, per-brand campaign memory with escalation rules, and brand motif generation.
+- **Spotify source picker**: choose from your playlists or Liked Songs directly in the dashboard. Persisted source selection restores your last choice on restart.
+- **Autoplay on Spotify Connect**: tapping the station in Spotify triggers personalized welcome banter referencing the currently playing song.
+- **Listener persona system**: tracks aggregate listening patterns (skip rate, energy preference, ballad loyalty) and feeds them into banter prompts.
+- **Personality sliders**: tune host energy, chaos, warmth, verbosity, and nostalgia from the dashboard.
+- **Dashboard Volare theme**: warm Italian sunset palette with Playfair Display typography. Capability-driven cards, connect hero card, tier badge with pulse animation.
+- **Capability flags API**: `GET /api/capabilities` returns flags, tier, guided next-step hint, and connect status.
+- **New API routes**: `/api/hosts`, `/api/hosts/{name}/personality/reset`, `/api/pacing`, `/api/setup/save-keys`, `/api/spotify/auth-status`, `/api/spotify/disconnect`, `/api/spotify/source-options`, `/api/spotify/source/select`.
+- CSRF protection for admin mutating endpoints when accessed over non-loopback networks.
+- Conductor workspace support with lifecycle scripts for multi-agent development.
+- 30+ new tests covering news flash generation, TTS prosody, crossfade audio, scheduler counters, admin CSRF, trigger endpoint, dialogue synthesis, and API client caching.
 
 ### Changed
 
-- Bounded lists (`played_tracks`, `running_jokes`, `segment_log`, `stream_log`, `ad_history`, `recent_outcomes`) now use `deque(maxlen=N)` instead of manual truncation, removing 6 redundant trim blocks.
-- Home Assistant context uses a reusable `httpx.AsyncClient` singleton and module-level cache instead of creating a new HTTP client per poll.
-- Dashboard and admin HTML injection results are cached by ingress prefix, avoiding repeated string replacements per request.
-- Playback throttle threshold tightened from 10ms to 5ms for smoother audio delivery.
-- **Richer ad SFX**: cash register, whoosh, mandolin sting, and ice clink now use layered tones with exponential decay envelopes and noise transients instead of plain sine waves.
-- **Better bumper jingles**: melody notes now have plucked envelopes and velocity variation over a sustained C-major pad, with a multi-tap echo tail.
-- **Music beds with warmth**: all moods use 4 harmonic layers (root, third, detuned chorus, fifth) instead of 2 bare sines, with per-mood tremolo rates and reverb. Suspicious jazz has a walking bass line.
-- **Punchier ad processing**: `normalize_ad()` uses heavier compression (ratio 8:1, -24dB threshold), presence + air boost, and a 120Hz mud cut for louder, brighter commercials that pop against music.
-- **FFmpeg performance**: collapsed multi-input sine generators into single `aevalsrc` expressions across all SFX and music bed functions (up to 8 inputs reduced to 1), cutting filter graph overhead.
+- Bounded lists (`played_tracks`, `running_jokes`, `segment_log`, `stream_log`, `ad_history`, `recent_outcomes`) now use `deque(maxlen=N)` instead of manual truncation.
+- Home Assistant context uses a reusable `httpx.AsyncClient` singleton and module-level cache.
+- **Richer ad SFX**: layered tones with exponential decay envelopes and noise transients. Better bumper jingles with plucked envelopes and velocity variation. Music beds use 4 harmonic layers with per-mood tremolo and reverb.
+- **Punchier ad processing**: heavier compression (8:1, -24dB), presence + air boost, 120Hz mud cut.
+- **FFmpeg performance**: collapsed multi-input sine generators into single `aevalsrc` expressions (up to 8→1 inputs).
+- Source switching triggers immediate cutover with queue purge and concurrent switch serialization.
+- Voice differentiation via SSML prosody derived from personality axes.
+- Playback throttle threshold tightened from 10ms to 5ms.
+- Dashboard and admin HTML injection results cached by ingress prefix.
 
 ### Fixed
 
-- `running_jokes` deque is now converted to `list()` before JSON serialization in the status API, preventing `TypeError` on every `/api/status` call.
-- Deque fields are wrapped with `list()` before slicing in scriptwriter (deque doesn't support `[-N:]` syntax).
-
-### Added
-
-- 30 new tests covering news flash generation, TTS prosody, crossfade audio, scheduler counters, admin CSRF, trigger endpoint, dialogue synthesis, and API client caching.
-
-## [Unreleased]
-
-### Added
-
-- **Capability flags**: `Capabilities` frozen dataclass and `capabilities.py` replace the 64-state mode system. Four independent flags (`spotify_connected`, `spotify_api`, `anthropic`, `ha`) derive a tier label. `GET /api/capabilities` returns flags, tier, guided next-step hint, and connect status.
-- **Demo-first boot**: station starts instantly with zero config. Built-in demo playlist of classic Italian tracks plays while you set up Spotify.
-- **Shareware trial**: first 3 banter clips use pre-bundled audio. After the trial, the station prompts for an Anthropic API key to unlock live AI hosts.
-- **Autoplay on Spotify Connect**: when a user taps the station in Spotify, the producer captures the currently playing song and generates personalized welcome banter referencing it, both in parallel.
-- **`capture_current_audio()`**: captures audio already playing on go-librespot without issuing a `play_track` call.
-- **`get_current_track()`**: reads current track metadata from go-librespot `/status` API.
-- **Embedded dashboard player**: play button + auto-reconnect on hot reload. Stream starts on first click anywhere.
-- **Listener persona system**: `persona.py` tracks aggregate listening patterns (skip rate, energy preference, ballad loyalty) and feeds them into banter prompts for eerily on-point host commentary.
-- **Config sync module**: `sync.py` synchronizes go-librespot device name, FIFO path, and API port from `radio.toml` into the go-librespot config on startup.
-- **Ephemeral segment flag**: `Segment.ephemeral` controls whether segment audio files are cleaned up after playback.
-
-### Changed
-
-- **Dashboard Volare theme**: warm Italian sunset palette — orange-red dominant background, deep sienna card surfaces, golden sun accent (#F4D048), Lancia-red FM dial needle with glow. Playfair Display italic station name. All JS/API logic preserved.
-- **Dashboard redesigned**: 640px single-column, capability-driven cards, connect hero card, tier badge with pulse animation on upgrade.
-- **Voice differentiation**: SSML prosody (rate/pitch) derived from personality axes. Marco → GianniNeural (booming), personality axes widened for contrast.
-- **Louder ad breaks**: 6-note bumper jingle (1.5s, 1.8x volume), music bed 0.12→0.20, env bed 0.06→0.10.
-- **go-librespot config sync**: `start.sh` syncs device name, FIFO path, and API port on startup.
-- **Autoplay fade-in**: 300ms fade-in on captured audio smooths the handover from demo.
-- **Sine wave fallback removed**: last-resort placeholder generates silence instead of 440Hz tone.
-- **`start.sh` reload**: uvicorn now watches `*.html` files for hot reload.
-
-### Fixed
-
+- `running_jokes` deque converted to `list()` before JSON serialization (prevented `TypeError` on `/api/status`).
+- Deque fields wrapped with `list()` before slicing in scriptwriter.
 - Auto-transfer no longer spams logs when no Spotify Client ID is configured.
-- Banter generation no longer errors when no Anthropic key is set (early return with fallback text).
-- Banter TTS failure gracefully skips the segment instead of crashing the producer loop.
-- Spotify audio capture failures now fall back to local download instead of crashing the producer.
-- `start.sh` reclaims stale ports on startup instead of failing with "address already in use".
+- Banter generation gracefully falls back when no Anthropic key is set.
+- Banter TTS failure skips the segment instead of crashing the producer loop.
+- Spotify audio capture failures fall back to local download.
+- Category-based sonic world defaults no longer share mutable references across calls.
+- Duo scenes with only one role demoted to classic pitch instead of broken multi-voice audio.
+- Spotify playlist fetch returned zero tracks when API items nested under `item` key.
+- Listener page `_base is not defined` JS error from service worker scope.
+- Producer recovery stall when go-librespot restarts mid-segment.
+- `start.sh` reclaims stale ports on startup.
+
+### Dependencies
+
+- `docker/setup-qemu-action` 3.7.0 → 4.0.0
+- `docker/login-action` 3.7.0 → 4.1.0
+- `docker/setup-buildx-action` 3.12.0 → 4.0.0
+- `docker/metadata-action` 5.10.0 → 6.0.0
+- `docker/build-push-action` 6.19.2 → 7.0.0
+- `requests` 2.33.0 → 2.33.1
+- `charset-normalizer` 3.4.6 → 3.4.7
 
 ## [1.5.0] - 2026-04-04
 

@@ -1,26 +1,42 @@
 # Changelog
 
-## 1.5.1
+## 2.0.0
+
+Major release. The station now boots instantly with zero config and progressively unlocks capabilities.
+
+### Breaking
+
+- Capability flags replace the old mode system. Integrations reading mode must switch to `GET /api/capabilities`.
 
 ### Added
 
-- OpenAI gpt-4o-mini-tts as second TTS engine for host voices. Marco now uses a distinct voice from Giulia.
-- `OPENAI_API_KEY` supported in addon options for voice synthesis.
-- Personality-aware TTS instructions shape how OpenAI voices deliver lines.
+- **Demo-first boot**: station starts with zero config using built-in demo tracks and pre-bundled banter.
+- **OpenAI TTS**: hosts can use `gpt-4o-mini-tts` via `engine = "openai"`. `OPENAI_API_KEY` supported in addon options.
+- **Signature Ad System**: 6 formats, multi-voice casting, campaign memory, brand motifs, sonic signatures.
+- **Spotify source picker**: choose playlists or Liked Songs. Persisted across restarts.
+- **Personality sliders**: tune host energy, chaos, warmth, verbosity, and nostalgia.
+- **Listener persona system**: tracks listening patterns and feeds them into banter prompts.
+- **Dashboard Volare theme**: warm Italian sunset palette with capability-driven cards.
 
 ### Changed
 
-- Internal data structures use bounded deques for automatic memory management.
-- Home Assistant polling uses a reusable HTTP client (fewer connections, faster polls).
-- Richer ad SFX (cash register, whoosh, mandolin sting, ice clink) with layered tones and noise transients.
-- Better bumper jingles with plucked envelopes, velocity variation, pad, and echo tail.
-- Warmer music beds with 4 harmonic layers, per-mood tremolo, and reverb. Jazz bed has walking bass.
-- Punchier ad broadcast processing (heavier compression, presence/air boost, mud cut).
-- FFmpeg performance: multi-input filter graphs collapsed into single expressions.
+- Bounded deques for automatic memory management.
+- HA polling uses a reusable HTTP client singleton.
+- Richer ad SFX, bumper jingles, and music beds with layered harmonics.
+- Punchier ad processing (8:1 compression, presence boost, mud cut).
+- FFmpeg: multi-input filter graphs collapsed into single expressions.
+- Source switching triggers immediate cutover with queue purge.
 
 ### Fixed
 
-- Status API no longer crashes when serializing internal data structures.
+- Status API deque serialization crash.
+- Banter generation gracefully falls back without Anthropic key.
+- Spotify playlist fetch zero-track bug.
+- Producer recovery stall on go-librespot restart.
+
+### Dependencies
+
+- Docker GitHub Actions bumped to latest majors (setup-qemu 4.0, login 4.1, buildx 4.0, metadata 6.0, build-push 7.0).
 
 ## 1.5.0
 
