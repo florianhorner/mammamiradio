@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from mammamiradio.models import Segment, SegmentType, StationState, Track
+from mammamiradio.models import ListenerProfile, Segment, SegmentType, StationState, Track
 
 
 def _track(n: int = 1) -> Track:
@@ -119,3 +119,121 @@ def test_on_stream_segment_counts_canned_clips():
     # Another canned
     state.on_stream_segment(seg2)
     assert state.canned_clips_streamed == 2
+
+
+# ---------------------------------------------------------------------------
+# ListenerProfile tests
+# ---------------------------------------------------------------------------
+
+
+def test_skip_rate_zero_on_no_plays():
+    p = ListenerProfile()
+    assert p.skip_rate == 0.0
+
+
+def test_skip_rate_all_skipped():
+    p = ListenerProfile(songs_played=5, songs_skipped=5)
+    assert p.skip_rate == 1.0
+
+
+def test_skip_rate_partial():
+    p = ListenerProfile(songs_played=10, songs_skipped=3)
+    assert abs(p.skip_rate - 0.3) < 0.001
+
+
+def test_patterns_empty_below_three_outcomes():
+    p = ListenerProfile()
+    p.record_outcome(skipped=False, listen_sec=200)
+    p.record_outcome(skipped=True, listen_sec=10)
+    assert p.patterns == []
+
+
+def test_patterns_restless_skipper():
+    p = ListenerProfile()
+    for _ in range(5):
+        p.record_outcome(skipped=True, listen_sec=60)
+    assert "restless_skipper" in p.patterns
+
+
+def test_patterns_rides_every_song():
+    p = ListenerProfile()
+    for _ in range(6):
+        p.record_outcome(skipped=False, listen_sec=200)
+    assert "rides_every_song" in p.patterns
+
+
+def test_patterns_bails_on_intros():
+    p = ListenerProfile()
+    for _ in range(3):
+        p.record_outcome(skipped=False, listen_sec=200)
+    for _ in range(3):
+        p.record_outcome(skipped=True, listen_sec=15)
+    assert "bails_on_intros" in p.patterns
+
+
+def test_patterns_ballad_lover():
+    p = ListenerProfile()
+    for _ in range(3):
+        p.record_outcome(skipped=False, listen_sec=200)
+    for _ in range(3):
+        p.record_outcome(skipped=False, listen_sec=200, energy_hint="low")
+    assert "ballad_lover" in p.patterns
+
+
+def test_patterns_energy_seeker():
+    p = ListenerProfile()
+    for _ in range(3):
+        p.record_outcome(skipped=False, listen_sec=200)
+    for _ in range(4):
+        p.record_outcome(skipped=False, listen_sec=240, energy_hint="high")
+    assert "energy_seeker" in p.patterns
+
+
+def test_record_outcome_increments_counters():
+    p = ListenerProfile()
+    p.record_outcome(skipped=False, listen_sec=200)
+    p.record_outcome(skipped=True, listen_sec=20)
+    assert p.songs_played == 2
+    assert p.songs_skipped == 1
+
+
+def test_record_outcome_caps_recent_at_twenty():
+    p = ListenerProfile()
+    for i in range(25):
+        p.record_outcome(skipped=False, listen_sec=float(i * 10))
+    assert len(p.recent_outcomes) == 20
+
+
+def test_describe_for_prompt_empty_on_no_patterns():
+    p = ListenerProfile()
+    assert p.describe_for_prompt() == ""
+
+
+def test_describe_for_prompt_includes_pattern_description():
+    p = ListenerProfile()
+    for _ in range(5):
+        p.record_outcome(skipped=True, listen_sec=60)
+    desc = p.describe_for_prompt()
+    assert "restless_skipper" not in desc  # internal key not exposed
+    assert "salta" in desc  # Italian description
+
+
+def test_describe_for_prompt_correct_prediction_callback():
+    p = ListenerProfile()
+    for _ in range(5):
+        p.record_outcome(skipped=True, listen_sec=60)
+    p.last_prediction = "salterà il prossimo"
+    p.last_prediction_correct = True
+    desc = p.describe_for_prompt()
+    assert "PREDIZIONE PRECEDENTE CORRETTA" in desc
+    assert "salterà il prossimo" in desc
+
+
+def test_describe_for_prompt_wrong_prediction_callback():
+    p = ListenerProfile()
+    for _ in range(5):
+        p.record_outcome(skipped=True, listen_sec=60)
+    p.last_prediction = "rimarrà fino alla fine"
+    p.last_prediction_correct = False
+    desc = p.describe_for_prompt()
+    assert "PREDIZIONE PRECEDENTE SBAGLIATA" in desc

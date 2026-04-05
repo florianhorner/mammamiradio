@@ -332,3 +332,101 @@ async def test_static_path_traversal_blocked():
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
         resp = await client.get("/static/../streamer.py")
     assert resp.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# /admin route tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_admin_panel_loopback_no_password_returns_html():
+    """GET /admin on loopback with no credentials configured should return 200 HTML."""
+    app = _make_test_app()
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.get("/admin")
+    assert resp.status_code == 200
+    assert "text/html" in resp.headers["content-type"]
+
+
+@pytest.mark.asyncio
+async def test_admin_panel_non_loopback_without_auth_rejected():
+    """GET /admin from non-loopback without credentials should return 401."""
+    app = _make_test_app(admin_password="secret")
+    transport = httpx.ASGITransport(app=app, client=("10.0.0.1", 9999))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.get("/admin")
+    assert resp.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_admin_panel_with_basic_auth_returns_html():
+    """GET /admin with valid basic auth should return 200 HTML."""
+    app = _make_test_app(admin_password="secret")
+    transport = httpx.ASGITransport(app=app, client=("10.0.0.1", 9999))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.get("/admin", auth=("admin", "secret"))
+    assert resp.status_code == 200
+    assert "text/html" in resp.headers["content-type"]
+
+
+# ---------------------------------------------------------------------------
+# /api/capabilities route tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_capabilities_loopback_returns_flags():
+    """GET /api/capabilities on loopback returns capability flags and tier."""
+    app = _make_test_app()
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.get("/api/capabilities")
+    assert resp.status_code == 200
+    body = resp.json()
+    # Flags are nested under "capabilities"; top-level has tier, trial, etc.
+    caps = body.get("capabilities", body)
+    assert "spotify_connected" in caps
+    assert "anthropic" in caps
+    assert "tier" in body
+    assert "trial" in body
+    assert "canned_clips_streamed" in body["trial"]
+
+
+@pytest.mark.asyncio
+async def test_capabilities_non_loopback_without_auth_rejected():
+    """GET /api/capabilities from non-loopback without credentials returns 401."""
+    app = _make_test_app(admin_password="secret")
+    transport = httpx.ASGITransport(app=app, client=("192.168.1.5", 9999))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.get("/api/capabilities")
+    assert resp.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_capabilities_spotify_username_absent_when_not_connected():
+    """spotify_username should be empty string when Spotify is not connected."""
+    app = _make_test_app()
+    app.state.station_state.spotify_connected = False
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.get("/api/capabilities")
+    assert resp.status_code == 200
+    assert resp.json()["spotify_username"] == ""
+
+
+@pytest.mark.asyncio
+async def test_capabilities_trial_exhausted_flag():
+    """trial.exhausted is True when canned_clips_streamed >= limit."""
+    from mammamiradio.producer import SHAREWARE_CANNED_LIMIT
+
+    app = _make_test_app()
+    app.state.station_state.canned_clips_streamed = SHAREWARE_CANNED_LIMIT
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.get("/api/capabilities")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["trial"]["exhausted"] is True
+    assert body["trial"]["canned_clips_streamed"] == SHAREWARE_CANNED_LIMIT

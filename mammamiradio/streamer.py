@@ -641,13 +641,16 @@ async def capabilities(request: Request, _: None = Depends(require_admin_access)
     except Exception:
         result["connect_device_name"] = "MammaMiRadio"
 
-    # Spotify username for welcome message
+    # Spotify username for welcome message.
+    # Only expose when spotify_api is true — go-librespot /status username is an
+    # internal device auth token, not a display name (prior learning: librespot-username-device-token).
     result["spotify_username"] = ""
-    if state.spotify_connected:
+    if state.spotify_connected and caps.spotify_api:
         try:
             import httpx as _httpx
 
-            r = await _httpx.AsyncClient().get(f"http://127.0.0.1:{config.audio.go_librespot_port}/status", timeout=1.0)
+            async with _httpx.AsyncClient() as _client:
+                r = await _client.get(f"http://127.0.0.1:{config.audio.go_librespot_port}/status", timeout=1.0)
             if r.status_code == 200:
                 result["spotify_username"] = r.json().get("username", "")
         except Exception:
@@ -683,7 +686,7 @@ async def skip_track(request: Request, _: None = Depends(require_admin_access)):
 
     # Record skip in listener profile if this was a music segment
     now_seg = state.now_streaming
-    if now_seg.get("type") == "music" and hasattr(state, "listener"):
+    if now_seg.get("type") == "music":
         started = now_seg.get("started", time.time())
         listen_sec = time.time() - started
         state.listener.record_outcome(

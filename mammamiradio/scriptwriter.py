@@ -206,7 +206,7 @@ def _build_system_prompt(config: StationConfig) -> str:
         host_lines.append(line)
     host_descriptions = "\n".join(host_lines)
     geography = ""
-    if hasattr(config, "sonic_brand") and config.sonic_brand.geography:
+    if config.sonic_brand.geography:
         geography = f"\nThe station broadcasts from the area between {config.sonic_brand.geography}. Occasionally reference these places naturally — local landmarks, weather there, complaints about the commute between them."
 
     # Station world: fictional locations and characters that make the station feel real
@@ -296,10 +296,9 @@ You may CASUALLY reference ONE item — like glancing out a window. Don't force 
 
     # Listener behavior patterns (generic, never personal)
     listener_block = ""
-    if hasattr(state, "listener"):
-        behavior_desc = state.listener.describe_for_prompt()
-        if behavior_desc:
-            listener_block = f"""
+    behavior_desc = state.listener.describe_for_prompt()
+    if behavior_desc:
+        listener_block = f"""
 <listener_behavior>
 {behavior_desc}
 You may reference ONE of these patterns playfully — as if you just happen to know.

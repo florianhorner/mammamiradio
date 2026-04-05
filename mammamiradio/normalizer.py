@@ -516,16 +516,9 @@ def generate_station_id_bed(
         ";".join(filter_parts),
         "-map",
         "[out]",
-        "-ar",
-        "48000",
-        "-ac",
-        "2",
-        "-b:a",
-        "192k",
+        *_MP3_OUTPUT_ARGS,
         "-t",
         str(duration_sec),
-        "-f",
-        "mp3",
         str(output_path),
     ]
     _run_ffmpeg(cmd, "station ID bed")

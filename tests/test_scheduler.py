@@ -243,3 +243,89 @@ def test_select_next_track_empty_playlist_raises():
     state = StationState(playlist=[])
     with pytest.raises(RuntimeError, match="Playlist is empty"):
         state.select_next_track()
+
+
+def test_news_flash_triggers_when_songs_since_news_threshold_met():
+    """NEWS_FLASH is returned when songs_since_news >= 6 and banter threshold is also met."""
+    from mammamiradio.scheduler import _decide
+
+    pacing = PacingSection(songs_between_banter=2, songs_between_ads=10)
+    result = _decide(
+        segments_produced=5,
+        songs_since_ad=1,
+        songs_since_banter=5,
+        pacing=pacing,
+        deterministic=True,
+        songs_since_news=6,
+    )
+    assert result == SegmentType.NEWS_FLASH
+
+
+def test_news_flash_not_triggered_below_threshold():
+    """NEWS_FLASH is NOT returned when songs_since_news < 6 (falls through to BANTER)."""
+    from mammamiradio.scheduler import _decide
+
+    pacing = PacingSection(songs_between_banter=2, songs_between_ads=10)
+    result = _decide(
+        segments_produced=5,
+        songs_since_ad=1,
+        songs_since_banter=5,
+        pacing=pacing,
+        deterministic=True,
+        songs_since_news=3,
+    )
+    assert result == SegmentType.BANTER
+
+
+def test_station_id_triggers_deterministically():
+    """STATION_ID fires deterministically when segments_since_station_id >= 5 and last_micro >= 2."""
+    from mammamiradio.scheduler import _decide
+
+    pacing = PacingSection(songs_between_banter=5, songs_between_ads=10)
+    result = _decide(
+        segments_produced=10,
+        songs_since_ad=1,
+        songs_since_banter=1,
+        pacing=pacing,
+        deterministic=True,
+        songs_since_news=0,
+        segments_since_station_id=5,
+        segments_since_time_check=2,
+    )
+    assert result == SegmentType.STATION_ID
+
+
+def test_time_check_triggers_deterministically():
+    """TIME_CHECK fires when segments_since_time_check >= 8 and station_id guard doesn't fire first."""
+    from mammamiradio.scheduler import _decide
+
+    pacing = PacingSection(songs_between_banter=5, songs_between_ads=10)
+    result = _decide(
+        segments_produced=10,
+        songs_since_ad=1,
+        songs_since_banter=1,
+        pacing=pacing,
+        deterministic=True,
+        songs_since_news=0,
+        segments_since_station_id=2,  # below station_id threshold of 5
+        segments_since_time_check=8,
+    )
+    assert result == SegmentType.TIME_CHECK
+
+
+def test_preview_upcoming_includes_news_flash():
+    """preview_upcoming simulation produces a NEWS_FLASH when songs_since_news is primed."""
+    from mammamiradio.scheduler import preview_upcoming
+
+    pacing = PacingSection(songs_between_banter=2, songs_between_ads=10)
+    tracks = [Track(title=f"T{i}", artist="A", duration_ms=200000, spotify_id=str(i)) for i in range(10)]
+    state = _make_state(
+        segments_produced=5,
+        songs_since_banter=0,
+        songs_since_ad=0,
+        songs_since_news=6,
+    )
+    state.playlist = tracks
+    preview = preview_upcoming(state, pacing, tracks, count=12)
+    types = [p["type"] for p in preview]
+    assert "news_flash" in types
