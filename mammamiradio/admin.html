@@ -291,6 +291,29 @@ h1 {
 
 .empty { font-size: 12px; color: rgba(245,237,216,0.35); text-align: center; padding: 16px 0; font-style: italic; }
 .section-divider { height: 1px; background: rgba(245,237,216,0.08); margin: 4px 0 12px; }
+
+/* ── STOP/RESUME ── */
+.btn-stop { background: var(--error); color: var(--cream); }
+.btn-stop:hover { background: #d45555; }
+.btn-resume { background: var(--ok); color: var(--cream); }
+.btn-resume:hover { background: #3b7bff; }
+.stopped-banner { background: rgba(196,74,74,0.2); border: 1px solid rgba(196,74,74,0.4); border-radius: 8px; padding: 10px 14px; margin-bottom: 14px; text-align: center; font-size: 13px; font-weight: 600; color: var(--error); display: none; }
+.stopped-banner.show { display: block; }
+
+/* ── PACING HINT ── */
+.pace-hint { font-size: 10px; color: rgba(245,237,216,0.35); margin-bottom: 4px; }
+.pace-counter { font-size: 10px; color: rgba(245,237,216,0.4); margin-top: 2px; }
+.pace-counter strong { color: var(--sun); font-weight: 600; }
+
+/* ── HOST AXIS LABELS ── */
+.ha-labels { display: flex; justify-content: space-between; font-size: 9px; color: rgba(245,237,216,0.3); margin-top: -2px; margin-bottom: 2px; padding: 0 64px 0 0; }
+.ha-labels span:first-child { padding-left: 58px; }
+
+/* ── FORCE PENDING ── */
+.force-badge { font-size: 9px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; padding: 1px 7px; border-radius: 8px; background: rgba(244,208,72,0.2); color: var(--sun); margin-left: 4px; }
+
+/* ── PROGRESS LABEL ── */
+.progress-label { font-size: 9px; color: rgba(245,237,216,0.3); text-align: right; margin-top: 2px; }
 </style>
 </head>
 <body>
@@ -301,8 +324,10 @@ h1 {
     <h1>Radio Italì</h1>
     <div class="header-sub">Regia — Control Room</div>
   </div>
-  <div class="on-air"><span class="on-air-dot"></span>ON AIR</div>
+  <div class="on-air" id="onAirBadge"><span class="on-air-dot"></span>ON AIR</div>
 </div>
+
+<div class="stopped-banner" id="stoppedBanner">Session stopped. Hit Resume to continue.</div>
 
 <!-- NOW PLAYING -->
 <div class="card">
@@ -314,6 +339,7 @@ h1 {
     <span id="nowElapsed" style="font-variant-numeric:tabular-nums"></span>
   </div>
   <div class="progress"><div class="progress-fill" id="progFill" data-t="music"></div></div>
+  <div class="progress-label">estimated</div>
   <div class="transport">
     <button class="btn btn-skip" onclick="doSkip(this)">⏭ SKIP <span class="key">S</span></button>
   </div>
@@ -323,6 +349,10 @@ h1 {
     <button class="btn btn-trigger" onclick="doTrigger('news_flash',this)">⚡ News <span class="key">N</span></button>
     <button class="btn btn-util" onclick="doShuffle(this)">🔀 Shuffle</button>
     <button class="btn btn-util" onclick="doPurge(this)">🗑 Purge</button>
+  </div>
+  <div class="transport" style="margin-top:8px">
+    <button class="btn btn-stop" id="stopBtn" onclick="doStop(this)">&#9632; Stop Session</button>
+    <button class="btn btn-resume" id="resumeBtn" onclick="doResume(this)" style="display:none">&#9654; Resume</button>
   </div>
 </div>
 
@@ -353,9 +383,12 @@ h1 {
     <span class="collapse-arrow">▶</span>
   </div>
   <div class="collapse-body">
+    <div class="pace-hint">Higher = more songs between segments (less frequent)</div>
     <div class="pace-row"><label>Banter</label><input type="range" id="pBanter" min="1" max="6" value="2"><span class="pv" id="pvBanter">2</span></div>
+    <div class="pace-counter" id="pcBanter"></div>
     <div class="pace-row"><label>Ads</label><input type="range" id="pAds" min="1" max="10" value="4"><span class="pv" id="pvAds">4</span></div>
-    <div class="pace-row"><label>Spots</label><input type="range" id="pSpots" min="1" max="5" value="2"><span class="pv" id="pvSpots">2</span></div>
+    <div class="pace-counter" id="pcAds"></div>
+    <div class="pace-row"><label>Spots/break</label><input type="range" id="pSpots" min="1" max="5" value="2"><span class="pv" id="pvSpots">2</span></div>
   </div>
 </div>
 
@@ -392,10 +425,19 @@ function flash(el){if(!el)return;el.classList.remove('flash');void el.offsetWidt
 async function api(m,p,b){const o={method:m,headers:H()};if(b)o.body=JSON.stringify(b);return(await fetch(p,o)).json()}
 
 // ── Transport ──
-async function doSkip(el){flash(el);await api('POST','/api/skip');toast('Skipped')}
-async function doTrigger(t,el){flash(el);await api('POST','/api/trigger',{type:t});toast('Triggered: '+t)}
-async function doShuffle(el){flash(el);await api('POST','/api/shuffle');toast('Shuffled')}
-async function doPurge(el){flash(el);await api('POST','/api/purge');toast('Purged')}
+async function doSkip(el){flash(el);await api('POST','/api/skip');toast('Skipped — advancing to next segment')}
+async function doTrigger(t,el){flash(el);const r=await api('POST','/api/trigger',{type:t});if(r.ok)toast('Queued: '+t.replace('_',' ')+' (plays after current song)');else toast('Failed: '+(r.error||'unknown'))}
+async function doShuffle(el){flash(el);await api('POST','/api/shuffle');toast('Playlist shuffled')}
+async function doPurge(el){flash(el);const r=await api('POST','/api/purge');toast('Purged '+r.purged+' segments from queue')}
+async function doStop(el){flash(el);await api('POST','/api/stop');toast('Session stopped');updateStopState(true)}
+async function doResume(el){flash(el);await api('POST','/api/resume');toast('Session resumed');updateStopState(false)}
+function updateStopState(stopped){
+  document.getElementById('stoppedBanner').classList.toggle('show',stopped);
+  document.getElementById('stopBtn').style.display=stopped?'none':'';
+  document.getElementById('resumeBtn').style.display=stopped?'':'none';
+  const badge=document.getElementById('onAirBadge');
+  badge.innerHTML=stopped?'<span style="color:var(--error)">STOPPED</span>':'<span class="on-air-dot"></span>ON AIR';
+}
 
 // ── Now Playing ──
 function updateNow(ns){
@@ -422,11 +464,14 @@ function updateNow(ns){
 }
 
 // ── Queue ──
-function updateQueue(up){
+function updateQueue(up,forcePending){
   const el=document.getElementById('queueBody');const meta=document.getElementById('queueMeta');
-  if(!up?.length){el.innerHTML='<div class="empty">Queue empty</div>';meta.textContent='';return}
-  meta.textContent=up.length+' segments';
-  el.innerHTML=up.map((it,i)=>`<div class="queue-item"><span class="qi-num">${i+1}</span><span class="qi-badge" data-t="${it.type}">${it.type.replace('_',' ')}</span><span class="qi-label">${esc(it.label||it.type)}</span></div>`).join('');
+  if(!up?.length&&!forcePending){el.innerHTML='<div class="empty">Queue empty</div>';meta.textContent='';return}
+  const parts=[];
+  if(forcePending){parts.push(`<div class="queue-item"><span class="qi-num">!</span><span class="qi-badge" data-t="${forcePending}">${forcePending.replace('_',' ')}</span><span class="qi-label">Triggered — plays next</span><span class="force-badge">forced</span></div>`)}
+  if(up?.length){parts.push(...up.map((it,i)=>`<div class="queue-item"><span class="qi-num">${i+1}</span><span class="qi-badge" data-t="${it.type}">${it.type.replace('_',' ')}</span><span class="qi-label">${esc(it.label||it.type)}</span></div>`))}
+  meta.textContent=(up?.length||0)+' upcoming';
+  el.innerHTML=parts.join('');
 }
 
 function updateScript(st){
@@ -434,7 +479,7 @@ function updateScript(st){
   const lines=st.last_banter_script;
   if(!lines?.length){wrap.style.display='none';return}
   wrap.style.display='';
-  body.innerHTML='<div style="font-size:9px;font-weight:600;letter-spacing:0.12em;text-transform:uppercase;color:rgba(245,237,216,0.4);margin-bottom:6px">Last Script</div>'+
+  body.innerHTML='<div style="font-size:9px;font-weight:600;letter-spacing:0.12em;text-transform:uppercase;color:rgba(245,237,216,0.4);margin-bottom:6px">Last Aired Script</div>'+
     lines.map(l=>`<div><span class="script-host" data-h="${esc(l.host)}">${esc(l.host)}:</span> ${esc(l.text)}</div>`).join('');
 }
 
@@ -467,14 +512,23 @@ async function addTr(i){const t=_sR[i];if(!t)return;await api('POST','/api/playl
 ['Banter','Ads','Spots'].forEach(n=>{
   const el=document.getElementById('p'+n);
   el.addEventListener('input',()=>{document.getElementById('pv'+n).textContent=el.value});
-  el.addEventListener('change',()=>{api('PATCH','/api/pacing',{songs_between_banter:+document.getElementById('pBanter').value,songs_between_ads:+document.getElementById('pAds').value,ad_spots_per_break:+document.getElementById('pSpots').value});toast('Pacing updated')});
+  el.addEventListener('change',()=>{api('PATCH','/api/pacing',{songs_between_banter:+document.getElementById('pBanter').value,songs_between_ads:+document.getElementById('pAds').value,ad_spots_per_break:+document.getElementById('pSpots').value});toast('Pacing saved')});
 });
+function updatePaceCounters(pacing){
+  if(!pacing)return;
+  const b=pacing.songs_since_banter||0,bMax=pacing.songs_between_banter||2;
+  const a=pacing.songs_since_ad||0,aMax=pacing.songs_between_ads||4;
+  document.getElementById('pcBanter').innerHTML='<strong>'+b+'/'+bMax+'</strong> songs since last banter'+(b>=bMax?' — next up':'');
+  document.getElementById('pcAds').innerHTML='<strong>'+a+'/'+aMax+'</strong> songs since last ad'+(a>=aMax?' — next up':'');
+}
 
 // ── Hosts ──
 const AX=['energy','chaos','warmth','verbosity','nostalgia'];
+const AX_LOW ={'energy':'calm','chaos':'orderly','warmth':'distant','verbosity':'concise','nostalgia':'present'};
+const AX_HIGH={'energy':'hyped','chaos':'chaotic','warmth':'intimate','verbosity':'verbose','nostalgia':'nostalgic'};
 function renderHosts(hosts){
   document.getElementById('hostsBody').innerHTML=hosts.map(h=>
-    `<div class="host-block" data-h="${esc(h.name)}"><div class="host-name">${esc(h.name)}</div><div class="host-style">${esc(h.style)}</div>${AX.map(a=>`<div class="ha"><label>${a.slice(0,7)}</label><input type="range" min="0" max="100" value="${h.personality[a]}" data-a="${a}" oninput="this.parentElement.querySelector('.hv').textContent=this.value" onchange="updHost('${esc(h.name)}')"><span class="hv">${h.personality[a]}</span></div>`).join('')}<button class="host-reset" onclick="rstHost('${esc(h.name)}')">Reset</button></div>`
+    `<div class="host-block" data-h="${esc(h.name)}"><div class="host-name">${esc(h.name)}</div><div class="host-style">${esc(h.style)}</div>${AX.map(a=>`<div class="ha"><label>${a.slice(0,7)}</label><input type="range" min="0" max="100" value="${h.personality[a]}" data-a="${a}" oninput="this.parentElement.querySelector('.hv').textContent=this.value" onchange="updHost('${esc(h.name)}')"><span class="hv">${h.personality[a]}</span></div><div class="ha-labels"><span>${AX_LOW[a]}</span><span>${AX_HIGH[a]}</span></div>`).join('')}<button class="host-reset" onclick="rstHost('${esc(h.name)}')">Reset</button></div>`
   ).join('');
 }
 async function updHost(n){const b={};document.querySelector(`[data-h="${n}"]`).querySelectorAll('input[type="range"]').forEach(e=>{b[e.dataset.a]=+e.value});await api('PATCH',`/api/hosts/${encodeURIComponent(n)}/personality`,b);toast(n+' updated')}
@@ -495,8 +549,10 @@ async function refresh(){
   try{
     const [sr,pr]=await Promise.all([fetch('/status',{headers:H()}),fetch('/public-status')]);
     _st=await sr.json();_pub=await pr.json();
-    updateNow(_pub.now_streaming);updateQueue(_pub.upcoming);updateScript(_st);
+    updateNow(_pub.now_streaming);updateQueue(_pub.upcoming,_st.force_pending);updateScript(_st);
     updateLog(_pub.stream_log);updatePl(_st.playlist||[]);
+    updatePaceCounters(_st.pacing);
+    if(_st.session_stopped!==undefined)updateStopState(_st.session_stopped);
     if(!_paceOk&&_st.pacing){_paceOk=true;
       document.getElementById('pBanter').value=_st.pacing.songs_between_banter;document.getElementById('pvBanter').textContent=_st.pacing.songs_between_banter;
       document.getElementById('pAds').value=_st.pacing.songs_between_ads;document.getElementById('pvAds').textContent=_st.pacing.songs_between_ads;

@@ -823,6 +823,31 @@ async def purge_queue(request: Request, _: None = Depends(require_admin_access))
     return {"ok": True, "purged": purged}
 
 
+@router.post("/api/stop")
+async def stop_session(request: Request, _: None = Depends(require_admin_access)):
+    """Gracefully stop the station: skip current, purge queue, cancel producer."""
+    state = request.app.state.station_state
+    # Purge queued segments
+    purged = _purge_segment_queue(request.app.state.queue)
+    # Skip current segment
+    if state.now_streaming:
+        request.app.state.skip_event.set()
+    # Signal producer to pause
+    state.session_stopped = True
+    state.now_streaming = {"type": "stopped", "label": "Session stopped", "started": time.time()}
+    logger.info("Session stopped by admin (purged %d segments)", purged)
+    return {"ok": True, "purged": purged}
+
+
+@router.post("/api/resume")
+async def resume_session(request: Request, _: None = Depends(require_admin_access)):
+    """Resume a stopped session."""
+    state = request.app.state.station_state
+    state.session_stopped = False
+    logger.info("Session resumed by admin")
+    return {"ok": True}
+
+
 @router.post("/api/trigger")
 async def trigger_segment(request: Request, _: None = Depends(require_admin_access)):
     """Force the next produced segment to be banter, ad, or news flash."""
@@ -1290,6 +1315,7 @@ async def status(request: Request, _: None = Depends(require_admin_access)):
                 "tts_characters": state.tts_characters,
             },
             "force_pending": state.force_next.value if state.force_next else None,
+            "session_stopped": state.session_stopped,
             "playlist": [
                 {"title": t.title, "artist": t.artist, "display": t.display, "spotify_id": t.spotify_id}
                 for t in state.playlist[:100]

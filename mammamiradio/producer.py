@@ -393,6 +393,10 @@ async def run_producer(
         if not state.spotify_connected:
             was_spotify_connected = False
 
+        if state.session_stopped:
+            await asyncio.sleep(1)
+            continue
+
         if queue.qsize() >= config.pacing.lookahead_segments:
             await asyncio.sleep(0.5)
             continue
