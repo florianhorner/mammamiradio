@@ -943,4 +943,7 @@ async def run_producer(
                     success_callback()
                 state.failed_segments = 0  # Reset backoff on success
             await queue.put(segment)
+            state.queued_segments.append(
+                {"type": seg_type.value, "label": segment.metadata.get("title", seg_type.value)}
+            )
             logger.info("Queued %s (queue size: %d)", seg_type.value, queue.qsize())

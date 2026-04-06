@@ -481,6 +481,8 @@ async def run_playback_loop(app) -> None:
             continue
 
         state.on_stream_segment(segment)
+        if state.queued_segments:
+            state.queued_segments.pop(0)
         logger.info(
             ">>> NOW STREAMING %s: %s",
             segment.type.value,
@@ -820,6 +822,7 @@ async def skip_track(request: Request, _: None = Depends(require_admin_access)):
 async def purge_queue(request: Request, _: None = Depends(require_admin_access)):
     """Drain all pre-produced segments from the queue."""
     purged = _purge_segment_queue(request.app.state.queue)
+    request.app.state.station_state.queued_segments.clear()
     return {"ok": True, "purged": purged}
 
 
@@ -829,6 +832,7 @@ async def stop_session(request: Request, _: None = Depends(require_admin_access)
     state = request.app.state.station_state
     # Purge queued segments
     purged = _purge_segment_queue(request.app.state.queue)
+    state.queued_segments.clear()
     # Skip current segment
     if state.now_streaming:
         request.app.state.skip_event.set()
@@ -1243,7 +1247,9 @@ def _public_status_payload(request: Request) -> dict:
             {"type": e.type, "label": e.label, "timestamp": e.timestamp, "metadata": e.metadata}
             for e in state.stream_log
         ],
-        "upcoming": preview_upcoming(state, config.pacing, state.playlist, count=5),
+        "upcoming": state.queued_segments[:5]
+        if state.queued_segments
+        else preview_upcoming(state, config.pacing, state.playlist, count=5),
     }
 
 
