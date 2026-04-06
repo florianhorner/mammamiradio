@@ -4,6 +4,20 @@ All notable changes to `mammamiradio` are documented here.
 
 The current version source of truth is `pyproject.toml`.
 
+## [2.0.2] - 2026-04-06
+
+### Added
+
+- **OpenAI fallback for script generation**: banter, ads, news flashes, and transitions now try Anthropic first, then fall back to OpenAI `gpt-4o-mini` automatically. Set `OPENAI_API_KEY` in `.env` or the dashboard settings panel.
+- **Golden path onboarding UI**: dashboard and listener page show clear, step-by-step guidance when Spotify isn't connected yet, including what to do and why music is silent.
+- **Spotify redirect URI override**: new `MAMMAMIRADIO_SPOTIFY_REDIRECT_BASE_URL` env var lets you use a stable HTTPS domain for OAuth callbacks instead of localhost.
+- **Interactive Spotify auth workaround**: when macOS hostname causes the `.local.local` mDNS bug, the app detects it and offers browser-based login instead of broken zeroconf discovery.
+
+### Fixed
+
+- **FFmpeg `aevalsrc` crash** (exit code 234): bare `(t>0.08)` gate expressions replaced with lavfi-safe `if(gte(t,onset),1,0)` syntax. Bumper jingles now also fall back to a simpler sine-based jingle if the complex expression still fails.
+- **Spotify callback URL mismatch**: `localhost` is now canonicalized to `127.0.0.1` in OAuth redirect URIs, matching Spotify's loopback policy.
+
 ## [2.0.1] - 2026-04-06
 
 ### Fixed

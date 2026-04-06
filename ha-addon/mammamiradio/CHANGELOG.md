@@ -1,5 +1,18 @@
 # Changelog
 
+## 2.0.2
+
+### Added
+
+- OpenAI fallback for AI-generated banter and ads (set `openai_api_key` in add-on config)
+- Golden path onboarding guidance in dashboard and listener UI
+- Interactive Spotify auth workaround for macOS `.local.local` mDNS bug
+
+### Fixed
+
+- FFmpeg `aevalsrc` crash (exit code 234) in bumper jingle generation
+- Spotify OAuth callback URL mismatch with loopback canonicalization
+
 ## 2.0.1
 
 ### Fixed
