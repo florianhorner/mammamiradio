@@ -1174,6 +1174,8 @@ async def move_to_next(request: Request, _: None = Depends(require_admin_access)
     if 0 <= idx < len(pl):
         track = pl.pop(idx)
         pl.insert(0, track)
+        # Force the scheduler to pick music next so this track actually plays
+        state.force_next = SegmentType.MUSIC
         return {"ok": True, "moved": track.display, "to_position": 0}
     return {"ok": False, "error": "Invalid index"}
 

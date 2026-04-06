@@ -491,7 +491,7 @@ function updatePl(tracks){
   const s=tracks.slice(0,50);
   el.innerHTML=s.map((t,i)=>`<div class="pl-row"><span class="pl-n">${i+1}</span><span class="pl-t">${esc(t.display||t.title||'?')}</span><div class="pl-a"><button class="pl-btn" onclick="moveNext(${i})">▶ Next</button><button class="pl-btn" onclick="removeTr(${i})">✕</button></div></div>`).join('')+(tracks.length>50?`<div class="empty">+ ${tracks.length-50} more</div>`:'');
 }
-async function moveNext(i){await api('POST','/api/playlist/move_to_next',{index:i});toast('Moved to next')}
+async function moveNext(i){const r=await api('POST','/api/playlist/move_to_next',{index:i});if(r.ok)toast('Playing next: '+r.moved);else toast('Failed to move track')}
 async function removeTr(i){await api('POST','/api/playlist/remove',{index:i});toast('Removed')}
 
 // ── Search ──
