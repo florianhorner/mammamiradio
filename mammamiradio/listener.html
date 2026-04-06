@@ -200,6 +200,35 @@
     margin-bottom:0.75rem;
     letter-spacing:0.02em;
   }
+  .golden-path-notice{
+    border-left:3px solid var(--terracotta);
+  }
+  .golden-path-head{
+    font-size:0.72rem;
+    font-weight:600;
+    letter-spacing:0.1em;
+    text-transform:uppercase;
+    color:var(--dusty-rose);
+    margin-bottom:0.4rem;
+  }
+  .golden-path-title{
+    font-family:var(--font-display);
+    font-size:1rem;
+    color:var(--highlight);
+    margin-bottom:0.35rem;
+  }
+  .golden-path-detail{
+    font-size:0.84rem;
+    color:var(--cream-dk);
+    margin-bottom:0.55rem;
+  }
+  .golden-path-steps{
+    margin-left:1.1rem;
+    color:var(--cream-dk);
+    font-size:0.82rem;
+    line-height:1.45;
+  }
+  .golden-path-steps li{margin-bottom:0.25rem}
 
   /* Up Next list */
   .upcoming-list{display:flex;flex-direction:column}
@@ -444,6 +473,13 @@
     </div>
   </div>
 
+  <div class="section-card golden-path-notice" id="goldenPathNotice" style="display:none">
+    <div class="golden-path-head">Golden path</div>
+    <div class="golden-path-title" id="goldenPathTitle"></div>
+    <div class="golden-path-detail" id="goldenPathDetail"></div>
+    <ol class="golden-path-steps" id="goldenPathSteps"></ol>
+  </div>
+
   <!-- Up Next -->
   <div class="section-card" id="upNextSection" style="display:none">
     <div class="section-title">Up next</div>
@@ -599,6 +635,7 @@
     fetch(_base + '/public-status')
       .then(function(r){return r.json()})
       .then(function(data){
+        updateGoldenPath(data.golden_path);
         updateNowPlaying(data.now_streaming);
         updateUpNext(data.upcoming);
         updateJokes(data.running_jokes);
@@ -608,6 +645,24 @@
         }
       })
       .catch(function(){});
+  }
+
+  function updateGoldenPath(gp){
+    var wrap = document.getElementById('goldenPathNotice');
+    if(!gp || !gp.blocking){
+      wrap.style.display = 'none';
+      return;
+    }
+    wrap.style.display = 'block';
+    document.getElementById('goldenPathTitle').textContent = gp.headline || '';
+    document.getElementById('goldenPathDetail').textContent = gp.detail || '';
+    var stepsHtml = (gp.steps || []).map(function(step){
+      return '<li>' + escHtml(step) + '</li>';
+    }).join('');
+    if(gp.auth_url){
+      stepsHtml += '<li><a href="' + escHtml(gp.auth_url) + '" target="_blank" rel="noopener" style="color:var(--highlight);text-decoration:underline;font-weight:600">Log in to Spotify &rarr;</a></li>';
+    }
+    document.getElementById('goldenPathSteps').innerHTML = stepsHtml;
   }
 
   function updateNowPlaying(np){

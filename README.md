@@ -160,6 +160,8 @@ docker compose up
 
 Open `http://localhost:8000/` for the dashboard. `ADMIN_TOKEN` must be set in `.env` (the container binds to `0.0.0.0` and requires auth).
 
+For Spotify OAuth in local development, register `http://127.0.0.1:8000/spotify/callback` as the redirect URI in your Spotify app settings. If you want to use a stable HTTPS origin instead, set `MAMMAMIRADIO_SPOTIFY_REDIRECT_BASE_URL=https://your-domain` and register `https://your-domain/spotify/callback`.
+
 ### Run (Home Assistant add-on)
 
 If you run Home Assistant OS or Supervised:

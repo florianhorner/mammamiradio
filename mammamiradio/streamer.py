@@ -75,6 +75,99 @@ def _purge_segment_queue(q) -> int:
     return purged
 
 
+def _has_any_mp3(path: Path) -> bool:
+    """Return True when a directory contains at least one MP3 file."""
+    if not path.exists() or not path.is_dir():
+        return False
+    return any(path.glob("*.mp3"))
+
+
+def _golden_path_status(config, state) -> dict:
+    """Build a single, explicit music onboarding status for UI surfaces."""
+    spotify_api = bool(config.spotify_client_id and config.spotify_client_secret)
+    spotify_connected = bool(state.spotify_connected)
+    allow_ytdlp = os.getenv("MAMMAMIRADIO_ALLOW_YTDLP", "false").lower() in ("true", "1", "yes")
+    has_demo_assets = _has_any_mp3(_PKG_DIR / "demo_assets" / "music")
+    has_local_music = _has_any_mp3(Path("music"))
+
+    fallback_sources: list[str] = []
+    if has_demo_assets:
+        fallback_sources.append("bundled demo tracks")
+    if has_local_music:
+        fallback_sources.append("local music/*.mp3 files")
+    if allow_ytdlp:
+        fallback_sources.append("yt-dlp downloads")
+
+    silent_music_fallback = (not spotify_connected) and not fallback_sources
+
+    if spotify_connected:
+        return {
+            "stage": "connected",
+            "blocking": False,
+            "headline": "Connected to Spotify. Real music is live.",
+            "detail": "Your in-page player is now using your Spotify-powered station audio.",
+            "steps": [],
+            "silent_music_fallback": False,
+        }
+
+    if not spotify_api:
+        detail = "Add Spotify credentials first. Until then, the station cannot use the golden path."
+        if silent_music_fallback:
+            detail += " In this setup, music segments fall back to silence placeholders."
+        return {
+            "stage": "needs_spotify_credentials",
+            "blocking": True,
+            "headline": "Action required: add Spotify App credentials.",
+            "detail": detail,
+            "steps": [
+                "Open Advanced Settings.",
+                "Paste Spotify App ID and App Secret.",
+                "Click Save, then open Spotify and choose the MammaMiRadio device.",
+            ],
+            "silent_music_fallback": silent_music_fallback,
+        }
+
+    auth_url = getattr(state, "spotify_auth_url", "") or ""
+    if auth_url:
+        detail = (
+            "Your Mac hostname causes a Spotify Connect discovery issue. "
+            "Click the link below to log in via browser instead (one-time setup)."
+        )
+        if fallback_sources:
+            detail += f" Until then, using: {', '.join(fallback_sources)}."
+        return {
+            "stage": "needs_spotify_browser_login",
+            "blocking": True,
+            "headline": "Action required: log in to Spotify via browser.",
+            "detail": detail,
+            "steps": [
+                "Click the login link below.",
+                "Log in with your Spotify account.",
+                "After login, the station connects automatically.",
+            ],
+            "auth_url": auth_url,
+            "silent_music_fallback": silent_music_fallback,
+        }
+
+    detail = "Spotify credentials are present, but Spotify Connect is not attached yet."
+    if fallback_sources:
+        detail += f" Temporary fallback available: {', '.join(fallback_sources)}."
+    elif silent_music_fallback:
+        detail += " Current fallback is silent placeholder tracks."
+    return {
+        "stage": "needs_spotify_connect",
+        "blocking": True,
+        "headline": "Action required: connect Spotify to MammaMiRadio.",
+        "detail": detail,
+        "steps": [
+            "Open Spotify on your phone or desktop.",
+            "Tap/click the device picker (speaker icon).",
+            "Select MammaMiRadio as the playback device.",
+        ],
+        "silent_music_fallback": silent_music_fallback,
+    }
+
+
 def _apply_loaded_source(
     request,
     tracks: list,
@@ -542,7 +635,13 @@ async def save_keys(request: Request):
     body = await request.json()
     config = request.app.state.config
 
-    allowed = {"SPOTIFY_CLIENT_ID", "SPOTIFY_CLIENT_SECRET", "ANTHROPIC_API_KEY", "PLAYLIST_SPOTIFY_URL"}
+    allowed = {
+        "SPOTIFY_CLIENT_ID",
+        "SPOTIFY_CLIENT_SECRET",
+        "ANTHROPIC_API_KEY",
+        "OPENAI_API_KEY",
+        "PLAYLIST_SPOTIFY_URL",
+    }
     updates = {k: v.strip() for k, v in body.items() if k in allowed and isinstance(v, str) and v.strip()}
 
     if not updates:
@@ -564,6 +663,8 @@ async def save_keys(request: Request):
         config.spotify_client_secret = updates["SPOTIFY_CLIENT_SECRET"]
     if "ANTHROPIC_API_KEY" in updates:
         config.anthropic_api_key = updates["ANTHROPIC_API_KEY"]
+    if "OPENAI_API_KEY" in updates:
+        config.openai_api_key = updates["OPENAI_API_KEY"]
     if "PLAYLIST_SPOTIFY_URL" in updates:
         config.playlist.spotify_url = updates["PLAYLIST_SPOTIFY_URL"]
 
@@ -613,6 +714,7 @@ def _save_addon_options(updates: dict[str, str]) -> None:
         "SPOTIFY_CLIENT_ID": "spotify_client_id",
         "SPOTIFY_CLIENT_SECRET": "spotify_client_secret",
         "ANTHROPIC_API_KEY": "anthropic_api_key",
+        "OPENAI_API_KEY": "openai_api_key",
         "PLAYLIST_SPOTIFY_URL": "playlist_spotify_url",
     }
     for env_key, value in updates.items():
@@ -676,6 +778,8 @@ async def capabilities(request: Request, _: None = Depends(require_admin_access)
         "limit": SHAREWARE_CANNED_LIMIT,
         "exhausted": state.canned_clips_streamed >= SHAREWARE_CANNED_LIMIT,
     }
+    result["golden_path"] = _golden_path_status(config, state)
+    result["startup_source_error"] = state.startup_source_error or ""
     return result
 
 
@@ -774,6 +878,7 @@ async def save_credentials(request: Request, _: None = Depends(require_admin_acc
         "spotify_client_id": ("SPOTIFY_CLIENT_ID", "spotify_client_id"),
         "spotify_client_secret": ("SPOTIFY_CLIENT_SECRET", "spotify_client_secret"),
         "anthropic_api_key": ("ANTHROPIC_API_KEY", "anthropic_api_key"),
+        "openai_api_key": ("OPENAI_API_KEY", "openai_api_key"),
         "playlist_spotify_url": ("PLAYLIST_SPOTIFY_URL", None),
     }
 
@@ -1106,6 +1211,7 @@ def _public_status_payload(request: Request) -> dict:
         "running_jokes": list(state.running_jokes),
         "now_streaming": state.now_streaming,
         "current_source": _serialize_source(state.playlist_source),
+        "golden_path": _golden_path_status(config, state),
         "stream_log": [
             {"type": e.type, "label": e.label, "timestamp": e.timestamp, "metadata": e.metadata}
             for e in state.stream_log
@@ -1195,9 +1301,24 @@ async def status(request: Request, _: None = Depends(require_admin_access)):
 
 def _detect_callback_url(request: Request) -> str:
     """Build the Spotify OAuth callback URL from the current request's origin."""
+    override_base = os.getenv("MAMMAMIRADIO_SPOTIFY_REDIRECT_BASE_URL", "").strip().rstrip("/")
+    if override_base:
+        return f"{override_base}/spotify/callback"
+
     ingress_prefix = _sanitize_ingress_prefix(request.headers.get("X-Ingress-Path", ""))
     scheme = request.headers.get("X-Forwarded-Proto", str(request.url.scheme))
     host = request.headers.get("X-Forwarded-Host") or request.headers.get("Host") or "localhost:8000"
+    # Spotify accepts loopback redirect URIs, but rejects plain localhost in
+    # some app configurations. Canonicalize all local dev callback URLs to
+    # 127.0.0.1 so the registered URI can stay stable.
+    if host.startswith("localhost:"):
+        host = host.replace("localhost", "127.0.0.1", 1)
+    elif host == "localhost":
+        host = "127.0.0.1"
+    elif host.startswith("[::1]:"):
+        host = host.replace("[::1]", "127.0.0.1", 1)
+    elif host == "[::1]" or host == "::1":
+        host = "127.0.0.1"
     return f"{scheme}://{host}{ingress_prefix}/spotify/callback"
 
 

@@ -430,3 +430,15 @@ async def test_capabilities_trial_exhausted_flag():
     body = resp.json()
     assert body["trial"]["exhausted"] is True
     assert body["trial"]["canned_clips_streamed"] == SHAREWARE_CANNED_LIMIT
+
+
+@pytest.mark.asyncio
+async def test_spotify_auth_status_uses_loopback_ip_callback():
+    app = _make_test_app()
+    app.state.config.spotify_client_id = "client-id"
+    app.state.config.spotify_client_secret = "client-secret"
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://localhost:8000") as client:
+        resp = await client.get("/api/spotify/auth-status")
+    assert resp.status_code == 200
+    assert resp.json()["callback_url"] == "http://127.0.0.1:8000/spotify/callback"
