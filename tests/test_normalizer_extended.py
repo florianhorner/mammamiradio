@@ -306,6 +306,27 @@ def test_generate_bumper_jingle_custom_duration(mock_subprocess):
     assert cmd[t_idx + 1] == "0.8"
 
 
+def test_generate_bumper_jingle_falls_back_after_aevalsrc_failure():
+    out = Path("/tmp/bumper.mp3")
+    ok = MagicMock(spec=subprocess.CompletedProcess)
+    ok.returncode = 0
+    ok.stderr = b""
+    ok.stdout = b""
+
+    with patch(
+        "mammamiradio.normalizer._run_ffmpeg",
+        side_effect=[subprocess.CalledProcessError(234, ["ffmpeg"]), ok],
+    ) as run_ffmpeg:
+        result = generate_bumper_jingle(out)
+
+    assert result == out
+    assert run_ffmpeg.call_count == 2
+    first_cmd = run_ffmpeg.call_args_list[0][0][0]
+    second_cmd = run_ffmpeg.call_args_list[1][0][0]
+    assert "aevalsrc=" in " ".join(first_cmd)
+    assert "sine=frequency=523" in " ".join(second_cmd)
+
+
 # ---------------------------------------------------------------------------
 # New music bed types (signature ad system)
 # ---------------------------------------------------------------------------
