@@ -119,7 +119,7 @@ async def _generate_json_response(
         state.api_calls += 1
         state.api_input_tokens += getattr(resp.usage, "prompt_tokens", 0)
         state.api_output_tokens += getattr(resp.usage, "completion_tokens", 0)
-    raw = (resp.choices[0].message.content or "").strip()
+    raw = (resp.choices[0].message.content or "").strip()  # type: ignore[attr-defined]
     return json.loads(_strip_fences(raw))
 
 

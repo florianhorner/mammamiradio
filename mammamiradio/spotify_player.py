@@ -311,7 +311,8 @@ class SpotifyPlayer:
         if self._interactive_auth:
             # Give go-librespot a moment to write the auth URL to stderr
             time.sleep(1)
-            self._log_file.flush()
+            if self._log_file:
+                self._log_file.flush()
             auth_url = self._parse_auth_url_from_log()
             if auth_url:
                 self._spotify_auth_url = auth_url
