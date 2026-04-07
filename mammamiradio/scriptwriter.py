@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import datetime
 import json
 import logging
+import os
 import random
 import re
 
@@ -30,6 +32,8 @@ logger = logging.getLogger(__name__)
 # Reusable Anthropic client — avoids creating a new TCP connection per LLM call
 _anthropic_client: anthropic.AsyncAnthropic | None = None
 _anthropic_key: str = ""
+_openai_client = None
+_openai_key: str = ""
 
 # Cached system prompt — rebuilt only when config changes
 _cached_system_prompt: str = ""
@@ -43,6 +47,80 @@ def _get_client(api_key: str) -> anthropic.AsyncAnthropic:
         _anthropic_client = anthropic.AsyncAnthropic(api_key=api_key)
         _anthropic_key = api_key
     return _anthropic_client
+
+
+def _get_openai_client(api_key: str):
+    """Return a reusable OpenAI client, creating one if needed."""
+    global _openai_client, _openai_key
+    if _openai_client is None or _openai_key != api_key:
+        from openai import OpenAI
+
+        _openai_client = OpenAI(api_key=api_key)
+        _openai_key = api_key
+    return _openai_client
+
+
+def _has_script_llm(config: StationConfig) -> bool:
+    """Return whether any script-generation backend is configured."""
+    return bool(config.anthropic_api_key or config.openai_api_key)
+
+
+async def _generate_json_response(
+    *,
+    prompt: str,
+    config: StationConfig,
+    state: StationState,
+    model: str,
+    max_tokens: int,
+) -> dict:
+    """Generate JSON via Anthropic, falling back to OpenAI when needed."""
+    system_prompt = _get_system_prompt(config)
+
+    if config.anthropic_api_key:
+        try:
+            client = _get_client(config.anthropic_api_key)
+            resp = await client.messages.create(
+                model=model,
+                max_tokens=max_tokens,
+                system=system_prompt,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            if hasattr(resp, "usage") and resp.usage:
+                state.api_calls += 1
+                state.api_input_tokens += resp.usage.input_tokens
+                state.api_output_tokens += resp.usage.output_tokens
+            raw = resp.content[0].text.strip()  # type: ignore[union-attr]
+            return json.loads(_strip_fences(raw))
+        except Exception as exc:
+            if not config.openai_api_key:
+                raise
+            logger.warning("Anthropic %s, falling back to OpenAI: %s", type(exc).__name__, exc)
+
+    openai_key = config.openai_api_key or os.getenv("OPENAI_API_KEY", "")
+    if not openai_key:
+        raise RuntimeError("No LLM API key configured for script generation")
+
+    client = _get_openai_client(openai_key)
+    loop = asyncio.get_running_loop()
+
+    def _call_openai():
+        return client.chat.completions.create(
+            model="gpt-4o-mini",
+            max_tokens=max_tokens,
+            response_format={"type": "json_object"},
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": prompt},
+            ],
+        )
+
+    resp = await asyncio.wait_for(loop.run_in_executor(None, _call_openai), timeout=45.0)
+    if getattr(resp, "usage", None):
+        state.api_calls += 1
+        state.api_input_tokens += getattr(resp.usage, "prompt_tokens", 0)
+        state.api_output_tokens += getattr(resp.usage, "completion_tokens", 0)
+    raw = (resp.choices[0].message.content or "").strip()  # type: ignore[attr-defined]
+    return json.loads(_strip_fences(raw))
 
 
 def _get_system_prompt(config: StationConfig) -> str:
@@ -259,12 +337,10 @@ Rules:
 
 async def write_banter(state: StationState, config: StationConfig) -> list[tuple[HostPersonality, str]]:
     """Generate short host banter with recent tracks, jokes, and home context."""
-    if not config.anthropic_api_key:
+    if not _has_script_llm(config):
         host = random.choice(config.hosts)
         fallback = {"it": "E torniamo alla musica!", "en": "And back to the music!"}
         return [(host, fallback.get(config.station.language, fallback["en"]))]
-
-    client = _get_client(config.anthropic_api_key)
 
     recent = [_sanitize_prompt_data(t.display) for t in list(state.played_tracks)[-3:]]
     jokes = list(state.running_jokes)[-3:] if state.running_jokes else []
@@ -319,20 +395,13 @@ Return JSON:
 {{"lines": [{{"host": "HostName", "text": "what they say"}}], "new_joke": "brief description of any new running joke or null"}}"""
 
     try:
-        resp = await client.messages.create(
+        data = await _generate_json_response(
+            prompt=prompt,
+            config=config,
+            state=state,
             model=config.audio.claude_creative_model,
             max_tokens=500,
-            system=_get_system_prompt(config),
-            messages=[{"role": "user", "content": prompt}],
         )
-        raw = resp.content[0].text.strip()  # type: ignore[union-attr]
-        # Track consumption
-        if hasattr(resp, "usage") and resp.usage:
-            state.api_calls += 1
-            state.api_input_tokens += resp.usage.input_tokens
-            state.api_output_tokens += resp.usage.output_tokens
-        raw = _strip_fences(raw)
-        data = json.loads(raw)
 
         result = []
         for line in data["lines"]:
@@ -413,11 +482,9 @@ async def write_news_flash(
 
     Returns (host, text, category) — the host delivers the flash solo.
     """
-    if not config.anthropic_api_key:
+    if not _has_script_llm(config):
         host = random.choice(config.hosts)
         return (host, "Notizia dell'ultima ora: tutto a posto. Più o meno.", "breaking")
-
-    client = _get_client(config.anthropic_api_key)
 
     if category is None:
         category = random.choice(list(NEWS_FLASH_CATEGORIES.keys()))
@@ -451,19 +518,13 @@ Return JSON:
 {{"text": "the news flash text", "intro_jingle": "notizie flash|traffico flash|sport flash|meteo flash"}}"""
 
     try:
-        resp = await client.messages.create(
+        data = await _generate_json_response(
+            prompt=prompt,
+            config=config,
+            state=state,
             model=config.audio.claude_creative_model,
             max_tokens=300,
-            system=_get_system_prompt(config),
-            messages=[{"role": "user", "content": prompt}],
         )
-        raw = resp.content[0].text.strip()  # type: ignore[union-attr]
-        if hasattr(resp, "usage") and resp.usage:
-            state.api_calls += 1
-            state.api_input_tokens += resp.usage.input_tokens
-            state.api_output_tokens += resp.usage.output_tokens
-        raw = _strip_fences(raw)
-        data = json.loads(raw)
 
         text = data.get("text", "Notizia dell'ultima ora!")
         logger.info("Generated %s flash: %d chars", category, len(text))
@@ -483,12 +544,10 @@ async def write_transition(
 
     Returns (host, text). The text is meant to be overlaid on the fading music.
     """
-    if not config.anthropic_api_key:
+    if not _has_script_llm(config):
         host = random.choice(config.hosts)
         fallback = {"banter": "Allora...", "ad": "E adesso...", "news_flash": "Attenzione..."}
         return (host, fallback.get(next_segment, "Allora..."))
-
-    client = _get_client(config.anthropic_api_key)
 
     current = _sanitize_prompt_data(state.played_tracks[-1].display) if state.played_tracks else "the opening"
     host = random.choice(config.hosts)
@@ -521,19 +580,13 @@ Return JSON:
 {{"text": "the transition line"}}"""
 
     try:
-        resp = await client.messages.create(
+        data = await _generate_json_response(
+            prompt=prompt,
+            config=config,
+            state=state,
             model=config.audio.claude_model,
             max_tokens=100,
-            system=_get_system_prompt(config),
-            messages=[{"role": "user", "content": prompt}],
         )
-        raw = resp.content[0].text.strip()  # type: ignore[union-attr]
-        if hasattr(resp, "usage") and resp.usage:
-            state.api_calls += 1
-            state.api_input_tokens += resp.usage.input_tokens
-            state.api_output_tokens += resp.usage.output_tokens
-        raw = _strip_fences(raw)
-        data = json.loads(raw)
         text = data.get("text", "Allora...")
         logger.info("Generated transition: %s", text[:50])
         return (host, text)
@@ -553,14 +606,13 @@ async def write_ad(
     sonic: SonicWorld | None = None,
 ) -> AdScript:
     """Generate a structured fictional ad script for one brand with role-based voices."""
-    if not config.anthropic_api_key:
+    if not _has_script_llm(config):
         return AdScript(
             brand=brand.name,
             parts=[AdPart(type="voice", text=f"{brand.name}. {brand.tagline}")],
             summary=brand.tagline,
             format=ad_format,
         )
-    client = _get_client(config.anthropic_api_key)
     sonic = sonic or SonicWorld()
 
     # Build context for cross-referencing
@@ -673,20 +725,13 @@ Return JSON:
 }}"""
 
     try:
-        resp = await client.messages.create(
+        data = await _generate_json_response(
+            prompt=prompt,
+            config=config,
+            state=state,
             model=config.audio.claude_creative_model,
             max_tokens=800,
-            system=_get_system_prompt(config),
-            messages=[{"role": "user", "content": prompt}],
         )
-        raw = resp.content[0].text.strip()  # type: ignore[union-attr]
-        # Track consumption
-        if hasattr(resp, "usage") and resp.usage:
-            state.api_calls += 1
-            state.api_input_tokens += resp.usage.input_tokens
-            state.api_output_tokens += resp.usage.output_tokens
-        raw = _strip_fences(raw)
-        data = json.loads(raw)
 
         parts = []
         for p in data.get("parts", []):

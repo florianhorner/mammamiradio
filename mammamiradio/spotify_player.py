@@ -16,9 +16,11 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 import select
 import shutil
 import signal
+import socket
 import subprocess
 import threading
 import time
@@ -85,6 +87,10 @@ class SpotifyPlayer:
             tmp_dir=config.tmp_dir,
         )
 
+        # Interactive auth fallback for .local.local mDNS bug
+        self._interactive_auth = False
+        self._spotify_auth_url = ""
+
         # Persistent FIFO drain
         self._drain_thread: threading.Thread | None = None
         self._drain_running = False
@@ -95,6 +101,11 @@ class SpotifyPlayer:
     @property
     def device_name(self) -> str:
         return self._device_name
+
+    @property
+    def spotify_auth_url(self) -> str:
+        """Interactive auth URL when zeroconf is broken (e.g. .local.local mDNS bug)."""
+        return self._spotify_auth_url
 
     def _ensure_fifo(self) -> None:
         """Create or repair the PCM FIFO used by go-librespot output."""
@@ -279,11 +290,14 @@ class SpotifyPlayer:
             return
 
         self._external = False
+        self._interactive_auth = self._needs_interactive_auth()
         cmd = [
             self._resolve_go_librespot_bin(),
             "--config_dir",
             str(self._config_dir),
         ]
+        if self._interactive_auth:
+            cmd.extend(["-c", "credentials.type=interactive"])
 
         logger.info("Starting go-librespot: %s", " ".join(cmd))
         self._log_file = open(self.config.tmp_dir / "go-librespot.log", "w")  # type: ignore[assignment]
@@ -293,6 +307,47 @@ class SpotifyPlayer:
             stderr=self._log_file,
         )
         logger.info("go-librespot started (PID %d)", self._process.pid)
+
+        if self._interactive_auth:
+            # Give go-librespot a moment to write the auth URL to stderr
+            time.sleep(1)
+            if self._log_file:
+                self._log_file.flush()
+            auth_url = self._parse_auth_url_from_log()
+            if auth_url:
+                self._spotify_auth_url = auth_url
+                logger.info("Spotify interactive auth URL ready — visit dashboard to connect")
+
+    def _needs_interactive_auth(self) -> bool:
+        """Detect the macOS .local.local mDNS bug that prevents Spotify Connect discovery.
+
+        When macOS hostname ends with '.local', go-librespot's built-in mDNS
+        advertises a '.local.local' address that Spotify cannot resolve.
+        If no stored credentials exist yet, we fall back to interactive
+        (browser-based) auth to bypass mDNS entirely.
+        """
+        hostname = socket.gethostname()
+        if not hostname.endswith(".local"):
+            return False
+        creds_file = self._config_dir / "credentials.json"
+        if creds_file.exists() and creds_file.stat().st_size > 0:
+            return False
+        logger.warning(
+            "Hostname '%s' causes .local.local mDNS bug — "
+            "using interactive auth (one-time browser login) instead of zeroconf",
+            hostname,
+        )
+        return True
+
+    def _parse_auth_url_from_log(self) -> str:
+        """Read the go-librespot log and extract the interactive auth URL."""
+        log_path = self.config.tmp_dir / "go-librespot.log"
+        try:
+            text = log_path.read_text()
+        except OSError:
+            return ""
+        match = re.search(r"(https://accounts\.spotify\.com/authorize\S+)", text)
+        return match.group(1) if match else ""
 
     def _resolve_go_librespot_bin(self) -> str:
         """Find a working go-librespot binary even when PATH is stripped down."""

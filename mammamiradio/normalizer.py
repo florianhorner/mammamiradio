@@ -42,6 +42,17 @@ def _run_ffmpeg(cmd: list[str], description: str) -> subprocess.CompletedProcess
     return result
 
 
+def _fmt_num(value: float) -> str:
+    """Format floats for FFmpeg expressions with bounded precision."""
+    return f"{value:.6f}".rstrip("0").rstrip(".")
+
+
+def _gate_after(onset_sec: float) -> str:
+    """Return a lavfi-safe gate expression that is 1 after onset, else 0."""
+    onset = max(0.0, onset_sec)
+    return f"if(gte(t\\,{_fmt_num(onset)})\\,1\\,0)"
+
+
 def normalize(input_path: Path, output_path: Path, config=None) -> Path:
     """Re-encode an input file to the station's target loudness and format."""
     sample_rate = str(config.audio.sample_rate) if config else "48000"
@@ -290,11 +301,11 @@ def _generate_mandolin_sting(output_path: Path, duration_sec: float = 0.5) -> Pa
         "1.0*sin(2*PI*330*t)*exp(-12*t)"
         "+0.5*sin(2*PI*660*t)*exp(-12*t)"
         # Note 2 (A4+A5) — onset at 0.08s
-        "+1.0*sin(2*PI*440*t)*exp(-12*(t-0.08))*(t>0.08)"
-        "+0.5*sin(2*PI*880*t)*exp(-12*(t-0.08))*(t>0.08)"
+        f"+1.0*sin(2*PI*440*t)*exp(-12*(t-0.08))*{_gate_after(0.08)}"
+        f"+0.5*sin(2*PI*880*t)*exp(-12*(t-0.08))*{_gate_after(0.08)}"
         # Note 3 (C#5+C#6) — onset at 0.16s
-        "+1.0*sin(2*PI*554*t)*exp(-15*(t-0.16))*(t>0.16)"
-        "+0.5*sin(2*PI*1108*t)*exp(-15*(t-0.16))*(t>0.16)"
+        f"+1.0*sin(2*PI*554*t)*exp(-15*(t-0.16))*{_gate_after(0.16)}"
+        f"+0.5*sin(2*PI*1108*t)*exp(-15*(t-0.16))*{_gate_after(0.16)}"
     )
     cmd = [
         "ffmpeg",
@@ -537,15 +548,15 @@ def generate_bumper_jingle(output_path: Path, duration_sec: float = 1.5) -> Path
     d = duration_sec
 
     # Melody notes with velocities and staggered onsets
-    # Each note: vel * sin(freq*t) * exp(-decay*(t-onset)) * (t>onset)
+    # Each note: vel * sin(freq*t) * exp(-decay*(t-onset)) * gate(t>=onset)
     # Notes: C5(523), E5(659), G5(784), C6(1047), G5(784), E5(659)
     melody_parts = [
-        f"0.7*sin(2*PI*523*t)*exp(-{1.0 / nd * 3}*(t-0))*(t>0)",
-        f"0.85*sin(2*PI*659*t)*exp(-{1.0 / nd * 3}*(t-{nd}))*((t>{nd}))",
-        f"1.0*sin(2*PI*784*t)*exp(-{1.0 / nd * 3}*(t-{nd * 2}))*((t>{nd * 2}))",
-        f"1.0*sin(2*PI*1047*t)*exp(-{1.0 / nd * 3}*(t-{nd * 3}))*((t>{nd * 3}))",
-        f"0.8*sin(2*PI*784*t)*exp(-{1.0 / nd * 3}*(t-{nd * 4}))*((t>{nd * 4}))",
-        f"0.6*sin(2*PI*659*t)*exp(-{1.0 / (nd * 1.5) * 3}*(t-{nd * 5}))*((t>{nd * 5}))",
+        f"0.7*sin(2*PI*523*t)*exp(-{1.0 / nd * 3}*(t-0))*{_gate_after(0.0)}",
+        f"0.85*sin(2*PI*659*t)*exp(-{1.0 / nd * 3}*(t-{nd}))*{_gate_after(nd)}",
+        f"1.0*sin(2*PI*784*t)*exp(-{1.0 / nd * 3}*(t-{nd * 2}))*{_gate_after(nd * 2)}",
+        f"1.0*sin(2*PI*1047*t)*exp(-{1.0 / nd * 3}*(t-{nd * 3}))*{_gate_after(nd * 3)}",
+        f"0.8*sin(2*PI*784*t)*exp(-{1.0 / nd * 3}*(t-{nd * 4}))*{_gate_after(nd * 4)}",
+        f"0.6*sin(2*PI*659*t)*exp(-{1.0 / (nd * 1.5) * 3}*(t-{nd * 5}))*{_gate_after(nd * 5)}",
     ]
     # Pad: sustained C3(131) + G3(196) with gentle tremolo approximated by AM
     pad_parts = [
@@ -568,7 +579,36 @@ def generate_bumper_jingle(output_path: Path, duration_sec: float = 1.5) -> Path
         str(d),
         str(output_path),
     ]
-    _run_ffmpeg(cmd, "bumper jingle")
+    try:
+        _run_ffmpeg(cmd, "bumper jingle")
+    except subprocess.CalledProcessError:
+        logger.warning("Bumper synthesis fallback: using simpler jingle after aevalsrc failure")
+        fallback_cmd = [
+            "ffmpeg",
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            f"sine=frequency=523:sample_rate=48000:duration={_fmt_num(d)}",
+            "-f",
+            "lavfi",
+            "-i",
+            f"sine=frequency=784:sample_rate=48000:duration={_fmt_num(d)}",
+            "-filter_complex",
+            (
+                "[0:a]volume=0.8[a0];"
+                "[1:a]volume=0.55,adelay=80|80[a1];"
+                "[a0][a1]amix=inputs=2:duration=first,"
+                f"aecho=0.8:0.6:35|70:0.20|0.10,"
+                f"afade=t=in:d={_fmt_num(fade)},"
+                f"afade=t=out:st={_fmt_num(d - fade)}:d={_fmt_num(fade)}"
+            ),
+            *_MP3_OUTPUT_ARGS,
+            "-t",
+            str(d),
+            str(output_path),
+        ]
+        _run_ffmpeg(fallback_cmd, "bumper jingle fallback")
     logger.info("Generated bumper jingle: %s", output_path.name)
     return output_path
 

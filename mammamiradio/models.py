@@ -363,10 +363,14 @@ class StationState:
     last_ad_script: dict = field(default_factory=dict)
     ad_history: deque[AdHistoryEntry] = field(default_factory=lambda: deque(maxlen=20))
     spotify_connected: bool = False
+    spotify_auth_url: str = ""
+    session_stopped: bool = False
     playlist_source: PlaylistSource | None = None
     startup_source_error: str = ""
     # What the listener is hearing RIGHT NOW
     now_streaming: dict = field(default_factory=dict)
+    # Pre-produced segments waiting to play (shadow of asyncio.Queue for UI display)
+    queued_segments: list[dict] = field(default_factory=list)
     # Stream-side log (when segments actually play, not when produced)
     stream_log: deque[SegmentLogEntry] = field(default_factory=lambda: deque(maxlen=50))
     # Home Assistant context (natural language summary of home state)

@@ -63,7 +63,13 @@ async def startup():
         _spotify_player = SpotifyPlayer(config)
         _spotify_player.start()
         spotify_player = _spotify_player
-        logger.info("go-librespot started — select '%s' in your Spotify app to connect", _spotify_player.device_name)
+        if _spotify_player.spotify_auth_url:
+            logger.info("Spotify interactive auth required — visit dashboard to connect")
+        else:
+            logger.info(
+                "go-librespot started — select '%s' in your Spotify app to connect",
+                _spotify_player.device_name,
+            )
     except Exception as e:
         logger.warning("Could not start go-librespot: %s — using fallback audio", e)
 
@@ -86,10 +92,12 @@ async def startup():
         startup_source_error = str(e)
     logger.info("Loaded %d tracks", len(tracks))
 
+    _auth_url = getattr(_spotify_player, "spotify_auth_url", "") if _spotify_player else ""
     state = StationState(
         playlist=tracks,
         playlist_source=playlist_source,
         startup_source_error=startup_source_error,
+        spotify_auth_url=_auth_url,
     )
     queue: asyncio.Queue = asyncio.Queue(maxsize=config.pacing.lookahead_segments + 2)
 

@@ -32,6 +32,7 @@ from mammamiradio.scriptwriter import (
 def config():
     cfg = load_config()
     cfg.anthropic_api_key = "test-key"
+    cfg.openai_api_key = ""
     return cfg
 
 
@@ -54,6 +55,29 @@ def _mock_anthropic_response(text: str):
 
     mock_cls = MagicMock(return_value=mock_client)
     return mock_cls
+
+
+def _mock_openai_response(text: str):
+    """Build a mock OpenAI client whose chat.completions.create returns the given text."""
+    mock_message = MagicMock()
+    mock_message.content = text
+
+    mock_choice = MagicMock()
+    mock_choice.message = mock_message
+
+    mock_usage = MagicMock()
+    mock_usage.prompt_tokens = 11
+    mock_usage.completion_tokens = 7
+
+    mock_response = MagicMock()
+    mock_response.choices = [mock_choice]
+    mock_response.usage = mock_usage
+
+    mock_client = MagicMock()
+    mock_client.chat = MagicMock()
+    mock_client.chat.completions = MagicMock()
+    mock_client.chat.completions.create = MagicMock(return_value=mock_response)
+    return mock_client
 
 
 # --- _build_system_prompt tests ---
@@ -187,6 +211,31 @@ async def test_write_banter_falls_back_on_malformed_json(config, state):
     # Should be fallback copy
     assert isinstance(result[0][0], HostPersonality)
     assert isinstance(result[0][1], str)
+
+
+@pytest.mark.asyncio
+async def test_write_banter_falls_back_to_openai_when_anthropic_fails(config, state):
+    config.openai_api_key = "openai-key"
+    host_name = config.hosts[0].name
+    openai_client = _mock_openai_response(
+        json.dumps({"lines": [{"host": host_name, "text": "OpenAI salva la diretta."}], "new_joke": None})
+    )
+    mock_client = MagicMock()
+    mock_client.messages = MagicMock()
+    mock_client.messages.create = AsyncMock(side_effect=Exception("anthropic invalid"))
+    mock_cls = MagicMock(return_value=mock_client)
+
+    with (
+        patch("mammamiradio.scriptwriter._anthropic_client", None),
+        patch("mammamiradio.scriptwriter._openai_client", None),
+        patch("mammamiradio.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
+        patch("mammamiradio.scriptwriter._get_openai_client", return_value=openai_client),
+    ):
+        result = await write_banter(state, config)
+
+    assert len(result) == 1
+    assert result[0][0].name == host_name
+    assert result[0][1] == "OpenAI salva la diretta."
 
 
 # --- write_ad tests ---
