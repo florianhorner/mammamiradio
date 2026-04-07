@@ -322,7 +322,7 @@ h1 {
 .card p { font-size: 13px; color: rgba(245,237,216,0.65); margin-bottom: 8px; line-height: 1.6; }
 .card-muted { font-size: 11px; color: rgba(245,237,216,0.4); }
 .golden-path-card {
-  border-left: 4px solid rgba(240,200,64,0.75);
+  border-top: 2px solid var(--sun2);
 }
 .golden-path-state {
   font-size: 11px;
@@ -1127,7 +1127,7 @@ function updateCards() {
   gpDetail.textContent = gp.detail || '';
   var stepsHtml = (gp.steps || []).map((s) => '<li>' + escHtml(s) + '</li>').join('');
   if (gp.auth_url) {
-    stepsHtml += '<li><a href="' + escHtml(gp.auth_url) + '" target="_blank" rel="noopener" style="color:var(--accent);text-decoration:underline;font-weight:600">Log in to Spotify &rarr;</a></li>';
+    stepsHtml += '<li><a href="' + escHtml(gp.auth_url) + '" target="_blank" rel="noopener" style="color:var(--sun);text-decoration:underline;font-weight:600">Log in to Spotify &rarr;</a></li>';
   }
   gpSteps.innerHTML = stepsHtml;
 
