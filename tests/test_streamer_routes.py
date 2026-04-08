@@ -163,6 +163,22 @@ async def test_public_status_returns_json():
 
 
 @pytest.mark.asyncio
+async def test_public_status_syncs_spotify_auth_url_from_player():
+    app = _make_test_app()
+    app.state.config.spotify_client_id = "client-id"
+    app.state.config.spotify_client_secret = "client-secret"
+    app.state.spotify_player = type(
+        "FakeSpotifyPlayer", (), {"spotify_auth_url": "https://accounts.spotify.com/authorize?x=1"}
+    )()
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.get("/public-status")
+    assert resp.status_code == 200
+    assert resp.json()["golden_path"]["auth_url"] == "https://accounts.spotify.com/authorize?x=1"
+    assert app.state.station_state.spotify_auth_url == "https://accounts.spotify.com/authorize?x=1"
+
+
+@pytest.mark.asyncio
 async def test_setup_status_returns_onboarding_payload():
     app = _make_test_app()
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
@@ -414,6 +430,18 @@ async def test_capabilities_spotify_username_absent_when_not_connected():
         resp = await client.get("/api/capabilities")
     assert resp.status_code == 200
     assert resp.json()["spotify_username"] == ""
+
+
+@pytest.mark.asyncio
+async def test_capabilities_openai_only_marks_ai_as_available():
+    app = _make_test_app()
+    app.state.config.openai_api_key = "openai-key"
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.get("/api/capabilities")
+    assert resp.status_code == 200
+    assert resp.json()["capabilities"]["anthropic"] is True
+    assert resp.json()["next_step"]["key"] != "add_ai_key"
 
 
 @pytest.mark.asyncio

@@ -168,6 +168,16 @@ def _golden_path_status(config, state) -> dict:
     }
 
 
+def _sync_runtime_state(request: Request) -> None:
+    """Refresh UI-facing state from long-lived runtime backends."""
+    state = request.app.state.station_state
+    spotify_player = getattr(request.app.state, "spotify_player", None)
+    if spotify_player:
+        auth_url = getattr(spotify_player, "spotify_auth_url", "") or ""
+        if auth_url and state.spotify_auth_url != auth_url:
+            state.spotify_auth_url = auth_url
+
+
 def _apply_loaded_source(
     request,
     tracks: list,
@@ -187,6 +197,7 @@ def _apply_loaded_source(
 
     # Immediate cutover: purge queued segments and skip current playback
     purged = _purge_segment_queue(request.app.state.queue)
+    state.queued_segments.clear()
     skipped = False
     if state.now_streaming:
         request.app.state.skip_event.set()
@@ -756,6 +767,7 @@ async def capabilities(request: Request, _: None = Depends(require_admin_access)
     The dashboard uses these flags to show/hide cards and determine the
     current feature tier (Demo Radio / Your Music / Full AI Radio).
     """
+    _sync_runtime_state(request)
     config = request.app.state.config
     state = request.app.state.station_state
     caps = get_capabilities(config, state)
@@ -1192,9 +1204,13 @@ async def move_to_next(request: Request, _: None = Depends(require_admin_access)
     if 0 <= idx < len(pl):
         track = pl.pop(idx)
         pl.insert(0, track)
-        # Force the scheduler to pick music next so this track actually plays
+        # Invalidate any in-flight generation, then flush buffered lookahead so
+        # the reordered track really is next.
+        state.playlist_revision += 1
+        purged = _purge_segment_queue(request.app.state.queue)
+        state.queued_segments.clear()
         state.force_next = SegmentType.MUSIC
-        return {"ok": True, "moved": track.display, "to_position": 0}
+        return {"ok": True, "moved": track.display, "to_position": 0, "purged": purged}
     return {"ok": False, "error": "Invalid index"}
 
 
@@ -1249,6 +1265,7 @@ async def reset_host_personality(host_name: str, request: Request, _: None = Dep
 
 def _public_status_payload(request: Request) -> dict:
     """Build the read-only status payload shared by public and admin APIs."""
+    _sync_runtime_state(request)
     state = request.app.state.station_state
     config = request.app.state.config
     return {

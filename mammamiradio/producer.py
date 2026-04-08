@@ -40,6 +40,7 @@ from mammamiradio.scheduler import next_segment_type
 from mammamiradio.scriptwriter import (
     AD_BREAK_INTROS,
     AD_BREAK_OUTROS,
+    _has_script_llm,
     write_ad,
     write_banter,
     write_news_flash,
@@ -338,6 +339,16 @@ async def run_producer(
     """Keep the lookahead queue filled with rendered segments for live playback."""
     logger.info("Producer started. Playlist: %d tracks", len(state.playlist))
 
+    async def _queue_segment(segment: Segment) -> bool:
+        """Queue a segment unless the operator stopped the session mid-generation."""
+        if state.session_stopped:
+            if segment.ephemeral:
+                segment.path.unlink(missing_ok=True)
+            logger.info("Discarding %s because the session is stopped", segment.type.value)
+            return False
+        await queue.put(segment)
+        return True
+
     # Home Assistant context cache
     ha_cache: HomeContext | None = None
 
@@ -371,13 +382,14 @@ async def run_producer(
                             discarded.path.unlink(missing_ok=True)
                     except Exception:
                         break
+                state.queued_segments.clear()
 
                 norm_path = config.tmp_dir / f"music_{uuid4().hex[:8]}.mp3"
 
                 # Generate banter about THIS specific song while capturing audio
                 async def _generate_welcome_banter(track=current):
                     try:
-                        canned = _pick_canned_clip("banter", state=state) if not config.anthropic_api_key else None
+                        canned = _pick_canned_clip("banter", state=state) if not _has_script_llm(config) else None
                         if canned:
                             state.last_banter_script = [{"host": "Radio", "text": "(pre-recorded banter)"}]
                             return canned
@@ -400,9 +412,9 @@ async def run_producer(
                             metadata={"type": "welcome", "canned": True},
                             ephemeral=False,
                         )
-                        await queue.put(welcome_seg)
-                        state.after_banter()
-                        logger.info("Welcome clip queued: %s", welcome_clip.name)
+                        if await _queue_segment(welcome_seg):
+                            state.after_banter()
+                            logger.info("Welcome clip queued: %s", welcome_clip.name)
 
                     # Run capture and banter in parallel, but don't block the
                     # queue on capture — enqueue segments as they become ready
@@ -421,9 +433,9 @@ async def run_producer(
                             metadata={"type": "banter", "lines": state.last_banter_script},
                             ephemeral=not _is_canned,
                         )
-                        await queue.put(banter_seg)
-                        state.after_banter()
-                        logger.info("Welcome banter queued after welcome clip")
+                        if await _queue_segment(banter_seg):
+                            state.after_banter()
+                            logger.info("Welcome banter queued after welcome clip")
 
                     # Now wait for capture to finish and queue the music
                     audio_path = await capture_task
@@ -432,9 +444,9 @@ async def run_producer(
                         path=audio_path,
                         metadata={"title": current.display, "album_art": current.album_art},
                     )
-                    await queue.put(music_seg)
-                    state.after_music(current)
-                    logger.info("Autoplay queued: %s", current.display)
+                    if await _queue_segment(music_seg):
+                        state.after_music(current)
+                        logger.info("Autoplay queued: %s", current.display)
                 except Exception as exc:
                     logger.warning("Autoplay failed: %s", exc)
                     was_spotify_connected = False  # allow retry on next loop
@@ -556,7 +568,7 @@ async def run_producer(
                 impossible_tts = False
                 canned = None
 
-                if not (config.anthropic_api_key or config.openai_api_key):
+                if not _has_script_llm(config):
                     # No LLM — use canned clips + impossible TTS lines
                     if _is_new_listener:
                         line = generate_impossible_line(
@@ -1040,12 +1052,13 @@ async def run_producer(
                 logger.info("Discarding stale %s segment after playlist source switch", seg_type.value)
                 segment.path.unlink(missing_ok=True)
                 continue
+            if not await _queue_segment(segment):
+                continue
+            state.queued_segments.append(
+                {"type": seg_type.value, "label": segment.metadata.get("title", seg_type.value)}
+            )
             if "error" not in segment.metadata:
                 if success_callback:
                     success_callback()
                 state.failed_segments = 0  # Reset backoff on success
-            await queue.put(segment)
-            state.queued_segments.append(
-                {"type": seg_type.value, "label": segment.metadata.get("title", seg_type.value)}
-            )
             logger.info("Queued %s (queue size: %d)", seg_type.value, queue.qsize())

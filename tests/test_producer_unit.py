@@ -207,6 +207,52 @@ async def test_source_switch_discards_stale_music_segment(tmp_path):
                 pass
 
 
+@pytest.mark.asyncio
+async def test_stopped_session_discards_finished_segment_without_advancing_state(tmp_path):
+    """A segment finished after /stop should be dropped without mutating playback state."""
+    track = Track(title="Late Song", artist="Late Artist", duration_ms=200_000, spotify_id="late1")
+    state = StationState(playlist=[track])
+    config = _make_config()
+    config.tmp_dir = tmp_path
+    config.cache_dir = tmp_path
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+
+    download_started = asyncio.Event()
+    allow_download_finish = asyncio.Event()
+    source_audio = tmp_path / "source.mp3"
+    source_audio.write_bytes(b"fake audio")
+
+    async def fake_download(*_args, **_kwargs):
+        download_started.set()
+        await allow_download_finish.wait()
+        return source_audio
+
+    def fake_normalize(src: Path, dst: Path) -> None:
+        dst.write_bytes(Path(src).read_bytes())
+
+    with (
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.MUSIC),
+        patch(f"{PRODUCER_MODULE}.download_track", new_callable=AsyncMock, side_effect=fake_download),
+        patch(f"{PRODUCER_MODULE}.normalize", side_effect=fake_normalize),
+        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+    ):
+        task = asyncio.create_task(run_producer(queue, state, config))
+        try:
+            await asyncio.wait_for(download_started.wait(), timeout=1.0)
+            state.session_stopped = True
+            allow_download_finish.set()
+            await asyncio.sleep(0.1)
+            assert queue.empty()
+            assert len(state.played_tracks) == 0
+            assert state.segments_produced == 0
+        finally:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+
 # ---------------------------------------------------------------------------
 # Shareware trial: canned clip limit
 # ---------------------------------------------------------------------------

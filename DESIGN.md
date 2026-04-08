@@ -575,9 +575,28 @@ cross (✗), or circle (○). Color alone is never sufficient for status communi
 
 ## Listener page
 
-`listener.html` is the public-facing stream page. It shares the brand but is simpler —
-no admin controls, no dial animation. When restyling, apply the same Volare palette
-but check that the stream embed and now-playing elements remain fully functional.
+`listener.html` is the public-facing stream page with a **dark late-night palette** —
+intentionally different from the warm sunset dashboard. No admin controls, no dial.
+
+### Listener palette (`:root` in listener.html)
+
+```css
+--bg:         #2a2320;     /* dark background */
+--bg2:        #3d3530;     /* card surfaces */
+--cream:      #F5EDD8;     /* text — matches dashboard */
+--cream-dk:   #EADDC4;     /* secondary text — matches dashboard */
+--terracotta: #c4654a;     /* primary accent (play button, on-air dot) */
+--dusty-rose: #d4917a;     /* secondary accent */
+--sage:       #8a7e6d;     /* warm taupe — volume slider, borders (NOT green, colorblind-safe) */
+--highlight:  #faf3eb;     /* headings */
+--muted:      #b0a494;     /* tertiary text */
+```
+
+**Rules:**
+- `--cream` and `--cream-dk` MUST match the dashboard values exactly.
+- `--sage` is a warm taupe, never green. The original `#7a8f6d` was green and violated
+  the colorblind rule. Current `#8a7e6d` is safe.
+- Font stack MUST include `-apple-system` fallback, matching dashboard.
 
 ---
 
