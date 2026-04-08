@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.1.0
+
+### Added
+
+- Impossible moments: time-aware, listener-aware banter that works without Spotify or Home Assistant
+- New listener greeting: DJ acknowledges when someone tunes in
+- Listener connection tracking on admin status API
+
 ## 2.0.2
 
 ### Added

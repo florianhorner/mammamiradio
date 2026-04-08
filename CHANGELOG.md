@@ -4,6 +4,16 @@ All notable changes to `mammamiradio` are documented here.
 
 The current version source of truth is `pyproject.toml`.
 
+## [2.1.0] - 2026-04-08
+
+### Added
+
+- **Impossible moments (zero-config)**: time-of-day, day-of-week, and listener-behavior-aware banter that works at every tier, no Spotify or Home Assistant required. The DJ knows what time it is and whether you just tuned in.
+- **"Benvenuto" new listener greeting**: when someone connects to the stream, the next banter segment acknowledges them. First listener gets a special welcome. Works via TTS (no LLM) or through the LLM prompt when an API key is present.
+- **Listener connection tracking**: `LiveStreamHub` now tracks active, peak, and total listener counts. Exposed on the `/status` admin API under `listeners`.
+- **40+ pre-written Italian impossible lines** in `context_cues.py`: tagged by show segment (alba, mattina, pranzo, pomeriggio, sera, notte), day-of-week, and listener behavior pattern (restless_skipper, ballad_lover, energy_seeker, rides_every_song).
+- **Shareware gold closer**: the 3rd demo banter clip is now a time-aware TTS line instead of a pre-recorded clip, selling differentiation over quality in the trial experience.
+
 ## [2.0.2] - 2026-04-06
 
 ### Added
