@@ -1190,7 +1190,9 @@ async def move_to_next(request: Request, _: None = Depends(require_admin_access)
     if 0 <= idx < len(pl):
         track = pl.pop(idx)
         pl.insert(0, track)
-        # Flush buffered lookahead so the reordered track is actually next.
+        # Invalidate any in-flight generation, then flush buffered lookahead so
+        # the reordered track really is next.
+        state.playlist_revision += 1
         purged = _purge_segment_queue(request.app.state.queue)
         state.queued_segments.clear()
         state.force_next = SegmentType.MUSIC

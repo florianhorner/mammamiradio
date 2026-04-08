@@ -251,6 +251,7 @@ async def test_move_to_next_valid(tmp_path):
     queued_file.write_bytes(b"queued")
     app.state.queue.put_nowait(Segment(type=SegmentType.BANTER, path=queued_file, metadata={"title": "Queued"}))
     app.state.station_state.queued_segments = [{"type": "banter", "label": "Queued"}]
+    starting_revision = app.state.station_state.playlist_revision
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
         resp = await client.post("/api/playlist/move_to_next", json={"index": 2})
@@ -260,6 +261,7 @@ async def test_move_to_next_valid(tmp_path):
     assert body["purged"] == 1
     assert app.state.station_state.playlist[0].title == "Song C"
     assert app.state.station_state.force_next == SegmentType.MUSIC
+    assert app.state.station_state.playlist_revision == starting_revision + 1
     assert app.state.station_state.queued_segments == []
     assert app.state.queue.qsize() == 0
     assert not queued_file.exists()

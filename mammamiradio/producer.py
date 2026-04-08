@@ -950,13 +950,13 @@ async def run_producer(
                 logger.info("Discarding stale %s segment after playlist source switch", seg_type.value)
                 segment.path.unlink(missing_ok=True)
                 continue
-            if "error" not in segment.metadata:
-                if success_callback:
-                    success_callback()
-                state.failed_segments = 0  # Reset backoff on success
             if not await _queue_segment(segment):
                 continue
             state.queued_segments.append(
                 {"type": seg_type.value, "label": segment.metadata.get("title", seg_type.value)}
             )
+            if "error" not in segment.metadata:
+                if success_callback:
+                    success_callback()
+                state.failed_segments = 0  # Reset backoff on success
             logger.info("Queued %s (queue size: %d)", seg_type.value, queue.qsize())
