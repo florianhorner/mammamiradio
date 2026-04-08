@@ -18,7 +18,8 @@ Add-on repository for [mammamiradio](https://github.com/florianhorner/mammamirad
 
 After installing, go to the add-on's **Configuration** tab:
 
-- **Anthropic API Key** (optional): Enables AI-generated banter and ads. Get one at [console.anthropic.com](https://console.anthropic.com). Without this, the station uses stock banter lines.
+- **Anthropic API Key** (optional): Enables Claude-generated banter and ads. Get one at [console.anthropic.com](https://console.anthropic.com). Without this, the station uses stock banter lines.
+- **OpenAI API Key** (optional): Enables OpenAI `gpt-4o-mini-tts` host voices and serves as a script generation fallback when Anthropic is unavailable.
 - **Spotify Client ID / Secret**: From [developer.spotify.com](https://developer.spotify.com/dashboard). Without these, the station uses a built-in demo Italian playlist.
 - **Station Name**: Customize your station's name (default: "Malamie Radio").
 - **Spotify Playlist URL**: The public playlist to use on first run. In add-on mode this is the reliable path because browser-based user OAuth is not part of the add-on flow.
@@ -27,12 +28,9 @@ After installing, go to the add-on's **Configuration** tab:
 
 1. Start the add-on
 2. Click **Open Web UI** in the sidebar (or the add-on info page)
-3. Follow the same four setup steps shown in the dashboard:
-   - choose the `Home Assistant add-on` run mode
-   - connect Spotify credentials and a playlist URL
-   - run the preflight checks
-   - confirm whether the station is in `Real Spotify Mode`, `Demo Mode`, or `Degraded`
-4. Use the add-on's `/stream` endpoint with HA media players once the mode banner matches what you expect
+3. The dashboard shows your station's current tier (Demo Radio, Your Music, or Full AI Radio) and a golden path guide for what to set up next
+4. Connect Spotify credentials and a playlist URL to unlock real music
+5. Use the add-on's `/stream` endpoint with HA media players once the dashboard shows the tier you expect
 
 The add-on also exposes unauthenticated `/healthz` and `/readyz` probes for monitoring. The richer setup checks live behind the admin UI at `/api/setup/status`, `/api/setup/recheck`, and `/api/setup/addon-snippet`.
 
@@ -65,5 +63,6 @@ The listener page is a clean, mobile-friendly player for anyone on your network:
 
 - Streams a continuous AI-generated Italian radio station
 - Hosts reference your actual Home Assistant state (lights, temperature, who's home)
+- Remembers returning listeners across sessions with compounding persona memory
 - Rotates between music, host banter, and absurd fake Italian ads
 - Falls back gracefully when optional services are unavailable

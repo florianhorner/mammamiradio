@@ -11,6 +11,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Install ffmpeg
         run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
@@ -34,5 +36,24 @@ jobs:
       - name: Mypy
         run: mypy mammamiradio/ tests/
 
-      - name: Pytest
-        run: pytest -n auto --cov=mammamiradio --cov-report=term-missing --cov-fail-under=60
+      # On PRs: enforce per-module coverage floors (no regressions allowed)
+      - name: Coverage gate (per-module floors)
+        if: github.event_name == 'pull_request'
+        run: python scripts/coverage-ratchet.py check
+
+      # On main: auto-ratchet floors up and commit if changed
+      - name: Coverage ratchet (auto-update floors)
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        run: |
+          python scripts/coverage-ratchet.py update
+
+          # If floors changed, commit them back
+          if ! git diff --quiet .coverage-floors.json pyproject.toml; then
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add .coverage-floors.json pyproject.toml
+            git commit -m "ci: auto-ratchet coverage floors
+
+          Co-Authored-By: github-actions[bot] <github-actions[bot]@users.noreply.github.com>"
+            git push
+          fi
