@@ -145,6 +145,19 @@ tests/                pytest coverage
 - **Local check**: `make coverage-check` to verify locally. `make coverage-ratchet` to preview what CI would commit.
 - **Adding tests**: Write tests, push. CI will auto-raise the floors on merge. The next PR that drops any module will fail.
 
+## Review discipline
+
+For every bug fix or behavior change, do not stop at the first broken instance.
+
+- Identify the user-visible promise or system invariant that failed.
+- Check sibling code paths for the same failure mode before concluding the fix is done.
+- Add or update at least one automated guard (test, validation, or build check) that would fail if the invariant breaks again.
+- If duplicated state exists, explain what keeps it synchronized. If you cannot name the synchronization boundary, treat that as a design risk and either remove the duplication or add a guard around it.
+
+Review question to apply before merge:
+
+`What invariant failed here, where else could it fail the same way, and what automated check will catch the next instance before a user does?`
+
 ## Skill routing
 
 When the user's request matches an available skill, ALWAYS invoke it using the Skill

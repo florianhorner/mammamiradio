@@ -17,7 +17,7 @@ from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Stre
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 
 from mammamiradio.capabilities import capabilities_to_dict, get_capabilities
-from mammamiradio.models import PersonalityAxes, PlaylistSource, Segment, SegmentType
+from mammamiradio.models import PersonalityAxes, PlaylistSource, Segment, SegmentType, StationState
 from mammamiradio.playlist import (
     ExplicitSourceError,
     list_user_playlists,
@@ -168,6 +168,16 @@ def _golden_path_status(config, state) -> dict:
     }
 
 
+def _sync_runtime_state(request: Request) -> None:
+    """Refresh UI-facing state from long-lived runtime backends."""
+    state = request.app.state.station_state
+    spotify_player = getattr(request.app.state, "spotify_player", None)
+    if spotify_player:
+        auth_url = getattr(spotify_player, "spotify_auth_url", "") or ""
+        if auth_url and state.spotify_auth_url != auth_url:
+            state.spotify_auth_url = auth_url
+
+
 def _apply_loaded_source(
     request,
     tracks: list,
@@ -187,6 +197,7 @@ def _apply_loaded_source(
 
     # Immediate cutover: purge queued segments and skip current playback
     purged = _purge_segment_queue(request.app.state.queue)
+    state.queued_segments.clear()
     skipped = False
     if state.now_streaming:
         request.app.state.skip_event.set()
@@ -335,6 +346,11 @@ class LiveStreamHub:
         self._listener_queue_size = listener_queue_size
         self._listeners: dict[int, asyncio.Queue[bytes | None]] = {}
         self._next_listener_id = 0
+        self._state: StationState | None = None
+
+    def bind_state(self, state: StationState) -> None:
+        """Attach station state for listener tracking. Call once at startup."""
+        self._state = state
 
     def subscribe(self) -> tuple[int, asyncio.Queue[bytes | None]]:
         """Register a listener and return its dedicated chunk queue."""
@@ -342,13 +358,22 @@ class LiveStreamHub:
         self._next_listener_id += 1
         queue: asyncio.Queue[bytes | None] = asyncio.Queue(maxsize=self._listener_queue_size)
         self._listeners[listener_id] = queue
-        logger.info("Listener connected (%d active)", len(self._listeners))
+        active = len(self._listeners)
+        logger.info("Listener connected (%d active)", active)
+        if self._state is not None:
+            self._state.listeners_active = active
+            self._state.listeners_total += 1
+            self._state.listeners_peak = max(self._state.listeners_peak, active)
+            self._state.new_listeners_pending += 1
         return listener_id, queue
 
     def unsubscribe(self, listener_id: int) -> None:
         """Remove a listener and drop any future broadcast work for it."""
         if self._listeners.pop(listener_id, None) is not None:
-            logger.info("Listener disconnected (%d active)", len(self._listeners))
+            active = len(self._listeners)
+            logger.info("Listener disconnected (%d active)", active)
+            if self._state is not None:
+                self._state.listeners_active = active
 
     def has_listener(self, listener_id: int) -> bool:
         """Return whether a listener is still subscribed."""
@@ -742,6 +767,7 @@ async def capabilities(request: Request, _: None = Depends(require_admin_access)
     The dashboard uses these flags to show/hide cards and determine the
     current feature tier (Demo Radio / Your Music / Full AI Radio).
     """
+    _sync_runtime_state(request)
     config = request.app.state.config
     state = request.app.state.station_state
     caps = get_capabilities(config, state)
@@ -1178,9 +1204,13 @@ async def move_to_next(request: Request, _: None = Depends(require_admin_access)
     if 0 <= idx < len(pl):
         track = pl.pop(idx)
         pl.insert(0, track)
-        # Force the scheduler to pick music next so this track actually plays
+        # Invalidate any in-flight generation, then flush buffered lookahead so
+        # the reordered track really is next.
+        state.playlist_revision += 1
+        purged = _purge_segment_queue(request.app.state.queue)
+        state.queued_segments.clear()
         state.force_next = SegmentType.MUSIC
-        return {"ok": True, "moved": track.display, "to_position": 0}
+        return {"ok": True, "moved": track.display, "to_position": 0, "purged": purged}
     return {"ok": False, "error": "Invalid index"}
 
 
@@ -1235,6 +1265,7 @@ async def reset_host_personality(host_name: str, request: Request, _: None = Dep
 
 def _public_status_payload(request: Request) -> dict:
     """Build the read-only status payload shared by public and admin APIs."""
+    _sync_runtime_state(request)
     state = request.app.state.station_state
     config = request.app.state.config
     return {
@@ -1321,6 +1352,11 @@ async def status(request: Request, _: None = Depends(require_admin_access)):
                 "input_tokens": state.api_input_tokens,
                 "output_tokens": state.api_output_tokens,
                 "tts_characters": state.tts_characters,
+            },
+            "listeners": {
+                "active": state.listeners_active,
+                "peak": state.listeners_peak,
+                "total": state.listeners_total,
             },
             "force_pending": state.force_next.value if state.force_next else None,
             "session_stopped": state.session_stopped,

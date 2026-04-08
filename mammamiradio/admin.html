@@ -84,7 +84,7 @@ h1 {
   border-top: 2px solid var(--sun2);
   border-radius: 10px;
   padding: 18px 20px;
-  margin-bottom: 14px;
+  margin-bottom: 12px;
 }
 .card-label {
   font-size: 9px; font-weight: 600; letter-spacing: 0.18em; text-transform: uppercase;
@@ -293,9 +293,9 @@ h1 {
 .section-divider { height: 1px; background: rgba(245,237,216,0.08); margin: 4px 0 12px; }
 
 /* ── STOP/RESUME ── */
-.btn-stop { background: var(--error); color: var(--cream); }
+.btn-stop { background: var(--error); color: var(--cream); min-height: 44px; }
 .btn-stop:hover { background: #d45555; }
-.btn-resume { background: var(--ok); color: var(--cream); }
+.btn-resume { background: var(--ok); color: var(--cream); min-height: 44px; }
 .btn-resume:hover { background: #3b7bff; }
 .stopped-banner { background: rgba(196,74,74,0.2); border: 1px solid rgba(196,74,74,0.4); border-radius: 8px; padding: 10px 14px; margin-bottom: 14px; text-align: center; font-size: 13px; font-weight: 600; color: var(--error); display: none; }
 .stopped-banner.show { display: block; }
@@ -306,8 +306,7 @@ h1 {
 .pace-counter strong { color: var(--sun); font-weight: 600; }
 
 /* ── HOST AXIS LABELS ── */
-.ha-labels { display: flex; justify-content: space-between; font-size: 9px; color: rgba(245,237,216,0.3); margin-top: -2px; margin-bottom: 2px; padding: 0 64px 0 0; }
-.ha-labels span:first-child { padding-left: 58px; }
+.ha-labels { display: flex; justify-content: space-between; font-size: 9px; color: rgba(245,237,216,0.3); margin-top: -2px; margin-bottom: 2px; padding: 0 22px 0 58px; }
 
 /* ── FORCE PENDING ── */
 .force-badge { font-size: 9px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; padding: 1px 7px; border-radius: 8px; background: rgba(244,208,72,0.2); color: var(--sun); margin-left: 4px; }

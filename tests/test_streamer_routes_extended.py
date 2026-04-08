@@ -14,7 +14,7 @@ import pytest
 from fastapi import FastAPI
 
 from mammamiradio.config import load_config
-from mammamiradio.models import Segment, SegmentType, StationState, Track
+from mammamiradio.models import PlaylistSource, Segment, SegmentType, StationState, Track
 from mammamiradio.streamer import LiveStreamHub, router
 
 TOML_PATH = str(Path(__file__).parent.parent / "radio.toml")
@@ -245,15 +245,26 @@ async def test_move_track_invalid_indices():
 
 
 @pytest.mark.asyncio
-async def test_move_to_next_valid():
+async def test_move_to_next_valid(tmp_path):
     app = _make_test_app()
+    queued_file = tmp_path / "queued-next.mp3"
+    queued_file.write_bytes(b"queued")
+    app.state.queue.put_nowait(Segment(type=SegmentType.BANTER, path=queued_file, metadata={"title": "Queued"}))
+    app.state.station_state.queued_segments = [{"type": "banter", "label": "Queued"}]
+    starting_revision = app.state.station_state.playlist_revision
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
         resp = await client.post("/api/playlist/move_to_next", json={"index": 2})
     assert resp.status_code == 200
     body = resp.json()
     assert body["ok"] is True
+    assert body["purged"] == 1
     assert app.state.station_state.playlist[0].title == "Song C"
+    assert app.state.station_state.force_next == SegmentType.MUSIC
+    assert app.state.station_state.playlist_revision == starting_revision + 1
+    assert app.state.station_state.queued_segments == []
+    assert app.state.queue.qsize() == 0
+    assert not queued_file.exists()
 
 
 @pytest.mark.asyncio
@@ -264,6 +275,29 @@ async def test_move_to_next_invalid():
         resp = await client.post("/api/playlist/move_to_next", json={"index": 99})
     assert resp.status_code == 200
     assert resp.json()["ok"] is False
+
+
+@pytest.mark.asyncio
+async def test_load_playlist_clears_shadow_upcoming_after_purge(tmp_path):
+    app = _make_test_app()
+    queued_file = tmp_path / "queued.mp3"
+    queued_file.write_bytes(b"queued")
+    app.state.queue.put_nowait(Segment(type=SegmentType.MUSIC, path=queued_file, metadata={"title": "Queued Song"}))
+    app.state.station_state.queued_segments = [{"type": "music", "label": "Queued Song"}]
+    loaded_tracks = [Track(title="Fresh Song", artist="Fresh Artist", duration_ms=180_000, spotify_id="fresh1")]
+    resolved_source = PlaylistSource(kind="url", url="https://open.spotify.com/playlist/test", label="Fresh playlist")
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    with (
+        patch("mammamiradio.streamer.load_explicit_source", return_value=(loaded_tracks, resolved_source)),
+        patch("mammamiradio.streamer.write_persisted_source"),
+    ):
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            resp = await client.post("/api/playlist/load", json={"url": resolved_source.url})
+    assert resp.status_code == 200
+    assert resp.json()["ok"] is True
+    assert app.state.station_state.queued_segments == []
+    assert app.state.queue.qsize() == 0
+    assert not queued_file.exists()
 
 
 # ---------------------------------------------------------------------------

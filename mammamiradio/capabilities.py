@@ -17,7 +17,7 @@ def get_capabilities(config: StationConfig, state: StationState) -> Capabilities
     return Capabilities(
         spotify_connected=state.spotify_connected,
         spotify_api=bool(config.spotify_client_id and config.spotify_client_secret),
-        anthropic=bool(config.anthropic_api_key),
+        anthropic=bool(config.anthropic_api_key or config.openai_api_key),
         ha=bool(config.homeassistant.enabled and config.ha_token),
     )
 
