@@ -30,6 +30,8 @@ The public listener at `/listen` is an art-deco styled player with now-playing i
 - Auto-transfers Spotify playback to the `mammamiradio` device when possible
 - Lets hosts reference live Home Assistant state when enabled
 - Supports playlist mutation from the dashboard: shuffle, skip, purge, remove, reorder, play-next
+- Stop and resume sessions from the admin control room
+- Remembers returning listeners across sessions with compounding persona memory
 
 ## Documentation
 
@@ -112,8 +114,8 @@ The app now treats first run as setup, not as "the dashboard happened to load". 
 - FFmpeg
 - Spotify client credentials (client ID and secret from [Spotify Developer Dashboard](https://developer.spotify.com/dashboard))
 - go-librespot, for real Spotify device playback and capture
-- Optional: Anthropic API key, for Claude-generated banter and ads (falls back to stock copy without it)
-- Optional: OpenAI API key, for `gpt-4o-mini-tts` host voices (falls back to Edge TTS without it)
+- Optional: Anthropic API key, for Claude-generated banter and ads (falls back to OpenAI or stock copy without it)
+- Optional: OpenAI API key, for `gpt-4o-mini-tts` host voices and as a script generation fallback when Anthropic is unavailable
 - Optional: Home Assistant long-lived token, for ambient home-state references in scripts
 
 > **How the Spotify pieces fit together:**
@@ -143,6 +145,7 @@ ADMIN_PASSWORD=
 ADMIN_TOKEN=
 SPOTIFY_CLIENT_ID=
 SPOTIFY_CLIENT_SECRET=
+MAMMAMIRADIO_SPOTIFY_REDIRECT_BASE_URL=
 ANTHROPIC_API_KEY=
 OPENAI_API_KEY=
 HA_TOKEN=
@@ -239,7 +242,7 @@ The station is intentionally resilient:
 | --- | --- |
 | Spotify client credentials | Uses a built-in demo Italian playlist |
 | go-librespot or Spotify device connection | Falls back to local files, then `yt-dlp`, then placeholder audio |
-| Anthropic API key or Claude request failure | Uses simple fallback banter or ad copy |
+| Anthropic API key or Claude request failure | Falls back to OpenAI `gpt-4o-mini` if `OPENAI_API_KEY` is set, then to stock copy |
 | OpenAI API key missing or request failure | Falls back to Edge TTS voice for that host |
 | Home Assistant token or API failure | Continues without home context |
 | Ad brands missing | Skips ad generation instead of failing startup |
@@ -299,6 +302,8 @@ The Home Assistant token is never stored in `radio.toml`. Set it via `HA_TOKEN` 
 | `/api/setup/save-keys` | POST | Admin | Save API keys via dashboard |
 | `/api/capabilities` | GET | Public | Capability flags, tier, next-step hint, connect status |
 | `/api/trigger` | POST | Admin | Trigger segment production |
+| `/api/stop` | POST | Admin | Gracefully stop the session (skip + purge + pause producer) |
+| `/api/resume` | POST | Admin | Resume a stopped session |
 | `/api/credentials` | POST | Admin | Update credentials at runtime |
 
 ## Admin access
@@ -325,7 +330,7 @@ mammamiradio/
   spotify_player.py   go-librespot process + FIFO capture
   playlist.py         Spotify playlist fetch + demo fallback
   downloader.py       local file / yt-dlp / placeholder fallback
-  scriptwriter.py     Claude prompts for banter and ads
+  scriptwriter.py     Anthropic/OpenAI prompts for banter and ads
   tts.py              TTS synthesis (Edge TTS + OpenAI gpt-4o-mini-tts)
   normalizer.py       FFmpeg helpers
   ha_context.py       Home Assistant polling and formatting

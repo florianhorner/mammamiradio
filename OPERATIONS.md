@@ -31,6 +31,8 @@ Environment:
 - `SPOTIFY_CLIENT_ID`
 - `SPOTIFY_CLIENT_SECRET`
 - `ANTHROPIC_API_KEY`
+- `OPENAI_API_KEY` (optional, used for TTS and as script generation fallback)
+- `MAMMAMIRADIO_SPOTIFY_REDIRECT_BASE_URL` (optional, for stable HTTPS OAuth callbacks)
 - `HA_TOKEN` if Home Assistant integration is enabled
 
 Static config:
@@ -109,6 +111,8 @@ Admin routes:
 - `/api/capabilities`
 - `/api/credentials`
 - `/api/trigger`
+- `/api/stop`
+- `/api/resume`
 - `/api/spotify/source-options`
 - `/api/spotify/source/select`
 

@@ -9,7 +9,7 @@ Do the local setup, run targeted tests, then do a quick listen-through.
 - Python 3.11+
 - FFmpeg on your `PATH`
 - go-librespot if you want to test real Spotify playback
-- Spotify and Anthropic credentials if you want the full happy path
+- Spotify, Anthropic, and optionally OpenAI credentials if you want the full happy path
 
 You can still work on config, scheduler, most routes, and documentation without Spotify credentials. The app falls back to demo tracks when Spotify is not configured.
 
@@ -35,7 +35,8 @@ These files are part of the repo contract and should stay in git. Runtime artifa
 Then fill in whatever `.env` values you need:
 
 - `SPOTIFY_CLIENT_ID` / `SPOTIFY_CLIENT_SECRET` for Spotify playlist access and playback transfer
-- `ANTHROPIC_API_KEY` for banter and ad script generation
+- `ANTHROPIC_API_KEY` for banter and ad script generation (falls back to OpenAI if unavailable)
+- `OPENAI_API_KEY` for TTS voices and as a script generation fallback
 - `HA_TOKEN` for Home Assistant prompt context
 - `ADMIN_PASSWORD` or `ADMIN_TOKEN` if you plan to bind outside localhost
 

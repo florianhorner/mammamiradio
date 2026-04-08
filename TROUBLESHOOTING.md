@@ -93,6 +93,14 @@ tail -n 100 tmp/go-librespot.log
 
 On Apple Silicon or stripped `PATH` environments, the setup checker now also searches common binary locations like `/opt/homebrew/bin/go-librespot`. If the dashboard still says the binary is missing, that path is probably wrong or the file is not executable.
 
+## Spotify device not found on macOS (.local.local mDNS bug)
+
+If your Mac's hostname ends with `.local` (e.g., `MyMac.local`), go-librespot's mDNS advertises a `.local.local` address that Spotify cannot resolve. The app detects this and switches to interactive browser-based auth automatically.
+
+When this happens, the dashboard shows a "Log in to Spotify" button instead of the usual "Connect in Spotify" prompt. Click it, log in once, and the app stores credentials for future sessions.
+
+If you want to fix this at the system level instead, change your Mac's hostname to not end in `.local` (System Settings > General > Sharing > Local Hostname).
+
 ## `cat /data/go-librespot/config.yml` says "No such file or directory"
 
 That path only exists in Home Assistant add-on mode, inside the add-on container.
@@ -124,11 +132,13 @@ If you bypass `./start.sh`, you lose part of that protection. Use the script.
 
 ## The stream works but banter or ads are bland
 
-That usually means Claude generation failed and the app fell back to stock copy.
+That usually means script generation failed and the app fell back to stock copy.
+
+The app tries Anthropic first, then falls back to OpenAI `gpt-4o-mini` if `OPENAI_API_KEY` is set, then to stock lines.
 
 Check:
 
-- `ANTHROPIC_API_KEY` is set
+- `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` is set (at least one is needed for AI-generated content)
 - outbound network access is available
 - `/status` or the dashboard shows recent producer errors
 

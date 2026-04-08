@@ -54,7 +54,7 @@ Spotify playlist / liked songs / demo tracks
   - otherwise falls back to local `music/`, then `yt-dlp`, then a generated placeholder tone
   - normalizes output before queueing
 - `BANTER`
-  - asks Claude for structured dialogue JSON
+  - asks Claude (or OpenAI as fallback) for structured dialogue JSON
   - synthesizes one line per host via the configured TTS engine (see [TTS architecture](#tts-architecture) below)
   - preserves running jokes in `StationState`
 - `AD`
@@ -179,6 +179,20 @@ Fallback chain: OpenAI failure → `edge_fallback_voice` (so the host falls back
 
 A singleton `openai.AsyncOpenAI` client is reused across all TTS calls for connection pool efficiency.
 
+## Compounding listener memory
+
+`persona.py` maintains a persistent listener profile in SQLite (`cache/mammamiradio.db`). The persona tracks:
+
+- **Session count**: how many times the listener has tuned in (10-minute gap = new session)
+- **Motifs**: the last 20 played tracks, so hosts can reference past music naturally
+- **Theories**: LLM-generated guesses about who the listener is
+- **Running jokes**: cross-session callbacks that build familiarity
+- **Callbacks used**: which songs the hosts have already referenced
+
+During banter generation, the persona is loaded into the prompt via `<listener_memory>`. Claude's response includes `persona_updates` (new theories, jokes, callbacks) which are persisted back to SQLite. First-time listeners get curiosity and intrigue. Returning listeners get inside jokes and personal references.
+
+Instruction-like patterns in persona entries are filtered before storage (matching the `ha_context` sanitizer) to prevent stored prompt injection across sessions.
+
 ## Optional Home Assistant context
 
 If `[homeassistant].enabled = true` and `HA_TOKEN` is present:
@@ -211,6 +225,8 @@ Admin routes:
 - `/api/search`
 - `/api/playlist/add`
 - `/api/playlist/load`
+- `/api/stop`
+- `/api/resume`
 - `/api/spotify/source-options`
 - `/api/spotify/source/select`
 
@@ -235,7 +251,7 @@ Mutating admin requests (POST/PUT/PATCH/DELETE) over non-loopback networks must 
 This repo is biased toward "keep the station on air."
 
 - producer exceptions insert a short silence segment instead of crashing the app
-- script generation failures fall back to stock copy
+- script generation failures fall back to OpenAI when configured, then to stock copy
 - missing Spotify auth falls back to demo or downloaded audio
 - missing Home Assistant context is ignored
 - missing ad brands disables ads rather than killing startup
@@ -254,10 +270,10 @@ The rich path is richer, but the failure path still produces a stream.
 | `mammamiradio/producer.py` | segment generation pipeline |
 | `mammamiradio/spotify_player.py` | go-librespot process management and FIFO capture |
 | `mammamiradio/downloader.py` | local-file, yt-dlp, and placeholder music fallback |
-| `mammamiradio/scriptwriter.py` | Claude prompts for banter and ad copy |
+| `mammamiradio/scriptwriter.py` | Anthropic/OpenAI prompts for banter and ad copy |
 | `mammamiradio/tts.py` | TTS synthesis (Edge TTS + OpenAI gpt-4o-mini-tts) |
 | `mammamiradio/capabilities.py` | Capability flags, tier derivation, and next-step hints |
-| `mammamiradio/persona.py` | Listener behavior profiling for banter prompts |
+| `mammamiradio/persona.py` | Listener persona with compounding memory, motif tracking, and session counting |
 | `mammamiradio/sync.py` | go-librespot config synchronization from radio.toml |
 | `mammamiradio/context_cues.py` | Time-of-day and cultural context for prompts |
 | `mammamiradio/normalizer.py` | ffmpeg helpers for normalization, mixing, tones, and bumpers |

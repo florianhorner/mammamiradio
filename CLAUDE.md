@@ -48,7 +48,7 @@ AI-powered Italian radio station engine. Python 3.11+, FastAPI, FFmpeg, optional
 - `ADMIN_USERNAME`, `ADMIN_PASSWORD`, `ADMIN_TOKEN`: admin auth
 - `SPOTIFY_CLIENT_ID`, `SPOTIFY_CLIENT_SECRET`: Spotify Web API access
 - `ANTHROPIC_API_KEY`: Claude banter/ad generation
-- `OPENAI_API_KEY`: OpenAI gpt-4o-mini-tts voice synthesis (hosts with `engine = "openai"`; falls back to edge-tts if missing)
+- `OPENAI_API_KEY`: OpenAI gpt-4o-mini-tts voice synthesis + script generation fallback when Anthropic is unavailable
 - `HA_TOKEN`: Home Assistant API token
 - `HA_URL`: Home Assistant API base URL (auto-set by HA add-on to `http://supervisor/core/api`)
 - `HA_ENABLED`: force-enable HA integration (`true`/`1`/`yes`)
@@ -59,6 +59,7 @@ AI-powered Italian radio station engine. Python 3.11+, FastAPI, FFmpeg, optional
 - `MAMMAMIRADIO_GO_LIBRESPOT_BIN`: override go-librespot binary path
 - `MAMMAMIRADIO_GO_LIBRESPOT_CONFIG_DIR`: override go-librespot config directory
 - `MAMMAMIRADIO_GO_LIBRESPOT_PORT`: override go-librespot API port (default `3678`)
+- `MAMMAMIRADIO_SPOTIFY_REDIRECT_BASE_URL`: override Spotify OAuth callback base URL (e.g., `https://radio.example.com`; uses request origin if unset)
 - `MAMMAMIRADIO_ALLOW_YTDLP`: enable yt-dlp fallback for demo tracks (`true`/`1`/`yes`; default: disabled for copyright safety)
 
 ## Runtime behavior
@@ -67,9 +68,9 @@ AI-powered Italian radio station engine. Python 3.11+, FastAPI, FFmpeg, optional
 - **Capability flags** (`spotify_connected`, `spotify_api`, `anthropic`, `ha`) replace the old 64-state mode system. Each flag is independent. The dashboard derives a tier label from them: Demo Radio, Your Music, Full AI Radio. `GET /api/capabilities` returns flags, tier, and a `next_step` hint guiding the user toward the next setup action.
 - Demo-first: if no Spotify credentials exist, the app boots immediately with built-in demo tracks and pre-bundled banter clips. No wizard, no gates.
 - **Spotify Connect (zeroconf):** go-librespot advertises via mDNS. Users tap "MammaMiRadio" in their Spotify app to connect. This handles streaming auth without any Client ID/secret. Playlist browsing still requires Client ID/secret (Web API scopes not available via zeroconf).
-- If Anthropic key is missing, banter uses pre-bundled clips from `demo_assets/banter/` instead of calling Claude.
+- If no LLM key is configured (neither Anthropic nor OpenAI), banter uses pre-bundled clips from `demo_assets/banter/` instead of calling an API.
 - If go-librespot is unavailable or not authenticated, music falls back to local `music/` files, then `yt-dlp`, then placeholder tones.
-- If Anthropic fails mid-session, banter and ad generation fall back to short stock copy.
+- If Anthropic fails mid-session, script generation falls back to OpenAI `gpt-4o-mini` when `OPENAI_API_KEY` is set, then to short stock copy.
 - If Home Assistant is enabled and `HA_TOKEN` is present, banter and ads may reference current home state.
 - `audio.bitrate` is the single source of truth for encoding, ICY headers, and playback throttling.
 - Source switching via `/api/spotify/source/select` or `/api/playlist/load` purges the queue, skips the current segment, and begins playback from the new source immediately.
@@ -86,7 +87,7 @@ mammamiradio/
   producer.py         async segment production loop
   streamer.py         playback loop, routes, auth checks, public/admin status
   scheduler.py        segment scheduling and upcoming preview
-  scriptwriter.py     Claude API calls for banter and ad JSON
+  scriptwriter.py     Anthropic/OpenAI API calls for banter and ad JSON (with automatic fallback)
   spotify_player.py   go-librespot integration, FIFO drain, auto-transfer
   spotify_auth.py     Spotipy OAuth setup
   playlist.py         playlist fetch, liked-songs fallback, demo fallback
@@ -95,7 +96,7 @@ mammamiradio/
   tts.py              Edge TTS synthesis for hosts and ads
   ha_context.py       Home Assistant polling and Italian state formatting
   capabilities.py     Capability flags (spotify_connected, spotify_api, anthropic, ha), tier derivation, and next_step hints
-  persona.py          Listener behavior profiling (skip rate, energy preference) for banter prompts
+  persona.py          Compounding listener memory: persona, motifs, session tracking, prompt injection filtering
   sync.py             go-librespot config synchronization from radio.toml
   context_cues.py     Time-of-day and cultural context for banter/ad prompts
   track_rationale.py  "Why this track?" rationale generation for listener UI
@@ -132,6 +133,13 @@ tests/                pytest coverage
 - `radio.toml` is the source of truth for hosts, pacing, ad brands, audio settings, and Home Assistant enablement. Secrets stay in `.env`.
 - If you change routes, config keys, auth rules, or fallback behavior, update the matching docs in the same change.
 - `conductor.json` and `scripts/conductor-*.sh` define Conductor workspace setup/run/archive behavior. Commit those files, but keep `.context/` runtime state out of git.
+
+## Quality gates
+
+- **Coverage ratchet**: `fail_under` in `pyproject.toml` is the floor (currently 75%). CI and the pre-push hook enforce it. After a coverage sprint, run `make coverage-ratchet` to raise the bar to the new level. Coverage can only go up.
+- **Pre-push coverage gate**: The `.pre-commit-config.yaml` `coverage-gate` hook runs tests with `--cov` on every push. Fails if coverage drops below `fail_under`.
+- **CI enforcement**: `.github/workflows/quality.yml` runs `pytest --cov=mammamiradio` — coverage threshold comes from `pyproject.toml`, not a hardcoded number.
+- **Ratchet script**: `scripts/coverage-ratchet.sh --update` measures current coverage and updates `fail_under` if it improved.
 
 ## Skill routing
 
