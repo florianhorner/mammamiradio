@@ -335,7 +335,13 @@ Rules:
 - Output ONLY valid JSON, no markdown fences or extra text."""
 
 
-async def write_banter(state: StationState, config: StationConfig) -> list[tuple[HostPersonality, str]]:
+async def write_banter(
+    state: StationState,
+    config: StationConfig,
+    *,
+    is_new_listener: bool = False,
+    is_first_listener: bool = False,
+) -> list[tuple[HostPersonality, str]]:
     """Generate short host banter with recent tracks, jokes, and home context."""
     if not _has_script_llm(config):
         host = random.choice(config.hosts)
@@ -382,6 +388,21 @@ Never say "the data shows" or reference tracking. Maintain plausible deniability
 </listener_behavior>
 """
 
+    # New listener awareness — the "benvenuto" impossible moment
+    new_listener_block = ""
+    if is_first_listener:
+        new_listener_block = """
+IMPOSSIBLE MOMENT: Someone JUST tuned in — they are the FIRST listener!
+Acknowledge this naturally. Be excited but not desperate. "Finalmente qualcuno ci ascolta!"
+This is the WOW moment — the listener just connected and immediately hears the DJ notice.
+"""
+    elif is_new_listener:
+        new_listener_block = """
+IMPOSSIBLE MOMENT: A new listener JUST tuned in right now!
+Acknowledge this subtly — "oh, abbiamo compagnia" or "qualcuno si è sintonizzato".
+Don't over-explain. The uncanny part is that the DJ noticed IMMEDIATELY.
+"""
+
     prompt = f"""Write a short radio banter between the hosts. 2-4 exchanges total.
 
 Just played: {recent if recent else "opening of the show"}
@@ -390,7 +411,7 @@ Running jokes to optionally callback: {jokes if jokes else "none yet, you may se
 <context_awareness>
 {context_block}
 </context_awareness>
-{listener_block}
+{new_listener_block}{listener_block}
 Return JSON:
 {{"lines": [{{"host": "HostName", "text": "what they say"}}], "new_joke": "brief description of any new running joke or null"}}"""
 

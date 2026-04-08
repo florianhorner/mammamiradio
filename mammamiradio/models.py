@@ -384,6 +384,11 @@ class StationState:
     api_input_tokens: int = 0
     api_output_tokens: int = 0
     tts_characters: int = 0
+    # Listener connection tracking for "impossible moments"
+    listeners_active: int = 0
+    listeners_peak: int = 0
+    listeners_total: int = 0
+    new_listeners_pending: int = 0
 
     def switch_playlist(self, tracks: list[Track], source: PlaylistSource | None = None) -> None:
         """Replace the active playlist and bump revision counter.
