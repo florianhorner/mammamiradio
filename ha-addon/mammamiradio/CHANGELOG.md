@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.1.0
+
+### Added
+
+- Compounding listener memory: returning listeners are recognized across sessions with personalized banter
+- Track motif recording and session tracking for richer host callbacks
+- Persona security: instruction-pattern filtering prevents stored prompt injection
+
 ## 2.0.2
 
 ### Added

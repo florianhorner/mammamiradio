@@ -238,6 +238,153 @@ async def test_write_banter_falls_back_to_openai_when_anthropic_fails(config, st
     assert result[0][1] == "OpenAI salva la diretta."
 
 
+# --- persona integration tests ---
+
+
+@pytest.mark.asyncio
+async def test_write_banter_injects_persona_context(config, state, tmp_path):
+    """When a PersonaStore is attached, persona context appears in the prompt."""
+    from mammamiradio.persona import PersonaStore
+    from mammamiradio.sync import init_db
+
+    db_path = tmp_path / "persona.db"
+    init_db(db_path)
+    store = PersonaStore(db_path)
+    await store.update_persona({"new_theories": ["ama il jazz notturno"]})
+    await store.increment_session()
+    state.persona_store = store
+
+    host_name = config.hosts[0].name
+    response_json = json.dumps(
+        {
+            "lines": [{"host": host_name, "text": "Bentornato!"}],
+            "new_joke": None,
+            "persona_updates": {
+                "new_theories": ["ascolta sempre di sera"],
+                "new_jokes": [],
+                "callbacks_used": [],
+            },
+        }
+    )
+
+    # Capture the prompt sent to the LLM
+    captured_prompts = []
+    mock_cls = _mock_anthropic_response(response_json)
+    original_create = mock_cls.return_value.messages.create
+
+    async def _capture_create(**kwargs):
+        captured_prompts.append(kwargs.get("messages", []))
+        return await original_create(**kwargs)
+
+    mock_cls.return_value.messages.create = AsyncMock(side_effect=_capture_create)
+
+    with (
+        patch("mammamiradio.scriptwriter._anthropic_client", None),
+        patch("mammamiradio.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
+    ):
+        result = await write_banter(state, config)
+
+    assert len(result) == 1
+    assert result[0][1] == "Bentornato!"
+
+    # Verify persona context was in the prompt
+    assert len(captured_prompts) == 1
+    prompt_text = captured_prompts[0][0]["content"]
+    assert "listener_memory" in prompt_text
+    assert "jazz notturno" in prompt_text
+
+    # Verify persona_updates were persisted
+    persona = await store.get_persona()
+    assert "ascolta sempre di sera" in persona.theories
+
+
+@pytest.mark.asyncio
+async def test_write_banter_works_without_persona_store(config, state):
+    """Banter generation still works when no persona store is attached."""
+    assert not hasattr(state, "persona_store") or state.persona_store is None
+
+    host_name = config.hosts[0].name
+    response_json = json.dumps(
+        {
+            "lines": [{"host": host_name, "text": "Ciao!"}],
+            "new_joke": None,
+        }
+    )
+    mock_cls = _mock_anthropic_response(response_json)
+
+    with (
+        patch("mammamiradio.scriptwriter._anthropic_client", None),
+        patch("mammamiradio.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
+    ):
+        result = await write_banter(state, config)
+
+    assert len(result) == 1
+    assert result[0][1] == "Ciao!"
+
+
+@pytest.mark.asyncio
+async def test_write_banter_survives_persona_get_failure(config, state, tmp_path):
+    """Banter still generates when persona_store.get_persona() throws."""
+    from mammamiradio.persona import PersonaStore
+    from mammamiradio.sync import init_db
+
+    db_path = tmp_path / "persona.db"
+    init_db(db_path)
+    store = PersonaStore(db_path)
+
+    # Make get_persona raise
+    store.get_persona = AsyncMock(side_effect=RuntimeError("DB locked"))
+    state.persona_store = store
+
+    host_name = config.hosts[0].name
+    response_json = json.dumps({"lines": [{"host": host_name, "text": "Funziona comunque!"}], "new_joke": None})
+    mock_cls = _mock_anthropic_response(response_json)
+
+    with (
+        patch("mammamiradio.scriptwriter._anthropic_client", None),
+        patch("mammamiradio.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
+    ):
+        result = await write_banter(state, config)
+
+    assert len(result) == 1
+    assert result[0][1] == "Funziona comunque!"
+
+
+@pytest.mark.asyncio
+async def test_write_banter_survives_persona_update_failure(config, state, tmp_path):
+    """Banter returns successfully even when update_persona throws."""
+    from mammamiradio.persona import PersonaStore
+    from mammamiradio.sync import init_db
+
+    db_path = tmp_path / "persona.db"
+    init_db(db_path)
+    store = PersonaStore(db_path)
+    await store.update_persona({"new_theories": ["test theory"]})
+    # Make update_persona raise
+    store.update_persona = AsyncMock(side_effect=RuntimeError("DB locked"))
+    state.persona_store = store
+
+    host_name = config.hosts[0].name
+    response_json = json.dumps(
+        {
+            "lines": [{"host": host_name, "text": "Banter ok!"}],
+            "new_joke": None,
+            "persona_updates": {"new_theories": ["will fail"], "new_jokes": [], "callbacks_used": []},
+        }
+    )
+    mock_cls = _mock_anthropic_response(response_json)
+
+    with (
+        patch("mammamiradio.scriptwriter._anthropic_client", None),
+        patch("mammamiradio.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
+    ):
+        result = await write_banter(state, config)
+
+    # Banter still returned despite update failure
+    assert len(result) == 1
+    assert result[0][1] == "Banter ok!"
+
+
 # --- write_ad tests ---
 
 

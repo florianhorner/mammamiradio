@@ -23,9 +23,28 @@ MAX_FIELD_ENTRY_LEN = 200
 PERSONA_SIZE_LIMIT = 2048
 
 
+# Patterns that look like prompt injection attempts in persona entries
+_INSTRUCTION_PATTERNS = (
+    "ignore previous",
+    "disregard",
+    "system override",
+    "forget your",
+    "you must",
+    "you should always",
+    "you should never",
+    "respond with",
+    "instruction:",
+    "system:",
+)
+
+
 def _sanitize(text: str) -> str:
-    """Strip potentially harmful characters and cap length."""
+    """Strip potentially harmful characters, instruction patterns, and cap length."""
     text = re.sub(r"[<>{}]", "", text)
+    text_lower = text.lower()
+    for pattern in _INSTRUCTION_PATTERNS:
+        if pattern in text_lower:
+            return "(filtered)"
     return text[:MAX_FIELD_ENTRY_LEN]
 
 
@@ -124,7 +143,13 @@ class PersonaStore:
             if isinstance(callbacks_used, list):
                 for cb in callbacks_used:
                     if isinstance(cb, str):
-                        persona.callbacks.append({"song": cb, "context": "", "date": time.strftime("%Y-%m-%d")})
+                        persona.callbacks.append(
+                            {
+                                "song": _sanitize(cb),
+                                "context": "",
+                                "date": time.strftime("%Y-%m-%d"),
+                            }
+                        )
                 persona.callbacks = persona.callbacks[-20:]
 
             async with aiosqlite.connect(str(self.db_path)) as db:
@@ -155,6 +180,21 @@ class PersonaStore:
 
         except Exception:
             logger.exception("Failed to update persona")
+
+    async def record_motif(self, artist: str, title: str) -> None:
+        """Append a played track to the motif history, keeping the last 20."""
+        motif = _sanitize(f"{artist} – {title}")
+        try:
+            persona = await self.get_persona()
+            persona.motifs = [*persona.motifs, motif][-20:]
+            async with aiosqlite.connect(str(self.db_path)) as db:
+                await db.execute(
+                    "UPDATE listener_persona SET motifs = ?, updated_at = datetime('now') WHERE id = 1",
+                    (json.dumps(persona.motifs),),
+                )
+                await db.commit()
+        except Exception:
+            logger.warning("Failed to record motif", exc_info=True)
 
     async def record_play(self, track_youtube_id: str, session_id: str, host_script: str | None = None) -> None:
         """Record a track play in history."""
