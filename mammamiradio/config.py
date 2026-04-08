@@ -187,8 +187,8 @@ def _validate(config: StationConfig) -> None:
     if config.pacing.lookahead_segments < 1:
         errors.append("pacing.lookahead_segments must be >= 1")
 
-    if not config.anthropic_api_key:
-        log.warning("No ANTHROPIC_API_KEY — banter/ads will use fallback text")
+    if not (config.anthropic_api_key or config.openai_api_key):
+        log.warning("No ANTHROPIC_API_KEY or OPENAI_API_KEY — banter/ads will use fallback text")
     if config.homeassistant.enabled and not config.ha_token:
         log.warning("Home Assistant enabled but no HA_TOKEN in environment")
     if not config.ads.brands:

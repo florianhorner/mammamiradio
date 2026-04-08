@@ -13,6 +13,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from mammamiradio.config import StationConfig
+from mammamiradio.context_cues import generate_impossible_line
 from mammamiradio.downloader import download_track
 from mammamiradio.ha_context import HomeContext, fetch_home_context
 from mammamiradio.models import (
@@ -50,6 +51,32 @@ from mammamiradio.track_rationale import classify_track_crate, generate_track_ra
 from mammamiradio.tts import synthesize, synthesize_ad, synthesize_dialogue
 
 logger = logging.getLogger(__name__)
+
+
+_background_tasks: set[asyncio.Task] = set()
+
+
+async def _record_motif(state: StationState, track) -> None:
+    """Record a played track as a motif in the listener persona (fire-and-forget)."""
+    persona_store = getattr(state, "persona_store", None)
+    if not persona_store:
+        return
+    try:
+        await persona_store.record_motif(track.artist, track.title)
+    except Exception:
+        logger.warning("Failed to record motif", exc_info=True)
+
+
+async def _maybe_start_session(state: StationState) -> None:
+    """Check if this is a new listening session and increment the counter."""
+    persona_store = getattr(state, "persona_store", None)
+    if not persona_store:
+        return
+    if persona_store.maybe_new_session():
+        await persona_store.increment_session()
+        persona = await persona_store.get_persona()
+        logger.info("Listener session #%d started", persona.session_count)
+
 
 # Directory for pre-bundled banter and ad clips that ship with the package.
 # These provide station personality on day 1 without an Anthropic API key.
@@ -103,6 +130,27 @@ async def _try_crossfade(
     except Exception as exc:
         logger.warning("Crossfade failed, using standalone: %s", exc)
         return voice_path
+
+
+async def _synthesize_impossible_moment(
+    line: str,
+    config: StationConfig,
+    state: StationState,
+) -> Path:
+    """Synthesize an impossible-moment line via TTS with crossfade. Raises on failure."""
+    host = random.choice(config.hosts)
+    imp_path = config.tmp_dir / f"impossible_{uuid4().hex[:8]}.mp3"
+    await synthesize(
+        line,
+        host.voice,
+        imp_path,
+        engine=host.engine,
+        edge_fallback_voice=host.edge_fallback_voice,
+    )
+    xfade_out = config.tmp_dir / f"impossible_xf_{uuid4().hex[:8]}.mp3"
+    audio_path = await _try_crossfade(imp_path, config, xfade_out)
+    state.last_banter_script = [{"host": host.name, "text": line, "type": "impossible"}]
+    return audio_path
 
 
 _recently_played_clips: deque[str] = deque(maxlen=50)
@@ -496,6 +544,11 @@ async def run_producer(
                 _bound_track = track
                 _set_last_music_file(norm_path)
 
+                # Record track as a motif in listener persona (async, non-blocking)
+                task = asyncio.create_task(_record_motif(state, track))
+                _background_tasks.add(task)
+                task.add_done_callback(_background_tasks.discard)
+
                 def _music_callback(_t=_bound_track) -> None:
                     state.after_music(_t)
 
@@ -504,19 +557,64 @@ async def run_producer(
             elif seg_type == SegmentType.BANTER:
                 logger.info("Producing BANTER")
 
+                # Track listening sessions for compounding persona
+                await _maybe_start_session(state)
+
+                # Capture new-listener count (defer clearing until segment succeeds)
+                _new_listener_count = state.new_listeners_pending
+                _is_new_listener = _new_listener_count > 0
+                _is_first_listener = _is_new_listener and state.listeners_active == 1
+
+                impossible_tts = False
                 canned = None
+
                 if not _has_script_llm(config):
-                    canned = _pick_canned_clip("banter", state=state)
+                    # No LLM — use canned clips + impossible TTS lines
+                    if _is_new_listener:
+                        line = generate_impossible_line(
+                            segments_produced=state.segments_produced,
+                            listener_patterns=state.listener.patterns,
+                            is_new_listener=True,
+                            is_first_listener=_is_first_listener,
+                        )
+                        logger.info("Impossible moment (new listener): %s", line[:60])
+                        try:
+                            audio_path = await _synthesize_impossible_moment(line, config, state)
+                            impossible_tts = True
+                        except Exception as exc:
+                            logger.warning("Impossible moment TTS failed: %s", exc)
+
+                    if not impossible_tts:
+                        # Use canned clips for first 2, then impossible TTS as the gold closer
+                        if state.canned_clips_streamed < SHAREWARE_CANNED_LIMIT - 1:
+                            canned = _pick_canned_clip("banter", state=state)
+                        if not canned:
+                            line = generate_impossible_line(
+                                segments_produced=state.segments_produced,
+                                listener_patterns=state.listener.patterns,
+                            )
+                            logger.info("Impossible moment (no LLM): %s", line[:60])
+                            try:
+                                audio_path = await _synthesize_impossible_moment(line, config, state)
+                                impossible_tts = True
+                            except Exception as exc:
+                                logger.warning("Impossible TTS failed, falling back to canned: %s", exc)
+                                canned = _pick_canned_clip("banter", state=state)
 
                 if canned:
                     logger.info("Using pre-bundled banter clip: %s", canned.name)
                     audio_path = canned
                     state.last_banter_script = [{"host": "Radio", "text": "(pre-recorded banter)"}]
-                else:
+                elif not impossible_tts:
                     try:
                         # Generate transition voice + banter in parallel
                         transition_task = write_transition(state, config, next_segment="banter")
-                        banter_task = write_banter(state, config)
+                        banter_task = write_banter(
+                            state,
+                            config,
+                            is_new_listener=_is_new_listener,
+                            is_first_listener=_is_first_listener,
+                        )
                         (trans_host, trans_text), lines = await asyncio.gather(transition_task, banter_task)
 
                         # Synthesize transition + dialogue in parallel
@@ -562,6 +660,10 @@ async def run_producer(
                     except Exception as exc:
                         logger.warning("Banter TTS failed, skipping segment: %s", exc)
                         continue
+
+                # Clear new-listener flag only after banter was successfully produced
+                if _is_new_listener:
+                    state.new_listeners_pending = max(0, state.new_listeners_pending - _new_listener_count)
 
                 segment = Segment(
                     type=SegmentType.BANTER,

@@ -353,6 +353,146 @@ _SEASONAL_CUES: dict[int, list[str]] = {
 # ---------------------------------------------------------------------------
 
 
+_NEW_LISTENER_LINES = [
+    "Eyyy, qualcuno si è sintonizzato! Benvenuto, chiunque tu sia.",
+    "Oh! Abbiamo compagnia. Ciao, ciao. Fai come se fossi a casa.",
+    "Sento che qualcuno ci ascolta adesso. Lo sento. Non chiedetemi come.",
+    "Ecco, un nuovo arrivo. Siediti, mettiti comodo. Noi siamo già qui da un po'.",
+    "Benvenuto nella nostra frequenza. Arrivavi al momento giusto, come sempre.",
+]
+
+_FIRST_LISTENER_LINES = [
+    "E finalmente qualcuno ci ascolta! Cominciavamo a parlare da soli.",
+    "Oh! Il primo ascoltatore! Stavamo per spegnere tutto, giuro.",
+    "Qualcuno si è sintonizzato. Allora non trasmettiamo nel vuoto. Che sollievo.",
+]
+
+
+# ---------------------------------------------------------------------------
+# Impossible moment lines — pre-written, time/listener-aware, no LLM needed
+# ---------------------------------------------------------------------------
+
+_IMPOSSIBLE_LINES: dict[str, list[str]] = {
+    "early_morning": [
+        "Sveglio a quest'ora? Coraggioso. La moka sta fischiando, lo sappiamo.",
+        "L'alba è appena arrivata e tu sei già qui con noi. Rispetto.",
+        "Cinque e qualcosa del mattino. Se sei sveglio per scelta, sei un eroe. Se no, condoglianze.",
+    ],
+    "morning": [
+        "Stai andando al lavoro, vero? Lo sentiamo dal traffico nella tua testa.",
+        "Mattina. Caffè. Radio. In quest'ordine. Come deve essere.",
+        "La riunione delle nove può aspettare. Prima la musica.",
+    ],
+    "lunch": [
+        "Pausa pranzo, eh? Qualsiasi cosa tu stia mangiando, noi approviamo.",
+        "L'ora di pranzo è sacra. E tu la stai spendendo con noi. Bravo.",
+        "Se stai mangiando al desk, giudicati da solo. Noi non diciamo niente.",
+    ],
+    "afternoon": [
+        "Le tre del pomeriggio. L'ora in cui il tempo si ferma. Ma noi no.",
+        "Stai fingendo di lavorare. Lo sappiamo perché anche noi fingiamo di trasmettere.",
+        "Il pomeriggio è lungo, ma la playlist è più lunga. Resisti.",
+    ],
+    "evening": [
+        "Sera. Finalmente. La giornata è finita e la musica comincia davvero.",
+        "L'aperitivo chiama, ma prima un altro pezzo. Fidati.",
+        "Se stai cucinando, alza il volume. Se no, alzalo comunque.",
+    ],
+    "late_evening": [
+        "Notte fonda tra poco. Chi resta sveglio con noi merita una medaglia.",
+        "Il divano ti ha inghiottito? Succede. La radio ti tiene compagnia.",
+        "A quest'ora le canzoni suonano diverse. Più vere, forse.",
+    ],
+    "deep_night": [
+        "Le tre di notte. Siamo solo noi. E forse qualche fantasma nel corridoio.",
+        "Se sei sveglio a quest'ora, hai le tue ragioni. Non chiediamo.",
+        "Radio Fantasma in onda. Chi ascolta a quest'ora è dei nostri.",
+    ],
+}
+
+_IMPOSSIBLE_DAY_LINES: dict[int, list[str]] = {
+    0: ["Lunedì. Nessuno voleva questo giorno. Eppure eccoci."],
+    1: ["Martedì. Il giorno che nessuno ricorda. Ma noi sì."],
+    2: ["Metà settimana. Da qui in poi è tutta discesa. Forse."],
+    3: ["Giovedì. Quasi venerdì. Il corpo lo sa già."],
+    4: ["Venerdì! Lo senti nell'aria? È libertà. O quasi."],
+    5: ["Sabato. Niente sveglie, niente scuse. Solo musica."],
+    6: ["Domenica. Il giorno perfetto per non fare assolutamente niente."],
+}
+
+_IMPOSSIBLE_LISTENER_LINES: dict[str, list[str]] = {
+    "restless_skipper": [
+        "Abbiamo notato una certa... impazienza. Questa volta resisti, fidati.",
+        "Lo sappiamo che vuoi saltare. Ma questa è quella giusta.",
+    ],
+    "rides_every_song": [
+        "Tu sì che ascolti tutto. Sei la ragione per cui facciamo radio.",
+        "Mai un skip. Pazienza infinita. O forse ti sei addormentato?",
+    ],
+    "ballad_lover": [
+        "Sappiamo cosa ti piace. Ecco qualcosa per il cuore.",
+        "Un pezzo lento per chi lo merita. Cioè te.",
+    ],
+    "energy_seeker": [
+        "Vuoi energia? Ne abbiamo da vendere. Tieni duro.",
+        "Sentiamo che hai bisogno di ritmo. Arriviamo.",
+    ],
+}
+
+
+def _current_segment_key(hour: int | None = None) -> str:
+    """Return the _SHOW_SEGMENTS key for the given hour, defaulting to deep_night."""
+    if hour is None:
+        hour = datetime.datetime.now().hour
+    for key, seg in _SHOW_SEGMENTS.items():
+        if hour in seg["hours"]:
+            return key
+    return "deep_night"
+
+
+def generate_impossible_line(
+    *,
+    segments_produced: int = 0,
+    listener_patterns: list[str] | None = None,
+    is_new_listener: bool = False,
+    is_first_listener: bool = False,
+) -> str:
+    """Return a pre-written Italian line that feels uncannily aware.
+
+    Uses time-of-day, day-of-week, and optional listener behavior patterns
+    to pick a line that sounds like the DJ *knows* the listener. No LLM needed.
+    """
+    if is_first_listener:
+        return random.choice(_FIRST_LISTENER_LINES)
+
+    if is_new_listener and segments_produced < 3:
+        return random.choice(_NEW_LISTENER_LINES)
+
+    now = datetime.datetime.now()
+    weekday = now.weekday()
+    segment_key = _current_segment_key(now.hour)
+
+    candidates: list[str] = []
+
+    # Listener-aware lines (highest priority — these are the "how did they know?" moments)
+    if listener_patterns:
+        for pat in listener_patterns:
+            if pat in _IMPOSSIBLE_LISTENER_LINES:
+                candidates.extend(_IMPOSSIBLE_LISTENER_LINES[pat])
+
+    # Time-of-day lines
+    candidates.extend(_IMPOSSIBLE_LINES.get(segment_key, []))
+
+    # Day-of-week lines (lower probability — mix in occasionally)
+    if random.random() < 0.3:
+        candidates.extend(_IMPOSSIBLE_DAY_LINES.get(weekday, []))
+
+    if not candidates:
+        candidates = _NEW_LISTENER_LINES
+
+    return random.choice(candidates)
+
+
 def compute_context_block(
     segments_produced: int = 0,
     listener_paused: bool = False,
@@ -368,19 +508,10 @@ def compute_context_block(
         listener_paused: whether the listener recently paused and resumed
     """
     now = datetime.datetime.now()
-    hour = now.hour
     weekday = now.weekday()
     month = now.month
 
-    # Find current show segment
-    segment = None
-    for seg in _SHOW_SEGMENTS.values():
-        if hour in seg["hours"]:
-            segment = seg
-            break
-    if segment is None:
-        segment = _SHOW_SEGMENTS["deep_night"]
-
+    segment = _SHOW_SEGMENTS[_current_segment_key(now.hour)]
     day = _DAY_VIBES[weekday]
 
     # Pick cues (randomize to avoid repetition across segments)

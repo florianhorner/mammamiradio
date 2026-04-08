@@ -14,6 +14,7 @@ def _config(**overrides):
     cfg.spotify_client_id = overrides.get("spotify_client_id", "")
     cfg.spotify_client_secret = overrides.get("spotify_client_secret", "")
     cfg.anthropic_api_key = overrides.get("anthropic_api_key", "")
+    cfg.openai_api_key = overrides.get("openai_api_key", "")
     cfg.ha_token = overrides.get("ha_token", "")
     cfg.homeassistant.enabled = overrides.get("ha_enabled", False)
     return cfg
@@ -113,6 +114,11 @@ def test_get_capabilities_spotify_api():
 
 def test_get_capabilities_anthropic():
     caps = get_capabilities(_config(anthropic_api_key="sk-test"), _state())
+    assert caps.anthropic is True
+
+
+def test_get_capabilities_openai_only_counts_as_ai_enabled():
+    caps = get_capabilities(_config(openai_api_key="sk-openai"), _state())
     assert caps.anthropic is True
 
 

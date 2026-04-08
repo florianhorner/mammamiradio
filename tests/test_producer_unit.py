@@ -293,3 +293,64 @@ def test_pick_canned_clip_respects_shareware_limit(tmp_path):
         producer._DEMO_ASSETS_DIR = orig
         producer._recently_played_clips.clear()
         producer._canned_clip_cache.clear()
+
+
+# ---------------------------------------------------------------------------
+# Persona feedback loop in producer
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_record_motif_persists_to_persona(tmp_path):
+    """_record_motif stores the played track as a motif in the persona store."""
+    from mammamiradio.persona import PersonaStore
+    from mammamiradio.producer import _record_motif
+    from mammamiradio.sync import init_db
+
+    db_path = tmp_path / "persona.db"
+    init_db(db_path)
+    store = PersonaStore(db_path)
+    # Seed the persona row
+    await store.update_persona({})
+
+    state = StationState()
+    state.persona_store = store
+
+    track = Track(title="Volare", artist="Domenico Modugno", duration_ms=200_000)
+    await _record_motif(state, track)
+
+    persona = await store.get_persona()
+    assert "Domenico Modugno – Volare" in persona.motifs
+
+
+@pytest.mark.asyncio
+async def test_maybe_start_session_increments_count(tmp_path):
+    """_maybe_start_session bumps session_count on a fresh PersonaStore."""
+    from mammamiradio.persona import PersonaStore
+    from mammamiradio.producer import _maybe_start_session
+    from mammamiradio.sync import init_db
+
+    db_path = tmp_path / "persona.db"
+    init_db(db_path)
+    store = PersonaStore(db_path)
+    # Seed the persona row so increment_session has a row to update
+    await store.update_persona({})
+
+    state = StationState()
+    state.persona_store = store
+
+    await _maybe_start_session(state)
+
+    persona = await store.get_persona()
+    assert persona.session_count == 1
+
+
+@pytest.mark.asyncio
+async def test_record_motif_noop_without_store():
+    """_record_motif does nothing when no persona_store is set."""
+    from mammamiradio.producer import _record_motif
+
+    state = StationState()
+    track = Track(title="Test", artist="Artist", duration_ms=1000)
+    # Should not raise
+    await _record_motif(state, track)
