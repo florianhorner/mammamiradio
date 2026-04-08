@@ -24,7 +24,7 @@ AI-powered Italian radio station engine. Python 3.11+, FastAPI, FFmpeg, optional
 - Lint: `ruff check .` (fix: `ruff check --fix .`)
 - Format: `ruff format .` (check: `ruff format --check .`)
 - Type check: `mypy mammamiradio/ tests/`
-- All checks: `make check` (lint + typecheck + test)
+- All checks: `make check` (lint + typecheck + coverage gate with per-module floors)
 - Pre-commit: `pip install pre-commit && pre-commit install --hook-type pre-commit --hook-type pre-push --hook-type commit-msg`
 - **Validate addon before push**: `./scripts/validate-addon.sh` (add `--build` for Docker build test)
 
@@ -136,10 +136,14 @@ tests/                pytest coverage
 
 ## Quality gates
 
-- **Coverage ratchet**: `fail_under` in `pyproject.toml` is the floor (currently 75%). CI and the pre-push hook enforce it. After a coverage sprint, run `make coverage-ratchet` to raise the bar to the new level. Coverage can only go up.
-- **Pre-push coverage gate**: The `.pre-commit-config.yaml` `coverage-gate` hook runs tests with `--cov` on every push. Fails if coverage drops below `fail_under`.
-- **CI enforcement**: `.github/workflows/quality.yml` runs `pytest --cov=mammamiradio` — coverage threshold comes from `pyproject.toml`, not a hardcoded number.
-- **Ratchet script**: `scripts/coverage-ratchet.sh --update` measures current coverage and updates `fail_under` if it improved.
+- **Coverage ratchet (automatic)**: Coverage can only go up, never down. Two layers enforce this:
+  - **Aggregate floor**: `fail_under` in `pyproject.toml` — the overall minimum.
+  - **Per-module floors**: `.coverage-floors.json` — every module has its own floor. A module-level regression fails CI even if the aggregate stays above threshold.
+- **CI enforcement**: `.github/workflows/quality.yml` runs `scripts/coverage-ratchet.py`:
+  - On PRs: `check` mode — fails if any module dropped below its floor.
+  - On main merge: `update` mode — auto-ratchets all floors up and commits the new values. Zero human intervention.
+- **Local check**: `make coverage-check` to verify locally. `make coverage-ratchet` to preview what CI would commit.
+- **Adding tests**: Write tests, push. CI will auto-raise the floors on merge. The next PR that drops any module will fail.
 
 ## Skill routing
 

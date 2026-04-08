@@ -20,3 +20,4 @@ repos:
         pass_filenames: false
         stages: [pre-commit, pre-push]
         files: ^(ha-addon/mammamiradio/|mammamiradio/|pyproject\.toml|radio\.toml|\.github/workflows/addon-build\.yml)
+
