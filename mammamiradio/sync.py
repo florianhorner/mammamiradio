@@ -44,6 +44,9 @@ CREATE TABLE IF NOT EXISTS listener_persona (
     last_session TEXT,
     updated_at TEXT DEFAULT (datetime('now'))
 );
+
+-- Seed the default persona row so UPDATE-based methods never no-op
+INSERT OR IGNORE INTO listener_persona (id) VALUES (1);
 """
 
 

@@ -13,6 +13,16 @@ The current version source of truth is `pyproject.toml`.
 - **Listener connection tracking**: `LiveStreamHub` now tracks active, peak, and total listener counts. Exposed on the `/status` admin API under `listeners`.
 - **40+ pre-written Italian impossible lines** in `context_cues.py`: tagged by show segment (alba, mattina, pranzo, pomeriggio, sera, notte), day-of-week, and listener behavior pattern (restless_skipper, ballad_lover, energy_seeker, rides_every_song).
 - **Shareware gold closer**: the 3rd demo banter clip is now a time-aware TTS line instead of a pre-recorded clip, selling differentiation over quality in the trial experience.
+- **Compounding listener memory**: returning listeners are recognized across sessions. The hosts build theories, running jokes, and callbacks that persist in SQLite and feed back into banter prompts. Session 1 gets curiosity; session 5 gets inside jokes.
+- **Persona feedback loop**: Claude's banter responses now include `persona_updates` (theories, jokes, callbacks) that are persisted and injected into future prompts automatically.
+- **Track motif recording**: every played track is recorded in the listener persona, giving hosts material to reference past music naturally.
+- **Session tracking**: listening sessions are detected (10-minute gap = new session) and counted, so banter adapts to how often the listener returns.
+
+### Fixed
+
+- **Persona security**: instruction-like patterns in LLM-generated persona entries are now filtered (matching the existing `ha_context` sanitizer), preventing stored prompt injection across sessions.
+- **Callback sanitization**: `callbacks_used` entries from LLM responses now go through `_sanitize()` before storage.
+- **Persona row seeding**: `init_db` now seeds the default persona row, preventing `increment_session` from silently no-oping on fresh databases.
 
 ## [2.0.2] - 2026-04-06
 

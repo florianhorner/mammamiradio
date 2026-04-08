@@ -342,7 +342,12 @@ async def write_banter(
     is_new_listener: bool = False,
     is_first_listener: bool = False,
 ) -> list[tuple[HostPersonality, str]]:
-    """Generate short host banter with recent tracks, jokes, and home context."""
+    """Generate short host banter with recent tracks, jokes, and home context.
+
+    When a PersonaStore is available on state, loads the listener persona into
+    the prompt and requests persona_updates from the LLM.  The returned updates
+    are persisted asynchronously so sessions compound.
+    """
     if not _has_script_llm(config):
         host = random.choice(config.hosts)
         fallback = {"it": "E torniamo alla musica!", "en": "And back to the music!"}
@@ -403,6 +408,37 @@ Acknowledge this subtly — "oh, abbiamo compagnia" or "qualcuno si è sintonizz
 Don't over-explain. The uncanny part is that the DJ noticed IMMEDIATELY.
 """
 
+    # Compounding listener memory — persona built across sessions
+    persona_block = ""
+    persona_store = getattr(state, "persona_store", None)
+    if persona_store:
+        try:
+            persona = await persona_store.get_persona()
+            persona_ctx = persona.to_prompt_context()
+            if persona_ctx:
+                persona_block = f"""
+<listener_memory>
+{persona_ctx}
+Use this to make the listener feel recognized — callback old songs, reference
+running jokes from past sessions, build on your theories about who's listening.
+Never explain HOW you remember. Just casually reference things as if it's natural.
+The more sessions they've had, the more familiar and personal you should sound.
+First-time listeners get curiosity and intrigue. Returning listeners get inside jokes.
+</listener_memory>
+"""
+        except Exception:
+            logger.warning("Failed to load persona for banter prompt", exc_info=True)
+
+    # If persona is active, request persona_updates in the response
+    persona_update_schema = ""
+    if persona_block:
+        persona_update_schema = """,
+  "persona_updates": {{
+    "new_theories": ["new theory about the listener based on this interaction, or empty"],
+    "new_jokes": ["any new running joke to carry across sessions, or empty"],
+    "callbacks_used": ["song titles you referenced from their history, or empty"]
+  }}"""
+
     prompt = f"""Write a short radio banter between the hosts. 2-4 exchanges total.
 
 Just played: {recent if recent else "opening of the show"}
@@ -411,9 +447,9 @@ Running jokes to optionally callback: {jokes if jokes else "none yet, you may se
 <context_awareness>
 {context_block}
 </context_awareness>
-{new_listener_block}{listener_block}
+{new_listener_block}{listener_block}{persona_block}
 Return JSON:
-{{"lines": [{{"host": "HostName", "text": "what they say"}}], "new_joke": "brief description of any new running joke or null"}}"""
+{{"lines": [{{"host": "HostName", "text": "what they say"}}], "new_joke": "brief description of any new running joke or null"{persona_update_schema}}}"""
 
     try:
         data = await _generate_json_response(
@@ -421,7 +457,7 @@ Return JSON:
             config=config,
             state=state,
             model=config.audio.claude_creative_model,
-            max_tokens=500,
+            max_tokens=600,
         )
 
         result = []
@@ -431,6 +467,13 @@ Return JSON:
 
         if data.get("new_joke"):
             state.add_joke(data["new_joke"])
+
+        # Persist persona updates from the LLM response (fire-and-forget)
+        if persona_store and data.get("persona_updates"):
+            try:
+                await persona_store.update_persona(data["persona_updates"])
+            except Exception:
+                logger.warning("Failed to persist persona updates", exc_info=True)
 
         logger.info("Generated banter: %d lines", len(result))
         return result

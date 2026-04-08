@@ -10,7 +10,10 @@ from collections import deque
 from dataclasses import dataclass, field
 from enum import Enum, StrEnum
 from pathlib import Path
-from typing import ClassVar
+from typing import TYPE_CHECKING, ClassVar
+
+if TYPE_CHECKING:
+    from mammamiradio.persona import PersonaStore
 
 
 class SegmentType(Enum):
@@ -379,6 +382,8 @@ class StationState:
     force_next: SegmentType | None = None
     # Shareware trial: counts canned banter clips actually streamed to listener
     canned_clips_streamed: int = 0
+    # Persona store for compounding listener memory (set by main.py at startup)
+    persona_store: PersonaStore | None = None
     # Consumption metrics
     api_calls: int = 0
     api_input_tokens: int = 0

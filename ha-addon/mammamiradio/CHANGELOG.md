@@ -7,6 +7,9 @@
 - Impossible moments: time-aware, listener-aware banter that works without Spotify or Home Assistant
 - New listener greeting: DJ acknowledges when someone tunes in
 - Listener connection tracking on admin status API
+- Compounding listener memory: returning listeners are recognized across sessions with personalized banter
+- Track motif recording and session tracking for richer host callbacks
+- Persona security: instruction-pattern filtering prevents stored prompt injection
 
 ## 2.0.2
 
