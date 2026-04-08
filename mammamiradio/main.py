@@ -115,6 +115,7 @@ async def startup():
     app.state.source_switch_lock = asyncio.Lock()
     app.state.csrf_token = secrets.token_urlsafe(32)
     app.state.stream_hub = LiveStreamHub()
+    app.state.stream_hub.bind_state(state)
     app.state.station_state = state
     app.state.config = config
     app.state.start_time = time.time()

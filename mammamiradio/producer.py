@@ -13,6 +13,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from mammamiradio.config import StationConfig
+from mammamiradio.context_cues import generate_impossible_line
 from mammamiradio.downloader import download_track
 from mammamiradio.ha_context import HomeContext, fetch_home_context
 from mammamiradio.models import (
@@ -128,6 +129,27 @@ async def _try_crossfade(
     except Exception as exc:
         logger.warning("Crossfade failed, using standalone: %s", exc)
         return voice_path
+
+
+async def _synthesize_impossible_moment(
+    line: str,
+    config: StationConfig,
+    state: StationState,
+) -> Path:
+    """Synthesize an impossible-moment line via TTS with crossfade. Raises on failure."""
+    host = random.choice(config.hosts)
+    imp_path = config.tmp_dir / f"impossible_{uuid4().hex[:8]}.mp3"
+    await synthesize(
+        line,
+        host.voice,
+        imp_path,
+        engine=host.engine,
+        edge_fallback_voice=host.edge_fallback_voice,
+    )
+    xfade_out = config.tmp_dir / f"impossible_xf_{uuid4().hex[:8]}.mp3"
+    audio_path = await _try_crossfade(imp_path, config, xfade_out)
+    state.last_banter_script = [{"host": host.name, "text": line, "type": "impossible"}]
+    return audio_path
 
 
 _recently_played_clips: deque[str] = deque(maxlen=50)
@@ -526,19 +548,61 @@ async def run_producer(
                 # Track listening sessions for compounding persona
                 await _maybe_start_session(state)
 
+                # Capture new-listener count (defer clearing until segment succeeds)
+                _new_listener_count = state.new_listeners_pending
+                _is_new_listener = _new_listener_count > 0
+                _is_first_listener = _is_new_listener and state.listeners_active == 1
+
+                impossible_tts = False
                 canned = None
-                if not config.anthropic_api_key:
-                    canned = _pick_canned_clip("banter", state=state)
+
+                if not (config.anthropic_api_key or config.openai_api_key):
+                    # No LLM — use canned clips + impossible TTS lines
+                    if _is_new_listener:
+                        line = generate_impossible_line(
+                            segments_produced=state.segments_produced,
+                            listener_patterns=state.listener.patterns,
+                            is_new_listener=True,
+                            is_first_listener=_is_first_listener,
+                        )
+                        logger.info("Impossible moment (new listener): %s", line[:60])
+                        try:
+                            audio_path = await _synthesize_impossible_moment(line, config, state)
+                            impossible_tts = True
+                        except Exception as exc:
+                            logger.warning("Impossible moment TTS failed: %s", exc)
+
+                    if not impossible_tts:
+                        # Use canned clips for first 2, then impossible TTS as the gold closer
+                        if state.canned_clips_streamed < SHAREWARE_CANNED_LIMIT - 1:
+                            canned = _pick_canned_clip("banter", state=state)
+                        if not canned:
+                            line = generate_impossible_line(
+                                segments_produced=state.segments_produced,
+                                listener_patterns=state.listener.patterns,
+                            )
+                            logger.info("Impossible moment (no LLM): %s", line[:60])
+                            try:
+                                audio_path = await _synthesize_impossible_moment(line, config, state)
+                                impossible_tts = True
+                            except Exception as exc:
+                                logger.warning("Impossible TTS failed, falling back to canned: %s", exc)
+                                canned = _pick_canned_clip("banter", state=state)
 
                 if canned:
                     logger.info("Using pre-bundled banter clip: %s", canned.name)
                     audio_path = canned
                     state.last_banter_script = [{"host": "Radio", "text": "(pre-recorded banter)"}]
-                else:
+                elif not impossible_tts:
                     try:
                         # Generate transition voice + banter in parallel
                         transition_task = write_transition(state, config, next_segment="banter")
-                        banter_task = write_banter(state, config)
+                        banter_task = write_banter(
+                            state,
+                            config,
+                            is_new_listener=_is_new_listener,
+                            is_first_listener=_is_first_listener,
+                        )
                         (trans_host, trans_text), lines = await asyncio.gather(transition_task, banter_task)
 
                         # Synthesize transition + dialogue in parallel
@@ -584,6 +648,10 @@ async def run_producer(
                     except Exception as exc:
                         logger.warning("Banter TTS failed, skipping segment: %s", exc)
                         continue
+
+                # Clear new-listener flag only after banter was successfully produced
+                if _is_new_listener:
+                    state.new_listeners_pending = max(0, state.new_listeners_pending - _new_listener_count)
 
                 segment = Segment(
                     type=SegmentType.BANTER,

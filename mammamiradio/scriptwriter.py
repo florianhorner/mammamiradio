@@ -335,7 +335,13 @@ Rules:
 - Output ONLY valid JSON, no markdown fences or extra text."""
 
 
-async def write_banter(state: StationState, config: StationConfig) -> list[tuple[HostPersonality, str]]:
+async def write_banter(
+    state: StationState,
+    config: StationConfig,
+    *,
+    is_new_listener: bool = False,
+    is_first_listener: bool = False,
+) -> list[tuple[HostPersonality, str]]:
     """Generate short host banter with recent tracks, jokes, and home context.
 
     When a PersonaStore is available on state, loads the listener persona into
@@ -387,6 +393,21 @@ Never say "the data shows" or reference tracking. Maintain plausible deniability
 </listener_behavior>
 """
 
+    # New listener awareness — the "benvenuto" impossible moment
+    new_listener_block = ""
+    if is_first_listener:
+        new_listener_block = """
+IMPOSSIBLE MOMENT: Someone JUST tuned in — they are the FIRST listener!
+Acknowledge this naturally. Be excited but not desperate. "Finalmente qualcuno ci ascolta!"
+This is the WOW moment — the listener just connected and immediately hears the DJ notice.
+"""
+    elif is_new_listener:
+        new_listener_block = """
+IMPOSSIBLE MOMENT: A new listener JUST tuned in right now!
+Acknowledge this subtly — "oh, abbiamo compagnia" or "qualcuno si è sintonizzato".
+Don't over-explain. The uncanny part is that the DJ noticed IMMEDIATELY.
+"""
+
     # Compounding listener memory — persona built across sessions
     persona_block = ""
     persona_store = getattr(state, "persona_store", None)
@@ -426,7 +447,7 @@ Running jokes to optionally callback: {jokes if jokes else "none yet, you may se
 <context_awareness>
 {context_block}
 </context_awareness>
-{listener_block}{persona_block}
+{new_listener_block}{listener_block}{persona_block}
 Return JSON:
 {{"lines": [{{"host": "HostName", "text": "what they say"}}], "new_joke": "brief description of any new running joke or null"{persona_update_schema}}}"""
 

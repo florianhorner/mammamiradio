@@ -17,7 +17,7 @@ from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Stre
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 
 from mammamiradio.capabilities import capabilities_to_dict, get_capabilities
-from mammamiradio.models import PersonalityAxes, PlaylistSource, Segment, SegmentType
+from mammamiradio.models import PersonalityAxes, PlaylistSource, Segment, SegmentType, StationState
 from mammamiradio.playlist import (
     ExplicitSourceError,
     list_user_playlists,
@@ -335,6 +335,11 @@ class LiveStreamHub:
         self._listener_queue_size = listener_queue_size
         self._listeners: dict[int, asyncio.Queue[bytes | None]] = {}
         self._next_listener_id = 0
+        self._state: StationState | None = None
+
+    def bind_state(self, state: StationState) -> None:
+        """Attach station state for listener tracking. Call once at startup."""
+        self._state = state
 
     def subscribe(self) -> tuple[int, asyncio.Queue[bytes | None]]:
         """Register a listener and return its dedicated chunk queue."""
@@ -342,13 +347,22 @@ class LiveStreamHub:
         self._next_listener_id += 1
         queue: asyncio.Queue[bytes | None] = asyncio.Queue(maxsize=self._listener_queue_size)
         self._listeners[listener_id] = queue
-        logger.info("Listener connected (%d active)", len(self._listeners))
+        active = len(self._listeners)
+        logger.info("Listener connected (%d active)", active)
+        if self._state is not None:
+            self._state.listeners_active = active
+            self._state.listeners_total += 1
+            self._state.listeners_peak = max(self._state.listeners_peak, active)
+            self._state.new_listeners_pending += 1
         return listener_id, queue
 
     def unsubscribe(self, listener_id: int) -> None:
         """Remove a listener and drop any future broadcast work for it."""
         if self._listeners.pop(listener_id, None) is not None:
-            logger.info("Listener disconnected (%d active)", len(self._listeners))
+            active = len(self._listeners)
+            logger.info("Listener disconnected (%d active)", active)
+            if self._state is not None:
+                self._state.listeners_active = active
 
     def has_listener(self, listener_id: int) -> bool:
         """Return whether a listener is still subscribed."""
@@ -1321,6 +1335,11 @@ async def status(request: Request, _: None = Depends(require_admin_access)):
                 "input_tokens": state.api_input_tokens,
                 "output_tokens": state.api_output_tokens,
                 "tts_characters": state.tts_characters,
+            },
+            "listeners": {
+                "active": state.listeners_active,
+                "peak": state.listeners_peak,
+                "total": state.listeners_total,
             },
             "force_pending": state.force_next.value if state.force_next else None,
             "session_stopped": state.session_stopped,
