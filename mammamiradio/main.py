@@ -12,10 +12,12 @@ from fastapi import FastAPI
 
 from mammamiradio.config import load_config
 from mammamiradio.models import StationState
+from mammamiradio.persona import PersonaStore
 from mammamiradio.playlist import DEMO_TRACKS, fetch_startup_playlist, read_persisted_source
 from mammamiradio.producer import run_producer
 from mammamiradio.spotify_player import SpotifyPlayer
 from mammamiradio.streamer import LiveStreamHub, router, run_playback_loop
+from mammamiradio.sync import init_db
 
 logging.basicConfig(
     level=getattr(logging, os.getenv("LOG_LEVEL", "INFO").upper(), logging.INFO),
@@ -42,6 +44,11 @@ async def startup():
 
     config.tmp_dir.mkdir(parents=True, exist_ok=True)
     config.cache_dir.mkdir(parents=True, exist_ok=True)
+
+    # Initialize persona database and store for compounding listener memory
+    db_path = config.cache_dir / "mammamiradio.db"
+    init_db(db_path)
+    persona_store = PersonaStore(db_path)
 
     # Dependency checks with install hints
     import shutil
@@ -98,6 +105,7 @@ async def startup():
         playlist_source=playlist_source,
         startup_source_error=startup_source_error,
         spotify_auth_url=_auth_url,
+        persona_store=persona_store,
     )
     queue: asyncio.Queue = asyncio.Queue(maxsize=config.pacing.lookahead_segments + 2)
 

@@ -50,6 +50,32 @@ from mammamiradio.tts import synthesize, synthesize_ad, synthesize_dialogue
 
 logger = logging.getLogger(__name__)
 
+
+_background_tasks: set[asyncio.Task] = set()
+
+
+async def _record_motif(state: StationState, track) -> None:
+    """Record a played track as a motif in the listener persona (fire-and-forget)."""
+    persona_store = getattr(state, "persona_store", None)
+    if not persona_store:
+        return
+    try:
+        await persona_store.record_motif(track.artist, track.title)
+    except Exception:
+        logger.warning("Failed to record motif", exc_info=True)
+
+
+async def _maybe_start_session(state: StationState) -> None:
+    """Check if this is a new listening session and increment the counter."""
+    persona_store = getattr(state, "persona_store", None)
+    if not persona_store:
+        return
+    if persona_store.maybe_new_session():
+        await persona_store.increment_session()
+        persona = await persona_store.get_persona()
+        logger.info("Listener session #%d started", persona.session_count)
+
+
 # Directory for pre-bundled banter and ad clips that ship with the package.
 # These provide station personality on day 1 without an Anthropic API key.
 _DEMO_ASSETS_DIR = Path(__file__).parent / "demo_assets"
@@ -484,6 +510,11 @@ async def run_producer(
                 _bound_track = track
                 _set_last_music_file(norm_path)
 
+                # Record track as a motif in listener persona (async, non-blocking)
+                task = asyncio.create_task(_record_motif(state, track))
+                _background_tasks.add(task)
+                task.add_done_callback(_background_tasks.discard)
+
                 def _music_callback(_t=_bound_track) -> None:
                     state.after_music(_t)
 
@@ -491,6 +522,9 @@ async def run_producer(
 
             elif seg_type == SegmentType.BANTER:
                 logger.info("Producing BANTER")
+
+                # Track listening sessions for compounding persona
+                await _maybe_start_session(state)
 
                 canned = None
                 if not config.anthropic_api_key:
