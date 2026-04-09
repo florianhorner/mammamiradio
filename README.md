@@ -6,7 +6,7 @@
 
 <p align="center">AI-powered Italian radio station engine. It streams a continuous MP3 from your Spotify library, layers in Claude-written host banter and absurd AI-generated ads, and exposes both a control-plane dashboard and a public listener page.</p>
 
-The app is designed to degrade gracefully. If Spotify auth is missing, it falls back to a demo playlist. If go-librespot is unavailable, it can still synthesize a station from local files, `yt-dlp`, or generated placeholder audio. If Anthropic is unavailable, banter and ads fall back to short stock lines instead of crashing the station.
+The app is designed to degrade gracefully. If Spotify auth is missing, it falls back to live Italian charts when `MAMMAMIRADIO_ALLOW_YTDLP=true`, otherwise to a bundled demo playlist. If go-librespot is unavailable, it can still synthesize a station from local files, `yt-dlp`, or generated placeholder audio. If Anthropic is unavailable, banter and ads fall back to short stock lines instead of crashing the station.
 
 ## Screenshots
 
@@ -121,7 +121,7 @@ The app now treats first run as setup, not as "the dashboard happened to load". 
 > **How the Spotify pieces fit together:**
 > Three things connect the station to Spotify, each doing a different job.
 > **Developer credentials** (client ID + secret) talk to the Spotify Web API for metadata only: what tracks are in a playlist, your library, search results, and track info so the hosts can reference what is playing. **go-librespot** is a Spotify Connect receiver that streams actual audio, the same way a Chromecast or Sonos speaker does. **Device selection** is the manual step: open your Spotify app, tap the device picker, and choose `mammamiradio` so Spotify routes audio to go-librespot. A **playlist share link** is an alternative to the source picker, letting you paste a URL instead of browsing playlists interactively.
-> Each layer degrades independently. No credentials means demo tracks. No go-librespot means downloaded or local audio. No device selection means the station waits in degraded mode. The station always produces a stream. See [ARCHITECTURE.md](ARCHITECTURE.md#how-spotify-integration-works) for the full breakdown.
+> Each layer degrades independently. No credentials means live Italian charts when `MAMMAMIRADIO_ALLOW_YTDLP=true`, otherwise demo tracks. No go-librespot means downloaded or local audio. No device selection means the station waits in degraded mode. The station always produces a stream. See [ARCHITECTURE.md](ARCHITECTURE.md#how-spotify-integration-works) for the full breakdown.
 
 ### Setup
 
@@ -215,8 +215,8 @@ On first full Spotify run, select `mammamiradio` as the playback device in Spoti
 
 This repo ships a shared [`conductor.json`](conductor.json) for Conductor workspaces.
 
-- setup creates `.venv`, installs app plus dev dependencies, and symlinks `.env` from `$CONDUCTOR_ROOT_PATH` when available
-- run delegates to `./start.sh`, binds to `$CONDUCTOR_PORT`, and isolates FIFO/cache/tmp/go-librespot state under `.context/conductor/`
+- setup creates `.venv`, installs app plus dev dependencies, and symlinks `.env` from `~/.config/mammamiradio/.env` when present, falling back to `$CONDUCTOR_ROOT_PATH/.env`
+- run delegates to `./start.sh`, binds to `$CONDUCTOR_PORT`, isolates FIFO/cache/tmp/go-librespot state under `.context/conductor/`, and enables `MAMMAMIRADIO_ALLOW_YTDLP=true` by default for local workspaces
 - archive stops workspace-owned helper processes and removes the workspace runtime state
 
 ### Sharing with friends
@@ -240,7 +240,7 @@ The station is intentionally resilient:
 
 | Missing dependency | What happens |
 | --- | --- |
-| Spotify client credentials | Uses a built-in demo Italian playlist |
+| Spotify client credentials | Uses live Italian charts when `MAMMAMIRADIO_ALLOW_YTDLP=true`, otherwise a built-in Italian jazz demo playlist |
 | go-librespot or Spotify device connection | Falls back to local files, then `yt-dlp`, then placeholder audio |
 | Anthropic API key or Claude request failure | Falls back to OpenAI `gpt-4o-mini` if `OPENAI_API_KEY` is set, then to stock copy |
 | OpenAI API key missing or request failure | Falls back to Edge TTS voice for that host |
@@ -248,6 +248,7 @@ The station is intentionally resilient:
 | Ad brands missing | Skips ad generation instead of failing startup |
 
 If you keep a local `music/` directory with matching MP3s, the downloader will prefer that before trying `yt-dlp`.
+Conductor's default run script enables `MAMMAMIRADIO_ALLOW_YTDLP=true` for local workspaces, so those runs prefer live charts over the bundled demo set when Spotify metadata is unavailable.
 
 ## Configuration
 
@@ -277,7 +278,7 @@ The Home Assistant token is never stored in `radio.toml`. Set it via `HA_TOKEN` 
 | `/stream` | GET | Public | Infinite MP3 stream |
 | `/healthz` | GET | Public | Liveness probe with process uptime |
 | `/readyz` | GET | Public | Readiness probe with queue depth and startup status |
-| `/public-status` | GET | Public | Current segment, recent log, upcoming preview |
+| `/public-status` | GET | Public | Current segment, recent log, and the real queued segments (`upcoming_mode` is `queued` or `building`) |
 | `/status` | GET | Admin | Full admin JSON: queue depth, uptime, scripts, HA context, errors |
 | `/api/logs` | GET | Admin | Recent go-librespot logs |
 | `/api/setup/status` | GET | Admin | First-run setup status, detected run mode, and station mode |
@@ -300,15 +301,15 @@ The Home Assistant token is never stored in `radio.toml`. Set it via `HA_TOKEN` 
 | `/api/hosts/{name}/personality/reset` | POST | Admin | Reset host personality to defaults |
 | `/api/pacing` | GET | Admin | Current pacing configuration |
 | `/api/setup/save-keys` | POST | Admin | Save API keys via dashboard |
-| `/api/capabilities` | GET | Public | Capability flags, tier, next-step hint, connect status |
+| `/api/capabilities` | GET | Admin | Capability flags, tier, next-step hint, connect status |
 | `/api/trigger` | POST | Admin | Trigger segment production |
-| `/api/stop` | POST | Admin | Gracefully stop the session (skip + purge + pause producer) |
+| `/api/stop` | POST | Admin | Gracefully stop the session (skip + purge + pause producer until `/api/resume`) |
 | `/api/resume` | POST | Admin | Resume a stopped session |
 | `/api/credentials` | POST | Admin | Update credentials at runtime |
 
 ## Admin access
 
-The public surface is `/listen`, `/stream`, and `/public-status`.
+The public surface is `/listen`, `/stream`, `/public-status`, `/healthz`, and `/readyz`.
 
 Admin routes are:
 

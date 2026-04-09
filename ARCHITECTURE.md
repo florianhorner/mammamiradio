@@ -7,7 +7,7 @@ One background task stays ahead and produces segments. Another reads the next re
 ## Runtime overview
 
 ```text
-Spotify playlist / liked songs / demo tracks
+Spotify playlist / liked songs / live charts / demo tracks
                 |
                 v
            playlist.py
@@ -33,7 +33,7 @@ Spotify playlist / liked songs / demo tracks
 
 1. Loads `radio.toml` and `.env` through `config.py`.
 2. Validates the config and applies legacy migration like `station.bitrate -> audio.bitrate`.
-3. Restores persisted source selection from `cache/playlist_source.json`, then fetches the playlist (by source kind: playlist, liked songs, or URL) from Spotify or falls back to demo tracks.
+3. Restores persisted source selection from `cache/playlist_source.json`, then fetches the playlist (by source kind: playlist, liked songs, or URL) from Spotify or falls back to live Italian charts when `MAMMAMIRADIO_ALLOW_YTDLP=true`, otherwise demo tracks.
 4. Starts `SpotifyPlayer`, which owns go-librespot and the FIFO drain path.
 5. Creates shared app state, then launches:
    - `run_producer()` to fill the lookahead queue
@@ -121,7 +121,7 @@ These authenticate the app against the **Spotify Web API** via Spotipy. The Web 
 - search the Spotify catalog from the dashboard
 - read track names, artists, and durations so the hosts can reference what is playing
 
-Without credentials the app falls back to a built-in demo playlist of Italian tracks. The demo playlist has hardcoded metadata so banter still references real song names.
+Without credentials the app falls back to live Italian charts when `MAMMAMIRADIO_ALLOW_YTDLP=true`, otherwise to a built-in demo playlist of Italian tracks. The demo playlist has hardcoded metadata so banter still references real song names.
 
 ### go-librespot (audio capture)
 
@@ -152,7 +152,7 @@ Developer creds          go-librespot             Spotify app
                    radio stream
 ```
 
-Each layer is independent. Missing credentials means demo tracks. Missing go-librespot means downloaded or local audio. Missing device selection means the app waits in degraded mode until the user connects. The station always produces a stream.
+Each layer is independent. Missing credentials means live Italian charts when `MAMMAMIRADIO_ALLOW_YTDLP=true`, otherwise demo tracks. Missing go-librespot means downloaded or local audio. Missing device selection means the app waits in degraded mode until the user connects. The station always produces a stream.
 
 ## Spotify audio path (FIFO details)
 

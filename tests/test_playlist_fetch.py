@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from mammamiradio.config import load_config
-from mammamiradio.models import PlaylistSource
+from mammamiradio.models import PlaylistSource, Track
 from mammamiradio.playlist import (
     DEMO_TRACKS,
     _track_from_spotify_item,
@@ -81,6 +81,22 @@ def test_no_credentials_shuffles_when_configured(config):
     results = [tuple(t.title for t in fetch_playlist(config)) for _ in range(10)]
     # With 10 tracks shuffled 10 times, extremely unlikely all orderings are identical
     assert len(set(results)) > 1
+
+
+def test_no_credentials_uses_live_charts_when_ytdlp_enabled(config, monkeypatch):
+    config.spotify_client_id = ""
+    config.spotify_client_secret = ""
+    chart_tracks = [Track(title="Chart One", artist="Artist One", duration_ms=210000, spotify_id="c1")]
+    monkeypatch.setenv("MAMMAMIRADIO_ALLOW_YTDLP", "true")
+
+    with patch("mammamiradio.playlist._fetch_current_italy_charts", return_value=chart_tracks):
+        tracks, source, err = fetch_startup_playlist(config)
+
+    assert len(tracks) == 1
+    assert tracks[0].title == "Chart One"
+    assert source.kind == "charts"
+    assert source.label == "Current Italian charts"
+    assert "Spotify credentials are missing" in err
 
 
 # --- With credentials + playlist URL → fetches from Spotify ---
@@ -188,6 +204,25 @@ def test_liked_songs_fails_returns_demo(config_with_spotify):
     assert len(result) == len(DEMO_TRACKS)
 
 
+def test_liked_fallback_uses_live_charts_when_enabled(config_with_spotify, monkeypatch):
+    mock_sp = MagicMock()
+    mock_sp.playlist_tracks.side_effect = Exception("Playlist error")
+    mock_sp.current_user_saved_tracks.return_value = {"items": [], "next": None}
+    chart_tracks = [Track(title="Chart Two", artist="Artist Two", duration_ms=210000, spotify_id="c2")]
+    monkeypatch.setenv("MAMMAMIRADIO_ALLOW_YTDLP", "true")
+
+    with (
+        patch("mammamiradio.playlist.get_spotify_client", return_value=mock_sp),
+        patch("mammamiradio.playlist._fetch_current_italy_charts", return_value=chart_tracks),
+    ):
+        tracks, source, error = fetch_startup_playlist(config_with_spotify)
+
+    assert len(tracks) == 1
+    assert tracks[0].title == "Chart Two"
+    assert source.kind == "charts"
+    assert error
+
+
 # --- Empty playlist from API → returns demo tracks ---
 
 
@@ -266,6 +301,31 @@ def test_load_explicit_liked_songs_success(config_with_spotify):
     assert len(tracks) == 1
     assert source.kind == "liked_songs"
     assert source.track_count == 1
+
+
+def test_load_explicit_charts_source_success(config_with_spotify):
+    chart_tracks = [Track(title="Chart Three", artist="Artist Three", duration_ms=210000, spotify_id="c3")]
+    with patch("mammamiradio.playlist._fetch_current_italy_charts", return_value=chart_tracks):
+        tracks, source = load_explicit_source(
+            config_with_spotify,
+            PlaylistSource(kind="charts", source_id="apple_music_it_top_50", label="Current Italian charts"),
+        )
+
+    assert len(tracks) == 1
+    assert tracks[0].title == "Chart Three"
+    assert source.kind == "charts"
+    assert source.label == "Current Italian charts"
+
+
+def test_load_explicit_charts_source_raises_when_unavailable(config_with_spotify):
+    with (
+        patch("mammamiradio.playlist._fetch_current_italy_charts", return_value=[]),
+        pytest.raises(Exception, match="temporarily unavailable"),
+    ):
+        load_explicit_source(
+            config_with_spotify,
+            PlaylistSource(kind="charts", source_id="apple_music_it_top_50", label="Current Italian charts"),
+        )
 
 
 def test_explicit_source_does_not_fall_back_on_failure(config_with_spotify):

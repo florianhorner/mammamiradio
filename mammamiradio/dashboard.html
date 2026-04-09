@@ -77,6 +77,15 @@ body {
   margin: 0 auto;
 }
 
+.dashboard-grid {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 12px;
+  margin-top: 20px;
+}
+
 /* Golden sun glow top-right, like the record cover */
 body::before {
   content: '';
@@ -540,6 +549,35 @@ h1 {
   body { padding: 0 12px 80px; }
   h1 { font-size: 28px; }
 }
+
+@media (min-width: 1024px) {
+  body {
+    max-width: 1200px;
+    padding: 0 24px 96px;
+  }
+  .dashboard-grid {
+    grid-template-columns: minmax(0, 1.45fr) minmax(320px, 1fr);
+    gap: 14px 16px;
+    align-items: start;
+  }
+  #radio-dial,
+  #now-playing,
+  #ticker-wrap,
+  #golden-path-card,
+  #controls {
+    grid-column: 1;
+  }
+  #connect-card,
+  #help-toggle,
+  #help-popover,
+  #queue-card,
+  #playlist-card,
+  #unlock-ai,
+  #connect-ha,
+  #advanced-card {
+    grid-column: 2;
+  }
+}
 </style>
 </head>
 <body>
@@ -555,8 +593,10 @@ h1 {
   </div>
 </div>
 
+<main class="dashboard-grid">
+
 <!-- Radio dial (shown before first data, stays visible as ambient UI) -->
-<div class="dial-card" id="radio-dial" style="margin-top:20px">
+<div class="dial-card" id="radio-dial">
   <div class="dial-header">
     <div>
       <div class="dial-label" id="dial-label">Searching for signal...</div>
@@ -686,6 +726,8 @@ h1 {
   <button class="btn btn-sm" onclick="saveAdvancedCredentials()">Save</button>
   <span class="card-muted" id="advanced-status"></span>
 </div>
+
+</main>
 
 <!-- Transition overlay -->
 <div class="transition-overlay" id="transition-overlay">
@@ -1202,13 +1244,18 @@ function updateStatus(d) {
 
   // Queue (only after Spotify connected — golden path: "nothing else to look at")
   const upcoming = d.upcoming || [];
+  const upcomingMode = d.upcoming_mode || '';
   const queueCard = document.getElementById('queue-card');
   const isConnected = caps && caps.capabilities && caps.capabilities.spotify_connected;
-  if (upcoming.length && isConnected) {
+  if (upcoming.length || upcomingMode === 'building' || isConnected) {
     queueCard.style.display = '';
-    document.getElementById('queue-list').innerHTML = upcoming.slice(0, 3).map(e =>
-      '<li>' + escHtml(e.label || e.type || '?') + '</li>'
-    ).join('');
+    if (upcoming.length) {
+      document.getElementById('queue-list').innerHTML = upcoming.slice(0, 3).map(e =>
+        '<li>' + escHtml(e.label || e.type || '?') + '</li>'
+      ).join('');
+    } else {
+      document.getElementById('queue-list').innerHTML = '<li>Building next segments...</li>';
+    }
   } else {
     queueCard.style.display = 'none';
   }

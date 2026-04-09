@@ -57,3 +57,15 @@ The signature ad system provides rich format instructions (duo_scene should prod
 ## P3: Wire disclaimer_goblin into format system
 The disclaimer_goblin role is defined in SPEAKER_ROLES and has a voice in radio.toml (Rinaldo), but no format in _FORMAT_ROLES ever requests it. It can only appear via random fallback casting. Consider adding it as a secondary role for classic_pitch or testimonial formats, or creating a new format that features it.
 **Effort:** S (CC: ~5min) | **Depends on:** signature ad system | **Files:** mammamiradio/producer.py
+
+## P1: Listener QA backlog (2026-04-09 live feedback)
+- Re-enable direct playlist reordering UX in dashboard (backend endpoints already exist: `/api/playlist/move`, `/api/playlist/move_to_next`).
+- Fix playlist source UX so Spotify URL import is explicit and does not conflict with search UI.
+- Clarify playlist lifecycle in UI (what happens when station reaches end / how rotation works).
+- Align "Up Next" preview with actual queued segments to avoid UI/audio desync.
+- Add top-level pipeline indicators near "On Air" (Anthropic status, OpenAI fallback, degraded mode).
+- Redesign Pacing UI for clarity (outcomes, cadence preview, plain-language effects).
+- Add post-download/normalize tail-silence guard and skip-bad-track fallback for broken endings.
+- Restore skeuomorphic radio visual language consistently across admin and listener.
+- Keep manual `/api/stop` sticky until an explicit `/api/resume`; do not auto-resume stopped sessions after idle time.
+- Make `scripts/stream_watch_server.py` work against secured stations by using an authenticated status path or a dedicated read-only endpoint instead of unauthenticated `/status` and `/api/capabilities`.

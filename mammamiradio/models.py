@@ -198,6 +198,9 @@ class AdHistoryEntry:
     timestamp: float = 0.0
     format: str = ""
     sonic_signature: str = ""
+    environment: str = ""
+    music_bed: str = ""
+    transition_motif: str = ""
 
 
 @dataclass
@@ -356,6 +359,7 @@ class StationState:
     segments_since_station_id: int = 0
     segments_since_time_check: int = 0
     running_jokes: deque[str] = field(default_factory=lambda: deque(maxlen=5))
+    recent_transition_texts: deque[str] = field(default_factory=lambda: deque(maxlen=8))
     current_track: Track | None = None
     segments_produced: int = 0
     failed_segments: int = 0
@@ -584,6 +588,9 @@ class StationState:
         summary: str = "",
         format: str = "",
         sonic_signature: str = "",
+        environment: str = "",
+        music_bed: str = "",
+        transition_motif: str = "",
     ) -> None:
         """Record a single ad spot in history (called per-spot within a break)."""
         self.ad_history.append(
@@ -593,6 +600,9 @@ class StationState:
                 timestamp=time.time(),
                 format=format,
                 sonic_signature=sonic_signature,
+                environment=environment,
+                music_bed=music_bed,
+                transition_motif=transition_motif,
             )
         )
 

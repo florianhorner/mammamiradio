@@ -138,6 +138,18 @@ def test_generate_sfx_cash_register(mock_subprocess):
     assert "aecho" in joined
 
 
+def test_generate_sfx_cash_register_failure_uses_simple_fallback(mock_subprocess):
+    out = Path("/tmp/sfx.mp3")
+    with (
+        patch("mammamiradio.normalizer._generate_cash_register", side_effect=RuntimeError("ffmpeg broke")),
+        patch("mammamiradio.normalizer.generate_tone", return_value=out) as mock_tone,
+    ):
+        result = generate_sfx(out, "cash_register")
+
+    assert result == out
+    mock_tone.assert_called_once()
+
+
 def test_generate_sfx_sweep(mock_subprocess):
     mock_run, _ = mock_subprocess
     out = Path("/tmp/sfx.mp3")

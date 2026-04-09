@@ -38,6 +38,27 @@ _openai_key: str = ""
 # Cached system prompt — rebuilt only when config changes
 _cached_system_prompt: str = ""
 _cached_prompt_key: str = ""
+_TRANSITION_REWRITE_MAP: dict[str, list[str]] = {
+    "banter": [
+        "Mamma mia... adesso si litiga davvero.",
+        "Aspetta un secondo, perche qui c'e da dire una cosa.",
+        "No, ma senti questa, perche adesso parte il casino vero.",
+        "Madonna, fermati un attimo, perche qui c'e materiale.",
+    ],
+    "ad": [
+        "Aspetta, ma prima ci tocca la pubblicita.",
+        "Un secondo solo, che arrivano gli sponsor peggiori d'Italia.",
+        "No, no, fermi tutti, prima passa la pubblicita.",
+        "Prima di continuare, c'e una pausa che nessuno ha chiesto.",
+    ],
+    "news_flash": [
+        "Un secondo, mi stanno urlando qualcosa in cuffia.",
+        "Aspetta, aspetta, qui c'e aria di notizia improvvisa.",
+        "No, ferma tutto, mi dicono che sta succedendo qualcosa.",
+        "Un attimo, questa sembra una notizia vera. Purtroppo.",
+    ],
+}
+_BORING_TRANSITION_STEMS = {"che pezzo", "eh non", "bellissima", "allora", "e adesso"}
 
 
 def _get_client(api_key: str) -> anthropic.AsyncAnthropic:
@@ -157,6 +178,46 @@ def _strip_fences(raw: str) -> str:
     return raw
 
 
+def _transition_stem(text: str) -> str:
+    cleaned = re.sub(r"[^a-zA-Z0-9\s]", " ", text.lower())
+    words = [w for w in cleaned.split() if w]
+    return " ".join(words[:2])
+
+
+def _massage_transition_text(text: str, next_segment: str, recent_texts: list[str]) -> str:
+    """Replace stale opener patterns when the LLM falls into a rut."""
+    stem = _transition_stem(text)
+    recent_stems = [_transition_stem(item) for item in recent_texts if item]
+    repeated = recent_stems.count(stem) >= 1 and stem in _BORING_TRANSITION_STEMS
+    overused_che_pezzo = stem == "che pezzo" and recent_stems.count("che pezzo") >= 1
+    if not repeated and not overused_che_pezzo:
+        return text.strip()
+
+    for candidate in _TRANSITION_REWRITE_MAP.get(next_segment, _TRANSITION_REWRITE_MAP["banter"]):
+        if _transition_stem(candidate) not in recent_stems:
+            return candidate
+    return _TRANSITION_REWRITE_MAP.get(next_segment, _TRANSITION_REWRITE_MAP["banter"])[0]
+
+
+def _ensure_attention_grabbing_ad_parts(parts: list[AdPart], sonic: SonicWorld) -> list[AdPart]:
+    """Guarantee each ad has a distinct opener and at least one internal accent."""
+    updated = list(parts)
+    motif = sonic.transition_motif or "chime"
+    if not updated or updated[0].type != "sfx":
+        updated.insert(0, AdPart(type="sfx", sfx=motif))
+    elif not updated[0].sfx:
+        updated[0].sfx = motif
+
+    has_extra_sfx = any(part.type == "sfx" for part in updated[1:])
+    voice_indexes = [idx for idx, part in enumerate(updated) if part.type == "voice"]
+    if not has_extra_sfx and len(voice_indexes) >= 2:
+        insert_at = voice_indexes[1]
+        fallback_sfx = "whoosh" if motif != "whoosh" else "register_hit"
+        updated.insert(insert_at, AdPart(type="sfx", sfx=fallback_sfx))
+
+    return updated
+
+
 # --- Ad creative system constants ---
 
 AD_FORMATS: dict[str, str] = {
@@ -246,7 +307,10 @@ def _personality_modifier(name: str, axes: PersonalityAxes) -> str:
     if axes.chaos < 50 - threshold:
         parts.append("Stay on topic. Structured, logical flow. No random tangents.")
     elif axes.chaos > 50 + threshold:
-        parts.append("Go on wild tangents. Non-sequiturs. Start a thought and abandon it for something unrelated.")
+        parts.append(
+            "Go on wild tangents. Cut people off. Half-finished thoughts, false starts, verbal collisions, "
+            "and abrupt pivots like you're talking over the room."
+        )
 
     # Warmth
     if axes.warmth < 50 - threshold:
@@ -326,6 +390,8 @@ Rules:
   basta, dai, ma va, figurati, mamma mia, allora, insomma, comunque, senti, guarda,
   eh niente, vabbè, cioè, tipo, no?, dico io, madonna, oddio, aspetta aspetta.
 - Hosts interrupt each other, trail off, change topic mid-sentence. Real radio is messy.
+- When chaos is high, make the dialogue feel crowded: cut-offs, corrections, stepping on each
+  other's point, and sentences that restart halfway through.
 - NEVER use each other's names more than ONCE per exchange. They know each other — they
   don't keep saying names. Use "tu", "eh", "senti", or just talk. Real people almost
   never address each other by name in conversation.
@@ -429,6 +495,17 @@ First-time listeners get curiosity and intrigue. Returning listeners get inside 
         except Exception:
             logger.warning("Failed to load persona for banter prompt", exc_info=True)
 
+    chaos_hosts = [h.name for h in config.hosts if h.personality.chaos >= 80 or h.personality.energy >= 90]
+    chaos_block = ""
+    if len(config.hosts) >= 2 and chaos_hosts:
+        chaos_block = f"""
+CHAOS DIRECTION:
+- This break should feel argumentative and unstable.
+- At least one host cuts the other off mid-thought.
+- Use interruptions, corrections, abandoned sentences, and "no, aspetta" energy.
+- The most volatile hosts right now: {", ".join(chaos_hosts)}.
+"""
+
     # If persona is active, request persona_updates in the response
     persona_update_schema = ""
     if persona_block:
@@ -447,7 +524,7 @@ Running jokes to optionally callback: {jokes if jokes else "none yet, you may se
 <context_awareness>
 {context_block}
 </context_awareness>
-{new_listener_block}{listener_block}{persona_block}
+{chaos_block}{new_listener_block}{listener_block}{persona_block}
 Return JSON:
 {{"lines": [{{"host": "HostName", "text": "what they say"}}], "new_joke": "brief description of any new running joke or null"{persona_update_schema}}}"""
 
@@ -615,6 +692,9 @@ async def write_transition(
 
     current = _sanitize_prompt_data(state.played_tracks[-1].display) if state.played_tracks else "the opening"
     host = random.choice(config.hosts)
+    recent_texts = list(state.recent_transition_texts)[-4:]
+    recent_openers = [_transition_stem(text) for text in recent_texts if text]
+    banned_openers = ", ".join(dict.fromkeys(recent_openers)) if recent_openers else "none"
 
     segment_hints = {
         "banter": "You're about to chat with your co-host. Tease what's coming or react to the song.",
@@ -635,9 +715,11 @@ Time context: {time_hint}
 
 RULES:
 - ONE sentence only. Max 15 words. This is a VOICEOVER, not a monologue.
-- React to the song naturally — "Bellissima..." / "Eh, non male..." / "Che pezzo..."
+- React to the song naturally, but do NOT keep repeating the same opener.
 - Then pivot to what's next. Smooth, natural, like a real DJ.
 - You MAY reference the time of day if it fits ("perfetta per stasera", "mattina col botto").
+- Recent opener stems to avoid repeating: {banned_openers}
+- If the host would normally say "Che pezzo...", pick something fresher instead.
 - ALL text in {config.station.language}.
 
 Return JSON:
@@ -651,14 +733,15 @@ Return JSON:
             model=config.audio.claude_model,
             max_tokens=100,
         )
-        text = data.get("text", "Allora...")
+        text = _massage_transition_text(data.get("text", "Allora..."), next_segment, recent_texts)
         logger.info("Generated transition: %s", text[:50])
         return (host, text)
 
     except Exception as e:
         logger.error("Transition generation failed: %s", e)
         fallback = {"banter": "Allora...", "ad": "E adesso...", "news_flash": "Attenzione..."}
-        return (host, fallback.get(next_segment, "Allora..."))
+        text = _massage_transition_text(fallback.get(next_segment, "Allora..."), next_segment, recent_texts)
+        return (host, text)
 
 
 async def write_ad(
@@ -769,7 +852,9 @@ RULES:
 - Think Italian TV shopping channel meets GTA radio meets Silvio Berlusconi's fever dream.
 - 15-25 seconds when read aloud. Keep each voice line under 30 words.
 - Follow the ad format rules above. Use the assigned speakers by their role names.
+- Open HARD. The first beat should grab attention immediately.
 - You may interleave sound effect cues and environment cues between voice lines.
+- Change the sonic texture inside the ad: opener sting, one extra accent, then the sales copy.
 - Available SFX types: {sfx_types}
 - ALL text must be in {config.station.language}.
 - You may reference what the hosts said, what other ads claimed, or current music.
@@ -813,6 +898,7 @@ Return JSON:
         # Ensure we have at least one voice part
         if not any(p.type == "voice" for p in parts):
             parts = [AdPart(type="voice", text=data.get("text", brand.tagline))]
+        parts = _ensure_attention_grabbing_ad_parts(parts, sonic)
 
         # Light validation: demote single-role duo_scenes
         roles_found = {p.role for p in parts if p.type == "voice" and p.role}

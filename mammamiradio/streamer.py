@@ -25,7 +25,6 @@ from mammamiradio.playlist import (
     supports_user_sources,
     write_persisted_source,
 )
-from mammamiradio.scheduler import preview_upcoming
 from mammamiradio.setup_status import addon_options_snippet, build_setup_status, classify_station_mode
 
 logger = logging.getLogger(__name__)
@@ -100,6 +99,21 @@ def _golden_path_status(config, state) -> dict:
 
     silent_music_fallback = (not spotify_connected) and not fallback_sources
 
+    # Music is available via yt-dlp, local files, or demo assets — not blocking
+    if fallback_sources and not spotify_connected:
+        source_label = ", ".join(fallback_sources)
+        return {
+            "stage": "music_available",
+            "blocking": False,
+            "headline": f"Music via {source_label}.",
+            "detail": (
+                f"Playing music from: {source_label}. "
+                "Add Spotify credentials in Advanced Settings for streaming from your own library."
+            ),
+            "steps": [],
+            "silent_music_fallback": False,
+        }
+
     if spotify_connected:
         return {
             "stage": "connected",
@@ -111,18 +125,18 @@ def _golden_path_status(config, state) -> dict:
         }
 
     if not spotify_api:
-        detail = "Add Spotify credentials first. Until then, the station cannot use the golden path."
+        detail = "No music source available."
         if silent_music_fallback:
-            detail += " In this setup, music segments fall back to silence placeholders."
+            detail += " Music segments fall back to silence placeholders."
+        detail += " Set MAMMAMIRADIO_ALLOW_YTDLP=true or add Spotify credentials."
         return {
-            "stage": "needs_spotify_credentials",
+            "stage": "needs_music_source",
             "blocking": True,
-            "headline": "Action required: add Spotify App credentials.",
+            "headline": "No music source configured.",
             "detail": detail,
             "steps": [
-                "Open Advanced Settings.",
-                "Paste Spotify App ID and App Secret.",
-                "Click Save, then open Spotify and choose the MammaMiRadio device.",
+                "Set MAMMAMIRADIO_ALLOW_YTDLP=true for YouTube music, or",
+                "Open Advanced Settings and paste Spotify App ID and Secret.",
             ],
             "silent_music_fallback": silent_music_fallback,
         }
@@ -1268,6 +1282,7 @@ def _public_status_payload(request: Request) -> dict:
     _sync_runtime_state(request)
     state = request.app.state.station_state
     config = request.app.state.config
+    upcoming = state.queued_segments[:5]
     return {
         "station": config.station.name,
         "running_jokes": list(state.running_jokes),
@@ -1278,9 +1293,10 @@ def _public_status_payload(request: Request) -> dict:
             {"type": e.type, "label": e.label, "timestamp": e.timestamp, "metadata": e.metadata}
             for e in state.stream_log
         ],
-        "upcoming": state.queued_segments[:5]
-        if state.queued_segments
-        else preview_upcoming(state, config.pacing, state.playlist, count=5),
+        # Truthful queue view only. When empty, UI should show "warming up"
+        # instead of deterministic previews that can diverge from real output.
+        "upcoming": upcoming,
+        "upcoming_mode": "queued" if upcoming else "building",
     }
 
 

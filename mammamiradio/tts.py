@@ -206,10 +206,14 @@ async def synthesize_ad(
         if part.type == "voice" and part.text:
             voice_for_part = voices.get(part.role, default_voice) if part.role else default_voice
             return await synthesize(part.text, voice_for_part.voice, part_path)
-        elif part.type == "sfx" and part.sfx:
+        if part.type == "sfx" and part.sfx:
             sfx_name = part.sfx if part.sfx in AVAILABLE_SFX_TYPES else "chime"
-            return await loop.run_in_executor(None, generate_sfx, part_path, sfx_name, sfx_dir)
-        elif part.type == "pause":
+            try:
+                return await loop.run_in_executor(None, generate_sfx, part_path, sfx_name, sfx_dir)
+            except Exception as e:
+                logger.warning("Ad SFX '%s' failed, inserting short fallback: %s", sfx_name, e)
+                return await loop.run_in_executor(None, generate_silence, part_path, 0.18)
+        if part.type == "pause":
             duration = part.duration if part.duration > 0 else 0.5
             return await loop.run_in_executor(None, generate_silence, part_path, duration)
         return None
@@ -280,7 +284,7 @@ async def synthesize_ad(
     if env_bed_path and env_bed_path.exists():
         try:
             env_mixed_path = tmp_dir / f"envmix_{uuid4().hex[:8]}.mp3"
-            await loop.run_in_executor(None, mix_with_bed, voice_path, env_bed_path, env_mixed_path, 0.10)
+            await loop.run_in_executor(None, mix_with_bed, voice_path, env_bed_path, env_mixed_path, 0.14)
             env_bed_path.unlink(missing_ok=True)
             voice_path.unlink(missing_ok=True)
             voice_path = env_mixed_path
@@ -288,7 +292,7 @@ async def synthesize_ad(
             logger.warning("Environment bed mixing failed (%s), continuing without: %s", env_name, e)
 
     try:
-        await loop.run_in_executor(None, mix_with_bed, voice_path, bed_path, output_path, 0.20)
+        await loop.run_in_executor(None, mix_with_bed, voice_path, bed_path, output_path, 0.24)
         bed_path.unlink(missing_ok=True)
         voice_path.unlink(missing_ok=True)
         logger.info("Ad with music bed (%s): %s", mood, output_path.name)
