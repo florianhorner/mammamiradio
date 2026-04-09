@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 MODULE = "mammamiradio.main"
+TEST_TMP = Path("/tmp/mammamiradio-test-main-tmp")
+TEST_CACHE = Path("/tmp/mammamiradio-test-main-cache")
 
 
 @pytest.mark.asyncio
@@ -21,8 +24,8 @@ async def test_startup_creates_state_and_tasks():
     mock_config.bind_host = "127.0.0.1"
     mock_config.port = 8000
     mock_config.pacing.lookahead_segments = 3
-    mock_config.tmp_dir = MagicMock()
-    mock_config.cache_dir = MagicMock()
+    mock_config.tmp_dir = TEST_TMP
+    mock_config.cache_dir = TEST_CACHE
 
     demo_tracks = [Track(title="Song", artist="Art", duration_ms=1000, spotify_id="t1")]
 
@@ -43,6 +46,8 @@ async def test_startup_creates_state_and_tasks():
         assert hasattr(app.state, "stream_hub")
         assert hasattr(app.state, "station_state")
         assert hasattr(app.state, "config")
+        assert hasattr(app.state, "producer_task")
+        assert hasattr(app.state, "playback_task")
         assert app.state.station_state.playlist == demo_tracks
 
 
@@ -58,8 +63,8 @@ async def test_startup_without_golibrespot():
     mock_config.bind_host = "127.0.0.1"
     mock_config.port = 8000
     mock_config.pacing.lookahead_segments = 3
-    mock_config.tmp_dir = MagicMock()
-    mock_config.cache_dir = MagicMock()
+    mock_config.tmp_dir = TEST_TMP
+    mock_config.cache_dir = TEST_CACHE
 
     with (
         patch(f"{MODULE}.load_config", return_value=mock_config),
@@ -90,8 +95,8 @@ async def test_startup_starts_spotify_before_fetching_playlist():
     mock_config.bind_host = "127.0.0.1"
     mock_config.port = 8000
     mock_config.pacing.lookahead_segments = 3
-    mock_config.tmp_dir = MagicMock()
-    mock_config.cache_dir = MagicMock()
+    mock_config.tmp_dir = TEST_TMP
+    mock_config.cache_dir = TEST_CACHE
 
     mock_player = MagicMock()
     mock_player.device_name = "mammamiradio"
@@ -128,8 +133,8 @@ async def test_startup_reads_persisted_source_before_fetching():
     mock_config.bind_host = "127.0.0.1"
     mock_config.port = 8000
     mock_config.pacing.lookahead_segments = 3
-    mock_config.tmp_dir = MagicMock()
-    mock_config.cache_dir = MagicMock()
+    mock_config.tmp_dir = TEST_TMP
+    mock_config.cache_dir = TEST_CACHE
     persisted = PlaylistSource(kind="playlist", source_id="abc", label="Roadtrip")
 
     def _read(_cache_dir):

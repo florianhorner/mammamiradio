@@ -69,6 +69,8 @@ async def test_healthz_returns_ok():
     body = resp.json()
     assert body["status"] == "ok"
     assert "uptime_s" in body
+    assert "runtime" in body
+    assert "shadow_queue_in_sync" in body["runtime"]
 
 
 @pytest.mark.asyncio
@@ -105,6 +107,7 @@ async def test_readyz_ready():
         resp = await client.get("/readyz")
     assert resp.status_code == 200
     assert resp.json()["status"] == "ready"
+    assert "runtime" in resp.json()
 
 
 @pytest.mark.asyncio
@@ -116,6 +119,38 @@ async def test_readyz_no_queue():
         resp = await client.get("/readyz")
     assert resp.status_code == 200
     assert resp.json()["queue_depth"] == -1
+
+
+@pytest.mark.asyncio
+async def test_public_status_marks_upcoming_source_type():
+    app = _make_test_app()
+    app.state.queue.put_nowait(Segment(type=SegmentType.MUSIC, path=Path("/tmp/fake-upcoming.mp3"), metadata={}))
+    app.state.station_state.queued_segments = [{"type": "music", "label": "Queued Song"}]
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.get("/public-status")
+    assert resp.status_code == 200
+    upcoming = resp.json()["upcoming"]
+    assert upcoming
+    assert upcoming[0]["source"] == "rendered_queue"
+
+
+@pytest.mark.asyncio
+async def test_public_status_trims_shadow_queue_drift(tmp_path):
+    app = _make_test_app()
+    fake_file = tmp_path / "seg.mp3"
+    fake_file.write_bytes(b"data")
+    app.state.queue.put_nowait(Segment(type=SegmentType.MUSIC, path=fake_file, metadata={"title": "Real"}))
+    app.state.station_state.queued_segments = [
+        {"type": "music", "label": "Real"},
+        {"type": "banter", "label": "Stale"},
+    ]
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.get("/public-status")
+    assert resp.status_code == 200
+    assert len(resp.json()["upcoming"]) == 1
+    assert app.state.station_state.shadow_queue_corrections == 1
 
 
 # ---------------------------------------------------------------------------

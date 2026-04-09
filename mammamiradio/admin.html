@@ -173,6 +173,9 @@ h1 {
 .qi-badge[data-t="ad"] { background: rgba(196,160,74,0.15); color: var(--warning); }
 .qi-badge[data-t="news_flash"] { background: rgba(224,112,56,0.15); color: #e07038; }
 .qi-label { flex: 1; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.qi-reason { font-size: 10px; color: rgba(245,237,216,0.45); margin-top: 2px; margin-left: 28px; }
+.queue-item.linked { cursor: pointer; }
+.queue-item.linked:hover { background: rgba(245,237,216,0.04); border-radius: 4px; }
 
 /* ── SCRIPT PREVIEW ── */
 .script-box {
@@ -203,6 +206,7 @@ h1 {
   font-size: 12px;
 }
 .pl-row:hover { background: rgba(245,237,216,0.03); border-radius: 4px; }
+.pl-row.focus { background: rgba(37,99,235,0.22); border-radius: 4px; }
 .pl-n { font-size: 10px; color: rgba(245,237,216,0.3); width: 22px; text-align: right; }
 .pl-t { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pl-a { display: flex; gap: 4px; opacity: 0; transition: opacity 0.15s; }
@@ -269,6 +273,14 @@ h1 {
   border: 1px solid rgba(245,237,216,0.12); cursor: pointer;
 }
 .host-reset:hover { color: var(--error); border-color: rgba(196,74,74,0.4); }
+.host-hint { font-size: 10px; color: rgba(245,237,216,0.45); margin-bottom: 8px; }
+.host-presets { display: flex; gap: 6px; margin: 2px 0 8px; }
+.host-preset {
+  font-size: 10px; padding: 2px 8px; border-radius: 4px;
+  background: rgba(42,16,8,0.4); color: rgba(245,237,216,0.7);
+  border: 1px solid rgba(245,237,216,0.14); cursor: pointer;
+}
+.host-preset:hover { color: var(--cream); border-color: rgba(245,237,216,0.35); }
 
 /* ── LOG ── */
 .log-entry { display: flex; gap: 8px; padding: 3px 0; font-size: 11px; }
@@ -397,7 +409,10 @@ h1 {
     <span class="card-label" style="margin-bottom:0">Host Personality</span>
     <span class="collapse-arrow">▶</span>
   </div>
-  <div class="collapse-body" id="hostsBody"></div>
+  <div class="collapse-body">
+    <div class="host-hint">0 = opposite trait, 50 = balanced, 100 = strong trait. Presets are quick starting points.</div>
+    <div id="hostsBody"></div>
+  </div>
 </div>
 
 <!-- LOG -->
@@ -468,7 +483,14 @@ function updateQueue(up,forcePending){
   if(!up?.length&&!forcePending){el.innerHTML='<div class="empty">Queue empty</div>';meta.textContent='';return}
   const parts=[];
   if(forcePending){parts.push(`<div class="queue-item"><span class="qi-num">!</span><span class="qi-badge" data-t="${forcePending}">${forcePending.replace('_',' ')}</span><span class="qi-label">Triggered — plays next</span><span class="force-badge">forced</span></div>`)}
-  if(up?.length){parts.push(...up.map((it,i)=>`<div class="queue-item"><span class="qi-num">${i+1}</span><span class="qi-badge" data-t="${it.type}">${it.type.replace('_',' ')}</span><span class="qi-label">${esc(it.label||it.type)}</span></div>`))}
+  if(up?.length){parts.push(...up.map((it,i)=>{
+    const linked = Number.isInteger(it.playlist_index) || !!it.spotify_id;
+    const clickAttrs = linked
+      ? `class="queue-item linked" onclick="focusPlaylistTrack(${Number.isInteger(it.playlist_index)?it.playlist_index:-1}, '${esc(it.spotify_id||'')}')"`
+      : 'class="queue-item"';
+    const reason = it.reason ? `<div class="qi-reason">${esc(it.reason)}</div>` : '';
+    return `<div ${clickAttrs}><span class="qi-num">${i+1}</span><span class="qi-badge" data-t="${it.type}">${it.type.replace('_',' ')}</span><span class="qi-label">${esc(it.label||it.type)}</span></div>${reason}`;
+  }))}
   meta.textContent=(up?.length||0)+' upcoming';
   el.innerHTML=parts.join('');
 }
@@ -488,7 +510,22 @@ function updatePl(tracks){
   if(!tracks?.length){el.innerHTML='<div class="empty">No tracks</div>';meta.textContent='';return}
   meta.textContent=tracks.length+' tracks';
   const s=tracks.slice(0,50);
-  el.innerHTML=s.map((t,i)=>`<div class="pl-row"><span class="pl-n">${i+1}</span><span class="pl-t">${esc(t.display||t.title||'?')}</span><div class="pl-a"><button class="pl-btn" onclick="moveNext(${i})">▶ Next</button><button class="pl-btn" onclick="removeTr(${i})">✕</button></div></div>`).join('')+(tracks.length>50?`<div class="empty">+ ${tracks.length-50} more</div>`:'');
+  el.innerHTML=s.map((t,i)=>`<div class="pl-row" data-i="${i}" data-id="${esc(t.spotify_id||'')}"><span class="pl-n">${i+1}</span><span class="pl-t">${esc(t.display||t.title||'?')}</span><div class="pl-a"><button class="pl-btn" onclick="moveNext(${i})">▶ Next</button><button class="pl-btn" onclick="removeTr(${i})">✕</button></div></div>`).join('')+(tracks.length>50?`<div class="empty">+ ${tracks.length-50} more</div>`:'');
+}
+function focusPlaylistTrack(index, spotifyId){
+  const rows=[...document.querySelectorAll('.pl-row')];
+  rows.forEach(r=>r.classList.remove('focus'));
+  let target=null;
+  if(Number.isInteger(index)&&index>=0){
+    target=document.querySelector(`.pl-row[data-i="${index}"]`);
+  }
+  if(!target&&spotifyId){
+    target=document.querySelector(`.pl-row[data-id="${spotifyId.replace(/"/g,'&quot;')}"]`);
+  }
+  if(!target)return;
+  target.classList.add('focus');
+  target.scrollIntoView({behavior:'smooth',block:'nearest'});
+  setTimeout(()=>target.classList.remove('focus'),1500);
 }
 async function moveNext(i){const r=await api('POST','/api/playlist/move_to_next',{index:i});if(r.ok)toast('Playing next: '+r.moved);else toast('Failed to move track')}
 async function removeTr(i){await api('POST','/api/playlist/remove',{index:i});toast('Removed')}
@@ -523,15 +560,36 @@ function updatePaceCounters(pacing){
 
 // ── Hosts ──
 const AX=['energy','chaos','warmth','verbosity','nostalgia'];
+const AX_LABEL={'energy':'Energy','chaos':'Chaos','warmth':'Warmth','verbosity':'Verbosity','nostalgia':'Nostalgia'};
 const AX_LOW ={'energy':'calm','chaos':'orderly','warmth':'distant','verbosity':'concise','nostalgia':'present'};
 const AX_HIGH={'energy':'hyped','chaos':'chaotic','warmth':'intimate','verbosity':'verbose','nostalgia':'nostalgic'};
+const HOST_PRESETS={
+  Balanced:{energy:50,chaos:50,warmth:50,verbosity:50,nostalgia:50},
+  Calm:{energy:25,chaos:25,warmth:65,verbosity:40,nostalgia:60},
+  Hype:{energy:85,chaos:70,warmth:55,verbosity:65,nostalgia:45},
+};
 function renderHosts(hosts){
   document.getElementById('hostsBody').innerHTML=hosts.map(h=>
-    `<div class="host-block" data-h="${esc(h.name)}"><div class="host-name">${esc(h.name)}</div><div class="host-style">${esc(h.style)}</div>${AX.map(a=>`<div class="ha"><label>${a.slice(0,7)}</label><input type="range" min="0" max="100" value="${h.personality[a]}" data-a="${a}" oninput="this.parentElement.querySelector('.hv').textContent=this.value" onchange="updHost('${esc(h.name)}')"><span class="hv">${h.personality[a]}</span></div><div class="ha-labels"><span>${AX_LOW[a]}</span><span>${AX_HIGH[a]}</span></div>`).join('')}<button class="host-reset" onclick="rstHost('${esc(h.name)}')">Reset</button></div>`
+    `<div class="host-block" data-h="${esc(h.name)}"><div class="host-name">${esc(h.name)}</div><div class="host-style">${esc(h.style)}</div><div class="host-presets">${Object.keys(HOST_PRESETS).map(p=>`<button class="host-preset" onclick="applyHostPreset('${esc(h.name)}','${p}')">${p}</button>`).join('')}</div>${AX.map(a=>`<div class="ha"><label>${AX_LABEL[a]}</label><input type="range" min="0" max="100" value="${h.personality[a]}" data-a="${a}" oninput="this.parentElement.querySelector('.hv').textContent=this.value" onchange="updHost('${esc(h.name)}')"><span class="hv">${h.personality[a]}</span></div><div class="ha-labels"><span>${AX_LOW[a]}</span><span>${AX_HIGH[a]}</span></div>`).join('')}<button class="host-reset" onclick="rstHost('${esc(h.name)}')">Reset</button></div>`
   ).join('');
 }
 async function updHost(n){const b={};document.querySelector(`[data-h="${n}"]`).querySelectorAll('input[type="range"]').forEach(e=>{b[e.dataset.a]=+e.value});await api('PATCH',`/api/hosts/${encodeURIComponent(n)}/personality`,b);toast(n+' updated')}
 async function rstHost(n){await api('POST',`/api/hosts/${encodeURIComponent(n)}/personality/reset`);toast(n+' reset');const r=await fetch('/api/hosts',{headers:H()});renderHosts((await r.json()).hosts||[])}
+async function applyHostPreset(n,presetName){
+  const preset=HOST_PRESETS[presetName];
+  if(!preset)return;
+  const block=document.querySelector(`[data-h="${n}"]`);
+  if(!block)return;
+  block.querySelectorAll('input[type="range"]').forEach(sl=>{
+    const axis=sl.dataset.a;
+    if(axis in preset){
+      sl.value=preset[axis];
+      sl.parentElement.querySelector('.hv').textContent=String(preset[axis]);
+    }
+  });
+  await updHost(n);
+  toast(`${n}: ${presetName} preset`);
+}
 
 // ── Log ──
 function updateLog(log){

@@ -394,6 +394,10 @@ class StationState:
     listeners_peak: int = 0
     listeners_total: int = 0
     new_listeners_pending: int = 0
+    # Runtime integrity counters for long-lived sessions
+    runtime_sync_events: int = 0
+    shadow_queue_corrections: int = 0
+    playback_epoch: int = 0
 
     def switch_playlist(self, tracks: list[Track], source: PlaylistSource | None = None) -> None:
         """Replace the active playlist and bump revision counter.
@@ -422,6 +426,7 @@ class StationState:
     def on_stream_segment(self, segment: Segment) -> None:
         """Called by the streamer when it starts sending a segment to the listener."""
         now = time.time()
+        self.playback_epoch += 1
         seg_type = segment.type.value
         label = segment.metadata.get("title", segment.metadata.get("brand", seg_type))
         # Record previous music segment as completed (not skipped) in listener profile
@@ -440,6 +445,7 @@ class StationState:
             "type": seg_type,
             "label": label,
             "started": now,
+            "epoch": self.playback_epoch,
             "metadata": segment.metadata,
         }
         self.stream_log.append(

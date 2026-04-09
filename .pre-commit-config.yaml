@@ -13,6 +13,12 @@ repos:
 
   - repo: local
     hooks:
+      - id: changelog-sync
+        name: changelog sync on version bump
+        entry: scripts/check-changelog-sync.sh
+        language: system
+        pass_filenames: false
+        stages: [pre-commit]
       - id: ha-addon-local-build
         name: ha-addon local build
         entry: scripts/test-addon-local.sh
@@ -20,4 +26,3 @@ repos:
         pass_filenames: false
         stages: [pre-commit, pre-push]
         files: ^(ha-addon/mammamiradio/|mammamiradio/|pyproject\.toml|radio\.toml|\.github/workflows/addon-build\.yml)
-

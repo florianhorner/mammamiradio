@@ -12,6 +12,7 @@ from dataclasses import replace
 from pathlib import Path
 from uuid import uuid4
 
+from mammamiradio.audio_quality import AudioQualityError, AudioToolError, validate_segment_audio
 from mammamiradio.config import StationConfig
 from mammamiradio.context_cues import generate_impossible_line
 from mammamiradio.downloader import download_track
@@ -492,12 +493,7 @@ async def run_producer(
 
         try:
             if seg_type == SegmentType.MUSIC:
-                track = state.select_next_track(
-                    allow_explicit=config.playlist.allow_explicit,
-                    repeat_cooldown=config.playlist.repeat_cooldown,
-                    artist_cooldown=config.playlist.artist_cooldown,
-                    max_artist_per_hour=config.playlist.max_artist_per_hour,
-                )
+                track = state.reserve_next_track()
                 logger.info("Producing MUSIC: %s", track.display)
 
                 norm_path = config.tmp_dir / f"music_{uuid4().hex[:8]}.mp3"
@@ -508,20 +504,35 @@ async def run_producer(
                     and track.spotify_id
                     and not track.spotify_id.startswith("demo")
                 )
+                audio_source = "fallback"
 
                 if use_spotify:
                     try:
                         audio_path = await download_track_spotify(spotify_player, track, norm_path)  # type: ignore[arg-type]
+                        audio_source = "spotify_capture"
                     except Exception as exc:
                         logger.warning("Spotify capture failed, falling back to local: %s", exc)
                         audio_path = await download_track(track, config.cache_dir, music_dir=Path("music"))
                         loop = asyncio.get_running_loop()
                         await loop.run_in_executor(None, normalize, audio_path, norm_path)
+                        audio_source = "fallback_after_spotify_error"
                 else:
                     # Fallback: local files / yt-dlp / placeholder
                     audio_path = await download_track(track, config.cache_dir, music_dir=Path("music"))
                     loop = asyncio.get_running_loop()
                     await loop.run_in_executor(None, normalize, audio_path, norm_path)
+                    audio_source = "fallback"
+
+                # Quality gate: reject truncated/silent downloads before queueing
+                _music_loop = asyncio.get_running_loop()
+                try:
+                    await _music_loop.run_in_executor(None, validate_segment_audio, norm_path, SegmentType.MUSIC)
+                except AudioToolError as exc:
+                    logger.warning("Audio tool unavailable, skipping music quality check: %s", exc)
+                except AudioQualityError as exc:
+                    logger.warning("Quality gate rejected music track (%s): %s", norm_path.name, exc)
+                    norm_path.unlink(missing_ok=True)
+                    continue
 
                 # Generate "Why this track?" rationale for listener UI
                 rationale = generate_track_rationale(
@@ -536,9 +547,11 @@ async def run_producer(
                     path=norm_path,
                     metadata={
                         "title": track.display,
+                        "spotify_id": track.spotify_id,
                         "album_art": track.album_art,
                         "rationale": rationale,
                         "crate": crate,
+                        "audio_source": audio_source,
                     },
                 )
                 _bound_track = track
@@ -659,6 +672,38 @@ async def run_producer(
                         ] + [{"host": h.name, "text": t} for h, t in lines]
                     except Exception as exc:
                         logger.warning("Banter TTS failed, skipping segment: %s", exc)
+                        continue
+
+                try:
+                    await loop.run_in_executor(None, validate_segment_audio, audio_path, SegmentType.BANTER)
+                except AudioToolError as exc:
+                    logger.warning("Audio tool unavailable, skipping banter quality check: %s", exc)
+                except AudioQualityError as exc:
+                    logger.warning("Quality gate rejected banter (%s): %s", audio_path.name, exc)
+                    if canned is None:
+                        audio_path.unlink(missing_ok=True)
+                    fallback_canned = _pick_canned_clip("banter", state=state)
+                    if fallback_canned:
+                        try:
+                            await loop.run_in_executor(
+                                None, validate_segment_audio, fallback_canned, SegmentType.BANTER
+                            )
+                            logger.info("Using canned banter fallback after quality reject: %s", fallback_canned.name)
+                            audio_path = fallback_canned
+                            canned = fallback_canned
+                            state.last_banter_script = [{"host": "Radio", "text": "(pre-recorded banter)"}]
+                        except AudioToolError as fallback_tool_exc:
+                            logger.warning(
+                                "Audio tool unavailable during fallback quality check: %s", fallback_tool_exc
+                            )
+                        except AudioQualityError as fallback_exc:
+                            logger.warning(
+                                "Canned banter fallback also rejected (%s): %s",
+                                fallback_canned.name,
+                                fallback_exc,
+                            )
+                            continue
+                    else:
                         continue
 
                 # Clear new-listener flag only after banter was successfully produced
@@ -997,6 +1042,17 @@ async def run_producer(
                         for p in break_parts:
                             p.unlink(missing_ok=True)
 
+                try:
+                    await loop.run_in_executor(None, validate_segment_audio, ad_break_path, SegmentType.AD)
+                except AudioToolError as exc:
+                    logger.warning("Audio tool unavailable, skipping ad quality check: %s", exc)
+                except AudioQualityError as exc:
+                    logger.warning("Quality gate rejected ad break (%s): %s", ad_break_path.name, exc)
+                    ad_break_path.unlink(missing_ok=True)
+                    # Prevent scheduler lock on AD if we reject a full break.
+                    state.songs_since_ad = 0
+                    continue
+
                 # Dashboard display: show all brands in the break
                 state.last_ad_script = {
                     "brands": break_brands,
@@ -1055,7 +1111,12 @@ async def run_producer(
             if not await _queue_segment(segment):
                 continue
             state.queued_segments.append(
-                {"type": seg_type.value, "label": segment.metadata.get("title", seg_type.value)}
+                {
+                    "type": seg_type.value,
+                    "label": segment.metadata.get("title", seg_type.value),
+                    "spotify_id": segment.metadata.get("spotify_id", ""),
+                    "reason": segment.metadata.get("queue_reason", "Rendered and queued for playback."),
+                }
             )
             if "error" not in segment.metadata:
                 if success_callback:

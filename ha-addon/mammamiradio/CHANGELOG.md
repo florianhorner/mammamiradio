@@ -1,5 +1,22 @@
 # Changelog
 
+## 2.2.0
+
+### Added
+
+- Audio quality gate: banter, ad, and music segments are validated before they reach the live queue. Corrupt yt-dlp downloads and silent placeholders are detected and retried automatically.
+- `AudioToolError` separates ffprobe/ffmpeg binary failures from content rejects — the station keeps playing even if the validation tool is temporarily unavailable.
+- Runtime health transparency in `/healthz`, `/readyz`, and `/status`: queue-shadow integrity, task liveness, playback epoch, and failover source visibility.
+- Deterministic Up Next explainability with per-item `reason` text and explicit upcoming-source labels.
+- Delivery guardrail hook `scripts/check-changelog-sync.sh` to block version bumps unless both changelogs are staged.
+
+### Changed
+
+- Quality gate validation now runs off the async event loop (executor), preventing stream freezes on lower-powered HA hardware during FFmpeg probing.
+- Producer music sequencing is now deterministic by playlist order, keeping add-on playlist controls and Up Next aligned during long sessions.
+- Runtime sync now trims stale shadow queue entries when drift is detected.
+- Admin host personality sliders now ship with clearer axis language and quick presets for faster tuning.
+
 ## 2.1.0
 
 ### Added
