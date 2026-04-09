@@ -8,6 +8,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 CHECK_COMMIT_MSG = ROOT / "scripts" / "check-commit-msg.sh"
 CHECK_VERSION_SYNC = ROOT / "scripts" / "check-version-sync.sh"
+CHECK_CHANGELOG_SYNC = ROOT / "scripts" / "check-changelog-sync.sh"
 VALIDATE_ADDON = ROOT / "scripts" / "validate-addon.sh"
 
 
@@ -79,6 +80,56 @@ def test_check_version_sync_passes_when_index_matches(tmp_path: Path) -> None:
 
     assert result.returncode == 0
     assert result.stdout == ""
+
+
+def test_check_changelog_sync_requires_both_changelogs_on_version_bump(tmp_path: Path) -> None:
+    _init_git_repo(tmp_path)
+    _write(tmp_path / "ha-addon/mammamiradio/config.yaml", 'version: "1.0.0"\n')
+    _write(tmp_path / "pyproject.toml", '[project]\nname = "mammamiradio"\nversion = "1.0.0"\n')
+    _write(tmp_path / "CHANGELOG.md", "# Changelog\n")
+    _write(tmp_path / "ha-addon/mammamiradio/CHANGELOG.md", "# Changelog\n")
+    _run(["git", "add", "."], cwd=tmp_path)
+    _run(["git", "commit", "-qm", "init"], cwd=tmp_path)
+
+    _write(tmp_path / "ha-addon/mammamiradio/config.yaml", 'version: "1.1.0"\n')
+    _write(tmp_path / "pyproject.toml", '[project]\nname = "mammamiradio"\nversion = "1.1.0"\n')
+    _write(tmp_path / "CHANGELOG.md", "# Changelog\n## [1.1.0]\n")
+    _run(["git", "add", "ha-addon/mammamiradio/config.yaml", "pyproject.toml", "CHANGELOG.md"], cwd=tmp_path)
+
+    result = _run(["bash", str(CHECK_CHANGELOG_SYNC)], cwd=tmp_path)
+
+    assert result.returncode == 1
+    assert "ha-addon/mammamiradio/CHANGELOG.md" in result.stdout
+
+
+def test_check_changelog_sync_passes_when_both_changelogs_staged(tmp_path: Path) -> None:
+    _init_git_repo(tmp_path)
+    _write(tmp_path / "ha-addon/mammamiradio/config.yaml", 'version: "1.0.0"\n')
+    _write(tmp_path / "pyproject.toml", '[project]\nname = "mammamiradio"\nversion = "1.0.0"\n')
+    _write(tmp_path / "CHANGELOG.md", "# Changelog\n")
+    _write(tmp_path / "ha-addon/mammamiradio/CHANGELOG.md", "# Changelog\n")
+    _run(["git", "add", "."], cwd=tmp_path)
+    _run(["git", "commit", "-qm", "init"], cwd=tmp_path)
+
+    _write(tmp_path / "ha-addon/mammamiradio/config.yaml", 'version: "1.1.0"\n')
+    _write(tmp_path / "pyproject.toml", '[project]\nname = "mammamiradio"\nversion = "1.1.0"\n')
+    _write(tmp_path / "CHANGELOG.md", "# Changelog\n## [1.1.0]\n")
+    _write(tmp_path / "ha-addon/mammamiradio/CHANGELOG.md", "# Changelog\n## 1.1.0\n")
+    _run(
+        [
+            "git",
+            "add",
+            "ha-addon/mammamiradio/config.yaml",
+            "pyproject.toml",
+            "CHANGELOG.md",
+            "ha-addon/mammamiradio/CHANGELOG.md",
+        ],
+        cwd=tmp_path,
+    )
+
+    result = _run(["bash", str(CHECK_CHANGELOG_SYNC)], cwd=tmp_path)
+
+    assert result.returncode == 0
 
 
 def _create_validate_addon_repo(
