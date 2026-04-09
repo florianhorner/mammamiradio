@@ -249,6 +249,7 @@ async def test_admin_status_with_basic_auth():
     body = resp.json()
     assert "queue_depth" in body
     assert "segments_produced" in body
+    assert "runtime_health" in body
 
 
 @pytest.mark.asyncio
