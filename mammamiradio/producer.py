@@ -199,17 +199,46 @@ def _pick_brand(brands: list[AdBrand], ad_history: list) -> AdBrand:
     return random.choices(eligible, weights=weights, k=1)[0]
 
 
-# Default sonic palettes by brand category
-_CATEGORY_SONIC: dict[str, SonicWorld] = {
-    "tech": SonicWorld(environment="shopping_channel", music_bed="discount_techno", transition_motif="startup_synth"),
-    "food": SonicWorld(environment="cafe", music_bed="tarantella_pop", transition_motif="register_hit"),
-    "fashion": SonicWorld(environment="showroom", music_bed="suspicious_jazz", transition_motif="whoosh"),
-    "beauty": SonicWorld(environment="luxury_spa", music_bed="cheap_synth_romance", transition_motif="mandolin_sting"),
-    "services": SonicWorld(environment="motorway", music_bed="lounge", transition_motif="chime"),
-    "finance": SonicWorld(environment="", music_bed="suspicious_jazz", transition_motif="hotline_beep"),
-    "health": SonicWorld(environment="", music_bed="lounge", transition_motif="ding"),
-    "fitness": SonicWorld(environment="stadium", music_bed="upbeat", transition_motif="whoosh"),
-    "tourism": SonicWorld(environment="beach", music_bed="tarantella_pop", transition_motif="mandolin_sting"),
+# Default sonic palettes by brand category. Each category gets multiple variants so
+# ads can shift texture between breaks instead of sounding like one recycled bed.
+_CATEGORY_SONIC: dict[str, list[SonicWorld]] = {
+    "tech": [
+        SonicWorld(environment="shopping_channel", music_bed="discount_techno", transition_motif="startup_synth"),
+        SonicWorld(environment="showroom", music_bed="upbeat", transition_motif="whoosh"),
+    ],
+    "food": [
+        SonicWorld(environment="cafe", music_bed="tarantella_pop", transition_motif="register_hit"),
+        SonicWorld(environment="shopping_channel", music_bed="cheap_synth_romance", transition_motif="ice_clink"),
+        SonicWorld(environment="cafe", music_bed="upbeat", transition_motif="mandolin_sting"),
+    ],
+    "fashion": [
+        SonicWorld(environment="showroom", music_bed="suspicious_jazz", transition_motif="whoosh"),
+        SonicWorld(environment="showroom", music_bed="discount_techno", transition_motif="tape_stop"),
+    ],
+    "beauty": [
+        SonicWorld(environment="luxury_spa", music_bed="cheap_synth_romance", transition_motif="mandolin_sting"),
+        SonicWorld(environment="showroom", music_bed="lounge", transition_motif="ice_clink"),
+    ],
+    "services": [
+        SonicWorld(environment="motorway", music_bed="lounge", transition_motif="chime"),
+        SonicWorld(environment="shopping_channel", music_bed="discount_techno", transition_motif="register_hit"),
+    ],
+    "finance": [
+        SonicWorld(environment="", music_bed="suspicious_jazz", transition_motif="hotline_beep"),
+        SonicWorld(environment="showroom", music_bed="lounge", transition_motif="ding"),
+    ],
+    "health": [
+        SonicWorld(environment="", music_bed="lounge", transition_motif="ding"),
+        SonicWorld(environment="luxury_spa", music_bed="cheap_synth_romance", transition_motif="chime"),
+    ],
+    "fitness": [
+        SonicWorld(environment="stadium", music_bed="upbeat", transition_motif="whoosh"),
+        SonicWorld(environment="motorway", music_bed="discount_techno", transition_motif="startup_synth"),
+    ],
+    "tourism": [
+        SonicWorld(environment="beach", music_bed="tarantella_pop", transition_motif="mandolin_sting"),
+        SonicWorld(environment="shopping_channel", music_bed="overblown_epic", transition_motif="whoosh"),
+    ],
 }
 
 # Default roles needed per format
@@ -260,18 +289,29 @@ def _select_ad_creative(
     ad_format = random.choice(candidates)
 
     # Pick sonic world
+    sonic_variants = _CATEGORY_SONIC.get(brand.category, [SonicWorld()])
+    if brand_history and len(sonic_variants) > 1:
+        last_sonic = brand_history[-1]
+        sonic_variants = [
+            variant
+            for variant in sonic_variants
+            if not (
+                variant.environment == last_sonic.environment
+                and variant.music_bed == last_sonic.music_bed
+                and variant.transition_motif == last_sonic.transition_motif
+            )
+        ] or sonic_variants
+    cat_sonic = replace(random.choice(sonic_variants))
+
     if brand.campaign and brand.campaign.sonic_signature:
-        cat_sonic = _CATEGORY_SONIC.get(brand.category, SonicWorld())
         sonic = SonicWorld(
             environment=cat_sonic.environment,
             music_bed=cat_sonic.music_bed,
             transition_motif=brand.campaign.sonic_signature.split("+")[0],
             sonic_signature=brand.campaign.sonic_signature,
         )
-    elif brand.category in _CATEGORY_SONIC:
-        sonic = replace(_CATEGORY_SONIC[brand.category])
     else:
-        sonic = SonicWorld()
+        sonic = cat_sonic
 
     # Determine needed roles
     if brand.campaign and brand.campaign.spokesperson:
@@ -667,6 +707,7 @@ async def run_producer(
                         trans_voice_path.unlink(missing_ok=True)
                         banter_path.unlink(missing_ok=True)
 
+                        state.recent_transition_texts.append(trans_text)
                         state.last_banter_script = [
                             {"host": trans_host.name, "text": trans_text, "type": "transition"},
                         ] + [{"host": h.name, "text": t} for h, t in lines]
@@ -957,7 +998,7 @@ async def run_producer(
                         parts.append(ppath)
                     except Exception:
                         pass
-                    return parts
+                    return parts, itext
 
                 async def _build_bumpers(_num_spots=num_spots, _loop=loop):
                     """Opening bumper + all mid-spot bumpers in parallel."""
@@ -972,7 +1013,7 @@ async def run_producer(
                     return bumper_in, mid_bumpers
 
                 # Fan out: intro + LLM scripts + bumpers all in parallel
-                intro_parts, scripts, (bumper_in, mid_bumpers) = await asyncio.gather(
+                (intro_parts, intro_text), scripts, (bumper_in, mid_bumpers) = await asyncio.gather(
                     _build_intro(),
                     asyncio.gather(
                         *(
@@ -992,6 +1033,8 @@ async def run_producer(
                 )
 
                 # ── PHASE 3: Assemble break_parts in order ──
+                if intro_text:
+                    state.recent_transition_texts.append(intro_text)
                 break_parts.extend(intro_parts)
                 break_parts.append(bumper_in)
 
@@ -1008,6 +1051,9 @@ async def run_producer(
                         summary=script.summary,
                         format=script.format,
                         sonic_signature=brand.campaign.sonic_signature if brand.campaign else "",
+                        environment=script.sonic.environment if script.sonic else "",
+                        music_bed=script.mood or (script.sonic.music_bed if script.sonic else ""),
+                        transition_motif=script.sonic.transition_motif if script.sonic else "",
                     )
                     if spot_idx < num_spots - 1 and spot_idx < len(mid_bumpers):
                         break_parts.append(mid_bumpers[spot_idx])

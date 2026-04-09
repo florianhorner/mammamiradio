@@ -92,7 +92,7 @@ async def startup():
         playlist_source = PlaylistSource(
             kind="demo",
             source_id="demo",
-            label="Built-in demo playlist",
+            label="Built-in modern Italian demo mix",
             track_count=len(tracks),
             selected_at=time.time(),
         )

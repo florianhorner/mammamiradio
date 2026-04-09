@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import random
 import re
 import time
 from pathlib import Path
+from urllib.error import URLError
+from urllib.request import urlopen
 
 from mammamiradio.config import StationConfig
 from mammamiradio.models import PlaylistSource, Track
@@ -16,14 +19,20 @@ from mammamiradio.spotify_auth import get_spotify_client
 logger = logging.getLogger(__name__)
 
 DEMO_TRACKS = [
-    Track(title="Tarantella", artist="Musica Tradizionale", duration_ms=180000, spotify_id="demo1"),
-    Track(title="La Danza", artist="Gioachino Rossini", duration_ms=210000, spotify_id="demo2"),
-    Track(title="Brindisi", artist="Giuseppe Verdi", duration_ms=195000, spotify_id="demo3"),
-    Track(title="Una Voce Poco Fa", artist="Gioachino Rossini", duration_ms=240000, spotify_id="demo4"),
-    Track(title="Core 'Ngrato", artist="Salvatore Cardillo", duration_ms=220000, spotify_id="demo5"),
+    Track(title="OSSESSIONE", artist="Samurai Jay", duration_ms=210000, spotify_id="demo1"),
+    Track(title="TU MI PIACI TANTO", artist="Sayf", duration_ms=210000, spotify_id="demo2"),
+    Track(title="Che fastidio!", artist="ditonellapiaga", duration_ms=210000, spotify_id="demo3"),
+    Track(title="DAVVERODAVVERO", artist="Artie 5ive", duration_ms=210000, spotify_id="demo4"),
+    Track(title="Stupida sfortuna", artist="Fulminacci", duration_ms=210000, spotify_id="demo5"),
+    Track(title="Labirinto", artist="Luche", duration_ms=210000, spotify_id="demo6"),
+    Track(title="Per sempre si", artist="Sal da Vinci", duration_ms=210000, spotify_id="demo7"),
+    Track(title="Poesie Clandestine", artist="LDA & Aka 7even", duration_ms=210000, spotify_id="demo8"),
+    Track(title="AL MIO PAESE", artist="Serena Brancale, Levante & DELIA", duration_ms=210000, spotify_id="demo9"),
+    Track(title="CANZONE D'AMORE", artist="Geolier", duration_ms=210000, spotify_id="demo10"),
 ]
 
 PERSISTED_SOURCE_FILENAME = "playlist_source.json"
+_APPLE_MUSIC_IT_CHARTS_URL = "https://rss.applemarketingtools.com/api/v2/it/music/most-played/50/songs.json"
 
 
 class ExplicitSourceError(RuntimeError):
@@ -73,11 +82,50 @@ def _demo_source() -> PlaylistSource:
     return PlaylistSource(
         kind="demo",
         source_id="demo",
-        label="Built-in demo playlist",
+        label="Built-in modern Italian demo mix",
         track_count=len(DEMO_TRACKS),
         selected_at=time.time(),
         url="",
     )
+
+
+def _charts_source(track_count: int) -> PlaylistSource:
+    return PlaylistSource(
+        kind="charts",
+        source_id="apple_music_it_top_50",
+        label="Current Italian charts",
+        track_count=track_count,
+        selected_at=time.time(),
+        url=_APPLE_MUSIC_IT_CHARTS_URL,
+    )
+
+
+def _fetch_current_italy_charts(limit: int = 20) -> list[Track]:
+    """Fetch a live Top Songs Italy list from Apple Music charts RSS."""
+    try:
+        with urlopen(_APPLE_MUSIC_IT_CHARTS_URL, timeout=4.0) as resp:
+            payload = json.loads(resp.read().decode("utf-8"))
+    except (URLError, TimeoutError, OSError, json.JSONDecodeError) as exc:
+        logger.warning("Live charts fetch failed: %s", exc)
+        return []
+
+    results = payload.get("feed", {}).get("results", [])
+    tracks: list[Track] = []
+    for item in results[:limit]:
+        title = str(item.get("name", "")).strip()
+        artist = str(item.get("artistName", "")).strip()
+        item_id = str(item.get("id", "")).strip()
+        if not title or not artist:
+            continue
+        tracks.append(
+            Track(
+                title=title,
+                artist=artist,
+                duration_ms=210000,
+                spotify_id=f"chart_{item_id or len(tracks) + 1}",
+            )
+        )
+    return tracks
 
 
 def _build_source(
@@ -313,6 +361,13 @@ def load_explicit_source(config: StationConfig, source: PlaylistSource) -> tuple
         resolved.track_count = len(tracks)
         return tracks, resolved
 
+    if source.kind == "charts":
+        tracks = _shuffle_if_needed(config, _fetch_current_italy_charts())
+        if not tracks:
+            raise ExplicitSourceError("Current Italian charts are temporarily unavailable")
+        resolved = _charts_source(len(tracks))
+        return tracks, resolved
+
     raise ExplicitSourceError(f"Unsupported source kind: {source.kind}")
 
 
@@ -332,8 +387,15 @@ def fetch_startup_playlist(
     else:
         error = ""
 
+    charts_allowed = os.getenv("MAMMAMIRADIO_ALLOW_YTDLP", "false").lower() in ("true", "1", "yes")
+
     if not config.spotify_client_id or not config.spotify_client_secret:
-        logger.warning("No Spotify credentials — using demo Italian playlist")
+        if charts_allowed:
+            chart_tracks = _shuffle_if_needed(config, _fetch_current_italy_charts())
+            if chart_tracks:
+                logger.warning("No Spotify credentials — using live Italian charts fallback")
+                return chart_tracks, _charts_source(len(chart_tracks)), error or "Spotify credentials are missing"
+        logger.warning("No Spotify credentials — using built-in modern Italian demo mix")
         tracks = _shuffle_if_needed(config, list(DEMO_TRACKS))
         return tracks, _demo_source(), error or "Spotify credentials are missing"
 
@@ -360,6 +422,12 @@ def fetch_startup_playlist(
     except Exception as exc:
         logger.warning("Liked songs fetch failed (%s) — using demo playlist", exc)
         error = str(exc)
+
+    if charts_allowed:
+        chart_tracks = _shuffle_if_needed(config, _fetch_current_italy_charts())
+        if chart_tracks:
+            logger.warning("No Spotify tracks available — using live Italian charts fallback")
+            return chart_tracks, _charts_source(len(chart_tracks)), error or "No Spotify tracks available"
 
     logger.warning("No Spotify tracks available — using demo playlist")
     tracks = _shuffle_if_needed(config, list(DEMO_TRACKS))

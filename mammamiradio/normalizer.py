@@ -376,30 +376,43 @@ def generate_sfx(output_path: Path, sfx_type: str, sfx_dir: Path | None = None) 
                 logger.info("Using pre-recorded SFX: %s", candidate.name)
                 return output_path
 
-    # Synthetic fallbacks — richer audio using layered lavfi filters
-    if sfx_type in ("chime", "ding"):
-        return generate_tone(output_path, freq_hz=880, duration_sec=0.4)
-    elif sfx_type in ("cash_register", "register_hit"):
-        return _generate_cash_register(output_path)
-    elif sfx_type in ("sweep", "whoosh"):
-        return _generate_whoosh(output_path)
-    elif sfx_type == "tape_stop":
-        # Descending sweep — tape stopping effect
-        return generate_sweep(output_path, start_hz=2000, end_hz=80, duration_sec=0.5)
-    elif sfx_type == "hotline_beep":
-        # Short dual-tone DTMF-like beep
-        return generate_tone(output_path, freq_hz=1336, duration_sec=0.2)
-    elif sfx_type == "mandolin_sting":
-        return _generate_mandolin_sting(output_path)
-    elif sfx_type == "ice_clink":
-        return _generate_ice_clink(output_path)
-    elif sfx_type == "startup_synth":
-        # Ascending sweep with synth bloom character
-        return generate_sweep(output_path, start_hz=200, end_hz=1200, duration_sec=0.6)
-    else:
-        # Unknown SFX type — short chime as default
+    def _simple_fallback() -> Path:
+        if sfx_type in ("sweep", "whoosh", "startup_synth"):
+            return generate_sweep(output_path, start_hz=320, end_hz=1100, duration_sec=0.35)
+        if sfx_type == "tape_stop":
+            return generate_sweep(output_path, start_hz=1400, end_hz=120, duration_sec=0.3)
+        if sfx_type in ("cash_register", "register_hit", "ice_clink", "mandolin_sting"):
+            return generate_tone(output_path, freq_hz=1047, duration_sec=0.18)
+        if sfx_type == "hotline_beep":
+            return generate_tone(output_path, freq_hz=1336, duration_sec=0.18)
+        return generate_tone(output_path, freq_hz=880, duration_sec=0.25)
+
+    try:
+        # Synthetic fallbacks — richer audio using layered lavfi filters
+        if sfx_type in ("chime", "ding"):
+            return generate_tone(output_path, freq_hz=880, duration_sec=0.4)
+        if sfx_type in ("cash_register", "register_hit"):
+            return _generate_cash_register(output_path)
+        if sfx_type in ("sweep", "whoosh"):
+            return _generate_whoosh(output_path)
+        if sfx_type == "tape_stop":
+            # Descending sweep — tape stopping effect
+            return generate_sweep(output_path, start_hz=2000, end_hz=80, duration_sec=0.5)
+        if sfx_type == "hotline_beep":
+            # Short dual-tone DTMF-like beep
+            return generate_tone(output_path, freq_hz=1336, duration_sec=0.2)
+        if sfx_type == "mandolin_sting":
+            return _generate_mandolin_sting(output_path)
+        if sfx_type == "ice_clink":
+            return _generate_ice_clink(output_path)
+        if sfx_type == "startup_synth":
+            # Ascending sweep with synth bloom character
+            return generate_sweep(output_path, start_hz=200, end_hz=1200, duration_sec=0.6)
         logger.warning("Unknown SFX type '%s', using default chime", sfx_type)
         return generate_tone(output_path, freq_hz=880, duration_sec=0.4)
+    except Exception as exc:
+        logger.warning("Synthetic SFX '%s' failed, using simple fallback: %s", sfx_type, exc)
+        return _simple_fallback()
 
 
 def generate_music_bed(output_path: Path, mood: str, duration_sec: float) -> Path:

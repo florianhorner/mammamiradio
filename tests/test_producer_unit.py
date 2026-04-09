@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
@@ -17,7 +18,11 @@ from mammamiradio.models import (
     StationState,
     Track,
 )
-from mammamiradio.producer import SHAREWARE_CANNED_LIMIT, _pick_canned_clip, run_producer
+from mammamiradio.producer import (
+    SHAREWARE_CANNED_LIMIT,
+    _pick_canned_clip,
+    run_producer,
+)
 
 TOML_PATH = str(Path(__file__).parent.parent / "radio.toml")
 PRODUCER_MODULE = "mammamiradio.producer"
@@ -251,6 +256,46 @@ async def test_stopped_session_discards_finished_segment_without_advancing_state
             assert queue.empty()
             assert len(state.played_tracks) == 0
             assert state.segments_produced == 0
+        finally:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+
+@pytest.mark.asyncio
+async def test_stopped_session_remains_stopped_until_resume(tmp_path):
+    """Producer should not clear a stopped session on its own."""
+    state = _make_state()
+    state.session_stopped = True
+    state.now_streaming = {
+        "type": "stopped",
+        "label": "Session stopped",
+        "started": time.time() - 60.0,
+    }
+    config = _make_config()
+    config.tmp_dir = tmp_path
+    config.cache_dir = tmp_path
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    source_audio = tmp_path / "source.mp3"
+    source_audio.write_bytes(b"fake audio")
+
+    def fake_normalize(src: Path, dst: Path) -> None:
+        dst.write_bytes(Path(src).read_bytes())
+
+    with (
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.MUSIC),
+        patch(f"{PRODUCER_MODULE}.download_track", new_callable=AsyncMock, return_value=source_audio),
+        patch(f"{PRODUCER_MODULE}.normalize", side_effect=fake_normalize),
+        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+    ):
+        task = asyncio.create_task(run_producer(queue, state, config))
+        try:
+            await asyncio.sleep(1.2)
+            assert state.session_stopped is True
+            assert state.now_streaming["type"] == "stopped"
+            assert queue.empty()
         finally:
             task.cancel()
             try:

@@ -43,7 +43,6 @@ body::before {
   background: radial-gradient(circle, rgba(244,208,72,0.3) 0%, rgba(240,160,40,0.1) 40%, transparent 70%);
   pointer-events: none;
 }
-
 /* ── HEADER ── */
 .header {
   position: relative; z-index: 1;
@@ -89,6 +88,9 @@ h1 {
 .card-label {
   font-size: 9px; font-weight: 600; letter-spacing: 0.18em; text-transform: uppercase;
   color: rgba(245,237,216,0.45); margin-bottom: 10px;
+}
+.now-card {
+  overflow: visible;
 }
 
 /* ── NOW PLAYING CARD ── */
@@ -188,6 +190,26 @@ h1 {
 .script-host { font-weight: 700; margin-right: 4px; }
 .script-host[data-h="Marco"] { color: var(--ok); }
 .script-host[data-h="Giulia"] { color: var(--sun); }
+
+/* ── SYSTEMS ── */
+.status-stack { display: flex; flex-direction: column; gap: 4px; }
+.status-row {
+  display: flex; align-items: flex-start; justify-content: space-between; gap: 12px;
+  padding: 8px 0; border-bottom: 1px solid rgba(245,237,216,0.08);
+}
+.status-row:last-child { border-bottom: none; }
+.status-copy { flex: 1; min-width: 0; }
+.status-title { font-size: 12px; font-weight: 700; color: var(--cream); }
+.status-detail { font-size: 11px; color: rgba(245,237,216,0.5); margin-top: 2px; line-height: 1.4; }
+.status-pill {
+  flex-shrink: 0;
+  font-size: 9px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase;
+  padding: 4px 8px; border-radius: 999px;
+}
+.status-pill[data-s="ok"] { background: rgba(37,99,235,0.2); color: var(--ok); }
+.status-pill[data-s="warn"] { background: rgba(244,208,72,0.16); color: var(--sun); }
+.status-pill[data-s="error"] { background: rgba(196,74,74,0.18); color: #ff8c8c; }
+.status-pill[data-s="info"] { background: rgba(245,237,216,0.12); color: rgba(245,237,216,0.75); }
 
 /* ── PLAYLIST ── */
 .search-bar { display: flex; gap: 8px; margin-bottom: 12px; }
@@ -325,6 +347,52 @@ h1 {
 
 /* ── PROGRESS LABEL ── */
 .progress-label { font-size: 9px; color: rgba(245,237,216,0.3); text-align: right; margin-top: 2px; }
+
+@media (max-width: 640px) {
+  .header {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .on-air {
+    align-self: flex-start;
+  }
+
+  .transport,
+  .search-bar,
+  .pace-row,
+  .sr-row,
+  .pl-row,
+  .queue-item,
+  .log-entry {
+    align-items: flex-start;
+  }
+
+  .search-bar {
+    flex-direction: column;
+  }
+
+  .search-bar .btn,
+  .transport .btn {
+    width: 100%;
+  }
+
+  .pl-row,
+  .sr-row,
+  .queue-item {
+    flex-wrap: wrap;
+  }
+
+  .pl-a {
+    width: 100%;
+    padding-left: 30px;
+    opacity: 1;
+  }
+
+  .force-badge {
+    margin-left: 28px;
+  }
+}
 </style>
 </head>
 <body>
@@ -332,7 +400,7 @@ h1 {
 <!-- HEADER -->
 <div class="header">
   <div>
-    <h1>Radio Italì</h1>
+    <h1>MammaMiRadio</h1>
     <div class="header-sub">Regia — Control Room</div>
   </div>
   <div class="on-air" id="onAirBadge"><span class="on-air-dot"></span>ON AIR</div>
@@ -341,7 +409,7 @@ h1 {
 <div class="stopped-banner" id="stoppedBanner">Session stopped. Hit Resume to continue.</div>
 
 <!-- NOW PLAYING -->
-<div class="card">
+<div class="card now-card">
   <div class="card-label">Now Playing</div>
   <div class="now-type" id="nowType" data-t="music">—</div>
   <div class="now-title" id="nowTitle">Waiting for signal...</div>
@@ -367,13 +435,22 @@ h1 {
   </div>
 </div>
 
+<!-- SYSTEMS -->
+<div class="card">
+  <div class="card-label">Systems</div>
+  <div class="status-stack" id="systemsBody"><div class="empty">Checking AI and music systems...</div></div>
+</div>
+
 <!-- UP NEXT -->
 <div class="card">
   <div class="card-label">Up Next <span id="queueMeta" style="float:right;font-weight:400"></span></div>
   <div id="queueBody"><div class="empty">Waiting...</div></div>
-  <div id="scriptWrap" style="display:none">
-    <div class="script-box" id="scriptBody"></div>
-  </div>
+</div>
+
+<!-- LAST BREAK -->
+<div class="card">
+  <div class="card-label">Last Break</div>
+  <div class="script-box" id="recentBody"><div class="empty">Nothing aired yet</div></div>
 </div>
 
 <!-- PLAYLIST -->
@@ -429,7 +506,7 @@ h1 {
 <script>
 const _csrf = document.querySelector('meta[name="mammamiradio-csrf-token"]')?.content || '';
 const H = () => ({'Content-Type':'application/json','X-Radio-CSRF-Token':_csrf});
-let _st={}, _pub={}, _hostsOk=false, _paceOk=false, _searchTo=null;
+let _st={}, _pub={}, _caps={}, _hostsOk=false, _paceOk=false, _searchTo=null;
 let _nowStart=0, _nowDur=0, _tick=null, _prevLabel='';
 
 function toast(m){const e=document.getElementById('toast');e.textContent=m;e.classList.add('show');setTimeout(()=>e.classList.remove('show'),1600)}
@@ -478,9 +555,15 @@ function updateNow(ns){
 }
 
 // ── Queue ──
-function updateQueue(up,forcePending){
+function updateQueue(up,forcePending,mode){
   const el=document.getElementById('queueBody');const meta=document.getElementById('queueMeta');
-  if(!up?.length&&!forcePending){el.innerHTML='<div class="empty">Queue empty</div>';meta.textContent='';return}
+  if(!up?.length&&!forcePending){
+    el.innerHTML = mode==='building'
+      ? '<div class="empty">Building next segments...</div>'
+      : '<div class="empty">Queue empty</div>';
+    meta.textContent='';
+    return
+  }
   const parts=[];
   if(forcePending){parts.push(`<div class="queue-item"><span class="qi-num">!</span><span class="qi-badge" data-t="${forcePending}">${forcePending.replace('_',' ')}</span><span class="qi-label">Triggered — plays next</span><span class="force-badge">forced</span></div>`)}
   if(up?.length){parts.push(...up.map((it,i)=>{
@@ -495,13 +578,73 @@ function updateQueue(up,forcePending){
   el.innerHTML=parts.join('');
 }
 
-function updateScript(st){
-  const wrap=document.getElementById('scriptWrap');const body=document.getElementById('scriptBody');
-  const lines=st.last_banter_script;
-  if(!lines?.length){wrap.style.display='none';return}
-  wrap.style.display='';
-  body.innerHTML='<div style="font-size:9px;font-weight:600;letter-spacing:0.12em;text-transform:uppercase;color:rgba(245,237,216,0.4);margin-bottom:6px">Last Aired Script</div>'+
-    lines.map(l=>`<div><span class="script-host" data-h="${esc(l.host)}">${esc(l.host)}:</span> ${esc(l.text)}</div>`).join('');
+function statusRow(title,state,label,detail){
+  return `<div class="status-row"><div class="status-copy"><div class="status-title">${esc(title)}</div><div class="status-detail">${esc(detail)}</div></div><span class="status-pill" data-s="${state}">${esc(label)}</span></div>`;
+}
+
+function updateSystems(caps,st,pub){
+  const el=document.getElementById('systemsBody');
+  const c=caps?.capabilities||{};
+  const gp=caps?.golden_path||pub?.golden_path||{};
+  if(!Object.keys(c).length&&!Object.keys(gp).length){
+    el.innerHTML='<div class="empty">System status unavailable</div>';
+    return;
+  }
+
+  const recentBanter=[...(pub?.stream_log||[])].reverse().find(e=>e.type==='banter'&&e.metadata&&Object.prototype.hasOwnProperty.call(e.metadata,'canned'));
+  let aiState='info',aiLabel='Unknown',aiDetail='No AI diagnostics yet.';
+  if(!c.anthropic){
+    aiState='warn';aiLabel='Demo';aiDetail='No AI script key configured. The station falls back to canned or local copy.';
+  }else if(recentBanter&&recentBanter.metadata?.canned===false){
+    aiState='ok';aiLabel='Working';aiDetail='Recent banter was generated live, not played from the canned demo pool.';
+  }else if((st?.consumption?.api_calls||0)>0){
+    aiState='ok';aiLabel='Working';aiDetail=`${st.consumption.api_calls} AI call${st.consumption.api_calls===1?'':'s'} this session.`;
+  }else{
+    aiState='info';aiLabel='Ready';aiDetail='AI key is present but no fresh generated break has been detected yet.';
+  }
+
+  const device=caps?.connect_device_name||'MammaMiRadio';
+  let spotifyState='warn',spotifyLabel='Waiting',spotifyDetail=gp?.detail||`Attach Spotify Connect to ${device}.`;
+  if(c.spotify_connected){
+    spotifyState='ok';spotifyLabel='Connected';spotifyDetail=`Spotify is attached to ${device}. Real music can play live.`;
+  }else if(gp?.silent_music_fallback){
+    spotifyState='error';spotifyLabel='Missing';spotifyDetail=`Spotify is not attached to ${device}. Music segments currently fall back to silent placeholders.`;
+  }else if(gp?.fallback_sources?.length){
+    spotifyState='warn';spotifyLabel='Waiting';spotifyDetail=`Spotify is not attached to ${device} yet. Temporary music fallback: ${gp.fallback_sources.join(', ')}.`;
+  }
+
+  const sourceLabel=pub?.current_source?.label||st?.playlist_source?.label||'No playlist source';
+  const upcomingMusic=(pub?.upcoming||[]).filter(it=>it.type==='music').map(it=>it.label).slice(0,2);
+  let musicState='ok',musicLabel='Ready',musicDetail=`Source: ${sourceLabel}.`;
+  if(gp?.silent_music_fallback){
+    musicState='error';musicLabel='Silent';musicDetail='No real music source is attached. Music slots degrade to silence until Spotify or another source is available.';
+  }else if(upcomingMusic.length){
+    musicDetail=`Source: ${sourceLabel}. Next music: ${upcomingMusic.join(' • ')}.`;
+  }else if(pub?.upcoming_mode==='building'){
+    musicState='info';musicLabel='Building';musicDetail=`Source: ${sourceLabel}. Producer is still building the next music segment.`;
+  }
+
+  el.innerHTML=[
+    statusRow('AI Writing',aiState,aiLabel,aiDetail),
+    statusRow('Spotify Connect',spotifyState,spotifyLabel,spotifyDetail),
+    statusRow('Music Source',musicState,musicLabel,musicDetail),
+  ].join('');
+}
+
+function updateRecent(st){
+  const body=document.getElementById('recentBody');
+  const parts=[];
+  const lines=st.last_banter_script||[];
+  if(lines.length){
+    parts.push('<div style="font-size:9px;font-weight:600;letter-spacing:0.12em;text-transform:uppercase;color:rgba(245,237,216,0.4);margin-bottom:6px">Last Banter</div>'+
+      lines.map(l=>`<div><span class="script-host" data-h="${esc(l.host)}">${esc(l.host)}:</span> ${esc(l.text)}</div>`).join(''));
+  }
+  const ad=st.last_ad_script||{};
+  if(ad.brands?.length){
+    parts.push('<div style="font-size:9px;font-weight:600;letter-spacing:0.12em;text-transform:uppercase;color:rgba(245,237,216,0.4);margin:10px 0 6px">Last Ad Break</div>'+
+      ad.brands.map((brand,i)=>`<div><span class="script-host">${esc(brand)}:</span> ${esc((ad.summaries&&ad.summaries[i])||(ad.formats&&ad.formats[i])||'Aired')}</div>`).join(''));
+  }
+  body.innerHTML=parts.length?parts.join(''):'<div class="empty">Nothing aired yet</div>';
 }
 
 // ── Playlist ──
@@ -604,9 +747,10 @@ function toggleSection(head){head.classList.toggle('open');head.nextElementSibli
 // ── Polling ──
 async function refresh(){
   try{
-    const [sr,pr]=await Promise.all([fetch('/status',{headers:H()}),fetch('/public-status')]);
+    const [sr,pr,cr]=await Promise.all([fetch('/status',{headers:H()}),fetch('/public-status'),fetch('/api/capabilities',{headers:H()})]);
     _st=await sr.json();_pub=await pr.json();
-    updateNow(_pub.now_streaming);updateQueue(_pub.upcoming,_st.force_pending);updateScript(_st);
+    _caps=await cr.json();
+    updateNow(_pub.now_streaming);updateQueue(_pub.upcoming,_st.force_pending,_pub.upcoming_mode);updateSystems(_caps,_st,_pub);updateRecent(_st);
     updateLog(_pub.stream_log);updatePl(_st.playlist||[]);
     updatePaceCounters(_st.pacing);
     if(_st.session_stopped!==undefined)updateStopState(_st.session_stopped);

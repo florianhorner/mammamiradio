@@ -637,7 +637,7 @@
       .then(function(data){
         updateGoldenPath(data.golden_path);
         updateNowPlaying(data.now_streaming);
-        updateUpNext(data.upcoming);
+        updateUpNext(data.upcoming, data.upcoming_mode);
         updateJokes(data.running_jokes);
         updateRecent(data.stream_log);
         if(!isPlaying && data.now_streaming){
@@ -711,14 +711,18 @@
     }, 200);
   }
 
-  function updateUpNext(upcoming){
+  function updateUpNext(upcoming, mode){
     var section = document.getElementById('upNextSection');
     var list = document.getElementById('upNextList');
-    if(!upcoming || upcoming.length === 0){
+    if((!upcoming || upcoming.length === 0) && mode !== 'building'){
       section.style.display = 'none';
       return;
     }
     section.style.display = 'block';
+    if(!upcoming || upcoming.length === 0){
+      list.innerHTML = '<div class="upcoming-item"><span class="item-icon">...</span><span class="item-label">Building next segments...</span></div>';
+      return;
+    }
     var items = upcoming.slice(0, 4);
     var html = '';
     for(var i = 0; i < items.length; i++){

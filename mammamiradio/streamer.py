@@ -99,6 +99,10 @@ def _golden_path_status(config, state) -> dict:
         fallback_sources.append("yt-dlp downloads")
 
     silent_music_fallback = (not spotify_connected) and not fallback_sources
+    shared = {
+        "fallback_sources": fallback_sources,
+        "silent_music_fallback": silent_music_fallback,
+    }
 
     if spotify_connected:
         return {
@@ -107,24 +111,41 @@ def _golden_path_status(config, state) -> dict:
             "headline": "Connected to Spotify. Real music is live.",
             "detail": "Your in-page player is now using your Spotify-powered station audio.",
             "steps": [],
-            "silent_music_fallback": False,
+            **shared,
+        }
+
+    # Music is available via yt-dlp, local files, or demo assets — not blocking,
+    # but only when Spotify credentials are absent. Once credentials exist, the
+    # user still needs the explicit Connect/browser-login guidance.
+    if fallback_sources and not spotify_connected and not spotify_api:
+        source_label = ", ".join(fallback_sources)
+        return {
+            "stage": "music_available",
+            "blocking": False,
+            "headline": f"Music via {source_label}.",
+            "detail": (
+                f"Playing music from: {source_label}. "
+                "Add Spotify credentials in Advanced Settings for streaming from your own library."
+            ),
+            "steps": [],
+            **shared,
         }
 
     if not spotify_api:
-        detail = "Add Spotify credentials first. Until then, the station cannot use the golden path."
+        detail = "No music source available."
         if silent_music_fallback:
-            detail += " In this setup, music segments fall back to silence placeholders."
+            detail += " Music segments fall back to silence placeholders."
+        detail += " Set MAMMAMIRADIO_ALLOW_YTDLP=true or add Spotify credentials."
         return {
-            "stage": "needs_spotify_credentials",
+            "stage": "needs_music_source",
             "blocking": True,
-            "headline": "Action required: add Spotify App credentials.",
+            "headline": "No music source configured.",
             "detail": detail,
             "steps": [
-                "Open Advanced Settings.",
-                "Paste Spotify App ID and App Secret.",
-                "Click Save, then open Spotify and choose the MammaMiRadio device.",
+                "Set MAMMAMIRADIO_ALLOW_YTDLP=true for YouTube music, or",
+                "Open Advanced Settings and paste Spotify App ID and Secret.",
             ],
-            "silent_music_fallback": silent_music_fallback,
+            **shared,
         }
 
     auth_url = getattr(state, "spotify_auth_url", "") or ""
@@ -146,7 +167,7 @@ def _golden_path_status(config, state) -> dict:
                 "After login, the station connects automatically.",
             ],
             "auth_url": auth_url,
-            "silent_music_fallback": silent_music_fallback,
+            **shared,
         }
 
     detail = "Spotify credentials are present, but Spotify Connect is not attached yet."
@@ -164,7 +185,7 @@ def _golden_path_status(config, state) -> dict:
             "Tap/click the device picker (speaker icon).",
             "Select MammaMiRadio as the playback device.",
         ],
-        "silent_music_fallback": silent_music_fallback,
+        **shared,
     }
 
 
@@ -813,6 +834,10 @@ async def capabilities(request: Request, _: None = Depends(require_admin_access)
     state = request.app.state.station_state
     caps = get_capabilities(config, state)
     result = capabilities_to_dict(caps)
+    capabilities = result.setdefault("capabilities", {})
+    capabilities["script_llm"] = bool(config.anthropic_api_key or config.openai_api_key)
+    capabilities["anthropic_key"] = bool(config.anthropic_api_key)
+    capabilities["openai"] = bool(config.openai_api_key)
 
     now = state.now_streaming or {}
     result["now_playing"] = now
@@ -1329,6 +1354,7 @@ def _public_status_payload(request: Request) -> dict:
             for e in state.stream_log
         ],
         "upcoming": upcoming,
+        "upcoming_mode": "queued" if upcoming else "building",
     }
 
 

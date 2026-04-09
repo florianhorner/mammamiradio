@@ -14,7 +14,7 @@ Spotify Connect capture adds a couple more requirements:
 - `go-librespot` on `PATH` or at the path configured in `radio.toml`
 - persistent access to the configured FIFO path, usually `/tmp/mammamiradio.pcm`
 
-If those are missing, the station still runs, but it drops into demo or degraded mode and falls back to local files, `yt-dlp`, or placeholder audio.
+If those are missing, the station still runs, but it drops into demo or degraded mode and falls back to live Italian charts when `MAMMAMIRADIO_ALLOW_YTDLP=true`, then bundled demo tracks, local files, `yt-dlp`, or placeholder audio as appropriate.
 
 ## Required secrets and config
 
@@ -26,6 +26,7 @@ Environment:
 - `MAMMAMIRADIO_GO_LIBRESPOT_BIN`
 - `MAMMAMIRADIO_GO_LIBRESPOT_CONFIG_DIR`
 - `MAMMAMIRADIO_GO_LIBRESPOT_PORT`
+- `MAMMAMIRADIO_ALLOW_YTDLP` (optional, enables live charts startup fallback and downloader fallback)
 - `ADMIN_USERNAME`
 - `ADMIN_PASSWORD` or `ADMIN_TOKEN` for non-local access
 - `SPOTIFY_CLIENT_ID`
@@ -77,8 +78,8 @@ If you replace it in production, your replacement needs to preserve the FIFO + g
 
 Shared Conductor scripts live in [`conductor.json`](conductor.json):
 
-- setup bootstraps `.venv`, installs dev tooling, and links `.env` from `$CONDUCTOR_ROOT_PATH` when present
-- run exports a workspace-specific port, FIFO path, tmp/cache dirs, and go-librespot config dir before delegating to `./start.sh`
+- setup bootstraps `.venv`, installs dev tooling, and links `.env` from `~/.config/mammamiradio/.env` when present, falling back to `$CONDUCTOR_ROOT_PATH/.env`
+- run exports a workspace-specific port, FIFO path, tmp/cache dirs, and go-librespot config dir before delegating to `./start.sh`, and defaults `MAMMAMIRADIO_ALLOW_YTDLP=true`
 - archive kills the workspace-owned go-librespot and FIFO drain processes, removes the FIFO, and deletes `.context/conductor/`
 
 ## HTTP surface
@@ -90,6 +91,8 @@ Public routes:
 - `/healthz`
 - `/readyz`
 - `/public-status`
+
+The read-only sidecar monitor in `scripts/stream_watch_server.py` is intentionally limited to `/public-status`, `/healthz`, and `/readyz` so it still works when admin auth is enabled.
 
 Admin routes:
 

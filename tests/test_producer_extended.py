@@ -721,15 +721,35 @@ def test_select_ad_creative_avoids_last_format():
 
 
 def test_select_ad_creative_category_sonic_defaults():
-    """Brand without campaign but with known category gets _CATEGORY_SONIC defaults."""
+    """Brand without campaign but with known category gets one of the configured sonic variants."""
     brand = AdBrand(name="Test", tagline="T", category="food")
     state = StationState()
     config = _make_config(Path("/tmp"))
 
     _fmt, sonic, _roles = _select_ad_creative(brand, state, config)
-    assert sonic.environment == "cafe"
-    assert sonic.music_bed == "tarantella_pop"
-    assert sonic.transition_motif == "register_hit"
+    assert sonic.environment in {"cafe", "shopping_channel"}
+    assert sonic.music_bed in {"tarantella_pop", "cheap_synth_romance", "upbeat"}
+    assert sonic.transition_motif in {"register_hit", "ice_clink", "mandolin_sting"}
+
+
+def test_select_ad_creative_avoids_last_sonic_variant_when_possible():
+    brand = AdBrand(name="Test", tagline="T", category="food")
+    state = StationState()
+    config = _make_config(Path("/tmp"))
+    state.record_ad_spot(
+        brand="Test",
+        environment="cafe",
+        music_bed="tarantella_pop",
+        transition_motif="register_hit",
+    )
+
+    for _ in range(20):
+        _fmt, sonic, _roles = _select_ad_creative(brand, state, config)
+        assert not (
+            sonic.environment == "cafe"
+            and sonic.music_bed == "tarantella_pop"
+            and sonic.transition_motif == "register_hit"
+        )
 
 
 def test_cast_voices_host_fallback():

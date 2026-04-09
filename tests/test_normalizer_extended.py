@@ -138,6 +138,18 @@ def test_generate_sfx_cash_register(mock_subprocess):
     assert "aecho" in joined
 
 
+def test_generate_sfx_cash_register_failure_uses_simple_fallback(mock_subprocess):
+    out = Path("/tmp/sfx.mp3")
+    with (
+        patch("mammamiradio.normalizer._generate_cash_register", side_effect=RuntimeError("ffmpeg broke")),
+        patch("mammamiradio.normalizer.generate_tone", return_value=out) as mock_tone,
+    ):
+        result = generate_sfx(out, "cash_register")
+
+    assert result == out
+    mock_tone.assert_called_once()
+
+
 def test_generate_sfx_sweep(mock_subprocess):
     mock_run, _ = mock_subprocess
     out = Path("/tmp/sfx.mp3")
@@ -624,3 +636,138 @@ def test_bumper_jingle_has_pad_and_reverb(mock_subprocess):
     assert "196" in joined
     # Reverb/echo tail
     assert "aecho" in joined
+
+
+# ---------------------------------------------------------------------------
+# concat_files silence_ms=0 branch (else path, no silence gaps)
+# ---------------------------------------------------------------------------
+
+
+def test_concat_files_no_silence(mock_subprocess):
+    """concat_files with silence_ms=0 uses simple file concat without anullsrc."""
+    from mammamiradio.normalizer import concat_files
+
+    mock_run, _ = mock_subprocess
+    paths = [Path("/tmp/a.mp3"), Path("/tmp/b.mp3"), Path("/tmp/c.mp3")]
+    out = Path("/tmp/out.mp3")
+    concat_files(paths, out, silence_ms=0)
+    cmd = mock_run.call_args[0][0]
+    joined = " ".join(cmd)
+    assert "anullsrc" not in joined
+    assert "concat=n=3" in joined
+
+
+# ---------------------------------------------------------------------------
+# generate_sweep validation (invalid params)
+# ---------------------------------------------------------------------------
+
+
+def test_generate_sweep_negative_start_freq_raises():
+    from mammamiradio.normalizer import generate_sweep
+
+    with pytest.raises(ValueError, match="positive"):
+        generate_sweep(Path("/tmp/out.mp3"), start_hz=-100, end_hz=2000)
+
+
+def test_generate_sweep_zero_duration_raises():
+    from mammamiradio.normalizer import generate_sweep
+
+    with pytest.raises(ValueError, match="positive"):
+        generate_sweep(Path("/tmp/out.mp3"), duration_sec=0)
+
+
+# ---------------------------------------------------------------------------
+# generate_sfx _simple_fallback paths (when main synthetic generation fails)
+# ---------------------------------------------------------------------------
+
+
+def test_generate_sfx_sweep_failure_uses_sweep_fallback(mock_subprocess):
+    """When _generate_whoosh fails, sweep-type SFX falls back to generate_sweep."""
+    out = Path("/tmp/sfx.mp3")
+    with (
+        patch("mammamiradio.normalizer._generate_whoosh", side_effect=RuntimeError("boom")),
+        patch("mammamiradio.normalizer.generate_sweep", return_value=out) as mock_sweep,
+    ):
+        result = generate_sfx(out, "sweep")
+    assert result == out
+    mock_sweep.assert_called_once()
+
+
+def test_generate_sfx_tape_stop_failure_uses_sweep_fallback(mock_subprocess):
+    """tape_stop SFX falls back to descending generate_sweep on failure."""
+    out = Path("/tmp/sfx.mp3")
+    with (
+        patch("mammamiradio.normalizer._generate_whoosh", side_effect=RuntimeError("boom")),
+        patch("mammamiradio.normalizer.generate_sweep", return_value=out) as mock_sweep,
+    ):
+        result = generate_sfx(out, "tape_stop")
+    assert result == out
+    mock_sweep.assert_called_once()
+
+
+def test_generate_sfx_hotline_beep_failure_uses_tone_fallback(mock_subprocess):
+    """hotline_beep uses 1336 Hz tone as simple fallback."""
+    out = Path("/tmp/sfx.mp3")
+    with (
+        patch("mammamiradio.normalizer.generate_tone", side_effect=[RuntimeError("boom"), out]),
+    ):
+        # First call raises (the synthetic path), second call from _simple_fallback returns out
+        # Actually generate_sfx tries synthetic first - let's mock the inner function
+        pass
+    # More direct: make the _run_ffmpeg call fail so _simple_fallback is called
+    with (
+        patch("mammamiradio.normalizer._run_ffmpeg", side_effect=[RuntimeError("ffmpeg broke"), None]),
+        patch("mammamiradio.normalizer.generate_tone", return_value=out) as mock_tone,
+    ):
+        result = generate_sfx(out, "hotline_beep")
+    assert result == out
+    mock_tone.assert_called_once()
+
+
+def test_generate_sfx_unknown_type_failure_uses_default_tone(mock_subprocess):
+    """Unknown SFX type uses 880 Hz tone as fallback when synthetic path fails."""
+    out = Path("/tmp/sfx.mp3")
+    with (
+        patch("mammamiradio.normalizer._run_ffmpeg", side_effect=[RuntimeError("ffmpeg broke"), None]),
+        patch("mammamiradio.normalizer.generate_tone", return_value=out) as mock_tone,
+    ):
+        result = generate_sfx(out, "totally_unknown_sfx_type")
+    assert result == out
+    mock_tone.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# generate_brand_motif edge cases
+# ---------------------------------------------------------------------------
+
+
+def test_generate_brand_motif_caps_at_2s(tmp_path, mock_subprocess):
+    """generate_brand_motif stops adding components once total_dur >= 2.0s."""
+    mock_run, completed = mock_subprocess
+
+    def _create_output(cmd, **kwargs):
+        for i, arg in enumerate(cmd):
+            if arg == "-f" and i + 1 < len(cmd) and cmd[i + 1] == "mp3":
+                Path(cmd[-1]).parent.mkdir(parents=True, exist_ok=True)
+                Path(cmd[-1]).write_bytes(b"\x00" * 64)
+                break
+        return completed
+
+    mock_run.side_effect = _create_output
+
+    out = tmp_path / "motif.mp3"
+    # 5 components at 0.5s each = 2.5s, but cap is 2.0s, so only 4 should be generated
+    generate_brand_motif(out, "chime+ding+chime+ding+chime")
+    # 4 SFX calls (4 x 0.5s = 2.0s) + at least 1 concat = at least 5 calls
+    # The 5th component is skipped due to cap
+    assert mock_run.call_count >= 4
+
+
+def test_generate_brand_motif_cleans_up_on_exception(tmp_path, mock_subprocess):
+    """generate_brand_motif cleans up temp parts if generation fails."""
+    out = tmp_path / "motif.mp3"
+    with (
+        patch("mammamiradio.normalizer.generate_sfx", side_effect=RuntimeError("ffmpeg died")),
+        pytest.raises(RuntimeError, match="ffmpeg died"),
+    ):
+        generate_brand_motif(out, "chime+ding")

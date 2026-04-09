@@ -7,7 +7,7 @@ Covers: LiveStreamHub, auth helpers, CSRF enforcement, golden path,
 from __future__ import annotations
 
 import asyncio
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -299,7 +299,7 @@ def test_golden_path_needs_credentials():
     state = MagicMock()
     state.spotify_connected = False
     result = _golden_path_status(config, state)
-    assert result["stage"] == "needs_spotify_credentials"
+    assert result["stage"] == "needs_music_source"
     assert result["blocking"] is True
 
 
@@ -324,6 +324,20 @@ def test_golden_path_browser_login():
     result = _golden_path_status(config, state)
     assert result["stage"] == "needs_spotify_browser_login"
     assert "auth_url" in result
+
+
+def test_golden_path_keeps_spotify_onboarding_when_fallback_music_exists():
+    config = MagicMock()
+    config.spotify_client_id = "id"
+    config.spotify_client_secret = "secret"
+    state = MagicMock()
+    state.spotify_connected = False
+    state.spotify_auth_url = "https://accounts.spotify.com/authorize?..."
+    with patch.dict("os.environ", {"MAMMAMIRADIO_ALLOW_YTDLP": "true"}):
+        result = _golden_path_status(config, state)
+    assert result["stage"] == "needs_spotify_browser_login"
+    assert result["blocking"] is True
+    assert result["fallback_sources"] == ["yt-dlp downloads"]
 
 
 # ---------------------------------------------------------------------------

@@ -310,6 +310,29 @@ async def test_synthesize_ad_voice_sfx_pause(_mock_all, tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_synthesize_ad_sfx_failure_falls_back_to_short_silence(_mock_all, tmp_path):
+    from mammamiradio.tts import synthesize_ad
+
+    _mock_all["generate_sfx"].side_effect = RuntimeError("boom")
+
+    script = AdScript(
+        brand="EspressoPlus",
+        parts=[
+            AdPart(type="voice", text="Vuoi un caffè?"),
+            AdPart(type="sfx", sfx="cash_register"),
+        ],
+        mood="lounge",
+    )
+    voices = {"default": AdVoice(name="Announcer", voice="it-IT-DiegoNeural", style="warm")}
+
+    result = await synthesize_ad(script, voices, tmp_path)
+
+    assert result.exists()
+    _mock_all["generate_sfx"].assert_called_once()
+    assert _mock_all["generate_silence"].call_count >= 1
+
+
+@pytest.mark.asyncio
 async def test_synthesize_ad_empty_parts_fallback(_mock_all, tmp_path):
     from mammamiradio.tts import synthesize_ad
 
@@ -427,12 +450,12 @@ async def test_synthesize_ad_environment_bed(_mock_all, tmp_path):
     result = await synthesize_ad(script, voices, tmp_path)
     assert result.exists()
     # Environment bed generates a music bed for the environment name
-    # and mixes it at 0.06 volume (quieter than music bed at 0.12)
+    # and mixes it at a quieter volume than the main ad bed.
     mix_calls = _mock_all["mix_with_bed"].call_args_list
-    env_mix = [c for c in mix_calls if len(c.args) >= 4 or c.kwargs.get("volume_scale") == 0.06]
+    env_mix = [c for c in mix_calls if c.kwargs.get("volume_scale") == 0.14 or (len(c.args) >= 4 and c.args[3] == 0.14)]
     # At least one mix call should use the environment volume
     assert len(env_mix) >= 1 or any(
-        c.kwargs.get("volume_scale") == 0.06 or (len(c.args) >= 4 and c.args[3] == 0.06) for c in mix_calls
+        c.kwargs.get("volume_scale") == 0.14 or (len(c.args) >= 4 and c.args[3] == 0.14) for c in mix_calls
     )
 
 

@@ -11,7 +11,7 @@ import pytest
 from fastapi import FastAPI
 
 from mammamiradio.config import load_config
-from mammamiradio.models import StationState, Track
+from mammamiradio.models import Segment, SegmentType, StationState, Track
 from mammamiradio.streamer import LiveStreamHub, router
 
 TOML_PATH = str(Path(__file__).parent.parent / "radio.toml")
@@ -159,7 +159,36 @@ async def test_public_status_returns_json():
     assert "station" in body
     assert "now_streaming" in body
     assert "upcoming" in body
+    assert "upcoming_mode" in body
     assert "stream_log" in body
+
+
+@pytest.mark.asyncio
+async def test_public_status_upcoming_mode_shows_predictions_when_queue_empty():
+    app = _make_test_app()
+    # Queue is empty — predictions from playlist are shown instead
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.get("/public-status")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert len(body["upcoming"]) > 0
+    assert all(item["source"] == "predicted_from_playlist" for item in body["upcoming"])
+    assert body["upcoming_mode"] == "queued"
+
+
+@pytest.mark.asyncio
+async def test_public_status_upcoming_mode_queued_with_shadow_queue():
+    app = _make_test_app()
+    app.state.queue.put_nowait(Segment(type=SegmentType.MUSIC, path=Path("/tmp/fake.mp3"), metadata={}))
+    app.state.station_state.queued_segments = [{"type": "music", "label": "Queued Song"}]
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.get("/public-status")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["upcoming"] == [{"type": "music", "label": "Queued Song", "source": "rendered_queue"}]
+    assert body["upcoming_mode"] == "queued"
 
 
 @pytest.mark.asyncio
@@ -284,6 +313,22 @@ async def test_skip_with_admin_auth():
 
 
 @pytest.mark.asyncio
+async def test_stop_and_resume_toggle_session_state():
+    app = _make_test_app()
+    app.state.station_state.now_streaming = {"type": "music", "label": "Test", "started": time.time()}
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        stop = await client.post("/api/stop")
+        assert stop.status_code == 200
+        assert app.state.station_state.session_stopped is True
+        assert app.state.station_state.now_streaming["type"] == "stopped"
+
+        resume = await client.post("/api/resume")
+        assert resume.status_code == 200
+        assert app.state.station_state.session_stopped is False
+
+
+@pytest.mark.asyncio
 async def test_loopback_bypasses_auth_when_no_password():
     """Loopback client with no admin_password/token configured gets through."""
     app = _make_test_app()  # no password, no token
@@ -386,6 +431,9 @@ async def test_admin_panel_with_basic_auth_returns_html():
         resp = await client.get("/admin", auth=("admin", "secret"))
     assert resp.status_code == 200
     assert "text/html" in resp.headers["content-type"]
+    assert "Systems" in resp.text
+    assert "Last Break" in resp.text
+    assert "Last Aired Script" not in resp.text
 
 
 # ---------------------------------------------------------------------------

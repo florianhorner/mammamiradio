@@ -21,6 +21,7 @@ from mammamiradio.scriptwriter import (
     AD_FORMATS,
     SPEAKER_ROLES,
     _build_system_prompt,
+    _massage_transition_text,
     write_ad,
     write_banter,
     write_news_flash,
@@ -102,6 +103,26 @@ def test_system_prompt_includes_theme(config):
 def test_system_prompt_includes_station_name(config):
     prompt = _build_system_prompt(config)
     assert config.station.name in prompt
+
+
+def test_massage_transition_text_rewrites_repeated_che_pezzo():
+    text = _massage_transition_text(
+        "Che pezzo, mamma mia.",
+        "banter",
+        ["Che pezzo assurdo.", "Che pezzo, davvero."],
+    )
+
+    assert "che pezzo" not in text.lower()
+
+
+def test_massage_transition_text_keeps_fresh_opener():
+    text = _massage_transition_text(
+        "Aspetta un secondo, qui c'e da ridere.",
+        "banter",
+        ["Che pezzo, mamma mia."],
+    )
+
+    assert text == "Aspetta un secondo, qui c'e da ridere."
 
 
 # --- write_banter tests ---

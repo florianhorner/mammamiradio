@@ -4,11 +4,21 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-if [ -n "${CONDUCTOR_ROOT_PATH:-}" ] && [ -f "$CONDUCTOR_ROOT_PATH/.env" ]; then
-  if [ -L .env ]; then
-    ln -sfn "$CONDUCTOR_ROOT_PATH/.env" .env
-  elif [ ! -e .env ]; then
-    ln -s "$CONDUCTOR_ROOT_PATH/.env" .env
+# Source credentials from ~/.config/mammamiradio/.env (safe, outside any repo).
+# Falls back to CONDUCTOR_ROOT_PATH/.env for backwards compat.
+_ENV_SAFE="$HOME/.config/mammamiradio/.env"
+_ENV_REPO="${CONDUCTOR_ROOT_PATH:+$CONDUCTOR_ROOT_PATH/.env}"
+
+_ENV_SOURCE=""
+if [ -f "$_ENV_SAFE" ]; then
+  _ENV_SOURCE="$_ENV_SAFE"
+elif [ -n "$_ENV_REPO" ] && [ -f "$_ENV_REPO" ]; then
+  _ENV_SOURCE="$_ENV_REPO"
+fi
+
+if [ -n "$_ENV_SOURCE" ]; then
+  if [ -L .env ] || [ ! -e .env ]; then
+    ln -sfn "$_ENV_SOURCE" .env
   fi
 fi
 

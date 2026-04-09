@@ -36,7 +36,7 @@ Possible causes:
 
 What the app does:
 
-- if Spotify credentials are missing, it uses the demo playlist
+- if Spotify credentials are missing, it uses live Italian charts when `MAMMAMIRADIO_ALLOW_YTDLP=true`, otherwise the built-in demo playlist
 - if Spotify capture is unavailable, it falls back to local files, then `yt-dlp`, then placeholder tones
 
 Check:
@@ -67,7 +67,7 @@ If the picker loads but shows no playlists:
 - Check the dashboard for an auth prompt and complete the OAuth flow
 - Check `/status` for `startup_source_error` details
 
-The app persists the last selected source to `cache/playlist_source.json` and restores it on restart. If a persisted source fails to load, the app falls back to the configured URL or demo tracks.
+The app persists the last selected source to `cache/playlist_source.json` and restores it on restart. If a persisted source fails to load, startup falls back to the configured Spotify source, then live Italian charts when `MAMMAMIRADIO_ALLOW_YTDLP=true`, then the built-in demo tracks.
 
 ## Spotify device does not appear
 
@@ -175,6 +175,8 @@ Rules:
 - if neither is set, admin routes only work from localhost
 
 Health probes are the exception. `/healthz` and `/readyz` stay unauthenticated so Docker, Home Assistant, and external monitors can poll them without admin credentials.
+
+For read-only monitoring, prefer `/public-status`, `/healthz`, and `/readyz`. Do not build external monitors against `/status` or `/api/capabilities` unless you are also supplying admin auth.
 
 ## `ffmpeg` failures
 
