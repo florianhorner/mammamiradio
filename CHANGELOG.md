@@ -4,6 +4,24 @@ All notable changes to `mammamiradio` are documented here.
 
 The current version source of truth is `pyproject.toml`.
 
+## [2.2.0] - 2026-04-09
+
+### Added
+
+- **Audio quality gate**: new `audio_quality.py` module validates banter, ad, and music segments before they reach the live queue. Checks duration, silence ratio, silence span, and volume levels with per-type thresholds. Rejects corrupt yt-dlp downloads and silent placeholders before they air.
+- **`AudioToolError`**: distinct exception for ffprobe/ffmpeg binary failures. Tool absence is an ops problem, not a content reject — segments pass through rather than being silently dropped when the binary is unavailable.
+- **MUSIC quality threshold**: permissive gate (min 30 s, 95% silence cap) catches truncated placeholders and corrupted downloads. On reject the file is deleted and the producer retries the next track automatically.
+- Runtime health transparency: `/healthz`, `/readyz`, and `/status` now expose queue-shadow integrity, task liveness, playback epoch, and active audio-source failover state.
+- Deterministic Up Next explainability: preview entries now include per-segment `reason` fields and explicit source tagging (`rendered_queue` vs `predicted_from_playlist`).
+- Delivery guardrail: new `scripts/check-changelog-sync.sh` hook enforces synchronized root and HA add-on changelog updates on version bumps.
+
+### Changed
+
+- Quality gate calls now use `loop.run_in_executor` so FFmpeg validation never blocks the async event loop — resolves potential stream freezes on HA add-on hardware.
+- Music sequencing now follows playlist order deterministically in the producer, keeping playlist operations and Up Next behavior tightly coupled.
+- Public/admin runtime sync now auto-corrects long-session queue-shadow drift when stale UI entries exceed real queue depth.
+- Admin Host Personality UX now includes clearer axis labels, trait guidance, and one-click presets (`Balanced`, `Calm`, `Hype`).
+
 ## [2.1.0] - 2026-04-08
 
 ### Added
