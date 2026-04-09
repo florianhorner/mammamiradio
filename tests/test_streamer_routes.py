@@ -11,7 +11,7 @@ import pytest
 from fastapi import FastAPI
 
 from mammamiradio.config import load_config
-from mammamiradio.models import StationState, Track
+from mammamiradio.models import Segment, SegmentType, StationState, Track
 from mammamiradio.streamer import LiveStreamHub, router
 
 TOML_PATH = str(Path(__file__).parent.parent / "radio.toml")
@@ -164,27 +164,30 @@ async def test_public_status_returns_json():
 
 
 @pytest.mark.asyncio
-async def test_public_status_upcoming_mode_building_when_queue_empty():
+async def test_public_status_upcoming_mode_shows_predictions_when_queue_empty():
     app = _make_test_app()
+    # Queue is empty — predictions from playlist are shown instead
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
         resp = await client.get("/public-status")
     assert resp.status_code == 200
     body = resp.json()
-    assert body["upcoming"] == []
-    assert body["upcoming_mode"] == "building"
+    assert len(body["upcoming"]) > 0
+    assert all(item["source"] == "predicted_from_playlist" for item in body["upcoming"])
+    assert body["upcoming_mode"] == "queued"
 
 
 @pytest.mark.asyncio
 async def test_public_status_upcoming_mode_queued_with_shadow_queue():
     app = _make_test_app()
+    app.state.queue.put_nowait(Segment(type=SegmentType.MUSIC, path=Path("/tmp/fake.mp3"), metadata={}))
     app.state.station_state.queued_segments = [{"type": "music", "label": "Queued Song"}]
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
         resp = await client.get("/public-status")
     assert resp.status_code == 200
     body = resp.json()
-    assert body["upcoming"] == [{"type": "music", "label": "Queued Song"}]
+    assert body["upcoming"] == [{"type": "music", "label": "Queued Song", "source": "rendered_queue"}]
     assert body["upcoming_mode"] == "queued"
 
 
@@ -275,6 +278,7 @@ async def test_admin_status_with_basic_auth():
     body = resp.json()
     assert "queue_depth" in body
     assert "segments_produced" in body
+    assert "runtime_health" in body
 
 
 @pytest.mark.asyncio

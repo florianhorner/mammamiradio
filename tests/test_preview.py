@@ -45,3 +45,4 @@ def test_preview_music_has_track_labels():
     for r in result:
         assert r["type"] == "music"
         assert "Artist" in r["label"]
+        assert "reason" in r

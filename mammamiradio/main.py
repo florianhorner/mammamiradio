@@ -119,6 +119,7 @@ async def startup():
     app.state.station_state = state
     app.state.config = config
     app.state.start_time = time.time()
+    app.state.spotify_player = spotify_player
 
     # Pre-queue a welcome clip so listeners hear audio instantly (no 2-5s gap)
     from mammamiradio.models import Segment, SegmentType
@@ -136,6 +137,8 @@ async def startup():
     _producer_task = asyncio.create_task(
         run_producer(queue, state, config, spotify_player=spotify_player, skip_event=app.state.skip_event)
     )
+    app.state.playback_task = _playback_task
+    app.state.producer_task = _producer_task
     logger.info(
         "Producer started. Stream at http://%s:%d/stream",
         config.bind_host,
@@ -148,6 +151,8 @@ async def shutdown():
     """Stop background workers and close shared streaming resources."""
     if _spotify_player:
         _spotify_player.stop()
+    if hasattr(app.state, "spotify_player"):
+        app.state.spotify_player = None
     tasks_to_cancel = []
     if _producer_task:
         _producer_task.cancel()
@@ -157,6 +162,10 @@ async def shutdown():
         tasks_to_cancel.append(_playback_task)
     if tasks_to_cancel:
         await asyncio.gather(*tasks_to_cancel, return_exceptions=True)
+    if hasattr(app.state, "producer_task"):
+        app.state.producer_task = None
+    if hasattr(app.state, "playback_task"):
+        app.state.playback_task = None
     if hasattr(app.state, "stream_hub"):
         app.state.stream_hub.close()
 

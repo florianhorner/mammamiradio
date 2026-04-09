@@ -28,6 +28,12 @@ TOML_PATH = str(Path(__file__).parent.parent / "radio.toml")
 PRODUCER_MODULE = "mammamiradio.producer"
 
 
+@pytest.fixture(autouse=True)
+def _mock_quality_gate():
+    with patch(f"{PRODUCER_MODULE}.validate_segment_audio", return_value=None):
+        yield
+
+
 def _make_state() -> StationState:
     return StationState(
         playlist=[

@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from mammamiradio.audio_quality import AudioQualityError, AudioToolError
 from mammamiradio.config import load_config
 from mammamiradio.models import (
     AdBrand,
@@ -27,6 +28,12 @@ from mammamiradio.producer import _cast_voices, _pick_brand, _select_ad_creative
 
 TOML_PATH = str(Path(__file__).parent.parent / "radio.toml")
 MODULE = "mammamiradio.producer"
+
+
+@pytest.fixture(autouse=True)
+def _mock_quality_gate():
+    with patch(f"{MODULE}.validate_segment_audio", return_value=None):
+        yield
 
 
 def _make_state() -> StationState:
@@ -257,6 +264,48 @@ async def test_ha_context_refreshed_for_banter(tmp_path):
     assert state.ha_context == "Il tempo e' bello"
 
 
+@pytest.mark.asyncio
+async def test_banter_quality_reject_uses_canned_fallback(tmp_path):
+    state = _make_state()
+    config = _make_config(tmp_path)
+    config.anthropic_api_key = "test-key"
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+
+    host = config.hosts[0] if config.hosts else HostPersonality(name="Marco", voice="it-IT-DiegoNeural", style="warm")
+    generated = tmp_path / "banter_generated.mp3"
+    generated.write_bytes(b"\x00" * 2048)
+    canned = tmp_path / "banter_canned.mp3"
+    canned.write_bytes(b"\x00" * 2048)
+
+    quality_calls = 0
+
+    def _quality_side_effect(path, seg_type):
+        nonlocal quality_calls
+        if seg_type == SegmentType.BANTER:
+            quality_calls += 1
+            if quality_calls == 1:
+                raise AudioQualityError("too much silence")
+        return None
+
+    with (
+        patch(f"{MODULE}.next_segment_type", return_value=SegmentType.BANTER),
+        patch(f"{MODULE}.write_banter", new_callable=AsyncMock, return_value=[(host, "Linea test")]),
+        patch(f"{MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora...")),
+        patch(f"{MODULE}.synthesize", new_callable=AsyncMock, return_value=generated),
+        patch(f"{MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=generated),
+        patch(f"{MODULE}.concat_files", return_value=generated),
+        patch(f"{MODULE}._pick_canned_clip", return_value=canned),
+        patch(f"{MODULE}.validate_segment_audio", side_effect=_quality_side_effect),
+        patch(f"{MODULE}.fetch_home_context", new_callable=AsyncMock),
+    ):
+        await _run_until_queued(queue, state, config)
+
+    seg = queue.get_nowait()
+    assert seg.type == SegmentType.BANTER
+    assert seg.metadata.get("canned") is True
+    assert seg.path == canned
+
+
 # ---------------------------------------------------------------------------
 # Spotify track path
 # ---------------------------------------------------------------------------
@@ -284,6 +333,55 @@ async def test_music_uses_spotify_when_authenticated(tmp_path):
         await _run_until_queued(queue, state, config, spotify_player=mock_player)
 
     mock_dl.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_ad_quality_reject_resets_pacing_and_continues(tmp_path):
+    state = _make_state()
+    state.songs_since_ad = 9
+    config = _make_config(tmp_path)
+    config.ads.brands = [AdBrand(name="TestBrand", tagline="Buy it")]
+    config.ads.voices = [AdVoice(name="VoiceGuy", voice="it-IT-DiegoNeural", style="energetic")]
+    config.pacing.ad_spots_per_break = 1
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+
+    fake_script = AdScript(
+        brand="TestBrand",
+        summary="Test ad",
+        parts=[AdPart(type="voice", text="Buy TestBrand today!")],
+    )
+
+    call_count = 0
+
+    def _seg_type(*_args, **_kwargs):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return SegmentType.AD
+        return SegmentType.MUSIC
+
+    def _quality_side_effect(path, seg_type):
+        if seg_type == SegmentType.AD:
+            raise AudioQualityError("silent ad break")
+        return None
+
+    with (
+        patch(f"{MODULE}.next_segment_type", side_effect=_seg_type),
+        patch(f"{MODULE}.write_ad", new_callable=AsyncMock, return_value=fake_script),
+        patch(f"{MODULE}.synthesize_ad", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(f"{MODULE}.synthesize", new_callable=AsyncMock),
+        patch(f"{MODULE}.generate_bumper_jingle", side_effect=_fake_path),
+        patch(f"{MODULE}.concat_files", side_effect=_fake_path),
+        patch(f"{MODULE}.validate_segment_audio", side_effect=_quality_side_effect),
+        patch(f"{MODULE}.download_track", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(f"{MODULE}.normalize", side_effect=_fake_path),
+        patch(f"{MODULE}.fetch_home_context", new_callable=AsyncMock),
+    ):
+        await _run_until_queued(queue, state, config)
+
+    seg = queue.get_nowait()
+    assert seg.type == SegmentType.MUSIC
+    assert state.songs_since_ad == 1
 
 
 @pytest.mark.asyncio
@@ -387,6 +485,119 @@ async def test_success_resets_failure_counter(tmp_path):
         await _run_until_queued(queue, state, config)
 
     assert state.failed_segments == 0
+
+
+# ---------------------------------------------------------------------------
+# AudioToolError pass-through — tool absent should not drop content
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_audio_tool_error_in_banter_does_not_drop_segment(tmp_path):
+    """If ffmpeg is absent during banter quality check, segment should still be queued."""
+    state = _make_state()
+    config = _make_config(tmp_path)
+    config.anthropic_api_key = "test-key"
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+
+    host = config.hosts[0] if config.hosts else HostPersonality(name="Marco", voice="it-IT-DiegoNeural", style="warm")
+    generated = tmp_path / "banter_generated.mp3"
+    generated.write_bytes(b"\x00" * 2048)
+
+    def _quality_side_effect(path, seg_type):
+        if seg_type == SegmentType.BANTER:
+            raise AudioToolError("ffmpeg not found")
+        return None
+
+    with (
+        patch(f"{MODULE}.next_segment_type", return_value=SegmentType.BANTER),
+        patch(f"{MODULE}.write_banter", new_callable=AsyncMock, return_value=[(host, "Ciao!")]),
+        patch(f"{MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora...")),
+        patch(f"{MODULE}.synthesize", new_callable=AsyncMock, return_value=generated),
+        patch(f"{MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=generated),
+        patch(f"{MODULE}.concat_files", return_value=generated),
+        patch(f"{MODULE}.validate_segment_audio", side_effect=_quality_side_effect),
+        patch(f"{MODULE}.fetch_home_context", new_callable=AsyncMock),
+    ):
+        await _run_until_queued(queue, state, config)
+
+    seg = queue.get_nowait()
+    assert seg.type == SegmentType.BANTER
+
+
+@pytest.mark.asyncio
+async def test_audio_tool_error_in_ad_does_not_drop_segment(tmp_path):
+    """If ffmpeg is absent during ad quality check, ad break should still be queued."""
+    state = _make_state()
+    state.songs_since_ad = 9
+    config = _make_config(tmp_path)
+    config.ads.brands = [AdBrand(name="TestBrand", tagline="Buy it")]
+    config.ads.voices = [AdVoice(name="VoiceGuy", voice="it-IT-DiegoNeural", style="energetic")]
+    config.pacing.ad_spots_per_break = 1
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+
+    fake_script = AdScript(
+        brand="TestBrand",
+        summary="Test ad",
+        parts=[AdPart(type="voice", text="Buy TestBrand today!")],
+    )
+
+    def _quality_side_effect(path, seg_type):
+        if seg_type == SegmentType.AD:
+            raise AudioToolError("ffmpeg not found")
+        return None
+
+    with (
+        patch(f"{MODULE}.next_segment_type", return_value=SegmentType.AD),
+        patch(f"{MODULE}.write_ad", new_callable=AsyncMock, return_value=fake_script),
+        patch(f"{MODULE}.synthesize_ad", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(f"{MODULE}.synthesize", new_callable=AsyncMock),
+        patch(f"{MODULE}.generate_bumper_jingle", side_effect=_fake_path),
+        patch(f"{MODULE}.concat_files", side_effect=_fake_path),
+        patch(f"{MODULE}.validate_segment_audio", side_effect=_quality_side_effect),
+        patch(f"{MODULE}.fetch_home_context", new_callable=AsyncMock),
+    ):
+        await _run_until_queued(queue, state, config)
+
+    seg = queue.get_nowait()
+    assert seg.type == SegmentType.AD
+
+
+# ---------------------------------------------------------------------------
+# MUSIC quality gate — corrupt/silent downloads rejected before queueing
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_music_quality_reject_retries_next_track(tmp_path):
+    """A music track that fails the quality gate should be skipped; producer retries the next track."""
+    state = _make_state()
+    config = _make_config(tmp_path)
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+
+    call_count = 0
+
+    def _quality_side_effect(path, seg_type):
+        nonlocal call_count
+        if seg_type == SegmentType.MUSIC:
+            call_count += 1
+            if call_count == 1:
+                raise AudioQualityError("too short (10.00s < 30.00s)")
+        return None
+
+    with (
+        patch(f"{MODULE}.next_segment_type", return_value=SegmentType.MUSIC),
+        patch(f"{MODULE}.download_track", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(f"{MODULE}.normalize", side_effect=_fake_path),
+        patch(f"{MODULE}.validate_segment_audio", side_effect=_quality_side_effect),
+        patch(f"{MODULE}.fetch_home_context", new_callable=AsyncMock),
+    ):
+        await _run_until_queued(queue, state, config)
+
+    seg = queue.get_nowait()
+    assert seg.type == SegmentType.MUSIC
+    # The first call rejected, second call passed — so quality was checked at least twice
+    assert call_count >= 2
 
 
 # ---------------------------------------------------------------------------

@@ -25,6 +25,7 @@ from mammamiradio.playlist import (
     supports_user_sources,
     write_persisted_source,
 )
+from mammamiradio.scheduler import preview_upcoming
 from mammamiradio.setup_status import addon_options_snippet, build_setup_status, classify_station_mode
 
 logger = logging.getLogger(__name__)
@@ -191,11 +192,52 @@ def _golden_path_status(config, state) -> dict:
 def _sync_runtime_state(request: Request) -> None:
     """Refresh UI-facing state from long-lived runtime backends."""
     state = request.app.state.station_state
+    state.runtime_sync_events += 1
     spotify_player = getattr(request.app.state, "spotify_player", None)
     if spotify_player:
         auth_url = getattr(spotify_player, "spotify_auth_url", "") or ""
         if auth_url and state.spotify_auth_url != auth_url:
             state.spotify_auth_url = auth_url
+
+    queue = getattr(request.app.state, "queue", None)
+    if queue is None:
+        return
+
+    queue_depth = queue.qsize()
+    shadow_depth = len(state.queued_segments)
+    if shadow_depth > queue_depth:
+        state.queued_segments = state.queued_segments[:queue_depth]
+        state.shadow_queue_corrections += 1
+        logger.warning(
+            "Queue shadow drift corrected (shadow=%d, queue=%d)",
+            shadow_depth,
+            queue_depth,
+        )
+
+
+def _runtime_health_snapshot(request: Request) -> dict:
+    state = request.app.state.station_state
+    queue = getattr(request.app.state, "queue", None)
+    queue_depth = queue.qsize() if queue else -1
+    shadow_depth = len(state.queued_segments)
+    now_streaming = state.now_streaming or {}
+    now_metadata = now_streaming.get("metadata", {}) if isinstance(now_streaming, dict) else {}
+    audio_source = now_metadata.get("audio_source", "")
+    producer_task = getattr(request.app.state, "producer_task", None)
+    playback_task = getattr(request.app.state, "playback_task", None)
+    producer_alive = True if producer_task is None else not producer_task.done()
+    playback_alive = True if playback_task is None else not playback_task.done()
+    return {
+        "queue_depth": queue_depth,
+        "shadow_queue_depth": shadow_depth,
+        "shadow_queue_in_sync": queue_depth == shadow_depth,
+        "producer_task_alive": producer_alive,
+        "playback_task_alive": playback_alive,
+        "playback_epoch": state.playback_epoch,
+        "audio_source": audio_source or "unknown",
+        "failover_active": bool(audio_source and audio_source.startswith("fallback")),
+        "shadow_queue_corrections": state.shadow_queue_corrections,
+    }
 
 
 def _apply_loaded_source(
@@ -1288,21 +1330,27 @@ def _public_status_payload(request: Request) -> dict:
     _sync_runtime_state(request)
     state = request.app.state.station_state
     config = request.app.state.config
-    upcoming = state.queued_segments[:5]
+    runtime_health = _runtime_health_snapshot(request)
+    if state.queued_segments:
+        upcoming = [{**item, "source": "rendered_queue"} for item in state.queued_segments[:5]]
+    else:
+        upcoming = [
+            {**item, "source": "predicted_from_playlist"}
+            for item in preview_upcoming(state, config.pacing, state.playlist, count=5)
+        ]
     return {
         "station": config.station.name,
         "running_jokes": list(state.running_jokes),
         "now_streaming": state.now_streaming,
         "current_source": _serialize_source(state.playlist_source),
         "golden_path": _golden_path_status(config, state),
+        "runtime_health": runtime_health,
         "stream_log": [
             {"type": e.type, "label": e.label, "timestamp": e.timestamp, "metadata": e.metadata}
             for e in state.stream_log
         ],
-        # Truthful queue view only. When empty, UI should show "warming up"
-        # instead of deterministic previews that can diverge from real output.
         "upcoming": upcoming,
-        "upcoming_mode": "queued" if upcoming else "building",
+        "upcoming_mode": "queued" if upcoming else "warmup",
     }
 
 
@@ -1311,18 +1359,24 @@ async def healthz(request: Request):
     """Unauthenticated liveness probe — is the process alive?"""
     start_time = getattr(request.app.state, "start_time", None)
     uptime = round(time.time() - start_time, 1) if start_time else 0
-    return {"status": "ok", "uptime_s": uptime}
+    _sync_runtime_state(request)
+    runtime = _runtime_health_snapshot(request)
+    return {"status": "ok", "uptime_s": uptime, "runtime": runtime}
 
 
 @router.get("/readyz")
 async def readyz(request: Request):
     """Unauthenticated readiness probe — is the station ready to stream?"""
+    _sync_runtime_state(request)
+    runtime = _runtime_health_snapshot(request)
     start_time = getattr(request.app.state, "start_time", None)
-    queue = getattr(request.app.state, "queue", None)
-    queue_depth = queue.qsize() if queue else -1
+    queue_depth = runtime["queue_depth"]
+    tasks_alive = runtime["producer_task_alive"] and runtime["playback_task_alive"]
+    status = "ready" if queue_depth > 0 and tasks_alive else "starting"
     return {
-        "status": "ready" if queue_depth > 0 else "starting",
+        "status": status,
         "queue_depth": queue_depth,
+        "runtime": runtime,
         "uptime_s": round(time.time() - start_time, 1) if start_time else 0,
     }
 
@@ -1342,6 +1396,7 @@ async def status(request: Request, _: None = Depends(require_admin_access)):
     start_time = request.app.state.start_time
     station_mode = classify_station_mode(config, state)
     payload = _public_status_payload(request)
+    runtime_health = _runtime_health_snapshot(request)
     payload.update(
         {
             "queue_depth": segment_queue.qsize(),
@@ -1380,6 +1435,7 @@ async def status(request: Request, _: None = Depends(require_admin_access)):
                 "peak": state.listeners_peak,
                 "total": state.listeners_total,
             },
+            "runtime_health": runtime_health,
             "force_pending": state.force_next.value if state.force_next else None,
             "session_stopped": state.session_stopped,
             "playlist": [
