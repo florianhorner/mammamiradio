@@ -1,5 +1,23 @@
 # Changelog
 
+## 2.2.1
+
+### Added
+
+- Session stop persists across restarts: stopped state is saved to disk and restored on startup.
+- Spotify transfer backoff: after 10 consecutive failures the transfer poller slows to ~5 min intervals, reducing log noise on add-on hardware without a Spotify device.
+- Playlist index endpoints reject non-integer payloads without mutating state.
+
+### Changed
+
+- Silence removal appended to the normalize filter chain — reduces dead air between segments.
+- Add-on detection no longer uses `/data/options.json` as a signal, preventing false add-on mode when that path is mounted in dev environments.
+- SFX generation expressions simplified for FFmpeg compatibility.
+
+### Fixed
+
+- Stale chart-track ID test assertion.
+
 ## 2.2.0
 
 ### Added

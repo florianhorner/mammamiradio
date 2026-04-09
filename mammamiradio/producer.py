@@ -533,7 +533,7 @@ async def run_producer(
 
         try:
             if seg_type == SegmentType.MUSIC:
-                track = state.reserve_next_track()
+                track = state.select_next_track()
                 logger.info("Producing MUSIC: %s", track.display)
 
                 norm_path = config.tmp_dir / f"music_{uuid4().hex[:8]}.mp3"

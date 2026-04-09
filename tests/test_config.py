@@ -131,7 +131,16 @@ def test_is_addon_with_hassio_token(monkeypatch):
 def test_is_addon_without_tokens(monkeypatch):
     monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
     monkeypatch.delenv("HASSIO_TOKEN", raising=False)
-    assert _is_addon() is False
+    with patch("mammamiradio.config.Path.exists", return_value=False):
+        assert _is_addon() is False
+
+
+def test_is_addon_ignores_options_file_without_tokens(monkeypatch):
+    monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+    monkeypatch.delenv("HASSIO_TOKEN", raising=False)
+
+    with patch("mammamiradio.config.Path.exists", return_value=True):
+        assert _is_addon() is False
 
 
 def test_apply_addon_options(monkeypatch, tmp_path):
@@ -199,6 +208,20 @@ def test_addon_mode_overrides_paths(monkeypatch):
     assert config.cache_dir == Path("/data/cache")
     assert config.tmp_dir == Path("/data/tmp")
     assert config.audio.go_librespot_config_dir == "/data/go-librespot"
+
+
+def test_load_config_does_not_force_addon_paths_from_options_file(monkeypatch):
+    toml_path = Path(__file__).parent.parent / "radio.toml"
+    monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+    monkeypatch.delenv("HASSIO_TOKEN", raising=False)
+
+    with patch("mammamiradio.config.Path.exists", return_value=True):
+        config = load_config(str(toml_path))
+
+    assert config.is_addon is False
+    assert config.cache_dir == Path("cache")
+    assert config.tmp_dir == Path("tmp")
+    assert config.audio.go_librespot_config_dir == "go-librespot"
 
 
 def test_addon_mode_respects_env_path_overrides(monkeypatch):

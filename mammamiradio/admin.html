@@ -559,7 +559,7 @@ function updateQueue(up,forcePending,mode){
   const el=document.getElementById('queueBody');const meta=document.getElementById('queueMeta');
   if(!up?.length&&!forcePending){
     el.innerHTML = mode==='building'
-      ? '<div class="empty">Building next segments...</div>'
+      ? '<div class="empty">Preparing next segments…</div>'
       : '<div class="empty">Queue empty</div>';
     meta.textContent='';
     return
@@ -670,7 +670,13 @@ function focusPlaylistTrack(index, spotifyId){
   target.scrollIntoView({behavior:'smooth',block:'nearest'});
   setTimeout(()=>target.classList.remove('focus'),1500);
 }
-async function moveNext(i){const r=await api('POST','/api/playlist/move_to_next',{index:i});if(r.ok)toast('Playing next: '+r.moved);else toast('Failed to move track')}
+async function moveNext(i){
+  const trackName=document.querySelector(`.pl-row[data-i="${i}"] .pl-t`)?.textContent||'track';
+  const el=document.getElementById('queueBody');const meta=document.getElementById('queueMeta');
+  if(el){el.innerHTML=`<div class="queue-item"><span class="qi-num">1</span><span class="qi-badge" data-t="music">music</span><span class="qi-label">${esc(trackName)}</span><span class="force-badge">rendering…</span></div>`;meta.textContent='1 upcoming';}
+  const r=await api('POST','/api/playlist/move_to_next',{index:i});
+  if(r.ok)toast('Playing next: '+r.moved);else toast('Failed to move track');
+}
 async function removeTr(i){await api('POST','/api/playlist/remove',{index:i});toast('Removed')}
 
 // ── Search ──
