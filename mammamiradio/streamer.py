@@ -98,9 +98,25 @@ def _golden_path_status(config, state) -> dict:
         fallback_sources.append("yt-dlp downloads")
 
     silent_music_fallback = (not spotify_connected) and not fallback_sources
+    shared = {
+        "fallback_sources": fallback_sources,
+        "silent_music_fallback": silent_music_fallback,
+    }
 
-    # Music is available via yt-dlp, local files, or demo assets — not blocking
-    if fallback_sources and not spotify_connected:
+    if spotify_connected:
+        return {
+            "stage": "connected",
+            "blocking": False,
+            "headline": "Connected to Spotify. Real music is live.",
+            "detail": "Your in-page player is now using your Spotify-powered station audio.",
+            "steps": [],
+            **shared,
+        }
+
+    # Music is available via yt-dlp, local files, or demo assets — not blocking,
+    # but only when Spotify credentials are absent. Once credentials exist, the
+    # user still needs the explicit Connect/browser-login guidance.
+    if fallback_sources and not spotify_connected and not spotify_api:
         source_label = ", ".join(fallback_sources)
         return {
             "stage": "music_available",
@@ -111,17 +127,7 @@ def _golden_path_status(config, state) -> dict:
                 "Add Spotify credentials in Advanced Settings for streaming from your own library."
             ),
             "steps": [],
-            "silent_music_fallback": False,
-        }
-
-    if spotify_connected:
-        return {
-            "stage": "connected",
-            "blocking": False,
-            "headline": "Connected to Spotify. Real music is live.",
-            "detail": "Your in-page player is now using your Spotify-powered station audio.",
-            "steps": [],
-            "silent_music_fallback": False,
+            **shared,
         }
 
     if not spotify_api:
@@ -138,7 +144,7 @@ def _golden_path_status(config, state) -> dict:
                 "Set MAMMAMIRADIO_ALLOW_YTDLP=true for YouTube music, or",
                 "Open Advanced Settings and paste Spotify App ID and Secret.",
             ],
-            "silent_music_fallback": silent_music_fallback,
+            **shared,
         }
 
     auth_url = getattr(state, "spotify_auth_url", "") or ""
@@ -160,7 +166,7 @@ def _golden_path_status(config, state) -> dict:
                 "After login, the station connects automatically.",
             ],
             "auth_url": auth_url,
-            "silent_music_fallback": silent_music_fallback,
+            **shared,
         }
 
     detail = "Spotify credentials are present, but Spotify Connect is not attached yet."
@@ -178,7 +184,7 @@ def _golden_path_status(config, state) -> dict:
             "Tap/click the device picker (speaker icon).",
             "Select MammaMiRadio as the playback device.",
         ],
-        "silent_music_fallback": silent_music_fallback,
+        **shared,
     }
 
 

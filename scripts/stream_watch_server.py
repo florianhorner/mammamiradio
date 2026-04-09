@@ -8,16 +8,22 @@ no-reload / no-interruption stream window.
 from __future__ import annotations
 
 import json
+import os
 from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.request import Request, urlopen
 
-UPSTREAM = "http://127.0.0.1:8000"
 _DEFAULT_DEVICE_NAME = "MammaMiRadio"
 
 
+def _upstream_base_url() -> str:
+    """Resolve the local app endpoint, following workspace port overrides."""
+    port = os.getenv("MAMMAMIRADIO_PORT") or os.getenv("CONDUCTOR_PORT") or "8000"
+    return f"http://127.0.0.1:{port}"
+
+
 def _fetch_json(path: str) -> dict:
-    req = Request(f"{UPSTREAM}{path}", headers={"Accept": "application/json"})
+    req = Request(f"{_upstream_base_url()}{path}", headers={"Accept": "application/json"})
     with urlopen(req, timeout=5) as resp:
         return json.load(resp)
 

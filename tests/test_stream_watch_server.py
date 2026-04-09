@@ -53,3 +53,9 @@ def test_build_summary_marks_ai_working_from_recent_generated_banter(monkeypatch
     assert summary["music"]["readiness"] == "ready"
     assert summary["music"]["queue_depth"] == 2
     assert summary["music"]["illusion_window_minutes"] == 2.0
+
+
+def test_upstream_base_url_uses_runtime_port(monkeypatch):
+    monkeypatch.setenv("CONDUCTOR_PORT", "9310")
+    module = _load_module()
+    assert module._upstream_base_url() == "http://127.0.0.1:9310"
