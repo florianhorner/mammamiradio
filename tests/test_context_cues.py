@@ -5,7 +5,13 @@ from __future__ import annotations
 import datetime
 from unittest.mock import patch
 
-from mammamiradio.context_cues import compute_context_block
+from mammamiradio.context_cues import (
+    compute_context_block,
+    generate_impossible_line,
+    pick_psychic_prediction,
+    pick_taste_line,
+    pick_taste_mirror_intro,
+)
 
 
 def _freeze_time(hour: int, weekday: int = 0, month: int = 6):
@@ -158,3 +164,115 @@ class TestListenerBehavior:
             mock_dt.datetime.now.return_value = _freeze_time(10)
             block = compute_context_block(listener_paused=True)
         assert "pausa" in block or "aspettato" in block
+
+
+class TestPickTasteLine:
+    """Tests for pick_taste_line helper."""
+
+    def test_known_pattern_returns_string(self):
+        result = pick_taste_line(["energy_seeker"])
+        assert isinstance(result, str)
+        assert len(result) > 0
+
+    def test_multiple_patterns_returns_first_match(self):
+        result = pick_taste_line(["unknown_pattern", "ballad_lover"])
+        assert isinstance(result, str)
+        assert len(result) > 0
+
+    def test_unknown_pattern_returns_empty(self):
+        result = pick_taste_line(["completely_unknown_pattern"])
+        assert result == ""
+
+    def test_empty_list_returns_empty(self):
+        result = pick_taste_line([])
+        assert result == ""
+
+    def test_bails_on_intros_pattern(self):
+        result = pick_taste_line(["bails_on_intros"])
+        assert isinstance(result, str)
+        assert len(result) > 0
+
+
+class TestPickPsychicPrediction:
+    """Tests for pick_psychic_prediction helper."""
+
+    def test_returns_dict_with_text(self):
+        result = pick_psychic_prediction(["energy_seeker"])
+        assert result is not None
+        assert "text" in result
+        assert isinstance(result["text"], str)
+
+    def test_empty_patterns_still_returns_generic(self):
+        # Generic predictions (pattern="") should still be picked
+        result = pick_psychic_prediction([])
+        assert result is not None
+
+    def test_unknown_pattern_falls_back_to_generic(self):
+        result = pick_psychic_prediction(["no_such_pattern"])
+        # Generic predictions have pattern="" so they always match
+        assert result is not None
+
+
+class TestPickTasteMirrorIntro:
+    """Tests for pick_taste_mirror_intro helper."""
+
+    def test_returns_nonempty_string(self):
+        result = pick_taste_mirror_intro()
+        assert isinstance(result, str)
+        assert len(result) > 0
+
+    def test_returns_italian_text(self):
+        result = pick_taste_mirror_intro()
+        # All intros are in Italian
+        assert any(word in result for word in ["set", "canzoni", "blocco", "sappiamo", "sezione"])
+
+
+class TestGenerateImpossibleLine:
+    """Tests for generate_impossible_line — zero-config uncanny DJ lines."""
+
+    def test_first_listener_returns_special_line(self):
+        line = generate_impossible_line(is_first_listener=True)
+        assert isinstance(line, str)
+        assert len(line) > 0
+
+    def test_new_listener_early_segments(self):
+        line = generate_impossible_line(is_new_listener=True, segments_produced=1)
+        assert isinstance(line, str)
+        assert len(line) > 0
+
+    def test_new_listener_later_segments_uses_normal_path(self):
+        # segments_produced >= 3 bypasses the new-listener early path
+        with patch("mammamiradio.context_cues.datetime") as mock_dt:
+            mock_dt.datetime.now.return_value = _freeze_time(10)
+            line = generate_impossible_line(is_new_listener=True, segments_produced=5)
+        assert isinstance(line, str)
+
+    def test_with_listener_patterns(self):
+        with patch("mammamiradio.context_cues.datetime") as mock_dt:
+            mock_dt.datetime.now.return_value = _freeze_time(14)
+            line = generate_impossible_line(listener_patterns=["energy_seeker"])
+        assert isinstance(line, str)
+        assert len(line) > 0
+
+    def test_without_listener_patterns(self):
+        with patch("mammamiradio.context_cues.datetime") as mock_dt:
+            mock_dt.datetime.now.return_value = _freeze_time(22)
+            line = generate_impossible_line()
+        assert isinstance(line, str)
+        assert len(line) > 0
+
+    def test_unknown_listener_pattern_falls_back(self):
+        with patch("mammamiradio.context_cues.datetime") as mock_dt:
+            mock_dt.datetime.now.return_value = _freeze_time(10)
+            line = generate_impossible_line(listener_patterns=["unknown_pattern"])
+        assert isinstance(line, str)
+        assert len(line) > 0
+
+    def test_day_of_week_lines_included_probabilistically(self):
+        import random
+
+        random.seed(0)
+        with patch("mammamiradio.context_cues.datetime") as mock_dt:
+            mock_dt.datetime.now.return_value = _freeze_time(10, weekday=4)  # Friday
+            lines = [generate_impossible_line() for _ in range(30)]
+        assert all(isinstance(line, str) and len(line) > 0 for line in lines)

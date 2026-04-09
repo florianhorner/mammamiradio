@@ -84,3 +84,9 @@ def test_defaults_without_overrides(monkeypatch):
     assert config.station.name == "Malamie Radio"
     assert config.homeassistant.url == ""
     assert config.cache_dir == Path("cache")
+
+
+def test_claude_creative_model_override(monkeypatch):
+    monkeypatch.setenv("CLAUDE_CREATIVE_MODEL", "claude-opus-4-6")
+    config = load_config(TOML_PATH)
+    assert config.audio.claude_creative_model == "claude-opus-4-6"

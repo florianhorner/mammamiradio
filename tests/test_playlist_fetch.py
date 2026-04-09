@@ -507,3 +507,220 @@ class TestTrackFromSpotifyItem:
             }
         }
         assert _track_from_spotify_item(item) is None
+
+
+# ---------------------------------------------------------------------------
+# _fetch_current_italy_charts
+# ---------------------------------------------------------------------------
+
+
+def test_fetch_current_italy_charts_success():
+    """Parses tracks from Apple Music charts RSS response."""
+    from mammamiradio.playlist import _fetch_current_italy_charts
+
+    payload = {
+        "feed": {
+            "results": [
+                {"name": "Song One", "artistName": "Artist A", "id": "1"},
+                {"name": "Song Two", "artistName": "Artist B", "id": "2"},
+                {"name": "", "artistName": "Artist C", "id": "3"},  # skipped: no title
+            ]
+        }
+    }
+
+    with patch("mammamiradio.playlist.urlopen") as mock_urlopen:
+        mock_response = MagicMock()
+        mock_response.read.return_value = json.dumps(payload).encode("utf-8")
+        mock_response.__enter__ = lambda s: s
+        mock_response.__exit__ = MagicMock(return_value=False)
+        mock_urlopen.return_value = mock_response
+
+        tracks = _fetch_current_italy_charts()
+
+    assert len(tracks) == 2
+    assert tracks[0].title == "Song One"
+    assert tracks[0].spotify_id == "chart_1"
+    assert tracks[1].title == "Song Two"
+
+
+def test_fetch_current_italy_charts_network_error():
+    """Returns empty list on network failure."""
+    from urllib.error import URLError
+
+    from mammamiradio.playlist import _fetch_current_italy_charts
+
+    with patch("mammamiradio.playlist.urlopen", side_effect=URLError("network down")):
+        tracks = _fetch_current_italy_charts()
+
+    assert tracks == []
+
+
+def test_fetch_current_italy_charts_invalid_json():
+    """Returns empty list on JSON decode error."""
+    from mammamiradio.playlist import _fetch_current_italy_charts
+
+    with patch("mammamiradio.playlist.urlopen") as mock_urlopen:
+        mock_response = MagicMock()
+        mock_response.read.return_value = b"not json at all"
+        mock_response.__enter__ = lambda s: s
+        mock_response.__exit__ = MagicMock(return_value=False)
+        mock_urlopen.return_value = mock_response
+
+        tracks = _fetch_current_italy_charts()
+
+    assert tracks == []
+
+
+# ---------------------------------------------------------------------------
+# read_persisted_source / write_persisted_source
+# ---------------------------------------------------------------------------
+
+
+def test_read_persisted_source_os_error(tmp_path):
+    """Returns None when file is unreadable due to OSError."""
+    from mammamiradio.playlist import PERSISTED_SOURCE_FILENAME, read_persisted_source
+
+    path = tmp_path / PERSISTED_SOURCE_FILENAME
+    # Write a file that raises OSError on read (simulate with invalid JSON)
+    path.write_bytes(b"\x00\x00\x00\x00")  # invalid JSON → JSONDecodeError
+
+    result = read_persisted_source(tmp_path)
+    assert result is None
+
+
+def test_read_persisted_source_missing_kind(tmp_path):
+    """Returns None when 'kind' is missing from persisted data."""
+    from mammamiradio.playlist import PERSISTED_SOURCE_FILENAME, read_persisted_source
+
+    path = tmp_path / PERSISTED_SOURCE_FILENAME
+    path.write_text(json.dumps({"source_id": "abc", "label": "Test"}))
+
+    result = read_persisted_source(tmp_path)
+    assert result is None
+
+
+def test_write_persisted_source_roundtrip(tmp_path):
+    """write_persisted_source creates a file that read_persisted_source can load."""
+    from mammamiradio.playlist import read_persisted_source, write_persisted_source
+
+    source = PlaylistSource(
+        kind="playlist",
+        source_id="test123",
+        url="https://open.spotify.com/playlist/test123",
+        label="Test Playlist",
+        track_count=42,
+        selected_at=1234567890.0,
+    )
+    write_persisted_source(tmp_path, source)
+
+    result = read_persisted_source(tmp_path)
+    assert result is not None
+    assert result.kind == "playlist"
+    assert result.source_id == "test123"
+    assert result.track_count == 42
+
+
+# ---------------------------------------------------------------------------
+# load_explicit_source — demo kind
+# ---------------------------------------------------------------------------
+
+
+def test_load_explicit_demo_source(config):
+    """demo kind returns DEMO_TRACKS without any Spotify call."""
+    tracks, source = load_explicit_source(
+        config,
+        PlaylistSource(kind="demo", source_id="", label="Demo"),
+    )
+    assert len(tracks) == len(DEMO_TRACKS)
+    assert source.kind == "demo"
+
+
+def test_load_explicit_source_invalid_url_raises(config_with_spotify):
+    """url kind raises ExplicitSourceError for invalid Spotify URLs."""
+    with pytest.raises(Exception, match="not a valid"):
+        load_explicit_source(
+            config_with_spotify,
+            PlaylistSource(kind="url", url="https://not-spotify.com/something", label="Bad URL"),
+        )
+
+
+def test_load_explicit_source_unsupported_kind_raises(config_with_spotify):
+    """Unsupported source kind raises ExplicitSourceError."""
+    with pytest.raises(Exception, match="Unsupported source kind"):
+        load_explicit_source(
+            config_with_spotify,
+            PlaylistSource(kind="unsupported_kind", source_id="", label="Bad"),
+        )
+
+
+def test_load_explicit_source_playlist_missing_id_raises(config_with_spotify):
+    """playlist kind raises ExplicitSourceError when source_id is missing."""
+    with pytest.raises(Exception, match="source_id is required"):
+        load_explicit_source(
+            config_with_spotify,
+            PlaylistSource(kind="playlist", source_id="", label="Empty"),
+        )
+
+
+# ---------------------------------------------------------------------------
+# fetch_startup_playlist — failed persisted source restore
+# ---------------------------------------------------------------------------
+
+
+def test_fetch_startup_playlist_failed_restore_falls_back(config_with_spotify):
+    """When persisted source restore fails, startup falls back to Spotify."""
+    persisted = PlaylistSource(kind="playlist", source_id="gone123", label="Deleted Playlist")
+    mock_sp = MagicMock()
+    # Persisted playlist raises → fallback to liked songs
+    mock_sp.playlist.side_effect = Exception("not found")
+    mock_sp.current_user_saved_tracks.return_value = {
+        "items": [_make_spotify_track("Liked Song", "Liked Artist", "liked1")],
+        "next": None,
+    }
+
+    with patch("mammamiradio.playlist.get_spotify_client", return_value=mock_sp):
+        tracks, source, error = fetch_startup_playlist(config_with_spotify, persisted)
+
+    assert len(tracks) == 1
+    assert tracks[0].title == "Liked Song"
+    assert "not found" in error or error != ""
+
+
+# ---------------------------------------------------------------------------
+# list_user_playlists — empty next page
+# ---------------------------------------------------------------------------
+
+
+def test_list_user_playlists_stops_when_no_next(config_with_spotify):
+    """list_user_playlists stops pagination when next is None."""
+    mock_sp = MagicMock()
+    mock_sp.current_user_playlists.return_value = {
+        "items": [{"id": "abc", "name": "Playlist A", "tracks": {"total": 10}}],
+        "next": None,
+    }
+    mock_sp.next.return_value = None
+
+    with patch("mammamiradio.playlist.get_spotify_client", return_value=mock_sp):
+        playlists = list_user_playlists(config_with_spotify)
+
+    assert len(playlists) == 1
+
+
+def test_list_user_playlists_skips_none_items(config_with_spotify):
+    """list_user_playlists skips items without an id."""
+    mock_sp = MagicMock()
+    mock_sp.current_user_playlists.return_value = {
+        "items": [
+            None,  # invalid
+            {"id": "", "name": "No ID", "tracks": {"total": 5}},  # no id
+            {"id": "valid_id", "name": "Valid Playlist", "tracks": {"total": 8}},
+        ],
+        "next": None,
+    }
+    mock_sp.next.return_value = None
+
+    with patch("mammamiradio.playlist.get_spotify_client", return_value=mock_sp):
+        playlists = list_user_playlists(config_with_spotify)
+
+    assert len(playlists) == 1
+    assert playlists[0]["id"] == "valid_id"
