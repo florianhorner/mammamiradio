@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import os
 from datetime import UTC, datetime
+from html import escape
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.request import Request, urlopen
 
@@ -68,6 +69,7 @@ def _build_summary() -> dict:
             "now_type": now.get("type", ""),
             "now_label": now.get("label", ""),
             "upcoming": [item.get("label", "") for item in public.get("upcoming", [])[:5]],
+            "upcoming_mode": public.get("upcoming_mode", ""),
             "queue_depth": ready.get("queue_depth"),
             "readiness": ready.get("status", ""),
             "illusion_window_minutes": illusion_window_minutes,
@@ -81,6 +83,9 @@ def _build_summary() -> dict:
 
 
 def _html(summary: dict) -> str:
+    def e(value: object) -> str:
+        return escape("" if value is None else str(value))
+
     ai = summary["ai"]
     spotify = summary["spotify"]
     music = summary["music"]
@@ -89,9 +94,16 @@ def _html(summary: dict) -> str:
     def badge(ok: bool, on: str, off: str) -> str:
         label = on if ok else off
         cls = "ok" if ok else "warn"
-        return f'<span class="badge {cls}">{label}</span>'
+        return f'<span class="badge {cls}">{e(label)}</span>'
 
-    upcoming = "".join(f"<li>{item}</li>" for item in music["upcoming"]) or "<li>Nothing queued</li>"
+    if music["upcoming"]:
+        upcoming = "".join(f"<li>{e(item)}</li>" for item in music["upcoming"])
+    else:
+        upcoming = (
+            "<li>Building next segments...</li>"
+            if music.get("upcoming_mode") == "building"
+            else "<li>Nothing queued</li>"
+        )
     last_banter = "AI-generated" if not ai["last_banter_canned"] else "canned"
     return f"""<!doctype html>
 <html lang="en">
@@ -136,27 +148,27 @@ def _html(summary: dict) -> str:
         <h1>MammaMiRadio Monitor</h1>
         <div class="sub">Read-only sidecar. Safe during the 60-minute illusion run.</div>
       </div>
-      <div class="muted">Updated: {summary["generated_at"]}</div>
+      <div class="muted">Updated: {e(summary["generated_at"])}</div>
     </div>
     <div class="grid">
       <section class="card">
         <h2>AI</h2>
         <div class="big">{badge(ai["status"] == "working", "Working", "Unclear")}</div>
-        <div>{ai["provider_hint"]}</div>
-        <div class="muted">Last banter: {last_banter}, {ai["last_banter_lines"]} lines</div>
+        <div>{e(ai["provider_hint"])}</div>
+        <div class="muted">Last banter: {e(last_banter)}, {e(ai["last_banter_lines"])} lines</div>
       </section>
       <section class="card">
         <h2>Spotify Connect</h2>
         <div class="big">{badge(spotify["connected"], "Connected", "Waiting")}</div>
-        <div>Device: <code>{spotify["device_name"] or "unknown"}</code></div>
-        <div class="muted">{spotify["next_step"]}</div>
+        <div>Device: <code>{e(spotify["device_name"] or "unknown")}</code></div>
+        <div class="muted">{e(spotify["next_step"])}</div>
       </section>
       <section class="card">
         <h2>Now</h2>
-        <div class="big">{music["now_type"] or "unknown"}</div>
-        <div>{music["now_label"] or "no label"}</div>
-        <div class="muted">Source: {music["source_label"] or music["source_kind"]}</div>
-        <div class="muted">Queue: {music["queue_depth"]} ({music["readiness"] or "unknown"})</div>
+        <div class="big">{e(music["now_type"] or "unknown")}</div>
+        <div>{e(music["now_label"] or "no label")}</div>
+        <div class="muted">Source: {e(music["source_label"] or music["source_kind"])}</div>
+        <div class="muted">Queue: {e(music["queue_depth"])} ({e(music["readiness"] or "unknown")})</div>
       </section>
     </div>
     <section class="card">
@@ -165,8 +177,8 @@ def _html(summary: dict) -> str:
     </section>
     <section class="card">
       <h2>Attention</h2>
-      <div>{golden["headline"]}</div>
-      <div class="muted">{golden["detail"]}</div>
+      <div>{e(golden["headline"])}</div>
+      <div class="muted">{e(golden["detail"])}</div>
     </section>
   </div>
 </body>
@@ -175,8 +187,9 @@ def _html(summary: dict) -> str:
 
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:  # noqa: N802
+        summary = _build_summary()
         if self.path == "/api/summary":
-            payload = json.dumps(_build_summary()).encode("utf-8")
+            payload = json.dumps(summary).encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Content-Length", str(len(payload)))
@@ -184,7 +197,7 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(payload)
             return
 
-        page = _html(_build_summary()).encode("utf-8")
+        page = _html(summary).encode("utf-8")
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Content-Length", str(len(page)))

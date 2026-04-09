@@ -834,6 +834,10 @@ async def capabilities(request: Request, _: None = Depends(require_admin_access)
     state = request.app.state.station_state
     caps = get_capabilities(config, state)
     result = capabilities_to_dict(caps)
+    capabilities = result.setdefault("capabilities", {})
+    capabilities["script_llm"] = bool(config.anthropic_api_key or config.openai_api_key)
+    capabilities["anthropic_key"] = bool(config.anthropic_api_key)
+    capabilities["openai"] = bool(config.openai_api_key)
 
     now = state.now_streaming or {}
     result["now_playing"] = now
@@ -1350,7 +1354,7 @@ def _public_status_payload(request: Request) -> dict:
             for e in state.stream_log
         ],
         "upcoming": upcoming,
-        "upcoming_mode": "queued" if upcoming else "warmup",
+        "upcoming_mode": "queued" if upcoming else "building",
     }
 
 

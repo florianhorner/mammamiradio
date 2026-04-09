@@ -189,8 +189,7 @@ def _massage_transition_text(text: str, next_segment: str, recent_texts: list[st
     stem = _transition_stem(text)
     recent_stems = [_transition_stem(item) for item in recent_texts if item]
     repeated = recent_stems.count(stem) >= 1 and stem in _BORING_TRANSITION_STEMS
-    overused_che_pezzo = stem == "che pezzo" and recent_stems.count("che pezzo") >= 1
-    if not repeated and not overused_che_pezzo:
+    if not repeated:
         return text.strip()
 
     for candidate in _TRANSITION_REWRITE_MAP.get(next_segment, _TRANSITION_REWRITE_MAP["banter"]):

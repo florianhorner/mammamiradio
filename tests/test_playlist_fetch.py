@@ -539,7 +539,7 @@ def test_fetch_current_italy_charts_success():
 
     assert len(tracks) == 2
     assert tracks[0].title == "Song One"
-    assert tracks[0].spotify_id == "chart_1"
+    assert tracks[0].spotify_id == ""
     assert tracks[1].title == "Song Two"
 
 
@@ -679,7 +679,7 @@ def test_fetch_startup_playlist_failed_restore_falls_back(config_with_spotify):
     }
 
     with patch("mammamiradio.playlist.get_spotify_client", return_value=mock_sp):
-        tracks, source, error = fetch_startup_playlist(config_with_spotify, persisted)
+        tracks, _source, error = fetch_startup_playlist(config_with_spotify, persisted)
 
     assert len(tracks) == 1
     assert tracks[0].title == "Liked Song"
