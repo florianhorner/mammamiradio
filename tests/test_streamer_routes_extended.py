@@ -245,6 +245,18 @@ async def test_remove_track_invalid_index():
     assert resp.json()["ok"] is False
 
 
+@pytest.mark.asyncio
+async def test_remove_track_rejects_non_integer_index_without_mutating_playlist():
+    app = _make_test_app()
+    before = [t.spotify_id for t in app.state.station_state.playlist]
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.post("/api/playlist/remove", json={"index": "abc"})
+    assert resp.status_code == 200
+    assert resp.json()["ok"] is False
+    assert [t.spotify_id for t in app.state.station_state.playlist] == before
+
+
 # ---------------------------------------------------------------------------
 # Move track
 # ---------------------------------------------------------------------------
@@ -272,6 +284,18 @@ async def test_move_track_invalid_indices():
         resp = await client.post("/api/playlist/move", json={"from": -1, "to": 100})
     assert resp.status_code == 200
     assert resp.json()["ok"] is False
+
+
+@pytest.mark.asyncio
+async def test_move_track_rejects_non_integer_indices_without_mutating_playlist():
+    app = _make_test_app()
+    before = [t.spotify_id for t in app.state.station_state.playlist]
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.post("/api/playlist/move", json={"from": "x", "to": 0})
+    assert resp.status_code == 200
+    assert resp.json()["ok"] is False
+    assert [t.spotify_id for t in app.state.station_state.playlist] == before
 
 
 # ---------------------------------------------------------------------------
@@ -310,6 +334,27 @@ async def test_move_to_next_invalid():
         resp = await client.post("/api/playlist/move_to_next", json={"index": 99})
     assert resp.status_code == 200
     assert resp.json()["ok"] is False
+
+
+@pytest.mark.asyncio
+async def test_move_to_next_rejects_non_integer_index_without_side_effects(tmp_path):
+    app = _make_test_app()
+    queued_file = tmp_path / "queued-next-invalid.mp3"
+    queued_file.write_bytes(b"queued")
+    app.state.queue.put_nowait(Segment(type=SegmentType.BANTER, path=queued_file, metadata={"title": "Queued"}))
+    app.state.station_state.queued_segments = [{"type": "banter", "label": "Queued"}]
+    starting_revision = app.state.station_state.playlist_revision
+    before = [t.spotify_id for t in app.state.station_state.playlist]
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.post("/api/playlist/move_to_next", json={"index": "abc"})
+    assert resp.status_code == 200
+    assert resp.json()["ok"] is False
+    assert [t.spotify_id for t in app.state.station_state.playlist] == before
+    assert app.state.station_state.playlist_revision == starting_revision
+    assert app.state.station_state.queued_segments == [{"type": "banter", "label": "Queued"}]
+    assert app.state.queue.qsize() == 1
+    assert queued_file.exists()
 
 
 @pytest.mark.asyncio

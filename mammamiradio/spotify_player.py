@@ -97,6 +97,7 @@ class SpotifyPlayer:
         self._capture_sink: subprocess.Popen | None = None  # ffmpeg stdin
         self._capture_lock = threading.Lock()
         self._transfer_counter = 0
+        self._transfer_fail_count = 0
 
     @property
     def device_name(self) -> str:
@@ -402,9 +403,11 @@ class SpotifyPlayer:
             logger.info("Spotify disconnected from mammamiradio")
         self._authenticated = False
 
-        # Periodically try auto-transfer (every ~30 checks = ~15s)
+        # Periodically try auto-transfer; back off after repeated failures.
+        # 10 failures → try every ~5min instead of every ~15s.
         self._transfer_counter += 1
-        if self._transfer_counter % 30 == 1:
+        interval = 600 if self._transfer_fail_count >= 10 else 30
+        if self._transfer_counter % interval == 1:
             await self._try_transfer_playback()
 
         return False
@@ -433,7 +436,9 @@ class SpotifyPlayer:
                 # Wait a moment for go-librespot to register the connection
                 await asyncio.sleep(2)
                 self._authenticated = True
+                self._transfer_fail_count = 0
             else:
+                self._transfer_fail_count += 1
                 logger.info(
                     "%s not in Spotify devices yet (visible: %s). Select it manually in Spotify app.",
                     self._device_name,
@@ -441,6 +446,7 @@ class SpotifyPlayer:
                 )
 
         except Exception as e:
+            self._transfer_fail_count += 1
             logger.warning("Auto-transfer failed: %s", e)
 
     async def wait_for_auth(self, timeout: float = 120.0) -> bool:

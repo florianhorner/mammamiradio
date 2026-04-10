@@ -539,8 +539,9 @@ def test_fetch_current_italy_charts_success():
 
     assert len(tracks) == 2
     assert tracks[0].title == "Song One"
-    assert tracks[0].spotify_id == ""
+    assert tracks[0].spotify_id == "chart_1"
     assert tracks[1].title == "Song Two"
+    assert tracks[1].spotify_id == "chart_2"
 
 
 def test_fetch_current_italy_charts_network_error():

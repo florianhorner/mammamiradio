@@ -80,6 +80,12 @@ async def startup():
     except Exception as e:
         logger.warning("Could not start go-librespot: %s — using fallback audio", e)
 
+    # Restore stop state so a reload/restart honours an operator-issued stop
+    _stopped_flag = config.cache_dir / "session_stopped.flag"
+    _session_stopped = _stopped_flag.exists()
+    if _session_stopped:
+        logger.info("Restoring stopped session state from previous run")
+
     persisted_source = read_persisted_source(config.cache_dir)
     logger.info("Fetching startup playlist")
     try:
@@ -106,6 +112,7 @@ async def startup():
         startup_source_error=startup_source_error,
         spotify_auth_url=_auth_url,
         persona_store=persona_store,
+        session_stopped=_session_stopped,
     )
     queue: asyncio.Queue = asyncio.Queue(maxsize=config.pacing.lookahead_segments + 2)
 

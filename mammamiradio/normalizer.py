@@ -72,7 +72,7 @@ def normalize(input_path: Path, output_path: Path, config=None) -> Path:
         "-b:a",
         bitrate,
         "-filter:a",
-        "loudnorm=I=-16:LRA=11:TP=-1.5",
+        "loudnorm=I=-16:LRA=11:TP=-1.5,silenceremove=start_periods=0:stop_periods=1:stop_threshold=-50dB:stop_duration=0.3",
         "-f",
         "mp3",
         str(output_path),
@@ -221,9 +221,7 @@ def _generate_cash_register(output_path: Path, duration_sec: float = 0.35) -> Pa
     d = duration_sec
     # Bell tones with exponential decay envelopes in one expression:
     # 1200Hz bell (fast decay) + 1507Hz detuned bell (0.7x vol) + 2400Hz ring (0.4x, shorter)
-    tones_expr = (
-        f"1.0*sin(2*PI*1200*t)*exp(-8*t)+0.7*sin(2*PI*1507*t)*exp(-10*t)+0.4*sin(2*PI*2400*t)*exp(-20*t)*(t<{d * 0.4})"
-    )
+    tones_expr = "1.0*sin(2*PI*1200*t)*exp(-8*t)+0.7*sin(2*PI*1507*t)*exp(-10*t)+0.4*sin(2*PI*2400*t)*exp(-20*t)"
     cmd = [
         "ffmpeg",
         "-y",
@@ -332,11 +330,7 @@ def _generate_ice_clink(output_path: Path, duration_sec: float = 0.3) -> Path:
     """
     d = duration_sec
     # Three glass-like tones with fast exponential decay, single expression
-    tones_expr = (
-        f"1.0*sin(2*PI*2400*t)*exp(-15*t)"
-        f"+0.6*sin(2*PI*3200*t)*exp(-20*t)*(t<{d * 0.7})"
-        f"+0.3*sin(2*PI*4800*t)*exp(-25*t)*(t<{d * 0.5})"
-    )
+    tones_expr = "1.0*sin(2*PI*2400*t)*exp(-15*t)+0.6*sin(2*PI*3200*t)*exp(-20*t)+0.3*sin(2*PI*4800*t)*exp(-25*t)"
     cmd = [
         "ffmpeg",
         "-y",

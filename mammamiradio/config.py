@@ -143,7 +143,9 @@ def _is_loopback_host(host: str) -> bool:
 
 def _is_addon() -> bool:
     """Detect if running as a Home Assistant addon."""
-    return bool(os.getenv("SUPERVISOR_TOKEN") or os.getenv("HASSIO_TOKEN") or Path("/data/options.json").exists())
+    # Only trust Supervisor-provided tokens as addon signals.
+    # /data/options.json may exist in non-addon environments (e.g. mounted test/dev paths).
+    return bool(os.getenv("SUPERVISOR_TOKEN") or os.getenv("HASSIO_TOKEN"))
 
 
 def _apply_addon_options() -> None:
