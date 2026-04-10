@@ -415,6 +415,10 @@ class StationState:
         self.songs_since_banter = 0
         self.songs_since_ad = 0
         self.songs_since_news = 0
+        # Clear play history so diversity filters start fresh for the new
+        # playlist context.  Without this, a 20-track playlist loops after
+        # ~30-40 min because the deque fills and recency weights flatten.
+        self.played_tracks.clear()
 
     def _log(self, seg_type: str, label: str, metadata: dict | None = None) -> None:
         """Append a bounded producer-side log entry."""

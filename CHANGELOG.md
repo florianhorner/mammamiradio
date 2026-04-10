@@ -4,6 +4,28 @@ All notable changes to `mammamiradio` are documented here.
 
 The current version source of truth is `pyproject.toml`.
 
+## [2.2.2] - 2026-04-10
+
+### Changed
+
+- **Listener-first routing**: `/` now serves the public listener page. Dashboard moved to `/dashboard`. Guests tap a link and hear radio, operators type `/admin`. The first thing a visitor sees is the experience, not a setup screen.
+- **Readyz returns 503 when not ready**: `/readyz` now returns HTTP 503 (was 200) when the station is still starting. Adds `ready: bool` and `watchdog_status` fields for the upcoming "tuning in" animation.
+- **Station name consistency**: Unified to "Mamma Mi Radio" across all files (was inconsistent "Malamie Radio" in some places).
+
+### Fixed
+
+- **Song repetition after ~30 min**: `played_tracks` history is now cleared on playlist switch and track reorder. A 20-track playlist no longer loops because the diversity filter's deque fills and weights flatten.
+- **"Move to upcoming" queue confusion**: `move_to_next` now clears play history alongside the queue purge, preventing the moved track from being penalized by stale diversity data.
+- **Pre-existing lint**: removed unused `ingress_prefix` variable in `require_admin_access`.
+
+### Added
+
+- **Quality gate env var escape hatch**: Set `MAMMAMIRADIO_SKIP_QUALITY_GATE=1` to bypass audio validation in emergencies.
+- **Canned fallback corruption alert**: Canned banter fallback rejection upgraded to `logger.error` with "ASSET CORRUPTION" prefix for operator visibility.
+- **HA addon: gcompat for go-librespot**: Alpine image now includes `gcompat` so the upstream go-librespot binary runs correctly.
+- **Silence fallback duration**: Fallback silence generator now produces 35s+ audio (was 5s), passing the MUSIC quality gate minimum.
+- **Audio quality gate documentation**: Added `-38dB coincidence` comment, updated `validate_segment_audio` docstring.
+
 ## [2.2.1] - 2026-04-10
 
 ### Added

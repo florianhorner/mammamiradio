@@ -69,7 +69,7 @@ _THRESHOLDS_BY_TYPE: dict[SegmentType, QualityThresholds] = {
 
 
 def validate_segment_audio(path: Path, seg_type: SegmentType) -> None:
-    """Validate audio for banter/ad segments and raise on quality failure."""
+    """Validate audio for any segment type and raise on quality failure."""
     th = _THRESHOLDS_BY_TYPE.get(seg_type, _DEFAULT_THRESHOLDS)
 
     if not path.exists():
@@ -136,6 +136,8 @@ def _probe_silence(path: Path) -> tuple[float, float]:
             "-i",
             str(path),
             "-af",
+            # NOTE: The -38dB noise floor here is independent of QualityThresholds.min_mean_volume_db.
+            # Both happen to be -38 now but will diverge as thresholds are tuned. Do not conflate.
             "silencedetect=n=-38dB:d=0.8",
             "-f",
             "null",

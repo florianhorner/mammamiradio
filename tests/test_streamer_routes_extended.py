@@ -91,9 +91,11 @@ async def test_readyz_starting():
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
         resp = await client.get("/readyz")
-    assert resp.status_code == 200
+    assert resp.status_code == 503
     body = resp.json()
     assert body["status"] == "starting"
+    assert body["ready"] is False
+    assert body["watchdog_status"] == "ok"
     assert body["queue_depth"] == 0
 
 
@@ -106,8 +108,11 @@ async def test_readyz_ready():
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
         resp = await client.get("/readyz")
     assert resp.status_code == 200
-    assert resp.json()["status"] == "ready"
-    assert "runtime" in resp.json()
+    body = resp.json()
+    assert body["status"] == "ready"
+    assert body["ready"] is True
+    assert body["watchdog_status"] == "ok"
+    assert "runtime" in body
 
 
 @pytest.mark.asyncio
@@ -117,7 +122,7 @@ async def test_readyz_no_queue():
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
         resp = await client.get("/readyz")
-    assert resp.status_code == 200
+    assert resp.status_code == 503
     assert resp.json()["queue_depth"] == -1
 
 
@@ -928,22 +933,44 @@ async def test_logs_endpoint():
 
 @pytest.mark.asyncio
 async def test_hassio_ingress_auth_bypass():
-    """HA addon with ingress prefix from Hassio network should bypass auth."""
+    """HA addon with ingress prefix from Hassio network should bypass auth on admin routes."""
     app = _make_test_app(is_addon=True)
     # Hassio internal network: 172.30.32.x
     transport = httpx.ASGITransport(app=app, client=("172.30.32.5", 9999))
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        # / is public (no auth needed)
         resp = await client.get("/", headers={"X-Ingress-Path": "/api/hassio_ingress/abc123"})
+        assert resp.status_code == 200
+        # /dashboard requires auth — Hassio internal network should bypass
+        resp = await client.get("/dashboard", headers={"X-Ingress-Path": "/api/hassio_ingress/abc123"})
+    assert resp.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_hassio_internal_request_without_ingress_header_bypasses_auth():
+    """HA-managed internal requests may omit X-Ingress-Path but should still work on admin routes."""
+    app = _make_test_app(is_addon=True)
+    transport = httpx.ASGITransport(app=app, client=("172.30.32.2", 9999))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        # / is public (no auth needed)
+        resp = await client.get("/")
+        assert resp.status_code == 200
+        # /dashboard should also work for Hassio internal requests
+        resp = await client.get("/dashboard")
     assert resp.status_code == 200
 
 
 @pytest.mark.asyncio
 async def test_hassio_ingress_spoofed_external():
-    """External client spoofing X-Ingress-Path should NOT bypass auth."""
+    """External client spoofing X-Ingress-Path should NOT bypass auth on admin routes."""
     app = _make_test_app(admin_password="secret", is_addon=True)
     transport = httpx.ASGITransport(app=app, client=("8.8.8.8", 9999))
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        # / is the public listener page (no auth required)
         resp = await client.get("/", headers={"X-Ingress-Path": "/api/hassio_ingress/abc123"})
+        assert resp.status_code == 200
+        # /dashboard requires admin auth — spoofed ingress should NOT bypass
+        resp = await client.get("/dashboard", headers={"X-Ingress-Path": "/api/hassio_ingress/abc123"})
     assert resp.status_code == 401
 
 
@@ -975,7 +1002,7 @@ async def test_basic_auth_mutation_allows_csrf_token_without_origin():
     app = _make_test_app(admin_password="secret")
     transport = httpx.ASGITransport(app=app, client=("10.0.0.1", 9999))
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
-        dashboard = await client.get("/", headers=_basic_auth_header())
+        dashboard = await client.get("/dashboard", headers=_basic_auth_header())
         assert dashboard.status_code == 200
         resp = await client.post(
             "/api/shuffle",

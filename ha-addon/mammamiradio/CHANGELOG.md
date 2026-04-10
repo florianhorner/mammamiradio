@@ -1,5 +1,24 @@
 # Changelog
 
+## 2.2.2
+
+### Changed
+
+- Listener page is now the default at `/`. Dashboard moved to `/dashboard`.
+- Station name unified to "Mamma Mi Radio" across all files.
+- `/readyz` returns HTTP 503 when station is starting (was 200).
+
+### Fixed
+
+- Song repetition after ~30 minutes on small playlists.
+- "Move to upcoming" no longer confuses the diversity filter.
+- go-librespot binary compatibility on Alpine (added gcompat).
+
+### Added
+
+- `MAMMAMIRADIO_SKIP_QUALITY_GATE=1` env var to bypass audio validation.
+- Silence fallback duration increased from 5s to 35s+ to pass quality gate.
+
 ## 2.2.1
 
 ### Added

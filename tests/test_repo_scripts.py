@@ -269,3 +269,15 @@ def test_addon_dockerfile_verifies_go_librespot_checksum() -> None:
 
     assert "GL_SHA256" in dockerfile
     assert "sha256sum -c -" in dockerfile
+
+
+def test_addon_dockerfile_installs_glibc_compat_for_go_librespot() -> None:
+    dockerfile = (ROOT / "ha-addon" / "mammamiradio" / "Dockerfile").read_text()
+
+    assert "gcompat" in dockerfile
+
+
+def test_addon_dockerfile_does_not_drop_root_before_supervisor_mounts() -> None:
+    dockerfile = (ROOT / "ha-addon" / "mammamiradio" / "Dockerfile").read_text()
+
+    assert "USER radio" not in dockerfile

@@ -7,13 +7,14 @@ from unittest.mock import patch
 from mammamiradio.config import AudioSection, _apply_addon_options, _is_addon, load_config, runtime_json
 
 
-def test_load_config_from_radio_toml():
+def test_load_config_from_radio_toml(monkeypatch):
     """Loading radio.toml should produce a valid StationConfig."""
     # Ensure we load from the project root radio.toml
     toml_path = Path(__file__).parent.parent / "radio.toml"
+    monkeypatch.delenv("STATION_NAME", raising=False)
     config = load_config(str(toml_path))
 
-    assert config.station.name == "Malamie Radio"
+    assert config.station.name == "Mamma Mi Radio"
     assert config.station.language == "it"
     assert config.pacing.songs_between_banter == 2
     assert config.pacing.songs_between_ads == 4

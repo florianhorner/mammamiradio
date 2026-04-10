@@ -137,15 +137,15 @@ async def test_get_listen_returns_html():
 
 
 @pytest.mark.asyncio
-async def test_get_dashboard_loopback_no_password():
-    """Dashboard on loopback with no admin_password configured should succeed."""
-    app = _make_test_app()  # no password, loopback → allowed
+async def test_get_root_serves_listener_page():
+    """Root serves the public listener page (no auth required)."""
+    app = _make_test_app()
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
         resp = await client.get("/")
     assert resp.status_code == 200
     assert "text/html" in resp.headers["content-type"]
-    assert "MammaMiRadio" in resp.text
+    assert "Mamma Mi Radio" in resp.text
 
 
 @pytest.mark.asyncio
