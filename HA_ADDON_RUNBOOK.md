@@ -161,5 +161,6 @@ Do NOT merge the next PR until all 7 steps pass.
 | FIFO `/tmp/mammamiradio.pcm` | config.py, radio.toml, go-librespot-config.yml |
 | go-librespot port 3678 | config.py, radio.toml, go-librespot-config.yml |
 | `/data/go-librespot` | config.py (addon override), Dockerfile (`COPY`) |
+| `MAMMAMIRADIO_ALLOW_YTDLP=true` | run.sh (hardcoded, required for music playback without Spotify capture) |
 
 If you change any of these, grep for the old value and update all locations.

@@ -38,6 +38,8 @@ What the app does:
 
 - if Spotify credentials are missing, it uses live Italian charts when `MAMMAMIRADIO_ALLOW_YTDLP=true`, otherwise the built-in demo playlist
 - if Spotify capture is unavailable, it falls back to local files, then `yt-dlp`, then placeholder tones
+- the HA addon enables `MAMMAMIRADIO_ALLOW_YTDLP=true` by default so yt-dlp is always available
+- a quality gate circuit breaker lets tracks through after 3 consecutive rejections to prevent stream starvation
 
 Check:
 

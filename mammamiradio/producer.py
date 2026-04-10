@@ -400,6 +400,7 @@ async def run_producer(
         logger.info("go-librespot running. Select 'mammamiradio' in Spotify to enable real music.")
 
     was_spotify_connected = False
+    _music_qg_rejections = 0  # consecutive music quality gate rejections (circuit breaker)
 
     while True:
         # Always check Spotify auth (cheap HTTP call)
@@ -564,17 +565,29 @@ async def run_producer(
                     await loop.run_in_executor(None, normalize, audio_path, norm_path)
                     audio_source = "fallback"
 
-                # Quality gate: reject truncated/silent downloads before queueing
+                # Quality gate: reject truncated/silent downloads before queueing.
+                # Circuit breaker: after 3 consecutive rejections, let the next track
+                # through so the stream doesn't starve (silence > dead air).
                 if not os.environ.get("MAMMAMIRADIO_SKIP_QUALITY_GATE"):
                     _music_loop = asyncio.get_running_loop()
                     try:
                         await _music_loop.run_in_executor(None, validate_segment_audio, norm_path, SegmentType.MUSIC)
+                        _music_qg_rejections = 0
                     except AudioToolError as exc:
                         logger.warning("Audio tool unavailable, skipping music quality check: %s", exc)
                     except AudioQualityError as exc:
-                        logger.warning("Quality gate rejected music track (%s): %s", norm_path.name, exc)
-                        norm_path.unlink(missing_ok=True)
-                        continue
+                        _music_qg_rejections += 1
+                        if _music_qg_rejections >= 3:
+                            logger.warning(
+                                "Quality gate circuit breaker: %d consecutive rejections, "
+                                "allowing track through to prevent stream starvation (%s: %s)",
+                                _music_qg_rejections, norm_path.name, exc,
+                            )
+                            _music_qg_rejections = 0
+                        else:
+                            logger.warning("Quality gate rejected music track (%s): %s", norm_path.name, exc)
+                            norm_path.unlink(missing_ok=True)
+                            continue
 
                 # Generate "Why this track?" rationale for listener UI
                 rationale = generate_track_rationale(

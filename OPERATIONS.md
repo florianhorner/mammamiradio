@@ -26,7 +26,7 @@ Environment:
 - `MAMMAMIRADIO_GO_LIBRESPOT_BIN`
 - `MAMMAMIRADIO_GO_LIBRESPOT_CONFIG_DIR`
 - `MAMMAMIRADIO_GO_LIBRESPOT_PORT`
-- `MAMMAMIRADIO_ALLOW_YTDLP` (optional, enables live charts startup fallback and downloader fallback)
+- `MAMMAMIRADIO_ALLOW_YTDLP` (optional, enables live charts startup fallback and downloader fallback; enabled by default in HA addon and Conductor)
 - `ADMIN_USERNAME`
 - `ADMIN_PASSWORD` or `ADMIN_TOKEN` for non-local access
 - `SPOTIFY_CLIENT_ID`
