@@ -22,6 +22,8 @@ The current version source of truth is `pyproject.toml`.
 ### Fixed
 
 - Stale test assertion for Apple Music chart track IDs (`chart_{id}` format introduced in 2.2.0 but test expected empty string).
+- CI: remove unused `# noqa: N802` (pre-commit ruff v0.9.10 flags it; CI ruff v0.15.9 does not — divergence triggered `RUF100`). N802 now suppressed via `per-file-ignores` in `pyproject.toml` instead.
+- CI: revert `pydantic-core` to `2.41.5` in `requirements.txt`. Dependabot PR #92 bumped it to `2.45.0` without bumping `pydantic`, breaking the lockfile (`pydantic==2.12.5` requires exactly `pydantic-core==2.41.5`).
 
 ## [2.2.0] - 2026-04-09
 

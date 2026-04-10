@@ -17,6 +17,7 @@
 ### Fixed
 
 - Stale chart-track ID test assertion.
+- CI: ruff noqa/lockfile fixes (pydantic-core reverted to 2.41.5 to match pydantic 2.12.5).
 
 ## 2.2.0
 
