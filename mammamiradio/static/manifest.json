@@ -1,6 +1,6 @@
 {
-  "name": "Malamie Radio",
-  "short_name": "Malamie Radio",
+  "name": "Mamma Mi Radio",
+  "short_name": "Mamma Mi Radio",
   "description": "Late-night AI-powered Italian radio station",
   "start_url": "/listen",
   "display": "standalone",

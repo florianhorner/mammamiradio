@@ -208,6 +208,8 @@ def test_generate_silence_calls_ffmpeg(track, tmp_path):
     cmd = mock_ffmpeg.call_args[0][0]
     assert "ffmpeg" in cmd[0]
     assert "anullsrc" in " ".join(cmd)
+    duration_index = cmd.index("-t") + 1
+    assert cmd[duration_index] == "210"
     assert str(out_path) in cmd
 
 

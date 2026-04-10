@@ -1,8 +1,9 @@
 ARG BUILD_FROM
 FROM ${BUILD_FROM}
 
-# Install Python 3, FFmpeg, and pip
-RUN apk add --no-cache python3 py3-pip ffmpeg
+# Install Python 3, FFmpeg, and the glibc compatibility shim required by
+# the upstream go-librespot release binary on Alpine.
+RUN apk add --no-cache python3 py3-pip ffmpeg gcompat
 
 # Install go-librespot for Spotify Connect support
 ARG BUILD_ARCH
@@ -41,11 +42,6 @@ COPY go-librespot-config.yml /defaults/go-librespot-config.yml
 
 # Make run script executable
 RUN chmod a+x /run.sh
-
-# Run as non-root user (security hardening)
-RUN adduser -D -h /app radio && \
-    chown -R radio:radio /app /data /defaults
-USER radio
 
 # Validate the install works
 RUN python3 -c "import mammamiradio; print('mammamiradio installed OK')"

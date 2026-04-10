@@ -76,12 +76,13 @@ if ! mkdir -p /data/cache /data/music /data/tmp /data/go-librespot 2>/tmp/mammam
 fi
 
 # ---- Initialize go-librespot config and keep device_name aligned with the shipped default ----
-SYNC_MSG="$(python3 -m mammamiradio.go_librespot_config sync \
+SYNC_LOG="/tmp/go-librespot-sync.log"
+if ! SYNC_MSG="$(python3 -m mammamiradio.go_librespot_config sync \
     /defaults/go-librespot-config.yml \
-    "$MAMMAMIRADIO_GO_LIBRESPOT_CONFIG_DIR/config.yml" 2>&1)" || {
-    echo "[mammamiradio] ERROR: go-librespot config sync failed: $SYNC_MSG"
+    "$MAMMAMIRADIO_GO_LIBRESPOT_CONFIG_DIR/config.yml" 2>"$SYNC_LOG")"; then
+    echo "[mammamiradio] ERROR: go-librespot config sync failed: ${SYNC_MSG:-$(cat "$SYNC_LOG" 2>/dev/null)}"
     exit 1
-}
+fi
 echo "[mammamiradio] $SYNC_MSG"
 
 # ---- Validate critical files exist ----
@@ -90,7 +91,7 @@ if [ ! -f /app/radio.toml ]; then
     exit 1
 fi
 
-echo "[mammamiradio] Station: ${STATION_NAME:-Malamie Radio}"
+echo "[mammamiradio] Station: ${STATION_NAME:-Mamma Mi Radio}"
 echo "[mammamiradio] Starting uvicorn on 0.0.0.0:8000..."
 
 cd /app

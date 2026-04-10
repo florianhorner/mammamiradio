@@ -81,7 +81,7 @@ def test_defaults_without_overrides(monkeypatch):
     monkeypatch.delenv("HA_URL", raising=False)
     monkeypatch.delenv("MAMMAMIRADIO_CACHE_DIR", raising=False)
     config = load_config(TOML_PATH)
-    assert config.station.name == "Malamie Radio"
+    assert config.station.name == "Mamma Mi Radio"
     assert config.homeassistant.url == ""
     assert config.cache_dir == Path("cache")
 

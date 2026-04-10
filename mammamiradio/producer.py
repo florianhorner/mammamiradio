@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import datetime
 import logging
+import os
 import random
 from collections import deque
 from collections.abc import Callable
@@ -564,15 +565,16 @@ async def run_producer(
                     audio_source = "fallback"
 
                 # Quality gate: reject truncated/silent downloads before queueing
-                _music_loop = asyncio.get_running_loop()
-                try:
-                    await _music_loop.run_in_executor(None, validate_segment_audio, norm_path, SegmentType.MUSIC)
-                except AudioToolError as exc:
-                    logger.warning("Audio tool unavailable, skipping music quality check: %s", exc)
-                except AudioQualityError as exc:
-                    logger.warning("Quality gate rejected music track (%s): %s", norm_path.name, exc)
-                    norm_path.unlink(missing_ok=True)
-                    continue
+                if not os.environ.get("MAMMAMIRADIO_SKIP_QUALITY_GATE"):
+                    _music_loop = asyncio.get_running_loop()
+                    try:
+                        await _music_loop.run_in_executor(None, validate_segment_audio, norm_path, SegmentType.MUSIC)
+                    except AudioToolError as exc:
+                        logger.warning("Audio tool unavailable, skipping music quality check: %s", exc)
+                    except AudioQualityError as exc:
+                        logger.warning("Quality gate rejected music track (%s): %s", norm_path.name, exc)
+                        norm_path.unlink(missing_ok=True)
+                        continue
 
                 # Generate "Why this track?" rationale for listener UI
                 rationale = generate_track_rationale(
@@ -715,37 +717,40 @@ async def run_producer(
                         logger.warning("Banter TTS failed, skipping segment: %s", exc)
                         continue
 
-                try:
-                    await loop.run_in_executor(None, validate_segment_audio, audio_path, SegmentType.BANTER)
-                except AudioToolError as exc:
-                    logger.warning("Audio tool unavailable, skipping banter quality check: %s", exc)
-                except AudioQualityError as exc:
-                    logger.warning("Quality gate rejected banter (%s): %s", audio_path.name, exc)
-                    if canned is None:
-                        audio_path.unlink(missing_ok=True)
-                    fallback_canned = _pick_canned_clip("banter", state=state)
-                    if fallback_canned:
-                        try:
-                            await loop.run_in_executor(
-                                None, validate_segment_audio, fallback_canned, SegmentType.BANTER
-                            )
-                            logger.info("Using canned banter fallback after quality reject: %s", fallback_canned.name)
-                            audio_path = fallback_canned
-                            canned = fallback_canned
-                            state.last_banter_script = [{"host": "Radio", "text": "(pre-recorded banter)"}]
-                        except AudioToolError as fallback_tool_exc:
-                            logger.warning(
-                                "Audio tool unavailable during fallback quality check: %s", fallback_tool_exc
-                            )
-                        except AudioQualityError as fallback_exc:
-                            logger.warning(
-                                "Canned banter fallback also rejected (%s): %s",
-                                fallback_canned.name,
-                                fallback_exc,
-                            )
+                if not os.environ.get("MAMMAMIRADIO_SKIP_QUALITY_GATE"):
+                    try:
+                        await loop.run_in_executor(None, validate_segment_audio, audio_path, SegmentType.BANTER)
+                    except AudioToolError as exc:
+                        logger.warning("Audio tool unavailable, skipping banter quality check: %s", exc)
+                    except AudioQualityError as exc:
+                        logger.warning("Quality gate rejected banter (%s): %s", audio_path.name, exc)
+                        if canned is None:
+                            audio_path.unlink(missing_ok=True)
+                        fallback_canned = _pick_canned_clip("banter", state=state)
+                        if fallback_canned:
+                            try:
+                                await loop.run_in_executor(
+                                    None, validate_segment_audio, fallback_canned, SegmentType.BANTER
+                                )
+                                logger.info(
+                                    "Using canned banter fallback after quality reject: %s", fallback_canned.name
+                                )
+                                audio_path = fallback_canned
+                                canned = fallback_canned
+                                state.last_banter_script = [{"host": "Radio", "text": "(pre-recorded banter)"}]
+                            except AudioToolError as fallback_tool_exc:
+                                logger.warning(
+                                    "Audio tool unavailable during fallback quality check: %s", fallback_tool_exc
+                                )
+                            except AudioQualityError as fallback_exc:
+                                logger.error(
+                                    "ASSET CORRUPTION: canned banter fallback also rejected (%s): %s",
+                                    fallback_canned.name,
+                                    fallback_exc,
+                                )
+                                continue
+                        else:
                             continue
-                    else:
-                        continue
 
                 # Clear new-listener flag only after banter was successfully produced
                 if _is_new_listener:
@@ -1088,16 +1093,17 @@ async def run_producer(
                         for p in break_parts:
                             p.unlink(missing_ok=True)
 
-                try:
-                    await loop.run_in_executor(None, validate_segment_audio, ad_break_path, SegmentType.AD)
-                except AudioToolError as exc:
-                    logger.warning("Audio tool unavailable, skipping ad quality check: %s", exc)
-                except AudioQualityError as exc:
-                    logger.warning("Quality gate rejected ad break (%s): %s", ad_break_path.name, exc)
-                    ad_break_path.unlink(missing_ok=True)
-                    # Prevent scheduler lock on AD if we reject a full break.
-                    state.songs_since_ad = 0
-                    continue
+                if not os.environ.get("MAMMAMIRADIO_SKIP_QUALITY_GATE"):
+                    try:
+                        await loop.run_in_executor(None, validate_segment_audio, ad_break_path, SegmentType.AD)
+                    except AudioToolError as exc:
+                        logger.warning("Audio tool unavailable, skipping ad quality check: %s", exc)
+                    except AudioQualityError as exc:
+                        logger.warning("Quality gate rejected ad break (%s): %s", ad_break_path.name, exc)
+                        ad_break_path.unlink(missing_ok=True)
+                        # Prevent scheduler lock on AD if we reject a full break.
+                        state.songs_since_ad = 0
+                        continue
 
                 # Dashboard display: show all brands in the break
                 state.last_ad_script = {

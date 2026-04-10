@@ -27,7 +27,7 @@ load_dotenv()
 class StationSection:
     """Station identity and public stream metadata."""
 
-    name: str = "Malamie Radio"
+    name: str = "Mamma Mi Radio"
     language: str = "it"
     theme: str = ""
 

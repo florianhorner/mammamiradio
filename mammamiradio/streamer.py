@@ -13,7 +13,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 
 from mammamiradio.capabilities import capabilities_to_dict, get_capabilities
@@ -338,6 +338,8 @@ def _inject_ingress_prefix(html: str, prefix: str) -> str:
     # (e.g. _base + '/api/hosts') — that causes double-prefixing.
     html = html.replace('href="/static/', f'href="{prefix}/static/')
     html = html.replace('href="/listen"', f'href="{prefix}/listen"')
+    html = html.replace('href="/dashboard"', f'href="{prefix}/dashboard"')
+    html = html.replace('href="/admin"', f'href="{prefix}/admin"')
     html = html.replace('href="/spotify/auth"', f'href="{prefix}/spotify/auth"')
     html = html.replace('src="/stream"', f'src="{prefix}/stream"')
     # Service worker registration is standalone (no _base), needs rewriting
@@ -508,11 +510,10 @@ def require_admin_access(
     """Authorize admin-only routes using token, basic auth, or loopback trust."""
     config = request.app.state.config
 
-    # Trust HA Ingress proxy — Supervisor handles authentication.
-    # Trust X-Ingress-Path from loopback or the Hassio internal network
-    # (172.30.32.0/23) to prevent external spoofing on the mapped port.
-    ingress_prefix = request.headers.get("X-Ingress-Path", "")
-    if config.is_addon and ingress_prefix and _is_hassio_or_loopback(request):
+    # Trust HA-managed requests inside the Supervisor network. Ingress normally
+    # supplies X-Ingress-Path, but some Home Assistant-managed probes/UI hops
+    # arrive from the same internal network without that header.
+    if config.is_addon and _is_hassio_or_loopback(request):
         return
     is_loopback = _is_loopback_client(request)
     if config.admin_token:
@@ -634,7 +635,14 @@ async def _audio_generator(request: Request):
         hub.unsubscribe(listener_id)
 
 
-@router.get("/", response_class=HTMLResponse, dependencies=[Depends(require_admin_access)])
+@router.get("/", response_class=HTMLResponse)
+async def listener_home(request: Request):
+    """Serve the public listener UI as the default landing page."""
+    prefix = request.headers.get("X-Ingress-Path", "")
+    return _get_injected_html("listener", _LISTENER_HTML, prefix)
+
+
+@router.get("/dashboard", response_class=HTMLResponse, dependencies=[Depends(require_admin_access)])
 async def dashboard(request: Request):
     """Serve the authenticated control-plane dashboard."""
     prefix = request.headers.get("X-Ingress-Path", "")
@@ -654,7 +662,7 @@ async def admin_panel(request: Request):
 
 @router.get("/listen", response_class=HTMLResponse)
 async def listener(request: Request):
-    """Serve the public listener UI."""
+    """Backwards-compatible alias for the listener UI."""
     prefix = request.headers.get("X-Ingress-Path", "")
     return _get_injected_html("listener", _LISTENER_HTML, prefix)
 
@@ -1283,12 +1291,17 @@ async def move_to_next(request: Request, _: None = Depends(require_admin_access)
     if 0 <= idx < len(pl):
         track = pl.pop(idx)
         pl.insert(0, track)
-        # Invalidate any in-flight generation, then flush buffered lookahead so
-        # the reordered track really is next.
+        # Bump revision so the producer picks up the reordered playlist.
+        # Purge pre-produced segments so the moved track actually plays next
+        # instead of waiting behind already-rendered lookahead.
         state.playlist_revision += 1
         purged = _purge_segment_queue(request.app.state.queue)
         state.queued_segments.clear()
         state.force_next = SegmentType.MUSIC
+        # Clear play history to reset diversity filters — without this,
+        # a move-to-next on a small playlist can trigger immediate repeats
+        # because the old history still penalises the moved track.
+        state.played_tracks.clear()
         return {"ok": True, "moved": track.display, "to_position": 0, "purged": purged}
     return {"ok": False, "error": "Invalid index"}
 
@@ -1389,13 +1402,17 @@ async def readyz(request: Request):
     start_time = getattr(request.app.state, "start_time", None)
     queue_depth = runtime["queue_depth"]
     tasks_alive = runtime["producer_task_alive"] and runtime["playback_task_alive"]
-    status = "ready" if queue_depth > 0 and tasks_alive else "starting"
-    return {
+    ready = queue_depth > 0 and tasks_alive
+    status = "ready" if ready else "starting"
+    body = {
         "status": status,
+        "ready": ready,
+        "watchdog_status": "ok",
         "queue_depth": queue_depth,
         "runtime": runtime,
         "uptime_s": round(time.time() - start_time, 1) if start_time else 0,
     }
+    return JSONResponse(content=body, status_code=200 if ready else 503)
 
 
 @router.get("/public-status")

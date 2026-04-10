@@ -66,11 +66,12 @@ HA Supervisor
 ## Startup sequence
 
 1. `run.sh` reads `/data/options.json` and exports env vars for the addon runtime.
+   The add-on must keep Home Assistant's default root runtime here because Supervisor now writes `options.json` with restrictive permissions.
 2. `run.sh` syncs `/data/go-librespot/config.yml` from the shipped defaults so the current `device_name` is present before app startup.
 3. `run.sh` starts uvicorn.
 4. FastAPI startup in `mammamiradio/main.py` loads `radio.toml`.
 5. `mammamiradio/main.py` initializes go-librespot and Spotify setup before calling `fetch_playlist()`.
-6. If `fetch_playlist()` or Spotify API auth fails, the app falls back to the demo playlist (10 built-in tracks).
+6. If `fetch_playlist()` or Spotify API auth fails, the app falls back to the demo playlist and then to placeholder/local audio if no real music source is available yet.
 7. If go-librespot fails, playback falls back to local files, yt-dlp, or placeholder tones.
 8. Producer and playback tasks start once startup initialization completes.
 
@@ -87,7 +88,7 @@ HA Supervisor
 2. Zeroconf/mDNS not reaching your network — `host_network: true` is required in `config.yaml`
 3. go-librespot credentials not cached yet — it needs a first connection via zeroconf
 
-**Fix**: Restart the addon. Check the log for `go-librespot started`. If it says `No such file or directory`, the binary is missing from the image (rebuild). If it starts but no device appears, your network may block mDNS (port 5353 UDP).
+**Fix**: Restart the addon. Check the log for `go-librespot started`. If it says `No such file or directory` on Alpine, the binary may be present but missing the glibc compatibility layer; the add-on image needs `gcompat`. If it starts but no device appears, your network may block mDNS (port 5353 UDP).
 
 ### "Playlist fetch failed — using demo playlist"
 
@@ -118,6 +119,14 @@ HA Supervisor
 
 **Fix**: Fixed in this version. The function now only rewrites static HTML attributes (`href=`, `src=`). JavaScript API calls use the `_base` variable from `window.location.pathname`.
 
+### "/data is not writable" or `options.json` permission errors
+
+**Symptom**: Log shows `Permission denied: '/data/options.json'` or the add-on falls back to `/tmp/mammamiradio-data`.
+
+**Cause**: The container dropped privileges before reading Supervisor-managed files under `/data`, so the add-on could not read `options.json` or persist cache/state.
+
+**Fix**: Keep the add-on on Home Assistant's default runtime user for Supervisor-managed mounts. If you see this after updating, fully restart the add-on and verify the log shows `/data` paths, not `/tmp/mammamiradio-data`.
+
 ### HA context never appears in banter
 
 **Symptom**: Hosts never reference home state even though HA is enabled.
@@ -146,7 +155,7 @@ HA Supervisor
 
 **Cause**: `ADMIN_TOKEN` is auto-generated on each restart and not logged. With `host_network: true`, port 8000 is exposed on the host.
 
-**Fix**: Use the addon via HA ingress (sidebar) — ingress bypasses admin auth. For direct access, set `ADMIN_PASSWORD` in the addon options (not yet exposed in the UI — would need adding to `config.yaml` schema).
+**Fix**: Use the addon via HA ingress (sidebar) as the primary UI path. The mapped port is best treated as the raw stream + diagnostics surface. For direct dashboard access, set `ADMIN_PASSWORD` in the addon options (not yet exposed in the UI — would need adding to `config.yaml` schema).
 
 ## Key files
 

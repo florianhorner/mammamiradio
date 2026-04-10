@@ -231,7 +231,7 @@ STATION_BIRTH_SCRIPT = {
         {
             "type": "voice",
             "host": "Marco",
-            "text": "Ah... eccoci. Malamie Radio. Da Windor a Vergen.",
+            "text": "Ah... eccoci. Mamma Mi Radio. Da Windor a Vergen.",
             "note": "Delivered like waking up — groggy, then snapping to life",
             "duration_sec": 4,
         },

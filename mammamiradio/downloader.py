@@ -28,7 +28,10 @@ def _find_demo_asset(track: Track) -> Path | None:
 
 
 def _generate_silence(track: Track, out_path: Path) -> Path:
-    """Generate brief silence as last-resort fallback (no sine wave tone)."""
+    """Generate silence as last-resort fallback (no sine wave tone)."""
+    # Keep fallback audio above the producer's minimum music-duration gate so
+    # demo/degraded boot can still fill the queue instead of looping forever.
+    duration_s = max(35, int((track.duration_ms or 0) / 1000) if track.duration_ms else 0)
     cmd = [
         "ffmpeg",
         "-y",
@@ -37,7 +40,7 @@ def _generate_silence(track: Track, out_path: Path) -> Path:
         "-i",
         "anullsrc=r=48000:cl=stereo",
         "-t",
-        "5",
+        str(duration_s),
         "-b:a",
         "192k",
         "-f",
