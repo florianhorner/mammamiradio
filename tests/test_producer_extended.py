@@ -600,6 +600,42 @@ async def test_music_quality_reject_retries_next_track(tmp_path):
     assert call_count >= 2
 
 
+@pytest.mark.asyncio
+async def test_music_quality_circuit_breaker_after_3_rejections(tmp_path):
+    """After 3 consecutive quality gate rejections the circuit breaker lets the next track through."""
+    state = _make_state()
+    # Need enough tracks so the producer can keep retrying
+    state.playlist = [
+        Track(title=f"Track {i}", artist="A", duration_ms=200_000, spotify_id=f"demo{i}")
+        for i in range(6)
+    ]
+    config = _make_config(tmp_path)
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+
+    call_count = 0
+
+    def _always_reject(path, seg_type):
+        nonlocal call_count
+        if seg_type == SegmentType.MUSIC:
+            call_count += 1
+            raise AudioQualityError("music has too much silence (100% > 95%)")
+        return None
+
+    with (
+        patch(f"{MODULE}.next_segment_type", return_value=SegmentType.MUSIC),
+        patch(f"{MODULE}.download_track", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(f"{MODULE}.normalize", side_effect=_fake_path),
+        patch(f"{MODULE}.validate_segment_audio", side_effect=_always_reject),
+        patch(f"{MODULE}.fetch_home_context", new_callable=AsyncMock),
+    ):
+        await _run_until_queued(queue, state, config)
+
+    seg = queue.get_nowait()
+    assert seg.type == SegmentType.MUSIC
+    # Circuit breaker fires on the 3rd rejection, so we should see exactly 3 quality checks
+    assert call_count == 3
+
+
 # ---------------------------------------------------------------------------
 # Signature ad system: _select_ad_creative and _cast_voices
 # ---------------------------------------------------------------------------

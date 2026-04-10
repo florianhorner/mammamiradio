@@ -49,6 +49,11 @@ elif [ -n "$HASSIO_TOKEN" ]; then
     echo "[mammamiradio] Home Assistant API access configured via Supervisor (legacy token)"
 fi
 
+# ---- Enable yt-dlp as primary music source ----
+# Without Spotify capture, yt-dlp is the only way to get real audio.
+# Silence placeholders are rejected by the quality gate, starving the stream.
+export MAMMAMIRADIO_ALLOW_YTDLP="true"
+
 # ---- Bind to all interfaces (required for ingress) ----
 export MAMMAMIRADIO_BIND_HOST="0.0.0.0"
 export MAMMAMIRADIO_PORT="8000"
