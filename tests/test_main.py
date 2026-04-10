@@ -162,6 +162,45 @@ async def test_startup_reads_persisted_source_before_fetching():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(("flag_exists", "expected"), [(True, True), (False, False)])
+async def test_startup_restores_stopped_session_flag(tmp_path: Path, flag_exists: bool, expected: bool):
+    """startup() maps session_stopped.flag presence to StationState.session_stopped."""
+    from mammamiradio.models import Track
+
+    mock_config = MagicMock()
+    mock_config.station.name = "TestRadio"
+    mock_config.station.language = "it"
+    mock_config.playlist.spotify_url = ""
+    mock_config.bind_host = "127.0.0.1"
+    mock_config.port = 8000
+    mock_config.pacing.lookahead_segments = 3
+    mock_config.tmp_dir = tmp_path / "tmp"
+    mock_config.cache_dir = tmp_path / "cache"
+
+    flag_file = mock_config.cache_dir / "session_stopped.flag"
+    if flag_exists:
+        flag_file.parent.mkdir(parents=True, exist_ok=True)
+        flag_file.touch()
+
+    with (
+        patch(f"{MODULE}.load_config", return_value=mock_config),
+        patch(f"{MODULE}.read_persisted_source", return_value=None),
+        patch(
+            f"{MODULE}.fetch_startup_playlist",
+            return_value=([Track(title="S", artist="A", duration_ms=1, spotify_id="x")], None, ""),
+        ),
+        patch(f"{MODULE}.SpotifyPlayer", side_effect=Exception("no go-librespot")),
+        patch(f"{MODULE}.run_producer", new_callable=AsyncMock),
+        patch(f"{MODULE}.run_playback_loop", new_callable=AsyncMock),
+    ):
+        from mammamiradio.main import app, startup
+
+        await startup()
+
+    assert app.state.station_state.session_stopped is expected
+
+
+@pytest.mark.asyncio
 async def test_shutdown_cancels_tasks():
     """shutdown() cancels producer and playback tasks and awaits gather."""
     import mammamiradio.main as main_mod
