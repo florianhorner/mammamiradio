@@ -235,6 +235,17 @@ async def test_write_banter_falls_back_on_malformed_json(config, state):
 
 
 @pytest.mark.asyncio
+async def test_write_banter_no_llm_returns_language_fallback(config, state):
+    config.anthropic_api_key = ""
+    config.openai_api_key = ""
+
+    result = await write_banter(state, config)
+
+    assert len(result) == 1
+    assert result[0][1] == "E torniamo alla musica!"
+
+
+@pytest.mark.asyncio
 async def test_write_banter_falls_back_to_openai_when_anthropic_fails(config, state):
     config.openai_api_key = "openai-key"
     host_name = config.hosts[0].name
@@ -317,6 +328,43 @@ async def test_write_banter_injects_persona_context(config, state, tmp_path):
     # Verify persona_updates were persisted
     persona = await store.get_persona()
     assert "ascolta sempre di sera" in persona.theories
+
+
+@pytest.mark.asyncio
+async def test_write_banter_prompt_includes_optional_context_blocks(config, state, tmp_path):
+    from mammamiradio.persona import PersonaStore
+    from mammamiradio.sync import init_db
+
+    db_path = tmp_path / "persona.db"
+    init_db(db_path)
+    store = PersonaStore(db_path)
+    await store.update_persona({"new_theories": ["torna sempre dopo mezzanotte"]})
+    await store.increment_session()
+    state.persona_store = store
+    state.ha_context = "La cucina e accesa."
+    for _ in range(5):
+        state.listener.record_outcome(skipped=False, energy_hint="high", track_display="Test Track")
+
+    captured = {}
+
+    async def _fake_generate_json_response(**kwargs):
+        captured["prompt"] = kwargs["prompt"]
+        return {
+            "lines": [{"host": config.hosts[0].name, "text": "Bentornati."}],
+            "new_joke": None,
+            "persona_updates": {"new_theories": [], "new_jokes": [], "callbacks_used": []},
+        }
+
+    with patch("mammamiradio.scriptwriter._generate_json_response", side_effect=_fake_generate_json_response):
+        result = await write_banter(state, config, is_first_listener=True)
+
+    assert len(result) == 1
+    prompt = captured["prompt"]
+    assert "<home_state_data>" in prompt
+    assert "<listener_behavior>" in prompt
+    assert "<listener_memory>" in prompt
+    assert "FIRST listener" in prompt
+    assert '"persona_updates"' in prompt
 
 
 @pytest.mark.asyncio
@@ -466,6 +514,20 @@ async def test_write_ad_falls_back_on_api_exception(config, state):
 
 
 @pytest.mark.asyncio
+async def test_write_ad_no_llm_returns_minimal_script(config, state):
+    config.anthropic_api_key = ""
+    config.openai_api_key = ""
+    brand = AdBrand(name="FallbackBrand", tagline="Sempre il top", category="tech")
+    voices = {"default": AdVoice(name="Voce Due", voice="it-IT-DiegoNeural", style="calm")}
+
+    result = await write_ad(brand, voices, state, config)
+
+    assert result.brand == "FallbackBrand"
+    assert result.summary == "Sempre il top"
+    assert result.parts[0].text == "FallbackBrand. Sempre il top"
+
+
+@pytest.mark.asyncio
 async def test_write_ad_ensures_voice_part_when_llm_returns_none(config, state):
     """If the LLM returns no voice parts, write_ad should add at least one."""
     response_json = json.dumps(
@@ -492,6 +554,42 @@ async def test_write_ad_ensures_voice_part_when_llm_returns_none(config, state):
     assert isinstance(result, AdScript)
     voice_parts = [p for p in result.parts if p.type == "voice"]
     assert len(voice_parts) >= 1
+
+
+@pytest.mark.asyncio
+async def test_write_ad_prompt_includes_campaign_and_home_context(config, state):
+    captured = {}
+    state.ha_context = "Il balcone e aperto."
+    state.record_ad_spot(brand="SagaBrand", summary="Il primo capitolo")
+    state.record_ad_spot(brand="OtherBrand", summary="Una pubblicita concorrente")
+    brand = AdBrand(
+        name="SagaBrand",
+        tagline="Sempre avanti",
+        category="tech",
+        campaign=MagicMock(
+            premise="Vendono modem emotivi",
+            escalation_rule="Ogni spot peggiora la situazione",
+        ),
+    )
+    brand.campaign.sonic_signature = "startup_synth+whoosh"
+    voices = {"hammer": AdVoice(name="Voce Uno", voice="it-IT-IsabellaNeural", style="enthusiastic")}
+
+    async def _fake_generate_json_response(**kwargs):
+        captured["prompt"] = kwargs["prompt"]
+        return {
+            "parts": [{"type": "voice", "text": "Compra adesso", "role": "hammer"}],
+            "mood": "upbeat",
+            "summary": "Campaign ad",
+        }
+
+    with patch("mammamiradio.scriptwriter._generate_json_response", side_effect=_fake_generate_json_response):
+        result = await write_ad(brand, voices, state, config)
+
+    assert result.summary == "Campaign ad"
+    prompt = captured["prompt"]
+    assert "CAMPAIGN ARC" in prompt
+    assert "CAMPAIGN SPINE" in prompt
+    assert "<home_state_data>" in prompt
 
 
 # --- Signature ad system tests ---
