@@ -57,6 +57,14 @@ def _get_injected_html(html_id: str, html: str, prefix: str) -> str:
     return _injected_html_cache[key]
 
 
+def _as_int_index(value, default: int = -1) -> int:
+    """Best-effort parse for playlist index payload fields."""
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
 _MUTATING_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 _CSRF_TOKEN_PLACEHOLDER = "__MAMMAMIRADIO_CSRF_TOKEN__"
 
@@ -928,8 +936,11 @@ async def stop_session(request: Request, _: None = Depends(require_admin_access)
     # Skip current segment
     if state.now_streaming:
         request.app.state.skip_event.set()
-    # Signal producer to pause
+    # Signal producer to pause and persist across reloads
     state.session_stopped = True
+    config = request.app.state.config
+    config.cache_dir.mkdir(parents=True, exist_ok=True)
+    (config.cache_dir / "session_stopped.flag").touch()
     state.now_streaming = {"type": "stopped", "label": "Session stopped", "started": time.time()}
     logger.info("Session stopped by admin (purged %d segments)", purged)
     return {"ok": True, "purged": purged}
@@ -940,6 +951,8 @@ async def resume_session(request: Request, _: None = Depends(require_admin_acces
     """Resume a stopped session."""
     state = request.app.state.station_state
     state.session_stopped = False
+    config = request.app.state.config
+    (config.cache_dir / "session_stopped.flag").unlink(missing_ok=True)
     logger.info("Session resumed by admin")
     return {"ok": True}
 
@@ -1061,7 +1074,7 @@ async def save_credentials(request: Request, _: None = Depends(require_admin_acc
 async def remove_track(request: Request, _: None = Depends(require_admin_access)):
     """Remove a track from playlist by index."""
     body = await request.json()
-    idx = body.get("index", -1)
+    idx = _as_int_index(body.get("index", -1))
     state = request.app.state.station_state
     if 0 <= idx < len(state.playlist):
         removed = state.playlist.pop(idx)
@@ -1073,8 +1086,8 @@ async def remove_track(request: Request, _: None = Depends(require_admin_access)
 async def move_track(request: Request, _: None = Depends(require_admin_access)):
     """Move a track in the playlist. body: {from: N, to: N}"""
     body = await request.json()
-    src = body.get("from", -1)
-    dst = body.get("to", -1)
+    src = _as_int_index(body.get("from", -1))
+    dst = _as_int_index(body.get("to", -1))
     state = request.app.state.station_state
     pl = state.playlist
     if 0 <= src < len(pl) and 0 <= dst < len(pl):
@@ -1263,7 +1276,7 @@ async def load_playlist(request: Request, _: None = Depends(require_admin_access
 async def move_to_next(request: Request, _: None = Depends(require_admin_access)):
     """Move a track to play next (position 0 in upcoming)."""
     body = await request.json()
-    idx = body.get("index", -1)
+    idx = _as_int_index(body.get("index", -1))
     state = request.app.state.station_state
     pl = state.playlist
 

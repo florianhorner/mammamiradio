@@ -186,7 +186,7 @@ def _html(summary: dict) -> str:
 
 
 class Handler(BaseHTTPRequestHandler):
-    def do_GET(self) -> None:  # noqa: N802
+    def do_GET(self) -> None:
         summary = _build_summary()
         if self.path == "/api/summary":
             payload = json.dumps(summary).encode("utf-8")

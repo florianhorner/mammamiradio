@@ -4,6 +4,27 @@ All notable changes to `mammamiradio` are documented here.
 
 The current version source of truth is `pyproject.toml`.
 
+## [2.2.1] - 2026-04-10
+
+### Added
+
+- **Session stop persistence**: stopped state now survives server restarts. A `session_stopped.flag` in the cache dir is written on stop and cleared on resume, so reloading the app during a planned break keeps the station paused.
+- **Spotify transfer backoff**: `SpotifyPlayer` tracks consecutive transfer failures and backs off to polling every ~5 minutes after 10 failures (was fixed 15 s), preventing log spam when no Spotify device is reachable.
+- Playlist index endpoints now use a strict `_as_int_index()` helper — non-integer payloads (e.g. `"abc"`) are rejected without mutating state.
+
+### Changed
+
+- **Silence removal in normalizer**: `loudnorm` filter chain now appends `silenceremove` to strip trailing silence before segments enter the queue. Reduces dead air between transitions.
+- `_is_addon()` no longer treats `/data/options.json` presence as an add-on signal — only Supervisor-provided env tokens are authoritative. Prevents false add-on mode in dev/test environments where that path is mounted.
+- `moveNext()` admin UI function shows an optimistic queue preview while the track renders instead of leaving the queue visually stale.
+- SFX generation expressions (cash register, ice clink) simplified — removed conditional time-guards that caused f-string injection of variable names into FFmpeg filter syntax.
+
+### Fixed
+
+- Stale test assertion for Apple Music chart track IDs (`chart_{id}` format introduced in 2.2.0 but test expected empty string).
+- CI: remove unused `# noqa: N802` (pre-commit ruff v0.9.10 flags it; CI ruff v0.15.9 does not — divergence triggered `RUF100`). N802 now suppressed via `per-file-ignores` in `pyproject.toml` instead.
+- CI: revert `pydantic-core` to `2.41.5` in `requirements.txt`. Dependabot PR #92 bumped it to `2.45.0` without bumping `pydantic`, breaking the lockfile (`pydantic==2.12.5` requires exactly `pydantic-core==2.41.5`).
+
 ## [2.2.0] - 2026-04-09
 
 ### Added

@@ -92,7 +92,7 @@ def test_normalize_builds_correct_default_command(mock_subprocess):
     assert "48000" in cmd  # sample_rate
     assert "2" in cmd  # channels
     assert "192k" in cmd  # bitrate
-    assert "loudnorm=I=-16:LRA=11:TP=-1.5" in cmd
+    assert any("loudnorm=I=-16:LRA=11:TP=-1.5" in arg for arg in cmd)
 
 
 def test_normalize_uses_config_params(mock_subprocess):
