@@ -675,6 +675,16 @@ async def test_hassio_ingress_spoofed_external():
 
 
 @pytest.mark.asyncio
+async def test_supervisor_network_addon_fully_trusted():
+    """HA Supervisor network (172.30.32.x) is fully trusted in addon mode, including POST."""
+    app = _make_test_app(is_addon=True)
+    transport = httpx.ASGITransport(app=app, client=("172.30.32.5", 9999))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.post("/api/shuffle")
+    assert resp.status_code == 200
+
+
+@pytest.mark.asyncio
 async def test_basic_auth_mutation_requires_same_origin_or_csrf():
     app = _make_test_app(admin_password="secret")
     transport = httpx.ASGITransport(app=app, client=("203.0.113.50", 9999))

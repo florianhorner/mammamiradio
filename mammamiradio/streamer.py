@@ -500,6 +500,12 @@ def require_admin_access(
     if _is_loopback_client(request):
         return
 
+    # HA Supervisor network is Docker-internal (not user-accessible), so
+    # CSRF from a browser on that network is not a real threat. Fully trust
+    # it in addon mode so HA automations (rest_command, etc.) work without tokens.
+    if config.is_addon and _is_hassio_or_loopback(request):
+        return
+
     # Other private networks (LAN, Tailscale): trusted for identity but
     # CSRF-checked on writes to prevent cross-site POSTs from other browsers.
     if _is_private_network(request):
