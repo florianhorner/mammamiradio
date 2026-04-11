@@ -819,11 +819,12 @@ def mix_ad_with_bed(voiceover_path: Path, output_path: Path) -> Path:
     The bed is a warm 220Hz+330Hz+440Hz sine chord with a slow 0.5Hz volume pulse,
     generated to exactly match the voiceover length, then mixed at -18dB under the
     voiceover. Output gets the same EBU R128 loudnorm pass as normalize_ad.
-    """
-    import subprocess as _sp
 
+    NOTE: synthesize_ad() already applies a mood-based bed via generate_station_id_bed().
+    Only call this function on raw voiceovers that bypassed synthesize_ad processing.
+    """
     # Get voiceover duration so the aevalsrc bed is trimmed exactly.
-    result = _sp.run(
+    result = subprocess.run(
         [
             "ffprobe",
             "-v",

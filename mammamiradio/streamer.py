@@ -391,6 +391,8 @@ class LiveStreamHub:
         """Signal all listeners to terminate and clear the hub."""
         listeners = list(self._listeners.items())
         self._listeners.clear()
+        if self._state is not None:
+            self._state.listeners_active = 0
         for _, queue in listeners:
             try:
                 queue.put_nowait(None)
@@ -924,6 +926,8 @@ async def save_credentials(request: Request, _: None = Depends(require_admin_acc
 
     # Atomically update .env file (async-wrapped to avoid blocking event loop)
     def _write_env_atomic() -> None:
+        # Sanitize values: strip newlines to prevent env injection (same as _save_dotenv)
+        safe = {k: v.replace("\n", "").replace("\r", "") for k, v in updates.items()}
         env_path = Path(".env")
         try:
             existing = env_path.read_text() if env_path.exists() else ""
@@ -939,13 +943,13 @@ async def save_credentials(request: Request, _: None = Depends(require_admin_acc
                 new_lines.append(line)
                 continue
             key = stripped.split("=", 1)[0].strip()
-            if key in updates:
-                new_lines.append(f'{key}="{updates[key]}"')
+            if key in safe:
+                new_lines.append(f'{key}="{safe[key]}"')
                 written.add(key)
             else:
                 new_lines.append(line)
 
-        for key, value in updates.items():
+        for key, value in safe.items():
             if key not in written:
                 new_lines.append(f'{key}="{value}"')
 

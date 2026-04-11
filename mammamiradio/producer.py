@@ -35,7 +35,6 @@ from mammamiradio.normalizer import (
     generate_silence,
     generate_station_id_bed,
     generate_tone,
-    mix_ad_with_bed,
     mix_voice_with_sting,
     normalize,
 )
@@ -398,6 +397,7 @@ async def run_producer(
     _cache_eviction_interval = 3600  # run eviction at most once per hour
 
     _producer_idle_logged = False
+    _was_idle = False
     while True:
         if state.session_stopped:
             await asyncio.sleep(1)
@@ -407,8 +407,25 @@ async def run_producer(
             if not _producer_idle_logged:
                 logger.info("Producer idle: no listeners connected")
                 _producer_idle_logged = True
+            _was_idle = True
             await asyncio.sleep(1)
             continue
+
+        if _was_idle:
+            logger.info("Producer resuming (%d listener(s) connected)", state.listeners_active)
+            # Queue is empty after idle — immediately seed a canned clip so the first
+            # listener hears something while the producer generates real content.
+            if queue.empty():
+                fallback = _pick_canned_clip("banter", state=state) or _pick_canned_clip("welcome")
+                if fallback:
+                    await _queue_segment(
+                        Segment(
+                            type=SegmentType.BANTER,
+                            path=fallback,
+                            metadata={"type": "banter", "canned": True, "warmup": True},
+                        )
+                    )
+            _was_idle = False
         _producer_idle_logged = False
 
         if queue.qsize() >= config.pacing.lookahead_segments:
@@ -959,13 +976,6 @@ async def run_producer(
 
                 for spot_idx, (script, ad_path) in enumerate(zip(scripts, ad_paths, strict=False)):
                     brand = spot_params[spot_idx][0]
-                    # Mix ambient bed under the voiceover so the spot isn't dry voice-only.
-                    bedded_path = ad_path.with_stem(ad_path.stem + "_bed")
-                    try:
-                        loop = asyncio.get_running_loop()
-                        ad_path = await loop.run_in_executor(None, mix_ad_with_bed, ad_path, bedded_path)
-                    except Exception as exc:
-                        logger.warning("Ad bed mix failed (%s), using dry voiceover: %s", ad_path.name, exc)
                     break_parts.append(ad_path)
                     break_brands.append(brand.name)
                     break_summaries.append(script.summary)
