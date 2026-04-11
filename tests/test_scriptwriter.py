@@ -342,6 +342,7 @@ async def test_write_banter_prompt_includes_optional_context_blocks(config, stat
     await store.increment_session()
     state.persona_store = store
     state.ha_context = "La cucina e accesa."
+    state.ha_events_summary = "- La macchina del caffè: spento/a -> acceso/a (1 min fa)"
     for _ in range(5):
         state.listener.record_outcome(skipped=False, energy_hint="high", track_display="Test Track")
 
@@ -361,6 +362,8 @@ async def test_write_banter_prompt_includes_optional_context_blocks(config, stat
     assert len(result) == 1
     prompt = captured["prompt"]
     assert "<home_state_data>" in prompt
+    assert "EVENTI RECENTI" in prompt
+    assert "La macchina del caffè" in prompt
     assert "<listener_behavior>" in prompt
     assert "<listener_memory>" in prompt
     assert "FIRST listener" in prompt

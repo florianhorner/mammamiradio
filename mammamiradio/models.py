@@ -380,6 +380,7 @@ class StationState:
     stream_log: deque[SegmentLogEntry] = field(default_factory=lambda: deque(maxlen=50))
     # Home Assistant context (natural language summary of home state)
     ha_context: str = ""
+    ha_events_summary: str = ""
     # Force-trigger: producer will use this type instead of scheduler for the next segment
     force_next: SegmentType | None = None
     # Shareware trial: counts canned banter clips actually streamed to listener

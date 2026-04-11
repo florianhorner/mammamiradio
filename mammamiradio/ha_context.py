@@ -9,9 +9,18 @@ from __future__ import annotations
 
 import logging
 import time
+from collections import deque
 from dataclasses import dataclass, field
 
 import httpx
+
+from mammamiradio.ha_enrichment import (
+    EVENT_BUFFER_SIZE,
+    HomeEvent,
+    build_events_summary,
+    diff_states,
+    prune_events,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -137,6 +146,8 @@ class HomeContext:
 
     raw_states: dict[str, dict] = field(default_factory=dict)
     summary: str = ""
+    events: deque[HomeEvent] = field(default_factory=lambda: deque(maxlen=EVENT_BUFFER_SIZE))
+    events_summary: str = ""
     timestamp: float = 0.0
 
     @property
@@ -253,11 +264,25 @@ async def fetch_home_context(
         entity_map = {e["entity_id"]: e for e in all_states}
         relevant = {eid: entity_map[eid] for eid in ALL_ENTITIES if eid in entity_map}
 
+        timestamp = time.time()
+        old_states = effective_cache.raw_states if effective_cache else {}
+        old_events = effective_cache.events if effective_cache else None
+        events = diff_states(
+            old_states,
+            relevant,
+            old_events,
+            entity_labels=ENTITY_LABELS,
+            state_translations=STATE_TRANSLATIONS,
+            now=timestamp,
+        )
         summary = _build_summary(relevant)
+        events_summary = build_events_summary(events, now=timestamp)
         context = HomeContext(
             raw_states=relevant,
             summary=summary,
-            timestamp=time.time(),
+            events=events,
+            events_summary=events_summary,
+            timestamp=timestamp,
         )
         _ha_cache = context
         logger.info("Fetched HA context: %d entities", len(relevant))
@@ -267,5 +292,8 @@ async def fetch_home_context(
         logger.warning("Failed to fetch HA context: %s", e)
         # Return stale cache if available, otherwise empty
         if effective_cache:
+            timestamp = time.time()
+            effective_cache.events = prune_events(effective_cache.events, now=timestamp)
+            effective_cache.events_summary = build_events_summary(effective_cache.events, now=timestamp)
             return effective_cache
         return HomeContext()

@@ -431,6 +431,7 @@ async def run_producer(
                 _cache=ha_cache,
             )
             state.ha_context = ha_cache.summary
+            state.ha_events_summary = ha_cache.events_summary
 
         try:
             if seg_type == SegmentType.MUSIC:
