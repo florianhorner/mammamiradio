@@ -4,6 +4,21 @@ All notable changes to `mammamiradio` are documented here.
 
 The current version source of truth is `pyproject.toml`.
 
+## [2.4.1] - 2026-04-11
+
+### Added
+
+- **Playlist search and filter**: Admin panel search bar restored. Instantly filters the visible playlist as you type, and searches the backend for matching tracks. Tracks can be queued directly from search results.
+- **Drag-and-drop playlist reorder**: Playlist tracks now have a grip handle for drag-and-drop reordering. Drop a track onto another to move it. Uses the existing `/api/playlist/move` endpoint.
+
+### Fixed
+
+- **Search endpoint returns results**: `/api/search` now searches the current playlist by title and artist instead of returning empty results (regression from v2.3.0 Spotify removal).
+- **Artist clustering prevention hardened**: `pick_next()` now uses a 4-tier progressive relaxation instead of 2 tiers, keeping artist cooldown active even when the hourly cap is relaxed. Soft weights tightened from 0.3x/0.7x to 0.05x/0.4x — same-artist clustering is near-impossible with a reasonable playlist size.
+- **Addon radio.toml host personality sync**: Extended host personality descriptions (Marco's ego, Giulia's contempt) now synced to the HA addon copy.
+
+---
+
 ## [2.4.0] - 2026-04-11
 
 ### Added

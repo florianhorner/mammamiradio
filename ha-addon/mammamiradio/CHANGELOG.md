@@ -1,5 +1,18 @@
 # Changelog
 
+## 2.4.1
+
+### Added
+
+- Playlist search and filter restored in admin panel.
+- Drag-and-drop playlist reorder with grip handles.
+
+### Fixed
+
+- Search endpoint now returns actual playlist results instead of empty array.
+- Artist clustering prevention hardened (4-tier relaxation, tighter soft weights).
+- Host personality descriptions synced to addon radio.toml.
+
 ## 2.4.0
 
 ### Added
