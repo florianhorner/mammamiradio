@@ -108,7 +108,11 @@ async def startup():
 
     # Pre-produce the first music segment so listeners hear audio instantly.
     # This runs before the producer loop and bypasses the listener gate.
-    await prewarm_first_segment(queue, state, config)
+    # Bounded to 20s so a slow download doesn't block app readiness.
+    try:
+        await asyncio.wait_for(prewarm_first_segment(queue, state, config), timeout=20)
+    except TimeoutError:
+        logger.warning("Prewarm timed out after 20s; producer will fill queue normally")
 
     _playback_task = asyncio.create_task(run_playback_loop(app))
     _producer_task = asyncio.create_task(run_producer(queue, state, config, skip_event=app.state.skip_event))

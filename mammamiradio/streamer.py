@@ -453,6 +453,34 @@ def _is_hassio_or_loopback(request: Request) -> bool:
         return False
 
 
+def _enforce_csrf_for_private_network(request: Request) -> None:
+    """Block cross-site mutating requests from private networks.
+
+    LAN trust skips credential checks but a browser on the LAN could still
+    be tricked into a cross-site POST. Require same-origin or CSRF token
+    on mutating methods.
+    """
+    if request.method.upper() not in _MUTATING_METHODS:
+        return
+
+    csrf_token = request.headers.get("X-Radio-CSRF-Token", "")
+    if csrf_token and secrets.compare_digest(csrf_token, _get_csrf_token(request.app)):
+        return
+
+    origin = request.headers.get("Origin", "")
+    if origin and _same_origin(request, origin):
+        return
+
+    referer = request.headers.get("Referer", "")
+    if referer and _same_origin(request, referer):
+        return
+
+    raise HTTPException(
+        status_code=403,
+        detail="Cross-site admin write blocked. Reload the dashboard and retry.",
+    )
+
+
 def require_admin_access(
     request: Request,
     credentials: HTTPBasicCredentials | None = Depends(security),
@@ -460,20 +488,27 @@ def require_admin_access(
     """Authorize admin-only routes using private network trust, token, or basic auth.
 
     Trust hierarchy (first match wins):
-    1. Private network (LAN, Tailscale, HA Supervisor) — always trusted
-    2. Admin token (header or query param)
+    1. Private network (LAN, Tailscale, HA Supervisor) — trusted for reads,
+       CSRF-checked for writes
+    2. Admin token (header only)
     3. Basic auth (username/password)
     4. Reject
     """
     config = request.app.state.config
 
-    # Self-hosted appliance: trust the operator's own network.
+    # Loopback is fully trusted — same machine, no CSRF risk.
+    if _is_loopback_client(request):
+        return
+
+    # Other private networks (LAN, Tailscale): trusted for identity but
+    # CSRF-checked on writes to prevent cross-site POSTs from other browsers.
     if _is_private_network(request):
+        _enforce_csrf_for_private_network(request)
         return
 
     # Explicit auth for public/remote access.
     if config.admin_token:
-        token = request.headers.get("X-Radio-Admin-Token") or request.query_params.get("token")
+        token = request.headers.get("X-Radio-Admin-Token")
         if token and secrets.compare_digest(token, config.admin_token):
             return
 

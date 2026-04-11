@@ -236,6 +236,12 @@ def test_is_private_network_loopback():
     assert _is_private_network(req) is True
 
 
+def test_is_private_network_link_local():
+    req = MagicMock()
+    req.client.host = "169.254.10.20"
+    assert _is_private_network(req) is True
+
+
 def test_is_private_network_public_ip():
     req = MagicMock()
     req.client.host = "203.0.113.50"

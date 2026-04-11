@@ -752,6 +752,37 @@ async def test_token_auth_private_network_trusted():
 
 
 @pytest.mark.asyncio
+async def test_private_network_mutation_requires_csrf():
+    """Private network POST without origin/CSRF should be blocked (cross-site protection)."""
+    app = _make_test_app()
+    transport = httpx.ASGITransport(app=app, client=("192.168.1.50", 9999))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.post("/api/shuffle")
+    assert resp.status_code == 403
+    assert "Cross-site" in resp.text
+
+
+@pytest.mark.asyncio
+async def test_private_network_mutation_allows_same_origin():
+    """Private network POST with same-origin header should succeed."""
+    app = _make_test_app()
+    transport = httpx.ASGITransport(app=app, client=("192.168.1.50", 9999))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.post("/api/shuffle", headers={"Origin": "http://testserver"})
+    assert resp.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_private_network_read_no_csrf_needed():
+    """Private network GET should succeed without CSRF."""
+    app = _make_test_app()
+    transport = httpx.ASGITransport(app=app, client=("192.168.1.50", 9999))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.get("/status")
+    assert resp.status_code == 200
+
+
+@pytest.mark.asyncio
 async def test_token_auth_non_loopback_with_valid_token():
     app = _make_test_app(admin_token="tok-123")
     transport = httpx.ASGITransport(app=app, client=("203.0.113.50", 9999))
