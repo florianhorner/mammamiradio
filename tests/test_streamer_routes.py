@@ -433,7 +433,7 @@ async def test_capabilities_loopback_returns_flags():
     body = resp.json()
     # Flags are nested under "capabilities"; top-level has tier, trial, etc.
     caps = body.get("capabilities", body)
-    assert "anthropic" in caps
+    assert "llm" in caps
     assert "tier" in body
     assert "trial" in body
     assert "canned_clips_streamed" in body["trial"]
@@ -457,7 +457,7 @@ async def test_capabilities_openai_only_marks_ai_as_available():
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
         resp = await client.get("/api/capabilities")
     assert resp.status_code == 200
-    assert resp.json()["capabilities"]["anthropic"] is True
+    assert resp.json()["capabilities"]["llm"] is True
     assert resp.json()["next_step"]["key"] != "add_ai_key"
 
 

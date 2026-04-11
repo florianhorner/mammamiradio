@@ -35,13 +35,13 @@ def test_tier_demo():
 
 
 def test_tier_full_ai():
-    c = Capabilities(anthropic=True)
+    c = Capabilities(llm=True)
     assert c.tier == "full_ai"
     assert c.tier_label == "Full AI Radio"
 
 
 def test_tier_connected_home():
-    c = Capabilities(anthropic=True, ha=True)
+    c = Capabilities(llm=True, ha=True)
     assert c.tier == "connected_home"
 
 
@@ -55,7 +55,7 @@ def test_capabilities_frozen():
     """Capabilities should be immutable."""
     c = Capabilities()
     try:
-        c.anthropic = True  # type: ignore[misc]
+        c.llm = True  # type: ignore[misc]
         raise AssertionError("Should have raised FrozenInstanceError")
     except AttributeError:
         pass
@@ -71,12 +71,12 @@ def test_get_capabilities_empty():
 
 def test_get_capabilities_anthropic():
     caps = get_capabilities(_config(anthropic_api_key="sk-test"), _state())
-    assert caps.anthropic is True
+    assert caps.llm is True
 
 
-def test_get_capabilities_openai_only_counts_as_ai_enabled():
+def test_get_capabilities_openai_only_counts_as_llm():
     caps = get_capabilities(_config(openai_api_key="sk-openai"), _state())
-    assert caps.anthropic is True
+    assert caps.llm is True
 
 
 def test_get_capabilities_ha():
@@ -105,19 +105,19 @@ def test_get_capabilities_all_on():
         ),
         _state(),
     )
-    assert caps == Capabilities(anthropic=True, ha=True)
+    assert caps == Capabilities(llm=True, ha=True)
 
 
 # --- capabilities_to_dict() ---
 
 
 def test_capabilities_to_dict_shape():
-    caps = Capabilities(anthropic=True)
+    caps = Capabilities(llm=True)
     d = capabilities_to_dict(caps)
     assert "capabilities" in d
     assert "tier" in d
     assert "tier_label" in d
-    assert d["capabilities"]["anthropic"] is True
+    assert d["capabilities"]["llm"] is True
     assert d["capabilities"]["ha"] is False
     assert d["tier"] == "full_ai"
     assert d["tier_label"] == "Full AI Radio"
@@ -129,9 +129,9 @@ def test_capabilities_to_dict_shape():
 def test_all_4_flag_combos():
     """Every combination of 2 boolean flags should produce a valid tier."""
     valid_tiers = {"demo", "full_ai", "connected_home"}
-    for an in (False, True):
+    for llm in (False, True):
         for ha in (False, True):
-            c = Capabilities(anthropic=an, ha=ha)
-            assert c.tier in valid_tiers, f"Invalid tier {c.tier!r} for flags an={an} ha={ha}"
+            c = Capabilities(llm=llm, ha=ha)
+            assert c.tier in valid_tiers, f"Invalid tier {c.tier!r} for flags llm={llm} ha={ha}"
             assert isinstance(c.tier_label, str)
             assert len(c.tier_label) > 0

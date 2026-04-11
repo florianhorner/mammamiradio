@@ -651,8 +651,8 @@ class Capabilities:
     Music source is no longer a tier gate (always available via local + yt-dlp + charts).
     """
 
-    anthropic: bool = False
-    """Anthropic or OpenAI API key available for live AI-generated banter and ads."""
+    llm: bool = False
+    """Any LLM API key available (Anthropic or OpenAI) for AI-generated banter and ads."""
 
     ha: bool = False
     """Home Assistant token present and integration enabled."""
@@ -660,9 +660,9 @@ class Capabilities:
     @property
     def tier(self) -> str:
         """Derive a human-friendly tier label from capability flags."""
-        if self.anthropic and self.ha:
+        if self.llm and self.ha:
             return "connected_home"
-        if self.anthropic:
+        if self.llm:
             return "full_ai"
         return "demo"
 

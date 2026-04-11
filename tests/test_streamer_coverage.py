@@ -284,10 +284,14 @@ def test_inject_csrf_token():
 
 def test_golden_path_demo():
     config = MagicMock()
+    config.anthropic_api_key = ""
+    config.openai_api_key = ""
     state = MagicMock()
     result = _golden_path_status(config, state)
-    # Should return a dict with stage
-    assert "stage" in result
+    assert result["stage"] in ("music_available", "needs_music_source")
+    assert "blocking" in result
+    assert "headline" in result
+    assert "fallback_sources" in result
 
 
 # ---------------------------------------------------------------------------

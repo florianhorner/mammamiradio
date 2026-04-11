@@ -966,7 +966,7 @@ function updateCards() {
   _lastTier = tier;
 
   // Unlock AI — show when no anthropic key
-  document.getElementById('unlock-ai').style.display = !c.anthropic ? '' : 'none';
+  document.getElementById('unlock-ai').style.display = !c.llm ? '' : 'none';
   // HA card hidden by default — it's a power-user feature, not onboarding
   document.getElementById('connect-ha').style.display = 'none';
 

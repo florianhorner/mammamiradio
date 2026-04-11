@@ -187,8 +187,8 @@ ONBOARDING_NARRATIVE = {
         {
             "label_it": "Analisi dei gusti...",
             "label_en": "Analyzing taste...",
-            "copy": "Scanning the charts, trending tracks, and that one genre "
-            "you secretly love but won't admit to. We see everything. "
+            "copy": "Scanning the charts, trending tracks, and probably that one genre "
+            "you secretly love but won't admit to. We think we see a pattern. "
             "We have questions.",
         },
         {
