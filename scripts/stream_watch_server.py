@@ -101,7 +101,7 @@ def _html(summary: dict) -> str:
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>MammaMiRadio Monitor</title>
+  <title>Mamma Mi Radio Monitor</title>
   <style>
     :root {{
       --bg: #1e1714; --panel: #2d1d18; --panel2: #3a241d; --text: #f5edd8;
@@ -136,7 +136,7 @@ def _html(summary: dict) -> str:
   <div class="wrap">
     <div class="mast">
       <div>
-        <h1>MammaMiRadio Monitor</h1>
+        <h1>Mamma Mi Radio Monitor</h1>
         <div class="sub">Read-only sidecar. Safe during the 60-minute illusion run.</div>
       </div>
       <div class="muted">Updated: {e(summary["generated_at"])}</div>

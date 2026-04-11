@@ -82,6 +82,7 @@ The addon Dockerfile installs mammamiradio from LOCAL source copied by CI into t
 - No risk of building with stale code from a different branch
 
 CI copies `mammamiradio/`, `pyproject.toml`, and `radio.toml` into `ha-addon/mammamiradio/` before building.
+The checked-in `ha-addon/mammamiradio/radio.toml` must remain byte-for-byte identical to the root `radio.toml`; local validation and CI now fail if those files drift.
 
 Before every commit or push that touches addon packaging, run:
 

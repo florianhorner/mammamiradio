@@ -110,6 +110,7 @@ class StationConfig:
     homeassistant: HomeAssistantSection = field(default_factory=HomeAssistantSection)
     cache_dir: Path = Path("cache")
     tmp_dir: Path = Path("tmp")
+    max_cache_size_mb: int = 500
 
     # Secrets from env
     bind_host: str = "127.0.0.1"
@@ -322,6 +323,7 @@ def load_config(path: str = "radio.toml") -> StationConfig:
         homeassistant=ha_section,
         cache_dir=cache_dir,
         tmp_dir=tmp_dir,
+        max_cache_size_mb=int(os.getenv("MAMMAMIRADIO_MAX_CACHE_MB", "500")),
         bind_host=os.getenv("MAMMAMIRADIO_BIND_HOST", "127.0.0.1"),
         port=int(os.getenv("MAMMAMIRADIO_PORT", "8000")),
         admin_username=os.getenv("ADMIN_USERNAME", "admin"),

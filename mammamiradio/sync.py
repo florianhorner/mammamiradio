@@ -47,6 +47,13 @@ CREATE TABLE IF NOT EXISTS listener_persona (
 
 -- Seed the default persona row so UPDATE-based methods never no-op
 INSERT OR IGNORE INTO listener_persona (id) VALUES (1);
+
+CREATE TABLE IF NOT EXISTS track_rules (
+    id INTEGER PRIMARY KEY,
+    youtube_id TEXT NOT NULL,
+    rule_text TEXT NOT NULL,
+    created_at TEXT DEFAULT (datetime('now'))
+);
 """
 
 

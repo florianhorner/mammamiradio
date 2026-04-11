@@ -1,5 +1,66 @@
 # Changelog
 
+## 2.5.0
+
+### Added
+- Track rules system: flag a song mid-stream with a reaction; future banter references it
+- Admin panel tab split: Music tab (queue/playlist) and Radio tab (hosts/pacing/logs)
+- Flag Track button in Now Playing card
+
+### Changed
+- Crossfade Option B: music bed stays at 50% during host voice-over (was 30%)
+- Station ID sting reduced to 15% volume — background texture, not jarring hit
+- Host banter: more chaos, mid-conversation drops, abandoned sentences, absurdist tangents
+- Transition lines: musical option added (~30% of transitions echo the song's vibe)
+
+## 2.4.1
+
+### Added
+
+- Playlist search and filter restored in admin panel.
+- Drag-and-drop playlist reorder with grip handles.
+
+### Fixed
+
+- Search endpoint now returns actual playlist results instead of empty array.
+- Artist clustering prevention hardened (4-tier relaxation, tighter soft weights).
+- Host personality descriptions synced to addon radio.toml.
+
+## 2.4.0
+
+### Added
+
+- Volare Refined design system: dark espresso theme across listener and admin UIs.
+- OpenAI API key now accepted as equivalent to Anthropic for AI tier detection.
+- yt-dlp in health check panel (warns if missing, does not block startup).
+- Reconnect silence fix: canned clip plays immediately when a listener reconnects after an idle period.
+- Home context enrichment: event diffing, mood classification, weather arcs, and reactive impossible moments. The DJ now knows when you made coffee.
+- Listener launch ceremony: animated pre-launch state with radio warming up.
+
+### Fixed
+
+- Ad double-bed artifact removed: ads now have one music bed, not two.
+- Credential write now strips newlines to prevent env file injection.
+- Hub close correctly resets listener count so producer idle gate works on restart.
+
+---
+
+## 2.3.1
+
+### Added
+
+- Artist diversity cap: no more than 2 tracks per artist from Apple Music charts.
+- LRU cache eviction: oldest MP3s are deleted when cache exceeds 500 MB (configurable via MAMMAMIRADIO_MAX_CACHE_MB). Prevents SD card overflow on Raspberry Pi.
+- `/api/status` now reports token cost estimate and cache disk usage.
+- Listener gate: no API burn when nobody is listening.
+- Ad sound beds: warm ambient sine bed under every ad voiceover.
+- HA media_player entity: copy-paste YAML in DOCS.md for play/pause/skip with album art.
+- Stable admin token: set once in HA UI, use in secrets.yaml for media_player integration.
+- Station name on air: hosts say your station name naturally, matches station_name config.
+- Sharper host personalities: Marco doubles down, Giulia cuts him off.
+
+---
+
 ## 2.3.0
 
 ### Removed

@@ -58,6 +58,14 @@ jobs:
             exit 1
           fi
 
+      - name: Validate addon radio.toml matches root radio.toml
+        run: |
+          if ! cmp -s radio.toml ha-addon/mammamiradio/radio.toml; then
+            echo "::error::ha-addon/mammamiradio/radio.toml drifted from root radio.toml"
+            diff -u radio.toml ha-addon/mammamiradio/radio.toml || true
+            exit 1
+          fi
+
   build:
     runs-on: ubuntu-latest
     needs: validate

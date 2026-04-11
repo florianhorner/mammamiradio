@@ -391,6 +391,8 @@ class LiveStreamHub:
         """Signal all listeners to terminate and clear the hub."""
         listeners = list(self._listeners.items())
         self._listeners.clear()
+        if self._state is not None:
+            self._state.listeners_active = 0
         for _, queue in listeners:
             try:
                 queue.put_nowait(None)
@@ -493,6 +495,12 @@ async def run_playback_loop(app) -> None:
     bytes_per_sec = (config.audio.bitrate * 1000) / 8  # bitrate is in kbps; convert to bytes/sec
 
     while True:
+        # Pause when nobody is listening — don't burn API tokens or disk on an empty room.
+        # The queue stays full; the moment a listener connects, playback resumes instantly.
+        if not hub._listeners:
+            await asyncio.sleep(1.0)
+            continue
+
         try:
             segment: Segment = await asyncio.wait_for(segment_queue.get(), timeout=30.0)
         except TimeoutError:
@@ -560,8 +568,13 @@ async def _audio_generator(request: Request):
 
 @router.get("/", response_class=HTMLResponse)
 async def listener_home(request: Request):
-    """Serve the public listener UI as the default landing page."""
+    """Serve the public listener UI, except trusted HA ingress opens the control room."""
     prefix = request.headers.get("X-Ingress-Path", "")
+    config = request.app.state.config
+    if config.is_addon and prefix and _is_hassio_or_loopback(request):
+        html = _get_injected_html("admin", _ADMIN_HTML, prefix)
+        html = _inject_csrf_token(html, _get_csrf_token(request.app))
+        return html
     return _get_injected_html("listener", _LISTENER_HTML, prefix)
 
 
@@ -804,7 +817,7 @@ async def skip_track(request: Request, _: None = Depends(require_admin_access)):
         )
 
     request.app.state.skip_event.set()
-    state.now_streaming = {"type": "skipping", "label": "Skipping...", "started": time.time()}
+    state.now_streaming = {"type": "skipping", "label": "Skipping...", "started": time.time(), "metadata": {}}
     return {"ok": True}
 
 
@@ -831,7 +844,7 @@ async def stop_session(request: Request, _: None = Depends(require_admin_access)
     config = request.app.state.config
     config.cache_dir.mkdir(parents=True, exist_ok=True)
     (config.cache_dir / "session_stopped.flag").touch()
-    state.now_streaming = {"type": "stopped", "label": "Session stopped", "started": time.time()}
+    state.now_streaming = {"type": "stopped", "label": "Session stopped", "started": time.time(), "metadata": {}}
     logger.info("Session stopped by admin (purged %d segments)", purged)
     return {"ok": True, "purged": purged}
 
@@ -918,6 +931,8 @@ async def save_credentials(request: Request, _: None = Depends(require_admin_acc
 
     # Atomically update .env file (async-wrapped to avoid blocking event loop)
     def _write_env_atomic() -> None:
+        # Sanitize values: strip newlines to prevent env injection (same as _save_dotenv)
+        safe = {k: v.replace("\n", "").replace("\r", "") for k, v in updates.items()}
         env_path = Path(".env")
         try:
             existing = env_path.read_text() if env_path.exists() else ""
@@ -933,13 +948,13 @@ async def save_credentials(request: Request, _: None = Depends(require_admin_acc
                 new_lines.append(line)
                 continue
             key = stripped.split("=", 1)[0].strip()
-            if key in updates:
-                new_lines.append(f'{key}="{updates[key]}"')
+            if key in safe:
+                new_lines.append(f'{key}="{safe[key]}"')
                 written.add(key)
             else:
                 new_lines.append(line)
 
-        for key, value in updates.items():
+        for key, value in safe.items():
             if key not in written:
                 new_lines.append(f'{key}="{value}"')
 
@@ -983,8 +998,28 @@ async def move_track(request: Request, _: None = Depends(require_admin_access)):
 
 @router.get("/api/search")
 async def search_tracks(request: Request, q: str = "", _: None = Depends(require_admin_access)):
-    """Search for tracks (stub — future: Music Assistant integration)."""
-    return {"results": []}
+    """Search the current playlist for tracks matching the query."""
+    if not q.strip():
+        return {"results": []}
+    query = q.strip().lower()
+    state = request.app.state.station_state
+    results = []
+    for i, track in enumerate(state.playlist):
+        text = f"{track.title} {track.artist}".lower()
+        if query in text:
+            results.append(
+                {
+                    "index": i,
+                    "title": track.title,
+                    "artist": track.artist,
+                    "display": track.display,
+                    "duration_ms": track.duration_ms,
+                    "id": track.spotify_id or track.cache_key,
+                }
+            )
+            if len(results) >= 20:
+                break
+    return {"results": results}
 
 
 @router.post("/api/playlist/add")
@@ -1062,6 +1097,22 @@ async def move_to_next(request: Request, _: None = Depends(require_admin_access)
         state.played_tracks.clear()
         return {"ok": True, "moved": track.display, "to_position": 0, "purged": purged}
     return {"ok": False, "error": "Invalid index"}
+
+
+@router.post("/api/track-rules")
+async def add_track_rule(request: Request, _: None = Depends(require_admin_access)):
+    """Flag a reaction rule for the currently playing track."""
+    from mammamiradio.track_rules import add_rule
+
+    payload = await request.json()
+    youtube_id = payload.get("youtube_id", "")
+    rule_text = payload.get("rule", "")
+    if not youtube_id or not rule_text:
+        return JSONResponse({"ok": False, "error": "youtube_id and rule required"}, status_code=400)
+    config = request.app.state.config
+    db_path = config.cache_dir / "mammamiradio.db"
+    add_rule(db_path, youtube_id, rule_text)
+    return {"ok": True}
 
 
 @router.get("/api/hosts")
@@ -1218,6 +1269,16 @@ async def status(request: Request, _: None = Depends(require_admin_access)):
                 "input_tokens": state.api_input_tokens,
                 "output_tokens": state.api_output_tokens,
                 "tts_characters": state.tts_characters,
+                # Haiku pricing: $0.80/M input, $4.00/M output (claude-haiku-4-5, 2026)
+                "api_cost_estimate_usd": round(
+                    state.api_input_tokens * 0.0000008 + state.api_output_tokens * 0.000004,
+                    4,
+                ),
+                "cache_size_mb": round(
+                    sum(f.stat().st_size for f in config.cache_dir.glob("*.mp3") if f.is_file()) / (1024 * 1024),
+                    1,
+                ),
+                "cache_limit_mb": config.max_cache_size_mb,
             },
             "listeners": {
                 "active": state.listeners_active,

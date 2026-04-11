@@ -17,7 +17,7 @@ try:
 except (json.JSONDecodeError, OSError) as e:
     print(f'FATAL: corrupt options.json: {e}', file=sys.stderr)
     sys.exit(1)
-for key in ('anthropic_api_key', 'openai_api_key', 'station_name', 'claude_model'):
+for key in ('anthropic_api_key', 'openai_api_key', 'station_name', 'claude_model', 'admin_token'):
     val = opts.get(key, '')
     if val:
         env_key = key.upper()
@@ -50,10 +50,10 @@ export MAMMAMIRADIO_ALLOW_YTDLP="true"
 export MAMMAMIRADIO_BIND_HOST="0.0.0.0"
 export MAMMAMIRADIO_PORT="8000"
 
-# ---- Auto-generate ADMIN_TOKEN for non-loopback bind ----
+# ---- Admin token: use config option if set, otherwise auto-generate ----
 if [ -z "$ADMIN_TOKEN" ]; then
     export ADMIN_TOKEN="$(python3 -c 'import uuid; print(uuid.uuid4().hex)')"
-    echo "[mammamiradio] Auto-generated ADMIN_TOKEN for non-loopback bind"
+    echo "[mammamiradio] Auto-generated ADMIN_TOKEN: $ADMIN_TOKEN"
 fi
 
 # ---- Point cache/tmp at persistent /data ----

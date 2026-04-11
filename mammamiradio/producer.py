@@ -16,8 +16,8 @@ from uuid import uuid4
 from mammamiradio.audio_quality import AudioQualityError, AudioToolError, validate_segment_audio
 from mammamiradio.config import StationConfig
 from mammamiradio.context_cues import generate_impossible_line
-from mammamiradio.downloader import download_track
-from mammamiradio.ha_context import HomeContext, fetch_home_context
+from mammamiradio.downloader import download_track, evict_cache_lru
+from mammamiradio.ha_context import HomeContext, check_reactive_triggers, fetch_home_context
 from mammamiradio.models import (
     AdBrand,
     AdFormat,
@@ -110,6 +110,7 @@ async def _try_crossfade(
     config: StationConfig,
     output_path: Path,
     tail_seconds: float = 8.0,
+    music_fade_volume: float = 0.5,
 ) -> Path:
     """Attempt to crossfade voice over the last music file. Returns voice_path on failure."""
     last_music = _latest_music_file(config.tmp_dir)
@@ -124,6 +125,8 @@ async def _try_crossfade(
             voice_path,
             output_path,
             tail_seconds,
+            1.0,
+            music_fade_volume,
         )
         voice_path.unlink(missing_ok=True)
         logger.info("Crossfade over %s", last_music.name)
@@ -393,13 +396,47 @@ async def run_producer(
     ha_cache: HomeContext | None = None
 
     _music_qg_rejections = 0  # consecutive music quality gate rejections (circuit breaker)
+    _last_cache_eviction = 0.0  # epoch time of last eviction check
+    _cache_eviction_interval = 3600  # run eviction at most once per hour
 
+    _producer_idle_logged = False
+    _was_idle = False
     while True:
         if state.session_stopped:
             await asyncio.sleep(1)
             continue
 
+        if state.listeners_active == 0:
+            if not _producer_idle_logged:
+                logger.info("Producer idle: no listeners connected")
+                _producer_idle_logged = True
+            _was_idle = True
+            await asyncio.sleep(1)
+            continue
+
+        if _was_idle:
+            logger.info("Producer resuming (%d listener(s) connected)", state.listeners_active)
+            # Queue is empty after idle — immediately seed a canned clip so the first
+            # listener hears something while the producer generates real content.
+            if queue.empty():
+                fallback = _pick_canned_clip("banter", state=state) or _pick_canned_clip("welcome")
+                if fallback:
+                    await _queue_segment(
+                        Segment(
+                            type=SegmentType.BANTER,
+                            path=fallback,
+                            metadata={"type": "banter", "canned": True, "warmup": True},
+                        )
+                    )
+            _was_idle = False
+        _producer_idle_logged = False
+
         if queue.qsize() >= config.pacing.lookahead_segments:
+            # Periodically evict stale cache files while the producer is idle
+            now = asyncio.get_running_loop().time()
+            if now - _last_cache_eviction >= _cache_eviction_interval:
+                _last_cache_eviction = now
+                await asyncio.to_thread(evict_cache_lru, config.cache_dir, config.max_cache_size_mb)
             await asyncio.sleep(0.5)
             continue
 
@@ -432,6 +469,13 @@ async def run_producer(
             )
             state.ha_context = ha_cache.summary
             state.ha_events_summary = ha_cache.events_summary
+            state.ha_home_mood = ha_cache.mood
+            state.ha_weather_arc = ha_cache.weather_arc
+            # Phase 4: only set directive if none is pending (first match wins)
+            if not state.ha_pending_directive:
+                directive = check_reactive_triggers(ha_cache.events)
+                if directive:
+                    state.ha_pending_directive = directive
 
         try:
             if seg_type == SegmentType.MUSIC:
@@ -484,6 +528,8 @@ async def run_producer(
                     path=norm_path,
                     metadata={
                         "title": track.display,
+                        "artist": track.artist,
+                        "title_only": track.title,
                         "spotify_id": track.spotify_id,
                         "album_art": track.album_art,
                         "rationale": rationale,
@@ -779,9 +825,9 @@ async def run_producer(
 
             elif seg_type == SegmentType.TIME_CHECK:
                 logger.info("Producing TIME CHECK")
-                now = datetime.datetime.now()
-                hour = now.hour
-                minute = now.minute
+                dt_now = datetime.datetime.now()
+                hour = dt_now.hour
+                minute = dt_now.minute
                 station_name = config.station.name
                 # Italian grammar: "È l'una" for 1:00/13:00, "Sono le N" otherwise
                 hour_str = "È l'una" if hour in (1, 13) else f"Sono le {hour}"
@@ -1026,7 +1072,7 @@ async def run_producer(
                 success_callback = _ad_callback
 
         except Exception as e:
-            # Recoverable: network/ffmpeg/disk/httpx errors — insert silence, retry next loop
+            # Recoverable: network/ffmpeg/disk/httpx errors — use canned banter or silence
             logger.error("Failed to produce %s segment: %s", seg_type.value, e)
             state.failed_segments += 1
             # Backoff on persistent failures to avoid CPU-burning tight loop
@@ -1035,20 +1081,30 @@ async def run_producer(
                 backoff = min(30.0, 2.0 ** min(consecutive, 5))
                 logger.warning("Consecutive failures: %d — backing off %.0fs", consecutive, backoff)
                 await asyncio.sleep(backoff)
-            silence_path = config.tmp_dir / f"silence_{uuid4().hex[:8]}.mp3"
-            try:
-                loop = asyncio.get_running_loop()
-                await loop.run_in_executor(None, generate_silence, silence_path, 5.0)
-            except Exception as silence_err:
-                logger.error("Cannot generate silence (ffmpeg broken?): %s", silence_err)
-                # Retry quickly so a transient ffmpeg failure does not stall the stream.
-                await asyncio.sleep(0.5)
-                continue
-            segment = Segment(
-                type=seg_type,
-                path=silence_path,
-                metadata={"error": str(e)},
-            )
+            # Prefer a canned banter clip over raw silence — at least it sounds intentional
+            fallback_path = _pick_canned_clip("banter", state=state) or _pick_canned_clip("welcome")
+            if fallback_path:
+                logger.info("Error recovery: using canned clip instead of silence")
+                segment = Segment(
+                    type=SegmentType.BANTER,
+                    path=fallback_path,
+                    metadata={"type": "banter", "canned": True, "error_recovery": True},
+                )
+            else:
+                logger.warning("No canned clips available — inserting silence (check demo_assets/banter/)")
+                silence_path = config.tmp_dir / f"silence_{uuid4().hex[:8]}.mp3"
+                try:
+                    loop = asyncio.get_running_loop()
+                    await loop.run_in_executor(None, generate_silence, silence_path, 5.0)
+                except Exception as silence_err:
+                    logger.error("Cannot generate silence (ffmpeg broken?): %s", silence_err)
+                    await asyncio.sleep(0.5)
+                    continue
+                segment = Segment(
+                    type=seg_type,
+                    path=silence_path,
+                    metadata={"error": str(e)},
+                )
             # Do NOT advance state counters — failed segment doesn't count
 
         if segment:

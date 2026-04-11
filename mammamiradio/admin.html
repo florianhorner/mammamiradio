@@ -4,43 +4,45 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Mamma Mi Radio — Regia</title>
-<meta name="theme-color" content="#D45228">
+<meta name="theme-color" content="#14110F">
 <meta name="mammamiradio-csrf-token" content="__MAMMAMIRADIO_CSRF_TOKEN__">
 <link rel="icon" href="/static/icon-192.svg" type="image/svg+xml">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,600;0,700;1,400;1,700&family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,600;0,700;1,400;1,700&family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
 *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
 
 :root {
-  --sky1: #C44020; --sky2: #D45228; --sky3: #E07038;
+  --bg: #14110F; --bg-elevated: #1C1714;
+  --surface: #251E19; --surface-hover: #2E2520; --surface-strong: #362B25;
   --sun: #F4D048; --sun2: #ECCC30;
-  --sienna: #823218; --sienna2: #924020; --sienna3: #A04A24;
+  --sienna: #251E19; --sienna2: #251E19; --sienna3: #2E2520;
   --cream: #F5EDD8; --cream-dk: #EADDC4;
-  --shadow: #2A1008;
+  --shadow: #0E0C0A;
   --lancia: #A02018; --lancia2: #B82C20;
-  --ok: #2563EB; --error: #c44a4a; --warning: #c4a04a;
-  --muted: rgba(245,237,216,0.45);
+  --ok: #2563EB; --error: #c44a4a; --warning: #D97706;
+  --muted: #9B8574;
   --font-display: 'Playfair Display', Georgia, serif;
-  --font-body: 'Inter', system-ui, -apple-system, sans-serif;
+  --font-body: 'Outfit', system-ui, -apple-system, sans-serif;
+  --font-mono: 'JetBrains Mono', monospace;
 }
 
 html {
   font-size: 15px; -webkit-font-smoothing: antialiased; min-height: 100vh;
   background:
-    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='200' height='200' filter='url(%23n)' opacity='0.055'/%3E%3C/svg%3E") repeat,
-    linear-gradient(175deg, #C44020 0%, #D45228 25%, #E07038 55%, #CC5A30 80%, #B04020 100%);
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='200' height='200' filter='url(%23n)' opacity='0.04'/%3E%3C/svg%3E") repeat,
+    linear-gradient(180deg, #1E1610 0%, #14110F 12%, #14110F 100%);
 }
 body {
   font-family: var(--font-body); color: var(--cream);
-  line-height: 1.5; padding: 0 16px 120px;
-  max-width: 600px; margin: 0 auto;
+  line-height: 1.5; padding: 0 24px 120px;
+  max-width: 1200px; margin: 0 auto;
 }
 body::before {
-  content: ''; position: fixed; top: -80px; right: 25%; z-index: 0;
-  width: 300px; height: 300px; border-radius: 50%;
-  background: radial-gradient(circle, rgba(244,208,72,0.3) 0%, rgba(240,160,40,0.1) 40%, transparent 70%);
+  content: ''; position: fixed; top: -120px; right: 20%; z-index: 0;
+  width: 400px; height: 400px; border-radius: 50%;
+  background: radial-gradient(circle, rgba(244,208,72,0.10) 0%, rgba(236,204,48,0.03) 40%, transparent 70%);
   pointer-events: none;
 }
 /* ── HEADER ── */
@@ -55,7 +57,7 @@ h1 {
   font-family: var(--font-display);
   font-size: 36px; font-weight: 700; font-style: italic;
   color: var(--cream); line-height: 0.95;
-  text-shadow: 0 2px 20px rgba(42,16,8,0.4);
+  text-shadow: 0 2px 20px rgba(20,17,15,0.4);
 }
 .header-sub {
   font-family: var(--font-display); font-size: 12px; font-style: italic;
@@ -66,7 +68,7 @@ h1 {
   font-size: 9px; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase;
   color: var(--cream);
   padding: 5px 12px; border-radius: 20px;
-  background: rgba(42,16,8,0.3); border: 1px solid rgba(245,237,216,0.25);
+  background: rgba(20,17,15,0.5); border: 1px solid rgba(245,237,216,0.15);
 }
 .on-air-dot {
   width: 6px; height: 6px; border-radius: 50%;
@@ -91,6 +93,81 @@ h1 {
 }
 .now-card {
   overflow: visible;
+}
+.setup-card { border-top-color: var(--sun); }
+.setup-headline {
+  font-family: var(--font-display);
+  font-size: 18px;
+  font-style: italic;
+  margin-bottom: 4px;
+}
+.setup-meta { font-size: 12px; color: rgba(245,237,216,0.72); margin-bottom: 10px; }
+.setup-next {
+  font-size: 12px;
+  color: rgba(245,237,216,0.85);
+  background: rgba(20,17,15,0.35);
+  border: 1px solid rgba(245,237,216,0.1);
+  border-radius: 8px;
+  padding: 8px 10px;
+  margin-bottom: 10px;
+}
+.setup-subhead {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: rgba(245,237,216,0.45);
+  margin: 10px 0 6px;
+}
+.setup-list { display: flex; flex-direction: column; gap: 6px; }
+.setup-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  background: rgba(20,17,15,0.2);
+  border: 1px solid rgba(245,237,216,0.08);
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+.setup-title { font-size: 12px; font-weight: 700; color: var(--cream); }
+.setup-detail { font-size: 11px; color: rgba(245,237,216,0.62); margin-top: 2px; line-height: 1.35; }
+.setup-steps { list-style: none; display: flex; flex-direction: column; gap: 6px; margin: 0; padding: 0; }
+.setup-steps li {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 12px;
+  color: rgba(245,237,216,0.82);
+}
+.setup-step-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  margin-top: 6px;
+  background: rgba(245,237,216,0.3);
+}
+.setup-steps li[data-s="done"] .setup-step-dot { background: var(--ok); }
+.setup-steps li[data-s="todo"] .setup-step-dot { background: var(--warning); }
+.setup-steps li[data-s="blocked"] .setup-step-dot { background: var(--error); }
+.setup-actions { margin-top: 10px; display: flex; gap: 8px; flex-wrap: wrap; }
+.setup-keys { display: grid; gap: 8px; margin-top: 8px; }
+.setup-snippet {
+  display: none;
+  margin-top: 10px;
+  background: rgba(20,17,15,0.35);
+  border: 1px solid rgba(245,237,216,0.1);
+  border-radius: 8px;
+  padding: 10px;
+}
+.setup-snippet.show { display: block; }
+.setup-pre {
+  margin-top: 8px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: ui-monospace, Menlo, Monaco, monospace;
+  font-size: 11px;
+  color: rgba(245,237,216,0.82);
 }
 
 /* ── NOW PLAYING CARD ── */
@@ -120,7 +197,7 @@ h1 {
 }
 
 /* Progress */
-.progress { height: 4px; background: rgba(42,16,8,0.4); border-radius: 2px; margin-bottom: 16px; overflow: hidden; }
+.progress { height: 4px; background: rgba(20,17,15,0.4); border-radius: 2px; margin-bottom: 16px; overflow: hidden; }
 .progress-fill { height: 100%; border-radius: 2px; transition: width 1s linear; width: 0; }
 .progress-fill[data-t="music"] { background: var(--ok); }
 .progress-fill[data-t="banter"] { background: var(--sun); }
@@ -142,12 +219,12 @@ h1 {
 }
 .btn-skip:hover { background: #cc3424; }
 .btn-trigger {
-  background: rgba(42,16,8,0.5); color: var(--sun);
+  background: rgba(20,17,15,0.5); color: var(--sun);
   border: 1px solid rgba(244,208,72,0.25);
 }
 .btn-trigger:hover { background: rgba(244,208,72,0.12); border-color: rgba(244,208,72,0.45); }
 .btn-util {
-  background: rgba(42,16,8,0.4); color: rgba(245,237,216,0.6);
+  background: rgba(20,17,15,0.4); color: rgba(245,237,216,0.6);
   border: 1px solid rgba(245,237,216,0.12);
 }
 .btn-util:hover { color: var(--cream); border-color: rgba(245,237,216,0.3); }
@@ -181,7 +258,7 @@ h1 {
 
 /* ── SCRIPT PREVIEW ── */
 .script-box {
-  background: rgba(42,16,8,0.3); border: 1px solid rgba(245,237,216,0.08);
+  background: rgba(20,17,15,0.3); border: 1px solid rgba(245,237,216,0.08);
   border-radius: 8px; padding: 12px 14px; margin-top: 10px;
   font-size: 12px; line-height: 1.6;
   word-wrap: break-word; overflow-wrap: break-word;
@@ -212,20 +289,50 @@ h1 {
 .status-pill[data-s="info"] { background: rgba(245,237,216,0.12); color: rgba(245,237,216,0.75); }
 
 /* ── PLAYLIST ── */
+.search-bar { display: flex; gap: 8px; margin-bottom: 12px; }
+.search-input {
+  flex: 1; font-family: var(--font-body); font-size: 13px;
+  padding: 10px 14px; border-radius: 8px;
+  background: rgba(20,17,15,0.5); color: var(--cream);
+  border: 1px solid rgba(245,237,216,0.12); outline: none;
+}
+.search-input:focus { border-color: rgba(244,208,72,0.5); }
+.search-input::placeholder { color: rgba(245,237,216,0.35); }
+
+.sr-row {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 0; font-size: 12px;
+  border-bottom: 1px solid rgba(245,237,216,0.06);
+}
+.sr-add {
+  margin-left: auto; font-size: 10px; font-weight: 600; padding: 3px 10px;
+  border-radius: 4px; background: rgba(244,208,72,0.12); color: var(--sun);
+  border: 1px solid rgba(244,208,72,0.3); cursor: pointer;
+}
+.sr-add:hover { background: rgba(244,208,72,0.22); }
+.sr-label { font-size: 10px; color: rgba(245,237,216,0.4); margin: 8px 0 4px; letter-spacing: 0.08em; text-transform: uppercase; font-weight: 600; }
+
 .pl-row {
   display: flex; align-items: center; gap: 8px;
   padding: 6px 0; border-bottom: 1px solid rgba(245,237,216,0.06);
-  font-size: 12px;
+  font-size: 12px; transition: background 0.15s;
 }
 .pl-row:hover { background: rgba(245,237,216,0.03); border-radius: 4px; }
 .pl-row.focus { background: rgba(37,99,235,0.22); border-radius: 4px; }
+.pl-row.drag-over { border-top: 2px solid var(--sun); padding-top: 4px; }
+.pl-row.dragging { opacity: 0.4; }
+.pl-grip {
+  cursor: grab; color: rgba(245,237,216,0.25); font-size: 12px; width: 14px; text-align: center;
+  user-select: none; -webkit-user-select: none;
+}
+.pl-grip:active { cursor: grabbing; }
 .pl-n { font-size: 10px; color: rgba(245,237,216,0.3); width: 22px; text-align: right; }
 .pl-t { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pl-a { display: flex; gap: 4px; opacity: 0; transition: opacity 0.15s; }
 .pl-row:hover .pl-a { opacity: 1; }
 .pl-btn {
   font-size: 10px; font-weight: 600; padding: 3px 8px; border-radius: 4px;
-  background: rgba(42,16,8,0.5); color: rgba(245,237,216,0.6);
+  background: rgba(20,17,15,0.5); color: rgba(245,237,216,0.6);
   border: 1px solid rgba(245,237,216,0.12); cursor: pointer;
 }
 .pl-btn:hover { color: var(--cream); border-color: rgba(245,237,216,0.3); }
@@ -244,7 +351,7 @@ h1 {
 .pace-row label { font-size: 12px; color: rgba(245,237,216,0.5); width: 65px; }
 .pace-row input[type="range"] {
   -webkit-appearance: none; appearance: none; flex: 1; height: 4px;
-  background: rgba(42,16,8,0.5); border-radius: 2px; outline: none; margin: 0 8px;
+  background: rgba(20,17,15,0.5); border-radius: 2px; outline: none; margin: 0 8px;
 }
 .pace-row input[type="range"]::-webkit-slider-thumb {
   -webkit-appearance: none; width: 16px; height: 16px; border-radius: 50%;
@@ -260,7 +367,7 @@ h1 {
 .ha label { font-size: 10px; color: rgba(245,237,216,0.4); width: 58px; }
 .ha input[type="range"] {
   -webkit-appearance: none; appearance: none; flex: 1; height: 3px;
-  background: rgba(42,16,8,0.5); border-radius: 2px; outline: none; margin: 0 6px;
+  background: rgba(20,17,15,0.5); border-radius: 2px; outline: none; margin: 0 6px;
 }
 .ha input[type="range"]::-webkit-slider-thumb {
   -webkit-appearance: none; width: 14px; height: 14px; border-radius: 50%;
@@ -277,7 +384,7 @@ h1 {
 .host-presets { display: flex; gap: 6px; margin: 2px 0 8px; }
 .host-preset {
   font-size: 10px; padding: 2px 8px; border-radius: 4px;
-  background: rgba(42,16,8,0.4); color: rgba(245,237,216,0.7);
+  background: rgba(20,17,15,0.4); color: rgba(245,237,216,0.7);
   border: 1px solid rgba(245,237,216,0.14); cursor: pointer;
 }
 .host-preset:hover { color: var(--cream); border-color: rgba(245,237,216,0.35); }
@@ -326,6 +433,22 @@ h1 {
 /* ── PROGRESS LABEL ── */
 .progress-label { font-size: 9px; color: rgba(245,237,216,0.3); text-align: right; margin-top: 2px; }
 
+/* ── TABS ── */
+.tab-nav { display: flex; gap: 2px; margin-bottom: 16px; position: relative; z-index: 1; }
+.tab-btn {
+  padding: 6px 18px; border-radius: 4px; border: none;
+  background: transparent; color: rgba(245,237,216,0.45);
+  font-family: 'Outfit', sans-serif; font-size: 13px; font-weight: 600;
+  cursor: pointer; letter-spacing: 0.05em; text-transform: uppercase;
+  transition: all 0.15s;
+}
+.tab-btn.active {
+  background: rgba(244,208,72,0.12); color: var(--sun);
+  border-bottom: 2px solid var(--sun);
+}
+.tab-pane { display: none; }
+.tab-pane.active { display: block; }
+
 @media (max-width: 640px) {
   .header {
     flex-direction: column;
@@ -337,18 +460,26 @@ h1 {
   }
 
   .transport,
+  .search-bar,
   .pace-row,
+  .sr-row,
   .pl-row,
   .queue-item,
   .log-entry {
     align-items: flex-start;
   }
 
+  .search-bar {
+    flex-direction: column;
+  }
+
+  .search-bar .btn,
   .transport .btn {
     width: 100%;
   }
 
   .pl-row,
+  .sr-row,
   .queue-item {
     flex-wrap: wrap;
   }
@@ -378,7 +509,7 @@ h1 {
 
 <div class="stopped-banner" id="stoppedBanner">Session stopped. Hit Resume to continue.</div>
 
-<!-- NOW PLAYING -->
+<!-- NOW PLAYING — always visible above tabs -->
 <div class="card now-card">
   <div class="card-label">Now Playing</div>
   <div class="now-type" id="nowType" data-t="music">—</div>
@@ -390,14 +521,11 @@ h1 {
   <div class="progress"><div class="progress-fill" id="progFill" data-t="music"></div></div>
   <div class="progress-label">estimated</div>
   <div class="transport">
-    <button class="btn btn-skip" onclick="doSkip(this)">⏭ SKIP <span class="key">S</span></button>
-  </div>
-  <div class="transport" style="margin-top:8px">
-    <button class="btn btn-trigger" onclick="doTrigger('banter',this)">🎙 Banter <span class="key">B</span></button>
-    <button class="btn btn-trigger" onclick="doTrigger('ad',this)">📢 Ad <span class="key">A</span></button>
-    <button class="btn btn-trigger" onclick="doTrigger('news_flash',this)">⚡ News <span class="key">N</span></button>
-    <button class="btn btn-util" onclick="doShuffle(this)">🔀 Shuffle</button>
-    <button class="btn btn-util" onclick="doPurge(this)">🗑 Purge</button>
+    <button class="btn btn-skip" onclick="doSkip(this)">&#9197; SKIP <span class="key">S</span></button>
+    <button class="btn btn-util" onclick="doShuffle(this)">&#128256; Shuffle</button>
+    <button class="btn btn-util" onclick="doPurge(this)">&#128465; Purge</button>
+    <!-- prompt() is intentional here: flag is an operator-only action, browser dialog is acceptable -->
+    <button class="btn btn-util" onclick="flagCurrentTrack(this)">&#128681; Flag Track</button>
   </div>
   <div class="transport" style="margin-top:8px">
     <button class="btn btn-stop" id="stopBtn" onclick="doStop(this)">&#9632; Stop Session</button>
@@ -405,73 +533,138 @@ h1 {
   </div>
 </div>
 
-<!-- SYSTEMS -->
-<div class="card">
-  <div class="card-label">Systems</div>
-  <div class="status-stack" id="systemsBody"><div class="empty">Checking AI and music systems...</div></div>
+<!-- TAB NAV -->
+<div class="tab-nav">
+  <button class="tab-btn" data-tab="music" onclick="switchTab('music')">Music</button>
+  <button class="tab-btn" data-tab="radio" onclick="switchTab('radio')">Radio</button>
 </div>
 
-<!-- UP NEXT -->
-<div class="card">
-  <div class="card-label">Up Next <span id="queueMeta" style="float:right;font-weight:400"></span></div>
-  <div id="queueBody"><div class="empty">Waiting...</div></div>
-</div>
+<!-- TAB: MUSIC -->
+<div class="tab-pane" data-tab="music">
 
-<!-- LAST BREAK -->
-<div class="card">
-  <div class="card-label">Last Break</div>
-  <div class="script-box" id="recentBody"><div class="empty">Nothing aired yet</div></div>
-</div>
-
-<!-- PLAYLIST -->
-<div class="card">
-  <div class="card-label">Playlist <span id="plMeta" style="float:right;font-weight:400"></span></div>
-  <div id="plBody" style="max-height:300px;overflow-y:auto;overflow-x:hidden"></div>
-</div>
-
-<!-- PACING -->
-<div class="card">
-  <div class="collapse-head" onclick="toggleSection(this)">
-    <span class="card-label" style="margin-bottom:0">Pacing</span>
-    <span class="collapse-arrow">▶</span>
+  <!-- UP NEXT -->
+  <div class="card">
+    <div class="card-label">Up Next <span id="queueMeta" style="float:right;font-weight:400"></span></div>
+    <div id="queueBody"><div class="empty">Waiting...</div></div>
   </div>
-  <div class="collapse-body">
-    <div class="pace-hint">Higher = more songs between segments (less frequent)</div>
-    <div class="pace-row"><label>Banter</label><input type="range" id="pBanter" min="1" max="6" value="2"><span class="pv" id="pvBanter">2</span></div>
-    <div class="pace-counter" id="pcBanter"></div>
-    <div class="pace-row"><label>Ads</label><input type="range" id="pAds" min="1" max="10" value="4"><span class="pv" id="pvAds">4</span></div>
-    <div class="pace-counter" id="pcAds"></div>
-    <div class="pace-row"><label>Spots/break</label><input type="range" id="pSpots" min="1" max="5" value="2"><span class="pv" id="pvSpots">2</span></div>
-  </div>
-</div>
 
-<!-- HOSTS -->
-<div class="card">
-  <div class="collapse-head" onclick="toggleSection(this)">
-    <span class="card-label" style="margin-bottom:0">Host Personality</span>
-    <span class="collapse-arrow">▶</span>
+  <!-- PLAYLIST -->
+  <div class="card">
+    <div class="card-label">Playlist <span id="plMeta" style="float:right;font-weight:400"></span></div>
+    <div class="search-bar">
+      <input type="text" class="search-input" id="searchInput" placeholder="Filter playlist or search tracks..." autocomplete="off">
+      <button class="btn btn-util" onclick="doSearch()">Search</button>
+    </div>
+    <div id="searchResults"></div>
+    <div id="plBody" style="max-height:400px;overflow-y:auto;overflow-x:hidden"></div>
   </div>
-  <div class="collapse-body">
-    <div class="host-hint">0 = opposite trait, 50 = balanced, 100 = strong trait. Presets are quick starting points.</div>
-    <div id="hostsBody"></div>
-  </div>
-</div>
 
-<!-- LOG -->
-<div class="card">
-  <div class="collapse-head" onclick="toggleSection(this)">
-    <span class="card-label" style="margin-bottom:0">Station Log</span>
-    <span class="collapse-arrow">▶</span>
+</div><!-- /tab music -->
+
+<!-- TAB: RADIO -->
+<div class="tab-pane" data-tab="radio">
+
+  <!-- TRIGGERS -->
+  <div class="card">
+    <div class="card-label">Broadcast Triggers</div>
+    <div class="transport">
+      <button class="btn btn-trigger" onclick="doTrigger('banter',this)">&#127897; Banter <span class="key">B</span></button>
+      <button class="btn btn-trigger" onclick="doTrigger('ad',this)">&#128226; Ad <span class="key">A</span></button>
+      <button class="btn btn-trigger" onclick="doTrigger('news_flash',this)">&#9889; News <span class="key">N</span></button>
+    </div>
   </div>
-  <div class="collapse-body" id="logBody" style="max-height:200px;overflow-y:auto"></div>
-</div>
+
+  <!-- LAST BREAK -->
+  <div class="card">
+    <div class="card-label">Last Break</div>
+    <div class="script-box" id="recentBody"><div class="empty">Nothing aired yet</div></div>
+  </div>
+
+  <!-- PACING -->
+  <div class="card">
+    <div class="collapse-head" onclick="toggleSection(this)">
+      <span class="card-label" style="margin-bottom:0">Pacing</span>
+      <span class="collapse-arrow">&#9658;</span>
+    </div>
+    <div class="collapse-body">
+      <div class="pace-hint">Higher = more songs between segments (less frequent)</div>
+      <div class="pace-row"><label>Banter</label><input type="range" id="pBanter" min="1" max="6" value="2"><span class="pv" id="pvBanter">2</span></div>
+      <div class="pace-counter" id="pcBanter"></div>
+      <div class="pace-row"><label>Ads</label><input type="range" id="pAds" min="1" max="10" value="4"><span class="pv" id="pvAds">4</span></div>
+      <div class="pace-counter" id="pcAds"></div>
+      <div class="pace-row"><label>Spots/break</label><input type="range" id="pSpots" min="1" max="5" value="2"><span class="pv" id="pvSpots">2</span></div>
+    </div>
+  </div>
+
+  <!-- HOSTS -->
+  <div class="card">
+    <div class="collapse-head" onclick="toggleSection(this)">
+      <span class="card-label" style="margin-bottom:0">Host Personality</span>
+      <span class="collapse-arrow">&#9658;</span>
+    </div>
+    <div class="collapse-body">
+      <div class="host-hint">0 = opposite trait, 50 = balanced, 100 = strong trait. Presets are quick starting points.</div>
+      <div id="hostsBody"></div>
+    </div>
+  </div>
+
+  <!-- LOG -->
+  <div class="card">
+    <div class="collapse-head" onclick="toggleSection(this)">
+      <span class="card-label" style="margin-bottom:0">Station Log</span>
+      <span class="collapse-arrow">&#9658;</span>
+    </div>
+    <div class="collapse-body" id="logBody" style="max-height:200px;overflow-y:auto"></div>
+  </div>
+
+  <!-- SYSTEMS -->
+  <div class="card">
+    <div class="card-label">Systems</div>
+    <div class="status-stack" id="systemsBody"><div class="empty">Checking AI and music systems...</div></div>
+  </div>
+
+  <!-- INSTALL ONBOARDING -->
+  <div class="card setup-card">
+    <div class="card-label">Installation Onboarding</div>
+    <div class="setup-headline" id="setupHeadline">Checking setup status...</div>
+    <div class="setup-meta" id="setupMeta"></div>
+    <div class="setup-next" id="setupNext">Collecting first-run diagnostics.</div>
+
+    <div class="setup-subhead">Step Checklist</div>
+    <ul class="setup-steps" id="setupSteps"></ul>
+
+    <div class="setup-subhead">Essentials</div>
+    <div class="setup-list" id="setupEssentials"></div>
+
+    <div class="setup-subhead">Preflight Checks</div>
+    <div class="setup-list" id="setupChecks"></div>
+
+    <div class="setup-subhead">Save Keys</div>
+    <div class="setup-keys">
+      <input class="input" id="setupAnthropicKey" type="password" placeholder="ANTHROPIC_API_KEY (optional)" autocomplete="off">
+      <input class="input" id="setupOpenaiKey" type="password" placeholder="OPENAI_API_KEY (optional)" autocomplete="off">
+    </div>
+
+    <div class="setup-actions">
+      <button class="btn btn-trigger" id="setupSaveBtn" onclick="setupSaveKeys(this)">Save Keys</button>
+      <button class="btn btn-util" onclick="setupRecheck(this)">Re-check</button>
+    </div>
+
+    <div class="setup-snippet" id="setupSnippetWrap">
+      <div class="setup-subhead" style="margin-top:0">Home Assistant Add-on Snippet</div>
+      <button class="btn btn-util" onclick="copySetupSnippet()">Copy Snippet</button>
+      <pre class="setup-pre" id="setupSnippet"></pre>
+    </div>
+  </div>
+
+</div><!-- /tab radio -->
 
 <div class="toast" id="toast"></div>
 
 <script>
 const _csrf = document.querySelector('meta[name="mammamiradio-csrf-token"]')?.content || '';
 const H = () => ({'Content-Type':'application/json','X-Radio-CSRF-Token':_csrf});
-let _st={}, _pub={}, _caps={}, _hostsOk=false, _paceOk=false;
+let _st={}, _pub={}, _caps={}, _hostsOk=false, _paceOk=false, _searchTo=null;
 let _nowStart=0, _nowDur=0, _tick=null, _prevLabel='';
 
 function toast(m){const e=document.getElementById('toast');e.textContent=m;e.classList.add('show');setTimeout(()=>e.classList.remove('show'),1600)}
@@ -479,6 +672,13 @@ function esc(s){const d=document.createElement('div');d.textContent=s||'';return
 function flash(el){if(!el)return;el.classList.remove('flash');void el.offsetWidth;el.classList.add('flash')}
 
 async function api(m,p,b){const o={method:m,headers:H()};if(b)o.body=JSON.stringify(b);return(await fetch(p,o)).json()}
+
+// ── Tab switching ──
+function switchTab(name) {
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === name));
+  document.querySelectorAll('.tab-pane').forEach(p => p.classList.toggle('active', p.dataset.tab === name));
+  localStorage.setItem('adminTab', name);
+}
 
 // ── Transport ──
 async function doSkip(el){flash(el);await api('POST','/api/skip');toast('Skipped — advancing to next segment')}
@@ -493,6 +693,17 @@ function updateStopState(stopped){
   document.getElementById('resumeBtn').style.display=stopped?'':'none';
   const badge=document.getElementById('onAirBadge');
   badge.innerHTML=stopped?'<span style="color:var(--error)">STOPPED</span>':'<span class="on-air-dot"></span>ON AIR';
+}
+
+// ── Flag Track — operator-only action, prompt() dialog is acceptable here ──
+async function flagCurrentTrack(el) {
+  const ytId = _st?.now?.metadata?.youtube_id;
+  if (!ytId) { toast('No track playing'); return; }
+  const rule = prompt('Describe this track reaction (e.g. "cringe pop classic, Aggu vibes"):');
+  if (!rule) return;
+  flash(el);
+  const r = await api('POST', '/api/track-rules', { youtube_id: ytId, rule });
+  toast(r.ok ? 'Rule saved!' : 'Failed: ' + (r.error || 'unknown'));
 }
 
 // ── Now Playing ──
@@ -545,6 +756,86 @@ function updateQueue(up,forcePending,mode){
 
 function statusRow(title,state,label,detail){
   return `<div class="status-row"><div class="status-copy"><div class="status-title">${esc(title)}</div><div class="status-detail">${esc(detail)}</div></div><span class="status-pill" data-s="${state}">${esc(label)}</span></div>`;
+}
+function setupPill(status){
+  if(status==='configured'||status==='ok'||status==='done') return {state:'ok',label:'Ready'};
+  if(status==='warn'||status==='missing'||status==='todo') return {state:'warn',label:'Needs action'};
+  if(status==='fail'||status==='blocked') return {state:'error',label:'Blocked'};
+  if(status==='skipped') return {state:'info',label:'Skipped'};
+  return {state:'info',label:'Info'};
+}
+function setupRow(label, detail, status){
+  const pill=setupPill(status);
+  return `<div class="setup-row"><div class="status-copy"><div class="setup-title">${esc(label)}</div><div class="setup-detail">${esc(detail)}</div></div><span class="status-pill" data-s="${pill.state}">${esc(pill.label)}</span></div>`;
+}
+function renderSetup(setup){
+  if(!setup) return;
+  const mode=setup.available_modes?.find(m=>m.id===setup.detected_mode);
+  const modeLabel=mode?.label||setup.detected_mode||'unknown';
+  const stationLabel=setup.station_mode?.label||'Unknown';
+  document.getElementById('setupHeadline').textContent=setup.launch?.headline||'Setup status available';
+  document.getElementById('setupMeta').textContent=`Mode: ${modeLabel} • Station: ${stationLabel}`;
+  document.getElementById('setupNext').textContent=setup.recommended_next_action||'Setup complete.';
+
+  const steps=(setup.onboarding_steps||[]).map(step=>{
+    const detail = step.detail ? ` - ${step.detail}` : '';
+    return `<li data-s="${esc(step.status||'todo')}"><span class="setup-step-dot"></span><span><strong>${esc(step.title||step.id||'Step')}</strong>${esc(detail)}</span></li>`;
+  });
+  document.getElementById('setupSteps').innerHTML=steps.join('')||'<li data-s="todo"><span class="setup-step-dot"></span><span>No setup steps reported.</span></li>';
+
+  const essentials=(setup.essentials||[]).map(item=>{
+    const where=(item.where&&setup.detected_mode)?item.where[setup.detected_mode]:'';
+    const detail=[item.summary, item.next_action, where?`Where: ${where}`:''].filter(Boolean).join(' ');
+    return setupRow(item.label||item.key, detail, item.status);
+  });
+  document.getElementById('setupEssentials').innerHTML=essentials.join('')||'<div class="empty">No essentials reported</div>';
+
+  const checks=(setup.preflight_checks||[]).map(item=>{
+    const detail=[item.detail, item.repair?`Fix: ${item.repair}`:''].filter(Boolean).join(' ');
+    return setupRow(item.label||item.key, detail, item.status);
+  });
+  document.getElementById('setupChecks').innerHTML=checks.join('')||'<div class="empty">No checks reported</div>';
+
+  const snippetWrap=document.getElementById('setupSnippetWrap');
+  const snippet=(setup.addon_options_snippet||'').trim();
+  if(snippet){
+    snippetWrap.classList.add('show');
+    document.getElementById('setupSnippet').textContent=snippet;
+  }else{
+    snippetWrap.classList.remove('show');
+  }
+}
+async function setupRecheck(el){
+  flash(el);
+  const data=await api('POST','/api/setup/recheck');
+  renderSetup(data);
+  toast('Setup re-check complete');
+}
+async function setupSaveKeys(el){
+  flash(el);
+  const anthropic=(document.getElementById('setupAnthropicKey')?.value||'').trim();
+  const openai=(document.getElementById('setupOpenaiKey')?.value||'').trim();
+  const payload={};
+  if(anthropic) payload.ANTHROPIC_API_KEY=anthropic;
+  if(openai) payload.OPENAI_API_KEY=openai;
+  if(!Object.keys(payload).length){toast('Enter at least one key');return}
+  const resp=await api('POST','/api/setup/save-keys',payload);
+  if(!resp.ok){toast(resp.error||'Failed to save keys');return}
+  document.getElementById('setupAnthropicKey').value='';
+  document.getElementById('setupOpenaiKey').value='';
+  const updated=await api('POST','/api/setup/recheck');
+  renderSetup(updated);
+  toast('Keys saved');
+}
+async function copySetupSnippet(){
+  const txt=document.getElementById('setupSnippet')?.textContent||'';
+  if(!txt){toast('No snippet available');return}
+  try{
+    await navigator.clipboard.writeText(txt);
+    toast('Snippet copied');
+  }catch(_){
+    toast('Clipboard unavailable');
+  }
 }
 
 function updateSystems(caps,st,pub){
@@ -600,12 +891,19 @@ function updateRecent(st){
 }
 
 // ── Playlist ──
+let _plFilter='';
 function updatePl(tracks){
   const el=document.getElementById('plBody');const meta=document.getElementById('plMeta');
   if(!tracks?.length){el.innerHTML='<div class="empty">No tracks</div>';meta.textContent='';return}
   meta.textContent=tracks.length+' tracks';
-  const s=tracks.slice(0,50);
-  el.innerHTML=s.map((t,i)=>`<div class="pl-row" data-i="${i}" data-id="${esc(t.spotify_id||t.id||'')}"><span class="pl-n">${i+1}</span><span class="pl-t">${esc(t.display||t.title||'?')}</span><div class="pl-a"><button class="pl-btn" onclick="moveNext(${i})">▶ Next</button><button class="pl-btn" onclick="removeTr(${i})">✕</button></div></div>`).join('')+(tracks.length>50?`<div class="empty">+ ${tracks.length-50} more</div>`:'');
+  const s=tracks.slice(0,80);
+  const filter=_plFilter.toLowerCase();
+  const filtered=filter?s.filter(t=>`${t.title} ${t.artist}`.toLowerCase().includes(filter)):s;
+  el.innerHTML=filtered.map((t,i)=>{
+    const idx=filter?tracks.indexOf(t):i;
+    return `<div class="pl-row" draggable="true" data-i="${idx}" data-id="${esc(t.spotify_id||t.id||'')}"><span class="pl-grip" title="Drag to reorder">&#10783;</span><span class="pl-n">${idx+1}</span><span class="pl-t">${esc(t.display||t.title||'?')}</span><div class="pl-a"><button class="pl-btn" onclick="moveNext(${idx})">&#9654; Next</button><button class="pl-btn" onclick="removeTr(${idx})">&#10005;</button></div></div>`;
+  }).join('')+(tracks.length>80?`<div class="empty">+ ${tracks.length-80} more</div>`:'');
+  initDragDrop();
 }
 function focusPlaylistTrack(index, trackId){
   const rows=[...document.querySelectorAll('.pl-row')];
@@ -630,6 +928,53 @@ async function moveNext(i){
   if(r.ok)toast('Playing next: '+r.moved);else toast('Failed to move track');
 }
 async function removeTr(i){await api('POST','/api/playlist/remove',{index:i});toast('Removed')}
+
+// ── Search ──
+const si=document.getElementById('searchInput');
+si.addEventListener('keydown',e=>{if(e.key==='Enter')doSearch()});
+si.addEventListener('input',()=>{
+  _plFilter=si.value.trim();
+  // Instantly filter the visible playlist
+  if(_st.playlist)updatePl(_st.playlist);
+  // Also debounce a backend search
+  clearTimeout(_searchTo);
+  if(_plFilter.length>=2)_searchTo=setTimeout(doSearch,400);
+  else document.getElementById('searchResults').innerHTML='';
+});
+let _sR=[];
+async function doSearch(){
+  const q=si.value.trim();if(!q)return;
+  const d=await(await fetch('/api/search?q='+encodeURIComponent(q),{headers:H()})).json();
+  _sR=d.results||[];const el=document.getElementById('searchResults');
+  if(!_sR.length){el.innerHTML=q.length>=2?'<div class="empty">No matches</div>':'';return}
+  el.innerHTML='<div class="sr-label">Matches</div>'+_sR.slice(0,8).map((t,i)=>`<div class="sr-row"><span>${esc(t.artist)} — ${esc(t.title)}</span><button class="sr-add" onclick="addTr(${i})">&#9654; Next</button></div>`).join('');
+}
+async function addTr(i){const t=_sR[i];if(!t)return;await api('POST','/api/playlist/move_to_next',{index:t.index});toast('Playing next: '+t.display);document.getElementById('searchResults').innerHTML='';si.value='';_plFilter=''}
+
+// ── Drag & Drop ──
+let _dragSrc=null;
+function initDragDrop(){
+  document.querySelectorAll('.pl-row[draggable]').forEach(row=>{
+    row.addEventListener('dragstart',e=>{
+      _dragSrc=parseInt(row.dataset.i);
+      row.classList.add('dragging');
+      e.dataTransfer.effectAllowed='move';
+      e.dataTransfer.setData('text/plain',row.dataset.i);
+    });
+    row.addEventListener('dragend',()=>{row.classList.remove('dragging');_dragSrc=null;document.querySelectorAll('.pl-row.drag-over').forEach(r=>r.classList.remove('drag-over'))});
+    row.addEventListener('dragover',e=>{e.preventDefault();e.dataTransfer.dropEffect='move';row.classList.add('drag-over')});
+    row.addEventListener('dragleave',()=>row.classList.remove('drag-over'));
+    row.addEventListener('drop',async e=>{
+      e.preventDefault();
+      row.classList.remove('drag-over');
+      const dst=parseInt(row.dataset.i);
+      if(_dragSrc===null||_dragSrc===dst)return;
+      const r=await api('POST','/api/playlist/move',{from:_dragSrc,to:dst});
+      if(r.ok)toast('Moved: '+r.moved);else toast('Move failed');
+      _dragSrc=null;
+    });
+  });
+}
 
 // ── Pacing ──
 ['Banter','Ads','Spots'].forEach(n=>{
@@ -691,11 +1036,13 @@ function toggleSection(head){head.classList.toggle('open');head.nextElementSibli
 // ── Polling ──
 async function refresh(){
   try{
-    const [sr,pr,cr]=await Promise.all([fetch('/status',{headers:H()}),fetch('/public-status'),fetch('/api/capabilities',{headers:H()})]);
+    const [sr,pr,cr,or]=await Promise.all([fetch('/status',{headers:H()}),fetch('/public-status'),fetch('/api/capabilities',{headers:H()}),fetch('/api/setup/status',{headers:H()})]);
     _st=await sr.json();_pub=await pr.json();
     _caps=await cr.json();
+    const setup=await or.json();
     updateNow(_pub.now_streaming);updateQueue(_pub.upcoming,_st.force_pending,_pub.upcoming_mode);updateSystems(_caps,_st,_pub);updateRecent(_st);
     updateLog(_pub.stream_log);updatePl(_st.playlist||[]);
+    renderSetup(setup);
     updatePaceCounters(_st.pacing);
     if(_st.session_stopped!==undefined)updateStopState(_st.session_stopped);
     if(!_paceOk&&_st.pacing){_paceOk=true;
@@ -711,6 +1058,11 @@ async function refresh(){
 document.addEventListener('keydown',e=>{
   if(e.target.tagName==='INPUT')return;
   switch(e.key.toLowerCase()){case's':doSkip();break;case'b':doTrigger('banter');break;case'a':doTrigger('ad');break;case'n':doTrigger('news_flash');break}
+});
+
+// ── Init: restore last active tab ──
+document.addEventListener('DOMContentLoaded', () => {
+  switchTab(localStorage.getItem('adminTab') || 'music');
 });
 
 refresh();setInterval(refresh,2000);

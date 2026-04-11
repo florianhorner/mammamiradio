@@ -114,6 +114,13 @@ else
     fail "radio.toml parse error"
 fi
 
+echo "6b. radio.toml sync"
+if cmp -s radio.toml ha-addon/mammamiradio/radio.toml; then
+    pass "ha-addon/mammamiradio/radio.toml matches root radio.toml"
+else
+    fail "ha-addon/mammamiradio/radio.toml drifted from root radio.toml"
+fi
+
 # ---- 7. run.sh syntax check ----
 echo "7. Shell syntax"
 if bash -n ha-addon/mammamiradio/rootfs/run.sh 2>/dev/null; then

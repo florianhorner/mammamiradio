@@ -665,7 +665,7 @@ def crossfade_voice_over_music(
     output_path: Path,
     tail_seconds: float = 8.0,
     voice_volume: float = 1.0,
-    music_fade_volume: float = 0.3,
+    music_fade_volume: float = 0.5,
 ) -> Path:
     """Overlay voice on the tail of a music track, fading music down underneath.
 
@@ -762,7 +762,7 @@ def mix_voice_with_sting(
         "-i",
         str(voice_path),
         "-filter_complex",
-        "[0:a]volume=0.6[bed];"
+        "[0:a]volume=0.15[bed];"
         "[1:a]adelay=400|400,volume=1.2[voice];"
         "[bed][voice]amix=inputs=2:duration=longest:dropout_transition=1,"
         "loudnorm=I=-16:LRA=11:TP=-1.5[out]",
@@ -810,6 +810,64 @@ def normalize_ad(input_path: Path, output_path: Path) -> Path:
     ]
     _run_ffmpeg(cmd, f"normalize_ad {input_path.name}")
     logger.info("Ad broadcast processing: %s -> %s", input_path.name, output_path.name)
+    return output_path
+
+
+def mix_ad_with_bed(voiceover_path: Path, output_path: Path) -> Path:
+    """Mix an ad voiceover with a gentle ambient bed so the spot isn't dry voice-only.
+
+    The bed is a warm 220Hz+330Hz+440Hz sine chord with a slow 0.5Hz volume pulse,
+    generated to exactly match the voiceover length, then mixed at -18dB under the
+    voiceover. Output gets the same EBU R128 loudnorm pass as normalize_ad.
+
+    NOTE: synthesize_ad() already applies a mood-based bed via generate_station_id_bed().
+    Only call this function on raw voiceovers that bypassed synthesize_ad processing.
+    """
+    # Get voiceover duration so the aevalsrc bed is trimmed exactly.
+    result = subprocess.run(
+        [
+            "ffprobe",
+            "-v",
+            "error",
+            "-show_entries",
+            "format=duration",
+            "-of",
+            "default=noprint_wrappers=1:nokey=1",
+            str(voiceover_path),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    try:
+        duration = float(result.stdout.strip()) if result.returncode == 0 else 30.0
+    except ValueError:
+        duration = 30.0
+
+    # Warm sine bed: three harmonics with a slow 0.5Hz LFO breathing envelope.
+    bed_expr = "0.03*sin(2*PI*220*t)+0.02*sin(2*PI*330*t)+0.01*sin(2*PI*440*t)"
+    # Multiply by breathing envelope: oscillates between 0.6 and 1.0 at 0.5Hz
+    bed_with_lfo = f"({bed_expr})*(0.8+0.2*sin(2*PI*0.5*t))"
+
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-i",
+        str(voiceover_path),
+        "-f",
+        "lavfi",
+        "-i",
+        f"aevalsrc={bed_with_lfo}|{bed_with_lfo}:d={duration:.3f}:s=48000:c=stereo",
+        "-filter_complex",
+        # bed at -18dB (volume≈0.126), voiceover at unity, then loudnorm
+        "[1:a]volume=0.126[bed];[0:a][bed]amix=inputs=2:duration=first[mixed];[mixed]loudnorm=I=-14:LRA=7:TP=-1.0[out]",
+        "-map",
+        "[out]",
+        *_MP3_OUTPUT_ARGS,
+        str(output_path),
+    ]
+    _run_ffmpeg(cmd, f"mix_ad_with_bed {voiceover_path.name}")
+    logger.info("Ad bed mix: %s -> %s", voiceover_path.name, output_path.name)
     return output_path
 
 

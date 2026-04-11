@@ -1,5 +1,5 @@
 #!/bin/bash
-# Double-click this file in Finder to start Malamie Radio.
+# Double-click this file in Finder to start Mamma Mi Radio.
 # Drag it to your Dock for one-click launch.
 cd "$(dirname "$0")"
 
@@ -55,7 +55,7 @@ fi
 if pgrep -f "uvicorn mammamiradio" > /dev/null 2>&1; then
     echo "Radio already running."
 else
-    echo "Starting Malamie Radio..."
+    echo "Starting Mamma Mi Radio..."
     ./start.sh &
     # Wait for server
     for i in $(seq 1 30); do

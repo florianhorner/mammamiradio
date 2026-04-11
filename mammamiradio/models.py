@@ -381,6 +381,13 @@ class StationState:
     # Home Assistant context (natural language summary of home state)
     ha_context: str = ""
     ha_events_summary: str = ""
+    # Phase 1: recent state-change events
+    # Phase 2: home mood scene classification
+    ha_home_mood: str = ""
+    # Phase 3: weather narrative arc
+    ha_weather_arc: str = ""
+    # Phase 4: pending reactive directive (consumed after one use)
+    ha_pending_directive: str = ""
     # Force-trigger: producer will use this type instead of scheduler for the next segment
     force_next: SegmentType | None = None
     # Shareware trial: counts canned banter clips actually streamed to listener
@@ -533,8 +540,15 @@ class StationState:
 
         candidates = _apply_filters(pool, strict=True)
         if not candidates:
-            # Relax: drop artist cooldown + hourly cap
-            candidates = _apply_filters(pool, strict=False)
+            # Relax: drop hourly cap but keep repeat + artist cooldown
+            candidates = [t for t in pool if t.cache_key not in recent_keys and t.artist not in recent_artist_set]
+            if not allow_explicit:
+                candidates = [t for t in candidates if not t.explicit]
+        if not candidates:
+            # Further relax: drop artist cooldown but keep repeat cooldown
+            candidates = [t for t in pool if t.cache_key not in recent_keys]
+            if not allow_explicit:
+                candidates = [t for t in candidates if not t.explicit]
         if not candidates:
             # Final fallback: entire pool (even explicit if filtered out everything)
             candidates = pool
@@ -554,9 +568,9 @@ class StationState:
             # Artist diversity: penalize over-represented artists in recent history
             recent_artist_count = recent_artist_10.get(track.artist, 0)
             if recent_artist_count >= 2:
-                w *= 0.3
+                w *= 0.05  # Near-zero: effectively blocked unless pool is tiny
             elif recent_artist_count == 1:
-                w *= 0.7
+                w *= 0.4
 
             # Popularity boost: slight preference for popular tracks
             if track.popularity:
