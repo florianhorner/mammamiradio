@@ -93,7 +93,7 @@ def test_mix_voice_with_sting(mock_subprocess, tmp_path):
     mock_run, _ = mock_subprocess
     cmd = " ".join(mock_run.call_args[0][0])
     assert "amix" in cmd
-    assert "volume=0.6" in cmd  # sting quieter than voice
+    assert "volume=0.15" in cmd  # sting very quiet — background texture only
 
 
 # ---------------------------------------------------------------------------

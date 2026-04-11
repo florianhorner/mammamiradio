@@ -1099,6 +1099,22 @@ async def move_to_next(request: Request, _: None = Depends(require_admin_access)
     return {"ok": False, "error": "Invalid index"}
 
 
+@router.post("/api/track-rules")
+async def add_track_rule(request: Request, _: None = Depends(require_admin_access)):
+    """Flag a reaction rule for the currently playing track."""
+    from mammamiradio.track_rules import add_rule
+
+    payload = await request.json()
+    youtube_id = payload.get("youtube_id", "")
+    rule_text = payload.get("rule", "")
+    if not youtube_id or not rule_text:
+        return JSONResponse({"ok": False, "error": "youtube_id and rule required"}, status_code=400)
+    config = request.app.state.config
+    db_path = config.cache_dir / "mammamiradio.db"
+    add_rule(db_path, youtube_id, rule_text)
+    return {"ok": True}
+
+
 @router.get("/api/hosts")
 async def get_hosts(request: Request, _: None = Depends(require_admin_access)):
     """Return all host configs including current personality slider values."""

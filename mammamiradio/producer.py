@@ -110,6 +110,7 @@ async def _try_crossfade(
     config: StationConfig,
     output_path: Path,
     tail_seconds: float = 8.0,
+    music_fade_volume: float = 0.5,
 ) -> Path:
     """Attempt to crossfade voice over the last music file. Returns voice_path on failure."""
     last_music = _latest_music_file(config.tmp_dir)
@@ -124,6 +125,8 @@ async def _try_crossfade(
             voice_path,
             output_path,
             tail_seconds,
+            1.0,
+            music_fade_volume,
         )
         voice_path.unlink(missing_ok=True)
         logger.info("Crossfade over %s", last_music.name)

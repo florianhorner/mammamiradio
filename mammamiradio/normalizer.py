@@ -665,7 +665,7 @@ def crossfade_voice_over_music(
     output_path: Path,
     tail_seconds: float = 8.0,
     voice_volume: float = 1.0,
-    music_fade_volume: float = 0.3,
+    music_fade_volume: float = 0.5,
 ) -> Path:
     """Overlay voice on the tail of a music track, fading music down underneath.
 
@@ -762,7 +762,7 @@ def mix_voice_with_sting(
         "-i",
         str(voice_path),
         "-filter_complex",
-        "[0:a]volume=0.6[bed];"
+        "[0:a]volume=0.15[bed];"
         "[1:a]adelay=400|400,volume=1.2[voice];"
         "[bed][voice]amix=inputs=2:duration=longest:dropout_transition=1,"
         "loudnorm=I=-16:LRA=11:TP=-1.5[out]",
