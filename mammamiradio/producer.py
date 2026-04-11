@@ -35,6 +35,7 @@ from mammamiradio.normalizer import (
     generate_silence,
     generate_station_id_bed,
     generate_tone,
+    mix_ad_with_bed,
     mix_voice_with_sting,
     normalize,
 )
@@ -947,6 +948,13 @@ async def run_producer(
 
                 for spot_idx, (script, ad_path) in enumerate(zip(scripts, ad_paths, strict=False)):
                     brand = spot_params[spot_idx][0]
+                    # Mix ambient bed under the voiceover so the spot isn't dry voice-only.
+                    bedded_path = ad_path.with_stem(ad_path.stem + "_bed")
+                    try:
+                        loop = asyncio.get_running_loop()
+                        ad_path = await loop.run_in_executor(None, mix_ad_with_bed, ad_path, bedded_path)
+                    except Exception as exc:
+                        logger.warning("Ad bed mix failed (%s), using dry voiceover: %s", ad_path.name, exc)
                     break_parts.append(ad_path)
                     break_brands.append(brand.name)
                     break_summaries.append(script.summary)
