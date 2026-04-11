@@ -606,8 +606,7 @@ async def test_music_quality_circuit_breaker_after_3_rejections(tmp_path):
     state = _make_state()
     # Need enough tracks so the producer can keep retrying
     state.playlist = [
-        Track(title=f"Track {i}", artist="A", duration_ms=200_000, spotify_id=f"demo{i}")
-        for i in range(6)
+        Track(title=f"Track {i}", artist="A", duration_ms=200_000, spotify_id=f"demo{i}") for i in range(6)
     ]
     config = _make_config(tmp_path)
     queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)

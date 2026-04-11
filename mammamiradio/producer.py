@@ -581,7 +581,9 @@ async def run_producer(
                             logger.warning(
                                 "Quality gate circuit breaker: %d consecutive rejections, "
                                 "allowing track through to prevent stream starvation (%s: %s)",
-                                _music_qg_rejections, norm_path.name, exc,
+                                _music_qg_rejections,
+                                norm_path.name,
+                                exc,
                             )
                             _music_qg_rejections = 0
                         else:

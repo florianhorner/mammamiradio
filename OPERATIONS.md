@@ -147,6 +147,19 @@ The add-on entrypoint (`ha-addon/mammamiradio/rootfs/run.sh`) maps Supervisor-in
 
 The dashboard is accessible via HA ingress (sidebar). The first-run flow exposes the same setup checks there as every other run mode, and the stream URL can be played on any HA media player.
 
+### Spotify Connect in the add-on
+
+go-librespot is bundled in the add-on image and starts automatically. It uses mDNS/zeroconf to advertise a Spotify Connect device on the local network. However, **mDNS from inside the HA add-on container may not work** even with `host_network: true`, because:
+
+- HA OS manages its own mDNS/Avahi daemon on the host. Container mDNS broadcasts may be filtered or not reflected to the LAN.
+- The HA supervisor network stack may not forward multicast UDP (port 5353) from containers.
+
+**yt-dlp is the primary and reliable audio source for the add-on.** It downloads tracks from YouTube and works in any container environment. Spotify Connect is best-effort: if it works on your network, great. If the device doesn't appear in Spotify, that's expected in some HA installations.
+
+### Cache poisoning recovery
+
+If the add-on previously ran without `MAMMAMIRADIO_ALLOW_YTDLP=true` (versions before 2.2.3), the cache directory (`/data/cache/`) may contain silence placeholders instead of real audio. Starting with v2.2.3, the app purges these automatically on startup. If silence persists, manually clear the cache: stop the add-on, delete `/data/cache/*.mp3` via SSH, and restart.
+
 ## What is still not documented because it does not exist yet
 
 - no systemd unit

@@ -45,6 +45,13 @@ async def startup():
     config.tmp_dir.mkdir(parents=True, exist_ok=True)
     config.cache_dir.mkdir(parents=True, exist_ok=True)
 
+    # Purge silence placeholders left by previous runs without yt-dlp
+    from mammamiradio.downloader import purge_silence_cache
+
+    purged = purge_silence_cache(config.cache_dir)
+    if purged:
+        logger.info("Purged %d silence placeholder(s) from cache", purged)
+
     # Initialize persona database and store for compounding listener memory
     db_path = config.cache_dir / "mammamiradio.db"
     init_db(db_path)

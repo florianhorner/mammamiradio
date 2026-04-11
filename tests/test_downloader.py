@@ -226,3 +226,126 @@ async def test_download_track_async(track, cache_dir, music_dir):
 
     result = await download_track(track, cache_dir, music_dir)
     assert result == cached
+
+
+# --- _is_silence_placeholder tests ---
+
+
+def test_is_silence_placeholder_returns_false_for_normal_file(cache_dir):
+    """Non-silence files should not be flagged as placeholders."""
+    from mammamiradio.downloader import _is_silence_placeholder
+
+    fake = cache_dir / "normal.mp3"
+    fake.write_bytes(b"\xff\xfb\x90\x00" * 100)  # fake MP3 data
+
+    # Mock ffmpeg to report normal volume
+    with patch("subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(
+            stderr="mean_volume: -14.2 dB\n",
+            returncode=0,
+        )
+        assert _is_silence_placeholder(fake) is False
+
+
+def test_is_silence_placeholder_returns_true_for_silence(cache_dir):
+    """Silence files (< -60dB) should be detected."""
+    from mammamiradio.downloader import _is_silence_placeholder
+
+    fake = cache_dir / "silence.mp3"
+    fake.write_bytes(b"\x00" * 100)
+
+    with patch("subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(
+            stderr="mean_volume: -91.0 dB\n",
+            returncode=0,
+        )
+        assert _is_silence_placeholder(fake) is True
+
+
+def test_is_silence_placeholder_returns_false_on_error(cache_dir):
+    """If ffmpeg fails, assume file is real audio (safe default)."""
+    from mammamiradio.downloader import _is_silence_placeholder
+
+    fake = cache_dir / "broken.mp3"
+    fake.write_bytes(b"\x00" * 10)
+
+    with patch("subprocess.run", side_effect=OSError("ffmpeg not found")):
+        assert _is_silence_placeholder(fake) is False
+
+
+# --- purge_silence_cache tests ---
+
+
+def test_purge_silence_cache_removes_silence_files(cache_dir):
+    """Startup purge should remove silence placeholders."""
+    from mammamiradio.downloader import purge_silence_cache
+
+    real = cache_dir / "real_track.mp3"
+    real.write_bytes(b"\xff\xfb" * 100)
+    silence = cache_dir / "silence_track.mp3"
+    silence.write_bytes(b"\x00" * 100)
+
+    call_count = 0
+
+    def _mock_silence_check(path):
+        nonlocal call_count
+        call_count += 1
+        return path == silence
+
+    with patch("mammamiradio.downloader._is_silence_placeholder", side_effect=_mock_silence_check):
+        purged = purge_silence_cache(cache_dir)
+
+    assert purged == 1
+    assert real.exists()
+    assert not silence.exists()
+
+
+def test_purge_silence_cache_handles_empty_dir(tmp_path):
+    """Purge on empty or missing dir should return 0."""
+    from mammamiradio.downloader import purge_silence_cache
+
+    assert purge_silence_cache(tmp_path / "nonexistent") == 0
+    empty = tmp_path / "empty_cache"
+    empty.mkdir()
+    assert purge_silence_cache(empty) == 0
+
+
+# --- cache hit with silence detection ---
+
+
+def test_cache_hit_purges_silence_when_ytdlp_enabled(track, cache_dir, music_dir):
+    """If a cached file is silence and yt-dlp is enabled, purge and re-download."""
+    import os
+
+    from mammamiradio.downloader import _download_sync
+
+    cached = cache_dir / f"{track.cache_key}.mp3"
+    cached.write_bytes(b"\x00" * 100)
+
+    with (
+        patch.dict(os.environ, {"MAMMAMIRADIO_ALLOW_YTDLP": "true"}),
+        patch("mammamiradio.downloader._is_silence_placeholder", return_value=True),
+        patch("mammamiradio.downloader._download_ytdlp", return_value=cached) as mock_ytdlp,
+    ):
+        result = _download_sync(track, cache_dir, music_dir)
+
+    mock_ytdlp.assert_called_once()
+    assert result == cached
+
+
+def test_cache_hit_keeps_real_audio_when_ytdlp_enabled(track, cache_dir, music_dir):
+    """If a cached file has real audio, return it even when yt-dlp is enabled."""
+    import os
+
+    from mammamiradio.downloader import _download_sync
+
+    cached = cache_dir / f"{track.cache_key}.mp3"
+    cached.write_bytes(b"\xff\xfb" * 100)
+
+    with (
+        patch.dict(os.environ, {"MAMMAMIRADIO_ALLOW_YTDLP": "true"}),
+        patch("mammamiradio.downloader._is_silence_placeholder", return_value=False),
+    ):
+        result = _download_sync(track, cache_dir, music_dir)
+
+    assert result == cached
