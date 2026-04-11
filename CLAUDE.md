@@ -99,17 +99,23 @@ start.sh              dev entrypoint with uvicorn and reload
 tests/                pytest coverage
 ```
 
+## Design System
+
+Always read `DESIGN.md` before making any visual or UI decisions.
+All font choices, colors, spacing, and aesthetic direction are defined there.
+Do not deviate without explicit user approval. In QA mode, flag any code that doesn't match `DESIGN.md`.
+
 ## Brand assets
 
 - **Logo SVG**: `mammamiradio/logo.svg` — canonical vector source (variant G: classic radio with Italian flag stripe and sound waves)
-- **Palette**: Volare — warm Italian sunset. See `DESIGN.md` for the full design system.
-  - Background: orange-red sunset gradient (`#C44020 → #D45228 → #E07038`)
-  - Cards: deep sienna (`#823218`, `#924020`) — buildings in shadow
+- **Palette**: Volare Refined — espresso dark with Italian warmth in accents. See `DESIGN.md` for the full design system.
+  - Background: espresso dark (`#14110F`) with subtle warm gradient at top
+  - Cards: warm brown surfaces (`#251E19`) — unified across listener and admin
   - Accent: golden sun (`#F4D048`, `#ECCC30`) — play button, active borders
-  - Interactive: Lancia red (`#B82C20`) — FM dial needle, connect border
+  - Interactive: Lancia red (`#B82C20`) — FM dial needle
   - Text: cream (`#F5EDD8`)
   - Success/connected: blue (`#2563EB`) — never green (colorblind)
-- **Typography**: Playfair Display italic (station name, display text) + Inter (body)
+- **Typography**: Playfair Display italic (station name, display text) + Outfit (body) + JetBrains Mono (technical)
 - **Favicon**: inline SVG data URI in `dashboard.html` and `listener.html` (simplified version of logo)
 - **HA add-on icon**: `ha-addon/mammamiradio/icon.png` (256px) and `logo.png` (512px), rasterized from the SVG
 - To regenerate PNGs from SVG: `cairosvg mammamiradio/logo.svg -o icon.png -W 256 -H 256`

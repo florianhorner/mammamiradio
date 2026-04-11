@@ -10,15 +10,15 @@ The app is designed to degrade gracefully. Music comes from live Italian charts 
 
 ## Screenshots
 
-### Admin Dashboard
+### Dashboard
 
-The control plane at `/admin` lets you manage the station: queue depth, host personality sliders, segment log, upcoming queue, and live banter scripts.
+The dashboard at `/dashboard` gives you the station at a glance: now playing with animated waveform, up-next queue, shuffle/skip controls, and setup prompts.
 
 ![Dashboard](docs/screenshots/dashboard.png)
 
-### Listener Page
+### Listener
 
-The public listener at `/listen` is an art-deco styled player with now-playing info, up-next preview, callback corner, and recently-played log.
+The public listener at `/` is a clean, mobile-friendly player with now-playing, up-next queue, callback corner, recently-played log, and a fixed bottom player bar.
 
 ![Listener](docs/screenshots/listener.png)
 
@@ -85,6 +85,13 @@ The dashboard shows your current tier:
 - **Demo Radio**: no API key, canned banter clips
 - **Full AI Radio**: Anthropic or OpenAI key configured, live AI hosts
 - **Connected Home**: AI hosts + Home Assistant context
+
+Open `/admin` and use the **Installation Onboarding** card to:
+
+- confirm detected run mode and station tier
+- run one-click preflight re-checks
+- save `ANTHROPIC_API_KEY` and/or `OPENAI_API_KEY` directly from the UI
+- copy a Home Assistant add-on config snippet when running in add-on mode
 
 ## Quick start
 

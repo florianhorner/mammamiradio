@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Mamma Mi Radio - Late-night Italian radio</title>
-<meta name="theme-color" content="#c4654a">
+<meta name="theme-color" content="#14110F">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Mamma Mi Radio">
@@ -17,31 +17,36 @@
 <link rel="apple-touch-icon" href="/static/icon-192.svg">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,600;0,700;1,400;1,600&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,600;0,700;1,400;1,700&family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
 <style>
   *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 
   :root{
-    --bg:#2a2320;
-    --bg2:#3d3530;
+    --bg:#14110F;
+    --bg2:#1C1714;
+    --surface:#251E19;
+    --surface-hover:#2E2520;
     --cream:#F5EDD8;
     --cream-dk:#EADDC4;
-    --terracotta:#c4654a;
-    --dusty-rose:#d4917a;
-    --sage:#8a7e6d;
-    --highlight:#faf3eb;
-    --muted:#b0a494;
+    --terracotta:#ECCC30;
+    --dusty-rose:#CBB9A6;
+    --sage:#9B8574;
+    --highlight:#F5EDD8;
+    --muted:#9B8574;
+    --ok:#2563EB;
+    --sun:#F4D048;
+    --sun2:#ECCC30;
     --font-display:'Playfair Display',Georgia,serif;
-    --font-body:'Inter',system-ui,-apple-system,sans-serif;
+    --font-body:'Outfit',system-ui,-apple-system,sans-serif;
   }
 
   html{font-size:16px;-webkit-font-smoothing:antialiased}
 
   body{
     background:
-      radial-gradient(circle at top center, rgba(212,145,122,0.12), transparent 28%),
-      radial-gradient(circle at 20% 0%, rgba(138,126,109,0.12), transparent 22%),
-      linear-gradient(180deg,#2a2320 0%,#241f1b 100%);
+      url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='200' height='200' filter='url(%23n)' opacity='0.04'/%3E%3C/svg%3E") repeat,
+      radial-gradient(circle at top center, rgba(244,208,72,0.06), transparent 28%),
+      linear-gradient(180deg,#1E1610 0%,#14110F 12%,#14110F 100%);
     color:var(--cream);
     font-family:var(--font-body);
     line-height:1.6;
@@ -79,7 +84,7 @@
     font-weight:600;
     letter-spacing:0.14em;
     text-transform:uppercase;
-    color:var(--terracotta);
+    color:var(--sun2);
     opacity:0;
     transition:opacity 0.4s;
   }
@@ -87,12 +92,12 @@
   .on-air-dot{
     width:8px;height:8px;
     border-radius:50%;
-    background:var(--terracotta);
+    background:var(--sun);
     animation:pulse-glow 1.8s ease-in-out infinite;
   }
   @keyframes pulse-glow{
-    0%,100%{box-shadow:0 0 4px var(--terracotta);opacity:1}
-    50%{box-shadow:0 0 14px var(--terracotta),0 0 28px rgba(196,101,74,0.3);opacity:0.7}
+    0%,100%{box-shadow:0 0 4px var(--sun);opacity:1}
+    50%{box-shadow:0 0 14px var(--sun),0 0 28px rgba(244,208,72,0.3);opacity:0.7}
   }
 
   /* ---- Shared container ---- */
@@ -106,22 +111,22 @@
 
   /* ---- Now Playing ---- */
   .now-playing{
-    background:linear-gradient(180deg,rgba(61,53,48,0.96),rgba(50,44,40,0.94));
-    border:1px solid rgba(212,145,122,0.16);
-    border-radius:20px;
+    background:var(--surface);
+    border:1px solid rgba(245,237,216,0.08);
+    border-top:2px solid rgba(236,204,48,0.4);
+    border-radius:12px;
     padding:2rem 1.75rem;
     position:relative;
     overflow:hidden;
     transition:background 0.3s;
-    box-shadow:0 24px 48px rgba(0,0,0,0.18);
+    box-shadow:0 24px 48px rgba(0,0,0,0.25);
   }
   .now-playing::before{
     content:'';
     position:absolute;
-    top:0;left:0;right:0;
-    height:3px;
-    background:linear-gradient(90deg,var(--terracotta),var(--dusty-rose),var(--sage));
-    opacity:0.7;
+    top:-1px;left:24px;right:24px;
+    height:2px;
+    background:linear-gradient(90deg,transparent,rgba(244,208,72,0.6),transparent);
   }
   .np-section-label{
     font-size:0.7rem;
@@ -146,7 +151,7 @@
   }
   .np-sublabel{
     font-size:0.85rem;
-    color:var(--dusty-rose);
+    color:var(--cream-dk);
     margin-top:0.35rem;
     font-weight:400;
   }
@@ -162,7 +167,7 @@
   .eq-bar{
     width:4px;
     border-radius:2px;
-    background:var(--terracotta);
+    background:rgba(240,200,64,0.45);
     opacity:0.6;
     transition:height 0.15s ease;
   }
@@ -186,11 +191,10 @@
 
   /* ---- Section cards ---- */
   .section-card{
-    background:rgba(61,53,48,0.48);
-    border:1px solid rgba(138,126,109,0.16);
-    border-radius:18px;
+    background:var(--surface);
+    border:1px solid rgba(245,237,216,0.08);
+    border-radius:12px;
     padding:1.1rem 1.1rem 0.2rem;
-    backdrop-filter:blur(8px);
   }
   .section-title{
     font-family:var(--font-display);
@@ -201,14 +205,14 @@
     letter-spacing:0.02em;
   }
   .golden-path-notice{
-    border-left:3px solid var(--terracotta);
+    border-left:3px solid var(--sun2);
   }
   .golden-path-head{
     font-size:0.72rem;
     font-weight:600;
     letter-spacing:0.1em;
     text-transform:uppercase;
-    color:var(--dusty-rose);
+    color:var(--sun2);
     margin-bottom:0.4rem;
   }
   .golden-path-title{
@@ -237,7 +241,7 @@
     align-items:center;
     gap:0.75rem;
     padding:0.65rem 0;
-    border-bottom:1px solid rgba(138,126,109,0.2);
+    border-bottom:1px solid rgba(245,237,216,0.2);
     transition:opacity 0.3s,transform 0.3s;
   }
   .upcoming-item:last-child{border-bottom:none}
@@ -259,7 +263,7 @@
     align-items:center;
     gap:0.75rem;
     padding:0.5rem 0;
-    border-bottom:1px solid rgba(138,126,109,0.1);
+    border-bottom:1px solid rgba(245,237,216,0.1);
   }
   .log-item:last-child{border-bottom:none}
   .log-time{
@@ -274,17 +278,17 @@
 
   /* Running Jokes */
   .jokes-section{
-    background:rgba(61,53,48,0.36);
-    border:1px solid rgba(212,145,122,0.14);
-    border-radius:18px;
-    border-left:3px solid var(--terracotta);
+    background:var(--surface);
+    border:1px solid rgba(245,237,216,0.08);
+    border-radius:12px;
+    border-left:3px solid var(--sun2);
     padding:1rem 1rem 0.9rem;
   }
   .jokes-title{
     font-family:var(--font-display);
     font-size:0.85rem;
     font-weight:600;
-    color:var(--dusty-rose);
+    color:var(--sun2);
     margin-bottom:0.5rem;
     letter-spacing:0.04em;
   }
@@ -314,30 +318,31 @@
     display:flex;
     align-items:center;
     gap:1rem;
-    border:1px solid rgba(212,145,122,0.18);
-    border-radius:20px;
-    background:linear-gradient(180deg,rgba(61,53,48,0.92),rgba(50,44,40,0.96));
-    box-shadow:0 18px 45px rgba(0,0,0,0.24);
+    border:1px solid rgba(245,237,216,0.10);
+    border-radius:12px;
+    background:rgba(28,23,20,0.95);
+    box-shadow:0 18px 45px rgba(0,0,0,0.35);
     backdrop-filter:blur(12px);
     pointer-events:auto;
   }
   .play-btn{
     width:56px;height:56px;
     border-radius:50%;
-    background:var(--terracotta);
+    background:var(--sun2);
     border:none;
     cursor:pointer;
     display:flex;
     align-items:center;
     justify-content:center;
     flex-shrink:0;
-    transition:background 0.2s,transform 0.15s;
-    box-shadow:0 4px 20px rgba(196,101,74,0.35);
+    transition:background 0.2s,transform 0.15s,box-shadow 0.3s;
+    box-shadow:0 4px 20px rgba(236,204,48,0.4),0 0 0 6px rgba(236,204,48,0.08),0 0 28px rgba(236,204,48,0.15);
   }
-  .play-btn:hover{background:#d4735a;transform:scale(1.05)}
+  .play-btn:hover{background:var(--sun);transform:scale(1.05);box-shadow:0 4px 24px rgba(244,208,72,0.55),0 0 0 8px rgba(244,208,72,0.12),0 0 36px rgba(244,208,72,0.2)}
   .play-btn:active{transform:scale(0.97)}
-  .play-btn svg{width:22px;height:22px;fill:var(--highlight);margin-left:2px}
-  .play-btn.playing svg{margin-left:0}
+  .play-btn svg{width:22px;height:22px;fill:#14110F;margin-left:2px}
+  .play-btn.playing{background:var(--ok);box-shadow:0 4px 20px rgba(37,99,235,0.4),0 0 0 6px rgba(37,99,235,0.08)}
+  .play-btn.playing svg{margin-left:0;fill:#fff}
 
   .player-meta{flex:1;min-width:0}
   .player-live{
@@ -345,7 +350,7 @@
     font-weight:600;
     letter-spacing:0.14em;
     text-transform:uppercase;
-    color:var(--terracotta);
+    color:var(--sun2);
     display:flex;
     align-items:center;
     gap:0.35rem;
@@ -353,7 +358,7 @@
   .player-live-dot{
     width:6px;height:6px;
     border-radius:50%;
-    background:var(--terracotta);
+    background:var(--sun);
     animation:pulse-glow 1.8s ease-in-out infinite;
   }
   .player-now{
@@ -382,7 +387,7 @@
     width:80px;
     height:4px;
     border-radius:2px;
-    background:rgba(138,126,109,0.3);
+    background:rgba(245,237,216,0.3);
     outline:none;
   }
   .volume-slider::-webkit-slider-thumb{
@@ -393,7 +398,7 @@
     cursor:pointer;
     transition:background 0.2s;
   }
-  .volume-slider::-webkit-slider-thumb:hover{background:#8da87e}
+  .volume-slider::-webkit-slider-thumb:hover{background:#CBB9A6}
   .volume-slider::-moz-range-thumb{
     width:14px;height:14px;
     border-radius:50%;
@@ -404,7 +409,7 @@
   .volume-slider::-moz-range-track{
     height:4px;
     border-radius:2px;
-    background:rgba(138,126,109,0.3);
+    background:rgba(245,237,216,0.3);
     border:none;
   }
 
@@ -447,7 +452,7 @@
 
 <!-- Station Header -->
 <header class="station-header">
-  <svg width="48" height="48" viewBox="0 0 100 100" style="margin-bottom: 8px;"><rect width="100" height="100" rx="12" fill="#2a2320"/><rect x="14" y="32" width="72" height="50" rx="6" fill="#c4654a"/><rect x="14" y="32" width="24" height="4" fill="#7a8f6d"/><rect x="38" y="32" width="24" height="4" fill="#f5efe6"/><rect x="62" y="32" width="24" height="4" fill="#c4654a"/><rect x="18" y="40" width="64" height="38" rx="4" fill="#3a3230"/><circle cx="42" cy="61" r="16" fill="#2a2320" stroke="#d4917a" stroke-width="1"/><circle cx="42" cy="61" r="3" fill="#c4654a"/><circle cx="70" cy="61" r="6" fill="#d4917a"/><circle cx="70" cy="61" r="2" fill="#f5efe6"/><line x1="72" y1="32" x2="80" y2="14" stroke="#d4917a" stroke-width="2" stroke-linecap="round"/><path d="M86 48 A3 6 0 0 1 86 64" fill="none" stroke="#f5efe6" stroke-width="2" stroke-linecap="round" opacity="0.8"/><path d="M90 44 A4 8 0 0 1 90 68" fill="none" stroke="#f5efe6" stroke-width="1.5" stroke-linecap="round" opacity="0.5"/></svg>
+  <svg width="48" height="48" viewBox="0 0 100 100" style="margin-bottom: 8px;"><rect width="100" height="100" rx="12" fill="#14110F"/><rect x="14" y="32" width="72" height="50" rx="6" fill="#ECCC30"/><rect x="14" y="32" width="24" height="4" fill="#B82C20"/><rect x="38" y="32" width="24" height="4" fill="#F5EDD8"/><rect x="62" y="32" width="24" height="4" fill="#ECCC30"/><rect x="18" y="40" width="64" height="38" rx="4" fill="#251E19"/><circle cx="42" cy="61" r="16" fill="#14110F" stroke="#CBB9A6" stroke-width="1"/><circle cx="42" cy="61" r="3" fill="#ECCC30"/><circle cx="70" cy="61" r="6" fill="#CBB9A6"/><circle cx="70" cy="61" r="2" fill="#F5EDD8"/><line x1="72" y1="32" x2="80" y2="14" stroke="#CBB9A6" stroke-width="2" stroke-linecap="round"/><path d="M86 48 A3 6 0 0 1 86 64" fill="none" stroke="#F5EDD8" stroke-width="2" stroke-linecap="round" opacity="0.8"/><path d="M90 44 A4 8 0 0 1 90 68" fill="none" stroke="#F5EDD8" stroke-width="1.5" stroke-linecap="round" opacity="0.5"/></svg>
   <h1 class="station-name">Mamma Mi Radio</h1>
   <p class="station-subtitle">Late-night Milan talk radio</p>
   <div class="on-air" id="onAirBadge">
