@@ -633,14 +633,14 @@ async def test_logs_endpoint():
 
 @pytest.mark.asyncio
 async def test_hassio_ingress_auth_bypass():
-    """HA addon with ingress prefix from Hassio network should bypass auth on admin routes."""
+    """HA addon ingress should land directly on the admin panel and bypass auth."""
     app = _make_test_app(is_addon=True)
     # Hassio internal network: 172.30.32.x
     transport = httpx.ASGITransport(app=app, client=("172.30.32.5", 9999))
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
-        # / is public (no auth needed)
         resp = await client.get("/", headers={"X-Ingress-Path": "/api/hassio_ingress/abc123"})
         assert resp.status_code == 200
+        assert "Regia — Control Room" in resp.text
         # /dashboard requires auth — Hassio internal network should bypass
         resp = await client.get("/dashboard", headers={"X-Ingress-Path": "/api/hassio_ingress/abc123"})
     assert resp.status_code == 200
@@ -666,9 +666,9 @@ async def test_hassio_ingress_spoofed_external():
     app = _make_test_app(admin_password="secret", is_addon=True)
     transport = httpx.ASGITransport(app=app, client=("8.8.8.8", 9999))
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
-        # / is the public listener page (no auth required)
         resp = await client.get("/", headers={"X-Ingress-Path": "/api/hassio_ingress/abc123"})
         assert resp.status_code == 200
+        assert "Regia — Control Room" not in resp.text
         # /dashboard requires admin auth — spoofed ingress should NOT bypass
         resp = await client.get("/dashboard", headers={"X-Ingress-Path": "/api/hassio_ingress/abc123"})
     assert resp.status_code == 401
