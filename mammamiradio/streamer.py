@@ -493,6 +493,12 @@ async def run_playback_loop(app) -> None:
     bytes_per_sec = (config.audio.bitrate * 1000) / 8  # bitrate is in kbps; convert to bytes/sec
 
     while True:
+        # Pause when nobody is listening — don't burn API tokens or disk on an empty room.
+        # The queue stays full; the moment a listener connects, playback resumes instantly.
+        if not hub._listeners:
+            await asyncio.sleep(1.0)
+            continue
+
         try:
             segment: Segment = await asyncio.wait_for(segment_queue.get(), timeout=30.0)
         except TimeoutError:
