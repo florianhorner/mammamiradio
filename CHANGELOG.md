@@ -4,6 +4,18 @@ All notable changes to `mammamiradio` are documented here.
 
 The current version source of truth is `pyproject.toml`.
 
+## [2.2.3] - 2026-04-11
+
+### Fixed
+
+- **HA add-on silence loop**: add-on startup now exports `MAMMAMIRADIO_ALLOW_YTDLP=true`, so demo-track fallback produces real audio instead of silence placeholders.
+- **Poisoned cache purge**: on startup, the cache directory is scanned for silence placeholders left by previous runs without yt-dlp. Stale silence files are deleted so yt-dlp can re-download real audio. The downloader also validates cached files before returning them.
+- **Quality gate starvation**: after 3 consecutive quality-gate rejections, the producer trips a circuit breaker and lets the next track through, preventing permanent stream silence.
+
+### Added
+
+- **Spotify Connect container notice**: documented that Spotify Connect (mDNS/zeroconf) may not work from containerized HA addon environments. yt-dlp is the primary and reliable audio source for the addon.
+
 ## [2.2.2] - 2026-04-10
 
 ### Changed

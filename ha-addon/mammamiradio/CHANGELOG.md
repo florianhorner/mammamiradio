@@ -1,5 +1,14 @@
 # Changelog
 
+## 2.2.3
+
+### Fixed
+
+- Add-on startup now sets `MAMMAMIRADIO_ALLOW_YTDLP=true`, restoring demo-track fallback instead of silence.
+- Startup cache purge removes silence placeholders from previous runs so yt-dlp can re-download real audio.
+- Producer circuit breaker after 3 consecutive quality-gate rejections prevents permanent stream starvation.
+- Spotify Connect (mDNS) may not work from containerized environments; yt-dlp is the primary audio source.
+
 ## 2.2.2
 
 ### Changed
