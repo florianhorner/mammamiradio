@@ -161,7 +161,7 @@ To play on speakers, use `media_player.play_media` with the stream URL, or add a
 ./setup-mac.sh
 ```
 
-This creates a `Malamie Radio.app` you can drag to your Dock, plus `Dashboard.webloc` and `Listener.webloc` bookmark files. Double-click the app to start the radio and open the dashboard. Double-click `Stop Radio.command` to stop it.
+This creates a `Mamma Mi Radio.app` you can drag to your Dock, plus `Dashboard.webloc` and `Listener.webloc` bookmark files. Double-click the app to start the radio and open the dashboard. Double-click `Stop Radio.command` to stop it.
 
 ### Run (terminal)
 
