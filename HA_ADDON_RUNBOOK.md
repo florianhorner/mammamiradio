@@ -55,11 +55,8 @@ Current config options:
 |--------|-------------|---------|
 | `anthropic_api_key` | `password?` | `ANTHROPIC_API_KEY` |
 | `openai_api_key` | `password?` | `OPENAI_API_KEY` |
-| `spotify_client_id` | `str?` | `SPOTIFY_CLIENT_ID` |
-| `spotify_client_secret` | `password?` | `SPOTIFY_CLIENT_SECRET` |
 | `station_name` | `str?` | `STATION_NAME` |
-| `claude_model` | `str?` | `CLAUDE_MODEL` |
-| `playlist_spotify_url` | `str?` | `PLAYLIST_SPOTIFY_URL` |
+| `claude_model` | `list?` | `CLAUDE_MODEL` |
 
 The option extraction in run.sh uses a single Python script that reads keys from `/data/options.json` and exports them as env vars with UPPER_CASE names. To add a new option:
 
@@ -158,9 +155,6 @@ Do NOT merge the next PR until all 7 steps pass.
 | Value | Files |
 |-------|-------|
 | Port 8000 | config.yaml (`ingress_port`), run.sh (`MAMMAMIRADIO_PORT`, `--port`), config.py (default) |
-| FIFO `/tmp/mammamiradio.pcm` | config.py, radio.toml, go-librespot-config.yml |
-| go-librespot port 3678 | config.py, radio.toml, go-librespot-config.yml |
-| `/data/go-librespot` | config.py (addon override), Dockerfile (`COPY`) |
-| `MAMMAMIRADIO_ALLOW_YTDLP=true` | run.sh (hardcoded, required for music playback without Spotify capture) |
+| `MAMMAMIRADIO_ALLOW_YTDLP=true` | run.sh (hardcoded, required for chart music playback) |
 
 If you change any of these, grep for the old value and update all locations.

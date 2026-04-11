@@ -71,7 +71,7 @@ already playing. The station is alive before you do anything.
 | Cream | `#F5EDD8` | All body text, headings |
 | Lancia | `#B82C20` | FM dial needle, interactive red, connect top border |
 | Shadow | `#2A1008` | FM dial interior only |
-| Signal blue | `#2563EB` | `--ok`: Spotify connected, play button active |
+| Signal blue | `#2563EB` | `--ok`: connected state, play button active |
 
 ### Background gradient
 
@@ -309,11 +309,9 @@ Show on `display:none` initially; reveal once station data arrives via `_initTic
 
 **Never use `position: fixed` for the ticker** — it should feel like part of the player, not a news header.
 
-**Ticker CTA injection**: when Spotify is not connected, two golden CTA items are mixed
-into the ticker among the ambient Italian text: "♫ Porta i tuoi dischi — connetti Spotify"
-and "♫ Your music, same hosts — connect Spotify". These use `--sun2` color instead of the
-normal muted cream, making them stand out without breaking the ambient feel. Clicking scrolls
-to the connect card. CTA items are removed once Spotify connects.
+**Ticker CTA injection**: when the station is in demo mode, golden CTA items can be mixed
+into the ticker among the ambient Italian text. These use `--sun2` color instead of the
+normal muted cream, making them stand out without breaking the ambient feel.
 
 ```css
 .ticker .ti.ticker-cta { color: var(--sun2); cursor: pointer; }
@@ -322,7 +320,7 @@ to the connect card. CTA items are removed once Spotify connects.
 
 ### Connect CTA (cream contrast card)
 
-The Spotify connect prompt uses an **inverted cream card** — the only light-background element
+The upgrade CTA uses an **inverted cream card** — the only light-background element
 in the UI. This deliberately breaks the sienna card pattern to create visual hierarchy: the
 upgrade CTA must never look like a regular card or an error state.
 
@@ -341,7 +339,7 @@ upgrade CTA must never look like a regular card or an error state.
 - **Subtitle**: Inter 11px, `rgba(42,16,8,0.55)`
 - **Hover**: `translateY(-1px)` lift with deeper shadow
 - **Icon**: music note emoji left, chevron arrow right
-- Hidden when `spotify_connected` is true
+- Hidden when the station is fully configured
 
 **Design rationale**: the council review identified that the old "Bring Your Records" card
 had identical visual weight to the "Having trouble?" error state. The cream card solves this
@@ -465,7 +463,7 @@ and should be preserved exactly when touching related code:
 - **Connect CTA**: cream contrast card — the one deliberate exception to sienna cards. Golden left stripe, Playfair italic headline, dark text on cream. Must pop.
 - **Help toggle**: `(?)` icon, not a card. Troubleshooting and advanced options live behind this toggle only.
 - **Waveform**: 36 golden bars bouncing independently — organic, not a progress bar.
-- **Ticker**: Playfair italic Italian text flowing left below the player — unhurried (32s loop). Golden CTA items injected when Spotify is disconnected.
+- **Ticker**: Playfair italic Italian text flowing left below the player — unhurried (32s loop). Golden CTA items injected when in demo mode.
 - **Play button**: golden with three-layer glow (drop shadow + outer ring + diffuse bloom).
 - **Dial needle**: Lancia red glow, overshoot-and-settle locking animation.
 
@@ -540,7 +538,7 @@ Fires once on tier change. Not a loop.
 }
 ```
 
-Used for "Benvenuto!" on Spotify connect. Keep the warm overlay, not dark.
+Used for "Benvenuto!" on first listen. Keep the warm overlay, not dark.
 
 ---
 

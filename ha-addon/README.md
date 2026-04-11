@@ -20,17 +20,15 @@ After installing, go to the add-on's **Configuration** tab:
 
 - **Anthropic API Key** (optional): Enables Claude-generated banter and ads. Get one at [console.anthropic.com](https://console.anthropic.com). Without this, the station uses stock banter lines.
 - **OpenAI API Key** (optional): Enables OpenAI `gpt-4o-mini-tts` host voices and serves as a script generation fallback when Anthropic is unavailable.
-- **Spotify Client ID / Secret**: From [developer.spotify.com](https://developer.spotify.com/dashboard). Without these, the station uses a built-in demo Italian playlist.
 - **Station Name**: Customize your station's name (default: "Mamma Mi Radio").
-- **Spotify Playlist URL**: The public playlist to use on first run. In add-on mode this is the reliable path because browser-based user OAuth is not part of the add-on flow.
 
 ## Usage
 
 1. Start the add-on
 2. Open it from the HA sidebar / ingress entry first. The mapped `:8000` port is mainly for `/stream`, `/healthz`, and direct diagnostics
-3. The dashboard shows your station's current tier (Demo Radio, Your Music, or Full AI Radio) and a golden path guide for what to set up next
-4. Connect Spotify credentials and a playlist URL to unlock real music
-5. Use the add-on's `/stream` endpoint with HA media players once the dashboard shows the tier you expect
+3. The dashboard shows your station's current tier (Demo Radio, Full AI Radio, or Connected Home) and a guide for what to set up next
+4. Add an Anthropic API key to unlock live AI hosts
+5. Use the add-on's `/stream` endpoint with HA media players
 
 The add-on also exposes unauthenticated `/healthz` and `/readyz` probes for monitoring. The richer setup checks live behind the admin UI at `/api/setup/status`, `/api/setup/recheck`, and `/api/setup/addon-snippet`.
 

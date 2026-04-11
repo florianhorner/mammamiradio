@@ -127,13 +127,11 @@ The easiest way to run mammamiradio on any platform (Windows, Mac, Linux):
 
 ```bash
 cp .env.example .env
-# Edit .env: set ADMIN_TOKEN and optionally ANTHROPIC_API_KEY, SPOTIFY_CLIENT_ID/SECRET
+# Edit .env: set ADMIN_TOKEN and optionally ANTHROPIC_API_KEY
 docker compose up
 ```
 
 Open `http://localhost:8000/` for the dashboard. `ADMIN_TOKEN` must be set in `.env` (the container binds to `0.0.0.0` and requires auth).
-
-For Spotify OAuth in local development, register `http://127.0.0.1:8000/spotify/callback` as the redirect URI in your Spotify app settings. If you want to use a stable HTTPS origin instead, set `MAMMAMIRADIO_SPOTIFY_REDIRECT_BASE_URL=https://your-domain` and register `https://your-domain/spotify/callback`.
 
 ### Run (Home Assistant add-on)
 
@@ -143,10 +141,8 @@ If you run Home Assistant OS or Supervised:
 2. Click the three dots menu > **Repositories**
 3. Paste: `https://github.com/florianhorner/mammamiradio`
 4. Find "Mamma Mi Radio" and click **Install**
-5. **Connect the essentials** in Add-on Configuration:
-   `spotify_client_id`, `spotify_client_secret`, `playlist_spotify_url`, and optionally `anthropic_api_key`
-6. **Run preflight checks** by starting the add-on and opening the dashboard
-7. **Launch your first station** once the app tells you whether you are in `Real Spotify Mode`, `Demo Mode`, or `Degraded`
+5. **Connect the essentials** in Add-on Configuration: optionally `anthropic_api_key` for AI hosts
+6. Start the add-on and open the dashboard from the sidebar
 
 The add-on automatically connects to Home Assistant, so the radio hosts reference your actual home state (lights, temperature, who's home) without any extra configuration.
 
@@ -166,28 +162,21 @@ This creates a `Malamie Radio.app` you can drag to your Dock, plus `Dashboard.we
 ./start.sh
 ```
 
-`start.sh`:
-
-- creates the FIFO at `/tmp/mammamiradio.pcm`
-- starts `go-librespot` if it is not already running
-- keeps a fallback drain process alive across hot reloads
-- runs `uvicorn` with `--reload`
+`start.sh` runs `uvicorn` with `--reload`.
 
 Open:
 
-- Dashboard: `http://localhost:8000/`
-- Listener: `http://localhost:8000/listen`
+- Listener: `http://localhost:8000/`
+- Dashboard: `http://localhost:8000/admin`
 - Raw stream: `http://localhost:8000/stream`
-
-On first full Spotify run, select `mammamiradio` as the playback device in Spotify. The app also tries to auto-transfer playback when the device appears.
 
 ### Run (Conductor)
 
 This repo ships a shared [`conductor.json`](conductor.json) for Conductor workspaces.
 
 - setup creates `.venv`, installs app plus dev dependencies, and symlinks `.env` from `~/.config/mammamiradio/.env` when present, falling back to `$CONDUCTOR_ROOT_PATH/.env`
-- run delegates to `./start.sh`, binds to `$CONDUCTOR_PORT`, isolates FIFO/cache/tmp/go-librespot state under `.context/conductor/`, and enables `MAMMAMIRADIO_ALLOW_YTDLP=true` by default for local workspaces
-- archive stops workspace-owned helper processes and removes the workspace runtime state
+- run delegates to `./start.sh`, binds to `$CONDUCTOR_PORT`, isolates cache/tmp under `.context/conductor/`, and enables `MAMMAMIRADIO_ALLOW_YTDLP=true` by default for local workspaces
+- archive removes the workspace runtime state
 
 ### Sharing with friends
 
@@ -210,15 +199,14 @@ The station is intentionally resilient:
 
 | Missing dependency | What happens |
 | --- | --- |
-| Spotify client credentials | Uses live Italian charts when `MAMMAMIRADIO_ALLOW_YTDLP=true`, otherwise a built-in Italian jazz demo playlist |
-| go-librespot or Spotify device connection | Falls back to local files, then `yt-dlp`, then placeholder audio |
+| `MAMMAMIRADIO_ALLOW_YTDLP` not set | Uses a built-in Italian demo playlist instead of live charts |
 | Anthropic API key or Claude request failure | Falls back to OpenAI `gpt-4o-mini` if `OPENAI_API_KEY` is set, then to stock copy |
 | OpenAI API key missing or request failure | Falls back to Edge TTS voice for that host |
 | Home Assistant token or API failure | Continues without home context |
 | Ad brands missing | Skips ad generation instead of failing startup |
 
 If you keep a local `music/` directory with matching MP3s, the downloader will prefer that before trying `yt-dlp`.
-Conductor's default run script enables `MAMMAMIRADIO_ALLOW_YTDLP=true` for local workspaces, so those runs prefer live charts over the bundled demo set when Spotify metadata is unavailable.
+Conductor and the HA addon enable `MAMMAMIRADIO_ALLOW_YTDLP=true` by default, so those runs prefer live charts over the bundled demo set.
 
 ## Configuration
 
@@ -229,10 +217,10 @@ Most station behavior lives in `radio.toml`.
 | Section | What it controls |
 | --- | --- |
 | `[station]` | Station name, language, theme |
-| `[playlist]` | Spotify playlist URL, source selection, shuffle behavior |
+| `[playlist]` | Shuffle behavior, repeat/artist cooldowns |
 | `[pacing]` | Songs between banter, songs between ads, spots per ad break, lookahead |
 | `[[hosts]]` | Host names, TTS engine (`edge` or `openai`), voices, style/personality |
-| `[audio]` | Sample rate, channels, bitrate, FIFO path, go-librespot settings, Claude model |
+| `[audio]` | Sample rate, channels, bitrate, Claude model |
 | `[homeassistant]` | Whether HA context is enabled, base URL, refresh interval |
 | `[[ads.brands]]` | Fictional brand pool, categories, recurring-campaign weighting |
 | `[[ads.voices]]` | Dedicated commercial voices for ads |
@@ -243,16 +231,15 @@ The Home Assistant token is never stored in `radio.toml`. Set it via `HA_TOKEN` 
 
 | Route | Method | Access | Description |
 | --- | --- | --- | --- |
-| `/` | GET | Admin | Dashboard HTML |
-| `/listen` | GET | Public | Minimal player UI |
+| `/` | GET | Public | Listener page |
+| `/admin` | GET | Admin | Dashboard HTML |
 | `/stream` | GET | Public | Infinite MP3 stream |
 | `/healthz` | GET | Public | Liveness probe with process uptime |
 | `/readyz` | GET | Public | Readiness probe with queue depth and startup status |
 | `/public-status` | GET | Public | Current segment, recent log, and the real queued segments (`upcoming_mode` is `queued` or `building`) |
 | `/status` | GET | Admin | Full admin JSON: queue depth, uptime, scripts, HA context, errors |
-| `/api/logs` | GET | Admin | Recent go-librespot logs |
 | `/api/setup/status` | GET | Admin | First-run setup status, detected run mode, and station mode |
-| `/api/setup/recheck` | POST | Admin | Re-run setup probes for Spotify, FFmpeg, and go-librespot |
+| `/api/setup/recheck` | POST | Admin | Re-run setup probes |
 | `/api/setup/addon-snippet` | GET | Admin | Copy-friendly Home Assistant add-on config snippet |
 | `/api/shuffle` | POST | Admin | Shuffle playlist |
 | `/api/skip` | POST | Admin | Skip current segment |
@@ -260,13 +247,8 @@ The Home Assistant token is never stored in `radio.toml`. Set it via `HA_TOKEN` 
 | `/api/playlist/remove` | POST | Admin | Remove track by index |
 | `/api/playlist/move` | POST | Admin | Move track with `{from, to}` |
 | `/api/playlist/move_to_next` | POST | Admin | Move track to position 0 in upcoming |
-| `/api/search` | GET | Admin | Search Spotify for tracks |
 | `/api/playlist/add` | POST | Admin | Add a track to the playlist |
-| `/api/playlist/load` | POST | Admin | Load a Spotify playlist by URL (legacy compatibility) |
-| `/api/spotify/source-options` | GET | Admin | Available sources: user playlists, Liked Songs |
-| `/api/spotify/source/select` | POST | Admin | Switch source to playlist, liked_songs, or URL |
-| `/api/spotify/auth-status` | GET | Admin | Spotify OAuth connection state |
-| `/api/spotify/disconnect` | POST | Admin | Revoke Spotify connection |
+| `/api/playlist/load` | POST | Admin | Load a playlist by URL |
 | `/api/hosts` | GET | Admin | List hosts with personality settings |
 | `/api/hosts/{name}/personality/reset` | POST | Admin | Reset host personality to defaults |
 | `/api/pacing` | GET | Admin | Current pacing configuration |
@@ -298,8 +280,7 @@ mammamiradio/
   producer.py         segment generation loop
   streamer.py         routes, auth gates, playback fan-out
   scheduler.py        segment selection and upcoming preview
-  spotify_player.py   go-librespot process + FIFO capture
-  playlist.py         Spotify playlist fetch + demo fallback
+  playlist.py         Charts, local, and demo playlist loading
   downloader.py       local file / yt-dlp / placeholder fallback
   scriptwriter.py     Anthropic/OpenAI prompts for banter and ads
   tts.py              TTS synthesis (Edge TTS + OpenAI gpt-4o-mini-tts)

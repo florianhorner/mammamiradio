@@ -1,6 +1,6 @@
 # Contributing
 
-This repo is small, but it has real moving parts: FastAPI, FFmpeg, Edge TTS, Spotify, Claude, and optional Home Assistant. The fastest way to break it is to change behavior without actually running the station.
+This repo is small, but it has real moving parts: FastAPI, FFmpeg, Edge TTS, Claude, and optional Home Assistant. The fastest way to break it is to change behavior without actually running the station.
 
 Do the local setup, run targeted tests, then do a quick listen-through.
 
@@ -8,10 +8,9 @@ Do the local setup, run targeted tests, then do a quick listen-through.
 
 - Python 3.11+
 - FFmpeg on your `PATH`
-- go-librespot if you want to test real Spotify playback
-- Spotify, Anthropic, and optionally OpenAI credentials if you want the full happy path
+- Optional: Anthropic and/or OpenAI credentials for the full AI radio experience
 
-You can still work on config, scheduler, most routes, and documentation without Spotify credentials. The app falls back to live Italian charts when `MAMMAMIRADIO_ALLOW_YTDLP=true`, otherwise to the bundled demo tracks.
+The app falls back to live Italian charts when `MAMMAMIRADIO_ALLOW_YTDLP=true`, otherwise to the bundled demo tracks. No external service credentials are required to run the station.
 
 ## Local setup
 
@@ -35,13 +34,12 @@ These files are part of the repo contract and should stay in git. Runtime artifa
 
 Then fill in whatever `.env` values you need. In Conductor, the preferred shared location is `~/.config/mammamiradio/.env`:
 
-- `SPOTIFY_CLIENT_ID` / `SPOTIFY_CLIENT_SECRET` for Spotify playlist access and playback transfer
 - `ANTHROPIC_API_KEY` for banter and ad script generation (falls back to OpenAI if unavailable)
 - `OPENAI_API_KEY` for TTS voices and as a script generation fallback
 - `HA_TOKEN` for Home Assistant prompt context
 - `ADMIN_PASSWORD` or `ADMIN_TOKEN` if you plan to bind outside localhost
 
-`radio.toml` is the main station config. That is where you change hosts, pacing, playlist source, ad brands, audio settings, and Home Assistant enablement.
+`radio.toml` is the main station config. That is where you change hosts, pacing, ad brands, audio settings, and Home Assistant enablement.
 
 ## Run the app
 
@@ -51,12 +49,7 @@ Full dev workflow:
 ./start.sh
 ```
 
-That script:
-
-- creates the FIFO if needed
-- starts or reuses go-librespot
-- keeps a fallback FIFO reader alive across reloads
-- runs uvicorn with `--reload`
+That script runs uvicorn with `--reload`.
 
 Or use Docker (no Python/FFmpeg setup needed):
 
@@ -132,11 +125,9 @@ After starting the app:
 3. Open `http://127.0.0.1:8000/stream` in a browser or player and confirm audio starts once the first segment is queued.
 4. Hit `/public-status` and confirm the upcoming list reflects the real queued segments, or returns `upcoming_mode="building"` while the producer is warming up.
 5. Use the dashboard controls for skip, shuffle, purge, and playlist reorder.
-6. If running locally with Spotify credentials, click "Refresh sources" on the dashboard and verify playlists load.
-7. Select a playlist or "Liked Songs" and verify the station cuts over immediately (old audio stops, new source begins).
-8. Restart the app and verify the last selected source restores automatically.
+6. Restart the app and verify the last selected source restores automatically.
 
-If you are testing the Spotify path, also open Spotify and select the `mammamiradio` device. If you are binding to `0.0.0.0`, set `ADMIN_PASSWORD` or `ADMIN_TOKEN` first or config validation will reject startup. Non-loopback admin requests with basic auth also require CSRF validation (the dashboard handles this automatically via injected tokens).
+If you are binding to `0.0.0.0`, set `ADMIN_PASSWORD` or `ADMIN_TOKEN` first or config validation will reject startup. Non-loopback admin requests with basic auth also require CSRF validation (the dashboard handles this automatically via injected tokens).
 
 ## Documentation expectations
 

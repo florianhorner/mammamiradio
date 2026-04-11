@@ -1,11 +1,11 @@
 # mammamiradio
 
-AI-powered Italian radio station engine. Python 3.11+, FastAPI, FFmpeg, optional Spotify and Home Assistant integration.
+AI-powered Italian radio station engine. Python 3.11+, FastAPI, FFmpeg, optional Home Assistant integration.
 
 ## Docs
 
 - `README.md` - product overview and operator quick start
-- `ARCHITECTURE.md` - runtime flow, queue model, and Spotify audio path
+- `ARCHITECTURE.md` - runtime flow, queue model, and audio pipeline
 - `CONTRIBUTING.md` - local setup, tests, and smoke checks
 - `TROUBLESHOOTING.md` - common failures and recovery paths
 - `HA_ADDON_RUNBOOK.md` - addon release process, config contract, pre-merge checklist
@@ -46,35 +46,26 @@ AI-powered Italian radio station engine. Python 3.11+, FastAPI, FFmpeg, optional
 - `MAMMAMIRADIO_CACHE_DIR`, `MAMMAMIRADIO_TMP_DIR`: override cache/tmp directories (for Docker volumes)
 - `LOG_LEVEL`: override log verbosity (`DEBUG`, `INFO`, `WARNING`, `ERROR`; default `INFO`)
 - `ADMIN_USERNAME`, `ADMIN_PASSWORD`, `ADMIN_TOKEN`: admin auth
-- `SPOTIFY_CLIENT_ID`, `SPOTIFY_CLIENT_SECRET`: Spotify Web API access
 - `ANTHROPIC_API_KEY`: Claude banter/ad generation
 - `OPENAI_API_KEY`: OpenAI gpt-4o-mini-tts voice synthesis + script generation fallback when Anthropic is unavailable
 - `HA_TOKEN`: Home Assistant API token
 - `HA_URL`: Home Assistant API base URL (auto-set by HA add-on to `http://supervisor/core/api`)
 - `HA_ENABLED`: force-enable HA integration (`true`/`1`/`yes`)
 - `STATION_NAME`, `STATION_THEME`: override station identity from `radio.toml`
-- `PLAYLIST_SPOTIFY_URL`: override playlist URL from `radio.toml`
 - `CLAUDE_MODEL`: override Claude model from `radio.toml`
-- `MAMMAMIRADIO_FIFO_PATH`: override go-librespot FIFO path
-- `MAMMAMIRADIO_GO_LIBRESPOT_BIN`: override go-librespot binary path
-- `MAMMAMIRADIO_GO_LIBRESPOT_CONFIG_DIR`: override go-librespot config directory
-- `MAMMAMIRADIO_GO_LIBRESPOT_PORT`: override go-librespot API port (default `3678`)
-- `MAMMAMIRADIO_SPOTIFY_REDIRECT_BASE_URL`: override Spotify OAuth callback base URL (e.g., `https://radio.example.com`; uses request origin if unset)
-- `MAMMAMIRADIO_ALLOW_YTDLP`: enable yt-dlp fallback for demo tracks (`true`/`1`/`yes`; default: disabled for copyright safety, but enabled by default in HA addon and Conductor)
+- `MAMMAMIRADIO_ALLOW_YTDLP`: enable yt-dlp for chart music (`true`/`1`/`yes`; default: disabled for copyright safety, but enabled by default in HA addon and Conductor)
 
 ## Runtime behavior
 
-- Startup loads `radio.toml`, validates config, starts go-librespot if possible, restores persisted source selection from `cache/playlist_source.json`, fetches the playlist, then launches producer and playback tasks.
-- **Capability flags** (`spotify_connected`, `spotify_api`, `anthropic`, `ha`) replace the old 64-state mode system. Each flag is independent. The dashboard derives a tier label from them: Demo Radio, Your Music, Full AI Radio. `GET /api/capabilities` returns flags, tier, and a `next_step` hint guiding the user toward the next setup action.
-- Demo-first: if no Spotify credentials exist, the app boots immediately with built-in demo tracks and pre-bundled banter clips. No wizard, no gates.
-- **Spotify Connect (zeroconf):** go-librespot advertises via mDNS. Users tap "MammaMiRadio" in their Spotify app to connect. This handles streaming auth without any Client ID/secret. Playlist browsing still requires Client ID/secret (Web API scopes not available via zeroconf).
+- Startup loads `radio.toml`, validates config, restores persisted source selection from `cache/playlist_source.json`, fetches the playlist, then launches producer and playback tasks.
+- **Capability flags** (`anthropic`, `ha`) drive a three-tier system. The dashboard derives a tier label from them: Demo Radio, Full AI Radio, Connected Home. `GET /api/capabilities` returns flags, tier, and a `next_step` hint guiding the user toward the next setup action.
+- Demo-first: the app boots immediately with charts or built-in demo tracks and pre-bundled banter clips. No wizard, no gates.
 - If no LLM key is configured (neither Anthropic nor OpenAI), banter uses pre-bundled clips from `demo_assets/banter/` instead of calling an API.
-- If go-librespot is unavailable or not authenticated, music falls back to local `music/` files, then `yt-dlp`, then placeholder tones.
+- Music comes from live Italian charts (via yt-dlp), local `music/` files, or placeholder tones.
 - If Anthropic fails mid-session, script generation falls back to OpenAI `gpt-4o-mini` when `OPENAI_API_KEY` is set, then to short stock copy.
 - If Home Assistant is enabled and `HA_TOKEN` is present, banter and ads may reference current home state.
 - `audio.bitrate` is the single source of truth for encoding, ICY headers, and playback throttling.
-- Source switching via `/api/spotify/source/select` or `/api/playlist/load` purges the queue, skips the current segment, and begins playback from the new source immediately.
-- The source picker (playlist/liked_songs selection) is only available in local/macOS mode; addon/Docker modes are restricted to URL loading.
+- Source switching via `/api/playlist/load` purges the queue, skips the current segment, and begins playback from the new source immediately.
 - Non-local binds require `ADMIN_PASSWORD` or `ADMIN_TOKEN`.
 
 ## Project structure
@@ -88,25 +79,23 @@ mammamiradio/
   streamer.py         playback loop, routes, auth checks, public/admin status
   scheduler.py        segment scheduling and upcoming preview
   scriptwriter.py     Anthropic/OpenAI API calls for banter and ad JSON (with automatic fallback)
-  spotify_player.py   go-librespot integration, FIFO drain, auto-transfer
-  spotify_auth.py     Spotipy OAuth setup
-  playlist.py         playlist fetch, liked-songs fallback, demo fallback
+  playlist.py         charts, local, and demo playlist loading
   downloader.py       local file, yt-dlp, and placeholder audio fallback
   normalizer.py       FFmpeg helpers for normalize, mix, concat, and generated SFX
   tts.py              Edge TTS synthesis for hosts and ads
   ha_context.py       Home Assistant polling and Italian state formatting
-  capabilities.py     Capability flags (spotify_connected, spotify_api, anthropic, ha), tier derivation, and next_step hints
+  capabilities.py     Capability flags (anthropic, ha), tier derivation, and next_step hints
   persona.py          Compounding listener memory: persona, motifs, session tracking, prompt injection filtering
-  sync.py             go-librespot config synchronization from radio.toml
+  sync.py             SQLite database initialization
   context_cues.py     Time-of-day and cultural context for banter/ad prompts
   track_rationale.py  "Why this track?" rationale generation for listener UI
   setup_status.py     Legacy setup status classification (kept for /status endpoint compat)
-  dashboard.html      Capability-flag-driven dashboard served at /
-  admin.html          Admin control room panel
-  listener.html       Listener HTML served at /listen
+  dashboard.html      Listener-facing dashboard served at /
+  admin.html          Admin control room panel served at /admin
+  listener.html       Listener HTML (legacy, redirects to /)
   demo_assets/        Pre-bundled banter clips, ads, music, and jingles for demo-first boot
 radio.toml            station config
-start.sh              dev entrypoint with reload-safe FIFO drain handling
+start.sh              dev entrypoint with uvicorn and reload
 tests/                pytest coverage
 ```
 
