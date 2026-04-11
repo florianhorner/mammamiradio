@@ -1218,6 +1218,16 @@ async def status(request: Request, _: None = Depends(require_admin_access)):
                 "input_tokens": state.api_input_tokens,
                 "output_tokens": state.api_output_tokens,
                 "tts_characters": state.tts_characters,
+                # Haiku pricing: $0.80/M input, $4.00/M output (claude-haiku-4-5, 2026)
+                "api_cost_estimate_usd": round(
+                    state.api_input_tokens * 0.0000008 + state.api_output_tokens * 0.000004,
+                    4,
+                ),
+                "cache_size_mb": round(
+                    sum(f.stat().st_size for f in config.cache_dir.glob("*.mp3") if f.is_file()) / (1024 * 1024),
+                    1,
+                ),
+                "cache_limit_mb": config.max_cache_size_mb,
             },
             "listeners": {
                 "active": state.listeners_active,
