@@ -149,6 +149,8 @@ async def test_get_root_serves_listener_page():
     assert resp.status_code == 200
     assert "text/html" in resp.headers["content-type"]
     assert "Mamma Mi Radio" in resp.text
+    assert "We're lighting the sign." in resp.text
+    assert "Start the station" in resp.text
 
 
 @pytest.mark.asyncio

@@ -17,7 +17,7 @@ from mammamiradio.audio_quality import AudioQualityError, AudioToolError, valida
 from mammamiradio.config import StationConfig
 from mammamiradio.context_cues import generate_impossible_line
 from mammamiradio.downloader import download_track, evict_cache_lru
-from mammamiradio.ha_context import HomeContext, fetch_home_context
+from mammamiradio.ha_context import HomeContext, check_reactive_triggers, fetch_home_context
 from mammamiradio.models import (
     AdBrand,
     AdFormat,
@@ -465,6 +465,14 @@ async def run_producer(
                 _cache=ha_cache,
             )
             state.ha_context = ha_cache.summary
+            state.ha_events_summary = ha_cache.events_summary
+            state.ha_home_mood = ha_cache.mood
+            state.ha_weather_arc = ha_cache.weather_arc
+            # Phase 4: only set directive if none is pending (first match wins)
+            if not state.ha_pending_directive:
+                directive = check_reactive_triggers(ha_cache.events)
+                if directive:
+                    state.ha_pending_directive = directive
 
         try:
             if seg_type == SegmentType.MUSIC:

@@ -7,8 +7,10 @@ ambient home state ~30-50% of the time, like glancing out a window.
 
 from __future__ import annotations
 
+import datetime
 import logging
 import time
+from collections import deque
 from dataclasses import dataclass, field
 
 import httpx
@@ -131,6 +133,79 @@ STATE_TRANSLATIONS = {
 }
 
 
+# ---------------------------------------------------------------------------
+# Phase 1: Event tracking
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class HomeEvent:
+    """A detected state change on a curated HA entity."""
+
+    entity_id: str
+    label: str
+    old_state: str  # translated via STATE_TRANSLATIONS
+    new_state: str  # translated via STATE_TRANSLATIONS
+    timestamp: float
+
+    @property
+    def age_seconds(self) -> float:
+        return time.time() - self.timestamp
+
+    def describe(self) -> str:
+        minutes_ago = max(1, round(self.age_seconds / 60))
+        return f"- {self.label}: {self.old_state} → {self.new_state} ({minutes_ago} min fa)"
+
+
+# ---------------------------------------------------------------------------
+# Phase 4: Reactive triggers
+# ---------------------------------------------------------------------------
+
+# (entity_id, raw_ha_trigger_state, directive_text, cooldown_seconds)
+REACTIVE_TRIGGERS: list[tuple[str, str, str, int]] = [
+    (
+        "switch.bar_kaffeemaschine_steckdose",
+        "on",
+        "La macchina del caffè si è appena accesa! I conduttori sentono il profumo di espresso"
+        " e lo notano brevemente — naturale, non esagerato.",
+        1800,
+    ),
+    (
+        "lock.lock_ultra_8d3c",
+        "unlocked",
+        "La porta d'ingresso si è appena aperta. Dite 'bentornato' come se aveste"
+        " sentito la porta — breve, caldo, non forzato.",
+        300,
+    ),
+    (
+        "vacuum.goldstaubsucher",
+        "cleaning",
+        "Il Goldstaubsucher ha iniziato ad aspirare. Lamentatevi del rumore di fondo, scherzate sul robot invadente.",
+        3600,
+    ),
+    (
+        "vacuum.matrix10_ultra",
+        "cleaning",
+        "Anche il Matrix10 Ultra sta aspirando! CAOS TOTALE — due robot in azione. Reazione esagerata ma divertente.",
+        3600,
+    ),
+    (
+        "person.florian_horner",
+        "home",
+        "Florian è appena tornato a casa. Un caloroso bentornato — come se sapeste esattamente chi è tornato.",
+        3600,
+    ),
+    (
+        "person.sabrina",
+        "home",
+        "Sabrina è appena tornata a casa. Un caloroso bentornata Sabrina — naturale e familiare.",
+        3600,
+    ),
+]
+
+_reactive_cooldowns: dict[str, float] = {}
+
+
 @dataclass
 class HomeContext:
     """Snapshot of interesting home state, formatted for scriptwriter."""
@@ -138,6 +213,13 @@ class HomeContext:
     raw_states: dict[str, dict] = field(default_factory=dict)
     summary: str = ""
     timestamp: float = 0.0
+    # Phase 1: event diffing
+    events: deque[HomeEvent] = field(default_factory=lambda: deque(maxlen=20))
+    events_summary: str = ""
+    # Phase 2: mood classification
+    mood: str = ""
+    # Phase 3: weather narrative arc
+    weather_arc: str = ""
 
     @property
     def age_seconds(self) -> float:
@@ -207,6 +289,202 @@ def _build_summary(states: dict[str, dict]) -> str:
     return "\n".join(lines) if lines else ""
 
 
+# ---------------------------------------------------------------------------
+# Phase 1 helpers: event diffing
+# ---------------------------------------------------------------------------
+
+
+def _diff_states(
+    old_states: dict[str, dict],
+    new_states: dict[str, dict],
+    events: deque[HomeEvent],
+) -> None:
+    """Detect state changes between polls and append as HomeEvent objects.
+
+    Mutates the events deque in place. Prunes events older than 30 minutes.
+    """
+    now = time.time()
+    for entity_id, new_data in new_states.items():
+        new_state = new_data.get("state", "unknown")
+        if new_state in ("unavailable", "unknown"):
+            continue
+        old_data = old_states.get(entity_id, {})
+        old_state = old_data.get("state", "")
+        if not old_state or old_state == new_state:
+            continue
+        if old_state in ("unavailable", "unknown"):
+            continue
+        label = ENTITY_LABELS.get(entity_id, entity_id)
+        events.append(
+            HomeEvent(
+                entity_id=entity_id,
+                label=label,
+                old_state=STATE_TRANSLATIONS.get(old_state, old_state),
+                new_state=STATE_TRANSLATIONS.get(new_state, new_state),
+                timestamp=now,
+            )
+        )
+    # Prune events older than 30 minutes (from the left — oldest first)
+    cutoff = now - 1800
+    while events and events[0].timestamp < cutoff:
+        events.popleft()
+
+
+def _build_events_summary(events: deque[HomeEvent]) -> str:
+    """Build a most-recent-first summary of home events, capped at 5 lines."""
+    if not events:
+        return ""
+    lines = [e.describe() for e in reversed(events)][:5]
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Phase 2: Home mood classification
+# ---------------------------------------------------------------------------
+
+
+def classify_home_mood(states: dict[str, dict]) -> str:
+    """Classify aggregate HA state into a named Italian home scene.
+
+    Priority order — first match wins. Returns "" when no scene matches.
+    """
+
+    def _state(eid: str) -> str:
+        return states.get(eid, {}).get("state", "")
+
+    now_hour = datetime.datetime.now().hour
+
+    if _state("vacuum.goldstaubsucher") == "cleaning" or _state("vacuum.matrix10_ultra") == "cleaning":
+        return "Il robot sta pulendo"
+    if _state("switch.bar_kaffeemaschine_steckdose") == "on" and 5 <= now_hour <= 10:
+        return "Stanno svegliandosi"
+    if _state("fan.kuche_lufter") == "on":
+        return "Qualcuno sta cucinando"
+    if _state("fan.bad_gross_lufter_shelly") == "on" or _state("fan.bad_klein_lufter") == "on":
+        return "Qualcuno sta facendo la doccia"
+    if _state("media_player.samsung_s95ca_65") == "playing" and now_hour >= 18:
+        return "Serata cinema"
+    if (
+        _state("media_player.wohnzimmer_sonos_arc_lautsprecher") == "playing"
+        or _state("media_player.esszimmer") == "playing"
+    ):
+        return "Musica in casa"
+    if _state("input_select.bedroom_occupancy_state") == "occupied" and (now_hour >= 22 or now_hour < 8):
+        return "Qualcuno sta dormendo"
+    if _state("person.florian_horner") == "not_home" and _state("person.sabrina") == "not_home":
+        return "Casa vuota"
+    return ""
+
+
+# ---------------------------------------------------------------------------
+# Phase 3: Weather narrative arc
+# ---------------------------------------------------------------------------
+
+_weather_forecast_cache: str = ""
+_weather_forecast_fetched_at: float = 0.0
+_WEATHER_CACHE_TTL = 3600.0
+_SIGNIFICANT_CONDITIONS = {"rainy", "snowy", "lightning", "windy", "fog"}
+
+
+def _build_weather_arc(forecast: list[dict]) -> str:
+    """Build a day-arc weather narrative from hourly forecast items."""
+    if not forecast:
+        return ""
+
+    now_hour = datetime.datetime.now().hour
+    current = forecast[0]
+    current_cond = _sanitize_state_value(str(current.get("condition", "")), max_len=30)
+    current_temp = current.get("temperature")
+
+    # Look 6 hours ahead for upcoming significant weather
+    upcoming_sig: str | None = None
+    for fc in forecast[1:7]:
+        cond = _sanitize_state_value(str(fc.get("condition", "")), max_len=30)
+        if cond in _SIGNIFICANT_CONDITIONS:
+            upcoming_sig = cond
+            break
+
+    current_is_sig = current_cond in _SIGNIFICANT_CONDITIONS
+    current_italian = STATE_TRANSLATIONS.get(current_cond, current_cond)
+
+    if upcoming_sig and now_hour < 12:
+        italian = STATE_TRANSLATIONS.get(upcoming_sig, upcoming_sig)
+        return f"Attenzione: {italian} in arrivo questo pomeriggio."
+    if current_is_sig and 12 <= now_hour < 18:
+        temp_str = f", {current_temp}°C" if current_temp is not None else ""
+        return f"Fuori c'è {current_italian}{temp_str} — come previsto."
+    if current_is_sig and now_hour >= 18:
+        return f"Siete sopravvissuti alla {current_italian} di oggi?"
+    if current_italian and current_temp is not None:
+        return f"Meteo: {current_italian}, {current_temp}°C."
+    return ""
+
+
+async def fetch_weather_forecast(ha_url: str, ha_token: str) -> str:
+    """Fetch hourly weather forecast from HA and return a narrative arc string.
+
+    Cached for 1 hour. Returns "" if HA does not support get_forecasts or on error.
+    """
+    global _weather_forecast_cache, _weather_forecast_fetched_at
+    if time.time() - _weather_forecast_fetched_at < _WEATHER_CACHE_TTL:
+        return _weather_forecast_cache
+
+    try:
+        client = _get_ha_client()
+        resp = await client.post(
+            f"{ha_url.rstrip('/')}/api/services/weather/get_forecasts",
+            headers={
+                "Authorization": f"Bearer {ha_token}",
+                "Content-Type": "application/json",
+            },
+            json={"entity_id": "weather.forecast_home", "type": "hourly"},
+            params={"return_response": "true"},
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        forecast_list: list[dict] = data.get("weather.forecast_home", {}).get("forecast", [])
+        arc = _build_weather_arc(forecast_list)
+        _weather_forecast_cache = arc
+        _weather_forecast_fetched_at = time.time()
+        logger.debug("Weather arc: %s", arc or "(none)")
+        return arc
+    except Exception as e:
+        logger.debug("Weather forecast unavailable: %s", e)
+        _weather_forecast_cache = ""
+        _weather_forecast_fetched_at = time.time()
+        return ""
+
+
+# ---------------------------------------------------------------------------
+# Phase 4: Reactive trigger dispatch
+# ---------------------------------------------------------------------------
+
+
+def check_reactive_triggers(events: deque[HomeEvent]) -> str | None:
+    """Scan recent events for reactive triggers.
+
+    Only considers events less than 2 minutes old. Respects per-trigger cooldowns.
+    Returns the first matching directive text, or None.
+    """
+    now = time.time()
+    age_cutoff = now - 120  # 2 minutes
+    for event in reversed(events):
+        if event.timestamp < age_cutoff:
+            break
+        for entity_id, trigger_state, directive, cooldown in REACTIVE_TRIGGERS:
+            if event.entity_id != entity_id:
+                continue
+            expected = STATE_TRANSLATIONS.get(trigger_state, trigger_state)
+            if event.new_state != expected:
+                continue
+            cooldown_key = f"{entity_id}:{trigger_state}"
+            if now - _reactive_cooldowns.get(cooldown_key, 0.0) < cooldown:
+                continue
+            _reactive_cooldowns[cooldown_key] = now
+            return directive
+    return None
+
+
 _ha_client: httpx.AsyncClient | None = None
 _ha_cache: HomeContext | None = None
 
@@ -253,14 +531,33 @@ async def fetch_home_context(
         entity_map = {e["entity_id"]: e for e in all_states}
         relevant = {eid: entity_map[eid] for eid in ALL_ENTITIES if eid in entity_map}
 
+        # Phase 1: detect state changes since last poll
+        old_states = effective_cache.raw_states if effective_cache else {}
+        events: deque[HomeEvent] = deque(
+            effective_cache.events if effective_cache else [],
+            maxlen=20,
+        )
+        _diff_states(old_states, relevant, events)
+        events_summary = _build_events_summary(events)
+
+        # Phase 2: classify home mood
+        mood = classify_home_mood(relevant)
+
+        # Phase 3: weather narrative arc (cached separately)
+        weather_arc = await fetch_weather_forecast(ha_url, ha_token)
+
         summary = _build_summary(relevant)
         context = HomeContext(
             raw_states=relevant,
             summary=summary,
             timestamp=time.time(),
+            events=events,
+            events_summary=events_summary,
+            mood=mood,
+            weather_arc=weather_arc,
         )
         _ha_cache = context
-        logger.info("Fetched HA context: %d entities", len(relevant))
+        logger.info("Fetched HA context: %d entities, %d events, mood=%r", len(relevant), len(events), mood or "none")
         return context
 
     except Exception as e:
