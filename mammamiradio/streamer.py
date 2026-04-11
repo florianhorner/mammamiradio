@@ -568,8 +568,13 @@ async def _audio_generator(request: Request):
 
 @router.get("/", response_class=HTMLResponse)
 async def listener_home(request: Request):
-    """Serve the public listener UI as the default landing page."""
+    """Serve the public listener UI, except trusted HA ingress opens the control room."""
     prefix = request.headers.get("X-Ingress-Path", "")
+    config = request.app.state.config
+    if config.is_addon and prefix and _is_hassio_or_loopback(request):
+        html = _get_injected_html("admin", _ADMIN_HTML, prefix)
+        html = _inject_csrf_token(html, _get_csrf_token(request.app))
+        return html
     return _get_injected_html("listener", _LISTENER_HTML, prefix)
 
 

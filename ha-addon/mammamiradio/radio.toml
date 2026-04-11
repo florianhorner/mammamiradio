@@ -1,10 +1,36 @@
 [station]
 name = "Mamma Mi Radio"
 language = "it"
-theme = "late-night Milan talk radio, warm and nostalgic, two hosts who love cinema and 90s Italian pop"
+theme = "unhinged late-night Italian shock radio broadcasting from somewhere between Windor and Vergen. Two hosts who roast each other, roast the listeners, roast Italy itself. Think Le Iene meets GTA radio. Absurd traffic reports about burning Lamborghinis, breaking news about pizza dough exported to Russia, and sports flashes delivered like a Serie A commentator having a meltdown. Edgy, chaotic, over the top — but always unmistakably Italian."
+
+[sonic_brand]
+tagline = "Da Windor a Vergen, la voce che non si spegne mai!"
+geography = "Windor, Vergen"
+# Full station ident — plays at top of hour and after ad breaks
+full_ident = "Mamma Mi Radio... da Windor a Vergen, la voce che non si spegne mai!"
+# Short sung jingle — plays before banter segments
+short_sting = "Malamie..."
+# Sweeper lines — short voice drops between songs
+sweepers = [
+    "Mamma Mi Radio.",
+    "Windor, Vergen... e tutto il mondo che ascolta.",
+    "Sei su Malamie.",
+    "La radio che tua nonna non approverebbe.",
+    "Da Windor a Vergen, nessuno è al sicuro.",
+]
+# Rhodes motif: C5 → E5 → G5 → C6 (ascending major arpeggio)
+motif_notes = [523, 659, 784, 1047]
+# Sweeper voice — uses a host voice for station idents
+sweeper_voice = "it-IT-GiuseppeMultilingualNeural"
+# Probability of inserting a sweeper after a music segment (0.0–1.0)
+sweeper_probability = 0.25
 
 [playlist]
-shuffle = false
+shuffle = true
+allow_explicit = true   # false = skip tracks marked explicit
+repeat_cooldown = 5     # Min songs before the same track can replay
+artist_cooldown = 3     # Min songs before the same artist replays
+max_artist_per_hour = 3 # Hard cap on same artist within ~60 min window
 
 [pacing]
 songs_between_banter = 2
@@ -14,31 +40,34 @@ lookahead_segments = 3
 
 [[hosts]]
 name = "Marco"
-voice = "it-IT-DiegoNeural"
-style = "enthusiastic, lots of 90s references, slightly dorky, loves obscure cinema trivia"
+voice = "onyx"
+engine = "openai"
+edge_fallback_voice = "it-IT-GiuseppeMultilingualNeural"
+style = "manic energy, steamrolls every conversation, interrupts people mid-thought, says things he shouldn't on air, conspiracy theories about Italian food, gets way too personal about listeners' lives, drops obscure cinema references nobody asked for, once got suspended for a week (he's proud of it)"
 [hosts.personality]
-energy = 70
-chaos = 50
-warmth = 60
-verbosity = 40
-nostalgia = 80
+energy = 100
+chaos = 100
+warmth = 55
+verbosity = 68
+nostalgia = 75
 
 [[hosts]]
 name = "Giulia"
-voice = "it-IT-ElsaNeural"
-style = "dry wit, corrects Marco constantly, secretly loves the songs she claims to hate"
+voice = "it-IT-IsabellaNeural"
+style = "razor-sharp sarcasm, cuts Marco off whenever he deserves it, openly judges the playlist, delivers devastating one-liners with zero emotion, pretends she's too good for this station but clearly loves it, will burn any caller who says something stupid"
 [hosts.personality]
-energy = 45
-chaos = 35
-warmth = 40
-verbosity = 50
-nostalgia = 55
+energy = 72
+chaos = 92
+warmth = 20
+verbosity = 66
+nostalgia = 30
 
 [audio]
 sample_rate = 48000
 channels = 2
 bitrate = 192
 claude_model = "claude-haiku-4-5-20251001"
+claude_creative_model = "claude-opus-4-6"
 
 [homeassistant]
 enabled = false
@@ -53,12 +82,24 @@ name = "Negroni as a Service"
 tagline = "NaaS. Sempre in cloud, mai nel bicchiere."
 category = "tech"
 recurring = true
+[ads.brands.campaign]
+premise = "A startup delivering negroni cocktails via cloud infrastructure, but the drinks never actually arrive"
+sonic_signature = "ice_clink+startup_synth"
+format_pool = ["classic_pitch", "institutional_psa", "live_remote"]
+spokesperson = "hammer"
+escalation_rule = "Each ad reveals a worse subscription tier or a more absurd cloud-computing metaphor"
 
 [[ads.brands]]
 name = "Spaghetti Carbonara su Stecco"
 tagline = "La tradizione... portatile."
 category = "food"
 recurring = true
+[ads.brands.campaign]
+premise = "Street food startup that puts carbonara on a stick, outraging every nonna in Italy"
+sonic_signature = "register_hit"
+format_pool = ["testimonial", "live_remote", "classic_pitch"]
+spokesperson = "witness"
+escalation_rule = "Each ad features increasingly angry nonnas calling in to complain"
 
 [[ads.brands]]
 name = "Mausoleo Berlusconi"
@@ -71,42 +112,84 @@ name = "Caffè Misterioso"
 tagline = "Il gusto che non capirai mai."
 category = "food"
 recurring = true
+[ads.brands.campaign]
+premise = "A coffee brand where nobody knows what's in it, and every ad makes it more suspicious"
+sonic_signature = "hotline_beep"
+format_pool = ["late_night_whisper", "institutional_psa", "duo_scene"]
+spokesperson = "seductress"
+escalation_rule = "Each ad reveals another ingredient that should not be in coffee"
 
 [[ads.brands]]
 name = "Autolavaggio Supremo"
 tagline = "La tua macchina esce più pulita di te."
 category = "services"
 recurring = true
+[ads.brands.campaign]
+premise = "A car wash that judges you harder than your mother-in-law"
+sonic_signature = "whoosh+chime"
+format_pool = ["classic_pitch", "testimonial"]
+spokesperson = "maniac"
+escalation_rule = "Each ad reveals a more insulting premium tier"
 
 [[ads.brands]]
 name = "Profumo di Nonna"
 tagline = "Ragù, naftalina, e un tocco di mistero."
 category = "beauty"
 recurring = true
+[ads.brands.campaign]
+premise = "A perfume line that smells like your grandmother's house, marketed as luxury"
+sonic_signature = "mandolin_sting"
+format_pool = ["late_night_whisper", "classic_pitch", "institutional_psa"]
+spokesperson = "seductress"
+escalation_rule = "Each ad introduces a more disturbing scent note from nonna's house"
 
 [[ads.brands]]
 name = "Scarpe Volanti"
 tagline = "Non corri. Voli. Poi cadi."
 category = "fashion"
 recurring = true
+[ads.brands.campaign]
+premise = "Shoes that promise flight but deliver spectacular falls, with increasingly bold injury disclaimers"
+sonic_signature = "whoosh+tape_stop"
+format_pool = ["classic_pitch", "duo_scene", "live_remote"]
+spokesperson = "hammer"
+escalation_rule = "Each ad shows a more dramatic testimonial of someone who flew and then fell"
 
 [[ads.brands]]
 name = "Gelato Infinito"
 tagline = "Non finisce mai. Letteralmente. Abbiamo un problema."
 category = "food"
 recurring = true
+[ads.brands.campaign]
+premise = "A gelato that never melts and never ends, which has become a logistical nightmare"
+sonic_signature = "chime+chime"
+format_pool = ["live_remote", "institutional_psa", "duo_scene"]
+spokesperson = "maniac"
+escalation_rule = "Each ad reveals the gelato has gotten more out of control"
 
 [[ads.brands]]
 name = "Pizzeria del Futuro"
 tagline = "Pizza stampata in 3D. Il sapore è opzionale."
 category = "food"
 recurring = true
+[ads.brands.campaign]
+premise = "A pizzeria that 3D-prints pizza and keeps adding more absurd tech features nobody asked for"
+sonic_signature = "startup_synth"
+format_pool = ["classic_pitch", "live_remote"]
+spokesperson = "hammer"
+escalation_rule = "Each ad reveals a new useless tech feature added to pizza"
 
 [[ads.brands]]
 name = "Assicurazione Fantasma"
 tagline = "Ti copriamo. Forse. Dipende dall'umore."
 category = "finance"
 recurring = true
+[ads.brands.campaign]
+premise = "An insurance company that may or may not exist, with increasingly suspicious fine print"
+sonic_signature = "hotline_beep+tape_stop"
+format_pool = ["institutional_psa", "duo_scene", "classic_pitch"]
+spokesperson = "bureaucrat"
+escalation_rule = "Each ad reveals another clause that makes the insurance more useless"
 
 [[ads.brands]]
 name = "Palestra Domani"
@@ -125,6 +208,12 @@ name = "Clinica Dentale Sorriso Forzato"
 tagline = "Non sorridi? Ti aiutiamo noi. Anche contro la tua volontà."
 category = "health"
 recurring = true
+[ads.brands.campaign]
+premise = "A dental clinic that forces smiles on people whether they want them or not"
+sonic_signature = "ding+sweep"
+format_pool = ["testimonial", "institutional_psa", "classic_pitch"]
+spokesperson = "bureaucrat"
+escalation_rule = "Each ad reveals more coercive smile-enforcement methods"
 
 [[ads.brands]]
 name = "Vino Quantistico"
@@ -140,20 +229,36 @@ recurring = false
 
 [[ads.voices]]
 name = "Roberto"
-voice = "it-IT-GianniNeural"
+voice = "it-IT-DiegoNeural"
 style = "booming TV announcer, dramatic pauses, sells everything like it's the last day on earth"
+role = "hammer"
 
 [[ads.voices]]
 name = "Palmira"
-voice = "it-IT-PalmiraNeural"
+voice = "it-IT-IsabellaNeural"
 style = "ASMR whisperer, unsettlingly intimate, makes toothpaste sound sensual"
+role = "seductress"
 
 [[ads.voices]]
 name = "Rinaldo"
-voice = "it-IT-RinaldoNeural"
+voice = "it-IT-DiegoNeural"
 style = "fast-talking disclaimer reader, buries the bad news in speed"
+role = "disclaimer_goblin"
 
 [[ads.voices]]
 name = "Fiamma"
-voice = "it-IT-FiammaNeural"
+voice = "it-IT-ElsaNeural"
 style = "overly enthusiastic infomercial host, everything is INCREDIBILE"
+role = "maniac"
+
+[[ads.voices]]
+name = "Dottore Marzio"
+voice = "it-IT-GiuseppeMultilingualNeural"
+style = "dry official government notice voice, reads absurd regulations with total sincerity"
+role = "bureaucrat"
+
+[[ads.voices]]
+name = "Signora Testimonia"
+voice = "it-IT-ElsaNeural"
+style = "fake customer testimonial voice, suspiciously specific enthusiasm, clearly reading a script"
+role = "witness"
