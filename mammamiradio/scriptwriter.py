@@ -394,6 +394,10 @@ Rules:
 - NEVER use each other's names more than ONCE per exchange. They know each other — they
   don't keep saying names. Use "tu", "eh", "senti", or just talk. Real people almost
   never address each other by name in conversation.
+- STATION NAME: drop "{config.station.name}" naturally about once every 3-4 exchanges —
+  the way a real DJ does. Not an announcement, just woven in. "...siamo su {config.station.name},
+  che altro?" or just "{config.station.name}." at the end of a thought. Never more than once
+  per banter block. Never forced.
 - FOURTH WALL: at most once per hour, the host may say something subtly self-aware
   ("A volte sembra troppo preciso, no? Coincidenza. Probabilmente."). Deliver it
   calmly, never winking. Never reference it again in the same session.
