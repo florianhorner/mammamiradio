@@ -40,6 +40,7 @@ def _make_state() -> StationState:
             Track(title="Canzone Uno", artist="Artista", duration_ms=200_000, spotify_id="demo1"),
             Track(title="Canzone Due", artist="Artista", duration_ms=180_000, spotify_id="demo2"),
         ],
+        listeners_active=1,  # simulate a live listener so the producer gate passes
     )
 
 
@@ -165,7 +166,7 @@ async def test_source_switch_discards_stale_music_segment(tmp_path):
     """A source switch should invalidate any in-flight music from the previous playlist."""
     old_track = Track(title="Old Song", artist="Old Artist", duration_ms=200_000, spotify_id="old1")
     new_track = Track(title="New Song", artist="New Artist", duration_ms=200_000, spotify_id="new1")
-    state = StationState(playlist=[old_track])
+    state = StationState(playlist=[old_track], listeners_active=1)
     config = _make_config()
     config.tmp_dir = tmp_path
     config.cache_dir = tmp_path
@@ -222,7 +223,7 @@ async def test_source_switch_discards_stale_music_segment(tmp_path):
 async def test_stopped_session_discards_finished_segment_without_advancing_state(tmp_path):
     """A segment finished after /stop should be dropped without mutating playback state."""
     track = Track(title="Late Song", artist="Late Artist", duration_ms=200_000, spotify_id="late1")
-    state = StationState(playlist=[track])
+    state = StationState(playlist=[track], listeners_active=1)
     config = _make_config()
     config.tmp_dir = tmp_path
     config.cache_dir = tmp_path

@@ -397,10 +397,19 @@ async def run_producer(
     _last_cache_eviction = 0.0  # epoch time of last eviction check
     _cache_eviction_interval = 3600  # run eviction at most once per hour
 
+    _producer_idle_logged = False
     while True:
         if state.session_stopped:
             await asyncio.sleep(1)
             continue
+
+        if state.listeners_active == 0:
+            if not _producer_idle_logged:
+                logger.info("Producer idle: no listeners connected")
+                _producer_idle_logged = True
+            await asyncio.sleep(1)
+            continue
+        _producer_idle_logged = False
 
         if queue.qsize() >= config.pacing.lookahead_segments:
             # Periodically evict stale cache files while the producer is idle
@@ -788,9 +797,9 @@ async def run_producer(
 
             elif seg_type == SegmentType.TIME_CHECK:
                 logger.info("Producing TIME CHECK")
-                now = datetime.datetime.now()
-                hour = now.hour
-                minute = now.minute
+                dt_now = datetime.datetime.now()
+                hour = dt_now.hour
+                minute = dt_now.minute
                 station_name = config.station.name
                 # Italian grammar: "È l'una" for 1:00/13:00, "Sono le N" otherwise
                 hour_str = "È l'una" if hour in (1, 13) else f"Sono le {hour}"

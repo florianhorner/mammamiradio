@@ -42,6 +42,7 @@ def _make_state() -> StationState:
             Track(title="Canzone Uno", artist="Artista", duration_ms=200_000, spotify_id="demo1"),
             Track(title="Canzone Due", artist="Artista", duration_ms=180_000, spotify_id="demo2"),
         ],
+        listeners_active=1,  # simulate a live listener so the producer gate passes
     )
 
 
