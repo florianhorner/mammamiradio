@@ -11,3 +11,6 @@ configuration:
   claude_model:
     name: AI Model
     description: "Haiku: fast and cheap. Sonnet: balanced. Opus: highest quality but slower."
+  admin_token:
+    name: Admin Token
+    description: "Set a stable token for the admin API and HA media_player integration. If left empty, one is auto-generated on each restart (check the add-on log to retrieve it)."

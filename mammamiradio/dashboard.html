@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Mamma Mi Radio</title>
-<meta name="theme-color" content="#D45228">
+<meta name="theme-color" content="#14110F">
 <meta property="og:title" content="Mamma Mi Radio">
 <meta property="og:description" content="AI-powered Italian radio station">
 <meta property="og:type" content="website">
@@ -16,64 +16,64 @@
 <link rel="apple-touch-icon" href="/static/icon-192.svg">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,600;0,700;1,400;1,700&family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,600;0,700;1,400;1,700&family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
 *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
 html {
   font-size: 15px; -webkit-font-smoothing: antialiased;
   min-height: 100vh;
-  /* Sunset gradient fills full viewport — not clipped to body width */
+  /* Espresso dark with subtle warm gradient at top + film grain */
   background:
-    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='200' height='200' filter='url(%23n)' opacity='0.055'/%3E%3C/svg%3E") repeat,
-    linear-gradient(175deg, #B83C1C 0%, #C84820 25%, #D46030 55%, #C05028 80%, #A03820 100%);
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='200' height='200' filter='url(%23n)' opacity='0.04'/%3E%3C/svg%3E") repeat,
+    linear-gradient(180deg, #1E1610 0%, #14110F 12%, #14110F 100%);
 }
 
-/* ── VOLARE PALETTE — from the record cover, +10% warmth ── */
+/* ── VOLARE REFINED — espresso dark, Italian warmth in accents ── */
 :root {
-  /* Sky — warm orange-red sunset (dominant bg) */
-  --sky1:   #C44020;   /* deep horizon red */
-  --sky2:   #D45228;   /* mid sunset orange */
-  --sky3:   #E07038;   /* bright amber-orange */
+  /* Espresso foundation */
+  --bg:         #14110F;
+  --bg-elevated:#1C1714;
+  --surface:    #251E19;
+  --surface-hover:#2E2520;
+  --surface-strong:#362B25;
 
-  /* Sun — golden highlight */
+  /* Sun — golden highlight (kept from Volare) */
   --sun:    #F4D048;
   --sun2:   #ECCC30;
 
-  /* Buildings in shadow — card surfaces */
-  --sienna: #823218;
-  --sienna2:#924020;
-  --sienna3:#A04A24;
+  /* Legacy aliases for card surfaces */
+  --sienna: #251E19;
+  --sienna2:#251E19;
+  --sienna3:#2E2520;
 
-  /* Road — mid-tone */
-  --road:   #A86838;
-
-  /* Cream — record sleeve border, text */
+  /* Cream — text */
   --cream:  #F5EDD8;
   --cream-dk: #EADDC4;
 
-  /* Silhouette — palm trees, deepest dark */
-  --shadow: #2A1008;
+  /* Deepest dark — FM dial interior */
+  --shadow: #0E0C0A;
 
-  /* Lancia red — primary interactive */
+  /* Lancia red — interactive */
   --lancia: #A02018;
   --lancia2:#B82C20;
 
-  /* Semantic (keep blue for success — red-green colorblind) */
+  /* Semantic (blue for success — red-green colorblind) */
   --ok:      #2563EB;
   --error:   #c44a4a;
-  --warning: #c4a04a;
-  --muted:   rgba(245,237,216,0.45);
+  --warning: #D97706;
+  --muted:   #9B8574;
 
   --font-display: 'Playfair Display', Georgia, serif;
-  --font-body: 'Inter', system-ui, -apple-system, sans-serif;
+  --font-body: 'Outfit', system-ui, -apple-system, sans-serif;
+  --font-mono: 'JetBrains Mono', monospace;
 }
 
 body {
   font-family: var(--font-body);
   color: var(--cream);
   line-height: 1.5;
-  padding: 0 16px 96px;
-  max-width: 640px;
+  padding: 0 24px 96px;
+  max-width: 960px;
   margin: 0 auto;
 }
 
@@ -86,12 +86,12 @@ body {
   margin-top: 20px;
 }
 
-/* Golden sun glow top-right, like the record cover */
+/* Subtle amber glow top-right */
 body::before {
   content: '';
-  position: fixed; top: -80px; right: 30%; z-index: 0;
-  width: 280px; height: 280px; border-radius: 50%;
-  background: radial-gradient(circle, rgba(240,200,64,0.28) 0%, rgba(240,160,40,0.1) 40%, transparent 70%);
+  position: fixed; top: -120px; right: 20%; z-index: 0;
+  width: 400px; height: 400px; border-radius: 50%;
+  background: radial-gradient(circle, rgba(244,208,72,0.10) 0%, rgba(236,204,48,0.03) 40%, transparent 70%);
   pointer-events: none;
 }
 
@@ -102,6 +102,12 @@ body::before {
   padding: 28px 0 24px;
   border-bottom: 1px solid rgba(245,237,216,0.15);
   margin-bottom: 0;
+}
+.header-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
 }
 .header-left { display: flex; flex-direction: column; gap: 0; }
 h1 {
@@ -118,7 +124,7 @@ h1 {
 .live-chip {
   display: flex; align-items: center; gap: 5px; margin-top: 6px;
   padding: 5px 12px; border-radius: 20px;
-  background: rgba(42,16,8,0.3); border: 1px solid rgba(245,237,216,0.25);
+  background: rgba(20,17,15,0.5); border: 1px solid rgba(245,237,216,0.15);
   font-size: 9px; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase;
   color: var(--cream);
 }
@@ -148,8 +154,8 @@ h1 {
   font-size: 10px; font-weight: 700; text-transform: uppercase;
   letter-spacing: 0.12em; padding: 4px 12px; border-radius: 20px;
   margin-bottom: 20px;
-  background: rgba(42,16,8,0.35);
-  border: 1px solid rgba(245,237,216,0.22);
+  background: rgba(20,17,15,0.5);
+  border: 1px solid rgba(245,237,216,0.12);
   color: var(--cream);
   transition: background 0.6s ease, color 0.6s ease;
 }
@@ -179,7 +185,7 @@ h1 {
   font-size: 28px; font-weight: 400; color: var(--cream);
   font-variant-numeric: tabular-nums; line-height: 1;
 }
-.dial-freq .unit { font-family: 'Inter', sans-serif; font-size: 11px; color: rgba(245,237,216,0.4); margin-left: 3px; }
+.dial-freq .unit { font-family: 'Outfit', sans-serif; font-size: 11px; color: rgba(245,237,216,0.4); margin-left: 3px; }
 .dial-status { font-size: 10px; color: var(--sun2); margin-top: 5px; min-height: 16px; }
 .signal-bars { display: flex; align-items: flex-end; gap: 3px; height: 22px; }
 .sb { width: 5px; border-radius: 1px; background: rgba(240,200,64,0.18); transition: background 0.4s ease; }
@@ -255,9 +261,10 @@ h1 {
 /* ── NOW PLAYING ── */
 .now-playing {
   position: relative; z-index: 1; overflow: hidden;
-  background: var(--sienna);
-  border-top: 2px solid var(--sun2);
-  border-bottom: 1px solid rgba(42,16,8,0.3);
+  background: var(--surface);
+  border: 1px solid rgba(245,237,216,0.08);
+  border-top: 2px solid rgba(236,204,48,0.4);
+  border-radius: 12px;
   padding: 24px 24px 22px;
   margin-top: 20px; margin-bottom: 0;
 }
@@ -385,8 +392,8 @@ h1 {
 
 /* ── INPUT ── */
 .input {
-  background: rgba(42,16,8,0.4);
-  border: 1px solid rgba(245,237,216,0.2);
+  background: rgba(20,17,15,0.6);
+  border: 1px solid rgba(245,237,216,0.16);
   border-radius: 6px; color: var(--cream);
   padding: 8px 12px; font-size: 13px; font-family: var(--font-body);
   outline: none; width: 100%; min-height: 44px;
@@ -403,7 +410,7 @@ h1 {
 .transition-overlay {
   position: fixed; inset: 0;
   display: flex; align-items: center; justify-content: center;
-  background: rgba(196,64,32,0.85);
+  background: rgba(20,17,15,0.92);
   z-index: 100; opacity: 0; pointer-events: none; transition: opacity 0.3s;
 }
 .transition-overlay.show { opacity: 1; pointer-events: auto; }
@@ -430,8 +437,8 @@ h1 {
 /* ── TICKER — inline beneath player, fade edges ── */
 .ticker-wrap {
   position: relative; overflow: hidden;
-  background: rgba(42,16,8,0.2);
-  border-bottom: 1px solid rgba(245,237,216,0.1);
+  background: rgba(20,17,15,0.4);
+  border-bottom: 1px solid rgba(245,237,216,0.08);
   -webkit-mask-image: linear-gradient(90deg, transparent 0%, black 6%, black 94%, transparent 100%);
   mask-image: linear-gradient(90deg, transparent 0%, black 6%, black 94%, transparent 100%);
 }
@@ -453,8 +460,8 @@ h1 {
 /* ── TOAST ── */
 .toast {
   position: fixed; bottom: 80px; left: 50%; transform: translateX(-50%);
-  background: var(--sienna); color: var(--cream);
-  border: 1px solid rgba(245,237,216,0.15);
+  background: var(--surface); color: var(--cream);
+  border: 1px solid rgba(245,237,216,0.12);
   padding: 10px 20px; border-radius: 8px; font-size: 13px;
   opacity: 0; transition: opacity 0.3s; pointer-events: none; z-index: 50;
 }
@@ -464,21 +471,20 @@ h1 {
 @media (max-width: 640px) {
   body { padding: 0 12px 80px; }
   h1 { font-size: 28px; }
+  .header-actions { align-items: flex-start; margin-top: 8px; }
 }
 
-@media (min-width: 1024px) {
-  body {
-    max-width: 1200px;
-    padding: 0 24px 96px;
-  }
+@media (min-width: 768px) {
   .dashboard-grid {
-    grid-template-columns: minmax(0, 1.45fr) minmax(320px, 1fr);
+    grid-template-columns: 1fr 1fr;
     gap: 14px 16px;
     align-items: start;
   }
   #radio-dial,
   #now-playing,
-  #ticker-wrap,
+  #ticker-wrap {
+    grid-column: 1 / -1;
+  }
   #golden-path-card,
   #controls {
     grid-column: 1;
@@ -487,6 +493,35 @@ h1 {
   #unlock-ai,
   #connect-ha {
     grid-column: 2;
+  }
+}
+
+@media (min-width: 1200px) {
+  body {
+    max-width: 1400px;
+    padding: 0 32px 96px;
+  }
+  .dashboard-grid {
+    grid-template-columns: minmax(0, 1.6fr) minmax(320px, 1fr) minmax(280px, 0.8fr);
+    gap: 14px 20px;
+  }
+  #radio-dial,
+  #now-playing,
+  #ticker-wrap {
+    grid-column: 1 / -1;
+  }
+  #golden-path-card {
+    grid-column: 1;
+  }
+  #queue-card {
+    grid-column: 2;
+  }
+  #unlock-ai,
+  #connect-ha {
+    grid-column: 3;
+  }
+  #controls {
+    grid-column: 1 / -1;
   }
 }
 </style>
@@ -498,9 +533,12 @@ h1 {
     <h1>Mamma Mi Radio</h1>
     <div class="station-sub">96.7 FM &middot; Milano &middot; Est. 1987</div>
   </div>
-  <div class="live-chip" aria-live="polite">
-    <div class="live-dot"></div>
-    <span id="tier-badge" data-tier="demo">On Air</span>
+  <div class="header-actions">
+    <a class="listener-link" id="admin-link" href="/admin">Control Room</a>
+    <div class="live-chip" aria-live="polite">
+      <div class="live-dot"></div>
+      <span id="tier-badge" data-tier="demo">On Air</span>
+    </div>
   </div>
 </div>
 
@@ -611,11 +649,15 @@ if (_base) {
   document.addEventListener('DOMContentLoaded', () => {
     const link = document.getElementById('listener-link');
     if (link) link.href = _base + '/';
+    const adminLink = document.getElementById('admin-link');
+    if (adminLink) adminLink.href = _base + '/admin';
   });
 } else {
   document.addEventListener('DOMContentLoaded', () => {
     const link = document.getElementById('listener-link');
     if (link) link.href = '/';
+    const adminLink = document.getElementById('admin-link');
+    if (adminLink) adminLink.href = '/admin';
   });
 }
 

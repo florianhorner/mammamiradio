@@ -49,7 +49,7 @@ Or add a button to your Lovelace dashboard that triggers this automation.
 
 ## Screenshots
 
-The dashboard gives you full control over the station — queue, host personalities, and live scripts:
+The dashboard gives you the station at a glance — now playing, up-next queue, controls, and setup prompts:
 
 ![Dashboard](../docs/screenshots/dashboard.png)
 

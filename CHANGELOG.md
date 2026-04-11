@@ -4,6 +4,56 @@ All notable changes to `mammamiradio` are documented here.
 
 The current version source of truth is `pyproject.toml`.
 
+## [2.4.0] - 2026-04-11
+
+### Added
+
+- **Volare Refined design system**: Listener and admin UIs now share a unified espresso-dark palette (`#14110F`) with golden accents. The sunset orange is preserved in typography and highlights — not the background. Typography updated to Playfair Display + Outfit + JetBrains Mono.
+- **OpenAI key parity in setup status**: `OPENAI_API_KEY` is now treated as equivalent to `ANTHROPIC_API_KEY` for tier classification, health check reporting, and onboarding prompts. Running on OpenAI-only now correctly shows "Full AI Radio" instead of "Demo Radio".
+- **yt-dlp in health check**: Setup status now includes a yt-dlp binary check (warn if missing, not fail — yt-dlp is preferred but optional).
+- **Onboarding steps payload**: `build_setup_status` now returns an `onboarding_steps` array to drive step-by-step setup UI.
+- **Canned clip on reconnect**: When the producer wakes from idle (0→1 listener), it immediately seeds a canned banter clip into the queue so reconnecting listeners hear audio within seconds instead of waiting 30–60s for generation.
+- **Home context enrichment**: Four-phase HA intelligence upgrade. Phase 1: event diffing detects state changes between polls and surfaces them as temporal events ("coffee machine turned on 3 minutes ago"). Phase 2: mood classification reads aggregate state into Italian scenes (cooking, sleeping, movie night). Phase 3: weather narrative arcs evolve through the day. Phase 4: reactive impossible moments fire high-priority directives when specific events occur (coffee on → hosts smell espresso, door unlocks → "bentornato").
+- **Listener launch ceremony**: Pre-launch state with animated radio warming up, welcome segment display in now-playing UI.
+
+### Fixed
+
+- **Ad double-bed removed**: `mix_ad_with_bed` call in the ad break pipeline was stacking a second music bed on top of the contextual bed already applied by `synthesize_ad`. Removed — ads now have one well-mixed bed, not two with loudnorm artifacts.
+- **Producer resumes visibly**: When waking from idle, the producer now logs "Producer resuming (N listeners)" so the wake transition is traceable in logs.
+- **Producer idle log deduplication**: The "Producer idle" log fires once per idle period, not once per second.
+- **Credential write security**: `_write_env_atomic` now strips newlines from values before writing to `.env`, matching the sanitization already present in `_save_dotenv`.
+- **Hub close resets listener count**: `LiveStreamHub.close()` now sets `state.listeners_active = 0` so the producer idle gate correctly reflects the empty state after shutdown.
+- **listener.html CSS completeness**: Added missing `--font-mono`, `--line`, `--line-strong`, and `--warning` tokens to listener.html so all design system references resolve.
+- **Flaky test eliminated**: `test_rationale_with_album` increased sample count from 100 to 500 to make the probabilistic assertion statistically reliable.
+
+### Changed
+
+- Station name references updated to "Mamma Mi Radio" across launcher scripts, monitor server title, and documentation. Stale SVG wireframes removed.
+
+---
+
+## [2.3.1] - 2026-04-11
+
+### Added
+
+- **Artist diversity cap**: Apple Music Italy charts now enforce a max of 2 tracks per artist, preventing any single artist (e.g. Shiva) from dominating the playlist.
+- **Cache LRU eviction**: On startup and hourly while the producer is idle, the oldest cached MP3s are deleted when the cache exceeds the configured size limit (default 500 MB). Controlled via `MAMMAMIRADIO_MAX_CACHE_MB` env var. Prevents SD card overflow on Raspberry Pi.
+- **API cost tracking**: `/api/status` now returns `api_cost_estimate_usd`, `cache_size_mb`, and `cache_limit_mb` so operators can monitor token spend and disk usage without SSH.
+- **Listener gate**: Playback loop pauses when no listeners are connected, preventing API and CPU burn when the room is empty. Producer naturally idles as the queue stays full.
+- **Ad sound beds**: Each ad voiceover is now mixed with a warm 220+330+440Hz ambient bed (-18dB) with a slow breathing LFO. Ads no longer sound like dry voice-only spots.
+- **HA media_player entity**: Station now exposes `artist` and `title_only` metadata fields separately; `skipping` and `stopped` states include `metadata: {}` to prevent template errors. DOCS.md includes a copy-paste `configuration.yaml` snippet for a full `media_player` entity with play/pause/skip and album art.
+- **Stable admin token**: `admin_token` is now a configurable add-on option. Set it once in the HA UI and reference it in `secrets.yaml` for the media_player integration — no more log-hunting on each restart.
+- **Station name on air**: Hosts now say the station name naturally once every 3–4 banter exchanges, matching the `station_name` config option. Rename in the HA UI; hosts adapt within minutes.
+- **Sharper host personalities**: Marco doubles down on bad takes and believes he's the reason people tune in. Giulia now delivers devastation with the warmth of a tax audit. Banter rules require mandatory conflict, Giulia cutting Marco off at least once per exchange, unexplained recurring bits, and song-specific reactions.
+
+### Fixed
+
+- `asyncio.get_event_loop()` (deprecated since Python 3.10) replaced with `asyncio.get_running_loop()` in the producer idle loop.
+- yt-dlp download options now include `noprogress: True` to suppress progress-bar noise in logs.
+- Error-recovery silence replaced: when segment production fails, the producer now falls back to a canned banter clip before inserting silence. Quiet patches between sections are significantly reduced.
+
+---
+
 ## [2.3.0] - 2026-04-11
 
 ### Removed

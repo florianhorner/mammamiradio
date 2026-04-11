@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Mamma Mi Radio - Late-night Italian radio</title>
-<meta name="theme-color" content="#c4654a">
+<meta name="theme-color" content="#14110F">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Mamma Mi Radio">
@@ -17,31 +17,40 @@
 <link rel="apple-touch-icon" href="/static/icon-192.svg">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,600;0,700;1,400;1,600&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,600;0,700;1,400;1,700&family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
   *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 
   :root{
-    --bg:#2a2320;
-    --bg2:#3d3530;
+    --bg:#14110F;
+    --bg2:#1C1714;
+    --surface:#251E19;
+    --surface-hover:#2E2520;
     --cream:#F5EDD8;
     --cream-dk:#EADDC4;
-    --terracotta:#c4654a;
-    --dusty-rose:#d4917a;
-    --sage:#8a7e6d;
-    --highlight:#faf3eb;
-    --muted:#b0a494;
+    --terracotta:#ECCC30;
+    --dusty-rose:#CBB9A6;
+    --sage:#9B8574;
+    --highlight:#F5EDD8;
+    --muted:#9B8574;
+    --line:rgba(245,237,216,0.10);
+    --line-strong:rgba(245,237,216,0.16);
+    --warning:#D97706;
+    --ok:#2563EB;
+    --sun:#F4D048;
+    --sun2:#ECCC30;
     --font-display:'Playfair Display',Georgia,serif;
-    --font-body:'Inter',system-ui,-apple-system,sans-serif;
+    --font-body:'Outfit',system-ui,-apple-system,sans-serif;
+    --font-mono:'JetBrains Mono',monospace;
   }
 
   html{font-size:16px;-webkit-font-smoothing:antialiased}
 
   body{
     background:
-      radial-gradient(circle at top center, rgba(212,145,122,0.12), transparent 28%),
-      radial-gradient(circle at 20% 0%, rgba(138,126,109,0.12), transparent 22%),
-      linear-gradient(180deg,#2a2320 0%,#241f1b 100%);
+      url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='200' height='200' filter='url(%23n)' opacity='0.04'/%3E%3C/svg%3E") repeat,
+      radial-gradient(circle at top center, rgba(244,208,72,0.06), transparent 28%),
+      linear-gradient(180deg,#1E1610 0%,#14110F 12%,#14110F 100%);
     color:var(--cream);
     font-family:var(--font-body);
     line-height:1.6;
@@ -49,6 +58,19 @@
     padding-bottom:160px;
     overflow-x:hidden;
   }
+  body::before{
+    content:'';
+    position:fixed;
+    top:-120px;
+    right:20%;
+    width:400px;
+    height:400px;
+    border-radius:50%;
+    background:radial-gradient(circle, rgba(244,208,72,0.10) 0%, rgba(236,204,48,0.03) 40%, transparent 70%);
+    pointer-events:none;
+    z-index:0;
+  }
+  body > *{position:relative;z-index:1}
 
   /* ---- Station Header ---- */
   .station-header{
@@ -79,7 +101,7 @@
     font-weight:600;
     letter-spacing:0.14em;
     text-transform:uppercase;
-    color:var(--terracotta);
+    color:var(--sun2);
     opacity:0;
     transition:opacity 0.4s;
   }
@@ -87,12 +109,12 @@
   .on-air-dot{
     width:8px;height:8px;
     border-radius:50%;
-    background:var(--terracotta);
+    background:var(--sun);
     animation:pulse-glow 1.8s ease-in-out infinite;
   }
   @keyframes pulse-glow{
-    0%,100%{box-shadow:0 0 4px var(--terracotta);opacity:1}
-    50%{box-shadow:0 0 14px var(--terracotta),0 0 28px rgba(196,101,74,0.3);opacity:0.7}
+    0%,100%{box-shadow:0 0 4px var(--sun);opacity:1}
+    50%{box-shadow:0 0 14px var(--sun),0 0 28px rgba(244,208,72,0.3);opacity:0.7}
   }
 
   /* ---- Shared container ---- */
@@ -104,24 +126,263 @@
     gap:1rem;
   }
 
+  /* ---- Launch Scene ---- */
+  .launch-scene{
+    background:var(--surface);
+    border:1px solid var(--line);
+    border-top:2px solid rgba(236,204,48,0.4);
+    border-radius:12px;
+    padding:1.5rem 1.25rem 1.25rem;
+    position:relative;
+    overflow:hidden;
+    box-shadow:0 24px 48px rgba(0,0,0,0.25);
+    transition:padding 0.4s ease, transform 0.4s ease, box-shadow 0.4s ease;
+  }
+  .launch-scene::before{
+    content:'';
+    position:absolute;
+    top:-1px;
+    left:24px;
+    right:24px;
+    height:2px;
+    background:linear-gradient(90deg, transparent, rgba(244,208,72,0.6), transparent);
+  }
+  .launch-scene::after{
+    content:'';
+    position:absolute;
+    inset:0;
+    background:
+      radial-gradient(circle at top right, rgba(244,208,72,0.10), transparent 35%),
+      linear-gradient(180deg, rgba(255,255,255,0.01), transparent 30%);
+    pointer-events:none;
+  }
+  .launch-top{
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    gap:1rem;
+    margin-bottom:1rem;
+  }
+  .launch-eyebrow{
+    font-size:0.66rem;
+    font-weight:700;
+    letter-spacing:0.18em;
+    text-transform:uppercase;
+    color:var(--sun2);
+  }
+  .launch-lamp{
+    display:inline-flex;
+    align-items:center;
+    gap:0.45rem;
+    padding:0.38rem 0.7rem;
+    border-radius:999px;
+    border:1px solid rgba(245,237,216,0.14);
+    background:rgba(245,237,216,0.04);
+    font-size:0.68rem;
+    font-weight:600;
+    letter-spacing:0.14em;
+    text-transform:uppercase;
+    color:var(--muted);
+  }
+  .launch-lamp-dot{
+    width:8px;
+    height:8px;
+    border-radius:50%;
+    background:rgba(245,237,216,0.28);
+    box-shadow:none;
+    transition:background 0.25s ease, box-shadow 0.25s ease;
+  }
+  .launch-lamp[data-state="warming"] .launch-lamp-dot,
+  .launch-lamp[data-state="ready"] .launch-lamp-dot{
+    background:var(--warning);
+    box-shadow:0 0 14px rgba(217,119,6,0.32);
+  }
+  .launch-lamp[data-state="live"]{
+    color:var(--sun2);
+    border-color:rgba(236,204,48,0.3);
+    background:rgba(236,204,48,0.12);
+  }
+  .launch-lamp[data-state="live"] .launch-lamp-dot{
+    background:var(--sun);
+    box-shadow:0 0 16px rgba(244,208,72,0.45);
+    animation:pulse-glow 1.8s ease-in-out infinite;
+  }
+  .launch-title{
+    font-family:var(--font-display);
+    font-size:clamp(2rem, 7vw, 3.2rem);
+    font-style:italic;
+    line-height:1;
+    color:var(--highlight);
+    max-width:12ch;
+  }
+  .launch-detail{
+    margin-top:0.65rem;
+    max-width:34rem;
+    font-size:0.98rem;
+    color:var(--cream-dk);
+    line-height:1.55;
+  }
+  .launch-promise{
+    margin-top:1rem;
+    font-size:0.74rem;
+    font-weight:600;
+    letter-spacing:0.16em;
+    text-transform:uppercase;
+    color:rgba(245,237,216,0.5);
+  }
+  .launch-waveform{
+    display:flex;
+    align-items:flex-end;
+    gap:4px;
+    height:48px;
+    margin:1.25rem 0 0.95rem;
+  }
+  .launch-waveform .wb{
+    width:4px;
+    border-radius:999px;
+    background:rgba(240,200,64,0.42);
+    height:8px;
+    animation:launch-wave var(--d) ease-in-out infinite alternate;
+    animation-delay:var(--dl);
+    animation-play-state:paused;
+  }
+  .launch-waveform.active .wb{animation-play-state:running}
+  @keyframes launch-wave{
+    from{height:5px;opacity:0.35}
+    to{height:var(--h);opacity:0.92}
+  }
+  .launch-preview{
+    padding:0.85rem 0.95rem;
+    border:1px solid rgba(245,237,216,0.08);
+    border-radius:10px;
+    background:rgba(20,17,15,0.42);
+    font-size:0.86rem;
+    color:var(--cream-dk);
+    min-height:3.4rem;
+  }
+  .launch-preview strong{
+    display:block;
+    margin-bottom:0.16rem;
+    font-size:0.68rem;
+    font-weight:700;
+    letter-spacing:0.16em;
+    text-transform:uppercase;
+    color:var(--sun2);
+  }
+  .launch-cues{
+    list-style:none;
+    display:grid;
+    gap:0.65rem;
+    margin:1rem 0 0;
+  }
+  .launch-cue{
+    display:flex;
+    align-items:flex-start;
+    gap:0.8rem;
+    padding:0.78rem 0.9rem;
+    border-radius:10px;
+    border:1px solid rgba(245,237,216,0.08);
+    background:rgba(20,17,15,0.36);
+  }
+  .launch-cue-dot{
+    width:10px;
+    height:10px;
+    border-radius:50%;
+    margin-top:0.28rem;
+    background:rgba(245,237,216,0.18);
+    flex-shrink:0;
+    transition:background 0.2s ease, box-shadow 0.2s ease;
+  }
+  .launch-cue[data-state="active"] .launch-cue-dot{
+    background:var(--warning);
+    box-shadow:0 0 14px rgba(217,119,6,0.28);
+  }
+  .launch-cue[data-state="done"] .launch-cue-dot{
+    background:var(--sun);
+    box-shadow:0 0 16px rgba(244,208,72,0.35);
+  }
+  .launch-cue-title{
+    font-size:0.86rem;
+    font-weight:600;
+    color:var(--highlight);
+  }
+  .launch-cue-detail{
+    margin-top:0.18rem;
+    font-size:0.8rem;
+    color:var(--muted);
+    line-height:1.45;
+  }
+  .launch-actions{
+    margin-top:1.1rem;
+    display:flex;
+    flex-direction:column;
+    align-items:flex-start;
+    gap:0.55rem;
+  }
+  .launch-btn{
+    min-height:52px;
+    border:none;
+    border-radius:999px;
+    padding:0.9rem 1.45rem;
+    background:var(--sun2);
+    color:var(--bg);
+    font-family:var(--font-body);
+    font-size:0.95rem;
+    font-weight:700;
+    cursor:pointer;
+    box-shadow:0 4px 20px rgba(236,204,48,0.4),0 0 0 6px rgba(236,204,48,0.08),0 0 28px rgba(236,204,48,0.15);
+    transition:transform 0.15s ease, background 0.2s ease, box-shadow 0.3s ease;
+  }
+  .launch-btn:hover{
+    background:var(--sun);
+    transform:scale(1.02);
+    box-shadow:0 4px 24px rgba(244,208,72,0.55),0 0 0 8px rgba(244,208,72,0.12),0 0 36px rgba(244,208,72,0.2);
+  }
+  .launch-btn:active{transform:scale(0.98)}
+  .launch-btn[disabled]{
+    cursor:default;
+    opacity:0.86;
+    transform:none;
+  }
+  .launch-note{
+    font-size:0.82rem;
+    color:var(--muted);
+    line-height:1.45;
+  }
+  .post-launch{
+    display:grid;
+    gap:1rem;
+    opacity:0.28;
+    transform:translateY(18px);
+    transition:opacity 0.45s ease, transform 0.45s ease;
+  }
+  body[data-launch-state="live"] .post-launch{
+    opacity:1;
+    transform:none;
+  }
+  body[data-launch-state="live"] .launch-scene{
+    padding-bottom:1rem;
+    box-shadow:0 18px 36px rgba(0,0,0,0.22);
+  }
+
   /* ---- Now Playing ---- */
   .now-playing{
-    background:linear-gradient(180deg,rgba(61,53,48,0.96),rgba(50,44,40,0.94));
-    border:1px solid rgba(212,145,122,0.16);
-    border-radius:20px;
+    background:var(--surface);
+    border:1px solid var(--line);
+    border-top:2px solid rgba(236,204,48,0.4);
+    border-radius:12px;
     padding:2rem 1.75rem;
     position:relative;
     overflow:hidden;
     transition:background 0.3s;
-    box-shadow:0 24px 48px rgba(0,0,0,0.18);
+    box-shadow:0 24px 48px rgba(0,0,0,0.25);
   }
   .now-playing::before{
     content:'';
     position:absolute;
-    top:0;left:0;right:0;
-    height:3px;
-    background:linear-gradient(90deg,var(--terracotta),var(--dusty-rose),var(--sage));
-    opacity:0.7;
+    top:-1px;left:24px;right:24px;
+    height:2px;
+    background:linear-gradient(90deg,transparent,rgba(244,208,72,0.6),transparent);
   }
   .np-section-label{
     font-size:0.7rem;
@@ -146,7 +407,7 @@
   }
   .np-sublabel{
     font-size:0.85rem;
-    color:var(--dusty-rose);
+    color:var(--cream-dk);
     margin-top:0.35rem;
     font-weight:400;
   }
@@ -162,7 +423,7 @@
   .eq-bar{
     width:4px;
     border-radius:2px;
-    background:var(--terracotta);
+    background:rgba(240,200,64,0.45);
     opacity:0.6;
     transition:height 0.15s ease;
   }
@@ -186,11 +447,10 @@
 
   /* ---- Section cards ---- */
   .section-card{
-    background:rgba(61,53,48,0.48);
-    border:1px solid rgba(138,126,109,0.16);
-    border-radius:18px;
+    background:var(--surface);
+    border:1px solid var(--line);
+    border-radius:12px;
     padding:1.1rem 1.1rem 0.2rem;
-    backdrop-filter:blur(8px);
   }
   .section-title{
     font-family:var(--font-display);
@@ -201,14 +461,14 @@
     letter-spacing:0.02em;
   }
   .golden-path-notice{
-    border-left:3px solid var(--terracotta);
+    border-left:3px solid var(--sun2);
   }
   .golden-path-head{
     font-size:0.72rem;
     font-weight:600;
     letter-spacing:0.1em;
     text-transform:uppercase;
-    color:var(--dusty-rose);
+    color:var(--sun2);
     margin-bottom:0.4rem;
   }
   .golden-path-title{
@@ -237,7 +497,7 @@
     align-items:center;
     gap:0.75rem;
     padding:0.65rem 0;
-    border-bottom:1px solid rgba(138,126,109,0.2);
+    border-bottom:1px solid rgba(245,237,216,0.2);
     transition:opacity 0.3s,transform 0.3s;
   }
   .upcoming-item:last-child{border-bottom:none}
@@ -259,7 +519,7 @@
     align-items:center;
     gap:0.75rem;
     padding:0.5rem 0;
-    border-bottom:1px solid rgba(138,126,109,0.1);
+    border-bottom:1px solid rgba(245,237,216,0.1);
   }
   .log-item:last-child{border-bottom:none}
   .log-time{
@@ -274,17 +534,17 @@
 
   /* Running Jokes */
   .jokes-section{
-    background:rgba(61,53,48,0.36);
-    border:1px solid rgba(212,145,122,0.14);
-    border-radius:18px;
-    border-left:3px solid var(--terracotta);
+    background:var(--surface);
+    border:1px solid var(--line);
+    border-radius:12px;
+    border-left:3px solid var(--sun2);
     padding:1rem 1rem 0.9rem;
   }
   .jokes-title{
     font-family:var(--font-display);
     font-size:0.85rem;
     font-weight:600;
-    color:var(--dusty-rose);
+    color:var(--sun2);
     margin-bottom:0.5rem;
     letter-spacing:0.04em;
   }
@@ -306,6 +566,13 @@
     display:flex;
     justify-content:center;
     pointer-events:none;
+    opacity:0;
+    transform:translateY(24px);
+    transition:opacity 0.35s ease, transform 0.35s ease;
+  }
+  body[data-launch-state="live"] .player-bar{
+    opacity:1;
+    transform:none;
   }
   .player-inner{
     width:min(640px,100%);
@@ -314,30 +581,31 @@
     display:flex;
     align-items:center;
     gap:1rem;
-    border:1px solid rgba(212,145,122,0.18);
-    border-radius:20px;
-    background:linear-gradient(180deg,rgba(61,53,48,0.92),rgba(50,44,40,0.96));
-    box-shadow:0 18px 45px rgba(0,0,0,0.24);
+    border:1px solid var(--line);
+    border-radius:12px;
+    background:rgba(28,23,20,0.95);
+    box-shadow:0 18px 45px rgba(0,0,0,0.35);
     backdrop-filter:blur(12px);
     pointer-events:auto;
   }
   .play-btn{
     width:56px;height:56px;
     border-radius:50%;
-    background:var(--terracotta);
+    background:var(--sun2);
     border:none;
     cursor:pointer;
     display:flex;
     align-items:center;
     justify-content:center;
     flex-shrink:0;
-    transition:background 0.2s,transform 0.15s;
-    box-shadow:0 4px 20px rgba(196,101,74,0.35);
+    transition:background 0.2s,transform 0.15s,box-shadow 0.3s;
+    box-shadow:0 4px 20px rgba(236,204,48,0.4),0 0 0 6px rgba(236,204,48,0.08),0 0 28px rgba(236,204,48,0.15);
   }
-  .play-btn:hover{background:#d4735a;transform:scale(1.05)}
+  .play-btn:hover{background:var(--sun);transform:scale(1.05);box-shadow:0 4px 24px rgba(244,208,72,0.55),0 0 0 8px rgba(244,208,72,0.12),0 0 36px rgba(244,208,72,0.2)}
   .play-btn:active{transform:scale(0.97)}
-  .play-btn svg{width:22px;height:22px;fill:var(--highlight);margin-left:2px}
-  .play-btn.playing svg{margin-left:0}
+  .play-btn svg{width:22px;height:22px;fill:#14110F;margin-left:2px}
+  .play-btn.playing{background:var(--ok);box-shadow:0 4px 20px rgba(37,99,235,0.4),0 0 0 6px rgba(37,99,235,0.08)}
+  .play-btn.playing svg{margin-left:0;fill:#fff}
 
   .player-meta{flex:1;min-width:0}
   .player-live{
@@ -345,7 +613,7 @@
     font-weight:600;
     letter-spacing:0.14em;
     text-transform:uppercase;
-    color:var(--terracotta);
+    color:var(--sun2);
     display:flex;
     align-items:center;
     gap:0.35rem;
@@ -353,7 +621,7 @@
   .player-live-dot{
     width:6px;height:6px;
     border-radius:50%;
-    background:var(--terracotta);
+    background:var(--sun);
     animation:pulse-glow 1.8s ease-in-out infinite;
   }
   .player-now{
@@ -382,7 +650,7 @@
     width:80px;
     height:4px;
     border-radius:2px;
-    background:rgba(138,126,109,0.3);
+    background:rgba(245,237,216,0.3);
     outline:none;
   }
   .volume-slider::-webkit-slider-thumb{
@@ -393,7 +661,7 @@
     cursor:pointer;
     transition:background 0.2s;
   }
-  .volume-slider::-webkit-slider-thumb:hover{background:#8da87e}
+  .volume-slider::-webkit-slider-thumb:hover{background:#CBB9A6}
   .volume-slider::-moz-range-thumb{
     width:14px;height:14px;
     border-radius:50%;
@@ -404,7 +672,7 @@
   .volume-slider::-moz-range-track{
     height:4px;
     border-radius:2px;
-    background:rgba(138,126,109,0.3);
+    background:rgba(245,237,216,0.3);
     border:none;
   }
 
@@ -423,12 +691,15 @@
   /* Responsive */
   @media(min-width:768px){
     .station-header{padding-top:3.5rem}
+    .launch-scene{padding:1.8rem 1.6rem 1.45rem}
     .now-playing{padding:2.5rem 2.25rem}
     .volume-slider{width:100px}
   }
   @media(max-width:640px){
     body{padding-bottom:180px}
-    .section-card,.jokes-section{border-radius:16px}
+    .launch-top{align-items:flex-start;flex-direction:column}
+    .launch-title{max-width:none}
+    .section-card,.jokes-section,.launch-scene{border-radius:16px}
     .player-bar{padding-left:0.75rem;padding-right:0.75rem}
     .player-inner{border-radius:18px}
   }
@@ -443,11 +714,11 @@
   }
 </style>
 </head>
-<body>
+<body data-launch-state="idle">
 
 <!-- Station Header -->
 <header class="station-header">
-  <svg width="48" height="48" viewBox="0 0 100 100" style="margin-bottom: 8px;"><rect width="100" height="100" rx="12" fill="#2a2320"/><rect x="14" y="32" width="72" height="50" rx="6" fill="#c4654a"/><rect x="14" y="32" width="24" height="4" fill="#7a8f6d"/><rect x="38" y="32" width="24" height="4" fill="#f5efe6"/><rect x="62" y="32" width="24" height="4" fill="#c4654a"/><rect x="18" y="40" width="64" height="38" rx="4" fill="#3a3230"/><circle cx="42" cy="61" r="16" fill="#2a2320" stroke="#d4917a" stroke-width="1"/><circle cx="42" cy="61" r="3" fill="#c4654a"/><circle cx="70" cy="61" r="6" fill="#d4917a"/><circle cx="70" cy="61" r="2" fill="#f5efe6"/><line x1="72" y1="32" x2="80" y2="14" stroke="#d4917a" stroke-width="2" stroke-linecap="round"/><path d="M86 48 A3 6 0 0 1 86 64" fill="none" stroke="#f5efe6" stroke-width="2" stroke-linecap="round" opacity="0.8"/><path d="M90 44 A4 8 0 0 1 90 68" fill="none" stroke="#f5efe6" stroke-width="1.5" stroke-linecap="round" opacity="0.5"/></svg>
+  <svg width="48" height="48" viewBox="0 0 100 100" style="margin-bottom: 8px;"><rect width="100" height="100" rx="12" fill="#14110F"/><rect x="14" y="32" width="72" height="50" rx="6" fill="#ECCC30"/><rect x="14" y="32" width="24" height="4" fill="#B82C20"/><rect x="38" y="32" width="24" height="4" fill="#F5EDD8"/><rect x="62" y="32" width="24" height="4" fill="#ECCC30"/><rect x="18" y="40" width="64" height="38" rx="4" fill="#251E19"/><circle cx="42" cy="61" r="16" fill="#14110F" stroke="#CBB9A6" stroke-width="1"/><circle cx="42" cy="61" r="3" fill="#ECCC30"/><circle cx="70" cy="61" r="6" fill="#CBB9A6"/><circle cx="70" cy="61" r="2" fill="#F5EDD8"/><line x1="72" y1="32" x2="80" y2="14" stroke="#CBB9A6" stroke-width="2" stroke-linecap="round"/><path d="M86 48 A3 6 0 0 1 86 64" fill="none" stroke="#F5EDD8" stroke-width="2" stroke-linecap="round" opacity="0.8"/><path d="M90 44 A4 8 0 0 1 90 68" fill="none" stroke="#F5EDD8" stroke-width="1.5" stroke-linecap="round" opacity="0.5"/></svg>
   <h1 class="station-name">Mamma Mi Radio</h1>
   <p class="station-subtitle">Late-night Milan talk radio</p>
   <div class="on-air" id="onAirBadge">
@@ -457,12 +728,54 @@
 </header>
 
 <div class="container">
+  <section class="launch-scene" id="launchScene">
+    <div class="launch-top">
+      <div class="launch-eyebrow" id="launchEyebrow">Sign-on sequence</div>
+      <div class="launch-lamp" id="launchLamp" data-state="idle">
+        <span class="launch-lamp-dot"></span>
+        <span id="launchLampLabel">Stand by</span>
+      </div>
+    </div>
+    <h2 class="launch-title fade-content" id="launchTitle">We're lighting the sign.</h2>
+    <p class="launch-detail fade-content" id="launchDetail">AI hosts. Italian music. Live absurdity.</p>
+    <div class="launch-promise">AI hosts. Italian music. Live absurdity.</div>
+    <div class="launch-waveform" id="launchWaveform" aria-hidden="true">
+      <span class="wb" style="--h:30px;--d:0.62s;--dl:0.00s"></span>
+      <span class="wb" style="--h:24px;--d:0.78s;--dl:0.08s"></span>
+      <span class="wb" style="--h:38px;--d:0.69s;--dl:0.13s"></span>
+      <span class="wb" style="--h:20px;--d:0.84s;--dl:0.21s"></span>
+      <span class="wb" style="--h:44px;--d:0.71s;--dl:0.04s"></span>
+      <span class="wb" style="--h:28px;--d:0.66s;--dl:0.18s"></span>
+      <span class="wb" style="--h:40px;--d:0.74s;--dl:0.26s"></span>
+      <span class="wb" style="--h:18px;--d:0.92s;--dl:0.11s"></span>
+      <span class="wb" style="--h:35px;--d:0.58s;--dl:0.09s"></span>
+      <span class="wb" style="--h:26px;--d:0.82s;--dl:0.28s"></span>
+      <span class="wb" style="--h:42px;--d:0.63s;--dl:0.17s"></span>
+      <span class="wb" style="--h:22px;--d:0.88s;--dl:0.05s"></span>
+      <span class="wb" style="--h:36px;--d:0.67s;--dl:0.24s"></span>
+      <span class="wb" style="--h:19px;--d:0.77s;--dl:0.15s"></span>
+      <span class="wb" style="--h:46px;--d:0.72s;--dl:0.03s"></span>
+      <span class="wb" style="--h:32px;--d:0.81s;--dl:0.29s"></span>
+      <span class="wb" style="--h:24px;--d:0.64s;--dl:0.12s"></span>
+      <span class="wb" style="--h:39px;--d:0.76s;--dl:0.22s"></span>
+      <span class="wb" style="--h:21px;--d:0.85s;--dl:0.06s"></span>
+      <span class="wb" style="--h:34px;--d:0.61s;--dl:0.19s"></span>
+    </div>
+    <div class="launch-preview" id="launchPreview"><strong>First cue</strong>You are arriving exactly at sign-on.</div>
+    <ol class="launch-cues" id="launchCues"></ol>
+    <div class="launch-actions">
+      <button class="launch-btn" id="launchBtn" type="button">Start the station</button>
+      <p class="launch-note" id="launchNote">Sound starts the moment you tap.</p>
+    </div>
+  </section>
+
+  <div class="post-launch" id="postLaunch">
 
   <!-- Now Playing -->
   <div class="now-playing" id="nowPlaying">
-    <div class="np-section-label">Now playing</div>
+    <div class="np-section-label">Live now</div>
     <div class="np-type-badge" id="npIcon">&#9835;</div>
-    <div class="np-label fade-content" id="npLabel">Waiting for signal...</div>
+    <div class="np-label fade-content" id="npLabel">The booth is warming up...</div>
     <div class="np-sublabel fade-content" id="npSublabel"></div>
     <div class="equalizer" id="equalizer">
       <div class="eq-bar"></div>
@@ -474,7 +787,7 @@
   </div>
 
   <div class="section-card golden-path-notice" id="goldenPathNotice" style="display:none">
-    <div class="golden-path-head">Golden path</div>
+    <div class="golden-path-head" id="goldenPathHead">Studio note</div>
     <div class="golden-path-title" id="goldenPathTitle"></div>
     <div class="golden-path-detail" id="goldenPathDetail"></div>
     <ol class="golden-path-steps" id="goldenPathSteps"></ol>
@@ -497,7 +810,7 @@
     <div class="section-title">Recently played</div>
     <div id="recentList"></div>
   </div>
-
+  </div>
 </div>
 
 <!-- Audio element (hidden) -->
@@ -531,6 +844,7 @@
     return p === '' ? '' : p;
   })();
   const audio = document.getElementById('radioAudio');
+  const body = document.body;
   const playBtn = document.getElementById('playBtn');
   const playIcon = document.getElementById('playIcon');
   const pauseIcon = document.getElementById('pauseIcon');
@@ -538,16 +852,37 @@
   const onAir = document.getElementById('onAirBadge');
   const volumeSlider = document.getElementById('volumeSlider');
   const volumeToggle = document.getElementById('volumeToggle');
+  const launchBtn = document.getElementById('launchBtn');
+  const launchTitle = document.getElementById('launchTitle');
+  const launchDetail = document.getElementById('launchDetail');
+  const launchEyebrow = document.getElementById('launchEyebrow');
+  const launchLamp = document.getElementById('launchLamp');
+  const launchLampLabel = document.getElementById('launchLampLabel');
+  const launchPreview = document.getElementById('launchPreview');
+  const launchCues = document.getElementById('launchCues');
+  const launchNote = document.getElementById('launchNote');
+  const launchWaveform = document.getElementById('launchWaveform');
+  const goldenPathHead = document.getElementById('goldenPathHead');
 
-  let isPlaying = false;
-  let lastVolume = 0.8;
-  let currentLabel = '';
+  const state = {
+    isPlaying: false,
+    lastVolume: 0.8,
+    currentLabel: '',
+    attemptedStart: false,
+    launchResolved: false,
+    waitingForAudio: false,
+    hasFetchedStatus: false,
+    streamReady: false,
+    nowStreaming: null,
+    upcoming: [],
+    goldenPath: null,
+  };
 
   audio.volume = 0.8;
 
-  // Type icons
   function icon(type){
     if(type==='music') return '\u266B';
+    if(type==='welcome') return '\u2728';
     if(type==='banter') return '\uD83C\uDF99\uFE0F';
     if(type==='ad') return '\uD83D\uDCE2';
     return '\u266B';
@@ -560,57 +895,250 @@
     return type||'';
   }
 
-  // Play/Pause
-  playBtn.addEventListener('click', function(){
-    if(isPlaying){
-      audio.pause();
-    } else {
-      // Reload stream source each time to get live position
-      audio.src = _base + '/stream';
-      audio.load();
-      audio.play().catch(function(){});
+  function timeScene(){
+    var hour = new Date().getHours();
+    if(hour < 6) return {
+      title: "We're lighting the sign.",
+      detail: "After-hours Italian radio, ready before the city admits it's awake."
+    };
+    if(hour < 12) return {
+      title: "We're lighting the sign.",
+      detail: "A fresh broadcast, warm mics, and the first record already in the room."
+    };
+    if(hour < 18) return {
+      title: "The studio is taking the afternoon.",
+      detail: "AI hosts. Italian music. Live absurdity, right on cue."
+    };
+    return {
+      title: "Tonight is coming on air.",
+      detail: "The booth is warm, the hosts are sharp, and the next record is waiting."
+    };
+  }
+
+  function friendlyGoldenPath(gp){
+    if(!gp || !gp.blocking) return null;
+    return {
+      head: 'Studio note',
+      title: 'The station wants a real crate of records.',
+      detail: 'The room is ready, but the station still needs a dependable music source before it can keep the fantasy alive for guests.',
+      steps: ['Enable chart music in the control room, or drop MP3s into the local music library.']
+    };
+  }
+
+  function cueState(done, active){
+    if(done) return 'done';
+    if(active) return 'active';
+    return 'pending';
+  }
+
+  function updateWaveform(){
+    launchWaveform.classList.toggle('active', state.attemptedStart || state.launchResolved || state.streamReady);
+  }
+
+  function renderLaunch(){
+    var mood = timeScene();
+    var nextLabel = '';
+    if(state.nowStreaming && state.nowStreaming.label) nextLabel = state.nowStreaming.label;
+    else if(state.upcoming && state.upcoming.length) nextLabel = state.upcoming[0].label || '';
+
+    var title = mood.title;
+    var detail = mood.detail;
+    var previewHead = 'First cue';
+    var previewText = 'You are arriving exactly at sign-on.';
+    var buttonText = state.launchResolved
+      ? (state.isPlaying ? 'Pause the station' : 'Resume the station')
+      : 'Start the station';
+    var note = 'Sound starts the moment you tap.';
+    var lampState = 'idle';
+    var lampLabel = 'Stand by';
+    var eyebrow = 'Sign-on sequence';
+
+    if(state.attemptedStart && !state.streamReady){
+      title = 'Mamma Mi Radio is going live.';
+      detail = 'The booth is warming up. Stay with us while the first signal hits the room.';
+      previewHead = 'In the room';
+      previewText = 'Checking the airwaves, warming the hosts, and lining up the first entrance.';
+      buttonText = 'Going on air...';
+      note = 'If your browser hesitates, tap again. The station should answer immediately.';
+      lampState = 'warming';
+      lampLabel = 'Warming';
+      eyebrow = 'Going live';
+    } else if(state.streamReady && !state.launchResolved){
+      title = "Tonight's first record is on the platter.";
+      detail = nextLabel ? nextLabel : 'The booth is ready. All it needs is your tap to open the room.';
+      previewHead = state.nowStreaming ? 'Now cued' : 'First up';
+      previewText = nextLabel || 'The first entrance is loaded and waiting.';
+      buttonText = 'Go on air';
+      note = 'Tap once and the station should open straight into the live feed.';
+      lampState = 'ready';
+      lampLabel = 'Ready';
+      eyebrow = 'Ready to break in';
     }
+    if(state.waitingForAudio && !state.launchResolved){
+      title = 'The red light is about to flip.';
+      detail = nextLabel ? ('Stay with us. ' + nextLabel + ' is already on deck.') : 'The station is already moving. Stay with the sign-on.';
+      previewHead = 'On deck';
+      previewText = nextLabel || 'The first voice or record is already lined up.';
+      buttonText = 'Opening the room...';
+      note = 'The sign turns ON AIR the moment sound actually lands.';
+      lampState = 'warming';
+      lampLabel = 'Arming';
+      eyebrow = 'Sound incoming';
+    }
+    if(state.launchResolved){
+      title = 'You arrived exactly on time.';
+      detail = state.isPlaying
+        ? 'The station is live. Let it run.'
+        : 'The station already knows how to come alive. Bring it back whenever you want.';
+      previewHead = state.nowStreaming ? 'Now airing' : 'On air';
+      previewText = nextLabel || 'The room is open and the next moment is already forming.';
+      note = state.isPlaying
+        ? 'The first hit landed. Stay through the next segue.'
+        : 'The scene stays warm. Tap to throw the switch again.';
+      lampState = state.isPlaying ? 'live' : 'ready';
+      lampLabel = state.isPlaying ? 'On air' : 'Ready';
+      eyebrow = 'Live sign-on';
+    }
+
+    launchTitle.textContent = title;
+    launchDetail.textContent = detail;
+    launchEyebrow.textContent = eyebrow;
+    launchLamp.dataset.state = lampState;
+    launchLampLabel.textContent = lampLabel;
+    launchBtn.textContent = buttonText;
+    launchBtn.disabled = !state.launchResolved && state.attemptedStart && !state.streamReady && !state.waitingForAudio;
+    launchNote.textContent = note;
+    launchPreview.innerHTML = '<strong>' + escHtml(previewHead) + '</strong>' + escHtml(previewText);
+
+    var cues = [
+      {
+        title: 'Checking the airwaves',
+        detail: state.hasFetchedStatus ? 'The signal made it into the booth.' : 'The booth is listening for the first pulse.',
+        status: cueState(state.hasFetchedStatus, state.attemptedStart)
+      },
+      {
+        title: 'The hosts are taking their seats',
+        detail: state.nowStreaming && (state.nowStreaming.type === 'banter' || state.nowStreaming.type === 'welcome')
+          ? 'They are already in the room, leaning into the first line.'
+          : 'Warm mics, a low hum, and just enough trouble.',
+        status: cueState(Boolean(state.nowStreaming), state.attemptedStart || state.streamReady)
+      },
+      {
+        title: "Tonight's first record is on the platter",
+        detail: nextLabel || 'The first entrance is lined up and waiting for the red light.',
+        status: cueState(Boolean(nextLabel), state.streamReady || state.waitingForAudio)
+      },
+      {
+        title: 'Opening the room to you',
+        detail: state.launchResolved
+          ? 'The station is fully live now.'
+          : 'The ON AIR lamp only flips when real sound starts.',
+        status: cueState(state.launchResolved, state.waitingForAudio || state.attemptedStart)
+      }
+    ];
+
+    launchCues.innerHTML = cues.map(function(cue){
+      return '<li class="launch-cue" data-state="' + cue.status + '">' +
+        '<span class="launch-cue-dot"></span>' +
+        '<div><div class="launch-cue-title">' + escHtml(cue.title) + '</div>' +
+        '<div class="launch-cue-detail">' + escHtml(cue.detail) + '</div></div>' +
+        '</li>';
+    }).join('');
+
+    if(state.launchResolved) body.setAttribute('data-launch-state', 'live');
+    else if(state.waitingForAudio) body.setAttribute('data-launch-state', 'priming');
+    else if(state.streamReady) body.setAttribute('data-launch-state', 'ready');
+    else body.setAttribute('data-launch-state', state.attemptedStart ? 'priming' : 'idle');
+    updateWaveform();
+  }
+
+  function resolveLaunch(){
+    if(state.launchResolved) return;
+    state.launchResolved = true;
+    renderLaunch();
+  }
+
+  function startStream(){
+    state.attemptedStart = true;
+    state.waitingForAudio = true;
+    if(audio.src !== _base + '/stream'){
+      audio.src = _base + '/stream';
+    }
+    audio.load();
+    var playAttempt = audio.play();
+    if(playAttempt && playAttempt.catch){
+      playAttempt.catch(function(){
+        state.waitingForAudio = false;
+        renderLaunch();
+      });
+    }
+    renderLaunch();
+  }
+
+  function togglePlayback(){
+    if(state.isPlaying){
+      audio.pause();
+      return;
+    }
+    startStream();
+  }
+
+  playBtn.addEventListener('click', togglePlayback);
+  launchBtn.addEventListener('click', function(){
+    if(!state.launchResolved && state.attemptedStart && !state.streamReady && !state.waitingForAudio){
+      startStream();
+      return;
+    }
+    togglePlayback();
   });
 
   audio.addEventListener('play', function(){
-    isPlaying = true;
+    state.isPlaying = true;
     playIcon.style.display = 'none';
     pauseIcon.style.display = 'block';
     playBtn.classList.add('playing');
     eq.classList.add('active');
-    onAir.classList.add('visible');
+    renderLaunch();
   });
 
   audio.addEventListener('pause', function(){
-    isPlaying = false;
+    state.isPlaying = false;
+    state.waitingForAudio = false;
     playIcon.style.display = 'block';
     pauseIcon.style.display = 'none';
     playBtn.classList.remove('playing');
     eq.classList.remove('active');
+    onAir.classList.remove('visible');
+    renderLaunch();
   });
 
   audio.addEventListener('waiting', function(){
+    state.waitingForAudio = true;
     eq.classList.remove('active');
+    renderLaunch();
   });
 
   audio.addEventListener('playing', function(){
+    state.isPlaying = true;
+    state.waitingForAudio = false;
     if(!audio.paused) eq.classList.add('active');
+    onAir.classList.add('visible');
+    resolveLaunch();
   });
 
-  // Volume
   volumeSlider.addEventListener('input', function(){
     audio.volume = this.value;
-    lastVolume = this.value;
+    state.lastVolume = this.value;
     updateVolumeIcon();
   });
 
   volumeToggle.addEventListener('click', function(){
     if(audio.volume > 0){
-      lastVolume = audio.volume;
+      state.lastVolume = audio.volume;
       audio.volume = 0;
       volumeSlider.value = 0;
     } else {
-      audio.volume = lastVolume || 0.8;
+      audio.volume = state.lastVolume || 0.8;
       volumeSlider.value = audio.volume;
     }
     updateVolumeIcon();
@@ -622,7 +1150,6 @@
     else volumeToggle.innerHTML = '\uD83D\uDD0A';
   }
 
-  // Format timestamp
   function fmtTime(ts){
     if(!ts) return '';
     var d = new Date(ts * 1000);
@@ -631,33 +1158,37 @@
     return (h<10?'0':'')+h+':'+(m<10?'0':'')+m;
   }
 
-  // Status polling
   function fetchStatus(){
     fetch(_base + '/public-status')
       .then(function(r){return r.json()})
       .then(function(data){
+        state.hasFetchedStatus = true;
+        state.nowStreaming = data.now_streaming || null;
+        state.upcoming = data.upcoming || [];
+        state.streamReady = !!(data.now_streaming || (data.upcoming && data.upcoming.length));
         updateGoldenPath(data.golden_path);
         updateNowPlaying(data.now_streaming);
         updateUpNext(data.upcoming, data.upcoming_mode);
         updateJokes(data.running_jokes);
         updateRecent(data.stream_log);
-        if(!isPlaying && data.now_streaming){
-          onAir.classList.add('visible');
-        }
+        renderLaunch();
       })
       .catch(function(){});
   }
 
   function updateGoldenPath(gp){
+    state.goldenPath = gp;
     var wrap = document.getElementById('goldenPathNotice');
-    if(!gp || !gp.blocking){
+    var friendly = friendlyGoldenPath(gp);
+    if(!friendly || !state.launchResolved){
       wrap.style.display = 'none';
       return;
     }
     wrap.style.display = 'block';
-    document.getElementById('goldenPathTitle').textContent = gp.headline || '';
-    document.getElementById('goldenPathDetail').textContent = gp.detail || '';
-    var stepsHtml = (gp.steps || []).map(function(step){
+    goldenPathHead.textContent = friendly.head;
+    document.getElementById('goldenPathTitle').textContent = friendly.title;
+    document.getElementById('goldenPathDetail').textContent = friendly.detail;
+    var stepsHtml = (friendly.steps || []).map(function(step){
       return '<li>' + escHtml(step) + '</li>';
     }).join('');
     document.getElementById('goldenPathSteps').innerHTML = stepsHtml;
@@ -671,10 +1202,9 @@
     var npIcon = document.getElementById('npIcon');
     var playerNow = document.getElementById('playerNow');
 
-    if(label === currentLabel) return;
-    currentLabel = label;
+    if(label === state.currentLabel) return;
+    state.currentLabel = label;
 
-    // Fade out
     npLabel.classList.add('updating');
     playerNow.classList.add('updating');
 
@@ -690,6 +1220,9 @@
           npLabel.textContent = label;
           npSublabel.textContent = '';
         }
+      } else if(np.type === 'welcome'){
+        npLabel.textContent = 'The station has noticed you.';
+        npSublabel.textContent = 'Straight into the room, no dead air.';
       } else if(np.type === 'banter'){
         npLabel.textContent = label ? label + ' are talking\u2026' : 'The hosts are talking\u2026';
         npSublabel.textContent = '';
@@ -703,7 +1236,6 @@
 
       playerNow.textContent = label || 'Mamma Mi Radio';
 
-      // Fade in
       npLabel.classList.remove('updating');
       playerNow.classList.remove('updating');
     }, 200);
@@ -772,7 +1304,7 @@
     return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
   }
 
-  // Initial fetch + polling
+  renderLaunch();
   fetchStatus();
   setInterval(fetchStatus, 3000);
 

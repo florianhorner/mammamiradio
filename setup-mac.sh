@@ -1,5 +1,5 @@
 #!/bin/bash
-# One-time setup: creates a clickable Malamie Radio.app launcher and bookmark files.
+# One-time setup: creates a clickable Mamma Mi Radio.app launcher and bookmark files.
 # After running this, drag the app to your Dock. Never touch the terminal again.
 set -e
 cd "$(dirname "$0")"
@@ -19,9 +19,9 @@ set -a
 set +a
 PORT="${MAMMAMIRADIO_PORT:-8000}"
 
-echo "Building Malamie Radio.app..."
+echo "Building Mamma Mi Radio.app..."
 
-osacompile -o "Malamie Radio.app" <<'APPLESCRIPT'
+osacompile -o "Mamma Mi Radio.app" <<'APPLESCRIPT'
 on run
     set appPath to POSIX path of (path to me)
     set projectPath to do shell script "dirname " & quoted form of appPath
@@ -53,7 +53,7 @@ on run
         end repeat
 
         if not ready then
-            display dialog "Malamie Radio failed to start. Check tmp/radio.log for details." buttons {"OK"} default button "OK" with icon caution
+            display dialog "Mamma Mi Radio failed to start. Check tmp/radio.log for details." buttons {"OK"} default button "OK" with icon caution
             return
         end if
     end if
@@ -94,7 +94,7 @@ echo "  Done."
 echo ""
 echo "=== Setup complete ==="
 echo ""
-echo "  Malamie Radio.app  → Drag to your Dock. One click starts the radio + opens dashboard."
+echo "  Mamma Mi Radio.app  → Drag to your Dock. One click starts the radio + opens dashboard."
 echo "  Dashboard.webloc  → Drag to browser bookmarks bar (admin controls)."
 echo "  Listener.webloc   → Drag to browser bookmarks bar (the player you share)."
 echo ""
