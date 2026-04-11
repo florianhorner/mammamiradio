@@ -998,8 +998,28 @@ async def move_track(request: Request, _: None = Depends(require_admin_access)):
 
 @router.get("/api/search")
 async def search_tracks(request: Request, q: str = "", _: None = Depends(require_admin_access)):
-    """Search for tracks (stub — future: Music Assistant integration)."""
-    return {"results": []}
+    """Search the current playlist for tracks matching the query."""
+    if not q.strip():
+        return {"results": []}
+    query = q.strip().lower()
+    state = request.app.state.station_state
+    results = []
+    for i, track in enumerate(state.playlist):
+        text = f"{track.title} {track.artist}".lower()
+        if query in text:
+            results.append(
+                {
+                    "index": i,
+                    "title": track.title,
+                    "artist": track.artist,
+                    "display": track.display,
+                    "duration_ms": track.duration_ms,
+                    "id": track.spotify_id or track.cache_key,
+                }
+            )
+            if len(results) >= 20:
+                break
+    return {"results": results}
 
 
 @router.post("/api/playlist/add")
