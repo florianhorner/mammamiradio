@@ -79,10 +79,10 @@ def classify_station_mode(
     """Collapse many setup details into one operator-friendly runtime mode."""
     if demo_playlist is None:
         demo_playlist = _playlist_is_demo(state)
-    has_anthropic = bool(config.anthropic_api_key or config.openai_api_key)
+    has_llm = bool(config.anthropic_api_key or config.openai_api_key)
     has_ha = bool(config.homeassistant.enabled and config.ha_token)
 
-    if has_anthropic and has_ha:
+    if has_llm and has_ha:
         return {
             "id": "connected_home",
             "label": "Connected Home Radio",
@@ -90,11 +90,11 @@ def classify_station_mode(
             "detail": "The station references your home state in banter and ads.",
         }
 
-    if has_anthropic:
+    if has_llm:
         return {
             "id": "full_ai",
             "label": "Full AI Radio",
-            "summary": "Live Claude-generated banter and ads.",
+            "summary": "Live AI-generated banter and ads.",
             "detail": "Add a Home Assistant token to unlock home-aware content.",
         }
 
@@ -110,6 +110,7 @@ def addon_options_snippet(config: StationConfig) -> str:
     """Return a copy-friendly JSON block for the Home Assistant add-on UI."""
     values = {
         "anthropic_api_key": "*** configured ***" if config.anthropic_api_key else "<optional>",
+        "openai_api_key": "*** configured ***" if config.openai_api_key else "<optional>",
     }
     return json.dumps(values, indent=2)
 
@@ -118,22 +119,36 @@ def build_setup_status(config: StationConfig, state: StationState, *, probe: boo
     """Produce the full onboarding payload used by the dashboard gate."""
     mode = detect_run_mode(config)
     ffmpeg_bin = shutil.which("ffmpeg")
+    ytdlp_bin = shutil.which("yt-dlp")
     demo_playlist = _playlist_is_demo(state)
     station_mode = classify_station_mode(config, state, demo_playlist=demo_playlist)
+    has_llm = bool(config.anthropic_api_key or config.openai_api_key)
+    has_ha = bool(config.homeassistant.enabled and config.ha_token)
+    is_ha_enabled = bool(config.homeassistant.enabled)
+
+    mode_by_id = {entry["id"]: entry for entry in mode["modes"]}
+    detected_mode = mode_by_id.get(mode["detected"], {})
+
+    ffmpeg_install_command = {
+        "ha_addon": "Bundled in the add-on image (no action required).",
+        "docker": "Bundled in the Docker image (rebuild container if missing).",
+        "macos": "brew install ffmpeg",
+        "local": "Install ffmpeg with your package manager and verify `ffmpeg -version`.",
+    }
 
     essentials = [
         {
-            "key": "anthropic",
-            "label": "Anthropic",
+            "key": "llm_keys",
+            "label": "AI Script Key",
             "required": False,
             "required_label": "Optional for AI banter and ads",
-            "status": "configured" if config.anthropic_api_key else "missing",
+            "status": "configured" if has_llm else "missing",
             "summary": (
-                "Claude generation is available for banter and ads."
-                if config.anthropic_api_key
-                else "No Anthropic key found. The station still works, but banter and ads use fallback copy."
+                "At least one AI key is configured. Banter and ads can be generated live."
+                if has_llm
+                else "No AI key found. The station still runs, but banter and ads use fallback copy."
             ),
-            "next_action": "Add ANTHROPIC_API_KEY if you want the full AI radio experience.",
+            "next_action": "Add ANTHROPIC_API_KEY or OPENAI_API_KEY for full AI banter and ad generation.",
             "skip_outcome": "If you skip this, the station still runs with simpler stock lines.",
             "where": {
                 "ha_addon": "Add-on Configuration",
@@ -141,24 +156,27 @@ def build_setup_status(config: StationConfig, state: StationState, *, probe: boo
                 "macos": "the generated .env file behind the Mac launcher",
                 "local": ".env in the project root",
             },
+            "accepted_keys": ["ANTHROPIC_API_KEY", "OPENAI_API_KEY"],
+            "configured_keys": [
+                key
+                for key, configured in [
+                    ("ANTHROPIC_API_KEY", bool(config.anthropic_api_key)),
+                    ("OPENAI_API_KEY", bool(config.openai_api_key)),
+                ]
+                if configured
+            ],
         },
         {
             "key": "homeassistant",
             "label": "Home Assistant",
             "required": False,
             "required_label": "Optional ambient context",
-            "status": (
-                "configured"
-                if config.homeassistant.enabled and config.ha_token
-                else "skipped"
-                if not config.homeassistant.enabled
-                else "missing"
-            ),
+            "status": ("configured" if has_ha else "skipped" if not is_ha_enabled else "missing"),
             "summary": (
                 "Home Assistant context is available for references in banter."
-                if config.homeassistant.enabled and config.ha_token
+                if has_ha
                 else "Home Assistant integration is off."
-                if not config.homeassistant.enabled
+                if not is_ha_enabled
                 else "Home Assistant is enabled, but no token is available."
             ),
             "next_action": (
@@ -186,6 +204,20 @@ def build_setup_status(config: StationConfig, state: StationState, *, probe: boo
                 if ffmpeg_bin
                 else "ffmpeg is missing from PATH, so audio rendering will fail."
             ),
+            "where": ffmpeg_bin or "not found in PATH",
+            "repair": ffmpeg_install_command.get(mode["detected"], "Install ffmpeg and restart the station."),
+        },
+        {
+            "key": "ytdlp",
+            "label": "yt-dlp",
+            "status": "ok" if ytdlp_bin else "warn",
+            "detail": (
+                "yt-dlp is available for fresh charts when enabled."
+                if ytdlp_bin
+                else "yt-dlp is not installed. The station can still play demo or local tracks."
+            ),
+            "where": ytdlp_bin or "not found in PATH",
+            "repair": "Install yt-dlp if you want live charts; otherwise keep using demo/local sources.",
         },
         {
             "key": "playlist_loaded",
@@ -204,6 +236,37 @@ def build_setup_status(config: StationConfig, state: StationState, *, probe: boo
                 )
                 + "."
             ),
+        },
+    ]
+
+    onboarding_steps = [
+        {
+            "id": "mode",
+            "title": "Choose Run Mode",
+            "status": "done",
+            "detail": f"Detected mode: {detected_mode.get('label', mode['detected'])}.",
+        },
+        {
+            "id": "llm",
+            "title": "Add AI Key (Optional)",
+            "status": "done" if has_llm else "todo",
+            "detail": (
+                "AI key detected."
+                if has_llm
+                else "Set ANTHROPIC_API_KEY or OPENAI_API_KEY for generated banter and ads."
+            ),
+        },
+        {
+            "id": "preflight",
+            "title": "Pass Preflight Checks",
+            "status": "todo" if any(item["status"] == "fail" for item in preflight_checks) else "done",
+            "detail": "Check ffmpeg and playlist readiness before going live.",
+        },
+        {
+            "id": "launch",
+            "title": "Launch Station",
+            "status": "done" if station_mode["id"] != "demo" else "todo",
+            "detail": "Open listener mode and verify live audio output.",
         },
     ]
 
@@ -233,6 +296,14 @@ def build_setup_status(config: StationConfig, state: StationState, *, probe: boo
         "onboarding_required": onboarding_required,
         "essentials": essentials,
         "preflight_checks": preflight_checks,
+        "onboarding_steps": onboarding_steps,
+        "recommended_next_action": (
+            "Add an AI key to unlock full station behavior."
+            if not has_llm
+            else "Install ffmpeg before launch."
+            if not ffmpeg_bin
+            else "Open the listener and verify live playback."
+        ),
         "launch": launch,
         "addon_options_snippet": addon_options_snippet(config) if config.is_addon else "",
         "signature": signature,

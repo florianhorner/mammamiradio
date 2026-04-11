@@ -190,3 +190,21 @@ The disclaimer_goblin role is defined in SPEAKER_ROLES and has a voice in radio.
 - Restore skeuomorphic radio visual language consistently across admin and listener.
 - Keep manual `/api/stop` sticky until an explicit `/api/resume`; do not auto-resume stopped sessions after idle time.
 - Make `scripts/stream_watch_server.py` work against secured stations by using an authenticated status path or a dedicated read-only endpoint instead of unauthenticated `/status` and `/api/capabilities`.
+
+## P1: Make GHCR packages public (BLOCKER for HA addon install)
+GHCR packages are private by default. HA Supervisor cannot pull private images — the addon install will fail silently with a confusing error if this is not done first.
+**Action:** GitHub → Packages → mammamiradio-addon-amd64 → Change visibility → Public. Repeat for aarch64.
+**Effort:** S (human: 2 min, no code) | **Priority:** P1 — must do before install attempt
+**Source:** /plan-ceo-review + /plan-eng-review, 2026-04-11
+
+## P2: Cache integrity check on startup (silence-cache-poison protection)
+The downloader cache has no TTL or integrity check. A failed yt-dlp run (rate limited, network error) caches a silence placeholder. Subsequent boots serve silence from cache without re-downloading. The quality gate rejects it, starving the queue. The only current recovery is: operator SSHes in and deletes /data/cache/ manually.
+**Action:** On startup, scan /data/cache/ for files < 10KB and delete them before serving. Also consider: log a warning when a cached file is used without re-validation.
+**Effort:** S (CC: ~10min) | **Files:** mammamiradio/downloader.py, mammamiradio/main.py
+**Source:** /plan-ceo-review, 2026-04-11 (Prior learning: silence-cache-poison, confidence 10/10)
+
+## P2: First-boot log summary line
+When the addon breaks, operators grep through scattered log lines to reconstruct what state the system was in at startup. A single structured boot summary line would let the failure log tell its story at a glance.
+**Action:** At end of startup in main.py or run.sh, print one line: resolved config dir, audio source (yt-dlp/demo/local), API keys present/absent (masked), HA context enabled/disabled, MAMMAMIRADIO_ALLOW_YTDLP value.
+**Effort:** S (CC: ~15min) | **Files:** mammamiradio/main.py
+**Source:** /plan-ceo-review, 2026-04-11

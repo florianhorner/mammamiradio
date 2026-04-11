@@ -12,6 +12,46 @@ from mammamiradio.normalizer import _run_ffmpeg
 
 logger = logging.getLogger(__name__)
 
+# Files that must never be evicted from the cache directory
+_CACHE_PROTECTED = {"mammamiradio.db", "playlist_source.json", "session_stopped.flag"}
+
+
+def evict_cache_lru(cache_dir: Path, max_size_mb: int) -> None:
+    """Delete oldest MP3s from cache_dir until total size is under max_size_mb.
+
+    Only .mp3 files are evicted. The SQLite database, playlist source JSON, and
+    session flag are always preserved.
+    """
+    if max_size_mb <= 0:
+        return
+
+    mp3_files = sorted(
+        [f for f in cache_dir.glob("*.mp3") if f.name not in _CACHE_PROTECTED],
+        key=lambda f: f.stat().st_atime,  # oldest access time first
+    )
+
+    total_bytes = sum(f.stat().st_size for f in mp3_files)
+    max_bytes = max_size_mb * 1024 * 1024
+    evicted = 0
+
+    for f in mp3_files:
+        if total_bytes <= max_bytes:
+            break
+        size = f.stat().st_size
+        try:
+            f.unlink()
+            total_bytes -= size
+            evicted += 1
+        except OSError as exc:
+            logger.warning("Cache eviction failed for %s: %s", f.name, exc)
+
+    if evicted:
+        logger.info(
+            "Cache eviction: removed %d file(s), %.1f MB remaining",
+            evicted,
+            total_bytes / (1024 * 1024),
+        )
+
 
 _DEMO_ASSETS_DIR = Path(__file__).parent / "demo_assets" / "music"
 
@@ -81,6 +121,7 @@ def _download_ytdlp(track: Track, cache_dir: Path) -> Path:
         ],
         "quiet": True,
         "no_warnings": True,
+        "noprogress": True,
     }
 
     with yt_dlp.YoutubeDL(opts) as ydl:

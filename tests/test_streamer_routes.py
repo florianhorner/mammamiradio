@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import time
 from pathlib import Path
+from unittest.mock import patch
 
 import httpx
 import pytest
@@ -38,7 +39,9 @@ def _make_test_app(*, admin_password: str = "", admin_token: str = "") -> FastAP
 
     app.state.queue = asyncio.Queue()
     app.state.skip_event = asyncio.Event()
-    app.state.stream_hub = LiveStreamHub()
+    hub = LiveStreamHub()
+    hub.bind_state(state)
+    app.state.stream_hub = hub
     app.state.station_state = state
     app.state.config = config
     app.state.start_time = time.time()
@@ -146,6 +149,8 @@ async def test_get_root_serves_listener_page():
     assert resp.status_code == 200
     assert "text/html" in resp.headers["content-type"]
     assert "Mamma Mi Radio" in resp.text
+    assert "We're lighting the sign." in resp.text
+    assert "Start the station" in resp.text
 
 
 @pytest.mark.asyncio
@@ -240,6 +245,41 @@ async def test_addon_snippet_returns_snippet():
     assert resp.status_code == 200
     body = resp.json()
     assert "snippet" in body
+
+
+@pytest.mark.asyncio
+async def test_setup_save_keys_updates_live_config_without_disk_write():
+    app = _make_test_app()
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+
+    with patch("mammamiradio.streamer._save_dotenv") as save_dotenv:
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            resp = await client.post(
+                "/api/setup/save-keys",
+                json={"ANTHROPIC_API_KEY": "ant-test", "OPENAI_API_KEY": "openai-test"},
+            )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ok"] is True
+    assert "ANTHROPIC_API_KEY" in body["saved"]
+    assert "OPENAI_API_KEY" in body["saved"]
+    assert app.state.config.anthropic_api_key == "ant-test"
+    assert app.state.config.openai_api_key == "openai-test"
+    save_dotenv.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_setup_save_keys_rejects_empty_payload():
+    app = _make_test_app()
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.post("/api/setup/save-keys", json={})
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ok"] is False
+    assert "No keys provided" in body["error"]
 
 
 @pytest.mark.asyncio

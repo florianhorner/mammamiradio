@@ -23,6 +23,7 @@ async def test_startup_creates_state_and_tasks():
     mock_config.bind_host = "127.0.0.1"
     mock_config.port = 8000
     mock_config.pacing.lookahead_segments = 3
+    mock_config.max_cache_size_mb = 500
     mock_config.tmp_dir = TEST_TMP
     mock_config.cache_dir = TEST_CACHE
 
@@ -60,6 +61,7 @@ async def test_startup_reads_persisted_source_before_fetching():
     mock_config.bind_host = "127.0.0.1"
     mock_config.port = 8000
     mock_config.pacing.lookahead_segments = 3
+    mock_config.max_cache_size_mb = 500
     mock_config.tmp_dir = TEST_TMP
     mock_config.cache_dir = TEST_CACHE
     persisted = PlaylistSource(kind="playlist", source_id="abc", label="Roadtrip")
@@ -99,6 +101,7 @@ async def test_startup_restores_stopped_session_flag(tmp_path: Path, flag_exists
     mock_config.bind_host = "127.0.0.1"
     mock_config.port = 8000
     mock_config.pacing.lookahead_segments = 3
+    mock_config.max_cache_size_mb = 500
     mock_config.tmp_dir = tmp_path / "tmp"
     mock_config.cache_dir = tmp_path / "cache"
 

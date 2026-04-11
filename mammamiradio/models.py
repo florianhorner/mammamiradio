@@ -380,6 +380,14 @@ class StationState:
     stream_log: deque[SegmentLogEntry] = field(default_factory=lambda: deque(maxlen=50))
     # Home Assistant context (natural language summary of home state)
     ha_context: str = ""
+    # Phase 1: recent state-change events
+    ha_events_summary: str = ""
+    # Phase 2: home mood scene classification
+    ha_home_mood: str = ""
+    # Phase 3: weather narrative arc
+    ha_weather_arc: str = ""
+    # Phase 4: pending reactive directive (consumed after one use)
+    ha_pending_directive: str = ""
     # Force-trigger: producer will use this type instead of scheduler for the next segment
     force_next: SegmentType | None = None
     # Shareware trial: counts canned banter clips actually streamed to listener

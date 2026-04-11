@@ -4,44 +4,31 @@ Operational guide for the Home Assistant add-on. Covers architecture, failure mo
 
 ## First run in 4 steps
 
-This add-on should teach setup in this order. If the product says something else, the product is wrong.
+### 1. Add the repository
 
-### 1. Choose your run mode
+In HA: Settings → Add-ons → Add-on Store → overflow menu → Repositories.
+Add: `https://github.com/florianhorner/mammamiradio`
 
-For this document, the run mode is `Home Assistant add-on`.
+### 2. Configure API key
 
-That sounds obvious, but it matters because the real config surface is the Add-on Configuration screen, not the dashboard itself.
+In the add-on Configuration tab, set your `anthropic_api_key` (required for AI banter and ads).
+`openai_api_key` is optional — used as TTS fallback when Anthropic is unavailable.
 
-### 2. Connect the essentials
+Without any API key, the station runs in Demo Mode using pre-bundled banter clips.
 
-Before you expect real Spotify radio, fill in:
+### 3. Start the add-on
 
-- `spotify_client_id`
-- `spotify_client_secret`
-- `playlist_spotify_url`
-- optional: `anthropic_api_key`
+Click Start. Watch the log for:
+- `[mammamiradio] Starting add-on...`
+- `[mammamiradio] Home Assistant API access configured via Supervisor`
+- `Producer started`
+- `Station ready`
 
-If these are missing, the app should say `Demo Mode` or `Degraded`. Silent fallback is not acceptable.
+First boot is slow (30–90 seconds) — yt-dlp downloads Italian chart tracks before playback begins.
 
-### 3. Run preflight checks
+### 4. Open the listener page
 
-After saving add-on options, restart the add-on, then verify:
-
-- `ffmpeg` is available
-- `go-librespot` started
-- Spotify playlist probe works
-- the app loaded real tracks instead of demo tracks
-- the `mammamiradio` Spotify Connect device appears
-
-### 4. Launch your first station
-
-Only after those checks pass should the control plane feel "ready".
-
-The user should know which of these states they are entering:
-
-- `Real Spotify Mode`
-- `Demo Mode`
-- `Degraded`
+Click Open Web UI or navigate to the ingress URL in the sidebar. Italian radio should start within 10 seconds.
 
 ## Architecture
 
@@ -54,108 +41,91 @@ HA Supervisor
   |           |
   |           +-- producer task (generates segments: music, banter, ads)
   |           +-- playback task (streams segments to listeners)
-  |           +-- go-librespot (Spotify Connect target, writes PCM to FIFO)
   |
   +-- /data/ (persistent across restarts)
-        +-- cache/       (downloaded track audio)
-        +-- tmp/         (rendered segments, go-librespot.log)
-        +-- music/       (local music files)
-        +-- go-librespot/ (config.yml, credentials cache)
+        +-- cache/   (downloaded track audio — survives restarts)
+        +-- tmp/     (rendered segments — ephemeral)
+        +-- music/   (local music files — optional)
 ```
 
 ## Startup sequence
 
 1. `run.sh` reads `/data/options.json` and exports env vars for the addon runtime.
-   The add-on must keep Home Assistant's default root runtime here because Supervisor now writes `options.json` with restrictive permissions.
-2. `run.sh` syncs `/data/go-librespot/config.yml` from the shipped defaults so the current `device_name` is present before app startup.
-3. `run.sh` starts uvicorn.
-4. FastAPI startup in `mammamiradio/main.py` loads `radio.toml`.
-5. `mammamiradio/main.py` initializes go-librespot and Spotify setup before calling `fetch_playlist()`.
-6. If `fetch_playlist()` or Spotify API auth fails, the app falls back to the demo playlist and then to placeholder/local audio if no real music source is available yet.
-7. If go-librespot fails, playback falls back to local files, yt-dlp, or placeholder tones.
-8. Producer and playback tasks start once startup initialization completes.
+2. `run.sh` maps `SUPERVISOR_TOKEN` to `HA_TOKEN`, sets `HA_URL=http://supervisor/core`, `HA_ENABLED=true`.
+3. `run.sh` enables yt-dlp (`MAMMAMIRADIO_ALLOW_YTDLP=true`) and starts uvicorn.
+4. `mammamiradio/main.py` loads `radio.toml` and validates config.
+5. `fetch_playlist()` downloads Italian chart tracks via yt-dlp (first boot: slow, cached after).
+6. Producer and playback tasks start once the first segment is ready.
 
-**Startup timeout**: `config.yaml` sets `timeout: 300` (5 minutes). The first boot is slow because it fetches the playlist and renders the first segment. If the addon is killed during startup, check the Supervisor log — a timeout kill looks like `Container terminated` with no error from the app.
+**Startup timeout**: `config.yaml` sets `timeout: 240`. First boot can take 60–120 seconds on slower hardware (Raspberry Pi + yt-dlp download + FFmpeg transcode). If the addon is killed during startup, check the log for `Container terminated` — usually means the download took too long.
+
+**Recovery**: If startup times out, restart the addon. Subsequent boots are fast because tracks are cached in `/data/cache/`.
 
 ## Failure modes and recovery
 
-### "No Spotify Connect target visible"
+### Stream plays silence indefinitely
 
-**Symptom**: The `mammamiradio` device doesn't appear in your Spotify app.
-
-**Causes**:
-1. go-librespot failed to start (check addon log for `Could not start go-librespot`)
-2. Zeroconf/mDNS not reaching your network — `host_network: true` is required in `config.yaml`
-3. go-librespot credentials not cached yet — it needs a first connection via zeroconf
-
-**Fix**: Restart the addon. Check the log for `go-librespot started`. If it says `No such file or directory` on Alpine, the binary may be present but missing the glibc compatibility layer; the add-on image needs `gcompat`. If it starts but no device appears, your network may block mDNS (port 5353 UDP).
-
-### "Playlist fetch failed — using demo playlist"
-
-**Symptom**: Log shows `401 Valid user authentication required` and plays demo tracks.
+**Symptom**: Ingress URL loads but no audio. Log shows repeated `Failed to produce segment` or `silence placeholder`.
 
 **Causes**:
-1. `spotify_client_id` / `spotify_client_secret` not set in addon options
-2. Credentials are for a "client credentials" app (no user auth) — this is expected for playlists you don't own
-3. Liked songs require user OAuth, which client credentials can't do
+1. yt-dlp rate-limited on first boot — silence placeholder cached instead of real audio
+2. FFmpeg not found on PATH
+3. Network blocks outbound connections to YouTube
 
-**Fix**: Set your Spotify app credentials in the addon config. For your own playlists, client credentials work. For liked songs, you need user OAuth (not yet supported in addon mode — use a playlist URL instead).
+**Fix**: SSH to the HA host, add `export MAMMAMIRADIO_SKIP_QUALITY_GATE=1` to `/addon_configs/mammamiradio/run.sh` before the `exec uvicorn` line, then restart the addon. Once real tracks download and are cached, remove the line and restart again.
 
-### "ffmpeg failed" / signal 15 kills
+If silence is in cache from a failed run: stop the addon, SSH to the HA host, delete `/data/addon_configs/<slug>/cache/`, restart.
 
-**Symptom**: Log shows `ffmpeg failed (normalize ...)` with `Exiting normally, received signal 15`.
+### TTS banter not generating
 
-**Causes**:
-1. The addon was stopped/restarted while FFmpeg was encoding
-2. The shutdown handler now awaits task cancellation, which should reduce these
+**Symptom**: Log shows `TTS synthesis failed` or `edge-tts connection error`. Banter falls back to pre-bundled demo clips.
 
-**Fix**: These are harmless on restart — FFmpeg was killed because the app was shutting down. If they happen during normal operation (not a restart), check disk space in `/data/tmp/`.
+**Cause**: `edge-tts` requires outbound websocket to Microsoft's TTS API. If your HA instance blocks outbound websockets, TTS fails silently and demo clips play instead.
+
+**Fix**: This is a network policy issue. Demo clips are acceptable — the station still plays. If you need live AI banter, ensure outbound websocket traffic is allowed.
 
 ### Ingress 404s (all API calls return 404)
 
 **Symptom**: Dashboard loads but shows no data. Log floods with `GET /api/hassio_ingress/.../status 404`.
 
-**Cause**: The `_inject_ingress_prefix` function was rewriting JavaScript string literals that the client-side `_base` variable already handles, causing double-prefixed URLs.
+**Cause**: Double-prefixed URLs in the frontend. This was fixed in v2.2.0. If you see this, you are on an old image.
 
-**Fix**: Fixed in this version. The function now only rewrites static HTML attributes (`href=`, `src=`). JavaScript API calls use the `_base` variable from `window.location.pathname`.
+**Fix**: Update the addon to the latest version.
 
-### "/data is not writable" or `options.json` permission errors
+### "/data is not writable" warning
 
-**Symptom**: Log shows `Permission denied: '/data/options.json'` or the add-on falls back to `/tmp/mammamiradio-data`.
+**Symptom**: Log shows `WARNING: /data is not writable` and falls back to `/tmp/mammamiradio-data`.
 
-**Cause**: The container dropped privileges before reading Supervisor-managed files under `/data`, so the add-on could not read `options.json` or persist cache/state.
+**Cause**: Supervisor permissions issue. State will not persist across restarts.
 
-**Fix**: Keep the add-on on Home Assistant's default runtime user for Supervisor-managed mounts. If you see this after updating, fully restart the add-on and verify the log shows `/data` paths, not `/tmp/mammamiradio-data`.
+**Fix**: Fully restart the addon (stop → start, not just restart). If persistent, check that the addon has correct permissions in Supervisor.
 
 ### HA context never appears in banter
 
 **Symptom**: Hosts never reference home state even though HA is enabled.
 
 **Check**:
-1. Addon log should show `Home Assistant API access configured via Supervisor`
-2. Look for `Fetched HA context: N entities` — if N=0, no entities matched
+1. Log should show `Home Assistant API access configured via Supervisor`
+2. Look for `Fetched HA context: N entities` — if N=0, no entities matched the filter
 3. Look for `Failed to fetch HA context` — network or auth error
 
-**Note**: `HA_URL` must be `http://supervisor/core` (without `/api`). The app appends `/api/states` itself. A double `/api` causes silent 404s from the Supervisor API.
+**Note**: `HA_URL` is set to `http://supervisor/core` by run.sh. The app appends `/api/states` itself. Do not override this.
 
-### Producer stuck in silence loop
+### Producer stuck after first banter cycle
 
-**Symptom**: Stream plays silence indefinitely. Log shows repeated `Failed to produce ... segment` errors.
+**Symptom**: Music plays, first banter completes, then silence.
 
-**Cause**: FFmpeg or network is persistently broken. The producer now backs off exponentially (2s, 4s, 8s, 16s, 30s max) on consecutive failures and resets on success.
+**Cause**: API key is invalid or quota exceeded. The producer falls back to demo clips but they may be exhausted.
 
-**Fix**: Check what's failing:
-- FFmpeg errors: is `ffmpeg` on PATH? (`ffmpeg -version` in the container)
-- Network errors: can the container reach `api.anthropic.com`? (banter/ads need Claude)
-- Disk full: check `/data/tmp/` size
+**Fix**: Verify your `anthropic_api_key` is valid. Check the log for `AuthenticationError` or `RateLimitError`.
 
-### Admin API inaccessible from LAN
+### Admin API inaccessible directly
 
-**Symptom**: Direct access to `http://<ha-ip>:8000/` returns 401 and you don't know the token.
+**Symptom**: Direct access to `http://<ha-ip>:8000/admin` returns 401.
 
-**Cause**: `ADMIN_TOKEN` is auto-generated on each restart and not logged. With `host_network: true`, port 8000 is exposed on the host.
+**Cause**: `ADMIN_TOKEN` is auto-generated on each restart and not logged. Use HA ingress as the primary UI.
 
-**Fix**: Use the addon via HA ingress (sidebar) as the primary UI path. The mapped port is best treated as the raw stream + diagnostics surface. For direct dashboard access, set `ADMIN_PASSWORD` in the addon options (not yet exposed in the UI — would need adding to `config.yaml` schema).
+**Fix**: Access the addon via the HA sidebar (ingress). The exposed port 8000 on the host is intended for streaming clients only.
 
 ## Key files
 
@@ -163,10 +133,9 @@ HA Supervisor
 |------|---------|
 | `config.yaml` | Addon metadata, options schema, network config |
 | `build.yaml` | Base images per arch, build args |
-| `Dockerfile` | Image: Alpine + Python + FFmpeg + go-librespot |
+| `Dockerfile` | Image: Alpine + Python + FFmpeg + mammamiradio |
 | `rootfs/run.sh` | Entrypoint: env var mapping, uvicorn launch |
 | `radio.toml` | Station config defaults (hosts, pacing, ads) |
-| `go-librespot-config.yml` | Spotify Connect config (zeroconf, FIFO output) |
 
 ## Env var flow
 
@@ -174,20 +143,21 @@ HA Supervisor
 /data/options.json (HA UI)
   |
   +-- run.sh reads JSON, exports as env vars
-  |     ANTHROPIC_API_KEY, SPOTIFY_CLIENT_ID, SPOTIFY_CLIENT_SECRET,
-  |     STATION_NAME, CLAUDE_MODEL, PLAYLIST_SPOTIFY_URL
+  |     ANTHROPIC_API_KEY, OPENAI_API_KEY,
+  |     STATION_NAME, CLAUDE_MODEL
   |
   +-- run.sh maps Supervisor token
-  |     SUPERVISOR_TOKEN -> HA_TOKEN, HA_URL, HA_ENABLED
+  |     SUPERVISOR_TOKEN -> HA_TOKEN, HA_URL=http://supervisor/core, HA_ENABLED=true
   |
   +-- run.sh sets addon defaults
   |     MAMMAMIRADIO_BIND_HOST=0.0.0.0, MAMMAMIRADIO_PORT=8000,
   |     MAMMAMIRADIO_CACHE_DIR=/data/cache, MAMMAMIRADIO_TMP_DIR=/data/tmp,
+  |     MAMMAMIRADIO_ALLOW_YTDLP=true,
   |     ADMIN_TOKEN=(auto-generated)
   |
   +-- config.py reads env vars, applies addon overrides
-        go_librespot_config_dir -> /data/go-librespot  (inside the add-on container)
         homeassistant.url -> http://supervisor/core
+        ha_token <- SUPERVISOR_TOKEN (addon mode overrides HA_TOKEN)
 ```
 
 ## Ingress URL flow
@@ -197,36 +167,125 @@ Browser: http://ha:8123/api/hassio_ingress/<token>/
   |
   +-- HA Supervisor nginx strips prefix, forwards GET / to addon:8000
   |
-  +-- App returns dashboard HTML
-  |     - Static attributes: href="/listen" rewritten to href="<prefix>/listen"
-  |     - JS: _base = window.location.pathname (= /api/hassio_ingress/<token>)
+  +-- App returns listener HTML
+  |     - Static attributes: src="/stream" rewritten to src="<prefix>/stream"
+  |     - JS: _base = window.location.pathname
   |     - JS fetch calls: _base + '/status' -> /api/hassio_ingress/<token>/status
   |
-  +-- Browser fetches /api/hassio_ingress/<token>/status
-  |     -> HA proxy strips prefix -> addon sees GET /status -> 200 OK
+  +-- Browser fetches <prefix>/stream
+  |     -> HA proxy passes through streaming MP3 response
+  |     -> Audio plays in browser
 ```
 
-**Critical rule**: `_inject_ingress_prefix` must NEVER rewrite JS string literals. The `_base` variable handles JS URLs. Only rewrite static HTML attributes.
+**Critical rule**: `_inject_ingress_prefix` must NEVER rewrite JS string literals. Only static HTML attributes are rewritten.
 
 ## Updating the addon
 
-1. Bump `version` in `config.yaml`
+1. Bump `version` in `config.yaml` and `pyproject.toml`
 2. Update `CHANGELOG.md`
-3. Push to main — CI builds and pushes the Docker image to GHCR
+3. Push to main — CI builds and pushes the Docker image to GHCR automatically
 4. HA Supervisor checks for updates periodically (or user clicks "Check for updates")
 5. User clicks "Update" in the HA UI
 
 **Pre-merge checklist**:
 - [ ] CI builds successfully for both amd64 and aarch64
-- [ ] GHCR image is published and pullable
+- [ ] GHCR packages are public (github.com/florianhorner → Packages → each mammamiradio-addon-* → visibility: Public)
 - [ ] Install the addon from the repo URL on a test HA instance
 - [ ] Verify the addon starts (check log for `Producer started`)
-- [ ] Verify ingress works (dashboard loads, status polls succeed)
-- [ ] Verify stream plays audio
+- [ ] Verify ingress works (listener page loads, audio plays)
+- [ ] Verify stream plays for 60+ minutes without interruption
 
-## Known limitations
+## Renaming the station
 
-- **No user OAuth in addon mode**: Liked songs and private playlists require user OAuth flow, which needs a browser redirect. Not practical in addon mode. Use a public playlist URL instead.
-- **go-librespot credentials persist across updates**: The default config is staged at `/defaults/go-librespot-config.yml`. On boot, the addon ensures `/data/go-librespot/config.yml` exists and refreshes only the `device_name` field to match the shipped default. That path is inside the add-on container, not on the host machine. Credentials/state files beside it still persist across updates. If `/data` is wiped, the addon re-initializes the config on next start.
-- **`host_network: true` is broad**: Required for mDNS/zeroconf discovery. Side effect: addon can reach any LAN device and port 8000 is exposed on the host.
-- **Access logs disabled**: `--no-access-log` prevents stream listener requests from flooding the Supervisor log. If you need request debugging, remove this flag in `run.sh`.
+The station name is what the hosts say on air. If you call it "Radio Florian", the hosts will say "Radio Florian" — naturally, mid-conversation, the way a real DJ does.
+
+**To rename:**
+
+1. In the add-on Configuration tab, set `station_name` to your chosen name (e.g. `Radio Florian`).
+2. Click Save, then restart the add-on.
+3. Within a few minutes of playback, the hosts will start using the new name.
+
+The name appears roughly once every 3–4 banter exchanges, never forced. You can also set it via environment variable: `STATION_NAME=Radio Florian`.
+
+## Home Assistant media_player entity
+
+You can expose the station as a `media_player` entity in HA — show the current track on dashboards, control play/pause/skip from automations, or cast the stream to a Sonos, Google, or Alexa speaker.
+
+**Setup (one-time):**
+
+1. In the add-on Configuration tab, set `admin_token` to a stable string (e.g. `my-radio-token`). This avoids log-hunting for the auto-generated token on every restart.
+2. Add that token to `secrets.yaml`:
+   ```yaml
+   mammamiradio_admin_token: my-radio-token
+   ```
+3. Add these three blocks to `configuration.yaml` and reload HA:
+
+```yaml
+rest:
+  - resource: "http://localhost:8000/public-status"
+    scan_interval: 5
+    sensor:
+      - name: "mammamiradio_now_streaming"
+        value_template: "{{ value_json.now_streaming.type }}"
+        json_attributes:
+          - now_streaming
+
+template:
+  - media_player:
+      - name: "Mamma Mi Radio"
+        unique_id: mammamiradio_player
+        state: >
+          {% set t = state_attr('sensor.mammamiradio_now_streaming', 'now_streaming') %}
+          {% if t and t.type not in ['stopped', 'skipping'] %}playing{% else %}paused{% endif %}
+        media_title: >
+          {% set t = state_attr('sensor.mammamiradio_now_streaming', 'now_streaming') %}
+          {% if t %}{{ t.get('metadata', {}).get('title_only', t.label) }}{% endif %}
+        media_artist: >
+          {% set t = state_attr('sensor.mammamiradio_now_streaming', 'now_streaming') %}
+          {% if t and t.type == 'music' %}{{ t.get('metadata', {}).get('artist', 'Mamma Mi Radio') }}
+          {% else %}Mamma Mi Radio{% endif %}
+        entity_picture: >
+          {% set t = state_attr('sensor.mammamiradio_now_streaming', 'now_streaming') %}
+          {% if t %}{{ t.get('metadata', {}).get('album_art', '') }}{% endif %}
+        media_content_type: "music"
+        media_content_id: "http://localhost:8000/stream"
+        supported_features:
+          - pause
+          - play
+          - next_track
+        play:
+          - action: rest_command.mammamiradio_resume
+        pause:
+          - action: rest_command.mammamiradio_stop
+        media_next_track:
+          - action: rest_command.mammamiradio_skip
+
+rest_command:
+  mammamiradio_resume:
+    url: "http://localhost:8000/api/resume"
+    method: POST
+    headers:
+      X-Radio-Admin-Token: !secret mammamiradio_admin_token
+  mammamiradio_stop:
+    url: "http://localhost:8000/api/stop"
+    method: POST
+    headers:
+      X-Radio-Admin-Token: !secret mammamiradio_admin_token
+  mammamiradio_skip:
+    url: "http://localhost:8000/api/skip"
+    method: POST
+    headers:
+      X-Radio-Admin-Token: !secret mammamiradio_admin_token
+```
+
+The entity `media_player.mamma_mi_radio` will appear with the current track title, artist, and album art (from YouTube thumbnails). You can add it to a dashboard card or use it in automations to cast the stream to any HA-connected speaker with `media_player.play_media`.
+
+## Tiers
+
+The dashboard shows one of three tiers based on your configuration:
+
+| Tier | What you hear | What it needs |
+|------|--------------|---------------|
+| Demo Radio | Pre-bundled banter, yt-dlp charts | Nothing (works out of the box) |
+| Full AI Radio | Live AI banter and ads, yt-dlp charts | `anthropic_api_key` or `openai_api_key` |
+| Connected Home | Above + home-aware banter | API key + HA running (automatic in addon mode) |

@@ -90,7 +90,7 @@ def test_rationale_with_album():
     """Template substitution includes album name."""
     track = Track(title="Test", artist="Artist", duration_ms=240000, album="Greatest Hits")
     rationales = set()
-    for _ in range(100):
+    for _ in range(500):
         rationales.add(generate_track_rationale(track))
 
     found = any("Greatest Hits" in r for r in rationales)

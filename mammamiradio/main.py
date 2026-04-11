@@ -11,6 +11,7 @@ import time
 from fastapi import FastAPI
 
 from mammamiradio.config import load_config
+from mammamiradio.downloader import evict_cache_lru
 from mammamiradio.models import StationState
 from mammamiradio.persona import PersonaStore
 from mammamiradio.playlist import DEMO_TRACKS, fetch_startup_playlist, read_persisted_source
@@ -42,6 +43,9 @@ async def startup():
 
     config.tmp_dir.mkdir(parents=True, exist_ok=True)
     config.cache_dir.mkdir(parents=True, exist_ok=True)
+
+    # Evict old cached tracks if the cache exceeds the configured size limit
+    evict_cache_lru(config.cache_dir, config.max_cache_size_mb)
 
     # Initialize persona database and store for compounding listener memory
     db_path = config.cache_dir / "mammamiradio.db"

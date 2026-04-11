@@ -1,4 +1,4 @@
-# TTS Architecture: Voice Strategy for MammaMiRadio
+# TTS Architecture: Voice Strategy for Mamma Mi Radio
 
 Status: APPROVED (CEO review 2026-04-04)
 Branch: florianhorner/feat-10x-vision

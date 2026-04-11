@@ -65,7 +65,7 @@ def _charts_source(track_count: int) -> PlaylistSource:
     )
 
 
-def _fetch_current_italy_charts(limit: int = 20) -> list[Track]:
+def _fetch_current_italy_charts(limit: int = 20, max_per_artist: int = 2) -> list[Track]:
     """Fetch a live Top Songs Italy list from Apple Music charts RSS."""
     try:
         with urlopen(_APPLE_MUSIC_IT_CHARTS_URL, timeout=4.0) as resp:
@@ -76,12 +76,20 @@ def _fetch_current_italy_charts(limit: int = 20) -> list[Track]:
 
     results = payload.get("feed", {}).get("results", [])
     tracks: list[Track] = []
-    for item in results[:limit]:
+    artist_counts: dict[str, int] = {}
+    for item in results:
+        if len(tracks) >= limit:
+            break
         title = str(item.get("name", "")).strip()
         artist = str(item.get("artistName", "")).strip()
         item_id = str(item.get("id", "")).strip()
         if not title or not artist:
             continue
+        # Cap tracks per artist to ensure variety across the playlist
+        artist_key = artist.lower()
+        if artist_counts.get(artist_key, 0) >= max_per_artist:
+            continue
+        artist_counts[artist_key] = artist_counts.get(artist_key, 0) + 1
         tracks.append(
             Track(
                 title=title,
