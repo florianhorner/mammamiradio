@@ -589,6 +589,7 @@ async def run_producer(
                             xfade_out = config.tmp_dir / f"banter_trans_{uuid4().hex[:8]}.mp3"
                             return await _try_crossfade(_path, config, xfade_out)
 
+                        banter_path: Path
                         trans_voice_path, banter_path = await asyncio.gather(
                             _do_transition(),
                             synthesize_dialogue(lines, config.tmp_dir),

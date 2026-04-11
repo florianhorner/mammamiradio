@@ -4,7 +4,7 @@ All notable changes to `mammamiradio` are documented here.
 
 The current version source of truth is `pyproject.toml`.
 
-## [2.3.0] - 2026-04-11
+## [2.3.0-dev] - 2026-04-11
 
 ### Removed
 
