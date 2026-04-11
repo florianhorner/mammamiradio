@@ -195,6 +195,18 @@ Browser: http://ha:8123/api/hassio_ingress/<token>/
 - [ ] Verify ingress works (listener page loads, audio plays)
 - [ ] Verify stream plays for 60+ minutes without interruption
 
+## Renaming the station
+
+The station name is what the hosts say on air. If you call it "Radio Florian", the hosts will say "Radio Florian" — naturally, mid-conversation, the way a real DJ does.
+
+**To rename:**
+
+1. In the add-on Configuration tab, set `station_name` to your chosen name (e.g. `Radio Florian`).
+2. Click Save, then restart the add-on.
+3. Within a few minutes of playback, the hosts will start using the new name.
+
+The name appears roughly once every 3–4 banter exchanges, never forced. You can also set it via environment variable: `STATION_NAME=Radio Florian`.
+
 ## Tiers
 
 The dashboard shows one of three tiers based on your configuration:
