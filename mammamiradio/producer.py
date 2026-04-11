@@ -1032,7 +1032,7 @@ async def run_producer(
                 success_callback = _ad_callback
 
         except Exception as e:
-            # Recoverable: network/ffmpeg/disk/httpx errors — insert silence, retry next loop
+            # Recoverable: network/ffmpeg/disk/httpx errors — use canned banter or silence
             logger.error("Failed to produce %s segment: %s", seg_type.value, e)
             state.failed_segments += 1
             # Backoff on persistent failures to avoid CPU-burning tight loop
@@ -1041,20 +1041,30 @@ async def run_producer(
                 backoff = min(30.0, 2.0 ** min(consecutive, 5))
                 logger.warning("Consecutive failures: %d — backing off %.0fs", consecutive, backoff)
                 await asyncio.sleep(backoff)
-            silence_path = config.tmp_dir / f"silence_{uuid4().hex[:8]}.mp3"
-            try:
-                loop = asyncio.get_running_loop()
-                await loop.run_in_executor(None, generate_silence, silence_path, 5.0)
-            except Exception as silence_err:
-                logger.error("Cannot generate silence (ffmpeg broken?): %s", silence_err)
-                # Retry quickly so a transient ffmpeg failure does not stall the stream.
-                await asyncio.sleep(0.5)
-                continue
-            segment = Segment(
-                type=seg_type,
-                path=silence_path,
-                metadata={"error": str(e)},
-            )
+            # Prefer a canned banter clip over raw silence — at least it sounds intentional
+            fallback_path = _pick_canned_clip("banter", state=state) or _pick_canned_clip("welcome")
+            if fallback_path:
+                logger.info("Error recovery: using canned clip instead of silence")
+                segment = Segment(
+                    type=SegmentType.BANTER,
+                    path=fallback_path,
+                    metadata={"type": "banter", "canned": True, "error_recovery": True},
+                )
+            else:
+                logger.warning("No canned clips available — inserting silence (check demo_assets/banter/)")
+                silence_path = config.tmp_dir / f"silence_{uuid4().hex[:8]}.mp3"
+                try:
+                    loop = asyncio.get_running_loop()
+                    await loop.run_in_executor(None, generate_silence, silence_path, 5.0)
+                except Exception as silence_err:
+                    logger.error("Cannot generate silence (ffmpeg broken?): %s", silence_err)
+                    await asyncio.sleep(0.5)
+                    continue
+                segment = Segment(
+                    type=seg_type,
+                    path=silence_path,
+                    metadata={"error": str(e)},
+                )
             # Do NOT advance state counters — failed segment doesn't count
 
         if segment:
