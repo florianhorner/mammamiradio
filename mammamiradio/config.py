@@ -186,13 +186,8 @@ def _validate(config: StationConfig) -> None:
         log.warning("Home Assistant enabled but no HA_TOKEN in environment")
     if not config.ads.brands:
         log.warning("No ad brands configured — ad segments will be skipped")
-    # Addon mode: Supervisor handles auth, skip non-local bind check
-    if (
-        not config.is_addon
-        and not _is_loopback_host(config.bind_host)
-        and not (config.admin_password or config.admin_token)
-    ):
-        errors.append("Non-local bind requires ADMIN_PASSWORD or ADMIN_TOKEN")
+    # Non-loopback bind without auth is fine — admin access trusts private
+    # networks (RFC1918, Tailscale CGNAT). Auth is only needed for public access.
 
     if errors:
         raise ValueError("Config errors:\n  " + "\n  ".join(errors))

@@ -677,7 +677,7 @@ async def test_hassio_ingress_spoofed_external():
 @pytest.mark.asyncio
 async def test_basic_auth_mutation_requires_same_origin_or_csrf():
     app = _make_test_app(admin_password="secret")
-    transport = httpx.ASGITransport(app=app, client=("10.0.0.1", 9999))
+    transport = httpx.ASGITransport(app=app, client=("203.0.113.50", 9999))
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
         resp = await client.post("/api/shuffle", headers=_basic_auth_header())
     assert resp.status_code == 403
@@ -687,7 +687,7 @@ async def test_basic_auth_mutation_requires_same_origin_or_csrf():
 @pytest.mark.asyncio
 async def test_basic_auth_mutation_allows_same_origin():
     app = _make_test_app(admin_password="secret")
-    transport = httpx.ASGITransport(app=app, client=("10.0.0.1", 9999))
+    transport = httpx.ASGITransport(app=app, client=("203.0.113.50", 9999))
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
         resp = await client.post(
             "/api/shuffle",
@@ -700,7 +700,7 @@ async def test_basic_auth_mutation_allows_same_origin():
 @pytest.mark.asyncio
 async def test_basic_auth_mutation_allows_csrf_token_without_origin():
     app = _make_test_app(admin_password="secret")
-    transport = httpx.ASGITransport(app=app, client=("10.0.0.1", 9999))
+    transport = httpx.ASGITransport(app=app, client=("203.0.113.50", 9999))
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
         dashboard = await client.get("/dashboard", headers=_basic_auth_header())
         assert dashboard.status_code == 200
@@ -715,7 +715,7 @@ async def test_basic_auth_mutation_allows_csrf_token_without_origin():
 @pytest.mark.asyncio
 async def test_token_auth_mutation_skips_csrf_requirement():
     app = _make_test_app(admin_token="tok-123")
-    transport = httpx.ASGITransport(app=app, client=("10.0.0.1", 9999))
+    transport = httpx.ASGITransport(app=app, client=("203.0.113.50", 9999))
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
         resp = await client.post("/api/shuffle", headers={"X-Radio-Admin-Token": "tok-123"})
     assert resp.status_code == 200
@@ -732,19 +732,29 @@ async def test_token_auth_on_loopback_no_password():
 
 
 @pytest.mark.asyncio
-async def test_token_auth_non_loopback_requires_token():
-    """Token-only auth: non-loopback without token should fail."""
+async def test_token_auth_public_ip_requires_token():
+    """Token-only auth: public IP without token should fail."""
     app = _make_test_app(admin_token="tok-123")
-    transport = httpx.ASGITransport(app=app, client=("10.0.0.1", 9999))
+    transport = httpx.ASGITransport(app=app, client=("203.0.113.50", 9999))
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
         resp = await client.get("/status")
     assert resp.status_code == 401
 
 
 @pytest.mark.asyncio
-async def test_token_auth_non_loopback_with_valid_token():
+async def test_token_auth_private_network_trusted():
+    """Private network (RFC1918) should be trusted without token."""
     app = _make_test_app(admin_token="tok-123")
     transport = httpx.ASGITransport(app=app, client=("10.0.0.1", 9999))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.get("/status")
+    assert resp.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_token_auth_non_loopback_with_valid_token():
+    app = _make_test_app(admin_token="tok-123")
+    transport = httpx.ASGITransport(app=app, client=("203.0.113.50", 9999))
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
         resp = await client.get("/status", headers={"X-Radio-Admin-Token": "tok-123"})
     assert resp.status_code == 200

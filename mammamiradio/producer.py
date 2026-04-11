@@ -373,6 +373,50 @@ def _cast_voices(
     return result
 
 
+async def prewarm_first_segment(
+    queue: asyncio.Queue[Segment],
+    state: StationState,
+    config: StationConfig,
+) -> bool:
+    """Pre-produce one music segment at startup so audio is ready before any listener connects.
+
+    Returns True if a segment was queued, False on failure (non-fatal).
+    """
+    if not state.playlist:
+        return False
+    try:
+        track = state.select_next_track()
+        logger.info("Pre-warming first track: %s", track.display)
+        norm_path = config.tmp_dir / f"music_{uuid4().hex[:8]}.mp3"
+        audio_path = await download_track(track, config.cache_dir, music_dir=Path("music"))
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, normalize, audio_path, norm_path)
+        rationale = generate_track_rationale(track, source=state.playlist_source, listener=state.listener)
+        crate = classify_track_crate(track, state.playlist_source)
+        segment = Segment(
+            type=SegmentType.MUSIC,
+            path=norm_path,
+            metadata={
+                "title": track.display,
+                "artist": track.artist,
+                "title_only": track.title,
+                "spotify_id": track.spotify_id,
+                "album_art": track.album_art,
+                "rationale": rationale,
+                "crate": crate,
+                "audio_source": "prewarm",
+            },
+        )
+        await queue.put(segment)
+        state.after_music(track)
+        _set_last_music_file(norm_path)
+        logger.info("Pre-warmed first segment: %s (ready for instant playback)", track.display)
+        return True
+    except Exception:
+        logger.warning("Pre-warm failed (non-fatal, producer will generate normally)", exc_info=True)
+        return False
+
+
 async def run_producer(
     queue: asyncio.Queue[Segment],
     state: StationState,

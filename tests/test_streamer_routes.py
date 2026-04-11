@@ -283,13 +283,23 @@ async def test_setup_save_keys_rejects_empty_payload():
 
 
 @pytest.mark.asyncio
-async def test_admin_status_without_auth_non_loopback_rejected():
-    """Non-loopback client without credentials should be rejected."""
+async def test_admin_status_without_auth_public_ip_rejected():
+    """Public IP client without credentials should be rejected."""
+    app = _make_test_app(admin_password="secret123")
+    transport = httpx.ASGITransport(app=app, client=("203.0.113.50", 9999))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.get("/status")
+    assert resp.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_admin_status_private_network_trusted():
+    """Private network (RFC1918) client should be trusted without credentials."""
     app = _make_test_app(admin_password="secret123")
     transport = httpx.ASGITransport(app=app, client=("192.168.1.50", 9999))
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
         resp = await client.get("/status")
-    assert resp.status_code == 401
+    assert resp.status_code == 200
 
 
 @pytest.mark.asyncio
@@ -315,9 +325,18 @@ async def test_admin_status_with_token():
 
 
 @pytest.mark.asyncio
+async def test_admin_status_with_token_query_param():
+    app = _make_test_app(admin_token="tok-abc-123")
+    transport = httpx.ASGITransport(app=app, client=("203.0.113.50", 9999))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.get("/status?token=tok-abc-123")
+    assert resp.status_code == 200
+
+
+@pytest.mark.asyncio
 async def test_admin_status_bad_credentials():
     app = _make_test_app(admin_password="secret123")
-    transport = httpx.ASGITransport(app=app, client=("192.168.1.50", 9999))
+    transport = httpx.ASGITransport(app=app, client=("203.0.113.50", 9999))
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
         resp = await client.get("/status", auth=("admin", "wrong"))
     assert resp.status_code == 401
@@ -363,10 +382,10 @@ async def test_loopback_bypasses_auth_when_no_password():
 
 
 @pytest.mark.asyncio
-async def test_non_loopback_no_auth_configured_rejected():
-    """Non-loopback with no auth configured gets 403."""
+async def test_public_ip_no_auth_configured_rejected():
+    """Public IP with no auth configured gets 403."""
     app = _make_test_app()  # no password, no token
-    transport = httpx.ASGITransport(app=app, client=("10.0.0.5", 9999))
+    transport = httpx.ASGITransport(app=app, client=("203.0.113.50", 9999))
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
         resp = await client.get("/status")
     assert resp.status_code == 403
@@ -437,10 +456,10 @@ async def test_admin_panel_loopback_no_password_returns_html():
 
 
 @pytest.mark.asyncio
-async def test_admin_panel_non_loopback_without_auth_rejected():
-    """GET /admin from non-loopback without credentials should return 401."""
+async def test_admin_panel_public_ip_without_auth_rejected():
+    """GET /admin from public IP without credentials should return 401."""
     app = _make_test_app(admin_password="secret")
-    transport = httpx.ASGITransport(app=app, client=("10.0.0.1", 9999))
+    transport = httpx.ASGITransport(app=app, client=("203.0.113.50", 9999))
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
         resp = await client.get("/admin")
     assert resp.status_code == 401
@@ -480,10 +499,10 @@ async def test_capabilities_loopback_returns_flags():
 
 
 @pytest.mark.asyncio
-async def test_capabilities_non_loopback_without_auth_rejected():
-    """GET /api/capabilities from non-loopback without credentials returns 401."""
+async def test_capabilities_public_ip_without_auth_rejected():
+    """GET /api/capabilities from public IP without credentials returns 401."""
     app = _make_test_app(admin_password="secret")
-    transport = httpx.ASGITransport(app=app, client=("192.168.1.5", 9999))
+    transport = httpx.ASGITransport(app=app, client=("203.0.113.50", 9999))
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
         resp = await client.get("/api/capabilities")
     assert resp.status_code == 401

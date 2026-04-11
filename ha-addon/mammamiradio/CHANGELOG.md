@@ -1,5 +1,15 @@
 # Changelog
 
+## 2.5.1
+
+### Fixed
+
+- Admin panel accessible from LAN without token (Tailscale, RFC1918 trusted).
+- Credential status now shows "configured" indicator when keys are set via addon config.
+- AI tier detection uses both Anthropic and OpenAI keys, not just Anthropic.
+- First audio plays within seconds of connecting (pre-warmed at startup).
+- Search field handles errors gracefully.
+
 ## 2.5.0
 
 ### Added

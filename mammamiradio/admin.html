@@ -552,7 +552,7 @@ h1 {
   <div class="card">
     <div class="card-label">Playlist <span id="plMeta" style="float:right;font-weight:400"></span></div>
     <div class="search-bar">
-      <input type="text" class="search-input" id="searchInput" placeholder="Filter playlist or search tracks..." autocomplete="off">
+      <input type="text" class="search-input" id="searchInput" placeholder="Filter playlist..." autocomplete="off">
       <button class="btn btn-util" onclick="doSearch()">Search</button>
     </div>
     <div id="searchResults"></div>
@@ -639,10 +639,16 @@ h1 {
     <div class="setup-subhead">Preflight Checks</div>
     <div class="setup-list" id="setupChecks"></div>
 
-    <div class="setup-subhead">Save Keys</div>
-    <div class="setup-keys">
-      <input class="input" id="setupAnthropicKey" type="password" placeholder="ANTHROPIC_API_KEY (optional)" autocomplete="off">
-      <input class="input" id="setupOpenaiKey" type="password" placeholder="OPENAI_API_KEY (optional)" autocomplete="off">
+    <div id="setupKeysConfigured" style="display:none;padding:0.75rem 1rem;background:rgba(37,99,235,0.1);border:1px solid rgba(37,99,235,0.3);border-radius:8px;margin-bottom:0.75rem">
+      <span style="color:#2563EB;font-weight:600" id="setupKeysLabel">&#10003; AI keys configured</span>
+      <span style="opacity:0.7;margin-left:0.5rem;font-size:0.85em" id="setupKeysDetail"></span>
+    </div>
+    <div id="setupKeysForm">
+      <div class="setup-subhead">Save Keys</div>
+      <div class="setup-keys">
+        <input class="input" id="setupAnthropicKey" type="password" placeholder="ANTHROPIC_API_KEY (optional)" autocomplete="off">
+        <input class="input" id="setupOpenaiKey" type="password" placeholder="OPENAI_API_KEY (optional)" autocomplete="off">
+      </div>
     </div>
 
     <div class="setup-actions">
@@ -796,6 +802,16 @@ function renderSetup(setup){
   });
   document.getElementById('setupChecks').innerHTML=checks.join('')||'<div class="empty">No checks reported</div>';
 
+  // Show configured indicator or input fields based on key status
+  const llmEssential=(setup.essentials||[]).find(e=>e.key==='llm_keys');
+  const configuredKeys=llmEssential?.configured_keys||[];
+  const keysConfigured=configuredKeys.length>0;
+  document.getElementById('setupKeysConfigured').style.display=keysConfigured?'block':'none';
+  document.getElementById('setupKeysForm').style.display=keysConfigured?'none':'block';
+  if(keysConfigured){
+    document.getElementById('setupKeysDetail').textContent=configuredKeys.join(', ');
+  }
+
   const snippetWrap=document.getElementById('setupSnippetWrap');
   const snippet=(setup.addon_options_snippet||'').trim();
   if(snippet){
@@ -849,7 +865,7 @@ function updateSystems(caps,st,pub){
 
   const recentBanter=[...(pub?.stream_log||[])].reverse().find(e=>e.type==='banter'&&e.metadata&&Object.prototype.hasOwnProperty.call(e.metadata,'canned'));
   let aiState='info',aiLabel='Unknown',aiDetail='No AI diagnostics yet.';
-  if(!c.anthropic){
+  if(!c.script_llm){
     aiState='warn';aiLabel='Demo';aiDetail='No AI script key configured. The station falls back to canned or local copy.';
   }else if(recentBanter&&recentBanter.metadata?.canned===false){
     aiState='ok';aiLabel='Working';aiDetail='Recent banter was generated live, not played from the canned demo pool.';
@@ -944,10 +960,14 @@ si.addEventListener('input',()=>{
 let _sR=[];
 async function doSearch(){
   const q=si.value.trim();if(!q)return;
-  const d=await(await fetch('/api/search?q='+encodeURIComponent(q),{headers:H()})).json();
-  _sR=d.results||[];const el=document.getElementById('searchResults');
-  if(!_sR.length){el.innerHTML=q.length>=2?'<div class="empty">No matches</div>':'';return}
-  el.innerHTML='<div class="sr-label">Matches</div>'+_sR.slice(0,8).map((t,i)=>`<div class="sr-row"><span>${esc(t.artist)} — ${esc(t.title)}</span><button class="sr-add" onclick="addTr(${i})">&#9654; Next</button></div>`).join('');
+  try{
+    const resp=await fetch('/api/search?q='+encodeURIComponent(q),{headers:H()});
+    if(!resp.ok){console.warn('Search failed:',resp.status);return}
+    const d=await resp.json();
+    _sR=d.results||[];const el=document.getElementById('searchResults');
+    if(!_sR.length){el.innerHTML=q.length>=2?'<div class="empty">No matches in playlist</div>':'';return}
+    el.innerHTML='<div class="sr-label">Matches</div>'+_sR.slice(0,8).map((t,i)=>`<div class="sr-row"><span>${esc(t.artist)} — ${esc(t.title)}</span><button class="sr-add" onclick="addTr(${i})">&#9654; Next</button></div>`).join('');
+  }catch(e){console.warn('Search error:',e)}
 }
 async function addTr(i){const t=_sR[i];if(!t)return;await api('POST','/api/playlist/move_to_next',{index:t.index});toast('Playing next: '+t.display);document.getElementById('searchResults').innerHTML='';si.value='';_plFilter=''}
 

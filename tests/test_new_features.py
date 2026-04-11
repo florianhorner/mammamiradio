@@ -420,9 +420,9 @@ async def test_trigger_endpoint_invalid_type():
 
 @pytest.mark.asyncio
 async def test_trigger_endpoint_requires_admin():
-    """POST /api/trigger from non-loopback without auth should return 401."""
+    """POST /api/trigger from public IP without auth should return 401."""
     app = _make_test_app(admin_password="secret")
-    transport = httpx.ASGITransport(app=app, client=("10.0.0.1", 9999))
+    transport = httpx.ASGITransport(app=app, client=("203.0.113.50", 9999))
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
         resp = await client.post("/api/trigger", json={"type": "banter"})
 

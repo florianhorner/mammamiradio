@@ -19,6 +19,7 @@ from mammamiradio.streamer import (
     _inject_csrf_token,
     _is_hassio_or_loopback,
     _is_loopback_client,
+    _is_private_network,
     _preview_tracks,
     _purge_segment_queue,
     _same_origin,
@@ -214,6 +215,31 @@ def test_is_hassio_no_client():
     req = MagicMock()
     req.client = None
     assert _is_hassio_or_loopback(req) is False
+
+
+def test_is_private_network_rfc1918():
+    for ip in ("10.0.0.1", "172.16.0.1", "192.168.1.100"):
+        req = MagicMock()
+        req.client.host = ip
+        assert _is_private_network(req) is True, f"{ip} should be private"
+
+
+def test_is_private_network_tailscale_cgnat():
+    req = MagicMock()
+    req.client.host = "100.98.177.107"
+    assert _is_private_network(req) is True
+
+
+def test_is_private_network_loopback():
+    req = MagicMock()
+    req.client.host = "127.0.0.1"
+    assert _is_private_network(req) is True
+
+
+def test_is_private_network_public_ip():
+    req = MagicMock()
+    req.client.host = "203.0.113.50"
+    assert _is_private_network(req) is False
 
 
 # ---------------------------------------------------------------------------

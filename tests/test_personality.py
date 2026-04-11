@@ -230,9 +230,10 @@ class TestHostsAPI:
         assert "personality" in host
         assert set(host["personality"].keys()) == {"energy", "chaos", "warmth", "verbosity", "nostalgia"}
 
-    async def test_get_hosts_requires_auth_off_loopback(self):
+    async def test_get_hosts_requires_auth_from_public_ip(self):
         app = _make_test_app(admin_password="secret")
-        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as c:
+        transport = httpx.ASGITransport(app=app, client=("203.0.113.50", 9999))
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
             r = await c.get("/api/hosts")
         assert r.status_code == 401
 
