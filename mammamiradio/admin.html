@@ -433,6 +433,22 @@ h1 {
 /* ── PROGRESS LABEL ── */
 .progress-label { font-size: 9px; color: rgba(245,237,216,0.3); text-align: right; margin-top: 2px; }
 
+/* ── TABS ── */
+.tab-nav { display: flex; gap: 2px; margin-bottom: 16px; position: relative; z-index: 1; }
+.tab-btn {
+  padding: 6px 18px; border-radius: 4px; border: none;
+  background: transparent; color: rgba(245,237,216,0.45);
+  font-family: 'Outfit', sans-serif; font-size: 13px; font-weight: 600;
+  cursor: pointer; letter-spacing: 0.05em; text-transform: uppercase;
+  transition: all 0.15s;
+}
+.tab-btn.active {
+  background: rgba(244,208,72,0.12); color: var(--sun);
+  border-bottom: 2px solid var(--sun);
+}
+.tab-pane { display: none; }
+.tab-pane.active { display: block; }
+
 @media (max-width: 640px) {
   .header {
     flex-direction: column;
@@ -493,7 +509,7 @@ h1 {
 
 <div class="stopped-banner" id="stoppedBanner">Session stopped. Hit Resume to continue.</div>
 
-<!-- NOW PLAYING -->
+<!-- NOW PLAYING — always visible above tabs -->
 <div class="card now-card">
   <div class="card-label">Now Playing</div>
   <div class="now-type" id="nowType" data-t="music">—</div>
@@ -505,14 +521,11 @@ h1 {
   <div class="progress"><div class="progress-fill" id="progFill" data-t="music"></div></div>
   <div class="progress-label">estimated</div>
   <div class="transport">
-    <button class="btn btn-skip" onclick="doSkip(this)">⏭ SKIP <span class="key">S</span></button>
-  </div>
-  <div class="transport" style="margin-top:8px">
-    <button class="btn btn-trigger" onclick="doTrigger('banter',this)">🎙 Banter <span class="key">B</span></button>
-    <button class="btn btn-trigger" onclick="doTrigger('ad',this)">📢 Ad <span class="key">A</span></button>
-    <button class="btn btn-trigger" onclick="doTrigger('news_flash',this)">⚡ News <span class="key">N</span></button>
-    <button class="btn btn-util" onclick="doShuffle(this)">🔀 Shuffle</button>
-    <button class="btn btn-util" onclick="doPurge(this)">🗑 Purge</button>
+    <button class="btn btn-skip" onclick="doSkip(this)">&#9197; SKIP <span class="key">S</span></button>
+    <button class="btn btn-util" onclick="doShuffle(this)">&#128256; Shuffle</button>
+    <button class="btn btn-util" onclick="doPurge(this)">&#128465; Purge</button>
+    <!-- prompt() is intentional here: flag is an operator-only action, browser dialog is acceptable -->
+    <button class="btn btn-util" onclick="flagCurrentTrack(this)">&#128681; Flag Track</button>
   </div>
   <div class="transport" style="margin-top:8px">
     <button class="btn btn-stop" id="stopBtn" onclick="doStop(this)">&#9632; Stop Session</button>
@@ -520,105 +533,131 @@ h1 {
   </div>
 </div>
 
-<!-- INSTALL ONBOARDING -->
-<div class="card setup-card">
-  <div class="card-label">Installation Onboarding</div>
-  <div class="setup-headline" id="setupHeadline">Checking setup status...</div>
-  <div class="setup-meta" id="setupMeta"></div>
-  <div class="setup-next" id="setupNext">Collecting first-run diagnostics.</div>
-
-  <div class="setup-subhead">Step Checklist</div>
-  <ul class="setup-steps" id="setupSteps"></ul>
-
-  <div class="setup-subhead">Essentials</div>
-  <div class="setup-list" id="setupEssentials"></div>
-
-  <div class="setup-subhead">Preflight Checks</div>
-  <div class="setup-list" id="setupChecks"></div>
-
-  <div class="setup-subhead">Save Keys</div>
-  <div class="setup-keys">
-    <input class="input" id="setupAnthropicKey" type="password" placeholder="ANTHROPIC_API_KEY (optional)" autocomplete="off">
-    <input class="input" id="setupOpenaiKey" type="password" placeholder="OPENAI_API_KEY (optional)" autocomplete="off">
-  </div>
-
-  <div class="setup-actions">
-    <button class="btn btn-trigger" id="setupSaveBtn" onclick="setupSaveKeys(this)">Save Keys</button>
-    <button class="btn btn-util" onclick="setupRecheck(this)">Re-check</button>
-  </div>
-
-  <div class="setup-snippet" id="setupSnippetWrap">
-    <div class="setup-subhead" style="margin-top:0">Home Assistant Add-on Snippet</div>
-    <button class="btn btn-util" onclick="copySetupSnippet()">Copy Snippet</button>
-    <pre class="setup-pre" id="setupSnippet"></pre>
-  </div>
+<!-- TAB NAV -->
+<div class="tab-nav">
+  <button class="tab-btn" data-tab="music" onclick="switchTab('music')">Music</button>
+  <button class="tab-btn" data-tab="radio" onclick="switchTab('radio')">Radio</button>
 </div>
 
-<!-- SYSTEMS -->
-<div class="card">
-  <div class="card-label">Systems</div>
-  <div class="status-stack" id="systemsBody"><div class="empty">Checking AI and music systems...</div></div>
-</div>
+<!-- TAB: MUSIC -->
+<div class="tab-pane" data-tab="music">
 
-<!-- UP NEXT -->
-<div class="card">
-  <div class="card-label">Up Next <span id="queueMeta" style="float:right;font-weight:400"></span></div>
-  <div id="queueBody"><div class="empty">Waiting...</div></div>
-</div>
+  <!-- UP NEXT -->
+  <div class="card">
+    <div class="card-label">Up Next <span id="queueMeta" style="float:right;font-weight:400"></span></div>
+    <div id="queueBody"><div class="empty">Waiting...</div></div>
+  </div>
 
-<!-- LAST BREAK -->
-<div class="card">
-  <div class="card-label">Last Break</div>
-  <div class="script-box" id="recentBody"><div class="empty">Nothing aired yet</div></div>
-</div>
+  <!-- PLAYLIST -->
+  <div class="card">
+    <div class="card-label">Playlist <span id="plMeta" style="float:right;font-weight:400"></span></div>
+    <div class="search-bar">
+      <input type="text" class="search-input" id="searchInput" placeholder="Filter playlist or search tracks..." autocomplete="off">
+      <button class="btn btn-util" onclick="doSearch()">Search</button>
+    </div>
+    <div id="searchResults"></div>
+    <div id="plBody" style="max-height:400px;overflow-y:auto;overflow-x:hidden"></div>
+  </div>
 
-<!-- PLAYLIST -->
-<div class="card">
-  <div class="card-label">Playlist <span id="plMeta" style="float:right;font-weight:400"></span></div>
-  <div class="search-bar">
-    <input type="text" class="search-input" id="searchInput" placeholder="Filter playlist or search tracks..." autocomplete="off">
-    <button class="btn btn-util" onclick="doSearch()">Search</button>
-  </div>
-  <div id="searchResults"></div>
-  <div id="plBody" style="max-height:400px;overflow-y:auto;overflow-x:hidden"></div>
-</div>
+</div><!-- /tab music -->
 
-<!-- PACING -->
-<div class="card">
-  <div class="collapse-head" onclick="toggleSection(this)">
-    <span class="card-label" style="margin-bottom:0">Pacing</span>
-    <span class="collapse-arrow">▶</span>
-  </div>
-  <div class="collapse-body">
-    <div class="pace-hint">Higher = more songs between segments (less frequent)</div>
-    <div class="pace-row"><label>Banter</label><input type="range" id="pBanter" min="1" max="6" value="2"><span class="pv" id="pvBanter">2</span></div>
-    <div class="pace-counter" id="pcBanter"></div>
-    <div class="pace-row"><label>Ads</label><input type="range" id="pAds" min="1" max="10" value="4"><span class="pv" id="pvAds">4</span></div>
-    <div class="pace-counter" id="pcAds"></div>
-    <div class="pace-row"><label>Spots/break</label><input type="range" id="pSpots" min="1" max="5" value="2"><span class="pv" id="pvSpots">2</span></div>
-  </div>
-</div>
+<!-- TAB: RADIO -->
+<div class="tab-pane" data-tab="radio">
 
-<!-- HOSTS -->
-<div class="card">
-  <div class="collapse-head" onclick="toggleSection(this)">
-    <span class="card-label" style="margin-bottom:0">Host Personality</span>
-    <span class="collapse-arrow">▶</span>
+  <!-- TRIGGERS -->
+  <div class="card">
+    <div class="card-label">Broadcast Triggers</div>
+    <div class="transport">
+      <button class="btn btn-trigger" onclick="doTrigger('banter',this)">&#127897; Banter <span class="key">B</span></button>
+      <button class="btn btn-trigger" onclick="doTrigger('ad',this)">&#128226; Ad <span class="key">A</span></button>
+      <button class="btn btn-trigger" onclick="doTrigger('news_flash',this)">&#9889; News <span class="key">N</span></button>
+    </div>
   </div>
-  <div class="collapse-body">
-    <div class="host-hint">0 = opposite trait, 50 = balanced, 100 = strong trait. Presets are quick starting points.</div>
-    <div id="hostsBody"></div>
-  </div>
-</div>
 
-<!-- LOG -->
-<div class="card">
-  <div class="collapse-head" onclick="toggleSection(this)">
-    <span class="card-label" style="margin-bottom:0">Station Log</span>
-    <span class="collapse-arrow">▶</span>
+  <!-- LAST BREAK -->
+  <div class="card">
+    <div class="card-label">Last Break</div>
+    <div class="script-box" id="recentBody"><div class="empty">Nothing aired yet</div></div>
   </div>
-  <div class="collapse-body" id="logBody" style="max-height:200px;overflow-y:auto"></div>
-</div>
+
+  <!-- PACING -->
+  <div class="card">
+    <div class="collapse-head" onclick="toggleSection(this)">
+      <span class="card-label" style="margin-bottom:0">Pacing</span>
+      <span class="collapse-arrow">&#9658;</span>
+    </div>
+    <div class="collapse-body">
+      <div class="pace-hint">Higher = more songs between segments (less frequent)</div>
+      <div class="pace-row"><label>Banter</label><input type="range" id="pBanter" min="1" max="6" value="2"><span class="pv" id="pvBanter">2</span></div>
+      <div class="pace-counter" id="pcBanter"></div>
+      <div class="pace-row"><label>Ads</label><input type="range" id="pAds" min="1" max="10" value="4"><span class="pv" id="pvAds">4</span></div>
+      <div class="pace-counter" id="pcAds"></div>
+      <div class="pace-row"><label>Spots/break</label><input type="range" id="pSpots" min="1" max="5" value="2"><span class="pv" id="pvSpots">2</span></div>
+    </div>
+  </div>
+
+  <!-- HOSTS -->
+  <div class="card">
+    <div class="collapse-head" onclick="toggleSection(this)">
+      <span class="card-label" style="margin-bottom:0">Host Personality</span>
+      <span class="collapse-arrow">&#9658;</span>
+    </div>
+    <div class="collapse-body">
+      <div class="host-hint">0 = opposite trait, 50 = balanced, 100 = strong trait. Presets are quick starting points.</div>
+      <div id="hostsBody"></div>
+    </div>
+  </div>
+
+  <!-- LOG -->
+  <div class="card">
+    <div class="collapse-head" onclick="toggleSection(this)">
+      <span class="card-label" style="margin-bottom:0">Station Log</span>
+      <span class="collapse-arrow">&#9658;</span>
+    </div>
+    <div class="collapse-body" id="logBody" style="max-height:200px;overflow-y:auto"></div>
+  </div>
+
+  <!-- SYSTEMS -->
+  <div class="card">
+    <div class="card-label">Systems</div>
+    <div class="status-stack" id="systemsBody"><div class="empty">Checking AI and music systems...</div></div>
+  </div>
+
+  <!-- INSTALL ONBOARDING -->
+  <div class="card setup-card">
+    <div class="card-label">Installation Onboarding</div>
+    <div class="setup-headline" id="setupHeadline">Checking setup status...</div>
+    <div class="setup-meta" id="setupMeta"></div>
+    <div class="setup-next" id="setupNext">Collecting first-run diagnostics.</div>
+
+    <div class="setup-subhead">Step Checklist</div>
+    <ul class="setup-steps" id="setupSteps"></ul>
+
+    <div class="setup-subhead">Essentials</div>
+    <div class="setup-list" id="setupEssentials"></div>
+
+    <div class="setup-subhead">Preflight Checks</div>
+    <div class="setup-list" id="setupChecks"></div>
+
+    <div class="setup-subhead">Save Keys</div>
+    <div class="setup-keys">
+      <input class="input" id="setupAnthropicKey" type="password" placeholder="ANTHROPIC_API_KEY (optional)" autocomplete="off">
+      <input class="input" id="setupOpenaiKey" type="password" placeholder="OPENAI_API_KEY (optional)" autocomplete="off">
+    </div>
+
+    <div class="setup-actions">
+      <button class="btn btn-trigger" id="setupSaveBtn" onclick="setupSaveKeys(this)">Save Keys</button>
+      <button class="btn btn-util" onclick="setupRecheck(this)">Re-check</button>
+    </div>
+
+    <div class="setup-snippet" id="setupSnippetWrap">
+      <div class="setup-subhead" style="margin-top:0">Home Assistant Add-on Snippet</div>
+      <button class="btn btn-util" onclick="copySetupSnippet()">Copy Snippet</button>
+      <pre class="setup-pre" id="setupSnippet"></pre>
+    </div>
+  </div>
+
+</div><!-- /tab radio -->
 
 <div class="toast" id="toast"></div>
 
@@ -634,6 +673,13 @@ function flash(el){if(!el)return;el.classList.remove('flash');void el.offsetWidt
 
 async function api(m,p,b){const o={method:m,headers:H()};if(b)o.body=JSON.stringify(b);return(await fetch(p,o)).json()}
 
+// ── Tab switching ──
+function switchTab(name) {
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === name));
+  document.querySelectorAll('.tab-pane').forEach(p => p.classList.toggle('active', p.dataset.tab === name));
+  localStorage.setItem('adminTab', name);
+}
+
 // ── Transport ──
 async function doSkip(el){flash(el);await api('POST','/api/skip');toast('Skipped — advancing to next segment')}
 async function doTrigger(t,el){flash(el);const r=await api('POST','/api/trigger',{type:t});if(r.ok)toast('Queued: '+t.replace('_',' ')+' (plays after current song)');else toast('Failed: '+(r.error||'unknown'))}
@@ -647,6 +693,17 @@ function updateStopState(stopped){
   document.getElementById('resumeBtn').style.display=stopped?'':'none';
   const badge=document.getElementById('onAirBadge');
   badge.innerHTML=stopped?'<span style="color:var(--error)">STOPPED</span>':'<span class="on-air-dot"></span>ON AIR';
+}
+
+// ── Flag Track — operator-only action, prompt() dialog is acceptable here ──
+async function flagCurrentTrack(el) {
+  const ytId = _st?.now?.metadata?.youtube_id;
+  if (!ytId) { toast('No track playing'); return; }
+  const rule = prompt('Describe this track reaction (e.g. "cringe pop classic, Aggu vibes"):');
+  if (!rule) return;
+  flash(el);
+  const r = await api('POST', '/api/track-rules', { youtube_id: ytId, rule });
+  toast(r.ok ? 'Rule saved!' : 'Failed: ' + (r.error || 'unknown'));
 }
 
 // ── Now Playing ──
@@ -844,7 +901,7 @@ function updatePl(tracks){
   const filtered=filter?s.filter(t=>`${t.title} ${t.artist}`.toLowerCase().includes(filter)):s;
   el.innerHTML=filtered.map((t,i)=>{
     const idx=filter?tracks.indexOf(t):i;
-    return `<div class="pl-row" draggable="true" data-i="${idx}" data-id="${esc(t.spotify_id||t.id||'')}"><span class="pl-grip" title="Drag to reorder">⠿</span><span class="pl-n">${idx+1}</span><span class="pl-t">${esc(t.display||t.title||'?')}</span><div class="pl-a"><button class="pl-btn" onclick="moveNext(${idx})">▶ Next</button><button class="pl-btn" onclick="removeTr(${idx})">✕</button></div></div>`;
+    return `<div class="pl-row" draggable="true" data-i="${idx}" data-id="${esc(t.spotify_id||t.id||'')}"><span class="pl-grip" title="Drag to reorder">&#10783;</span><span class="pl-n">${idx+1}</span><span class="pl-t">${esc(t.display||t.title||'?')}</span><div class="pl-a"><button class="pl-btn" onclick="moveNext(${idx})">&#9654; Next</button><button class="pl-btn" onclick="removeTr(${idx})">&#10005;</button></div></div>`;
   }).join('')+(tracks.length>80?`<div class="empty">+ ${tracks.length-80} more</div>`:'');
   initDragDrop();
 }
@@ -890,7 +947,7 @@ async function doSearch(){
   const d=await(await fetch('/api/search?q='+encodeURIComponent(q),{headers:H()})).json();
   _sR=d.results||[];const el=document.getElementById('searchResults');
   if(!_sR.length){el.innerHTML=q.length>=2?'<div class="empty">No matches</div>':'';return}
-  el.innerHTML='<div class="sr-label">Matches</div>'+_sR.slice(0,8).map((t,i)=>`<div class="sr-row"><span>${esc(t.artist)} — ${esc(t.title)}</span><button class="sr-add" onclick="addTr(${i})">▶ Next</button></div>`).join('');
+  el.innerHTML='<div class="sr-label">Matches</div>'+_sR.slice(0,8).map((t,i)=>`<div class="sr-row"><span>${esc(t.artist)} — ${esc(t.title)}</span><button class="sr-add" onclick="addTr(${i})">&#9654; Next</button></div>`).join('');
 }
 async function addTr(i){const t=_sR[i];if(!t)return;await api('POST','/api/playlist/move_to_next',{index:t.index});toast('Playing next: '+t.display);document.getElementById('searchResults').innerHTML='';si.value='';_plFilter=''}
 
@@ -1001,6 +1058,11 @@ async function refresh(){
 document.addEventListener('keydown',e=>{
   if(e.target.tagName==='INPUT')return;
   switch(e.key.toLowerCase()){case's':doSkip();break;case'b':doTrigger('banter');break;case'a':doTrigger('ad');break;case'n':doTrigger('news_flash');break}
+});
+
+// ── Init: restore last active tab ──
+document.addEventListener('DOMContentLoaded', () => {
+  switchTab(localStorage.getItem('adminTab') || 'music');
 });
 
 refresh();setInterval(refresh,2000);

@@ -4,6 +4,19 @@ All notable changes to `mammamiradio` are documented here.
 
 The current version source of truth is `pyproject.toml`.
 
+## [2.5.0] - 2026-04-11
+
+### Added
+- **Track rules system** — flag a song mid-stream with a reaction (e.g. "cringe pop classic, Aggu vibes") and future banter about that track will reference it. Rules persist in SQLite and accumulate over time. New `POST /api/track-rules` endpoint.
+- **Admin UI tab split** — admin panel reorganised into "Music" tab (queue, playlist, transport) and "Radio" tab (banter triggers, last break, pacing, host personality, logs). Tab selection persists across page refreshes.
+- **Flag Track button** — operator can flag the currently playing track with a reaction directly from the admin panel Now Playing card.
+
+### Changed
+- **Crossfade Option B** — host transition voice now plays over a higher music bed (50% vs 30%). The music stays audible underneath so the host sounds inside the track, not on top of a near-silent fade.
+- **Station ID sting volume** — reduced from 60% to 15%. Sting is now background texture rather than a jarring hit.
+- **Host chemistry** — amplified chaos and unpredictability in banter prompts: mid-conversation starts, abandoned sentences, absurdist tangents, physical studio comedy, and emotion-first reactions. Hosts feel less managed.
+- **Transition lines** — musical option added: ~30% of transitions echo the song's energy (rhythm, phrasing) rather than announcing the next segment. Real radio DJ feel.
+
 ## [2.4.1] - 2026-04-11
 
 ### Added

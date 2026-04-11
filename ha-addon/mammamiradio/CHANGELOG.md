@@ -1,5 +1,18 @@
 # Changelog
 
+## 2.5.0
+
+### Added
+- Track rules system: flag a song mid-stream with a reaction; future banter references it
+- Admin panel tab split: Music tab (queue/playlist) and Radio tab (hosts/pacing/logs)
+- Flag Track button in Now Playing card
+
+### Changed
+- Crossfade Option B: music bed stays at 50% during host voice-over (was 30%)
+- Station ID sting reduced to 15% volume — background texture, not jarring hit
+- Host banter: more chaos, mid-conversation drops, abandoned sentences, absurdist tangents
+- Transition lines: musical option added (~30% of transitions echo the song's vibe)
+
 ## 2.4.1
 
 ### Added

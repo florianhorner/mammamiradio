@@ -412,6 +412,15 @@ Rules:
 - FOURTH WALL: at most once per hour, the host may say something subtly self-aware
   ("A volte sembra troppo preciso, no? Coincidenza. Probabilmente."). Deliver it
   calmly, never winking. Never reference it again in the same session.
+- START MID-CONVERSATION: sometimes begin as if the listener tuned in halfway through
+  an argument or a laugh. No setup. Just drop in.
+- UNFINISHED THOUGHTS: hosts abandon sentences. "Lo so, ma comunque—" then the other
+  one is already talking. Normal.
+- ABSURDIST TANGENT: at least once per exchange, someone says something that has no
+  business being said on radio. Then continues as if nothing happened. The other host doesn't react.
+- PHYSICAL COMEDY: reference the studio physically. Someone knocks something over.
+  Someone's headphone cable gets caught. The mic sounds wrong and they complain about it.
+- REACT BEFORE WORDS: a host reacts first — laughs, "eh", groans, "oddio no" — before forming a sentence. Feelings first, words second.
 - Output ONLY valid JSON, no markdown fences or extra text."""
 
 
@@ -435,6 +444,26 @@ async def write_banter(
 
     recent = [_sanitize_prompt_data(t.display) for t in list(state.played_tracks)[-3:]]
     jokes = list(state.running_jokes)[-3:] if state.running_jokes else []
+
+    # Track rules — per-track flagged reactions
+    track_rules_block = ""
+    if state.played_tracks:
+        last_track = list(state.played_tracks)[-1]
+        if last_track.youtube_id:
+            try:
+                from mammamiradio.track_rules import get_rules
+
+                db_path = config.cache_dir / "mammamiradio.db"
+                rules = get_rules(db_path, last_track.youtube_id)
+                if rules:
+                    rules_text = "\n".join(f"- {r}" for r in rules[:5])
+                    track_rules_block = (
+                        f"\nTRACK RULES for {_sanitize_prompt_data(last_track.display)}:\n"
+                        f"{rules_text}\n"
+                        "Use at least one of these reactions in the banter.\n"
+                    )
+            except Exception:
+                logger.warning("Failed to load track rules for banter", exc_info=True)
 
     host_names = {h.name: h for h in config.hosts}
 
@@ -564,7 +593,7 @@ Running jokes to optionally callback: {jokes if jokes else "none yet, you may se
 {mood_block}<context_awareness>
 {context_block}
 </context_awareness>
-{reactive_block}{chaos_block}{new_listener_block}{listener_block}{persona_block}
+{track_rules_block}{reactive_block}{chaos_block}{new_listener_block}{listener_block}{persona_block}
 Return JSON:
 {{"lines": [{{"host": "HostName", "text": "what they say"}}], "new_joke": "brief description of any new running joke or null"{persona_update_schema}}}"""
 
@@ -761,6 +790,12 @@ RULES:
 - Recent opener stems to avoid repeating: {banned_openers}
 - If the host would normally say "Che pezzo...", pick something fresher instead.
 - ALL text in {config.station.language}.
+- MUSICAL OPTION: sometimes the transition line can echo the song's energy rather than explain it.
+  Finish a phrase like you're still inside the song's feeling, then pivot naturally.
+  Not literal singing — just rhythm and phrasing that mirrors the track's vibe.
+  Example: if the song was melancholic, start with "...sì." (pause) "Allora."
+  Example: if upbeat, start mid-energy "—e dai, basta così—" before the pivot.
+  Use this style ~30% of the time.
 
 Return JSON:
 {{"text": "the transition line"}}"""
