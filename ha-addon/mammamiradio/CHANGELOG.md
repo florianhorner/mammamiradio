@@ -8,6 +8,8 @@
 - OpenAI API key now accepted as equivalent to Anthropic for AI tier detection.
 - yt-dlp in health check panel (warns if missing, does not block startup).
 - Reconnect silence fix: canned clip plays immediately when a listener reconnects after an idle period.
+- Home context enrichment: event diffing, mood classification, weather arcs, and reactive impossible moments. The DJ now knows when you made coffee.
+- Listener launch ceremony: animated pre-launch state with radio warming up.
 
 ### Fixed
 

@@ -13,6 +13,8 @@ The current version source of truth is `pyproject.toml`.
 - **yt-dlp in health check**: Setup status now includes a yt-dlp binary check (warn if missing, not fail — yt-dlp is preferred but optional).
 - **Onboarding steps payload**: `build_setup_status` now returns an `onboarding_steps` array to drive step-by-step setup UI.
 - **Canned clip on reconnect**: When the producer wakes from idle (0→1 listener), it immediately seeds a canned banter clip into the queue so reconnecting listeners hear audio within seconds instead of waiting 30–60s for generation.
+- **Home context enrichment**: Four-phase HA intelligence upgrade. Phase 1: event diffing detects state changes between polls and surfaces them as temporal events ("coffee machine turned on 3 minutes ago"). Phase 2: mood classification reads aggregate state into Italian scenes (cooking, sleeping, movie night). Phase 3: weather narrative arcs evolve through the day. Phase 4: reactive impossible moments fire high-priority directives when specific events occur (coffee on → hosts smell espresso, door unlocks → "bentornato").
+- **Listener launch ceremony**: Pre-launch state with animated radio warming up, welcome segment display in now-playing UI.
 
 ### Fixed
 
