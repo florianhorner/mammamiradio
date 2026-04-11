@@ -7,6 +7,12 @@
 - Artist diversity cap: no more than 2 tracks per artist from Apple Music charts.
 - LRU cache eviction: oldest MP3s are deleted when cache exceeds 500 MB (configurable via MAMMAMIRADIO_MAX_CACHE_MB). Prevents SD card overflow on Raspberry Pi.
 - `/api/status` now reports token cost estimate and cache disk usage.
+- Listener gate: no API burn when nobody is listening.
+- Ad sound beds: warm ambient sine bed under every ad voiceover.
+- HA media_player entity: copy-paste YAML in DOCS.md for play/pause/skip with album art.
+- Stable admin token: set once in HA UI, use in secrets.yaml for media_player integration.
+- Station name on air: hosts say your station name naturally, matches station_name config.
+- Sharper host personalities: Marco doubles down, Giulia cuts him off.
 
 ---
 

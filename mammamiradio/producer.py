@@ -491,6 +491,8 @@ async def run_producer(
                     path=norm_path,
                     metadata={
                         "title": track.display,
+                        "artist": track.artist,
+                        "title_only": track.title,
                         "spotify_id": track.spotify_id,
                         "album_art": track.album_art,
                         "rationale": rationale,

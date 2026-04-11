@@ -810,7 +810,7 @@ async def skip_track(request: Request, _: None = Depends(require_admin_access)):
         )
 
     request.app.state.skip_event.set()
-    state.now_streaming = {"type": "skipping", "label": "Skipping...", "started": time.time()}
+    state.now_streaming = {"type": "skipping", "label": "Skipping...", "started": time.time(), "metadata": {}}
     return {"ok": True}
 
 
@@ -837,7 +837,7 @@ async def stop_session(request: Request, _: None = Depends(require_admin_access)
     config = request.app.state.config
     config.cache_dir.mkdir(parents=True, exist_ok=True)
     (config.cache_dir / "session_stopped.flag").touch()
-    state.now_streaming = {"type": "stopped", "label": "Session stopped", "started": time.time()}
+    state.now_streaming = {"type": "stopped", "label": "Session stopped", "started": time.time(), "metadata": {}}
     logger.info("Session stopped by admin (purged %d segments)", purged)
     return {"ok": True, "purged": purged}
 

@@ -207,6 +207,79 @@ The station name is what the hosts say on air. If you call it "Radio Florian", t
 
 The name appears roughly once every 3–4 banter exchanges, never forced. You can also set it via environment variable: `STATION_NAME=Radio Florian`.
 
+## Home Assistant media_player entity
+
+You can expose the station as a `media_player` entity in HA — show the current track on dashboards, control play/pause/skip from automations, or cast the stream to a Sonos, Google, or Alexa speaker.
+
+**Setup (one-time):**
+
+1. In the add-on Configuration tab, set `admin_token` to a stable string (e.g. `my-radio-token`). This avoids log-hunting for the auto-generated token on every restart.
+2. Add that token to `secrets.yaml`:
+   ```yaml
+   mammamiradio_admin_token: my-radio-token
+   ```
+3. Add these three blocks to `configuration.yaml` and reload HA:
+
+```yaml
+rest:
+  - resource: "http://localhost:8000/public-status"
+    scan_interval: 5
+    sensor:
+      - name: "mammamiradio_now_streaming"
+        value_template: "{{ value_json.now_streaming.type }}"
+        json_attributes:
+          - now_streaming
+
+template:
+  - media_player:
+      - name: "Mamma Mi Radio"
+        unique_id: mammamiradio_player
+        state: >
+          {% set t = state_attr('sensor.mammamiradio_now_streaming', 'now_streaming') %}
+          {% if t and t.type not in ['stopped', 'skipping'] %}playing{% else %}paused{% endif %}
+        media_title: >
+          {% set t = state_attr('sensor.mammamiradio_now_streaming', 'now_streaming') %}
+          {% if t %}{{ t.get('metadata', {}).get('title_only', t.label) }}{% endif %}
+        media_artist: >
+          {% set t = state_attr('sensor.mammamiradio_now_streaming', 'now_streaming') %}
+          {% if t and t.type == 'music' %}{{ t.get('metadata', {}).get('artist', 'Mamma Mi Radio') }}
+          {% else %}Mamma Mi Radio{% endif %}
+        entity_picture: >
+          {% set t = state_attr('sensor.mammamiradio_now_streaming', 'now_streaming') %}
+          {% if t %}{{ t.get('metadata', {}).get('album_art', '') }}{% endif %}
+        media_content_type: "music"
+        media_content_id: "http://localhost:8000/stream"
+        supported_features:
+          - pause
+          - play
+          - next_track
+        play:
+          - action: rest_command.mammamiradio_resume
+        pause:
+          - action: rest_command.mammamiradio_stop
+        media_next_track:
+          - action: rest_command.mammamiradio_skip
+
+rest_command:
+  mammamiradio_resume:
+    url: "http://localhost:8000/api/resume"
+    method: POST
+    headers:
+      X-Radio-Admin-Token: !secret mammamiradio_admin_token
+  mammamiradio_stop:
+    url: "http://localhost:8000/api/stop"
+    method: POST
+    headers:
+      X-Radio-Admin-Token: !secret mammamiradio_admin_token
+  mammamiradio_skip:
+    url: "http://localhost:8000/api/skip"
+    method: POST
+    headers:
+      X-Radio-Admin-Token: !secret mammamiradio_admin_token
+```
+
+The entity `media_player.mamma_mi_radio` will appear with the current track title, artist, and album art (from YouTube thumbnails). You can add it to a dashboard card or use it in automations to cast the stream to any HA-connected speaker with `media_player.play_media`.
+
 ## Tiers
 
 The dashboard shows one of three tiers based on your configuration:

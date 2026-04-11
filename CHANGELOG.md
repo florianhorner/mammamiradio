@@ -11,11 +11,18 @@ The current version source of truth is `pyproject.toml`.
 - **Artist diversity cap**: Apple Music Italy charts now enforce a max of 2 tracks per artist, preventing any single artist (e.g. Shiva) from dominating the playlist.
 - **Cache LRU eviction**: On startup and hourly while the producer is idle, the oldest cached MP3s are deleted when the cache exceeds the configured size limit (default 500 MB). Controlled via `MAMMAMIRADIO_MAX_CACHE_MB` env var. Prevents SD card overflow on Raspberry Pi.
 - **API cost tracking**: `/api/status` now returns `api_cost_estimate_usd`, `cache_size_mb`, and `cache_limit_mb` so operators can monitor token spend and disk usage without SSH.
+- **Listener gate**: Playback loop pauses when no listeners are connected, preventing API and CPU burn when the room is empty. Producer naturally idles as the queue stays full.
+- **Ad sound beds**: Each ad voiceover is now mixed with a warm 220+330+440Hz ambient bed (-18dB) with a slow breathing LFO. Ads no longer sound like dry voice-only spots.
+- **HA media_player entity**: Station now exposes `artist` and `title_only` metadata fields separately; `skipping` and `stopped` states include `metadata: {}` to prevent template errors. DOCS.md includes a copy-paste `configuration.yaml` snippet for a full `media_player` entity with play/pause/skip and album art.
+- **Stable admin token**: `admin_token` is now a configurable add-on option. Set it once in the HA UI and reference it in `secrets.yaml` for the media_player integration — no more log-hunting on each restart.
+- **Station name on air**: Hosts now say the station name naturally once every 3–4 banter exchanges, matching the `station_name` config option. Rename in the HA UI; hosts adapt within minutes.
+- **Sharper host personalities**: Marco doubles down on bad takes and believes he's the reason people tune in. Giulia now delivers devastation with the warmth of a tax audit. Banter rules require mandatory conflict, Giulia cutting Marco off at least once per exchange, unexplained recurring bits, and song-specific reactions.
 
 ### Fixed
 
 - `asyncio.get_event_loop()` (deprecated since Python 3.10) replaced with `asyncio.get_running_loop()` in the producer idle loop.
 - yt-dlp download options now include `noprogress: True` to suppress progress-bar noise in logs.
+- Error-recovery silence replaced: when segment production fails, the producer now falls back to a canned banter clip before inserting silence. Quiet patches between sections are significantly reduced.
 
 ---
 
