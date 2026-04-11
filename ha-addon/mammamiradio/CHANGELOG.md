@@ -1,5 +1,22 @@
 # Changelog
 
+## 2.4.0
+
+### Added
+
+- Volare Refined design system: dark espresso theme across listener and admin UIs.
+- OpenAI API key now accepted as equivalent to Anthropic for AI tier detection.
+- yt-dlp in health check panel (warns if missing, does not block startup).
+- Reconnect silence fix: canned clip plays immediately when a listener reconnects after an idle period.
+
+### Fixed
+
+- Ad double-bed artifact removed: ads now have one music bed, not two.
+- Credential write now strips newlines to prevent env file injection.
+- Hub close correctly resets listener count so producer idle gate works on restart.
+
+---
+
 ## 2.3.1
 
 ### Added

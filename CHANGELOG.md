@@ -4,6 +4,32 @@ All notable changes to `mammamiradio` are documented here.
 
 The current version source of truth is `pyproject.toml`.
 
+## [2.4.0] - 2026-04-11
+
+### Added
+
+- **Volare Refined design system**: Listener and admin UIs now share a unified espresso-dark palette (`#14110F`) with golden accents. The sunset orange is preserved in typography and highlights — not the background. Typography updated to Playfair Display + Outfit + JetBrains Mono.
+- **OpenAI key parity in setup status**: `OPENAI_API_KEY` is now treated as equivalent to `ANTHROPIC_API_KEY` for tier classification, health check reporting, and onboarding prompts. Running on OpenAI-only now correctly shows "Full AI Radio" instead of "Demo Radio".
+- **yt-dlp in health check**: Setup status now includes a yt-dlp binary check (warn if missing, not fail — yt-dlp is preferred but optional).
+- **Onboarding steps payload**: `build_setup_status` now returns an `onboarding_steps` array to drive step-by-step setup UI.
+- **Canned clip on reconnect**: When the producer wakes from idle (0→1 listener), it immediately seeds a canned banter clip into the queue so reconnecting listeners hear audio within seconds instead of waiting 30–60s for generation.
+
+### Fixed
+
+- **Ad double-bed removed**: `mix_ad_with_bed` call in the ad break pipeline was stacking a second music bed on top of the contextual bed already applied by `synthesize_ad`. Removed — ads now have one well-mixed bed, not two with loudnorm artifacts.
+- **Producer resumes visibly**: When waking from idle, the producer now logs "Producer resuming (N listeners)" so the wake transition is traceable in logs.
+- **Producer idle log deduplication**: The "Producer idle" log fires once per idle period, not once per second.
+- **Credential write security**: `_write_env_atomic` now strips newlines from values before writing to `.env`, matching the sanitization already present in `_save_dotenv`.
+- **Hub close resets listener count**: `LiveStreamHub.close()` now sets `state.listeners_active = 0` so the producer idle gate correctly reflects the empty state after shutdown.
+- **listener.html CSS completeness**: Added missing `--font-mono`, `--line`, `--line-strong`, and `--warning` tokens to listener.html so all design system references resolve.
+- **Flaky test eliminated**: `test_rationale_with_album` increased sample count from 100 to 500 to make the probabilistic assertion statistically reliable.
+
+### Changed
+
+- Station name references updated to "Mamma Mi Radio" across launcher scripts, monitor server title, and documentation. Stale SVG wireframes removed.
+
+---
+
 ## [2.3.1] - 2026-04-11
 
 ### Added
