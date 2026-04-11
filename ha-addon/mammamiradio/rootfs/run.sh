@@ -8,9 +8,6 @@ echo "[mammamiradio] Starting add-on..."
 # ---- Read add-on options from /data/options.json ----
 OPTIONS_FILE="/data/options.json"
 if [ -f "$OPTIONS_FILE" ]; then
-    # Extract options using Python (always available in the image)
-    # Uses shlex.quote to prevent shell injection from user-provided values
-    # stderr goes to log file (NOT into eval'd variable) to prevent injection
     OPTS_LOG="/tmp/opts-parse.log"
     if ! OPTS_EXPORT=$(python3 -c "
 import json, shlex, sys
@@ -20,8 +17,7 @@ try:
 except (json.JSONDecodeError, OSError) as e:
     print(f'FATAL: corrupt options.json: {e}', file=sys.stderr)
     sys.exit(1)
-for key in ('anthropic_api_key', 'openai_api_key', 'spotify_client_id', 'spotify_client_secret',
-            'station_name', 'claude_model', 'playlist_spotify_url'):
+for key in ('anthropic_api_key', 'openai_api_key', 'station_name', 'claude_model'):
     val = opts.get(key, '')
     if val:
         env_key = key.upper()
@@ -35,8 +31,6 @@ for key in ('anthropic_api_key', 'openai_api_key', 'spotify_client_id', 'spotify
 fi
 
 # ---- Map Supervisor token to HA_TOKEN ----
-# Keep SUPERVISOR_TOKEN so _is_addon() detects addon mode
-# Note: HA_URL must NOT include /api — ha_context.py appends it
 if [ -n "$SUPERVISOR_TOKEN" ]; then
     export HA_TOKEN="$SUPERVISOR_TOKEN"
     export HA_URL="http://supervisor/core"
@@ -50,8 +44,6 @@ elif [ -n "$HASSIO_TOKEN" ]; then
 fi
 
 # ---- Enable yt-dlp as primary music source ----
-# Without Spotify capture, yt-dlp is the only way to get real audio.
-# Silence placeholders are rejected by the quality gate, starving the stream.
 export MAMMAMIRADIO_ALLOW_YTDLP="true"
 
 # ---- Bind to all interfaces (required for ingress) ----
@@ -67,28 +59,16 @@ fi
 # ---- Point cache/tmp at persistent /data ----
 export MAMMAMIRADIO_CACHE_DIR="/data/cache"
 export MAMMAMIRADIO_TMP_DIR="/data/tmp"
-export MAMMAMIRADIO_GO_LIBRESPOT_CONFIG_DIR="/data/go-librespot"
 
 # ---- Ensure directories exist ----
-if ! mkdir -p /data/cache /data/music /data/tmp /data/go-librespot 2>/tmp/mammamiradio-data-mkdir.err; then
+if ! mkdir -p /data/cache /data/music /data/tmp 2>/tmp/mammamiradio-data-mkdir.err; then
     FALLBACK_BASE="/tmp/mammamiradio-data"
     echo "[mammamiradio] WARNING: /data is not writable ($(cat /tmp/mammamiradio-data-mkdir.err 2>/dev/null || echo unknown error))"
     echo "[mammamiradio] WARNING: Falling back to $FALLBACK_BASE (state will not persist across restarts)"
     export MAMMAMIRADIO_CACHE_DIR="$FALLBACK_BASE/cache"
     export MAMMAMIRADIO_TMP_DIR="$FALLBACK_BASE/tmp"
-    export MAMMAMIRADIO_GO_LIBRESPOT_CONFIG_DIR="$FALLBACK_BASE/go-librespot"
-    mkdir -p "$MAMMAMIRADIO_CACHE_DIR" "$FALLBACK_BASE/music" "$MAMMAMIRADIO_TMP_DIR" "$MAMMAMIRADIO_GO_LIBRESPOT_CONFIG_DIR"
+    mkdir -p "$MAMMAMIRADIO_CACHE_DIR" "$FALLBACK_BASE/music" "$MAMMAMIRADIO_TMP_DIR"
 fi
-
-# ---- Initialize go-librespot config and keep device_name aligned with the shipped default ----
-SYNC_LOG="/tmp/go-librespot-sync.log"
-if ! SYNC_MSG="$(python3 -m mammamiradio.go_librespot_config sync \
-    /defaults/go-librespot-config.yml \
-    "$MAMMAMIRADIO_GO_LIBRESPOT_CONFIG_DIR/config.yml" 2>"$SYNC_LOG")"; then
-    echo "[mammamiradio] ERROR: go-librespot config sync failed: ${SYNC_MSG:-$(cat "$SYNC_LOG" 2>/dev/null)}"
-    exit 1
-fi
-echo "[mammamiradio] $SYNC_MSG"
 
 # ---- Validate critical files exist ----
 if [ ! -f /app/radio.toml ]; then

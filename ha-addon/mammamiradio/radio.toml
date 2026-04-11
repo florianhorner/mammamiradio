@@ -4,7 +4,6 @@ language = "it"
 theme = "late-night Milan talk radio, warm and nostalgic, two hosts who love cinema and 90s Italian pop"
 
 [playlist]
-spotify_url = ""  # Leave empty to use liked songs, or paste a playlist URL you own
 shuffle = false
 
 [pacing]
@@ -39,10 +38,6 @@ nostalgia = 55
 sample_rate = 48000
 channels = 2
 bitrate = 192
-spotify_bitrate = 320
-fifo_path = "/tmp/mammamiradio.pcm"
-go_librespot_bin = "go-librespot"
-go_librespot_port = 3678
 claude_model = "claude-haiku-4-5-20251001"
 
 [homeassistant]

@@ -4,6 +4,24 @@ All notable changes to `mammamiradio` are documented here.
 
 The current version source of truth is `pyproject.toml`.
 
+## [2.3.0] - 2026-04-11
+
+### Removed
+
+- **Spotify integration**: Removed go-librespot, Spotipy OAuth, Spotify Connect, and all Spotify API routes. Music now comes from local files, yt-dlp chart downloads, and bundled demo tracks. The `spotipy` runtime dependency is dropped.
+- **5 source files deleted**: `spotify_auth.py`, `spotify_player.py`, `go_librespot_config.py`, `go_librespot_runtime.py`, `go-librespot-config.yml`.
+- **6 Spotify API routes removed**: `/spotify/auth`, `/spotify/callback`, `/api/spotify/auth-status`, `/api/spotify/disconnect`, `/api/spotify/source-options`, `/api/spotify/source/select`.
+- **HA addon go-librespot**: No longer downloads or runs go-librespot binary. Docker image is smaller and starts faster.
+
+### Changed
+
+- **3-tier system**: Capabilities simplified from 5 Spotify-centric tiers to 3: Demo Radio (no LLM key), Full AI Radio (Anthropic/OpenAI key), Connected Home (LLM + Home Assistant).
+- **Dashboard**: Spotify Connect card, credential forms, and source picker removed. Controls are always visible.
+- **Addon config**: 3 fewer options (no spotify_client_id, spotify_client_secret, playlist_spotify_url). Startup timeout reduced from 300s to 120s.
+- **start.sh**: Simplified to a minimal uvicorn launcher (was 137 lines managing go-librespot lifecycle).
+- **Search endpoint**: `/api/search` returns empty results (stub for future Music Assistant integration).
+- **Net reduction**: ~6,200 lines removed across 49 files.
+
 ## [2.2.2] - 2026-04-10
 
 ### Changed

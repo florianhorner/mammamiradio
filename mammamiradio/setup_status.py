@@ -11,14 +11,12 @@ from typing import Any
 
 from mammamiradio.config import StationConfig
 from mammamiradio.models import StationState
-from mammamiradio.playlist import _extract_playlist_id, supports_user_sources
-from mammamiradio.spotify_player import resolve_go_librespot_bin
 
 RUN_MODES = [
     {
         "id": "ha_addon",
         "label": "Home Assistant Add-on",
-        "description": "Best when you want the radio inside Home Assistant with ingress and Spotify Connect.",
+        "description": "Best when you want the radio inside Home Assistant with ingress.",
         "surface": "Add-on Configuration",
     },
     {
@@ -66,72 +64,10 @@ def detect_run_mode(config: StationConfig) -> dict:
 
 
 def _playlist_is_demo(state: StationState) -> bool:
-    """Check if the loaded playlist is the built-in demo set.
-
-    Matches the ``demo`` prefix convention from ``playlist.py:DEMO_TRACKS``.
-    """
+    """Check if the loaded playlist is the built-in demo set."""
     if not state.playlist:
         return True
     return all(track.spotify_id.startswith("demo") for track in state.playlist[:5])
-
-
-def _sanitize_error(exc: Exception) -> str:
-    text = str(exc).strip().replace("\n", " ")
-    if not text:
-        return exc.__class__.__name__
-    return text[:180]
-
-
-def _probe_playlist_url(config: StationConfig) -> tuple[str, str]:
-    """Check whether the configured playlist URL is actually reachable."""
-    if not config.spotify_client_id or not config.spotify_client_secret:
-        return "missing", "Spotify credentials are missing, so playlist checks are skipped."
-    if not config.playlist.spotify_url:
-        if config.is_addon:
-            return "missing", "Add-on mode needs a public playlist URL for a deterministic first run."
-        return (
-            "degraded",
-            "No playlist URL is set. Local runs may try liked songs later, but first run is less predictable.",
-        )
-
-    playlist_id = _extract_playlist_id(config.playlist.spotify_url)
-    if not playlist_id:
-        return "invalid", "The playlist URL does not look like a valid Spotify playlist link."
-
-    try:
-        import spotipy
-        from spotipy.oauth2 import SpotifyClientCredentials, SpotifyOAuth
-    except ImportError:
-        return "missing", "The spotipy library is not installed, so playlist probing is unavailable."
-
-    try:
-        sp = None
-        if not config.is_addon:
-            oauth = SpotifyOAuth(
-                client_id=config.spotify_client_id,
-                client_secret=config.spotify_client_secret,
-                redirect_uri="http://127.0.0.1:8888/callback",
-                scope="user-modify-playback-state user-read-playback-state user-library-read playlist-read-private",
-                cache_path=".spotify_token_cache",
-                open_browser=False,
-            )
-            if oauth.cache_handler.get_cached_token():
-                sp = spotipy.Spotify(auth_manager=oauth)
-
-        if sp is None:
-            auth = SpotifyClientCredentials(
-                client_id=config.spotify_client_id,
-                client_secret=config.spotify_client_secret,
-            )
-            sp = spotipy.Spotify(auth_manager=auth)
-
-        results = sp.playlist_tracks(playlist_id, limit=1)
-        items = results.get("items", [])
-        if items and items[0].get("track", {}).get("id"):
-            return "configured", "Spotify accepted the playlist URL and returned at least one track."
-        return "invalid", "Spotify reached the playlist, but no playable tracks came back."
-    except Exception as exc:
-        return "invalid", f"Spotify rejected the playlist check: {_sanitize_error(exc)}"
 
 
 def classify_station_mode(
@@ -139,45 +75,34 @@ def classify_station_mode(
     state: StationState,
     *,
     demo_playlist: bool | None = None,
-    go_bin: str | None = None,
 ) -> dict:
     """Collapse many setup details into one operator-friendly runtime mode."""
     if demo_playlist is None:
         demo_playlist = _playlist_is_demo(state)
-    has_spotify_creds = bool(config.spotify_client_id and config.spotify_client_secret)
-    has_playlist_url = bool(config.playlist.spotify_url)
-    if go_bin is None:
-        go_bin = resolve_go_librespot_bin(config.audio.go_librespot_bin)
+    has_anthropic = bool(config.anthropic_api_key or config.openai_api_key)
+    has_ha = bool(config.homeassistant.enabled and config.ha_token)
 
-    if demo_playlist and not has_spotify_creds and not has_playlist_url:
+    if has_anthropic and has_ha:
         return {
-            "id": "demo",
-            "label": "Demo Mode",
-            "summary": "The station is intentionally running built-in demo tracks.",
-            "detail": ("Add Spotify credentials, then choose a playlist, liked songs, or an advanced playlist URL."),
+            "id": "connected_home",
+            "label": "Connected Home Radio",
+            "summary": "Full AI radio with home-aware banter.",
+            "detail": "The station references your home state in banter and ads.",
         }
 
-    if not demo_playlist and state.spotify_connected and go_bin:
+    if has_anthropic:
         return {
-            "id": "real_spotify",
-            "label": "Real Spotify Mode",
-            "summary": "Spotify tracks are loaded and the mammamiradio device is connected.",
-            "detail": "You should hear your real playlist and can fine-tune the station from the control plane.",
-        }
-
-    if demo_playlist:
-        return {
-            "id": "degraded",
-            "label": "Degraded",
-            "summary": "The station fell back to demo tracks because the Spotify path is not fully working yet.",
-            "detail": state.startup_source_error or "Fix the missing Spotify setup items below, then re-run preflight.",
+            "id": "full_ai",
+            "label": "Full AI Radio",
+            "summary": "Live Claude-generated banter and ads.",
+            "detail": "Add a Home Assistant token to unlock home-aware content.",
         }
 
     return {
-        "id": "degraded",
-        "label": "Degraded",
-        "summary": "Real tracks are loaded, but the live Spotify playback path is not fully ready.",
-        "detail": "This usually means the Spotify Connect device is not connected yet or go-librespot is unavailable.",
+        "id": "demo",
+        "label": "Demo Radio",
+        "summary": "The station is running with canned banter clips and demo music.",
+        "detail": "Add an Anthropic or OpenAI API key to unlock AI-generated banter.",
     }
 
 
@@ -185,9 +110,6 @@ def addon_options_snippet(config: StationConfig) -> str:
     """Return a copy-friendly JSON block for the Home Assistant add-on UI."""
     values = {
         "anthropic_api_key": "*** configured ***" if config.anthropic_api_key else "<optional>",
-        "spotify_client_id": "*** configured ***" if config.spotify_client_id else "<paste client id>",
-        "spotify_client_secret": "*** configured ***" if config.spotify_client_secret else "<paste client secret>",
-        "playlist_spotify_url": config.playlist.spotify_url or "<paste public playlist url>",
     }
     return json.dumps(values, indent=2)
 
@@ -195,90 +117,11 @@ def addon_options_snippet(config: StationConfig) -> str:
 def build_setup_status(config: StationConfig, state: StationState, *, probe: bool = False) -> dict:
     """Produce the full onboarding payload used by the dashboard gate."""
     mode = detect_run_mode(config)
-    go_bin = resolve_go_librespot_bin(config.audio.go_librespot_bin)
     ffmpeg_bin = shutil.which("ffmpeg")
     demo_playlist = _playlist_is_demo(state)
-    if probe:
-        playlist_probe_status, playlist_probe_detail = _probe_playlist_url(config)
-    else:
-        playlist_probe_status, playlist_probe_detail = "skipped", "Skipped — click Re-check to probe Spotify."
-    station_mode = classify_station_mode(config, state, demo_playlist=demo_playlist, go_bin=go_bin)
-    playlist_source_active = bool(state.playlist_source and state.playlist_source.kind != "demo" and not demo_playlist)
+    station_mode = classify_station_mode(config, state, demo_playlist=demo_playlist)
 
-    _supports = supports_user_sources(config)
     essentials = [
-        {
-            "key": "spotify",
-            "label": "Spotify",
-            "required": True,
-            "required_label": "Required for real Spotify radio",
-            "status": "configured" if config.spotify_client_id and config.spotify_client_secret else "missing",
-            "summary": (
-                "Spotify credentials are present."
-                if config.spotify_client_id and config.spotify_client_secret
-                else "No Spotify credentials found. The app will use demo tracks instead."
-            ),
-            "next_action": (
-                "Open Spotify and select the mammamiradio device to finish the live playback path."
-                if config.spotify_client_id and config.spotify_client_secret
-                else "Add SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET, then re-check."
-            ),
-            "skip_outcome": (
-                "Credentials are already configured. Without the device handoff, playback stays degraded."
-                if config.spotify_client_id and config.spotify_client_secret
-                else "If you skip this, mammamiradio stays in demo mode."
-            ),
-            "where": {
-                "ha_addon": "Add-on Configuration",
-                "docker": ".env used by docker compose",
-                "macos": "the generated .env file behind the Mac launcher",
-                "local": ".env in the project root",
-            },
-        },
-        {
-            "key": "playlist",
-            "label": "Choose your music",
-            "required": True,
-            "required_label": "Required for a predictable first station",
-            "status": ("configured" if playlist_source_active else playlist_probe_status),
-            "summary": (
-                (
-                    "Current source: "
-                    + (
-                        state.playlist_source.label
-                        if state.playlist_source and state.playlist_source.label
-                        else "Spotify source"
-                    )
-                    + "."
-                )
-                if playlist_source_active
-                else "Connect Spotify, then choose one of your playlists or use Liked Songs."
-                if _supports
-                else "This run mode only supports the advanced playlist URL fallback for now."
-            ),
-            "next_action": (
-                "Nothing to do unless you want to switch sources."
-                if playlist_source_active
-                else "Open the dashboard setup flow, connect Spotify, and choose your music source."
-                if _supports
-                else "Paste a public Spotify playlist URL into PLAYLIST_SPOTIFY_URL."
-                if not config.playlist.spotify_url
-                else "Make sure the playlist is public or owned by the authenticated Spotify account."
-            ),
-            "skip_outcome": (
-                "A real source is already active."
-                if playlist_source_active
-                else "Without this, startup may fall back to demo tracks."
-                if config.is_addon
-                else "Without this, startup may fall back to demo tracks until you explicitly choose a source."
-            ),
-            "where": {
-                "ha_addon": "Dashboard advanced fallback or Add-on Configuration, field: playlist_spotify_url",
-                "docker": "Dashboard advanced fallback or .env entry: PLAYLIST_SPOTIFY_URL",
-                "macos": "Dashboard source picker",
-                "local": "Dashboard source picker",
-            },
-        },
         {
             "key": "anthropic",
             "label": "Anthropic",
@@ -345,28 +188,6 @@ def build_setup_status(config: StationConfig, state: StationState, *, probe: boo
             ),
         },
         {
-            "key": "go_librespot",
-            "label": "go-librespot",
-            "status": "ok" if go_bin else "fail",
-            "detail": (
-                f"go-librespot is available at {go_bin}."
-                if go_bin
-                else "go-librespot is missing, so Spotify Connect playback cannot come up."
-            ),
-        },
-        {
-            "key": "playlist_probe",
-            "label": "Playlist probe",
-            "status": (
-                "ok"
-                if playlist_probe_status == "configured"
-                else "warn"
-                if playlist_probe_status in {"degraded", "missing"}
-                else "fail"
-            ),
-            "detail": playlist_probe_detail,
-        },
-        {
             "key": "playlist_loaded",
             "label": "Current loaded tracks",
             "status": "warn" if demo_playlist else "ok",
@@ -379,19 +200,9 @@ def build_setup_status(config: StationConfig, state: StationState, *, probe: boo
                     if state.playlist_source and state.playlist_source.label
                     else state.playlist_source.kind
                     if state.playlist_source
-                    else "a Spotify source"
+                    else "charts"
                 )
                 + "."
-            ),
-        },
-        {
-            "key": "spotify_connect",
-            "label": "Spotify Connect live",
-            "status": "ok" if state.spotify_connected else "warn",
-            "detail": (
-                "The mammamiradio device is connected in Spotify."
-                if state.spotify_connected
-                else "Open Spotify, tap the speaker icon, and select the mammamiradio device."
             ),
         },
     ]
@@ -399,21 +210,13 @@ def build_setup_status(config: StationConfig, state: StationState, *, probe: boo
     launch = {
         "headline": station_mode["summary"],
         "detail": station_mode["detail"],
-        "cta": (
-            "Start Station"
-            if station_mode["id"] == "real_spotify"
-            else "Start Demo Station"
-            if station_mode["id"] == "demo"
-            else "Start Station Anyway"
-        ),
+        "cta": "Start Station" if station_mode["id"] != "demo" else "Start Demo Station",
         "post_launch": (
             "You will land in the control plane. Open the listener view when you want to hear the live station."
-            if station_mode["id"] == "real_spotify"
-            else "You will land in the control plane with a clear mode banner so nothing is ambiguous."
         ),
     }
 
-    onboarding_required = station_mode["id"] != "real_spotify"
+    onboarding_required = station_mode["id"] == "demo"
 
     signature_data = {
         "mode": mode["detected"],
@@ -425,7 +228,6 @@ def build_setup_status(config: StationConfig, state: StationState, *, probe: boo
 
     return {
         "detected_mode": mode["detected"],
-        "supports_user_sources": _supports,
         "available_modes": mode["modes"],
         "station_mode": station_mode,
         "onboarding_required": onboarding_required,

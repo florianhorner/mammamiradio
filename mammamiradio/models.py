@@ -30,7 +30,7 @@ class SegmentType(Enum):
 
 @dataclass
 class Track:
-    """A playable track sourced from Spotify, cache, or local files."""
+    """A playable track sourced from charts, cache, or local files."""
 
     title: str
     artist: str
@@ -369,8 +369,6 @@ class StationState:
     last_banter_script: list[dict] = field(default_factory=list)
     last_ad_script: dict = field(default_factory=dict)
     ad_history: deque[AdHistoryEntry] = field(default_factory=lambda: deque(maxlen=20))
-    spotify_connected: bool = False
-    spotify_auth_url: str = ""
     session_stopped: bool = False
     playlist_source: PlaylistSource | None = None
     startup_source_error: str = ""
@@ -466,7 +464,7 @@ class StationState:
         )
 
     def reserve_next_track(self) -> Track:
-        """Legacy FIFO rotation — use select_next_track() for weighted shuffle."""
+        """Legacy round-robin rotation — use select_next_track() for weighted shuffle."""
         if not self.playlist:
             raise RuntimeError("Playlist is empty")
         track = self.playlist.pop(0)
@@ -649,18 +647,12 @@ class StationState:
 class Capabilities:
     """Runtime capability flags derived from config + live state.
 
-    These replace the old 64-state mode system with independent boolean flags.
-    UI tier labels are derived from the flags for display only.
+    Three-tier system: Demo Radio → Full AI Radio → Connected Home.
+    Music source is no longer a tier gate (always available via local + yt-dlp + charts).
     """
 
-    spotify_connected: bool = False
-    """go-librespot zeroconf auth active (streaming and playback control work)."""
-
-    spotify_api: bool = False
-    """Spotify Client ID/secret present (playlist browsing, search, metadata)."""
-
     anthropic: bool = False
-    """Anthropic API key available for live Claude-generated banter and ads."""
+    """Anthropic or OpenAI API key available for live AI-generated banter and ads."""
 
     ha: bool = False
     """Home Assistant token present and integration enabled."""
@@ -668,23 +660,17 @@ class Capabilities:
     @property
     def tier(self) -> str:
         """Derive a human-friendly tier label from capability flags."""
-        if self.spotify_connected and self.spotify_api and self.anthropic:
-            return "full_ai"
-        if self.spotify_connected and self.spotify_api:
-            return "your_music_full"
-        if self.spotify_connected:
-            return "your_music_basic"
+        if self.anthropic and self.ha:
+            return "connected_home"
         if self.anthropic:
-            return "demo_ai"
+            return "full_ai"
         return "demo"
 
     @property
     def tier_label(self) -> str:
-        """Display name for the current tier — station language, not product language."""
+        """Display name for the current tier."""
         return {
-            "full_ai": "Live Broadcast",
-            "your_music_full": "Your Station",
-            "your_music_basic": "Your Station",
-            "demo_ai": "On Air",
-            "demo": "On Air",
+            "connected_home": "Connected Home",
+            "full_ai": "Full AI Radio",
+            "demo": "Demo Radio",
         }[self.tier]

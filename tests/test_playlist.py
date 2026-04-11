@@ -1,10 +1,10 @@
-"""Tests for playlist module: demo tracks, URL extraction."""
+"""Tests for playlist module: demo tracks."""
 
 from __future__ import annotations
 
 import pytest
 
-from mammamiradio.playlist import DEMO_TRACKS, _extract_playlist_id
+from mammamiradio.playlist import DEMO_TRACKS
 
 
 def test_demo_tracks_has_entries():
@@ -14,21 +14,6 @@ def test_demo_tracks_has_entries():
         assert t.artist
         assert t.duration_ms > 0
         assert t.spotify_id.startswith("demo")
-
-
-def test_extract_playlist_id_from_url():
-    url = "https://open.spotify.com/playlist/37i9dQZF1DXcBWIGoYBM5M"
-    assert _extract_playlist_id(url) == "37i9dQZF1DXcBWIGoYBM5M"
-
-
-def test_extract_playlist_id_with_query_params():
-    url = "https://open.spotify.com/playlist/abc123?si=xyz"
-    assert _extract_playlist_id(url) == "abc123"
-
-
-def test_extract_playlist_id_returns_none_for_invalid():
-    assert _extract_playlist_id("not a url") is None
-    assert _extract_playlist_id("https://open.spotify.com/track/abc") is None
 
 
 def test_demo_tracks_match_bundled_assets():

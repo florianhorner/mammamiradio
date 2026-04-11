@@ -1,6 +1,6 @@
 # Welcome Clips
 
-Pre-generated welcome clips that play when a Spotify user connects.
+Pre-generated welcome clips that play when the station starts.
 The DJ "interrupts" the broadcast to greet the listener.
 
 ## Generating clips

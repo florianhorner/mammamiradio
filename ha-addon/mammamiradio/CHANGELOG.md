@@ -1,5 +1,19 @@
 # Changelog
 
+## 2.3.0
+
+### Removed
+
+- Spotify integration: no more go-librespot, Spotify Connect, or Spotipy OAuth.
+- 3 addon config options removed: spotify_client_id, spotify_client_secret, playlist_spotify_url.
+
+### Changed
+
+- 3-tier system: Demo Radio, Full AI Radio, Connected Home (was 5 Spotify-centric tiers).
+- Startup timeout reduced from 300s to 120s (no go-librespot startup wait).
+- Docker image is smaller (no go-librespot binary download).
+- Music comes from local files, yt-dlp chart downloads, and bundled demo tracks.
+
 ## 2.2.2
 
 ### Changed

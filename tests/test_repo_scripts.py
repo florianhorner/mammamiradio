@@ -149,11 +149,9 @@ def _create_validate_addon_repo(
                 "ingress_port: 8000",
                 "schema:",
                 "  anthropic_api_key: password?",
-                "  spotify_client_id: password?",
-                "  spotify_client_secret: password?",
+                "  openai_api_key: password?",
                 "  station_name: str?",
                 "  claude_model: str?",
-                "  playlist_spotify_url: str?",
                 "",
             ]
         ),
@@ -165,17 +163,14 @@ def _create_validate_addon_repo(
                 "#!/usr/bin/env sh",
                 'export MAMMAMIRADIO_PORT="8000"',
                 "anthropic_api_key=${anthropic_api_key:-}",
-                "spotify_client_id=${spotify_client_id:-}",
-                "spotify_client_secret=${spotify_client_secret:-}",
+                "openai_api_key=${openai_api_key:-}",
                 "station_name=${station_name:-}",
                 "claude_model=${claude_model:-}",
-                "playlist_spotify_url=${playlist_spotify_url:-}",
                 "",
             ]
         ),
     )
     _write(tmp_path / "ha-addon/mammamiradio/Dockerfile", "FROM scratch\nCOPY app /app\n")
-    _write(tmp_path / "ha-addon/mammamiradio/go-librespot-config.yml", "device_name: test\n")
     _write(tmp_path / "ha-addon/mammamiradio/build.yaml", "build_from: {}\n")
     _write(
         tmp_path / "ha-addon/mammamiradio/translations/en.yaml",
@@ -183,11 +178,9 @@ def _create_validate_addon_repo(
             [
                 "configuration:",
                 "  anthropic_api_key: key",
-                "  spotify_client_id: key",
-                "  spotify_client_secret: key",
+                "  openai_api_key: key",
                 "  station_name: key",
                 "  claude_model: key",
-                "  playlist_spotify_url: key",
                 "",
             ]
         ),
@@ -262,19 +255,6 @@ def _inject_ingress_prefix(html: str, prefix: str) -> str:
 
     assert result.returncode == 0
     assert "radio.toml is valid TOML" in result.stdout
-
-
-def test_addon_dockerfile_verifies_go_librespot_checksum() -> None:
-    dockerfile = (ROOT / "ha-addon" / "mammamiradio" / "Dockerfile").read_text()
-
-    assert "GL_SHA256" in dockerfile
-    assert "sha256sum -c -" in dockerfile
-
-
-def test_addon_dockerfile_installs_glibc_compat_for_go_librespot() -> None:
-    dockerfile = (ROOT / "ha-addon" / "mammamiradio" / "Dockerfile").read_text()
-
-    assert "gcompat" in dockerfile
 
 
 def test_addon_dockerfile_does_not_drop_root_before_supervisor_mounts() -> None:

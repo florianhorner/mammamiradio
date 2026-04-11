@@ -212,16 +212,6 @@ h1 {
 .status-pill[data-s="info"] { background: rgba(245,237,216,0.12); color: rgba(245,237,216,0.75); }
 
 /* ── PLAYLIST ── */
-.search-bar { display: flex; gap: 8px; margin-bottom: 12px; }
-.search-input {
-  flex: 1; font-family: var(--font-body); font-size: 13px;
-  padding: 10px 14px; border-radius: 8px;
-  background: rgba(42,16,8,0.5); color: var(--cream);
-  border: 1px solid rgba(245,237,216,0.12); outline: none;
-}
-.search-input:focus { border-color: rgba(244,208,72,0.5); }
-.search-input::placeholder { color: rgba(245,237,216,0.35); }
-
 .pl-row {
   display: flex; align-items: center; gap: 8px;
   padding: 6px 0; border-bottom: 1px solid rgba(245,237,216,0.06);
@@ -239,18 +229,6 @@ h1 {
   border: 1px solid rgba(245,237,216,0.12); cursor: pointer;
 }
 .pl-btn:hover { color: var(--cream); border-color: rgba(245,237,216,0.3); }
-
-.sr-row {
-  display: flex; align-items: center; gap: 8px;
-  padding: 6px 0; font-size: 12px;
-  border-bottom: 1px solid rgba(245,237,216,0.06);
-}
-.sr-add {
-  margin-left: auto; font-size: 10px; font-weight: 600; padding: 3px 10px;
-  border-radius: 4px; background: rgba(244,208,72,0.12); color: var(--sun);
-  border: 1px solid rgba(244,208,72,0.3); cursor: pointer;
-}
-.sr-add:hover { background: rgba(244,208,72,0.22); }
 
 /* ── PACING + HOSTS (collapsible) ── */
 .collapse-head {
@@ -359,26 +337,18 @@ h1 {
   }
 
   .transport,
-  .search-bar,
   .pace-row,
-  .sr-row,
   .pl-row,
   .queue-item,
   .log-entry {
     align-items: flex-start;
   }
 
-  .search-bar {
-    flex-direction: column;
-  }
-
-  .search-bar .btn,
   .transport .btn {
     width: 100%;
   }
 
   .pl-row,
-  .sr-row,
   .queue-item {
     flex-wrap: wrap;
   }
@@ -456,11 +426,6 @@ h1 {
 <!-- PLAYLIST -->
 <div class="card">
   <div class="card-label">Playlist <span id="plMeta" style="float:right;font-weight:400"></span></div>
-  <div class="search-bar">
-    <input type="text" class="search-input" id="searchInput" placeholder="Search Spotify..." autocomplete="off">
-    <button class="btn btn-util" onclick="doSearch()">Search</button>
-  </div>
-  <div id="searchResults"></div>
   <div id="plBody" style="max-height:300px;overflow-y:auto;overflow-x:hidden"></div>
 </div>
 
@@ -506,7 +471,7 @@ h1 {
 <script>
 const _csrf = document.querySelector('meta[name="mammamiradio-csrf-token"]')?.content || '';
 const H = () => ({'Content-Type':'application/json','X-Radio-CSRF-Token':_csrf});
-let _st={}, _pub={}, _caps={}, _hostsOk=false, _paceOk=false, _searchTo=null;
+let _st={}, _pub={}, _caps={}, _hostsOk=false, _paceOk=false;
 let _nowStart=0, _nowDur=0, _tick=null, _prevLabel='';
 
 function toast(m){const e=document.getElementById('toast');e.textContent=m;e.classList.add('show');setTimeout(()=>e.classList.remove('show'),1600)}
@@ -603,22 +568,10 @@ function updateSystems(caps,st,pub){
     aiState='info';aiLabel='Ready';aiDetail='AI key is present but no fresh generated break has been detected yet.';
   }
 
-  const device=caps?.connect_device_name||'MammaMiRadio';
-  let spotifyState='warn',spotifyLabel='Waiting',spotifyDetail=gp?.detail||`Attach Spotify Connect to ${device}.`;
-  if(c.spotify_connected){
-    spotifyState='ok';spotifyLabel='Connected';spotifyDetail=`Spotify is attached to ${device}. Real music can play live.`;
-  }else if(gp?.silent_music_fallback){
-    spotifyState='error';spotifyLabel='Missing';spotifyDetail=`Spotify is not attached to ${device}. Music segments currently fall back to silent placeholders.`;
-  }else if(gp?.fallback_sources?.length){
-    spotifyState='warn';spotifyLabel='Waiting';spotifyDetail=`Spotify is not attached to ${device} yet. Temporary music fallback: ${gp.fallback_sources.join(', ')}.`;
-  }
-
   const sourceLabel=pub?.current_source?.label||st?.playlist_source?.label||'No playlist source';
   const upcomingMusic=(pub?.upcoming||[]).filter(it=>it.type==='music').map(it=>it.label).slice(0,2);
   let musicState='ok',musicLabel='Ready',musicDetail=`Source: ${sourceLabel}.`;
-  if(gp?.silent_music_fallback){
-    musicState='error';musicLabel='Silent';musicDetail='No real music source is attached. Music slots degrade to silence until Spotify or another source is available.';
-  }else if(upcomingMusic.length){
+  if(upcomingMusic.length){
     musicDetail=`Source: ${sourceLabel}. Next music: ${upcomingMusic.join(' • ')}.`;
   }else if(pub?.upcoming_mode==='building'){
     musicState='info';musicLabel='Building';musicDetail=`Source: ${sourceLabel}. Producer is still building the next music segment.`;
@@ -626,7 +579,6 @@ function updateSystems(caps,st,pub){
 
   el.innerHTML=[
     statusRow('AI Writing',aiState,aiLabel,aiDetail),
-    statusRow('Spotify Connect',spotifyState,spotifyLabel,spotifyDetail),
     statusRow('Music Source',musicState,musicLabel,musicDetail),
   ].join('');
 }
@@ -653,17 +605,17 @@ function updatePl(tracks){
   if(!tracks?.length){el.innerHTML='<div class="empty">No tracks</div>';meta.textContent='';return}
   meta.textContent=tracks.length+' tracks';
   const s=tracks.slice(0,50);
-  el.innerHTML=s.map((t,i)=>`<div class="pl-row" data-i="${i}" data-id="${esc(t.spotify_id||'')}"><span class="pl-n">${i+1}</span><span class="pl-t">${esc(t.display||t.title||'?')}</span><div class="pl-a"><button class="pl-btn" onclick="moveNext(${i})">▶ Next</button><button class="pl-btn" onclick="removeTr(${i})">✕</button></div></div>`).join('')+(tracks.length>50?`<div class="empty">+ ${tracks.length-50} more</div>`:'');
+  el.innerHTML=s.map((t,i)=>`<div class="pl-row" data-i="${i}" data-id="${esc(t.spotify_id||t.id||'')}"><span class="pl-n">${i+1}</span><span class="pl-t">${esc(t.display||t.title||'?')}</span><div class="pl-a"><button class="pl-btn" onclick="moveNext(${i})">▶ Next</button><button class="pl-btn" onclick="removeTr(${i})">✕</button></div></div>`).join('')+(tracks.length>50?`<div class="empty">+ ${tracks.length-50} more</div>`:'');
 }
-function focusPlaylistTrack(index, spotifyId){
+function focusPlaylistTrack(index, trackId){
   const rows=[...document.querySelectorAll('.pl-row')];
   rows.forEach(r=>r.classList.remove('focus'));
   let target=null;
   if(Number.isInteger(index)&&index>=0){
     target=document.querySelector(`.pl-row[data-i="${index}"]`);
   }
-  if(!target&&spotifyId){
-    target=document.querySelector(`.pl-row[data-id="${spotifyId.replace(/"/g,'&quot;')}"]`);
+  if(!target&&trackId){
+    target=document.querySelector(`.pl-row[data-id="${trackId.replace(/"/g,'&quot;')}"]`);
   }
   if(!target)return;
   target.classList.add('focus');
@@ -678,20 +630,6 @@ async function moveNext(i){
   if(r.ok)toast('Playing next: '+r.moved);else toast('Failed to move track');
 }
 async function removeTr(i){await api('POST','/api/playlist/remove',{index:i});toast('Removed')}
-
-// ── Search ──
-const si=document.getElementById('searchInput');
-si.addEventListener('keydown',e=>{if(e.key==='Enter')doSearch()});
-si.addEventListener('input',()=>{clearTimeout(_searchTo);if(si.value.trim().length>=3)_searchTo=setTimeout(doSearch,400)});
-let _sR=[];
-async function doSearch(){
-  const q=si.value.trim();if(!q)return;
-  const d=await(await fetch('/api/search?q='+encodeURIComponent(q),{headers:H()})).json();
-  _sR=d.results||d.tracks||[];const el=document.getElementById('searchResults');
-  if(!_sR.length){el.innerHTML='<div class="empty">No results</div>';return}
-  el.innerHTML=_sR.slice(0,6).map((t,i)=>`<div class="sr-row"><span>${esc(t.artist)} — ${esc(t.title)}</span><button class="sr-add" onclick="addTr(${i})">+ Add</button></div>`).join('');
-}
-async function addTr(i){const t=_sR[i];if(!t)return;await api('POST','/api/playlist/add',{title:t.title,artist:t.artist,duration_ms:t.duration_ms||0,spotify_id:t.spotify_id||'',position:'next'});toast('Added: '+t.title);document.getElementById('searchResults').innerHTML='';si.value=''}
 
 // ── Pacing ──
 ['Banter','Ads','Spots'].forEach(n=>{

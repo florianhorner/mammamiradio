@@ -82,7 +82,7 @@ fi
 echo "4. Critical files"
 for f in mammamiradio/__init__.py radio.toml ha-addon/mammamiradio/Dockerfile \
          ha-addon/mammamiradio/rootfs/run.sh ha-addon/mammamiradio/config.yaml \
-         ha-addon/mammamiradio/go-librespot-config.yml ha-addon/mammamiradio/build.yaml \
+         ha-addon/mammamiradio/build.yaml \
          ha-addon/mammamiradio/translations/en.yaml; do
     if [ -f "$f" ]; then
         pass "$f"
@@ -134,19 +134,19 @@ else
     fail "Port mismatch: config.yaml=$PORT_CONFIG run.sh=$PORT_RUNSH"
 fi
 
-# host_network required for Spotify Connect
+# host_network for local network stream access
 if grep -q 'host_network: true' ha-addon/mammamiradio/config.yaml; then
-    pass "host_network: true (required for Spotify Connect)"
+    pass "host_network: true (required for local network stream access)"
 else
-    fail "host_network must be true for Spotify Connect mDNS discovery"
+    fail "host_network must be true for local network stream access"
 fi
 
-# timeout >= 300 (addon needs time to download go-librespot)
+# timeout >= 120 (addon needs time to install Python deps)
 TIMEOUT=$(grep '^timeout:' ha-addon/mammamiradio/config.yaml | awk '{print $2}')
-if [ "${TIMEOUT:-0}" -ge 300 ] 2>/dev/null; then
-    pass "timeout: $TIMEOUT (>= 300)"
+if [ "${TIMEOUT:-0}" -ge 120 ] 2>/dev/null; then
+    pass "timeout: $TIMEOUT (>= 120)"
 else
-    fail "timeout should be >= 300, got: ${TIMEOUT:-missing}"
+    fail "timeout should be >= 120, got: ${TIMEOUT:-missing}"
 fi
 
 # ---- 9. Translations cover all options ----
@@ -259,7 +259,7 @@ if [ "${1:-}" = "--build" ]; then
 
         echo "  Testing container startup..."
         # Create minimal options.json
-        echo '{"anthropic_api_key":"","spotify_client_id":"","spotify_client_secret":""}' > "$TMPCTX/options.json"
+        echo '{"anthropic_api_key":"","openai_api_key":""}' > "$TMPCTX/options.json"
 
         CID=$(docker run -d --name mmr-test \
             -v "$TMPCTX/options.json:/data/options.json:ro" \

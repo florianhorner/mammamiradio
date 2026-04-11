@@ -15,7 +15,6 @@ from mammamiradio.models import StationState
 from mammamiradio.persona import PersonaStore
 from mammamiradio.playlist import DEMO_TRACKS, fetch_startup_playlist, read_persisted_source
 from mammamiradio.producer import run_producer
-from mammamiradio.spotify_player import SpotifyPlayer
 from mammamiradio.streamer import LiveStreamHub, router, run_playback_loop
 from mammamiradio.sync import init_db
 
@@ -31,13 +30,12 @@ app.include_router(router)
 
 _producer_task: asyncio.Task | None = None
 _playback_task: asyncio.Task | None = None
-_spotify_player: SpotifyPlayer | None = None
 
 
 @app.on_event("startup")
 async def startup():
     """Load config, build initial state, and start producer/playback workers."""
-    global _producer_task, _playback_task, _spotify_player
+    global _producer_task, _playback_task
 
     config = load_config()
     logger.info("Station: %s (%s)", config.station.name, config.station.language)
@@ -58,27 +56,6 @@ async def startup():
             "FFmpeg not found — audio generation will fail. "
             "Install: brew install ffmpeg (macOS) or apt install ffmpeg (Linux)"
         )
-    if not shutil.which(config.audio.go_librespot_bin):
-        logger.info(
-            "go-librespot not found — Spotify Connect disabled, using demo/local audio. "
-            "Install: brew install go-librespot (macOS) or download from github.com/devgianlu/go-librespot"
-        )
-
-    # Start go-librespot for Spotify audio
-    spotify_player = None
-    try:
-        _spotify_player = SpotifyPlayer(config)
-        _spotify_player.start()
-        spotify_player = _spotify_player
-        if _spotify_player.spotify_auth_url:
-            logger.info("Spotify interactive auth required — visit dashboard to connect")
-        else:
-            logger.info(
-                "go-librespot started — select '%s' in your Spotify app to connect",
-                _spotify_player.device_name,
-            )
-    except Exception as e:
-        logger.warning("Could not start go-librespot: %s — using fallback audio", e)
 
     # Restore stop state so a reload/restart honours an operator-issued stop
     _stopped_flag = config.cache_dir / "session_stopped.flag"
@@ -105,12 +82,10 @@ async def startup():
         startup_source_error = str(e)
     logger.info("Loaded %d tracks", len(tracks))
 
-    _auth_url = getattr(_spotify_player, "spotify_auth_url", "") if _spotify_player else ""
     state = StationState(
         playlist=tracks,
         playlist_source=playlist_source,
         startup_source_error=startup_source_error,
-        spotify_auth_url=_auth_url,
         persona_store=persona_store,
         session_stopped=_session_stopped,
     )
@@ -126,7 +101,6 @@ async def startup():
     app.state.station_state = state
     app.state.config = config
     app.state.start_time = time.time()
-    app.state.spotify_player = spotify_player
 
     # Pre-queue a welcome clip so listeners hear audio instantly (no 2-5s gap)
     from mammamiradio.models import Segment, SegmentType
@@ -141,9 +115,7 @@ async def startup():
         logger.info("Pre-queued welcome clip for instant playback")
 
     _playback_task = asyncio.create_task(run_playback_loop(app))
-    _producer_task = asyncio.create_task(
-        run_producer(queue, state, config, spotify_player=spotify_player, skip_event=app.state.skip_event)
-    )
+    _producer_task = asyncio.create_task(run_producer(queue, state, config, skip_event=app.state.skip_event))
     app.state.playback_task = _playback_task
     app.state.producer_task = _producer_task
     logger.info(
@@ -156,10 +128,6 @@ async def startup():
 @app.on_event("shutdown")
 async def shutdown():
     """Stop background workers and close shared streaming resources."""
-    if _spotify_player:
-        _spotify_player.stop()
-    if hasattr(app.state, "spotify_player"):
-        app.state.spotify_player = None
     tasks_to_cancel = []
     if _producer_task:
         _producer_task.cancel()

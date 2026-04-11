@@ -1,4 +1,4 @@
-"""Track acquisition helpers used when Spotify capture is unavailable."""
+"""Track acquisition helpers: local files, yt-dlp, and placeholder fallback."""
 
 from __future__ import annotations
 

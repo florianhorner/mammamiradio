@@ -18,22 +18,20 @@ All three review phases flagged: HA context is the only moat Spotify DJ cannot c
 
 ## P2: Distribution strategy
 No landing page, no hosted demo, no analytics, no invite loop. The product has no way to be discovered. PR readiness != adoption readiness.
-**Action:** Create a landing page with embedded demo player. Add basic analytics (segment counts, session duration). Consider Spotify embed integration.
+**Action:** Create a landing page with embedded demo player. Add basic analytics (segment counts, session duration).
 **Source:** /autoplan CEO review, 2026-04-04
 
 ## P2: Narrow add-on detection
-Current state: `_is_addon()` in `mammamiradio/config.py` treats `/data/options.json` as sufficient proof of add-on mode.
+Current state: `_is_addon()` in `mammamiradio/config.py` now uses `SUPERVISOR_TOKEN`/`HASSIO_TOKEN` as primary signals.
 
-Why it matters: that can coerce a non-add-on environment onto `/data/go-librespot`, which recreates the same path-confusion class in a different form.
-
-Where to start: tighten add-on detection so token-based Supervisor signals are primary, then add a regression test covering `/data/options.json` outside true add-on runtime.
+Where to start: add a regression test covering `/data/options.json` outside true add-on runtime to ensure non-add-on environments are never misdetected.
 
 ## P2: Add runtime startup diagnosis
-Current state: docs explain local vs add-on paths, but the runtime does not report resolved config dir, ownership mode, or why it attached vs spawned `go-librespot`.
+Current state: docs explain local vs add-on paths, but the runtime does not report resolved config dir or active audio source at boot.
 
 Why it matters: when startup breaks, operators still have to infer state from scattered logs instead of getting one clear answer.
 
-Where to start: add a small diagnostic surface from the launcher or app startup that prints the resolved config dir, active `go-librespot` PID ownership, and mismatch reasons.
+Where to start: add a small diagnostic surface from the launcher or app startup that prints the resolved config dir, detected audio source (local/yt-dlp/charts), and any missing dependencies.
 
 ## P2: Focus trap for setup gate modal overlay
 The setup gate overlay does not trap keyboard focus. Tab key can reach elements behind the overlay, which breaks accessibility for keyboard and screen reader users. Standard modal pattern: trap focus inside the overlay while open, restore on close.
@@ -103,12 +101,6 @@ The disclaimer_goblin role is defined in SPEAKER_ROLES and has a voice in radio.
 - Host + guest format: scripted Q&A, phone-in style, recurring fictional guests or synthesized celebrity voices
 - Natural escalation from current two-host banter
 - **Effort:** L | **Files:** mammamiradio/scriptwriter.py, mammamiradio/producer.py
-
-### MISSED MOMENT: Spotify Connect arrival — radio should notice (P1)
-- User connected via Spotify Connect, radio gave zero acknowledgment
-- Host should drop a subtle line ("ah, qualcuno si è collegato..."), ad flavor could shift, queue could lean toward connected account's taste
-- Currently connect event is invisible to the broadcast layer
-- **Files:** mammamiradio/spotify_player.py (connect event), mammamiradio/producer.py, mammamiradio/scriptwriter.py
 
 ### Ad brand palette — Italian authenticity (P2)
 - Current ad generator uses generic placeholder brands; should use real Italian radio categories
@@ -189,7 +181,7 @@ The disclaimer_goblin role is defined in SPEAKER_ROLES and has a voice in radio.
 
 ## P1: Listener QA backlog (2026-04-09 live feedback)
 - Re-enable direct playlist reordering UX in dashboard (backend endpoints already exist: `/api/playlist/move`, `/api/playlist/move_to_next`).
-- Fix playlist source UX so Spotify URL import is explicit and does not conflict with search UI.
+- Fix playlist source UX so URL import is explicit and does not conflict with search UI.
 - Clarify playlist lifecycle in UI (what happens when station reaches end / how rotation works).
 - Align "Up Next" preview with actual queued segments to avoid UI/audio desync.
 - Add top-level pipeline indicators near "On Air" (Anthropic status, OpenAI fallback, degraded mode).

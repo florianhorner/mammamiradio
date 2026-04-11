@@ -1,16 +1,14 @@
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 from mammamiradio.config import load_config
-from mammamiradio.models import PlaylistSource, StationState, Track
+from mammamiradio.models import StationState, Track
 from mammamiradio.setup_status import (
     _playlist_is_demo,
-    _probe_playlist_url,
     build_setup_status,
     classify_station_mode,
     detect_run_mode,
-    resolve_go_librespot_bin,
 )
 
 
@@ -23,131 +21,69 @@ def _demo_state() -> StationState:
 def _real_state() -> StationState:
     return StationState(
         playlist=[Track(title="Real Song", artist="Artist", duration_ms=180_000, spotify_id="spotify123")],
-        spotify_connected=True,
     )
 
 
-def test_classify_station_mode_demo_without_spotify():
+def test_classify_station_mode_demo():
     config = load_config()
-    config.spotify_client_id = ""
-    config.spotify_client_secret = ""
+    config.anthropic_api_key = ""
+    config.openai_api_key = ""
 
     mode = classify_station_mode(config, _demo_state())
 
     assert mode["id"] == "demo"
-    assert "built-in demo tracks" in mode["summary"]
+    assert "demo" in mode["summary"].lower() or "canned" in mode["summary"].lower()
 
 
-def test_classify_station_mode_degraded_when_spotify_falls_back():
+def test_classify_station_mode_full_ai():
     config = load_config()
-    config.spotify_client_id = "client"
-    config.spotify_client_secret = "secret"
+    config.anthropic_api_key = "sk-ant-test"
 
-    with patch("mammamiradio.setup_status.resolve_go_librespot_bin", return_value="/usr/local/bin/go-librespot"):
-        mode = classify_station_mode(config, _demo_state())
+    mode = classify_station_mode(config, _real_state())
 
-    assert mode["id"] == "degraded"
-    assert "fell back to demo tracks" in mode["summary"]
+    assert mode["id"] == "full_ai"
 
 
-def test_classify_station_mode_real_spotify():
+def test_classify_station_mode_connected_home():
     config = load_config()
-    config.spotify_client_id = "client"
-    config.spotify_client_secret = "secret"
+    config.anthropic_api_key = "sk-ant-test"
+    config.homeassistant.enabled = True
+    config.ha_token = "ha-token"
 
-    with patch("mammamiradio.setup_status.resolve_go_librespot_bin", return_value="/usr/local/bin/go-librespot"):
-        mode = classify_station_mode(config, _real_state())
+    mode = classify_station_mode(config, _real_state())
 
-    assert mode["id"] == "real_spotify"
+    assert mode["id"] == "connected_home"
 
 
 def test_build_setup_status_returns_expected_shape_for_addon():
     config = load_config()
     config.is_addon = True
-    config.spotify_client_id = ""
-    config.spotify_client_secret = ""
+    config.anthropic_api_key = ""
+    config.openai_api_key = ""
     config.homeassistant.enabled = True
     config.ha_token = "ha-token"
     state = _demo_state()
 
-    with (
-        patch("mammamiradio.setup_status._probe_playlist_url", return_value=("missing", "Playlist missing")),
-        patch("mammamiradio.setup_status.resolve_go_librespot_bin", return_value=None),
-    ):
-        payload = build_setup_status(config, state)
+    payload = build_setup_status(config, state)
 
     assert payload["detected_mode"] == "ha_addon"
     assert payload["onboarding_required"] is True
     assert payload["station_mode"]["id"] == "demo"
-    assert payload["essentials"][0]["key"] == "spotify"
+    assert payload["essentials"][0]["key"] == "anthropic"
     assert payload["preflight_checks"][0]["key"] == "ffmpeg"
-    assert "playlist_spotify_url" in payload["addon_options_snippet"]
-    assert payload["supports_user_sources"] is False
+    assert "anthropic_api_key" in payload["addon_options_snippet"]
     assert payload["signature"]
 
 
-def test_build_setup_status_local_promotes_source_picker_copy():
+def test_build_setup_status_non_demo_launch_copy():
     config = load_config()
-    config.spotify_client_id = "id"
-    config.spotify_client_secret = "secret"
+    config.anthropic_api_key = "sk-ant-test"
     state = _real_state()
 
-    with (
-        patch("mammamiradio.setup_status.detect_run_mode", return_value={"detected": "local", "modes": []}),
-        patch("mammamiradio.setup_status.resolve_go_librespot_bin", return_value="/usr/local/bin/go-librespot"),
-    ):
+    with patch("mammamiradio.setup_status.detect_run_mode", return_value={"detected": "local", "modes": []}):
         payload = build_setup_status(config, state)
 
-    playlist_item = next(item for item in payload["essentials"] if item["key"] == "playlist")
-    assert payload["supports_user_sources"] is True
-    assert playlist_item["label"] == "Choose your music"
-    assert "Liked Songs" in playlist_item["summary"]
-
-
-def test_build_setup_status_reflects_active_playlist_source_without_probe():
-    config = load_config()
-    config.spotify_client_id = "id"
-    config.spotify_client_secret = "secret"
-    config.anthropic_api_key = "sk-ant"
-    state = StationState(
-        playlist=[Track(title="OSSESSIONE", artist="Samurai Jay", duration_ms=180_000, spotify_id="track1")],
-        spotify_connected=False,
-        playlist_source=PlaylistSource(kind="url", label="mamma mi radio", source_id="abc123", track_count=50),
-    )
-
-    with (
-        patch("mammamiradio.setup_status.detect_run_mode", return_value={"detected": "macos", "modes": []}),
-        patch("mammamiradio.setup_status.resolve_go_librespot_bin", return_value="/usr/local/bin/go-librespot"),
-    ):
-        payload = build_setup_status(config, state)
-
-    spotify_item = next(item for item in payload["essentials"] if item["key"] == "spotify")
-    playlist_item = next(item for item in payload["essentials"] if item["key"] == "playlist")
-
-    assert spotify_item["status"] == "configured"
-    assert "mammamiradio device" in spotify_item["next_action"]
-    assert playlist_item["status"] == "configured"
-    assert playlist_item["summary"] == "Current source: mamma mi radio."
-    assert playlist_item["next_action"] == "Nothing to do unless you want to switch sources."
-    assert playlist_item["skip_outcome"] == "A real source is already active."
-
-
-def test_build_setup_status_real_spotify_launch_copy_points_to_listener_view():
-    config = load_config()
-    config.spotify_client_id = "id"
-    config.spotify_client_secret = "secret"
-    state = StationState(
-        playlist=[Track(title="Real Song", artist="Artist", duration_ms=180_000, spotify_id="spotify123")],
-        spotify_connected=True,
-    )
-
-    with (
-        patch("mammamiradio.setup_status.detect_run_mode", return_value={"detected": "macos", "modes": []}),
-        patch("mammamiradio.setup_status.resolve_go_librespot_bin", return_value="/usr/local/bin/go-librespot"),
-    ):
-        payload = build_setup_status(config, state)
-
-    assert payload["station_mode"]["id"] == "real_spotify"
+    assert payload["station_mode"]["id"] == "full_ai"
     assert "listener view" in payload["launch"]["post_launch"]
 
 
@@ -202,163 +138,3 @@ def test_playlist_is_demo_empty():
 def test_playlist_is_demo_none():
     state = StationState(playlist=None)
     assert _playlist_is_demo(state) is True
-
-
-# --- _probe_playlist_url ---
-
-
-def test_probe_playlist_url_no_creds():
-    config = load_config()
-    config.spotify_client_id = ""
-    config.spotify_client_secret = ""
-    status, detail = _probe_playlist_url(config)
-    assert status == "missing"
-    assert "credentials" in detail.lower()
-
-
-def test_probe_playlist_url_no_url_addon():
-    config = load_config()
-    config.spotify_client_id = "id"
-    config.spotify_client_secret = "secret"
-    config.playlist.spotify_url = ""
-    config.is_addon = True
-    status, detail = _probe_playlist_url(config)
-    assert status == "missing"
-    assert "Add-on" in detail
-
-
-def test_probe_playlist_url_no_url_local():
-    config = load_config()
-    config.spotify_client_id = "id"
-    config.spotify_client_secret = "secret"
-    config.playlist.spotify_url = ""
-    config.is_addon = False
-    status, _detail = _probe_playlist_url(config)
-    assert status == "degraded"
-
-
-def test_probe_playlist_url_invalid_url():
-    config = load_config()
-    config.spotify_client_id = "id"
-    config.spotify_client_secret = "secret"
-    config.playlist.spotify_url = "not-a-spotify-url"
-    status, detail = _probe_playlist_url(config)
-    assert status == "invalid"
-    assert "valid Spotify" in detail
-
-
-def test_probe_playlist_url_success():
-    config = load_config()
-    config.spotify_client_id = "id"
-    config.spotify_client_secret = "secret"
-    config.playlist.spotify_url = "https://open.spotify.com/playlist/abc123"
-
-    mock_sp = patch(
-        "spotipy.Spotify.playlist_tracks",
-        return_value={"items": [{"track": {"id": "t1"}}]},
-    )
-    mock_auth = patch("spotipy.oauth2.SpotifyClientCredentials")
-    with mock_sp, mock_auth:
-        status, _detail = _probe_playlist_url(config)
-    assert status == "configured"
-
-
-def test_probe_playlist_url_uses_cached_user_token_for_private_playlists():
-    config = load_config()
-    config.spotify_client_id = "id"
-    config.spotify_client_secret = "secret"
-    config.playlist.spotify_url = "https://open.spotify.com/playlist/private123"
-    config.is_addon = False
-
-    oauth = MagicMock()
-    oauth.cache_handler.get_cached_token.return_value = {"access_token": "cached"}
-
-    with (
-        patch("spotipy.oauth2.SpotifyOAuth", return_value=oauth) as mock_oauth,
-        patch("spotipy.oauth2.SpotifyClientCredentials") as mock_cc,
-        patch("spotipy.Spotify.playlist_tracks", return_value={"items": [{"track": {"id": "t1"}}]}),
-    ):
-        status, _detail = _probe_playlist_url(config)
-
-    assert status == "configured"
-    mock_oauth.assert_called_once()
-    mock_cc.assert_not_called()
-
-
-def test_resolve_go_librespot_bin_checks_opt_homebrew_before_usr_local():
-    with (
-        patch("mammamiradio.spotify_player.shutil.which", return_value=None),
-        patch("mammamiradio.spotify_player.os.path.isabs", return_value=False),
-        patch(
-            "mammamiradio.spotify_player.os.access",
-            side_effect=lambda path, mode: path == "/opt/homebrew/bin/go-librespot",
-        ),
-    ):
-        assert resolve_go_librespot_bin("go-librespot") == "/opt/homebrew/bin/go-librespot"
-
-
-def test_probe_playlist_url_empty_playlist():
-    config = load_config()
-    config.spotify_client_id = "id"
-    config.spotify_client_secret = "secret"
-    config.playlist.spotify_url = "https://open.spotify.com/playlist/abc123"
-
-    mock_sp = patch(
-        "spotipy.Spotify.playlist_tracks",
-        return_value={"items": []},
-    )
-    mock_auth = patch("spotipy.oauth2.SpotifyClientCredentials")
-    with mock_sp, mock_auth:
-        status, detail = _probe_playlist_url(config)
-    assert status == "invalid"
-    assert "no playable" in detail.lower()
-
-
-def test_probe_playlist_url_spotify_exception():
-    config = load_config()
-    config.spotify_client_id = "id"
-    config.spotify_client_secret = "secret"
-    config.playlist.spotify_url = "https://open.spotify.com/playlist/abc123"
-
-    mock_sp = patch(
-        "spotipy.Spotify.playlist_tracks",
-        side_effect=Exception("401 Unauthorized"),
-    )
-    mock_auth = patch("spotipy.oauth2.SpotifyClientCredentials")
-    with mock_sp, mock_auth:
-        status, detail = _probe_playlist_url(config)
-    assert status == "invalid"
-    assert "rejected" in detail.lower()
-
-
-def test_probe_playlist_url_import_error():
-    """When spotipy is not installed, should return missing, not invalid."""
-    config = load_config()
-    config.spotify_client_id = "id"
-    config.spotify_client_secret = "secret"
-    config.playlist.spotify_url = "https://open.spotify.com/playlist/abc123"
-
-    with patch.dict("sys.modules", {"spotipy": None, "spotipy.oauth2": None}):
-        status, detail = _probe_playlist_url(config)
-    assert status == "missing"
-    assert "spotipy" in detail.lower()
-
-
-# --- classify_station_mode: degraded with real tracks but no connect ---
-
-
-def test_classify_station_mode_degraded_real_tracks_no_connect():
-    config = load_config()
-    config.spotify_client_id = "client"
-    config.spotify_client_secret = "secret"
-
-    state = StationState(
-        playlist=[Track(title="Real", artist="Artist", duration_ms=180_000, spotify_id="sp1")],
-        spotify_connected=False,
-    )
-
-    with patch("mammamiradio.setup_status.resolve_go_librespot_bin", return_value="/usr/local/bin/go-librespot"):
-        mode = classify_station_mode(config, state)
-
-    assert mode["id"] == "degraded"
-    assert "not fully ready" in mode["summary"]

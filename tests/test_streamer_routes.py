@@ -46,7 +46,7 @@ def _make_test_app(*, admin_password: str = "", admin_token: str = "") -> FastAP
 
 
 # ---------------------------------------------------------------------------
-# LiveStreamHub — pure async unit tests
+# LiveStreamHub -- pure async unit tests
 # ---------------------------------------------------------------------------
 
 
@@ -122,7 +122,7 @@ async def test_close_clears_listeners():
 
 
 # ---------------------------------------------------------------------------
-# Route tests — using httpx.AsyncClient with ASGITransport
+# Route tests -- using httpx.AsyncClient with ASGITransport
 # ---------------------------------------------------------------------------
 
 
@@ -166,7 +166,7 @@ async def test_public_status_returns_json():
 @pytest.mark.asyncio
 async def test_public_status_upcoming_mode_shows_predictions_when_queue_empty():
     app = _make_test_app()
-    # Queue is empty — predictions from playlist are shown instead
+    # Queue is empty -- predictions from playlist are shown instead
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
         resp = await client.get("/public-status")
@@ -189,22 +189,6 @@ async def test_public_status_upcoming_mode_queued_with_shadow_queue():
     body = resp.json()
     assert body["upcoming"] == [{"type": "music", "label": "Queued Song", "source": "rendered_queue"}]
     assert body["upcoming_mode"] == "queued"
-
-
-@pytest.mark.asyncio
-async def test_public_status_syncs_spotify_auth_url_from_player():
-    app = _make_test_app()
-    app.state.config.spotify_client_id = "client-id"
-    app.state.config.spotify_client_secret = "client-secret"
-    app.state.spotify_player = type(
-        "FakeSpotifyPlayer", (), {"spotify_auth_url": "https://accounts.spotify.com/authorize?x=1"}
-    )()
-    transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
-        resp = await client.get("/public-status")
-    assert resp.status_code == 200
-    assert resp.json()["golden_path"]["auth_url"] == "https://accounts.spotify.com/authorize?x=1"
-    assert app.state.station_state.spotify_auth_url == "https://accounts.spotify.com/authorize?x=1"
 
 
 @pytest.mark.asyncio
@@ -431,9 +415,6 @@ async def test_admin_panel_with_basic_auth_returns_html():
         resp = await client.get("/admin", auth=("admin", "secret"))
     assert resp.status_code == 200
     assert "text/html" in resp.headers["content-type"]
-    assert "Systems" in resp.text
-    assert "Last Break" in resp.text
-    assert "Last Aired Script" not in resp.text
 
 
 # ---------------------------------------------------------------------------
@@ -452,7 +433,6 @@ async def test_capabilities_loopback_returns_flags():
     body = resp.json()
     # Flags are nested under "capabilities"; top-level has tier, trial, etc.
     caps = body.get("capabilities", body)
-    assert "spotify_connected" in caps
     assert "anthropic" in caps
     assert "tier" in body
     assert "trial" in body
@@ -467,18 +447,6 @@ async def test_capabilities_non_loopback_without_auth_rejected():
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
         resp = await client.get("/api/capabilities")
     assert resp.status_code == 401
-
-
-@pytest.mark.asyncio
-async def test_capabilities_spotify_username_absent_when_not_connected():
-    """spotify_username should be empty string when Spotify is not connected."""
-    app = _make_test_app()
-    app.state.station_state.spotify_connected = False
-    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
-    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
-        resp = await client.get("/api/capabilities")
-    assert resp.status_code == 200
-    assert resp.json()["spotify_username"] == ""
 
 
 @pytest.mark.asyncio
@@ -507,15 +475,3 @@ async def test_capabilities_trial_exhausted_flag():
     body = resp.json()
     assert body["trial"]["exhausted"] is True
     assert body["trial"]["canned_clips_streamed"] == SHAREWARE_CANNED_LIMIT
-
-
-@pytest.mark.asyncio
-async def test_spotify_auth_status_uses_loopback_ip_callback():
-    app = _make_test_app()
-    app.state.config.spotify_client_id = "client-id"
-    app.state.config.spotify_client_secret = "client-secret"
-    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
-    async with httpx.AsyncClient(transport=transport, base_url="http://localhost:8000") as client:
-        resp = await client.get("/api/spotify/auth-status")
-    assert resp.status_code == 200
-    assert resp.json()["callback_url"] == "http://127.0.0.1:8000/spotify/callback"

@@ -36,7 +36,6 @@ class StationSection:
 class PlaylistSection:
     """Playlist source selection and ordering preferences."""
 
-    spotify_url: str = ""
     shuffle: bool = True
     allow_explicit: bool = True
     repeat_cooldown: int = 5
@@ -56,16 +55,11 @@ class PacingSection:
 
 @dataclass
 class AudioSection:
-    """Audio pipeline settings for encoding and Spotify capture."""
+    """Audio pipeline settings for encoding."""
 
     sample_rate: int = 48000
     channels: int = 2
     bitrate: int = 192
-    spotify_bitrate: int = 320
-    fifo_path: str = "/tmp/mammamiradio.pcm"
-    go_librespot_bin: str = "go-librespot"
-    go_librespot_config_dir: str = "go-librespot"
-    go_librespot_port: int = 3678
     claude_model: str = "claude-haiku-4-5-20251001"
     claude_creative_model: str = "claude-opus-4-6"
 
@@ -123,8 +117,6 @@ class StationConfig:
     admin_username: str = "admin"
     admin_password: str = ""
     admin_token: str = ""
-    spotify_client_id: str = ""
-    spotify_client_secret: str = ""
     anthropic_api_key: str = ""
     openai_api_key: str = ""
     ha_token: str = ""
@@ -161,8 +153,6 @@ def _apply_addon_options() -> None:
         return
 
     env_map = {
-        "spotify_client_id": "SPOTIFY_CLIENT_ID",
-        "spotify_client_secret": "SPOTIFY_CLIENT_SECRET",
         "anthropic_api_key": "ANTHROPIC_API_KEY",
         "openai_api_key": "OPENAI_API_KEY",
         "admin_password": "ADMIN_PASSWORD",
@@ -195,8 +185,6 @@ def _validate(config: StationConfig) -> None:
         log.warning("Home Assistant enabled but no HA_TOKEN in environment")
     if not config.ads.brands:
         log.warning("No ad brands configured — ad segments will be skipped")
-    if not config.spotify_client_id or not config.spotify_client_secret:
-        log.warning("No Spotify credentials — using demo playlist")
     # Addon mode: Supervisor handles auth, skip non-local bind check
     if (
         not config.is_addon
@@ -304,16 +292,6 @@ def load_config(path: str = "radio.toml") -> StationConfig:
         station_raw["name"] = os.getenv("STATION_NAME")
     if os.getenv("STATION_THEME"):
         station_raw["theme"] = os.getenv("STATION_THEME")
-    if os.getenv("PLAYLIST_SPOTIFY_URL"):
-        raw.setdefault("playlist", {})["spotify_url"] = os.getenv("PLAYLIST_SPOTIFY_URL")
-    if os.getenv("MAMMAMIRADIO_FIFO_PATH"):
-        audio_raw["fifo_path"] = os.getenv("MAMMAMIRADIO_FIFO_PATH")
-    if os.getenv("MAMMAMIRADIO_GO_LIBRESPOT_BIN"):
-        audio_raw["go_librespot_bin"] = os.getenv("MAMMAMIRADIO_GO_LIBRESPOT_BIN")
-    if os.getenv("MAMMAMIRADIO_GO_LIBRESPOT_CONFIG_DIR"):
-        audio_raw["go_librespot_config_dir"] = os.getenv("MAMMAMIRADIO_GO_LIBRESPOT_CONFIG_DIR")
-    if os.getenv("MAMMAMIRADIO_GO_LIBRESPOT_PORT"):
-        audio_raw["go_librespot_port"] = int(os.getenv("MAMMAMIRADIO_GO_LIBRESPOT_PORT", "3678"))
     if os.getenv("CLAUDE_MODEL"):
         audio_raw["claude_model"] = os.getenv("CLAUDE_MODEL")
     if os.getenv("CLAUDE_CREATIVE_MODEL"):
@@ -349,22 +327,19 @@ def load_config(path: str = "radio.toml") -> StationConfig:
         admin_username=os.getenv("ADMIN_USERNAME", "admin"),
         admin_password=os.getenv("ADMIN_PASSWORD", ""),
         admin_token=os.getenv("ADMIN_TOKEN", ""),
-        spotify_client_id=os.getenv("SPOTIFY_CLIENT_ID", ""),
-        spotify_client_secret=os.getenv("SPOTIFY_CLIENT_SECRET", ""),
         anthropic_api_key=os.getenv("ANTHROPIC_API_KEY", ""),
         openai_api_key=os.getenv("OPENAI_API_KEY", ""),
         ha_token=ha_token,
         is_addon=addon_mode,
     )
 
-    # Addon overrides: persistent paths, auto-enable HA, configurable go-librespot dir
+    # Addon overrides: persistent paths, auto-enable HA
     if addon_mode:
         import logging as _log
 
         _log.getLogger(__name__).info("Running as Home Assistant addon")
         config.cache_dir = Path(os.getenv("MAMMAMIRADIO_CACHE_DIR", "/data/cache"))
         config.tmp_dir = Path(os.getenv("MAMMAMIRADIO_TMP_DIR", "/data/tmp"))
-        config.audio.go_librespot_config_dir = os.getenv("MAMMAMIRADIO_GO_LIBRESPOT_CONFIG_DIR", "/data/go-librespot")
         # Auto-enable HA context via Supervisor API
         supervisor_token = os.getenv("SUPERVISOR_TOKEN") or os.getenv("HASSIO_TOKEN", "")
         if supervisor_token:
@@ -383,42 +358,8 @@ def runtime_json(config: StationConfig | None = None) -> dict:
     return {
         "bind_host": config.bind_host,
         "port": config.port,
-        "fifo_path": config.audio.fifo_path,
-        "go_librespot_bin": config.audio.go_librespot_bin,
-        "go_librespot_config_dir": config.audio.go_librespot_config_dir,
-        "go_librespot_port": config.audio.go_librespot_port,
         "tmp_dir": str(config.tmp_dir),
     }
-
-
-def startup_env(config: StationConfig | None = None) -> str:
-    """Emit all shell variables start.sh needs in one shot, avoiding repeated Python spawns."""
-    import shlex
-
-    from mammamiradio.go_librespot_runtime import build_go_librespot_runtime, read_owned_pid
-
-    rt = runtime_json(config)
-    glr = build_go_librespot_runtime(
-        go_librespot_bin=rt["go_librespot_bin"],
-        config_dir=rt["go_librespot_config_dir"],
-        fifo_path=rt["fifo_path"],
-        port=rt["go_librespot_port"],
-        tmp_dir=rt["tmp_dir"],
-    )
-    owned_pid = read_owned_pid(glr.state_file, glr.fingerprint)
-    lines = [
-        f"HOST={shlex.quote(rt['bind_host'])}",
-        f"PORT={shlex.quote(str(rt['port']))}",
-        f"FIFO={shlex.quote(rt['fifo_path'])}",
-        f"GO_LIBRESPOT_BIN={shlex.quote(rt['go_librespot_bin'])}",
-        f"GO_LIBRESPOT_CONFIG_DIR={shlex.quote(str(glr.config_dir))}",
-        f"GO_LIBRESPOT_PORT={shlex.quote(str(glr.port))}",
-        f"TMP_DIR={shlex.quote(str(glr.tmp_dir))}",
-        f"GO_LIBRESPOT_FINGERPRINT={shlex.quote(glr.fingerprint)}",
-        f"GO_LIBRESPOT_STATE_FILE={shlex.quote(str(glr.state_file))}",
-        f"GOLIBRESPOT_OWNED_PID={shlex.quote(str(owned_pid) if owned_pid else '')}",
-    ]
-    return "\n".join(lines)
 
 
 if __name__ == "__main__":
@@ -427,8 +368,6 @@ if __name__ == "__main__":
 
     if len(sys.argv) > 1 and sys.argv[1] == "runtime-json":
         print(json.dumps(runtime_json()))
-    elif len(sys.argv) > 1 and sys.argv[1] == "startup-env":
-        print(startup_env())
     else:
-        print("Usage: python -m mammamiradio.config {runtime-json|startup-env}", file=sys.stderr)
+        print("Usage: python -m mammamiradio.config runtime-json", file=sys.stderr)
         sys.exit(1)

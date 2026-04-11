@@ -12,9 +12,6 @@ services:
       - ADMIN_TOKEN=${ADMIN_TOKEN:?Set ADMIN_TOKEN in .env or environment}
       # Optional: Anthropic API key for AI-generated banter/ads
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
-      # Optional: Spotify credentials
-      - SPOTIFY_CLIENT_ID=${SPOTIFY_CLIENT_ID:-}
-      - SPOTIFY_CLIENT_SECRET=${SPOTIFY_CLIENT_SECRET:-}
       # Optional: Home Assistant
       - HA_TOKEN=${HA_TOKEN:-}
       - HA_URL=${HA_URL:-}

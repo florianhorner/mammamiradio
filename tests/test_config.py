@@ -9,7 +9,6 @@ from mammamiradio.config import AudioSection, _apply_addon_options, _is_addon, l
 
 def test_load_config_from_radio_toml(monkeypatch):
     """Loading radio.toml should produce a valid StationConfig."""
-    # Ensure we load from the project root radio.toml
     toml_path = Path(__file__).parent.parent / "radio.toml"
     monkeypatch.delenv("STATION_NAME", raising=False)
     config = load_config(str(toml_path))
@@ -33,10 +32,6 @@ def test_audio_section_loaded():
     assert config.audio.sample_rate == 48000
     assert config.audio.channels == 2
     assert config.audio.bitrate == 192
-    assert config.audio.spotify_bitrate == 320
-    assert config.audio.fifo_path == "/tmp/mammamiradio.pcm"
-    assert "go-librespot" in config.audio.go_librespot_bin
-    assert config.audio.go_librespot_port == 3678
     # CLAUDE_MODEL env override may be set; just check it's non-empty
     assert config.audio.claude_model
 
@@ -85,19 +80,8 @@ def test_runtime_json_keys():
     config = load_config(str(toml_path))
     result = runtime_json(config)
     assert "bind_host" in result
-    assert "fifo_path" in result
-    assert "go_librespot_bin" in result
-    assert "go_librespot_config_dir" in result
-
-
-def test_runtime_json_includes_resolved_go_librespot_config_dir():
-    toml_path = Path(__file__).parent.parent / "radio.toml"
-    config = load_config(str(toml_path))
-    config.audio.go_librespot_config_dir = "custom-go-librespot"
-
-    result = runtime_json(config)
-
-    assert result["go_librespot_config_dir"] == "custom-go-librespot"
+    assert "port" in result
+    assert "tmp_dir" in result
 
 
 def test_non_local_bind_requires_admin_auth(monkeypatch):
@@ -145,12 +129,11 @@ def test_is_addon_ignores_options_file_without_tokens(monkeypatch):
 
 
 def test_apply_addon_options(monkeypatch, tmp_path):
-    options = {"spotify_client_id": "test_id", "spotify_client_secret": "test_secret"}
+    options = {"anthropic_api_key": "test_key"}
     options_file = tmp_path / "options.json"
     options_file.write_text(json.dumps(options))
 
-    monkeypatch.delenv("SPOTIFY_CLIENT_ID", raising=False)
-    monkeypatch.delenv("SPOTIFY_CLIENT_SECRET", raising=False)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
 
     import os
 
@@ -158,20 +141,18 @@ def test_apply_addon_options(monkeypatch, tmp_path):
         mock_path_cls.return_value = options_file
         _apply_addon_options()
 
-    assert os.environ.get("SPOTIFY_CLIENT_ID") == "test_id"
-    assert os.environ.get("SPOTIFY_CLIENT_SECRET") == "test_secret"
+    assert os.environ.get("ANTHROPIC_API_KEY") == "test_key"
     # Cleanup
-    monkeypatch.delenv("SPOTIFY_CLIENT_ID", raising=False)
-    monkeypatch.delenv("SPOTIFY_CLIENT_SECRET", raising=False)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
 
 
 def test_apply_addon_options_no_override(monkeypatch, tmp_path):
     """Existing env vars should not be overridden by options.json."""
-    options = {"spotify_client_id": "from_options"}
+    options = {"anthropic_api_key": "from_options"}
     options_file = tmp_path / "options.json"
     options_file.write_text(json.dumps(options))
 
-    monkeypatch.setenv("SPOTIFY_CLIENT_ID", "from_env")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "from_env")
 
     with patch("mammamiradio.config.Path") as mock_path_cls:
         mock_path_cls.return_value = options_file
@@ -179,7 +160,7 @@ def test_apply_addon_options_no_override(monkeypatch, tmp_path):
 
     import os
 
-    assert os.environ["SPOTIFY_CLIENT_ID"] == "from_env"
+    assert os.environ["ANTHROPIC_API_KEY"] == "from_env"
 
 
 def test_apply_addon_options_missing_file(monkeypatch):
@@ -208,7 +189,6 @@ def test_addon_mode_overrides_paths(monkeypatch):
     assert config.is_addon is True
     assert config.cache_dir == Path("/data/cache")
     assert config.tmp_dir == Path("/data/tmp")
-    assert config.audio.go_librespot_config_dir == "/data/go-librespot"
 
 
 def test_load_config_does_not_force_addon_paths_from_options_file(monkeypatch):
@@ -222,7 +202,6 @@ def test_load_config_does_not_force_addon_paths_from_options_file(monkeypatch):
     assert config.is_addon is False
     assert config.cache_dir == Path("cache")
     assert config.tmp_dir == Path("tmp")
-    assert config.audio.go_librespot_config_dir == "go-librespot"
 
 
 def test_addon_mode_respects_env_path_overrides(monkeypatch):
@@ -230,14 +209,12 @@ def test_addon_mode_respects_env_path_overrides(monkeypatch):
     monkeypatch.setenv("SUPERVISOR_TOKEN", "test_token")
     monkeypatch.setenv("MAMMAMIRADIO_CACHE_DIR", "/tmp/mammamiradio-data/cache")
     monkeypatch.setenv("MAMMAMIRADIO_TMP_DIR", "/tmp/mammamiradio-data/tmp")
-    monkeypatch.setenv("MAMMAMIRADIO_GO_LIBRESPOT_CONFIG_DIR", "/tmp/mammamiradio-data/go-librespot")
 
     config = load_config(str(toml_path))
 
     assert config.is_addon is True
     assert config.cache_dir == Path("/tmp/mammamiradio-data/cache")
     assert config.tmp_dir == Path("/tmp/mammamiradio-data/tmp")
-    assert config.audio.go_librespot_config_dir == "/tmp/mammamiradio-data/go-librespot"
 
 
 def test_addon_mode_auto_enables_ha(monkeypatch):

@@ -13,16 +13,14 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 
 from mammamiradio.capabilities import capabilities_to_dict, get_capabilities
 from mammamiradio.models import PersonalityAxes, PlaylistSource, Segment, SegmentType, StationState
 from mammamiradio.playlist import (
     ExplicitSourceError,
-    list_user_playlists,
     load_explicit_source,
-    supports_user_sources,
     write_persisted_source,
 )
 from mammamiradio.scheduler import preview_upcoming
@@ -92,106 +90,46 @@ def _has_any_mp3(path: Path) -> bool:
 
 def _golden_path_status(config, state) -> dict:
     """Build a single, explicit music onboarding status for UI surfaces."""
-    spotify_api = bool(config.spotify_client_id and config.spotify_client_secret)
-    spotify_connected = bool(state.spotify_connected)
     allow_ytdlp = os.getenv("MAMMAMIRADIO_ALLOW_YTDLP", "false").lower() in ("true", "1", "yes")
     has_demo_assets = _has_any_mp3(_PKG_DIR / "demo_assets" / "music")
     has_local_music = _has_any_mp3(Path("music"))
 
-    fallback_sources: list[str] = []
+    sources: list[str] = []
     if has_demo_assets:
-        fallback_sources.append("bundled demo tracks")
+        sources.append("bundled demo tracks")
     if has_local_music:
-        fallback_sources.append("local music/*.mp3 files")
+        sources.append("local music/*.mp3 files")
     if allow_ytdlp:
-        fallback_sources.append("yt-dlp downloads")
+        sources.append("yt-dlp downloads")
 
-    silent_music_fallback = (not spotify_connected) and not fallback_sources
     shared = {
-        "fallback_sources": fallback_sources,
-        "silent_music_fallback": silent_music_fallback,
+        "fallback_sources": sources,
+        "silent_music_fallback": not sources,
     }
 
-    if spotify_connected:
-        return {
-            "stage": "connected",
-            "blocking": False,
-            "headline": "Connected to Spotify. Real music is live.",
-            "detail": "Your in-page player is now using your Spotify-powered station audio.",
-            "steps": [],
-            **shared,
-        }
-
-    # Music is available via yt-dlp, local files, or demo assets — not blocking,
-    # but only when Spotify credentials are absent. Once credentials exist, the
-    # user still needs the explicit Connect/browser-login guidance.
-    if fallback_sources and not spotify_connected and not spotify_api:
-        source_label = ", ".join(fallback_sources)
+    if sources:
+        source_label = ", ".join(sources)
+        has_llm = bool(config.anthropic_api_key or config.openai_api_key)
         return {
             "stage": "music_available",
             "blocking": False,
             "headline": f"Music via {source_label}.",
             "detail": (
-                f"Playing music from: {source_label}. "
-                "Add Spotify credentials in Advanced Settings for streaming from your own library."
+                f"Playing music from: {source_label}."
+                + ("" if has_llm else " Add an Anthropic API key for AI-generated banter.")
             ),
             "steps": [],
             **shared,
         }
 
-    if not spotify_api:
-        detail = "No music source available."
-        if silent_music_fallback:
-            detail += " Music segments fall back to silence placeholders."
-        detail += " Set MAMMAMIRADIO_ALLOW_YTDLP=true or add Spotify credentials."
-        return {
-            "stage": "needs_music_source",
-            "blocking": True,
-            "headline": "No music source configured.",
-            "detail": detail,
-            "steps": [
-                "Set MAMMAMIRADIO_ALLOW_YTDLP=true for YouTube music, or",
-                "Open Advanced Settings and paste Spotify App ID and Secret.",
-            ],
-            **shared,
-        }
-
-    auth_url = getattr(state, "spotify_auth_url", "") or ""
-    if auth_url:
-        detail = (
-            "Your Mac hostname causes a Spotify Connect discovery issue. "
-            "Click the link below to log in via browser instead (one-time setup)."
-        )
-        if fallback_sources:
-            detail += f" Until then, using: {', '.join(fallback_sources)}."
-        return {
-            "stage": "needs_spotify_browser_login",
-            "blocking": True,
-            "headline": "Action required: log in to Spotify via browser.",
-            "detail": detail,
-            "steps": [
-                "Click the login link below.",
-                "Log in with your Spotify account.",
-                "After login, the station connects automatically.",
-            ],
-            "auth_url": auth_url,
-            **shared,
-        }
-
-    detail = "Spotify credentials are present, but Spotify Connect is not attached yet."
-    if fallback_sources:
-        detail += f" Temporary fallback available: {', '.join(fallback_sources)}."
-    elif silent_music_fallback:
-        detail += " Current fallback is silent placeholder tracks."
     return {
-        "stage": "needs_spotify_connect",
+        "stage": "needs_music_source",
         "blocking": True,
-        "headline": "Action required: connect Spotify to MammaMiRadio.",
-        "detail": detail,
+        "headline": "No music source configured.",
+        "detail": "Set MAMMAMIRADIO_ALLOW_YTDLP=true or add MP3 files to music/.",
         "steps": [
-            "Open Spotify on your phone or desktop.",
-            "Tap/click the device picker (speaker icon).",
-            "Select MammaMiRadio as the playback device.",
+            "Set MAMMAMIRADIO_ALLOW_YTDLP=true for chart music, or",
+            "Place MP3 files in the music/ directory.",
         ],
         **shared,
     }
@@ -201,11 +139,6 @@ def _sync_runtime_state(request: Request) -> None:
     """Refresh UI-facing state from long-lived runtime backends."""
     state = request.app.state.station_state
     state.runtime_sync_events += 1
-    spotify_player = getattr(request.app.state, "spotify_player", None)
-    if spotify_player:
-        auth_url = getattr(spotify_player, "spotify_auth_url", "") or ""
-        if auth_url and state.spotify_auth_url != auth_url:
-            state.spotify_auth_url = auth_url
 
     queue = getattr(request.app.state, "queue", None)
     if queue is None:
@@ -254,16 +187,9 @@ def _apply_loaded_source(
     resolved_source,
 ) -> dict:
     """Atomically swap the station source and trigger immediate cutover."""
-    config = request.app.state.config
     state = request.app.state.station_state
 
     state.switch_playlist(tracks, resolved_source)
-
-    # Synchronise URL config: only keep it for URL sources
-    if resolved_source.kind == "url":
-        config.playlist.spotify_url = resolved_source.url
-    else:
-        config.playlist.spotify_url = ""
 
     # Immediate cutover: purge queued segments and skip current playback
     purged = _purge_segment_queue(request.app.state.queue)
@@ -310,9 +236,7 @@ def _preview_tracks(tracks: list, limit: int = 3) -> dict:
 
 
 def _source_options_reason(config, exc: Exception) -> str:
-    if not config.spotify_client_id or not config.spotify_client_secret:
-        return "Add Spotify credentials first. Then the source picker and playlist link tools will unlock."
-    return f"Spotify auth is not ready yet: {exc}"
+    return f"Source loading failed: {exc}"
 
 
 def _sanitize_ingress_prefix(prefix: str) -> str:
@@ -340,7 +264,6 @@ def _inject_ingress_prefix(html: str, prefix: str) -> str:
     html = html.replace('href="/listen"', f'href="{prefix}/listen"')
     html = html.replace('href="/dashboard"', f'href="{prefix}/dashboard"')
     html = html.replace('href="/admin"', f'href="{prefix}/admin"')
-    html = html.replace('href="/spotify/auth"', f'href="{prefix}/spotify/auth"')
     html = html.replace('src="/stream"', f'src="{prefix}/stream"')
     # Service worker registration is standalone (no _base), needs rewriting
     html = html.replace("'/sw.js'", f"'{prefix}/sw.js'")
@@ -707,11 +630,8 @@ async def stream(request: Request):
 
 @router.get("/api/logs")
 async def logs(request: Request, lines: int = 50, _: None = Depends(require_admin_access)):
-    """Return recent go-librespot + producer logs."""
-    config = request.app.state.config
-    return {
-        "go_librespot": _tail_log(str(config.tmp_dir / "go-librespot.log"), lines),
-    }
+    """Return recent producer logs."""
+    return {}
 
 
 @router.get("/api/setup/status")
@@ -724,14 +644,10 @@ async def setup_status(request: Request, _: None = Depends(require_admin_access)
 
 @router.post("/api/setup/recheck")
 async def setup_recheck(request: Request, _: None = Depends(require_admin_access)):
-    """Force a fresh setup snapshot with live Spotify probe.
-
-    The probe makes a synchronous Spotify API call, so we run it off the
-    event loop to avoid stalling the audio stream for connected listeners.
-    """
+    """Force a fresh setup snapshot."""
     config = request.app.state.config
     state = request.app.state.station_state
-    return await asyncio.to_thread(build_setup_status, config, state, probe=True)
+    return build_setup_status(config, state)
 
 
 @router.post("/api/setup/save-keys", dependencies=[Depends(require_admin_access)])
@@ -741,11 +657,8 @@ async def save_keys(request: Request):
     config = request.app.state.config
 
     allowed = {
-        "SPOTIFY_CLIENT_ID",
-        "SPOTIFY_CLIENT_SECRET",
         "ANTHROPIC_API_KEY",
         "OPENAI_API_KEY",
-        "PLAYLIST_SPOTIFY_URL",
     }
     updates = {k: v.strip() for k, v in body.items() if k in allowed and isinstance(v, str) and v.strip()}
 
@@ -762,16 +675,10 @@ async def save_keys(request: Request):
     # Update env + live config so re-check sees the values immediately
     for k, v in updates.items():
         os.environ[k] = v
-    if "SPOTIFY_CLIENT_ID" in updates:
-        config.spotify_client_id = updates["SPOTIFY_CLIENT_ID"]
-    if "SPOTIFY_CLIENT_SECRET" in updates:
-        config.spotify_client_secret = updates["SPOTIFY_CLIENT_SECRET"]
     if "ANTHROPIC_API_KEY" in updates:
         config.anthropic_api_key = updates["ANTHROPIC_API_KEY"]
     if "OPENAI_API_KEY" in updates:
         config.openai_api_key = updates["OPENAI_API_KEY"]
-    if "PLAYLIST_SPOTIFY_URL" in updates:
-        config.playlist.spotify_url = updates["PLAYLIST_SPOTIFY_URL"]
 
     return {"ok": True, "saved": list(updates.keys())}
 
@@ -816,11 +723,8 @@ def _save_addon_options(updates: dict[str, str]) -> None:
             pass
 
     key_map = {
-        "SPOTIFY_CLIENT_ID": "spotify_client_id",
-        "SPOTIFY_CLIENT_SECRET": "spotify_client_secret",
         "ANTHROPIC_API_KEY": "anthropic_api_key",
         "OPENAI_API_KEY": "openai_api_key",
-        "PLAYLIST_SPOTIFY_URL": "playlist_spotify_url",
     }
     for env_key, value in updates.items():
         opt_key = key_map.get(env_key)
@@ -857,28 +761,6 @@ async def capabilities(request: Request, _: None = Depends(require_admin_access)
 
     now = state.now_streaming or {}
     result["now_playing"] = now
-    result["connect_status"] = "connected" if state.spotify_connected else "waiting"
-    try:
-        from mammamiradio.go_librespot_config import load_go_librespot_device_name
-
-        result["connect_device_name"] = load_go_librespot_device_name(config.audio.go_librespot_config_dir)
-    except Exception:
-        result["connect_device_name"] = "MammaMiRadio"
-
-    # Spotify username for welcome message.
-    # Only expose when spotify_api is true — go-librespot /status username is an
-    # internal device auth token, not a display name (prior learning: librespot-username-device-token).
-    result["spotify_username"] = ""
-    if state.spotify_connected and caps.spotify_api:
-        try:
-            import httpx as _httpx
-
-            async with _httpx.AsyncClient() as _client:
-                r = await _client.get(f"http://127.0.0.1:{config.audio.go_librespot_port}/status", timeout=1.0)
-            if r.status_code == 200:
-                result["spotify_username"] = r.json().get("username", "")
-        except Exception:
-            pass
 
     # Shareware trial state
     from mammamiradio.producer import SHAREWARE_CANNED_LIMIT
@@ -1017,11 +899,8 @@ async def save_credentials(request: Request, _: None = Depends(require_admin_acc
 
     # Allowed keys and their mapping to env var name and live config attribute
     allowed: dict[str, tuple[str, str | None]] = {
-        "spotify_client_id": ("SPOTIFY_CLIENT_ID", "spotify_client_id"),
-        "spotify_client_secret": ("SPOTIFY_CLIENT_SECRET", "spotify_client_secret"),
         "anthropic_api_key": ("ANTHROPIC_API_KEY", "anthropic_api_key"),
         "openai_api_key": ("OPENAI_API_KEY", "openai_api_key"),
-        "playlist_spotify_url": ("PLAYLIST_SPOTIFY_URL", None),
     }
 
     updates: dict[str, str] = {}
@@ -1033,9 +912,6 @@ async def save_credentials(request: Request, _: None = Depends(require_admin_acc
         os.environ[env_key] = value
         if config_attr:
             setattr(config, config_attr, value)
-        else:
-            # playlist_spotify_url lives on a nested object
-            config.playlist.spotify_url = value
 
     if not updates:
         return {"ok": False, "error": "No recognised credential fields in request"}
@@ -1107,31 +983,8 @@ async def move_track(request: Request, _: None = Depends(require_admin_access)):
 
 @router.get("/api/search")
 async def search_tracks(request: Request, q: str = "", _: None = Depends(require_admin_access)):
-    """Search Spotify for tracks."""
-    if not q.strip():
-        return {"results": []}
-
-    from mammamiradio.spotify_auth import get_spotify_client
-
-    config = request.app.state.config
-    try:
-        sp = get_spotify_client(config)
-        results = sp.search(q=q, type="track", limit=8)
-        tracks = []
-        for t in results["tracks"]["items"]:
-            artist = t["artists"][0]["name"] if t["artists"] else "Unknown"
-            tracks.append(
-                {
-                    "title": t["name"],
-                    "artist": artist,
-                    "duration_ms": t["duration_ms"],
-                    "spotify_id": t["id"],
-                }
-            )
-        return {"results": tracks}
-    except Exception as e:
-        logger.error("Search failed: %s", e)
-        return {"results": [], "error": "Search unavailable"}
+    """Search for tracks (stub — future: Music Assistant integration)."""
+    return {"results": []}
 
 
 @router.post("/api/playlist/add")
@@ -1146,11 +999,10 @@ async def add_track(request: Request, _: None = Depends(require_admin_access)):
         duration_ms=body.get("duration_ms", 0),
         spotify_id=body.get("spotify_id", ""),
     )
-    if not track.spotify_id:
-        return {"ok": False, "error": "Missing spotify_id"}
+    if not track.title:
+        return {"ok": False, "error": "Missing title"}
 
     state = request.app.state.station_state
-    # Insert at position (default: end, or "next" for play next)
     position = body.get("position", "end")
     if position == "next":
         state.playlist.insert(0, track)
@@ -1159,103 +1011,9 @@ async def add_track(request: Request, _: None = Depends(require_admin_access)):
     return {"ok": True, "added": track.display, "position": position}
 
 
-@router.get("/api/spotify/source-options")
-async def spotify_source_options(request: Request, _: None = Depends(require_admin_access)):
-    """Return available source selection options for the current run mode."""
-    config = request.app.state.config
-    state = request.app.state.station_state
-    capabilities = {
-        "supports_user_sources": supports_user_sources(config),
-        "supports_url_source": True,
-        "reason": "",
-    }
-    if not capabilities["supports_user_sources"]:
-        capabilities["reason"] = "Spotify source picker is only available in local/macOS mode right now."
-        return {
-            "ok": True,
-            "capabilities": capabilities,
-            "account": {"connected": False, "display_name": ""},
-            "current_source": _serialize_source(state.playlist_source),
-            "playlists": [],
-            "liked_songs": {"available": False, "label": "Liked Songs"},
-        }
-
-    try:
-        playlists = await asyncio.to_thread(list_user_playlists, config)
-    except Exception as exc:
-        return {
-            "ok": False,
-            "capabilities": {
-                **capabilities,
-                "supports_user_sources": False,
-                "reason": _source_options_reason(config, exc),
-            },
-            "account": {"connected": False, "display_name": ""},
-            "current_source": _serialize_source(state.playlist_source),
-            "playlists": [],
-            "liked_songs": {"available": False, "label": "Liked Songs"},
-        }
-
-    return {
-        "ok": True,
-        "capabilities": capabilities,
-        "account": {"connected": True, "display_name": "Spotify account"},
-        "current_source": _serialize_source(state.playlist_source),
-        "playlists": playlists,
-        "liked_songs": {"available": True, "label": "Liked Songs"},
-    }
-
-
-@router.post("/api/spotify/source/select")
-async def spotify_source_select(request: Request, _: None = Depends(require_admin_access)):
-    """Load a selected source and atomically swap the station playlist on success."""
-    body = await request.json()
-    kind = str(body.get("kind", "")).strip()
-    source = PlaylistSource(
-        kind=kind,
-        source_id=str(body.get("source_id", "")).strip(),
-        url=str(body.get("url", "")).strip(),
-        label=str(body.get("label", "")).strip(),
-    )
-    if kind not in {"playlist", "liked_songs", "url"}:
-        return {"ok": False, "error": "kind must be one of: playlist, liked_songs, url"}
-
-    config = request.app.state.config
-    state = request.app.state.station_state
-    source_switch_lock = request.app.state.source_switch_lock
-
-    async with source_switch_lock:
-        # Server-side capability enforcement
-        if kind in {"playlist", "liked_songs"} and not supports_user_sources(config):
-            return {
-                "ok": False,
-                "error": "This run mode only supports playlist URL loading right now.",
-                "current_source": _serialize_source(state.playlist_source),
-            }
-
-        try:
-            tracks, resolved_source = await asyncio.to_thread(load_explicit_source, config, source)
-        except ExplicitSourceError as exc:
-            return {"ok": False, "error": str(exc), "current_source": _serialize_source(state.playlist_source)}
-        except Exception as exc:
-            logger.error("Source selection failed: %s", exc)
-            return {
-                "ok": False,
-                "error": "Failed to load selected source",
-                "current_source": _serialize_source(state.playlist_source),
-            }
-
-        result = _apply_loaded_source(request, tracks, resolved_source)
-        try:
-            await asyncio.to_thread(write_persisted_source, config.cache_dir, resolved_source)
-        except Exception:
-            logger.warning("Failed to persist source selection, live switch still applied")
-        return result
-
-
 @router.post("/api/playlist/load")
 async def load_playlist(request: Request, _: None = Depends(require_admin_access)):
-    """Load a new playlist from a Spotify URL and replace the current one."""
+    """Load a new playlist from a URL and replace the current one."""
     body = await request.json()
     url = body.get("url", "").strip()
     if not url:
@@ -1437,14 +1195,11 @@ async def status(request: Request, _: None = Depends(require_admin_access)):
             "segments_produced": state.segments_produced,
             "tracks_played": len(state.played_tracks),
             "uptime_sec": round(time.time() - start_time),
-            "spotify_connected": state.spotify_connected,
-            "playlist_url": request.app.state.config.playlist.spotify_url or "",
             "playlist_source": _serialize_source(state.playlist_source),
             "produced_log": [{"type": e.type, "label": e.label, "timestamp": e.timestamp} for e in state.segment_log],
             "last_banter_script": state.last_banter_script,
             "last_ad_script": state.last_ad_script,
             "ha_context": state.ha_context if state.ha_context else None,
-            "go_librespot_log": _tail_log(str(config.tmp_dir / "go-librespot.log"), 15),
             "station_mode": station_mode,
             "producer_errors": [
                 {"type": e.type, "label": e.label, "metadata": e.metadata}
@@ -1479,138 +1234,6 @@ async def status(request: Request, _: None = Depends(require_admin_access)):
         }
     )
     return payload
-
-
-def _detect_callback_url(request: Request) -> str:
-    """Build the Spotify OAuth callback URL from the current request's origin."""
-    override_base = os.getenv("MAMMAMIRADIO_SPOTIFY_REDIRECT_BASE_URL", "").strip().rstrip("/")
-    if override_base:
-        return f"{override_base}/spotify/callback"
-
-    ingress_prefix = _sanitize_ingress_prefix(request.headers.get("X-Ingress-Path", ""))
-    scheme = request.headers.get("X-Forwarded-Proto", str(request.url.scheme))
-    host = request.headers.get("X-Forwarded-Host") or request.headers.get("Host") or "localhost:8000"
-    # Spotify accepts loopback redirect URIs, but rejects plain localhost in
-    # some app configurations. Canonicalize all local dev callback URLs to
-    # 127.0.0.1 so the registered URI can stay stable.
-    if host.startswith("localhost:"):
-        host = host.replace("localhost", "127.0.0.1", 1)
-    elif host == "localhost":
-        host = "127.0.0.1"
-    elif host.startswith("[::1]:"):
-        host = host.replace("[::1]", "127.0.0.1", 1)
-    elif host == "[::1]" or host == "::1":
-        host = "127.0.0.1"
-    return f"{scheme}://{host}{ingress_prefix}/spotify/callback"
-
-
-def _read_oauth_state(tmp_dir: Path) -> tuple[str, str]:
-    """Read OAuth state + callback URL from disk (survives server reload)."""
-    import json
-
-    state_file = tmp_dir / "spotify-oauth-state.json"
-    try:
-        data = json.loads(state_file.read_text())
-        return data.get("state", ""), data.get("callback_url", "")
-    except (FileNotFoundError, json.JSONDecodeError, OSError):
-        return "", ""
-
-
-def _write_oauth_state(tmp_dir: Path, state: str, callback_url: str) -> None:
-    """Persist OAuth state to disk so it survives server reload."""
-    import json
-
-    state_file = tmp_dir / "spotify-oauth-state.json"
-    state_file.write_text(json.dumps({"state": state, "callback_url": callback_url}))
-
-
-def _clear_oauth_state(tmp_dir: Path) -> None:
-    (tmp_dir / "spotify-oauth-state.json").unlink(missing_ok=True)
-
-
-@router.get("/spotify/auth", dependencies=[Depends(require_admin_access)])
-async def spotify_auth_start(request: Request):
-    """Start Spotify OAuth — redirects browser to Spotify authorization page."""
-    from mammamiradio.spotify_auth import build_auth_url
-
-    config = request.app.state.config
-    if not config.spotify_client_id or not config.spotify_client_secret:
-        raise HTTPException(400, "Configure spotify_client_id and spotify_client_secret first")
-
-    callback_url = _detect_callback_url(request)
-    state = secrets.token_urlsafe(32)
-
-    _write_oauth_state(config.tmp_dir, state, callback_url)
-
-    auth_url = build_auth_url(config, callback_url, state=state)
-    logger.info("Spotify OAuth started, callback=%s", callback_url)
-    return RedirectResponse(auth_url, status_code=302)
-
-
-@router.get("/spotify/callback")
-async def spotify_auth_callback(
-    request: Request,
-    code: str = "",
-    error: str = "",
-    state: str = "",
-):
-    """Handle Spotify OAuth callback after user authorization."""
-    from urllib.parse import quote
-
-    from mammamiradio.spotify_auth import exchange_code
-
-    config = request.app.state.config
-    prefix = _sanitize_ingress_prefix(request.headers.get("X-Ingress-Path", ""))
-    dashboard = f"{prefix}/"
-
-    if error:
-        logger.warning("Spotify OAuth error from provider: %s", error)
-        return RedirectResponse(f"{dashboard}?spotify=error&detail={quote(error)}", status_code=302)
-
-    expected_state, callback_url = _read_oauth_state(config.tmp_dir)
-    if not state or not expected_state or not secrets.compare_digest(state, expected_state):
-        logger.warning("Spotify OAuth state mismatch (server reloaded?)")
-        return RedirectResponse(f"{dashboard}?spotify=error&detail=invalid_state", status_code=302)
-
-    _clear_oauth_state(config.tmp_dir)
-
-    if not code or not callback_url:
-        logger.warning("Spotify OAuth callback missing code or callback_url")
-        return RedirectResponse(f"{dashboard}?spotify=error&detail=missing_params", status_code=302)
-
-    success = await asyncio.to_thread(exchange_code, config, code, callback_url)
-    if success:
-        logger.info("Spotify OAuth completed successfully")
-        return RedirectResponse(f"{dashboard}?spotify=connected", status_code=302)
-
-    logger.error("Spotify OAuth token exchange failed")
-    return RedirectResponse(f"{dashboard}?spotify=error&detail=token_exchange_failed", status_code=302)
-
-
-@router.get("/api/spotify/auth-status", dependencies=[Depends(require_admin_access)])
-async def spotify_auth_status(request: Request):
-    """Return Spotify OAuth status for the dashboard."""
-    from mammamiradio.spotify_auth import has_user_token
-
-    config = request.app.state.config
-    has_creds = bool(config.spotify_client_id and config.spotify_client_secret)
-    has_token = await asyncio.to_thread(has_user_token, config) if has_creds else False
-    callback_url = _detect_callback_url(request)
-    return {
-        "has_credentials": has_creds,
-        "has_user_token": has_token,
-        "callback_url": callback_url,
-    }
-
-
-@router.post("/api/spotify/disconnect", dependencies=[Depends(require_admin_access)])
-async def spotify_disconnect(request: Request):
-    """Clear cached Spotify user token."""
-    from mammamiradio.spotify_auth import clear_user_token
-
-    config = request.app.state.config
-    clear_user_token(config)
-    return {"ok": True}
 
 
 def _tail_log(path: str, lines: int = 15) -> list[str]:

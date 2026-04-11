@@ -26,11 +26,11 @@ def test_build_summary_marks_ai_working_from_recent_generated_banter(monkeypatch
                 {"type": "banter", "timestamp": 123.0, "metadata": {"canned": False, "lines": [{"host": "Marco"}]}}
             ],
             "golden_path": {
-                "stage": "needs_spotify_connect",
-                "headline": "Connect Spotify",
-                "detail": "Waiting",
-                "blocking": True,
-                "steps": ["Select the device"],
+                "stage": "music_available",
+                "headline": "Music ready",
+                "detail": "Charts loaded",
+                "blocking": False,
+                "steps": [],
             },
         },
         "/healthz": {"status": "ok", "uptime_s": 120.0},
@@ -47,8 +47,7 @@ def test_build_summary_marks_ai_working_from_recent_generated_banter(monkeypatch
     assert seen == ["/public-status", "/healthz", "/readyz"]
     assert summary["ai"]["status"] == "working"
     assert summary["ai"]["last_banter_canned"] is False
-    assert summary["spotify"]["connected"] is False
-    assert summary["spotify"]["next_step"] == "Select the device"
+    assert "spotify" not in summary
     assert summary["music"]["upcoming"] == ["Next Song"]
     assert summary["music"]["readiness"] == "ready"
     assert summary["music"]["queue_depth"] == 2
