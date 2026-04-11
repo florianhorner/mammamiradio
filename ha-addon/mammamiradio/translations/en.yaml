@@ -5,18 +5,9 @@ configuration:
   openai_api_key:
     name: OpenAI API Key
     description: Enables gpt-4o-mini-tts voice for hosts configured with engine="openai". Get one at platform.openai.com. Without this, all hosts use Edge TTS.
-  spotify_client_id:
-    name: Spotify Client ID
-    description: From developer.spotify.com/dashboard. Without this, the station uses a demo Italian playlist.
-  spotify_client_secret:
-    name: Spotify Client Secret
-    description: From developer.spotify.com/dashboard. Required alongside Client ID.
   station_name:
     name: Station Name
     description: Your radio station's name (shown in the UI and stream metadata).
   claude_model:
     name: AI Model
     description: "Haiku: fast and cheap. Sonnet: balanced. Opus: highest quality but slower."
-  playlist_spotify_url:
-    name: Spotify Playlist URL
-    description: Spotify playlist URL to seed your music library. Leave empty to use demo tracks.

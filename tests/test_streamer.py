@@ -40,14 +40,10 @@ def test_runtime_json_output():
     assert set(result.keys()) == {
         "bind_host",
         "port",
-        "fifo_path",
-        "go_librespot_bin",
-        "go_librespot_config_dir",
-        "go_librespot_port",
         "tmp_dir",
     }
-    assert result["fifo_path"] == config.audio.fifo_path
-    assert result["go_librespot_bin"] == config.audio.go_librespot_bin
+    assert result["bind_host"] == config.bind_host
+    assert result["port"] == config.port
 
 
 def test_legacy_station_bitrate_migrated(tmp_path, monkeypatch):

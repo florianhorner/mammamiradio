@@ -26,9 +26,8 @@ sweeper_voice = "it-IT-GiuseppeMultilingualNeural"
 sweeper_probability = 0.25
 
 [playlist]
-spotify_url = ""  # Leave empty to use liked songs, or paste a playlist URL you own
 shuffle = true
-allow_explicit = true   # false = skip tracks marked explicit by Spotify
+allow_explicit = true   # false = skip tracks marked explicit
 repeat_cooldown = 5     # Min songs before the same track can replay
 artist_cooldown = 3     # Min songs before the same artist replays
 max_artist_per_hour = 3 # Hard cap on same artist within ~60 min window
@@ -67,10 +66,6 @@ nostalgia = 30
 sample_rate = 48000
 channels = 2
 bitrate = 192
-spotify_bitrate = 320
-fifo_path = "/tmp/mammamiradio.pcm"
-go_librespot_bin = "go-librespot"
-go_librespot_port = 3678
 claude_model = "claude-haiku-4-5-20251001"
 claude_creative_model = "claude-opus-4-6"
 

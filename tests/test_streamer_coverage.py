@@ -1,19 +1,18 @@
-"""Extended tests for mammamiradio/streamer.py — coverage sprint.
+"""Extended tests for mammamiradio/streamer.py -- coverage sprint.
 
 Covers: LiveStreamHub, auth helpers, CSRF enforcement, golden path,
-        ingress prefix sanitization, OAuth state helpers, utility routes.
+        ingress prefix sanitization, utility routes.
 """
 
 from __future__ import annotations
 
 import asyncio
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
 from mammamiradio.streamer import (
     LiveStreamHub,
-    _detect_callback_url,
     _get_csrf_token,
     _golden_path_status,
     _has_any_mp3,
@@ -283,102 +282,16 @@ def test_inject_csrf_token():
 # ---------------------------------------------------------------------------
 
 
-def test_golden_path_connected():
+def test_golden_path_demo():
     config = MagicMock()
+    config.anthropic_api_key = ""
+    config.openai_api_key = ""
     state = MagicMock()
-    state.spotify_connected = True
     result = _golden_path_status(config, state)
-    assert result["stage"] == "connected"
-    assert result["blocking"] is False
-
-
-def test_golden_path_needs_credentials():
-    config = MagicMock()
-    config.spotify_client_id = ""
-    config.spotify_client_secret = ""
-    state = MagicMock()
-    state.spotify_connected = False
-    result = _golden_path_status(config, state)
-    assert result["stage"] == "needs_music_source"
-    assert result["blocking"] is True
-
-
-def test_golden_path_needs_connect():
-    config = MagicMock()
-    config.spotify_client_id = "id"
-    config.spotify_client_secret = "secret"
-    state = MagicMock()
-    state.spotify_connected = False
-    state.spotify_auth_url = ""
-    result = _golden_path_status(config, state)
-    assert result["stage"] == "needs_spotify_connect"
-
-
-def test_golden_path_browser_login():
-    config = MagicMock()
-    config.spotify_client_id = "id"
-    config.spotify_client_secret = "secret"
-    state = MagicMock()
-    state.spotify_connected = False
-    state.spotify_auth_url = "https://accounts.spotify.com/authorize?..."
-    result = _golden_path_status(config, state)
-    assert result["stage"] == "needs_spotify_browser_login"
-    assert "auth_url" in result
-
-
-def test_golden_path_keeps_spotify_onboarding_when_fallback_music_exists():
-    config = MagicMock()
-    config.spotify_client_id = "id"
-    config.spotify_client_secret = "secret"
-    state = MagicMock()
-    state.spotify_connected = False
-    state.spotify_auth_url = "https://accounts.spotify.com/authorize?..."
-    with patch.dict("os.environ", {"MAMMAMIRADIO_ALLOW_YTDLP": "true"}):
-        result = _golden_path_status(config, state)
-    assert result["stage"] == "needs_spotify_browser_login"
-    assert result["blocking"] is True
-    assert result["fallback_sources"] == ["yt-dlp downloads"]
-
-
-# ---------------------------------------------------------------------------
-# _detect_callback_url
-# ---------------------------------------------------------------------------
-
-
-def test_detect_callback_url_basic():
-    req = MagicMock()
-    req.headers = {"Host": "localhost:8000"}
-    req.url.scheme = "http"
-    result = _detect_callback_url(req)
-    assert "127.0.0.1:8000" in result
-    assert result.endswith("/spotify/callback")
-
-
-def test_detect_callback_url_with_override(monkeypatch):
-    monkeypatch.setenv("MAMMAMIRADIO_SPOTIFY_REDIRECT_BASE_URL", "https://ha.example.com")
-    req = MagicMock()
-    result = _detect_callback_url(req)
-    assert result == "https://ha.example.com/spotify/callback"
-
-
-def test_detect_callback_url_ipv6():
-    req = MagicMock()
-    req.headers = {"Host": "[::1]:8000"}
-    req.url.scheme = "http"
-    result = _detect_callback_url(req)
-    assert "127.0.0.1:8000" in result
-
-
-def test_detect_callback_url_with_ingress():
-    req = MagicMock()
-    req.headers = {
-        "Host": "ha.example.com",
-        "X-Ingress-Path": "/api/hassio_ingress/abc",
-        "X-Forwarded-Proto": "https",
-    }
-    req.url.scheme = "http"
-    result = _detect_callback_url(req)
-    assert "/api/hassio_ingress/abc/spotify/callback" in result
+    assert result["stage"] in ("music_available", "needs_music_source")
+    assert "blocking" in result
+    assert "headline" in result
+    assert "fallback_sources" in result
 
 
 # ---------------------------------------------------------------------------
@@ -396,30 +309,3 @@ def test_tail_log_exists(tmp_path):
 
 def test_tail_log_missing():
     assert _tail_log("/nonexistent/path.log") == []
-
-
-# ---------------------------------------------------------------------------
-# OAuth state helpers
-# ---------------------------------------------------------------------------
-
-
-def test_oauth_state_roundtrip(tmp_path):
-    from mammamiradio.streamer import _clear_oauth_state, _read_oauth_state, _write_oauth_state
-
-    _write_oauth_state(tmp_path, "state123", "http://callback")
-    state, url = _read_oauth_state(tmp_path)
-    assert state == "state123"
-    assert url == "http://callback"
-
-    _clear_oauth_state(tmp_path)
-    state, url = _read_oauth_state(tmp_path)
-    assert state == ""
-    assert url == ""
-
-
-def test_read_oauth_state_missing(tmp_path):
-    from mammamiradio.streamer import _read_oauth_state
-
-    state, url = _read_oauth_state(tmp_path)
-    assert state == ""
-    assert url == ""

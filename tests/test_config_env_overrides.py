@@ -51,12 +51,6 @@ def test_station_theme_override(monkeypatch):
     assert config.station.theme == "test theme"
 
 
-def test_playlist_spotify_url_override(monkeypatch):
-    monkeypatch.setenv("PLAYLIST_SPOTIFY_URL", "https://open.spotify.com/playlist/test")
-    config = load_config(TOML_PATH)
-    assert config.playlist.spotify_url == "https://open.spotify.com/playlist/test"
-
-
 def test_claude_model_override(monkeypatch):
     monkeypatch.setenv("CLAUDE_MODEL", "claude-sonnet-4-5-20250514")
     config = load_config(TOML_PATH)

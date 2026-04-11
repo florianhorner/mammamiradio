@@ -12,8 +12,7 @@ def _isolate_env():
     """Prevent real API keys from leaking into tests via load_dotenv."""
     sensitive = [
         "ANTHROPIC_API_KEY",
-        "SPOTIFY_CLIENT_ID",
-        "SPOTIFY_CLIENT_SECRET",
+        "OPENAI_API_KEY",
         "HA_TOKEN",
     ]
     saved = {k: os.environ.pop(k, None) for k in sensitive}

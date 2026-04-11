@@ -1,6 +1,6 @@
 # Troubleshooting
 
-This app has a lot of moving parts. Most failures reduce to five things: Python env, `ffmpeg`, Spotify auth, go-librespot device state, or missing secrets.
+This app has a lot of moving parts. Most failures reduce to three things: Python env, `ffmpeg`, or missing API keys.
 
 ## First checks
 
@@ -15,7 +15,7 @@ pip install -e .
 
 If you run tests or the app from the system Python and see missing modules like `dotenv`, you are not in the repo environment.
 
-If the dashboard is in the first-run setup flow, trust the banner. The station now classifies itself as `Real Spotify Mode`, `Demo Mode`, or `Degraded` instead of pretending startup is fine.
+If the dashboard is in the first-run setup flow, trust the banner. The station classifies itself as `Demo Radio`, `Full AI Radio`, or `Connected Home` based on available API keys.
 
 Useful probe endpoints:
 
@@ -28,109 +28,13 @@ curl http://127.0.0.1:8000/readyz
 
 ## The app starts but there is no real music
 
-Possible causes:
+The station uses live Italian charts when `MAMMAMIRADIO_ALLOW_YTDLP=true`, otherwise the built-in demo playlist. If you hear silence or placeholder tones:
 
-- Spotify credentials are missing
-- the `mammamiradio` playback device is not selected
-- go-librespot did not start cleanly
+- Check that `ffmpeg` is installed
+- Check that `MAMMAMIRADIO_ALLOW_YTDLP=true` is set (it is by default in HA addon and Conductor)
+- A quality gate circuit breaker lets tracks through after 3 consecutive rejections to prevent stream starvation
 
-What the app does:
-
-- if Spotify credentials are missing, it uses live Italian charts when `MAMMAMIRADIO_ALLOW_YTDLP=true`, otherwise the built-in demo playlist
-- if Spotify capture is unavailable, it falls back to local files, then `yt-dlp`, then placeholder tones
-- the HA addon enables `MAMMAMIRADIO_ALLOW_YTDLP=true` by default so yt-dlp is always available
-- a quality gate circuit breaker lets tracks through after 3 consecutive rejections to prevent stream starvation
-
-Check:
-
-```bash
-cat .env
-tail -n 50 tmp/go-librespot.log
-```
-
-Then open Spotify and explicitly select the `mammamiradio` device.
-
-If you want the same checks the dashboard runs, hit the admin setup probe:
-
-```bash
-curl --user "$ADMIN_USERNAME:$ADMIN_PASSWORD" http://127.0.0.1:8000/api/setup/status
-curl --user "$ADMIN_USERNAME:$ADMIN_PASSWORD" -X POST http://127.0.0.1:8000/api/setup/recheck
-```
-
-If you use token auth instead of basic auth, send `X-Radio-Admin-Token`.
-
-## Source picker not available
-
-The Spotify source picker (playlists, Liked Songs) is only available in local/macOS mode. In Docker or Home Assistant add-on mode, use the playlist URL field instead.
-
-If the picker loads but shows no playlists:
-
-- Verify `SPOTIFY_CLIENT_ID` and `SPOTIFY_CLIENT_SECRET` are set
-- Check the dashboard for an auth prompt and complete the OAuth flow
-- Check `/status` for `startup_source_error` details
-
-The app persists the last selected source to `cache/playlist_source.json` and restores it on restart. If a persisted source fails to load, startup falls back to the configured Spotify source, then live Italian charts when `MAMMAMIRADIO_ALLOW_YTDLP=true`, then the built-in demo tracks.
-
-## Spotify device does not appear
-
-`spotify_auth.py` uses a local callback at `http://127.0.0.1:8888/callback` and requests playback-control scopes. If the OAuth flow never completed, device transfer will not work.
-
-Check:
-
-- `SPOTIFY_CLIENT_ID`
-- `SPOTIFY_CLIENT_SECRET`
-- browser popups are not blocked for the auth flow
-
-If the device still does not appear, restart with:
-
-```bash
-./start.sh
-```
-
-Then inspect:
-
-```bash
-tail -n 100 tmp/go-librespot.log
-```
-
-On Apple Silicon or stripped `PATH` environments, the setup checker now also searches common binary locations like `/opt/homebrew/bin/go-librespot`. If the dashboard still says the binary is missing, that path is probably wrong or the file is not executable.
-
-## Spotify device not found on macOS (.local.local mDNS bug)
-
-If your Mac's hostname ends with `.local` (e.g., `MyMac.local`), go-librespot's mDNS advertises a `.local.local` address that Spotify cannot resolve. The app detects this and switches to interactive browser-based auth automatically.
-
-When this happens, the dashboard shows a "Log in to Spotify" button instead of the usual "Connect in Spotify" prompt. Click it, log in once, and the app stores credentials for future sessions.
-
-If you want to fix this at the system level instead, change your Mac's hostname to not end in `.local` (System Settings > General > Sharing > Local Hostname).
-
-## `cat /data/go-librespot/config.yml` says "No such file or directory"
-
-That path only exists in Home Assistant add-on mode, inside the add-on container.
-
-If you are running the app locally on macOS or Linux, use:
-
-```bash
-cat go-librespot/config.yml
-```
-
-If you are not sure which path the app is using, inspect the resolved runtime config:
-
-```bash
-.venv/bin/python -m mammamiradio.config runtime-json
-```
-
-## Tracks skip instantly on macOS
-
-This is usually the FIFO problem.
-
-go-librespot writes PCM into `/tmp/mammamiradio.pcm`. If nothing is reading from that FIFO, macOS throws `ENXIO` and playback skips.
-
-This repo works around that in two places:
-
-- `start.sh` starts a fallback `cat` drain process
-- `spotify_player.py` starts a persistent drain thread in the app
-
-If you bypass `./start.sh`, you lose part of that protection. Use the script.
+The app persists the last selected source to `cache/playlist_source.json` and restores it on restart. If a persisted source fails to load, startup falls back to charts then demo tracks.
 
 ## The stream works but banter or ads are bland
 

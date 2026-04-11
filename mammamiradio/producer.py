@@ -48,7 +48,6 @@ from mammamiradio.scriptwriter import (
     write_news_flash,
     write_transition,
 )
-from mammamiradio.spotify_player import SpotifyPlayer, download_track_spotify
 from mammamiradio.track_rationale import classify_track_crate, generate_track_rationale
 from mammamiradio.tts import synthesize, synthesize_ad, synthesize_dialogue
 
@@ -375,7 +374,6 @@ async def run_producer(
     queue: asyncio.Queue[Segment],
     state: StationState,
     config: StationConfig,
-    spotify_player: SpotifyPlayer | None = None,
     skip_event: asyncio.Event | None = None,
 ) -> None:
     """Keep the lookahead queue filled with rendered segments for live playback."""
@@ -394,108 +392,9 @@ async def run_producer(
     # Home Assistant context cache
     ha_cache: HomeContext | None = None
 
-    # Don't block on auth — start producing banter immediately,
-    # check Spotify connection each time we need to play music
-    if spotify_player:
-        logger.info("go-librespot running. Select 'mammamiradio' in Spotify to enable real music.")
-
-    was_spotify_connected = False
     _music_qg_rejections = 0  # consecutive music quality gate rejections (circuit breaker)
 
     while True:
-        # Always check Spotify auth (cheap HTTP call)
-        if spotify_player:
-            await spotify_player.check_auth()
-            state.spotify_connected = spotify_player._authenticated
-
-        # Autoplay: when Spotify just connected, capture the current track
-        # and generate personalized banter about it IN PARALLEL (the WTF moment)
-        if spotify_player and state.spotify_connected and not was_spotify_connected:
-            was_spotify_connected = True
-            current = await spotify_player.get_current_track()
-            if current:
-                logger.info("Autoplay: capturing %s + generating banter in parallel", current.display)
-                # Skip whatever is currently streaming and purge queued demo segments
-                if skip_event:
-                    skip_event.set()
-                while not queue.empty():
-                    try:
-                        discarded = queue.get_nowait()
-                        if discarded.ephemeral:
-                            discarded.path.unlink(missing_ok=True)
-                    except Exception:
-                        break
-                state.queued_segments.clear()
-
-                norm_path = config.tmp_dir / f"music_{uuid4().hex[:8]}.mp3"
-
-                # Generate banter about THIS specific song while capturing audio
-                async def _generate_welcome_banter(track=current):
-                    try:
-                        canned = _pick_canned_clip("banter", state=state) if not _has_script_llm(config) else None
-                        if canned:
-                            state.last_banter_script = [{"host": "Radio", "text": "(pre-recorded banter)"}]
-                            return canned
-                        lines = await write_banter(state, config)
-                        audio = await synthesize_dialogue(lines, config.tmp_dir)
-                        state.last_banter_script = [{"host": h.name, "text": t} for h, t in lines]
-                        logger.info("Welcome banter ready (references %s)", track.display)
-                        return audio
-                    except Exception as exc:
-                        logger.warning("Welcome banter generation failed: %s", exc)
-                        return None
-
-                try:
-                    # Queue a pre-recorded welcome clip FIRST (the DJ interrupts)
-                    welcome_clip = _pick_canned_clip("welcome")
-                    if welcome_clip:
-                        welcome_seg = Segment(
-                            type=SegmentType.BANTER,
-                            path=welcome_clip,
-                            metadata={"type": "welcome", "canned": True},
-                            ephemeral=False,
-                        )
-                        if await _queue_segment(welcome_seg):
-                            state.after_banter()
-                            logger.info("Welcome clip queued: %s", welcome_clip.name)
-
-                    # Run capture and banter in parallel, but don't block the
-                    # queue on capture — enqueue segments as they become ready
-                    # so listeners never hit dead air.
-                    capture_task = asyncio.ensure_future(spotify_player.capture_current_audio(current, norm_path))
-                    banter_task = asyncio.ensure_future(_generate_welcome_banter())
-
-                    # Banter finishes first (~5-10s) — enqueue it while capture continues
-                    banter_path = await banter_task
-                    if banter_path:
-                        # canned clips live under demo_assets/; generated audio goes to tmp_dir
-                        _is_canned = "demo_assets" in str(banter_path)
-                        banter_seg = Segment(
-                            type=SegmentType.BANTER,
-                            path=banter_path,
-                            metadata={"type": "banter", "lines": state.last_banter_script},
-                            ephemeral=not _is_canned,
-                        )
-                        if await _queue_segment(banter_seg):
-                            state.after_banter()
-                            logger.info("Welcome banter queued after welcome clip")
-
-                    # Now wait for capture to finish and queue the music
-                    audio_path = await capture_task
-                    music_seg = Segment(
-                        type=SegmentType.MUSIC,
-                        path=audio_path,
-                        metadata={"title": current.display, "album_art": current.album_art},
-                    )
-                    if await _queue_segment(music_seg):
-                        state.after_music(current)
-                        logger.info("Autoplay queued: %s", current.display)
-                except Exception as exc:
-                    logger.warning("Autoplay failed: %s", exc)
-                    was_spotify_connected = False  # allow retry on next loop
-        if not state.spotify_connected:
-            was_spotify_connected = False
-
         if state.session_stopped:
             await asyncio.sleep(1)
             continue
@@ -540,30 +439,10 @@ async def run_producer(
 
                 norm_path = config.tmp_dir / f"music_{uuid4().hex[:8]}.mp3"
 
-                use_spotify = (
-                    spotify_player
-                    and spotify_player._authenticated
-                    and track.spotify_id
-                    and not track.spotify_id.startswith("demo")
-                )
-                audio_source = "fallback"
-
-                if use_spotify:
-                    try:
-                        audio_path = await download_track_spotify(spotify_player, track, norm_path)  # type: ignore[arg-type]
-                        audio_source = "spotify_capture"
-                    except Exception as exc:
-                        logger.warning("Spotify capture failed, falling back to local: %s", exc)
-                        audio_path = await download_track(track, config.cache_dir, music_dir=Path("music"))
-                        loop = asyncio.get_running_loop()
-                        await loop.run_in_executor(None, normalize, audio_path, norm_path)
-                        audio_source = "fallback_after_spotify_error"
-                else:
-                    # Fallback: local files / yt-dlp / placeholder
-                    audio_path = await download_track(track, config.cache_dir, music_dir=Path("music"))
-                    loop = asyncio.get_running_loop()
-                    await loop.run_in_executor(None, normalize, audio_path, norm_path)
-                    audio_source = "fallback"
+                audio_path = await download_track(track, config.cache_dir, music_dir=Path("music"))
+                loop = asyncio.get_running_loop()
+                await loop.run_in_executor(None, normalize, audio_path, norm_path)
+                audio_source = "download"
 
                 # Quality gate: reject truncated/silent downloads before queueing.
                 # Circuit breaker: after 3 consecutive rejections, let the next track
@@ -581,7 +460,9 @@ async def run_producer(
                             logger.warning(
                                 "Quality gate circuit breaker: %d consecutive rejections, "
                                 "allowing track through to prevent stream starvation (%s: %s)",
-                                _music_qg_rejections, norm_path.name, exc,
+                                _music_qg_rejections,
+                                norm_path.name,
+                                exc,
                             )
                             _music_qg_rejections = 0
                         else:
@@ -708,6 +589,7 @@ async def run_producer(
                             xfade_out = config.tmp_dir / f"banter_trans_{uuid4().hex[:8]}.mp3"
                             return await _try_crossfade(_path, config, xfade_out)
 
+                        banter_path: Path
                         trans_voice_path, banter_path = await asyncio.gather(
                             _do_transition(),
                             synthesize_dialogue(lines, config.tmp_dir),

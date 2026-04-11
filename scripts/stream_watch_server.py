@@ -14,8 +14,6 @@ from html import escape
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.request import Request, urlopen
 
-_DEFAULT_DEVICE_NAME = "MammaMiRadio"
-
 
 def _upstream_base_url() -> str:
     """Resolve the local app endpoint, following workspace port overrides."""
@@ -45,7 +43,6 @@ def _build_summary() -> dict:
     now = public.get("now_streaming", {}) or {}
     current_source = public.get("current_source", {}) or {}
     golden_path = public.get("golden_path", {}) or {}
-    golden_steps = golden_path.get("steps", []) or []
     uptime_s = health.get("uptime_s")
     illusion_window_minutes = round(float(uptime_s) / 60, 1) if isinstance(uptime_s, int | float) else None
 
@@ -57,11 +54,6 @@ def _build_summary() -> dict:
             "last_banter_timestamp": last_banter.get("timestamp"),
             "last_banter_canned": bool(banter_meta.get("canned", False)),
             "last_banter_lines": len(banter_meta.get("lines", []) or []),
-        },
-        "spotify": {
-            "connected": golden_path.get("stage") == "connected",
-            "device_name": _DEFAULT_DEVICE_NAME,
-            "next_step": golden_steps[0] if golden_steps else golden_path.get("detail", ""),
         },
         "music": {
             "source_label": current_source.get("label", ""),
@@ -87,7 +79,6 @@ def _html(summary: dict) -> str:
         return escape("" if value is None else str(value))
 
     ai = summary["ai"]
-    spotify = summary["spotify"]
     music = summary["music"]
     golden = summary["golden_path"]
 
@@ -156,12 +147,6 @@ def _html(summary: dict) -> str:
         <div class="big">{badge(ai["status"] == "working", "Working", "Unclear")}</div>
         <div>{e(ai["provider_hint"])}</div>
         <div class="muted">Last banter: {e(last_banter)}, {e(ai["last_banter_lines"])} lines</div>
-      </section>
-      <section class="card">
-        <h2>Spotify Connect</h2>
-        <div class="big">{badge(spotify["connected"], "Connected", "Waiting")}</div>
-        <div>Device: <code>{e(spotify["device_name"] or "unknown")}</code></div>
-        <div class="muted">{e(spotify["next_step"])}</div>
       </section>
       <section class="card">
         <h2>Now</h2>

@@ -65,9 +65,8 @@ async def _run_until_queued(
     state: StationState,
     config,
     timeout: float = 5.0,
-    spotify_player=None,
 ):
-    task = asyncio.create_task(run_producer(queue, state, config, spotify_player=spotify_player))
+    task = asyncio.create_task(run_producer(queue, state, config))
     try:
         deadline = asyncio.get_event_loop().time() + timeout
         while queue.qsize() == 0:
@@ -306,35 +305,6 @@ async def test_banter_quality_reject_uses_canned_fallback(tmp_path):
     assert seg.path == canned
 
 
-# ---------------------------------------------------------------------------
-# Spotify track path
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_music_uses_spotify_when_authenticated(tmp_path):
-    state = _make_state()
-    # Use a non-demo track
-    state.playlist = [Track(title="Real Song", artist="Artist", duration_ms=200_000, spotify_id="realid123")]
-    config = _make_config(tmp_path)
-    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
-
-    mock_player = MagicMock()
-    mock_player._authenticated = True
-    mock_player.check_auth = AsyncMock()
-    mock_player.get_current_track = AsyncMock(return_value=None)  # no autoplay track
-    mock_player.capture_current_audio = AsyncMock()
-
-    with (
-        patch(f"{MODULE}.next_segment_type", return_value=SegmentType.MUSIC),
-        patch(f"{MODULE}.download_track_spotify", new_callable=AsyncMock, return_value=_fake_path()) as mock_dl,
-        patch(f"{MODULE}.fetch_home_context", new_callable=AsyncMock),
-    ):
-        await _run_until_queued(queue, state, config, spotify_player=mock_player)
-
-    mock_dl.assert_called_once()
-
-
 @pytest.mark.asyncio
 async def test_ad_quality_reject_resets_pacing_and_continues(tmp_path):
     state = _make_state()
@@ -382,28 +352,6 @@ async def test_ad_quality_reject_resets_pacing_and_continues(tmp_path):
     seg = queue.get_nowait()
     assert seg.type == SegmentType.MUSIC
     assert state.songs_since_ad == 1
-
-
-@pytest.mark.asyncio
-async def test_music_falls_back_when_spotify_not_authenticated(tmp_path):
-    state = _make_state()
-    config = _make_config(tmp_path)
-    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
-
-    mock_player = MagicMock()
-    mock_player._authenticated = False
-    mock_player.check_auth = AsyncMock()
-    mock_player.get_current_track = AsyncMock(return_value=None)
-
-    with (
-        patch(f"{MODULE}.next_segment_type", return_value=SegmentType.MUSIC),
-        patch(f"{MODULE}.download_track", new_callable=AsyncMock, return_value=_fake_path()) as mock_dl,
-        patch(f"{MODULE}.normalize", side_effect=_fake_path),
-        patch(f"{MODULE}.fetch_home_context", new_callable=AsyncMock),
-    ):
-        await _run_until_queued(queue, state, config, spotify_player=mock_player)
-
-    mock_dl.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
@@ -606,8 +554,7 @@ async def test_music_quality_circuit_breaker_after_3_rejections(tmp_path):
     state = _make_state()
     # Need enough tracks so the producer can keep retrying
     state.playlist = [
-        Track(title=f"Track {i}", artist="A", duration_ms=200_000, spotify_id=f"demo{i}")
-        for i in range(6)
+        Track(title=f"Track {i}", artist="A", duration_ms=200_000, spotify_id=f"demo{i}") for i in range(6)
     ]
     config = _make_config(tmp_path)
     queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)

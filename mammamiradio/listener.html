@@ -660,9 +660,6 @@
     var stepsHtml = (gp.steps || []).map(function(step){
       return '<li>' + escHtml(step) + '</li>';
     }).join('');
-    if(gp.auth_url){
-      stepsHtml += '<li><a href="' + escHtml(gp.auth_url) + '" target="_blank" rel="noopener" style="color:var(--highlight);text-decoration:underline;font-weight:600">Log in to Spotify &rarr;</a></li>';
-    }
     document.getElementById('goldenPathSteps').innerHTML = stepsHtml;
   }
 

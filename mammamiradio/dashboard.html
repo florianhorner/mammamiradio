@@ -450,90 +450,6 @@ h1 {
   100% { transform: translateX(-50%); }
 }
 
-/* ── CONNECT CTA — cream contrast card ── */
-.connect-cta {
-  position: relative; z-index: 1;
-  background: var(--cream);
-  border-radius: 10px;
-  padding: 16px 20px;
-  margin-bottom: 12px;
-  display: flex; align-items: center; gap: 14px;
-  cursor: pointer;
-  border-left: 4px solid var(--sun);
-  box-shadow: 0 2px 16px rgba(42,16,8,0.2);
-  transition: transform 0.15s ease, box-shadow 0.2s ease;
-}
-.connect-cta:hover {
-  transform: translateY(-1px);
-  box-shadow: 0 4px 24px rgba(42,16,8,0.3);
-}
-.connect-cta .cta-icon {
-  font-size: 22px; flex-shrink: 0;
-}
-.connect-cta .cta-text {
-  flex: 1;
-}
-.connect-cta .cta-headline {
-  font-family: var(--font-display);
-  font-size: 17px; font-weight: 700; font-style: italic;
-  color: var(--shadow); line-height: 1.2; margin-bottom: 2px;
-}
-.connect-cta .cta-sub {
-  font-size: 11px; color: rgba(42,16,8,0.55);
-}
-.connect-cta .cta-arrow {
-  font-size: 16px; color: rgba(42,16,8,0.3);
-  transition: transform 0.15s ease;
-}
-.connect-cta:hover .cta-arrow { transform: translateX(3px); }
-
-/* ── HELP ICON — collapsed (?) ── */
-.help-toggle {
-  display: flex; align-items: center; justify-content: center; gap: 4px;
-  background: none; border: none; cursor: pointer;
-  font-size: 11px; color: rgba(245,237,216,0.35);
-  padding: 6px 0; margin: 0 auto 12px;
-  font-family: var(--font-body);
-  transition: color 0.15s;
-}
-.help-toggle:hover { color: rgba(245,237,216,0.65); }
-.help-toggle .help-q {
-  display: inline-flex; align-items: center; justify-content: center;
-  width: 16px; height: 16px; border-radius: 50%;
-  border: 1px solid rgba(245,237,216,0.25);
-  font-size: 10px; font-weight: 700;
-}
-.help-popover {
-  display: none;
-  background: var(--sienna);
-  border: 1px solid rgba(245,237,216,0.12);
-  border-radius: 8px; padding: 14px 16px;
-  margin-bottom: 12px; font-size: 12px;
-  color: rgba(245,237,216,0.6); line-height: 1.6;
-}
-.help-popover.open { display: block; }
-.help-popover .help-advanced {
-  display: inline-block; margin-top: 8px;
-  font-size: 11px; color: rgba(245,237,216,0.4);
-  text-decoration: underline; cursor: pointer;
-  background: none; border: none; padding: 0;
-  font-family: var(--font-body);
-}
-.help-popover .help-advanced:hover { color: rgba(245,237,216,0.7); }
-
-/* ── TICKER CTA ITEM — golden highlight ── */
-.ticker .ti.ticker-cta {
-  color: var(--sun2);
-  cursor: pointer;
-  transition: color 0.2s;
-}
-.ticker .ti.ticker-cta:hover {
-  color: var(--sun);
-}
-.ticker .ts.ticker-cta-sep {
-  color: var(--sun2);
-}
-
 /* ── TOAST ── */
 .toast {
   position: fixed; bottom: 80px; left: 50%; transform: translateX(-50%);
@@ -567,14 +483,9 @@ h1 {
   #controls {
     grid-column: 1;
   }
-  #connect-card,
-  #help-toggle,
-  #help-popover,
   #queue-card,
-  #playlist-card,
   #unlock-ai,
-  #connect-ha,
-  #advanced-card {
+  #connect-ha {
     grid-column: 2;
   }
 }
@@ -645,16 +556,6 @@ h1 {
   <div class="ticker" id="ticker"></div>
 </div>
 
-<!-- Connect Spotify — cream contrast card (Option C) -->
-<div class="connect-cta" id="connect-card" style="display:none" onclick="window.open('spotify:', '_blank')" role="button" tabindex="0">
-  <div class="cta-icon" id="connect-cta-icon">🎵</div>
-  <div class="cta-text">
-    <div class="cta-headline" id="connect-cta-headline">Your music. Same hosts.</div>
-    <div class="cta-sub" id="connect-cta-sub">Open Spotify and connect to <strong id="device-name">MammaMiRadio</strong></div>
-  </div>
-  <div class="cta-arrow">›</div>
-</div>
-
 <!-- Golden path guidance -->
 <div class="card golden-path-card" id="golden-path-card" style="display:none">
   <div class="golden-path-state" id="golden-path-state"></div>
@@ -663,31 +564,14 @@ h1 {
   <ol class="golden-path-steps" id="golden-path-steps"></ol>
 </div>
 
-<!-- Help — collapsed (?) icon, expands to troubleshooting + advanced -->
-<button class="help-toggle" id="help-toggle" style="display:none" onclick="toggleHelp()">
-  <span class="help-q">?</span> Having trouble connecting?
-</button>
-<div class="help-popover" id="help-popover">
-  <p>Make sure your phone and this device are on the same WiFi network. Open Spotify, tap the speaker icon, and choose MammaMiRadio.</p>
-  <button class="help-advanced" onclick="openAdvancedSetup()">Advanced options</button>
-</div>
-
 <!-- Queue (collapsed, 3 items) -->
 <div class="card" id="queue-card" style="display:none">
   <h3>Up Next</h3>
   <ul class="queue" id="queue-list"></ul>
 </div>
 
-<!-- Playlist management (when spotify_connected=true) -->
-<div class="card" id="playlist-card" style="display:none">
-  <h3>Choose your music</h3>
-  <div id="playlist-content">
-    <!-- Populated by JS: playlist picker or URL paste depending on spotify_api -->
-  </div>
-</div>
-
 <!-- Controls -->
-<div class="controls" id="controls" style="display:none">
+<div class="controls" id="controls">
   <button class="btn btn-sm" onclick="doShuffle()">Shuffle</button>
   <button class="btn btn-sm" onclick="doSkip()">Skip</button>
   <button class="btn btn-sm btn-ghost" onclick="doPurge()">Fresh Start</button>
@@ -706,25 +590,6 @@ h1 {
 <div class="card" id="connect-ha" style="display:none">
   <h3>Let the Hosts See Your Home</h3>
   <p>The hosts can reference your lights, temperature, and who just walked in. Connect Home Assistant to make the station aware of your world.</p>
-</div>
-
-<!-- Advanced settings (hidden by default) -->
-<div class="card" id="advanced-card" style="display:none">
-  <h3>Advanced Settings</h3>
-  <div style="margin-bottom:8px">
-    <label class="card-muted" for="cred-spotify-id">Spotify App ID</label>
-    <input class="input" id="cred-spotify-id" type="text" placeholder="From your Spotify developer app" autocomplete="off">
-  </div>
-  <div style="margin-bottom:8px">
-    <label class="card-muted" for="cred-spotify-secret">Spotify App Secret</label>
-    <input class="input" id="cred-spotify-secret" type="password" placeholder="From your Spotify developer app" autocomplete="off">
-  </div>
-  <div style="margin-bottom:8px">
-    <label class="card-muted" for="playlist-url-input">Playlist link</label>
-    <input class="input" id="playlist-url-input" type="text" placeholder="Paste a Spotify playlist link" autocomplete="off">
-  </div>
-  <button class="btn btn-sm" onclick="saveAdvancedCredentials()">Save</button>
-  <span class="card-muted" id="advanced-status"></span>
 </div>
 
 </main>
@@ -769,13 +634,10 @@ window.fetch = (input, init = {}) => {
 let caps = null;
 let latestStatus = null;
 let firstDataReceived = false;
-let connectStartTime = null;
-let wasConnected = false;
 let _lastTier = null;
 
 // --- Radio Dial Controller ---
 const DEMO_FREQ = 94.7;
-const USER_FREQ = 101.3;
 let _dialFreq = 98.0; // start mid-band so sweeps use the full range
 let _dialTarget = DEMO_FREQ;
 let _dialState = 'searching'; // searching | locking | locked | shifting
@@ -1103,60 +965,10 @@ function updateCards() {
   }
   _lastTier = tier;
 
-  // Connect CTA card + help toggle
-  const showConnect = !c.spotify_connected;
-  const connectCard = document.getElementById('connect-card');
-  connectCard.style.display = showConnect ? '' : 'none';
-  document.getElementById('help-toggle').style.display = showConnect ? '' : 'none';
-  if (!showConnect) {
-    document.getElementById('help-popover').classList.remove('open');
-  }
-  if (caps.connect_device_name) {
-    const deviceNameEl = document.getElementById('device-name');
-    if (deviceNameEl) deviceNameEl.textContent = caps.connect_device_name;
-  }
-
-  // Show help toggle after 60s as a subtle nudge (but it's always visible)
-  if (!c.spotify_connected && connectStartTime) {
-    const elapsed = (Date.now() - connectStartTime) / 1000;
-    if (elapsed > 60) {
-      document.getElementById('help-toggle').style.color = 'rgba(245,237,216,0.55)';
-    }
-  }
-
-  // Playlist card (only when connected AND has spotify_api for browsing)
-  const playlistCard = document.getElementById('playlist-card');
-  playlistCard.style.display = (c.spotify_connected && c.spotify_api) ? '' : 'none';
-  if (c.spotify_connected && c.spotify_api) {
-    const content = document.getElementById('playlist-content');
-    content.innerHTML =
-      '<p>Browse your playlists or paste a link.</p>' +
-      '<div style="display:flex;gap:8px;flex-wrap:wrap">' +
-        '<select class="input" id="playlist-select" style="flex:1;min-width:200px"><option value="">Choose a playlist</option></select>' +
-        '<button class="btn btn-sm" onclick="selectPlaylist()">Load</button>' +
-      '</div>' +
-      '<div style="margin-top:8px;display:flex;gap:8px">' +
-        '<button class="btn btn-sm btn-ghost" onclick="selectLikedSongs()">Use Liked Songs</button>' +
-      '</div>';
-  }
-
-  // Controls (only after Spotify connected)
-  document.getElementById('controls').style.display = c.spotify_connected ? '' : 'none';
-
-  // Unlock AI — only when connected and no anthropic key
-  document.getElementById('unlock-ai').style.display = (c.spotify_connected && !c.anthropic) ? '' : 'none';
+  // Unlock AI — show when no anthropic key
+  document.getElementById('unlock-ai').style.display = !c.llm ? '' : 'none';
   // HA card hidden by default — it's a power-user feature, not onboarding
   document.getElementById('connect-ha').style.display = 'none';
-
-  // Transition ceremony: demo -> connected (dial shifts to new frequency)
-  if (c.spotify_connected && !wasConnected) {
-    wasConnected = true;
-    const rawName = caps.spotify_username || '';
-    // Hide hash-like internal Spotify IDs — only show human-readable names
-    const name = (rawName.length > 20 && !/\s/.test(rawName)) ? '' : rawName;
-    _dialShiftTo(USER_FREQ, name || 'Your Music', 'Spotify connected');
-    setTimeout(() => showTransition(name ? 'Benvenuto, ' + escHtml(name) + '!' : 'Benvenuto!', 2500), 1600);
-  }
 
   const gp = (latestStatus && latestStatus.golden_path) || caps.golden_path || null;
   const gpCard = document.getElementById('golden-path-card');
@@ -1174,32 +986,7 @@ function updateCards() {
   gpHeadline.textContent = gp.headline || '';
   gpDetail.textContent = gp.detail || '';
   var stepsHtml = (gp.steps || []).map((s) => '<li>' + escHtml(s) + '</li>').join('');
-  if (gp.auth_url) {
-    stepsHtml += '<li><a href="' + escHtml(gp.auth_url) + '" target="_blank" rel="noopener" style="color:var(--sun);text-decoration:underline;font-weight:600">Log in to Spotify &rarr;</a></li>';
-  }
   gpSteps.innerHTML = stepsHtml;
-
-  const ctaIcon = document.getElementById('connect-cta-icon');
-  const ctaHeadline = document.getElementById('connect-cta-headline');
-  const ctaSub = document.getElementById('connect-cta-sub');
-  if (showConnect && gp && gp.stage === 'needs_spotify_credentials') {
-    ctaIcon.textContent = '\u2699\uFE0F';
-    ctaHeadline.textContent = 'Step 1: Add Spotify credentials';
-    ctaSub.textContent = 'Open Advanced Settings, paste App ID + Secret, then save.';
-    connectCard.onclick = openAdvancedSetup;
-  } else if (showConnect && gp && gp.stage === 'needs_spotify_browser_login') {
-    ctaIcon.textContent = '\uD83D\uDD11';
-    ctaHeadline.textContent = 'Log in to Spotify';
-    ctaSub.textContent = 'One-time browser login required (hostname discovery workaround).';
-    connectCard.onclick = gp.auth_url ? () => window.open(gp.auth_url, '_blank') : null;
-  } else if (showConnect) {
-    ctaIcon.textContent = '\uD83C\uDFB5';
-    ctaHeadline.textContent = 'Step 2: Connect Spotify';
-    ctaSub.innerHTML = 'Open Spotify and connect to <strong id="device-name-inline"></strong>';
-    const inlineName = ctaSub.querySelector('#device-name-inline');
-    if (inlineName) inlineName.textContent = caps.connect_device_name || 'MammaMiRadio';
-    connectCard.onclick = () => window.open('spotify:', '_blank');
-  }
 }
 
 function updateStatus(d) {
@@ -1224,7 +1011,6 @@ function updateStatus(d) {
       }, 1500);
     }, 5000);
     document.getElementById('now-playing').style.display = '';
-    connectStartTime = Date.now();
     _initTicker();
     // Auto-start stream on first click
     if (!_wantsPlay) {
@@ -1248,12 +1034,11 @@ function updateStatus(d) {
     }
   }
 
-  // Queue (only after Spotify connected — golden path: "nothing else to look at")
+  // Queue
   const upcoming = d.upcoming || [];
   const upcomingMode = d.upcoming_mode || '';
   const queueCard = document.getElementById('queue-card');
-  const isConnected = caps && caps.capabilities && caps.capabilities.spotify_connected;
-  if (upcoming.length || upcomingMode === 'building' || isConnected) {
+  if (upcoming.length || upcomingMode === 'building') {
     queueCard.style.display = '';
     if (upcoming.length) {
       document.getElementById('queue-list').innerHTML = upcoming.slice(0, 3).map(e =>
@@ -1362,28 +1147,6 @@ async function loadPlaylistUrl() {
   showToast(d.ok ? 'Playlist loaded' : (d.error || 'Failed'));
 }
 
-async function selectPlaylist() {
-  const sel = document.getElementById('playlist-select');
-  if (!sel?.value) return;
-  const r = await fetch(_base + '/api/spotify/source/select', {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({source_id: sel.value, kind: 'playlist'}),
-  });
-  const d = await r.json();
-  showToast(d.ok ? 'Playlist loaded' : (d.error || 'Failed'));
-}
-
-async function selectLikedSongs() {
-  const r = await fetch(_base + '/api/spotify/source/select', {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({kind: 'liked_songs'}),
-  });
-  const d = await r.json();
-  showToast(d.ok ? 'Liked Songs loaded' : (d.error || 'Failed'));
-}
-
 async function saveAnthropicKey() {
   const key = document.getElementById('anthropic-key')?.value?.trim();
   if (!key) return;
@@ -1393,35 +1156,6 @@ async function saveAnthropicKey() {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({anthropic_api_key: key}),
-  });
-  const d = await r.json();
-  statusEl.textContent = d.ok ? 'Saved! Reloading...' : (d.error || 'Failed');
-  if (d.ok) setTimeout(refresh, 1000);
-}
-
-function toggleHelp() {
-  document.getElementById('help-popover').classList.toggle('open');
-}
-
-function openAdvancedSetup() {
-  document.getElementById('advanced-card').style.display = '';
-}
-
-async function saveAdvancedCredentials() {
-  const payload = {};
-  const id = document.getElementById('cred-spotify-id')?.value?.trim();
-  const secret = document.getElementById('cred-spotify-secret')?.value?.trim();
-  const url = document.getElementById('playlist-url-input')?.value?.trim();
-  if (id) payload.spotify_client_id = id;
-  if (secret) payload.spotify_client_secret = secret;
-  if (url) payload.playlist_spotify_url = url;
-  if (!Object.keys(payload).length) return;
-  const statusEl = document.getElementById('advanced-status');
-  statusEl.textContent = 'Saving...';
-  const r = await fetch(_base + '/api/credentials', {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify(payload),
   });
   const d = await r.json();
   statusEl.textContent = d.ok ? 'Saved! Reloading...' : (d.error || 'Failed');
@@ -1469,24 +1203,11 @@ function _initTicker() {
     'Palermo 27\u00B0 sole splendido',
     'Prossimo treno Roma\u2013Milano: 14:35',
   ];
-  // Inject Spotify CTA into ticker if not connected
-  const isConnected = caps && caps.capabilities && caps.capabilities.spotify_connected;
-  if (!isConnected) {
-    // Insert the CTA after every ~4 items as ambient reinforcement
-    items.splice(4, 0, '\u266B Porta i tuoi dischi \u2014 connetti Spotify');
-    items.splice(10, 0, '\u266B Your music, same hosts \u2014 connect Spotify');
-  }
 
   const ticker = document.getElementById('ticker');
   // Duplicate items so the scroll loops seamlessly
-  const ctaText1 = '\u266B Porta i tuoi dischi \u2014 connetti Spotify';
-  const ctaText2 = '\u266B Your music, same hosts \u2014 connect Spotify';
   const html = items.concat(items).map(t => {
-    const isCta = (t === ctaText1 || t === ctaText2);
-    const tiClass = isCta ? 'ti ticker-cta' : 'ti';
-    const tsClass = isCta ? 'ts ticker-cta-sep' : 'ts';
-    const onclick = isCta ? ' onclick="document.getElementById(\'connect-card\').scrollIntoView({behavior:\'smooth\'})"' : '';
-    return '<span class="' + tiClass + '"' + onclick + '>' + t + '</span><span class="' + tsClass + '"> · </span>';
+    return '<span class="ti">' + t + '</span><span class="ts"> · </span>';
   }).join('');
   ticker.innerHTML = html;
   document.getElementById('ticker-wrap').style.display = '';

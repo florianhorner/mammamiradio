@@ -180,15 +180,15 @@ ONBOARDING_NARRATIVE = {
         {
             "label_it": "Collegamento in corso...",
             "label_en": "Connecting...",
-            "copy": "We're connecting to your Spotify. Don't worry — "
-            "we're only looking at your music. We don't care about your podcasts. "
-            "Actually, we do judge a little.",
+            "copy": "We're tuning into the Italian charts. Don't worry — "
+            "we have impeccable taste. Well, mostly. "
+            "Actually, we judge a little.",
         },
         {
             "label_it": "Analisi dei gusti...",
             "label_en": "Analyzing taste...",
-            "copy": "Scanning playlists, liked songs, and that one playlist "
-            "you made at 2am and never renamed. We see 'Playlist (47)'. "
+            "copy": "Scanning the charts, trending tracks, and probably that one genre "
+            "you secretly love but won't admit to. We think we see a pattern. "
             "We have questions.",
         },
         {
