@@ -4,6 +4,21 @@ All notable changes to `mammamiradio` are documented here.
 
 The current version source of truth is `pyproject.toml`.
 
+## [2.3.1] - 2026-04-11
+
+### Added
+
+- **Artist diversity cap**: Apple Music Italy charts now enforce a max of 2 tracks per artist, preventing any single artist (e.g. Shiva) from dominating the playlist.
+- **Cache LRU eviction**: On startup and hourly while the producer is idle, the oldest cached MP3s are deleted when the cache exceeds the configured size limit (default 500 MB). Controlled via `MAMMAMIRADIO_MAX_CACHE_MB` env var. Prevents SD card overflow on Raspberry Pi.
+- **API cost tracking**: `/api/status` now returns `api_cost_estimate_usd`, `cache_size_mb`, and `cache_limit_mb` so operators can monitor token spend and disk usage without SSH.
+
+### Fixed
+
+- `asyncio.get_event_loop()` (deprecated since Python 3.10) replaced with `asyncio.get_running_loop()` in the producer idle loop.
+- yt-dlp download options now include `noprogress: True` to suppress progress-bar noise in logs.
+
+---
+
 ## [2.3.0] - 2026-04-11
 
 ### Removed

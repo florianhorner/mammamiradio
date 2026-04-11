@@ -1,5 +1,15 @@
 # Changelog
 
+## 2.3.1
+
+### Added
+
+- Artist diversity cap: no more than 2 tracks per artist from Apple Music charts.
+- LRU cache eviction: oldest MP3s are deleted when cache exceeds 500 MB (configurable via MAMMAMIRADIO_MAX_CACHE_MB). Prevents SD card overflow on Raspberry Pi.
+- `/api/status` now reports token cost estimate and cache disk usage.
+
+---
+
 ## 2.3.0
 
 ### Removed

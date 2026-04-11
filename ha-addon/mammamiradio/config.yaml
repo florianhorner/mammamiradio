@@ -1,14 +1,14 @@
 name: Mamma Mi Radio
 description: AI-powered Italian radio station — streams Claude-generated banter, absurd ads, and music from charts or local files. Hosts reference your Home Assistant state.
 slug: mammamiradio
-version: 2.3.0
+version: 2.3.1
 url: https://github.com/florianhorner/mammamiradio
 image: ghcr.io/florianhorner/mammamiradio-addon-{arch}
 arch:
   - amd64
   - aarch64
 init: false
-timeout: 120
+timeout: 240
 healthcheck: http://[HOST]:[PORT:8000]/healthz
 host_network: true
 homeassistant_api: true
