@@ -519,6 +519,11 @@ async def fetch_home_context(
     # Prefer explicitly passed cache, then module-level cache
     effective_cache = _cache or _ha_cache
     if effective_cache and effective_cache.age_seconds < poll_interval:
+        # Refresh event ages and prune expired entries even on cache hits, so
+        # "X min fa" timestamps stay accurate and stale events are dropped.
+        now = time.time()
+        effective_cache.events = prune_events(effective_cache.events, now=now)
+        effective_cache.events_summary = build_events_summary(effective_cache.events, now=now)
         return effective_cache
 
     try:
