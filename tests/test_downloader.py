@@ -144,6 +144,37 @@ def test_ytdlp_success_when_enabled(track, cache_dir, music_dir):
     assert result.exists()
 
 
+def test_ytdlp_uses_no_progress_options(track, cache_dir):
+    """yt-dlp is configured to avoid progress-bar noise in logs."""
+    from mammamiradio.downloader import _download_ytdlp
+
+    captured_opts = {}
+
+    class _FakeYoutubeDL:
+        def __init__(self, opts):
+            captured_opts.update(opts)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def download(self, queries):
+            (cache_dir / f"{track.cache_key}.mp3").write_text("downloaded audio")
+
+    mock_yt_dlp = MagicMock()
+    mock_yt_dlp.YoutubeDL = _FakeYoutubeDL
+
+    with patch.dict(sys.modules, {"yt_dlp": mock_yt_dlp}):
+        out = _download_ytdlp(track, cache_dir)
+
+    assert out == cache_dir / f"{track.cache_key}.mp3"
+    assert captured_opts["quiet"] is True
+    assert captured_opts["no_warnings"] is True
+    assert captured_opts["noprogress"] is True
+
+
 # --- _download_sync: yt-dlp failure falls back to placeholder ---
 
 
@@ -226,3 +257,62 @@ async def test_download_track_async(track, cache_dir, music_dir):
 
     result = await download_track(track, cache_dir, music_dir)
     assert result == cached
+
+
+# --- evict_cache_lru ---
+
+
+def test_evict_cache_lru_zero_limit_is_noop(cache_dir):
+    from mammamiradio.downloader import evict_cache_lru
+
+    (cache_dir / "a.mp3").write_bytes(b"x" * 1024 * 1024)
+    evict_cache_lru(cache_dir, 0)
+    assert (cache_dir / "a.mp3").exists()
+
+
+def test_evict_cache_lru_under_limit_noop(cache_dir):
+    from mammamiradio.downloader import evict_cache_lru
+
+    (cache_dir / "a.mp3").write_bytes(b"x" * 1024 * 1024)
+    evict_cache_lru(cache_dir, 100)
+    assert (cache_dir / "a.mp3").exists()
+
+
+def test_evict_cache_lru_over_limit_removes_oldest(cache_dir):
+    import time
+
+    from mammamiradio.downloader import evict_cache_lru
+
+    old = cache_dir / "old.mp3"
+    new = cache_dir / "new.mp3"
+    old.write_bytes(b"x" * 1024 * 1024)
+    time.sleep(0.02)
+    new.write_bytes(b"x" * 1024 * 1024)
+    # 2 MB total, limit 1 MB → should evict the older file
+    evict_cache_lru(cache_dir, 1)
+    assert not old.exists()
+    assert new.exists()
+
+
+def test_evict_cache_lru_protects_db_and_json(cache_dir):
+    from mammamiradio.downloader import evict_cache_lru
+
+    protected = ["mammamiradio.db", "playlist_source.json", "session_stopped.flag"]
+    for name in protected:
+        (cache_dir / name).write_bytes(b"x" * 1024 * 1024)
+    (cache_dir / "track.mp3").write_bytes(b"x" * 1024 * 1024)
+    evict_cache_lru(cache_dir, 0)  # even with 0 limit, protected files survive
+    for name in protected:
+        assert (cache_dir / name).exists()
+
+
+def test_evict_cache_lru_handles_oserror(cache_dir):
+    from unittest.mock import patch
+
+    from mammamiradio.downloader import evict_cache_lru
+
+    f = cache_dir / "broken.mp3"
+    f.write_bytes(b"x" * 1024 * 1024)
+    with patch("pathlib.Path.unlink", side_effect=OSError("permission denied")):
+        # Should not raise — logs warning and continues
+        evict_cache_lru(cache_dir, 0)

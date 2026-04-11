@@ -16,7 +16,7 @@ from uuid import uuid4
 from mammamiradio.audio_quality import AudioQualityError, AudioToolError, validate_segment_audio
 from mammamiradio.config import StationConfig
 from mammamiradio.context_cues import generate_impossible_line
-from mammamiradio.downloader import download_track
+from mammamiradio.downloader import download_track, evict_cache_lru
 from mammamiradio.ha_context import HomeContext, fetch_home_context
 from mammamiradio.models import (
     AdBrand,
@@ -393,6 +393,8 @@ async def run_producer(
     ha_cache: HomeContext | None = None
 
     _music_qg_rejections = 0  # consecutive music quality gate rejections (circuit breaker)
+    _last_cache_eviction = 0.0  # epoch time of last eviction check
+    _cache_eviction_interval = 3600  # run eviction at most once per hour
 
     while True:
         if state.session_stopped:
@@ -400,6 +402,11 @@ async def run_producer(
             continue
 
         if queue.qsize() >= config.pacing.lookahead_segments:
+            # Periodically evict stale cache files while the producer is idle
+            now = asyncio.get_running_loop().time()
+            if now - _last_cache_eviction >= _cache_eviction_interval:
+                _last_cache_eviction = now
+                await asyncio.to_thread(evict_cache_lru, config.cache_dir, config.max_cache_size_mb)
             await asyncio.sleep(0.5)
             continue
 
