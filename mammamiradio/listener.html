@@ -714,7 +714,7 @@
   }
 </style>
 </head>
-<body>
+<body data-launch-state="idle">
 
 <!-- Station Header -->
 <header class="station-header">
@@ -728,12 +728,54 @@
 </header>
 
 <div class="container">
+  <section class="launch-scene" id="launchScene">
+    <div class="launch-top">
+      <div class="launch-eyebrow" id="launchEyebrow">Sign-on sequence</div>
+      <div class="launch-lamp" id="launchLamp" data-state="idle">
+        <span class="launch-lamp-dot"></span>
+        <span id="launchLampLabel">Stand by</span>
+      </div>
+    </div>
+    <h2 class="launch-title fade-content" id="launchTitle">We're lighting the sign.</h2>
+    <p class="launch-detail fade-content" id="launchDetail">AI hosts. Italian music. Live absurdity.</p>
+    <div class="launch-promise">AI hosts. Italian music. Live absurdity.</div>
+    <div class="launch-waveform" id="launchWaveform" aria-hidden="true">
+      <span class="wb" style="--h:30px;--d:0.62s;--dl:0.00s"></span>
+      <span class="wb" style="--h:24px;--d:0.78s;--dl:0.08s"></span>
+      <span class="wb" style="--h:38px;--d:0.69s;--dl:0.13s"></span>
+      <span class="wb" style="--h:20px;--d:0.84s;--dl:0.21s"></span>
+      <span class="wb" style="--h:44px;--d:0.71s;--dl:0.04s"></span>
+      <span class="wb" style="--h:28px;--d:0.66s;--dl:0.18s"></span>
+      <span class="wb" style="--h:40px;--d:0.74s;--dl:0.26s"></span>
+      <span class="wb" style="--h:18px;--d:0.92s;--dl:0.11s"></span>
+      <span class="wb" style="--h:35px;--d:0.58s;--dl:0.09s"></span>
+      <span class="wb" style="--h:26px;--d:0.82s;--dl:0.28s"></span>
+      <span class="wb" style="--h:42px;--d:0.63s;--dl:0.17s"></span>
+      <span class="wb" style="--h:22px;--d:0.88s;--dl:0.05s"></span>
+      <span class="wb" style="--h:36px;--d:0.67s;--dl:0.24s"></span>
+      <span class="wb" style="--h:19px;--d:0.77s;--dl:0.15s"></span>
+      <span class="wb" style="--h:46px;--d:0.72s;--dl:0.03s"></span>
+      <span class="wb" style="--h:32px;--d:0.81s;--dl:0.29s"></span>
+      <span class="wb" style="--h:24px;--d:0.64s;--dl:0.12s"></span>
+      <span class="wb" style="--h:39px;--d:0.76s;--dl:0.22s"></span>
+      <span class="wb" style="--h:21px;--d:0.85s;--dl:0.06s"></span>
+      <span class="wb" style="--h:34px;--d:0.61s;--dl:0.19s"></span>
+    </div>
+    <div class="launch-preview" id="launchPreview"><strong>First cue</strong>You are arriving exactly at sign-on.</div>
+    <ol class="launch-cues" id="launchCues"></ol>
+    <div class="launch-actions">
+      <button class="launch-btn" id="launchBtn" type="button">Start the station</button>
+      <p class="launch-note" id="launchNote">Sound starts the moment you tap.</p>
+    </div>
+  </section>
+
+  <div class="post-launch" id="postLaunch">
 
   <!-- Now Playing -->
   <div class="now-playing" id="nowPlaying">
-    <div class="np-section-label">Now playing</div>
+    <div class="np-section-label">Live now</div>
     <div class="np-type-badge" id="npIcon">&#9835;</div>
-    <div class="np-label fade-content" id="npLabel">Waiting for signal...</div>
+    <div class="np-label fade-content" id="npLabel">The booth is warming up...</div>
     <div class="np-sublabel fade-content" id="npSublabel"></div>
     <div class="equalizer" id="equalizer">
       <div class="eq-bar"></div>
@@ -745,7 +787,7 @@
   </div>
 
   <div class="section-card golden-path-notice" id="goldenPathNotice" style="display:none">
-    <div class="golden-path-head">Golden path</div>
+    <div class="golden-path-head" id="goldenPathHead">Studio note</div>
     <div class="golden-path-title" id="goldenPathTitle"></div>
     <div class="golden-path-detail" id="goldenPathDetail"></div>
     <ol class="golden-path-steps" id="goldenPathSteps"></ol>
@@ -768,7 +810,7 @@
     <div class="section-title">Recently played</div>
     <div id="recentList"></div>
   </div>
-
+  </div>
 </div>
 
 <!-- Audio element (hidden) -->
@@ -802,6 +844,7 @@
     return p === '' ? '' : p;
   })();
   const audio = document.getElementById('radioAudio');
+  const body = document.body;
   const playBtn = document.getElementById('playBtn');
   const playIcon = document.getElementById('playIcon');
   const pauseIcon = document.getElementById('pauseIcon');
@@ -809,16 +852,37 @@
   const onAir = document.getElementById('onAirBadge');
   const volumeSlider = document.getElementById('volumeSlider');
   const volumeToggle = document.getElementById('volumeToggle');
+  const launchBtn = document.getElementById('launchBtn');
+  const launchTitle = document.getElementById('launchTitle');
+  const launchDetail = document.getElementById('launchDetail');
+  const launchEyebrow = document.getElementById('launchEyebrow');
+  const launchLamp = document.getElementById('launchLamp');
+  const launchLampLabel = document.getElementById('launchLampLabel');
+  const launchPreview = document.getElementById('launchPreview');
+  const launchCues = document.getElementById('launchCues');
+  const launchNote = document.getElementById('launchNote');
+  const launchWaveform = document.getElementById('launchWaveform');
+  const goldenPathHead = document.getElementById('goldenPathHead');
 
-  let isPlaying = false;
-  let lastVolume = 0.8;
-  let currentLabel = '';
+  const state = {
+    isPlaying: false,
+    lastVolume: 0.8,
+    currentLabel: '',
+    attemptedStart: false,
+    launchResolved: false,
+    waitingForAudio: false,
+    hasFetchedStatus: false,
+    streamReady: false,
+    nowStreaming: null,
+    upcoming: [],
+    goldenPath: null,
+  };
 
   audio.volume = 0.8;
 
-  // Type icons
   function icon(type){
     if(type==='music') return '\u266B';
+    if(type==='welcome') return '\u2728';
     if(type==='banter') return '\uD83C\uDF99\uFE0F';
     if(type==='ad') return '\uD83D\uDCE2';
     return '\u266B';
@@ -831,57 +895,250 @@
     return type||'';
   }
 
-  // Play/Pause
-  playBtn.addEventListener('click', function(){
-    if(isPlaying){
-      audio.pause();
-    } else {
-      // Reload stream source each time to get live position
-      audio.src = _base + '/stream';
-      audio.load();
-      audio.play().catch(function(){});
+  function timeScene(){
+    var hour = new Date().getHours();
+    if(hour < 6) return {
+      title: "We're lighting the sign.",
+      detail: "After-hours Italian radio, ready before the city admits it's awake."
+    };
+    if(hour < 12) return {
+      title: "We're lighting the sign.",
+      detail: "A fresh broadcast, warm mics, and the first record already in the room."
+    };
+    if(hour < 18) return {
+      title: "The studio is taking the afternoon.",
+      detail: "AI hosts. Italian music. Live absurdity, right on cue."
+    };
+    return {
+      title: "Tonight is coming on air.",
+      detail: "The booth is warm, the hosts are sharp, and the next record is waiting."
+    };
+  }
+
+  function friendlyGoldenPath(gp){
+    if(!gp || !gp.blocking) return null;
+    return {
+      head: 'Studio note',
+      title: 'The station wants a real crate of records.',
+      detail: 'The room is ready, but the station still needs a dependable music source before it can keep the fantasy alive for guests.',
+      steps: ['Enable chart music in the control room, or drop MP3s into the local music library.']
+    };
+  }
+
+  function cueState(done, active){
+    if(done) return 'done';
+    if(active) return 'active';
+    return 'pending';
+  }
+
+  function updateWaveform(){
+    launchWaveform.classList.toggle('active', state.attemptedStart || state.launchResolved || state.streamReady);
+  }
+
+  function renderLaunch(){
+    var mood = timeScene();
+    var nextLabel = '';
+    if(state.nowStreaming && state.nowStreaming.label) nextLabel = state.nowStreaming.label;
+    else if(state.upcoming && state.upcoming.length) nextLabel = state.upcoming[0].label || '';
+
+    var title = mood.title;
+    var detail = mood.detail;
+    var previewHead = 'First cue';
+    var previewText = 'You are arriving exactly at sign-on.';
+    var buttonText = state.launchResolved
+      ? (state.isPlaying ? 'Pause the station' : 'Resume the station')
+      : 'Start the station';
+    var note = 'Sound starts the moment you tap.';
+    var lampState = 'idle';
+    var lampLabel = 'Stand by';
+    var eyebrow = 'Sign-on sequence';
+
+    if(state.attemptedStart && !state.streamReady){
+      title = 'Mamma Mi Radio is going live.';
+      detail = 'The booth is warming up. Stay with us while the first signal hits the room.';
+      previewHead = 'In the room';
+      previewText = 'Checking the airwaves, warming the hosts, and lining up the first entrance.';
+      buttonText = 'Going on air...';
+      note = 'If your browser hesitates, tap again. The station should answer immediately.';
+      lampState = 'warming';
+      lampLabel = 'Warming';
+      eyebrow = 'Going live';
+    } else if(state.streamReady && !state.launchResolved){
+      title = "Tonight's first record is on the platter.";
+      detail = nextLabel ? nextLabel : 'The booth is ready. All it needs is your tap to open the room.';
+      previewHead = state.nowStreaming ? 'Now cued' : 'First up';
+      previewText = nextLabel || 'The first entrance is loaded and waiting.';
+      buttonText = 'Go on air';
+      note = 'Tap once and the station should open straight into the live feed.';
+      lampState = 'ready';
+      lampLabel = 'Ready';
+      eyebrow = 'Ready to break in';
     }
+    if(state.waitingForAudio && !state.launchResolved){
+      title = 'The red light is about to flip.';
+      detail = nextLabel ? ('Stay with us. ' + nextLabel + ' is already on deck.') : 'The station is already moving. Stay with the sign-on.';
+      previewHead = 'On deck';
+      previewText = nextLabel || 'The first voice or record is already lined up.';
+      buttonText = 'Opening the room...';
+      note = 'The sign turns ON AIR the moment sound actually lands.';
+      lampState = 'warming';
+      lampLabel = 'Arming';
+      eyebrow = 'Sound incoming';
+    }
+    if(state.launchResolved){
+      title = 'You arrived exactly on time.';
+      detail = state.isPlaying
+        ? 'The station is live. Let it run.'
+        : 'The station already knows how to come alive. Bring it back whenever you want.';
+      previewHead = state.nowStreaming ? 'Now airing' : 'On air';
+      previewText = nextLabel || 'The room is open and the next moment is already forming.';
+      note = state.isPlaying
+        ? 'The first hit landed. Stay through the next segue.'
+        : 'The scene stays warm. Tap to throw the switch again.';
+      lampState = state.isPlaying ? 'live' : 'ready';
+      lampLabel = state.isPlaying ? 'On air' : 'Ready';
+      eyebrow = 'Live sign-on';
+    }
+
+    launchTitle.textContent = title;
+    launchDetail.textContent = detail;
+    launchEyebrow.textContent = eyebrow;
+    launchLamp.dataset.state = lampState;
+    launchLampLabel.textContent = lampLabel;
+    launchBtn.textContent = buttonText;
+    launchBtn.disabled = !state.launchResolved && state.attemptedStart && !state.streamReady && !state.waitingForAudio;
+    launchNote.textContent = note;
+    launchPreview.innerHTML = '<strong>' + escHtml(previewHead) + '</strong>' + escHtml(previewText);
+
+    var cues = [
+      {
+        title: 'Checking the airwaves',
+        detail: state.hasFetchedStatus ? 'The signal made it into the booth.' : 'The booth is listening for the first pulse.',
+        status: cueState(state.hasFetchedStatus, state.attemptedStart)
+      },
+      {
+        title: 'The hosts are taking their seats',
+        detail: state.nowStreaming && (state.nowStreaming.type === 'banter' || state.nowStreaming.type === 'welcome')
+          ? 'They are already in the room, leaning into the first line.'
+          : 'Warm mics, a low hum, and just enough trouble.',
+        status: cueState(Boolean(state.nowStreaming), state.attemptedStart || state.streamReady)
+      },
+      {
+        title: "Tonight's first record is on the platter",
+        detail: nextLabel || 'The first entrance is lined up and waiting for the red light.',
+        status: cueState(Boolean(nextLabel), state.streamReady || state.waitingForAudio)
+      },
+      {
+        title: 'Opening the room to you',
+        detail: state.launchResolved
+          ? 'The station is fully live now.'
+          : 'The ON AIR lamp only flips when real sound starts.',
+        status: cueState(state.launchResolved, state.waitingForAudio || state.attemptedStart)
+      }
+    ];
+
+    launchCues.innerHTML = cues.map(function(cue){
+      return '<li class="launch-cue" data-state="' + cue.status + '">' +
+        '<span class="launch-cue-dot"></span>' +
+        '<div><div class="launch-cue-title">' + escHtml(cue.title) + '</div>' +
+        '<div class="launch-cue-detail">' + escHtml(cue.detail) + '</div></div>' +
+        '</li>';
+    }).join('');
+
+    if(state.launchResolved) body.setAttribute('data-launch-state', 'live');
+    else if(state.waitingForAudio) body.setAttribute('data-launch-state', 'priming');
+    else if(state.streamReady) body.setAttribute('data-launch-state', 'ready');
+    else body.setAttribute('data-launch-state', state.attemptedStart ? 'priming' : 'idle');
+    updateWaveform();
+  }
+
+  function resolveLaunch(){
+    if(state.launchResolved) return;
+    state.launchResolved = true;
+    renderLaunch();
+  }
+
+  function startStream(){
+    state.attemptedStart = true;
+    state.waitingForAudio = true;
+    if(audio.src !== _base + '/stream'){
+      audio.src = _base + '/stream';
+    }
+    audio.load();
+    var playAttempt = audio.play();
+    if(playAttempt && playAttempt.catch){
+      playAttempt.catch(function(){
+        state.waitingForAudio = false;
+        renderLaunch();
+      });
+    }
+    renderLaunch();
+  }
+
+  function togglePlayback(){
+    if(state.isPlaying){
+      audio.pause();
+      return;
+    }
+    startStream();
+  }
+
+  playBtn.addEventListener('click', togglePlayback);
+  launchBtn.addEventListener('click', function(){
+    if(!state.launchResolved && state.attemptedStart && !state.streamReady && !state.waitingForAudio){
+      startStream();
+      return;
+    }
+    togglePlayback();
   });
 
   audio.addEventListener('play', function(){
-    isPlaying = true;
+    state.isPlaying = true;
     playIcon.style.display = 'none';
     pauseIcon.style.display = 'block';
     playBtn.classList.add('playing');
     eq.classList.add('active');
-    onAir.classList.add('visible');
+    renderLaunch();
   });
 
   audio.addEventListener('pause', function(){
-    isPlaying = false;
+    state.isPlaying = false;
+    state.waitingForAudio = false;
     playIcon.style.display = 'block';
     pauseIcon.style.display = 'none';
     playBtn.classList.remove('playing');
     eq.classList.remove('active');
+    onAir.classList.remove('visible');
+    renderLaunch();
   });
 
   audio.addEventListener('waiting', function(){
+    state.waitingForAudio = true;
     eq.classList.remove('active');
+    renderLaunch();
   });
 
   audio.addEventListener('playing', function(){
+    state.isPlaying = true;
+    state.waitingForAudio = false;
     if(!audio.paused) eq.classList.add('active');
+    onAir.classList.add('visible');
+    resolveLaunch();
   });
 
-  // Volume
   volumeSlider.addEventListener('input', function(){
     audio.volume = this.value;
-    lastVolume = this.value;
+    state.lastVolume = this.value;
     updateVolumeIcon();
   });
 
   volumeToggle.addEventListener('click', function(){
     if(audio.volume > 0){
-      lastVolume = audio.volume;
+      state.lastVolume = audio.volume;
       audio.volume = 0;
       volumeSlider.value = 0;
     } else {
-      audio.volume = lastVolume || 0.8;
+      audio.volume = state.lastVolume || 0.8;
       volumeSlider.value = audio.volume;
     }
     updateVolumeIcon();
@@ -893,7 +1150,6 @@
     else volumeToggle.innerHTML = '\uD83D\uDD0A';
   }
 
-  // Format timestamp
   function fmtTime(ts){
     if(!ts) return '';
     var d = new Date(ts * 1000);
@@ -902,33 +1158,37 @@
     return (h<10?'0':'')+h+':'+(m<10?'0':'')+m;
   }
 
-  // Status polling
   function fetchStatus(){
     fetch(_base + '/public-status')
       .then(function(r){return r.json()})
       .then(function(data){
+        state.hasFetchedStatus = true;
+        state.nowStreaming = data.now_streaming || null;
+        state.upcoming = data.upcoming || [];
+        state.streamReady = !!(data.now_streaming || (data.upcoming && data.upcoming.length));
         updateGoldenPath(data.golden_path);
         updateNowPlaying(data.now_streaming);
         updateUpNext(data.upcoming, data.upcoming_mode);
         updateJokes(data.running_jokes);
         updateRecent(data.stream_log);
-        if(!isPlaying && data.now_streaming){
-          onAir.classList.add('visible');
-        }
+        renderLaunch();
       })
       .catch(function(){});
   }
 
   function updateGoldenPath(gp){
+    state.goldenPath = gp;
     var wrap = document.getElementById('goldenPathNotice');
-    if(!gp || !gp.blocking){
+    var friendly = friendlyGoldenPath(gp);
+    if(!friendly || !state.launchResolved){
       wrap.style.display = 'none';
       return;
     }
     wrap.style.display = 'block';
-    document.getElementById('goldenPathTitle').textContent = gp.headline || '';
-    document.getElementById('goldenPathDetail').textContent = gp.detail || '';
-    var stepsHtml = (gp.steps || []).map(function(step){
+    goldenPathHead.textContent = friendly.head;
+    document.getElementById('goldenPathTitle').textContent = friendly.title;
+    document.getElementById('goldenPathDetail').textContent = friendly.detail;
+    var stepsHtml = (friendly.steps || []).map(function(step){
       return '<li>' + escHtml(step) + '</li>';
     }).join('');
     document.getElementById('goldenPathSteps').innerHTML = stepsHtml;
@@ -942,10 +1202,9 @@
     var npIcon = document.getElementById('npIcon');
     var playerNow = document.getElementById('playerNow');
 
-    if(label === currentLabel) return;
-    currentLabel = label;
+    if(label === state.currentLabel) return;
+    state.currentLabel = label;
 
-    // Fade out
     npLabel.classList.add('updating');
     playerNow.classList.add('updating');
 
@@ -961,6 +1220,9 @@
           npLabel.textContent = label;
           npSublabel.textContent = '';
         }
+      } else if(np.type === 'welcome'){
+        npLabel.textContent = 'The station has noticed you.';
+        npSublabel.textContent = 'Straight into the room, no dead air.';
       } else if(np.type === 'banter'){
         npLabel.textContent = label ? label + ' are talking\u2026' : 'The hosts are talking\u2026';
         npSublabel.textContent = '';
@@ -974,7 +1236,6 @@
 
       playerNow.textContent = label || 'Mamma Mi Radio';
 
-      // Fade in
       npLabel.classList.remove('updating');
       playerNow.classList.remove('updating');
     }, 200);
@@ -1043,7 +1304,7 @@
     return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
   }
 
-  // Initial fetch + polling
+  renderLaunch();
   fetchStatus();
   setInterval(fetchStatus, 3000);
 
