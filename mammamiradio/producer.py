@@ -391,6 +391,15 @@ async def prewarm_first_segment(
         audio_path = await download_track(track, config.cache_dir, music_dir=Path("music"))
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(None, normalize, audio_path, norm_path)
+        if not os.environ.get("MAMMAMIRADIO_SKIP_QUALITY_GATE"):
+            try:
+                await loop.run_in_executor(None, validate_segment_audio, norm_path, SegmentType.MUSIC)
+            except AudioToolError as exc:
+                logger.warning("Audio tool unavailable, skipping prewarm quality check: %s", exc)
+            except AudioQualityError as exc:
+                logger.warning("Prewarm quality gate rejected track (%s): %s", norm_path.name, exc)
+                norm_path.unlink(missing_ok=True)
+                return False
         rationale = generate_track_rationale(track, source=state.playlist_source, listener=state.listener)
         crate = classify_track_crate(track, state.playlist_source)
         segment = Segment(
