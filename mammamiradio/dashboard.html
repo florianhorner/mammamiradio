@@ -655,7 +655,7 @@ h1 {
 </div>
 
 <div class="card" id="request-card">
-  <h3>🎙️ Manda un saluto o chiedi una canzone</h3>
+  <h3>Manda un saluto o chiedi una canzone</h3>
   <div id="request-form">
     <input type="text" id="req-name" aria-label="Come ti chiami? (opzionale)" placeholder="Come ti chiami? (opzionale)" autocomplete="off" style="width:100%;box-sizing:border-box;background:rgba(0,0,0,0.25);border:1px solid rgba(245,237,216,0.15);border-radius:6px;color:var(--cream);padding:8px 10px;font-size:13px;margin-bottom:8px">
     <textarea id="req-msg" aria-label="Messaggio o richiesta canzone" placeholder="Es: Ciao a Marco! oppure: puoi mettere Vasco Rossi - Albachiara?" rows="2" autocomplete="off" style="width:100%;box-sizing:border-box;resize:none;background:rgba(0,0,0,0.25);border:1px solid rgba(245,237,216,0.15);border-radius:6px;color:var(--cream);padding:8px 10px;font-size:13px;margin-bottom:8px;font-family:inherit"></textarea>
@@ -1266,8 +1266,8 @@ async function sendRequest() {
       formEl.style.display = 'none';
       sentEl.style.display = '';
       sentEl.textContent = d.type === 'song_request'
-        ? '🎵 Canzone in arrivo! I conduttori la suoneranno presto.'
-        : '🎙️ Saluto ricevuto! I conduttori ti menzioneranno presto.';
+        ? 'Canzone in arrivo! I conduttori la suoneranno presto.'
+        : 'Saluto ricevuto! I conduttori ti menzioneranno presto.';
       setTimeout(() => { formEl.style.display = ''; sentEl.style.display = 'none'; document.getElementById('req-msg').value = ''; }, 15000);
     } else if (r.status === 429) {
       sentEl.style.display = ''; formEl.style.display = 'none';

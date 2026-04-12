@@ -39,7 +39,7 @@ html {
 body {
   font-family: var(--font-body); color: var(--cream);
   line-height: 1.5; padding: 0 24px 120px;
-  max-width: 1200px; margin: 0 auto;
+  max-width: 960px; margin: 0 auto;
 }
 body::before {
   content: ''; position: fixed; top: -120px; right: 20%; z-index: 0;
@@ -84,7 +84,7 @@ h1 {
   position: relative; z-index: 1;
   background: var(--sienna);
   border: 1px solid rgba(245,237,216,0.1);
-  border-top: 2px solid var(--sun2);
+  border-top: 1px solid rgba(245,237,216,0.14);
   border-radius: 10px;
   padding: 18px 20px;
   margin-bottom: 12px;
@@ -95,6 +95,7 @@ h1 {
 }
 .now-card {
   overflow: visible;
+  border-top: 2px solid rgba(236,204,48,0.5);
 }
 .setup-card { border-top-color: var(--sun); }
 .setup-headline {
@@ -590,13 +591,13 @@ h1 {
 </div>
 
 <!-- TAB NAV -->
-<div class="tab-nav">
-  <button class="tab-btn" data-tab="music" onclick="switchTab('music')">Music</button>
-  <button class="tab-btn" data-tab="radio" onclick="switchTab('radio')">Radio<span class="tab-alert" aria-hidden="true"></span></button>
+<div class="tab-nav" role="tablist" aria-label="Admin panels">
+  <button class="tab-btn" role="tab" aria-selected="true" aria-controls="tab-panel-music" id="tab-music" data-tab="music" onclick="switchTab('music')">Music</button>
+  <button class="tab-btn" role="tab" aria-selected="false" aria-controls="tab-panel-radio" id="tab-radio" data-tab="radio" onclick="switchTab('radio')">Radio<span class="tab-alert" aria-hidden="true"></span></button>
 </div>
 
 <!-- TAB: MUSIC -->
-<div class="tab-pane" data-tab="music">
+<div class="tab-pane" role="tabpanel" id="tab-panel-music" aria-labelledby="tab-music" data-tab="music">
 
   <!-- UP NEXT -->
   <div class="card">
@@ -624,7 +625,7 @@ h1 {
 </div><!-- /tab music -->
 
 <!-- TAB: RADIO -->
-<div class="tab-pane" data-tab="radio">
+<div class="tab-pane" role="tabpanel" id="tab-panel-radio" aria-labelledby="tab-radio" data-tab="radio">
 
   <!-- Left column: status/health cards -->
   <div class="radio-col-left">
@@ -764,7 +765,11 @@ async function api(m,p,b){const o={method:m,headers:H()};if(b)o.body=JSON.string
 
 // ── Tab switching ──
 function switchTab(name) {
-  document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === name));
+  document.querySelectorAll('.tab-btn').forEach(b => {
+    const active = b.dataset.tab === name;
+    b.classList.toggle('active', active);
+    b.setAttribute('aria-selected', active ? 'true' : 'false');
+  });
   document.querySelectorAll('.tab-pane').forEach(p => p.classList.toggle('active', p.dataset.tab === name));
   localStorage.setItem('adminTab', name);
 }

@@ -28,10 +28,6 @@
     --surface-hover:#2E2520;
     --cream:#F5EDD8;
     --cream-dk:#EADDC4;
-    --terracotta:#ECCC30;
-    --dusty-rose:#CBB9A6;
-    --sage:#9B8574;
-    --highlight:#F5EDD8;
     --muted:#9B8574;
     --line:rgba(245,237,216,0.10);
     --line-strong:rgba(245,237,216,0.16);
@@ -86,7 +82,7 @@
     font-weight:700;
     font-style:italic;
     letter-spacing:0.02em;
-    color:var(--highlight);
+    color:var(--cream);
     margin-bottom:0.15em;
   }
   .station-subtitle{
@@ -216,7 +212,7 @@
     font-size:clamp(2rem, 7vw, 3.2rem);
     font-style:italic;
     line-height:1;
-    color:var(--highlight);
+    color:var(--cream);
     max-width:12ch;
   }
   .launch-detail{
@@ -327,7 +323,7 @@
   .launch-cue-title{
     font-size:0.86rem;
     font-weight:600;
-    color:var(--highlight);
+    color:var(--cream);
   }
   .launch-cue-detail{
     margin-top:0.18rem;
@@ -431,7 +427,7 @@
     font-family:var(--font-display);
     font-size:clamp(1.35rem,4vw,1.75rem);
     font-weight:600;
-    color:var(--highlight);
+    color:var(--cream);
     line-height:1.35;
     transition:opacity 0.3s;
   }
@@ -442,37 +438,26 @@
     font-weight:400;
   }
 
-  /* Equalizer */
+  /* Equalizer — 36 bars, JS-driven */
   .equalizer{
     display:flex;
-    align-items:flex-end;
+    align-items:center;
     gap:3px;
     height:28px;
     margin-top:1.25rem;
   }
-  .eq-bar{
-    width:4px;
+  .equalizer .wb{
+    width:3px;
     border-radius:2px;
     background:rgba(240,200,64,0.45);
-    opacity:0.6;
-    transition:height 0.15s ease;
+    animation:eq-wave var(--d) ease-in-out infinite alternate;
+    animation-delay:var(--dl);
+    animation-play-state:paused;
   }
-  .eq-bar:nth-child(1){height:8px}
-  .eq-bar:nth-child(2){height:16px}
-  .eq-bar:nth-child(3){height:10px}
-  .eq-bar:nth-child(4){height:20px}
-  .eq-bar:nth-child(5){height:12px}
-
-  .equalizer.active .eq-bar{animation:eq-bounce var(--dur,0.8s) ease-in-out infinite alternate}
-  .equalizer.active .eq-bar:nth-child(1){--dur:0.6s}
-  .equalizer.active .eq-bar:nth-child(2){--dur:0.75s;animation-delay:0.1s}
-  .equalizer.active .eq-bar:nth-child(3){--dur:0.65s;animation-delay:0.2s}
-  .equalizer.active .eq-bar:nth-child(4){--dur:0.8s;animation-delay:0.05s}
-  .equalizer.active .eq-bar:nth-child(5){--dur:0.7s;animation-delay:0.15s}
-
-  @keyframes eq-bounce{
-    0%{height:4px;opacity:0.4}
-    100%{height:26px;opacity:0.8}
+  .equalizer.active .wb{animation-play-state:running}
+  @keyframes eq-wave{
+    from{height:3px;opacity:0.4}
+    to{height:var(--h);opacity:0.8}
   }
 
   /* ---- Section cards ---- */
@@ -491,7 +476,6 @@
     letter-spacing:0.02em;
   }
   .golden-path-notice{
-    border-left:3px solid var(--sun2);
   }
   .golden-path-head{
     font-size:0.72rem;
@@ -504,7 +488,7 @@
   .golden-path-title{
     font-family:var(--font-display);
     font-size:1rem;
-    color:var(--highlight);
+    color:var(--cream);
     margin-bottom:0.35rem;
   }
   .golden-path-detail{
@@ -567,7 +551,6 @@
     background:var(--surface);
     border:1px solid var(--line);
     border-radius:12px;
-    border-left:3px solid var(--sun2);
     padding:1rem 1rem 0.9rem;
   }
   .jokes-title{
@@ -687,7 +670,7 @@
     -webkit-appearance:none;
     width:14px;height:14px;
     border-radius:50%;
-    background:var(--sage);
+    background:var(--muted);
     cursor:pointer;
     transition:background 0.2s;
   }
@@ -695,7 +678,7 @@
   .volume-slider::-moz-range-thumb{
     width:14px;height:14px;
     border-radius:50%;
-    background:var(--sage);
+    background:var(--muted);
     cursor:pointer;
     border:none;
   }
@@ -854,13 +837,7 @@
     <div class="np-type-badge" id="npTypeBadge"><span class="np-type-icon" id="npIcon" aria-hidden="true">&#9835;</span><span class="np-type-text" id="npTypeText">Music</span></div>
     <div class="np-label fade-content" id="npLabel">The booth is warming up...</div>
     <div class="np-sublabel fade-content" id="npSublabel"></div>
-    <div class="equalizer" id="equalizer">
-      <div class="eq-bar"></div>
-      <div class="eq-bar"></div>
-      <div class="eq-bar"></div>
-      <div class="eq-bar"></div>
-      <div class="eq-bar"></div>
-    </div>
+    <div class="equalizer" id="equalizer"></div>
   </div>
 
   <div class="section-card golden-path-notice" id="goldenPathNotice" style="display:none">
@@ -951,6 +928,19 @@
   const launchNote = document.getElementById('launchNote');
   const launchWaveform = document.getElementById('launchWaveform');
   const goldenPathHead = document.getElementById('goldenPathHead');
+
+  // Equalizer — populate 36 bars with randomised timings
+  (function() {
+    const eq = document.getElementById('equalizer');
+    if (!eq) return;
+    for (let i = 0; i < 36; i++) {
+      const b = document.createElement('div');
+      b.className = 'wb';
+      const h = 4 + Math.random() * 20;
+      b.style.cssText = `--h:${h}px;--d:${(0.45+Math.random()*0.85).toFixed(2)}s;--dl:${(Math.random()*0.7).toFixed(2)}s;height:${Math.round(h*0.4)}px`;
+      eq.appendChild(b);
+    }
+  })();
 
   const state = {
     isPlaying: false,
