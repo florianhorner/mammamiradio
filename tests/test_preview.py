@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from mammamiradio.config import PacingSection
-from mammamiradio.models import StationState, Track
+from mammamiradio.models import SegmentType, StationState, Track
 from mammamiradio.scheduler import preview_upcoming
 
 
@@ -46,3 +46,24 @@ def test_preview_music_has_track_labels():
         assert r["type"] == "music"
         assert "Artist" in r["label"]
         assert "reason" in r
+
+
+def test_preview_honors_force_next_and_pinned_track():
+    tracks = _tracks()
+    state = StationState(
+        playlist=tracks,
+        segments_produced=1,
+        songs_since_banter=5,
+        songs_since_ad=5,
+        force_next=SegmentType.MUSIC,
+        pinned_track=tracks[3],
+    )
+    pacing = PacingSection(songs_between_banter=1, songs_between_ads=1)
+
+    result = preview_upcoming(state, pacing, tracks, count=3)
+
+    assert result[0]["type"] == "music"
+    assert result[0]["label"] == tracks[3].display
+    assert result[0]["playlist_index"] == 3
+    assert state.force_next == SegmentType.MUSIC
+    assert state.pinned_track == tracks[3]

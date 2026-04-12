@@ -1062,11 +1062,15 @@ async def move_track(request: Request, _: None = Depends(require_admin_access)):
 
 @router.get("/api/search")
 async def search_tracks(request: Request, q: str = "", _: None = Depends(require_admin_access)):
-    """Search the current playlist for tracks matching the query."""
+    """Search the current playlist and yt-dlp for tracks matching the query."""
+    from mammamiradio.downloader import search_ytdlp_metadata
+
     if not q.strip():
-        return {"results": []}
+        return {"results": [], "external": []}
     query = q.strip().lower()
     state = request.app.state.station_state
+
+    # Playlist matches (instant)
     results = []
     for i, track in enumerate(state.playlist):
         text = f"{track.title} {track.artist}".lower()
@@ -1083,7 +1087,184 @@ async def search_tracks(request: Request, q: str = "", _: None = Depends(require
             )
             if len(results) >= 20:
                 break
-    return {"results": results}
+
+    # External yt-dlp search (blocking, run off the event loop)
+    loop = asyncio.get_running_loop()
+    external = await loop.run_in_executor(None, search_ytdlp_metadata, q.strip(), 5)
+
+    return {"results": results, "external": external}
+
+
+@router.post("/api/playlist/add-external")
+async def add_external_track(request: Request, _: None = Depends(require_admin_access)):
+    """Download a yt-dlp search result and pin it to play next."""
+    from mammamiradio.downloader import download_track
+    from mammamiradio.models import Track
+
+    body = await request.json()
+    youtube_id = body.get("youtube_id", "").strip()
+    title = body.get("title", "").strip()
+    artist = body.get("artist", "").strip()
+    duration_ms = int(body.get("duration_ms") or 0)
+    if not youtube_id:
+        return JSONResponse({"ok": False, "error": "youtube_id required"}, status_code=400)
+
+    state = request.app.state.station_state
+    config = request.app.state.config
+
+    track = Track(
+        title=title,
+        artist=artist,
+        duration_ms=duration_ms,
+        youtube_id=youtube_id,
+    )
+
+    # Pre-download so the cache is warm before we purge the queue.
+    # Without this, the producer would hit a cache miss after the purge,
+    # causing 30-60s of silence while yt-dlp downloads.
+    await download_track(track, config.cache_dir, music_dir=Path("music"))
+
+    # Add to playlist pool so it's available for future cycles too
+    state.playlist.append(track)
+
+    # Pin it so the producer plays it next
+    state.pinned_track = track
+    state.playlist_revision += 1
+    purged = _purge_segment_queue(request.app.state.queue)
+    state.queued_segments.clear()
+    state.force_next = SegmentType.MUSIC
+
+    logger.info("Queued external track: %s (yt:%s)", track.display, youtube_id)
+    return {"ok": True, "queued": track.display, "purged": purged}
+
+
+@router.get("/api/listener-requests")
+async def get_listener_requests(request: Request, _: None = Depends(require_admin_access)):
+    """Return current pending listener request queue (admin only)."""
+    import time as _time
+
+    state = request.app.state.station_state
+    now = _time.time()
+    return {
+        "requests": [
+            {
+                "name": r.get("name"),
+                "message": r.get("message"),
+                "type": r.get("type"),
+                "song_found": r.get("song_found"),
+                "song_error": r.get("song_error"),
+                "song_track": r.get("song_track"),
+                "age_s": int(now - r.get("ts", now)),
+            }
+            for r in state.pending_requests
+        ]
+    }
+
+
+@router.post("/api/listener-request")
+async def listener_request(request: Request):
+    """Accept a listener shoutout or song wish. Public endpoint, IP rate-limited."""
+    import time as _time
+
+    body = await request.json()
+    name = (body.get("name") or "Un ascoltatore").strip()[:60]
+    message = (body.get("message") or "").strip()[:200]
+    if not message:
+        return JSONResponse({"ok": False, "error": "message required"}, status_code=400)
+
+    # IP rate limit: 1 request per 30s per IP
+    ip = request.client.host if request.client else "unknown"
+    state = request.app.state.station_state
+    now = _time.time()
+    last = state._listener_request_rl.get(ip, 0)
+    if now - last < 30:
+        return JSONResponse({"ok": False, "retry_after": int(30 - (now - last))}, status_code=429)
+    state._listener_request_rl[ip] = now
+    # Prune stale entries to avoid unbounded growth
+    state._listener_request_rl = {k: v for k, v in state._listener_request_rl.items() if now - v < 300}
+
+    # Cap queue
+    if len(state.pending_requests) >= 10:
+        return JSONResponse({"ok": False, "error": "queue_full"}, status_code=429)
+
+    # Detect song request by keyword
+    msg_lower = message.lower()
+    song_keywords = ["metti", "suona", "play", "voglio sentire", "puoi mettere", "can you play", "mettete"]
+    is_song_request = any(kw in msg_lower for kw in song_keywords)
+    req: dict = {
+        "name": name,
+        "message": message,
+        "type": "song_request" if is_song_request else "shoutout",
+        "song_query": message if is_song_request else None,
+        "song_found": False,
+        "song_error": False,
+        "song_track": None,
+        "banter_cycles_missed": 0,
+        "ts": now,
+    }
+    state.pending_requests.append(req)
+
+    # Fire async download for song requests
+    if is_song_request:
+        _dl_task = asyncio.create_task(_download_listener_song(req, request.app.state))
+        request.app.state.background_tasks = getattr(request.app.state, "background_tasks", set())
+        request.app.state.background_tasks.add(_dl_task)
+        _dl_task.add_done_callback(request.app.state.background_tasks.discard)
+
+    logger.info("Listener request queued from %s: %s (%s)", name, message[:40], req["type"])
+    return {"ok": True, "queued": True, "type": req["type"]}
+
+
+async def _download_listener_song(req: dict, app_state) -> None:
+    """Background task: search yt-dlp for a listener song request and pin it.
+
+    Stream-safe: does NOT purge the pre-buffered queue.  The pinned track
+    enters the queue naturally after the current lookahead drains, avoiding
+    any audible silence gap.  If the request was already consumed (degraded
+    after 2 banter cycles, or cleared by a source switch), we still add the
+    track to the playlist for future rotation but skip the pin.
+    """
+    from mammamiradio.downloader import download_track, search_ytdlp_metadata
+    from mammamiradio.models import Track
+
+    state = app_state.station_state
+    config = app_state.config
+    query = req.get("song_query") or req.get("message") or ""
+    try:
+        loop = asyncio.get_running_loop()
+        results = await loop.run_in_executor(None, search_ytdlp_metadata, query, 1)
+        if not results:
+            req["song_error"] = True
+            logger.info("Listener song request: no yt-dlp results for %r", query)
+            return
+        meta = results[0]
+        track = Track(
+            title=meta["title"],
+            artist=meta["artist"],
+            duration_ms=meta["duration_ms"],
+            youtube_id=meta["youtube_id"],
+        )
+        # Download so it's ready when the producer picks it up
+        await download_track(track, config.cache_dir, music_dir=Path("music"))
+
+        # Always add to the playlist pool for future rotation
+        state.playlist.append(track)
+        req["song_found"] = True
+        req["song_track"] = track.display
+
+        # Only pin if the request is still pending.  If the scriptwriter
+        # already degraded it (2-cycle timeout) or a source switch cleared
+        # pending_requests, pinning would cause a zombie: unexpected track
+        # play with no host announcement after the fallback already aired.
+        if req in state.pending_requests:
+            state.pinned_track = track
+            state.force_next = SegmentType.MUSIC
+            logger.info("Listener song request ready: %s", track.display)
+        else:
+            logger.info("Listener song downloaded but request already consumed: %s", track.display)
+    except Exception:
+        req["song_error"] = True
+        logger.warning("Listener song download failed for %r", query, exc_info=True)
 
 
 @router.post("/api/playlist/add")
@@ -1146,19 +1327,17 @@ async def move_to_next(request: Request, _: None = Depends(require_admin_access)
     pl = state.playlist
 
     if 0 <= idx < len(pl):
-        track = pl.pop(idx)
-        pl.insert(0, track)
-        # Bump revision so the producer picks up the reordered playlist.
-        # Purge pre-produced segments so the moved track actually plays next
-        # instead of waiting behind already-rendered lookahead.
+        track = pl[idx]
+        # Pin the track so select_next_track returns it immediately on the next
+        # music pick, regardless of weighted-random ordering.
+        state.pinned_track = track
+        # Bump revision so the producer picks up the change.
+        # Purge pre-produced segments so the pinned track plays next instead of
+        # waiting behind already-rendered lookahead.
         state.playlist_revision += 1
         purged = _purge_segment_queue(request.app.state.queue)
         state.queued_segments.clear()
         state.force_next = SegmentType.MUSIC
-        # Clear play history to reset diversity filters — without this,
-        # a move-to-next on a small playlist can trigger immediate repeats
-        # because the old history still penalises the moved track.
-        state.played_tracks.clear()
         return {"ok": True, "moved": track.display, "to_position": 0, "purged": purged}
     return {"ok": False, "error": "Invalid index"}
 

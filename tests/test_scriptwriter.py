@@ -418,6 +418,38 @@ async def test_write_banter_works_without_persona_store(config, state):
 
 
 @pytest.mark.asyncio
+async def test_write_banter_defers_listener_request_mutation_until_commit(config, state):
+    """Listener requests stay pending until the produced banter is actually committed."""
+    host_name = config.hosts[0].name
+    state.pending_requests.append(
+        {
+            "name": "Luca",
+            "message": "Ciao radio",
+            "type": "shoutout",
+            "song_found": False,
+            "song_error": False,
+            "song_track": None,
+            "banter_cycles_missed": 0,
+            "ts": 0,
+        }
+    )
+
+    async def _fake_generate_json_response(**kwargs):
+        return {"lines": [{"host": host_name, "text": "Ciao Luca!"}], "new_joke": None}
+
+    with patch("mammamiradio.scriptwriter._generate_json_response", side_effect=_fake_generate_json_response):
+        result, listener_request_commit = await write_banter(state, config, return_listener_request_commit=True)
+
+    assert len(result) == 1
+    assert state.pending_requests[0]["message"] == "Ciao radio"
+    assert listener_request_commit is not None
+
+    listener_request_commit.apply(state)
+
+    assert state.pending_requests == []
+
+
+@pytest.mark.asyncio
 async def test_write_banter_survives_persona_get_failure(config, state, tmp_path):
     """Banter still generates when persona_store.get_persona() throws."""
     from mammamiradio.persona import PersonaStore

@@ -323,7 +323,9 @@ async def test_move_to_next_valid(tmp_path):
     body = resp.json()
     assert body["ok"] is True
     assert body["purged"] == 1
-    assert app.state.station_state.playlist[0].title == "Song C"
+    # move_to_next pins the track instead of reordering the playlist
+    assert app.state.station_state.pinned_track is not None
+    assert app.state.station_state.pinned_track.title == "Song C"
     assert app.state.station_state.force_next == SegmentType.MUSIC
     assert app.state.station_state.playlist_revision == starting_revision + 1
     assert app.state.station_state.queued_segments == []
@@ -360,6 +362,23 @@ async def test_move_to_next_rejects_non_integer_index_without_side_effects(tmp_p
     assert app.state.station_state.queued_segments == [{"type": "banter", "label": "Queued"}]
     assert app.state.queue.qsize() == 1
     assert queued_file.exists()
+
+
+@pytest.mark.asyncio
+async def test_move_to_next_updates_public_upcoming_preview():
+    app = _make_test_app()
+    app.state.station_state.segments_produced = 1
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        move_resp = await client.post("/api/playlist/move_to_next", json={"index": 2})
+        status_resp = await client.get("/public-status")
+
+    assert move_resp.status_code == 200
+    assert move_resp.json()["ok"] is True
+    upcoming = status_resp.json()["upcoming"]
+    assert upcoming[0]["type"] == "music"
+    assert upcoming[0]["label"] == "Artist C – Song C"
+    assert upcoming[0]["playlist_index"] == 2
 
 
 @pytest.mark.asyncio

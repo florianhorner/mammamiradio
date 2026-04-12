@@ -252,21 +252,36 @@ async def test_setup_save_keys_updates_live_config_without_disk_write():
     app = _make_test_app()
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
 
-    with patch("mammamiradio.streamer._save_dotenv") as save_dotenv:
-        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
-            resp = await client.post(
-                "/api/setup/save-keys",
-                json={"ANTHROPIC_API_KEY": "ant-test", "OPENAI_API_KEY": "openai-test"},
-            )
+    import os as _os
 
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["ok"] is True
-    assert "ANTHROPIC_API_KEY" in body["saved"]
-    assert "OPENAI_API_KEY" in body["saved"]
-    assert app.state.config.anthropic_api_key == "ant-test"
-    assert app.state.config.openai_api_key == "openai-test"
-    save_dotenv.assert_called_once()
+    _prev_anthropic = _os.environ.get("ANTHROPIC_API_KEY")
+    _prev_openai = _os.environ.get("OPENAI_API_KEY")
+    try:
+        with patch("mammamiradio.streamer._save_dotenv") as save_dotenv:
+            async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+                resp = await client.post(
+                    "/api/setup/save-keys",
+                    json={"ANTHROPIC_API_KEY": "ant-test", "OPENAI_API_KEY": "openai-test"},
+                )
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["ok"] is True
+        assert "ANTHROPIC_API_KEY" in body["saved"]
+        assert "OPENAI_API_KEY" in body["saved"]
+        assert app.state.config.anthropic_api_key == "ant-test"
+        assert app.state.config.openai_api_key == "openai-test"
+        save_dotenv.assert_called_once()
+    finally:
+        # Restore env to avoid polluting subsequent tests
+        if _prev_anthropic is None:
+            _os.environ.pop("ANTHROPIC_API_KEY", None)
+        else:
+            _os.environ["ANTHROPIC_API_KEY"] = _prev_anthropic
+        if _prev_openai is None:
+            _os.environ.pop("OPENAI_API_KEY", None)
+        else:
+            _os.environ["OPENAI_API_KEY"] = _prev_openai
 
 
 @pytest.mark.asyncio

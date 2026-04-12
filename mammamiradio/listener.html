@@ -83,6 +83,7 @@
     font-family:var(--font-display);
     font-size:clamp(2.4rem,6vw,3.6rem);
     font-weight:700;
+    font-style:italic;
     letter-spacing:0.02em;
     color:var(--highlight);
     margin-bottom:0.15em;
@@ -714,6 +715,46 @@
   @supports(padding-bottom:env(safe-area-inset-bottom)){
     .player-bar{padding-bottom:env(safe-area-inset-bottom)}
   }
+
+  /* ---- Listener Request Form ---- */
+  .request-form{display:flex;flex-direction:column;gap:0.65rem;padding-bottom:0.8rem}
+  .request-input{
+    background:#1a1410;
+    border:1px solid var(--line);
+    border-radius:8px;
+    color:var(--cream);
+    font-family:var(--font-body);
+    font-size:0.88rem;
+    padding:0.55rem 0.75rem;
+    outline:none;
+    resize:none;
+    width:100%;
+    box-sizing:border-box;
+    transition:border-color 0.2s;
+  }
+  .request-input::placeholder{color:var(--muted);opacity:0.7}
+  .request-input:focus{border-color:var(--sun2)}
+  .request-textarea{min-height:72px}
+  .request-btn{
+    align-self:flex-start;
+    background:var(--sun2);
+    border:none;
+    border-radius:8px;
+    color:#14110f;
+    cursor:pointer;
+    font-family:var(--font-body);
+    font-size:0.85rem;
+    font-weight:600;
+    letter-spacing:0.02em;
+    padding:0.5rem 1.2rem;
+    transition:opacity 0.2s,transform 0.1s;
+  }
+  .request-btn:hover{opacity:0.85}
+  .request-btn:active{transform:scale(0.97)}
+  .request-btn:disabled{opacity:0.4;cursor:not-allowed}
+  .request-feedback{font-size:0.88rem;color:var(--muted);margin-top:0.5rem;padding:0.5rem 0.75rem;border-radius:6px;background:rgba(255,255,255,0.05)}
+  .request-feedback.ok{color:#6fa3ef;background:rgba(37,99,235,0.12)}
+  .request-feedback.err{color:#e07070;background:rgba(184,44,32,0.12)}
 </style>
 </head>
 <body data-launch-state="idle">
@@ -740,7 +781,6 @@
     </div>
     <h2 class="launch-title fade-content" id="launchTitle">We're lighting the sign.</h2>
     <p class="launch-detail fade-content" id="launchDetail">AI hosts. Italian music. Live absurdity.</p>
-    <div class="launch-promise">AI hosts. Italian music. Live absurdity.</div>
     <div class="launch-waveform" id="launchWaveform" aria-hidden="true">
       <span class="wb" style="--h:30px;--d:0.62s;--dl:0.00s"></span>
       <span class="wb" style="--h:24px;--d:0.78s;--dl:0.08s"></span>
@@ -811,6 +851,17 @@
   <div class="section-card" id="recentSection" style="display:none">
     <div class="section-title">Recently played</div>
     <div id="recentList"></div>
+  </div>
+
+  <!-- Listener Request -->
+  <div class="section-card" id="requestCard">
+    <div class="section-title">Manda un messaggio in studio</div>
+    <div class="request-form">
+      <input type="text" id="requestName" class="request-input" placeholder="Il tuo nome (opzionale)" maxlength="40" autocomplete="off">
+      <textarea id="requestMsg" class="request-input request-textarea" placeholder="Chiedi una canzone o manda un saluto… I conduttori potrebbero leggerlo in diretta!" maxlength="280" rows="3"></textarea>
+      <button class="request-btn" id="requestSendBtn" onclick="sendRequest()">Manda al DJ</button>
+      <div id="requestFeedback" class="request-feedback" style="display:none"></div>
+    </div>
   </div>
   </div>
 </div>
@@ -1236,7 +1287,7 @@
         npSublabel.textContent = '';
       }
 
-      playerNow.textContent = label || 'Mamma Mi Radio';
+      playerNow.textContent = label || localStorage.getItem('stationName') || 'Mamma Mi Radio';
 
       npLabel.classList.remove('updating');
       playerNow.classList.remove('updating');
@@ -1305,6 +1356,64 @@
     if(!s) return '';
     return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
   }
+
+  function sendRequest(){
+    var nameEl = document.getElementById('requestName');
+    var msgEl = document.getElementById('requestMsg');
+    var btn = document.getElementById('requestSendBtn');
+    var fb = document.getElementById('requestFeedback');
+    var name = (nameEl.value || '').trim();
+    var msg = (msgEl.value || '').trim();
+    if(!msg){ fb.textContent='Scrivi qualcosa prima!'; fb.className='request-feedback err'; fb.style.display='block'; return; }
+    btn.disabled = true;
+    fb.style.display = 'none';
+    fetch(_base + '/api/listener-request', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({name: name || null, message: msg})
+    })
+    .then(function(r){ return r.json().then(function(d){ return {ok:r.ok, d:d}; }); })
+    .then(function(res){
+      if(res.ok){
+        fb.textContent = res.d.message || 'Messaggio ricevuto! I DJ lo leggeranno presto.';
+        fb.className = 'request-feedback ok';
+        msgEl.value = '';
+      } else if(res.d && res.d.retry_after){
+        fb.textContent = 'Un attimo — aspetta ' + res.d.retry_after + ' secondi prima del prossimo messaggio.';
+        fb.className = 'request-feedback err';
+      } else {
+        fb.textContent = 'Ops, qualcosa è andato storto. Riprova!';
+        fb.className = 'request-feedback err';
+      }
+      fb.style.display = 'block';
+    })
+    .catch(function(){
+      fb.textContent = 'Ops, qualcosa è andato storto. Riprova!';
+      fb.className = 'request-feedback err';
+      fb.style.display = 'block';
+    })
+    .finally(function(){ btn.disabled = false; });
+  }
+
+  // Apply custom station name from admin if set
+  (function applyStationName(){
+    var n = localStorage.getItem('stationName');
+    if(!n) return;
+    var h1 = document.querySelector('.station-name');
+    if(h1) h1.textContent = n;
+    document.title = n + ' — Live';
+    document.getElementById('playerNow').textContent = n;
+    document.querySelector('meta[property="og:title"]') && (document.querySelector('meta[property="og:title"]').content = n);
+  })();
+
+  // Re-apply whenever admin changes the name in another tab
+  window.addEventListener('storage', function(e){
+    if(e.key !== 'stationName') return;
+    var n = e.newValue || 'Mamma Mi Radio';
+    var h1 = document.querySelector('.station-name');
+    if(h1) h1.textContent = n;
+    document.title = n + ' — Live';
+  });
 
   renderLaunch();
   fetchStatus();

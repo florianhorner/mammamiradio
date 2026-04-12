@@ -9,6 +9,7 @@ import logging
 import os
 import random
 import re
+from dataclasses import dataclass
 
 import anthropic
 
@@ -59,6 +60,82 @@ _TRANSITION_REWRITE_MAP: dict[str, list[str]] = {
     ],
 }
 _BORING_TRANSITION_STEMS = {"che pezzo", "eh non", "bellissima", "allora", "e adesso"}
+
+
+@dataclass
+class ListenerRequestCommit:
+    """Deferred listener-request state update, applied only after banter queues."""
+
+    request: dict
+    banter_cycles_missed: int | None = None
+    mark_song_error: bool = False
+    consume: bool = False
+
+    def apply(self, state: StationState) -> None:
+        if self.request not in state.pending_requests:
+            return
+        if self.banter_cycles_missed is not None:
+            self.request["banter_cycles_missed"] = self.banter_cycles_missed
+        if self.mark_song_error:
+            self.request["song_error"] = True
+        if self.consume:
+            state.pending_requests.remove(self.request)
+
+
+def _plan_listener_request_block(state: StationState) -> tuple[str, ListenerRequestCommit | None]:
+    """Build prompt text plus a deferred state mutation for the pending request."""
+    pending = state.pending_requests
+    if not pending:
+        return "", None
+
+    req = pending[0]  # peek only; producer applies the commit after queue success
+    is_song = req.get("type") == "song_request"
+    still_downloading = is_song and not req.get("song_found") and not req.get("song_error")
+
+    if still_downloading:
+        next_missed = req.get("banter_cycles_missed", 0) + 1
+        if next_missed >= 2:
+            still_downloading = False
+            commit = ListenerRequestCommit(
+                request=req,
+                banter_cycles_missed=next_missed,
+                mark_song_error=True,
+                consume=True,
+            )
+        else:
+            return "", ListenerRequestCommit(request=req, banter_cycles_missed=next_missed)
+    else:
+        commit = ListenerRequestCommit(request=req, consume=True)
+
+    name = req.get("name") or "Un ascoltatore"
+    msg = req.get("message") or ""
+    if is_song and req.get("song_found") and req.get("song_track"):
+        return (
+            f"""
+LISTENER REQUEST:
+{name} ha chiesto: "{msg}"
+La canzone che stai per suonare è "{req["song_track"]}" — annunciala dedicandola a {name}.
+Sii caldo, divertente, fai sentire {name} speciale. Questa è la magia della radio.
+""",
+            commit,
+        )
+    if is_song and (req.get("song_error") or commit.mark_song_error):
+        return (
+            f"""
+LISTENER REQUEST (SONG NOT FOUND):
+{name} ha chiesto: "{msg}"
+Non sei riuscito a trovare quella canzone. Dillo con simpatia e dedica comunque un saluto speciale a {name}.
+""",
+            commit,
+        )
+    return (
+        f"""
+LISTENER REQUEST:
+{name} ha mandato un saluto: "{msg}"
+Menziona {name} per nome in modo naturale durante il banter. Fallo sentire ascoltato.
+""",
+        commit,
+    )
 
 
 def _get_client(api_key: str) -> anthropic.AsyncAnthropic:
@@ -430,7 +507,8 @@ async def write_banter(
     *,
     is_new_listener: bool = False,
     is_first_listener: bool = False,
-) -> list[tuple[HostPersonality, str]]:
+    return_listener_request_commit: bool = False,
+) -> list[tuple[HostPersonality, str]] | tuple[list[tuple[HostPersonality, str]], ListenerRequestCommit | None]:
     """Generate short host banter with recent tracks, jokes, and home context.
 
     When a PersonaStore is available on state, loads the listener persona into
@@ -440,7 +518,10 @@ async def write_banter(
     if not _has_script_llm(config):
         host = random.choice(config.hosts)
         fallback = {"it": "E torniamo alla musica!", "en": "And back to the music!"}
-        return [(host, fallback.get(config.station.language, fallback["en"]))]
+        result = [(host, fallback.get(config.station.language, fallback["en"]))]
+        if return_listener_request_commit:
+            return result, None
+        return result
 
     recent = [_sanitize_prompt_data(t.display) for t in list(state.played_tracks)[-3:]]
     jokes = list(state.running_jokes)[-3:] if state.running_jokes else []
@@ -577,6 +658,9 @@ Make this the focus of this banter break. It happened just now — react natural
         # Consume the directive so it fires only once
         state.ha_pending_directive = ""
 
+    # Listener request injection
+    listener_request_block, listener_request_commit = _plan_listener_request_block(state)
+
     # If persona is active, request persona_updates in the response
     persona_update_schema = ""
     if persona_block:
@@ -595,7 +679,7 @@ Running jokes to optionally callback: {jokes if jokes else "none yet, you may se
 {mood_block}<context_awareness>
 {context_block}
 </context_awareness>
-{track_rules_block}{reactive_block}{chaos_block}{new_listener_block}{listener_block}{persona_block}
+{track_rules_block}{reactive_block}{listener_request_block}{chaos_block}{new_listener_block}{listener_block}{persona_block}
 Return JSON:
 {{"lines": [{{"host": "HostName", "text": "what they say"}}], "new_joke": "brief description of any new running joke or null"{persona_update_schema}}}"""
 
@@ -624,6 +708,8 @@ Return JSON:
                 logger.warning("Failed to persist persona updates", exc_info=True)
 
         logger.info("Generated banter: %d lines", len(result))
+        if return_listener_request_commit:
+            return result, listener_request_commit
         return result
 
     except Exception as e:
@@ -634,7 +720,10 @@ Return JSON:
             "en": "And back to the music!",
         }
         text = fallback.get(config.station.language, fallback["en"])
-        return [(host, text)]
+        result = [(host, text)]
+        if return_listener_request_commit:
+            return result, None
+        return result
 
 
 AD_BREAK_INTROS = [

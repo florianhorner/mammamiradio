@@ -319,6 +319,9 @@ h1 {
   border: 1px solid rgba(244,208,72,0.3); cursor: pointer;
 }
 .sr-add:hover { background: rgba(244,208,72,0.22); }
+.sr-add.external { background: rgba(37,99,235,0.12); color: #93b4fd; border-color: rgba(37,99,235,0.3); }
+.sr-add.external:hover { background: rgba(37,99,235,0.22); }
+.sr-add.loading { opacity: 0.5; pointer-events: none; }
 .sr-label { font-size: 10px; color: rgba(245,237,216,0.4); margin: 8px 0 4px; letter-spacing: 0.08em; text-transform: uppercase; font-weight: 600; }
 
 .pl-row {
@@ -419,6 +422,19 @@ h1 {
 
 .empty { font-size: 12px; color: rgba(245,237,216,0.35); text-align: center; padding: 16px 0; font-style: italic; }
 .section-divider { height: 1px; background: rgba(245,237,216,0.08); margin: 4px 0 12px; }
+
+/* ── Listener Requests ── */
+.lr-item { padding: 8px 0; border-bottom: 1px solid rgba(245,237,216,0.07); }
+.lr-item:last-child { border-bottom: none; }
+.lr-head { display: flex; align-items: center; gap: 6px; margin-bottom: 3px; }
+.lr-name { font-size: 12px; font-weight: 600; color: var(--cream); }
+.lr-age { font-size: 10px; color: rgba(245,237,216,0.35); margin-left: auto; }
+.lr-msg { font-size: 12px; color: rgba(245,237,216,0.65); }
+.lr-pill { font-size: 10px; font-weight: 600; padding: 2px 6px; border-radius: 4px; }
+.lr-shout { background: rgba(37,99,235,0.18); color: #6fa3ef; }
+.lr-found { background: rgba(37,99,235,0.18); color: #6fa3ef; }
+.lr-searching { background: rgba(244,208,72,0.15); color: var(--sun2); }
+.lr-err { background: rgba(184,44,32,0.18); color: #e07070; }
 
 /* ── STOP/RESUME ── */
 .btn-stop { background: var(--error); color: var(--cream); min-height: 44px; }
@@ -578,6 +594,12 @@ h1 {
     <div id="queueBody"><div class="empty">Waiting...</div></div>
   </div>
 
+  <!-- LISTENER REQUESTS -->
+  <div class="card">
+    <div class="card-label">Listener Requests <span id="lrMeta" style="float:right;font-weight:400;color:var(--muted)"></span></div>
+    <div id="lrBody"><div class="empty">No requests yet</div></div>
+  </div>
+
   <!-- PLAYLIST -->
   <div class="card">
     <div class="card-label">Playlist <span id="plMeta" style="float:right;font-weight:400"></span></div>
@@ -665,6 +687,16 @@ h1 {
     <div class="card">
       <div class="card-label">Last Break</div>
       <div class="script-box" id="recentBody"><div class="empty">Nothing aired yet</div></div>
+    </div>
+
+    <!-- STATION NAME -->
+    <div class="card">
+      <div class="card-label">Station Name</div>
+      <div style="display:flex;gap:8px;align-items:center">
+        <input type="text" id="stationNameInput" class="input" placeholder="e.g. Florian's Radio" maxlength="60" autocomplete="off" style="flex:1" oninput="updateStationNamePreview()">
+        <button class="btn btn-trigger" onclick="saveStationName(this)">Save</button>
+      </div>
+      <div id="stationNamePreview" style="font-size:11px;color:rgba(245,237,216,0.4);margin-top:6px"></div>
     </div>
 
     <!-- PACING -->
@@ -1011,19 +1043,36 @@ si.addEventListener('input',()=>{
   if(_plFilter.length>=2)_searchTo=setTimeout(doSearch,400);
   else document.getElementById('searchResults').innerHTML='';
 });
-let _sR=[];
+let _sR=[],_sExt=[];
 async function doSearch(){
   const q=si.value.trim();if(!q)return;
+  const el=document.getElementById('searchResults');
+  el.innerHTML='<div class="sr-label" style="color:rgba(245,237,216,0.25)">Searching…</div>';
   try{
     const resp=await fetch('/api/search?q='+encodeURIComponent(q),{headers:H()});
-    if(!resp.ok){console.warn('Search failed:',resp.status);return}
+    if(!resp.ok){console.warn('Search failed:',resp.status);el.innerHTML='';return}
     const d=await resp.json();
-    _sR=d.results||[];const el=document.getElementById('searchResults');
-    if(!_sR.length){el.innerHTML=q.length>=2?'<div class="empty">No matches in playlist</div>':'';return}
-    el.innerHTML='<div class="sr-label">Matches</div>'+_sR.slice(0,8).map((t,i)=>`<div class="sr-row"><span>${esc(t.artist)} — ${esc(t.title)}</span><button class="sr-add" onclick="addTr(${i})">&#9654; Next</button></div>`).join('');
-  }catch(e){console.warn('Search error:',e)}
+    _sR=d.results||[];_sExt=d.external||[];
+    let html='';
+    if(_sR.length){
+      html+='<div class="sr-label">In playlist</div>'+_sR.slice(0,5).map((t,i)=>`<div class="sr-row"><span>${esc(t.artist)} — ${esc(t.title)}</span><button class="sr-add" onclick="addTr(${i})">&#9654; Next</button></div>`).join('');
+    }
+    if(_sExt.length){
+      html+='<div class="sr-label" style="margin-top:8px">From the web</div>'+_sExt.slice(0,5).map((t,i)=>`<div class="sr-row"><span>${esc(t.artist?t.artist+' — ':'')}${esc(t.title)}</span><button class="sr-add external" id="ext-btn-${i}" onclick="addExternal(${i})">&#8681; Queue</button></div>`).join('');
+    }
+    if(!html)html=q.length>=2?'<div class="empty">No matches</div>':'';
+    el.innerHTML=html;
+  }catch(e){console.warn('Search error:',e);el.innerHTML='';}
 }
 async function addTr(i){const t=_sR[i];if(!t)return;await api('POST','/api/playlist/move_to_next',{index:t.index});toast('Playing next: '+t.display);document.getElementById('searchResults').innerHTML='';si.value='';_plFilter=''}
+async function addExternal(i){
+  const t=_sExt[i];if(!t)return;
+  const btn=document.getElementById('ext-btn-'+i);
+  if(btn){btn.classList.add('loading');btn.textContent='Downloading…';}
+  const r=await api('POST','/api/playlist/add-external',{youtube_id:t.youtube_id,title:t.title,artist:t.artist,duration_ms:t.duration_ms});
+  if(r.ok){toast('Queued: '+t.display);document.getElementById('searchResults').innerHTML='';si.value='';_plFilter='';}
+  else{toast('Failed to queue');if(btn){btn.classList.remove('loading');btn.textContent='&#8681; Queue';}}
+}
 
 // ── Drag & Drop ──
 let _dragSrc=null;
@@ -1048,6 +1097,23 @@ function initDragDrop(){
       _dragSrc=null;
     });
   });
+}
+
+// ── Station Name ──
+(function initStationName(){
+  const saved = localStorage.getItem('stationName');
+  if(saved) { document.getElementById('stationNameInput').value = saved; document.getElementById('stationNamePreview').textContent = 'Current: '+saved; }
+})();
+function updateStationNamePreview(){
+  const v = document.getElementById('stationNameInput').value.trim();
+  document.getElementById('stationNamePreview').textContent = v ? 'Preview: '+v : '';
+}
+function saveStationName(el){
+  const v = document.getElementById('stationNameInput').value.trim();
+  if(!v){ toast('Enter a station name first'); return; }
+  localStorage.setItem('stationName', v);
+  document.getElementById('stationNamePreview').textContent = 'Saved: '+v;
+  flash(el); toast('Station name saved — visible in this browser only');
 }
 
 // ── Pacing ──
@@ -1097,6 +1163,29 @@ async function applyHostPreset(n,presetName){
   toast(`${n}: ${presetName} preset`);
 }
 
+// ── Listener Requests ──
+function updateListenerRequests(reqs){
+  const el=document.getElementById('lrBody');
+  const meta=document.getElementById('lrMeta');
+  if(!reqs?.length){el.innerHTML='<div class="empty">No requests yet</div>';meta.textContent='';return}
+  meta.textContent=reqs.length+' pending';
+  el.innerHTML=reqs.map(r=>{
+    const age=r.age_s<60?r.age_s+'s ago':Math.floor(r.age_s/60)+'m ago';
+    let status='';
+    if(r.type==='song_request'){
+      if(r.song_found) status=`<span class="lr-pill lr-found">&#9654; ${esc(r.song_track||'ready')}</span>`;
+      else if(r.song_error) status='<span class="lr-pill lr-err">not found</span>';
+      else status='<span class="lr-pill lr-searching">searching…</span>';
+    } else {
+      status='<span class="lr-pill lr-shout">shoutout</span>';
+    }
+    return `<div class="lr-item">
+      <div class="lr-head"><span class="lr-name">${esc(r.name||'Listener')}</span>${status}<span class="lr-age">${age}</span></div>
+      <div class="lr-msg">${esc(r.message)}</div>
+    </div>`;
+  }).join('');
+}
+
 // ── Log ──
 function updateLog(log){
   const el=document.getElementById('logBody');
@@ -1110,12 +1199,14 @@ function toggleSection(head){head.classList.toggle('open');head.nextElementSibli
 // ── Polling ──
 async function refresh(){
   try{
-    const [sr,pr,cr,or]=await Promise.all([fetch('/status',{headers:H()}),fetch('/public-status'),fetch('/api/capabilities',{headers:H()}),fetch('/api/setup/status',{headers:H()})]);
+    const [sr,pr,cr,or,lrr]=await Promise.all([fetch('/status',{headers:H()}),fetch('/public-status'),fetch('/api/capabilities',{headers:H()}),fetch('/api/setup/status',{headers:H()}),fetch('/api/listener-requests',{headers:H()})]);
     _st=await sr.json();_pub=await pr.json();
     _caps=await cr.json();
     const setup=await or.json();
+    const lrData=lrr.ok?await lrr.json():{requests:[]};
     updateNow(_pub.now_streaming);updateQueue(_pub.upcoming,_st.force_pending,_pub.upcoming_mode);updateSystems(_caps,_st,_pub);updateRecent(_st);
     updateLog(_pub.stream_log);updatePl(_st.playlist||[]);
+    updateListenerRequests(lrData.requests||[]);
     renderSetup(setup);
     updatePaceCounters(_st.pacing);
     if(_st.session_stopped!==undefined)updateStopState(_st.session_stopped);

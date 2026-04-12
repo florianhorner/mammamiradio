@@ -111,22 +111,36 @@ def preview_upcoming(state: StationState, pacing: PacingSection, tracks: list, c
     segments_since_time_check = state.segments_since_time_check
     segments_produced = state.segments_produced
     track_idx = 0
+    force_next = state.force_next
+    pinned_track = state.pinned_track
 
     for _ in range(count):
-        seg_type, reason = _decide_with_reason(
-            segments_produced,
-            songs_since_ad,
-            songs_since_banter,
-            pacing,
-            deterministic=True,
-            songs_since_news=songs_since_news,
-            segments_since_station_id=segments_since_station_id,
-            segments_since_time_check=segments_since_time_check,
-        )
+        if force_next is not None:
+            seg_type = force_next
+            reason = "Forced next segment is pending."
+            force_next = None
+        else:
+            seg_type, reason = _decide_with_reason(
+                segments_produced,
+                songs_since_ad,
+                songs_since_banter,
+                pacing,
+                deterministic=True,
+                songs_since_news=songs_since_news,
+                segments_since_station_id=segments_since_station_id,
+                segments_since_time_check=segments_since_time_check,
+            )
 
         if seg_type == SegmentType.MUSIC:
-            real_idx = track_idx % len(tracks) if tracks else -1
-            t = tracks[real_idx] if tracks and real_idx >= 0 else None
+            if pinned_track is not None:
+                t = pinned_track
+                real_idx = next((i for i, track in enumerate(tracks) if track.cache_key == t.cache_key), -1)
+                pinned_track = None
+                reason = "Pinned track will play on the next music slot."
+            else:
+                real_idx = track_idx % len(tracks) if tracks else -1
+                t = tracks[real_idx] if tracks and real_idx >= 0 else None
+                track_idx += 1
             preview.append(
                 {
                     "type": "music",
@@ -135,7 +149,6 @@ def preview_upcoming(state: StationState, pacing: PacingSection, tracks: list, c
                     "reason": reason,
                 }
             )
-            track_idx += 1
             songs_since_banter += 1
             songs_since_ad += 1
             songs_since_news += 1
