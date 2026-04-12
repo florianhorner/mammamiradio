@@ -84,18 +84,15 @@ def test_runtime_json_keys():
     assert "tmp_dir" in result
 
 
-def test_non_local_bind_requires_admin_auth(monkeypatch):
+def test_non_local_bind_allowed_without_auth(monkeypatch):
+    """Non-local bind without auth is allowed — private networks are trusted at runtime."""
     toml_path = Path(__file__).parent.parent / "radio.toml"
     monkeypatch.setenv("MAMMAMIRADIO_BIND_HOST", "0.0.0.0")
     monkeypatch.delenv("ADMIN_PASSWORD", raising=False)
     monkeypatch.delenv("ADMIN_TOKEN", raising=False)
 
-    try:
-        load_config(str(toml_path))
-    except ValueError as exc:
-        assert "Non-local bind requires ADMIN_PASSWORD or ADMIN_TOKEN" in str(exc)
-    else:
-        raise AssertionError("Expected config validation to fail for non-local bind without auth")
+    config = load_config(str(toml_path))
+    assert config.bind_host == "0.0.0.0"
 
 
 # --- Addon detection tests ---

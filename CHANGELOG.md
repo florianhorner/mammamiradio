@@ -4,6 +4,17 @@ All notable changes to `mammamiradio` are documented here.
 
 The current version source of truth is `pyproject.toml`.
 
+## [2.5.1] - 2026-04-11
+
+### Fixed
+
+- **Admin auth trusts private networks**: RFC1918, Tailscale CGNAT (100.64.0.0/10), and link-local IPs are now trusted for admin access. No token or password needed from your own LAN. Public IPs still require explicit auth.
+- **Credential UX contradiction**: When API keys are configured (via addon or env), the admin panel now shows a "configured" indicator instead of empty password fields that imply nothing is set. AI status check uses `script_llm` flag instead of only checking Anthropic key.
+- **Search error handling**: Admin panel search no longer silently fails on auth errors. Shows "No matches in playlist" instead of misleading "No matches". Placeholder clarified to "Filter playlist..." to set correct expectations.
+- **Boot time to first audio**: First music segment is now pre-produced during startup, bypassing the listener idle gate. Audio is ready in the queue before any listener connects, cutting initial wait from ~2 minutes to seconds.
+- **Config validation removed for non-local bind**: Binding to 0.0.0.0 no longer requires `ADMIN_PASSWORD` or `ADMIN_TOKEN` at startup. Runtime auth trusts private networks instead.
+- **Flaky playlist test**: `test_no_credentials_returns_demo_tracks` no longer hits live charts when yt-dlp happens to be enabled in the test environment.
+
 ## [2.5.0] - 2026-04-11
 
 ### Added

@@ -406,3 +406,101 @@ async def test_record_motif_noop_without_store():
     track = Track(title="Test", artist="Artist", duration_ms=1000)
     # Should not raise
     await _record_motif(state, track)
+
+
+# ---------------------------------------------------------------------------
+# prewarm_first_segment
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_prewarm_empty_playlist():
+    """prewarm returns False immediately when playlist is empty."""
+    from mammamiradio.producer import prewarm_first_segment
+
+    state = StationState(playlist=[])
+    config = _make_config()
+    queue: asyncio.Queue = asyncio.Queue()
+    result = await prewarm_first_segment(queue, state, config)
+    assert result is False
+    assert queue.empty()
+
+
+@pytest.mark.asyncio
+async def test_prewarm_stopped_session():
+    """prewarm returns False when session is stopped."""
+    from mammamiradio.producer import prewarm_first_segment
+
+    state = _make_state()
+    state.session_stopped = True
+    config = _make_config()
+    queue: asyncio.Queue = asyncio.Queue()
+    result = await prewarm_first_segment(queue, state, config)
+    assert result is False
+    assert queue.empty()
+
+
+@pytest.mark.asyncio
+async def test_prewarm_happy_path():
+    """prewarm downloads, normalizes, and queues a music segment."""
+    from mammamiradio.producer import prewarm_first_segment
+
+    state = _make_state()
+    config = _make_config()
+    config.tmp_dir.mkdir(parents=True, exist_ok=True)
+    queue: asyncio.Queue = asyncio.Queue()
+
+    with (
+        patch(f"{PRODUCER_MODULE}.download_track", new_callable=AsyncMock, return_value=Path("/tmp/fake.mp3")),
+        patch(f"{PRODUCER_MODULE}.normalize"),
+        patch(f"{PRODUCER_MODULE}.validate_segment_audio"),
+        patch(f"{PRODUCER_MODULE}._set_last_music_file"),
+    ):
+        result = await prewarm_first_segment(queue, state, config)
+
+    assert result is True
+    assert queue.qsize() == 1
+    segment = queue.get_nowait()
+    assert segment.type == SegmentType.MUSIC
+    assert segment.metadata["audio_source"] == "prewarm"
+
+
+@pytest.mark.asyncio
+async def test_prewarm_quality_gate_rejection():
+    """prewarm returns False when quality gate rejects the track."""
+    from mammamiradio.audio_quality import AudioQualityError
+    from mammamiradio.producer import prewarm_first_segment
+
+    state = _make_state()
+    config = _make_config()
+    config.tmp_dir.mkdir(parents=True, exist_ok=True)
+    queue: asyncio.Queue = asyncio.Queue()
+
+    def _reject(*_a, **_kw):
+        raise AudioQualityError("silent track")
+
+    with (
+        patch(f"{PRODUCER_MODULE}.download_track", new_callable=AsyncMock, return_value=Path("/tmp/fake.mp3")),
+        patch(f"{PRODUCER_MODULE}.normalize"),
+        patch(f"{PRODUCER_MODULE}.validate_segment_audio", side_effect=_reject),
+    ):
+        result = await prewarm_first_segment(queue, state, config)
+
+    assert result is False
+    assert queue.empty()
+
+
+@pytest.mark.asyncio
+async def test_prewarm_download_exception():
+    """prewarm returns False (not raises) on download failure."""
+    from mammamiradio.producer import prewarm_first_segment
+
+    state = _make_state()
+    config = _make_config()
+    queue: asyncio.Queue = asyncio.Queue()
+
+    with patch(f"{PRODUCER_MODULE}.download_track", new_callable=AsyncMock, side_effect=RuntimeError("network")):
+        result = await prewarm_first_segment(queue, state, config)
+
+    assert result is False
+    assert queue.empty()

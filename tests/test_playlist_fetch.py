@@ -27,6 +27,7 @@ def config():
 
 
 def test_no_credentials_returns_demo_tracks(config, monkeypatch):
+    # Ensure yt-dlp is disabled so we get demo tracks, not live charts
     monkeypatch.delenv("MAMMAMIRADIO_ALLOW_YTDLP", raising=False)
     result = fetch_playlist(config)
     assert len(result) == len(DEMO_TRACKS)

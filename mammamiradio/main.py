@@ -15,7 +15,7 @@ from mammamiradio.downloader import evict_cache_lru
 from mammamiradio.models import StationState
 from mammamiradio.persona import PersonaStore
 from mammamiradio.playlist import DEMO_TRACKS, fetch_startup_playlist, read_persisted_source
-from mammamiradio.producer import run_producer
+from mammamiradio.producer import prewarm_first_segment, run_producer
 from mammamiradio.streamer import LiveStreamHub, router, run_playback_loop
 from mammamiradio.sync import init_db
 
@@ -106,17 +106,13 @@ async def startup():
     app.state.config = config
     app.state.start_time = time.time()
 
-    # Pre-queue a welcome clip so listeners hear audio instantly (no 2-5s gap)
-    from mammamiradio.models import Segment, SegmentType
-    from mammamiradio.producer import _pick_canned_clip
-
-    welcome = _pick_canned_clip("welcome")
-    if not welcome:
-        welcome = _pick_canned_clip("banter", state=state)
-    if welcome:
-        await queue.put(Segment(type=SegmentType.BANTER, path=welcome, metadata={"type": "welcome", "canned": True}))
-        state.after_banter()
-        logger.info("Pre-queued welcome clip for instant playback")
+    # Pre-produce the first music segment so listeners hear audio instantly.
+    # This runs before the producer loop and bypasses the listener gate.
+    # Bounded to 20s so a slow download doesn't block app readiness.
+    try:
+        await asyncio.wait_for(prewarm_first_segment(queue, state, config), timeout=20)
+    except TimeoutError:
+        logger.warning("Prewarm timed out after 20s; producer will fill queue normally")
 
     _playback_task = asyncio.create_task(run_playback_loop(app))
     _producer_task = asyncio.create_task(run_producer(queue, state, config, skip_event=app.state.skip_event))
