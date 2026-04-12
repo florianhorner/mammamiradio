@@ -5,7 +5,7 @@ from __future__ import annotations
 import random
 
 from mammamiradio.config import PacingSection
-from mammamiradio.models import SegmentType, StationState
+from mammamiradio.models import SegmentType, StationState, Track
 
 
 def _reason_for_decision(reason_key: str, *, threshold: int = 0) -> str:
@@ -132,6 +132,7 @@ def preview_upcoming(state: StationState, pacing: PacingSection, tracks: list, c
             )
 
         if seg_type == SegmentType.MUSIC:
+            t: Track | None = None
             if pinned_track is not None:
                 t = pinned_track
                 real_idx = next((i for i, track in enumerate(tracks) if track.cache_key == t.cache_key), -1)
