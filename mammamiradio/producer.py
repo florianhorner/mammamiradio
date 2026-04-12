@@ -37,9 +37,12 @@ from mammamiradio.normalizer import (
     generate_silence,
     generate_station_id_bed,
     generate_tone,
+    mix_oneshot_sfx,
+    mix_quiet_bleed,
     mix_voice_with_sting,
     normalize,
 )
+from mammamiradio.playlist import fetch_chart_refresh
 from mammamiradio.scheduler import next_segment_type
 from mammamiradio.scriptwriter import (
     AD_BREAK_INTROS,
@@ -457,6 +460,11 @@ async def run_producer(
     _music_qg_rejections = 0  # consecutive music quality gate rejections (circuit breaker)
     _last_cache_eviction = 0.0  # epoch time of last eviction check
     _cache_eviction_interval = 3600  # run eviction at most once per hour
+    _last_playlist_refresh = 0.0  # epoch time of last chart refresh
+    _playlist_refresh_interval = 5400.0  # refresh charts every 90 minutes
+    _humanity_event_fired = False  # one-shot studio humanity event per session
+    _segments_produced = 0  # count for humanity event gating
+    _recent_banter_paths: deque[Path] = deque(maxlen=5)  # for studio bleed atmosphere
 
     _producer_idle_logged = False
     _was_idle = False
@@ -496,6 +504,24 @@ async def run_producer(
             if now - _last_cache_eviction >= _cache_eviction_interval:
                 _last_cache_eviction = now
                 await asyncio.to_thread(evict_cache_lru, config.cache_dir, config.max_cache_size_mb)
+            # Periodically refresh the chart playlist mid-session so long-running
+            # stations don't loop the same 50 tracks after ~3 hours.  Only merges
+            # tracks not already in the playlist — played_tracks history is preserved.
+            if (
+                state.playlist_source is not None
+                and state.playlist_source.kind == "charts"
+                and now - _last_playlist_refresh >= _playlist_refresh_interval
+            ):
+                _last_playlist_refresh = now
+                existing_ids = {t.spotify_id for t in state.playlist}
+                new_tracks = await asyncio.to_thread(fetch_chart_refresh, existing_ids)
+                if new_tracks:
+                    state.playlist.extend(new_tracks)
+                    logger.info(
+                        "Chart refresh: merged %d new track(s) into playlist (%d total)",
+                        len(new_tracks),
+                        len(state.playlist),
+                    )
             await asyncio.sleep(0.5)
             continue
 
@@ -581,6 +607,21 @@ async def run_producer(
                     listener=state.listener,
                 )
                 crate = classify_track_crate(track, state.playlist_source)
+
+                # Studio bleed: mix faint prior banter under the start of the
+                # music segment to create the "someone left a mic on" atmosphere.
+                if _recent_banter_paths and random.random() < 0.35:
+                    bleed_src = random.choice(list(_recent_banter_paths))
+                    if bleed_src.exists():
+                        bleed_out = config.tmp_dir / f"bleed_{uuid4().hex[:8]}.mp3"
+                        try:
+                            await loop.run_in_executor(None, mix_quiet_bleed, norm_path, bleed_src, bleed_out)
+                            norm_path.unlink(missing_ok=True)
+                            norm_path = bleed_out
+                            logger.debug("Studio bleed applied to %s", norm_path.name)
+                        except Exception as exc:
+                            logger.debug("Studio bleed skipped: %s", exc)
+                            bleed_out.unlink(missing_ok=True)
 
                 segment = Segment(
                     type=SegmentType.MUSIC,
@@ -760,6 +801,32 @@ async def run_producer(
                                 continue
                         else:
                             continue
+
+                # Record banter path for studio bleed atmosphere in future music
+                if canned is None:
+                    _recent_banter_paths.append(audio_path)
+
+                # One-shot studio humanity event: cough, paper rustle, etc.
+                # Only fires once per session, only after 15+ segments produced.
+                if not _humanity_event_fired and _segments_produced >= 15 and canned is None and random.random() < 0.10:
+                    sfx_studio_dir = Path("demo_assets/sfx/studio")
+                    if sfx_studio_dir.is_dir():
+                        sfx_files = list(sfx_studio_dir.glob("*.mp3"))
+                        if sfx_files:
+                            sfx_pick = random.choice(sfx_files)
+                            humanity_out = config.tmp_dir / f"humanity_{uuid4().hex[:8]}.mp3"
+                            try:
+                                await loop.run_in_executor(
+                                    None, mix_oneshot_sfx, audio_path, sfx_pick, humanity_out, 2.0, -18.0
+                                )
+                                if canned is None:
+                                    audio_path.unlink(missing_ok=True)
+                                audio_path = humanity_out
+                                _humanity_event_fired = True
+                                logger.info("Studio humanity event: %s", sfx_pick.name)
+                            except Exception as exc:
+                                logger.debug("Humanity event skipped: %s", exc)
+                                humanity_out.unlink(missing_ok=True)
 
                 segment = Segment(
                     type=SegmentType.BANTER,
@@ -1025,10 +1092,16 @@ async def run_producer(
                     return parts, itext
 
                 async def _build_bumpers(_num_spots=num_spots, _loop=loop):
-                    """Opening bumper + all mid-spot bumpers in parallel."""
+                    """Opening bumper + sparse mid-spot bumpers.
+
+                    Mid-bumpers only play ~25% of the time to avoid harsh
+                    synthetic SFX overwhelming the ad break.
+                    """
                     bumper_in = config.tmp_dir / f"bumper_in_{uuid4().hex[:8]}.mp3"
                     mid_bumpers = [
-                        config.tmp_dir / f"bumper_mid_{uuid4().hex[:8]}.mp3" for _ in range(max(0, _num_spots - 1))
+                        config.tmp_dir / f"bumper_mid_{uuid4().hex[:8]}.mp3"
+                        for _ in range(max(0, _num_spots - 1))
+                        if random.random() < 0.25
                     ]
                     tasks = [_loop.run_in_executor(None, generate_bumper_jingle, bumper_in)]
                     for mb in mid_bumpers:
@@ -1191,6 +1264,7 @@ async def run_producer(
                 continue
             if not await _queue_segment(segment):
                 continue
+            _segments_produced += 1
             state.queued_segments.append(
                 {
                     "type": seg_type.value,

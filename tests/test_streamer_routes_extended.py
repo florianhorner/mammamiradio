@@ -322,15 +322,15 @@ async def test_move_to_next_valid(tmp_path):
     assert resp.status_code == 200
     body = resp.json()
     assert body["ok"] is True
-    assert body["purged"] == 1
     # move_to_next pins the track instead of reordering the playlist
     assert app.state.station_state.pinned_track is not None
     assert app.state.station_state.pinned_track.title == "Song C"
     assert app.state.station_state.force_next == SegmentType.MUSIC
     assert app.state.station_state.playlist_revision == starting_revision + 1
-    assert app.state.station_state.queued_segments == []
-    assert app.state.queue.qsize() == 0
-    assert not queued_file.exists()
+    # Pre-rendered segments are intentionally preserved — no purge on move_to_next
+    assert app.state.station_state.queued_segments == [{"type": "banter", "label": "Queued"}]
+    assert app.state.queue.qsize() == 1
+    assert queued_file.exists()
 
 
 @pytest.mark.asyncio
