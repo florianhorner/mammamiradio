@@ -621,7 +621,7 @@ async def test_listener_request_valid_song_starts_background_download():
 
 
 @pytest.mark.asyncio
-async def test_listener_request_rate_limited():
+async def test_listener_request_rate_limited_alt_client():
     app = _make_test_app()
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
@@ -633,7 +633,7 @@ async def test_listener_request_rate_limited():
 
 
 @pytest.mark.asyncio
-async def test_listener_request_queue_full():
+async def test_listener_request_queue_full_prefilled_state():
     app = _make_test_app()
     app.state.station_state.pending_requests = [{"message": f"m{i}"} for i in range(10)]
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
