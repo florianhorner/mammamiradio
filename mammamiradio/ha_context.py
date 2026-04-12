@@ -17,6 +17,7 @@ import httpx
 
 from mammamiradio.ha_enrichment import (
     EVENT_BUFFER_SIZE,
+    HomeEvent,
     build_events_summary,
     diff_states,
     prune_events,
@@ -138,30 +139,6 @@ STATE_TRANSLATIONS = {
     "windy": "ventoso",
     "lightning": "temporale",
 }
-
-
-# ---------------------------------------------------------------------------
-# Phase 1: Event tracking
-# ---------------------------------------------------------------------------
-
-
-@dataclass
-class HomeEvent:
-    """A detected state change on a curated HA entity."""
-
-    entity_id: str
-    label: str
-    old_state: str  # translated via STATE_TRANSLATIONS
-    new_state: str  # translated via STATE_TRANSLATIONS
-    timestamp: float
-
-    @property
-    def age_seconds(self) -> float:
-        return time.time() - self.timestamp
-
-    def describe(self) -> str:
-        minutes_ago = max(1, round(self.age_seconds / 60))
-        return f"- {self.label}: {self.old_state} → {self.new_state} ({minutes_ago} min fa)"
 
 
 # ---------------------------------------------------------------------------

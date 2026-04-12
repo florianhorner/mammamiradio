@@ -26,7 +26,8 @@ def config():
 # --- No credentials -> demo tracks ---
 
 
-def test_no_credentials_returns_demo_tracks(config):
+def test_no_credentials_returns_demo_tracks(config, monkeypatch):
+    monkeypatch.delenv("MAMMAMIRADIO_ALLOW_YTDLP", raising=False)
     result = fetch_playlist(config)
     assert len(result) == len(DEMO_TRACKS)
     demo_titles = {t.title for t in DEMO_TRACKS}
