@@ -33,9 +33,9 @@ Why it matters: when startup breaks, operators still have to infer state from sc
 
 Where to start: add a small diagnostic surface from the launcher or app startup that prints the resolved config dir, detected audio source (local/yt-dlp/charts), and any missing dependencies.
 
-## P2: Focus trap for setup gate modal overlay
-The setup gate overlay does not trap keyboard focus. Tab key can reach elements behind the overlay, which breaks accessibility for keyboard and screen reader users. Standard modal pattern: trap focus inside the overlay while open, restore on close.
-**Effort:** S (CC: ~5min) | **Depends on:** nothing | **Files:** mammamiradio/dashboard.html
+## ~~P2: Focus trap for setup gate modal overlay~~ RESOLVED
+The setup gate overlay was removed in the v2.5.x refactor. The only remaining fixed overlay in dashboard.html is the transition notification (2s display, no interactive elements). No focus trap needed.
+**Resolved:** 2026-04-12 — setup gate no longer exists as a blocking modal.
 
 ## P3: Extract setup gate UI from dashboard.html
 dashboard.html is now 1600+ lines with ~620 lines of inline setup gate CSS/JS/HTML. Extract into a separate template or at minimum a JS module. The file is the most-modified in the repo (28 touches in 30 days) and the monolith makes merge conflicts more likely.
