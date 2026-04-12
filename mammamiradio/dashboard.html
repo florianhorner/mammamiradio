@@ -373,6 +373,40 @@ h1 {
   border-bottom: 1px solid rgba(245,237,216,0.08);
 }
 .queue li:last-child { border-bottom: none; }
+.queue li.predicted { opacity: 0.5; font-style: italic; }
+.queue-source { font-size: 9px; color: rgba(245,237,216,0.35); margin-left: 6px; }
+
+/* ── PIPELINE STATUS ── */
+.pipeline-status {
+  display: flex; align-items: center; gap: 8px; margin-top: 4px;
+}
+.pipeline-dot {
+  display: inline-flex; align-items: center; gap: 3px;
+  font-size: 8px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase;
+  color: rgba(245,237,216,0.6);
+}
+.pipeline-dot .dot {
+  width: 5px; height: 5px; border-radius: 50%;
+}
+.pipeline-dot .dot.ok { background: #2563EB; box-shadow: 0 0 6px rgba(37,99,235,0.5); }
+.pipeline-dot .dot.warn { background: #F59E0B; box-shadow: 0 0 6px rgba(245,158,11,0.5); }
+.pipeline-dot .tri { font-size: 8px; color: #F59E0B; }
+
+/* ── STOPPED STATE ── */
+.stopped-banner {
+  display: none; padding: 16px; text-align: center; border-radius: 12px;
+  background: rgba(184,44,32,0.15); border: 1px solid rgba(184,44,32,0.3);
+  color: var(--cream); margin-bottom: 12px;
+}
+.stopped-banner.show { display: block; }
+.stopped-banner h3 { font-size: 14px; margin-bottom: 8px; }
+.live-dot.stopped { background: var(--red); box-shadow: 0 0 8px var(--red); animation: none; }
+
+/* ── AD META ── */
+.ad-meta {
+  font-size: 10px; color: rgba(245,237,216,0.45); margin-top: 4px;
+  font-family: var(--font-mono); letter-spacing: 0.04em;
+}
 
 /* ── BUTTONS ── */
 .btn {
@@ -560,10 +594,17 @@ h1 {
   <div class="header-actions">
     <a class="listener-link" id="admin-link" href="/admin">Control Room</a>
     <div class="live-chip" aria-live="polite">
-      <div class="live-dot"></div>
+      <div class="live-dot" id="live-dot"></div>
       <span id="tier-badge" data-tier="demo">On Air</span>
     </div>
+    <div class="pipeline-status" id="pipeline-status"></div>
   </div>
+</div>
+
+<div class="stopped-banner" id="stopped-banner">
+  <h3>&#9632; Station Stopped</h3>
+  <p style="font-size:12px;opacity:0.7;margin-bottom:10px">The station was stopped by the operator.</p>
+  <button class="btn" onclick="doResume()">&#9654; Resume</button>
 </div>
 
 <main class="dashboard-grid">
@@ -606,6 +647,7 @@ h1 {
           <div class="np-track" id="np-track">...</div>
         </div>
         <div class="np-artist" id="np-meta"></div>
+        <div class="ad-meta" id="ad-meta" style="display:none"></div>
         <div class="waveform paused" id="waveform"></div>
       </div>
     </div>
@@ -1065,6 +1107,65 @@ function updateCards() {
   gpSteps.innerHTML = stepsHtml;
 }
 
+function _updatePipelineStatus() {
+  if (!caps) return;
+  const c = caps.capabilities || {};
+  const el = document.getElementById('pipeline-status');
+  let html = '';
+  if (c.anthropic_key || c.llm) {
+    html += '<span class="pipeline-dot"><span class="dot ok"></span>AI</span>';
+  } else if (c.openai) {
+    html += '<span class="pipeline-dot"><span class="tri">&#9650;</span>AI Fallback</span>';
+  } else {
+    html += '<span class="pipeline-dot"><span class="tri">&#9650;</span>No AI</span>';
+  }
+  if (c.ha) {
+    html += '<span class="pipeline-dot"><span class="dot ok"></span>HA</span>';
+  }
+  el.innerHTML = html;
+}
+
+function _updateStoppedState(d) {
+  const stopped = d.session_stopped === true;
+  const banner = document.getElementById('stopped-banner');
+  const dot = document.getElementById('live-dot');
+  const queueCard = document.getElementById('queue-card');
+  banner.classList.toggle('show', stopped);
+  dot.classList.toggle('stopped', stopped);
+  if (stopped) {
+    queueCard.style.display = 'none';
+    const trackEl = document.getElementById('np-track');
+    const metaEl = document.getElementById('np-meta');
+    trackEl.textContent = 'Station Stopped';
+    metaEl.textContent = '';
+    _lastTrackLabel = 'Station Stopped';
+  }
+}
+
+function _updateAdMeta(ns) {
+  const el = document.getElementById('ad-meta');
+  if (!ns || ns.type !== 'ad') { el.style.display = 'none'; return; }
+  const meta = ns.metadata || {};
+  const parts = [];
+  if (meta.format) parts.push(meta.format.replace(/_/g, ' '));
+  if (meta.brands) parts.push(meta.brands);
+  if (meta.spots) parts.push(meta.spots + ' spot' + (meta.spots > 1 ? 's' : ''));
+  if (parts.length) {
+    el.textContent = parts.join(' \u00b7 ');
+    el.style.display = '';
+  } else {
+    el.style.display = 'none';
+  }
+}
+
+async function doResume() {
+  try {
+    await fetch(_base + '/api/resume', { method: 'POST' });
+    showToast('Resuming station...');
+    setTimeout(refresh, 1000);
+  } catch (e) { showToast('Resume failed'); }
+}
+
 function updateStatus(d) {
   // Lock the dial on first data — signal found
   if (!firstDataReceived) {
@@ -1098,6 +1199,9 @@ function updateStatus(d) {
   // Now playing
   const ns = d.now_streaming || {};
   _updateNowPlaying(ns);
+  _updateAdMeta(ns);
+  _updateStoppedState(d);
+  _updatePipelineStatus();
 
   // Album art — blurred background wash (thumbnail removed in redesign)
   const artUrl = (ns.metadata && ns.metadata.album_art) || '';
@@ -1117,9 +1221,12 @@ function updateStatus(d) {
   if (upcoming.length || upcomingMode === 'building') {
     queueCard.style.display = '';
     if (upcoming.length) {
-      document.getElementById('queue-list').innerHTML = upcoming.slice(0, 3).map(e =>
-        '<li>' + escHtml(e.label || e.type || '?') + '</li>'
-      ).join('');
+      document.getElementById('queue-list').innerHTML = upcoming.slice(0, 3).map(e => {
+        const predicted = e.source === 'predicted_from_playlist';
+        const cls = predicted ? ' class="predicted"' : '';
+        const tag = predicted ? '<span class="queue-source">predicted</span>' : '';
+        return '<li' + cls + '>' + escHtml(e.label || e.type || '?') + tag + '</li>';
+      }).join('');
     } else {
       document.getElementById('queue-list').innerHTML = '<li>Building next segments...</li>';
     }
