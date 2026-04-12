@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from unittest.mock import patch
 
 from mammamiradio.models import ListenerProfile, Segment, SegmentType, StationState, Track
 
@@ -82,6 +83,26 @@ def test_on_stream_segment_updates_now_streaming():
     assert len(state.stream_log) == 1
 
 
+def test_on_stream_segment_records_previous_music_as_completed():
+    state = StationState()
+    state.now_streaming = {
+        "type": "music",
+        "label": "Prev Song",
+        "started": 100.0,
+    }
+    seg = Segment(
+        type=SegmentType.BANTER,
+        path=Path("/tmp/fake2.mp3"),
+        metadata={"title": "Banter"},
+    )
+
+    with patch("mammamiradio.models.time.time", return_value=130.0):
+        state.on_stream_segment(seg)
+
+    assert state.listener.songs_played == 1
+    assert state.listener.segments_since_taste_mirror == 1
+
+
 def test_track_cache_key():
     t = Track(title="Con te partirò!", artist="Andrea Bocelli", duration_ms=250000, spotify_id="x")
     key = t.cache_key
@@ -157,6 +178,13 @@ def test_on_stream_segment_counts_canned_clips():
     # Another canned
     state.on_stream_segment(seg2)
     assert state.canned_clips_streamed == 2
+
+
+def test_after_sweeper_logs_and_increments_segments():
+    state = StationState()
+    state.after_sweeper()
+    assert state.segments_produced == 1
+    assert state.segment_log[-1].type == "sweeper"
 
 
 # ---------------------------------------------------------------------------
