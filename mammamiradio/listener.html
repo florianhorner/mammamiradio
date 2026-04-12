@@ -288,21 +288,40 @@
     background:rgba(20,17,15,0.36);
   }
   .launch-cue-dot{
-    width:10px;
-    height:10px;
+    width:18px;
+    height:18px;
     border-radius:50%;
-    margin-top:0.28rem;
+    margin-top:0.18rem;
     background:rgba(245,237,216,0.18);
+    color:transparent;
+    display:inline-flex;
+    align-items:center;
+    justify-content:center;
+    font-size:10px;
+    font-weight:700;
+    line-height:1;
     flex-shrink:0;
     transition:background 0.2s ease, box-shadow 0.2s ease;
   }
   .launch-cue[data-state="active"] .launch-cue-dot{
     background:var(--warning);
+    color:#fff;
     box-shadow:0 0 14px rgba(217,119,6,0.28);
+    animation:launch-step-pulse 1.1s ease-in-out infinite;
   }
   .launch-cue[data-state="done"] .launch-cue-dot{
     background:var(--sun);
+    color:#14110F;
     box-shadow:0 0 16px rgba(244,208,72,0.35);
+  }
+  .launch-cue[data-state="blocked"] .launch-cue-dot{
+    background:var(--error);
+    color:#fff;
+    box-shadow:0 0 12px rgba(196,74,74,0.35);
+  }
+  @keyframes launch-step-pulse{
+    0%,100%{transform:scale(1);opacity:0.85}
+    50%{transform:scale(1.12);opacity:1}
   }
   .launch-cue-title{
     font-size:0.86rem;
@@ -396,10 +415,17 @@
     margin-bottom:0.75rem;
   }
   .np-type-badge{
-    display:inline-block;
-    font-size:1.1rem;
+    display:inline-flex;
+    align-items:center;
+    gap:0.45rem;
+    font-size:0.92rem;
+    font-weight:600;
+    letter-spacing:0.06em;
+    text-transform:uppercase;
     margin-bottom:0.5rem;
   }
+  .np-type-icon{font-size:1.1rem}
+  .np-type-text{color:var(--cream-dk)}
   .np-label{
     font-family:var(--font-display);
     font-size:clamp(1.35rem,4vw,1.75rem);
@@ -755,6 +781,14 @@
   .request-feedback{font-size:0.88rem;color:var(--muted);margin-top:0.5rem;padding:0.5rem 0.75rem;border-radius:6px;background:rgba(255,255,255,0.05)}
   .request-feedback.ok{color:#6fa3ef;background:rgba(37,99,235,0.12)}
   .request-feedback.err{color:#e07070;background:rgba(184,44,32,0.12)}
+
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
 </style>
 </head>
 <body data-launch-state="idle">
@@ -816,7 +850,7 @@
   <!-- Now Playing -->
   <div class="now-playing" id="nowPlaying">
     <div class="np-section-label">Live now</div>
-    <div class="np-type-badge" id="npIcon">&#9835;</div>
+    <div class="np-type-badge" id="npTypeBadge"><span class="np-type-icon" id="npIcon" aria-hidden="true">&#9835;</span><span class="np-type-text" id="npTypeText">Music</span></div>
     <div class="np-label fade-content" id="npLabel">The booth is warming up...</div>
     <div class="np-sublabel fade-content" id="npSublabel"></div>
     <div class="equalizer" id="equalizer">
@@ -935,16 +969,19 @@
 
   function icon(type){
     if(type==='music') return '\u266B';
-    if(type==='welcome') return '\u2728';
+    if(type==='welcome') return '\uD83C\uDF99';
     if(type==='banter') return '\uD83C\uDF99\uFE0F';
-    if(type==='ad') return '\uD83D\uDCE2';
+    if(type==='ad') return '[Ad]';
+    if(type==='news_flash') return '[!]';
     return '\u266B';
   }
 
   function typeLabel(type){
     if(type==='music') return 'Music';
+    if(type==='welcome') return 'Banter';
     if(type==='banter') return 'Banter';
-    if(type==='ad') return 'Sponsors';
+    if(type==='ad') return 'Ad';
+    if(type==='news_flash') return 'News';
     return type||'';
   }
 
@@ -982,6 +1019,18 @@
     if(done) return 'done';
     if(active) return 'active';
     return 'pending';
+  }
+
+  function normalizeCueStatus(status){
+    if(status === 'done' || status === 'active' || status === 'blocked') return status;
+    return 'pending';
+  }
+
+  function cueGlyph(status){
+    if(status === 'done') return '\u2713';
+    if(status === 'blocked') return '\u2717';
+    if(status === 'active') return '\u25CF';
+    return '';
   }
 
   function updateWaveform(){
@@ -1091,8 +1140,10 @@
     ];
 
     launchCues.innerHTML = cues.map(function(cue){
-      return '<li class="launch-cue" data-state="' + cue.status + '">' +
-        '<span class="launch-cue-dot"></span>' +
+      var cueStatus = normalizeCueStatus(cue.status);
+      var currentAttr = cueStatus === 'active' ? ' aria-current="step"' : '';
+      return '<li class="launch-cue" data-state="' + cueStatus + '"' + currentAttr + '>' +
+        '<span class="launch-cue-dot" aria-hidden="true">' + cueGlyph(cueStatus) + '</span>' +
         '<div><div class="launch-cue-title">' + escHtml(cue.title) + '</div>' +
         '<div class="launch-cue-detail">' + escHtml(cue.detail) + '</div></div>' +
         '</li>';
@@ -1253,6 +1304,7 @@
     var npLabel = document.getElementById('npLabel');
     var npSublabel = document.getElementById('npSublabel');
     var npIcon = document.getElementById('npIcon');
+    var npTypeText = document.getElementById('npTypeText');
     var playerNow = document.getElementById('playerNow');
 
     if(label === state.currentLabel) return;
@@ -1263,6 +1315,7 @@
 
     setTimeout(function(){
       npIcon.textContent = icon(np.type);
+      npTypeText.textContent = typeLabel(np.type);
 
       if(np.type === 'music'){
         var parts = label.split(' \u2014 ');
@@ -1309,9 +1362,12 @@
     var items = upcoming.slice(0, 4);
     var html = '';
     for(var i = 0; i < items.length; i++){
+      var item = items[i] || {};
+      var itemType = typeof item.type === 'string' ? item.type : '';
+      var itemLabel = item.label || [item.artist, item.title].filter(Boolean).join(' \u2014 ') || itemType || 'Upcoming';
       html += '<div class="upcoming-item">' +
-        '<span class="item-icon">' + icon(items[i].type) + '</span>' +
-        '<span class="item-label">' + escHtml(items[i].label) + '</span>' +
+        '<span class="item-icon">' + icon(itemType) + '</span>' +
+        '<span class="item-label">' + escHtml(itemLabel) + '</span>' +
         '</div>';
     }
     list.innerHTML = html;
