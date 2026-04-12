@@ -594,6 +594,7 @@ h1 {
 <div class="tab-nav" role="tablist" aria-label="Admin panels">
   <button class="tab-btn" role="tab" aria-selected="true" aria-controls="tab-panel-music" id="tab-music" data-tab="music" onclick="switchTab('music')">Music</button>
   <button class="tab-btn" role="tab" aria-selected="false" aria-controls="tab-panel-radio" id="tab-radio" data-tab="radio" onclick="switchTab('radio')">Radio<span class="tab-alert" aria-hidden="true"></span></button>
+  <button class="tab-btn" role="tab" aria-selected="false" aria-controls="tab-panel-engine" id="tab-engine" data-tab="engine" onclick="switchTab('engine')">Engine Room</button>
 </div>
 
 <!-- TAB: MUSIC -->
@@ -740,6 +741,26 @@ h1 {
   </div><!-- /radio-col-right -->
 
 </div><!-- /tab radio -->
+
+<!-- TAB: ENGINE ROOM -->
+<div class="tab-pane" role="tabpanel" id="tab-panel-engine" aria-labelledby="tab-engine" data-tab="engine">
+
+  <div class="card">
+    <div class="card-label">Runtime</div>
+    <div id="engineRuntime" style="font-family:var(--font-mono);font-size:12px;line-height:1.8;color:var(--text-secondary)">Loading...</div>
+  </div>
+
+  <div class="card">
+    <div class="card-label">Segment Counts</div>
+    <div id="engineSegments" style="font-family:var(--font-mono);font-size:12px;line-height:1.8;color:var(--text-secondary)"></div>
+  </div>
+
+  <div class="card">
+    <div class="card-label">Capabilities</div>
+    <div id="engineCaps" style="font-family:var(--font-mono);font-size:12px;line-height:1.8;color:var(--text-secondary)"></div>
+  </div>
+
+</div><!-- /tab engine -->
 
 <div class="toast" id="toast"></div>
 
@@ -1220,6 +1241,7 @@ async function refresh(){
     updateListenerRequests(lrData.requests||[]);
     renderSetup(setup);
     updatePaceCounters(_st.pacing);
+    updateEngineRoom(_st,_caps);
     if(_st.session_stopped!==undefined)updateStopState(_st.session_stopped);
     if(!_paceOk&&_st.pacing){_paceOk=true;
       document.getElementById('pBanter').value=_st.pacing.songs_between_banter;document.getElementById('pvBanter').textContent=_st.pacing.songs_between_banter;
@@ -1228,6 +1250,37 @@ async function refresh(){
     }
     if(!_hostsOk){_hostsOk=true;const r=await fetch('/api/hosts',{headers:H()});renderHosts((await r.json()).hosts||[])}
   }catch(e){console.error('refresh',e)}
+}
+
+// ── Engine Room ──
+function updateEngineRoom(st,caps){
+  const rt=document.getElementById('engineRuntime');
+  if(!rt)return;
+  const uptime=st.uptime_s?Math.round(st.uptime_s/60)+'m':'—';
+  const qd=st.queue_depth!=null?st.queue_depth:'—';
+  const pl=st.playlist?st.playlist.length:'—';
+  const rev=st.playlist_revision!=null?st.playlist_revision:'—';
+  rt.innerHTML=[
+    'Uptime: <strong>'+uptime+'</strong>',
+    'Queue depth: <strong>'+qd+'</strong> segments buffered',
+    'Playlist: <strong>'+pl+'</strong> tracks (revision '+rev+')',
+    'Listeners: <strong>'+(st.listeners_active||0)+'</strong>',
+  ].join('<br>');
+
+  const seg=document.getElementById('engineSegments');
+  const sc=st.segment_counts||{};
+  seg.innerHTML=Object.entries(sc).map(([k,v])=>k+': <strong>'+v+'</strong>').join('<br>')||'No segments yet';
+
+  const ce=document.getElementById('engineCaps');
+  if(caps&&caps.capabilities){
+    const c=caps.capabilities;
+    ce.innerHTML=[
+      'Tier: <strong>'+(caps.tier_label||caps.tier||'—')+'</strong>',
+      'Anthropic: '+(c.anthropic_key?'<strong style="color:var(--ok)">✓ connected</strong>':'<strong style="color:var(--warning)">✕ not set</strong>'),
+      'OpenAI: '+(c.openai?'<strong style="color:var(--ok)">✓ available</strong>':'—'),
+      'Home Assistant: '+(c.ha?'<strong style="color:var(--ok)">✓ connected</strong>':'disabled'),
+    ].join('<br>');
+  }
 }
 
 // ── Keyboard shortcuts ──
