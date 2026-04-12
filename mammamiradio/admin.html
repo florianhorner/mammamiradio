@@ -218,7 +218,9 @@ h1 {
 .btn {
   font-family: var(--font-body); font-size: 13px; font-weight: 600;
   padding: 10px 16px; border-radius: 8px; border: none;
-  cursor: pointer; transition: all 0.15s; user-select: none;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;
+  user-select: none;
   display: flex; align-items: center; gap: 6px;
 }
 .btn:active { transform: scale(0.96); }
@@ -416,7 +418,7 @@ h1 {
   position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%) translateY(16px);
   font-size: 13px; font-weight: 600; padding: 8px 20px;
   background: var(--sun); color: var(--shadow); border-radius: 8px;
-  opacity: 0; transition: all 0.2s; pointer-events: none; z-index: 99;
+  opacity: 0; transition: opacity 0.2s ease, transform 0.2s ease; pointer-events: none; z-index: 99;
 }
 .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
 
@@ -465,7 +467,7 @@ h1 {
   background: transparent; color: rgba(245,237,216,0.45);
   font-family: 'Outfit', sans-serif; font-size: 13px; font-weight: 600;
   cursor: pointer; letter-spacing: 0.05em; text-transform: uppercase;
-  transition: all 0.15s; position: relative;
+  transition: background 0.15s ease, color 0.15s ease; position: relative;
 }
 .tab-btn.active {
   background: rgba(244,208,72,0.12); color: var(--sun);
@@ -479,6 +481,14 @@ h1 {
 .tab-btn.needs-attention .tab-alert { display: block; }
 .tab-pane { display: none; }
 .tab-pane.active { display: block; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
 
 @media (max-width: 640px) {
   .header {
@@ -565,7 +575,7 @@ h1 {
     <span id="nowElapsed" style="font-variant-numeric:tabular-nums"></span>
   </div>
   <div class="progress"><div class="progress-fill" id="progFill" data-t="music"></div></div>
-  <div class="progress-label">estimated</div>
+  <div class="progress-label" id="progLabel">estimated</div>
   <div class="transport">
     <button class="btn btn-skip" onclick="doSkip(this)">&#9197; SKIP <span class="key">S</span></button>
     <button class="btn btn-util" onclick="doShuffle(this)">&#128256; Shuffle</button>
@@ -689,16 +699,6 @@ h1 {
       <div class="script-box" id="recentBody"><div class="empty">Nothing aired yet</div></div>
     </div>
 
-    <!-- STATION NAME -->
-    <div class="card">
-      <div class="card-label">Station Name</div>
-      <div style="display:flex;gap:8px;align-items:center">
-        <input type="text" id="stationNameInput" class="search-input" placeholder="e.g. Florian's Radio" maxlength="60" autocomplete="off" style="flex:1" oninput="updateStationNamePreview()">
-        <button class="btn btn-trigger" onclick="saveStationName(this)">Save</button>
-      </div>
-      <div id="stationNamePreview" style="font-size:11px;color:rgba(245,237,216,0.4);margin-top:6px"></div>
-    </div>
-
     <!-- PACING -->
     <div class="card">
       <div class="collapse-head" onclick="toggleSection(this)">
@@ -748,12 +748,17 @@ const H = () => ({'Content-Type':'application/json','X-Radio-CSRF-Token':_csrf})
 let _st={}, _pub={}, _caps={}, _hostsOk=false, _paceOk=false, _searchTo=null, _keysEditMode=false;
 let _nowStart=0, _nowDur=0, _tick=null, _prevLabel='';
 const SHAPE={ok:'✓',warn:'△',error:'✕',info:'·'};
+const SEGMENT_GLYPH={music:'♪',banter:'🎙',ad:'[Ad]',news_flash:'[!]'};
 const _radioTabBtn=document.querySelector('.tab-btn[data-tab="radio"]');
 let _lastSetupJson=null;
 
 function toast(m){const e=document.getElementById('toast');e.textContent=m;e.classList.add('show');setTimeout(()=>e.classList.remove('show'),1600)}
 function esc(s){const d=document.createElement('div');d.textContent=s||'';return d.innerHTML}
 function flash(el){if(!el)return;el.classList.remove('flash');void el.offsetWidth;el.classList.add('flash')}
+function segmentTypeKey(type){const raw=String(type||'music');return raw==='welcome'?'banter':raw}
+function segmentText(type){return segmentTypeKey(type).replace('_',' ')}
+function segmentGlyph(type){return SEGMENT_GLYPH[segmentTypeKey(type)]||'•'}
+function segmentBadge(type){return `${segmentGlyph(type)} ${segmentText(type)}`}
 
 async function api(m,p,b){const o={method:m,headers:H()};if(b)o.body=JSON.stringify(b);return(await fetch(p,o)).json()}
 
@@ -794,12 +799,15 @@ async function flagCurrentTrack(el) {
 function updateNow(ns){
   if(!ns||!ns.type){
     document.getElementById('nowType').textContent='—';document.getElementById('nowType').setAttribute('data-t','music');
+    document.getElementById('progLabel').textContent='estimated';
     document.getElementById('nowTitle').textContent='Waiting for signal...';document.getElementById('nowTime').textContent='—';return;
   }
+  const typeKey=segmentTypeKey(ns.type);
   const ty=document.getElementById('nowType');
-  ty.setAttribute('data-t',ns.type);ty.textContent=ns.type.replace('_',' ');
+  ty.setAttribute('data-t',typeKey);ty.textContent=segmentBadge(typeKey);
   document.getElementById('nowTitle').textContent=ns.label||ns.type;
-  document.getElementById('progFill').setAttribute('data-t',ns.type);
+  document.getElementById('progFill').setAttribute('data-t',typeKey);
+  document.getElementById('progLabel').textContent=`${segmentBadge(typeKey)} - estimated`;
   const dur=ns.metadata?.duration_ms?ns.metadata.duration_ms/1000:ns.type==='music'?240:ns.type==='banter'?30:ns.type==='ad'?60:20;
   const label=ns.label||'';
   if(label!==_prevLabel){_prevLabel=label;_nowStart=ns.started?ns.started*1000:Date.now();_nowDur=dur}
@@ -825,14 +833,18 @@ function updateQueue(up,forcePending,mode){
     return
   }
   const parts=[];
-  if(forcePending){parts.push(`<div class="queue-item"><span class="qi-num">!</span><span class="qi-badge" data-t="${forcePending}">${forcePending.replace('_',' ')}</span><span class="qi-label">Triggered — plays next</span><span class="force-badge">forced</span></div>`)}
+  if(forcePending){
+    const forceType=segmentTypeKey(forcePending);
+    parts.push(`<div class="queue-item"><span class="qi-num">!</span><span class="qi-badge" data-t="${esc(forceType)}">${esc(segmentBadge(forceType))}</span><span class="qi-label">Triggered - plays next</span><span class="force-badge">forced</span></div>`)
+  }
   if(up?.length){parts.push(...up.map((it,i)=>{
     const linked = Number.isInteger(it.playlist_index) || !!it.spotify_id;
+    const typeKey=segmentTypeKey(it.type);
     const clickAttrs = linked
       ? `class="queue-item linked" onclick="focusPlaylistTrack(${Number.isInteger(it.playlist_index)?it.playlist_index:-1}, '${esc(it.spotify_id||'')}')"`
       : 'class="queue-item"';
     const reason = it.reason ? `<div class="qi-reason">${esc(it.reason)}</div>` : '';
-    return `<div ${clickAttrs}><span class="qi-num">${i+1}</span><span class="qi-badge" data-t="${it.type}">${it.type.replace('_',' ')}</span><span class="qi-label">${esc(it.label||it.type)}</span></div>${reason}`;
+    return `<div ${clickAttrs}><span class="qi-num">${i+1}</span><span class="qi-badge" data-t="${esc(typeKey)}">${esc(segmentBadge(typeKey))}</span><span class="qi-label">${esc(it.label||it.type)}</span></div>${reason}`;
   }))}
   meta.textContent=(up?.length||0)+' upcoming';
   el.innerHTML=parts.join('');
@@ -1025,7 +1037,7 @@ function focusPlaylistTrack(index, trackId){
 async function moveNext(i){
   const trackName=document.querySelector(`.pl-row[data-i="${i}"] .pl-t`)?.textContent||'track';
   const el=document.getElementById('queueBody');const meta=document.getElementById('queueMeta');
-  if(el){el.innerHTML=`<div class="queue-item"><span class="qi-num">1</span><span class="qi-badge" data-t="music">music</span><span class="qi-label">${esc(trackName)}</span><span class="force-badge">rendering…</span></div>`;meta.textContent='1 upcoming';}
+  if(el){el.innerHTML=`<div class="queue-item"><span class="qi-num">1</span><span class="qi-badge" data-t="music">${esc(segmentBadge('music'))}</span><span class="qi-label">${esc(trackName)}</span><span class="force-badge">rendering…</span></div>`;meta.textContent='1 upcoming';}
   const r=await api('POST','/api/playlist/move_to_next',{index:i});
   if(r.ok)toast('Playing next: '+r.moved);else toast('Failed to move track');
 }
@@ -1108,23 +1120,6 @@ function initDragDrop(){
       _dragSrc=null;
     });
   });
-}
-
-// ── Station Name ──
-(function initStationName(){
-  const saved = localStorage.getItem('stationName');
-  if(saved) { document.getElementById('stationNameInput').value = saved; document.getElementById('stationNamePreview').textContent = 'Current: '+saved; }
-})();
-function updateStationNamePreview(){
-  const v = document.getElementById('stationNameInput').value.trim();
-  document.getElementById('stationNamePreview').textContent = v ? 'Preview: '+v : '';
-}
-function saveStationName(el){
-  const v = document.getElementById('stationNameInput').value.trim();
-  if(!v){ toast('Enter a station name first'); return; }
-  localStorage.setItem('stationName', v);
-  document.getElementById('stationNamePreview').textContent = 'Saved: '+v;
-  flash(el); toast('Station name saved — visible in this browser only');
 }
 
 // ── Pacing ──
