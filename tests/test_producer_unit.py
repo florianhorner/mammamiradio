@@ -23,6 +23,7 @@ from mammamiradio.producer import (
     _pick_canned_clip,
     run_producer,
 )
+from mammamiradio.scriptwriter import ListenerRequestCommit
 
 TOML_PATH = str(Path(__file__).parent.parent / "radio.toml")
 PRODUCER_MODULE = "mammamiradio.producer"
@@ -504,3 +505,62 @@ async def test_prewarm_download_exception():
 
     assert result is False
     assert queue.empty()
+
+
+# ---------------------------------------------------------------------------
+# Banter success branches — ListenerRequestCommit
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_banter_with_listener_request_commit_applies_on_queue():
+    """When write_banter returns a ListenerRequestCommit, the callback applies it after queuing."""
+    state = _make_state()
+    config = _make_config()
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+
+    req = {"type": "song_request", "name": "Florian", "song_found": True}
+    state.pending_requests.append(req)
+    commit = ListenerRequestCommit(request=req, consume=True)
+
+    host = config.hosts[0] if config.hosts else HostPersonality(name="Marco", voice="it-IT-DiegoNeural", style="warm")
+    banter_lines = [(host, "Dedicato a te!")]
+
+    with (
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.BANTER),
+        patch(f"{PRODUCER_MODULE}._has_script_llm", return_value=True),
+        patch(f"{PRODUCER_MODULE}.write_banter", new_callable=AsyncMock, return_value=(banter_lines, commit)),
+        patch(f"{PRODUCER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora...")),
+        patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(f"{PRODUCER_MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(f"{PRODUCER_MODULE}.concat_files", return_value=_fake_path()),
+        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+    ):
+        await _run_until_queued(queue, state, config)
+
+    # success_callback fires inline before _run_until_queued returns; request must be consumed
+    assert req not in state.pending_requests
+
+
+@pytest.mark.asyncio
+async def test_banter_canned_path_does_not_apply_listener_request_commit():
+    """When a canned clip is used, the ListenerRequestCommit is never applied."""
+    state = _make_state()
+    config = _make_config()
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+
+    req = {"type": "song_request", "name": "Giulia", "song_found": True}
+    state.pending_requests.append(req)
+
+    canned_path = _fake_path()
+
+    with (
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.BANTER),
+        patch(f"{PRODUCER_MODULE}._has_script_llm", return_value=False),
+        patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=canned_path),
+        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+    ):
+        await _run_until_queued(queue, state, config)
+
+    # canned path: _used_generated_banter is False, commit is None — request must remain
+    assert req in state.pending_requests
