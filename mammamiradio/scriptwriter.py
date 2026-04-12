@@ -107,14 +107,15 @@ def _plan_listener_request_block(state: StationState) -> tuple[str, ListenerRequ
     else:
         commit = ListenerRequestCommit(request=req, consume=True)
 
-    name = req.get("name") or "Un ascoltatore"
-    msg = req.get("message") or ""
+    name = _sanitize_prompt_data(str(req.get("name") or "Un ascoltatore"), max_len=60)
+    msg = _sanitize_prompt_data(str(req.get("message") or ""), max_len=200)
+    song_track = _sanitize_prompt_data(str(req.get("song_track") or ""), max_len=120)
     if is_song and req.get("song_found") and req.get("song_track"):
         return (
             f"""
 LISTENER REQUEST:
 {name} ha chiesto: "{msg}"
-La canzone che stai per suonare è "{req["song_track"]}" — annunciala dedicandola a {name}.
+La canzone che stai per suonare è "{song_track}" — annunciala dedicandola a {name}.
 Sii caldo, divertente, fai sentire {name} speciale. Questa è la magia della radio.
 """,
             commit,

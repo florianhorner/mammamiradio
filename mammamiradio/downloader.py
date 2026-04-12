@@ -108,7 +108,12 @@ def _download_ytdlp(track: Track, cache_dir: Path) -> Path:
     """Download the best-effort public audio match for a track via yt-dlp."""
     import yt_dlp
 
-    query = f"ytsearch1:{track.artist} {track.title} official audio"
+    # Use the exact video ID when available to download the chosen upload,
+    # not a fresh text-search result that might return a different version.
+    if track.youtube_id:
+        query = f"https://www.youtube.com/watch?v={track.youtube_id}"
+    else:
+        query = f"ytsearch1:{track.artist} {track.title} official audio"
     opts = {
         "format": "bestaudio/best",
         "outtmpl": str(cache_dir / f"{track.cache_key}.%(ext)s"),

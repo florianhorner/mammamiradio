@@ -321,7 +321,7 @@ h1 {
   border: 1px solid rgba(244,208,72,0.3); cursor: pointer;
 }
 .sr-add:hover { background: rgba(244,208,72,0.22); }
-.sr-add.external { background: rgba(37,99,235,0.12); color: #93b4fd; border-color: rgba(37,99,235,0.3); }
+.sr-add.external { background: rgba(37,99,235,0.12); color: var(--ok); border-color: rgba(37,99,235,0.3); }
 .sr-add.external:hover { background: rgba(37,99,235,0.22); }
 .sr-add.loading { opacity: 0.5; pointer-events: none; }
 .sr-label { font-size: 10px; color: rgba(245,237,216,0.4); margin: 8px 0 4px; letter-spacing: 0.08em; text-transform: uppercase; font-weight: 600; }
@@ -433,10 +433,10 @@ h1 {
 .lr-age { font-size: 10px; color: rgba(245,237,216,0.35); margin-left: auto; }
 .lr-msg { font-size: 12px; color: rgba(245,237,216,0.65); }
 .lr-pill { font-size: 10px; font-weight: 600; padding: 2px 6px; border-radius: 4px; }
-.lr-shout { background: rgba(37,99,235,0.18); color: #6fa3ef; }
-.lr-found { background: rgba(37,99,235,0.18); color: #6fa3ef; }
-.lr-searching { background: rgba(244,208,72,0.15); color: var(--sun2); }
-.lr-err { background: rgba(184,44,32,0.18); color: #e07070; }
+.lr-shout { background: rgba(37,99,235,0.18); color: var(--ok); }
+.lr-found { background: rgba(37,99,235,0.18); color: var(--ok); }
+.lr-searching { background: rgba(244,208,72,0.15); color: var(--sun); }
+.lr-err { background: rgba(184,44,32,0.18); color: var(--error); }
 
 /* ── STOP/RESUME ── */
 .btn-stop { background: var(--error); color: var(--cream); min-height: 44px; }
@@ -1081,9 +1081,20 @@ async function addExternal(i){
   const t=_sExt[i];if(!t)return;
   const btn=document.getElementById('ext-btn-'+i);
   if(btn){btn.classList.add('loading');btn.textContent='Downloading…';}
-  const r=await api('POST','/api/playlist/add-external',{youtube_id:t.youtube_id,title:t.title,artist:t.artist,duration_ms:t.duration_ms});
-  if(r.ok){toast('Queued: '+t.display);document.getElementById('searchResults').innerHTML='';si.value='';_plFilter='';}
-  else{toast('Failed to queue');if(btn){btn.classList.remove('loading');btn.textContent='&#8681; Queue';}}
+  try{
+    const r=await api('POST','/api/playlist/add-external',{youtube_id:t.youtube_id,title:t.title,artist:t.artist,duration_ms:t.duration_ms});
+    if(r.ok){
+      toast('Queued: '+t.display);
+      document.getElementById('searchResults').innerHTML='';
+      si.value='';_plFilter='';
+    }else{
+      toast('Failed: '+(r.error||'queue failed'));
+    }
+  }catch(_){
+    toast('Failed to queue');
+  }finally{
+    if(btn){btn.classList.remove('loading');btn.textContent='↓ Queue';}
+  }
 }
 
 // ── Drag & Drop ──

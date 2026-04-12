@@ -1273,8 +1273,17 @@ async function sendRequest() {
       sentEl.style.display = ''; formEl.style.display = 'none';
       sentEl.textContent = d.retry_after ? `Aspetta ${d.retry_after}s prima di inviare un altra richiesta.` : 'Coda piena, riprova tra poco.';
       setTimeout(() => { formEl.style.display = ''; sentEl.style.display = 'none'; }, 5000);
+    } else {
+      sentEl.style.display = ''; formEl.style.display = 'none';
+      sentEl.textContent = d.error || 'Invio non riuscito. Riprova.';
+      setTimeout(() => { formEl.style.display = ''; sentEl.style.display = 'none'; }, 5000);
     }
-  } catch(e) { console.warn('Request failed', e); }
+  } catch(e) {
+    console.warn('Request failed', e);
+    sentEl.style.display = ''; formEl.style.display = 'none';
+    sentEl.textContent = 'Invio non riuscito. Controlla la connessione e riprova.';
+    setTimeout(() => { formEl.style.display = ''; sentEl.style.display = 'none'; }, 5000);
+  }
 }
 
 // Start polling
