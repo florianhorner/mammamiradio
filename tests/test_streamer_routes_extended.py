@@ -906,3 +906,219 @@ def test_sanitize_ingress_prefix_empty():
     from mammamiradio.streamer import _sanitize_ingress_prefix
 
     assert _sanitize_ingress_prefix("") == ""
+
+
+# ---------------------------------------------------------------------------
+# Listener requests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_listener_request_shoutout():
+    app = _make_test_app()
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.post("/api/listener-request", json={"name": "Marco", "message": "Ciao a tutti!"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ok"] is True
+    assert body["type"] == "shoutout"
+    assert len(app.state.station_state.pending_requests) == 1
+
+
+@pytest.mark.asyncio
+async def test_listener_request_missing_message_rejected():
+    app = _make_test_app()
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.post("/api/listener-request", json={"name": "Marco"})
+    assert resp.status_code == 400
+    assert resp.json()["ok"] is False
+
+
+@pytest.mark.asyncio
+async def test_listener_request_rate_limited():
+    app = _make_test_app()
+    transport = httpx.ASGITransport(app=app, client=("10.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        r1 = await client.post("/api/listener-request", json={"name": "A", "message": "primo"})
+        r2 = await client.post("/api/listener-request", json={"name": "A", "message": "secondo"})
+    assert r1.status_code == 200
+    assert r2.status_code == 429
+    assert "retry_after" in r2.json()
+
+
+@pytest.mark.asyncio
+async def test_listener_request_queue_full():
+    app = _make_test_app()
+    state = app.state.station_state
+    # Pre-fill the queue with 10 entries (the cap)
+    for i in range(10):
+        state.pending_requests.append({"name": f"U{i}", "message": f"msg{i}", "ts": 0})
+    transport = httpx.ASGITransport(app=app, client=("99.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.post("/api/listener-request", json={"name": "Late", "message": "ciao"})
+    assert resp.status_code == 429
+    assert resp.json()["error"] == "queue_full"
+
+
+@pytest.mark.asyncio
+async def test_get_listener_requests_returns_queue():
+    app = _make_test_app()
+    import time as _time
+
+    state = app.state.station_state
+    state.pending_requests.append(
+        {"name": "Giulia", "message": "metti Volare", "type": "song_request", "ts": _time.time()}
+    )
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.get("/api/listener-requests")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data["requests"]) == 1
+    assert data["requests"][0]["name"] == "Giulia"
+
+
+# ---------------------------------------------------------------------------
+# Track rules
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_track_rules_missing_fields():
+    app = _make_test_app()
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.post("/api/track-rules", json={"youtube_id": "abc123"})
+    assert resp.status_code == 400
+    assert resp.json()["ok"] is False
+
+
+@pytest.mark.asyncio
+async def test_track_rules_saves_rule(tmp_path):
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path
+    # Ensure DB exists so add_rule can write to it
+    from mammamiradio.sync import init_db
+
+    init_db(tmp_path / "mammamiradio.db")
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.post("/api/track-rules", json={"youtube_id": "dQw4w9WgXcQ", "rule": "plays too often"})
+    assert resp.status_code == 200
+    assert resp.json()["ok"] is True
+
+
+# ---------------------------------------------------------------------------
+# Add track endpoint
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_add_track_appends_to_playlist():
+    app = _make_test_app()
+    initial_len = len(app.state.station_state.playlist)
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.post(
+            "/api/playlist/add", json={"title": "Azzurro", "artist": "Celentano", "duration_ms": 200000}
+        )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ok"] is True
+    assert len(app.state.station_state.playlist) == initial_len + 1
+
+
+@pytest.mark.asyncio
+async def test_add_track_inserts_at_next_position():
+    app = _make_test_app()
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.post(
+            "/api/playlist/add",
+            json={"title": "Priority Track", "artist": "DJ", "duration_ms": 180000, "position": "next"},
+        )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ok"] is True
+    assert body["position"] == "next"
+    assert app.state.station_state.playlist[0].title == "Priority Track"
+
+
+# ---------------------------------------------------------------------------
+# Pacing endpoints
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_pacing_returns_config():
+    app = _make_test_app()
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.get("/api/pacing")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "songs_between_banter" in body
+    assert "songs_between_ads" in body
+    assert "ad_spots_per_break" in body
+
+
+@pytest.mark.asyncio
+async def test_patch_pacing_updates_values():
+    app = _make_test_app()
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.patch(
+            "/api/pacing",
+            json={"songs_between_banter": 3, "songs_between_ads": 6, "ad_spots_per_break": 2},
+        )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ok"] is True
+    assert body["songs_between_banter"] == 3
+    assert body["songs_between_ads"] == 6
+    assert body["ad_spots_per_break"] == 2
+
+
+@pytest.mark.asyncio
+async def test_patch_pacing_enforces_floor():
+    app = _make_test_app()
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.patch("/api/pacing", json={"songs_between_banter": 0})
+    assert resp.status_code == 200
+    # Floor of 1 enforced
+    assert resp.json()["songs_between_banter"] == 1
+
+
+# ---------------------------------------------------------------------------
+# Credentials endpoint
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_credentials_no_recognised_fields():
+    app = _make_test_app()
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.post("/api/credentials", json={"unknown_field": "value"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ok"] is False
+    assert "error" in body
+
+
+@pytest.mark.asyncio
+async def test_credentials_saves_valid_key(tmp_path):
+    """Valid anthropic_api_key updates config and triggers file write."""
+    app = _make_test_app()
+    # Patch run_in_executor so no actual .env write happens
+    with patch("asyncio.AbstractEventLoop.run_in_executor", return_value=None):
+        transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            resp = await client.post("/api/credentials", json={"anthropic_api_key": "sk-test-key"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ok"] is True
+    assert "ANTHROPIC_API_KEY" in body["saved"]
