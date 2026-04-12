@@ -94,6 +94,44 @@ def test_track_display():
     assert t.display == "Artist 1 – Song 1"
 
 
+def test_switch_playlist_clears_listener_request_state():
+    state = StationState(playlist=[_track(1)])
+    state.pending_requests.append({"name": "Luca", "message": "ciao", "type": "shoutout"})
+    state._listener_request_rl = {"127.0.0.1": 123.0}
+    state.pinned_track = _track(99)
+    state.force_next = SegmentType.BANTER
+
+    state.switch_playlist([_track(2)])
+
+    assert state.pending_requests == []
+    assert state._listener_request_rl == {}
+    assert state.pinned_track is None
+    assert state.force_next is None
+
+
+def test_select_next_track_consumes_pinned_track():
+    state = StationState(playlist=[_track(1), _track(2)])
+    pinned = _track(99)
+    state.pinned_track = pinned
+
+    picked = state.select_next_track()
+
+    assert picked is pinned
+    assert state.pinned_track is None
+
+
+def test_select_next_track_most_stale_fallback():
+    stale = _track(1)
+    recent = _track(2)
+    state = StationState(playlist=[stale, recent])
+    # Ensure repeat cooldown excludes the whole pool, forcing fallback.
+    state.played_tracks.extend([stale, recent, recent])
+
+    picked = state.select_next_track()
+
+    assert picked == stale
+
+
 def test_on_stream_segment_counts_canned_clips():
     """Canned banter clips are counted at stream time for shareware trial."""
     state = StationState()

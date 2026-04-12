@@ -1090,7 +1090,11 @@ async def search_tracks(request: Request, q: str = "", _: None = Depends(require
 
     # External yt-dlp search (blocking, run off the event loop)
     loop = asyncio.get_running_loop()
-    external = await loop.run_in_executor(None, search_ytdlp_metadata, q.strip(), 5)
+    try:
+        external = await loop.run_in_executor(None, search_ytdlp_metadata, q.strip(), 5)
+    except Exception:
+        logger.warning("yt-dlp external search failed for query %r", q, exc_info=True)
+        external = []
 
     return {"results": results, "external": external}
 
@@ -1102,10 +1106,13 @@ async def add_external_track(request: Request, _: None = Depends(require_admin_a
     from mammamiradio.models import Track
 
     body = await request.json()
-    youtube_id = body.get("youtube_id", "").strip()
-    title = body.get("title", "").strip()
-    artist = body.get("artist", "").strip()
-    duration_ms = int(body.get("duration_ms") or 0)
+    youtube_id = str(body.get("youtube_id") or "").strip()
+    title = str(body.get("title") or "").strip()
+    artist = str(body.get("artist") or "").strip()
+    try:
+        duration_ms = int(body.get("duration_ms") or 0)
+    except (TypeError, ValueError):
+        return JSONResponse({"ok": False, "error": "invalid duration_ms"}, status_code=400)
     if not youtube_id:
         return JSONResponse({"ok": False, "error": "youtube_id required"}, status_code=400)
 

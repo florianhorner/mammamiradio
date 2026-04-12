@@ -435,6 +435,7 @@ class StationState:
         # download tasks from the old source can't zombie-pin a track into
         # the new playlist context.
         self.pending_requests.clear()
+        self._listener_request_rl.clear()
         self.pinned_track = None
         self.force_next = None
 

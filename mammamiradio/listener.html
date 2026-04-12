@@ -1451,24 +1451,23 @@
     .finally(function(){ btn.disabled = false; });
   }
 
-  // Apply custom station name from admin if set
-  (function applyStationName(){
-    var n = localStorage.getItem('stationName');
-    if(!n) return;
+  function applyStationName(newName){
+    var n = newName || localStorage.getItem('stationName') || 'Mamma Mi Radio';
     var h1 = document.querySelector('.station-name');
     if(h1) h1.textContent = n;
     document.title = n + ' — Live';
-    document.getElementById('playerNow').textContent = n;
-    document.querySelector('meta[property="og:title"]') && (document.querySelector('meta[property="og:title"]').content = n);
-  })();
+    var playerNow = document.getElementById('playerNow');
+    if(playerNow) playerNow.textContent = n;
+    var og = document.querySelector('meta[property="og:title"]');
+    if(og) og.content = n;
+  }
+
+  applyStationName();
 
   // Re-apply whenever admin changes the name in another tab
   window.addEventListener('storage', function(e){
     if(e.key !== 'stationName') return;
-    var n = e.newValue || 'Mamma Mi Radio';
-    var h1 = document.querySelector('.station-name');
-    if(h1) h1.textContent = n;
-    document.title = n + ' — Live';
+    applyStationName(e.newValue || null);
   });
 
   renderLaunch();
