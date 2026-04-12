@@ -15,6 +15,14 @@ from dataclasses import dataclass, field
 
 import httpx
 
+from mammamiradio.ha_enrichment import (
+    EVENT_BUFFER_SIZE,
+    HomeEvent,
+    build_events_summary,
+    diff_states,
+    prune_events,
+)
+
 logger = logging.getLogger(__name__)
 
 # Entities curated for maximum radio entertainment value
@@ -134,30 +142,6 @@ STATE_TRANSLATIONS = {
 
 
 # ---------------------------------------------------------------------------
-# Phase 1: Event tracking
-# ---------------------------------------------------------------------------
-
-
-@dataclass
-class HomeEvent:
-    """A detected state change on a curated HA entity."""
-
-    entity_id: str
-    label: str
-    old_state: str  # translated via STATE_TRANSLATIONS
-    new_state: str  # translated via STATE_TRANSLATIONS
-    timestamp: float
-
-    @property
-    def age_seconds(self) -> float:
-        return time.time() - self.timestamp
-
-    def describe(self) -> str:
-        minutes_ago = max(1, round(self.age_seconds / 60))
-        return f"- {self.label}: {self.old_state} → {self.new_state} ({minutes_ago} min fa)"
-
-
-# ---------------------------------------------------------------------------
 # Phase 4: Reactive triggers
 # ---------------------------------------------------------------------------
 
@@ -212,10 +196,9 @@ class HomeContext:
 
     raw_states: dict[str, dict] = field(default_factory=dict)
     summary: str = ""
-    timestamp: float = 0.0
-    # Phase 1: event diffing
-    events: deque[HomeEvent] = field(default_factory=lambda: deque(maxlen=20))
+    events: deque[HomeEvent] = field(default_factory=lambda: deque(maxlen=EVENT_BUFFER_SIZE))
     events_summary: str = ""
+    timestamp: float = 0.0
     # Phase 2: mood classification
     mood: str = ""
     # Phase 3: weather narrative arc
@@ -513,6 +496,11 @@ async def fetch_home_context(
     # Prefer explicitly passed cache, then module-level cache
     effective_cache = _cache or _ha_cache
     if effective_cache and effective_cache.age_seconds < poll_interval:
+        # Refresh event ages and prune expired entries even on cache hits, so
+        # "X min fa" timestamps stay accurate and stale events are dropped.
+        now = time.time()
+        effective_cache.events = prune_events(effective_cache.events, now=now)
+        effective_cache.events_summary = build_events_summary(effective_cache.events, now=now)
         return effective_cache
 
     try:
@@ -531,30 +519,29 @@ async def fetch_home_context(
         entity_map = {e["entity_id"]: e for e in all_states}
         relevant = {eid: entity_map[eid] for eid in ALL_ENTITIES if eid in entity_map}
 
-        # Phase 1: detect state changes since last poll
+        timestamp = time.time()
         old_states = effective_cache.raw_states if effective_cache else {}
-        events: deque[HomeEvent] = deque(
-            effective_cache.events if effective_cache else [],
-            maxlen=20,
+        old_events = effective_cache.events if effective_cache else None
+        events = diff_states(
+            old_states,
+            relevant,
+            old_events,
+            entity_labels=ENTITY_LABELS,
+            state_translations=STATE_TRANSLATIONS,
+            now=timestamp,
         )
-        _diff_states(old_states, relevant, events)
-        events_summary = _build_events_summary(events)
-
-        # Phase 2: classify home mood
         mood = classify_home_mood(relevant)
-
-        # Phase 3: weather narrative arc (cached separately)
         weather_arc = await fetch_weather_forecast(ha_url, ha_token)
-
         summary = _build_summary(relevant)
+        events_summary = build_events_summary(events, now=timestamp)
         context = HomeContext(
             raw_states=relevant,
             summary=summary,
-            timestamp=time.time(),
             events=events,
             events_summary=events_summary,
             mood=mood,
             weather_arc=weather_arc,
+            timestamp=timestamp,
         )
         _ha_cache = context
         logger.info("Fetched HA context: %d entities, %d events, mood=%r", len(relevant), len(events), mood or "none")
@@ -564,5 +551,8 @@ async def fetch_home_context(
         logger.warning("Failed to fetch HA context: %s", e)
         # Return stale cache if available, otherwise empty
         if effective_cache:
+            timestamp = time.time()
+            effective_cache.events = prune_events(effective_cache.events, now=timestamp)
+            effective_cache.events_summary = build_events_summary(effective_cache.events, now=timestamp)
             return effective_cache
         return HomeContext()

@@ -248,6 +248,7 @@ async def test_ha_context_refreshed_for_banter(tmp_path):
 
     mock_context = MagicMock()
     mock_context.summary = "Il tempo e' bello"
+    mock_context.events_summary = "- La macchina del caffe: spento/a -> acceso/a (1 min fa)"
 
     with (
         patch(f"{MODULE}.next_segment_type", return_value=SegmentType.BANTER),
@@ -262,6 +263,7 @@ async def test_ha_context_refreshed_for_banter(tmp_path):
 
     mock_fetch.assert_called_once()
     assert state.ha_context == "Il tempo e' bello"
+    assert state.ha_events_summary == "- La macchina del caffe: spento/a -> acceso/a (1 min fa)"
 
 
 @pytest.mark.asyncio

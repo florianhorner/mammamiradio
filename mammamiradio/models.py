@@ -380,8 +380,8 @@ class StationState:
     stream_log: deque[SegmentLogEntry] = field(default_factory=lambda: deque(maxlen=50))
     # Home Assistant context (natural language summary of home state)
     ha_context: str = ""
-    # Phase 1: recent state-change events
     ha_events_summary: str = ""
+    # Phase 1: recent state-change events
     # Phase 2: home mood scene classification
     ha_home_mood: str = ""
     # Phase 3: weather narrative arc
