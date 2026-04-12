@@ -11,7 +11,7 @@ import time
 from fastapi import FastAPI
 
 from mammamiradio.config import load_config
-from mammamiradio.downloader import evict_cache_lru
+from mammamiradio.downloader import evict_cache_lru, purge_suspect_cache_files
 from mammamiradio.models import StationState
 from mammamiradio.persona import PersonaStore
 from mammamiradio.playlist import DEMO_TRACKS, fetch_startup_playlist, read_persisted_source
@@ -43,6 +43,11 @@ async def startup():
 
     config.tmp_dir.mkdir(parents=True, exist_ok=True)
     config.cache_dir.mkdir(parents=True, exist_ok=True)
+
+    # Purge suspect cache files (likely failed downloads) before serving
+    purged = purge_suspect_cache_files(config.cache_dir)
+    if purged:
+        logger.info("Cache integrity check: purged %d suspect file(s)", purged)
 
     # Evict old cached tracks if the cache exceeds the configured size limit
     evict_cache_lru(config.cache_dir, config.max_cache_size_mb)
@@ -95,6 +100,15 @@ async def startup():
     )
     queue: asyncio.Queue = asyncio.Queue(maxsize=config.pacing.lookahead_segments + 2)
 
+    # Ring buffer for clip sharing ("share WTF moment") — holds ~60s of MP3 chunks
+    from collections import deque
+
+    try:
+        _clip_maxlen = max(240, int(config.audio.bitrate) * 1000 // 8 * 60 // 4096)
+    except (TypeError, ValueError, AttributeError):
+        _clip_maxlen = 240
+    app.state.clip_ring_buffer: deque[bytes] = deque(maxlen=_clip_maxlen)
+
     # Set app.state for streamer access
     app.state.queue = queue
     app.state.skip_event = asyncio.Event()
@@ -118,6 +132,20 @@ async def startup():
     _producer_task = asyncio.create_task(run_producer(queue, state, config, skip_event=app.state.skip_event))
     app.state.playback_task = _playback_task
     app.state.producer_task = _producer_task
+    # One-line boot summary for operator diagnostics
+    _audio_src = {"charts": "yt-dlp", "demo": "demo", "local": "local"}.get(
+        (playlist_source.kind if playlist_source else ""), "unknown"
+    )
+    logger.info(
+        "Boot summary: config_dir=%s audio_source=%s anthropic=%s openai=%s ha=%s ytdlp=%s tracks=%d",
+        config.cache_dir,
+        _audio_src,
+        "yes" if os.getenv("ANTHROPIC_API_KEY") else "no",
+        "yes" if os.getenv("OPENAI_API_KEY") else "no",
+        "enabled" if config.homeassistant.enabled else "disabled",
+        "allowed" if config.allow_ytdlp else "blocked",
+        len(tracks),
+    )
     logger.info(
         "Producer started. Stream at http://%s:%d/stream",
         config.bind_host,
