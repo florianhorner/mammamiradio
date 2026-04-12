@@ -4,6 +4,30 @@ All notable changes to `mammamiradio` are documented here.
 
 The current version source of truth is `pyproject.toml`.
 
+## [2.6.0] - 2026-04-12
+
+### Added
+
+- **Listener requests**: Listeners can submit song wishes and shoutouts from the dashboard or listener page. Requests appear in the admin panel with status pills (searching/found/error/shoutout) and are woven into banter by the hosts.
+- **Track pinning**: Requested songs are downloaded in the background and pinned to play next, with the host announcing the dedication. Pinned tracks enter the queue naturally without interrupting the current segment.
+- **External song search**: Admin search now shows both playlist matches and live web results. Clicking "Queue" on a web result downloads and pins the exact video for immediate playback.
+- **Station name customisation**: Admins can set a custom station name in the Radio tab. The name persists in localStorage and syncs across open tabs.
+- **IP rate limiting**: Listener requests are rate-limited to 1 per 30 seconds per IP with a 10-request queue cap. Countdown is shown to the user on 429 responses.
+
+### Fixed
+
+- **Prompt injection in listener requests**: Name, message, and song-track fields from public listener requests are now sanitised via `_sanitize_prompt_data()` before LLM interpolation, preventing injection attacks that could break banter JSON shape or hijack host script.
+- **Stale download on playlist switch**: Background song downloads now capture the playlist revision at enqueue time and discard the result if the source changed while downloading, preventing old listener wishes from leaking into a freshly loaded playlist.
+- **Type validation on public endpoint**: `/api/listener-request` now rejects non-string `name`/`message` fields with a 400 instead of raising `AttributeError` on `.strip()`.
+- **`force_next` not cleared on playlist switch**: `switch_playlist()` now also resets `force_next` so a previously forced segment type cannot bleed into the new source.
+- **`addExternal` button stuck loading**: The admin "↓ Queue" button now always restores via `finally`, so a thrown error can no longer leave the control permanently in a loading state.
+- **Non-429 request errors silent**: The listener request form in both dashboard and listener pages now surfaces all error responses (400, 500, network failures) with visible Italian feedback instead of swallowing them in `catch`.
+- **`tracks` parameter untyped in `preview_upcoming`**: Signature changed from `tracks: list` to `tracks: list[Track]`, resolving a mypy assignment error at line 142.
+- **Hard-coded colour tokens in admin**: Listener request pills and external search buttons now use `var(--ok)`, `var(--sun)`, and `var(--error)` from the design system instead of one-off hex values.
+- **Station name input unstyled**: The Station Name input in the Radio tab now uses `class="search-input"` so it inherits the admin dark theme instead of falling back to browser defaults.
+- **Accessibility**: Request name and message inputs in `listener.html` now have `aria-label` attributes for screen reader support.
+- **Download exact yt-dlp result**: `_download_ytdlp` now uses the direct `youtube.com/watch?v=ID` URL when a `youtube_id` is present on the Track, so the admin-selected video is always downloaded rather than a fresh text-search result that may return a different upload.
+
 ## [2.5.1] - 2026-04-11
 
 ### Fixed

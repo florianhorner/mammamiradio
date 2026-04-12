@@ -857,8 +857,8 @@
   <div class="section-card" id="requestCard">
     <div class="section-title">Manda un messaggio in studio</div>
     <div class="request-form">
-      <input type="text" id="requestName" class="request-input" placeholder="Il tuo nome (opzionale)" maxlength="40" autocomplete="off">
-      <textarea id="requestMsg" class="request-input request-textarea" placeholder="Chiedi una canzone o manda un saluto… I conduttori potrebbero leggerlo in diretta!" maxlength="280" rows="3"></textarea>
+      <input type="text" id="requestName" class="request-input" placeholder="Il tuo nome (opzionale)" maxlength="40" autocomplete="off" aria-label="Il tuo nome">
+      <textarea id="requestMsg" class="request-input request-textarea" placeholder="Chiedi una canzone o manda un saluto… I conduttori potrebbero leggerlo in diretta!" maxlength="280" rows="3" aria-label="Messaggio o richiesta canzone"></textarea>
       <button class="request-btn" id="requestSendBtn" onclick="sendRequest()">Manda al DJ</button>
       <div id="requestFeedback" class="request-feedback" style="display:none"></div>
     </div>

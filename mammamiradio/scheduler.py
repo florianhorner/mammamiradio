@@ -101,7 +101,7 @@ def next_segment_type(state: StationState, pacing: PacingSection) -> SegmentType
     )
 
 
-def preview_upcoming(state: StationState, pacing: PacingSection, tracks: list, count: int = 8) -> list[dict]:
+def preview_upcoming(state: StationState, pacing: PacingSection, tracks: list[Track], count: int = 8) -> list[dict]:
     """Predict the next N segments without mutating state."""
     preview = []
     songs_since_banter = state.songs_since_banter

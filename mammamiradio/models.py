@@ -436,6 +436,7 @@ class StationState:
         # the new playlist context.
         self.pending_requests.clear()
         self.pinned_track = None
+        self.force_next = None
 
     def _log(self, seg_type: str, label: str, metadata: dict | None = None) -> None:
         """Append a bounded producer-side log entry."""

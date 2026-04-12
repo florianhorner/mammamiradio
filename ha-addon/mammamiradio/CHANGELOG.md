@@ -1,5 +1,24 @@
 # Changelog
 
+## 2.6.0
+
+### Added
+
+- Listeners can submit song requests and shoutouts from the dashboard or listener page.
+- Requested songs are downloaded in the background and pinned to play next, with host announcement.
+- Admin search now shows live web results alongside playlist matches. Queue a web result to download and play it immediately.
+- Custom station name in the admin Radio tab, persisted across tabs via localStorage.
+
+### Fixed
+
+- Listener request fields are now sanitised before LLM interpolation (prompt injection protection).
+- Background downloads are discarded if the playlist source changed while downloading.
+- `/api/listener-request` now rejects non-string inputs with a 400 instead of crashing.
+- `switch_playlist()` now also clears `force_next` to prevent bleed into new sources.
+- Admin "↓ Queue" button always restores after download errors.
+- Request form shows visible error feedback for all failure modes, not just rate-limit responses.
+- `_download_ytdlp` uses the exact `youtube_id` URL when available instead of re-searching.
+
 ## 2.5.1
 
 ### Fixed

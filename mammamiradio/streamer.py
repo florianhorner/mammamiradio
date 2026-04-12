@@ -1167,8 +1167,16 @@ async def listener_request(request: Request):
     import time as _time
 
     body = await request.json()
-    name = (body.get("name") or "Un ascoltatore").strip()[:60]
-    message = (body.get("message") or "").strip()[:200]
+    if not isinstance(body, dict):
+        return JSONResponse({"ok": False, "error": "invalid payload"}, status_code=400)
+    raw_name = body.get("name")
+    raw_message = body.get("message")
+    if raw_name is not None and not isinstance(raw_name, str):
+        return JSONResponse({"ok": False, "error": "name must be a string"}, status_code=400)
+    if raw_message is not None and not isinstance(raw_message, str):
+        return JSONResponse({"ok": False, "error": "message must be a string"}, status_code=400)
+    name = (raw_name or "Un ascoltatore").strip()[:60]
+    message = (raw_message or "").strip()[:200]
     if not message:
         return JSONResponse({"ok": False, "error": "message required"}, status_code=400)
 
@@ -1206,7 +1214,7 @@ async def listener_request(request: Request):
 
     # Fire async download for song requests
     if is_song_request:
-        _dl_task = asyncio.create_task(_download_listener_song(req, request.app.state))
+        _dl_task = asyncio.create_task(_download_listener_song(req, request.app.state, state.playlist_revision))
         request.app.state.background_tasks = getattr(request.app.state, "background_tasks", set())
         request.app.state.background_tasks.add(_dl_task)
         _dl_task.add_done_callback(request.app.state.background_tasks.discard)
@@ -1215,14 +1223,14 @@ async def listener_request(request: Request):
     return {"ok": True, "queued": True, "type": req["type"]}
 
 
-async def _download_listener_song(req: dict, app_state) -> None:
+async def _download_listener_song(req: dict, app_state, originating_revision: int) -> None:
     """Background task: search yt-dlp for a listener song request and pin it.
 
     Stream-safe: does NOT purge the pre-buffered queue.  The pinned track
     enters the queue naturally after the current lookahead drains, avoiding
-    any audible silence gap.  If the request was already consumed (degraded
-    after 2 banter cycles, or cleared by a source switch), we still add the
-    track to the playlist for future rotation but skip the pin.
+    any audible silence gap.  If the playlist source changed while downloading
+    (revision mismatch) or the request was already consumed, the track is
+    dropped entirely to prevent leaking old requests into the new source.
     """
     from mammamiradio.downloader import download_track, search_ytdlp_metadata
     from mammamiradio.models import Track
@@ -1247,21 +1255,19 @@ async def _download_listener_song(req: dict, app_state) -> None:
         # Download so it's ready when the producer picks it up
         await download_track(track, config.cache_dir, music_dir=Path("music"))
 
-        # Always add to the playlist pool for future rotation
+        # Guard: if the playlist source switched while we were downloading,
+        # drop the result entirely.  Adding it to the new playlist would embed
+        # an old listener wish in a freshly loaded source.
+        if state.playlist_revision != originating_revision or req not in state.pending_requests:
+            logger.info("Listener song downloaded but playlist changed or request consumed: %s", track.display)
+            return
+
         state.playlist.append(track)
         req["song_found"] = True
         req["song_track"] = track.display
-
-        # Only pin if the request is still pending.  If the scriptwriter
-        # already degraded it (2-cycle timeout) or a source switch cleared
-        # pending_requests, pinning would cause a zombie: unexpected track
-        # play with no host announcement after the fallback already aired.
-        if req in state.pending_requests:
-            state.pinned_track = track
-            state.force_next = SegmentType.MUSIC
-            logger.info("Listener song request ready: %s", track.display)
-        else:
-            logger.info("Listener song downloaded but request already consumed: %s", track.display)
+        state.pinned_track = track
+        state.force_next = SegmentType.MUSIC
+        logger.info("Listener song request ready: %s", track.display)
     except Exception:
         req["song_error"] = True
         logger.warning("Listener song download failed for %r", query, exc_info=True)
