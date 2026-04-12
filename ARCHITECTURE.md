@@ -29,14 +29,17 @@ Live Italian charts / local files / demo tracks
 
 ## Startup flow
 
-`mammamiradio.main:startup()` does five things:
+`mammamiradio.main:startup()` does seven things:
 
 1. Loads `radio.toml` and `.env` through `config.py`.
 2. Validates the config and applies legacy migration like `station.bitrate -> audio.bitrate`.
-3. Restores persisted source selection from `cache/playlist_source.json`, then fetches the playlist (charts or demo) with fallback to live Italian charts when `MAMMAMIRADIO_ALLOW_YTDLP=true`, otherwise demo tracks.
-4. Creates shared app state, then launches:
+3. Purges suspect cache files (< 10KB, likely failed downloads) and evicts old cache entries.
+4. Restores persisted source selection from `cache/playlist_source.json`, then fetches the playlist (charts or demo) with fallback to live Italian charts when `MAMMAMIRADIO_ALLOW_YTDLP=true`, otherwise demo tracks.
+5. Initializes the clip ring buffer for WTF clip sharing.
+6. Creates shared app state, then launches:
    - `run_producer()` to fill the lookahead queue
    - `run_playback_loop()` to stream queued audio
+7. Logs a one-line boot summary with resolved config dir, audio source, API key presence, HA status, and track count.
 
 ## Segment production
 
@@ -67,6 +70,21 @@ Live Italian charts / local files / demo tracks
 Every produced segment becomes a temporary MP3 on disk and is pushed into `asyncio.Queue[Segment]`.
 
 Bounded state lists (`played_tracks`, `running_jokes`, `segment_log`, `stream_log`, `ad_history`, `recent_outcomes`) use `deque(maxlen=N)` for automatic memory management — no manual truncation needed.
+
+### Studio atmosphere
+
+Two features create the illusion of a live radio studio:
+
+- **Studio bleed**: After producing a music segment, the producer mixes a faint (-22dB) snippet of a previously-played banter clip under ~35% of music segments. This creates the "someone left a mic on" feeling.
+- **Humanity events**: A one-shot event system (cough, paper rustle, chair creak, pen tap) fires exactly once per session after 15+ segments have been produced. SFX files live in `demo_assets/sfx/studio/`.
+
+### Clip sharing
+
+A rolling `deque[bytes]` ring buffer on `app.state` records ~60 seconds of raw MP3 chunks during the playback loop. `POST /api/clip` extracts the last 30 seconds into a shareable file in `{cache_dir}/clips/`. Clips are served without auth at `GET /clips/{id}.mp3` and auto-expire after 24 hours. Per-IP rate limiting (1 clip per 10 seconds) and a 50-clip disk cap prevent abuse.
+
+### Periodic chart refresh
+
+When the playlist source is charts, the producer checks every 90 minutes and merges new chart entries into the live playlist without resetting `played_tracks` history. This prevents long sessions from looping the same track set.
 
 ## Playback and fanout
 
@@ -141,9 +159,14 @@ This is opportunistic context, not a hard dependency. Failures there should not 
 
 Public routes:
 
-- `/listen`
+- `/` (listener dashboard)
+- `/listen` (legacy, redirects to `/`)
 - `/stream`
 - `/public-status`
+- `/healthz`, `/readyz`
+- `/api/clip` (rate-limited)
+- `/clips/{id}.mp3`
+- `/api/listener-request`
 
 Admin routes:
 
@@ -156,9 +179,18 @@ Admin routes:
 - `/api/playlist/move`
 - `/api/playlist/move_to_next`
 - `/api/playlist/add`
+- `/api/playlist/add-external`
 - `/api/playlist/load`
+- `/api/search`
 - `/api/stop`
 - `/api/resume`
+- `/api/trigger`
+- `/api/track-rules`
+- `/api/listener-requests`
+- `/api/hosts`, `/api/hosts/{name}/personality`
+- `/api/pacing`
+- `/api/credentials`
+- `/api/capabilities`
 
 Admin access is granted by one of:
 
@@ -205,8 +237,10 @@ The rich path is richer, but the failure path still produces a stream.
 | `mammamiradio/persona.py` | Listener persona with compounding memory, motif tracking, and session counting |
 | `mammamiradio/sync.py` | SQLite database initialization |
 | `mammamiradio/context_cues.py` | Time-of-day and cultural context for prompts |
-| `mammamiradio/normalizer.py` | ffmpeg helpers for normalization, mixing, tones, and bumpers |
-| `mammamiradio/streamer.py` | HTTP routes, auth gating, playback loop, listener fanout |
+| `mammamiradio/normalizer.py` | ffmpeg helpers for normalization, mixing, tones, bumpers, bleed, and SFX |
+| `mammamiradio/clip.py` | WTF clip extraction from ring buffer, save, cleanup |
+| `mammamiradio/track_rationale.py` | "Why this track?" rationale generation for listener UI |
+| `mammamiradio/streamer.py` | HTTP routes, auth gating, playback loop, clip endpoints, listener fanout |
 | `start.sh` | local dev entry point with uvicorn and reload |
 
 ## Deployment models

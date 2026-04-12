@@ -57,7 +57,7 @@ AI-powered Italian radio station engine. Python 3.11+, FastAPI, FFmpeg, optional
 
 ## Runtime behavior
 
-- Startup loads `radio.toml`, validates config, restores persisted source selection from `cache/playlist_source.json`, fetches the playlist, then launches producer and playback tasks.
+- Startup loads `radio.toml`, validates config, purges suspect cache files (< 10KB), restores persisted source selection from `cache/playlist_source.json`, fetches the playlist, initializes the clip ring buffer, then launches producer and playback tasks. Logs a one-line boot summary at the end.
 - **Capability flags** (`anthropic`, `ha`) drive a three-tier system. The dashboard derives a tier label from them: Demo Radio, Full AI Radio, Connected Home. `GET /api/capabilities` returns flags, tier, and a `next_step` hint guiding the user toward the next setup action.
 - Demo-first: the app boots immediately with charts or built-in demo tracks and pre-bundled banter clips. No wizard, no gates.
 - If no LLM key is configured (neither Anthropic nor OpenAI), banter uses pre-bundled clips from `demo_assets/banter/` instead of calling an API.
@@ -81,8 +81,9 @@ mammamiradio/
   scriptwriter.py     Anthropic/OpenAI API calls for banter and ad JSON (with automatic fallback)
   playlist.py         charts, local, and demo playlist loading
   downloader.py       local file, yt-dlp, and placeholder audio fallback
-  normalizer.py       FFmpeg helpers for normalize, mix, concat, and generated SFX
-  tts.py              Edge TTS synthesis for hosts and ads
+  normalizer.py       FFmpeg helpers for normalize, mix, concat, generated SFX, studio bleed, and oneshot mixing
+  tts.py              Edge TTS synthesis for hosts and ads (with +90% rate for pharma disclaimers)
+  clip.py             WTF clip extraction from ring buffer, save, and cleanup
   ha_context.py       Home Assistant polling and Italian state formatting
   capabilities.py     Capability flags (anthropic, ha), tier derivation, and next_step hints
   persona.py          Compounding listener memory: persona, motifs, session tracking, prompt injection filtering
