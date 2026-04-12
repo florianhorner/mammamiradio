@@ -252,7 +252,7 @@ async def test_ha_context_refreshed_for_banter(tmp_path):
 
     with (
         patch(f"{MODULE}.next_segment_type", return_value=SegmentType.BANTER),
-        patch(f"{MODULE}.write_banter", new_callable=AsyncMock, return_value=banter_lines),
+        patch(f"{MODULE}.write_banter", new_callable=AsyncMock, return_value=(banter_lines, None)),
         patch(f"{MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora...")),
         patch(f"{MODULE}.synthesize", new_callable=AsyncMock, return_value=_fake_path()),
         patch(f"{MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=_fake_path()),
@@ -291,7 +291,7 @@ async def test_banter_quality_reject_uses_canned_fallback(tmp_path):
 
     with (
         patch(f"{MODULE}.next_segment_type", return_value=SegmentType.BANTER),
-        patch(f"{MODULE}.write_banter", new_callable=AsyncMock, return_value=[(host, "Linea test")]),
+        patch(f"{MODULE}.write_banter", new_callable=AsyncMock, return_value=([(host, "Linea test")], None)),
         patch(f"{MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora...")),
         patch(f"{MODULE}.synthesize", new_callable=AsyncMock, return_value=generated),
         patch(f"{MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=generated),
@@ -462,7 +462,7 @@ async def test_audio_tool_error_in_banter_does_not_drop_segment(tmp_path):
 
     with (
         patch(f"{MODULE}.next_segment_type", return_value=SegmentType.BANTER),
-        patch(f"{MODULE}.write_banter", new_callable=AsyncMock, return_value=[(host, "Ciao!")]),
+        patch(f"{MODULE}.write_banter", new_callable=AsyncMock, return_value=([(host, "Ciao!")], None)),
         patch(f"{MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora...")),
         patch(f"{MODULE}.synthesize", new_callable=AsyncMock, return_value=generated),
         patch(f"{MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=generated),

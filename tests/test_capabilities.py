@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
-from mammamiradio.capabilities import capabilities_to_dict, get_capabilities
+from mammamiradio.capabilities import capabilities_to_dict, get_capabilities, next_step
 from mammamiradio.models import Capabilities, StationState
 
 
@@ -121,6 +121,17 @@ def test_capabilities_to_dict_shape():
     assert d["capabilities"]["ha"] is False
     assert d["tier"] == "full_ai"
     assert d["tier_label"] == "Full AI Radio"
+
+
+def test_next_step_add_llm_when_no_llm():
+    step = next_step(Capabilities(llm=False, ha=False))
+    assert step["key"] == "add_llm"
+    assert step["action"] == "open_settings"
+
+
+def test_next_step_all_set_when_llm_and_ha_enabled():
+    step = next_step(Capabilities(llm=True, ha=True))
+    assert step == {"key": "all_set", "message": "", "action": "none"}
 
 
 # --- All flag combinations produce valid tiers ---

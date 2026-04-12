@@ -20,8 +20,10 @@ from mammamiradio.models import (
 from mammamiradio.scriptwriter import (
     AD_FORMATS,
     SPEAKER_ROLES,
+    ListenerRequestCommit,
     _build_system_prompt,
     _massage_transition_text,
+    _plan_listener_request_block,
     write_ad,
     write_banter,
     write_news_flash,
@@ -415,6 +417,145 @@ async def test_write_banter_works_without_persona_store(config, state):
 
     assert len(result) == 1
     assert result[0][1] == "Ciao!"
+
+
+@pytest.mark.asyncio
+async def test_write_banter_defers_listener_request_mutation_until_commit(config, state):
+    """Listener requests stay pending until the produced banter is actually committed."""
+    host_name = config.hosts[0].name
+    state.pending_requests.append(
+        {
+            "name": "Luca",
+            "message": "Ciao radio",
+            "type": "shoutout",
+            "song_found": False,
+            "song_error": False,
+            "song_track": None,
+            "banter_cycles_missed": 0,
+            "ts": 0,
+        }
+    )
+
+    async def _fake_generate_json_response(**kwargs):
+        return {"lines": [{"host": host_name, "text": "Ciao Luca!"}], "new_joke": None}
+
+    with patch("mammamiradio.scriptwriter._generate_json_response", side_effect=_fake_generate_json_response):
+        result, listener_request_commit = await write_banter(state, config, return_listener_request_commit=True)
+
+    assert len(result) == 1
+    assert state.pending_requests[0]["message"] == "Ciao radio"
+    assert listener_request_commit is not None
+
+    listener_request_commit.apply(state)
+
+    assert state.pending_requests == []
+
+
+def test_plan_listener_request_block_empty_queue(state):
+    prompt, commit = _plan_listener_request_block(state)
+
+    assert prompt == ""
+    assert commit is None
+
+
+def test_plan_listener_request_block_song_still_downloading_defers(state):
+    req = {
+        "name": "Luca",
+        "message": "metti Eros Ramazzotti",
+        "type": "song_request",
+        "song_found": False,
+        "song_error": False,
+        "song_track": None,
+        "banter_cycles_missed": 0,
+    }
+    state.pending_requests.append(req)
+
+    prompt, commit = _plan_listener_request_block(state)
+
+    assert prompt == ""
+    assert commit is not None
+    assert commit.consume is False
+    assert commit.mark_song_error is False
+    commit.apply(state)
+    assert req["banter_cycles_missed"] == 1
+    assert req in state.pending_requests
+
+
+def test_plan_listener_request_block_song_still_downloading_marks_error_after_two_cycles(state):
+    req = {
+        "name": "Luca",
+        "message": "metti Eros Ramazzotti",
+        "type": "song_request",
+        "song_found": False,
+        "song_error": False,
+        "song_track": None,
+        "banter_cycles_missed": 1,
+    }
+    state.pending_requests.append(req)
+
+    prompt, commit = _plan_listener_request_block(state)
+
+    assert "SONG NOT FOUND" in prompt
+    assert commit is not None
+    assert commit.consume is True
+    assert commit.mark_song_error is True
+    commit.apply(state)
+    assert req["song_error"] is True
+    assert req not in state.pending_requests
+
+
+def test_plan_listener_request_block_song_found_announcement(state):
+    req = {
+        "name": "Giulia",
+        "message": "metti Albachiara",
+        "type": "song_request",
+        "song_found": True,
+        "song_error": False,
+        "song_track": "Vasco Rossi - Albachiara",
+        "banter_cycles_missed": 0,
+    }
+    state.pending_requests.append(req)
+
+    prompt, commit = _plan_listener_request_block(state)
+
+    assert "Vasco Rossi - Albachiara" in prompt
+    assert commit is not None
+    assert commit.consume is True
+
+
+def test_plan_listener_request_block_song_error_branch(state):
+    req = {
+        "name": "Giulia",
+        "message": "metti Albachiara",
+        "type": "song_request",
+        "song_found": False,
+        "song_error": True,
+        "song_track": None,
+        "banter_cycles_missed": 0,
+    }
+    state.pending_requests.append(req)
+
+    prompt, commit = _plan_listener_request_block(state)
+
+    assert "SONG NOT FOUND" in prompt
+    assert commit is not None
+    assert commit.consume is True
+
+
+def test_listener_request_commit_apply_noops_when_request_missing(state):
+    req = {
+        "name": "Marta",
+        "message": "ciao",
+        "type": "song_request",
+        "song_error": False,
+        "banter_cycles_missed": 0,
+    }
+    commit = ListenerRequestCommit(request=req, banter_cycles_missed=3, mark_song_error=True, consume=True)
+
+    commit.apply(state)
+
+    assert req["song_error"] is False
+    assert req["banter_cycles_missed"] == 0
 
 
 @pytest.mark.asyncio

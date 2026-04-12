@@ -390,6 +390,12 @@ class StationState:
     ha_pending_directive: str = ""
     # Force-trigger: producer will use this type instead of scheduler for the next segment
     force_next: SegmentType | None = None
+    # Pinned track: select_next_track returns this immediately then clears it
+    pinned_track: Track | None = None
+    # Listener requests: shoutouts and song wishes submitted via the dashboard
+    pending_requests: list[dict] = field(default_factory=list)
+    # IP-based rate limiting for /api/listener-request {ip: last_ts}
+    _listener_request_rl: dict = field(default_factory=dict)
     # Shareware trial: counts canned banter clips actually streamed to listener
     canned_clips_streamed: int = 0
     # Persona store for compounding listener memory (set by main.py at startup)
@@ -425,6 +431,13 @@ class StationState:
         # playlist context.  Without this, a 20-track playlist loops after
         # ~30-40 min because the deque fills and recency weights flatten.
         self.played_tracks.clear()
+        # Clear listener requests and pinned track so in-flight background
+        # download tasks from the old source can't zombie-pin a track into
+        # the new playlist context.
+        self.pending_requests.clear()
+        self._listener_request_rl.clear()
+        self.pinned_track = None
+        self.force_next = None
 
     def _log(self, seg_type: str, label: str, metadata: dict | None = None) -> None:
         """Append a bounded producer-side log entry."""
@@ -483,7 +496,7 @@ class StationState:
         self,
         *,
         allow_explicit: bool = True,
-        repeat_cooldown: int = 5,
+        repeat_cooldown: int = 8,
         artist_cooldown: int = 3,
         max_artist_per_hour: int = 3,
     ) -> Track:
@@ -496,6 +509,11 @@ class StationState:
         """
         if not self.playlist:
             raise RuntimeError("Playlist is empty")
+
+        if self.pinned_track is not None:
+            track = self.pinned_track
+            self.pinned_track = None
+            return track
 
         pool = list(self.playlist)
 
@@ -550,8 +568,16 @@ class StationState:
             if not allow_explicit:
                 candidates = [t for t in candidates if not t.explicit]
         if not candidates:
-            # Final fallback: entire pool (even explicit if filtered out everything)
-            candidates = pool
+            # Final fallback: pick the track played least recently to minimise
+            # audible repeats.  Never just random from the full pool — that
+            # lets a song play twice in quick succession on small playlists.
+            def _staleness(t: Track) -> int:
+                # Higher = played longer ago (or never played)
+                if t.cache_key not in last_play_pos:
+                    return n_played + 1  # never played = most stale
+                return n_played - last_play_pos[t.cache_key]
+
+            candidates = [max(pool, key=_staleness)]
 
         # --- Soft weights (all lookups are O(1) via dicts built in the single pass above) ---
         weights: list[float] = []

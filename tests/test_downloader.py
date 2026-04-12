@@ -66,6 +66,20 @@ def test_find_local_matches_by_title(track, music_dir):
     assert result == mp3
 
 
+def test_find_demo_asset_matches_by_cache_key(track, tmp_path):
+    from mammamiradio.downloader import _find_demo_asset
+
+    demo_dir = tmp_path / "demo_assets" / "music"
+    demo_dir.mkdir(parents=True)
+    demo_file = demo_dir / f"{track.cache_key}_demo.mp3"
+    demo_file.touch()
+
+    with patch("mammamiradio.downloader._DEMO_ASSETS_DIR", demo_dir):
+        result = _find_demo_asset(track)
+
+    assert result == demo_file
+
+
 # --- _download_sync: cache hit ---
 
 
@@ -90,6 +104,21 @@ def test_local_file_found(track, cache_dir, music_dir):
 
     result = _download_sync(track, cache_dir, music_dir)
     assert result == local_mp3
+
+
+def test_download_sync_prefers_demo_asset(track, cache_dir, music_dir, tmp_path):
+    from mammamiradio.downloader import _download_sync
+
+    demo_dir = tmp_path / "demo_assets" / "music"
+    demo_dir.mkdir(parents=True)
+    demo_file = demo_dir / f"{track.cache_key}.mp3"
+    demo_file.write_text("demo audio")
+    (music_dir / f"{track.cache_key}.mp3").write_text("local audio")
+
+    with patch("mammamiradio.downloader._DEMO_ASSETS_DIR", demo_dir):
+        result = _download_sync(track, cache_dir, music_dir)
+
+    assert result == demo_file
 
 
 # --- _download_sync: yt-dlp success ---
@@ -173,6 +202,42 @@ def test_ytdlp_uses_no_progress_options(track, cache_dir):
     assert captured_opts["quiet"] is True
     assert captured_opts["no_warnings"] is True
     assert captured_opts["noprogress"] is True
+
+
+def test_download_ytdlp_uses_exact_watch_url_when_youtube_id(cache_dir):
+    from mammamiradio.downloader import _download_ytdlp
+
+    track = Track(
+        title="Albachiara",
+        artist="Vasco Rossi",
+        duration_ms=300000,
+        spotify_id="x1",
+        youtube_id="abc123",
+    )
+    captured_queries = []
+
+    class _FakeYoutubeDL:
+        def __init__(self, _opts):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def download(self, queries):
+            captured_queries.extend(queries)
+            (cache_dir / f"{track.cache_key}.mp3").write_text("downloaded audio")
+
+    mock_yt_dlp = MagicMock()
+    mock_yt_dlp.YoutubeDL = _FakeYoutubeDL
+
+    with patch.dict(sys.modules, {"yt_dlp": mock_yt_dlp}):
+        out = _download_ytdlp(track, cache_dir)
+
+    assert out.exists()
+    assert captured_queries == ["https://www.youtube.com/watch?v=abc123"]
 
 
 # --- _download_sync: yt-dlp failure falls back to placeholder ---
@@ -315,4 +380,92 @@ def test_evict_cache_lru_handles_oserror(cache_dir):
     f.write_bytes(b"x" * 1024 * 1024)
     with patch("pathlib.Path.unlink", side_effect=OSError("permission denied")):
         # Should not raise — logs warning and continues
-        evict_cache_lru(cache_dir, 0)
+        evict_cache_lru(cache_dir, 0.0001)
+
+
+# --- search_ytdlp_metadata ---
+
+
+def test_search_ytdlp_metadata_disabled_returns_empty():
+    from mammamiradio.downloader import search_ytdlp_metadata
+
+    with patch.dict("os.environ", {"MAMMAMIRADIO_ALLOW_YTDLP": "false"}):
+        assert search_ytdlp_metadata("vasco", max_results=3) == []
+
+
+def test_search_ytdlp_metadata_import_error_returns_empty():
+    from mammamiradio.downloader import search_ytdlp_metadata
+
+    with (
+        patch.dict("os.environ", {"MAMMAMIRADIO_ALLOW_YTDLP": "true"}),
+        patch.dict(sys.modules, {"yt_dlp": None}),
+    ):
+        assert search_ytdlp_metadata("vasco", max_results=3) == []
+
+
+def test_search_ytdlp_metadata_success_parses_entries():
+    from mammamiradio.downloader import search_ytdlp_metadata
+
+    class _FakeYoutubeDL:
+        def __init__(self, _opts):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def extract_info(self, query, download=False):
+            assert query == "ytsearch2:vasco"
+            assert download is False
+            return {
+                "entries": [
+                    None,
+                    {"id": ""},
+                    {"id": "yt1", "title": "Albachiara", "uploader": "Vasco Rossi", "duration": 123},
+                    {"id": "yt2", "title": "Volare", "channel": "Modugno Channel", "duration": 0},
+                ]
+            }
+
+    mock_yt_dlp = MagicMock()
+    mock_yt_dlp.YoutubeDL = _FakeYoutubeDL
+
+    with (
+        patch.dict("os.environ", {"MAMMAMIRADIO_ALLOW_YTDLP": "true"}),
+        patch.dict(sys.modules, {"yt_dlp": mock_yt_dlp}),
+    ):
+        results = search_ytdlp_metadata("vasco", max_results=2)
+
+    assert len(results) == 2
+    assert results[0]["youtube_id"] == "yt1"
+    assert results[0]["artist"] == "Vasco Rossi"
+    assert results[0]["duration_ms"] == 123000
+    assert results[1]["youtube_id"] == "yt2"
+    assert results[1]["artist"] == "Modugno Channel"
+
+
+def test_search_ytdlp_metadata_returns_empty_on_extract_exception():
+    from mammamiradio.downloader import search_ytdlp_metadata
+
+    class _FailingYoutubeDL:
+        def __init__(self, _opts):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def extract_info(self, _query, download=False):
+            raise RuntimeError("yt-dlp failed")
+
+    mock_yt_dlp = MagicMock()
+    mock_yt_dlp.YoutubeDL = _FailingYoutubeDL
+
+    with (
+        patch.dict("os.environ", {"MAMMAMIRADIO_ALLOW_YTDLP": "true"}),
+        patch.dict(sys.modules, {"yt_dlp": mock_yt_dlp}),
+    ):
+        assert search_ytdlp_metadata("vasco", max_results=3) == []

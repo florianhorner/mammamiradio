@@ -477,6 +477,20 @@ h1 {
 }
 .toast.show { opacity: 1; }
 
+#request-form input:focus-visible,
+#request-form textarea:focus-visible {
+  outline: 2px solid var(--sun2);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
 /* ── RESPONSIVE ── */
 @media (max-width: 640px) {
   body { padding: 0 12px 80px; }
@@ -638,6 +652,16 @@ h1 {
 <div class="card" id="connect-ha" style="display:none">
   <h3>Let the Hosts See Your Home</h3>
   <p>The hosts can reference your lights, temperature, and who just walked in. Connect Home Assistant to make the station aware of your world.</p>
+</div>
+
+<div class="card" id="request-card">
+  <h3>🎙️ Manda un saluto o chiedi una canzone</h3>
+  <div id="request-form">
+    <input type="text" id="req-name" aria-label="Come ti chiami? (opzionale)" placeholder="Come ti chiami? (opzionale)" autocomplete="off" style="width:100%;box-sizing:border-box;background:rgba(0,0,0,0.25);border:1px solid rgba(245,237,216,0.15);border-radius:6px;color:var(--cream);padding:8px 10px;font-size:13px;margin-bottom:8px">
+    <textarea id="req-msg" aria-label="Messaggio o richiesta canzone" placeholder="Es: Ciao a Marco! oppure: puoi mettere Vasco Rossi - Albachiara?" rows="2" autocomplete="off" style="width:100%;box-sizing:border-box;resize:none;background:rgba(0,0,0,0.25);border:1px solid rgba(245,237,216,0.15);border-radius:6px;color:var(--cream);padding:8px 10px;font-size:13px;margin-bottom:8px;font-family:inherit"></textarea>
+    <button onclick="sendRequest()" style="width:100%;padding:9px;background:rgba(244,208,72,0.12);border:1px solid rgba(244,208,72,0.3);border-radius:6px;color:var(--sun);font-size:13px;font-weight:600;cursor:pointer">Manda al DJ ▶</button>
+  </div>
+  <div id="request-sent" style="display:none;text-align:center;padding:8px 0;font-size:13px;color:rgba(245,237,216,0.7)"></div>
 </div>
 
 </main>
@@ -1173,18 +1197,28 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 async function doShuffle() {
-  await fetch(_base + '/api/shuffle', { method: 'POST' });
-  showToast('Shuffled');
+  try {
+    const r = await fetch(_base + '/api/shuffle', { method: 'POST' });
+    if (r.ok) showToast('Shuffled');
+    else r.text().then(t => showToast('Error: ' + (t || r.status)));
+  } catch(e) { showToast('Request failed'); }
 }
 
 async function doSkip() {
-  await fetch(_base + '/api/skip', { method: 'POST' });
-  showToast('Skipped');
+  try {
+    const r = await fetch(_base + '/api/skip', { method: 'POST' });
+    if (r.ok) showToast('Skipped');
+    else r.text().then(t => showToast('Error: ' + (t || r.status)));
+  } catch(e) { showToast('Request failed'); }
 }
 
 async function doPurge() {
-  await fetch(_base + '/api/purge', { method: 'POST' });
-  showToast('Buffer cleared');
+  if (!confirm('Clear the entire queue? This cannot be undone.')) return;
+  try {
+    const r = await fetch(_base + '/api/purge', { method: 'POST' });
+    if (r.ok) showToast('Buffer cleared');
+    else r.text().then(t => showToast('Error: ' + (t || r.status)));
+  } catch(e) { showToast('Request failed'); }
 }
 
 async function loadPlaylistUrl() {
@@ -1212,6 +1246,44 @@ async function saveAnthropicKey() {
   const d = await r.json();
   statusEl.textContent = d.ok ? 'Saved! Reloading...' : (d.error || 'Failed');
   if (d.ok) setTimeout(refresh, 1000);
+}
+
+// Listener request
+async function sendRequest() {
+  const name = (document.getElementById('req-name').value || '').trim();
+  const msg = (document.getElementById('req-msg').value || '').trim();
+  if (!msg) return;
+  const sentEl = document.getElementById('request-sent');
+  const formEl = document.getElementById('request-form');
+  try {
+    const r = await fetch(_base + '/api/listener-request', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({name: name || 'Un ascoltatore', message: msg}),
+    });
+    const d = await r.json();
+    if (d.ok) {
+      formEl.style.display = 'none';
+      sentEl.style.display = '';
+      sentEl.textContent = d.type === 'song_request'
+        ? '🎵 Canzone in arrivo! I conduttori la suoneranno presto.'
+        : '🎙️ Saluto ricevuto! I conduttori ti menzioneranno presto.';
+      setTimeout(() => { formEl.style.display = ''; sentEl.style.display = 'none'; document.getElementById('req-msg').value = ''; }, 15000);
+    } else if (r.status === 429) {
+      sentEl.style.display = ''; formEl.style.display = 'none';
+      sentEl.textContent = d.retry_after ? `Aspetta ${d.retry_after}s prima di inviare un altra richiesta.` : 'Coda piena, riprova tra poco.';
+      setTimeout(() => { formEl.style.display = ''; sentEl.style.display = 'none'; }, 5000);
+    } else {
+      sentEl.style.display = ''; formEl.style.display = 'none';
+      sentEl.textContent = d.error || 'Invio non riuscito. Riprova.';
+      setTimeout(() => { formEl.style.display = ''; sentEl.style.display = 'none'; }, 5000);
+    }
+  } catch(e) {
+    console.warn('Request failed', e);
+    sentEl.style.display = ''; formEl.style.display = 'none';
+    sentEl.textContent = 'Invio non riuscito. Controlla la connessione e riprova.';
+    setTimeout(() => { formEl.style.display = ''; sentEl.style.display = 'none'; }, 5000);
+  }
 }
 
 // Start polling

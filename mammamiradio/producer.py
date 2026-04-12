@@ -11,6 +11,7 @@ from collections import deque
 from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
+from typing import cast
 from uuid import uuid4
 
 from mammamiradio.audio_quality import AudioQualityError, AudioToolError, validate_segment_audio
@@ -23,6 +24,7 @@ from mammamiradio.models import (
     AdFormat,
     AdHistoryEntry,
     AdVoice,
+    HostPersonality,
     Segment,
     SegmentType,
     SonicWorld,
@@ -42,6 +44,7 @@ from mammamiradio.scheduler import next_segment_type
 from mammamiradio.scriptwriter import (
     AD_BREAK_INTROS,
     AD_BREAK_OUTROS,
+    ListenerRequestCommit,
     _has_script_llm,
     write_ad,
     write_banter,
@@ -619,6 +622,8 @@ async def run_producer(
 
                 impossible_tts = False
                 canned = None
+                listener_request_commit = None
+                loop = asyncio.get_running_loop()
 
                 if not _has_script_llm(config):
                     # No LLM — use canned clips + impossible TTS lines
@@ -666,8 +671,14 @@ async def run_producer(
                             config,
                             is_new_listener=_is_new_listener,
                             is_first_listener=_is_first_listener,
+                            return_listener_request_commit=True,
                         )
-                        (trans_host, trans_text), lines = await asyncio.gather(transition_task, banter_task)
+                        _trans_res, _banter_res = await asyncio.gather(transition_task, banter_task)
+                        trans_host, trans_text = cast(tuple[HostPersonality, str], _trans_res)
+                        lines, listener_request_commit = cast(
+                            tuple[list[tuple[HostPersonality, str]], ListenerRequestCommit | None],
+                            _banter_res,
+                        )
 
                         # Synthesize transition + dialogue in parallel
                         trans_voice_path = config.tmp_dir / f"trans_{uuid4().hex[:8]}.mp3"
@@ -750,17 +761,27 @@ async def run_producer(
                         else:
                             continue
 
-                # Clear new-listener flag only after banter was successfully produced
-                if _is_new_listener:
-                    state.new_listeners_pending = max(0, state.new_listeners_pending - _new_listener_count)
-
                 segment = Segment(
                     type=SegmentType.BANTER,
                     path=audio_path,
                     metadata={"type": "banter", "lines": state.last_banter_script, "canned": canned is not None},
                     ephemeral=canned is None,
                 )
-                success_callback = state.after_banter
+
+                def _banter_callback(
+                    *,
+                    _is_new_listener=_is_new_listener,
+                    _new_listener_count=_new_listener_count,
+                    _listener_request_commit=listener_request_commit,
+                    _used_generated_banter=(canned is None and not impossible_tts),
+                ) -> None:
+                    state.after_banter()
+                    if _is_new_listener:
+                        state.new_listeners_pending = max(0, state.new_listeners_pending - _new_listener_count)
+                    if _used_generated_banter and _listener_request_commit is not None:
+                        _listener_request_commit.apply(state)
+
+                success_callback = _banter_callback
 
             elif seg_type == SegmentType.NEWS_FLASH:
                 logger.info("Producing NEWS FLASH")

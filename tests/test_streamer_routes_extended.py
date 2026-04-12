@@ -6,7 +6,7 @@ import asyncio
 import base64
 import time
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
@@ -15,7 +15,7 @@ from fastapi import FastAPI
 from mammamiradio.config import load_config
 from mammamiradio.models import PlaylistSource, Segment, SegmentType, StationState, Track
 from mammamiradio.playlist import ExplicitSourceError
-from mammamiradio.streamer import LiveStreamHub, router
+from mammamiradio.streamer import LiveStreamHub, _download_listener_song, router
 
 TOML_PATH = str(Path(__file__).parent.parent / "radio.toml")
 
@@ -323,7 +323,9 @@ async def test_move_to_next_valid(tmp_path):
     body = resp.json()
     assert body["ok"] is True
     assert body["purged"] == 1
-    assert app.state.station_state.playlist[0].title == "Song C"
+    # move_to_next pins the track instead of reordering the playlist
+    assert app.state.station_state.pinned_track is not None
+    assert app.state.station_state.pinned_track.title == "Song C"
     assert app.state.station_state.force_next == SegmentType.MUSIC
     assert app.state.station_state.playlist_revision == starting_revision + 1
     assert app.state.station_state.queued_segments == []
@@ -360,6 +362,23 @@ async def test_move_to_next_rejects_non_integer_index_without_side_effects(tmp_p
     assert app.state.station_state.queued_segments == [{"type": "banter", "label": "Queued"}]
     assert app.state.queue.qsize() == 1
     assert queued_file.exists()
+
+
+@pytest.mark.asyncio
+async def test_move_to_next_updates_public_upcoming_preview():
+    app = _make_test_app()
+    app.state.station_state.segments_produced = 1
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        move_resp = await client.post("/api/playlist/move_to_next", json={"index": 2})
+        status_resp = await client.get("/public-status")
+
+    assert move_resp.status_code == 200
+    assert move_resp.json()["ok"] is True
+    upcoming = status_resp.json()["upcoming"]
+    assert upcoming[0]["type"] == "music"
+    assert upcoming[0]["label"] == "Artist C – Song C"
+    assert upcoming[0]["playlist_index"] == 2
 
 
 @pytest.mark.asyncio
@@ -530,14 +549,274 @@ async def test_search_empty_query():
 
 
 @pytest.mark.asyncio
-async def test_search_returns_empty_stub():
-    """Search endpoint is now a stub that always returns empty results."""
+async def test_search_returns_playlist_and_external_results():
+    app = _make_test_app()
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    with patch(
+        "mammamiradio.downloader.search_ytdlp_metadata",
+        return_value=[
+            {
+                "youtube_id": "yt1",
+                "title": "Song X",
+                "artist": "Artist X",
+                "display": "Artist X – Song X",
+                "duration_ms": 123000,
+            }
+        ],
+    ):
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            resp = await client.get("/api/search?q=Song")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert len(body["results"]) >= 1
+    assert len(body["external"]) == 1
+    assert body["external"][0]["youtube_id"] == "yt1"
+
+
+@pytest.mark.asyncio
+async def test_search_external_failure_returns_playlist_results():
+    app = _make_test_app()
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    with patch("mammamiradio.downloader.search_ytdlp_metadata", side_effect=RuntimeError("yt-dlp unavailable")):
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            resp = await client.get("/api/search?q=Song")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert len(body["results"]) >= 1
+    assert body["external"] == []
+
+
+# ---------------------------------------------------------------------------
+# Listener requests and add-external
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_listener_request_valid_shoutout():
+    app = _make_test_app()
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    with patch("mammamiradio.streamer._download_listener_song", new_callable=AsyncMock) as dl_mock:
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            resp = await client.post("/api/listener-request", json={"name": "Luca", "message": "Ciao a tutti!"})
+        await asyncio.sleep(0)
+    assert resp.status_code == 200
+    assert resp.json()["type"] == "shoutout"
+    assert len(app.state.station_state.pending_requests) == 1
+    assert dl_mock.await_count == 0
+
+
+@pytest.mark.asyncio
+async def test_listener_request_valid_song_starts_background_download():
+    app = _make_test_app()
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    with patch("mammamiradio.streamer._download_listener_song", new_callable=AsyncMock) as dl_mock:
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            resp = await client.post(
+                "/api/listener-request", json={"name": "Luca", "message": "puoi mettere Albachiara?"}
+            )
+        await asyncio.sleep(0)
+    assert resp.status_code == 200
+    assert resp.json()["type"] == "song_request"
+    assert dl_mock.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_listener_request_rate_limited_alt_client():
     app = _make_test_app()
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
-        resp = await client.get("/api/search?q=test")
+        first = await client.post("/api/listener-request", json={"name": "A", "message": "ciao"})
+        second = await client.post("/api/listener-request", json={"name": "B", "message": "ciao ancora"})
+    assert first.status_code == 200
+    assert second.status_code == 429
+    assert "retry_after" in second.json()
+
+
+@pytest.mark.asyncio
+async def test_listener_request_queue_full_prefilled_state():
+    app = _make_test_app()
+    app.state.station_state.pending_requests = [{"message": f"m{i}"} for i in range(10)]
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.post("/api/listener-request", json={"name": "Luca", "message": "ciao"})
+    assert resp.status_code == 429
+    assert resp.json()["error"] == "queue_full"
+
+
+@pytest.mark.asyncio
+async def test_listener_request_invalid_payload_types():
+    app = _make_test_app()
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        bad_payload = await client.post("/api/listener-request", json=["not", "an", "object"])
+        bad_name = await client.post("/api/listener-request", json={"name": 123, "message": "ciao"})
+        bad_message = await client.post("/api/listener-request", json={"name": "Luca", "message": 456})
+    assert bad_payload.status_code == 400
+    assert bad_payload.json()["error"] == "invalid payload"
+    assert bad_name.status_code == 400
+    assert bad_message.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_get_listener_requests_returns_age():
+    app = _make_test_app()
+    now = time.time()
+    app.state.station_state.pending_requests = [
+        {
+            "name": "Marta",
+            "message": "Ciao",
+            "type": "shoutout",
+            "song_found": False,
+            "song_error": False,
+            "song_track": None,
+            "ts": now - 8,
+        }
+    ]
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.get("/api/listener-requests")
     assert resp.status_code == 200
-    assert resp.json()["results"] == []
+    body = resp.json()
+    assert len(body["requests"]) == 1
+    assert body["requests"][0]["age_s"] >= 8
+
+
+@pytest.mark.asyncio
+async def test_add_external_track_success(tmp_path):
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path
+    original_len = len(app.state.station_state.playlist)
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    with patch("mammamiradio.downloader.download_track", new_callable=AsyncMock, return_value=tmp_path / "dl.mp3"):
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            resp = await client.post(
+                "/api/playlist/add-external",
+                json={"youtube_id": "abc123", "title": "Brano", "artist": "Artista", "duration_ms": 123000},
+            )
+    assert resp.status_code == 200
+    assert resp.json()["ok"] is True
+    assert len(app.state.station_state.playlist) == original_len + 1
+    assert app.state.station_state.pinned_track is not None
+    assert app.state.station_state.pinned_track.youtube_id == "abc123"
+
+
+@pytest.mark.asyncio
+async def test_add_external_track_missing_youtube_id():
+    app = _make_test_app()
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.post("/api/playlist/add-external", json={"title": "x", "artist": "y", "duration_ms": 1000})
+    assert resp.status_code == 400
+    assert resp.json()["error"] == "youtube_id required"
+
+
+@pytest.mark.asyncio
+async def test_add_external_track_invalid_duration():
+    app = _make_test_app()
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.post(
+            "/api/playlist/add-external",
+            json={"youtube_id": "abc123", "title": "Brano", "artist": "Artista", "duration_ms": "abc"},
+        )
+    assert resp.status_code == 400
+    assert resp.json()["error"] == "invalid duration_ms"
+
+
+@pytest.mark.asyncio
+async def test_download_listener_song_success(tmp_path):
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path
+    state = app.state.station_state
+    original_len = len(state.playlist)
+    req = {"song_query": "albachiara", "message": "metti albachiara", "song_found": False, "song_error": False}
+    state.pending_requests.append(req)
+    with (
+        patch(
+            "mammamiradio.downloader.search_ytdlp_metadata",
+            return_value=[
+                {"title": "Albachiara", "artist": "Vasco Rossi", "duration_ms": 120000, "youtube_id": "yt123"}
+            ],
+        ),
+        patch("mammamiradio.downloader.download_track", new_callable=AsyncMock, return_value=tmp_path / "song.mp3"),
+    ):
+        await _download_listener_song(req, app.state, state.playlist_revision)
+    assert req["song_found"] is True
+    assert req["song_error"] is False
+    assert req["song_track"] == "Vasco Rossi – Albachiara"
+    assert state.pinned_track is not None
+    assert len(state.playlist) == original_len + 1
+
+
+@pytest.mark.asyncio
+async def test_download_listener_song_no_results_marks_error(tmp_path):
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path
+    state = app.state.station_state
+    original_len = len(state.playlist)
+    req = {"song_query": "missing", "message": "missing", "song_found": False, "song_error": False}
+    state.pending_requests.append(req)
+    with patch("mammamiradio.downloader.search_ytdlp_metadata", return_value=[]):
+        await _download_listener_song(req, app.state, state.playlist_revision)
+    assert req["song_found"] is False
+    assert req["song_error"] is True
+    assert len(state.playlist) == original_len
+    assert state.pinned_track is None
+
+
+@pytest.mark.asyncio
+async def test_download_listener_song_drops_track_on_revision_change(tmp_path):
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path
+    state = app.state.station_state
+    original_len = len(state.playlist)
+    req = {"song_query": "track", "message": "track", "song_found": False, "song_error": False}
+    state.pending_requests.append(req)
+
+    async def _download_with_revision_bump(*_args, **_kwargs):
+        state.playlist_revision += 1
+        return tmp_path / "song.mp3"
+
+    with (
+        patch(
+            "mammamiradio.downloader.search_ytdlp_metadata",
+            return_value=[{"title": "Track", "artist": "Artist", "duration_ms": 120000, "youtube_id": "yt987"}],
+        ),
+        patch(
+            "mammamiradio.downloader.download_track", new_callable=AsyncMock, side_effect=_download_with_revision_bump
+        ),
+    ):
+        await _download_listener_song(req, app.state, state.playlist_revision)
+    assert req["song_found"] is False
+    assert req["song_error"] is False
+    assert len(state.playlist) == original_len
+    assert state.pinned_track is None
+
+
+@pytest.mark.asyncio
+async def test_download_listener_song_download_exception_marks_error(tmp_path):
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path
+    state = app.state.station_state
+    original_len = len(state.playlist)
+    req = {"song_query": "track", "message": "track", "song_found": False, "song_error": False}
+    state.pending_requests.append(req)
+    with (
+        patch(
+            "mammamiradio.downloader.search_ytdlp_metadata",
+            return_value=[{"title": "Track", "artist": "Artist", "duration_ms": 120000, "youtube_id": "yt987"}],
+        ),
+        patch(
+            "mammamiradio.downloader.download_track",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("download failed"),
+        ),
+    ):
+        await _download_listener_song(req, app.state, state.playlist_revision)
+    assert req["song_found"] is False
+    assert req["song_error"] is True
+    assert len(state.playlist) == original_len
+    assert state.pinned_track is None
 
 
 # ---------------------------------------------------------------------------
@@ -887,3 +1166,219 @@ def test_sanitize_ingress_prefix_empty():
     from mammamiradio.streamer import _sanitize_ingress_prefix
 
     assert _sanitize_ingress_prefix("") == ""
+
+
+# ---------------------------------------------------------------------------
+# Listener requests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_listener_request_shoutout():
+    app = _make_test_app()
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.post("/api/listener-request", json={"name": "Marco", "message": "Ciao a tutti!"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ok"] is True
+    assert body["type"] == "shoutout"
+    assert len(app.state.station_state.pending_requests) == 1
+
+
+@pytest.mark.asyncio
+async def test_listener_request_missing_message_rejected():
+    app = _make_test_app()
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.post("/api/listener-request", json={"name": "Marco"})
+    assert resp.status_code == 400
+    assert resp.json()["ok"] is False
+
+
+@pytest.mark.asyncio
+async def test_listener_request_rate_limited():
+    app = _make_test_app()
+    transport = httpx.ASGITransport(app=app, client=("10.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        r1 = await client.post("/api/listener-request", json={"name": "A", "message": "primo"})
+        r2 = await client.post("/api/listener-request", json={"name": "A", "message": "secondo"})
+    assert r1.status_code == 200
+    assert r2.status_code == 429
+    assert "retry_after" in r2.json()
+
+
+@pytest.mark.asyncio
+async def test_listener_request_queue_full():
+    app = _make_test_app()
+    state = app.state.station_state
+    # Pre-fill the queue with 10 entries (the cap)
+    for i in range(10):
+        state.pending_requests.append({"name": f"U{i}", "message": f"msg{i}", "ts": 0})
+    transport = httpx.ASGITransport(app=app, client=("99.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.post("/api/listener-request", json={"name": "Late", "message": "ciao"})
+    assert resp.status_code == 429
+    assert resp.json()["error"] == "queue_full"
+
+
+@pytest.mark.asyncio
+async def test_get_listener_requests_returns_queue():
+    app = _make_test_app()
+    import time as _time
+
+    state = app.state.station_state
+    state.pending_requests.append(
+        {"name": "Giulia", "message": "metti Volare", "type": "song_request", "ts": _time.time()}
+    )
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.get("/api/listener-requests")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data["requests"]) == 1
+    assert data["requests"][0]["name"] == "Giulia"
+
+
+# ---------------------------------------------------------------------------
+# Track rules
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_track_rules_missing_fields():
+    app = _make_test_app()
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.post("/api/track-rules", json={"youtube_id": "abc123"})
+    assert resp.status_code == 400
+    assert resp.json()["ok"] is False
+
+
+@pytest.mark.asyncio
+async def test_track_rules_saves_rule(tmp_path):
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path
+    # Ensure DB exists so add_rule can write to it
+    from mammamiradio.sync import init_db
+
+    init_db(tmp_path / "mammamiradio.db")
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.post("/api/track-rules", json={"youtube_id": "dQw4w9WgXcQ", "rule": "plays too often"})
+    assert resp.status_code == 200
+    assert resp.json()["ok"] is True
+
+
+# ---------------------------------------------------------------------------
+# Add track endpoint
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_add_track_appends_to_playlist():
+    app = _make_test_app()
+    initial_len = len(app.state.station_state.playlist)
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.post(
+            "/api/playlist/add", json={"title": "Azzurro", "artist": "Celentano", "duration_ms": 200000}
+        )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ok"] is True
+    assert len(app.state.station_state.playlist) == initial_len + 1
+
+
+@pytest.mark.asyncio
+async def test_add_track_inserts_at_next_position():
+    app = _make_test_app()
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.post(
+            "/api/playlist/add",
+            json={"title": "Priority Track", "artist": "DJ", "duration_ms": 180000, "position": "next"},
+        )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ok"] is True
+    assert body["position"] == "next"
+    assert app.state.station_state.playlist[0].title == "Priority Track"
+
+
+# ---------------------------------------------------------------------------
+# Pacing endpoints
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_pacing_returns_config():
+    app = _make_test_app()
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.get("/api/pacing")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "songs_between_banter" in body
+    assert "songs_between_ads" in body
+    assert "ad_spots_per_break" in body
+
+
+@pytest.mark.asyncio
+async def test_patch_pacing_updates_values():
+    app = _make_test_app()
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.patch(
+            "/api/pacing",
+            json={"songs_between_banter": 3, "songs_between_ads": 6, "ad_spots_per_break": 2},
+        )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ok"] is True
+    assert body["songs_between_banter"] == 3
+    assert body["songs_between_ads"] == 6
+    assert body["ad_spots_per_break"] == 2
+
+
+@pytest.mark.asyncio
+async def test_patch_pacing_enforces_floor():
+    app = _make_test_app()
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.patch("/api/pacing", json={"songs_between_banter": 0})
+    assert resp.status_code == 200
+    # Floor of 1 enforced
+    assert resp.json()["songs_between_banter"] == 1
+
+
+# ---------------------------------------------------------------------------
+# Credentials endpoint
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_credentials_no_recognised_fields():
+    app = _make_test_app()
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.post("/api/credentials", json={"unknown_field": "value"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ok"] is False
+    assert "error" in body
+
+
+@pytest.mark.asyncio
+async def test_credentials_saves_valid_key(tmp_path):
+    """Valid anthropic_api_key updates config and triggers file write."""
+    app = _make_test_app()
+    # Patch run_in_executor so no actual .env write happens
+    with patch("asyncio.AbstractEventLoop.run_in_executor", return_value=None):
+        transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            resp = await client.post("/api/credentials", json={"anthropic_api_key": "sk-test-key"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ok"] is True
+    assert "ANTHROPIC_API_KEY" in body["saved"]

@@ -108,7 +108,12 @@ def _download_ytdlp(track: Track, cache_dir: Path) -> Path:
     """Download the best-effort public audio match for a track via yt-dlp."""
     import yt_dlp
 
-    query = f"ytsearch1:{track.artist} {track.title} official audio"
+    # Use the exact video ID when available to download the chosen upload,
+    # not a fresh text-search result that might return a different version.
+    if track.youtube_id:
+        query = f"https://www.youtube.com/watch?v={track.youtube_id}"
+    else:
+        query = f"ytsearch1:{track.artist} {track.title} official audio"
     opts = {
         "format": "bestaudio/best",
         "outtmpl": str(cache_dir / f"{track.cache_key}.%(ext)s"),
@@ -163,6 +168,53 @@ def _download_sync(track: Track, cache_dir: Path, music_dir: Path) -> Path:
 
     # 4. Fallback: brief silence (never a sine wave tone)
     return _generate_silence(track, out_path)
+
+
+def search_ytdlp_metadata(query: str, max_results: int = 5) -> list[dict]:
+    """Search yt-dlp for tracks matching query, returning metadata without downloading.
+
+    Uses extract_flat so only lightweight playlist-level info is fetched.
+    Returns a list of dicts with youtube_id, title, artist, duration_ms, display.
+    Returns [] if yt-dlp is unavailable or the search fails.
+    """
+    allow_ytdlp = os.getenv("MAMMAMIRADIO_ALLOW_YTDLP", "false").lower() in ("true", "1", "yes")
+    if not allow_ytdlp:
+        return []
+    try:
+        import yt_dlp
+    except ImportError:
+        return []
+    opts = {
+        "quiet": True,
+        "no_warnings": True,
+        "noprogress": True,
+        "extract_flat": True,
+    }
+    try:
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(f"ytsearch{max_results}:{query}", download=False)
+        entries = info.get("entries", []) if info else []
+        results = []
+        for e in entries or []:
+            if not e or not e.get("id"):
+                continue
+            title = e.get("title") or ""
+            artist = e.get("uploader") or e.get("channel") or ""
+            duration_s = e.get("duration") or 0
+            display = f"{artist} \u2013 {title}" if artist else title
+            results.append(
+                {
+                    "youtube_id": e["id"],
+                    "title": title,
+                    "artist": artist,
+                    "duration_ms": int(duration_s * 1000),
+                    "display": display,
+                }
+            )
+        return results
+    except Exception:
+        logger.debug("yt-dlp metadata search failed", exc_info=True)
+        return []
 
 
 async def download_track(track: Track, cache_dir: Path, music_dir: Path | None = None) -> Path:
