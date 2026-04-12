@@ -248,13 +248,13 @@ def test_load_config_parses_campaign_spines():
     toml_path = Path(__file__).parent.parent / "radio.toml"
     config = load_config(str(toml_path))
 
-    # Negroni as a Service has a campaign spine
-    negroni = next(b for b in config.ads.brands if b.name == "Negroni as a Service")
-    assert negroni.campaign is not None
-    assert "cloud" in negroni.campaign.premise.lower()
-    assert negroni.campaign.sonic_signature == "ice_clink+startup_synth"
-    assert "classic_pitch" in negroni.campaign.format_pool
-    assert negroni.campaign.spokesperson == "hammer"
+    # Esselunga has a campaign spine
+    esselunga = next(b for b in config.ads.brands if b.name == "Esselunga")
+    assert esselunga.campaign is not None
+    assert "offers" in esselunga.campaign.premise.lower() or "saving" in esselunga.campaign.premise.lower()
+    assert esselunga.campaign.sonic_signature == "chime+register_hit"
+    assert "classic_pitch" in esselunga.campaign.format_pool
+    assert esselunga.campaign.spokesperson == "hammer"
 
 
 def test_load_config_brands_without_campaign():
@@ -262,9 +262,9 @@ def test_load_config_brands_without_campaign():
     toml_path = Path(__file__).parent.parent / "radio.toml"
     config = load_config(str(toml_path))
 
-    # Mausoleo Berlusconi has no campaign
-    mausoleo = next(b for b in config.ads.brands if b.name == "Mausoleo Berlusconi")
-    assert mausoleo.campaign is None
+    # Lidl Italia has no campaign
+    lidl = next(b for b in config.ads.brands if b.name == "Lidl Italia")
+    assert lidl.campaign is None
 
 
 def test_load_config_parses_voice_roles():

@@ -205,7 +205,11 @@ async def synthesize_ad(
     async def _render_part(part, part_path):
         if part.type == "voice" and part.text:
             voice_for_part = voices.get(part.role, default_voice) if part.role else default_voice
-            return await synthesize(part.text, voice_for_part.voice, part_path)
+            # Pharma disclaimers are read at ~2x speed — real Italian radio style
+            extra: dict[str, str] = {}
+            if part.role == "disclaimer_goblin":
+                extra["rate"] = "+90%"
+            return await synthesize(part.text, voice_for_part.voice, part_path, **extra)
         if part.type == "sfx" and part.sfx:
             sfx_name = part.sfx if part.sfx in AVAILABLE_SFX_TYPES else "chime"
             try:
