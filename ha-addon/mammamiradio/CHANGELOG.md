@@ -1,5 +1,25 @@
 # Changelog
 
+## 2.7.0
+
+### Added
+- WTF clip sharing: capture last 30s of audio into a shareable MP3 clip.
+- Studio bleed atmosphere and one-shot humanity events for live radio feel.
+- 18 authentic Italian ad brands (Esselunga, Fiat, TIM, Barilla, etc.).
+- Fast-talking pharma disclaimer at +90% TTS rate.
+- Cache integrity check and boot summary log for operator diagnostics.
+- Dashboard pipeline indicators, stop sticky state, and ad metadata display.
+- Admin Engine Room tab with runtime stats and capabilities.
+- Periodic chart refresh every 90 minutes mid-session.
+
+### Fixed
+- Move-to-next no longer destroys the pre-rendered queue.
+- Song repetition fixed: charts now fetch 50 tracks (was 20).
+- Up-next preview distinguishes rendered vs predicted segments.
+
+### Changed
+- SFX volume reduced ~12dB. Mid-bumpers play 25% of the time.
+
 ## 2.6.0
 
 ### Added

@@ -4,6 +4,34 @@ All notable changes to `mammamiradio` are documented here.
 
 The current version source of truth is `pyproject.toml`.
 
+## [2.7.0] - 2026-04-12
+
+### Added
+
+- **WTF clip sharing**: Listeners can capture the last 30 seconds of audio into a shareable MP3 clip. Ring buffer records ~60s of stream data; `POST /api/clip` extracts a clip, `GET /clips/{id}.mp3` serves it without auth.
+- **Studio bleed atmosphere**: Faint prior banter clips mixed under ~35% of music segments at -22dB, creating the "someone left a mic on" live studio feeling.
+- **Studio humanity events**: One-shot events (cough, paper rustle, chair creak, pen tap) fire once per session after 15+ segments. Scarcity is the mechanic.
+- **Italian ad brands**: 18 authentic Italian radio advertisers (Esselunga, Fiat, TIM, Barilla, Moment, etc.) replace the fictional brand palette. Organized by category with campaign spines.
+- **Fast-talking pharma disclaimer**: Health/pharma ads end with a legally-required disclaimer at +90% TTS rate, matching real Italian radio style.
+- **Cache integrity check**: On startup, purge cached files under 10KB (likely failed downloads caching silence placeholders).
+- **Boot summary log**: Single INFO line at startup with resolved config, audio source, API keys, HA status, and track count.
+- **Dashboard pipeline indicators**: Small status dots near "On Air" showing Anthropic/OpenAI/HA connection state.
+- **Dashboard stop sticky**: Stopped station shows a clear banner with resume button instead of misleading loading states.
+- **Dashboard ad metadata**: Ad format, sonic palette, and cast info shown during ad breaks.
+- **Admin Engine Room tab**: Runtime stats, segment counts by type, and capability status dashboard.
+- **Periodic chart refresh**: Charts playlist refreshes every 90 minutes mid-session, merging new tracks without resetting play history.
+
+### Fixed
+
+- **Move-to-next no longer destroys the queue**: Previously purged the entire pre-rendered audio queue on every "play next" action. Now the pinned track plays after buffered segments drain naturally.
+- **Song repetition at 30-40 minutes**: Charts fetch limit raised from 20 to 50 tracks, giving ~3.5 hours of unique content.
+- **Up-next sync**: Dashboard distinguishes rendered (queued) vs predicted (upcoming) segments.
+
+### Changed
+
+- SFX volume reduced ~12dB across all generators (bumper jingles, station ID beds, time check tones).
+- Mid-bumpers between ad spots now only play ~25% of the time instead of every transition.
+
 ## [2.6.0] - 2026-04-12
 
 ### Added

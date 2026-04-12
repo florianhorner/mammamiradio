@@ -59,10 +59,9 @@ The disclaimer_goblin role is defined in SPEAKER_ROLES and has a voice in radio.
 
 ## P1: Live session feedback — 2026-04-09 (third session)
 
-### Transition sounds — HARSH (fix before next session)
-- The SFX/jingles between segments feel harsh and artificial
-- Soften or remove entirely; silence or a very subtle breath is better than bad SFX
-- **Files:** mammamiradio/normalizer.py, mammamiradio/producer.py
+### ~~Transition sounds — HARSH~~ RESOLVED
+- SFX volume reduced ~12dB, mid-bumpers play 25% of the time.
+- **Completed:** v2.7.0 (2026-04-12)
 
 ### Song-to-host crossfade — explore "host sings along" technique
 - Current fade at ~80% smoothness — Option A: improve the fade curve
@@ -83,11 +82,9 @@ The disclaimer_goblin role is defined in SPEAKER_ROLES and has a voice in radio.
 - This is different from persona memory — it's per-track annotation + reaction rules
 - **Effort:** M | **Files:** mammamiradio/producer.py, mammamiradio/scriptwriter.py, new: mammamiradio/track_rules.py
 
-### Studio humanity events — sparse, intentional one-shots (P1 impossible moment)
-- Cough/sneeze mid-show (once per session max), paper rustling when host loses thought, door opening for news delivery
-- These are EVENTS not ambient loops — scarcity is the mechanic. Once = magic. Ten times = annoying.
-- Implementation: one-shot event scheduler in producer, SFX assets in demo_assets/sfx/studio/
-- **Effort:** S+S | **Files:** mammamiradio/producer.py, demo_assets/sfx/studio/ (new)
+### ~~Studio humanity events~~ RESOLVED
+- One-shot cough/paper-rustle/chair-creak/pen-tap after 15+ segments. 4 SFX files generated.
+- **Completed:** v2.7.0 (2026-04-12)
 
 ### Real radio advertisements — the anchor of reality (P2)
 - Mix real movie/brand radio spots with AI-generated ones — real ads make AI ads feel realer by association
@@ -102,48 +99,30 @@ The disclaimer_goblin role is defined in SPEAKER_ROLES and has a voice in radio.
 - Natural escalation from current two-host banter
 - **Effort:** L | **Files:** mammamiradio/scriptwriter.py, mammamiradio/producer.py
 
-### Ad brand palette — Italian authenticity (P2)
-- Current ad generator uses generic placeholder brands; should use real Italian radio categories
-- radio.toml ad_brands needs: supermarkets (Esselunga, Lidl, Conad), cars (Fiat, Alfa, Jeep), movies (current theatrical), telecom (TIM, Vodafone, WindTre), banking (Fineco, Poste), health (with fast disclaimer), food (Barilla, Ferrero), fashion (OVS, Zara seasonal)
-- Seasonal rotation: Ferrero at Christmas, sunscreen in summer, school supplies in September
-- **Files:** radio.toml, mammamiradio/scriptwriter.py
+### ~~Ad brand palette — Italian authenticity~~ RESOLVED
+- 18 real Italian brands across 7 categories. Seasonal rotation TBD (follow-up).
+- **Completed:** v2.7.0 (2026-04-12)
 
-### BUG: "Move to upcoming" destroys the playlist (P1)
-- Moving a track to "upcoming" via UI wiped the entire queue and triggered full rebuild
-- Expected: reorder only, never destroy
-- Investigate: does the endpoint purge state? is the frontend calling the wrong endpoint?
-- **Files:** mammamiradio/admin.html, mammamiradio/streamer.py (playlist move endpoints)
+### ~~BUG: "Move to upcoming" destroys the playlist~~ RESOLVED
+- Removed queue purge from move_to_next. Pin takes effect after buffer drains naturally.
+- **Completed:** v2.7.0 (2026-04-12)
 
-### BUG: Song repetition / playlist loses position (P1)
-- Songs repeat after ~30-40 min; feels like the 20-track Italian charts set loops from top
-- Unclear if producer tracks cursor position across cycles or reshuffles each time
-- "Move to upcoming" may reset the playlist cursor — double-whammy with the bug above
-- **Files:** mammamiradio/producer.py, mammamiradio/playlist.py
+### ~~BUG: Song repetition / playlist loses position~~ RESOLVED
+- Charts limit raised from 20 to 50 tracks. Periodic 90-minute refresh merges new tracks.
+- **Completed:** v2.7.0 (2026-04-12)
 
-### FEATURE: Fast-talking disclaimer for health/pharma ads (P2)
-- Real radio health ads end with a legally-required disclaimer read at ~3-4x speed
-- Currently read at normal pace — sounds wrong, breaks the illusion
-- Implementation: scriptwriter marks disclaimer segment, TTS renders at elevated rate
-- **Files:** mammamiradio/scriptwriter.py, mammamiradio/tts.py
+### ~~FEATURE: Fast-talking disclaimer for health/pharma ads~~ RESOLVED
+- Pharma ads get disclaimer_goblin role at +90% TTS rate.
+- **Completed:** v2.7.0 (2026-04-12)
 
-### "Studio bleed" atmosphere — engineer the accidental Italian chatter (P1 impossible moment)
-- At 32min mark, user heard Italian voices in background during transition — sounded like someone left a mic on
-- Not confused in a bad way — "borderline confused in a good way. uncanny."
-- Likely: banter TTS clips bleeding through at low volume during segment handoff
-- Action: find exact mechanism, then make it intentional and controllable
-- Design: persistent low-volume Italian studio ambient layer under all transitions — NOT silence, not SFX, but the sense that the studio is always live
-- This is what separates a playlist with voiceover from a radio station with a soul
-- Do NOT remove or "fix" this behavior before understanding it
-- **Effort:** S (understand) + M (engineer intentionally) | **Files:** mammamiradio/producer.py, mammamiradio/normalizer.py
+### ~~"Studio bleed" atmosphere~~ RESOLVED
+- Faint prior banter clips (-22dB) mixed under ~35% of music segments. Intentional and controllable.
+- **Completed:** v2.7.0 (2026-04-12)
 
-### "Share WTF moment" — viral clip mechanism (P1 product idea)
-- Listener presses a button → last ~30s trimmed into a clip → short URL to share
-- Already felt the need 2-3 times in this single session — strong signal
-- The clip IS the marketing. Nobody explains AI radio, they send a clip.
-- Retroactive: "replay last 30s" → decide to share
-- Pairs with song cue mechanism: flagging a moment = potential WTF clip candidate
-- Architecture: rolling ring buffer of raw stream audio → clip on demand → upload → short URL
-- **Effort:** M | **Files:** mammamiradio/streamer.py (ring buffer), new: mammamiradio/clip.py
+### ~~"Share WTF moment" — viral clip mechanism~~ RESOLVED
+- Ring buffer + `POST /api/clip` + `GET /clips/{id}.mp3`. Clips auto-expire after 24h.
+- Short URL generation and upload TBD (follow-up).
+- **Completed:** v2.7.0 (2026-04-12)
 
 ### Italian pronunciation of English — PROTECT
 - Love when Italian hosts mispronounce English song titles in Italian accent
@@ -197,14 +176,10 @@ GHCR packages are private by default. HA Supervisor cannot pull private images �
 **Effort:** S (human: 2 min, no code) | **Priority:** P1 — must do before install attempt
 **Source:** /plan-ceo-review + /plan-eng-review, 2026-04-11
 
-## P2: Cache integrity check on startup (silence-cache-poison protection)
-The downloader cache has no TTL or integrity check. A failed yt-dlp run (rate limited, network error) caches a silence placeholder. Subsequent boots serve silence from cache without re-downloading. The quality gate rejects it, starving the queue. The only current recovery is: operator SSHes in and deletes /data/cache/ manually.
-**Action:** On startup, scan /data/cache/ for files < 10KB and delete them before serving. Also consider: log a warning when a cached file is used without re-validation.
-**Effort:** S (CC: ~10min) | **Files:** mammamiradio/downloader.py, mammamiradio/main.py
-**Source:** /plan-ceo-review, 2026-04-11 (Prior learning: silence-cache-poison, confidence 10/10)
+## ~~P2: Cache integrity check on startup~~ RESOLVED
+Purge cached files < 10KB on startup. Logs warning for each purged file.
+**Completed:** v2.7.0 (2026-04-12)
 
-## P2: First-boot log summary line
-When the addon breaks, operators grep through scattered log lines to reconstruct what state the system was in at startup. A single structured boot summary line would let the failure log tell its story at a glance.
-**Action:** At end of startup in main.py or run.sh, print one line: resolved config dir, audio source (yt-dlp/demo/local), API keys present/absent (masked), HA context enabled/disabled, MAMMAMIRADIO_ALLOW_YTDLP value.
-**Effort:** S (CC: ~15min) | **Files:** mammamiradio/main.py
-**Source:** /plan-ceo-review, 2026-04-11
+## ~~P2: First-boot log summary line~~ RESOLVED
+One-line boot summary at INFO level with config dir, audio source, API keys, HA, yt-dlp, track count.
+**Completed:** v2.7.0 (2026-04-12)
