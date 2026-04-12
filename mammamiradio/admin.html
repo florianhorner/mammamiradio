@@ -642,7 +642,7 @@ h1 {
     <div id="setupKeysConfigured" style="display:none;padding:0.75rem 1rem;background:rgba(37,99,235,0.1);border:1px solid rgba(37,99,235,0.3);border-radius:8px;margin-bottom:0.75rem">
       <span style="color:#2563EB;font-weight:600" id="setupKeysLabel">&#10003; AI keys configured</span>
       <span style="opacity:0.7;margin-left:0.5rem;font-size:0.85em" id="setupKeysDetail"></span>
-      <button class="btn btn-util" style="margin-left:0.75rem;font-size:0.8em;padding:0.2rem 0.6rem" onclick="document.getElementById('setupKeysForm').style.display='block'">Replace</button>
+      <button class="btn btn-util" style="margin-left:0.75rem;font-size:0.8em;padding:0.2rem 0.6rem" onclick="_keysEditMode=true;document.getElementById('setupKeysForm').style.display='block'">Replace</button>
     </div>
     <div id="setupKeysForm">
       <div class="setup-subhead">Save Keys</div>
@@ -671,7 +671,7 @@ h1 {
 <script>
 const _csrf = document.querySelector('meta[name="mammamiradio-csrf-token"]')?.content || '';
 const H = () => ({'Content-Type':'application/json','X-Radio-CSRF-Token':_csrf});
-let _st={}, _pub={}, _caps={}, _hostsOk=false, _paceOk=false, _searchTo=null;
+let _st={}, _pub={}, _caps={}, _hostsOk=false, _paceOk=false, _searchTo=null, _keysEditMode=false;
 let _nowStart=0, _nowDur=0, _tick=null, _prevLabel='';
 
 function toast(m){const e=document.getElementById('toast');e.textContent=m;e.classList.add('show');setTimeout(()=>e.classList.remove('show'),1600)}
@@ -808,7 +808,7 @@ function renderSetup(setup){
   const configuredKeys=llmEssential?.configured_keys||[];
   const keysConfigured=configuredKeys.length>0;
   document.getElementById('setupKeysConfigured').style.display=keysConfigured?'block':'none';
-  document.getElementById('setupKeysForm').style.display=keysConfigured?'none':'block';
+  if(!_keysEditMode) document.getElementById('setupKeysForm').style.display=keysConfigured?'none':'block';
   if(keysConfigured){
     document.getElementById('setupKeysDetail').textContent=configuredKeys.join(', ');
   }
@@ -840,6 +840,7 @@ async function setupSaveKeys(el){
   if(!resp.ok){toast(resp.error||'Failed to save keys');return}
   document.getElementById('setupAnthropicKey').value='';
   document.getElementById('setupOpenaiKey').value='';
+  _keysEditMode=false;
   const updated=await api('POST','/api/setup/recheck');
   renderSetup(updated);
   toast('Keys saved');

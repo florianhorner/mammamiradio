@@ -384,6 +384,9 @@ async def prewarm_first_segment(
     """
     if not state.playlist:
         return False
+    if state.session_stopped:
+        logger.info("Skipping prewarm: session is stopped")
+        return False
     try:
         track = state.select_next_track()
         logger.info("Pre-warming first track: %s", track.display)

@@ -427,6 +427,20 @@ async def test_prewarm_empty_playlist():
 
 
 @pytest.mark.asyncio
+async def test_prewarm_stopped_session():
+    """prewarm returns False when session is stopped."""
+    from mammamiradio.producer import prewarm_first_segment
+
+    state = _make_state()
+    state.session_stopped = True
+    config = _make_config()
+    queue: asyncio.Queue = asyncio.Queue()
+    result = await prewarm_first_segment(queue, state, config)
+    assert result is False
+    assert queue.empty()
+
+
+@pytest.mark.asyncio
 async def test_prewarm_happy_path():
     """prewarm downloads, normalizes, and queues a music segment."""
     from mammamiradio.producer import prewarm_first_segment
