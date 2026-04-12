@@ -657,8 +657,8 @@ h1 {
 <div class="card" id="request-card">
   <h3>🎙️ Manda un saluto o chiedi una canzone</h3>
   <div id="request-form">
-    <input type="text" id="req-name" placeholder="Come ti chiami? (opzionale)" autocomplete="off" style="width:100%;box-sizing:border-box;background:rgba(0,0,0,0.25);border:1px solid rgba(245,237,216,0.15);border-radius:6px;color:var(--cream);padding:8px 10px;font-size:13px;margin-bottom:8px">
-    <textarea id="req-msg" placeholder="Es: Ciao a Marco! oppure: puoi mettere Vasco Rossi - Albachiara?" rows="2" autocomplete="off" style="width:100%;box-sizing:border-box;resize:none;background:rgba(0,0,0,0.25);border:1px solid rgba(245,237,216,0.15);border-radius:6px;color:var(--cream);padding:8px 10px;font-size:13px;margin-bottom:8px;font-family:inherit"></textarea>
+    <input type="text" id="req-name" aria-label="Come ti chiami? (opzionale)" placeholder="Come ti chiami? (opzionale)" autocomplete="off" style="width:100%;box-sizing:border-box;background:rgba(0,0,0,0.25);border:1px solid rgba(245,237,216,0.15);border-radius:6px;color:var(--cream);padding:8px 10px;font-size:13px;margin-bottom:8px">
+    <textarea id="req-msg" aria-label="Messaggio o richiesta canzone" placeholder="Es: Ciao a Marco! oppure: puoi mettere Vasco Rossi - Albachiara?" rows="2" autocomplete="off" style="width:100%;box-sizing:border-box;resize:none;background:rgba(0,0,0,0.25);border:1px solid rgba(245,237,216,0.15);border-radius:6px;color:var(--cream);padding:8px 10px;font-size:13px;margin-bottom:8px;font-family:inherit"></textarea>
     <button onclick="sendRequest()" style="width:100%;padding:9px;background:rgba(244,208,72,0.12);border:1px solid rgba(244,208,72,0.3);border-radius:6px;color:var(--sun);font-size:13px;font-weight:600;cursor:pointer">Manda al DJ ▶</button>
   </div>
   <div id="request-sent" style="display:none;text-align:center;padding:8px 0;font-size:13px;color:rgba(245,237,216,0.7)"></div>
