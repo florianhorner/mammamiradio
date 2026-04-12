@@ -175,7 +175,11 @@ async def test_fetch_returns_cached_if_fresh():
 
 @pytest.mark.asyncio
 async def test_fetch_calls_api_when_stale():
-    stale_cache = HomeContext(summary="old", timestamp=time.time() - 120.0)
+    stale_cache = HomeContext(
+        raw_states={"person.florian_horner": {"state": "not_home", "attributes": {}}},
+        summary="old",
+        timestamp=time.time() - 120.0,
+    )
 
     mock_resp = MagicMock()
     mock_resp.raise_for_status = MagicMock()
@@ -196,6 +200,7 @@ async def test_fetch_calls_api_when_stale():
     assert result is not stale_cache
     assert result.timestamp > stale_cache.timestamp
     assert "Florian" in result.summary
+    assert "Florian" in result.events_summary
 
 
 @pytest.mark.asyncio

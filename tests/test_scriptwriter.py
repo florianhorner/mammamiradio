@@ -342,6 +342,22 @@ async def test_write_banter_prompt_includes_optional_context_blocks(config, stat
     await store.increment_session()
     state.persona_store = store
     state.ha_context = "La cucina e accesa."
+    state.ha_events_summary = "- La macchina del caffè: spento/a -> acceso/a (1 min fa)"
+    state.ha_weather_arc = "Meteo: soleggiato, 22°C."
+    state.ha_home_mood = "Musica in casa"
+    state.ha_pending_directive = "Florian è appena tornato a casa. Salutalo subito."
+    state.played_tracks.append(
+        Track(
+            title="Test Track",
+            artist="Rule Artist",
+            duration_ms=210000,
+            spotify_id="track-rule-1",
+            youtube_id="yt123",
+        )
+    )
+    if len(config.hosts) == 1:
+        config.hosts.append(HostPersonality(name="Giulia", voice="it-IT-IsabellaNeural", style="sharp"))
+    config.hosts[0].personality.chaos = 90
     for _ in range(5):
         state.listener.record_outcome(skipped=False, energy_hint="high", track_display="Test Track")
 
@@ -355,16 +371,26 @@ async def test_write_banter_prompt_includes_optional_context_blocks(config, stat
             "persona_updates": {"new_theories": [], "new_jokes": [], "callbacks_used": []},
         }
 
-    with patch("mammamiradio.scriptwriter._generate_json_response", side_effect=_fake_generate_json_response):
+    with (
+        patch("mammamiradio.scriptwriter._generate_json_response", side_effect=_fake_generate_json_response),
+        patch("mammamiradio.track_rules.get_rules", return_value=["React to the chorus like it's a scandal"]),
+    ):
         result = await write_banter(state, config, is_first_listener=True)
 
     assert len(result) == 1
     prompt = captured["prompt"]
     assert "<home_state_data>" in prompt
+    assert "EVENTI RECENTI" in prompt
+    assert "La macchina del caffè" in prompt
+    assert "WEATHER ARC" in prompt
+    assert "TRACK RULES for Rule Artist" in prompt
+    assert "HOME MOOD: Musica in casa" in prompt
+    assert "HIGH PRIORITY" in prompt
     assert "<listener_behavior>" in prompt
     assert "<listener_memory>" in prompt
     assert "FIRST listener" in prompt
     assert '"persona_updates"' in prompt
+    assert state.ha_pending_directive == ""
 
 
 @pytest.mark.asyncio
