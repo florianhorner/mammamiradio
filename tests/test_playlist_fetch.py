@@ -11,6 +11,7 @@ from mammamiradio.config import load_config
 from mammamiradio.models import PlaylistSource, Track
 from mammamiradio.playlist import (
     DEMO_TRACKS,
+    fetch_chart_refresh,
     fetch_playlist,
     fetch_startup_playlist,
     load_explicit_source,
@@ -260,3 +261,39 @@ def test_load_explicit_source_unsupported_kind_raises(config):
             config,
             PlaylistSource(kind="unsupported_kind", source_id="", label="Bad"),
         )
+
+
+# ---------------------------------------------------------------------------
+# fetch_chart_refresh
+# ---------------------------------------------------------------------------
+
+
+def test_fetch_chart_refresh_filters_existing():
+    """Tracks already in the playlist are excluded from the refresh."""
+    tracks = [
+        Track(title="A", artist="X", spotify_id="id_a", duration_ms=210000),
+        Track(title="B", artist="Y", spotify_id="id_b", duration_ms=210000),
+        Track(title="C", artist="Z", spotify_id="id_c", duration_ms=210000),
+    ]
+    with patch("mammamiradio.playlist._fetch_current_italy_charts", return_value=tracks):
+        result = fetch_chart_refresh({"id_a", "id_c"})
+    assert len(result) == 1
+    assert result[0].spotify_id == "id_b"
+
+
+def test_fetch_chart_refresh_returns_empty_on_failure():
+    """When the chart fetch fails, an empty list is returned."""
+    with patch("mammamiradio.playlist._fetch_current_italy_charts", return_value=[]):
+        result = fetch_chart_refresh(set())
+    assert result == []
+
+
+def test_fetch_chart_refresh_returns_all_when_no_overlap():
+    """When none of the chart tracks are in the existing set, all are returned."""
+    tracks = [
+        Track(title="A", artist="X", spotify_id="id_a", duration_ms=210000),
+        Track(title="B", artist="Y", spotify_id="id_b", duration_ms=210000),
+    ]
+    with patch("mammamiradio.playlist._fetch_current_italy_charts", return_value=tracks):
+        result = fetch_chart_refresh({"id_z"})
+    assert len(result) == 2

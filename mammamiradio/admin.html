@@ -1256,20 +1256,22 @@ async function refresh(){
 function updateEngineRoom(st,caps){
   const rt=document.getElementById('engineRuntime');
   if(!rt)return;
-  const uptime=st.uptime_s?Math.round(st.uptime_s/60)+'m':'—';
+  const uptime=(st.uptime_sec||st.uptime_s)?Math.round((st.uptime_sec||st.uptime_s)/60)+'m':'—';
   const qd=st.queue_depth!=null?st.queue_depth:'—';
   const pl=st.playlist?st.playlist.length:'—';
-  const rev=st.playlist_revision!=null?st.playlist_revision:'—';
+  const listeners=st.listeners?st.listeners.active:(st.listeners_active||0);
   rt.innerHTML=[
     'Uptime: <strong>'+uptime+'</strong>',
     'Queue depth: <strong>'+qd+'</strong> segments buffered',
-    'Playlist: <strong>'+pl+'</strong> tracks (revision '+rev+')',
-    'Listeners: <strong>'+(st.listeners_active||0)+'</strong>',
+    'Playlist: <strong>'+pl+'</strong> tracks',
+    'Listeners: <strong>'+listeners+'</strong> (peak: '+(st.listeners?st.listeners.peak:'—')+')',
+    'Segments produced: <strong>'+(st.segments_produced||'—')+'</strong>',
   ].join('<br>');
 
   const seg=document.getElementById('engineSegments');
-  const sc=st.segment_counts||{};
-  seg.innerHTML=Object.entries(sc).map(([k,v])=>k+': <strong>'+v+'</strong>').join('<br>')||'No segments yet';
+  const log=st.produced_log||[];
+  const counts={};log.forEach(e=>{counts[e.type]=(counts[e.type]||0)+1});
+  seg.innerHTML=Object.entries(counts).map(([k,v])=>k+': <strong>'+v+'</strong>').join('<br>')||'No segments yet';
 
   const ce=document.getElementById('engineCaps');
   if(caps&&caps.capabilities){

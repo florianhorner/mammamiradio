@@ -896,7 +896,8 @@ def mix_quiet_bleed(
             f"[1:a]atrim=0:{bleed_duration_sec},"
             f"volume={bleed_volume_db}dB,"
             f"afade=t=in:d={fade},afade=t=out:st={bleed_duration_sec - fade}:d={fade}[bleed];"
-            "[0:a][bleed]amix=inputs=2:duration=first:dropout_transition=0[out]"
+            "[0:a][bleed]amix=inputs=2:duration=first:dropout_transition=0,"
+            "loudnorm=I=-16:LRA=11:TP=-1.5[out]"
         ),
         "-map",
         "[out]",
@@ -926,7 +927,8 @@ def mix_oneshot_sfx(
         "-filter_complex",
         (
             f"[1:a]volume={sfx_volume_db}dB,adelay={delay_ms}|{delay_ms}[sfx];"
-            "[0:a][sfx]amix=inputs=2:duration=first:dropout_transition=0[out]"
+            "[0:a][sfx]amix=inputs=2:duration=first:dropout_transition=0,"
+            "loudnorm=I=-16:LRA=11:TP=-1.5[out]"
         ),
         "-map",
         "[out]",

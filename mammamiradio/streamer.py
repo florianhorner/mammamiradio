@@ -1459,10 +1459,22 @@ def _public_status_payload(request: Request) -> dict:
 # ---------------------------------------------------------------------------
 
 
+_clip_rate: dict[str, float] = {}  # IP -> last clip timestamp
+
+
 @router.post("/api/clip")
 async def create_clip(request: Request):
     """Extract the last ~30s of audio into a shareable clip."""
-    from mammamiradio.clip import cleanup_old_clips, extract_clip, save_clip
+    from mammamiradio.clip import CLIP_TTL_SECONDS, cleanup_old_clips, extract_clip, save_clip
+
+    # Rate limit: 1 clip per 10 seconds per IP
+    client_ip = request.client.host if request.client else "unknown"
+    now = time.time()
+    if now - _clip_rate.get(client_ip, 0) < 10:
+        from fastapi.responses import JSONResponse
+
+        return JSONResponse({"ok": False, "error": "Rate limited — try again in a few seconds"}, status_code=429)
+    _clip_rate[client_ip] = now
 
     ring_buffer = getattr(request.app.state, "clip_ring_buffer", None)
     if ring_buffer is None or len(ring_buffer) == 0:
@@ -1475,8 +1487,15 @@ async def create_clip(request: Request):
         return {"ok": False, "error": "Buffer empty"}
 
     clips_dir = config.cache_dir / "clips"
+
+    # Cap total clips on disk to prevent unbounded writes
+    existing = sorted(clips_dir.glob("*.mp3"), key=lambda f: f.stat().st_mtime) if clips_dir.is_dir() else []
+    if len(existing) >= 50:
+        for old in existing[: len(existing) - 49]:
+            old.unlink(missing_ok=True)
+
     clip_id = save_clip(clip_data, clips_dir)
-    cleanup_old_clips(clips_dir)
+    cleanup_old_clips(clips_dir, max_age_hours=CLIP_TTL_SECONDS // 3600)
     return {"ok": True, "clip_id": clip_id, "url": f"/clips/{clip_id}.mp3"}
 
 
@@ -1484,6 +1503,8 @@ async def create_clip(request: Request):
 async def serve_clip(clip_id: str, request: Request):
     """Serve a saved clip file — no auth required (clips are for sharing)."""
     from fastapi.responses import FileResponse
+
+    from mammamiradio.clip import CLIP_TTL_SECONDS
 
     # Sanitize clip_id to prevent path traversal
     if "/" in clip_id or "\\" in clip_id or ".." in clip_id:
@@ -1495,6 +1516,14 @@ async def serve_clip(clip_id: str, request: Request):
         from fastapi.responses import JSONResponse
 
         return JSONResponse({"ok": False, "error": "Clip not found"}, status_code=404)
+
+    # Enforce TTL — don't serve expired clips
+    if time.time() - clip_path.stat().st_mtime > CLIP_TTL_SECONDS:
+        clip_path.unlink(missing_ok=True)
+        from fastapi.responses import JSONResponse
+
+        return JSONResponse({"ok": False, "error": "Clip expired"}, status_code=404)
+
     return FileResponse(clip_path, media_type="audio/mpeg")
 
 

@@ -46,11 +46,9 @@ def extract_clip(
         return None
 
     chunks.reverse()
-    data = b"".join(chunks)
-    # Trim to exactly the requested duration
-    if len(data) > bytes_needed:
-        data = data[-bytes_needed:]
-    return data
+    # Return whole chunks to avoid cutting into MP3 frames.
+    # The result may be slightly longer than requested but stays frame-aligned.
+    return b"".join(chunks)
 
 
 def save_clip(clip_data: bytes, clips_dir: Path) -> str:
