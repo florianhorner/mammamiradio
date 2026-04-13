@@ -196,12 +196,7 @@ def _is_anthropic_auth_error(exc: Exception) -> bool:
     text = str(exc).lower()
     if "auth" in exc_type:
         return True
-    return (
-        "invalid x-api-key" in text
-        or "authentication_error" in text
-        or "unauthorized" in text
-        or "401" in text
-    )
+    return "invalid x-api-key" in text or "authentication_error" in text or "unauthorized" in text or "401" in text
 
 
 async def _generate_json_response(
@@ -225,17 +220,12 @@ async def _generate_json_response(
             state.anthropic_disabled_until = 0.0
             state.anthropic_last_error = ""
 
-        blocked = (
-            _anthropic_auth_blocked_key == config.anthropic_api_key
-            and now < _anthropic_auth_blocked_until
-        )
+        blocked = _anthropic_auth_blocked_key == config.anthropic_api_key and now < _anthropic_auth_blocked_until
 
         if blocked:
             state.anthropic_disabled_until = _anthropic_auth_blocked_until
             if not config.openai_api_key:
-                raise RuntimeError(
-                    "Anthropic authentication previously failed; provider is temporarily disabled"
-                )
+                raise RuntimeError("Anthropic authentication previously failed; provider is temporarily disabled")
             logger.debug(
                 "Anthropic temporarily disabled after auth failure (retry in %ds); using OpenAI fallback",
                 max(1, int(_anthropic_auth_blocked_until - now)),

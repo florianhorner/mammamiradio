@@ -352,11 +352,7 @@ def test_measure_lufs_parses_integrated_loudness():
 
     fake_result = MagicMock(spec=subprocess.CompletedProcess)
     fake_result.returncode = 0
-    fake_result.stderr = (
-        "  Integrated loudness:\n"
-        "    I:         -16.2 LUFS\n"
-        "    Threshold: -26.2 LUFS\n"
-    )
+    fake_result.stderr = "  Integrated loudness:\n    I:         -16.2 LUFS\n    Threshold: -26.2 LUFS\n"
     with patch("mammamiradio.normalizer.subprocess.run", return_value=fake_result):
         result = measure_lufs(Path("/tmp/test.mp3"))
     assert result == pytest.approx(-16.2)

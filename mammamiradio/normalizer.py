@@ -19,9 +19,14 @@ def measure_lufs(input_path: Path) -> float | None:
     Returns integrated LUFS value, or None if measurement fails.
     """
     cmd = [
-        "ffmpeg", "-i", str(input_path),
-        "-af", "ebur128=peak=true",
-        "-f", "null", "-",
+        "ffmpeg",
+        "-i",
+        str(input_path),
+        "-af",
+        "ebur128=peak=true",
+        "-f",
+        "null",
+        "-",
     ]
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
@@ -32,6 +37,7 @@ def measure_lufs(input_path: Path) -> float | None:
     if match:
         return float(match.group(1))
     return None
+
 
 # Shared FFmpeg output arguments for consistent MP3 encoding across all generators.
 _MP3_OUTPUT_ARGS: list[str] = ["-ar", "48000", "-ac", "2", "-b:a", "192k", "-f", "mp3"]

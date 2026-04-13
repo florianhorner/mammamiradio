@@ -1236,13 +1236,13 @@ function toggleSection(head){head.classList.toggle('open');head.nextElementSibli
 // ── Polling ──
 async function refresh(){
   try{
-    const [sr,pr,cr,or,lrr]=await Promise.all([fetch('/status',{headers:H()}),fetch('/public-status'),fetch('/api/capabilities',{headers:H()}),fetch('/api/setup/status',{headers:H()}),fetch('/api/listener-requests',{headers:H()})]);
-    _st=await sr.json();_pub=await pr.json();
+    const [sr,cr,or,lrr]=await Promise.all([fetch('/status',{headers:H()}),fetch('/api/capabilities',{headers:H()}),fetch('/api/setup/status',{headers:H()}),fetch('/api/listener-requests',{headers:H()})]);
+    _st=await sr.json();_pub=_st;
     _caps=await cr.json();
     const setup=await or.json();
     const lrData=lrr.ok?await lrr.json():{requests:[]};
-    updateNow(_pub.now_streaming);updateQueue(_pub.upcoming,_st.force_pending,_pub.upcoming_mode);updateSystems(_caps,_st,_pub);updateRecent(_st);
-    updateLog(_pub.stream_log);updatePl(_st.playlist||[]);
+    updateNow(_st.now_streaming);updateQueue(_st.upcoming,_st.force_pending,_st.upcoming_mode);updateSystems(_caps,_st,_st);updateRecent(_st);
+    updateLog(_st.stream_log);updatePl(_st.playlist||[]);
     updateListenerRequests(lrData.requests||[]);
     renderSetup(setup);
     updatePaceCounters(_st.pacing);

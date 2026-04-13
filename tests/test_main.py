@@ -91,9 +91,9 @@ async def test_startup_reads_persisted_source_before_fetching():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(("flag_exists", "expected"), [(True, False), (False, False)])
+@pytest.mark.parametrize(("flag_exists", "expected"), [(True, True), (False, False)])
 async def test_startup_restores_stopped_session_flag(tmp_path: Path, flag_exists: bool, expected: bool):
-    """startup() always clears session_stopped on restart — a restart is an intent to play."""
+    """startup() preserves session_stopped across restarts so operator stop survives crashes."""
     from mammamiradio.models import Track
 
     mock_config = MagicMock()
@@ -126,8 +126,8 @@ async def test_startup_restores_stopped_session_flag(tmp_path: Path, flag_exists
         await startup()
 
     assert app.state.station_state.session_stopped is expected
-    # Flag file must be deleted so a subsequent restart also starts clean
-    assert not flag_file.exists()
+    # Flag file is preserved when it existed (operator stop survives restart)
+    assert flag_file.exists() == flag_exists
 
 
 @pytest.mark.asyncio

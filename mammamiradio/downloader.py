@@ -130,12 +130,23 @@ def evict_cache_lru(cache_dir: Path, max_size_mb: int) -> None:
 
 _DEMO_ASSETS_DIR = Path(__file__).parent / "demo_assets" / "music"
 
+# Cached directory listings to avoid repeated glob() on every track lookup.
+# Demo assets never change at runtime; local music rarely does.
+_demo_files_cache: tuple[str, list[Path]] | None = None
+_local_files_cache: dict[str, tuple[float, list[Path]]] = {}
+_LOCAL_FILES_TTL = 60.0  # seconds
+
 
 def _find_demo_asset(track: Track) -> Path | None:
     """Check bundled demo_assets/music/ for a matching MP3."""
-    if not _DEMO_ASSETS_DIR.exists():
-        return None
-    for f in _DEMO_ASSETS_DIR.glob("*.mp3"):
+    global _demo_files_cache
+    cache_key = str(_DEMO_ASSETS_DIR)
+    if _demo_files_cache is None or _demo_files_cache[0] != cache_key:
+        if not _DEMO_ASSETS_DIR.exists():
+            _demo_files_cache = (cache_key, [])
+        else:
+            _demo_files_cache = (cache_key, list(_DEMO_ASSETS_DIR.glob("*.mp3")))
+    for f in _demo_files_cache[1]:
         name = f.stem.lower()
         if track.cache_key in name or track.title.lower() in name:
             return f
@@ -171,8 +182,16 @@ def _find_local(track: Track, music_dir: Path) -> Path | None:
     """Check if a local MP3 exists in the music/ directory."""
     if not music_dir.exists():
         return None
-    # Try exact match first, then fuzzy
-    for f in music_dir.glob("*.mp3"):
+    import time as _time
+
+    key = str(music_dir)
+    cached = _local_files_cache.get(key)
+    if cached and (_time.time() - cached[0]) < _LOCAL_FILES_TTL:
+        files = cached[1]
+    else:
+        files = list(music_dir.glob("*.mp3"))
+        _local_files_cache[key] = (_time.time(), files)
+    for f in files:
         name = f.stem.lower()
         if track.cache_key in name or track.title.lower() in name:
             return f

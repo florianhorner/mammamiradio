@@ -76,8 +76,7 @@ async def startup():
     _session_stopped = _stopped_flag.exists()
     if _session_stopped:
         logger.info(
-            "Restoring stopped session state from previous run — "
-            "use /api/resume or the admin panel to start playback"
+            "Restoring stopped session state from previous run — use /api/resume or the admin panel to start playback"
         )
 
     persisted_source = read_persisted_source(config.cache_dir)
