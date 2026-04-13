@@ -261,3 +261,84 @@ def test_addon_dockerfile_does_not_drop_root_before_supervisor_mounts() -> None:
     dockerfile = (ROOT / "ha-addon" / "mammamiradio" / "Dockerfile").read_text()
 
     assert "USER radio" not in dockerfile
+
+
+def test_port_is_consistent_across_addon_files() -> None:
+    """config.yaml ingress_port, run.sh MAMMAMIRADIO_PORT, and config.py default must all match.
+
+    Port drift across these three files causes silent HA add-on breakage:
+    the supervisor health-check points at one port, uvicorn binds another.
+    """
+    import re
+
+    config_yaml = (ROOT / "ha-addon" / "mammamiradio" / "config.yaml").read_text()
+    run_sh = (ROOT / "ha-addon" / "mammamiradio" / "rootfs" / "run.sh").read_text()
+    config_py = (ROOT / "mammamiradio" / "config.py").read_text()
+
+    # ingress_port: 8000
+    ingress_match = re.search(r"^ingress_port:\s*(\d+)", config_yaml, re.MULTILINE)
+    assert ingress_match, "ingress_port not found in config.yaml"
+    ingress_port = ingress_match.group(1)
+
+    # export MAMMAMIRADIO_PORT="8000"
+    env_match = re.search(r'MAMMAMIRADIO_PORT=["\']?(\d+)["\']?', run_sh)
+    assert env_match, "MAMMAMIRADIO_PORT not found in run.sh"
+    env_port = env_match.group(1)
+
+    # --port 8000  (uvicorn CLI flag)
+    uvicorn_match = re.search(r"--port\s+(\d+)", run_sh)
+    assert uvicorn_match, "--port not found in run.sh"
+    uvicorn_port = uvicorn_match.group(1)
+
+    # port: int = 8000  (config.py dataclass default)
+    py_match = re.search(r"port:\s*int\s*=\s*(\d+)", config_py)
+    assert py_match, "port default not found in config.py"
+    py_port = py_match.group(1)
+
+    assert ingress_port == env_port == uvicorn_port == py_port, (
+        f"Port mismatch: config.yaml ingress_port={ingress_port}, "
+        f"run.sh MAMMAMIRADIO_PORT={env_port}, "
+        f"run.sh --port={uvicorn_port}, "
+        f"config.py default={py_port}"
+    )
+
+
+def test_dockerfile_port_matches_config() -> None:
+    """Standalone Dockerfile ENV, EXPOSE, and CMD --port must match config.py default.
+
+    The Dockerfile hardcodes port in three places independently of the HA addon.
+    If someone bumps the default port in config.py without updating the Dockerfile,
+    the standalone container silently binds the wrong port.
+    """
+    import re
+
+    dockerfile = (ROOT / "Dockerfile").read_text()
+    config_py = (ROOT / "mammamiradio" / "config.py").read_text()
+
+    # ENV MAMMAMIRADIO_PORT=8000
+    env_match = re.search(r"ENV MAMMAMIRADIO_PORT=(\d+)", dockerfile)
+    assert env_match, "ENV MAMMAMIRADIO_PORT not found in Dockerfile"
+    env_port = env_match.group(1)
+
+    # EXPOSE 8000
+    expose_match = re.search(r"^EXPOSE\s+(\d+)", dockerfile, re.MULTILINE)
+    assert expose_match, "EXPOSE not found in Dockerfile"
+    expose_port = expose_match.group(1)
+
+    # CMD [..., "--port", "8000"]
+    cmd_match = re.search(r"--port[\"',\s]+(\d+)", dockerfile)
+    assert cmd_match, "--port not found in Dockerfile CMD"
+    cmd_port = cmd_match.group(1)
+
+    # port: int = 8000  (config.py dataclass default)
+    py_match = re.search(r"port:\s*int\s*=\s*(\d+)", config_py)
+    assert py_match, "port default not found in config.py"
+    py_port = py_match.group(1)
+
+    assert env_port == expose_port == cmd_port == py_port, (
+        f"Port mismatch in Dockerfile vs config.py: "
+        f"ENV MAMMAMIRADIO_PORT={env_port}, "
+        f"EXPOSE={expose_port}, "
+        f"CMD --port={cmd_port}, "
+        f"config.py default={py_port}"
+    )

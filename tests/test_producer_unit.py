@@ -348,6 +348,89 @@ def test_pick_canned_clip_respects_shareware_limit(tmp_path):
         producer._canned_clip_cache.clear()
 
 
+def test_pick_canned_clip_returns_none_when_dir_missing(tmp_path):
+    """_pick_canned_clip returns None when the banter subdirectory does not exist."""
+    from mammamiradio import producer
+
+    orig = producer._DEMO_ASSETS_DIR
+    producer._DEMO_ASSETS_DIR = tmp_path
+    producer._canned_clip_cache.clear()
+    producer._recently_played_clips.clear()
+
+    try:
+        result = _pick_canned_clip("banter", state=StationState())
+        assert result is None
+    finally:
+        producer._DEMO_ASSETS_DIR = orig
+        producer._canned_clip_cache.clear()
+        producer._recently_played_clips.clear()
+
+
+def test_pick_canned_clip_returns_none_when_dir_empty(tmp_path):
+    """_pick_canned_clip returns None when banter/ exists but contains no .mp3 files."""
+    from mammamiradio import producer
+
+    (tmp_path / "banter").mkdir()
+
+    orig = producer._DEMO_ASSETS_DIR
+    producer._DEMO_ASSETS_DIR = tmp_path
+    producer._canned_clip_cache.clear()
+    producer._recently_played_clips.clear()
+
+    try:
+        result = _pick_canned_clip("banter", state=StationState())
+        assert result is None
+        assert producer._canned_clip_cache.get("banter") == []
+    finally:
+        producer._DEMO_ASSETS_DIR = orig
+        producer._canned_clip_cache.clear()
+        producer._recently_played_clips.clear()
+
+
+@pytest.mark.asyncio
+async def test_error_recovery_inserts_silence_when_no_canned_clips(tmp_path):
+    """Outer run_producer handler falls through to silence when demo_assets/ is empty.
+
+    When produce_one_segment raises (music download fails), the outer handler
+    tries _pick_canned_clip("banter") then _pick_canned_clip("welcome") before
+    generating silence.  With both directories empty, silence is the last resort.
+
+    Note: banter TTS failures use `continue` internally and never reach the outer
+    handler.  This test uses MUSIC (whose failures propagate out) to exercise the
+    outer silence path with no canned-clip safety net.
+    """
+    from mammamiradio import producer
+
+    (tmp_path / "banter").mkdir()
+    (tmp_path / "welcome").mkdir()
+
+    state = _make_state()
+    config = _make_config()
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+
+    orig = producer._DEMO_ASSETS_DIR
+    producer._DEMO_ASSETS_DIR = tmp_path
+    producer._canned_clip_cache.clear()
+    producer._recently_played_clips.clear()
+
+    try:
+        with (
+            patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.MUSIC),
+            patch(f"{PRODUCER_MODULE}.download_track", new_callable=AsyncMock, side_effect=RuntimeError("network down")),
+            patch(f"{PRODUCER_MODULE}.generate_silence", side_effect=_fake_path),
+            patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+        ):
+            await _run_until_queued(queue, state, config)
+    finally:
+        producer._DEMO_ASSETS_DIR = orig
+        producer._canned_clip_cache.clear()
+        producer._recently_played_clips.clear()
+
+    assert queue.qsize() >= 1
+    seg = queue.get_nowait()
+    assert "error" in seg.metadata
+
+
 # ---------------------------------------------------------------------------
 # Persona feedback loop in producer
 # ---------------------------------------------------------------------------
@@ -597,3 +680,96 @@ async def test_banter_impossible_tts_path_does_not_apply_listener_request_commit
     assert req in state.pending_requests
     seg = queue.get_nowait()
     assert seg.type == SegmentType.BANTER
+
+
+# ---------------------------------------------------------------------------
+# _pick_canned_clip unit tests
+# ---------------------------------------------------------------------------
+
+
+def test_pick_canned_clip_returns_none_for_empty_dir(tmp_path):
+    """_pick_canned_clip returns None when the subdir has no clips."""
+    from mammamiradio.producer import _canned_clip_cache, _pick_canned_clip
+
+    empty_dir = tmp_path / "banter"
+    empty_dir.mkdir()
+    _canned_clip_cache.clear()
+    with patch(f"{PRODUCER_MODULE}._DEMO_ASSETS_DIR", tmp_path):
+        result = _pick_canned_clip("banter")
+    assert result is None
+
+
+def test_pick_canned_clip_returns_file(tmp_path):
+    """_pick_canned_clip returns a path when clips exist."""
+    from mammamiradio.producer import _canned_clip_cache, _pick_canned_clip, _recently_played_clips
+
+    banter_dir = tmp_path / "banter"
+    banter_dir.mkdir()
+    clip1 = banter_dir / "clip1.mp3"
+    clip1.write_bytes(b"audio")
+    _canned_clip_cache.clear()
+    _recently_played_clips.clear()
+    with patch(f"{PRODUCER_MODULE}._DEMO_ASSETS_DIR", tmp_path):
+        result = _pick_canned_clip("banter")
+    assert result == clip1
+
+
+def test_pick_canned_clip_clears_recently_played_when_exhausted(tmp_path):
+    """When all clips are recently played, the cache resets and re-picks."""
+    from mammamiradio.producer import _canned_clip_cache, _pick_canned_clip, _recently_played_clips
+
+    banter_dir = tmp_path / "banter"
+    banter_dir.mkdir()
+    clip1 = banter_dir / "clip1.mp3"
+    clip1.write_bytes(b"audio")
+    _canned_clip_cache.clear()
+    _recently_played_clips.clear()
+    _recently_played_clips.append("clip1.mp3")  # Mark the only clip as recently played
+    with patch(f"{PRODUCER_MODULE}._DEMO_ASSETS_DIR", tmp_path):
+        result = _pick_canned_clip("banter")
+    assert result == clip1
+    # recently_played should have been cleared and then clip1 re-added
+    assert "clip1.mp3" in _recently_played_clips
+
+
+def test_pick_canned_clip_nonexistent_dir(tmp_path):
+    """_pick_canned_clip returns None when the subdir doesn't exist."""
+    from mammamiradio.producer import _canned_clip_cache, _pick_canned_clip
+
+    _canned_clip_cache.clear()
+    with patch(f"{PRODUCER_MODULE}._DEMO_ASSETS_DIR", tmp_path):
+        result = _pick_canned_clip("nonexistent")
+    assert result is None
+
+
+# ---------------------------------------------------------------------------
+# _record_motif unit test
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_record_motif_handles_exception():
+    """_record_motif catches exceptions without propagating."""
+    from mammamiradio.producer import _record_motif
+
+    state = _make_state()
+    mock_persona = AsyncMock()
+    mock_persona.record_motif = AsyncMock(side_effect=RuntimeError("db error"))
+    state.persona_store = mock_persona
+
+    track = Track(title="Test", artist="Artist", duration_ms=1000, spotify_id="t1")
+    # Should not raise
+    await _record_motif(state, track)
+    mock_persona.record_motif.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_record_motif_skips_when_no_persona_store():
+    """_record_motif returns early when no persona_store."""
+    from mammamiradio.producer import _record_motif
+
+    state = _make_state()
+    state.persona_store = None
+
+    track = Track(title="Test", artist="Artist", duration_ms=1000, spotify_id="t1")
+    await _record_motif(state, track)
