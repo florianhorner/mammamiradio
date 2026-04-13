@@ -1276,9 +1276,7 @@ async def test_write_banter_song_cues_schema_omitted_when_no_yt_id(config, state
     await store.increment_session()
     state.persona_store = store
     # Track with empty youtube_id — song_cues schema should be omitted
-    state.played_tracks.append(
-        Track(title="No ID Track", artist="Artist", duration_ms=180000, youtube_id="")
-    )
+    state.played_tracks.append(Track(title="No ID Track", artist="Artist", duration_ms=180000, youtube_id=""))
 
     captured = {}
 
@@ -1311,9 +1309,7 @@ async def test_write_banter_bump_usage_exception_is_swallowed(config, state, tmp
     await store.update_persona({"new_theories": ["notturno"]})
     await store.increment_session()
     state.persona_store = store
-    state.played_tracks.append(
-        Track(title="Test", artist="Artist", duration_ms=180000, youtube_id="yt_bump_err")
-    )
+    state.played_tracks.append(Track(title="Test", artist="Artist", duration_ms=180000, youtube_id="yt_bump_err"))
 
     async def _fake_generate(**kwargs):
         return {

@@ -47,11 +47,9 @@ Spotify AI DJ exists (launched 2023, expanding languages). No contingency plan i
 10 new entities (room lights, power sensors, star projectors, terrace lights). 4 new mood classifications. Tiered banter references (1 item or up to 2 when mood is active). Weather-mood fusion. Casa dashboard card. `ha_moments` API for public status, `ha_details` for admin. Numeric event passthrough fixed.
 **Completed:** feat/deeper-ha-context (2026-04-13)
 
-## P1: Casa card in listener.html (QA bug — deeper-ha-context)
-Casa card was added to `dashboard.html` (served at `/dashboard`, admin auth) but public listeners hit `/` which serves `listener.html`. The card is invisible to actual listeners. Backend (`ha_moments` in `/public-status`) is correct — UI fix only.
-**Fix:** Copy casa-card HTML (dashboard.html:703-707) + the `ha` block in `updateStatus()` into `listener.html` at equivalent positions.
-**Effort:** XS (CC: ~10 min) | **Files:** mammamiradio/listener.html
-**Source:** QA pass on feat/deeper-ha-context, 2026-04-13
+## ~~P1: Casa card in listener.html (QA bug — deeper-ha-context)~~ RESOLVED
+Casa card now exists in `listener.html` and is bound to `ha_moments` from `/public-status`, matching dashboard behavior for public listeners.
+**Resolved:** 2026-04-13
 
 ## P2: Distribution strategy
 No landing page, no hosted demo, no analytics, no invite loop. The product has no way to be discovered. PR readiness != adoption readiness.
