@@ -1228,7 +1228,7 @@ function updateListenerRequests(reqs){
     if(r.type==='song_request'){
       if(r.song_found){
         status=`<span class="lr-pill lr-found">&#9654; ${esc(r.song_track||'ready')}</span>`;
-        actions+=`<button class="lr-btn lr-btn-queue" onclick="lrQueueNext(${i})">&#9654; Play next</button>`;
+        actions+=`<button class="lr-btn lr-btn-queue" onclick="lrQueueNext(${i})">&#10003; Done</button>`;
       } else if(r.song_error){
         status='<span class="lr-pill lr-err">not found</span>';
       } else {
@@ -1254,10 +1254,9 @@ async function lrDismiss(id){
 }
 async function lrQueueNext(i){
   const req=_lrReqs[i];if(!req)return;
-  // Pin the found track to play next, then dismiss the request
   if(req.type==='song_request'&&req.song_found){
     const r=await api('POST','/api/listener-requests/dismiss',{id:req.id});
-    toast(r.removed>0?'Queuing: '+esc(req.song_track||req.name):'Already consumed');
+    toast(r.removed>0?'Request handled: '+esc(req.song_track||req.name):'Already consumed');
   }
 }
 
