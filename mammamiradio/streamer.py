@@ -18,6 +18,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Streamin
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 
 from mammamiradio.capabilities import capabilities_to_dict, get_capabilities
+from mammamiradio.ha_enrichment import EVENT_RETENTION_SECONDS
 from mammamiradio.models import PersonalityAxes, PlaylistSource, Segment, SegmentType, StationState
 from mammamiradio.playlist import (
     ExplicitSourceError,
@@ -1112,10 +1113,12 @@ async def search_tracks(request: Request, q: str = "", _: None = Depends(require
 @router.post("/api/playlist/add-external")
 async def add_external_track(request: Request, _: None = Depends(require_admin_access)):
     """Download a yt-dlp search result and pin it to play next."""
-    from mammamiradio.downloader import download_track
+    from mammamiradio.downloader import download_external_track
     from mammamiradio.models import Track
 
     body = await request.json()
+    if not isinstance(body, dict):
+        return JSONResponse({"ok": False, "error": "invalid payload"}, status_code=400)
     youtube_id = str(body.get("youtube_id") or "").strip()
     title = str(body.get("title") or "").strip()
     artist = str(body.get("artist") or "").strip()
@@ -1128,6 +1131,8 @@ async def add_external_track(request: Request, _: None = Depends(require_admin_a
 
     state = request.app.state.station_state
     config = request.app.state.config
+    if not config.allow_ytdlp:
+        return JSONResponse({"ok": False, "error": "external_downloads_disabled"}, status_code=409)
 
     track = Track(
         title=title,
@@ -1139,7 +1144,11 @@ async def add_external_track(request: Request, _: None = Depends(require_admin_a
     # Pre-download so the cache is warm before we purge the queue.
     # Without this, the producer would hit a cache miss after the purge,
     # causing 30-60s of silence while yt-dlp downloads.
-    await download_track(track, config.cache_dir, music_dir=Path("music"))
+    try:
+        await download_external_track(track, config.cache_dir, music_dir=Path("music"))
+    except Exception:
+        logger.warning("External track download failed for %s (yt:%s)", track.display, youtube_id, exc_info=True)
+        return JSONResponse({"ok": False, "error": "download_failed"}, status_code=502)
 
     # Add to playlist pool so it's available for future cycles too
     state.playlist.append(track)
@@ -1245,7 +1254,7 @@ async def _download_listener_song(req: dict, app_state, originating_revision: in
     (revision mismatch) or the request was already consumed, the track is
     dropped entirely to prevent leaking old requests into the new source.
     """
-    from mammamiradio.downloader import download_track, search_ytdlp_metadata
+    from mammamiradio.downloader import download_external_track, search_ytdlp_metadata
     from mammamiradio.models import Track
 
     state = app_state.station_state
@@ -1266,7 +1275,7 @@ async def _download_listener_song(req: dict, app_state, originating_revision: in
             youtube_id=meta["youtube_id"],
         )
         # Download so it's ready when the producer picks it up
-        await download_track(track, config.cache_dir, music_dir=Path("music"))
+        await download_external_track(track, config.cache_dir, music_dir=Path("music"))
 
         # Guard: if the playlist source switched while we were downloading,
         # drop the result entirely.  Adding it to the new playlist would embed
@@ -1278,8 +1287,10 @@ async def _download_listener_song(req: dict, app_state, originating_revision: in
         state.playlist.append(track)
         req["song_found"] = True
         req["song_track"] = track.display
-        state.pinned_track = track
-        state.force_next = SegmentType.MUSIC
+        req["song_track_obj"] = track
+        if state.pending_requests and state.pending_requests[0] is req:
+            state.pinned_track = track
+            state.force_next = SegmentType.MUSIC
         logger.info("Listener song request ready: %s", track.display)
     except Exception:
         req["song_error"] = True
@@ -1439,6 +1450,24 @@ def _public_status_payload(request: Request) -> dict:
             {**item, "source": "predicted_from_playlist"}
             for item in preview_upcoming(state, config.pacing, state.playlist, count=5)
         ]
+    # HA moments for the Casa card (public-safe, no person entity details)
+    ha_moments: dict | None = None
+    if state.ha_context:
+        ha_moments = {
+            "connected": True,
+            "mood": state.ha_home_mood or None,
+            "weather": state.ha_weather_arc or None,
+        }
+        # Event fields: only if within retention window (person filter applied in producer)
+        _retention = EVENT_RETENTION_SECONDS
+        _now = time.time()
+        if state.ha_last_event_ts > 0 and (_now - state.ha_last_event_ts) < _retention:
+            ha_moments["last_event_label"] = state.ha_last_event_label
+            ha_moments["last_event_ago_min"] = max(1, round((_now - state.ha_last_event_ts) / 60))
+        # Hide card if nothing interesting to show
+        if not ha_moments.get("mood") and not ha_moments.get("weather") and not ha_moments.get("last_event_label"):
+            ha_moments = None
+
     return {
         "station": config.station.name,
         "running_jokes": list(state.running_jokes),
@@ -1452,6 +1481,7 @@ def _public_status_payload(request: Request) -> dict:
         ],
         "upcoming": upcoming,
         "upcoming_mode": "queued" if upcoming else "building",
+        "ha_moments": ha_moments,
     }
 
 
@@ -1593,6 +1623,16 @@ async def status(request: Request, _: None = Depends(require_admin_access)):
             "last_banter_script": state.last_banter_script,
             "last_ad_script": state.last_ad_script,
             "ha_context": state.ha_context if state.ha_context else None,
+            "ha_details": {
+                "mood": state.ha_home_mood or None,
+                "weather_arc": state.ha_weather_arc or None,
+                "events_summary": state.ha_events_summary or None,
+                "pending_directive": state.ha_pending_directive or None,
+                "recent_event_count": state.ha_recent_event_count,
+                "last_event_label": state.ha_last_event_label or None,
+            }
+            if state.ha_context
+            else None,
             "station_mode": station_mode,
             "producer_errors": [
                 {"type": e.type, "label": e.label, "metadata": e.metadata}

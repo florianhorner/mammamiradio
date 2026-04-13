@@ -81,10 +81,11 @@ def diff_states(
             continue
 
         label = entity_labels.get(entity_id)
-        old_state = state_translations.get(old_raw)
-        new_state = state_translations.get(new_raw)
-        if not label or not old_state or not new_state:
+        if not label:
             continue
+        # Translate states; pass through raw values (e.g., numeric power sensor readings)
+        old_state = state_translations.get(old_raw, old_raw)
+        new_state = state_translations.get(new_raw, new_raw)
 
         events.append(
             HomeEvent(

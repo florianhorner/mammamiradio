@@ -148,9 +148,16 @@ Instruction-like patterns in persona entries are filtered before storage (matchi
 
 If `[homeassistant].enabled = true` and `HA_TOKEN` is present:
 
-- `ha_context.py` polls the Home Assistant REST API
-- a curated set of entities is translated into short Italian-readable context
-- banter and ads may reference one ambient detail, like weather or who is home
+- `ha_context.py` polls the Home Assistant REST API for ~35 curated entities (gold/silver/bronze tiers)
+- entities include room-level light groups, power sensors, weather, presence, vacuums, star projectors, terrace lights
+- a 4-phase pipeline processes the data: state summary → event diffing → mood classification → weather narrative arc
+- 7 reactive triggers fire on specific state changes (coffee machine, door unlock, vacuums, arrivals, terrace lights)
+- banter references are tiered: 1 item by default, up to 2 when a mood scene is active (mood counts toward cap)
+- weather-mood fusion allows hosts to connect outdoor conditions to indoor activity
+- numeric state passthrough in `ha_enrichment.diff_states()` ensures power sensors generate events
+- the listener dashboard shows a "Casa" card with mood, weather, and recent events via `ha_moments` in `/public-status`
+- the admin panel shows full HA details (mood, weather arc, events summary, pending directives) via `ha_details` in `/status`
+- person entity events are filtered from public API responses (privacy)
 
 This is opportunistic context, not a hard dependency. Failures there should not stop the station.
 

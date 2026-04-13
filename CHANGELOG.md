@@ -4,6 +4,28 @@ All notable changes to `mammamiradio` are documented here.
 
 The current version source of truth is `pyproject.toml`.
 
+## [Unreleased]
+
+### Added
+
+- **Threshold reactive triggers**: New `ThresholdTrigger` type and `THRESHOLD_TRIGGERS` list in `ha_context.py`. `check_reactive_triggers` now accepts `current_states` and fires reactive banter when numeric sensor values cross a wattage threshold. First trigger: coffee machine (`> 50W` → "La caffettiera si è appena accesa!"). Cooldown-keyed separately from event triggers to avoid collision.
+- **Coffee machine mood**: `classify_home_mood` now returns "Caffè in preparazione" when coffee machine power exceeds 50W at any time of day (not just morning via switch check).
+- **Qualitative power formatting**: `_format_state` now translates coffee machine power to `in funzione / riscaldamento / fredda` and total household power to `casa tranquilla / normale / tutto acceso` instead of raw watts.
+- **Mood prompt examples**: `_MOOD_EXAMPLES` in `scriptwriter.py` now covers all 11 moods including the 6 previously uncovered (Caffè in preparazione, La casa si sta svegliando, Stanno svegliandosi, Il robot sta pulendo, Casa vuota, Qualcuno sta facendo la doccia).
+- **Deeper HA context**: 10 new entities (room-level light groups, power sensors, star projectors, terrace lights). 4 new mood classifications (Atmosfera rilassata, Lavatrice in funzione, Serata sotto le stelle, La casa si sta svegliando). Terrace lights reactive trigger.
+- **Casa dashboard card**: Ambient awareness card showing HA mood, weather, and recent events on the listener dashboard. Appears only when HA is connected and has data. Fades in/out with eyebrow pulse on updates. WCAG AA compliant.
+- **`ha_moments` API**: `/public-status` now includes `ha_moments` object with mood, weather, and last event (person-filtered, staleness-guarded). `/status` includes full `ha_details` for admin.
+- **Tiered HA prompt references**: When a mood scene is active, hosts may reference up to 2 home details (mood counts toward cap). Weather-mood fusion instruction when both are present.
+- **Numeric event passthrough**: Power sensors and other numeric-state entities now generate events correctly in `ha_enrichment.diff_states()`.
+
+### Fixed
+
+- **Listener song request ordering**: Background downloads now stay attached to their own pending request until that request reaches the head of the queue. Later requests can no longer overwrite `pinned_track` and play before the earlier dedication.
+- **Strict external-track queueing**: `/api/playlist/add-external` now rejects requests when yt-dlp downloads are disabled instead of returning success after generating silence.
+- **`/api/playlist/add-external` payload validation**: Non-object JSON payloads now return a 400 instead of raising `AttributeError`.
+- **Dead code cleanup**: Removed unused `_diff_states()` and `_build_events_summary()` from `ha_context.py` (runtime uses `ha_enrichment.diff_states()`).
+- **Unused import**: Removed `import os` from `playlist.py`.
+
 ## [2.8.0] - 2026-04-13
 
 ### Added

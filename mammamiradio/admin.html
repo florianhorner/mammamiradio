@@ -760,6 +760,11 @@ h1 {
     <div id="engineCaps" style="font-family:var(--font-mono);font-size:12px;line-height:1.8;color:var(--text-secondary)"></div>
   </div>
 
+  <div class="card" id="ha-details-card" style="display:none">
+    <div class="card-label">HA Context</div>
+    <div id="haDetails" style="font-family:var(--font-mono);font-size:12px;line-height:1.8;color:var(--text-secondary)"></div>
+  </div>
+
 </div><!-- /tab engine -->
 
 <div class="toast" id="toast"></div>
@@ -1282,6 +1287,24 @@ function updateEngineRoom(st,caps){
       'OpenAI: '+(c.openai?'<strong style="color:var(--ok)">✓ available</strong>':'—'),
       'Home Assistant: '+(c.ha?'<strong style="color:var(--ok)">✓ connected</strong>':'disabled'),
     ].join('<br>');
+  }
+
+  // HA Context details
+  const haCard=document.getElementById('ha-details-card');
+  const haEl=document.getElementById('haDetails');
+  const hd=st.ha_details;
+  if(hd){
+    haCard.style.display='';
+    const lines=[];
+    if(hd.mood)lines.push('Mood: <strong>'+hd.mood+'</strong>');
+    if(hd.weather_arc)lines.push('Weather: '+hd.weather_arc);
+    if(hd.events_summary)lines.push('Events:<br>'+hd.events_summary.replace(/\n/g,'<br>'));
+    if(hd.pending_directive)lines.push('Pending directive: <strong style="color:var(--warning)">'+hd.pending_directive.substring(0,80)+'...</strong>');
+    lines.push('Recent events: '+(hd.recent_event_count||0));
+    if(hd.last_event_label)lines.push('Last event: '+hd.last_event_label);
+    haEl.innerHTML=lines.join('<br>')||'No HA data';
+  }else{
+    haCard.style.display='none';
   }
 }
 

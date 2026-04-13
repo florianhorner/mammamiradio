@@ -50,7 +50,7 @@ def test_diff_states_creates_translated_event():
     assert "1 min fa" in build_events_summary(events, now=1_060.0)
 
 
-def test_diff_states_skips_unknown_and_untranslated_changes():
+def test_diff_states_skips_unknown_but_passes_through_untranslated():
     old_states = {
         "person.florian_horner": {"state": "unknown", "attributes": {}},
         "input_select.kaffee_dad_jokes": {"state": "Prima battuta", "attributes": {}},
@@ -69,7 +69,14 @@ def test_diff_states_skips_unknown_and_untranslated_changes():
         now=1_000.0,
     )
 
-    assert list(events) == []
+    result = list(events)
+    # Unknown old state is still skipped
+    assert not any(e.entity_id == "person.florian_horner" for e in result)
+    # Untranslated states now pass through as raw values
+    assert len(result) == 1
+    assert result[0].entity_id == "input_select.kaffee_dad_jokes"
+    assert result[0].old_state == "Prima battuta"
+    assert result[0].new_state == "Seconda battuta"
 
 
 def test_prune_events_drops_expired_entries():
@@ -122,3 +129,58 @@ def test_build_events_summary_uses_newest_five_first():
     assert len(lines) == 5
     assert lines[0].startswith("- Evento 5:")
     assert lines[-1].startswith("- Evento 1:")
+
+
+# ---------------------------------------------------------------------------
+# Numeric state passthrough (power sensors, energy sensors)
+# ---------------------------------------------------------------------------
+
+
+def test_diff_states_numeric_passthrough():
+    """Numeric states (e.g., power sensor '0' → '450') should generate events."""
+    old_states = {
+        "sensor.bar_bali_boot_steckdose_power": {"state": "0", "attributes": {}},
+    }
+    new_states = {
+        "sensor.bar_bali_boot_steckdose_power": {"state": "450", "attributes": {}},
+    }
+
+    events = diff_states(
+        old_states,
+        new_states,
+        existing_events=None,
+        entity_labels=ENTITY_LABELS,
+        state_translations=STATE_TRANSLATIONS,
+        now=1_000.0,
+    )
+
+    result = list(events)
+    assert len(result) == 1
+    assert result[0].entity_id == "sensor.bar_bali_boot_steckdose_power"
+    assert result[0].old_state == "0"
+    assert result[0].new_state == "450"
+
+
+def test_diff_states_numeric_no_translation_passthrough():
+    """When STATE_TRANSLATIONS has no entry, raw value is used as-is."""
+    old_states = {
+        "sensor.kuche_kaffeemaschine_steckdose_power": {"state": "0", "attributes": {}},
+    }
+    new_states = {
+        "sensor.kuche_kaffeemaschine_steckdose_power": {"state": "1200", "attributes": {}},
+    }
+
+    events = diff_states(
+        old_states,
+        new_states,
+        existing_events=None,
+        entity_labels=ENTITY_LABELS,
+        state_translations=STATE_TRANSLATIONS,
+        now=1_000.0,
+    )
+
+    result = list(events)
+    assert len(result) == 1
+    # Raw values passed through, not translated
+    assert result[0].old_state == "0"
+    assert result[0].new_state == "1200"

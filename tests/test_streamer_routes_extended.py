@@ -685,9 +685,14 @@ async def test_get_listener_requests_returns_age():
 async def test_add_external_track_success(tmp_path):
     app = _make_test_app()
     app.state.config.cache_dir = tmp_path
+    app.state.config.allow_ytdlp = True
     original_len = len(app.state.station_state.playlist)
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
-    with patch("mammamiradio.downloader.download_track", new_callable=AsyncMock, return_value=tmp_path / "dl.mp3"):
+    with patch(
+        "mammamiradio.downloader.download_external_track",
+        new_callable=AsyncMock,
+        return_value=tmp_path / "dl.mp3",
+    ):
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
             resp = await client.post(
                 "/api/playlist/add-external",
@@ -724,6 +729,33 @@ async def test_add_external_track_invalid_duration():
 
 
 @pytest.mark.asyncio
+async def test_add_external_track_invalid_payload():
+    app = _make_test_app()
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.post("/api/playlist/add-external", json=["not", "an", "object"])
+    assert resp.status_code == 400
+    assert resp.json()["error"] == "invalid payload"
+
+
+@pytest.mark.asyncio
+async def test_add_external_track_rejected_when_ytdlp_disabled():
+    app = _make_test_app()
+    app.state.config.allow_ytdlp = False
+    original_len = len(app.state.station_state.playlist)
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.post(
+            "/api/playlist/add-external",
+            json={"youtube_id": "abc123", "title": "Brano", "artist": "Artista", "duration_ms": 123000},
+        )
+    assert resp.status_code == 409
+    assert resp.json()["error"] == "external_downloads_disabled"
+    assert len(app.state.station_state.playlist) == original_len
+    assert app.state.station_state.pinned_track is None
+
+
+@pytest.mark.asyncio
 async def test_download_listener_song_success(tmp_path):
     app = _make_test_app()
     app.state.config.cache_dir = tmp_path
@@ -738,12 +770,17 @@ async def test_download_listener_song_success(tmp_path):
                 {"title": "Albachiara", "artist": "Vasco Rossi", "duration_ms": 120000, "youtube_id": "yt123"}
             ],
         ),
-        patch("mammamiradio.downloader.download_track", new_callable=AsyncMock, return_value=tmp_path / "song.mp3"),
+        patch(
+            "mammamiradio.downloader.download_external_track",
+            new_callable=AsyncMock,
+            return_value=tmp_path / "song.mp3",
+        ),
     ):
         await _download_listener_song(req, app.state, state.playlist_revision)
     assert req["song_found"] is True
     assert req["song_error"] is False
     assert req["song_track"] == "Vasco Rossi – Albachiara"
+    assert req["song_track_obj"].display == "Vasco Rossi – Albachiara"
     assert state.pinned_track is not None
     assert len(state.playlist) == original_len + 1
 
@@ -783,7 +820,9 @@ async def test_download_listener_song_drops_track_on_revision_change(tmp_path):
             return_value=[{"title": "Track", "artist": "Artist", "duration_ms": 120000, "youtube_id": "yt987"}],
         ),
         patch(
-            "mammamiradio.downloader.download_track", new_callable=AsyncMock, side_effect=_download_with_revision_bump
+            "mammamiradio.downloader.download_external_track",
+            new_callable=AsyncMock,
+            side_effect=_download_with_revision_bump,
         ),
     ):
         await _download_listener_song(req, app.state, state.playlist_revision)
@@ -807,7 +846,7 @@ async def test_download_listener_song_download_exception_marks_error(tmp_path):
             return_value=[{"title": "Track", "artist": "Artist", "duration_ms": 120000, "youtube_id": "yt987"}],
         ),
         patch(
-            "mammamiradio.downloader.download_track",
+            "mammamiradio.downloader.download_external_track",
             new_callable=AsyncMock,
             side_effect=RuntimeError("download failed"),
         ),
@@ -817,6 +856,36 @@ async def test_download_listener_song_download_exception_marks_error(tmp_path):
     assert req["song_error"] is True
     assert len(state.playlist) == original_len
     assert state.pinned_track is None
+
+
+@pytest.mark.asyncio
+async def test_download_listener_song_non_head_request_does_not_pin_out_of_order(tmp_path):
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path
+    state = app.state.station_state
+    first_req = {"song_query": "first", "message": "metti first", "song_found": False, "song_error": False}
+    second_req = {"song_query": "second", "message": "metti second", "song_found": False, "song_error": False}
+    state.pending_requests.extend([first_req, second_req])
+
+    with (
+        patch(
+            "mammamiradio.downloader.search_ytdlp_metadata",
+            return_value=[{"title": "Second", "artist": "Artist 2", "duration_ms": 120000, "youtube_id": "yt2"}],
+        ),
+        patch(
+            "mammamiradio.downloader.download_external_track",
+            new_callable=AsyncMock,
+            return_value=tmp_path / "second.mp3",
+        ),
+    ):
+        await _download_listener_song(second_req, app.state, state.playlist_revision)
+
+    assert second_req["song_found"] is True
+    assert second_req["song_track"] == "Artist 2 – Second"
+    assert second_req["song_track_obj"].display == "Artist 2 – Second"
+    assert state.pending_requests[0] is first_req
+    assert state.pinned_track is None
+    assert state.force_next is None
 
 
 # ---------------------------------------------------------------------------
@@ -1552,3 +1621,139 @@ async def test_clip_rate_prune_keeps_recent_entries():
     assert streamer_mod._clip_rate["198.51.100.1"] == pytest.approx(now - 5)
     assert "198.51.100.2" not in streamer_mod._clip_rate
     assert streamer_mod._clip_rate["203.0.113.9"] == pytest.approx(now)
+
+
+# ---------------------------------------------------------------------------
+# HA moments (Casa card) — public-status
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_public_status_ha_moments_absent_when_no_ha_context():
+    """ha_moments is None when HA context is not set."""
+    app = _make_test_app()
+    app.state.station_state.ha_context = ""
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.get("/public-status")
+    assert resp.status_code == 200
+    assert resp.json()["ha_moments"] is None
+
+
+@pytest.mark.asyncio
+async def test_public_status_ha_moments_present_with_mood():
+    """ha_moments carries mood and weather when HA context is active."""
+    app = _make_test_app()
+    state = app.state.station_state
+    state.ha_context = "some HA context"
+    state.ha_home_mood = "Serata cinema"
+    state.ha_weather_arc = "Meteo: soleggiato, 22°C."
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.get("/public-status")
+    assert resp.status_code == 200
+    ha = resp.json()["ha_moments"]
+    assert ha is not None
+    assert ha["mood"] == "Serata cinema"
+    assert ha["weather"] == "Meteo: soleggiato, 22°C."
+
+
+@pytest.mark.asyncio
+async def test_public_status_ha_moments_hidden_when_empty():
+    """ha_moments is None when HA is connected but no mood/weather/event to show."""
+    app = _make_test_app()
+    state = app.state.station_state
+    state.ha_context = "some HA context"
+    state.ha_home_mood = ""
+    state.ha_weather_arc = ""
+    state.ha_last_event_label = ""
+    state.ha_last_event_ts = 0.0
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.get("/public-status")
+    assert resp.status_code == 200
+    assert resp.json()["ha_moments"] is None
+
+
+@pytest.mark.asyncio
+async def test_public_status_ha_moments_event_within_retention():
+    """ha_moments includes last_event_label when the event is within 30 min."""
+    app = _make_test_app()
+    state = app.state.station_state
+    state.ha_context = "some HA context"
+    state.ha_home_mood = ""
+    state.ha_weather_arc = ""
+    now = 1_700_000_000.0
+    state.ha_last_event_label = "Luci terrazza"
+    state.ha_last_event_ts = now - 120  # 2 minutes ago
+    with patch("mammamiradio.streamer.time.time", return_value=now):
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            resp = await client.get("/public-status")
+    assert resp.status_code == 200
+    ha = resp.json()["ha_moments"]
+    assert ha is not None
+    assert ha["last_event_label"] == "Luci terrazza"
+    assert ha["last_event_ago_min"] == 2
+
+
+@pytest.mark.asyncio
+async def test_public_status_ha_moments_event_outside_retention():
+    """ha_moments omits stale events older than EVENT_RETENTION_SECONDS."""
+    app = _make_test_app()
+    state = app.state.station_state
+    state.ha_context = "some HA context"
+    state.ha_home_mood = "Serata cinema"
+    state.ha_weather_arc = ""
+    now = 1_700_000_000.0
+    state.ha_last_event_label = "Stale event"
+    state.ha_last_event_ts = now - 2000  # ~33 min ago, beyond 30 min window
+    with patch("mammamiradio.streamer.time.time", return_value=now):
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            resp = await client.get("/public-status")
+    assert resp.status_code == 200
+    ha = resp.json()["ha_moments"]
+    assert ha is not None
+    assert "last_event_label" not in ha
+
+
+# ---------------------------------------------------------------------------
+# HA details — admin /status
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_admin_status_ha_details_absent_when_no_ha_context():
+    """ha_details is None in /status when HA context is not set."""
+    app = _make_test_app(admin_token="secret-tok")
+    app.state.station_state.ha_context = ""
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.get("/status", headers={"Authorization": "Bearer secret-tok"})
+    assert resp.status_code == 200
+    assert resp.json()["ha_details"] is None
+
+
+@pytest.mark.asyncio
+async def test_admin_status_ha_details_present_with_full_context():
+    """ha_details carries mood, weather_arc, events_summary, and event counts."""
+    app = _make_test_app(admin_token="secret-tok")
+    state = app.state.station_state
+    state.ha_context = "some HA context"
+    state.ha_home_mood = "Lavatrice in funzione"
+    state.ha_weather_arc = "Meteo: nuvoloso, 15°C."
+    state.ha_events_summary = "- Lavatrice: inattivo → 450 W"
+    state.ha_recent_event_count = 3
+    state.ha_last_event_label = "Lavatrice (consumo)"
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.get("/status", headers={"Authorization": "Bearer secret-tok"})
+    assert resp.status_code == 200
+    hd = resp.json()["ha_details"]
+    assert hd is not None
+    assert hd["mood"] == "Lavatrice in funzione"
+    assert hd["weather_arc"] == "Meteo: nuvoloso, 15°C."
+    assert hd["events_summary"] == "- Lavatrice: inattivo → 450 W"
+    assert hd["recent_event_count"] == 3
+    assert hd["last_event_label"] == "Lavatrice (consumo)"

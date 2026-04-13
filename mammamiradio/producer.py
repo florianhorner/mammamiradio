@@ -18,7 +18,12 @@ from mammamiradio.audio_quality import AudioQualityError, AudioToolError, valida
 from mammamiradio.config import StationConfig
 from mammamiradio.context_cues import generate_impossible_line
 from mammamiradio.downloader import download_track, evict_cache_lru
-from mammamiradio.ha_context import HomeContext, check_reactive_triggers, fetch_home_context
+from mammamiradio.ha_context import (
+    GOLD_ENTITIES,
+    HomeContext,
+    check_reactive_triggers,
+    fetch_home_context,
+)
 from mammamiradio.models import (
     AdBrand,
     AdFormat,
@@ -555,9 +560,26 @@ async def run_producer(
             state.ha_events_summary = ha_cache.events_summary
             state.ha_home_mood = ha_cache.mood
             state.ha_weather_arc = ha_cache.weather_arc
+            # Dashboard HA moments: pick the most notable recent non-person event
+            state.ha_recent_event_count = len(ha_cache.events)
+            _public_events = [e for e in ha_cache.events if not e.entity_id.startswith("person.")]
+            if _public_events:
+                _gold_set = set(GOLD_ENTITIES)
+                best = max(
+                    _public_events,
+                    key=lambda e: (
+                        e.entity_id in _gold_set,
+                        e.timestamp,
+                    ),
+                )
+                state.ha_last_event_label = best.label
+                state.ha_last_event_ts = best.timestamp
+            else:
+                state.ha_last_event_label = ""
+                state.ha_last_event_ts = 0.0
             # Phase 4: only set directive if none is pending (first match wins)
             if not state.ha_pending_directive:
-                directive = check_reactive_triggers(ha_cache.events)
+                directive = check_reactive_triggers(ha_cache.events, ha_cache.raw_states)
                 if directive:
                     state.ha_pending_directive = directive
 
