@@ -8,7 +8,6 @@ import logging
 import os
 import re as _re
 import secrets
-import threading
 import time
 from pathlib import Path
 from urllib.parse import urlparse
@@ -19,7 +18,7 @@ from fastapi.security import HTTPBasic, HTTPBasicCredentials
 
 from mammamiradio.capabilities import capabilities_to_dict, get_capabilities
 from mammamiradio.ha_enrichment import EVENT_RETENTION_SECONDS
-from mammamiradio.models import PersonalityAxes, PlaylistSource, Segment, SegmentType, StationState
+from mammamiradio.models import PersonalityAxes, PlaylistSource, Segment, SegmentType, StationState, Track
 from mammamiradio.playlist import (
     ExplicitSourceError,
     load_explicit_source,
@@ -589,11 +588,13 @@ async def run_playback_loop(app) -> None:
         try:
             send_start = time.monotonic()
             bytes_sent = 0
+            was_skipped = False
             skip_event.clear()
             with open(segment.path, "rb") as f:
                 while chunk := f.read(chunk_size):
                     if skip_event.is_set():
                         logger.info("Skipping current segment")
+                        was_skipped = True
                         skip_event.clear()
                         break
 
@@ -610,10 +611,60 @@ async def run_playback_loop(app) -> None:
                     ahead = expected - elapsed
                     if ahead > 0.005:
                         await asyncio.sleep(ahead)
+            if segment.type == SegmentType.MUSIC and not was_skipped:
+                listen_sec = bytes_sent / bytes_per_sec if bytes_per_sec else None
+                await _persist_completed_music(state, config, segment.metadata, listen_sec=listen_sec)
         finally:
             if segment.ephemeral:
                 segment.path.unlink(missing_ok=True)
             segment_queue.task_done()
+
+
+def _track_from_music_metadata(metadata: dict) -> Track | None:
+    """Build a lightweight Track object from queued music metadata."""
+    title = str(metadata.get("title_only") or metadata.get("title") or "").strip()
+    artist = str(metadata.get("artist") or "").strip()
+    if not title and not artist:
+        return None
+    return Track(
+        title=title,
+        artist=artist,
+        duration_ms=0,
+        spotify_id=str(metadata.get("spotify_id") or "").strip(),
+        youtube_id=str(metadata.get("youtube_id") or "").strip(),
+    )
+
+
+async def _persist_completed_music(state: StationState, config, metadata: dict, *, listen_sec: float | None) -> None:
+    """Persist only music that actually finished streaming to listeners."""
+    track = _track_from_music_metadata(metadata)
+    if track is None:
+        return
+
+    from mammamiradio.producer import _record_motif
+
+    await _record_motif(state, track, config, listen_duration_s=listen_sec)
+
+
+async def _persist_skipped_music(state: StationState, config, metadata: dict, *, listen_sec: float) -> None:
+    """Persist a real skip so cross-session skip-bit detection has source data."""
+    persona_store = getattr(state, "persona_store", None)
+    yt_id = str((metadata or {}).get("youtube_id") or "").strip()
+    if not persona_store or not yt_id:
+        return
+
+    await persona_store.record_play(
+        yt_id,
+        persona_store._session_id,
+        skipped=True,
+        listen_duration_s=listen_sec,
+    )
+
+    from mammamiradio.song_cues import detect_skip_bit
+
+    persona_cfg = getattr(config, "persona", None)
+    skip_t = persona_cfg.skip_bit_threshold if persona_cfg else 2
+    await detect_skip_bit(config.cache_dir / "mammamiradio.db", yt_id, threshold=skip_t)
 
 
 async def _audio_generator(request: Request):
@@ -889,6 +940,12 @@ async def skip_track(request: Request, _: None = Depends(require_admin_access)):
             skipped=True,
             listen_sec=listen_sec,
             track_display=now_seg.get("label", ""),
+        )
+        await _persist_skipped_music(
+            state,
+            request.app.state.config,
+            now_seg.get("metadata") or {},
+            listen_sec=listen_sec,
         )
 
     request.app.state.skip_event.set()
@@ -1220,7 +1277,9 @@ async def listener_request(request: Request):
     # Detect song request by keyword
     msg_lower = message.lower()
     song_keywords = ["metti", "suona", "play", "voglio sentire", "puoi mettere", "can you play", "mettete"]
-    is_song_request = any(kw in msg_lower for kw in song_keywords)
+    config = request.app.state.config
+    allow_ytdlp = getattr(config, "allow_ytdlp", False)
+    is_song_request = allow_ytdlp and any(kw in msg_lower for kw in song_keywords)
     req: dict = {
         "name": name,
         "message": message,
@@ -1491,7 +1550,7 @@ def _public_status_payload(request: Request) -> dict:
 
 
 _clip_rate: dict[str, float] = {}  # IP -> last clip timestamp
-_clip_rate_lock = threading.Lock()
+_clip_rate_lock = asyncio.Lock()
 
 
 @router.post("/api/clip")
@@ -1502,7 +1561,7 @@ async def create_clip(request: Request):
     # Rate limit: 1 clip per 10 seconds per IP
     client_ip = request.client.host if request.client else "unknown"
     now = time.time()
-    with _clip_rate_lock:
+    async with _clip_rate_lock:
         if now - _clip_rate.get(client_ip, 0) < 10:
             from fastapi.responses import JSONResponse
 

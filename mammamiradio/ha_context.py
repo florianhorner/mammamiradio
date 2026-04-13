@@ -583,9 +583,7 @@ def check_reactive_triggers(
                 continue
             threshold = trigger["threshold"]
             direction = trigger["direction"]
-            crossed = (direction == "above" and val > threshold) or (
-                direction == "below" and val < threshold
-            )
+            crossed = (direction == "above" and val > threshold) or (direction == "below" and val < threshold)
             if not crossed:
                 continue
             cooldown_key = f"{eid}:threshold:{threshold}"

@@ -97,6 +97,15 @@ class AdsSection:
 
 
 @dataclass
+class PersonaSection:
+    """Cross-session listener memory tuning."""
+
+    arc_thresholds: list[int] = field(default_factory=lambda: [4, 11, 26])
+    anthem_threshold: int = 3
+    skip_bit_threshold: int = 2
+
+
+@dataclass
 class StationConfig:
     """Fully resolved application configuration used at runtime."""
 
@@ -108,6 +117,7 @@ class StationConfig:
     sonic_brand: SonicBrandSection = field(default_factory=SonicBrandSection)
     audio: AudioSection = field(default_factory=AudioSection)
     homeassistant: HomeAssistantSection = field(default_factory=HomeAssistantSection)
+    persona: PersonaSection = field(default_factory=PersonaSection)
     cache_dir: Path = Path("cache")
     tmp_dir: Path = Path("tmp")
     max_cache_size_mb: int = 500
@@ -180,6 +190,10 @@ def _validate(config: StationConfig) -> None:
         errors.append("pacing.songs_between_ads must be >= 1")
     if config.pacing.lookahead_segments < 1:
         errors.append("pacing.lookahead_segments must be >= 1")
+    if not isinstance(config.persona.anthem_threshold, int) or config.persona.anthem_threshold < 1:
+        errors.append("persona.anthem_threshold must be >= 1")
+    if not isinstance(config.persona.skip_bit_threshold, int) or config.persona.skip_bit_threshold < 1:
+        errors.append("persona.skip_bit_threshold must be >= 1")
 
     if not (config.anthropic_api_key or config.openai_api_key):
         log.warning("No ANTHROPIC_API_KEY or OPENAI_API_KEY — banter/ads will use fallback text")
@@ -317,6 +331,7 @@ def load_config(path: str = "radio.toml") -> StationConfig:
         sonic_brand=sonic_brand,
         audio=AudioSection(**audio_raw),
         homeassistant=ha_section,
+        persona=PersonaSection(**raw.get("persona", {})),
         cache_dir=cache_dir,
         tmp_dir=tmp_dir,
         max_cache_size_mb=int(os.getenv("MAMMAMIRADIO_MAX_CACHE_MB", "500")),
@@ -347,6 +362,9 @@ def load_config(path: str = "radio.toml") -> StationConfig:
             config.ha_token = supervisor_token
 
     _validate(config)
+    from mammamiradio.persona import set_arc_thresholds
+
+    set_arc_thresholds(config.persona.arc_thresholds)
     return config
 
 

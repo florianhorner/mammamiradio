@@ -4,7 +4,7 @@ All notable changes to `mammamiradio` are documented here.
 
 The current version source of truth is `pyproject.toml`.
 
-## [Unreleased]
+## [2.9.0] - 2026-04-13
 
 ### Added
 
@@ -17,14 +17,25 @@ The current version source of truth is `pyproject.toml`.
 - **`ha_moments` API**: `/public-status` now includes `ha_moments` object with mood, weather, and last event (person-filtered, staleness-guarded). `/status` includes full `ha_details` for admin.
 - **Tiered HA prompt references**: When a mood scene is active, hosts may reference up to 2 home details (mood counts toward cap). Weather-mood fusion instruction when both are present.
 - **Numeric event passthrough**: Power sensors and other numeric-state entities now generate events correctly in `ha_enrichment.diff_states()`.
+- **Multi-session arc phases**: Hosts now warm up over sessions. Four relationship phases (stranger, acquaintance, friend, old_friend) computed from session count, each with phase-aware callback and joke budgets. Milestone sessions (1, 5, 10, 25, 50, 100) inject subtle acknowledgment directives into banter prompts.
+- **Song cues**: Machine-derived per-track memory. Anthem detection (played 3+ times, never skipped) and skip-bit detection (skipped 2+ times) create persistent cues. LLM can also generate per-track reaction cues during banter. Cues appear in banter prompts as "TRACK MEMORY" alongside legacy operator rules.
+- **Enhanced callbacks**: `callbacks_used` from LLM responses now support structured format `{"song": "...", "context": "..."}` alongside plain strings. Context describes WHY a song was referenced, enriching cross-session memory.
+- **Play history enrichment**: `skipped` and `listen_duration_s` columns added to `play_history` table, enabling cross-session anthem and skip-bit detection.
+- **`[persona]` config section**: `arc_thresholds`, `anthem_threshold`, `skip_bit_threshold` configurable in `radio.toml`.
 
 ### Fixed
 
 - **Listener song request ordering**: Background downloads now stay attached to their own pending request until that request reaches the head of the queue. Later requests can no longer overwrite `pinned_track` and play before the earlier dedication.
 - **Strict external-track queueing**: `/api/playlist/add-external` now rejects requests when yt-dlp downloads are disabled instead of returning success after generating silence.
 - **`/api/playlist/add-external` payload validation**: Non-object JSON payloads now return a 400 instead of raising `AttributeError`.
-- **Dead code cleanup**: Removed unused `_diff_states()` and `_build_events_summary()` from `ha_context.py` (runtime uses `ha_enrichment.diff_states()`).
-- **Unused import**: Removed `import os` from `playlist.py`.
+- **Song cue youtube_id pinning**: LLM-generated song cues now use the known track ID from playback state instead of trusting the LLM echo, preventing orphan cue rows from hallucinated IDs.
+- **Cue text prompt sanitization**: Song cue text is now sanitized via `_sanitize_prompt_data` on the read path before re-injection into banter prompts, closing a cross-session prompt injection vector.
+- **SQLite NULLS LAST compatibility**: Song cue ordering replaced `NULLS LAST` (requires SQLite 3.30+) with a portable `CASE` expression.
+- **Listener request button**: Fixed `sendRequest()` IIFE scoping bug — button now works via `addEventListener` instead of broken inline `onclick`.
+- **Clip rate limiter**: Replaced `threading.Lock` with `asyncio.Lock` for async-correct rate limiting.
+- **Song request gating**: Song-request keyword detection now only activates when yt-dlp is enabled, preventing dead-end download attempts.
+- **Dead code cleanup**: Removed unused `_diff_states()` and `_build_events_summary()` from `ha_context.py`, unused imports (`cast`, `threading`, `ListenerRequestCommit`).
+- **Listener Casa card visibility**: The Home Assistant "Casa" ambient card now renders on `listener.html` (public `/` and `/listen`) and updates from `/public-status` `ha_moments`, not only on the admin dashboard.
 
 ## [2.8.0] - 2026-04-13
 

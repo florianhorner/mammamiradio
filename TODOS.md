@@ -1,5 +1,15 @@
 # TODOs
 
+## P2: Wire skip-bit detection into live reactive banter
+The skip-bit cue is correctly created when a listener skips a track twice (`detect_skip_bit` in `streamer.py:667`), but the boolean return value is discarded. The AI host never has a "caught you skipping it again!" moment in the current banter cycle.
+
+**Action:** In `_persist_skipped_music`, check the `detect_skip_bit` return value. When `True`, set `state.ha_pending_directive` with an Italian reactive line like "Florian ha saltato questa canzone per la Nth volta — reagisci in modo complice" so the next banter slot delivers the impossible moment live.
+
+**Why it matters:** This is the structural moat use case — real radio cannot do this. The data collection is already working; the reactive hook is the missing one-liner.
+
+**Effort:** S (CC: ~15 min) | **Files:** `mammamiradio/streamer.py:649`, `mammamiradio/models.py`
+**Source:** /plan-eng-review, 2026-04-13
+
 ## ~~Music catalog depth — multi-source rotation~~ RESOLVED
 - Charts raised to 100 tracks. Local `music/` MP3s auto-blended into chart playlist when `allow_ytdlp=true`. Covers 7h+ of unique content without repetition.
 - **Completed:** v2.8.0 (2026-04-13)
@@ -37,11 +47,9 @@ Spotify AI DJ exists (launched 2023, expanding languages). No contingency plan i
 10 new entities (room lights, power sensors, star projectors, terrace lights). 4 new mood classifications. Tiered banter references (1 item or up to 2 when mood is active). Weather-mood fusion. Casa dashboard card. `ha_moments` API for public status, `ha_details` for admin. Numeric event passthrough fixed.
 **Completed:** feat/deeper-ha-context (2026-04-13)
 
-## P1: Casa card in listener.html (QA bug — deeper-ha-context)
-Casa card was added to `dashboard.html` (served at `/dashboard`, admin auth) but public listeners hit `/` which serves `listener.html`. The card is invisible to actual listeners. Backend (`ha_moments` in `/public-status`) is correct — UI fix only.
-**Fix:** Copy casa-card HTML (dashboard.html:703-707) + the `ha` block in `updateStatus()` into `listener.html` at equivalent positions.
-**Effort:** XS (CC: ~10 min) | **Files:** mammamiradio/listener.html
-**Source:** QA pass on feat/deeper-ha-context, 2026-04-13
+## ~~P1: Casa card in listener.html (QA bug — deeper-ha-context)~~ RESOLVED
+Casa card now exists in `listener.html` and is bound to `ha_moments` from `/public-status`, matching dashboard behavior for public listeners.
+**Resolved:** 2026-04-13
 
 ## P2: Distribution strategy
 No landing page, no hosted demo, no analytics, no invite loop. The product has no way to be discovered. PR readiness != adoption readiness.
@@ -100,12 +108,9 @@ The disclaimer_goblin role is defined in SPEAKER_ROLES and has a voice in radio.
 - Differentiated energy instructions when both hosts are high-energy/chaotic: higher-energy host runs the chaos, lower-energy one cuts surgically. No more identical manic robots.
 - **Completed:** v2.8.0 (2026-04-13)
 
-### Song cue + ruleset mechanism
-- User needs to flag a specific song mid-stream → system accumulates per-track rules
-- Example: Aggu Palermo cringe pop → host reaction "spot on cringe fest" was perfect — want to lock that in
-- Build: highlight endpoint → rule stored → ruleset applied at next playback of flagged track
-- This is different from persona memory — it's per-track annotation + reaction rules
-- **Effort:** M | **Files:** mammamiradio/producer.py, mammamiradio/scriptwriter.py, new: mammamiradio/track_rules.py
+### ~~Song cue + ruleset mechanism~~ RESOLVED
+- Machine-derived per-track memory via `song_cues.py`. Anthem detection (3+ plays, never skipped), skip-bit detection (2+ skips), LLM reaction cues. Cues appear in banter prompts as TRACK MEMORY.
+- **Completed:** v2.9.0 (2026-04-13)
 
 ### ~~Studio humanity events~~ RESOLVED
 - One-shot cough/paper-rustle/chair-creak/pen-tap after 15+ segments. 4 SFX files generated.

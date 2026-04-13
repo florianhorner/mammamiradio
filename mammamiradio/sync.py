@@ -54,7 +54,38 @@ CREATE TABLE IF NOT EXISTS track_rules (
     rule_text TEXT NOT NULL,
     created_at TEXT DEFAULT (datetime('now'))
 );
+
+CREATE TABLE IF NOT EXISTS song_cues (
+    id INTEGER PRIMARY KEY,
+    youtube_id TEXT NOT NULL,
+    cue_type TEXT NOT NULL,
+    cue_text TEXT NOT NULL,
+    source_session INTEGER,
+    times_used INTEGER DEFAULT 0,
+    pinned INTEGER DEFAULT 0,
+    created_at TEXT DEFAULT (datetime('now')),
+    last_used_at TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_song_cues_yt ON song_cues(youtube_id);
 """
+
+
+def _migrate_schema(conn: sqlite3.Connection) -> None:
+    """Add new columns to existing tables. Idempotent — safe to run on every startup."""
+    migrations = [
+        "ALTER TABLE listener_persona ADD COLUMN arc_metadata TEXT DEFAULT '{}'",
+        "ALTER TABLE play_history ADD COLUMN skipped INTEGER DEFAULT 0",
+        "ALTER TABLE play_history ADD COLUMN listen_duration_s REAL",
+    ]
+    for sql in migrations:
+        try:
+            conn.execute(sql)
+        except sqlite3.OperationalError as exc:
+            msg = str(exc).lower()
+            if "duplicate column name" in msg or "already exists" in msg:
+                continue
+            raise
 
 
 def init_db(db_path: Path) -> None:
@@ -62,6 +93,7 @@ def init_db(db_path: Path) -> None:
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(db_path))
     conn.executescript(DB_SCHEMA)
+    _migrate_schema(conn)
     conn.close()
     logger.info("Database initialized: %s", db_path)
 

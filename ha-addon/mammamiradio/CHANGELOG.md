@@ -1,5 +1,23 @@
 # Changelog
 
+## 2.9.0
+
+### Added
+- Multi-session persona arcs: hosts warm up over sessions (stranger → acquaintance → friend → old_friend). Milestone sessions inject acknowledgment directives.
+- Song cues: persistent per-track memory. Anthem detection (3+ plays, never skipped), skip-bit detection (2+ skips), LLM reaction cues. Displayed as TRACK MEMORY in banter prompts.
+- Enhanced callbacks: structured format with song context alongside plain strings.
+- Play history enrichment: skipped/listen_duration_s columns for cross-session anthem and skip-bit detection.
+- Deeper HA context: 10 new entities, 4 new mood classifications, threshold reactive triggers, Casa dashboard card.
+- Tiered HA prompt references with weather-mood fusion.
+
+### Fixed
+- Song cue youtube_id pinned to known track, preventing orphan rows from LLM hallucination.
+- Cue text sanitized before re-injection into prompts (cross-session injection prevention).
+- SQLite NULLS LAST replaced with portable CASE expression.
+- Listener request button fixed (IIFE scoping bug).
+- Clip rate limiter uses asyncio.Lock instead of threading.Lock.
+- Song request keywords only activate when yt-dlp is enabled.
+
 ## 2.8.0
 
 ### Added

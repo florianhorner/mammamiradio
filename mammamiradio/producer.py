@@ -11,7 +11,6 @@ from collections import deque
 from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
-from typing import cast
 from uuid import uuid4
 
 from mammamiradio.audio_quality import AudioQualityError, AudioToolError, validate_segment_audio
@@ -29,7 +28,6 @@ from mammamiradio.models import (
     AdFormat,
     AdHistoryEntry,
     AdVoice,
-    HostPersonality,
     Segment,
     SegmentType,
     SonicWorld,
@@ -52,7 +50,6 @@ from mammamiradio.scheduler import next_segment_type
 from mammamiradio.scriptwriter import (
     AD_BREAK_INTROS,
     AD_BREAK_OUTROS,
-    ListenerRequestCommit,
     _has_script_llm,
     write_ad,
     write_banter,
@@ -65,16 +62,29 @@ from mammamiradio.tts import synthesize, synthesize_ad, synthesize_dialogue
 logger = logging.getLogger(__name__)
 
 
-_background_tasks: set[asyncio.Task] = set()
-
-
-async def _record_motif(state: StationState, track) -> None:
-    """Record a played track as a motif in the listener persona (fire-and-forget)."""
+async def _record_motif(state: StationState, track, config=None, *, listen_duration_s: float | None = None) -> None:
+    """Record a completed streamed track in persona memory and play history."""
     persona_store = getattr(state, "persona_store", None)
     if not persona_store:
         return
     try:
         await persona_store.record_motif(track.artist, track.title)
+        # Also record to play_history for cross-session anthem/skip detection
+        yt_id = getattr(track, "youtube_id", "") or ""
+        if yt_id:
+            await persona_store.record_play(
+                yt_id,
+                persona_store._session_id,
+                skipped=False,
+                listen_duration_s=listen_duration_s,
+            )
+            if config:
+                from mammamiradio.song_cues import detect_anthem
+
+                db_path = config.cache_dir / "mammamiradio.db"
+                persona_cfg = getattr(config, "persona", None)
+                anthem_t = persona_cfg.anthem_threshold if persona_cfg else 3
+                await detect_anthem(db_path, yt_id, threshold=anthem_t)
     except Exception:
         logger.warning("Failed to record motif", exc_info=True)
 
@@ -423,6 +433,7 @@ async def prewarm_first_segment(
                 "title": track.display,
                 "artist": track.artist,
                 "title_only": track.title,
+                "youtube_id": track.youtube_id,
                 "spotify_id": track.spotify_id,
                 "album_art": track.album_art,
                 "rationale": rationale,
@@ -651,6 +662,7 @@ async def run_producer(
                         "title": track.display,
                         "artist": track.artist,
                         "title_only": track.title,
+                        "youtube_id": track.youtube_id,
                         "spotify_id": track.spotify_id,
                         "album_art": track.album_art,
                         "rationale": rationale,
@@ -660,11 +672,6 @@ async def run_producer(
                 )
                 _bound_track = track
                 _set_last_music_file(norm_path)
-
-                # Record track as a motif in listener persona (async, non-blocking)
-                task = asyncio.create_task(_record_motif(state, track))
-                _background_tasks.add(task)
-                task.add_done_callback(_background_tasks.discard)
 
                 def _music_callback(_t=_bound_track) -> None:
                     state.after_music(_t)
@@ -733,13 +740,9 @@ async def run_producer(
                             config,
                             is_new_listener=_is_new_listener,
                             is_first_listener=_is_first_listener,
-                            return_listener_request_commit=True,
                         )
-                        _trans_res, _banter_res = await asyncio.gather(transition_task, banter_task)
-                        trans_host, trans_text = cast(tuple[HostPersonality, str], _trans_res)
-                        lines, listener_request_commit = cast(
-                            tuple[list[tuple[HostPersonality, str]], ListenerRequestCommit | None],
-                            _banter_res,
+                        (trans_host, trans_text), (lines, listener_request_commit) = await asyncio.gather(
+                            transition_task, banter_task
                         )
 
                         # Synthesize transition + dialogue in parallel

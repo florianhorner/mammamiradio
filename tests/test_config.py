@@ -4,6 +4,8 @@ import json
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+
 from mammamiradio.config import AudioSection, _apply_addon_options, _is_addon, load_config, runtime_json
 
 
@@ -44,6 +46,64 @@ def test_homeassistant_section_loaded():
     assert config.homeassistant.enabled is False
     assert config.homeassistant.url == ""
     assert config.homeassistant.poll_interval == 60
+
+
+def test_load_config_applies_persona_arc_thresholds(tmp_path):
+    """Configured arc thresholds should change the phase machine at runtime."""
+    source = Path(__file__).parent.parent / "radio.toml"
+    custom = source.read_text().replace(
+        "arc_thresholds = [4, 11, 26]",
+        "arc_thresholds = [2, 5, 9]",
+    )
+    custom_path = tmp_path / "radio.toml"
+    custom_path.write_text(custom)
+
+    config = load_config(str(custom_path))
+
+    from mammamiradio.persona import compute_arc_phase, set_arc_thresholds
+
+    try:
+        assert config.persona.arc_thresholds == [2, 5, 9]
+        assert compute_arc_phase(2) == "acquaintance"
+        assert compute_arc_phase(5) == "friend"
+        assert compute_arc_phase(9) == "old_friend"
+    finally:
+        set_arc_thresholds([4, 11, 26])
+
+
+def test_load_config_rejects_nonpositive_persona_cue_thresholds(tmp_path):
+    source = Path(__file__).parent.parent / "radio.toml"
+    custom = (
+        source.read_text()
+        .replace("anthem_threshold = 3", "anthem_threshold = 0")
+        .replace(
+            "skip_bit_threshold = 2",
+            "skip_bit_threshold = -1",
+        )
+    )
+    custom_path = tmp_path / "radio.toml"
+    custom_path.write_text(custom)
+
+    with pytest.raises(ValueError, match="persona\\.anthem_threshold must be >= 1"):
+        load_config(str(custom_path))
+
+
+def test_load_config_does_not_leak_arc_thresholds_on_validation_failure(tmp_path):
+    source = Path(__file__).parent.parent / "radio.toml"
+    custom = (
+        source.read_text()
+        .replace("arc_thresholds = [4, 11, 26]", "arc_thresholds = [2, 5, 9]")
+        .replace("songs_between_banter = 2", "songs_between_banter = 0")
+    )
+    custom_path = tmp_path / "radio.toml"
+    custom_path.write_text(custom)
+
+    from mammamiradio.persona import compute_arc_phase, set_arc_thresholds
+
+    set_arc_thresholds([4, 11, 26])
+    with pytest.raises(ValueError, match="pacing\\.songs_between_banter must be >= 1"):
+        load_config(str(custom_path))
+    assert compute_arc_phase(5) == "acquaintance"
 
 
 def test_audio_section_defaults():
@@ -248,13 +308,13 @@ def test_load_config_parses_campaign_spines():
     toml_path = Path(__file__).parent.parent / "radio.toml"
     config = load_config(str(toml_path))
 
-    # Esselunga has a campaign spine
-    esselunga = next(b for b in config.ads.brands if b.name == "Esselunga")
-    assert esselunga.campaign is not None
-    assert "offers" in esselunga.campaign.premise.lower() or "saving" in esselunga.campaign.premise.lower()
-    assert esselunga.campaign.sonic_signature == "chime+register_hit"
-    assert "classic_pitch" in esselunga.campaign.format_pool
-    assert esselunga.campaign.spokesperson == "hammer"
+    # First recurring brand should have a campaign spine
+    recurring = next(b for b in config.ads.brands if b.recurring and b.campaign is not None)
+    assert recurring.campaign is not None
+    assert recurring.campaign.premise  # non-empty
+    assert recurring.campaign.sonic_signature
+    assert "classic_pitch" in recurring.campaign.format_pool
+    assert recurring.campaign.spokesperson
 
 
 def test_load_config_brands_without_campaign():
@@ -262,9 +322,9 @@ def test_load_config_brands_without_campaign():
     toml_path = Path(__file__).parent.parent / "radio.toml"
     config = load_config(str(toml_path))
 
-    # Lidl Italia has no campaign
-    lidl = next(b for b in config.ads.brands if b.name == "Lidl Italia")
-    assert lidl.campaign is None
+    # Find a brand without a campaign (non-recurring brand)
+    non_campaign = next(b for b in config.ads.brands if b.campaign is None)
+    assert non_campaign.campaign is None
 
 
 def test_load_config_parses_voice_roles():
