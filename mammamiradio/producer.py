@@ -458,14 +458,13 @@ async def run_producer(
     ha_cache: HomeContext | None = None
 
     _music_qg_rejections = 0  # consecutive music quality gate rejections (circuit breaker)
+    _loop = asyncio.get_running_loop()
     _last_cache_eviction = 0.0  # epoch time of last eviction check
     _cache_eviction_interval = 3600  # run eviction at most once per hour
-    _last_playlist_refresh = 0.0  # epoch time of last chart refresh
+    _last_playlist_refresh = _loop.time()  # monotonic time of last chart refresh
     _playlist_refresh_interval = 5400.0  # refresh charts every 90 minutes
     _humanity_event_fired = False  # one-shot studio humanity event per session
     _segments_produced = 0  # count for humanity event gating
-    _recent_banter_paths: deque[Path] = deque(maxlen=5)  # for studio bleed atmosphere
-
     _producer_idle_logged = False
     _was_idle = False
     while True:
@@ -610,8 +609,8 @@ async def run_producer(
 
                 # Studio bleed: mix faint prior banter under the start of the
                 # music segment to create the "someone left a mic on" atmosphere.
-                if _recent_banter_paths and random.random() < 0.35:
-                    bleed_src = random.choice(list(_recent_banter_paths))
+                if state.recent_banter_paths and random.random() < 0.35:
+                    bleed_src = random.choice(list(state.recent_banter_paths))
                     if bleed_src.exists():
                         bleed_out = config.tmp_dir / f"bleed_{uuid4().hex[:8]}.mp3"
                         try:
@@ -801,10 +800,6 @@ async def run_producer(
                                 continue
                         else:
                             continue
-
-                # Record banter path for studio bleed atmosphere in future music
-                if canned is None:
-                    _recent_banter_paths.append(audio_path)
 
                 # One-shot studio humanity event: cough, paper rustle, etc.
                 # Only fires once per session, only after 15+ segments produced.

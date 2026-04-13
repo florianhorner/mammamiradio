@@ -127,7 +127,7 @@ Do not deviate without explicit user approval. In QA mode, flag any code that do
 - `dashboard.html` and `listener.html` are loaded as static file contents by `streamer.py`.
 - `start.sh` is part of the runtime contract, not just a convenience script.
 - `radio.toml` is the source of truth for hosts, pacing, ad brands, audio settings, and Home Assistant enablement. Secrets stay in `.env`.
-- If you change routes, config keys, auth rules, or fallback behavior, update the matching docs in the same change.
+- If you change routes, config keys, auth rules, or fallback behavior, update the matching docs in the same change. (See **Doc sync** rule below.)
 - `conductor.json` and `scripts/conductor-*.sh` define Conductor workspace setup/run/archive behavior. Commit those files, but keep `.context/` runtime state out of git.
 - If the user has a live stream running, do not stop, restart, or reload it unless they explicitly ask. Protect the illusion first.
 - Treat 60 minutes of uninterrupted runtime per live station object as the default minimum when tinkering around an active stream.
@@ -144,6 +144,14 @@ Do not deviate without explicit user approval. In QA mode, flag any code that do
   - On main merge: `update` mode — auto-ratchets all floors up and commits the new values. Zero human intervention.
 - **Local check**: `make coverage-check` to verify locally. `make coverage-ratchet` to preview what CI would commit.
 - **Adding tests**: Write tests, push. CI will auto-raise the floors on merge. The next PR that drops any module will fail.
+
+## Doc sync
+
+**Any change to a route, config key, env var, auth rule, or fallback path must update at least one of the following docs in the same commit:**
+
+`README.md`, `ARCHITECTURE.md`, `TROUBLESHOOTING.md`, `OPERATIONS.md`, `CLAUDE.md`, `CHANGELOG.md`
+
+If the behavior changed and the docs didn't, the docs are wrong. Fix them in the same change, not a follow-up.
 
 ## Review discipline
 

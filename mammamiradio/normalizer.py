@@ -53,15 +53,29 @@ def _gate_after(onset_sec: float) -> str:
     return f"if(gte(t\\,{_fmt_num(onset)})\\,1\\,0)"
 
 
-def normalize(input_path: Path, output_path: Path, config=None) -> Path:
-    """Re-encode an input file to the station's target loudness and format."""
+def normalize(input_path: Path, output_path: Path, config=None, *, loudnorm: bool = True) -> Path:
+    """Re-encode an input file to the station's target loudness and format.
+
+    Set loudnorm=False for intermediate files that will receive a final loudnorm
+    pass later (e.g. individual TTS lines before dialogue assembly). This runs
+    ~3x faster on constrained hardware — just re-encodes to station format without
+    the EBU R128 analysis pass. Silence trimming is still applied.
+    """
     sample_rate = str(config.audio.sample_rate) if config else "48000"
     channels = str(config.audio.channels) if config else "2"
     bitrate = f"{config.audio.bitrate}k" if config else "192k"
 
+    audio_filter = (
+        "loudnorm=I=-16:LRA=11:TP=-1.5,silenceremove=start_periods=0:stop_periods=1:stop_threshold=-50dB:stop_duration=0.3"
+        if loudnorm
+        else "silenceremove=start_periods=0:stop_periods=1:stop_threshold=-50dB:stop_duration=0.3"
+    )
+
     cmd = [
         "ffmpeg",
         "-y",
+        "-threads",
+        "1",
         "-i",
         str(input_path),
         "-vn",
@@ -72,13 +86,13 @@ def normalize(input_path: Path, output_path: Path, config=None) -> Path:
         "-b:a",
         bitrate,
         "-filter:a",
-        "loudnorm=I=-16:LRA=11:TP=-1.5,silenceremove=start_periods=0:stop_periods=1:stop_threshold=-50dB:stop_duration=0.3",
+        audio_filter,
         "-f",
         "mp3",
         str(output_path),
     ]
     _run_ffmpeg(cmd, f"normalize {input_path.name}")
-    logger.info("Normalized: %s -> %s", input_path.name, output_path.name)
+    logger.info("Normalized%s: %s -> %s", "" if loudnorm else " (fast)", input_path.name, output_path.name)
     return output_path
 
 
