@@ -324,6 +324,18 @@ async def test_download_track_async(track, cache_dir, music_dir):
     assert result == cached
 
 
+def test_download_external_sync_raises_when_ytdlp_disabled(track, cache_dir, music_dir):
+    import os
+
+    from mammamiradio.downloader import _download_external_sync
+
+    env = os.environ.copy()
+    env.pop("MAMMAMIRADIO_ALLOW_YTDLP", None)
+
+    with patch.dict(os.environ, env, clear=True), pytest.raises(RuntimeError, match="yt-dlp is disabled"):
+        _download_external_sync(track, cache_dir, music_dir)
+
+
 # --- evict_cache_lru ---
 
 

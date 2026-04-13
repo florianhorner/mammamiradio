@@ -23,6 +23,7 @@ from mammamiradio.models import (
     AdVoice,
     HostPersonality,
     PersonalityAxes,
+    SegmentType,
     SonicWorld,
     StationState,
 )
@@ -121,6 +122,10 @@ def _plan_listener_request_block(state: StationState) -> tuple[str, ListenerRequ
     msg = _sanitize_prompt_data(str(req.get("message") or ""), max_len=200)
     song_track = _sanitize_prompt_data(str(req.get("song_track") or ""), max_len=120)
     if is_song and req.get("song_found") and req.get("song_track"):
+        track_obj = req.get("song_track_obj")
+        if track_obj is not None:
+            state.pinned_track = track_obj
+            state.force_next = SegmentType.MUSIC
         return (
             f"""
 LISTENER REQUEST:
@@ -375,6 +380,20 @@ SONIC_MUSIC_BEDS: dict[str, str] = {
 }
 
 _BANTER_EXCHANGE_COUNT: str = "4-6"
+
+_MOOD_EXAMPLES: dict[str, str] = {
+    "Serata cinema": "Example: 'La TV accesa, le luci basse — serata perfetta...'",
+    "Qualcuno sta cucinando": "Example: 'Il ventilatore della cucina — qualcosa di buono...'",
+    "Atmosfera rilassata": "Example: 'Luci basse nel soggiorno — serata tranquilla...'",
+    "Serata sotto le stelle": "Example: 'Il proiettore stelle acceso — che atmosfera...'",
+    "Lavatrice in funzione": "Example: 'La lavatrice gira — vita domestica...'",
+    "Caffè in preparazione": "Example: 'La caffettiera accesa — pausa caffè in arrivo...'",
+    "La casa si sta svegliando": "Example: 'Le luci si accendono piano — tutti svegli...'",
+    "Stanno svegliandosi": "Example: 'Il caffè è quasi pronto — buongiorno a tutti...'",
+    "Il robot sta pulendo": "Example: 'Il robot sul pavimento — casa in ordine...'",
+    "Casa vuota": "Example: 'Tutti fuori — musica per la casa vuota...'",
+    "Qualcuno sta facendo la doccia": "Example: 'Il ventilatore del bagno — qualcuno fresco...'",
+}
 
 
 def _is_high_chaos_pair_leader(name: str, axes: PersonalityAxes, other_host: HostPersonality) -> bool:
@@ -647,15 +666,7 @@ async def write_banter(
             f"HOME MOOD: {state.ha_home_mood} — "
             "reference this at most once, like a passing observation. Never as a report.\n"
         )
-        # Mood reference examples (outside data tags, security boundary preserved)
-        _mood_examples = {
-            "Serata cinema": "Example: 'La TV accesa, le luci basse — serata perfetta...'",
-            "Qualcuno sta cucinando": "Example: 'Il ventilatore della cucina — qualcosa di buono...'",
-            "Atmosfera rilassata": "Example: 'Luci basse nel soggiorno — serata tranquilla...'",
-            "Serata sotto le stelle": "Example: 'Il proiettore stelle acceso — che atmosfera...'",
-            "Lavatrice in funzione": "Example: 'La lavatrice gira — vita domestica...'",
-        }
-        example = _mood_examples.get(state.ha_home_mood)
+        example = _MOOD_EXAMPLES.get(state.ha_home_mood)
         if example:
             mood_block += f"{example}\n"
 

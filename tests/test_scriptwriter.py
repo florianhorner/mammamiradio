@@ -14,6 +14,7 @@ from mammamiradio.models import (
     AdScript,
     AdVoice,
     HostPersonality,
+    SegmentType,
     StationState,
     Track,
 )
@@ -506,6 +507,12 @@ def test_plan_listener_request_block_song_still_downloading_marks_error_after_tw
 
 
 def test_plan_listener_request_block_song_found_announcement(state):
+    requested_track = Track(
+        title="Albachiara",
+        artist="Vasco Rossi",
+        duration_ms=120000,
+        youtube_id="yt123",
+    )
     req = {
         "name": "Giulia",
         "message": "metti Albachiara",
@@ -513,6 +520,7 @@ def test_plan_listener_request_block_song_found_announcement(state):
         "song_found": True,
         "song_error": False,
         "song_track": "Vasco Rossi - Albachiara",
+        "song_track_obj": requested_track,
         "banter_cycles_missed": 0,
     }
     state.pending_requests.append(req)
@@ -522,6 +530,45 @@ def test_plan_listener_request_block_song_found_announcement(state):
     assert "Vasco Rossi - Albachiara" in prompt
     assert commit is not None
     assert commit.consume is True
+    assert state.pinned_track is requested_track
+    assert state.force_next == SegmentType.MUSIC
+
+
+def test_plan_listener_request_block_ignores_ready_second_song_until_it_reaches_head(state):
+    first_req = {
+        "name": "Luca",
+        "message": "metti Eros Ramazzotti",
+        "type": "song_request",
+        "song_found": False,
+        "song_error": False,
+        "song_track": None,
+        "banter_cycles_missed": 0,
+    }
+    second_track = Track(
+        title="Albachiara",
+        artist="Vasco Rossi",
+        duration_ms=120000,
+        youtube_id="yt123",
+    )
+    second_req = {
+        "name": "Giulia",
+        "message": "metti Albachiara",
+        "type": "song_request",
+        "song_found": True,
+        "song_error": False,
+        "song_track": "Vasco Rossi - Albachiara",
+        "song_track_obj": second_track,
+        "banter_cycles_missed": 0,
+    }
+    state.pending_requests.extend([first_req, second_req])
+
+    prompt, commit = _plan_listener_request_block(state)
+
+    assert prompt == ""
+    assert commit is not None
+    assert commit.consume is False
+    assert state.pinned_track is None
+    assert state.force_next is None
 
 
 def test_plan_listener_request_block_song_error_branch(state):

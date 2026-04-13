@@ -16,6 +16,9 @@ The current version source of truth is `pyproject.toml`.
 
 ### Fixed
 
+- **Listener song request ordering**: Background downloads now stay attached to their own pending request until that request reaches the head of the queue. Later requests can no longer overwrite `pinned_track` and play before the earlier dedication.
+- **Strict external-track queueing**: `/api/playlist/add-external` now rejects requests when yt-dlp downloads are disabled instead of returning success after generating silence.
+- **`/api/playlist/add-external` payload validation**: Non-object JSON payloads now return a 400 instead of raising `AttributeError`.
 - **Dead code cleanup**: Removed unused `_diff_states()` and `_build_events_summary()` from `ha_context.py` (runtime uses `ha_enrichment.diff_states()`).
 - **Unused import**: Removed `import os` from `playlist.py`.
 
