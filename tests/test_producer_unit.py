@@ -512,6 +512,7 @@ async def test_error_recovery_logs_demo_assets_banter_hint_and_uses_silence(capl
     assert mock_silence.call_count == 1
     assert mock_silence.call_args.args[1] == 5.0
 
+
 # ---------------------------------------------------------------------------
 # Persona feedback loop in producer
 # ---------------------------------------------------------------------------

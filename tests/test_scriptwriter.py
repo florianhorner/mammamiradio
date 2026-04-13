@@ -1014,8 +1014,7 @@ def test_personality_modifier_produces_distinct_strings_for_high_chaos_pair():
 
     # The modifiers must not be identical — the contrast is the whole point
     assert marco_modifier != giulia_modifier, (
-        "Marco and Giulia received identical personality modifiers; "
-        "relative contrast logic is not working."
+        "Marco and Giulia received identical personality modifiers; relative contrast logic is not working."
     )
 
     # Marco (higher energy) should contain runaway/lead framing
@@ -1027,6 +1026,53 @@ def test_personality_modifier_produces_distinct_strings_for_high_chaos_pair():
     assert "surgical" in giulia_modifier.lower() or "controlled" in giulia_modifier.lower(), (
         f"Giulia (lower energy) should contain 'surgical' or 'controlled' framing, got: {giulia_modifier!r}"
     )
+
+
+def test_personality_modifier_tie_energy_picks_single_deterministic_leader():
+    """Equal-energy high-chaos pairs must still produce one leader and one contrast host."""
+    from mammamiradio.models import HostPersonality, PersonalityAxes
+
+    marco_axes = PersonalityAxes(energy=90, chaos=95, warmth=50, verbosity=55, nostalgia=40)
+    giulia_axes = PersonalityAxes(energy=90, chaos=92, warmth=45, verbosity=60, nostalgia=35)
+
+    marco_host = HostPersonality(name="Marco", voice="onyx", style="manic", personality=marco_axes)
+    giulia_host = HostPersonality(name="Giulia", voice="test", style="sharp", personality=giulia_axes)
+
+    marco_modifier = _personality_modifier("Marco", marco_axes, other_host=giulia_host)
+    giulia_modifier = _personality_modifier("Giulia", giulia_axes, other_host=marco_host)
+    marco_modifier_again = _personality_modifier("Marco", marco_axes, other_host=giulia_host)
+    giulia_modifier_again = _personality_modifier("Giulia", giulia_axes, other_host=marco_host)
+
+    assert marco_modifier and giulia_modifier
+    assert marco_modifier == marco_modifier_again
+    assert giulia_modifier == giulia_modifier_again
+
+    runaway_count = sum("runaway" in m.lower() or "lead" in m.lower() for m in (marco_modifier, giulia_modifier))
+    surgical_count = sum(
+        "surgical" in m.lower() or "controlled" in m.lower() for m in (marco_modifier, giulia_modifier)
+    )
+    assert runaway_count == 1
+    assert surgical_count == 1
+
+
+def test_personality_modifier_energy_controls_runaway_when_axes_conflict():
+    """If hosts split energy/chaos leadership, energy decides the runaway role."""
+    from mammamiradio.models import HostPersonality, PersonalityAxes
+
+    host_a_axes = PersonalityAxes(energy=95, chaos=80, warmth=45, verbosity=55, nostalgia=40)
+    host_b_axes = PersonalityAxes(energy=80, chaos=100, warmth=45, verbosity=55, nostalgia=40)
+
+    host_a = HostPersonality(name="HostA", voice="onyx", style="manic", personality=host_a_axes)
+    host_b = HostPersonality(name="HostB", voice="test", style="sharp", personality=host_b_axes)
+
+    host_a_modifier = _personality_modifier("HostA", host_a_axes, other_host=host_b)
+    host_b_modifier = _personality_modifier("HostB", host_b_axes, other_host=host_a)
+
+    assert host_a_modifier
+    assert host_b_modifier
+    assert host_a_modifier != host_b_modifier
+    assert "runaway" in host_a_modifier.lower() or "lead" in host_a_modifier.lower()
+    assert "surgical" in host_b_modifier.lower() or "controlled" in host_b_modifier.lower()
 
 
 @pytest.mark.asyncio
@@ -1053,6 +1099,4 @@ async def test_write_banter_dedup_drops_identical_consecutive_lines(config, stat
         result = await write_banter(state, config)
 
     texts = [text for _host, text in result]
-    assert texts == ["Eccoci a voi!", "E adesso la musica."], (
-        f"Expected duplicate line dropped, got: {texts}"
-    )
+    assert texts == ["Eccoci a voi!", "E adesso la musica."], f"Expected duplicate line dropped, got: {texts}"

@@ -1526,3 +1526,29 @@ async def test_clip_rate_limiting(tmp_path):
         # Second request within 10s should be rate limited
         resp2 = await client.post("/api/clip")
         assert resp2.status_code == 429
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_clear_clip_rate")
+async def test_clip_rate_prune_keeps_recent_entries():
+    """Clip limiter pruning drops stale IPs without clearing recent limits."""
+    app = _make_test_app()
+    from collections import deque
+
+    from mammamiradio import streamer as streamer_mod
+
+    # Empty ring buffer is enough: pruning happens before clip extraction.
+    app.state.clip_ring_buffer = deque(maxlen=240)
+    now = 1_700_000_000.0
+    streamer_mod._clip_rate["198.51.100.1"] = now - 5
+    streamer_mod._clip_rate["198.51.100.2"] = now - 301
+
+    transport = httpx.ASGITransport(app=app, client=("203.0.113.9", 12345))
+    with patch("mammamiradio.streamer.time.time", return_value=now):
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            resp = await client.post("/api/clip")
+
+    assert resp.status_code == 200
+    assert streamer_mod._clip_rate["198.51.100.1"] == pytest.approx(now - 5)
+    assert "198.51.100.2" not in streamer_mod._clip_rate
+    assert streamer_mod._clip_rate["203.0.113.9"] == pytest.approx(now)

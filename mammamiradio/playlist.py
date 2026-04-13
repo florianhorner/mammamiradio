@@ -102,6 +102,38 @@ def _load_local_music_tracks(music_dir: Path) -> list[Track]:
     return tracks
 
 
+def _normalized_track_key(track: Track) -> tuple[str, str]:
+    return (track.artist.strip().lower(), track.title.strip().lower())
+
+
+def _merge_local_music_tracks(chart_tracks: list[Track], local_tracks: list[Track]) -> int:
+    """Append non-duplicate local tracks to chart tracks and return merged count."""
+    existing_keys = {_normalized_track_key(t) for t in chart_tracks}
+    merged = 0
+    for local_track in local_tracks:
+        track_key = _normalized_track_key(local_track)
+        if track_key in existing_keys:
+            continue
+        chart_tracks.append(local_track)
+        existing_keys.add(track_key)
+        merged += 1
+    return merged
+
+
+def _load_chart_source_tracks(config: StationConfig) -> list[Track]:
+    """Load chart tracks and blend local music/ tracks, then shuffle if configured."""
+    chart_tracks = list(_fetch_current_italy_charts())
+    local_tracks = _load_local_music_tracks(Path("music"))
+    if local_tracks:
+        merged_count = _merge_local_music_tracks(chart_tracks, local_tracks)
+        logger.info(
+            "Merged %d/%d local music/ tracks into chart playlist",
+            merged_count,
+            len(local_tracks),
+        )
+    return _shuffle_if_needed(config, chart_tracks)
+
+
 def _fetch_current_italy_charts(limit: int = 100, max_per_artist: int = 2) -> list[Track]:
     """Fetch a live Top Songs Italy list from Apple Music charts RSS."""
     try:
@@ -192,7 +224,7 @@ def load_explicit_source(config: StationConfig, source: PlaylistSource) -> tuple
 
     if source.kind in ("charts", "url"):
         # "url" kind comes from /api/playlist/load — treat as charts reload
-        tracks = _shuffle_if_needed(config, _fetch_current_italy_charts())
+        tracks = _load_chart_source_tracks(config)
         if not tracks:
             raise ExplicitSourceError("Current Italian charts are temporarily unavailable")
         resolved = _charts_source(len(tracks))
@@ -218,17 +250,8 @@ def fetch_startup_playlist(
     charts_allowed = config.allow_ytdlp
 
     if charts_allowed:
-        chart_tracks = _fetch_current_italy_charts()
-        local_tracks = _load_local_music_tracks(Path("music"))
-        if local_tracks:
-            existing_ids = {t.spotify_id for t in chart_tracks}
-            for t in local_tracks:
-                if t.spotify_id not in existing_ids:
-                    chart_tracks.append(t)
-                    existing_ids.add(t.spotify_id)
-            logger.info("Merged %d local music/ tracks into chart playlist", len(local_tracks))
+        chart_tracks = _load_chart_source_tracks(config)
         if chart_tracks:
-            chart_tracks = _shuffle_if_needed(config, chart_tracks)
             logger.info("Using live Italian charts (%d tracks total)", len(chart_tracks))
             return chart_tracks, _charts_source(len(chart_tracks)), error
 

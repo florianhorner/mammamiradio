@@ -232,7 +232,10 @@ def test_load_explicit_demo_source(config):
 
 def test_load_explicit_charts_source_success(config):
     chart_tracks = [Track(title="Chart Three", artist="Artist Three", duration_ms=210000, spotify_id="c3")]
-    with patch("mammamiradio.playlist._fetch_current_italy_charts", return_value=chart_tracks):
+    with (
+        patch("mammamiradio.playlist._fetch_current_italy_charts", return_value=chart_tracks),
+        patch("mammamiradio.playlist._load_local_music_tracks", return_value=[]),
+    ):
         tracks, source = load_explicit_source(
             config,
             PlaylistSource(kind="charts", source_id="apple_music_it_top_50", label="Current Italian charts"),
@@ -247,12 +250,50 @@ def test_load_explicit_charts_source_success(config):
 def test_load_explicit_charts_source_raises_when_unavailable(config):
     with (
         patch("mammamiradio.playlist._fetch_current_italy_charts", return_value=[]),
+        patch("mammamiradio.playlist._load_local_music_tracks", return_value=[]),
         pytest.raises(Exception, match="temporarily unavailable"),
     ):
         load_explicit_source(
             config,
             PlaylistSource(kind="charts", source_id="apple_music_it_top_50", label="Current Italian charts"),
         )
+
+
+def test_load_explicit_charts_blends_local_tracks_and_dedupes_by_artist_title(config):
+    chart_tracks = [
+        Track(title="Emozioni", artist="Lucio Battisti", duration_ms=210000, spotify_id="chart_1"),
+        Track(title="Chart Three", artist="Artist Three", duration_ms=210000, spotify_id="c3"),
+    ]
+    local_tracks = [
+        Track(
+            title="Emozioni",
+            artist="lucio battisti",
+            duration_ms=210000,
+            spotify_id="local_battisti_emozioni",
+        ),
+        Track(
+            title="Grande Grande Grande",
+            artist="Mina",
+            duration_ms=210000,
+            spotify_id="local_mina_grande",
+        ),
+    ]
+
+    with (
+        patch("mammamiradio.playlist._fetch_current_italy_charts", return_value=chart_tracks),
+        patch("mammamiradio.playlist._load_local_music_tracks", return_value=local_tracks),
+    ):
+        tracks, source = load_explicit_source(
+            config,
+            PlaylistSource(kind="charts", source_id="apple_music_it_top_50", label="Current Italian charts"),
+        )
+
+    assert source.kind == "charts"
+    by_key = {(t.artist.strip().lower(), t.title.strip().lower()): t for t in tracks}
+    assert ("lucio battisti", "emozioni") in by_key
+    assert ("artist three", "chart three") in by_key
+    assert ("mina", "grande grande grande") in by_key
+    assert len(tracks) == 3
 
 
 def test_load_explicit_source_unsupported_kind_raises(config):
@@ -372,19 +413,19 @@ def test_load_local_music_tracks_missing_dir(tmp_path):
     assert result == []
 
 
-def test_local_music_deduplicates_against_chart_ids(config, monkeypatch, tmp_path):
-    """A local file whose derived spotify_id matches an existing chart ID is not double-added."""
+def test_local_music_deduplicates_against_chart_artist_title(config, monkeypatch, tmp_path):
+    """A local file with same artist+title as a chart track is not double-added."""
     from mammamiradio.playlist import _load_local_music_tracks
 
-    # Create a local file whose generated ID won't collide with chart IDs
+    # Same logical song as chart track, but local spotify_id format differs
     (tmp_path / "Battisti - Emozioni.mp3").write_bytes(b"")
+    (tmp_path / "Mina - Grande Grande Grande.mp3").write_bytes(b"")
 
-    # Chart already has a track with an ID that does NOT match the local one
-    chart_tracks = [Track(title="Chart Hit", artist="Pop Star", duration_ms=210000, spotify_id="c_hit")]
+    chart_tracks = [Track(title="Emozioni", artist="Battisti", duration_ms=210000, spotify_id="chart_77")]
     config.allow_ytdlp = True
 
     local = _load_local_music_tracks(tmp_path)
-    assert len(local) == 1
+    assert len(local) == 2
 
     with (
         patch("mammamiradio.playlist._fetch_current_italy_charts", return_value=chart_tracks),
@@ -392,5 +433,7 @@ def test_local_music_deduplicates_against_chart_ids(config, monkeypatch, tmp_pat
     ):
         tracks, _source, _err = fetch_startup_playlist(config)
 
-    ids = [t.spotify_id for t in tracks]
-    assert len(ids) == len(set(ids)), "Duplicate spotify_ids found in merged playlist"
+    normalized_keys = {(t.artist.strip().lower(), t.title.strip().lower()) for t in tracks}
+    assert ("battisti", "emozioni") in normalized_keys
+    assert ("mina", "grande grande grande") in normalized_keys
+    assert len(tracks) == 2

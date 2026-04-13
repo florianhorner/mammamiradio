@@ -8,6 +8,7 @@ import logging
 import os
 import re as _re
 import secrets
+import threading
 import time
 from pathlib import Path
 from urllib.parse import urlparse
@@ -1460,6 +1461,7 @@ def _public_status_payload(request: Request) -> dict:
 
 
 _clip_rate: dict[str, float] = {}  # IP -> last clip timestamp
+_clip_rate_lock = threading.Lock()
 
 
 @router.post("/api/clip")
@@ -1470,15 +1472,16 @@ async def create_clip(request: Request):
     # Rate limit: 1 clip per 10 seconds per IP
     client_ip = request.client.host if request.client else "unknown"
     now = time.time()
-    if now - _clip_rate.get(client_ip, 0) < 10:
-        from fastapi.responses import JSONResponse
+    with _clip_rate_lock:
+        if now - _clip_rate.get(client_ip, 0) < 10:
+            from fastapi.responses import JSONResponse
 
-        return JSONResponse({"ok": False, "error": "Rate limited — try again in a few seconds"}, status_code=429)
-    _clip_rate[client_ip] = now
-    # Prune stale entries to avoid unbounded growth
-    _clip_rate_pruned = {k: v for k, v in _clip_rate.items() if now - v < 300}
-    _clip_rate.clear()
-    _clip_rate.update(_clip_rate_pruned)
+            return JSONResponse({"ok": False, "error": "Rate limited — try again in a few seconds"}, status_code=429)
+        _clip_rate[client_ip] = now
+        # Prune stale entries to avoid unbounded growth.
+        stale_keys = [k for k, v in _clip_rate.items() if now - v >= 300]
+        for key in stale_keys:
+            _clip_rate.pop(key, None)
 
     ring_buffer = getattr(request.app.state, "clip_ring_buffer", None)
     if ring_buffer is None or len(ring_buffer) == 0:

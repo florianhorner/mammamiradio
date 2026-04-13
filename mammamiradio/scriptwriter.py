@@ -377,6 +377,16 @@ SONIC_MUSIC_BEDS: dict[str, str] = {
 _BANTER_EXCHANGE_COUNT: str = "4-6"
 
 
+def _is_high_chaos_pair_leader(name: str, axes: PersonalityAxes, other_host: HostPersonality) -> bool:
+    """Choose one deterministic leader for high-energy/high-chaos host pairs."""
+    other_axes = other_host.personality
+    if axes.energy > other_axes.energy:
+        return True
+    if axes.energy < other_axes.energy:
+        return False
+    return name.strip().casefold() <= other_host.name.strip().casefold()
+
+
 def _personality_modifier(
     name: str,
     axes: PersonalityAxes,
@@ -389,28 +399,21 @@ def _personality_modifier(
 
     When ``other_host`` is provided, the energy+chaos combination is treated
     relatively: if both hosts score above the high-energy threshold the one with
-    higher energy leads the chaos while the lower one provides surgical contrast,
-    preventing two hosts from receiving identical manic instructions.
+    higher energy leads the chaos while the lower one provides surgical contrast.
+    Ties are broken deterministically by host name so both hosts don't get the
+    same manic instruction.
     """
     parts: list[str] = []
     threshold = 15  # distance from 50 before we emit guidance
 
     # Energy + Chaos — treated as a coupled pair when both hosts are high
     other_axes = other_host.personality if other_host else None
-    both_high_energy = (
-        other_axes is not None
-        and axes.energy > 50 + threshold
-        and other_axes.energy > 50 + threshold
-    )
-    both_high_chaos = (
-        other_axes is not None
-        and axes.chaos > 50 + threshold
-        and other_axes.chaos > 50 + threshold
-    )
+    both_high_energy = other_axes is not None and axes.energy > 50 + threshold and other_axes.energy > 50 + threshold
+    both_high_chaos = other_axes is not None and axes.chaos > 50 + threshold and other_axes.chaos > 50 + threshold
 
     if both_high_energy and both_high_chaos:
         # Relative treatment: higher energy leads, lower one cuts with precision
-        if axes.energy >= other_axes.energy:
+        if _is_high_chaos_pair_leader(name, axes, other_host):
             parts.append(
                 "You are the runaway train. Manic energy — talk fast, steamroll the conversation, "
                 "start three thoughts before finishing one, fill every silence. Lead the chaos."
