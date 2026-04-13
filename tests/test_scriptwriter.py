@@ -377,7 +377,12 @@ async def test_write_banter_prompt_includes_optional_context_blocks(config, stat
 
     with (
         patch("mammamiradio.scriptwriter._generate_json_response", side_effect=_fake_generate_json_response),
-        patch("mammamiradio.track_rules.get_rules", return_value=["React to the chorus like it's a scandal"]),
+        patch(
+            "mammamiradio.song_cues.get_cues",
+            return_value=[
+                {"type": "reaction", "text": "React to the chorus like it's a scandal", "session": 1, "uses": 0}
+            ],
+        ),
     ):
         result = await write_banter(state, config, is_first_listener=True)
 
@@ -387,13 +392,15 @@ async def test_write_banter_prompt_includes_optional_context_blocks(config, stat
     assert "EVENTI RECENTI" in prompt
     assert "La macchina del caffè" in prompt
     assert "WEATHER ARC" in prompt
-    assert "TRACK RULES for Rule Artist" in prompt
+    assert "TRACK MEMORY for Rule Artist" in prompt
     assert "HOME MOOD: Musica in casa" in prompt
     assert "HIGH PRIORITY" in prompt
     assert "<listener_behavior>" in prompt
+    assert "<arc_phase>" in prompt
     assert "<listener_memory>" in prompt
     assert "FIRST listener" in prompt
     assert '"persona_updates"' in prompt
+    assert '"song_cues"' in prompt
     assert state.ha_pending_directive == ""
 
 

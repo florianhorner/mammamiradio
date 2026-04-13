@@ -87,8 +87,9 @@ mammamiradio/
   ha_context.py       Home Assistant polling, Italian state formatting, mood classification, reactive triggers
   ha_enrichment.py    Pure HA event derivation (diff_states, event pruning, numeric passthrough)
   capabilities.py     Capability flags (anthropic, ha), tier derivation, and next_step hints
-  persona.py          Compounding listener memory: persona, motifs, session tracking, prompt injection filtering
-  sync.py             SQLite database initialization
+  persona.py          Compounding listener memory: persona, motifs, session tracking, arc phases, prompt injection filtering
+  song_cues.py        Per-track machine-derived memory: anthems, skip bits, LLM reactions
+  sync.py             SQLite database initialization and schema migration
   context_cues.py     Time-of-day and cultural context for banter/ad prompts
   track_rationale.py  "Why this track?" rationale generation for listener UI
   setup_status.py     Legacy setup status classification (kept for /status endpoint compat)
@@ -122,6 +123,14 @@ Do not deviate without explicit user approval. In QA mode, flag any code that do
 - **HA add-on icon**: `ha-addon/mammamiradio/icon.png` (256px) and `logo.png` (512px), rasterized from the SVG
 - To regenerate PNGs from SVG: `cairosvg mammamiradio/logo.svg -o icon.png -W 256 -H 256`
 - **Full design system**: `DESIGN.md` — colors, typography, components, motion, anti-patterns
+
+## Brand safety — hard rule
+
+**All ad brands in `radio.toml` must be fictional.** Never add a real company, product, or registered trademark to `[[ads.brands]]`. This applies to names, taglines, slogans, and campaign copy.
+
+Why: the scriptwriter generates fake ads in the brand's voice, makes false product claims, and can produce satirical or defamatory content. Doing this with real brands creates trademark infringement and false advertising exposure — including pharma brands where false claims carry regulatory risk.
+
+**The test:** google the brand name. If it returns a real company, it does not belong in `radio.toml`. Invented names that sound Italian and absurd are correct. Names that are one letter off a real brand (e.g. "Barella" for Barilla) also fail — the intent to deceive is implicit in the similarity.
 
 ## Notes for future edits
 

@@ -890,6 +890,21 @@ async def skip_track(request: Request, _: None = Depends(require_admin_access)):
             listen_sec=listen_sec,
             track_display=now_seg.get("label", ""),
         )
+        # Persist skip to play_history for cross-session anthem/skip detection
+        persona_store = getattr(state, "persona_store", None)
+        yt_id = (now_seg.get("metadata") or {}).get("youtube_id", "")
+        if persona_store and yt_id:
+            import asyncio
+
+            _task = asyncio.create_task(
+                persona_store.record_play(
+                    yt_id,
+                    persona_store._session_id,
+                    skipped=True,
+                    listen_duration_s=listen_sec,
+                )
+            )
+            _task.add_done_callback(lambda t: t.result() if not t.cancelled() and not t.exception() else None)
 
     request.app.state.skip_event.set()
     state.now_streaming = {"type": "skipping", "label": "Skipping...", "started": time.time(), "metadata": {}}

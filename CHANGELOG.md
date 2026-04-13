@@ -17,6 +17,11 @@ The current version source of truth is `pyproject.toml`.
 - **`ha_moments` API**: `/public-status` now includes `ha_moments` object with mood, weather, and last event (person-filtered, staleness-guarded). `/status` includes full `ha_details` for admin.
 - **Tiered HA prompt references**: When a mood scene is active, hosts may reference up to 2 home details (mood counts toward cap). Weather-mood fusion instruction when both are present.
 - **Numeric event passthrough**: Power sensors and other numeric-state entities now generate events correctly in `ha_enrichment.diff_states()`.
+- **Multi-session arc phases**: Hosts now warm up over sessions. Four relationship phases (stranger, acquaintance, friend, old_friend) computed from session count, each with phase-aware callback and joke budgets. Milestone sessions (1, 5, 10, 25, 50, 100) inject subtle acknowledgment directives into banter prompts.
+- **Song cues**: Machine-derived per-track memory. Anthem detection (played 3+ times, never skipped) and skip-bit detection (skipped 2+ times) create persistent cues. LLM can also generate per-track reaction cues during banter. Cues appear in banter prompts as "TRACK MEMORY" alongside legacy operator rules.
+- **Enhanced callbacks**: `callbacks_used` from LLM responses now support structured format `{"song": "...", "context": "..."}` alongside plain strings. Context describes WHY a song was referenced, enriching cross-session memory.
+- **Play history enrichment**: `skipped` and `listen_duration_s` columns added to `play_history` table, enabling cross-session anthem and skip-bit detection.
+- **`[persona]` config section**: `arc_thresholds`, `anthem_threshold`, `skip_bit_threshold` configurable in `radio.toml`.
 
 ### Fixed
 

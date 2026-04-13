@@ -74,157 +74,162 @@ enabled = false
 url = ""
 poll_interval = 60  # seconds between state refreshes
 
+[persona]
+arc_thresholds = [4, 11, 26]   # session counts for acquaintance, friend, old_friend
+anthem_threshold = 3            # plays without skip to declare anthem
+skip_bit_threshold = 2          # skips to declare skip-bit
+
 [ads]
 sfx_dir = "sfx"
 
 # ── Supermarkets ──
 [[ads.brands]]
-name = "Esselunga"
-tagline = "Ogni giorno, prezzi bassi."
+name = "Prezzoforte"
+tagline = "Prezzoforte. Conveniente. Sempre. Forse."
 category = "supermarket"
 recurring = true
 [ads.brands.campaign]
-premise = "Weekly offers that sound too good to be true, with increasingly dramatic comparisons to rival chains"
+premise = "Prezzoforte's legendary weekly offers: discounts so aggressive the staff look personally offended by them"
 sonic_signature = "chime+register_hit"
 format_pool = ["classic_pitch", "testimonial", "live_remote"]
 spokesperson = "hammer"
-escalation_rule = "Each ad reveals a more outrageous saving, building to absurd claims"
+escalation_rule = "Each ad reveals a more outrageous discount, building to prices that are clearly a mistake"
 
 [[ads.brands]]
-name = "Lidl Italia"
-tagline = "Lidl. La vita è più buona."
+name = "Sacchettino"
+tagline = "Sacchettino. Il risparmio che non ti aspetti."
 category = "supermarket"
 recurring = false
 
 [[ads.brands]]
-name = "Conad"
-tagline = "Persone oltre le cose."
+name = "Borsello & Figli"
+tagline = "Borsello & Figli. Da tre generazioni, non miglioriamo."
 category = "supermarket"
 recurring = false
 
 # ── Cars ──
 [[ads.brands]]
-name = "Fiat"
-tagline = "Fiat. Semplicemente avanti."
+name = "Velocino"
+tagline = "Velocino. L'auto elettrica che ti fa sentire italiano anche quando non lo sei."
 category = "cars"
 recurring = true
 [ads.brands.campaign]
-premise = "The new Fiat 600e: Italian style meets electric future, narrated with the passion of a Sunday drive through Toscana"
+premise = "The new Velocino Fulmine: an Italian electric car so passionate it occasionally refuses to charge out of spite"
 sonic_signature = "whoosh+sweep"
 format_pool = ["classic_pitch", "duo_scene", "live_remote"]
 spokesperson = "hammer"
-escalation_rule = "Each ad reveals another impossibly Italian feature of the car"
+escalation_rule = "Each ad reveals a more implausibly Italian feature — the horn plays O Sole Mio, the sat-nav argues back"
 
 [[ads.brands]]
-name = "Alfa Romeo"
-tagline = "La meccanica delle emozioni."
+name = "Stradabella"
+tagline = "Stradabella. Ogni curva, un capolavoro."
 category = "cars"
 recurring = false
 
 [[ads.brands]]
-name = "Jeep"
-tagline = "Non c'è strada che non sia la tua."
+name = "Motoretto"
+tagline = "Motoretto. Piccolo. Feroce. Parcheggiabile."
 category = "cars"
 recurring = false
 
 # ── Telecom ──
 [[ads.brands]]
-name = "TIM"
-tagline = "La forza delle connessioni."
+name = "TeleCuore"
+tagline = "TeleCuore. Il segnale che ti ama."
 category = "telecom"
 recurring = true
 [ads.brands.campaign]
-premise = "TIM's new unlimited plan: so much data, you'll never need to talk to anyone in person again"
+premise = "TeleCuore's new piano illimitato: so unlimited they haven't actually checked what the limit is"
 sonic_signature = "hotline_beep+chime"
 format_pool = ["classic_pitch", "institutional_psa", "testimonial"]
 spokesperson = "hammer"
-escalation_rule = "Each ad makes the unlimited plan sound more suspiciously unlimited"
+escalation_rule = "Each ad makes the unlimited plan sound more philosophically infinite and legally dubious"
 
 [[ads.brands]]
-name = "Vodafone Italia"
-tagline = "Insieme. Per il futuro."
+name = "Fibra Magica"
+tagline = "Fibra Magica. Connessi. Quasi sempre."
 category = "telecom"
 recurring = false
 
 [[ads.brands]]
-name = "WindTre"
-tagline = "Molto più avanti."
+name = "Prontissimo Mobile"
+tagline = "Prontissimo Mobile. Arriviamo. Prima o poi."
 category = "telecom"
 recurring = false
 
 # ── Banking ──
 [[ads.brands]]
-name = "Fineco"
-tagline = "La banca che semplifica la banca."
+name = "Bancone SpA"
+tagline = "Bancone SpA. I tuoi soldi, al sicuro da te."
 category = "banking"
 recurring = true
 [ads.brands.campaign]
-premise = "Fineco: banking so simple, even your nonno who still hides cash under the mattress can use it"
+premise = "Bancone SpA: the bank so bureaucratic it takes three forms to open a form to open an account"
 sonic_signature = "ding+startup_synth"
 format_pool = ["institutional_psa", "testimonial", "classic_pitch"]
 spokesperson = "bureaucrat"
-escalation_rule = "Each ad features a more technophobic Italian who was finally converted"
+escalation_rule = "Each ad features a more Kafkaesque banking procedure presented as a feature, not a bug"
 
 [[ads.brands]]
-name = "Poste Italiane"
-tagline = "Poste Italiane. Vicini a te."
+name = "Risparmiana"
+tagline = "Risparmiana. Metti da parte qualcosa, anche se non sai cosa."
 category = "banking"
 recurring = false
 
 # ── Food & Beverage ──
 [[ads.brands]]
-name = "Barilla"
-tagline = "Dove c'è Barilla, c'è casa."
+name = "Pastaforte"
+tagline = "Pastaforte. La pasta che ti vuole bene."
 category = "food"
 recurring = true
 [ads.brands.campaign]
-premise = "Barilla's new limited edition: pasta shapes inspired by Italian landmarks, stirring patriotic tears at every dinner table"
+premise = "Pastaforte's limited edition Forme d'Italia: pasta shaped like Italian landmarks, each one triggers a different regional argument"
 sonic_signature = "mandolin_sting"
 format_pool = ["classic_pitch", "late_night_whisper", "testimonial"]
 spokesperson = "witness"
-escalation_rule = "Each ad introduces a more emotionally devastating pasta shape"
+escalation_rule = "Each ad introduces a more emotionally devastating pasta shape — the Colosseo makes nonni weep, the Vesuvio causes scenes at dinner"
 
 [[ads.brands]]
-name = "Ferrero"
-tagline = "Una storia di passione e qualità."
+name = "Cioccolozzo"
+tagline = "Cioccolozzo. Perché no."
 category = "food"
 recurring = false
 
 [[ads.brands]]
-name = "Lavazza"
-tagline = "Più lo mandi giù, più ti tira su."
+name = "Caffè Turbino"
+tagline = "Caffè Turbino. Il caffè che ti rimette in piedi. Violentemente."
 category = "food"
 recurring = false
 
 # ── Fashion ──
 [[ads.brands]]
-name = "OVS"
-tagline = "It's my time."
+name = "ModaBloc"
+tagline = "ModaBloc. Vestiti bene. O almeno meglio di ieri."
 category = "fashion"
 recurring = false
 
 # ── Health / Pharma ──
 [[ads.brands]]
-name = "Moment"
-tagline = "Momento. Agisce in fretta contro il dolore."
+name = "Dolorfin"
+tagline = "Dolorfin. Agisce. Prima che tu voglia smettere."
 category = "pharma"
 recurring = true
 [ads.brands.campaign]
-premise = "Moment pain relief: for the headache of Italian bureaucracy, family dinners, and Monday mornings"
+premise = "Dolorfin pain relief: clinically tested on every Italian social obligation — family lunch, commute, bureaucratic queue"
 sonic_signature = "chime"
 format_pool = ["classic_pitch", "institutional_psa"]
 spokesperson = "bureaucrat"
-escalation_rule = "Each ad targets a more specifically Italian source of headache"
+escalation_rule = "Each ad targets a more specifically Italian source of suffering: the autogrill queue, the condominium meeting, the tax return"
 
 [[ads.brands]]
-name = "Bioscalin"
-tagline = "La scienza dei tuoi capelli."
+name = "Capellissimo"
+tagline = "Capellissimo. I capelli che hai sempre sognato. Circa."
 category = "pharma"
 recurring = false
 
 [[ads.brands]]
-name = "Enterogermina"
-tagline = "Riequilibra la tua flora intestinale."
+name = "Intestix"
+tagline = "Intestix. Perché la salute inizia dove non si parla a cena."
 category = "pharma"
 recurring = false
 

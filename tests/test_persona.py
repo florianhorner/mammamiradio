@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from mammamiradio.persona import ListenerPersona, PersonaStore
+from mammamiradio.persona import ListenerPersona, PersonaStore, compute_arc_phase
 
 
 @pytest.fixture()
@@ -223,3 +223,138 @@ async def test_callbacks_used_are_sanitized(store):
     # The instruction-like callback should be filtered
     for cb in persona.callbacks:
         assert cb["song"] == "(filtered)"
+
+
+# ---------------------------------------------------------------------------
+# Arc phase machine
+# ---------------------------------------------------------------------------
+
+
+def test_compute_arc_phase_stranger():
+    assert compute_arc_phase(0) == "stranger"
+    assert compute_arc_phase(1) == "stranger"
+    assert compute_arc_phase(3) == "stranger"
+
+
+def test_compute_arc_phase_acquaintance():
+    assert compute_arc_phase(4) == "acquaintance"
+    assert compute_arc_phase(10) == "acquaintance"
+
+
+def test_compute_arc_phase_friend():
+    assert compute_arc_phase(11) == "friend"
+    assert compute_arc_phase(25) == "friend"
+
+
+def test_compute_arc_phase_old_friend():
+    assert compute_arc_phase(26) == "old_friend"
+    assert compute_arc_phase(100) == "old_friend"
+
+
+def test_arc_phase_property():
+    p = ListenerPersona(session_count=15)
+    assert p.arc_phase == "friend"
+    assert p.callback_budget == 4
+    assert p.joke_budget == 3
+
+
+def test_arc_phase_budgets_scale():
+    stranger = ListenerPersona(session_count=0)
+    friend = ListenerPersona(session_count=15)
+    old = ListenerPersona(session_count=50)
+    assert stranger.callback_budget < friend.callback_budget < old.callback_budget
+    assert stranger.joke_budget <= friend.joke_budget <= old.joke_budget
+
+
+def test_milestone_detection():
+    p = ListenerPersona(session_count=5)
+    assert p.pending_milestone == 5
+
+    p = ListenerPersona(session_count=6)
+    assert p.pending_milestone is None
+
+
+def test_milestone_not_repeated():
+    p = ListenerPersona(session_count=5, arc_metadata={"milestones_fired": [5]})
+    assert p.pending_milestone is None
+
+
+@pytest.mark.asyncio
+async def test_consume_milestone(store):
+    await store.update_persona({})
+    for _ in range(5):
+        await store.increment_session()
+    persona = await store.get_persona()
+    assert persona.pending_milestone == 5
+    await store.consume_milestone()
+    persona = await store.get_persona()
+    assert persona.pending_milestone is None
+
+
+def test_to_prompt_context_uses_joke_budget():
+    p = ListenerPersona(
+        session_count=1,
+        running_jokes=["joke1", "joke2", "joke3", "joke4"],
+    )
+    ctx = p.to_prompt_context()
+    # stranger phase: joke_budget=1, so only last 1 joke shown
+    assert "joke4" in ctx
+    assert "joke1" not in ctx
+
+
+# ---------------------------------------------------------------------------
+# Enhanced callbacks (dict format)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_update_persona_dict_callbacks(store):
+    await store.update_persona({"callbacks_used": [{"song": "Volare", "context": "Marco's conspiracy"}]})
+    persona = await store.get_persona()
+    assert len(persona.callbacks) == 1
+    assert persona.callbacks[0]["song"] == "Volare"
+    assert persona.callbacks[0]["context"] == "Marco's conspiracy"
+
+
+@pytest.mark.asyncio
+async def test_update_persona_mixed_callbacks(store):
+    await store.update_persona(
+        {
+            "callbacks_used": [
+                "Nel Blu",
+                {"song": "Felicita", "context": "used as alarm clock"},
+            ]
+        }
+    )
+    persona = await store.get_persona()
+    assert len(persona.callbacks) == 2
+    assert persona.callbacks[0]["song"] == "Nel Blu"
+    assert persona.callbacks[0]["context"] == ""
+    assert persona.callbacks[1]["song"] == "Felicita"
+    assert persona.callbacks[1]["context"] == "used as alarm clock"
+
+
+# ---------------------------------------------------------------------------
+# Schema migration idempotency
+# ---------------------------------------------------------------------------
+
+
+def test_migrate_schema_idempotent(tmp_path):
+    """Running init_db twice doesn't error."""
+    from mammamiradio.sync import init_db
+
+    db_path = tmp_path / "test_migrate.db"
+    init_db(db_path)
+    init_db(db_path)  # Should not raise
+
+
+# ---------------------------------------------------------------------------
+# Play history with skip/duration
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_record_play_with_skip_data(store):
+    await store.record_play("yt_skip_test", "s1", skipped=True, listen_duration_s=12.5)
+    plays = await store.get_recent_plays(n=1)
+    assert len(plays) == 1

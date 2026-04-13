@@ -605,25 +605,33 @@ async def write_banter(
     recent = [_sanitize_prompt_data(t.display) for t in list(state.played_tracks)[-3:]]
     jokes = list(state.running_jokes)[-3:] if state.running_jokes else []
 
-    # Track rules — per-track flagged reactions
+    # Track memory — per-track song cues + legacy operator rules
     track_rules_block = ""
     if state.played_tracks:
         last_track = list(state.played_tracks)[-1]
-        if last_track.youtube_id:
+        yt_id = last_track.youtube_id
+        if yt_id:
             try:
-                from mammamiradio.track_rules import get_rules
+                from mammamiradio.song_cues import get_cues
 
                 db_path = config.cache_dir / "mammamiradio.db"
-                rules = get_rules(db_path, last_track.youtube_id)
-                if rules:
-                    rules_text = "\n".join(f"- {r}" for r in rules[:5])
+                cues = await get_cues(db_path, yt_id, limit=5)
+                if cues:
+                    cue_lines = []
+                    for c in cues:
+                        label = c["type"]
+                        text = c["text"]
+                        session = c.get("session")
+                        session_note = f" (session {session})" if session else ""
+                        cue_lines.append(f"- [{label}] {text}{session_note}")
+                    cues_text = "\n".join(cue_lines)
                     track_rules_block = (
-                        f"\nTRACK RULES for {_sanitize_prompt_data(last_track.display)}:\n"
-                        f"{rules_text}\n"
-                        "Use at least one of these reactions in the banter.\n"
+                        f"\nTRACK MEMORY for {_sanitize_prompt_data(last_track.display)}:\n"
+                        f"{cues_text}\n"
+                        "Weave at least one of these into the banter naturally.\n"
                     )
             except Exception:
-                logger.warning("Failed to load track rules for banter", exc_info=True)
+                logger.warning("Failed to load song cues for banter", exc_info=True)
 
     host_names = {h.name: h for h in config.hosts}
 
@@ -712,11 +720,32 @@ Don't over-explain. The uncanny part is that the DJ noticed IMMEDIATELY.
 
     # Compounding listener memory — persona built across sessions
     persona_block = ""
+    arc_phase_block = ""
     persona_store = getattr(state, "persona_store", None)
     if persona_store:
         try:
+            from mammamiradio.persona import _ARC_DIRECTIVES
+
             persona = await persona_store.get_persona()
             persona_ctx = persona.to_prompt_context()
+
+            # Arc phase directive — relationship stage shapes host behavior
+            phase = persona.arc_phase
+            directive = _ARC_DIRECTIVES.get(phase, "")
+            milestone = persona.pending_milestone
+            milestone_line = ""
+            if milestone:
+                milestone_line = f"\nMilestone: session #{milestone}. Acknowledge indirectly."
+            arc_phase_block = f"""
+<arc_phase>
+Phase: {phase} (session #{persona.session_count})
+Directive: {directive}{milestone_line}
+</arc_phase>
+"""
+            # Consume the milestone so it only fires once
+            if milestone:
+                await persona_store.consume_milestone()
+
             if persona_ctx:
                 persona_block = f"""
 <listener_memory>
@@ -764,7 +793,8 @@ Make this the focus of this banter break. It happened just now — react natural
   "persona_updates": {{
     "new_theories": ["new theory about the listener based on this interaction, or empty"],
     "new_jokes": ["any new running joke to carry across sessions, or empty"],
-    "callbacks_used": ["song titles you referenced from their history, or empty"]
+    "callbacks_used": [{{"song": "title", "context": "why you referenced it"}}],
+    "song_cues": [{{"youtube_id": "id of the track", "cue_text": "what the hosts said/did about it", "cue_type": "reaction"}}]
   }}"""
 
     prompt = f"""Write a short radio banter between the hosts. {_BANTER_EXCHANGE_COUNT} exchanges total.
@@ -775,7 +805,7 @@ Running jokes to optionally callback: {jokes if jokes else "none yet, you may se
 {mood_block}{weather_mood_fusion}<context_awareness>
 {context_block}
 </context_awareness>
-{track_rules_block}{reactive_block}{listener_request_block}{chaos_block}{new_listener_block}{listener_block}{persona_block}
+{track_rules_block}{reactive_block}{listener_request_block}{chaos_block}{new_listener_block}{listener_block}{arc_phase_block}{persona_block}
 Return JSON:
 {{"lines": [{{"host": "HostName", "text": "what they say"}}], "new_joke": "brief description of any new running joke or null"{persona_update_schema}}}"""
 
@@ -811,6 +841,26 @@ Return JSON:
                 await persona_store.update_persona(data["persona_updates"])
             except Exception:
                 logger.warning("Failed to persist persona updates", exc_info=True)
+
+            # Persist LLM-generated song cues (fire-and-forget)
+            llm_cues = data["persona_updates"].get("song_cues", [])
+            if isinstance(llm_cues, list) and llm_cues:
+                try:
+                    from mammamiradio.song_cues import add_cue
+
+                    db_path = config.cache_dir / "mammamiradio.db"
+                    persona = await persona_store.get_persona()
+                    for cue in llm_cues:
+                        if isinstance(cue, dict) and cue.get("youtube_id") and cue.get("cue_text"):
+                            await add_cue(
+                                db_path,
+                                cue["youtube_id"],
+                                cue.get("cue_type", "reaction"),
+                                cue["cue_text"],
+                                source_session=persona.session_count,
+                            )
+                except Exception:
+                    logger.warning("Failed to persist LLM song cues", exc_info=True)
 
         logger.info("Generated banter: %d lines", len(result))
         if return_listener_request_commit:

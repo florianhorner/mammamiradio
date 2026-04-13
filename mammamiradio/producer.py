@@ -68,13 +68,27 @@ logger = logging.getLogger(__name__)
 _background_tasks: set[asyncio.Task] = set()
 
 
-async def _record_motif(state: StationState, track) -> None:
-    """Record a played track as a motif in the listener persona (fire-and-forget)."""
+async def _record_motif(state: StationState, track, config=None) -> None:
+    """Record a played track as a motif and play history entry (fire-and-forget)."""
     persona_store = getattr(state, "persona_store", None)
     if not persona_store:
         return
     try:
         await persona_store.record_motif(track.artist, track.title)
+        # Also record to play_history for cross-session anthem/skip detection
+        yt_id = getattr(track, "youtube_id", "") or getattr(track, "spotify_id", "") or ""
+        if yt_id:
+            await persona_store.record_play(yt_id, persona_store._session_id, skipped=False)
+            # Fire-and-forget anthem/skip detection
+            if config:
+                from mammamiradio.song_cues import detect_anthem, detect_skip_bit
+
+                db_path = config.cache_dir / "mammamiradio.db"
+                persona_cfg = getattr(config, "persona", None)
+                anthem_t = persona_cfg.anthem_threshold if persona_cfg else 3
+                skip_t = persona_cfg.skip_bit_threshold if persona_cfg else 2
+                await detect_anthem(db_path, yt_id, threshold=anthem_t)
+                await detect_skip_bit(db_path, yt_id, threshold=skip_t)
     except Exception:
         logger.warning("Failed to record motif", exc_info=True)
 
@@ -662,7 +676,7 @@ async def run_producer(
                 _set_last_music_file(norm_path)
 
                 # Record track as a motif in listener persona (async, non-blocking)
-                task = asyncio.create_task(_record_motif(state, track))
+                task = asyncio.create_task(_record_motif(state, track, config))
                 _background_tasks.add(task)
                 task.add_done_callback(_background_tasks.discard)
 
