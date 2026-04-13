@@ -696,7 +696,14 @@ async def _persist_skipped_music(state: StationState, config, metadata: dict, *,
 
     persona_cfg = getattr(config, "persona", None)
     skip_t = persona_cfg.skip_bit_threshold if persona_cfg else 2
-    await detect_skip_bit(config.cache_dir / "mammamiradio.db", yt_id, threshold=skip_t)
+    is_new_skip_bit = await detect_skip_bit(config.cache_dir / "mammamiradio.db", yt_id, threshold=skip_t)
+
+    if is_new_skip_bit and not state.ha_pending_directive:
+        track_name = (metadata.get("title_only") or metadata.get("title") or "questa canzone")
+        state.ha_pending_directive = (
+            f"L'ascoltatore ha saltato '{track_name}' troppe volte — "
+            "reagisci in modo complice, scherzoso. Fai notare che la skippa sempre."
+        )
 
 
 async def _audio_generator(request: Request):

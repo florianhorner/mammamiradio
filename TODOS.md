@@ -21,14 +21,9 @@ FFmpeg loudnorm on Pi (aarch64) takes 75s per track. The producer queue (3 segme
 **Effort:** M (CC: ~2-3 hours) | **Files:** `mammamiradio/normalizer.py`, `mammamiradio/producer.py`, `mammamiradio/main.py`
 **Source:** Fifth live session, 2026-04-13
 
-## P2: Wire skip-bit detection into live reactive banter
-The skip-bit cue is correctly created when a listener skips a track twice (`detect_skip_bit` in `streamer.py:667`), but the boolean return value is discarded. The AI host never has a "caught you skipping it again!" moment in the current banter cycle.
-
-**Action:** In `_persist_skipped_music`, check the `detect_skip_bit` return value. When `True`, set `state.ha_pending_directive` with an Italian reactive line like "Florian ha saltato questa canzone per la Nth volta — reagisci in modo complice" so the next banter slot delivers the impossible moment live.
-
-**Why it matters:** This is the structural moat use case — real radio cannot do this. The data collection is already working; the reactive hook is the missing one-liner.
-
-**Effort:** S (CC: ~15 min) | **Files:** `mammamiradio/streamer.py:649`, `mammamiradio/models.py`
+## ~~P2: Wire skip-bit detection into live reactive banter~~ RESOLVED
+When `detect_skip_bit` returns True (new skip-bit threshold crossed), `_persist_skipped_music` now sets `state.ha_pending_directive` with an Italian reactive prompt. The next banter slot picks it up and the host calls out the repeated skip live.
+**Completed:** 2026-04-13
 **Source:** /plan-eng-review, 2026-04-13
 
 ## ~~Music catalog depth — multi-source rotation~~ RESOLVED

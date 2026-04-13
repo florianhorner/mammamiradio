@@ -232,6 +232,32 @@ async def test_skip_route_persists_music_skips_with_youtube_id():
 
 
 @pytest.mark.asyncio
+async def test_skip_bit_sets_pending_directive():
+    """When detect_skip_bit returns True, ha_pending_directive is set for reactive banter."""
+    app = _make_test_app()
+    persona_store = MagicMock()
+    persona_store._session_id = "session-3"
+    persona_store.record_play = AsyncMock()
+    app.state.station_state.persona_store = persona_store
+    app.state.station_state.now_streaming = {
+        "type": "music",
+        "label": "Hated Song",
+        "started": time.time() - 5,
+        "metadata": {"youtube_id": "yt_hated", "title_only": "Brutta Canzone"},
+    }
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    with patch("mammamiradio.song_cues.detect_skip_bit", new=AsyncMock(return_value=True)):
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            resp = await client.post("/api/skip")
+
+    assert resp.status_code == 200
+    directive = app.state.station_state.ha_pending_directive
+    assert "Brutta Canzone" in directive
+    assert "saltato" in directive or "skippa" in directive
+
+
+@pytest.mark.asyncio
 async def test_get_root_serves_listener_page():
     """Root serves the public listener page (no auth required)."""
     app = _make_test_app()
