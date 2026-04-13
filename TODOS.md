@@ -1,5 +1,26 @@
 # TODOs
 
+## P1: HA hardware optimization — Pi can't sustain playback
+FFmpeg loudnorm on Pi (aarch64) takes 75s per track. The producer queue (3 segments) drains faster than it refills, causing 30s+ dead air gaps. This wrecked a live magic moment (hosts said Florian's name, then silence).
+
+**Problems:**
+- Normalization cache not surviving container restarts (stored in `/data/tmp/` which gets cleared?)
+- Prewarm timeout (20s) is way too short for Pi — normalize alone takes 75s
+- Queue empty → silence instead of fallback audio
+- yt-dlp partial downloads passing through (Phil Collins 2.42s, Ultimo 6.12s — quality gate catches them but wastes a production slot)
+
+**Action:**
+1. Verify norm cache writes to `/data/cache/` not `/data/tmp/` — cache must survive restarts
+2. Pre-normalize N+1 tracks in background at boot (not just the first one)
+3. When queue is empty, serve a canned clip or previously-cached segment instead of silence
+4. Consider lower-cost FFmpeg preset for Pi (skip loudnorm? use `-af volume` instead?)
+5. Increase queue depth from 3 to 5+ on Pi-class hardware
+
+**Why it matters:** The product's value IS the magic moments. Dead air immediately after one destroys the illusion. This is the #1 blocker to mammamiradio being usable on HA hardware.
+
+**Effort:** M (CC: ~2-3 hours) | **Files:** `mammamiradio/normalizer.py`, `mammamiradio/producer.py`, `mammamiradio/main.py`
+**Source:** Fifth live session, 2026-04-13
+
 ## P2: Wire skip-bit detection into live reactive banter
 The skip-bit cue is correctly created when a listener skips a track twice (`detect_skip_bit` in `streamer.py:667`), but the boolean return value is discarded. The AI host never has a "caught you skipping it again!" moment in the current banter cycle.
 
@@ -50,6 +71,47 @@ Spotify AI DJ exists (launched 2023, expanding languages). No contingency plan i
 ## ~~P1: Casa card in listener.html (QA bug — deeper-ha-context)~~ RESOLVED
 Casa card now exists in `listener.html` and is bound to `ha_moments` from `/public-status`, matching dashboard behavior for public listeners.
 **Resolved:** 2026-04-13
+
+## P2: Queue starvation — watermark-based production urgency
+On Pi, the producer can't keep up with playback. The fix is a watermark system that adjusts normalization aggressiveness based on queue depth, borrowed from GStreamer's `queue2` and Liquidsoap's prefetch patterns.
+
+**Action:**
+1. Start normalizing track N+1 the moment track N begins playing (not when N ends) — the 180s playback window is more than enough for even 75s normalization
+2. Implement watermark thresholds: queue=0 → serve fallback immediately; queue=1 → spin up parallel normalization; queue≥3 → relax
+3. Measure actual normalization time at startup (short reference file), use it to set elastic lookahead
+4. Consider `asyncio.create_subprocess_exec` for FFmpeg calls so multiple normalize jobs can run concurrently without blocking the event loop
+
+**Why it matters:** The P0 dynaudnorm fix reduces per-track cost 5-8x, but the fundamental producer-consumer imbalance remains on very slow hardware. Watermarks make the system self-tuning.
+
+**Effort:** M (CC: ~2-3 hours) | **Files:** `mammamiradio/producer.py`, `mammamiradio/main.py`
+**Source:** research_queue_architecture.md, 2026-04-13
+
+## P2: yt-dlp download hardening
+Current yt-dlp config silently produces corrupt files when fragments fail. Three quick flags plus atomic downloads would eliminate most bad files at source.
+
+**Action:**
+1. Add `--throttled-rate 100K` — re-extract format URLs if download speed drops below 100 KB/s (prevents hour-long trickle downloads)
+2. Add `-P "temp:/tmp/ytdlp_work"` — download fragments to temp dir, atomic-move to cache only when fully assembled (prevents half-written files in cache)
+3. Add `--concurrent-fragments 2` — parallel fragment downloads reduce wall-clock time and window for network glitches
+4. Add `--check-formats` — verify formats are downloadable before selecting (filters out 403-prone format IDs)
+
+**Why it matters:** The P0 ffprobe pre-validation catches bad files after download. These flags prevent bad files from being created in the first place.
+
+**Effort:** S (CC: ~15 min) | **Files:** `mammamiradio/downloader.py`
+**Source:** research_ytdlp_quality.md, 2026-04-13
+
+## P2: Jamendo API as CC-licensed music fallback
+Jamendo offers 600k+ CC-licensed tracks via REST API with direct HTTP MP3 URLs — no yt-dlp, no fragmentation, no bot detection, no DRM. Free tier: 50k API calls/month.
+
+**Action:**
+1. Add Jamendo as a playlist source type alongside charts/local/yt-dlp
+2. Use for genre/mood-based radio when yt-dlp fails or as a zero-friction demo source
+3. Attribution required per CC license — add to banter/metadata
+
+**Why it matters:** yt-dlp reliability on Pi is structurally fragile (YouTube bot detection, fragment failures). A CC source with plain HTTP downloads is 100% reliable and legally clean.
+
+**Effort:** M (CC: ~2 hours) | **Files:** `mammamiradio/playlist.py`, `mammamiradio/downloader.py`
+**Source:** research_ytdlp_quality.md, 2026-04-13
 
 ## P2: Distribution strategy
 No landing page, no hosted demo, no analytics, no invite loop. The product has no way to be discovered. PR readiness != adoption readiness.
