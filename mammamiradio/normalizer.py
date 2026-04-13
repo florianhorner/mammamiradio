@@ -107,7 +107,7 @@ def normalize(
     # Broadcast EQ for music: tonal consistency across yt-dlp rips.
     # Applied *before* loudnorm so the level measurement sees the equalized signal.
     # Kept gentle — this is correction, not creative processing.
-    _MUSIC_EQ = (
+    music_eq_chain = (
         "highpass=f=35,"                          # sub-bass rumble from video codec leakage
         "equalizer=f=200:t=o:w=150:g=-2,"         # de-mud (compressed video audio)
         "equalizer=f=3000:t=o:w=1000:g=1.5,"      # presence / clarity
@@ -133,10 +133,7 @@ def normalize(
         else:
             norm_part = "loudnorm=I=-16:LRA=11:TP=-1.5"
         silence_trim = "silenceremove=start_periods=0:stop_periods=1:stop_threshold=-50dB:stop_duration=0.3"
-        if music_eq:
-            audio_filter = f"{_MUSIC_EQ},{norm_part},{silence_trim}"
-        else:
-            audio_filter = f"{norm_part},{silence_trim}"
+        audio_filter = f"{music_eq_chain},{norm_part},{silence_trim}" if music_eq else f"{norm_part},{silence_trim}"
     else:
         audio_filter = "silenceremove=start_periods=0:stop_periods=1:stop_threshold=-50dB:stop_duration=0.3"
 
