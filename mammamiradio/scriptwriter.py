@@ -1084,6 +1084,20 @@ Return JSON:
             mood,
             roles_found or "default",
         )
+        # Pharma brands get a fast-talking disclaimer — real Italian radio style
+        if brand.category == "pharma":
+            parts.append(
+                AdPart(
+                    type="voice",
+                    text=(
+                        "È un medicinale a base di ibuprofene. Leggere attentamente "
+                        "il foglio illustrativo. Autorizzazione del 10 dicembre 2015. "
+                        "Non somministrare ai bambini al di sotto dei 12 anni."
+                    ),
+                    role="disclaimer_goblin",
+                )
+            )
+
         return AdScript(
             brand=brand.name,
             parts=parts,

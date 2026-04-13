@@ -65,7 +65,7 @@ def _charts_source(track_count: int) -> PlaylistSource:
     )
 
 
-def _fetch_current_italy_charts(limit: int = 20, max_per_artist: int = 2) -> list[Track]:
+def _fetch_current_italy_charts(limit: int = 50, max_per_artist: int = 2) -> list[Track]:
     """Fetch a live Top Songs Italy list from Apple Music charts RSS."""
     try:
         with urlopen(_APPLE_MUSIC_IT_CHARTS_URL, timeout=4.0) as resp:
@@ -195,3 +195,14 @@ def fetch_playlist(config: StationConfig) -> list[Track]:
     """Legacy wrapper that preserves charts -> demo fallback behavior."""
     tracks, _, _ = fetch_startup_playlist(config)
     return tracks
+
+
+def fetch_chart_refresh(existing_ids: set[str]) -> list[Track]:
+    """Fetch the latest Italian charts and return only tracks not already in the playlist.
+
+    Used for mid-session playlist refreshes: merges new chart entries into a
+    live session without restarting the producer or resetting play history.
+    Returns an empty list if the fetch fails or produces no new tracks.
+    """
+    fresh = _fetch_current_italy_charts()
+    return [t for t in fresh if t.spotify_id not in existing_ids]

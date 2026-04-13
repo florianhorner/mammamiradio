@@ -16,6 +16,30 @@ logger = logging.getLogger(__name__)
 _CACHE_PROTECTED = {"mammamiradio.db", "playlist_source.json", "session_stopped.flag"}
 
 
+def purge_suspect_cache_files(cache_dir: Path, min_size_bytes: int = 10240) -> int:
+    """Delete cached files smaller than *min_size_bytes* (likely failed downloads).
+
+    A failed yt-dlp run can cache a silence placeholder that's only a few KB.
+    Subsequent boots serve silence from cache without re-downloading.  Purging
+    these on startup forces a fresh download.
+    """
+    if not cache_dir.is_dir():
+        return 0
+    purged = 0
+    for f in cache_dir.glob("*.mp3"):
+        if f.name in _CACHE_PROTECTED:
+            continue
+        try:
+            size = f.stat().st_size
+        except OSError:
+            continue
+        if size < min_size_bytes:
+            logger.warning("Purging suspect cache file (too small): %s (%d bytes)", f.name, size)
+            f.unlink(missing_ok=True)
+            purged += 1
+    return purged
+
+
 def evict_cache_lru(cache_dir: Path, max_size_mb: int) -> None:
     """Delete oldest MP3s from cache_dir until total size is under max_size_mb.
 

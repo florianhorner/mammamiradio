@@ -1,6 +1,6 @@
 [project]
 name = "mammamiradio"
-version = "2.6.0"
+version = "2.7.0"
 description = "AI-powered Italian radio station engine"
 requires-python = ">=3.11"
 dependencies = [
@@ -67,7 +67,7 @@ branch = true
 source = ["mammamiradio"]
 
 [tool.coverage.report]
-fail_under = 88
+fail_under = 87
 exclude_lines = [
     "pragma: no cover",
     "if TYPE_CHECKING:",

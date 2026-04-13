@@ -39,7 +39,7 @@ html {
 body {
   font-family: var(--font-body); color: var(--cream);
   line-height: 1.5; padding: 0 24px 120px;
-  max-width: 1200px; margin: 0 auto;
+  max-width: 960px; margin: 0 auto;
 }
 body::before {
   content: ''; position: fixed; top: -120px; right: 20%; z-index: 0;
@@ -84,7 +84,7 @@ h1 {
   position: relative; z-index: 1;
   background: var(--sienna);
   border: 1px solid rgba(245,237,216,0.1);
-  border-top: 2px solid var(--sun2);
+  border-top: 1px solid rgba(245,237,216,0.14);
   border-radius: 10px;
   padding: 18px 20px;
   margin-bottom: 12px;
@@ -95,6 +95,7 @@ h1 {
 }
 .now-card {
   overflow: visible;
+  border-top: 2px solid rgba(236,204,48,0.5);
 }
 .setup-card { border-top-color: var(--sun); }
 .setup-headline {
@@ -590,13 +591,14 @@ h1 {
 </div>
 
 <!-- TAB NAV -->
-<div class="tab-nav">
-  <button class="tab-btn" data-tab="music" onclick="switchTab('music')">Music</button>
-  <button class="tab-btn" data-tab="radio" onclick="switchTab('radio')">Radio<span class="tab-alert" aria-hidden="true"></span></button>
+<div class="tab-nav" role="tablist" aria-label="Admin panels">
+  <button class="tab-btn" role="tab" aria-selected="true" aria-controls="tab-panel-music" id="tab-music" data-tab="music" onclick="switchTab('music')">Music</button>
+  <button class="tab-btn" role="tab" aria-selected="false" aria-controls="tab-panel-radio" id="tab-radio" data-tab="radio" onclick="switchTab('radio')">Radio<span class="tab-alert" aria-hidden="true"></span></button>
+  <button class="tab-btn" role="tab" aria-selected="false" aria-controls="tab-panel-engine" id="tab-engine" data-tab="engine" onclick="switchTab('engine')">Engine Room</button>
 </div>
 
 <!-- TAB: MUSIC -->
-<div class="tab-pane" data-tab="music">
+<div class="tab-pane" role="tabpanel" id="tab-panel-music" aria-labelledby="tab-music" data-tab="music">
 
   <!-- UP NEXT -->
   <div class="card">
@@ -624,7 +626,7 @@ h1 {
 </div><!-- /tab music -->
 
 <!-- TAB: RADIO -->
-<div class="tab-pane" data-tab="radio">
+<div class="tab-pane" role="tabpanel" id="tab-panel-radio" aria-labelledby="tab-radio" data-tab="radio">
 
   <!-- Left column: status/health cards -->
   <div class="radio-col-left">
@@ -740,6 +742,26 @@ h1 {
 
 </div><!-- /tab radio -->
 
+<!-- TAB: ENGINE ROOM -->
+<div class="tab-pane" role="tabpanel" id="tab-panel-engine" aria-labelledby="tab-engine" data-tab="engine">
+
+  <div class="card">
+    <div class="card-label">Runtime</div>
+    <div id="engineRuntime" style="font-family:var(--font-mono);font-size:12px;line-height:1.8;color:var(--text-secondary)">Loading...</div>
+  </div>
+
+  <div class="card">
+    <div class="card-label">Segment Counts</div>
+    <div id="engineSegments" style="font-family:var(--font-mono);font-size:12px;line-height:1.8;color:var(--text-secondary)"></div>
+  </div>
+
+  <div class="card">
+    <div class="card-label">Capabilities</div>
+    <div id="engineCaps" style="font-family:var(--font-mono);font-size:12px;line-height:1.8;color:var(--text-secondary)"></div>
+  </div>
+
+</div><!-- /tab engine -->
+
 <div class="toast" id="toast"></div>
 
 <script>
@@ -764,7 +786,11 @@ async function api(m,p,b){const o={method:m,headers:H()};if(b)o.body=JSON.string
 
 // ── Tab switching ──
 function switchTab(name) {
-  document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === name));
+  document.querySelectorAll('.tab-btn').forEach(b => {
+    const active = b.dataset.tab === name;
+    b.classList.toggle('active', active);
+    b.setAttribute('aria-selected', active ? 'true' : 'false');
+  });
   document.querySelectorAll('.tab-pane').forEach(p => p.classList.toggle('active', p.dataset.tab === name));
   localStorage.setItem('adminTab', name);
 }
@@ -1215,6 +1241,7 @@ async function refresh(){
     updateListenerRequests(lrData.requests||[]);
     renderSetup(setup);
     updatePaceCounters(_st.pacing);
+    updateEngineRoom(_st,_caps);
     if(_st.session_stopped!==undefined)updateStopState(_st.session_stopped);
     if(!_paceOk&&_st.pacing){_paceOk=true;
       document.getElementById('pBanter').value=_st.pacing.songs_between_banter;document.getElementById('pvBanter').textContent=_st.pacing.songs_between_banter;
@@ -1223,6 +1250,39 @@ async function refresh(){
     }
     if(!_hostsOk){_hostsOk=true;const r=await fetch('/api/hosts',{headers:H()});renderHosts((await r.json()).hosts||[])}
   }catch(e){console.error('refresh',e)}
+}
+
+// ── Engine Room ──
+function updateEngineRoom(st,caps){
+  const rt=document.getElementById('engineRuntime');
+  if(!rt)return;
+  const uptime=(st.uptime_sec||st.uptime_s)?Math.round((st.uptime_sec||st.uptime_s)/60)+'m':'—';
+  const qd=st.queue_depth!=null?st.queue_depth:'—';
+  const pl=st.playlist?st.playlist.length:'—';
+  const listeners=st.listeners?st.listeners.active:(st.listeners_active||0);
+  rt.innerHTML=[
+    'Uptime: <strong>'+uptime+'</strong>',
+    'Queue depth: <strong>'+qd+'</strong> segments buffered',
+    'Playlist: <strong>'+pl+'</strong> tracks',
+    'Listeners: <strong>'+listeners+'</strong> (peak: '+(st.listeners?st.listeners.peak:'—')+')',
+    'Segments produced: <strong>'+(st.segments_produced||'—')+'</strong>',
+  ].join('<br>');
+
+  const seg=document.getElementById('engineSegments');
+  const log=st.produced_log||[];
+  const counts={};log.forEach(e=>{counts[e.type]=(counts[e.type]||0)+1});
+  seg.innerHTML=Object.entries(counts).map(([k,v])=>k+': <strong>'+v+'</strong>').join('<br>')||'No segments yet';
+
+  const ce=document.getElementById('engineCaps');
+  if(caps&&caps.capabilities){
+    const c=caps.capabilities;
+    ce.innerHTML=[
+      'Tier: <strong>'+(caps.tier_label||caps.tier||'—')+'</strong>',
+      'Anthropic: '+(c.anthropic_key?'<strong style="color:var(--ok)">✓ connected</strong>':'<strong style="color:var(--warning)">✕ not set</strong>'),
+      'OpenAI: '+(c.openai?'<strong style="color:var(--ok)">✓ available</strong>':'—'),
+      'Home Assistant: '+(c.ha?'<strong style="color:var(--ok)">✓ connected</strong>':'disabled'),
+    ].join('<br>');
+  }
 }
 
 // ── Keyboard shortcuts ──

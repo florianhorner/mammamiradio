@@ -322,15 +322,15 @@ async def test_move_to_next_valid(tmp_path):
     assert resp.status_code == 200
     body = resp.json()
     assert body["ok"] is True
-    assert body["purged"] == 1
     # move_to_next pins the track instead of reordering the playlist
     assert app.state.station_state.pinned_track is not None
     assert app.state.station_state.pinned_track.title == "Song C"
     assert app.state.station_state.force_next == SegmentType.MUSIC
     assert app.state.station_state.playlist_revision == starting_revision + 1
-    assert app.state.station_state.queued_segments == []
-    assert app.state.queue.qsize() == 0
-    assert not queued_file.exists()
+    # Pre-rendered segments are intentionally preserved — no purge on move_to_next
+    assert app.state.station_state.queued_segments == [{"type": "banter", "label": "Queued"}]
+    assert app.state.queue.qsize() == 1
+    assert queued_file.exists()
 
 
 @pytest.mark.asyncio
@@ -1382,3 +1382,147 @@ async def test_credentials_saves_valid_key(tmp_path):
     body = resp.json()
     assert body["ok"] is True
     assert "ANTHROPIC_API_KEY" in body["saved"]
+
+
+# ---------------------------------------------------------------------------
+# Clip sharing endpoints
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=False)
+def _clear_clip_rate():
+    """Clear clip rate limiter state before each clip test."""
+    from mammamiradio.streamer import _clip_rate
+
+    _clip_rate.clear()
+    yield
+    _clip_rate.clear()
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_clear_clip_rate")
+async def test_clip_create_empty_ring_buffer():
+    """POST /api/clip returns error when ring buffer is empty."""
+    app = _make_test_app()
+    from collections import deque
+
+    app.state.clip_ring_buffer = deque(maxlen=240)
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.post("/api/clip")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ok"] is False
+    assert "No audio" in body["error"] or "Buffer" in body["error"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_clear_clip_rate")
+async def test_clip_create_no_ring_buffer():
+    """POST /api/clip returns error when clip_ring_buffer is missing."""
+    app = _make_test_app()
+    # No clip_ring_buffer set at all
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.post("/api/clip")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ok"] is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_clear_clip_rate")
+async def test_clip_create_with_data(tmp_path):
+    """POST /api/clip extracts and saves a clip when buffer has data."""
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path / "cache"
+    app.state.config.cache_dir.mkdir()
+    app.state.config.audio.bitrate = 192
+    from collections import deque
+
+    ring = deque(maxlen=240)
+    # Fill with some fake audio chunks
+    for _ in range(10):
+        ring.append(b"\xff" * 4096)
+    app.state.clip_ring_buffer = ring
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.post("/api/clip")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ok"] is True
+    assert "clip_id" in body
+    assert body["url"].startswith("/clips/")
+
+
+@pytest.mark.asyncio
+async def test_clip_serve_valid(tmp_path):
+    """GET /clips/{id}.mp3 serves an existing clip file."""
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path / "cache"
+    clips_dir = app.state.config.cache_dir / "clips"
+    clips_dir.mkdir(parents=True)
+    clip_file = clips_dir / "abc123.mp3"
+    clip_file.write_bytes(b"\xff" * 1000)
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.get("/clips/abc123.mp3")
+    assert resp.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_clip_serve_missing(tmp_path):
+    """GET /clips/{id}.mp3 returns 404 for nonexistent clip."""
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path / "cache"
+    (tmp_path / "cache" / "clips").mkdir(parents=True)
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.get("/clips/nonexistent.mp3")
+    assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_clip_serve_path_traversal(tmp_path):
+    """GET /clips/{id}.mp3 rejects clip IDs containing '..'."""
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path / "cache"
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        # Use a clip_id that contains '..' but no slashes (slashes won't match the route)
+        resp = await client.get("/clips/..evil..thing.mp3")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ok"] is False
+    assert "Invalid" in body["error"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_clear_clip_rate")
+async def test_clip_rate_limiting(tmp_path):
+    """POST /api/clip rate limits to 1 clip per 10s per IP."""
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path / "cache"
+    app.state.config.cache_dir.mkdir()
+    app.state.config.audio.bitrate = 192
+    from collections import deque
+
+    ring = deque(maxlen=240)
+    for _ in range(10):
+        ring.append(b"\xff" * 4096)
+    app.state.clip_ring_buffer = ring
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        # First request should succeed
+        resp1 = await client.post("/api/clip")
+        assert resp1.status_code == 200
+        assert resp1.json()["ok"] is True
+
+        # Second request within 10s should be rate limited
+        resp2 = await client.post("/api/clip")
+        assert resp2.status_code == 429

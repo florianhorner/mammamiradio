@@ -53,15 +53,29 @@ def _gate_after(onset_sec: float) -> str:
     return f"if(gte(t\\,{_fmt_num(onset)})\\,1\\,0)"
 
 
-def normalize(input_path: Path, output_path: Path, config=None) -> Path:
-    """Re-encode an input file to the station's target loudness and format."""
+def normalize(input_path: Path, output_path: Path, config=None, *, loudnorm: bool = True) -> Path:
+    """Re-encode an input file to the station's target loudness and format.
+
+    Set loudnorm=False for intermediate files that will receive a final loudnorm
+    pass later (e.g. individual TTS lines before dialogue assembly). This runs
+    ~3x faster on constrained hardware — just re-encodes to station format without
+    the EBU R128 analysis pass. Silence trimming is still applied.
+    """
     sample_rate = str(config.audio.sample_rate) if config else "48000"
     channels = str(config.audio.channels) if config else "2"
     bitrate = f"{config.audio.bitrate}k" if config else "192k"
 
+    audio_filter = (
+        "loudnorm=I=-16:LRA=11:TP=-1.5,silenceremove=start_periods=0:stop_periods=1:stop_threshold=-50dB:stop_duration=0.3"
+        if loudnorm
+        else "silenceremove=start_periods=0:stop_periods=1:stop_threshold=-50dB:stop_duration=0.3"
+    )
+
     cmd = [
         "ffmpeg",
         "-y",
+        "-threads",
+        "1",
         "-i",
         str(input_path),
         "-vn",
@@ -72,13 +86,13 @@ def normalize(input_path: Path, output_path: Path, config=None) -> Path:
         "-b:a",
         bitrate,
         "-filter:a",
-        "loudnorm=I=-16:LRA=11:TP=-1.5,silenceremove=start_periods=0:stop_periods=1:stop_threshold=-50dB:stop_duration=0.3",
+        audio_filter,
         "-f",
         "mp3",
         str(output_path),
     ]
     _run_ffmpeg(cmd, f"normalize {input_path.name}")
-    logger.info("Normalized: %s -> %s", input_path.name, output_path.name)
+    logger.info("Normalized%s: %s -> %s", "" if loudnorm else " (fast)", input_path.name, output_path.name)
     return output_path
 
 
@@ -157,7 +171,7 @@ def generate_tone(output_path: Path, freq_hz: float = 880, duration_sec: float =
         "-i",
         f"sine=frequency={freq_hz}:duration={duration_sec}",
         "-af",
-        f"afade=t=in:d={fade},afade=t=out:st={duration_sec - fade}:d={fade}",
+        f"afade=t=in:d={fade},afade=t=out:st={duration_sec - fade}:d={fade},volume=0.35",
         "-ar",
         "48000",
         "-ac",
@@ -580,7 +594,7 @@ def generate_bumper_jingle(output_path: Path, duration_sec: float = 1.5) -> Path
         "-i",
         f"aevalsrc={expr}|{expr}:d={d}:s=48000:c=stereo",
         "-af",
-        f"volume=1.8,aecho=0.8:0.7:30|60|90:0.25|0.15|0.08,afade=t=in:d={fade},afade=t=out:st={d - fade}:d={fade}",
+        f"volume=0.45,aecho=0.8:0.7:30|60|90:0.25|0.15|0.08,afade=t=in:d={fade},afade=t=out:st={d - fade}:d={fade}",
         *_MP3_OUTPUT_ARGS,
         "-t",
         str(d),
@@ -725,7 +739,7 @@ def generate_station_id_bed(
 
     mix_inputs = "".join(f"[{ch}]" for ch in labels)
     filter_parts.append(
-        f"{mix_inputs}amix=inputs={len(notes)}:duration=longest,volume=1.5,"
+        f"{mix_inputs}amix=inputs={len(notes)}:duration=longest,volume=0.4,"
         f"aecho=0.8:0.7:40|80:0.3|0.2,"
         f"afade=t=in:d={fade},afade=t=out:st={duration_sec - fade * 2}:d={fade * 2}[out]"
     )
@@ -868,6 +882,74 @@ def mix_ad_with_bed(voiceover_path: Path, output_path: Path) -> Path:
     ]
     _run_ffmpeg(cmd, f"mix_ad_with_bed {voiceover_path.name}")
     logger.info("Ad bed mix: %s -> %s", voiceover_path.name, output_path.name)
+    return output_path
+
+
+def mix_quiet_bleed(
+    base_path: Path,
+    bleed_path: Path,
+    output_path: Path,
+    bleed_volume_db: float = -22.0,
+    bleed_duration_sec: float = 4.0,
+) -> Path:
+    """Mix a very quiet snippet of *bleed_path* under the start of *base_path*.
+
+    Creates the "studio mic left on" atmosphere — faint Italian voices under
+    a music segment.  The bleed is faded in/out so it never pops.
+    """
+    fade = min(0.8, bleed_duration_sec / 3)
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-i",
+        str(base_path),
+        "-i",
+        str(bleed_path),
+        "-filter_complex",
+        (
+            f"[1:a]atrim=0:{bleed_duration_sec},"
+            f"volume={bleed_volume_db}dB,"
+            f"afade=t=in:d={fade},afade=t=out:st={bleed_duration_sec - fade}:d={fade}[bleed];"
+            "[0:a][bleed]amix=inputs=2:duration=first:dropout_transition=0,"
+            "loudnorm=I=-16:LRA=11:TP=-1.5[out]"
+        ),
+        "-map",
+        "[out]",
+        *_MP3_OUTPUT_ARGS,
+        str(output_path),
+    ]
+    _run_ffmpeg(cmd, "studio bleed mix")
+    return output_path
+
+
+def mix_oneshot_sfx(
+    base_path: Path,
+    sfx_path: Path,
+    output_path: Path,
+    offset_sec: float = 0.0,
+    sfx_volume_db: float = -18.0,
+) -> Path:
+    """Mix a short one-shot SFX into *base_path* at *offset_sec*."""
+    delay_ms = int(offset_sec * 1000)
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-i",
+        str(base_path),
+        "-i",
+        str(sfx_path),
+        "-filter_complex",
+        (
+            f"[1:a]volume={sfx_volume_db}dB,adelay={delay_ms}|{delay_ms}[sfx];"
+            "[0:a][sfx]amix=inputs=2:duration=first:dropout_transition=0,"
+            "loudnorm=I=-16:LRA=11:TP=-1.5[out]"
+        ),
+        "-map",
+        "[out]",
+        *_MP3_OUTPUT_ARGS,
+        str(output_path),
+    ]
+    _run_ffmpeg(cmd, "oneshot SFX mix")
     return output_path
 
 

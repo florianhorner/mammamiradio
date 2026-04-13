@@ -378,6 +378,9 @@ class StationState:
     queued_segments: list[dict] = field(default_factory=list)
     # Stream-side log (when segments actually play, not when produced)
     stream_log: deque[SegmentLogEntry] = field(default_factory=lambda: deque(maxlen=50))
+    # Recent generated banter clips that have actually started streaming.
+    # Producer may mix these under future music for "studio bleed".
+    recent_banter_paths: deque[Path] = field(default_factory=lambda: deque(maxlen=5))
     # Home Assistant context (natural language summary of home state)
     ha_context: str = ""
     ha_events_summary: str = ""
@@ -468,6 +471,9 @@ class StationState:
         # Track canned banter clips at stream time (shareware trial)
         if segment.metadata.get("canned"):
             self.canned_clips_streamed += 1
+        # Only add to studio-bleed pool once banter truly starts streaming.
+        if segment.type == SegmentType.BANTER and not segment.metadata.get("canned"):
+            self.recent_banter_paths.append(segment.path)
         self.now_streaming = {
             "type": seg_type,
             "label": label,

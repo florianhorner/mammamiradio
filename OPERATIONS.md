@@ -55,11 +55,15 @@ Shared Conductor scripts live in [`conductor.json`](conductor.json):
 
 Public routes:
 
-- `/listen`
+- `/` (listener dashboard)
+- `/listen` (legacy, redirects to /)
 - `/stream`
 - `/healthz`
 - `/readyz`
 - `/public-status`
+- `/api/clip` (rate-limited, 1 per 10s per IP)
+- `/clips/{id}.mp3` (no auth, for sharing)
+- `/api/listener-request`
 
 The read-only sidecar monitor in `scripts/stream_watch_server.py` is intentionally limited to `/public-status`, `/healthz`, and `/readyz` so it still works when admin auth is enabled.
 
@@ -85,6 +89,11 @@ Admin routes:
 - `/api/trigger`
 - `/api/stop`
 - `/api/resume`
+- `/api/track-rules`
+- `/api/listener-requests`
+- `/api/playlist/add-external`
+- `/api/hosts`, `/api/hosts/{name}/personality`
+- `/api/pacing`
 
 ## Recommended production shape
 

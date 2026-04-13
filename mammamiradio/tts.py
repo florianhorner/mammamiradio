@@ -35,6 +35,11 @@ _instructions_cache: dict[int, str] = {}
 _openai_client = None
 _openai_client_key: str = ""
 
+# Cap concurrent TTS + FFmpeg jobs to avoid CPU/thermal spikes on constrained hardware
+# (e.g. Home Assistant Green — fanless ARM SoC). Two slots let one TTS+normalize and
+# one SFX/bed generation overlap without saturating all cores.
+_HEAVY_SEM = asyncio.Semaphore(2)
+
 
 def _openai_instructions_for_host(host: HostPersonality) -> str:
     """Build OpenAI TTS instructions from host personality axes and style.
@@ -88,6 +93,7 @@ async def synthesize_openai(
     output_path: Path,
     *,
     instructions: str = "",
+    loudnorm: bool = True,
 ) -> Path:
     """Render text with OpenAI gpt-4o-mini-tts, then normalize to station settings."""
     api_key = os.getenv("OPENAI_API_KEY", "")
@@ -113,7 +119,7 @@ async def synthesize_openai(
     )
     raw_path.write_bytes(audio_bytes)
 
-    await loop.run_in_executor(None, normalize, raw_path, output_path)
+    await loop.run_in_executor(None, lambda: normalize(raw_path, output_path, loudnorm=loudnorm))
     raw_path.unlink(missing_ok=True)
 
     logger.info("Synthesized (OpenAI): %s (%s)", output_path.name, voice)
@@ -130,16 +136,23 @@ async def synthesize(
     engine: str = "edge",
     edge_fallback_voice: str = "",
     openai_instructions: str = "",
+    loudnorm: bool = True,
 ) -> Path:
     """Render text via the chosen TTS engine, then normalize to station output settings.
 
     engine="openai" uses OpenAI gpt-4o-mini-tts. Falls back to edge-tts if
     OPENAI_API_KEY is missing. When falling back, uses edge_fallback_voice if set.
+
+    loudnorm=False skips the EBU R128 pass — use for intermediate lines that will
+    be assembled and loudnorm'd as a single unit by the caller.
     """
     if engine == "openai":
         if os.getenv("OPENAI_API_KEY", ""):
             try:
-                return await synthesize_openai(text, voice, output_path, instructions=openai_instructions)
+                async with _HEAVY_SEM:
+                    return await synthesize_openai(
+                        text, voice, output_path, instructions=openai_instructions, loudnorm=loudnorm
+                    )
             except Exception as e:
                 logger.warning("OpenAI TTS failed, falling back to edge-tts: %s", e)
         else:
@@ -148,37 +161,38 @@ async def synthesize(
         if edge_fallback_voice:
             voice = edge_fallback_voice
 
-    try:
-        comm = edge_tts.Communicate(text, voice, rate=rate or "+0%", pitch=pitch or "+0Hz")
-        raw_path = output_path.with_suffix(".raw.mp3")
-        await asyncio.wait_for(comm.save(str(raw_path)), timeout=15.0)
+    async with _HEAVY_SEM:
+        try:
+            comm = edge_tts.Communicate(text, voice, rate=rate or "+0%", pitch=pitch or "+0Hz")
+            raw_path = output_path.with_suffix(".raw.mp3")
+            await asyncio.wait_for(comm.save(str(raw_path)), timeout=15.0)
 
-        loop = asyncio.get_running_loop()
-        await loop.run_in_executor(None, normalize, raw_path, output_path)
-        raw_path.unlink(missing_ok=True)
+            loop = asyncio.get_running_loop()
+            await loop.run_in_executor(None, lambda: normalize(raw_path, output_path, loudnorm=loudnorm))
+            raw_path.unlink(missing_ok=True)
 
-        logger.info("Synthesized: %s (%s)", output_path.name, voice)
-        return output_path
-    except Exception as e:
-        logger.error("TTS failed with %s: %s", voice, e)
-        # Retry with a fallback voice before resorting to silence
-        fallback = "it-IT-DiegoNeural"
-        if voice != fallback:
-            try:
-                logger.info("Retrying TTS with fallback voice: %s", fallback)
-                comm = edge_tts.Communicate(text, fallback, rate=rate or "+0%", pitch=pitch or "+0Hz")
-                raw_path = output_path.with_suffix(".raw.mp3")
-                await asyncio.wait_for(comm.save(str(raw_path)), timeout=15.0)
-                loop = asyncio.get_running_loop()
-                await loop.run_in_executor(None, normalize, raw_path, output_path)
-                raw_path.unlink(missing_ok=True)
-                logger.info("Fallback synthesized: %s (%s)", output_path.name, fallback)
-                return output_path
-            except Exception as e2:
-                logger.error("Fallback TTS also failed: %s", e2)
-        loop = asyncio.get_running_loop()
-        await loop.run_in_executor(None, generate_silence, output_path, 2.0)
-        return output_path
+            logger.info("Synthesized: %s (%s)", output_path.name, voice)
+            return output_path
+        except Exception as e:
+            logger.error("TTS failed with %s: %s", voice, e)
+            # Retry with a fallback voice before resorting to silence
+            fallback = "it-IT-DiegoNeural"
+            if voice != fallback:
+                try:
+                    logger.info("Retrying TTS with fallback voice: %s", fallback)
+                    comm = edge_tts.Communicate(text, fallback, rate=rate or "+0%", pitch=pitch or "+0Hz")
+                    raw_path = output_path.with_suffix(".raw.mp3")
+                    await asyncio.wait_for(comm.save(str(raw_path)), timeout=15.0)
+                    loop = asyncio.get_running_loop()
+                    await loop.run_in_executor(None, lambda: normalize(raw_path, output_path, loudnorm=loudnorm))
+                    raw_path.unlink(missing_ok=True)
+                    logger.info("Fallback synthesized: %s (%s)", output_path.name, fallback)
+                    return output_path
+                except Exception as e2:
+                    logger.error("Fallback TTS also failed: %s", e2)
+            loop = asyncio.get_running_loop()
+            await loop.run_in_executor(None, generate_silence, output_path, 2.0)
+            return output_path
 
 
 async def synthesize_ad(
@@ -205,7 +219,12 @@ async def synthesize_ad(
     async def _render_part(part, part_path):
         if part.type == "voice" and part.text:
             voice_for_part = voices.get(part.role, default_voice) if part.role else default_voice
-            return await synthesize(part.text, voice_for_part.voice, part_path)
+            # Pharma disclaimers are read at ~2x speed — real Italian radio style
+            extra: dict[str, str] = {}
+            if part.role == "disclaimer_goblin":
+                extra["rate"] = "+90%"
+            # Skip per-part loudnorm — normalize_ad() handles the final loudnorm pass
+            return await synthesize(part.text, voice_for_part.voice, part_path, **extra, loudnorm=False)
         if part.type == "sfx" and part.sfx:
             sfx_name = part.sfx if part.sfx in AVAILABLE_SFX_TYPES else "chime"
             try:
@@ -352,8 +371,11 @@ async def synthesize_dialogue(
 ) -> Path:
     """Render all host lines in parallel and stitch the exchange together."""
     paths = [tmp_dir / f"line_{uuid4().hex[:8]}.mp3" for _ in lines]
+    multi_line = len(lines) > 1
 
-    # Synthesize all lines concurrently — each is an independent TTS + normalize
+    # For multi-line dialogue: skip per-line loudnorm (just re-encode to station format),
+    # concat, then do one final loudnorm on the assembled segment. Reduces N passes → 1.
+    # For single-line: one full loudnorm pass is correct and avoids an extra encode cycle.
     parts = list(
         await asyncio.gather(
             *(
@@ -365,21 +387,25 @@ async def synthesize_dialogue(
                     engine=host.engine,
                     edge_fallback_voice=host.edge_fallback_voice,
                     openai_instructions=_openai_instructions_for_host(host),
+                    loudnorm=not multi_line,
                 )
                 for (host, text), path in zip(lines, paths, strict=False)
             )
         )
     )
 
-    if len(parts) == 1:
+    if not multi_line:
         return parts[0]
 
+    raw_path = tmp_dir / f"dialogue_raw_{uuid4().hex[:8]}.mp3"
     output_path = tmp_dir / f"dialogue_{uuid4().hex[:8]}.mp3"
     loop = asyncio.get_running_loop()
-    # Skip redundant loudnorm — each line already normalized by synthesize()
-    await loop.run_in_executor(None, concat_files, parts, output_path, 300, False)
-
+    await loop.run_in_executor(None, concat_files, parts, raw_path, 300, False)
     for p in parts:
         p.unlink(missing_ok=True)
 
+    # One loudnorm pass on the fully assembled dialogue
+    async with _HEAVY_SEM:
+        await loop.run_in_executor(None, normalize, raw_path, output_path)
+    raw_path.unlink(missing_ok=True)
     return output_path

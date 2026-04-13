@@ -12,13 +12,13 @@ The app is designed to degrade gracefully. Music comes from live Italian charts 
 
 ### Dashboard
 
-The dashboard at `/dashboard` gives you the station at a glance: now playing with animated waveform, up-next queue, shuffle/skip controls, and setup prompts.
+The listener dashboard at `/` gives you the station at a glance: now playing with animated waveform, up-next queue (with rendered vs predicted segments), pipeline status indicators, and a radio dial tuning animation on first load.
 
 ![Dashboard](docs/screenshots/dashboard.png)
 
-### Listener
+### Admin
 
-The public listener at `/` is a clean, mobile-friendly player with now-playing, up-next queue, callback corner, recently-played log, and a fixed bottom player bar.
+The admin control room at `/admin` has three tabs: Music (playlist, queue, drag-drop reorder, search), Radio (hosts, pacing, triggers, banter), and Engine Room (runtime stats, segment counts, capabilities).
 
 ![Listener](docs/screenshots/listener.png)
 
@@ -26,11 +26,13 @@ The public listener at `/` is a clean, mobile-friendly player with now-playing, 
 
 - Streams a live MP3 station at `/stream`
 - Serves a public listener page at `/` and an admin dashboard at `/admin`
-- Rotates between music, host banter, and multi-spot ad breaks
+- Rotates between music, host banter, and multi-spot ad breaks with authentic Italian brands
 - Lets hosts reference live Home Assistant state when enabled
 - Supports playlist mutation from the dashboard: shuffle, skip, purge, remove, reorder, play-next
 - Stop and resume sessions from the admin control room
 - Remembers returning listeners across sessions with compounding persona memory
+- Share WTF moments: clip the last 30 seconds of audio into a shareable MP3
+- Studio atmosphere: faint background voices, rare one-shot events (cough, paper rustle) for live radio feel
 
 ## Documentation
 
@@ -229,7 +231,7 @@ Most station behavior lives in `radio.toml`.
 | `[[hosts]]` | Host names, TTS engine (`edge` or `openai`), voices, style/personality |
 | `[audio]` | Sample rate, channels, bitrate, Claude model |
 | `[homeassistant]` | Whether HA context is enabled, base URL, refresh interval |
-| `[[ads.brands]]` | Fictional brand pool, categories, recurring-campaign weighting |
+| `[[ads.brands]]` | Italian brand pool (Esselunga, Fiat, TIM, Barilla, etc.), categories, recurring-campaign spines |
 | `[[ads.voices]]` | Dedicated commercial voices for ads |
 
 The Home Assistant token is never stored in `radio.toml`. Set it via `HA_TOKEN` in `.env`.
@@ -265,6 +267,13 @@ The Home Assistant token is never stored in `radio.toml`. Set it via `HA_TOKEN` 
 | `/api/stop` | POST | Admin | Gracefully stop the session (skip + purge + pause producer until `/api/resume`) |
 | `/api/resume` | POST | Admin | Resume a stopped session |
 | `/api/credentials` | POST | Admin | Update credentials at runtime |
+| `/api/clip` | POST | Public | Capture last 30s of audio into a shareable clip |
+| `/clips/{id}.mp3` | GET | Public | Serve a saved clip (no auth, for sharing) |
+| `/api/track-rules` | POST | Admin | Flag a reaction rule for the current track |
+| `/api/listener-request` | POST | Public | Submit a song request or shoutout |
+| `/api/listener-requests` | GET | Admin | List pending listener requests |
+| `/api/search` | GET | Admin | Search playlist and external sources |
+| `/api/playlist/add-external` | POST | Admin | Add external track from search results |
 
 ## Admin access
 
@@ -293,9 +302,14 @@ mammamiradio/
   tts.py              TTS synthesis (Edge TTS + OpenAI gpt-4o-mini-tts)
   normalizer.py       FFmpeg helpers
   ha_context.py       Home Assistant polling and formatting
+  clip.py             WTF clip extraction from ring buffer
+  track_rationale.py  "Why this track?" rationale for listener UI
+  capabilities.py     Capability flags, tier derivation, next-step hints
+  persona.py          Compounding listener memory and session tracking
+  context_cues.py     Time-of-day and cultural context for prompts
   models.py           core data models and station state
-  dashboard.html      admin UI
-  listener.html       public listener UI
+  dashboard.html      listener-facing dashboard at /
+  admin.html          admin control room at /admin
 radio.toml            station config
 start.sh              local dev entrypoint
 Dockerfile            standalone Docker image

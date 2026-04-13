@@ -57,7 +57,7 @@ AI-powered Italian radio station engine. Python 3.11+, FastAPI, FFmpeg, optional
 
 ## Runtime behavior
 
-- Startup loads `radio.toml`, validates config, restores persisted source selection from `cache/playlist_source.json`, fetches the playlist, then launches producer and playback tasks.
+- Startup loads `radio.toml`, validates config, purges suspect cache files (< 10KB), restores persisted source selection from `cache/playlist_source.json`, fetches the playlist, initializes the clip ring buffer, then launches producer and playback tasks. Logs a one-line boot summary at the end.
 - **Capability flags** (`anthropic`, `ha`) drive a three-tier system. The dashboard derives a tier label from them: Demo Radio, Full AI Radio, Connected Home. `GET /api/capabilities` returns flags, tier, and a `next_step` hint guiding the user toward the next setup action.
 - Demo-first: the app boots immediately with charts or built-in demo tracks and pre-bundled banter clips. No wizard, no gates.
 - If no LLM key is configured (neither Anthropic nor OpenAI), banter uses pre-bundled clips from `demo_assets/banter/` instead of calling an API.
@@ -81,8 +81,9 @@ mammamiradio/
   scriptwriter.py     Anthropic/OpenAI API calls for banter and ad JSON (with automatic fallback)
   playlist.py         charts, local, and demo playlist loading
   downloader.py       local file, yt-dlp, and placeholder audio fallback
-  normalizer.py       FFmpeg helpers for normalize, mix, concat, and generated SFX
-  tts.py              Edge TTS synthesis for hosts and ads
+  normalizer.py       FFmpeg helpers for normalize, mix, concat, generated SFX, studio bleed, and oneshot mixing
+  tts.py              Edge TTS synthesis for hosts and ads (with +90% rate for pharma disclaimers)
+  clip.py             WTF clip extraction from ring buffer, save, and cleanup
   ha_context.py       Home Assistant polling and Italian state formatting
   capabilities.py     Capability flags (anthropic, ha), tier derivation, and next_step hints
   persona.py          Compounding listener memory: persona, motifs, session tracking, prompt injection filtering
@@ -126,7 +127,7 @@ Do not deviate without explicit user approval. In QA mode, flag any code that do
 - `dashboard.html` and `listener.html` are loaded as static file contents by `streamer.py`.
 - `start.sh` is part of the runtime contract, not just a convenience script.
 - `radio.toml` is the source of truth for hosts, pacing, ad brands, audio settings, and Home Assistant enablement. Secrets stay in `.env`.
-- If you change routes, config keys, auth rules, or fallback behavior, update the matching docs in the same change.
+- If you change routes, config keys, auth rules, or fallback behavior, update the matching docs in the same change. (See **Doc sync** rule below.)
 - `conductor.json` and `scripts/conductor-*.sh` define Conductor workspace setup/run/archive behavior. Commit those files, but keep `.context/` runtime state out of git.
 - If the user has a live stream running, do not stop, restart, or reload it unless they explicitly ask. Protect the illusion first.
 - Treat 60 minutes of uninterrupted runtime per live station object as the default minimum when tinkering around an active stream.
@@ -143,6 +144,14 @@ Do not deviate without explicit user approval. In QA mode, flag any code that do
   - On main merge: `update` mode — auto-ratchets all floors up and commits the new values. Zero human intervention.
 - **Local check**: `make coverage-check` to verify locally. `make coverage-ratchet` to preview what CI would commit.
 - **Adding tests**: Write tests, push. CI will auto-raise the floors on merge. The next PR that drops any module will fail.
+
+## Doc sync
+
+**Any change to a route, config key, env var, auth rule, or fallback path must update at least one of the following docs in the same commit:**
+
+`README.md`, `ARCHITECTURE.md`, `TROUBLESHOOTING.md`, `OPERATIONS.md`, `CLAUDE.md`, `CHANGELOG.md`
+
+If the behavior changed and the docs didn't, the docs are wrong. Fix them in the same change, not a follow-up.
 
 ## Review discipline
 
