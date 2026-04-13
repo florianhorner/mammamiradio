@@ -658,6 +658,22 @@ async def test_listener_request_invalid_payload_types():
 
 
 @pytest.mark.asyncio
+async def test_listener_request_song_keyword_treated_as_shoutout_when_ytdlp_disabled():
+    app = _make_test_app()
+    app.state.config.allow_ytdlp = False
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    with patch("mammamiradio.streamer._download_listener_song", new_callable=AsyncMock) as dl_mock:
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            resp = await client.post(
+                "/api/listener-request", json={"name": "Luca", "message": "puoi mettere Albachiara?"}
+            )
+        await asyncio.sleep(0)
+    assert resp.status_code == 200
+    assert resp.json()["type"] == "shoutout"
+    assert dl_mock.await_count == 0
+
+
+@pytest.mark.asyncio
 async def test_get_listener_requests_returns_age():
     app = _make_test_app()
     now = time.time()

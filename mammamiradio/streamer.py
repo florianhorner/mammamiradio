@@ -8,7 +8,7 @@ import logging
 import os
 import re as _re
 import secrets
-import threading
+
 import time
 from pathlib import Path
 from urllib.parse import urlparse
@@ -1278,7 +1278,9 @@ async def listener_request(request: Request):
     # Detect song request by keyword
     msg_lower = message.lower()
     song_keywords = ["metti", "suona", "play", "voglio sentire", "puoi mettere", "can you play", "mettete"]
-    is_song_request = any(kw in msg_lower for kw in song_keywords)
+    config = request.app.state.config
+    allow_ytdlp = getattr(config, "allow_ytdlp", False)
+    is_song_request = allow_ytdlp and any(kw in msg_lower for kw in song_keywords)
     req: dict = {
         "name": name,
         "message": message,
@@ -1549,7 +1551,7 @@ def _public_status_payload(request: Request) -> dict:
 
 
 _clip_rate: dict[str, float] = {}  # IP -> last clip timestamp
-_clip_rate_lock = threading.Lock()
+_clip_rate_lock = asyncio.Lock()
 
 
 @router.post("/api/clip")
@@ -1560,7 +1562,7 @@ async def create_clip(request: Request):
     # Rate limit: 1 clip per 10 seconds per IP
     client_ip = request.client.host if request.client else "unknown"
     now = time.time()
-    with _clip_rate_lock:
+    async with _clip_rate_lock:
         if now - _clip_rate.get(client_ip, 0) < 10:
             from fastapi.responses import JSONResponse
 

@@ -1,5 +1,15 @@
 # TODOs
 
+## P2: Wire skip-bit detection into live reactive banter
+The skip-bit cue is correctly created when a listener skips a track twice (`detect_skip_bit` in `streamer.py:667`), but the boolean return value is discarded. The AI host never has a "caught you skipping it again!" moment in the current banter cycle.
+
+**Action:** In `_persist_skipped_music`, check the `detect_skip_bit` return value. When `True`, set `state.ha_pending_directive` with an Italian reactive line like "Florian ha saltato questa canzone per la Nth volta — reagisci in modo complice" so the next banter slot delivers the impossible moment live.
+
+**Why it matters:** This is the structural moat use case — real radio cannot do this. The data collection is already working; the reactive hook is the missing one-liner.
+
+**Effort:** S (CC: ~15 min) | **Files:** `mammamiradio/streamer.py:649`, `mammamiradio/models.py`
+**Source:** /plan-eng-review, 2026-04-13
+
 ## ~~Music catalog depth — multi-source rotation~~ RESOLVED
 - Charts raised to 100 tracks. Local `music/` MP3s auto-blended into chart playlist when `allow_ytdlp=true`. Covers 7h+ of unique content without repetition.
 - **Completed:** v2.8.0 (2026-04-13)

@@ -11,7 +11,7 @@ from collections import deque
 from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
-from typing import cast
+
 from uuid import uuid4
 
 from mammamiradio.audio_quality import AudioQualityError, AudioToolError, validate_segment_audio
@@ -52,7 +52,7 @@ from mammamiradio.scheduler import next_segment_type
 from mammamiradio.scriptwriter import (
     AD_BREAK_INTROS,
     AD_BREAK_OUTROS,
-    ListenerRequestCommit,
+
     _has_script_llm,
     write_ad,
     write_banter,
@@ -742,13 +742,9 @@ async def run_producer(
                             config,
                             is_new_listener=_is_new_listener,
                             is_first_listener=_is_first_listener,
-                            return_listener_request_commit=True,
                         )
-                        _trans_res, _banter_res = await asyncio.gather(transition_task, banter_task)
-                        trans_host, trans_text = cast(tuple[HostPersonality, str], _trans_res)
-                        lines, listener_request_commit = cast(
-                            tuple[list[tuple[HostPersonality, str]], ListenerRequestCommit | None],
-                            _banter_res,
+                        (trans_host, trans_text), (lines, listener_request_commit) = await asyncio.gather(
+                            transition_task, banter_task
                         )
 
                         # Synthesize transition + dialogue in parallel
