@@ -341,3 +341,71 @@ def test_mix_oneshot_sfx_default_params(mock_subprocess):
     joined = " ".join(cmd)
     assert "volume=-18.0dB" in joined
     assert "adelay=0|0" in joined
+
+
+# ── measure_lufs tests ──
+
+
+def test_measure_lufs_parses_integrated_loudness():
+    """measure_lufs extracts integrated LUFS from ebur128 stderr."""
+    from mammamiradio.normalizer import measure_lufs
+
+    fake_result = MagicMock(spec=subprocess.CompletedProcess)
+    fake_result.returncode = 0
+    fake_result.stderr = (
+        "  Integrated loudness:\n"
+        "    I:         -16.2 LUFS\n"
+        "    Threshold: -26.2 LUFS\n"
+    )
+    with patch("mammamiradio.normalizer.subprocess.run", return_value=fake_result):
+        result = measure_lufs(Path("/tmp/test.mp3"))
+    assert result == pytest.approx(-16.2)
+
+
+def test_measure_lufs_returns_none_on_failure():
+    """measure_lufs returns None when ffmpeg/ebur128 fails."""
+    from mammamiradio.normalizer import measure_lufs
+
+    fake_result = MagicMock(spec=subprocess.CompletedProcess)
+    fake_result.returncode = 1
+    fake_result.stderr = ""
+    with patch("mammamiradio.normalizer.subprocess.run", return_value=fake_result):
+        assert measure_lufs(Path("/tmp/test.mp3")) is None
+
+
+def test_measure_lufs_returns_none_on_timeout():
+    """measure_lufs returns None on subprocess timeout."""
+    from mammamiradio.normalizer import measure_lufs
+
+    with patch("mammamiradio.normalizer.subprocess.run", side_effect=subprocess.TimeoutExpired("ffmpeg", 30)):
+        assert measure_lufs(Path("/tmp/test.mp3")) is None
+
+
+def test_normalize_skips_when_lufs_within_tolerance(mock_subprocess, tmp_path):
+    """normalize copies file instead of processing when LUFS is within ±1.5 of -16."""
+    mock_run, _ = mock_subprocess
+    input_file = tmp_path / "input.mp3"
+    input_file.write_bytes(b"\xff" * 1000)
+    output_file = tmp_path / "output.mp3"
+
+    with patch("mammamiradio.normalizer.measure_lufs", return_value=-15.8):
+        result = normalize(input_file, output_file, loudnorm=True)
+
+    assert result == output_file
+    assert output_file.exists()
+    # subprocess.run should NOT have been called for ffmpeg normalize
+    mock_run.assert_not_called()
+
+
+def test_normalize_proceeds_when_lufs_out_of_tolerance(mock_subprocess, tmp_path):
+    """normalize runs full pipeline when LUFS is outside tolerance."""
+    mock_run, _ = mock_subprocess
+    input_file = tmp_path / "input.mp3"
+    input_file.write_bytes(b"\xff" * 1000)
+    output_file = tmp_path / "output.mp3"
+
+    with patch("mammamiradio.normalizer.measure_lufs", return_value=-25.0):
+        normalize(input_file, output_file, loudnorm=True)
+
+    # ffmpeg should have been called for normalization
+    mock_run.assert_called_once()

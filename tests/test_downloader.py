@@ -237,6 +237,10 @@ def test_ytdlp_uses_no_progress_options(track, cache_dir):
     assert captured_opts["no_warnings"] is True
     assert captured_opts["noprogress"] is True
     assert captured_opts["abort_on_unavailable_fragments"] is True
+    assert captured_opts["throttled_rate"] == 100_000
+    assert captured_opts["check_formats"] is True
+    assert captured_opts["concurrent_fragment_downloads"] == 2
+    assert "temp" in captured_opts.get("paths", {})
 
 
 def test_download_ytdlp_uses_exact_watch_url_when_youtube_id(cache_dir):
