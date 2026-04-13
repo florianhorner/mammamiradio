@@ -66,11 +66,14 @@ async def startup():
             "Install: brew install ffmpeg (macOS) or apt install ffmpeg (Linux)"
         )
 
-    # Restore stop state so a reload/restart honours an operator-issued stop
+    # Always clear the stopped flag on restart. A restart is an explicit intent
+    # to bring the station back up — preserving stopped state silently kept
+    # listeners waiting with no audio and no obvious reason.
     _stopped_flag = config.cache_dir / "session_stopped.flag"
-    _session_stopped = _stopped_flag.exists()
-    if _session_stopped:
-        logger.info("Restoring stopped session state from previous run")
+    if _stopped_flag.exists():
+        _stopped_flag.unlink(missing_ok=True)
+        logger.info("Cleared stopped flag — station will start playing on first listener")
+    _session_stopped = False
 
     persisted_source = read_persisted_source(config.cache_dir)
     logger.info("Fetching startup playlist")
@@ -120,13 +123,10 @@ async def startup():
     app.state.config = config
     app.state.start_time = time.time()
 
-    # Pre-produce the first music segment so listeners hear audio instantly.
-    # This runs before the producer loop and bypasses the listener gate.
-    # Bounded to 20s so a slow download doesn't block app readiness.
-    try:
-        await asyncio.wait_for(prewarm_first_segment(queue, state, config), timeout=20)
-    except TimeoutError:
-        logger.warning("Prewarm timed out after 20s; producer will fill queue normally")
+    # Pre-produce the first music segment in the background so app startup is
+    # instant. If a listener arrives before prewarm finishes, the producer's
+    # idle-resume logic queues a canned clip as an immediate fallback.
+    asyncio.create_task(prewarm_first_segment(queue, state, config))
 
     _playback_task = asyncio.create_task(run_playback_loop(app))
     _producer_task = asyncio.create_task(run_producer(queue, state, config, skip_event=app.state.skip_event))

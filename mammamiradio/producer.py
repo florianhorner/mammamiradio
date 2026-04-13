@@ -7,6 +7,7 @@ import datetime
 import logging
 import os
 import random
+import shutil
 from collections import deque
 from collections.abc import Callable
 from dataclasses import replace
@@ -396,10 +397,16 @@ async def prewarm_first_segment(
     try:
         track = state.select_next_track()
         logger.info("Pre-warming first track: %s", track.display)
-        norm_path = config.tmp_dir / f"music_{uuid4().hex[:8]}.mp3"
         audio_path = await download_track(track, config.cache_dir, music_dir=Path("music"))
         loop = asyncio.get_running_loop()
-        await loop.run_in_executor(None, normalize, audio_path, norm_path)
+        norm_cached = config.cache_dir / f"norm_{track.cache_key}_{config.audio.bitrate}k.mp3"
+        if norm_cached.exists():
+            norm_path = norm_cached
+            logger.info("Normalization cache hit (prewarm): %s", norm_cached.name)
+        else:
+            norm_path = config.tmp_dir / f"music_{uuid4().hex[:8]}.mp3"
+            await loop.run_in_executor(None, normalize, audio_path, norm_path)
+            await loop.run_in_executor(None, shutil.copy2, str(norm_path), str(norm_cached))
         if not os.environ.get("MAMMAMIRADIO_SKIP_QUALITY_GATE"):
             try:
                 await loop.run_in_executor(None, validate_segment_audio, norm_path, SegmentType.MUSIC)
@@ -407,7 +414,8 @@ async def prewarm_first_segment(
                 logger.warning("Audio tool unavailable, skipping prewarm quality check: %s", exc)
             except AudioQualityError as exc:
                 logger.warning("Prewarm quality gate rejected track (%s): %s", norm_path.name, exc)
-                norm_path.unlink(missing_ok=True)
+                if norm_path != norm_cached:
+                    norm_path.unlink(missing_ok=True)
                 return False
         rationale = generate_track_rationale(track, source=state.playlist_source, listener=state.listener)
         crate = classify_track_crate(track, state.playlist_source)
@@ -566,11 +574,22 @@ async def run_producer(
                 track = state.select_next_track()
                 logger.info("Producing MUSIC: %s", track.display)
 
-                norm_path = config.tmp_dir / f"music_{uuid4().hex[:8]}.mp3"
-
                 audio_path = await download_track(track, config.cache_dir, music_dir=Path("music"))
                 loop = asyncio.get_running_loop()
-                await loop.run_in_executor(None, normalize, audio_path, norm_path)
+
+                # Normalization cache: skip FFmpeg re-encode if we already have a
+                # normalized copy in cache_dir from a previous run. Named by track +
+                # bitrate so a config change busts the cache automatically.
+                norm_cached = config.cache_dir / f"norm_{track.cache_key}_{config.audio.bitrate}k.mp3"
+                if norm_cached.exists():
+                    norm_path = norm_cached
+                    norm_is_cached = True
+                    logger.debug("Normalization cache hit: %s", norm_cached.name)
+                else:
+                    norm_path = config.tmp_dir / f"music_{uuid4().hex[:8]}.mp3"
+                    norm_is_cached = False
+                    await loop.run_in_executor(None, normalize, audio_path, norm_path)
+                    await loop.run_in_executor(None, shutil.copy2, str(norm_path), str(norm_cached))
                 audio_source = "download"
 
                 # Quality gate: reject truncated/silent downloads before queueing.
@@ -596,7 +615,8 @@ async def run_producer(
                             _music_qg_rejections = 0
                         else:
                             logger.warning("Quality gate rejected music track (%s): %s", norm_path.name, exc)
-                            norm_path.unlink(missing_ok=True)
+                            if not norm_is_cached:
+                                norm_path.unlink(missing_ok=True)
                             continue
 
                 # Generate "Why this track?" rationale for listener UI
@@ -615,8 +635,10 @@ async def run_producer(
                         bleed_out = config.tmp_dir / f"bleed_{uuid4().hex[:8]}.mp3"
                         try:
                             await loop.run_in_executor(None, mix_quiet_bleed, norm_path, bleed_src, bleed_out)
-                            norm_path.unlink(missing_ok=True)
+                            if not norm_is_cached:
+                                norm_path.unlink(missing_ok=True)
                             norm_path = bleed_out
+                            norm_is_cached = False
                             logger.debug("Studio bleed applied to %s", norm_path.name)
                         except Exception as exc:
                             logger.debug("Studio bleed skipped: %s", exc)

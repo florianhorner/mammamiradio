@@ -104,6 +104,7 @@ async def test_music_segment_queued():
         patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.MUSIC),
         patch(f"{PRODUCER_MODULE}.download_track", new_callable=AsyncMock, return_value=_fake_path()),
         patch(f"{PRODUCER_MODULE}.normalize", side_effect=_fake_path),
+        patch(f"{PRODUCER_MODULE}.shutil.copy2"),
         patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
     ):
         await _run_until_queued(queue, state, config)
@@ -619,6 +620,7 @@ async def test_prewarm_happy_path():
     with (
         patch(f"{PRODUCER_MODULE}.download_track", new_callable=AsyncMock, return_value=Path("/tmp/fake.mp3")),
         patch(f"{PRODUCER_MODULE}.normalize"),
+        patch(f"{PRODUCER_MODULE}.shutil.copy2"),
         patch(f"{PRODUCER_MODULE}.validate_segment_audio"),
         patch(f"{PRODUCER_MODULE}._set_last_music_file"),
     ):
@@ -648,6 +650,7 @@ async def test_prewarm_quality_gate_rejection():
     with (
         patch(f"{PRODUCER_MODULE}.download_track", new_callable=AsyncMock, return_value=Path("/tmp/fake.mp3")),
         patch(f"{PRODUCER_MODULE}.normalize"),
+        patch(f"{PRODUCER_MODULE}.shutil.copy2"),
         patch(f"{PRODUCER_MODULE}.validate_segment_audio", side_effect=_reject),
     ):
         result = await prewarm_first_segment(queue, state, config)
