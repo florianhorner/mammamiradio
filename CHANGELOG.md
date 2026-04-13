@@ -4,6 +4,14 @@ All notable changes to `mammamiradio` are documented here.
 
 The current version source of truth is `pyproject.toml`.
 
+## [2.9.1] - 2026-04-13
+
+### Fixed
+
+- **Instant startup**: Prewarm now runs as a background task instead of blocking FastAPI startup for up to 20 seconds. The app becomes available immediately on boot; the producer's idle-resume fallback (canned banter clip) covers the gap if a listener connects before the first track is ready.
+- **Session auto-resume on restart**: Restarting the HA add-on no longer silently restores a stopped session state. The `session_stopped.flag` is cleared at boot, so the station plays as soon as a listener connects without requiring a manual admin resume.
+- **Normalization cache**: FFmpeg re-encoding is now skipped for tracks that have already been normalized in a previous session. Normalized files are cached at `cache_dir/norm_{track}_{bitrate}k.mp3`. On HA hardware (Raspberry Pi class) this saves 60+ seconds per restart per cached track. Cache is automatically busted if the audio bitrate config changes.
+
 ## [2.9.0] - 2026-04-13
 
 ### Added

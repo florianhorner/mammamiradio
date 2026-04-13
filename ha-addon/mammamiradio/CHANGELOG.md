@@ -1,5 +1,12 @@
 # Changelog
 
+## 2.9.1
+
+### Fixed
+- Station now starts playing immediately on add-on restart — no more silent dead air requiring manual admin resume.
+- Prewarm runs in background, FastAPI is ready instantly (was blocking up to 20s).
+- Normalization cache skips FFmpeg re-encode for previously-processed tracks, saving 60+ seconds per restart on HA hardware.
+
 ## 2.9.0
 
 ### Added
