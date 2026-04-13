@@ -17,8 +17,8 @@ def _touch(path: Path) -> Path:
     return path
 
 
-def _normalize_side_effect(input_path, output_path, config=None):
-    """Side-effect for normalize(input_path, output_path, config)."""
+def _normalize_side_effect(input_path, output_path, config=None, *, loudnorm=True):
+    """Side-effect for normalize(input_path, output_path, config, loudnorm)."""
     _touch(output_path)
     return output_path
 
@@ -189,6 +189,28 @@ async def test_synthesize_openai_happy_path(_mock_all, tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_synthesize_openai_passes_loudnorm_flag(_mock_all, tmp_path, monkeypatch):
+    """OpenAI synth forwards loudnorm=False into normalize()."""
+    from mammamiradio.tts import synthesize
+
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-key")
+
+    mock_response = MagicMock()
+    mock_response.content = b"\x00" * 512
+
+    mock_client_instance = MagicMock()
+    mock_client_instance.audio.speech.create.return_value = mock_response
+
+    with patch("mammamiradio.tts._get_openai_client", return_value=mock_client_instance):
+        output = tmp_path / "openai_fast.mp3"
+        result = await synthesize("Ciao mondo", "onyx", output, engine="openai", loudnorm=False)
+
+    assert result == output
+    normalize_call = _mock_all["normalize"].call_args
+    assert normalize_call.kwargs["loudnorm"] is False
+
+
+@pytest.mark.asyncio
 async def test_synthesize_openai_falls_back_to_edge_when_no_key(_mock_all, tmp_path, monkeypatch):
     """When engine='openai' but OPENAI_API_KEY is missing, fall back to edge-tts."""
     from mammamiradio.tts import synthesize
@@ -276,6 +298,37 @@ async def test_openai_instructions_from_personality(_mock_all, tmp_path, monkeyp
 # ---------------------------------------------------------------------------
 # synthesize_ad
 # ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_synthesize_ad_disclaimer_goblin_rate(_mock_all, tmp_path):
+    """Parts with role='disclaimer_goblin' are synthesized at +90% rate."""
+    from mammamiradio.tts import synthesize_ad
+
+    script = AdScript(
+        brand="PharmaCo",
+        parts=[
+            AdPart(type="voice", text="Side effects may include...", role="disclaimer_goblin"),
+        ],
+        mood="lounge",
+    )
+    voices = {
+        "disclaimer_goblin": AdVoice(name="Speed", voice="it-IT-DiegoNeural", style="fast", role="disclaimer_goblin"),
+    }
+
+    result = await synthesize_ad(script, voices, tmp_path)
+    assert result.exists()
+
+    # Check that Communicate was called with rate="+90%"
+    calls = _mock_all["Communicate"].call_args_list
+    assert len(calls) >= 1
+    found_rate = False
+    for call in calls:
+        kwargs = call.kwargs if call.kwargs else {}
+        if kwargs.get("rate") == "+90%":
+            found_rate = True
+            break
+    assert found_rate, f"Expected rate='+90%' in Communicate calls, got: {calls}"
 
 
 @pytest.mark.asyncio
@@ -481,6 +534,13 @@ async def test_synthesize_dialogue_multiple_hosts(_mock_all, tmp_path):
     assert result.exists()
     assert _mock_all["Communicate"].call_count == 2
     _mock_all["concat_files"].assert_called_once()
+    concat_call = _mock_all["concat_files"].call_args
+    assert concat_call.args[3] is False
+    normalize_calls = _mock_all["normalize"].call_args_list
+    assert len(normalize_calls) == 3
+    assert normalize_calls[0].kwargs["loudnorm"] is False
+    assert normalize_calls[1].kwargs["loudnorm"] is False
+    assert "loudnorm" not in normalize_calls[2].kwargs
 
 
 @pytest.mark.asyncio
@@ -496,6 +556,8 @@ async def test_synthesize_dialogue_single_host(_mock_all, tmp_path):
     _mock_all["Communicate"].assert_called_once()
     # Single part — no concatenation needed
     _mock_all["concat_files"].assert_not_called()
+    normalize_call = _mock_all["normalize"].call_args
+    assert normalize_call.kwargs["loudnorm"] is True
 
 
 @pytest.mark.asyncio

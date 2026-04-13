@@ -445,6 +445,138 @@ def test_search_ytdlp_metadata_success_parses_entries():
     assert results[1]["artist"] == "Modugno Channel"
 
 
+# --- purge_suspect_cache_files ---
+
+
+def test_purge_suspect_cache_files_empty_dir(tmp_path):
+    from mammamiradio.downloader import purge_suspect_cache_files
+
+    d = tmp_path / "cache"
+    d.mkdir()
+    assert purge_suspect_cache_files(d) == 0
+
+
+def test_purge_suspect_cache_files_nonexistent_dir(tmp_path):
+    from mammamiradio.downloader import purge_suspect_cache_files
+
+    assert purge_suspect_cache_files(tmp_path / "nope") == 0
+
+
+def test_purge_suspect_cache_files_removes_small_files(tmp_path):
+    from mammamiradio.downloader import purge_suspect_cache_files
+
+    d = tmp_path / "cache"
+    d.mkdir()
+    small = d / "bad_download.mp3"
+    small.write_bytes(b"x" * 100)  # well below 10240
+    assert purge_suspect_cache_files(d) == 1
+    assert not small.exists()
+
+
+def test_purge_suspect_cache_files_keeps_large_files(tmp_path):
+    from mammamiradio.downloader import purge_suspect_cache_files
+
+    d = tmp_path / "cache"
+    d.mkdir()
+    big = d / "good_track.mp3"
+    big.write_bytes(b"x" * 10240)  # exactly at threshold
+    assert purge_suspect_cache_files(d) == 0
+    assert big.exists()
+
+
+def test_purge_suspect_cache_files_skips_protected(tmp_path):
+    from mammamiradio.downloader import purge_suspect_cache_files
+
+    d = tmp_path / "cache"
+    d.mkdir()
+    # Create protected files that are small .mp3 — they would match the glob
+    # only if they end in .mp3, but _CACHE_PROTECTED names don't end in .mp3
+    # so let's test with a non-mp3 extension and also with a small mp3
+    small = d / "tiny.mp3"
+    small.write_bytes(b"x" * 10)
+    # Protected files aren't .mp3 so they won't be globbed, but test the logic
+    # by creating an .mp3 with a protected name (edge case)
+    for name in ["mammamiradio.db", "playlist_source.json", "session_stopped.flag"]:
+        # These don't end in .mp3 so glob("*.mp3") won't match them anyway
+        (d / name).write_bytes(b"x" * 10)
+    assert purge_suspect_cache_files(d) == 1  # only tiny.mp3
+    assert not small.exists()
+
+
+def test_purge_suspect_cache_files_oserror_on_stat(tmp_path):
+    from pathlib import Path
+
+    from mammamiradio.downloader import purge_suspect_cache_files
+
+    d = tmp_path / "cache"
+    d.mkdir()
+    f = d / "broken.mp3"
+    f.write_bytes(b"x" * 10)
+    original_stat = Path.stat
+
+    def _stat_that_fails(self, *args, **kwargs):
+        if self.name == "broken.mp3":
+            raise OSError("permission denied")
+        return original_stat(self, *args, **kwargs)
+
+    with patch.object(Path, "stat", _stat_that_fails):
+        assert purge_suspect_cache_files(d) == 0
+
+
+def test_purge_suspect_cache_files_skips_protected_mp3_names(tmp_path):
+    """If a file with a protected name appears in the glob, it should be skipped."""
+    from mammamiradio.downloader import _CACHE_PROTECTED, purge_suspect_cache_files
+
+    d = tmp_path / "cache"
+    d.mkdir()
+    protected_name = next(iter(_CACHE_PROTECTED))
+    fake_file = d / protected_name
+    fake_file.write_bytes(b"x" * 10)
+
+    with patch.object(type(d), "glob", return_value=[fake_file]):
+        assert purge_suspect_cache_files(d) == 0
+        assert fake_file.exists()
+
+
+def test_purge_suspect_cache_files_custom_threshold(tmp_path):
+    from mammamiradio.downloader import purge_suspect_cache_files
+
+    d = tmp_path / "cache"
+    d.mkdir()
+    f = d / "medium.mp3"
+    f.write_bytes(b"x" * 500)
+    # With higher threshold, this should be purged
+    assert purge_suspect_cache_files(d, min_size_bytes=1000) == 1
+    assert not f.exists()
+
+
+def test_download_ytdlp_raises_when_no_output_file(cache_dir):
+    """_download_ytdlp raises FileNotFoundError when yt-dlp doesn't create the output."""
+    from mammamiradio.downloader import _download_ytdlp
+
+    track = Track(title="Missing", artist="Nobody", duration_ms=100000, spotify_id="x")
+
+    class _FakeYoutubeDL:
+        def __init__(self, _opts):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def download(self, queries):
+            pass  # Deliberately don't create the output file
+
+    mock_yt_dlp = MagicMock()
+    mock_yt_dlp.YoutubeDL = _FakeYoutubeDL
+
+    with patch.dict(sys.modules, {"yt_dlp": mock_yt_dlp}):
+        with pytest.raises(FileNotFoundError):
+            _download_ytdlp(track, cache_dir)
+
+
 def test_search_ytdlp_metadata_returns_empty_on_extract_exception():
     from mammamiradio.downloader import search_ytdlp_metadata
 

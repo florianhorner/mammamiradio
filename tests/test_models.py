@@ -180,6 +180,32 @@ def test_on_stream_segment_counts_canned_clips():
     assert state.canned_clips_streamed == 2
 
 
+def test_on_stream_segment_adds_generated_banter_to_bleed_pool():
+    state = StationState()
+    seg = Segment(
+        type=SegmentType.BANTER,
+        path=Path("/tmp/generated-banter.mp3"),
+        metadata={"type": "banter", "canned": False},
+    )
+
+    state.on_stream_segment(seg)
+
+    assert list(state.recent_banter_paths) == [Path("/tmp/generated-banter.mp3")]
+
+
+def test_on_stream_segment_does_not_add_canned_banter_to_bleed_pool():
+    state = StationState()
+    seg = Segment(
+        type=SegmentType.BANTER,
+        path=Path("/tmp/canned-banter.mp3"),
+        metadata={"type": "banter", "canned": True},
+    )
+
+    state.on_stream_segment(seg)
+
+    assert list(state.recent_banter_paths) == []
+
+
 def test_after_sweeper_logs_and_increments_segments():
     state = StationState()
     state.after_sweeper()

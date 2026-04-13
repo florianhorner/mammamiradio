@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -33,6 +34,17 @@ PRODUCER_MODULE = "mammamiradio.producer"
 def _mock_quality_gate():
     with patch(f"{PRODUCER_MODULE}.validate_segment_audio", return_value=None):
         yield
+
+
+@pytest.fixture(autouse=True)
+def _clean_producer_globals():
+    """Reset global state that leaks between tests."""
+    from mammamiradio import producer
+
+    yield
+    producer._last_music_file = None
+    producer._canned_clip_cache.clear()
+    producer._recently_played_clips.clear()
 
 
 def _make_state() -> StationState:
@@ -132,6 +144,7 @@ async def test_banter_segment_queued():
     seg = queue.get_nowait()
     assert seg.type == SegmentType.BANTER
     assert seg.metadata.get("type") == "banter"
+    assert list(state.recent_banter_paths) == []
 
 
 # ---------------------------------------------------------------------------
@@ -306,6 +319,43 @@ async def test_stopped_session_remains_stopped_until_resume(tmp_path):
                 pass
 
 
+@pytest.mark.asyncio
+async def test_chart_refresh_waits_full_interval_after_startup():
+    """Producer must not trigger chart refresh immediately after startup."""
+    state = _make_state()
+    state.playlist_source = PlaylistSource(kind="charts", source_id="it", label="Italian charts")
+    config = _make_config()
+    config.pacing.lookahead_segments = 1
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    await queue.put(
+        Segment(
+            type=SegmentType.BANTER,
+            path=Path("/tmp/mammamiradio_test/seed.mp3"),
+            metadata={"type": "banter"},
+        )
+    )
+
+    fake_loop = MagicMock()
+    fake_loop.time.return_value = 10_000.0
+
+    with (
+        patch(f"{PRODUCER_MODULE}.asyncio.get_running_loop", return_value=fake_loop),
+        patch(f"{PRODUCER_MODULE}.fetch_chart_refresh", return_value=[]) as mock_refresh,
+        patch(f"{PRODUCER_MODULE}.evict_cache_lru"),
+    ):
+        task = asyncio.create_task(run_producer(queue, state, config))
+        try:
+            await asyncio.sleep(0.1)
+        finally:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+    mock_refresh.assert_not_called()
+
+
 # ---------------------------------------------------------------------------
 # Shareware trial: canned clip limit
 # ---------------------------------------------------------------------------
@@ -430,6 +480,33 @@ async def test_error_recovery_inserts_silence_when_no_canned_clips(tmp_path):
     seg = queue.get_nowait()
     assert "error" in seg.metadata
 
+
+@pytest.mark.asyncio
+async def test_error_recovery_logs_demo_assets_banter_hint_and_uses_silence(caplog):
+    """When canned banter+welcome are unavailable, producer logs the banter-dir hint and inserts silence."""
+    state = _make_state()
+    config = _make_config()
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    picked_subdirs: list[str] = []
+
+    def _pick_none(subdir: str, state=None):  # noqa: ARG001
+        picked_subdirs.append(subdir)
+        return None
+
+    caplog.set_level(logging.WARNING, logger="mammamiradio.producer")
+    with (
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.MUSIC),
+        patch(f"{PRODUCER_MODULE}.download_track", new_callable=AsyncMock, side_effect=RuntimeError("network down")),
+        patch(f"{PRODUCER_MODULE}._pick_canned_clip", side_effect=_pick_none),
+        patch(f"{PRODUCER_MODULE}.generate_silence", side_effect=_fake_path) as mock_silence,
+        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+    ):
+        await _run_until_queued(queue, state, config)
+
+    assert picked_subdirs[:2] == ["banter", "welcome"]
+    assert any("check demo_assets/banter/" in record.message for record in caplog.records)
+    assert mock_silence.call_count == 1
+    assert mock_silence.call_args.args[1] == 5.0
 
 # ---------------------------------------------------------------------------
 # Persona feedback loop in producer
@@ -773,3 +850,482 @@ async def test_record_motif_skips_when_no_persona_store():
 
     track = Track(title="Test", artist="Artist", duration_ms=1000, spotify_id="t1")
     await _record_motif(state, track)
+
+
+# ---------------------------------------------------------------------------
+# _maybe_start_session unit tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_maybe_start_session_no_persona_store():
+    """_maybe_start_session returns early when no persona_store."""
+    from mammamiradio.producer import _maybe_start_session
+
+    state = _make_state()
+    state.persona_store = None
+    await _maybe_start_session(state)
+
+
+@pytest.mark.asyncio
+async def test_maybe_start_session_new_session():
+    """_maybe_start_session increments session when new."""
+    from mammamiradio.producer import _maybe_start_session
+
+    state = _make_state()
+    mock_persona = MagicMock()
+    mock_persona.maybe_new_session.return_value = True
+    mock_persona.increment_session = AsyncMock()
+    mock_persona_data = MagicMock()
+    mock_persona_data.session_count = 5
+    mock_persona.get_persona = AsyncMock(return_value=mock_persona_data)
+    state.persona_store = mock_persona
+
+    await _maybe_start_session(state)
+    mock_persona.increment_session.assert_awaited_once()
+    mock_persona.get_persona.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_maybe_start_session_not_new():
+    """_maybe_start_session does nothing when not a new session."""
+    from mammamiradio.producer import _maybe_start_session
+
+    state = _make_state()
+    mock_persona = MagicMock()
+    mock_persona.maybe_new_session.return_value = False
+    mock_persona.increment_session = AsyncMock()
+    state.persona_store = mock_persona
+
+    await _maybe_start_session(state)
+    mock_persona.increment_session.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# _pick_brand unit tests
+# ---------------------------------------------------------------------------
+
+
+def test_pick_brand_avoids_recent():
+    """_pick_brand avoids recently-aired brands."""
+    from mammamiradio.models import AdBrand
+    from mammamiradio.producer import _pick_brand
+
+    brands = [
+        AdBrand(name="BrandA", tagline="A", category="tech"),
+        AdBrand(name="BrandB", tagline="B", category="food"),
+    ]
+
+    class FakeHistory:
+        def __init__(self, brand_name):
+            self.brand = brand_name
+
+    # BrandA was just aired, so BrandB should be picked
+    history = [FakeHistory("BrandA")]
+    # Run multiple times to verify BrandA is avoided
+    for _ in range(10):
+        result = _pick_brand(brands, history)
+        assert result.name == "BrandB"
+
+
+def test_pick_brand_all_recent_allows_repeats():
+    """_pick_brand allows repeats when all brands are recently aired."""
+    from mammamiradio.models import AdBrand
+    from mammamiradio.producer import _pick_brand
+
+    brands = [
+        AdBrand(name="BrandA", tagline="A", category="tech"),
+    ]
+
+    class FakeHistory:
+        def __init__(self, brand_name):
+            self.brand = brand_name
+
+    history = [FakeHistory("BrandA")]
+    result = _pick_brand(brands, history)
+    assert result.name == "BrandA"
+
+
+# ---------------------------------------------------------------------------
+# _latest_music_file / _try_crossfade unit tests
+# ---------------------------------------------------------------------------
+
+
+def test_latest_music_file_returns_none_for_empty_dir(tmp_path):
+    """_latest_music_file returns None when no music files exist."""
+    from mammamiradio import producer
+
+    producer._last_music_file = None
+    from mammamiradio.producer import _latest_music_file
+
+    result = _latest_music_file(tmp_path)
+    assert result is None
+
+
+def test_latest_music_file_returns_most_recent(tmp_path):
+    """_latest_music_file returns the most recent music file."""
+    import time
+
+    from mammamiradio import producer
+
+    producer._last_music_file = None
+    from mammamiradio.producer import _latest_music_file
+
+    old = tmp_path / "music_old.mp3"
+    old.write_bytes(b"old")
+    time.sleep(0.02)
+    new = tmp_path / "music_new.mp3"
+    new.write_bytes(b"new")
+
+    result = _latest_music_file(tmp_path)
+    assert result == new
+
+
+def test_latest_music_file_uses_cache():
+    """_latest_music_file returns cached path when available."""
+    from mammamiradio import producer
+    from mammamiradio.producer import _latest_music_file
+
+    fake_path = Path("/tmp/music_cached.mp3")
+    fake_path.parent.mkdir(parents=True, exist_ok=True)
+    fake_path.write_bytes(b"cached")
+    producer._last_music_file = fake_path
+
+    result = _latest_music_file(Path("/tmp/nonexistent"))
+    assert result == fake_path
+
+    # Cleanup
+    producer._last_music_file = None
+    fake_path.unlink(missing_ok=True)
+
+
+@pytest.mark.asyncio
+async def test_try_crossfade_no_music_file():
+    """_try_crossfade returns voice_path when no music file exists."""
+    from mammamiradio import producer
+    from mammamiradio.producer import _try_crossfade
+
+    producer._last_music_file = None
+    config = _make_config()
+    config.tmp_dir = Path("/tmp/mammamiradio_test_xfade")
+    config.tmp_dir.mkdir(exist_ok=True)
+    voice = config.tmp_dir / "voice.mp3"
+    voice.write_bytes(b"voice")
+    output = config.tmp_dir / "output.mp3"
+
+    result = await _try_crossfade(voice, config, output)
+    assert result == voice
+
+    # Cleanup
+    voice.unlink(missing_ok=True)
+
+
+@pytest.mark.asyncio
+async def test_try_crossfade_success(tmp_path):
+    """_try_crossfade returns output_path on successful crossfade."""
+    from mammamiradio import producer
+    from mammamiradio.producer import _try_crossfade
+
+    voice = tmp_path / "voice.mp3"
+    voice.write_bytes(b"voice")
+    music = tmp_path / "music_test.mp3"
+    music.write_bytes(b"music")
+    output = tmp_path / "output.mp3"
+
+    producer._last_music_file = music
+    config = _make_config()
+    config.tmp_dir = tmp_path
+
+    def fake_crossfade(*args, **kwargs):
+        output.write_bytes(b"crossfaded")
+
+    with patch(f"{PRODUCER_MODULE}.crossfade_voice_over_music", side_effect=fake_crossfade):
+        result = await _try_crossfade(voice, config, output)
+
+    assert result == output
+    producer._last_music_file = None
+
+
+@pytest.mark.asyncio
+async def test_try_crossfade_failure_returns_voice(tmp_path):
+    """_try_crossfade returns voice_path when crossfade fails."""
+    from mammamiradio import producer
+    from mammamiradio.producer import _try_crossfade
+
+    voice = tmp_path / "voice.mp3"
+    voice.write_bytes(b"voice")
+    music = tmp_path / "music_test.mp3"
+    music.write_bytes(b"music")
+    output = tmp_path / "output.mp3"
+
+    producer._last_music_file = music
+    config = _make_config()
+    config.tmp_dir = tmp_path
+
+    with patch(f"{PRODUCER_MODULE}.crossfade_voice_over_music", side_effect=RuntimeError("ffmpeg failed")):
+        result = await _try_crossfade(voice, config, output)
+
+    assert result == voice
+    producer._last_music_file = None
+
+
+# ---------------------------------------------------------------------------
+# _synthesize_impossible_moment unit tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_synthesize_impossible_moment(tmp_path):
+    """_synthesize_impossible_moment synthesizes and returns a path."""
+    from mammamiradio.producer import _synthesize_impossible_moment
+
+    config = _make_config()
+    config.tmp_dir = tmp_path
+    state = _make_state()
+
+    with (
+        patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, side_effect=lambda *a, **kw: _fake_path()),
+        patch(f"{PRODUCER_MODULE}._try_crossfade", new_callable=AsyncMock, return_value=_fake_path()),
+    ):
+        result = await _synthesize_impossible_moment("Che succede!", config, state)
+
+    assert result == _fake_path()
+    assert len(state.last_banter_script) == 1
+    assert state.last_banter_script[0]["type"] == "impossible"
+
+
+# ---------------------------------------------------------------------------
+# _pick_brand weight tests
+# ---------------------------------------------------------------------------
+
+
+def test_pick_brand_weights_recurring():
+    """_pick_brand weights recurring brands 3x higher."""
+    from mammamiradio.models import AdBrand
+    from mammamiradio.producer import _pick_brand
+
+    brands = [
+        AdBrand(name="Recurring", tagline="R", category="tech", recurring=True),
+        AdBrand(name="OneShot", tagline="O", category="food", recurring=False),
+    ]
+    # With many picks, recurring should appear ~3x more often
+    picks = [_pick_brand(brands, []).name for _ in range(100)]
+    assert picks.count("Recurring") > picks.count("OneShot")
+
+
+# ---------------------------------------------------------------------------
+# _select_ad_creative unit tests
+# ---------------------------------------------------------------------------
+
+
+def test_select_ad_creative_voice_count_guard():
+    """_select_ad_creative excludes multi-voice formats when only 1 voice available."""
+    from mammamiradio.models import AdBrand
+    from mammamiradio.producer import _select_ad_creative
+
+    brand = AdBrand(name="TestBrand", tagline="Test", category="tech")
+    state = _make_state()
+    config = _make_config()
+    # Ensure only 1 voice
+    config.ads.voices = [MagicMock(role="hammer")]
+
+    ad_format, sonic, roles = _select_ad_creative(brand, state, config)
+    assert ad_format is not None
+    assert sonic is not None
+    assert len(roles) >= 1
+
+
+def test_select_ad_creative_no_voices():
+    """_select_ad_creative handles empty voice list."""
+    from mammamiradio.models import AdBrand
+    from mammamiradio.producer import _select_ad_creative
+
+    brand = AdBrand(name="TestBrand", tagline="Test", category="food")
+    state = _make_state()
+    config = _make_config()
+    config.ads.voices = []
+
+    ad_format, sonic, roles = _select_ad_creative(brand, state, config)
+    assert ad_format is not None
+
+
+def test_select_ad_creative_multivoice_only_fallback():
+    """When format_pool is all multi-voice and only 1 voice, falls back to CLASSIC_PITCH."""
+    from mammamiradio.models import AdBrand, AdFormat, CampaignSpine
+    from mammamiradio.producer import _select_ad_creative
+
+    brand = AdBrand(
+        name="MultiVoiceBrand",
+        tagline="Test",
+        category="tech",
+        campaign=CampaignSpine(format_pool=["duo_scene", "testimonial"]),
+    )
+    state = _make_state()
+    config = _make_config()
+    config.ads.voices = [MagicMock(role="hammer")]  # only 1 voice
+
+    ad_format, sonic, roles = _select_ad_creative(brand, state, config)
+    assert ad_format == AdFormat.CLASSIC_PITCH
+
+
+# ---------------------------------------------------------------------------
+# _cast_voices unit tests
+# ---------------------------------------------------------------------------
+
+
+def test_cast_voices_no_voices_configured():
+    """_cast_voices falls back to host when no ad voices configured."""
+    from mammamiradio.models import AdBrand
+    from mammamiradio.producer import _cast_voices
+
+    brand = AdBrand(name="TestBrand", tagline="Test", category="tech")
+    config = _make_config()
+    config.ads.voices = []
+
+    result = _cast_voices(brand, config, ["hammer"])
+    assert "hammer" in result
+    assert result["hammer"].voice is not None
+
+
+def test_cast_voices_reuses_when_exhausted():
+    """_cast_voices reuses voices when more roles than available voices."""
+    from mammamiradio.models import AdBrand, AdVoice
+    from mammamiradio.producer import _cast_voices
+
+    brand = AdBrand(name="TestBrand", tagline="Test", category="tech")
+    config = _make_config()
+    config.ads.voices = [AdVoice(name="Ann", voice="it-IT-DiegoNeural", style="warm", role="hammer")]
+
+    result = _cast_voices(brand, config, ["hammer", "maniac", "bureaucrat"])
+    assert len(result) == 3
+    # All three should have a voice assigned
+    for role in ["hammer", "maniac", "bureaucrat"]:
+        assert role in result
+
+
+# ---------------------------------------------------------------------------
+# prewarm_first_segment
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_prewarm_empty_playlist():
+    """prewarm returns False when playlist is empty."""
+    from mammamiradio.producer import prewarm_first_segment
+
+    state = _make_state()
+    state.playlist = []
+    config = _make_config()
+    queue: asyncio.Queue = asyncio.Queue()
+    result = await prewarm_first_segment(queue, state, config)
+    assert result is False
+
+
+@pytest.mark.asyncio
+async def test_prewarm_stopped_session():
+    """prewarm returns False when session is stopped."""
+    from mammamiradio.producer import prewarm_first_segment
+
+    state = _make_state()
+    state.session_stopped = True
+    config = _make_config()
+    queue: asyncio.Queue = asyncio.Queue()
+    result = await prewarm_first_segment(queue, state, config)
+    assert result is False
+
+
+@pytest.mark.asyncio
+async def test_record_motif_exception_is_swallowed():
+    """_record_motif swallows exceptions from persona store."""
+    from mammamiradio.producer import _record_motif
+
+    state = _make_state()
+    mock_store = AsyncMock()
+    mock_store.record_motif = AsyncMock(side_effect=Exception("DB error"))
+    state.persona_store = mock_store
+    track = Track(title="Song", artist="Artist", duration_ms=200_000, spotify_id="t1")
+    # Should not raise
+    await _record_motif(state, track)
+
+
+@pytest.mark.asyncio
+async def test_try_crossfade_success_with_music_file(tmp_path):
+    """_try_crossfade returns the crossfade output when last music exists."""
+    from mammamiradio.producer import _set_last_music_file, _try_crossfade
+
+    # Create fake music file and voice file
+    music = tmp_path / "last_music.mp3"
+    music.write_bytes(b"\x00" * 1000)
+    _set_last_music_file(music)
+
+    voice = tmp_path / "voice.mp3"
+    voice.write_bytes(b"\x00" * 500)
+
+    output = tmp_path / "crossfade.mp3"
+    config = _make_config()
+    config.tmp_dir = tmp_path
+
+    with patch(f"{PRODUCER_MODULE}.crossfade_voice_over_music") as mock_xf:
+        mock_xf.return_value = output
+        output.write_bytes(b"\x00" * 800)  # simulate ffmpeg output
+        result = await _try_crossfade(voice, config, output)
+    assert result == output
+    mock_xf.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_prewarm_exception_returns_false(tmp_path):
+    """prewarm returns False and logs when download throws."""
+    from mammamiradio.producer import prewarm_first_segment
+
+    state = _make_state()
+    config = _make_config()
+    config.tmp_dir = tmp_path
+    config.cache_dir = tmp_path
+    queue: asyncio.Queue = asyncio.Queue()
+    with patch(f"{PRODUCER_MODULE}.download_track", side_effect=Exception("network error")):
+        result = await prewarm_first_segment(queue, state, config)
+    assert result is False
+    assert queue.qsize() == 0
+
+
+@pytest.mark.asyncio
+async def test_prewarm_success(tmp_path):
+    """prewarm queues a segment on success."""
+    from mammamiradio.producer import prewarm_first_segment
+
+    state = _make_state()
+    config = _make_config()
+    config.tmp_dir = tmp_path
+    config.cache_dir = tmp_path
+    queue: asyncio.Queue = asyncio.Queue()
+    fake = tmp_path / "fake.mp3"
+    fake.write_bytes(b"\x00" * 500)
+
+    with (
+        patch(f"{PRODUCER_MODULE}.download_track", return_value=fake),
+        patch(f"{PRODUCER_MODULE}.normalize", side_effect=lambda src, dst: dst.write_bytes(b"\x00" * 500)),
+        patch(f"{PRODUCER_MODULE}.generate_track_rationale", return_value="great track"),
+        patch(f"{PRODUCER_MODULE}.classify_track_crate", return_value="charts"),
+    ):
+        result = await prewarm_first_segment(queue, state, config)
+    assert result is True
+    assert queue.qsize() == 1
+
+
+def test_select_ad_creative_single_voice_excludes_multi():
+    """_select_ad_creative excludes duo formats when only 1 voice available."""
+    from mammamiradio.models import AdBrand, AdVoice
+    from mammamiradio.producer import _select_ad_creative
+
+    brand = AdBrand(name="Test", tagline="test", category="food")
+    state = _make_state()
+    config = _make_config()
+    # Only 1 voice = multi-voice formats should be excluded
+    config.ads.voices = [AdVoice(name="Solo", voice="it-IT-DiegoNeural", style="warm", role="hammer")]
+
+    fmt, sonic, roles = _select_ad_creative(brand, state, config)
+    from mammamiradio.models import AdFormat
+
+    # Should not select a format that needs 2+ voices
+    assert AdFormat(fmt).voice_count < 2

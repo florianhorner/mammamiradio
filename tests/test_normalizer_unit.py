@@ -13,6 +13,8 @@ from mammamiradio.normalizer import (
     concat_files,
     generate_silence,
     generate_sweep,
+    mix_oneshot_sfx,
+    mix_quiet_bleed,
     normalize,
 )
 
@@ -113,6 +115,32 @@ def test_normalize_uses_config_params(mock_subprocess):
     assert "128k" in cmd
 
 
+def test_normalize_forces_single_thread(mock_subprocess):
+    mock_run, _ = mock_subprocess
+    inp = Path("/tmp/in.mp3")
+    out = Path("/tmp/out.mp3")
+
+    normalize(inp, out)
+
+    cmd = mock_run.call_args[0][0]
+    threads_idx = cmd.index("-threads")
+    assert cmd[threads_idx + 1] == "1"
+
+
+def test_normalize_without_loudnorm_uses_fast_filter(mock_subprocess):
+    mock_run, _ = mock_subprocess
+    inp = Path("/tmp/in.mp3")
+    out = Path("/tmp/out.mp3")
+
+    normalize(inp, out, loudnorm=False)
+
+    cmd = mock_run.call_args[0][0]
+    filter_idx = cmd.index("-filter:a")
+    audio_filter = cmd[filter_idx + 1]
+    assert "silenceremove" in audio_filter
+    assert "loudnorm" not in audio_filter
+
+
 # ---------------------------------------------------------------------------
 # concat_files
 # ---------------------------------------------------------------------------
@@ -207,3 +235,89 @@ def test_generate_sweep_with_ffmpeg(tmp_path):
 
     assert out.exists()
     assert out.stat().st_size > 1000
+
+
+# ---------------------------------------------------------------------------
+# mix_quiet_bleed
+# ---------------------------------------------------------------------------
+
+
+def test_mix_quiet_bleed_builds_correct_command(mock_subprocess):
+    mock_run, _ = mock_subprocess
+    base = Path("/tmp/base.mp3")
+    bleed = Path("/tmp/bleed.mp3")
+    out = Path("/tmp/bleed_out.mp3")
+
+    result = mix_quiet_bleed(base, bleed, out)
+
+    assert result == out
+    mock_run.assert_called_once()
+    cmd = mock_run.call_args[0][0]
+    assert cmd[0] == "ffmpeg"
+    assert "-y" in cmd
+    assert str(base) in cmd
+    assert str(bleed) in cmd
+    assert str(out) in cmd
+    joined = " ".join(cmd)
+    assert "volume=-22.0dB" in joined
+    assert "afade" in joined
+    assert "amix" in joined
+    assert "loudnorm" in joined
+
+
+def test_mix_quiet_bleed_custom_params(mock_subprocess):
+    mock_run, _ = mock_subprocess
+    base = Path("/tmp/base.mp3")
+    bleed = Path("/tmp/bleed.mp3")
+    out = Path("/tmp/bleed_out.mp3")
+
+    result = mix_quiet_bleed(base, bleed, out, bleed_volume_db=-30.0, bleed_duration_sec=6.0)
+
+    assert result == out
+    cmd = mock_run.call_args[0][0]
+    joined = " ".join(cmd)
+    assert "volume=-30.0dB" in joined
+    assert "atrim=0:6.0" in joined
+
+
+# ---------------------------------------------------------------------------
+# mix_oneshot_sfx
+# ---------------------------------------------------------------------------
+
+
+def test_mix_oneshot_sfx_builds_correct_command(mock_subprocess):
+    mock_run, _ = mock_subprocess
+    base = Path("/tmp/base.mp3")
+    sfx = Path("/tmp/sfx.mp3")
+    out = Path("/tmp/sfx_out.mp3")
+
+    result = mix_oneshot_sfx(base, sfx, out, offset_sec=2.5, sfx_volume_db=-15.0)
+
+    assert result == out
+    mock_run.assert_called_once()
+    cmd = mock_run.call_args[0][0]
+    assert cmd[0] == "ffmpeg"
+    assert "-y" in cmd
+    assert str(base) in cmd
+    assert str(sfx) in cmd
+    assert str(out) in cmd
+    joined = " ".join(cmd)
+    assert "volume=-15.0dB" in joined
+    assert "adelay=2500|2500" in joined
+    assert "amix" in joined
+    assert "loudnorm" in joined
+
+
+def test_mix_oneshot_sfx_default_params(mock_subprocess):
+    mock_run, _ = mock_subprocess
+    base = Path("/tmp/base.mp3")
+    sfx = Path("/tmp/sfx.mp3")
+    out = Path("/tmp/sfx_out.mp3")
+
+    result = mix_oneshot_sfx(base, sfx, out)
+
+    assert result == out
+    cmd = mock_run.call_args[0][0]
+    joined = " ".join(cmd)
+    assert "volume=-18.0dB" in joined
+    assert "adelay=0|0" in joined
