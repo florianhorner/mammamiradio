@@ -12,15 +12,13 @@ The app is designed to degrade gracefully. Music comes from live Italian charts 
 
 ### Dashboard
 
-The listener dashboard at `/` gives you the station at a glance: now playing with animated waveform, up-next queue (with rendered vs predicted segments), pipeline status indicators, and a radio dial tuning animation on first load.
+The listener dashboard at `/` gives you the station at a glance: now playing with animated waveform, up-next queue (with rendered vs predicted segments), pipeline status indicators, a callback corner for running jokes, and a radio dial tuning animation on first load.
 
-![Dashboard](docs/screenshots/dashboard.png)
+![Dashboard](docs/screenshots/listener.png)
 
 ### Admin
 
 The admin control room at `/admin` has three tabs: Music (playlist, queue, drag-drop reorder, search), Radio (hosts, pacing, triggers, banter), and Engine Room (runtime stats, segment counts, capabilities).
-
-![Listener](docs/screenshots/listener.png)
 
 ## What it does
 
@@ -302,11 +300,17 @@ mammamiradio/
   tts.py              TTS synthesis (Edge TTS + OpenAI gpt-4o-mini-tts)
   normalizer.py       FFmpeg helpers
   ha_context.py       Home Assistant polling and formatting
+  ha_enrichment.py    Pure HA event derivation (state diffing, event pruning, numeric passthrough)
   clip.py             WTF clip extraction from ring buffer
   track_rationale.py  "Why this track?" rationale for listener UI
+  track_rules.py      Per-track personality rules flagged by admin
   capabilities.py     Capability flags, tier derivation, next-step hints
-  persona.py          Compounding listener memory and session tracking
+  persona.py          Compounding listener memory, arc phases, session tracking
+  song_cues.py        Per-track machine-derived memory: anthems, skip bits, LLM reactions
   context_cues.py     Time-of-day and cultural context for prompts
+  audio_quality.py    Audio quality gate for spoken segments before queuing
+  setup_status.py     First-run setup status classification (legacy, kept for /status compat)
+  sync.py             SQLite database initialization and schema migration
   models.py           core data models and station state
   dashboard.html      listener-facing dashboard at /
   admin.html          admin control room at /admin
