@@ -635,6 +635,13 @@ Rules:
 - PHYSICAL COMEDY: reference the studio physically. Someone knocks something over.
   Someone's headphone cable gets caught. The mic sounds wrong and they complain about it.
 - REACT BEFORE WORDS: a host reacts first — laughs, "eh", groans, "oddio no" — before forming a sentence. Feelings first, words second.
+- BANNED PHRASES: never write these — they are overused clichés that make the station sound fake:
+  "che bomba", "che ritmo", "che musica", "che canzone", "che pezzo", "ah che",
+  "assolutamente", "incredibile", "fantastico", "pazzesco", "spettacolare",
+  "bella canzone", "bella musica", "che bella".
+  These phrases appear after EVERY break and destroy the illusion instantly.
+  If you're about to reach for one of these, stop. Find a specific, unexpected reaction instead —
+  reference something real about the track, invent a grievance, or just move on without commenting.
 - Output ONLY valid JSON, no markdown fences or extra text."""
 
 
@@ -698,6 +705,7 @@ async def write_banter(
                 logger.warning("Failed to load song cues for banter", exc_info=True)
 
     host_names = {h.name: h for h in config.hosts}
+    host_names_ci = {h.name.lower(): h for h in config.hosts}
 
     # Home Assistant context — hosts may casually reference home state
     # SECURITY: instructions are placed OUTSIDE the data tags so injected
@@ -891,7 +899,8 @@ Return JSON:
 
         result = []
         for line in data["lines"]:
-            host = host_names.get(line["host"], config.hosts[0])
+            raw_name = str(line.get("host", ""))
+            host = host_names.get(raw_name) or host_names_ci.get(raw_name.lower(), config.hosts[0])
             result.append((host, line["text"]))
 
         # Dedup guard: drop consecutive lines with identical text (LLM copy-paste error)
@@ -1118,7 +1127,8 @@ RULES:
 - Then pivot to what's next. Smooth, natural, like a real DJ.
 - You MAY reference the time of day if it fits ("perfetta per stasera", "mattina col botto").
 - Recent opener stems to avoid repeating: {banned_openers}
-- If the host would normally say "Che pezzo...", pick something fresher instead.
+- BANNED openers — never start with: "Che pezzo", "Che ritmo", "Che musica", "Che canzone",
+  "Che bomba", "Ah che", "Bella canzone", "Bella musica". These sound like a broken record.
 - ALL text in {config.station.language}.
 - {style_instruction}
 

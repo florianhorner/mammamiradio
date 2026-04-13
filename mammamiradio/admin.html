@@ -302,14 +302,15 @@ h1 {
 
 /* ── PLAYLIST ── */
 .search-bar { display: flex; gap: 8px; margin-bottom: 12px; }
-.search-input {
+.search-input, .input {
   flex: 1; font-family: var(--font-body); font-size: 13px;
   padding: 10px 14px; border-radius: 8px;
   background: rgba(20,17,15,0.5); color: var(--cream);
   border: 1px solid rgba(245,237,216,0.12); outline: none;
+  width: 100%; box-sizing: border-box;
 }
-.search-input:focus { border-color: rgba(244,208,72,0.5); }
-.search-input::placeholder { color: rgba(245,237,216,0.35); }
+.search-input:focus, .input:focus { border-color: rgba(244,208,72,0.5); }
+.search-input::placeholder, .input::placeholder { color: rgba(245,237,216,0.35); }
 
 .sr-row {
   display: flex; align-items: center; gap: 8px;
@@ -432,7 +433,13 @@ h1 {
 .lr-head { display: flex; align-items: center; gap: 6px; margin-bottom: 3px; }
 .lr-name { font-size: 12px; font-weight: 600; color: var(--cream); }
 .lr-age { font-size: 10px; color: rgba(245,237,216,0.35); margin-left: auto; }
-.lr-msg { font-size: 12px; color: rgba(245,237,216,0.65); }
+.lr-msg { font-size: 12px; color: rgba(245,237,216,0.65); line-height: 1.4; margin-bottom: 6px; }
+.lr-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.lr-btn { font-family: var(--font-body); font-size: 11px; font-weight: 600; padding: 3px 8px; border-radius: 5px; border: none; cursor: pointer; transition: background 0.15s; }
+.lr-btn-dismiss { background: rgba(245,237,216,0.08); color: rgba(245,237,216,0.45); }
+.lr-btn-dismiss:hover { background: rgba(184,44,32,0.25); color: var(--error); }
+.lr-btn-queue { background: rgba(37,99,235,0.18); color: var(--ok); }
+.lr-btn-queue:hover { background: rgba(37,99,235,0.32); }
 .lr-pill { font-size: 10px; font-weight: 600; padding: 2px 6px; border-radius: 4px; }
 .lr-shout { background: rgba(37,99,235,0.18); color: var(--ok); }
 .lr-found { background: rgba(37,99,235,0.18); color: var(--ok); }
@@ -587,22 +594,22 @@ h1 {
   <div class="progress-label" id="progLabel">estimated</div>
   <div class="transport">
     <button class="btn btn-skip" onclick="doSkip(this)">&#9197; SKIP <span class="key">S</span></button>
+    <button class="btn btn-stop" id="stopBtn" onclick="doStop(this)">&#9632; Stop</button>
+    <button class="btn btn-resume" id="resumeBtn" onclick="doResume(this)" style="display:none">&#9654; Resume</button>
+  </div>
+  <!-- prompt() is intentional here: flag is an operator-only action, browser dialog is acceptable -->
+  <div class="transport" style="margin-top:6px">
     <button class="btn btn-util" onclick="doShuffle(this)">&#128256; Shuffle</button>
     <button class="btn btn-util" onclick="doPurge(this)">&#128465; Purge</button>
-    <!-- prompt() is intentional here: flag is an operator-only action, browser dialog is acceptable -->
-    <button class="btn btn-util" onclick="flagCurrentTrack(this)">&#128681; Flag Track</button>
-  </div>
-  <div class="transport" style="margin-top:8px">
-    <button class="btn btn-stop" id="stopBtn" onclick="doStop(this)">&#9632; Stop Session</button>
-    <button class="btn btn-resume" id="resumeBtn" onclick="doResume(this)" style="display:none">&#9654; Resume</button>
+    <button class="btn btn-util" onclick="flagCurrentTrack(this)">&#128681; Flag</button>
   </div>
 </div>
 
 <!-- TAB NAV -->
 <div class="tab-nav" role="tablist" aria-label="Admin panels">
   <button class="tab-btn" role="tab" aria-selected="true" aria-controls="tab-panel-music" id="tab-music" data-tab="music" onclick="switchTab('music')">Music</button>
-  <button class="tab-btn" role="tab" aria-selected="false" aria-controls="tab-panel-radio" id="tab-radio" data-tab="radio" onclick="switchTab('radio')">Radio<span class="tab-alert" aria-hidden="true"></span></button>
-  <button class="tab-btn" role="tab" aria-selected="false" aria-controls="tab-panel-engine" id="tab-engine" data-tab="engine" onclick="switchTab('engine')">Engine Room</button>
+  <button class="tab-btn" role="tab" aria-selected="false" aria-controls="tab-panel-radio" id="tab-radio" data-tab="radio" onclick="switchTab('radio')">Radio</button>
+  <button class="tab-btn" role="tab" aria-selected="false" aria-controls="tab-panel-engine" id="tab-engine" data-tab="engine" onclick="switchTab('engine')">Engine Room<span class="tab-alert" aria-hidden="true"></span></button>
 </div>
 
 <!-- TAB: MUSIC -->
@@ -624,7 +631,7 @@ h1 {
   <div class="card">
     <div class="card-label">Playlist <span id="plMeta" style="float:right;font-weight:400"></span></div>
     <div class="search-bar">
-      <input type="text" class="search-input" id="searchInput" placeholder="Filter playlist..." autocomplete="off">
+      <input type="text" class="search-input" id="searchInput" placeholder="Search music (playlist + web)..." autocomplete="off">
       <button class="btn btn-util" onclick="doSearch()">Search</button>
     </div>
     <div id="searchResults"></div>
@@ -636,61 +643,6 @@ h1 {
 <!-- TAB: RADIO -->
 <div class="tab-pane" role="tabpanel" id="tab-panel-radio" aria-labelledby="tab-radio" data-tab="radio">
 
-  <!-- Left column: status/health cards -->
-  <div class="radio-col-left">
-
-    <!-- INSTALL ONBOARDING — first so urgent action is never buried -->
-    <div class="card setup-card">
-      <div class="card-label">Installation Onboarding</div>
-      <div class="setup-headline" id="setupHeadline">Checking setup status...</div>
-      <div class="setup-meta" id="setupMeta"></div>
-      <div class="setup-next" id="setupNext">Collecting first-run diagnostics.</div>
-
-      <div class="setup-subhead">Step Checklist</div>
-      <ul class="setup-steps" id="setupSteps"></ul>
-
-      <div class="setup-subhead">Essentials</div>
-      <div class="setup-list" id="setupEssentials"></div>
-
-      <div class="setup-subhead">Preflight Checks</div>
-      <div class="setup-list" id="setupChecks"></div>
-
-      <div id="setupKeysConfigured" style="display:none;padding:0.75rem 1rem;background:rgba(37,99,235,0.1);border:1px solid rgba(37,99,235,0.3);border-radius:8px;margin-bottom:0.75rem">
-        <span style="color:var(--ok);font-weight:600" id="setupKeysLabel">&#10003; AI keys configured</span>
-        <span style="opacity:0.7;margin-left:0.5rem;font-size:0.85em" id="setupKeysDetail"></span>
-        <button class="btn btn-util" style="margin-left:0.75rem;font-size:0.8em;padding:0.2rem 0.6rem" onclick="_keysEditMode=true;document.getElementById('setupKeysForm').style.display='block'">Replace</button>
-      </div>
-      <div id="setupKeysForm">
-        <div class="setup-subhead">Save Keys</div>
-        <div class="setup-keys">
-          <input class="input" id="setupAnthropicKey" type="password" placeholder="ANTHROPIC_API_KEY (optional)" autocomplete="off">
-          <input class="input" id="setupOpenaiKey" type="password" placeholder="OPENAI_API_KEY (optional)" autocomplete="off">
-        </div>
-        <div class="setup-actions" style="margin-top:10px">
-          <button class="btn btn-trigger" id="setupSaveBtn" onclick="setupSaveKeys(this)">Save Keys</button>
-        </div>
-      </div>
-
-      <div class="setup-actions">
-        <button class="btn btn-util" onclick="setupRecheck(this)">Re-check</button>
-      </div>
-
-      <div class="setup-snippet" id="setupSnippetWrap">
-        <div class="setup-subhead" style="margin-top:0">Home Assistant Add-on Snippet</div>
-        <button class="btn btn-util" onclick="copySetupSnippet()">Copy Snippet</button>
-        <pre class="setup-pre" id="setupSnippet"></pre>
-      </div>
-    </div>
-
-    <!-- SYSTEMS -->
-    <div class="card">
-      <div class="card-label">Systems</div>
-      <div class="status-stack" id="systemsBody"><div class="empty">Checking AI and music systems...</div></div>
-    </div>
-
-  </div><!-- /radio-col-left -->
-
-  <!-- Right column: broadcast controls -->
   <div class="radio-col-right">
 
     <!-- TRIGGERS -->
@@ -753,6 +705,55 @@ h1 {
 <!-- TAB: ENGINE ROOM -->
 <div class="tab-pane" role="tabpanel" id="tab-panel-engine" aria-labelledby="tab-engine" data-tab="engine">
 
+  <!-- INSTALL ONBOARDING -->
+  <div class="card setup-card">
+    <div class="card-label">Installation Onboarding</div>
+    <div class="setup-headline" id="setupHeadline">Checking setup status...</div>
+    <div class="setup-meta" id="setupMeta"></div>
+    <div class="setup-next" id="setupNext">Collecting first-run diagnostics.</div>
+
+    <div class="setup-subhead">Step Checklist</div>
+    <ul class="setup-steps" id="setupSteps"></ul>
+
+    <div class="setup-subhead">Essentials</div>
+    <div class="setup-list" id="setupEssentials"></div>
+
+    <div class="setup-subhead">Preflight Checks</div>
+    <div class="setup-list" id="setupChecks"></div>
+
+    <div id="setupKeysConfigured" style="display:none;padding:0.75rem 1rem;background:rgba(37,99,235,0.1);border:1px solid rgba(37,99,235,0.3);border-radius:8px;margin-bottom:0.75rem">
+      <span style="color:var(--ok);font-weight:600" id="setupKeysLabel">&#10003; AI keys configured</span>
+      <span style="opacity:0.7;margin-left:0.5rem;font-size:0.85em" id="setupKeysDetail"></span>
+      <button class="btn btn-util" style="margin-left:0.75rem;font-size:0.8em;padding:0.2rem 0.6rem" onclick="_keysEditMode=true;document.getElementById('setupKeysForm').style.display='block'">Replace</button>
+    </div>
+    <div id="setupKeysForm">
+      <div class="setup-subhead">Save Keys</div>
+      <div class="setup-keys">
+        <input class="input" id="setupAnthropicKey" type="password" placeholder="ANTHROPIC_API_KEY (optional)" autocomplete="off">
+        <input class="input" id="setupOpenaiKey" type="password" placeholder="OPENAI_API_KEY (optional)" autocomplete="off">
+      </div>
+      <div class="setup-actions" style="margin-top:10px">
+        <button class="btn btn-trigger" id="setupSaveBtn" onclick="setupSaveKeys(this)">Save Keys</button>
+      </div>
+    </div>
+
+    <div class="setup-actions">
+      <button class="btn btn-util" onclick="setupRecheck(this)">Re-check</button>
+    </div>
+
+    <div class="setup-snippet" id="setupSnippetWrap">
+      <div class="setup-subhead" style="margin-top:0">Home Assistant Add-on Snippet</div>
+      <button class="btn btn-util" onclick="copySetupSnippet()">Copy Snippet</button>
+      <pre class="setup-pre" id="setupSnippet"></pre>
+    </div>
+  </div>
+
+  <!-- SYSTEMS -->
+  <div class="card">
+    <div class="card-label">Systems</div>
+    <div class="status-stack" id="systemsBody"><div class="empty">Checking AI and music systems...</div></div>
+  </div>
+
   <div class="card">
     <div class="card-label">Runtime</div>
     <div id="engineRuntime" style="font-family:var(--font-mono);font-size:12px;line-height:1.8;color:var(--text-secondary)">Loading...</div>
@@ -784,7 +785,7 @@ let _st={}, _pub={}, _caps={}, _hostsOk=false, _paceOk=false, _searchTo=null, _k
 let _nowStart=0, _nowDur=0, _tick=null, _prevLabel='';
 const SHAPE={ok:'✓',warn:'△',error:'✕',info:'·'};
 const SEGMENT_GLYPH={music:'♪',banter:'🎙',ad:'[Ad]',news_flash:'[!]'};
-const _radioTabBtn=document.querySelector('.tab-btn[data-tab="radio"]');
+const _radioTabBtn=document.querySelector('.tab-btn[data-tab="engine"]');
 let _lastSetupJson=null;
 
 function toast(m){const e=document.getElementById('toast');e.textContent=m;e.classList.add('show');setTimeout(()=>e.classList.remove('show'),1600)}
@@ -1219,21 +1220,44 @@ function updateListenerRequests(reqs){
   const meta=document.getElementById('lrMeta');
   if(!reqs?.length){el.innerHTML='<div class="empty">No requests yet</div>';meta.textContent='';return}
   meta.textContent=reqs.length+' pending';
-  el.innerHTML=reqs.map(r=>{
+  _lrReqs=reqs;
+  el.innerHTML=reqs.map((r,i)=>{
     const age=r.age_s<60?r.age_s+'s ago':Math.floor(r.age_s/60)+'m ago';
     let status='';
+    let actions='';
     if(r.type==='song_request'){
-      if(r.song_found) status=`<span class="lr-pill lr-found">&#9654; ${esc(r.song_track||'ready')}</span>`;
-      else if(r.song_error) status='<span class="lr-pill lr-err">not found</span>';
-      else status='<span class="lr-pill lr-searching">searching…</span>';
+      if(r.song_found){
+        status=`<span class="lr-pill lr-found">&#9654; ${esc(r.song_track||'ready')}</span>`;
+        actions+=`<button class="lr-btn lr-btn-queue" onclick="lrQueueNext(${i})">&#10003; Done</button>`;
+      } else if(r.song_error){
+        status='<span class="lr-pill lr-err">not found</span>';
+      } else {
+        status='<span class="lr-pill lr-searching">searching…</span>';
+      }
     } else {
       status='<span class="lr-pill lr-shout">shoutout</span>';
     }
-    return `<div class="lr-item">
+    actions+=`<button class="lr-btn lr-btn-dismiss" onclick="lrDismiss('${esc(r.id||'')}')">&#10005; Dismiss</button>`;
+    return `<div class="lr-item" id="lr-item-${esc(r.id||i)}">
       <div class="lr-head"><span class="lr-name">${esc(r.name||'Listener')}</span>${status}<span class="lr-age">${age}</span></div>
       <div class="lr-msg">${esc(r.message)}</div>
+      <div class="lr-actions">${actions}</div>
     </div>`;
   }).join('');
+}
+let _lrReqs=[];
+async function lrDismiss(id){
+  if(!id)return;
+  const r=await api('POST','/api/listener-requests/dismiss',{id});
+  if(r.removed>0)toast('Request dismissed');
+  else toast('Already gone');
+}
+async function lrQueueNext(i){
+  const req=_lrReqs[i];if(!req)return;
+  if(req.type==='song_request'&&req.song_found){
+    const r=await api('POST','/api/listener-requests/dismiss',{id:req.id});
+    toast(r.removed>0?'Request handled: '+esc(req.song_track||req.name):'Already consumed');
+  }
 }
 
 // ── Log ──
@@ -1317,12 +1341,12 @@ function updateEngineRoom(st,caps){
   if(hd){
     haCard.style.display='';
     const lines=[];
-    if(hd.mood)lines.push('Mood: <strong>'+hd.mood+'</strong>');
-    if(hd.weather_arc)lines.push('Weather: '+hd.weather_arc);
-    if(hd.events_summary)lines.push('Events:<br>'+hd.events_summary.replace(/\n/g,'<br>'));
+    if(hd.mood_en||hd.mood)lines.push('Mood: <strong>'+(hd.mood_en||hd.mood)+'</strong>');
+    if(hd.weather_arc_en||hd.weather_arc)lines.push('Weather: '+(hd.weather_arc_en||hd.weather_arc));
+    if(hd.events_summary_en||hd.events_summary)lines.push('Events:<br>'+(hd.events_summary_en||hd.events_summary).replace(/\n/g,'<br>'));
     if(hd.pending_directive)lines.push('Pending directive: <strong style="color:var(--warning)">'+hd.pending_directive.substring(0,80)+'...</strong>');
     lines.push('Recent events: '+(hd.recent_event_count||0));
-    if(hd.last_event_label)lines.push('Last event: '+hd.last_event_label);
+    if(hd.last_event_label_en||hd.last_event_label)lines.push('Last event: '+(hd.last_event_label_en||hd.last_event_label));
     haEl.innerHTML=lines.join('<br>')||'No HA data';
   }else{
     haCard.style.display='none';

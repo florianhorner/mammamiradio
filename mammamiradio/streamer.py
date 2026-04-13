@@ -1324,6 +1324,7 @@ async def get_listener_requests(request: Request, _: None = Depends(require_admi
     return {
         "requests": [
             {
+                "id": str(r.get("ts", "")),
                 "name": r.get("name"),
                 "message": r.get("message"),
                 "type": r.get("type"),
@@ -1335,6 +1336,20 @@ async def get_listener_requests(request: Request, _: None = Depends(require_admi
             for r in state.pending_requests
         ]
     }
+
+
+@router.post("/api/listener-requests/dismiss")
+async def dismiss_listener_request(request: Request, _: None = Depends(require_admin_access)):
+    """Remove a specific listener request from the queue by id (admin only)."""
+    state = request.app.state.station_state
+    body = await request.json()
+    req_id = str(body.get("id", ""))
+    if not req_id:
+        return JSONResponse({"ok": False, "error": "id required"}, status_code=400)
+    before = len(state.pending_requests)
+    state.pending_requests = [r for r in state.pending_requests if str(r.get("ts", "")) != req_id]
+    removed = before - len(state.pending_requests)
+    return {"ok": True, "removed": removed}
 
 
 @router.post("/api/listener-request")
@@ -1784,6 +1799,10 @@ async def status(request: Request, _: None = Depends(require_admin_access)):
                 "pending_directive": state.ha_pending_directive or None,
                 "recent_event_count": state.ha_recent_event_count,
                 "last_event_label": state.ha_last_event_label or None,
+                "mood_en": state.ha_home_mood_en or None,
+                "weather_arc_en": state.ha_weather_arc_en or None,
+                "events_summary_en": state.ha_events_summary_en or None,
+                "last_event_label_en": state.ha_last_event_label_en or None,
             }
             if state.ha_context
             else None,

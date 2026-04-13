@@ -411,7 +411,10 @@ async def prewarm_first_segment(
         logger.info("Skipping prewarm: session is stopped")
         return False
     try:
-        track = state.select_next_track()
+        track = state.select_next_track(
+            repeat_cooldown=config.playlist.repeat_cooldown,
+            artist_cooldown=config.playlist.artist_cooldown,
+        )
         logger.info("Pre-warming first track: %s", track.display)
         audio_path = await download_track(track, config.cache_dir, music_dir=Path("music"))
         loop = asyncio.get_running_loop()
@@ -425,7 +428,7 @@ async def prewarm_first_segment(
             logger.info("Normalization cache hit (prewarm): %s", norm_cached.name)
         else:
             norm_path = config.tmp_dir / f"music_{uuid4().hex[:8]}.mp3"
-            _norm_fn = partial(normalize, audio_path, norm_path, config, loudnorm=True)
+            _norm_fn = partial(normalize, audio_path, norm_path, config, loudnorm=True, music_eq=True)
             await loop.run_in_executor(None, _norm_fn)
             try:
                 await loop.run_in_executor(None, shutil.copy2, str(norm_path), str(norm_cached))
@@ -536,7 +539,7 @@ async def run_producer(
             _was_idle = False
         _producer_idle_logged = False
 
-        if queue.qsize() >= config.pacing.lookahead_segments:
+        if queue.qsize() >= config.pacing.lookahead_segments and state.force_next is None:
             # Periodically evict stale cache files while the producer is idle
             now = asyncio.get_running_loop().time()
             if now - _last_cache_eviction >= _cache_eviction_interval:
@@ -594,6 +597,9 @@ async def run_producer(
             state.ha_events_summary = ha_cache.events_summary
             state.ha_home_mood = ha_cache.mood
             state.ha_weather_arc = ha_cache.weather_arc
+            state.ha_home_mood_en = ha_cache.mood_en
+            state.ha_weather_arc_en = ha_cache.weather_arc_en
+            state.ha_events_summary_en = ha_cache.events_summary_en
             # Dashboard HA moments: pick the most notable recent non-person event
             state.ha_recent_event_count = len(ha_cache.events)
             _public_events = [e for e in ha_cache.events if not e.entity_id.startswith("person.")]
@@ -608,9 +614,11 @@ async def run_producer(
                 )
                 state.ha_last_event_label = best.label
                 state.ha_last_event_ts = best.timestamp
+                state.ha_last_event_label_en = ha_cache.last_event_label_en or best.label
             else:
                 state.ha_last_event_label = ""
                 state.ha_last_event_ts = 0.0
+                state.ha_last_event_label_en = ""
             # Phase 4: only set directive if none is pending (first match wins)
             if not state.ha_pending_directive:
                 directive = check_reactive_triggers(ha_cache.events, ha_cache.raw_states)
@@ -619,7 +627,10 @@ async def run_producer(
 
         try:
             if seg_type == SegmentType.MUSIC:
-                track = state.select_next_track()
+                track = state.select_next_track(
+                    repeat_cooldown=config.playlist.repeat_cooldown,
+                    artist_cooldown=config.playlist.artist_cooldown,
+                )
                 logger.info("Producing MUSIC: %s", track.display)
 
                 audio_path = await download_track(track, config.cache_dir, music_dir=Path("music"))
@@ -640,7 +651,7 @@ async def run_producer(
                 else:
                     norm_path = config.tmp_dir / f"music_{uuid4().hex[:8]}.mp3"
                     norm_is_cached = False
-                    _norm_fn = partial(normalize, audio_path, norm_path, config, loudnorm=True)
+                    _norm_fn = partial(normalize, audio_path, norm_path, config, loudnorm=True, music_eq=True)
                     await loop.run_in_executor(None, _norm_fn)
                     try:
                         await loop.run_in_executor(None, shutil.copy2, str(norm_path), str(norm_cached))

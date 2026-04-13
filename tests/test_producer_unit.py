@@ -1474,3 +1474,61 @@ def test_select_ad_creative_single_voice_excludes_multi():
 
     # Should not select a format that needs 2+ voices
     assert AdFormat(fmt).voice_count < 2
+
+
+# ---------------------------------------------------------------------------
+# force_next bypasses queue-full gate
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_force_next_bypasses_full_queue(tmp_path):
+    """force_next is consumed even when the queue is at lookahead capacity.
+
+    Regression test for the bug where setting state.force_next while the
+    queue was full caused the trigger to be silently ignored — the producer
+    loop hit the queue-full gate before reaching the force_next check.
+    """
+    queue: asyncio.Queue = asyncio.Queue()
+    state = _make_state()
+    config = _make_config()
+    config.pacing.lookahead_segments = 1
+
+    # Pre-fill the queue to capacity with a dummy music segment so the
+    # producer would normally skip production and sleep.
+    dummy = tmp_path / "dummy.mp3"
+    dummy.write_bytes(b"\x00" * 200)
+    await queue.put(Segment(type=SegmentType.MUSIC, path=dummy, metadata={}))
+    assert queue.qsize() == 1
+
+    # Set a forced trigger while the queue is already full.
+    state.force_next = SegmentType.BANTER
+
+    host = config.hosts[0] if config.hosts else HostPersonality(name="Marco", voice="it-IT-DiegoNeural", style="warm")
+    banter_lines = [(host, "Ciao!")]
+
+    with (
+        patch(f"{PRODUCER_MODULE}.write_banter", new_callable=AsyncMock, return_value=(banter_lines, None)),
+        patch(f"{PRODUCER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora...")),
+        patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(f"{PRODUCER_MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(f"{PRODUCER_MODULE}.concat_files", return_value=_fake_path()),
+        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+    ):
+        task = asyncio.create_task(run_producer(queue, state, config))
+        try:
+            # Wait until force_next is consumed (producer processed the trigger).
+            deadline = asyncio.get_event_loop().time() + 5.0
+            while state.force_next is not None:
+                if asyncio.get_event_loop().time() > deadline:
+                    raise TimeoutError("force_next was never consumed — queue-full gate blocked the trigger")
+                await asyncio.sleep(0.05)
+        finally:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+    # force_next was consumed — the trigger was not silently dropped.
+    assert state.force_next is None

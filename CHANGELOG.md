@@ -6,8 +6,16 @@ The current version source of truth is `pyproject.toml`.
 
 ## [Unreleased]
 
+## [2.9.2] - 2026-04-13
+
 ### Fixed
 
+- **Engine Room shows English**: Home Assistant context (mood, weather arc, recent events, last event label) now displays in English in the admin Engine Room panel. Italian strings are preserved internally for the scriptwriter — the dual-track approach adds parallel `_en` fields through `HomeContext`, `StationState`, and the status API without touching LLM prompt content.
+- **Tab reorganization**: Installation Onboarding and Systems cards moved from the Radio tab to the Engine Room tab where they belong. The setup-incomplete alert dot now appears on the Engine Room tab button.
+- **Input field styling**: API key input fields in the admin panel now use the same dark pill style as search inputs (`.input` aliased to `.search-input` CSS rules). Previously fell through to browser defaults.
+- **Host clichés banned**: `"che bomba"`, `"che ritmo"`, `"che musica"`, `"che canzone"`, `"che pezzo"`, `"ah che"`, `"assolutamente"`, `"incredibile"`, `"fantastico"`, `"pazzesco"`, `"spettacolare"`, `"bella canzone"`, `"bella musica"`, `"che bella"` added to the banter system prompt banned-phrases list and to the transition voiceover prompt. Hosts were opening every segment with the same exclamation; these phrases now cause a retry.
+- **Listener request "Done" button**: The "Play next" button on listener requests was showing a misleading toast without actually queuing the track. Relabelled to "Done" with an honest dismiss-and-acknowledge behaviour.
+- **Triggers not heard when queue is full**: `/api/trigger` (banter, news flash, ad) was silently ignored when the producer queue was already at lookahead capacity. The queue-full gate now checks `force_next` first and falls through to produce the forced segment immediately. Regression test added.
 - **Admin keyboard shortcuts removed**: Global `keydown` listener (`s`/`b`/`a`/`n`) was firing skip/banter/ad/news-flash commands while the user was typing in the search box. The shortcuts were removed entirely. A regression test guards against reintroduction.
 - **HA addon config lost on every restart**: `run.sh` had a shell quoting bug — an f-string containing `"double quotes"` inside a shell `"double-quoted"` string caused the Python options parser to receive mangled code. Result: `NameError: name 'true' is not defined` on every restart, `ANTHROPIC_API_KEY` never exported, all Anthropic calls falling back to OpenAI. Fixed by removing the inner double-quotes. 11 functional tests now execute the real parser snippet against JSON fixtures.
 

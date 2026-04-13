@@ -200,12 +200,10 @@ def test_generate_music_bed_lounge(mock_subprocess):
     generate_music_bed(out, "lounge", 10.0)
     cmd = mock_run.call_args[0][0]
     joined = " ".join(cmd)
-    # All tones in single aevalsrc
     assert "aevalsrc=" in joined
     assert "220" in joined
-    assert "tremolo" in joined
-    assert "volume=0.15" in joined
-    assert "aecho" in joined
+    assert "aphaser" in joined
+    assert "volume=0.14" in joined
 
 
 def test_generate_music_bed_dramatic(mock_subprocess):
@@ -225,7 +223,8 @@ def test_generate_music_bed_upbeat(mock_subprocess):
     cmd = mock_run.call_args[0][0]
     joined = " ".join(cmd)
     assert "aevalsrc=" in joined
-    assert "440" in joined
+    assert "330" in joined
+    assert "aphaser" in joined
 
 
 def test_generate_music_bed_mysterious(mock_subprocess):
@@ -245,7 +244,8 @@ def test_generate_music_bed_epic(mock_subprocess):
     cmd = mock_run.call_args[0][0]
     joined = " ".join(cmd)
     assert "aevalsrc=" in joined
-    assert "60" in joined
+    assert "65" in joined
+    assert "tremolo" in joined
 
 
 def test_generate_music_bed_unknown_mood_defaults_to_lounge(mock_subprocess):
@@ -361,7 +361,8 @@ def test_generate_music_bed_cheap_synth_romance(mock_subprocess):
     cmd = mock_run.call_args[0][0]
     joined = " ".join(cmd)
     assert "aevalsrc=" in joined
-    assert "300" in joined
+    assert "293" in joined
+    assert "aphaser" in joined
 
 
 def test_generate_music_bed_suspicious_jazz(mock_subprocess):
@@ -382,10 +383,10 @@ def test_generate_music_bed_discount_techno(mock_subprocess):
     cmd = mock_run.call_args[0][0]
     joined = " ".join(cmd)
     assert "aevalsrc=" in joined
-    assert "440" in joined
-    assert "880" in joined
-    # Fast tremolo for techno pulse
-    assert "tremolo=f=6" in joined
+    assert "110" in joined
+    # Fast rhythmic tremolo (f=8) instead of droning echo
+    assert "tremolo=f=8" in joined
+    assert "highpass" in joined
 
 
 def test_generate_music_bed_environment_cafe(mock_subprocess):
@@ -395,7 +396,7 @@ def test_generate_music_bed_environment_cafe(mock_subprocess):
     cmd = mock_run.call_args[0][0]
     joined = " ".join(cmd)
     assert "aevalsrc=" in joined
-    assert "180" in joined
+    assert "174" in joined
 
 
 # ---------------------------------------------------------------------------
@@ -771,3 +772,211 @@ def test_generate_brand_motif_cleans_up_on_exception(tmp_path, mock_subprocess):
         pytest.raises(RuntimeError, match="ffmpeg died"),
     ):
         generate_brand_motif(out, "chime+ding")
+
+
+# ---------------------------------------------------------------------------
+# generate_music_bed — additional moods (coverage for uncovered branches)
+# ---------------------------------------------------------------------------
+
+
+def test_generate_music_bed_shopping_channel(mock_subprocess):
+    mock_run, _ = mock_subprocess
+    out = Path("/tmp/bed.mp3")
+    generate_music_bed(out, "shopping_channel", 5.0)
+    cmd = mock_run.call_args[0][0]
+    joined = " ".join(cmd)
+    assert "aevalsrc=" in joined
+    assert "400" in joined
+    assert "tremolo" in joined
+
+
+def test_generate_music_bed_luxury_spa(mock_subprocess):
+    mock_run, _ = mock_subprocess
+    out = Path("/tmp/bed.mp3")
+    generate_music_bed(out, "luxury_spa", 5.0)
+    cmd = mock_run.call_args[0][0]
+    joined = " ".join(cmd)
+    assert "aevalsrc=" in joined
+    assert "250" in joined
+    assert "aphaser" in joined
+
+
+def test_generate_music_bed_showroom(mock_subprocess):
+    mock_run, _ = mock_subprocess
+    out = Path("/tmp/bed.mp3")
+    generate_music_bed(out, "showroom", 5.0)
+    cmd = mock_run.call_args[0][0]
+    joined = " ".join(cmd)
+    assert "aevalsrc=" in joined
+    assert "300" in joined
+    assert "aphaser" in joined
+
+
+def test_generate_music_bed_stadium(mock_subprocess):
+    mock_run, _ = mock_subprocess
+    out = Path("/tmp/bed.mp3")
+    generate_music_bed(out, "stadium", 5.0)
+    cmd = mock_run.call_args[0][0]
+    joined = " ".join(cmd)
+    assert "aevalsrc=" in joined
+    assert "100" in joined
+    assert "tremolo" in joined
+
+
+def test_generate_music_bed_motorway(mock_subprocess):
+    mock_run, _ = mock_subprocess
+    out = Path("/tmp/bed.mp3")
+    generate_music_bed(out, "motorway", 5.0)
+    cmd = mock_run.call_args[0][0]
+    joined = " ".join(cmd)
+    assert "aevalsrc=" in joined
+    assert "55" in joined
+    assert "tremolo" in joined
+
+
+def test_generate_music_bed_occult_basement(mock_subprocess):
+    mock_run, _ = mock_subprocess
+    out = Path("/tmp/bed.mp3")
+    generate_music_bed(out, "occult_basement", 5.0)
+    cmd = mock_run.call_args[0][0]
+    joined = " ".join(cmd)
+    assert "aevalsrc=" in joined
+    assert "50" in joined
+    assert "tremolo" in joined
+
+
+def test_generate_music_bed_overblown_epic(mock_subprocess):
+    mock_run, _ = mock_subprocess
+    out = Path("/tmp/bed.mp3")
+    generate_music_bed(out, "overblown_epic", 5.0)
+    cmd = mock_run.call_args[0][0]
+    joined = " ".join(cmd)
+    assert "aevalsrc=" in joined
+    assert "55" in joined
+
+
+def test_generate_music_bed_beach(mock_subprocess):
+    mock_run, _ = mock_subprocess
+    out = Path("/tmp/bed.mp3")
+    generate_music_bed(out, "beach", 5.0)
+    cmd = mock_run.call_args[0][0]
+    joined = " ".join(cmd)
+    assert "aevalsrc=" in joined
+    assert "196" in joined
+
+
+def test_generate_music_bed_cafe(mock_subprocess):
+    mock_run, _ = mock_subprocess
+    out = Path("/tmp/bed.mp3")
+    generate_music_bed(out, "cafe", 5.0)
+    cmd = mock_run.call_args[0][0]
+    joined = " ".join(cmd)
+    assert "aevalsrc=" in joined
+    assert "174" in joined
+
+
+def test_generate_music_bed_cheap_synth_romance_v2(mock_subprocess):
+    mock_run, _ = mock_subprocess
+    out = Path("/tmp/bed.mp3")
+    generate_music_bed(out, "cheap_synth_romance", 5.0)
+    cmd = mock_run.call_args[0][0]
+    joined = " ".join(cmd)
+    assert "aevalsrc=" in joined
+    assert "293" in joined
+    assert "aphaser" in joined
+
+
+# ---------------------------------------------------------------------------
+# generate_foley_loop
+# ---------------------------------------------------------------------------
+
+
+from mammamiradio.normalizer import generate_foley_loop  # noqa: E402
+
+
+def test_generate_foley_loop_cafe(mock_subprocess):
+    mock_run, _ = mock_subprocess
+    out = Path("/tmp/foley.mp3")
+    generate_foley_loop(out, "cafe", 5.0)
+    cmd = mock_run.call_args[0][0]
+    joined = " ".join(cmd)
+    assert "anoisesrc=color=pink" in joined
+    assert "bandpass" in joined
+
+
+def test_generate_foley_loop_motorway(mock_subprocess):
+    mock_run, _ = mock_subprocess
+    out = Path("/tmp/foley.mp3")
+    generate_foley_loop(out, "motorway", 5.0)
+    cmd = mock_run.call_args[0][0]
+    joined = " ".join(cmd)
+    assert "aevalsrc=" in joined
+    assert "82" in joined
+
+
+def test_generate_foley_loop_beach(mock_subprocess):
+    mock_run, _ = mock_subprocess
+    out = Path("/tmp/foley.mp3")
+    generate_foley_loop(out, "beach", 5.0)
+    cmd = mock_run.call_args[0][0]
+    joined = " ".join(cmd)
+    assert "anoisesrc=color=pink" in joined
+    assert "lowpass" in joined
+
+
+def test_generate_foley_loop_stadium(mock_subprocess):
+    mock_run, _ = mock_subprocess
+    out = Path("/tmp/foley.mp3")
+    generate_foley_loop(out, "stadium", 5.0)
+    cmd = mock_run.call_args[0][0]
+    joined = " ".join(cmd)
+    assert "anoisesrc=color=pink" in joined
+    assert "aecho" in joined
+
+
+def test_generate_foley_loop_luxury_spa(mock_subprocess):
+    mock_run, _ = mock_subprocess
+    out = Path("/tmp/foley.mp3")
+    generate_foley_loop(out, "luxury_spa", 5.0)
+    cmd = mock_run.call_args[0][0]
+    joined = " ".join(cmd)
+    assert "anoisesrc=color=pink" in joined
+    assert "highpass" in joined
+
+
+def test_generate_foley_loop_showroom(mock_subprocess):
+    mock_run, _ = mock_subprocess
+    out = Path("/tmp/foley.mp3")
+    generate_foley_loop(out, "showroom", 5.0)
+    cmd = mock_run.call_args[0][0]
+    joined = " ".join(cmd)
+    assert "anoisesrc=color=pink" in joined
+    assert "lowpass" in joined
+
+
+def test_generate_foley_loop_shopping_channel(mock_subprocess):
+    mock_run, _ = mock_subprocess
+    out = Path("/tmp/foley.mp3")
+    generate_foley_loop(out, "shopping_channel", 5.0)
+    cmd = mock_run.call_args[0][0]
+    joined = " ".join(cmd)
+    assert "anoisesrc=color=white" in joined
+    assert "bandpass" in joined
+
+
+def test_generate_foley_loop_unknown_environment_returns_path(mock_subprocess):
+    """Unknown environment returns output_path without generating anything."""
+    mock_run, _ = mock_subprocess
+    out = Path("/tmp/foley_unknown.mp3")
+    result = generate_foley_loop(out, "unknown_env_xyz", 5.0)
+    assert result == out
+    mock_run.assert_not_called()
+
+
+def test_generate_foley_loop_exception_is_swallowed(mock_subprocess):
+    """If ffmpeg fails, exception is logged and path is returned (not raised)."""
+    mock_run, _ = mock_subprocess
+    mock_run.side_effect = RuntimeError("ffmpeg exploded")
+    out = Path("/tmp/foley_exc.mp3")
+    result = generate_foley_loop(out, "cafe", 5.0)
+    assert result == out  # no exception raised

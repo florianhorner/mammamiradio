@@ -395,6 +395,11 @@ class StationState:
     ha_recent_event_count: int = 0
     ha_last_event_label: str = ""
     ha_last_event_ts: float = 0.0
+    # English equivalents for admin Engine Room display
+    ha_home_mood_en: str = ""
+    ha_weather_arc_en: str = ""
+    ha_events_summary_en: str = ""
+    ha_last_event_label_en: str = ""
     # Force-trigger: producer will use this type instead of scheduler for the next segment
     force_next: SegmentType | None = None
     # Pinned track: select_next_track returns this immediately then clears it
@@ -696,7 +701,8 @@ class StationState:
 
     def add_joke(self, joke: str) -> None:
         """Keep a short rolling buffer of running jokes for prompt callbacks."""
-        self.running_jokes.append(joke)
+        if joke not in self.running_jokes:
+            self.running_jokes.append(joke)
 
 
 @dataclass(frozen=True)

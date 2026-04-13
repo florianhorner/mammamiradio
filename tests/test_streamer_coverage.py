@@ -7,7 +7,7 @@ Covers: LiveStreamHub, auth helpers, CSRF enforcement, golden path,
 from __future__ import annotations
 
 import asyncio
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -341,3 +341,133 @@ def test_tail_log_exists(tmp_path):
 
 def test_tail_log_missing():
     assert _tail_log("/nonexistent/path.log") == []
+
+
+@pytest.mark.asyncio
+async def test_purge_segment_queue_ephemeral_unlinks(tmp_path):
+    """Ephemeral segments have their file unlinked during purge."""
+    from mammamiradio.models import Segment, SegmentType
+
+    audio = tmp_path / "seg.mp3"
+    audio.write_bytes(b"\x00" * 64)
+    q = asyncio.Queue()
+    seg = Segment(type=SegmentType.BANTER, path=audio, metadata={}, ephemeral=True)
+    q.put_nowait(seg)
+    purged = _purge_segment_queue(q)
+    assert purged == 1
+    assert not audio.exists()
+
+
+def test_golden_path_with_local_music(tmp_path, monkeypatch):
+    """When local music/ directory contains MP3s, golden path shows music_available."""
+    import mammamiradio.streamer as streamer_mod
+
+    monkeypatch.setattr(streamer_mod, "_golden_path_cache", None)
+    monkeypatch.setattr(streamer_mod, "_golden_path_cache_ts", 0.0)
+
+    config = MagicMock()
+    config.anthropic_api_key = "key"
+    config.openai_api_key = ""
+    state = MagicMock()
+
+    music_dir = tmp_path / "music"
+    music_dir.mkdir()
+    (music_dir / "song.mp3").write_bytes(b"data")
+
+    with (
+        patch("mammamiradio.streamer._has_any_mp3", side_effect=lambda p: "music" in str(p)),
+    ):
+        result = _golden_path_status(config, state)
+
+    assert result["stage"] == "music_available"
+
+
+def test_golden_path_with_ytdlp(monkeypatch):
+    """When yt-dlp is enabled in env, it appears in fallback_sources."""
+    import mammamiradio.streamer as streamer_mod
+
+    monkeypatch.setattr(streamer_mod, "_golden_path_cache", None)
+    monkeypatch.setattr(streamer_mod, "_golden_path_cache_ts", 0.0)
+    monkeypatch.setenv("MAMMAMIRADIO_ALLOW_YTDLP", "true")
+
+    config = MagicMock()
+    config.anthropic_api_key = ""
+    config.openai_api_key = ""
+    state = MagicMock()
+
+    with patch("mammamiradio.streamer._has_any_mp3", return_value=False):
+        result = _golden_path_status(config, state)
+
+    assert "yt-dlp downloads" in result["fallback_sources"]
+
+
+def test_source_options_reason():
+    """_source_options_reason formats a readable error string."""
+    from mammamiradio.streamer import _source_options_reason
+
+    msg = _source_options_reason(None, ValueError("something broke"))
+    assert "something broke" in msg
+
+
+def test_is_private_network_no_client():
+    """_is_private_network returns False when request has no client."""
+    req = MagicMock()
+    req.client = None
+    req.headers = {}
+    # _is_loopback_client needs client attribute — mock to return False
+    with patch("mammamiradio.streamer._is_loopback_client", return_value=False):
+        result = _is_private_network(req)
+    assert result is False
+
+
+def test_is_private_network_invalid_ip():
+    """_is_private_network returns False for an invalid IP address string."""
+    req = MagicMock()
+    req.client = MagicMock()
+    req.client.host = "not-an-ip"
+    with patch("mammamiradio.streamer._is_loopback_client", return_value=False):
+        result = _is_private_network(req)
+    assert result is False
+
+
+def test_is_hassio_or_loopback_no_client():
+    """_is_hassio_or_loopback returns False when request has no client."""
+    req = MagicMock()
+    req.client = None
+    with patch("mammamiradio.streamer._is_loopback_client", return_value=False):
+        result = _is_hassio_or_loopback(req)
+    assert result is False
+
+
+def test_is_hassio_or_loopback_invalid_ip():
+    """_is_hassio_or_loopback returns False for invalid IP."""
+    req = MagicMock()
+    req.client = MagicMock()
+    req.client.host = "bad-ip"
+    with patch("mammamiradio.streamer._is_loopback_client", return_value=False):
+        result = _is_hassio_or_loopback(req)
+    assert result is False
+
+
+@pytest.mark.asyncio
+async def test_hub_close_queue_full():
+    """close() swallows QueueFull when a listener's queue is already full."""
+    hub = LiveStreamHub()
+    hub._listener_queue_size = 1
+    _lid, q = hub.subscribe()
+    # Fill the queue to capacity so put_nowait raises QueueFull
+    q.put_nowait(b"chunk")
+    # Should not raise even though QueueFull will be triggered
+    hub.close()
+
+
+def test_hub_unsubscribe_updates_state():
+    """unsubscribe updates state.listeners_active when state is attached."""
+    from mammamiradio.models import StationState
+
+    hub = LiveStreamHub()
+    state = StationState()
+    hub._state = state
+    lid, _q = hub.subscribe()
+    hub.unsubscribe(lid)
+    assert state.listeners_active == 0
