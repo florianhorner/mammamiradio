@@ -939,6 +939,7 @@ def test_get_ha_client_recreates_closed_client():
     import asyncio
 
     import httpx
+
     import mammamiradio.ha_context as _hc
     from mammamiradio.ha_context import _get_ha_client
 
@@ -980,11 +981,13 @@ async def test_fetch_weather_forecast_upcoming_significant_condition():
     mock_client = AsyncMock()
     mock_client.post.return_value = mock_response
 
-    with patch("mammamiradio.ha_context._get_ha_client", return_value=mock_client):
-        with patch("mammamiradio.ha_context.datetime") as mock_dt:
-            with patch("mammamiradio.ha_context._weather_forecast_fetched_at", 0.0):
-                mock_dt.datetime.now.return_value.hour = 9
-                result = await fetch_weather_forecast("http://ha.local", "mytoken")
+    with (
+        patch("mammamiradio.ha_context._get_ha_client", return_value=mock_client),
+        patch("mammamiradio.ha_context.datetime") as mock_dt,
+        patch("mammamiradio.ha_context._weather_forecast_fetched_at", 0.0),
+    ):
+        mock_dt.datetime.now.return_value.hour = 9
+        result = await fetch_weather_forecast("http://ha.local", "mytoken")
 
     assert result is not None
     assert len(result) > 0

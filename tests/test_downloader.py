@@ -740,7 +740,9 @@ def test_validate_download_ffprobe_timeout(tmp_path):
     p = tmp_path / "track.mp3"
     p.write_bytes(b"x" * (600 * 1024))
 
-    with patch("mammamiradio.downloader.subprocess.run", side_effect=__import__("subprocess").TimeoutExpired("ffprobe", 30)):
+    import subprocess as _sp
+
+    with patch("mammamiradio.downloader.subprocess.run", side_effect=_sp.TimeoutExpired("ffprobe", 30)):
         ok, reason = validate_download(p)
     assert ok is False
     assert "timed out" in reason
@@ -887,6 +889,7 @@ def test_find_local_uses_ttl_cache(tmp_path):
     # Prime the cache
     key = str(music_dir)
     import time as _time
+
     _dl._local_files_cache[key] = (_time.time(), [mp3])
 
     result = _find_local(track, music_dir)
@@ -931,7 +934,7 @@ def test_download_external_sync_local_file(tmp_path):
     assert result == local
 
 
-def test_download_external_sync_raises_when_ytdlp_disabled(tmp_path):
+def test_download_external_sync_raises_when_ytdlp_disabled_standalone(tmp_path):
     """_download_external_sync must raise RuntimeError when yt-dlp is disabled and no cache/local."""
     from mammamiradio.downloader import _download_external_sync
 
@@ -941,9 +944,11 @@ def test_download_external_sync_raises_when_ytdlp_disabled(tmp_path):
     music_dir.mkdir()
     track = Track(title="Unavailable", artist="Nobody", duration_ms=180000)
 
-    with patch.dict("os.environ", {"MAMMAMIRADIO_ALLOW_YTDLP": "false"}):
-        with pytest.raises(RuntimeError, match="yt-dlp is disabled"):
-            _download_external_sync(track, cache_dir, music_dir)
+    with (
+        patch.dict("os.environ", {"MAMMAMIRADIO_ALLOW_YTDLP": "false"}),
+        pytest.raises(RuntimeError, match="yt-dlp is disabled"),
+    ):
+        _download_external_sync(track, cache_dir, music_dir)
 
 
 # ---------------------------------------------------------------------------
