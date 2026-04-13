@@ -1,5 +1,37 @@
 # TODOs
 
+## P2: Music catalog depth — multi-source rotation (from 4th live session, 2026-04-12)
+3-hour session with a single guest listener hit song repetition after ~1 hour despite v2.7.0's 50-track limit and 90-minute refresh. The Italian chart alone (even at 50 tracks) can't sustain multi-hour listening.
+
+**Root cause:** The product leans entirely on the Italian chart as its music source. Local `music/` files and yt-dlp playlists are supported but not blended automatically.
+
+**Action:** Implement multi-source blending in the playlist/producer layer:
+- After chart tracks are exhausted (or in parallel), draw from local `music/` directory
+- Weight tracks by last-played time — prioritize longest-unplayed tracks
+- Consider a "never repeat within N songs" guard regardless of source
+- Optional: pull from a secondary yt-dlp playlist (user-configurable in radio.toml) to expand catalog beyond Italian charts
+
+**Effort:** M (CC: ~1-2 hours) | **Files:** mammamiradio/playlist.py, mammamiradio/producer.py, radio.toml
+**Source:** 4th live session (mother test, 3 hours), 2026-04-12
+
+## P2: Setup friction — still unresolved after 4 sessions
+Every single live session has surfaced setup friction. Stream stability once running is excellent, but getting there takes effort. This is now a pattern, not a one-off.
+
+**Observed across sessions:**
+- Session 1: go-librespot chaos, missing API key
+- Session 2: first user couldn't find stream URL
+- Session 3: admin UI controls felt disconnected
+- Session 4 (2026-04-12): "not super smooth as always" — even for Florian running his own stack
+
+**Action:** Dedicated setup sprint. Goals:
+- Zero-friction start from fresh install to first sound in <60 seconds
+- Surface stream URL and key status immediately on first load
+- Consider a "health check" endpoint that validates config before stream starts
+- Possibly: streamline the HA addon config options (fewer required fields)
+
+**Effort:** M (CC: ~1-2 hours) | **Files:** mammamiradio/main.py, mammamiradio/dashboard.html, ha-addon/mammamiradio/config.yaml
+**Source:** Recurring across all 4 live sessions; confirmed pattern 2026-04-12
+
 ## P1: Product positioning decision
 The product is stuck between "self-hosted household radio engine" and "consumer product with shareware upsell." Both CEO and Eng dual voices flagged this independently. Until this is decided, onboarding, monetization, and multi-tenancy work is built on sand.
 **Action:** Interview 5 potential users (cafe owners, HA enthusiasts, music hobbyists). Decide: household engine or consumer product.

@@ -364,30 +364,74 @@ SONIC_MUSIC_BEDS: dict[str, str] = {
     "epic": "layered low+high drones",
 }
 
+_BANTER_EXCHANGE_COUNT: str = "4-6"
 
-def _personality_modifier(name: str, axes: PersonalityAxes) -> str:
+
+def _personality_modifier(
+    name: str,
+    axes: PersonalityAxes,
+    other_host: HostPersonality | None = None,
+) -> str:
     """Translate personality slider values into natural-language prompt guidance.
 
     Values near 50 produce no modifier (neutral).  Extremes produce strong
     directional instructions.  Only axes that deviate from neutral are included.
+
+    When ``other_host`` is provided, the energy+chaos combination is treated
+    relatively: if both hosts score above the high-energy threshold the one with
+    higher energy leads the chaos while the lower one provides surgical contrast,
+    preventing two hosts from receiving identical manic instructions.
     """
     parts: list[str] = []
     threshold = 15  # distance from 50 before we emit guidance
 
-    # Energy
-    if axes.energy < 50 - threshold:
-        parts.append("Speak slowly and calmly. Long pauses. Laid-back, almost sleepy delivery.")
-    elif axes.energy > 50 + threshold:
-        parts.append("Manic energy! Talk fast, interrupt yourself, barely breathe between sentences.")
+    # Energy + Chaos — treated as a coupled pair when both hosts are high
+    other_axes = other_host.personality if other_host else None
+    both_high_energy = (
+        other_axes is not None
+        and axes.energy > 50 + threshold
+        and other_axes.energy > 50 + threshold
+    )
+    both_high_chaos = (
+        other_axes is not None
+        and axes.chaos > 50 + threshold
+        and other_axes.chaos > 50 + threshold
+    )
 
-    # Chaos
-    if axes.chaos < 50 - threshold:
-        parts.append("Stay on topic. Structured, logical flow. No random tangents.")
-    elif axes.chaos > 50 + threshold:
-        parts.append(
-            "Go on wild tangents. Cut people off. Half-finished thoughts, false starts, verbal collisions, "
-            "and abrupt pivots like you're talking over the room."
-        )
+    if both_high_energy and both_high_chaos:
+        # Relative treatment: higher energy leads, lower one cuts with precision
+        if axes.energy >= other_axes.energy:
+            parts.append(
+                "You are the runaway train. Manic energy — talk fast, steamroll the conversation, "
+                "start three thoughts before finishing one, fill every silence. Lead the chaos."
+            )
+            parts.append(
+                "On chaos: interrupt constantly, collide mid-sentence, never let the other finish a "
+                "point you disagree with. Verbal pile-up energy."
+            )
+        else:
+            parts.append(
+                "Sharp and controlled — let him dig deeper into the hole, then cut him off at exactly the "
+                "wrong moment. You don't chase the chaos, you redirect it with one surgical line."
+            )
+            parts.append(
+                "On chaos: you choose WHEN to interrupt, not constantly. When you cut in, it lands. "
+                "One devastating correction beats ten overlapping complaints."
+            )
+    else:
+        # Standard independent treatment for energy and chaos
+        if axes.energy < 50 - threshold:
+            parts.append("Speak slowly and calmly. Long pauses. Laid-back, almost sleepy delivery.")
+        elif axes.energy > 50 + threshold:
+            parts.append("Manic energy! Talk fast, interrupt yourself, barely breathe between sentences.")
+
+        if axes.chaos < 50 - threshold:
+            parts.append("Stay on topic. Structured, logical flow. No random tangents.")
+        elif axes.chaos > 50 + threshold:
+            parts.append(
+                "Go on wild tangents. Cut people off. Half-finished thoughts, false starts, verbal collisions, "
+                "and abrupt pivots like you're talking over the room."
+            )
 
     # Warmth
     if axes.warmth < 50 - threshold:
@@ -417,9 +461,11 @@ def _personality_modifier(name: str, axes: PersonalityAxes) -> str:
 def _build_system_prompt(config: StationConfig) -> str:
     """Build the shared station persona prompt used for every script request."""
     host_lines = []
-    for h in config.hosts:
+    for i, h in enumerate(config.hosts):
         line = f"- {h.name}: {h.style} (voice: {h.voice})"
-        modifier = _personality_modifier(h.name, h.personality)
+        # Pass the other host so energy/chaos contrast can be computed relatively
+        other = config.hosts[1 - i] if len(config.hosts) == 2 else None
+        modifier = _personality_modifier(h.name, h.personality, other_host=other)
         if modifier:
             line += modifier
         host_lines.append(line)
@@ -672,7 +718,7 @@ Make this the focus of this banter break. It happened just now — react natural
     "callbacks_used": ["song titles you referenced from their history, or empty"]
   }}"""
 
-    prompt = f"""Write a short radio banter between the hosts. 2-4 exchanges total.
+    prompt = f"""Write a short radio banter between the hosts. {_BANTER_EXCHANGE_COUNT} exchanges total.
 
 Just played: {recent if recent else "opening of the show"}
 Running jokes to optionally callback: {jokes if jokes else "none yet, you may seed one"}
@@ -690,13 +736,22 @@ Return JSON:
             config=config,
             state=state,
             model=config.audio.claude_creative_model,
-            max_tokens=600,
+            max_tokens=1200,
         )
 
         result = []
         for line in data["lines"]:
             host = host_names.get(line["host"], config.hosts[0])
             result.append((host, line["text"]))
+
+        # Dedup guard: drop consecutive lines with identical text (LLM copy-paste error)
+        deduped: list[tuple[HostPersonality, str]] = []
+        for entry in result:
+            if deduped and entry[1] == deduped[-1][1]:
+                logger.warning("Dropped duplicate banter line: %r", entry[1][:60])
+                continue
+            deduped.append(entry)
+        result = deduped
 
         if data.get("new_joke"):
             state.add_joke(data["new_joke"])
@@ -841,15 +896,25 @@ async def write_transition(
     state: StationState,
     config: StationConfig,
     next_segment: str = "banter",
+    style: str | None = None,
 ) -> tuple[HostPersonality, str]:
     """Generate a short host transition line to talk over the end of a song.
 
     Returns (host, text). The text is meant to be overlaid on the fading music.
+
+    ``style`` can be:
+    - ``None``  — auto-select: ~20% chance of "echo" style, otherwise standard react
+    - ``"echo"`` — finish a phrase as if still inside the song's feeling, then pivot naturally
+    - ``"react"`` — explicitly use the default react-to-the-song style
     """
     if not _has_script_llm(config):
         host = random.choice(config.hosts)
         fallback = {"banter": "Allora...", "ad": "E adesso...", "news_flash": "Attenzione..."}
         return (host, fallback.get(next_segment, "Allora..."))
+
+    # Auto-select echo style ~20% of the time when caller doesn't specify
+    if style is None:
+        style = "echo" if random.random() < 0.2 else "react"
 
     current = _sanitize_prompt_data(state.played_tracks[-1].display) if state.played_tracks else "the opening"
     host = random.choice(config.hosts)
@@ -867,6 +932,19 @@ async def write_transition(
     now = datetime.datetime.now()
     time_hint = f"It's {now.strftime('%H:%M')}, {'weekend' if now.weekday() >= 5 else 'weekday'}."
 
+    # Style-specific instruction injected into the prompt
+    _ECHO_STYLE_INSTRUCTION = (
+        "STYLE: Echo the song's energy — finish a phrase like you're still INSIDE the song's feeling, "
+        "then pivot naturally to what's next. Not literal singing — rhythm and phrasing that mirrors "
+        "the track's vibe. Example melancholic: '...sì.' (pause) 'Allora.' "
+        "Example upbeat: '—e dai, basta così—' before the pivot."
+    )
+    _REACT_STYLE_INSTRUCTION = (
+        "STYLE: React to the song naturally — love it, hate it, or have a conspiracy theory about it. "
+        "Then pivot to what's next. Generic 'bella canzone' is banned."
+    )
+    style_instruction = _ECHO_STYLE_INSTRUCTION if style == "echo" else _REACT_STYLE_INSTRUCTION
+
     prompt = f"""Write a SHORT transition line for {host.name} to say OVER the end of the current song.
 This plays while the music is fading out — the classic radio DJ move.
 
@@ -882,12 +960,7 @@ RULES:
 - Recent opener stems to avoid repeating: {banned_openers}
 - If the host would normally say "Che pezzo...", pick something fresher instead.
 - ALL text in {config.station.language}.
-- MUSICAL OPTION: sometimes the transition line can echo the song's energy rather than explain it.
-  Finish a phrase like you're still inside the song's feeling, then pivot naturally.
-  Not literal singing — just rhythm and phrasing that mirrors the track's vibe.
-  Example: if the song was melancholic, start with "...sì." (pause) "Allora."
-  Example: if upbeat, start mid-energy "—e dai, basta così—" before the pivot.
-  Use this style ~30% of the time.
+- {style_instruction}
 
 Return JSON:
 {{"text": "the transition line"}}"""

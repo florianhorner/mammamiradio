@@ -297,3 +297,99 @@ def test_fetch_chart_refresh_returns_all_when_no_overlap():
     with patch("mammamiradio.playlist._fetch_current_italy_charts", return_value=tracks):
         result = fetch_chart_refresh({"id_z"})
     assert len(result) == 2
+
+
+# ---------------------------------------------------------------------------
+# fetch_startup_playlist -- local music/ blending
+# ---------------------------------------------------------------------------
+
+
+def test_local_music_merged_into_chart_playlist(config, monkeypatch, tmp_path):
+    """Local music/ files are appended to chart tracks when both exist."""
+    from mammamiradio.playlist import _load_local_music_tracks
+
+    # Create two fake MP3 stubs
+    (tmp_path / "Lucio Battisti - Emozioni.mp3").write_bytes(b"")
+    (tmp_path / "Mina - Grande Grande Grande.mp3").write_bytes(b"")
+
+    chart_tracks = [Track(title="Chart Hit", artist="Pop Star", duration_ms=210000, spotify_id="c_hit")]
+    monkeypatch.setenv("MAMMAMIRADIO_ALLOW_YTDLP", "true")
+
+    with (
+        patch("mammamiradio.playlist._fetch_current_italy_charts", return_value=chart_tracks),
+        patch("mammamiradio.playlist._load_local_music_tracks", return_value=_load_local_music_tracks(tmp_path)),
+    ):
+        tracks, source, _err = fetch_startup_playlist(config)
+
+    titles = {t.title for t in tracks}
+    assert "Chart Hit" in titles
+    assert "Emozioni" in titles
+    assert "Grande Grande Grande" in titles
+    assert len(tracks) == 3
+    assert source.kind == "charts"
+    assert source.track_count == 3
+
+
+def test_local_music_skipped_when_dir_missing(config, monkeypatch):
+    """When music/ dir does not exist, chart-only playlist is returned without error."""
+    chart_tracks = [Track(title="Solo Chart", artist="Solo Artist", duration_ms=210000, spotify_id="c_solo")]
+    monkeypatch.setenv("MAMMAMIRADIO_ALLOW_YTDLP", "true")
+
+    with (
+        patch("mammamiradio.playlist._fetch_current_italy_charts", return_value=chart_tracks),
+        patch("mammamiradio.playlist._load_local_music_tracks", return_value=[]),
+    ):
+        tracks, source, _err = fetch_startup_playlist(config)
+
+    assert len(tracks) == 1
+    assert tracks[0].title == "Solo Chart"
+
+
+def test_load_local_music_tracks_parses_artist_title(tmp_path):
+    """Artist and title are split on ' - ' delimiter in filename."""
+    from mammamiradio.playlist import _load_local_music_tracks
+
+    (tmp_path / "Lucio Battisti - Emozioni.mp3").write_bytes(b"")
+    (tmp_path / "NoHyphen.mp3").write_bytes(b"")
+
+    tracks = _load_local_music_tracks(tmp_path)
+    by_title = {t.title: t for t in tracks}
+
+    assert "Emozioni" in by_title
+    assert by_title["Emozioni"].artist == "Lucio Battisti"
+    assert by_title["Emozioni"].spotify_id.startswith("local_")
+
+    assert "NoHyphen" in by_title
+    assert by_title["NoHyphen"].artist == "Unknown"
+
+
+def test_load_local_music_tracks_missing_dir(tmp_path):
+    """Returns empty list when the directory does not exist."""
+    from mammamiradio.playlist import _load_local_music_tracks
+
+    result = _load_local_music_tracks(tmp_path / "nonexistent")
+    assert result == []
+
+
+def test_local_music_deduplicates_against_chart_ids(config, monkeypatch, tmp_path):
+    """A local file whose derived spotify_id matches an existing chart ID is not double-added."""
+    from mammamiradio.playlist import _load_local_music_tracks
+
+    # Create a local file whose generated ID won't collide with chart IDs
+    (tmp_path / "Battisti - Emozioni.mp3").write_bytes(b"")
+
+    # Chart already has a track with an ID that does NOT match the local one
+    chart_tracks = [Track(title="Chart Hit", artist="Pop Star", duration_ms=210000, spotify_id="c_hit")]
+    monkeypatch.setenv("MAMMAMIRADIO_ALLOW_YTDLP", "true")
+
+    local = _load_local_music_tracks(tmp_path)
+    assert len(local) == 1
+
+    with (
+        patch("mammamiradio.playlist._fetch_current_italy_charts", return_value=chart_tracks),
+        patch("mammamiradio.playlist._load_local_music_tracks", return_value=local),
+    ):
+        tracks, _source, _err = fetch_startup_playlist(config)
+
+    ids = [t.spotify_id for t in tracks]
+    assert len(ids) == len(set(ids)), "Duplicate spotify_ids found in merged playlist"

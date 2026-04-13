@@ -23,6 +23,7 @@ from mammamiradio.scriptwriter import (
     ListenerRequestCommit,
     _build_system_prompt,
     _massage_transition_text,
+    _personality_modifier,
     _plan_listener_request_block,
     write_ad,
     write_banter,
@@ -989,3 +990,69 @@ async def test_write_transition_strips_markdown_fences(config, state):
         _host, text = await write_transition(state, config)
 
     assert text == "Che bel pezzo..."
+
+
+# --- _personality_modifier contrast tests ---
+
+
+def test_personality_modifier_produces_distinct_strings_for_high_chaos_pair():
+    """Marco and Giulia both have high chaos/energy — their modifiers must differ."""
+    from mammamiradio.models import HostPersonality, PersonalityAxes
+
+    marco_axes = PersonalityAxes(energy=100, chaos=100, warmth=55, verbosity=68, nostalgia=75)
+    giulia_axes = PersonalityAxes(energy=72, chaos=92, warmth=20, verbosity=66, nostalgia=30)
+
+    marco_host = HostPersonality(name="Marco", voice="onyx", style="manic", personality=marco_axes)
+    giulia_host = HostPersonality(name="Giulia", voice="test", style="sharp", personality=giulia_axes)
+
+    marco_modifier = _personality_modifier("Marco", marco_axes, other_host=giulia_host)
+    giulia_modifier = _personality_modifier("Giulia", giulia_axes, other_host=marco_host)
+
+    # Both should produce non-empty modifiers
+    assert marco_modifier, "Marco should get a non-empty modifier"
+    assert giulia_modifier, "Giulia should get a non-empty modifier"
+
+    # The modifiers must not be identical — the contrast is the whole point
+    assert marco_modifier != giulia_modifier, (
+        "Marco and Giulia received identical personality modifiers; "
+        "relative contrast logic is not working."
+    )
+
+    # Marco (higher energy) should contain runaway/lead framing
+    assert "runaway" in marco_modifier.lower() or "lead" in marco_modifier.lower(), (
+        f"Marco (higher energy) should contain 'runaway' or 'lead' framing, got: {marco_modifier!r}"
+    )
+
+    # Giulia (lower energy) should contain surgical/controlled framing
+    assert "surgical" in giulia_modifier.lower() or "controlled" in giulia_modifier.lower(), (
+        f"Giulia (lower energy) should contain 'surgical' or 'controlled' framing, got: {giulia_modifier!r}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_write_banter_dedup_drops_identical_consecutive_lines(config, state):
+    """Banter dedup guard removes consecutive lines with identical text."""
+    host_name = config.hosts[0].name
+    # LLM returns two consecutive identical lines — a real copy-paste error
+    response_json = json.dumps(
+        {
+            "lines": [
+                {"host": host_name, "text": "Eccoci a voi!"},
+                {"host": host_name, "text": "Eccoci a voi!"},  # duplicate
+                {"host": host_name, "text": "E adesso la musica."},
+            ],
+            "new_joke": None,
+        }
+    )
+    mock_cls = _mock_anthropic_response(response_json)
+
+    with (
+        patch("mammamiradio.scriptwriter._anthropic_client", None),
+        patch("mammamiradio.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
+    ):
+        result = await write_banter(state, config)
+
+    texts = [text for _host, text in result]
+    assert texts == ["Eccoci a voi!", "E adesso la musica."], (
+        f"Expected duplicate line dropped, got: {texts}"
+    )

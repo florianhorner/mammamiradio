@@ -30,7 +30,7 @@ DEMO_TRACKS = [
 ]
 
 PERSISTED_SOURCE_FILENAME = "playlist_source.json"
-_APPLE_MUSIC_IT_CHARTS_URL = "https://rss.applemarketingtools.com/api/v2/it/music/most-played/50/songs.json"
+_APPLE_MUSIC_IT_CHARTS_URL = "https://rss.applemarketingtools.com/api/v2/it/music/most-played/100/songs.json"
 
 
 class ExplicitSourceError(RuntimeError):
@@ -65,7 +65,44 @@ def _charts_source(track_count: int) -> PlaylistSource:
     )
 
 
-def _fetch_current_italy_charts(limit: int = 50, max_per_artist: int = 2) -> list[Track]:
+def _load_local_music_tracks(music_dir: Path) -> list[Track]:
+    """Return Track objects built from MP3 files found in music_dir.
+
+    File names are parsed as ``Artist - Title.mp3`` when a hyphen is present;
+    otherwise the stem is used as the title with artist "Unknown".  Silently
+    returns an empty list if the directory does not exist or contains no MP3s.
+    """
+    _MAX_LOCAL_TRACKS = 200
+    if not music_dir.exists():
+        return []
+    tracks: list[Track] = []
+    all_mp3s = sorted(music_dir.glob("*.mp3"))
+    if len(all_mp3s) > _MAX_LOCAL_TRACKS:
+        logger.warning(
+            "music/ contains %d MP3s; capping at %d to avoid blocking the event loop",
+            len(all_mp3s),
+            _MAX_LOCAL_TRACKS,
+        )
+        all_mp3s = all_mp3s[:_MAX_LOCAL_TRACKS]
+    for mp3 in all_mp3s:
+        stem = mp3.stem.strip()
+        if " - " in stem:
+            artist_part, title_part = stem.split(" - ", 1)
+        else:
+            artist_part, title_part = "Unknown", stem
+        track_id = f"local_{mp3.stem.lower().replace(' ', '_')}"
+        tracks.append(
+            Track(
+                title=title_part.strip(),
+                artist=artist_part.strip(),
+                duration_ms=210000,
+                spotify_id=track_id,
+            )
+        )
+    return tracks
+
+
+def _fetch_current_italy_charts(limit: int = 100, max_per_artist: int = 2) -> list[Track]:
     """Fetch a live Top Songs Italy list from Apple Music charts RSS."""
     try:
         with urlopen(_APPLE_MUSIC_IT_CHARTS_URL, timeout=4.0) as resp:
@@ -181,11 +218,26 @@ def fetch_startup_playlist(
     charts_allowed = os.getenv("MAMMAMIRADIO_ALLOW_YTDLP", "false").lower() in ("true", "1", "yes")
 
     if charts_allowed:
-        chart_tracks = _shuffle_if_needed(config, _fetch_current_italy_charts())
+        chart_tracks = _fetch_current_italy_charts()
+        local_tracks = _load_local_music_tracks(Path("music"))
+        if local_tracks:
+            existing_ids = {t.spotify_id for t in chart_tracks}
+            for t in local_tracks:
+                if t.spotify_id not in existing_ids:
+                    chart_tracks.append(t)
+                    existing_ids.add(t.spotify_id)
+            logger.info("Merged %d local music/ tracks into chart playlist", len(local_tracks))
         if chart_tracks:
-            logger.info("Using live Italian charts")
+            chart_tracks = _shuffle_if_needed(config, chart_tracks)
+            logger.info("Using live Italian charts (%d tracks total)", len(chart_tracks))
             return chart_tracks, _charts_source(len(chart_tracks)), error
 
+    local_present = Path("music").exists() and any(Path("music").glob("*.mp3"))
+    if local_present:
+        logger.warning(
+            "Local music/ files found but MAMMAMIRADIO_ALLOW_YTDLP is not set — "
+            "set it to 'true' to blend local tracks into the playlist"
+        )
     logger.info("Using built-in modern Italian demo mix")
     tracks = _shuffle_if_needed(config, list(DEMO_TRACKS))
     return tracks, _demo_source(), error

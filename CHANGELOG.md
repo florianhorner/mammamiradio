@@ -4,6 +4,23 @@ All notable changes to `mammamiradio` are documented here.
 
 The current version source of truth is `pyproject.toml`.
 
+## [2.8.0] - 2026-04-13
+
+### Added
+
+- **Multi-source playlist blending**: Local `music/` files are now merged into the chart playlist automatically when `MAMMAMIRADIO_ALLOW_YTDLP=true`. Files are parsed as `Artist - Title.mp3`; capped at 200 files to avoid blocking the event loop. Startup warns if local files exist but the flag is unset.
+- **Expanded chart catalog**: Italian charts now fetch up to 100 tracks (was 50), giving ~5.8 hours of unique content before _staleness_ fallback. Combined with local music blending, multi-hour sessions no longer hit the repetition wall.
+
+### Fixed
+
+- **Host chemistry too controlled**: `_personality_modifier()` now uses relative contrast when both hosts score above the high-energy/high-chaos threshold. The more chaotic host gets "runaway train" framing; the other gets "surgical precision" — preventing identical manic instructions that made both hosts sound the same.
+- **Banter JSON truncation**: `max_tokens` in `write_banter()` raised 600 → 1200. At 4-6 exchanges plus the persona update schema, 600 tokens was insufficient and caused silent JSON parse failures that forced the entire session onto stock banter fallback.
+- **Transition echo/react variant**: `write_transition()` now randomly echoes last song lyrics or reacts to them (20% echo vs 80% react), adding variety to song handovers.
+
+### Changed
+
+- `_BANTER_EXCHANGE_COUNT` promoted to module-level constant in `scriptwriter.py` (was an inline literal).
+
 ## [2.7.0] - 2026-04-12
 
 ### Added
