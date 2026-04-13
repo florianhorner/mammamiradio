@@ -531,6 +531,9 @@ h1 {
   h1 { font-size: 28px; }
   .header-actions { align-items: flex-start; margin-top: 8px; }
 }
+@media (max-width: 480px) {
+  #casa-card { padding: 16px; }
+}
 
 @media (min-width: 768px) {
   .dashboard-grid {
@@ -694,6 +697,14 @@ h1 {
 <div class="card" id="connect-ha" style="display:none">
   <h3>Let the Hosts See Your Home</h3>
   <p>The hosts can reference your lights, temperature, and who just walked in. Connect Home Assistant to make the station aware of your world.</p>
+</div>
+
+<!-- Casa — HA ambient awareness (hidden when HA not connected or no data) -->
+<div class="card" id="casa-card" role="status" aria-live="polite" style="display:none;opacity:0;transition:opacity 250ms ease-out">
+  <div style="font-family:var(--font-body);font-weight:700;font-size:10px;text-transform:uppercase;letter-spacing:0.18em;color:var(--sun2);margin-bottom:8px" id="casa-eyebrow">CASA</div>
+  <div id="casa-mood" style="font-family:var(--font-display);font-style:italic;font-size:20px;color:var(--cream);line-height:1.3"></div>
+  <div id="casa-weather" style="font-size:13px;color:var(--text-secondary);margin-top:4px"></div>
+  <div id="casa-event" style="font-size:13px;color:var(--muted);margin-top:4px"></div>
 </div>
 
 <div class="card" id="request-card">
@@ -1232,6 +1243,37 @@ function updateStatus(d) {
     }
   } else {
     queueCard.style.display = 'none';
+  }
+
+  // Casa card — HA ambient awareness
+  var ha = d.ha_moments;
+  var casaEl = document.getElementById('casa-card');
+  if (ha) {
+    var moodEl = document.getElementById('casa-mood');
+    var weatherEl = document.getElementById('casa-weather');
+    var evtEl = document.getElementById('casa-event');
+    var prevMood = moodEl.textContent;
+    moodEl.textContent = ha.mood || '';
+    weatherEl.textContent = ha.weather || '';
+    if (ha.last_event_label) {
+      var agoText = ha.last_event_ago_min ? ' \u00b7 rilevato ' + ha.last_event_ago_min + ' min fa' : '';
+      evtEl.innerHTML = escHtml(ha.last_event_label) + '<span aria-hidden="true">' + escHtml(agoText) + '</span>';
+    } else {
+      evtEl.textContent = '';
+    }
+    casaEl.style.display = '';
+    requestAnimationFrame(function() { casaEl.style.opacity = '1'; });
+    // Pulse eyebrow on mood/event change
+    if (prevMood && ha.mood && prevMood !== ha.mood) {
+      var ey = document.getElementById('casa-eyebrow');
+      ey.style.transition = 'opacity 200ms';
+      ey.style.opacity = '0.4';
+      setTimeout(function() { ey.style.opacity = '1'; }, 200);
+      setTimeout(function() { ey.style.opacity = ''; ey.style.transition = ''; }, 600);
+    }
+  } else {
+    casaEl.style.opacity = '0';
+    setTimeout(function() { if (casaEl.style.opacity === '0') casaEl.style.display = 'none'; }, 260);
   }
 }
 

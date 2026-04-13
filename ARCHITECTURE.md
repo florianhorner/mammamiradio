@@ -135,22 +135,42 @@ A singleton `openai.AsyncOpenAI` client is reused across all TTS calls for conne
 `persona.py` maintains a persistent listener profile in SQLite (`cache/mammamiradio.db`). The persona tracks:
 
 - **Session count**: how many times the listener has tuned in (10-minute gap = new session)
+- **Arc phase**: relationship stage computed from session count — stranger, acquaintance, friend, or old_friend. Each phase shapes callback budgets and joke styles. Milestone sessions (1, 5, 10, 25, 50, 100) inject subtle acknowledgment directives into prompts.
 - **Motifs**: the last 20 played tracks, so hosts can reference past music naturally
 - **Theories**: LLM-generated guesses about who the listener is
 - **Running jokes**: cross-session callbacks that build familiarity
-- **Callbacks used**: which songs the hosts have already referenced
+- **Callbacks used**: structured format `{"song": "...", "context": "..."}` recording which songs were referenced and why
 
-During banter generation, the persona is loaded into the prompt via `<listener_memory>`. Claude's response includes `persona_updates` (new theories, jokes, callbacks) which are persisted back to SQLite. First-time listeners get curiosity and intrigue. Returning listeners get inside jokes and personal references.
+During banter generation, the persona is loaded into the prompt via `<listener_memory>`. Claude's response includes `persona_updates` (new theories, jokes, callbacks) which are persisted back to SQLite. First-time listeners get curiosity and intrigue. Returning listeners get inside jokes, personal references, and phase-aware banter depth.
 
 Instruction-like patterns in persona entries are filtered before storage (matching the `ha_context` sanitizer) to prevent stored prompt injection across sessions.
+
+## Song cues
+
+`song_cues.py` builds machine-derived per-track memory in SQLite (`cache/mammamiradio.db`), separate from the persona:
+
+- **Anthem detection**: a track played 3+ times and never skipped becomes an anthem. The cue is stored with confidence "anthem".
+- **Skip-bit detection**: a track skipped 2+ times gets a skip-bit cue. When the listener skips a known skip-bit track, the hosts can react ("caught you again").
+- **LLM reaction cues**: during banter generation Claude can generate a free-text reaction cue for the current track (e.g., "sempre questa canzone sul tramonto"). These are stored and reinjected into future banter prompts for that track.
+
+Cues appear in banter prompts as a `TRACK MEMORY` block alongside operator-flagged rules from `track_rules.py`. The `youtube_id` from live playback state is used to key cues rather than trusting LLM echoes, preventing orphan rows from hallucinated IDs.
+
+Cue text is sanitized via `_sanitize_prompt_data` on the read path before injection, closing a cross-session prompt injection vector.
 
 ## Optional Home Assistant context
 
 If `[homeassistant].enabled = true` and `HA_TOKEN` is present:
 
-- `ha_context.py` polls the Home Assistant REST API
-- a curated set of entities is translated into short Italian-readable context
-- banter and ads may reference one ambient detail, like weather or who is home
+- `ha_context.py` polls the Home Assistant REST API for ~35 curated entities (gold/silver/bronze tiers)
+- entities include room-level light groups, power sensors, weather, presence, vacuums, star projectors, terrace lights
+- a 4-phase pipeline processes the data: state summary → event diffing → mood classification → weather narrative arc
+- 7 reactive triggers fire on specific state changes (coffee machine, door unlock, vacuums, arrivals, terrace lights)
+- banter references are tiered: 1 item by default, up to 2 when a mood scene is active (mood counts toward cap)
+- weather-mood fusion allows hosts to connect outdoor conditions to indoor activity
+- numeric state passthrough in `ha_enrichment.diff_states()` ensures power sensors generate events
+- the listener dashboard shows a "Casa" card with mood, weather, and recent events via `ha_moments` in `/public-status`
+- the admin panel shows full HA details (mood, weather arc, events summary, pending directives) via `ha_details` in `/status`
+- person entity events are filtered from public API responses (privacy)
 
 This is opportunistic context, not a hard dependency. Failures there should not stop the station.
 
@@ -233,12 +253,17 @@ The rich path is richer, but the failure path still produces a stream.
 | `mammamiradio/scriptwriter.py` | Anthropic/OpenAI prompts for banter and ad copy |
 | `mammamiradio/tts.py` | TTS synthesis (Edge TTS + OpenAI gpt-4o-mini-tts) |
 | `mammamiradio/capabilities.py` | Capability flags, tier derivation, and next-step hints |
-| `mammamiradio/persona.py` | Listener persona with compounding memory, motif tracking, and session counting |
-| `mammamiradio/sync.py` | SQLite database initialization |
+| `mammamiradio/persona.py` | Listener persona: compounding memory, arc phases, motif tracking, session counting |
+| `mammamiradio/song_cues.py` | Machine-derived per-track memory: anthem detection, skip-bit detection, LLM reaction cues |
+| `mammamiradio/sync.py` | SQLite database initialization and schema migration |
 | `mammamiradio/context_cues.py` | Time-of-day and cultural context for prompts |
 | `mammamiradio/normalizer.py` | ffmpeg helpers for normalization, mixing, tones, bumpers, bleed, and SFX |
 | `mammamiradio/clip.py` | WTF clip extraction from ring buffer, save, cleanup |
 | `mammamiradio/track_rationale.py` | "Why this track?" rationale generation for listener UI |
+| `mammamiradio/track_rules.py` | Per-track personality rules flagged by admin via `/api/track-rules` |
+| `mammamiradio/ha_enrichment.py` | Pure HA event derivation: state diffing, event pruning, numeric passthrough |
+| `mammamiradio/audio_quality.py` | Audio quality gate: duration and silence checks before segments reach the queue |
+| `mammamiradio/setup_status.py` | First-run setup status classification (legacy; retained for `/api/setup/status` compat) |
 | `mammamiradio/streamer.py` | HTTP routes, auth gating, playback loop, clip endpoints, listener fanout |
 | `start.sh` | local dev entry point with uvicorn and reload |
 

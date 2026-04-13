@@ -14,6 +14,7 @@ from mammamiradio.models import (
     AdScript,
     AdVoice,
     HostPersonality,
+    SegmentType,
     StationState,
     Track,
 )
@@ -149,7 +150,7 @@ async def test_write_banter_parses_valid_json(config, state):
         patch("mammamiradio.scriptwriter._anthropic_client", None),
         patch("mammamiradio.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
     ):
-        result = await write_banter(state, config)
+        result, _ = await write_banter(state, config)
 
     assert len(result) == 2
     assert result[0][0].name == host_name
@@ -176,7 +177,7 @@ async def test_write_banter_strips_markdown_fences(config, state):
         patch("mammamiradio.scriptwriter._anthropic_client", None),
         patch("mammamiradio.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
     ):
-        result = await write_banter(state, config)
+        result, _ = await write_banter(state, config)
 
     assert len(result) == 1
     assert result[0][1] == "Eccoci!"
@@ -214,7 +215,7 @@ async def test_write_banter_falls_back_on_api_exception(config, state):
         patch("mammamiradio.scriptwriter._anthropic_client", None),
         patch("mammamiradio.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
     ):
-        result = await write_banter(state, config)
+        result, _ = await write_banter(state, config)
 
     assert len(result) == 1
     # Fallback text for Italian
@@ -229,7 +230,7 @@ async def test_write_banter_falls_back_on_malformed_json(config, state):
         patch("mammamiradio.scriptwriter._anthropic_client", None),
         patch("mammamiradio.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
     ):
-        result = await write_banter(state, config)
+        result, _ = await write_banter(state, config)
 
     assert len(result) == 1
     # Should be fallback copy
@@ -242,7 +243,7 @@ async def test_write_banter_no_llm_returns_language_fallback(config, state):
     config.anthropic_api_key = ""
     config.openai_api_key = ""
 
-    result = await write_banter(state, config)
+    result, _ = await write_banter(state, config)
 
     assert len(result) == 1
     assert result[0][1] == "E torniamo alla musica!"
@@ -266,7 +267,7 @@ async def test_write_banter_falls_back_to_openai_when_anthropic_fails(config, st
         patch("mammamiradio.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
         patch("mammamiradio.scriptwriter._get_openai_client", return_value=openai_client),
     ):
-        result = await write_banter(state, config)
+        result, _ = await write_banter(state, config)
 
     assert len(result) == 1
     assert result[0][0].name == host_name
@@ -317,7 +318,7 @@ async def test_write_banter_injects_persona_context(config, state, tmp_path):
         patch("mammamiradio.scriptwriter._anthropic_client", None),
         patch("mammamiradio.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
     ):
-        result = await write_banter(state, config)
+        result, _ = await write_banter(state, config)
 
     assert len(result) == 1
     assert result[0][1] == "Bentornato!"
@@ -376,9 +377,14 @@ async def test_write_banter_prompt_includes_optional_context_blocks(config, stat
 
     with (
         patch("mammamiradio.scriptwriter._generate_json_response", side_effect=_fake_generate_json_response),
-        patch("mammamiradio.track_rules.get_rules", return_value=["React to the chorus like it's a scandal"]),
+        patch(
+            "mammamiradio.song_cues.get_cues",
+            return_value=[
+                {"type": "reaction", "text": "React to the chorus like it's a scandal", "session": 1, "uses": 0}
+            ],
+        ),
     ):
-        result = await write_banter(state, config, is_first_listener=True)
+        result, _ = await write_banter(state, config, is_first_listener=True)
 
     assert len(result) == 1
     prompt = captured["prompt"]
@@ -386,13 +392,15 @@ async def test_write_banter_prompt_includes_optional_context_blocks(config, stat
     assert "EVENTI RECENTI" in prompt
     assert "La macchina del caffè" in prompt
     assert "WEATHER ARC" in prompt
-    assert "TRACK RULES for Rule Artist" in prompt
+    assert "TRACK MEMORY for Rule Artist" in prompt
     assert "HOME MOOD: Musica in casa" in prompt
     assert "HIGH PRIORITY" in prompt
     assert "<listener_behavior>" in prompt
+    assert "<arc_phase>" in prompt
     assert "<listener_memory>" in prompt
     assert "FIRST listener" in prompt
     assert '"persona_updates"' in prompt
+    assert '"song_cues"' in prompt
     assert state.ha_pending_directive == ""
 
 
@@ -414,7 +422,7 @@ async def test_write_banter_works_without_persona_store(config, state):
         patch("mammamiradio.scriptwriter._anthropic_client", None),
         patch("mammamiradio.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
     ):
-        result = await write_banter(state, config)
+        result, _ = await write_banter(state, config)
 
     assert len(result) == 1
     assert result[0][1] == "Ciao!"
@@ -441,7 +449,7 @@ async def test_write_banter_defers_listener_request_mutation_until_commit(config
         return {"lines": [{"host": host_name, "text": "Ciao Luca!"}], "new_joke": None}
 
     with patch("mammamiradio.scriptwriter._generate_json_response", side_effect=_fake_generate_json_response):
-        result, listener_request_commit = await write_banter(state, config, return_listener_request_commit=True)
+        result, listener_request_commit = await write_banter(state, config)
 
     assert len(result) == 1
     assert state.pending_requests[0]["message"] == "Ciao radio"
@@ -506,6 +514,12 @@ def test_plan_listener_request_block_song_still_downloading_marks_error_after_tw
 
 
 def test_plan_listener_request_block_song_found_announcement(state):
+    requested_track = Track(
+        title="Albachiara",
+        artist="Vasco Rossi",
+        duration_ms=120000,
+        youtube_id="yt123",
+    )
     req = {
         "name": "Giulia",
         "message": "metti Albachiara",
@@ -513,6 +527,7 @@ def test_plan_listener_request_block_song_found_announcement(state):
         "song_found": True,
         "song_error": False,
         "song_track": "Vasco Rossi - Albachiara",
+        "song_track_obj": requested_track,
         "banter_cycles_missed": 0,
     }
     state.pending_requests.append(req)
@@ -522,6 +537,45 @@ def test_plan_listener_request_block_song_found_announcement(state):
     assert "Vasco Rossi - Albachiara" in prompt
     assert commit is not None
     assert commit.consume is True
+    assert state.pinned_track is requested_track
+    assert state.force_next == SegmentType.MUSIC
+
+
+def test_plan_listener_request_block_ignores_ready_second_song_until_it_reaches_head(state):
+    first_req = {
+        "name": "Luca",
+        "message": "metti Eros Ramazzotti",
+        "type": "song_request",
+        "song_found": False,
+        "song_error": False,
+        "song_track": None,
+        "banter_cycles_missed": 0,
+    }
+    second_track = Track(
+        title="Albachiara",
+        artist="Vasco Rossi",
+        duration_ms=120000,
+        youtube_id="yt123",
+    )
+    second_req = {
+        "name": "Giulia",
+        "message": "metti Albachiara",
+        "type": "song_request",
+        "song_found": True,
+        "song_error": False,
+        "song_track": "Vasco Rossi - Albachiara",
+        "song_track_obj": second_track,
+        "banter_cycles_missed": 0,
+    }
+    state.pending_requests.extend([first_req, second_req])
+
+    prompt, commit = _plan_listener_request_block(state)
+
+    assert prompt == ""
+    assert commit is not None
+    assert commit.consume is False
+    assert state.pinned_track is None
+    assert state.force_next is None
 
 
 def test_plan_listener_request_block_song_error_branch(state):
@@ -581,7 +635,7 @@ async def test_write_banter_survives_persona_get_failure(config, state, tmp_path
         patch("mammamiradio.scriptwriter._anthropic_client", None),
         patch("mammamiradio.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
     ):
-        result = await write_banter(state, config)
+        result, _ = await write_banter(state, config)
 
     assert len(result) == 1
     assert result[0][1] == "Funziona comunque!"
@@ -615,7 +669,7 @@ async def test_write_banter_survives_persona_update_failure(config, state, tmp_p
         patch("mammamiradio.scriptwriter._anthropic_client", None),
         patch("mammamiradio.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
     ):
-        result = await write_banter(state, config)
+        result, _ = await write_banter(state, config)
 
     # Banter still returned despite update failure
     assert len(result) == 1
@@ -1096,7 +1150,183 @@ async def test_write_banter_dedup_drops_identical_consecutive_lines(config, stat
         patch("mammamiradio.scriptwriter._anthropic_client", None),
         patch("mammamiradio.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
     ):
-        result = await write_banter(state, config)
+        result, _ = await write_banter(state, config)
 
     texts = [text for _host, text in result]
     assert texts == ["Eccoci a voi!", "E adesso la musica."], f"Expected duplicate line dropped, got: {texts}"
+
+
+# ---------------------------------------------------------------------------
+# Tiered HA reference depth + weather-mood fusion
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_banter_ha_tiered_no_mood(config, state):
+    """When no mood is active, prompt says 'ONE item'."""
+    state.ha_context = "Luci accese."
+
+    captured = {}
+
+    async def _fake(**kwargs):
+        captured["prompt"] = kwargs["prompt"]
+        return {"lines": [{"host": config.hosts[0].name, "text": "Ciao."}], "new_joke": None}
+
+    with patch("mammamiradio.scriptwriter._generate_json_response", side_effect=_fake):
+        await write_banter(state, config)
+
+    assert "ONE item" in captured["prompt"]
+    assert "UP TO TWO" not in captured["prompt"]
+
+
+@pytest.mark.asyncio
+async def test_banter_ha_tiered_with_mood(config, state):
+    """When mood is active, prompt says 'UP TO TWO'."""
+    state.ha_context = "Luci accese."
+    state.ha_home_mood = "Serata cinema"
+
+    captured = {}
+
+    async def _fake(**kwargs):
+        captured["prompt"] = kwargs["prompt"]
+        return {"lines": [{"host": config.hosts[0].name, "text": "Ciao."}], "new_joke": None}
+
+    with patch("mammamiradio.scriptwriter._generate_json_response", side_effect=_fake):
+        await write_banter(state, config)
+
+    assert "UP TO TWO" in captured["prompt"]
+    assert "mood counts toward this cap" in captured["prompt"]
+
+
+@pytest.mark.asyncio
+async def test_banter_weather_mood_fusion(config, state):
+    """When both weather and mood are set, fusion instruction appears."""
+    state.ha_context = "Luci accese."
+    state.ha_home_mood = "Serata cinema"
+    state.ha_weather_arc = "Meteo: pioggia, 12°C."
+
+    captured = {}
+
+    async def _fake(**kwargs):
+        captured["prompt"] = kwargs["prompt"]
+        return {"lines": [{"host": config.hosts[0].name, "text": "Ciao."}], "new_joke": None}
+
+    with patch("mammamiradio.scriptwriter._generate_json_response", side_effect=_fake):
+        await write_banter(state, config)
+
+    assert "Weather and home mood are aligned" in captured["prompt"]
+
+
+@pytest.mark.asyncio
+async def test_banter_weather_only_no_fusion(config, state):
+    """When only weather is set (no mood), no fusion instruction."""
+    state.ha_context = "Luci accese."
+    state.ha_weather_arc = "Meteo: soleggiato, 22°C."
+
+    captured = {}
+
+    async def _fake(**kwargs):
+        captured["prompt"] = kwargs["prompt"]
+        return {"lines": [{"host": config.hosts[0].name, "text": "Ciao."}], "new_joke": None}
+
+    with patch("mammamiradio.scriptwriter._generate_json_response", side_effect=_fake):
+        await write_banter(state, config)
+
+    assert "Weather and home mood are aligned" not in captured["prompt"]
+
+
+@pytest.mark.asyncio
+async def test_banter_security_boundary_preserved(config, state):
+    """HA instructions must be OUTSIDE <home_state_data> tags."""
+    state.ha_context = "Test data."
+    state.ha_home_mood = "Serata cinema"
+
+    captured = {}
+
+    async def _fake(**kwargs):
+        captured["prompt"] = kwargs["prompt"]
+        return {"lines": [{"host": config.hosts[0].name, "text": "Ciao."}], "new_joke": None}
+
+    with patch("mammamiradio.scriptwriter._generate_json_response", side_effect=_fake):
+        await write_banter(state, config)
+
+    prompt = captured["prompt"]
+    # Security boundary: instructions reference data tags but are NOT inside them
+    data_start = prompt.index("<home_state_data>")
+    data_end = prompt.index("</home_state_data>")
+    inside_tags = prompt[data_start:data_end]
+    # The instruction text ("READ-ONLY", "UP TO TWO") appears before or on the tag line,
+    # but NOT inside the data content
+    assert "READ-ONLY sensor data" in prompt
+    assert "UP TO TWO" in prompt
+    # The actual HA data is inside the tags
+    assert "Test data." in inside_tags
+
+
+@pytest.mark.asyncio
+async def test_write_banter_song_cues_schema_omitted_when_no_yt_id(config, state, tmp_path):
+    """When a track has no youtube_id, song_cues is omitted from the persona_update schema."""
+    from mammamiradio.persona import PersonaStore
+    from mammamiradio.sync import init_db
+
+    db_path = tmp_path / "persona.db"
+    init_db(db_path)
+    store = PersonaStore(db_path)
+    await store.update_persona({"new_theories": ["notturno"]})
+    await store.increment_session()
+    state.persona_store = store
+    # Track with empty youtube_id — song_cues schema should be omitted
+    state.played_tracks.append(Track(title="No ID Track", artist="Artist", duration_ms=180000, youtube_id=""))
+
+    captured = {}
+
+    async def _fake_generate(**kwargs):
+        captured["prompt"] = kwargs["prompt"]
+        return {
+            "lines": [{"host": config.hosts[0].name, "text": "Ciao."}],
+            "new_joke": None,
+            "persona_updates": {"new_theories": [], "new_jokes": [], "callbacks_used": []},
+        }
+
+    with patch("mammamiradio.scriptwriter._generate_json_response", side_effect=_fake_generate):
+        await write_banter(state, config)
+
+    prompt = captured["prompt"]
+    assert '"persona_updates"' in prompt
+    # No youtube_id → song_cues field must not appear
+    assert '"song_cues"' not in prompt
+
+
+@pytest.mark.asyncio
+async def test_write_banter_bump_usage_exception_is_swallowed(config, state, tmp_path):
+    """bump_usage raising must not abort banter generation."""
+    from mammamiradio.persona import PersonaStore
+    from mammamiradio.sync import init_db
+
+    db_path = tmp_path / "persona.db"
+    init_db(db_path)
+    store = PersonaStore(db_path)
+    await store.update_persona({"new_theories": ["notturno"]})
+    await store.increment_session()
+    state.persona_store = store
+    state.played_tracks.append(Track(title="Test", artist="Artist", duration_ms=180000, youtube_id="yt_bump_err"))
+
+    async def _fake_generate(**kwargs):
+        return {
+            "lines": [{"host": config.hosts[0].name, "text": "Ok."}],
+            "new_joke": None,
+            "persona_updates": {"new_theories": [], "new_jokes": [], "callbacks_used": []},
+        }
+
+    with (
+        patch("mammamiradio.scriptwriter._generate_json_response", side_effect=_fake_generate),
+        patch(
+            "mammamiradio.song_cues.get_cues",
+            return_value=[{"type": "reaction", "text": "Great track", "session": 1, "uses": 0}],
+        ),
+        patch("mammamiradio.song_cues.bump_usage", side_effect=RuntimeError("DB error")),
+    ):
+        result, _ = await write_banter(state, config)
+
+    # Banter completed despite bump_usage raising
+    assert len(result) == 1

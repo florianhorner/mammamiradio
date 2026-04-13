@@ -22,6 +22,67 @@ MAX_FIELD_ENTRY_LEN = 200
 # Persona size threshold for compression
 PERSONA_SIZE_LIMIT = 2048
 
+# ── Arc phase machine ──────────────────────────────────────────────
+# Relationship phases computed from session_count. Never stored — always derived.
+_DEFAULT_ARC_THRESHOLDS = (4, 11, 26)
+_ARC_THRESHOLDS: list[tuple[int, str]] = []
+
+_ARC_DIRECTIVES: dict[str, str] = {
+    "stranger": (
+        "You don't know this listener yet. Be curious. Observe. Seed theories. "
+        "Don't pretend familiarity you haven't earned."
+    ),
+    "acquaintance": (
+        "You're getting to know this listener. Reference past sessions casually. Test which jokes land. Build rapport."
+    ),
+    "friend": ('This is a regular. Deep callbacks, inside jokes, comfortable silence. "Remember when..." is natural.'),
+    "old_friend": (
+        "This is family. You've been through things together. Legendary callbacks. "
+        "The station wouldn't be the same without them."
+    ),
+}
+
+_MILESTONE_SESSIONS: frozenset[int] = frozenset({1, 5, 10, 25, 50, 100})
+
+_ARC_BUDGETS: dict[str, tuple[int, int]] = {
+    # phase -> (callback_budget, joke_budget)
+    "stranger": (1, 1),
+    "acquaintance": (3, 2),
+    "friend": (4, 3),
+    "old_friend": (5, 3),
+}
+
+
+def set_arc_thresholds(thresholds: list[int]) -> None:
+    """Apply configurable session thresholds for arc phases."""
+    global _ARC_THRESHOLDS
+
+    try:
+        parsed = [int(value) for value in thresholds]
+    except (TypeError, ValueError):
+        parsed = list(_DEFAULT_ARC_THRESHOLDS)
+
+    if len(parsed) != 3 or parsed != sorted(parsed) or any(value < 1 for value in parsed):
+        logger.warning("Invalid persona.arc_thresholds=%r; using defaults %s", thresholds, _DEFAULT_ARC_THRESHOLDS)
+        parsed = list(_DEFAULT_ARC_THRESHOLDS)
+
+    _ARC_THRESHOLDS = [
+        (parsed[2], "old_friend"),
+        (parsed[1], "friend"),
+        (parsed[0], "acquaintance"),
+    ]
+
+
+def compute_arc_phase(session_count: int) -> str:
+    """Derive the relationship phase from session count."""
+    for threshold, phase in _ARC_THRESHOLDS:
+        if session_count >= threshold:
+            return phase
+    return "stranger"
+
+
+set_arc_thresholds(list(_DEFAULT_ARC_THRESHOLDS))
+
 
 # Patterns that look like prompt injection attempts in persona entries
 _INSTRUCTION_PATTERNS = (
@@ -66,11 +127,30 @@ class ListenerPersona:
     personality_guesses: list[str] = field(default_factory=list)
     session_count: int = 0
     last_session: str = ""
+    arc_metadata: dict = field(default_factory=dict)
+
+    @property
+    def arc_phase(self) -> str:
+        """Current relationship phase, derived from session count."""
+        return compute_arc_phase(self.session_count)
 
     @property
     def callback_budget(self) -> int:
         """How many callbacks the hosts should reference per break."""
-        return min(self.session_count, 5)
+        return _ARC_BUDGETS.get(self.arc_phase, (1, 1))[0]
+
+    @property
+    def joke_budget(self) -> int:
+        """How many jokes the hosts should reference per break."""
+        return _ARC_BUDGETS.get(self.arc_phase, (1, 1))[1]
+
+    @property
+    def pending_milestone(self) -> int | None:
+        """Session number if this is a milestone that hasn't been consumed yet."""
+        fired = set(self.arc_metadata.get("milestones_fired", []))
+        if self.session_count in _MILESTONE_SESSIONS and self.session_count not in fired:
+            return self.session_count
+        return None
 
     def to_prompt_context(self) -> str:
         """Format persona for inclusion in a Claude prompt."""
@@ -80,7 +160,7 @@ class ListenerPersona:
         if self.theories:
             parts.append(f"Theories about the listener: {', '.join(self.theories[-5:])}")
         if self.running_jokes:
-            parts.append(f"Running jokes: {', '.join(self.running_jokes[-3:])}")
+            parts.append(f"Running jokes: {', '.join(self.running_jokes[-self.joke_budget :])}")
         if self.callbacks and self.callback_budget > 0:
             recent = self.callbacks[-self.callback_budget :]
             cb_strs = [f"{c.get('song', '?')} ({c.get('context', '')})" for c in recent]
@@ -113,6 +193,11 @@ class PersonaStore:
             if not row:
                 return ListenerPersona()
 
+            # arc_metadata may not exist yet (pre-migration DB)
+            try:
+                arc_meta_raw = row["arc_metadata"] or "{}"
+            except (IndexError, KeyError):
+                arc_meta_raw = "{}"
             return ListenerPersona(
                 motifs=json.loads(row["motifs"] or "[]"),
                 theories=json.loads(row["theories"] or "[]"),
@@ -121,6 +206,7 @@ class PersonaStore:
                 personality_guesses=json.loads(row["personality_guesses"] or "[]"),
                 session_count=row["session_count"] or 0,
                 last_session=row["last_session"] or "",
+                arc_metadata=json.loads(arc_meta_raw or "{}"),
             )
 
     async def update_persona(self, updates: dict) -> None:
@@ -133,11 +219,14 @@ class PersonaStore:
             persona = await self.get_persona()
 
             new_theories = _sanitize_list(updates.get("new_theories", []))
+            new_guesses = _sanitize_list(updates.get("new_personality_guesses", []))
             new_jokes = _sanitize_list(updates.get("new_jokes", []))
             callbacks_used = updates.get("callbacks_used", [])
 
             if new_theories:
                 persona.theories = (persona.theories + new_theories)[-10:]
+            if new_guesses:
+                persona.personality_guesses = (persona.personality_guesses + new_guesses)[-5:]
             if new_jokes:
                 persona.running_jokes = (persona.running_jokes + new_jokes)[-5:]
             if isinstance(callbacks_used, list):
@@ -148,6 +237,16 @@ class PersonaStore:
                                 "song": _sanitize(cb),
                                 "context": "",
                                 "date": time.strftime("%Y-%m-%d"),
+                                "session": persona.session_count,
+                            }
+                        )
+                    elif isinstance(cb, dict) and cb.get("song"):
+                        persona.callbacks.append(
+                            {
+                                "song": _sanitize(str(cb["song"])),
+                                "context": _sanitize(str(cb.get("context", ""))),
+                                "date": time.strftime("%Y-%m-%d"),
+                                "session": persona.session_count,
                             }
                         )
                 persona.callbacks = persona.callbacks[-20:]
@@ -161,6 +260,7 @@ class PersonaStore:
                        theories = excluded.theories,
                        running_jokes = excluded.running_jokes,
                        callbacks = excluded.callbacks,
+                       personality_guesses = excluded.personality_guesses,
                        updated_at = excluded.updated_at""",
                     (
                         json.dumps(persona.motifs),
@@ -173,8 +273,9 @@ class PersonaStore:
                 )
                 await db.commit()
                 logger.info(
-                    "Persona updated: +%d theories, +%d jokes",
+                    "Persona updated: +%d theories, +%d guesses, +%d jokes",
                     len(new_theories),
+                    len(new_guesses),
                     len(new_jokes),
                 )
 
@@ -196,18 +297,26 @@ class PersonaStore:
         except Exception:
             logger.warning("Failed to record motif", exc_info=True)
 
-    async def record_play(self, track_youtube_id: str, session_id: str, host_script: str | None = None) -> None:
-        """Record a track play in history."""
+    async def record_play(
+        self,
+        track_youtube_id: str,
+        session_id: str,
+        host_script: str | None = None,
+        *,
+        skipped: bool = False,
+        listen_duration_s: float | None = None,
+    ) -> None:
+        """Record a completed or skipped track play with optional duration data."""
         try:
             async with aiosqlite.connect(str(self.db_path)) as db:
-                # Look up track_id
                 cursor = await db.execute("SELECT id FROM tracks WHERE youtube_id = ?", (track_youtube_id,))
                 row = await cursor.fetchone()
                 track_id = row[0] if row else None
 
                 await db.execute(
-                    "INSERT INTO play_history (track_id, session_id, host_script) VALUES (?, ?, ?)",
-                    (track_id, session_id, host_script),
+                    "INSERT INTO play_history (track_id, session_id, host_script, skipped, listen_duration_s) "
+                    "VALUES (?, ?, ?, ?, ?)",
+                    (track_id, session_id, host_script, int(skipped), listen_duration_s),
                 )
                 await db.commit()
         except Exception:
@@ -235,6 +344,9 @@ class PersonaStore:
         """Check if enough time has passed to consider this a new session.
 
         Returns True if session_count should be incremented.
+
+        Note: must only be called from a single async task (the producer loop).
+        The check-then-set on _last_listener_at is not concurrency-safe.
         """
         now = time.time()
         if self._last_listener_at == 0.0 or (now - self._last_listener_at) > SESSION_GAP_SECONDS:
@@ -245,7 +357,7 @@ class PersonaStore:
         return False
 
     async def increment_session(self) -> None:
-        """Bump session_count in the database."""
+        """Bump session_count and detect milestones."""
         try:
             async with aiosqlite.connect(str(self.db_path)) as db:
                 await db.execute(
@@ -253,6 +365,34 @@ class PersonaStore:
                     "last_session = datetime('now') WHERE id = 1"
                 )
                 await db.commit()
-                logger.info("New listening session started")
+
+            persona = await self.get_persona()
+            phase = persona.arc_phase
+            milestone = persona.pending_milestone
+            logger.info(
+                "Listener session #%d started (phase: %s%s)",
+                persona.session_count,
+                phase,
+                f", milestone #{milestone}" if milestone else "",
+            )
         except Exception:
             logger.exception("Failed to increment session")
+
+    async def consume_milestone(self) -> None:
+        """Mark the current milestone as fired so it won't repeat."""
+        try:
+            persona = await self.get_persona()
+            milestone = persona.pending_milestone
+            if milestone is None:
+                return
+            fired = set(persona.arc_metadata.get("milestones_fired", []))
+            fired.add(milestone)
+            persona.arc_metadata["milestones_fired"] = sorted(fired)
+            async with aiosqlite.connect(str(self.db_path)) as db:
+                await db.execute(
+                    "UPDATE listener_persona SET arc_metadata = ? WHERE id = 1",
+                    (json.dumps(persona.arc_metadata),),
+                )
+                await db.commit()
+        except Exception:
+            logger.exception("Failed to consume milestone")

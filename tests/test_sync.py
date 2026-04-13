@@ -5,7 +5,9 @@ from __future__ import annotations
 import sqlite3
 from unittest.mock import MagicMock, patch
 
-from mammamiradio.sync import init_db, load_cached_tracks
+import pytest
+
+from mammamiradio.sync import _migrate_schema, init_db, load_cached_tracks
 
 
 def test_init_db_creates_tables(tmp_path):
@@ -27,6 +29,25 @@ def test_init_db_is_idempotent(tmp_path):
     init_db(db_path)
     init_db(db_path)  # should not raise
     assert db_path.exists()
+
+
+def test_migrate_schema_ignores_duplicate_column_errors():
+    conn = MagicMock()
+    conn.execute.side_effect = [
+        sqlite3.OperationalError("duplicate column name: arc_metadata"),
+        sqlite3.OperationalError("duplicate column name: skipped"),
+        sqlite3.OperationalError("duplicate column name: listen_duration_s"),
+    ]
+
+    _migrate_schema(conn)
+
+
+def test_migrate_schema_reraises_unexpected_operational_error():
+    conn = MagicMock()
+    conn.execute.side_effect = sqlite3.OperationalError("no such table: listener_persona")
+
+    with pytest.raises(sqlite3.OperationalError, match="no such table"):
+        _migrate_schema(conn)
 
 
 def test_init_db_creates_parent_directory(tmp_path):

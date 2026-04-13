@@ -14,6 +14,7 @@ logger = logging.getLogger(__name__)
 
 # Files that must never be evicted from the cache directory
 _CACHE_PROTECTED = {"mammamiradio.db", "playlist_source.json", "session_stopped.flag"}
+_TRUTHY = ("true", "1", "yes")
 
 
 def purge_suspect_cache_files(cache_dir: Path, min_size_bytes: int = 10240) -> int:
@@ -162,27 +163,40 @@ def _download_ytdlp(track: Track, cache_dir: Path) -> Path:
     return out_path
 
 
-def _download_sync(track: Track, cache_dir: Path, music_dir: Path) -> Path:
-    """Resolve a track from cache, local files, yt-dlp, or a placeholder tone."""
+def _ytdlp_enabled() -> bool:
+    """Return whether yt-dlp downloads are enabled for this runtime."""
+    return os.getenv("MAMMAMIRADIO_ALLOW_YTDLP", "false").lower() in _TRUTHY
+
+
+def _resolve_cached_or_local(track: Track, cache_dir: Path, music_dir: Path) -> Path | None:
+    """Return an existing cache/local/demo asset path when one is already available."""
     out_path = cache_dir / f"{track.cache_key}.mp3"
     if out_path.exists():
         logger.info("Cache hit: %s", track.display)
         return out_path
 
-    # 1. Check bundled demo assets
     demo = _find_demo_asset(track)
     if demo:
         logger.info("Demo asset: %s -> %s", track.display, demo)
         return demo
 
-    # 2. Check local music/ directory
     local = _find_local(track, music_dir)
     if local:
         logger.info("Local file: %s -> %s", track.display, local)
         return local
 
+    return None
+
+
+def _download_sync(track: Track, cache_dir: Path, music_dir: Path) -> Path:
+    """Resolve a track from cache, local files, yt-dlp, or a placeholder tone."""
+    out_path = cache_dir / f"{track.cache_key}.mp3"
+    existing = _resolve_cached_or_local(track, cache_dir, music_dir)
+    if existing is not None:
+        return existing
+
     # 3. Try yt-dlp (opt-in only, disabled by default for copyright safety)
-    if os.getenv("MAMMAMIRADIO_ALLOW_YTDLP", "false").lower() in ("true", "1", "yes"):
+    if _ytdlp_enabled():
         try:
             return _download_ytdlp(track, cache_dir)
         except Exception as e:
@@ -194,6 +208,24 @@ def _download_sync(track: Track, cache_dir: Path, music_dir: Path) -> Path:
     return _generate_silence(track, out_path)
 
 
+def _download_external_sync(track: Track, cache_dir: Path, music_dir: Path) -> Path:
+    """Resolve an explicit external request without silently falling back to silence."""
+    out_path = cache_dir / f"{track.cache_key}.mp3"
+    if out_path.exists():
+        logger.info("Cache hit: %s", track.display)
+        return out_path
+
+    local = _find_local(track, music_dir)
+    if local:
+        logger.info("Local file: %s -> %s", track.display, local)
+        return local
+
+    if not _ytdlp_enabled():
+        raise RuntimeError("yt-dlp is disabled")
+
+    return _download_ytdlp(track, cache_dir)
+
+
 def search_ytdlp_metadata(query: str, max_results: int = 5) -> list[dict]:
     """Search yt-dlp for tracks matching query, returning metadata without downloading.
 
@@ -201,8 +233,7 @@ def search_ytdlp_metadata(query: str, max_results: int = 5) -> list[dict]:
     Returns a list of dicts with youtube_id, title, artist, duration_ms, display.
     Returns [] if yt-dlp is unavailable or the search fails.
     """
-    allow_ytdlp = os.getenv("MAMMAMIRADIO_ALLOW_YTDLP", "false").lower() in ("true", "1", "yes")
-    if not allow_ytdlp:
+    if not _ytdlp_enabled():
         return []
     try:
         import yt_dlp
@@ -246,3 +277,10 @@ async def download_track(track: Track, cache_dir: Path, music_dir: Path | None =
     loop = asyncio.get_running_loop()
     _music_dir = music_dir or Path("music")
     return await loop.run_in_executor(None, _download_sync, track, cache_dir, _music_dir)
+
+
+async def download_external_track(track: Track, cache_dir: Path, music_dir: Path | None = None) -> Path:
+    """Download an explicit external request, raising on failure instead of returning silence."""
+    loop = asyncio.get_running_loop()
+    _music_dir = music_dir or Path("music")
+    return await loop.run_in_executor(None, _download_external_sync, track, cache_dir, _music_dir)
