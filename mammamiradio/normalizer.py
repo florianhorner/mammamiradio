@@ -115,14 +115,17 @@ def normalize(
         "acompressor=threshold=0.25:ratio=2:attack=20:release=250:makeup=1"  # gentle radio leveller
     )
 
-    # Skip normalization entirely if the file is already within ±1.5 LU of -16 LUFS
-    # AND no EQ correction is needed (EQ always requires a re-encode pass).
+    # Skip the expensive loudnorm pass if the file is already within ±1.5 LU of -16 LUFS,
+    # but still re-encode to the station format (sample rate, channels, bitrate) and trim
+    # trailing silence. A bare shutil.copy2 would leave the file at whatever sample rate
+    # the source was (e.g. 44.1 kHz from yt-dlp), which can cause audio glitches at stream
+    # boundaries. measure_lufs takes ~2-5s on Pi vs 10-75s for a full loudnorm pass.
+    # When music_eq is requested, we always re-encode (EQ requires a pass regardless).
     if loudnorm and not music_eq:
         lufs = measure_lufs(input_path)
         if lufs is not None and abs(lufs - (-16.0)) <= 1.5:
-            shutil.copy2(input_path, output_path)
+            loudnorm = False  # fall through to the fast format-conversion path below
             logger.info("LUFS skip (%.1f LUFS, within tolerance): %s", lufs, input_path.name)
-            return output_path
 
     if loudnorm:
         if config is not None and getattr(config, "is_addon", False) is True:
@@ -176,6 +179,8 @@ def concat_files(
     Set loudnorm=False when all inputs are already normalized to skip the
     expensive EBU R128 loudness pass (~1-3s saved per concat).
     """
+    if len(paths) == 0:
+        raise ValueError("concat_files: paths list must not be empty")
     if len(paths) == 1:
         return paths[0]
 

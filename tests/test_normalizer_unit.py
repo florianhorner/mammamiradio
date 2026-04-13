@@ -377,8 +377,13 @@ def test_measure_lufs_returns_none_on_timeout():
         assert measure_lufs(Path("/tmp/test.mp3")) is None
 
 
-def test_normalize_skips_when_lufs_within_tolerance(mock_subprocess, tmp_path):
-    """normalize copies file instead of processing when LUFS is within ±1.5 of -16."""
+def test_normalize_skips_loudnorm_when_lufs_within_tolerance(mock_subprocess, tmp_path):
+    """normalize uses fast format conversion (no loudnorm) when LUFS is within ±1.5 of -16.
+
+    Previously this did a bare shutil.copy2, which skipped format conversion and could
+    leave the output at the wrong sample rate or bitrate. Now it falls through to the
+    fast encode path (loudnorm=False) so format conversion still happens.
+    """
     mock_run, _ = mock_subprocess
     input_file = tmp_path / "input.mp3"
     input_file.write_bytes(b"\xff" * 1000)
@@ -388,9 +393,18 @@ def test_normalize_skips_when_lufs_within_tolerance(mock_subprocess, tmp_path):
         result = normalize(input_file, output_file, loudnorm=True)
 
     assert result == output_file
-    assert output_file.exists()
-    # subprocess.run should NOT have been called for ffmpeg normalize
-    mock_run.assert_not_called()
+    # FFmpeg must be called once for fast format conversion (silence trim + re-encode)
+    mock_run.assert_called_once()
+    cmd = mock_run.call_args[0][0]
+    # Find the -filter:a value (the element after "-filter:a")
+    filter_val = ""
+    for i, c in enumerate(cmd):
+        if str(c) == "-filter:a" and i + 1 < len(cmd):
+            filter_val = str(cmd[i + 1])
+            break
+    # Loudnorm and dynaudnorm filters must NOT be in the filter chain — this is the fast path
+    assert "loudnorm" not in filter_val
+    assert "dynaudnorm" not in filter_val
 
 
 def test_normalize_proceeds_when_lufs_out_of_tolerance(mock_subprocess, tmp_path):

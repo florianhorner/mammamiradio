@@ -397,3 +397,14 @@ def test_load_config_parses_voice_roles():
     # New voices
     marzio = next(v for v in config.ads.voices if v.name == "Dottore Marzio")
     assert marzio.role == "bureaucrat"
+
+
+def test_load_config_rejects_nonpositive_pacing_values(tmp_path):
+    """_validate raises ValueError when pacing.songs_between_ads < 1."""
+    source = Path(__file__).parent.parent / "radio.toml"
+    custom = source.read_text().replace("songs_between_ads = 4", "songs_between_ads = 0")
+    custom_path = tmp_path / "radio.toml"
+    custom_path.write_text(custom)
+
+    with pytest.raises(ValueError, match="pacing\\.songs_between_ads must be >= 1"):
+        load_config(str(custom_path))

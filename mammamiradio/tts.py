@@ -141,14 +141,18 @@ async def synthesize_openai(
         return response.content
 
     raw_path = output_path.with_suffix(".raw.mp3")
-    audio_bytes = await asyncio.wait_for(
-        loop.run_in_executor(None, _call_openai),
-        timeout=30.0,
-    )
-    raw_path.write_bytes(audio_bytes)
+    try:
+        audio_bytes = await asyncio.wait_for(
+            loop.run_in_executor(None, _call_openai),
+            timeout=30.0,
+        )
+        raw_path.write_bytes(audio_bytes)
 
-    await loop.run_in_executor(None, lambda: normalize(raw_path, output_path, loudnorm=loudnorm))
-    raw_path.unlink(missing_ok=True)
+        await loop.run_in_executor(None, lambda: normalize(raw_path, output_path, loudnorm=loudnorm))
+        raw_path.unlink(missing_ok=True)
+    except Exception:
+        raw_path.unlink(missing_ok=True)  # clean up orphaned raw file on any failure
+        raise
 
     logger.info("Synthesized (OpenAI): %s (%s)", output_path.name, voice)
     return output_path
@@ -192,9 +196,9 @@ async def synthesize(
     edge_voice = _coerce_edge_voice(voice, edge_fallback_voice=edge_fallback_voice)
 
     async with _HEAVY_SEM:
+        raw_path = output_path.with_suffix(".raw.mp3")
         try:
             comm = edge_tts.Communicate(text, edge_voice, rate=rate or "+0%", pitch=pitch or "+0Hz")
-            raw_path = output_path.with_suffix(".raw.mp3")
             await asyncio.wait_for(comm.save(str(raw_path)), timeout=15.0)
 
             loop = asyncio.get_running_loop()
@@ -204,6 +208,7 @@ async def synthesize(
             logger.info("Synthesized: %s (%s)", output_path.name, edge_voice)
             return output_path
         except Exception as e:
+            raw_path.unlink(missing_ok=True)  # clean up orphaned raw file on any failure
             logger.error("TTS failed with %s: %s", edge_voice, e)
             # Retry with a fallback voice before resorting to silence
             fallback = _EDGE_DEFAULT_FALLBACK_VOICE
@@ -211,7 +216,6 @@ async def synthesize(
                 try:
                     logger.info("Retrying TTS with fallback voice: %s", fallback)
                     comm = edge_tts.Communicate(text, fallback, rate=rate or "+0%", pitch=pitch or "+0Hz")
-                    raw_path = output_path.with_suffix(".raw.mp3")
                     await asyncio.wait_for(comm.save(str(raw_path)), timeout=15.0)
                     loop = asyncio.get_running_loop()
                     await loop.run_in_executor(None, lambda: normalize(raw_path, output_path, loudnorm=loudnorm))
@@ -219,6 +223,7 @@ async def synthesize(
                     logger.info("Fallback synthesized: %s (%s)", output_path.name, fallback)
                     return output_path
                 except Exception as e2:
+                    raw_path.unlink(missing_ok=True)  # clean up on fallback failure too
                     logger.error("Fallback TTS also failed: %s", e2)
             loop = asyncio.get_running_loop()
             await loop.run_in_executor(None, generate_silence, output_path, 2.0)
