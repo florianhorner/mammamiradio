@@ -92,6 +92,8 @@ mammamiradio/
   sync.py             SQLite database initialization and schema migration
   context_cues.py     Time-of-day and cultural context for banter/ad prompts
   track_rationale.py  "Why this track?" rationale generation for listener UI
+  track_rules.py      Per-track personality rules flagged via /api/track-rules
+  audio_quality.py    Audio quality gate: duration and silence checks before segments reach the queue
   setup_status.py     Legacy setup status classification (kept for /status endpoint compat)
   dashboard.html      Listener-facing dashboard served at /
   admin.html          Admin control room panel served at /admin
