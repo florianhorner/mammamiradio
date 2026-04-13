@@ -6,14 +6,14 @@
   "mammamiradio.config": 90,
   "mammamiradio.context_cues": 94,
   "mammamiradio.downloader": 98,
-  "mammamiradio.ha_context": 96,
-  "mammamiradio.ha_enrichment": 97,
+  "mammamiradio.ha_context": 97,
+  "mammamiradio.ha_enrichment": 98,
   "mammamiradio.main": 87,
   "mammamiradio.models": 97,
-  "mammamiradio.normalizer": 94,
+  "mammamiradio.normalizer": 96,
   "mammamiradio.persona": 85,
   "mammamiradio.playlist": 91,
-  "mammamiradio.producer": 77,
+  "mammamiradio.producer": 78,
   "mammamiradio.scheduler": 95,
   "mammamiradio.scriptwriter": 93,
   "mammamiradio.setup_status": 100,
@@ -22,5 +22,5 @@
   "mammamiradio.sync": 88,
   "mammamiradio.track_rationale": 91,
   "mammamiradio.track_rules": 100,
-  "mammamiradio.tts": 87
+  "mammamiradio.tts": 90
 }
