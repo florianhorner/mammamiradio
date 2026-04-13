@@ -32,6 +32,40 @@ def music_dir(tmp_path):
 # --- _find_local tests ---
 
 
+def test_validate_download_rejects_small_file(tmp_path):
+    from mammamiradio.downloader import validate_download
+
+    file_path = tmp_path / "tiny.mp3"
+    file_path.write_bytes(b"x" * 100)
+
+    with patch("mammamiradio.downloader.subprocess.run") as mock_run:
+        ok, reason = validate_download(file_path)
+
+    assert ok is False
+    assert "too small" in reason
+    mock_run.assert_not_called()
+
+
+def test_validate_download_accepts_valid_duration(tmp_path):
+    from mammamiradio.downloader import validate_download
+
+    file_path = tmp_path / "good.mp3"
+    file_path.write_bytes(b"x" * (600 * 1024))
+    result = MagicMock()
+    result.returncode = 0
+    result.stdout = '{"format":{"duration":"180.2"}}'
+
+    with patch("mammamiradio.downloader.subprocess.run", return_value=result) as mock_run:
+        ok, reason = validate_download(file_path)
+
+    assert ok is True
+    assert reason == "ok"
+    mock_run.assert_called_once()
+    cmd = mock_run.call_args[0][0]
+    assert cmd[:5] == ["ffprobe", "-v", "quiet", "-print_format", "json"]
+    assert str(file_path) in cmd
+
+
 def test_find_local_returns_none_when_dir_missing(track, tmp_path):
     from mammamiradio.downloader import _find_local
 
@@ -202,6 +236,7 @@ def test_ytdlp_uses_no_progress_options(track, cache_dir):
     assert captured_opts["quiet"] is True
     assert captured_opts["no_warnings"] is True
     assert captured_opts["noprogress"] is True
+    assert captured_opts["abort_on_unavailable_fragments"] is True
 
 
 def test_download_ytdlp_uses_exact_watch_url_when_youtube_id(cache_dir):
@@ -395,6 +430,20 @@ def test_evict_cache_lru_handles_oserror(cache_dir):
         evict_cache_lru(cache_dir, 0.0001)
 
 
+def test_evict_cache_lru_skips_norm_cache_files(cache_dir):
+    from mammamiradio.downloader import evict_cache_lru
+
+    norm = cache_dir / "norm_track_192k.mp3"
+    regular = cache_dir / "regular.mp3"
+    norm.write_bytes(b"x" * 700 * 1024)
+    regular.write_bytes(b"x" * 700 * 1024)
+
+    evict_cache_lru(cache_dir, 0.1)
+
+    assert norm.exists()
+    assert not regular.exists()
+
+
 # --- search_ytdlp_metadata ---
 
 
@@ -548,6 +597,22 @@ def test_purge_suspect_cache_files_skips_protected_mp3_names(tmp_path):
     with patch.object(type(d), "glob", return_value=[fake_file]):
         assert purge_suspect_cache_files(d) == 0
         assert fake_file.exists()
+
+
+def test_purge_suspect_cache_files_keeps_norm_cache_files(tmp_path):
+    from mammamiradio.downloader import purge_suspect_cache_files
+
+    d = tmp_path / "cache"
+    d.mkdir()
+    norm = d / "norm_song_192k.mp3"
+    tiny = d / "tiny.mp3"
+    norm.write_bytes(b"x" * 100)
+    tiny.write_bytes(b"x" * 100)
+
+    purged = purge_suspect_cache_files(d)
+    assert purged == 1
+    assert norm.exists()
+    assert not tiny.exists()
 
 
 def test_purge_suspect_cache_files_custom_threshold(tmp_path):

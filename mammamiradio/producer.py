@@ -18,7 +18,7 @@ from uuid import uuid4
 from mammamiradio.audio_quality import AudioQualityError, AudioToolError, validate_segment_audio
 from mammamiradio.config import StationConfig
 from mammamiradio.context_cues import generate_impossible_line
-from mammamiradio.downloader import download_track, evict_cache_lru
+from mammamiradio.downloader import download_track, evict_cache_lru, validate_download
 from mammamiradio.ha_context import (
     GOLD_ENTITIES,
     HomeContext,
@@ -415,13 +415,17 @@ async def prewarm_first_segment(
         logger.info("Pre-warming first track: %s", track.display)
         audio_path = await download_track(track, config.cache_dir, music_dir=Path("music"))
         loop = asyncio.get_running_loop()
+        ok, reason = await loop.run_in_executor(None, validate_download, audio_path)
+        if not ok:
+            logger.warning("Skipping prewarm track due to invalid download (%s): %s", track.display, reason)
+            return False
         norm_cached = config.cache_dir / f"norm_{track.cache_key}_{config.audio.bitrate}k.mp3"
         if norm_cached.exists():
             norm_path = norm_cached
             logger.info("Normalization cache hit (prewarm): %s", norm_cached.name)
         else:
             norm_path = config.tmp_dir / f"music_{uuid4().hex[:8]}.mp3"
-            _norm_fn = partial(normalize, audio_path, norm_path, config, loudnorm=not config.is_addon)
+            _norm_fn = partial(normalize, audio_path, norm_path, config, loudnorm=True)
             await loop.run_in_executor(None, _norm_fn)
             await loop.run_in_executor(None, shutil.copy2, str(norm_path), str(norm_cached))
         if not os.environ.get("MAMMAMIRADIO_SKIP_QUALITY_GATE"):
@@ -611,6 +615,10 @@ async def run_producer(
 
                 audio_path = await download_track(track, config.cache_dir, music_dir=Path("music"))
                 loop = asyncio.get_running_loop()
+                ok, reason = await loop.run_in_executor(None, validate_download, audio_path)
+                if not ok:
+                    logger.warning("Skipping track due to invalid download (%s): %s", track.display, reason)
+                    continue
 
                 # Normalization cache: skip FFmpeg re-encode if we already have a
                 # normalized copy in cache_dir from a previous run. Named by track +
@@ -623,9 +631,7 @@ async def run_producer(
                 else:
                     norm_path = config.tmp_dir / f"music_{uuid4().hex[:8]}.mp3"
                     norm_is_cached = False
-                    # On HA addon hardware (Pi-class), skip loudnorm for ~3x faster
-                    # normalization. Volume consistency is less important than dead air.
-                    _norm_fn = partial(normalize, audio_path, norm_path, config, loudnorm=not config.is_addon)
+                    _norm_fn = partial(normalize, audio_path, norm_path, config, loudnorm=True)
                     await loop.run_in_executor(None, _norm_fn)
                     await loop.run_in_executor(None, shutil.copy2, str(norm_path), str(norm_cached))
                 audio_source = "download"

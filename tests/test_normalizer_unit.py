@@ -141,6 +141,26 @@ def test_normalize_without_loudnorm_uses_fast_filter(mock_subprocess):
     assert "loudnorm" not in audio_filter
 
 
+def test_normalize_addon_uses_dynaudnorm(mock_subprocess):
+    mock_run, _ = mock_subprocess
+    inp = Path("/tmp/in.mp3")
+    out = Path("/tmp/out.mp3")
+    config = MagicMock()
+    config.audio.sample_rate = 48000
+    config.audio.channels = 2
+    config.audio.bitrate = 192
+    config.is_addon = True
+
+    normalize(inp, out, config, loudnorm=True)
+
+    cmd = mock_run.call_args[0][0]
+    filter_idx = cmd.index("-filter:a")
+    audio_filter = cmd[filter_idx + 1]
+    assert "dynaudnorm=f=150:g=13" in audio_filter
+    assert "alimiter=limit=0.95" in audio_filter
+    assert "loudnorm=I=-16:LRA=11:TP=-1.5" not in audio_filter
+
+
 # ---------------------------------------------------------------------------
 # concat_files
 # ---------------------------------------------------------------------------

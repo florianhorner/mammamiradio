@@ -37,6 +37,12 @@ def _mock_quality_gate():
 
 
 @pytest.fixture(autouse=True)
+def _mock_download_validation():
+    with patch(f"{PRODUCER_MODULE}.validate_download", return_value=(True, "ok")):
+        yield
+
+
+@pytest.fixture(autouse=True)
 def _clean_producer_globals():
     """Reset global state that leaks between tests."""
     from mammamiradio import producer
@@ -637,6 +643,29 @@ async def test_prewarm_happy_path():
 
 
 @pytest.mark.asyncio
+async def test_prewarm_skips_invalid_download_before_normalize():
+    """prewarm should reject invalid downloads without invoking normalize."""
+    from mammamiradio.producer import prewarm_first_segment
+
+    state = _make_state()
+    config = _make_config()
+    config.tmp_dir.mkdir(parents=True, exist_ok=True)
+    queue: asyncio.Queue = asyncio.Queue()
+
+    with (
+        patch(f"{PRODUCER_MODULE}.download_track", new_callable=AsyncMock, return_value=Path("/tmp/fake.mp3")),
+        patch(f"{PRODUCER_MODULE}.validate_download", return_value=(False, "too small")) as mock_validate,
+        patch(f"{PRODUCER_MODULE}.normalize") as mock_normalize,
+    ):
+        result = await prewarm_first_segment(queue, state, config)
+
+    assert result is False
+    assert queue.empty()
+    mock_validate.assert_called_once()
+    mock_normalize.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_prewarm_quality_gate_rejection():
     """prewarm returns False when quality gate rejects the track."""
     from mammamiradio.audio_quality import AudioQualityError
@@ -676,6 +705,34 @@ async def test_prewarm_download_exception():
 
     assert result is False
     assert queue.empty()
+
+
+@pytest.mark.asyncio
+async def test_music_segment_skips_invalid_download_before_normalize():
+    """Main producer loop should skip invalid downloads before normalization."""
+    state = _make_state()
+    state.playlist[0].youtube_id = "yt_demo1"
+    state.playlist[1].youtube_id = "yt_demo2"
+    config = _make_config()
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+
+    validate_results = [(False, "too small"), (True, "ok")]
+
+    with (
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.MUSIC),
+        patch(f"{PRODUCER_MODULE}.download_track", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(f"{PRODUCER_MODULE}.validate_download", side_effect=validate_results) as mock_validate,
+        patch(f"{PRODUCER_MODULE}.normalize", side_effect=_fake_path) as mock_normalize,
+        patch(f"{PRODUCER_MODULE}.shutil.copy2"),
+        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+    ):
+        await _run_until_queued(queue, state, config)
+
+    assert queue.qsize() >= 1
+    seg = queue.get_nowait()
+    assert seg.type == SegmentType.MUSIC
+    assert mock_validate.call_count >= 2
+    mock_normalize.assert_called_once()
 
 
 # ---------------------------------------------------------------------------

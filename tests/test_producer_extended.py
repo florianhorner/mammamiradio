@@ -36,6 +36,12 @@ def _mock_quality_gate():
         yield
 
 
+@pytest.fixture(autouse=True)
+def _mock_download_validation():
+    with patch(f"{MODULE}.validate_download", return_value=(True, "ok")):
+        yield
+
+
 def _make_state() -> StationState:
     return StationState(
         playlist=[

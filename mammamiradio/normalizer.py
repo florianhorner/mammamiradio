@@ -65,11 +65,16 @@ def normalize(input_path: Path, output_path: Path, config=None, *, loudnorm: boo
     channels = str(config.audio.channels) if config else "2"
     bitrate = f"{config.audio.bitrate}k" if config else "192k"
 
-    audio_filter = (
-        "loudnorm=I=-16:LRA=11:TP=-1.5,silenceremove=start_periods=0:stop_periods=1:stop_threshold=-50dB:stop_duration=0.3"
-        if loudnorm
-        else "silenceremove=start_periods=0:stop_periods=1:stop_threshold=-50dB:stop_duration=0.3"
-    )
+    if loudnorm:
+        if config is not None and getattr(config, "is_addon", False) is True:
+            norm_part = "dynaudnorm=f=150:g=13,alimiter=limit=0.95"
+        else:
+            norm_part = "loudnorm=I=-16:LRA=11:TP=-1.5"
+        audio_filter = (
+            f"{norm_part},silenceremove=start_periods=0:stop_periods=1:stop_threshold=-50dB:stop_duration=0.3"
+        )
+    else:
+        audio_filter = "silenceremove=start_periods=0:stop_periods=1:stop_threshold=-50dB:stop_duration=0.3"
 
     cmd = [
         "ffmpeg",

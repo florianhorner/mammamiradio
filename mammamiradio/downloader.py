@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
+import subprocess
 from pathlib import Path
 
 from mammamiradio.models import Track
@@ -15,6 +17,43 @@ logger = logging.getLogger(__name__)
 # Files that must never be evicted from the cache directory
 _CACHE_PROTECTED = {"mammamiradio.db", "playlist_source.json", "session_stopped.flag"}
 _TRUTHY = ("true", "1", "yes")
+
+
+def validate_download(filepath: Path) -> tuple[bool, str]:
+    """Quickly reject partial/corrupt downloads before expensive normalization."""
+    min_size_bytes = 500 * 1024
+    try:
+        size = filepath.stat().st_size
+    except OSError as exc:
+        return False, f"stat failed: {exc}"
+
+    if size < min_size_bytes:
+        return False, f"file too small ({size} bytes < {min_size_bytes})"
+
+    cmd = ["ffprobe", "-v", "quiet", "-print_format", "json", "-show_format", str(filepath)]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True)
+    except OSError as exc:
+        return False, f"ffprobe failed to start: {exc}"
+    if result.returncode != 0:
+        return False, "ffprobe failed"
+
+    try:
+        info = json.loads(result.stdout or "{}")
+    except json.JSONDecodeError:
+        return False, "ffprobe returned invalid JSON"
+
+    duration_raw = (info.get("format") or {}).get("duration")
+    if duration_raw is None:
+        return False, "missing duration"
+    try:
+        duration_s = float(duration_raw)
+    except (TypeError, ValueError):
+        return False, f"invalid duration: {duration_raw!r}"
+    if duration_s < 60:
+        return False, f"duration too short ({duration_s:.1f}s)"
+
+    return True, "ok"
 
 
 def purge_suspect_cache_files(cache_dir: Path, min_size_bytes: int = 10240) -> int:
@@ -28,7 +67,7 @@ def purge_suspect_cache_files(cache_dir: Path, min_size_bytes: int = 10240) -> i
         return 0
     purged = 0
     for f in cache_dir.glob("*.mp3"):
-        if f.name in _CACHE_PROTECTED:
+        if f.name in _CACHE_PROTECTED or f.name.startswith("norm_"):
             continue
         try:
             size = f.stat().st_size
@@ -51,7 +90,7 @@ def evict_cache_lru(cache_dir: Path, max_size_mb: int) -> None:
         return
 
     mp3_files = sorted(
-        [f for f in cache_dir.glob("*.mp3") if f.name not in _CACHE_PROTECTED],
+        [f for f in cache_dir.glob("*.mp3") if f.name not in _CACHE_PROTECTED and not f.name.startswith("norm_")],
         key=lambda f: f.stat().st_atime,  # oldest access time first
     )
 
@@ -152,6 +191,7 @@ def _download_ytdlp(track: Track, cache_dir: Path) -> Path:
         "quiet": True,
         "no_warnings": True,
         "noprogress": True,
+        "abort_on_unavailable_fragments": True,
     }
 
     with yt_dlp.YoutubeDL(opts) as ydl:

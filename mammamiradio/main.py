@@ -31,12 +31,13 @@ app.include_router(router)
 
 _producer_task: asyncio.Task | None = None
 _playback_task: asyncio.Task | None = None
+_prewarm_task: asyncio.Task | None = None
 
 
 @app.on_event("startup")
 async def startup():
     """Load config, build initial state, and start producer/playback workers."""
-    global _producer_task, _playback_task
+    global _producer_task, _playback_task, _prewarm_task
 
     config = load_config()
     logger.info("Station: %s (%s)", config.station.name, config.station.language)
@@ -48,6 +49,8 @@ async def startup():
     purged = purge_suspect_cache_files(config.cache_dir)
     if purged:
         logger.info("Cache integrity check: purged %d suspect file(s)", purged)
+    norm_count = len(list(config.cache_dir.glob("norm_*.mp3")))
+    logger.info("Normalization cache: %d tracks pre-normalized", norm_count)
 
     # Evict old cached tracks if the cache exceeds the configured size limit
     evict_cache_lru(config.cache_dir, config.max_cache_size_mb)
@@ -132,10 +135,11 @@ async def startup():
         if config.is_addon:
             await prewarm_first_segment(queue, state, config)
 
-    asyncio.create_task(_prewarm_multiple())
+    _prewarm_task = asyncio.create_task(_prewarm_multiple())
 
     _playback_task = asyncio.create_task(run_playback_loop(app))
     _producer_task = asyncio.create_task(run_producer(queue, state, config, skip_event=app.state.skip_event))
+    app.state.prewarm_task = _prewarm_task
     app.state.playback_task = _playback_task
     app.state.producer_task = _producer_task
     # One-line boot summary for operator diagnostics
@@ -163,6 +167,9 @@ async def startup():
 async def shutdown():
     """Stop background workers and close shared streaming resources."""
     tasks_to_cancel = []
+    if _prewarm_task:
+        _prewarm_task.cancel()
+        tasks_to_cancel.append(_prewarm_task)
     if _producer_task:
         _producer_task.cancel()
         tasks_to_cancel.append(_producer_task)
@@ -173,6 +180,8 @@ async def shutdown():
         await asyncio.gather(*tasks_to_cancel, return_exceptions=True)
     if hasattr(app.state, "producer_task"):
         app.state.producer_task = None
+    if hasattr(app.state, "prewarm_task"):
+        app.state.prewarm_task = None
     if hasattr(app.state, "playback_task"):
         app.state.playback_task = None
     if hasattr(app.state, "stream_hub"):
