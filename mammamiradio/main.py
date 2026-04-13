@@ -7,6 +7,7 @@ import logging
 import os
 import secrets
 import time
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
@@ -26,15 +27,22 @@ logging.basicConfig(
 )
 logger = logging.getLogger("mammamiradio")
 
-app = FastAPI(title="mammamiradio")
-app.include_router(router)
-
 _producer_task: asyncio.Task | None = None
 _playback_task: asyncio.Task | None = None
 _prewarm_task: asyncio.Task | None = None
 
 
-@app.on_event("startup")
+@asynccontextmanager
+async def _lifespan(app: FastAPI):
+    await startup()
+    yield
+    await shutdown()
+
+
+app = FastAPI(title="mammamiradio", lifespan=_lifespan)
+app.include_router(router)
+
+
 async def startup():
     """Load config, build initial state, and start producer/playback workers."""
     global _producer_task, _playback_task, _prewarm_task
@@ -165,7 +173,6 @@ async def startup():
     )
 
 
-@app.on_event("shutdown")
 async def shutdown():
     """Stop background workers and close shared streaming resources."""
     tasks_to_cancel = []

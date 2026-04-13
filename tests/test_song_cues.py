@@ -214,3 +214,24 @@ async def test_bump_usage_increments_times_used(db):
 async def test_bump_usage_nonexistent_is_noop(db):
     """bump_usage on a cue that doesn't exist must not raise."""
     await bump_usage(db, "yt_ghost", "reaction")  # no row — should not raise
+
+
+@pytest.mark.asyncio
+async def test_get_cues_missing_db(tmp_path):
+    """get_cues returns empty list immediately when the db file does not exist."""
+    result = await get_cues(tmp_path / "nonexistent.db", "any-id")
+    assert result == []
+
+
+@pytest.mark.asyncio
+async def test_detect_anthem_empty_youtube_id(tmp_path):
+    """detect_anthem returns False immediately for empty youtube_id without touching the db."""
+    result = await detect_anthem(tmp_path / "any.db", "")
+    assert result is False
+
+
+@pytest.mark.asyncio
+async def test_detect_skip_bit_empty_youtube_id(tmp_path):
+    """detect_skip_bit returns False immediately for empty youtube_id."""
+    result = await detect_skip_bit(tmp_path / "any.db", "")
+    assert result is False
