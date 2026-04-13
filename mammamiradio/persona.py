@@ -344,6 +344,9 @@ class PersonaStore:
         """Check if enough time has passed to consider this a new session.
 
         Returns True if session_count should be incremented.
+
+        Note: must only be called from a single async task (the producer loop).
+        The check-then-set on _last_listener_at is not concurrency-safe.
         """
         now = time.time()
         if self._last_listener_at == 0.0 or (now - self._last_listener_at) > SESSION_GAP_SECONDS:

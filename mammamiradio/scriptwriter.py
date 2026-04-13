@@ -618,7 +618,7 @@ async def write_banter(
                     cue_lines = []
                     for c in cues:
                         label = c["type"]
-                        text = c["text"]
+                        text = _sanitize_prompt_data(c["text"])
                         session = c.get("session")
                         session_note = f" (session {session})" if session else ""
                         cue_lines.append(f"- [{label}] {text}{session_note}")
@@ -860,18 +860,24 @@ Return JSON:
                 logger.warning("Failed to persist persona updates", exc_info=True)
 
             # Persist LLM-generated song cues (fire-and-forget)
+            # Pin youtube_id to the known value from played_tracks — never trust
+            # the LLM to echo it correctly (hallucinated IDs create orphan rows).
             llm_cues = data["persona_updates"].get("song_cues", [])
-            if isinstance(llm_cues, list) and llm_cues:
+            known_yt = ""
+            if state.played_tracks:
+                _last_track = list(state.played_tracks)[-1]
+                known_yt = getattr(_last_track, "youtube_id", "") or ""
+            if isinstance(llm_cues, list) and llm_cues and known_yt:
                 try:
                     from mammamiradio.song_cues import add_cue
 
                     db_path = config.cache_dir / "mammamiradio.db"
                     persona = await persona_store.get_persona()
                     for cue in llm_cues:
-                        if isinstance(cue, dict) and cue.get("youtube_id") and cue.get("cue_text"):
+                        if isinstance(cue, dict) and cue.get("cue_text"):
                             await add_cue(
                                 db_path,
-                                cue["youtube_id"],
+                                known_yt,
                                 cue.get("cue_type", "reaction"),
                                 cue["cue_text"],
                                 source_session=persona.session_count,

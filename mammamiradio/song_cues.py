@@ -25,7 +25,9 @@ async def get_cues(db_path: Path, youtube_id: str, limit: int = 3) -> list[dict]
             # Song cues (machine-derived)
             cursor = await db.execute(
                 "SELECT cue_type, cue_text, source_session, times_used FROM song_cues "
-                "WHERE youtube_id = ? ORDER BY pinned DESC, last_used_at DESC NULLS LAST, created_at DESC "
+                "WHERE youtube_id = ? ORDER BY pinned DESC, "
+                "CASE WHEN last_used_at IS NULL THEN 0 ELSE 1 END DESC, "
+                "last_used_at DESC, created_at DESC "
                 "LIMIT ?",
                 (youtube_id, limit),
             )
