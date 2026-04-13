@@ -586,21 +586,19 @@ async def write_banter(
     *,
     is_new_listener: bool = False,
     is_first_listener: bool = False,
-    return_listener_request_commit: bool = False,
-) -> list[tuple[HostPersonality, str]] | tuple[list[tuple[HostPersonality, str]], ListenerRequestCommit | None]:
+) -> tuple[list[tuple[HostPersonality, str]], ListenerRequestCommit | None]:
     """Generate short host banter with recent tracks, jokes, and home context.
 
-    When a PersonaStore is available on state, loads the listener persona into
-    the prompt and requests persona_updates from the LLM.  The returned updates
-    are persisted asynchronously so sessions compound.
+    Always returns ``(lines, commit)`` where ``commit`` is a deferred state
+    mutation for any pending listener request, or ``None`` if no request was
+    injected.  When a PersonaStore is available on state, loads the listener
+    persona into the prompt and requests persona_updates from the LLM.  The
+    returned updates are persisted asynchronously so sessions compound.
     """
     if not _has_script_llm(config):
         host = random.choice(config.hosts)
         fallback = {"it": "E torniamo alla musica!", "en": "And back to the music!"}
-        result = [(host, fallback.get(config.station.language, fallback["en"]))]
-        if return_listener_request_commit:
-            return result, None
-        return result
+        return [(host, fallback.get(config.station.language, fallback["en"]))], None
 
     recent = [_sanitize_prompt_data(t.display) for t in list(state.played_tracks)[-3:]]
     jokes = list(state.running_jokes)[-3:] if state.running_jokes else []
@@ -630,6 +628,14 @@ async def write_banter(
                         f"{cues_text}\n"
                         "Weave at least one of these into the banter naturally.\n"
                     )
+                    # Bump usage so last_used_at advances and ordering stays meaningful
+                    try:
+                        from mammamiradio.song_cues import bump_usage
+
+                        for c in cues:
+                            await bump_usage(db_path, yt_id, c["type"])
+                    except Exception:
+                        logger.warning("Failed to bump song cue usage", exc_info=True)
             except Exception:
                 logger.warning("Failed to load song cues for banter", exc_info=True)
 
@@ -789,12 +795,23 @@ Make this the focus of this banter break. It happened just now — react natural
     # If persona is active, request persona_updates in the response
     persona_update_schema = ""
     if persona_block:
-        persona_update_schema = """,
+        # Only include song_cues field when we have a real youtube_id to echo back.
+        # Without it the LLM hallucinates IDs that can never be retrieved from the DB.
+        song_cues_schema = ""
+        if state.played_tracks:
+            _last = list(state.played_tracks)[-1]
+            _yt = getattr(_last, "youtube_id", "") or ""
+            if _yt:
+                song_cues_schema = (
+                    f',\n    "song_cues": [{{"youtube_id": "{_yt}", '
+                    '"cue_text": "what the hosts said/did about it", "cue_type": "reaction"}}]'
+                )
+        persona_update_schema = f""",
   "persona_updates": {{
     "new_theories": ["new theory about the listener based on this interaction, or empty"],
+    "new_personality_guesses": ["one guess about who this listener is, or empty"],
     "new_jokes": ["any new running joke to carry across sessions, or empty"],
-    "callbacks_used": [{{"song": "title", "context": "why you referenced it"}}],
-    "song_cues": [{{"youtube_id": "id of the track", "cue_text": "what the hosts said/did about it", "cue_type": "reaction"}}]
+    "callbacks_used": [{{"song": "title", "context": "why you referenced it"}}]{song_cues_schema}
   }}"""
 
     prompt = f"""Write a short radio banter between the hosts. {_BANTER_EXCHANGE_COUNT} exchanges total.
@@ -863,9 +880,7 @@ Return JSON:
                     logger.warning("Failed to persist LLM song cues", exc_info=True)
 
         logger.info("Generated banter: %d lines", len(result))
-        if return_listener_request_commit:
-            return result, listener_request_commit
-        return result
+        return result, listener_request_commit
 
     except Exception as e:
         logger.error("Banter generation failed: %s", e)
@@ -875,10 +890,7 @@ Return JSON:
             "en": "And back to the music!",
         }
         text = fallback.get(config.station.language, fallback["en"])
-        result = [(host, text)]
-        if return_listener_request_commit:
-            return result, None
-        return result
+        return [(host, text)], None
 
 
 AD_BREAK_INTROS = [

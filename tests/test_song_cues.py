@@ -185,3 +185,32 @@ async def test_detect_skip_bit_below_threshold(db):
     _insert_play(db, track_id, skipped=1)
     result = await detect_skip_bit(db, "yt_one_skip", threshold=2)
     assert result is False
+
+
+# ---------------------------------------------------------------------------
+# Bug fix: bump_usage advances times_used and last_used_at (Bug 2 fix)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_bump_usage_increments_times_used(db):
+    """bump_usage must advance times_used so get_cues ordering is meaningful."""
+    await add_cue(db, "yt_bump", "reaction", "Marco went wild for this one")
+    await bump_usage(db, "yt_bump", "reaction")
+    await bump_usage(db, "yt_bump", "reaction")
+    import sqlite3 as _sqlite3
+
+    conn = _sqlite3.connect(str(db))
+    row = conn.execute(
+        "SELECT times_used, last_used_at FROM song_cues WHERE youtube_id = ? AND cue_type = ?",
+        ("yt_bump", "reaction"),
+    ).fetchone()
+    conn.close()
+    assert row[0] == 2
+    assert row[1] is not None  # last_used_at was set
+
+
+@pytest.mark.asyncio
+async def test_bump_usage_nonexistent_is_noop(db):
+    """bump_usage on a cue that doesn't exist must not raise."""
+    await bump_usage(db, "yt_ghost", "reaction")  # no row — should not raise

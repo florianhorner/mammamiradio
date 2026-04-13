@@ -219,11 +219,14 @@ class PersonaStore:
             persona = await self.get_persona()
 
             new_theories = _sanitize_list(updates.get("new_theories", []))
+            new_guesses = _sanitize_list(updates.get("new_personality_guesses", []))
             new_jokes = _sanitize_list(updates.get("new_jokes", []))
             callbacks_used = updates.get("callbacks_used", [])
 
             if new_theories:
                 persona.theories = (persona.theories + new_theories)[-10:]
+            if new_guesses:
+                persona.personality_guesses = (persona.personality_guesses + new_guesses)[-5:]
             if new_jokes:
                 persona.running_jokes = (persona.running_jokes + new_jokes)[-5:]
             if isinstance(callbacks_used, list):
@@ -257,6 +260,7 @@ class PersonaStore:
                        theories = excluded.theories,
                        running_jokes = excluded.running_jokes,
                        callbacks = excluded.callbacks,
+                       personality_guesses = excluded.personality_guesses,
                        updated_at = excluded.updated_at""",
                     (
                         json.dumps(persona.motifs),
@@ -269,8 +273,9 @@ class PersonaStore:
                 )
                 await db.commit()
                 logger.info(
-                    "Persona updated: +%d theories, +%d jokes",
+                    "Persona updated: +%d theories, +%d guesses, +%d jokes",
                     len(new_theories),
+                    len(new_guesses),
                     len(new_jokes),
                 )
 
