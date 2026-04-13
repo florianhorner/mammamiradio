@@ -40,6 +40,10 @@ def test_addon_port_8000_consistent_across_config_run_and_runtime_defaults():
 def test_addon_run_sh_respects_home_assistant_toggle():
     run_sh = (REPO_ROOT / "ha-addon" / "mammamiradio" / "rootfs" / "run.sh").read_text()
 
-    assert 'export HA_ENABLED={"true" if enabled else "false"}' in run_sh
+    # Must NOT use the broken f-string form (double-quotes inside shell double-quoted string
+    # cause the shell to mangle the Python code, resulting in NameError: name 'true').
+    assert 'export HA_ENABLED={"true" if enabled else "false"}' not in run_sh
+    # Must use a shell-safe form that correctly exports HA_ENABLED.
+    assert "export HA_ENABLED" in run_sh
     assert 'if [ "${HA_ENABLED:-true}" != "false" ]; then' in run_sh
     assert "Home Assistant integration disabled by add-on option" in run_sh

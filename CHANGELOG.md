@@ -4,6 +4,13 @@ All notable changes to `mammamiradio` are documented here.
 
 The current version source of truth is `pyproject.toml`.
 
+## [Unreleased]
+
+### Fixed
+
+- **Admin keyboard shortcuts removed**: Global `keydown` listener (`s`/`b`/`a`/`n`) was firing skip/banter/ad/news-flash commands while the user was typing in the search box. The shortcuts were removed entirely. A regression test guards against reintroduction.
+- **HA addon config lost on every restart**: `run.sh` had a shell quoting bug — an f-string containing `"double quotes"` inside a shell `"double-quoted"` string caused the Python options parser to receive mangled code. Result: `NameError: name 'true' is not defined` on every restart, `ANTHROPIC_API_KEY` never exported, all Anthropic calls falling back to OpenAI. Fixed by removing the inner double-quotes. 11 functional tests now execute the real parser snippet against JSON fixtures.
+
 ## [2.9.1] - 2026-04-13
 
 ### Fixed
