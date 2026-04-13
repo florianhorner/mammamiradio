@@ -69,7 +69,7 @@ def purge_suspect_cache_files(cache_dir: Path, min_size_bytes: int = 10240) -> i
         return 0
     purged = 0
     for f in cache_dir.glob("*.mp3"):
-        if f.name in _CACHE_PROTECTED or f.name.startswith("norm_"):
+        if f.name in _CACHE_PROTECTED:
             continue
         try:
             size = f.stat().st_size

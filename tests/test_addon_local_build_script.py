@@ -35,3 +35,11 @@ def test_addon_port_8000_consistent_across_config_run_and_runtime_defaults():
         int(env_default_match.group(1)),
     }
     assert ports == {8000}
+
+
+def test_addon_run_sh_respects_home_assistant_toggle():
+    run_sh = (REPO_ROOT / "ha-addon" / "mammamiradio" / "rootfs" / "run.sh").read_text()
+
+    assert "export HA_ENABLED={\"true\" if enabled else \"false\"}" in run_sh
+    assert 'if [ "${HA_ENABLED:-true}" != "false" ]; then' in run_sh
+    assert "Home Assistant integration disabled by add-on option" in run_sh

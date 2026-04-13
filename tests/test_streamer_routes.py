@@ -207,6 +207,41 @@ async def test_run_playback_loop_persists_music_only_after_segment_finishes(tmp_
 
 
 @pytest.mark.asyncio
+async def test_run_playback_loop_timeout_fallback_keeps_queue_bookkeeping_balanced(tmp_path):
+    app = _make_test_app()
+    app.state.config.audio.bitrate = 3200
+    app.state.stream_hub.subscribe()
+    app.state.station_state.queued_segments = [{"type": "music", "label": "Queued Song"}]
+
+    fallback_path = tmp_path / "fallback.mp3"
+    fallback_path.write_bytes(b"x" * 4096)
+
+    async def _forced_timeout(awaitable, *_args, **_kwargs):
+        awaitable.close()
+        raise TimeoutError
+
+    with (
+        patch("mammamiradio.streamer.asyncio.wait_for", new=AsyncMock(side_effect=_forced_timeout)),
+        patch("mammamiradio.producer._pick_canned_clip", return_value=fallback_path),
+        patch.object(app.state.queue, "task_done") as mock_task_done,
+    ):
+        task = asyncio.create_task(run_playback_loop(app))
+        try:
+            deadline = time.monotonic() + 1.0
+            while not app.state.station_state.now_streaming:
+                if time.monotonic() > deadline:
+                    raise AssertionError("playback loop did not stream fallback segment")
+                await asyncio.sleep(0.01)
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    assert app.state.station_state.now_streaming["metadata"].get("fallback") is True
+    assert app.state.station_state.queued_segments == [{"type": "music", "label": "Queued Song"}]
+    mock_task_done.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_skip_route_persists_music_skips_with_youtube_id():
     app = _make_test_app()
     persona_store = MagicMock()

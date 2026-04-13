@@ -23,6 +23,9 @@ from mammamiradio.tts import _EDGE_DEFAULT_FALLBACK_VOICE, _looks_like_openai_vo
 
 load_dotenv()
 
+_TRUTHY = {"true", "1", "yes"}
+_FALSY = {"false", "0", "no"}
+
 
 @dataclass
 class StationSection:
@@ -327,12 +330,16 @@ def load_config(path: str = "radio.toml") -> StationConfig:
     # Env-var overrides for HA add-on: HA_URL and HA_ENABLED
     if os.getenv("HA_URL"):
         ha_raw["url"] = os.getenv("HA_URL")
-    if os.getenv("HA_ENABLED", "").lower() in ("true", "1", "yes"):
+    ha_enabled_env = os.getenv("HA_ENABLED", "").strip().lower()
+    ha_force_disabled = ha_enabled_env in _FALSY
+    if ha_enabled_env in _TRUTHY:
         ha_raw["enabled"] = True
+    elif ha_force_disabled:
+        ha_raw["enabled"] = False
     ha_section = HomeAssistantSection(**ha_raw)
     ha_token = os.getenv("HA_TOKEN", "")
     # Auto-enable HA if token is present and URL is set (Docker/add-on convenience)
-    if ha_token and ha_section.url and not ha_section.enabled:
+    if ha_token and ha_section.url and not ha_section.enabled and not ha_force_disabled:
         ha_section.enabled = True
     if ha_section.enabled and not ha_token:
         import logging as _log
@@ -395,12 +402,15 @@ def load_config(path: str = "radio.toml") -> StationConfig:
         _log.getLogger(__name__).info("Running as Home Assistant addon")
         config.cache_dir = Path(os.getenv("MAMMAMIRADIO_CACHE_DIR", "/data/cache"))
         config.tmp_dir = Path(os.getenv("MAMMAMIRADIO_TMP_DIR", "/data/tmp"))
-        # Auto-enable HA context via Supervisor API
+        # Auto-enable HA context via Supervisor API unless explicitly disabled.
         supervisor_token = os.getenv("SUPERVISOR_TOKEN") or os.getenv("HASSIO_TOKEN", "")
-        if supervisor_token:
+        if supervisor_token and not ha_force_disabled:
             config.homeassistant.enabled = True
             config.homeassistant.url = "http://supervisor/core"
             config.ha_token = supervisor_token
+        elif ha_force_disabled:
+            config.homeassistant.enabled = False
+            config.ha_token = ""
 
     _normalize_tts_voices(config)
     _validate(config)

@@ -427,7 +427,15 @@ async def prewarm_first_segment(
             norm_path = config.tmp_dir / f"music_{uuid4().hex[:8]}.mp3"
             _norm_fn = partial(normalize, audio_path, norm_path, config, loudnorm=True)
             await loop.run_in_executor(None, _norm_fn)
-            await loop.run_in_executor(None, shutil.copy2, str(norm_path), str(norm_cached))
+            try:
+                await loop.run_in_executor(None, shutil.copy2, str(norm_path), str(norm_cached))
+            except OSError as exc:
+                logger.warning(
+                    "Normalization cache write failed (prewarm) %s -> %s: %s",
+                    norm_path,
+                    norm_cached,
+                    exc,
+                )
         if not os.environ.get("MAMMAMIRADIO_SKIP_QUALITY_GATE"):
             try:
                 await loop.run_in_executor(None, validate_segment_audio, norm_path, SegmentType.MUSIC)
@@ -634,7 +642,15 @@ async def run_producer(
                     norm_is_cached = False
                     _norm_fn = partial(normalize, audio_path, norm_path, config, loudnorm=True)
                     await loop.run_in_executor(None, _norm_fn)
-                    await loop.run_in_executor(None, shutil.copy2, str(norm_path), str(norm_cached))
+                    try:
+                        await loop.run_in_executor(None, shutil.copy2, str(norm_path), str(norm_cached))
+                    except OSError as exc:
+                        logger.warning(
+                            "Normalization cache write failed %s -> %s: %s",
+                            norm_path,
+                            norm_cached,
+                            exc,
+                        )
                 audio_source = "download"
 
                 # Quality gate: reject truncated/silent downloads before queueing.

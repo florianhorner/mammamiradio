@@ -616,7 +616,7 @@ def test_purge_suspect_cache_files_skips_protected_mp3_names(tmp_path):
         assert fake_file.exists()
 
 
-def test_purge_suspect_cache_files_keeps_norm_cache_files(tmp_path):
+def test_purge_suspect_cache_files_purges_tiny_norm_cache_files(tmp_path):
     from mammamiradio.downloader import purge_suspect_cache_files
 
     d = tmp_path / "cache"
@@ -627,9 +627,22 @@ def test_purge_suspect_cache_files_keeps_norm_cache_files(tmp_path):
     tiny.write_bytes(b"x" * 100)
 
     purged = purge_suspect_cache_files(d)
-    assert purged == 1
-    assert norm.exists()
+    assert purged == 2
+    assert not norm.exists()
     assert not tiny.exists()
+
+
+def test_purge_suspect_cache_files_keeps_large_norm_cache_files(tmp_path):
+    from mammamiradio.downloader import purge_suspect_cache_files
+
+    d = tmp_path / "cache"
+    d.mkdir()
+    norm = d / "norm_song_192k.mp3"
+    norm.write_bytes(b"x" * 20000)
+
+    purged = purge_suspect_cache_files(d)
+    assert purged == 0
+    assert norm.exists()
 
 
 def test_purge_suspect_cache_files_custom_threshold(tmp_path):

@@ -151,7 +151,12 @@ If you run Home Assistant OS or Supervised:
 5. **Connect the essentials** in Add-on Configuration: optionally `anthropic_api_key` for AI hosts
 6. Start the add-on and open the dashboard from the sidebar
 
-The add-on automatically connects to Home Assistant, so the radio hosts reference your actual home state (lights, temperature, who's home) without any extra configuration.
+The add-on includes `enable_home_assistant` (default: `true`) in **Settings > Add-ons > Mamma Mi Radio > Configuration**.
+
+- `true`: Supervisor token + URL are wired automatically, and hosts can reference live home state (lights, temperature, presence).
+- `false`: Home Assistant context is fully disabled for this add-on run.
+
+Disable it when you want strict privacy, when your HA instance is unavailable/unreliable, or when you want the station to run only with local/model fallbacks.
 
 To play on speakers, use `media_player.play_media` with the stream URL, or add a button to your Lovelace dashboard.
 
@@ -207,6 +212,7 @@ The station is intentionally resilient:
 | Missing dependency | What happens |
 | --- | --- |
 | `MAMMAMIRADIO_ALLOW_YTDLP` not set | Uses a built-in Italian demo playlist instead of live charts |
+| Add-on `enable_home_assistant=false` | Ignores Supervisor HA context and runs without home-state prompts, while music (`MAMMAMIRADIO_ALLOW_YTDLP`) and Anthropic/OpenAI fallbacks continue normally |
 | Anthropic API key or Claude request failure | Falls back to OpenAI `gpt-4o-mini` if `OPENAI_API_KEY` is set, then to stock copy. Authentication failures are memoized for 10 minutes to prevent repeated 401 retries. |
 | OpenAI API key missing or request failure | Falls back to Edge TTS voice for that host |
 | Home Assistant token or API failure | Continues without home context |

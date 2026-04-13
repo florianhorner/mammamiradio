@@ -329,6 +329,18 @@ def test_addon_mode_auto_enables_ha(monkeypatch):
     assert config.ha_token == "my_supervisor_token"
 
 
+def test_addon_mode_respects_ha_enabled_false(monkeypatch):
+    toml_path = Path(__file__).parent.parent / "radio.toml"
+    monkeypatch.setenv("SUPERVISOR_TOKEN", "my_supervisor_token")
+    monkeypatch.setenv("HA_ENABLED", "false")
+
+    config = load_config(str(toml_path))
+
+    assert config.is_addon is True
+    assert config.homeassistant.enabled is False
+    assert config.ha_token == ""
+
+
 def test_addon_mode_skips_bind_auth(monkeypatch):
     """Addon mode should not require ADMIN_PASSWORD for non-local bind."""
     toml_path = Path(__file__).parent.parent / "radio.toml"

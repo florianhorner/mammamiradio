@@ -626,8 +626,10 @@ async def run_playback_loop(app) -> None:
             await asyncio.sleep(1.0)
             continue
 
+        pulled_from_queue = False
         try:
             segment: Segment = await asyncio.wait_for(segment_queue.get(), timeout=30.0)
+            pulled_from_queue = True
         except TimeoutError:
             # Serve a canned clip instead of dead air while the producer catches up
             from mammamiradio.producer import _pick_canned_clip
@@ -646,7 +648,7 @@ async def run_playback_loop(app) -> None:
                 continue
 
         state.on_stream_segment(segment)
-        if state.queued_segments:
+        if pulled_from_queue and state.queued_segments:
             state.queued_segments.pop(0)
         logger.info(
             ">>> NOW STREAMING %s: %s",
@@ -692,7 +694,8 @@ async def run_playback_loop(app) -> None:
         finally:
             if segment.ephemeral:
                 segment.path.unlink(missing_ok=True)
-            segment_queue.task_done()
+            if pulled_from_queue:
+                segment_queue.task_done()
 
 
 def _track_from_music_metadata(metadata: dict) -> Track | None:
