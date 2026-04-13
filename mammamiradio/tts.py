@@ -140,14 +140,18 @@ async def synthesize_openai(
         return response.content
 
     raw_path = output_path.with_suffix(".raw.mp3")
-    audio_bytes = await asyncio.wait_for(
-        loop.run_in_executor(None, _call_openai),
-        timeout=30.0,
-    )
-    raw_path.write_bytes(audio_bytes)
+    try:
+        audio_bytes = await asyncio.wait_for(
+            loop.run_in_executor(None, _call_openai),
+            timeout=30.0,
+        )
+        raw_path.write_bytes(audio_bytes)
 
-    await loop.run_in_executor(None, lambda: normalize(raw_path, output_path, loudnorm=loudnorm))
-    raw_path.unlink(missing_ok=True)
+        await loop.run_in_executor(None, lambda: normalize(raw_path, output_path, loudnorm=loudnorm))
+        raw_path.unlink(missing_ok=True)
+    except Exception:
+        raw_path.unlink(missing_ok=True)  # clean up orphaned raw file on any failure
+        raise
 
     logger.info("Synthesized (OpenAI): %s (%s)", output_path.name, voice)
     return output_path

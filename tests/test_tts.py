@@ -617,3 +617,27 @@ async def test_synthesize_dialogue_openai_host(_mock_all, tmp_path, monkeypatch)
     # Giulia should have used edge-tts
     _mock_all["Communicate"].assert_called_once()
     _mock_all["concat_files"].assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_synthesize_openai_cleans_up_raw_on_normalize_failure(_mock_all, tmp_path, monkeypatch):
+    """synthesize_openai unlinks raw_path when normalize raises, preventing disk leaks."""
+    from mammamiradio.tts import synthesize_openai
+
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-key")
+
+    mock_response = MagicMock()
+    mock_response.content = b"\x00" * 512
+
+    mock_client_instance = MagicMock()
+    mock_client_instance.audio.speech.create.return_value = mock_response
+
+    _mock_all["normalize"].side_effect = RuntimeError("normalize failed")
+
+    with patch("mammamiradio.tts._get_openai_client", return_value=mock_client_instance):
+        output = tmp_path / "openai_out.mp3"
+        raw = output.with_suffix(".raw.mp3")
+        with pytest.raises(RuntimeError, match="normalize failed"):
+            await synthesize_openai("Ciao", "onyx", output)
+
+    assert not raw.exists(), "raw_path must be cleaned up on normalize failure"
