@@ -880,7 +880,7 @@ async def run_producer(
                 # One-shot studio humanity event: cough, paper rustle, etc.
                 # Only fires once per session, only after 15+ segments produced.
                 if not _humanity_event_fired and _segments_produced >= 15 and canned is None and random.random() < 0.10:
-                    sfx_studio_dir = Path("demo_assets/sfx/studio")
+                    sfx_studio_dir = _DEMO_ASSETS_DIR / "sfx" / "studio"
                     if sfx_studio_dir.is_dir():
                         sfx_files = list(sfx_studio_dir.glob("*.mp3"))
                         if sfx_files:
@@ -929,17 +929,20 @@ async def run_producer(
                     flash_path = config.tmp_dir / f"flash_{uuid4().hex[:8]}.mp3"
 
                     # Synthesize with extra energy for sports
-                    flash_prosody: dict[str, str] = {}
+                    flash_rate: str | None = None
+                    flash_pitch: str | None = None
                     if category == "sports":
-                        flash_prosody = {"rate": "+25%", "pitch": "+12Hz"}
+                        flash_rate = "+25%"
+                        flash_pitch = "+12Hz"
                     elif category == "traffic":
-                        flash_prosody = {"rate": "+10%"}
+                        flash_rate = "+10%"
 
                     await synthesize(
                         text,
                         host.voice,
                         flash_path,
-                        **flash_prosody,
+                        rate=flash_rate,
+                        pitch=flash_pitch,
                         engine=host.engine,
                         edge_fallback_voice=host.edge_fallback_voice,
                     )

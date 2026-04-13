@@ -70,7 +70,7 @@ def _make_app(
     config.admin_password = ""
     config.anthropic_api_key = anthropic_key
     config.openai_api_key = openai_key
-    config.ha_enabled = ha_enabled
+    config.homeassistant.enabled = ha_enabled
 
     state = StationState(
         playlist=[Track(title="Song A", artist="Artist", duration_ms=180_000, spotify_id="s1")],
