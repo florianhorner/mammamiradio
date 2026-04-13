@@ -1265,13 +1265,21 @@ function updateEngineRoom(st,caps){
   const qd=st.queue_depth!=null?st.queue_depth:'—';
   const pl=st.playlist?st.playlist.length:'—';
   const listeners=st.listeners?st.listeners.active:(st.listeners_active||0);
+  const con=st.consumption||{};
+  const apiCalls=con.api_calls||0;
+  const inTok=con.input_tokens||0;
+  const outTok=con.output_tokens||0;
+  const cost=con.api_cost_estimate_usd!=null?'$'+con.api_cost_estimate_usd.toFixed(4):'—';
+  const ttsCh=con.tts_characters||0;
   rt.innerHTML=[
     'Uptime: <strong>'+uptime+'</strong>',
     'Queue depth: <strong>'+qd+'</strong> segments buffered',
     'Playlist: <strong>'+pl+'</strong> tracks',
     'Listeners: <strong>'+listeners+'</strong> (peak: '+(st.listeners?st.listeners.peak:'—')+')',
     'Segments produced: <strong>'+(st.segments_produced||'—')+'</strong>',
-  ].join('<br>');
+    apiCalls>0?'AI calls: <strong>'+apiCalls+'</strong> ('+inTok.toLocaleString()+' in / '+outTok.toLocaleString()+' out tokens) · est. <strong>'+cost+'</strong>':'AI calls: <strong>0</strong>',
+    ttsCh>0?'TTS characters: <strong>'+ttsCh.toLocaleString()+'</strong>':'',
+  ].filter(Boolean).join('<br>');
 
   const seg=document.getElementById('engineSegments');
   const log=st.produced_log||[];
