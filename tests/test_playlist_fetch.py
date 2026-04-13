@@ -30,6 +30,7 @@ def config():
 def test_no_credentials_returns_demo_tracks(config, monkeypatch):
     # Ensure yt-dlp is disabled so we get demo tracks, not live charts
     monkeypatch.delenv("MAMMAMIRADIO_ALLOW_YTDLP", raising=False)
+    config.allow_ytdlp = False
     result = fetch_playlist(config)
     assert len(result) == len(DEMO_TRACKS)
     demo_titles = {t.title for t in DEMO_TRACKS}
@@ -47,7 +48,7 @@ def test_no_credentials_shuffles_when_configured(config):
 
 def test_no_credentials_uses_live_charts_when_ytdlp_enabled(config, monkeypatch):
     chart_tracks = [Track(title="Chart One", artist="Artist One", duration_ms=210000, spotify_id="c1")]
-    monkeypatch.setenv("MAMMAMIRADIO_ALLOW_YTDLP", "true")
+    config.allow_ytdlp = True
 
     with patch("mammamiradio.playlist._fetch_current_italy_charts", return_value=chart_tracks):
         tracks, source, _err = fetch_startup_playlist(config)
@@ -313,7 +314,7 @@ def test_local_music_merged_into_chart_playlist(config, monkeypatch, tmp_path):
     (tmp_path / "Mina - Grande Grande Grande.mp3").write_bytes(b"")
 
     chart_tracks = [Track(title="Chart Hit", artist="Pop Star", duration_ms=210000, spotify_id="c_hit")]
-    monkeypatch.setenv("MAMMAMIRADIO_ALLOW_YTDLP", "true")
+    config.allow_ytdlp = True
 
     with (
         patch("mammamiradio.playlist._fetch_current_italy_charts", return_value=chart_tracks),
@@ -333,7 +334,7 @@ def test_local_music_merged_into_chart_playlist(config, monkeypatch, tmp_path):
 def test_local_music_skipped_when_dir_missing(config, monkeypatch):
     """When music/ dir does not exist, chart-only playlist is returned without error."""
     chart_tracks = [Track(title="Solo Chart", artist="Solo Artist", duration_ms=210000, spotify_id="c_solo")]
-    monkeypatch.setenv("MAMMAMIRADIO_ALLOW_YTDLP", "true")
+    config.allow_ytdlp = True
 
     with (
         patch("mammamiradio.playlist._fetch_current_italy_charts", return_value=chart_tracks),
@@ -380,7 +381,7 @@ def test_local_music_deduplicates_against_chart_ids(config, monkeypatch, tmp_pat
 
     # Chart already has a track with an ID that does NOT match the local one
     chart_tracks = [Track(title="Chart Hit", artist="Pop Star", duration_ms=210000, spotify_id="c_hit")]
-    monkeypatch.setenv("MAMMAMIRADIO_ALLOW_YTDLP", "true")
+    config.allow_ytdlp = True
 
     local = _load_local_music_tracks(tmp_path)
     assert len(local) == 1

@@ -215,7 +215,7 @@ def fetch_startup_playlist(
     else:
         error = ""
 
-    charts_allowed = os.getenv("MAMMAMIRADIO_ALLOW_YTDLP", "false").lower() in ("true", "1", "yes")
+    charts_allowed = config.allow_ytdlp
 
     if charts_allowed:
         chart_tracks = _fetch_current_italy_charts()
