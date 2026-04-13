@@ -1100,3 +1100,110 @@ async def test_write_banter_dedup_drops_identical_consecutive_lines(config, stat
 
     texts = [text for _host, text in result]
     assert texts == ["Eccoci a voi!", "E adesso la musica."], f"Expected duplicate line dropped, got: {texts}"
+
+
+# ---------------------------------------------------------------------------
+# Tiered HA reference depth + weather-mood fusion
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_banter_ha_tiered_no_mood(config, state):
+    """When no mood is active, prompt says 'ONE item'."""
+    state.ha_context = "Luci accese."
+
+    captured = {}
+
+    async def _fake(**kwargs):
+        captured["prompt"] = kwargs["prompt"]
+        return {"lines": [{"host": config.hosts[0].name, "text": "Ciao."}], "new_joke": None}
+
+    with patch("mammamiradio.scriptwriter._generate_json_response", side_effect=_fake):
+        await write_banter(state, config)
+
+    assert "ONE item" in captured["prompt"]
+    assert "UP TO TWO" not in captured["prompt"]
+
+
+@pytest.mark.asyncio
+async def test_banter_ha_tiered_with_mood(config, state):
+    """When mood is active, prompt says 'UP TO TWO'."""
+    state.ha_context = "Luci accese."
+    state.ha_home_mood = "Serata cinema"
+
+    captured = {}
+
+    async def _fake(**kwargs):
+        captured["prompt"] = kwargs["prompt"]
+        return {"lines": [{"host": config.hosts[0].name, "text": "Ciao."}], "new_joke": None}
+
+    with patch("mammamiradio.scriptwriter._generate_json_response", side_effect=_fake):
+        await write_banter(state, config)
+
+    assert "UP TO TWO" in captured["prompt"]
+    assert "mood counts toward this cap" in captured["prompt"]
+
+
+@pytest.mark.asyncio
+async def test_banter_weather_mood_fusion(config, state):
+    """When both weather and mood are set, fusion instruction appears."""
+    state.ha_context = "Luci accese."
+    state.ha_home_mood = "Serata cinema"
+    state.ha_weather_arc = "Meteo: pioggia, 12°C."
+
+    captured = {}
+
+    async def _fake(**kwargs):
+        captured["prompt"] = kwargs["prompt"]
+        return {"lines": [{"host": config.hosts[0].name, "text": "Ciao."}], "new_joke": None}
+
+    with patch("mammamiradio.scriptwriter._generate_json_response", side_effect=_fake):
+        await write_banter(state, config)
+
+    assert "Weather and home mood are aligned" in captured["prompt"]
+
+
+@pytest.mark.asyncio
+async def test_banter_weather_only_no_fusion(config, state):
+    """When only weather is set (no mood), no fusion instruction."""
+    state.ha_context = "Luci accese."
+    state.ha_weather_arc = "Meteo: soleggiato, 22°C."
+
+    captured = {}
+
+    async def _fake(**kwargs):
+        captured["prompt"] = kwargs["prompt"]
+        return {"lines": [{"host": config.hosts[0].name, "text": "Ciao."}], "new_joke": None}
+
+    with patch("mammamiradio.scriptwriter._generate_json_response", side_effect=_fake):
+        await write_banter(state, config)
+
+    assert "Weather and home mood are aligned" not in captured["prompt"]
+
+
+@pytest.mark.asyncio
+async def test_banter_security_boundary_preserved(config, state):
+    """HA instructions must be OUTSIDE <home_state_data> tags."""
+    state.ha_context = "Test data."
+    state.ha_home_mood = "Serata cinema"
+
+    captured = {}
+
+    async def _fake(**kwargs):
+        captured["prompt"] = kwargs["prompt"]
+        return {"lines": [{"host": config.hosts[0].name, "text": "Ciao."}], "new_joke": None}
+
+    with patch("mammamiradio.scriptwriter._generate_json_response", side_effect=_fake):
+        await write_banter(state, config)
+
+    prompt = captured["prompt"]
+    # Security boundary: instructions reference data tags but are NOT inside them
+    data_start = prompt.index("<home_state_data>")
+    data_end = prompt.index("</home_state_data>")
+    inside_tags = prompt[data_start:data_end]
+    # The instruction text ("READ-ONLY", "UP TO TWO") appears before or on the tag line,
+    # but NOT inside the data content
+    assert "READ-ONLY sensor data" in prompt
+    assert "UP TO TWO" in prompt
+    # The actual HA data is inside the tags
+    assert "Test data." in inside_tags

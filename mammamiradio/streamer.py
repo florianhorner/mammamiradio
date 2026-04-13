@@ -1439,6 +1439,24 @@ def _public_status_payload(request: Request) -> dict:
             {**item, "source": "predicted_from_playlist"}
             for item in preview_upcoming(state, config.pacing, state.playlist, count=5)
         ]
+    # HA moments for the Casa card (public-safe, no person entity details)
+    ha_moments: dict | None = None
+    if state.ha_context:
+        ha_moments = {
+            "connected": True,
+            "mood": state.ha_home_mood or None,
+            "weather": state.ha_weather_arc or None,
+        }
+        # Event fields: only if within retention window (person filter applied in producer)
+        _retention = 30 * 60  # 30 minutes, matching EVENT_RETENTION_SECONDS
+        _now = time.time()
+        if state.ha_last_event_ts > 0 and (_now - state.ha_last_event_ts) < _retention:
+            ha_moments["last_event_label"] = state.ha_last_event_label
+            ha_moments["last_event_ago_min"] = max(1, round((_now - state.ha_last_event_ts) / 60))
+        # Hide card if nothing interesting to show
+        if not ha_moments.get("mood") and not ha_moments.get("weather") and not ha_moments.get("last_event_label"):
+            ha_moments = None
+
     return {
         "station": config.station.name,
         "running_jokes": list(state.running_jokes),
@@ -1452,6 +1470,7 @@ def _public_status_payload(request: Request) -> dict:
         ],
         "upcoming": upcoming,
         "upcoming_mode": "queued" if upcoming else "building",
+        "ha_moments": ha_moments,
     }
 
 
@@ -1593,6 +1612,16 @@ async def status(request: Request, _: None = Depends(require_admin_access)):
             "last_banter_script": state.last_banter_script,
             "last_ad_script": state.last_ad_script,
             "ha_context": state.ha_context if state.ha_context else None,
+            "ha_details": {
+                "mood": state.ha_home_mood or None,
+                "weather_arc": state.ha_weather_arc or None,
+                "events_summary": state.ha_events_summary or None,
+                "pending_directive": state.ha_pending_directive or None,
+                "recent_event_count": state.ha_recent_event_count,
+                "last_event_label": state.ha_last_event_label or None,
+            }
+            if state.ha_context
+            else None,
             "station_mode": station_mode,
             "producer_errors": [
                 {"type": e.type, "label": e.label, "metadata": e.metadata}

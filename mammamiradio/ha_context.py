@@ -66,6 +66,20 @@ SILVER_ENTITIES = [
     "fan.bad_klein_lufter",
     # Kitchen fan (someone cooking?)
     "fan.kuche_lufter",
+    # Room-level light groups (Magic Areas aggregates)
+    "light.magic_areas_light_groups_wohnzimmer_all_lights",
+    "light.magic_areas_light_groups_schlafzimmer_all_lights",
+    "light.magic_areas_light_groups_kuche_all_lights",
+    "light.magic_areas_light_groups_esszimmer_all_lights",
+    # Power sensors for activity detection
+    "sensor.bar_bali_boot_steckdose_power",
+    "sensor.kuche_kaffeemaschine_steckdose_power",
+    # Atmosphere
+    "light.schlafzimmer_sternenlicht_projektor_2",
+    "light.kleiderschrank_sternenlicht_projektor",
+    "light.terrasse_9_outdoor_lichtschlauch",
+    # Total household power
+    "sensor.haushalt_stromverbrauch_gesamt",
 ]
 
 BRONZE_ENTITIES = [
@@ -107,6 +121,20 @@ ENTITY_LABELS = {
     "input_datetime.last_sleep_time": "Ultimo orario di sonno",
     "input_datetime.last_wake_time": "Ultimo orario di sveglia",
     "binary_sensor.buro_9_ring_intercom_klingelt": "Citofono",
+    # Room-level lights
+    "light.magic_areas_light_groups_wohnzimmer_all_lights": "Luci soggiorno",
+    "light.magic_areas_light_groups_schlafzimmer_all_lights": "Luci camera da letto",
+    "light.magic_areas_light_groups_kuche_all_lights": "Luci cucina",
+    "light.magic_areas_light_groups_esszimmer_all_lights": "Luci sala da pranzo",
+    # Power sensors
+    "sensor.bar_bali_boot_steckdose_power": "Lavatrice (consumo)",
+    "sensor.kuche_kaffeemaschine_steckdose_power": "Caffettiera (consumo)",
+    # Atmosphere
+    "light.schlafzimmer_sternenlicht_projektor_2": "Proiettore stelle camera",
+    "light.kleiderschrank_sternenlicht_projektor": "Proiettore stelle guardaroba",
+    "light.terrasse_9_outdoor_lichtschlauch": "Luci terrazza",
+    # Household power
+    "sensor.haushalt_stromverbrauch_gesamt": "Consumo elettrico totale",
 }
 
 # Map raw HA states to natural Italian descriptions
@@ -185,6 +213,13 @@ REACTIVE_TRIGGERS: list[tuple[str, str, str, int]] = [
         "Sabrina è appena tornata a casa. Un caloroso bentornata Sabrina — naturale e familiare.",
         3600,
     ),
+    (
+        "light.terrasse_9_outdoor_lichtschlauch",
+        "on",
+        "Le luci della terrazza si sono accese! Serata all'aperto — commentate il bel tempo"
+        " o la voglia di aria fresca. Breve, naturale.",
+        3600,
+    ),
 ]
 
 _reactive_cooldowns: dict[str, float] = {}
@@ -256,6 +291,33 @@ def _format_state(entity_id: str, state_data: dict) -> str | None:
     if entity_id == "input_select.kaffee_dad_jokes":
         return f'{label}: "{state}"'
 
+    # Room-level lights — include brightness as percentage
+    if entity_id.startswith("light."):
+        if state == "off":
+            return f"{label}: spente"
+        brightness = attrs.get("brightness")
+        if brightness is not None:
+            try:
+                pct = round(int(brightness) / 255 * 100)
+            except (ValueError, TypeError):
+                pct = None
+            if pct is not None:
+                if pct >= 90:
+                    return f"{label}: accese al massimo"
+                return f"{label}: luci soffuse (~{pct}%)"
+        return f"{label}: accese"
+
+    # Power sensors — translate wattage into activity description
+    if entity_id.startswith("sensor.") and attrs.get("device_class") == "power":
+        try:
+            watts = float(state)
+        except (ValueError, TypeError):
+            return f"{label}: —"
+        unit = attrs.get("unit_of_measurement", "W")
+        if watts < 1:
+            return f"{label}: inattivo"
+        return f"{label}: {watts:.0f} {unit}"
+
     # Default: translate the state
     translated = STATE_TRANSLATIONS.get(state, state)
     return f"{label}: {translated}"
@@ -273,55 +335,6 @@ def _build_summary(states: dict[str, dict]) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Phase 1 helpers: event diffing
-# ---------------------------------------------------------------------------
-
-
-def _diff_states(
-    old_states: dict[str, dict],
-    new_states: dict[str, dict],
-    events: deque[HomeEvent],
-) -> None:
-    """Detect state changes between polls and append as HomeEvent objects.
-
-    Mutates the events deque in place. Prunes events older than 30 minutes.
-    """
-    now = time.time()
-    for entity_id, new_data in new_states.items():
-        new_state = new_data.get("state", "unknown")
-        if new_state in ("unavailable", "unknown"):
-            continue
-        old_data = old_states.get(entity_id, {})
-        old_state = old_data.get("state", "")
-        if not old_state or old_state == new_state:
-            continue
-        if old_state in ("unavailable", "unknown"):
-            continue
-        label = ENTITY_LABELS.get(entity_id, entity_id)
-        events.append(
-            HomeEvent(
-                entity_id=entity_id,
-                label=label,
-                old_state=STATE_TRANSLATIONS.get(old_state, old_state),
-                new_state=STATE_TRANSLATIONS.get(new_state, new_state),
-                timestamp=now,
-            )
-        )
-    # Prune events older than 30 minutes (from the left — oldest first)
-    cutoff = now - 1800
-    while events and events[0].timestamp < cutoff:
-        events.popleft()
-
-
-def _build_events_summary(events: deque[HomeEvent]) -> str:
-    """Build a most-recent-first summary of home events, capped at 5 lines."""
-    if not events:
-        return ""
-    lines = [e.describe() for e in reversed(events)][:5]
-    return "\n".join(lines)
-
-
-# ---------------------------------------------------------------------------
 # Phase 2: Home mood classification
 # ---------------------------------------------------------------------------
 
@@ -335,6 +348,26 @@ def classify_home_mood(states: dict[str, dict]) -> str:
     def _state(eid: str) -> str:
         return states.get(eid, {}).get("state", "")
 
+    def _brightness(eid: str) -> int | None:
+        """Return brightness 0-255 for a light entity, or None."""
+        data = states.get(eid, {})
+        if data.get("state") != "on":
+            return None
+        val = data.get("attributes", {}).get("brightness")
+        if val is None:
+            return None
+        try:
+            return int(val)
+        except (ValueError, TypeError):
+            return None
+
+    def _power_watts(eid: str) -> float:
+        """Return power consumption in watts, 0.0 if unavailable."""
+        try:
+            return float(states.get(eid, {}).get("state", "0"))
+        except (ValueError, TypeError):
+            return 0.0
+
     now_hour = datetime.datetime.now().hour
 
     if _state("vacuum.goldstaubsucher") == "cleaning" or _state("vacuum.matrix10_ultra") == "cleaning":
@@ -345,8 +378,15 @@ def classify_home_mood(states: dict[str, dict]) -> str:
         return "Qualcuno sta cucinando"
     if _state("fan.bad_gross_lufter_shelly") == "on" or _state("fan.bad_klein_lufter") == "on":
         return "Qualcuno sta facendo la doccia"
+    if _power_watts("sensor.bar_bali_boot_steckdose_power") > 10:
+        return "Lavatrice in funzione"
     if _state("media_player.samsung_s95ca_65") == "playing" and now_hour >= 18:
         return "Serata cinema"
+    if (
+        _state("light.schlafzimmer_sternenlicht_projektor_2") == "on"
+        or _state("light.kleiderschrank_sternenlicht_projektor") == "on"
+    ) and now_hour >= 18:
+        return "Serata sotto le stelle"
     if (
         _state("media_player.wohnzimmer_sonos_arc_lautsprecher") == "playing"
         or _state("media_player.esszimmer") == "playing"
@@ -354,6 +394,23 @@ def classify_home_mood(states: dict[str, dict]) -> str:
         return "Musica in casa"
     if _state("input_select.bedroom_occupancy_state") == "occupied" and (now_hour >= 22 or now_hour < 8):
         return "Qualcuno sta dormendo"
+    # Relaxed atmosphere: living room lights on but dimmed below 40%
+    wz_brightness = _brightness("light.magic_areas_light_groups_wohnzimmer_all_lights")
+    if wz_brightness is not None and wz_brightness < 102 and now_hour >= 18:
+        return "Atmosfera rilassata"
+    # House waking up: multiple room lights turning on in the morning
+    if 5 <= now_hour <= 9:
+        lit_rooms = sum(
+            1
+            for eid in (
+                "light.magic_areas_light_groups_wohnzimmer_all_lights",
+                "light.magic_areas_light_groups_kuche_all_lights",
+                "light.magic_areas_light_groups_esszimmer_all_lights",
+            )
+            if _state(eid) == "on"
+        )
+        if lit_rooms >= 2:
+            return "La casa si sta svegliando"
     if _state("person.florian_horner") == "not_home" and _state("person.sabrina") == "not_home":
         return "Casa vuota"
     return ""

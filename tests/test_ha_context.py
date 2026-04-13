@@ -11,10 +11,8 @@ import pytest
 from mammamiradio.ha_context import (
     HomeContext,
     HomeEvent,
-    _build_events_summary,
     _build_summary,
     _build_weather_arc,
-    _diff_states,
     _format_state,
     _sanitize_state_value,
     check_reactive_triggers,
@@ -232,105 +230,6 @@ async def test_fetch_returns_empty_on_failure_no_cache():
 
     assert result.summary == ""
     assert result.raw_states == {}
-
-
-# ---------------------------------------------------------------------------
-# Phase 1: _diff_states
-# ---------------------------------------------------------------------------
-
-
-def test_diff_states_detects_change():
-    old = {"person.florian_horner": {"state": "not_home", "attributes": {}}}
-    new = {"person.florian_horner": {"state": "home", "attributes": {}}}
-    events: deque[HomeEvent] = deque(maxlen=20)
-    _diff_states(old, new, events)
-    assert len(events) == 1
-    assert events[0].entity_id == "person.florian_horner"
-    assert events[0].new_state == "a casa"
-    assert events[0].old_state == "fuori casa"
-
-
-def test_diff_states_ignores_unchanged():
-    states = {"person.florian_horner": {"state": "home", "attributes": {}}}
-    events: deque[HomeEvent] = deque(maxlen=20)
-    _diff_states(states, states, events)
-    assert len(events) == 0
-
-
-def test_diff_states_skips_unavailable_new_state():
-    old = {"vacuum.goldstaubsucher": {"state": "docked", "attributes": {}}}
-    new = {"vacuum.goldstaubsucher": {"state": "unavailable", "attributes": {}}}
-    events: deque[HomeEvent] = deque(maxlen=20)
-    _diff_states(old, new, events)
-    assert len(events) == 0
-
-
-def test_diff_states_skips_unavailable_old_state():
-    old = {"vacuum.goldstaubsucher": {"state": "unavailable", "attributes": {}}}
-    new = {"vacuum.goldstaubsucher": {"state": "cleaning", "attributes": {}}}
-    events: deque[HomeEvent] = deque(maxlen=20)
-    _diff_states(old, new, events)
-    assert len(events) == 0
-
-
-def test_diff_states_prunes_old_events():
-    old_event = HomeEvent(
-        entity_id="person.florian_horner",
-        label="Florian",
-        old_state="fuori casa",
-        new_state="a casa",
-        timestamp=time.time() - 2000,  # 33+ min ago
-    )
-    events: deque[HomeEvent] = deque([old_event], maxlen=20)
-    _diff_states({}, {}, events)
-    assert len(events) == 0
-
-
-def test_diff_states_respects_ring_buffer_maxlen():
-    events: deque[HomeEvent] = deque(maxlen=3)
-    # Manually fill with 5 events to test maxlen
-    for i in range(5):
-        events.append(
-            HomeEvent(
-                entity_id="test",
-                label="Test",
-                old_state=f"s{i}",
-                new_state=f"s{i + 1}",
-                timestamp=time.time(),
-            )
-        )
-    assert len(events) == 3  # maxlen enforced
-
-
-# ---------------------------------------------------------------------------
-# Phase 1: _build_events_summary
-# ---------------------------------------------------------------------------
-
-
-def test_build_events_summary_empty():
-    assert _build_events_summary(deque(maxlen=20)) == ""
-
-
-def test_build_events_summary_most_recent_first():
-    now = time.time()
-    events: deque[HomeEvent] = deque(maxlen=20)
-    events.append(HomeEvent("e1", "Coffee", "spento/a", "acceso/a", now - 300))
-    events.append(HomeEvent("e2", "Florian", "fuori casa", "a casa", now - 60))
-    summary = _build_events_summary(events)
-    lines = summary.strip().splitlines()
-    assert len(lines) == 2
-    # Most recent (Florian) should come first
-    assert "Florian" in lines[0]
-    assert "Coffee" in lines[1]
-
-
-def test_build_events_summary_caps_at_five():
-    now = time.time()
-    events: deque[HomeEvent] = deque(maxlen=20)
-    for i in range(8):
-        events.append(HomeEvent(f"e{i}", f"Label{i}", "old", "new", now - i * 60))
-    summary = _build_events_summary(events)
-    assert len(summary.strip().splitlines()) == 5
 
 
 # ---------------------------------------------------------------------------
@@ -617,3 +516,185 @@ async def test_fetch_weather_forecast_error_returns_empty():
         result = await fetch_weather_forecast("http://ha:8123", "token")
 
     assert result == ""
+
+
+# ---------------------------------------------------------------------------
+# New entity formatting: lights with brightness
+# ---------------------------------------------------------------------------
+
+
+def test_format_state_light_brightness_max():
+    result = _format_state(
+        "light.magic_areas_light_groups_wohnzimmer_all_lights",
+        {"state": "on", "attributes": {"brightness": 255}},
+    )
+    assert result is not None
+    assert "accese al massimo" in result
+
+
+def test_format_state_light_brightness_dim():
+    result = _format_state(
+        "light.magic_areas_light_groups_wohnzimmer_all_lights",
+        {"state": "on", "attributes": {"brightness": 128}},
+    )
+    assert result is not None
+    assert "luci soffuse" in result
+    assert "50%" in result
+
+
+def test_format_state_light_brightness_none():
+    result = _format_state(
+        "light.magic_areas_light_groups_wohnzimmer_all_lights",
+        {"state": "off", "attributes": {}},
+    )
+    assert result is not None
+    assert "spente" in result
+
+
+# ---------------------------------------------------------------------------
+# New entity formatting: power sensors
+# ---------------------------------------------------------------------------
+
+
+def test_format_state_power_sensor_active():
+    result = _format_state(
+        "sensor.bar_bali_boot_steckdose_power",
+        {"state": "450", "attributes": {"device_class": "power", "unit_of_measurement": "W"}},
+    )
+    assert result is not None
+    assert "450" in result
+    assert "W" in result
+
+
+def test_format_state_power_sensor_zero():
+    result = _format_state(
+        "sensor.bar_bali_boot_steckdose_power",
+        {"state": "0", "attributes": {"device_class": "power", "unit_of_measurement": "W"}},
+    )
+    assert result is not None
+    assert "inattivo" in result
+
+
+def test_format_state_power_sensor_non_numeric():
+    result = _format_state(
+        "sensor.bar_bali_boot_steckdose_power",
+        {"state": "unavailable", "attributes": {"device_class": "power"}},
+    )
+    # unavailable states are filtered out
+    assert result is None
+
+
+# ---------------------------------------------------------------------------
+# New mood classifications
+# ---------------------------------------------------------------------------
+
+
+def _states_with_attrs(*entries: tuple[str, str, dict]) -> dict[str, dict]:
+    return {eid: {"state": state, "attributes": attrs} for eid, state, attrs in entries}
+
+
+def test_mood_atmosfera_rilassata():
+    states = _states_with_attrs(
+        ("light.magic_areas_light_groups_wohnzimmer_all_lights", "on", {"brightness": 80}),
+    )
+    with patch("mammamiradio.ha_context.datetime") as mock_dt:
+        mock_dt.datetime.now.return_value.hour = 21
+        result = classify_home_mood(states)
+    assert result == "Atmosfera rilassata"
+
+
+def test_mood_atmosfera_rilassata_wrong_hour():
+    states = _states_with_attrs(
+        ("light.magic_areas_light_groups_wohnzimmer_all_lights", "on", {"brightness": 80}),
+    )
+    with patch("mammamiradio.ha_context.datetime") as mock_dt:
+        mock_dt.datetime.now.return_value.hour = 10
+        result = classify_home_mood(states)
+    assert result != "Atmosfera rilassata"
+
+
+def test_mood_lavatrice_in_funzione():
+    states = _states_with_attrs(
+        ("sensor.bar_bali_boot_steckdose_power", "450", {}),
+    )
+    with patch("mammamiradio.ha_context.datetime") as mock_dt:
+        mock_dt.datetime.now.return_value.hour = 14
+        result = classify_home_mood(states)
+    assert result == "Lavatrice in funzione"
+
+
+def test_mood_lavatrice_below_threshold():
+    states = _states_with_attrs(
+        ("sensor.bar_bali_boot_steckdose_power", "5", {}),
+    )
+    with patch("mammamiradio.ha_context.datetime") as mock_dt:
+        mock_dt.datetime.now.return_value.hour = 14
+        result = classify_home_mood(states)
+    assert result != "Lavatrice in funzione"
+
+
+def test_mood_serata_sotto_le_stelle():
+    states = _states_with_attrs(
+        ("light.schlafzimmer_sternenlicht_projektor_2", "on", {}),
+    )
+    with patch("mammamiradio.ha_context.datetime") as mock_dt:
+        mock_dt.datetime.now.return_value.hour = 22
+        result = classify_home_mood(states)
+    assert result == "Serata sotto le stelle"
+
+
+def test_mood_casa_si_sveglia():
+    states = _states_with_attrs(
+        ("light.magic_areas_light_groups_wohnzimmer_all_lights", "on", {}),
+        ("light.magic_areas_light_groups_kuche_all_lights", "on", {}),
+    )
+    with patch("mammamiradio.ha_context.datetime") as mock_dt:
+        mock_dt.datetime.now.return_value.hour = 7
+        result = classify_home_mood(states)
+    assert result == "La casa si sta svegliando"
+
+
+# ---------------------------------------------------------------------------
+# New reactive triggers
+# ---------------------------------------------------------------------------
+
+
+def test_reactive_terrace_lights():
+    import mammamiradio.ha_context as _hc
+
+    _hc._reactive_cooldowns.clear()
+    events: deque[HomeEvent] = deque(maxlen=20)
+    events.append(
+        HomeEvent(
+            entity_id="light.terrasse_9_outdoor_lichtschlauch",
+            label="Luci terrazza",
+            old_state="spento/a",
+            new_state="acceso/a",
+            timestamp=time.time() - 30,
+        )
+    )
+    result = check_reactive_triggers(events)
+    assert result is not None
+    assert "terrazza" in result.lower()
+
+
+def test_reactive_new_trigger_cooldown():
+    import mammamiradio.ha_context as _hc
+
+    _hc._reactive_cooldowns.clear()
+    events: deque[HomeEvent] = deque(maxlen=20)
+    events.append(
+        HomeEvent(
+            entity_id="light.terrasse_9_outdoor_lichtschlauch",
+            label="Luci terrazza",
+            old_state="spento/a",
+            new_state="acceso/a",
+            timestamp=time.time() - 30,
+        )
+    )
+    # First call should fire
+    result1 = check_reactive_triggers(events)
+    assert result1 is not None
+    # Second call within cooldown should not fire
+    result2 = check_reactive_triggers(events)
+    assert result2 is None

@@ -84,7 +84,8 @@ mammamiradio/
   normalizer.py       FFmpeg helpers for normalize, mix, concat, generated SFX, studio bleed, and oneshot mixing
   tts.py              Edge TTS synthesis for hosts and ads (with +90% rate for pharma disclaimers)
   clip.py             WTF clip extraction from ring buffer, save, and cleanup
-  ha_context.py       Home Assistant polling and Italian state formatting
+  ha_context.py       Home Assistant polling, Italian state formatting, mood classification, reactive triggers
+  ha_enrichment.py    Pure HA event derivation (diff_states, event pruning, numeric passthrough)
   capabilities.py     Capability flags (anthropic, ha), tier derivation, and next_step hints
   persona.py          Compounding listener memory: persona, motifs, session tracking, prompt injection filtering
   sync.py             SQLite database initialization

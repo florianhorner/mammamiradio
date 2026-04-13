@@ -391,6 +391,10 @@ class StationState:
     ha_weather_arc: str = ""
     # Phase 4: pending reactive directive (consumed after one use)
     ha_pending_directive: str = ""
+    # Dashboard HA moments: last notable event (for Casa card)
+    ha_recent_event_count: int = 0
+    ha_last_event_label: str = ""
+    ha_last_event_ts: float = 0.0
     # Force-trigger: producer will use this type instead of scheduler for the next segment
     force_next: SegmentType | None = None
     # Pinned track: select_next_track returns this immediately then clears it

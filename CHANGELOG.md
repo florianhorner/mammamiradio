@@ -4,6 +4,21 @@ All notable changes to `mammamiradio` are documented here.
 
 The current version source of truth is `pyproject.toml`.
 
+## [Unreleased]
+
+### Added
+
+- **Deeper HA context**: 10 new entities (room-level light groups, power sensors, star projectors, terrace lights). 4 new mood classifications (Atmosfera rilassata, Lavatrice in funzione, Serata sotto le stelle, La casa si sta svegliando). Terrace lights reactive trigger.
+- **Casa dashboard card**: Ambient awareness card showing HA mood, weather, and recent events on the listener dashboard. Appears only when HA is connected and has data. Fades in/out with eyebrow pulse on updates. WCAG AA compliant.
+- **`ha_moments` API**: `/public-status` now includes `ha_moments` object with mood, weather, and last event (person-filtered, staleness-guarded). `/status` includes full `ha_details` for admin.
+- **Tiered HA prompt references**: When a mood scene is active, hosts may reference up to 2 home details (mood counts toward cap). Weather-mood fusion instruction when both are present.
+- **Numeric event passthrough**: Power sensors and other numeric-state entities now generate events correctly in `ha_enrichment.diff_states()`.
+
+### Fixed
+
+- **Dead code cleanup**: Removed unused `_diff_states()` and `_build_events_summary()` from `ha_context.py` (runtime uses `ha_enrichment.diff_states()`).
+- **Unused import**: Removed `import os` from `playlist.py`.
+
 ## [2.8.0] - 2026-04-13
 
 ### Added
