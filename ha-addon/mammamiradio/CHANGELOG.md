@@ -1,15 +1,5 @@
 # Changelog
 
-## 2.8.0
-
-### Added
-- Multi-source playlist blending: local `music/` files blend into chart playlist when `MAMMAMIRADIO_ALLOW_YTDLP=true`. Charts raised to 100 tracks (~5.8 hours of unique content).
-
-### Fixed
-- Host chemistry: relative contrast logic prevents both hosts from receiving identical high-energy/chaos instructions.
-- Banter JSON truncation: `max_tokens` raised 600 → 1200, fixing silent fallback to stock banter on long sessions.
-- Transition variety: echo-last-lyric variant fires ~20% of the time.
-
 ## 2.7.0
 
 ### Added
