@@ -4,6 +4,24 @@ All notable changes to `mammamiradio` are documented here.
 
 The current version source of truth is `pyproject.toml`.
 
+## [2.8.0] - 2026-04-13
+
+### Added
+
+- **100-track catalog depth**: Apple Music charts fetch raised from 50 to 100 songs. Combined with local `music/` blending, playlists now hold ~7 hours of unique content before repetition.
+- **Local music blending**: MP3 files in `music/` are automatically merged into the chart playlist when `MAMMAMIRADIO_ALLOW_YTDLP=true`. Parsed as `Artist - Title.mp3`; unknown artist falls back gracefully.
+- **Host chemistry**: When both hosts score high on energy and chaos, they receive differentiated instructions — one runs the chaos, the other delivers surgical cuts. Prevents both hosts from sounding identically manic.
+- **Echo-style transitions**: `write_transition()` now occasionally (20%) mirrors the fading song's energy in the handover phrasing instead of always pivoting away from it.
+- **Banter depth**: Exchange count raised from 2-4 to 4-6 lines. Token budget doubled (600 → 1200) to prevent mid-exchange truncation.
+- **Banter dedup guard**: Consecutive identical lines from LLM copy-paste errors are silently dropped.
+
+### Fixed
+
+- **`/readyz` always 503 with no listeners**: Producer idles when no stream client is connected, keeping queue depth at 0. Fixed: after 30s of uptime, readiness no longer requires a non-empty queue.
+- **`audio_source` stuck at `"prewarm"` in `/healthz`**: First segment produced at startup labelled the source "prewarm" — this value was never replaced until the next segment played. Fixed: falls back to `playlist_source.kind` when audio_source is empty or "prewarm".
+- **`allow_ytdlp` dual env-var read**: `fetch_startup_playlist()` read `MAMMAMIRADIO_ALLOW_YTDLP` directly from env instead of using the already-parsed `config.allow_ytdlp`. Fixed to use the config object as the single source of truth.
+- **Clip rate-limit dict unbounded growth**: `_clip_rate` dict in `create_clip()` was never pruned. Now evicts entries older than 5 minutes on each request.
+
 ## [2.7.0] - 2026-04-12
 
 ### Added

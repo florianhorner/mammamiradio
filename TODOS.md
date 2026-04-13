@@ -1,18 +1,8 @@
 # TODOs
 
-## P2: Music catalog depth — multi-source rotation (from 4th live session, 2026-04-12)
-3-hour session with a single guest listener hit song repetition after ~1 hour despite v2.7.0's 50-track limit and 90-minute refresh. The Italian chart alone (even at 50 tracks) can't sustain multi-hour listening.
-
-**Root cause:** The product leans entirely on the Italian chart as its music source. Local `music/` files and yt-dlp playlists are supported but not blended automatically.
-
-**Action:** Implement multi-source blending in the playlist/producer layer:
-- After chart tracks are exhausted (or in parallel), draw from local `music/` directory
-- Weight tracks by last-played time — prioritize longest-unplayed tracks
-- Consider a "never repeat within N songs" guard regardless of source
-- Optional: pull from a secondary yt-dlp playlist (user-configurable in radio.toml) to expand catalog beyond Italian charts
-
-**Effort:** M (CC: ~1-2 hours) | **Files:** mammamiradio/playlist.py, mammamiradio/producer.py, radio.toml
-**Source:** 4th live session (mother test, 3 hours), 2026-04-12
+### ~~Music catalog depth — multi-source rotation~~ RESOLVED
+- Charts raised to 100 tracks. Local `music/` MP3s auto-blended into chart playlist when `allow_ytdlp=true`. Covers 7h+ of unique content without repetition.
+- **Completed:** v2.8.0 (2026-04-13)
 
 ## P2: Setup friction — still unresolved after 4 sessions
 Every single live session has surfaced setup friction. Stream stability once running is excellent, but getting there takes effort. This is now a pattern, not a one-off.
@@ -101,11 +91,9 @@ The disclaimer_goblin role is defined in SPEAKER_ROLES and has a voice in radio.
 - Option B is transformative for immersion; jigginess between segments doesn't matter
 - **Effort:** M-L | **Files:** mammamiradio/producer.py, mammamiradio/scriptwriter.py
 
-### Host chemistry — too controlled, missing energy
-- Hosts sound too "unchaotic" relative to each other
-- Missing: interruptions, strong reactions, real opinions, chaos of actual radio banter
-- Need to feel like two people with real energy, not two robots taking turns
-- **Effort:** M | **Files:** mammamiradio/scriptwriter.py, radio.toml
+### ~~Host chemistry — too controlled, missing energy~~ RESOLVED
+- Differentiated energy instructions when both hosts are high-energy/chaotic: higher-energy host runs the chaos, lower-energy one cuts surgically. No more identical manic robots.
+- **Completed:** v2.8.0 (2026-04-13)
 
 ### Song cue + ruleset mechanism
 - User needs to flag a specific song mid-stream → system accumulates per-track rules
