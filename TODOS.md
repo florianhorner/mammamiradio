@@ -33,10 +33,15 @@ Spotify AI DJ exists (launched 2023, expanding languages). No contingency plan i
 **Action:** Write the 1-pager, but the answer is now clear. Frame it as: "Spotify can't be bad at radio. We can."
 **Source:** /autoplan CEO dual voices, 2026-04-04 + 55min live session observation, 2026-04-09
 
-## P2: Invest in HA context as differentiator
-All three review phases flagged: HA context is the only moat Spotify DJ cannot copy. The plan invests zero in it. Current HA integration (ha_context.py) is already structured but underutilized.
-**Action:** Make HA context more visible in banter/ads. Add weather-aware, time-aware, and room-aware content prompts. Surface HA state in dashboard.
-**Source:** /autoplan cross-phase theme, 2026-04-04
+## ~~P2: Invest in HA context as differentiator~~ RESOLVED
+10 new entities (room lights, power sensors, star projectors, terrace lights). 4 new mood classifications. Tiered banter references (1 item or up to 2 when mood is active). Weather-mood fusion. Casa dashboard card. `ha_moments` API for public status, `ha_details` for admin. Numeric event passthrough fixed.
+**Completed:** feat/deeper-ha-context (2026-04-13)
+
+## P1: Casa card in listener.html (QA bug — deeper-ha-context)
+Casa card was added to `dashboard.html` (served at `/dashboard`, admin auth) but public listeners hit `/` which serves `listener.html`. The card is invisible to actual listeners. Backend (`ha_moments` in `/public-status`) is correct — UI fix only.
+**Fix:** Copy casa-card HTML (dashboard.html:703-707) + the `ha` block in `updateStatus()` into `listener.html` at equivalent positions.
+**Effort:** XS (CC: ~10 min) | **Files:** mammamiradio/listener.html
+**Source:** QA pass on feat/deeper-ha-context, 2026-04-13
 
 ## P2: Distribution strategy
 No landing page, no hosted demo, no analytics, no invite loop. The product has no way to be discovered. PR readiness != adoption readiness.
