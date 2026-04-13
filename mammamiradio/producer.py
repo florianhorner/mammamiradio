@@ -539,7 +539,7 @@ async def run_producer(
             _was_idle = False
         _producer_idle_logged = False
 
-        if queue.qsize() >= config.pacing.lookahead_segments:
+        if queue.qsize() >= config.pacing.lookahead_segments and state.force_next is None:
             # Periodically evict stale cache files while the producer is idle
             now = asyncio.get_running_loop().time()
             if now - _last_cache_eviction >= _cache_eviction_interval:
