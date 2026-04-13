@@ -523,7 +523,8 @@ async def fetch_weather_forecast(ha_url: str, ha_token: str) -> str:
         )
         resp.raise_for_status()
         data = resp.json()
-        forecast_list: list[dict] = data.get("weather.forecast_home", {}).get("forecast", [])
+        response_data = data.get("response", {}) or data
+        forecast_list: list[dict] = next(iter(response_data.values()), {}).get("forecast", [])
         arc = _build_weather_arc(forecast_list)
         _weather_forecast_cache = arc
         _weather_forecast_fetched_at = time.time()

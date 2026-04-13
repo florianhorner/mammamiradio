@@ -148,6 +148,10 @@ Why: the scriptwriter generates fake ads in the brand's voice, makes false produ
 
 ## Quality gates
 
+- **Pre-merge QA (mandatory)**: Every PR must pass two separate `/qa` runs before merge:
+  1. **Player QA** (`/qa` on `/` dashboard) — listener-facing: stream playback, now-playing, up-next, Casa card, song requests, clip sharing, responsive layout.
+  2. **Admin QA** (`/qa` on `/admin`) — operator-facing: controls (skip/stop/resume/shuffle), pacing sliders, host config, key management, engine room, playlist management.
+  Splitting QA into two focused runs maximizes findings per surface. A single combined run tends to rush through one side. Both must pass before merging.
 - **Coverage ratchet (automatic)**: Coverage can only go up, never down. Two layers enforce this:
   - **Aggregate floor**: `fail_under` in `pyproject.toml` — the overall minimum.
   - **Per-module floors**: `.coverage-floors.json` — every module has its own floor. A module-level regression fails CI even if the aggregate stays above threshold.
