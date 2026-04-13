@@ -20,8 +20,9 @@ These are the contracts that must stay true through the refactor:
 - Source switches must invalidate in-flight work via `playlist_revision`; stale segments must never leak into the new playlist context.
 - `session_stopped` must discard completed in-flight builds without queueing them or advancing playback counters.
 - Listener requests must only be consumed when generated banter queues successfully. Canned fallback and impossible-TTS fallback must not consume them.
-- The real queue and `state.queued_segments` shadow must remain synchronized by explicit rules. The producer appends shadow entries only after successful queue commit. The streamer removes them when playback actually starts.
+- The real queue is authoritative. `state.queued_segments` is a UI-facing shadow that must remain synchronized by explicit rules. The producer appends shadow entries only after successful queue commit. The streamer removes them when playback actually starts. Drift must be corrected and metered, not silently ignored.
 - Failures must degrade to canned audio or silence instead of crashing the station.
+- Rejected, discarded, and stale builds must emit telemetry that explains why they did not commit.
 - Music production, prewarm, and future watermark logic must share one build path. No second copy of the music pipeline.
 
 ## Decision
@@ -51,7 +52,7 @@ Proposed internal package:
 - `mammamiradio/production/music.py`
 - `mammamiradio/production/banter.py`
 - `mammamiradio/production/ads.py`
-- `mammamiradio/production/misc.py`
+- `mammamiradio/production/fillers.py`
 
 The public import boundary stays where it is:
 
@@ -72,9 +73,20 @@ Introduce one internal result type so builders stop directly mutating shared sta
 
 - `segment`
 - `shadow_entry`
-- `on_commit`
-- `on_reject`
+- `effects`
 - `telemetry`
+- `is_prewarm`
+
+`effects` must be a closed, declarative set interpreted by the commit layer. Builders do not return executable callbacks.
+
+Examples:
+
+- `ConsumeListenerRequest(request_id)`
+- `RecordAdHistory(...)`
+- `SetLastScript(kind, payload)`
+- `AdvanceCounters(kind, payload)`
+- `ResetFailureCounter(kind)`
+- `IncrementFailureCounter(kind, reason)`
 
 The important part is not the exact type name. The important part is that builders return intent and the shell performs the mutation.
 
@@ -86,10 +98,31 @@ Add one commit function that alone is allowed to:
 - check `session_stopped`
 - queue the segment
 - append to `state.queued_segments`
-- run success callbacks
+- interpret commit effects
 - reset or retain failure counters
 
 This is the synchronization boundary for the producer side.
+
+Commit ordering must be explicit:
+
+1. validate `playlist_revision`
+2. validate `session_stopped`
+3. `queue.put(segment)`
+4. append shadow entry
+5. apply declarative effects
+6. update counters and telemetry
+
+Partial-failure policy must also be explicit:
+
+- queue truth wins over shadow truth
+- if commit work after `queue.put()` fails, record drift telemetry and let reconciliation repair it
+- commit effects must be idempotent or guarded so commit is retry-safe at the effect layer
+
+Locking note:
+
+- PR1 assumes the current single-producer model remains in place
+- no new `StationState` lock is required unless commit starts awaiting after `queue.put()`
+- if commit grows await points, re-evaluate lock scope before shipping
 
 ### 3. Policy Boundary
 
@@ -115,12 +148,20 @@ Changes:
   - stopped-session discard
   - listener-request commit behavior
   - queue-shadow behavior
+- add listener-request edge cases:
+  - generated banter committed -> consumed
+  - built but stale -> not consumed
+  - built but stopped -> not consumed
+  - impossible-TTS fallback -> not consumed
+  - canned fallback -> not consumed
+- add streamer-side shadow-removal contract coverage
 - add `BuildResult` and `commit_built_segment(...)`
+- add drift telemetry and reconciliation checks at the commit boundary
 - keep `run_producer()` behavior-identical
 
 Exit condition:
 
-- `run_producer()` still owns the flow, but all successful queue commits go through one path
+- `run_producer()` still owns the flow, but all successful commits, rejections, stale discards, and stopped-session discards go through one path
 
 ## PR2: Extract Music and Unify Prewarm
 
@@ -137,6 +178,13 @@ Changes:
   - rationale generation
   - studio bleed
 - make `prewarm_first_segment()` call the same music builder in prewarm mode
+
+Prewarm deltas must be documented explicitly:
+
+- which counters do or do not advance
+- whether rationale is generated
+- whether studio bleed is allowed
+- which telemetry differs from live production
 
 Exit condition:
 
@@ -178,7 +226,7 @@ Changes:
   - transition generation
   - dialogue synthesis
   - banter quality fallback
-- move listener-request consumption behind `on_commit`
+- move listener-request consumption behind declarative commit effects
 
 Exit condition:
 
@@ -191,7 +239,7 @@ Goal: finish the decomposition without changing the public producer boundary.
 Changes:
 
 - create `production/ads.py`
-- create `production/misc.py`
+- create `production/fillers.py`
 - move:
   - ad break assembly
   - ad history commit intent
@@ -246,6 +294,7 @@ Minimum suite per phase:
 - `tests/test_producer_extended.py`
 - `tests/test_shadow_queue_sync.py`
 - `tests/test_ui_control_contracts.py`
+- relevant streamer contract tests when queue-shadow behavior changes
 
 New test files should follow the extraction:
 
@@ -253,6 +302,7 @@ New test files should follow the extraction:
 - `tests/test_production_policy.py`
 - `tests/test_production_banter.py`
 - `tests/test_production_ads.py`
+- `tests/test_production_commit.py`
 
 ## Success Criteria
 
