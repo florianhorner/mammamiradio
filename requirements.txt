@@ -146,9 +146,9 @@ annotated-types==0.7.0 \
     --hash=sha256:1f02e8b43a8fbbc3f3e0d4f0f4bfc8131bcb4eebe8849b8e5c773f3a1c582a53 \
     --hash=sha256:aff07c09a53a08bc8cfccb9c85b05f1aa9a2a6f23728d790723543408344ce89
     # via pydantic
-anthropic==0.93.0 \
-    --hash=sha256:2c20b2ce6d305564c66a6cbaedddee8efdd3b9753098bf314093fcf4c662d04c \
-    --hash=sha256:fea8376f7d5cdf99d5e8e85a48fe7a7bd8ab307cdfee4b1e8283a18b1c0ce1b5
+anthropic==0.94.0 \
+    --hash=sha256:42550b401eed8fcd7f6654234560f99c428306301bca726d32bca4bfb6feb748 \
+    --hash=sha256:dde8c57de73538c5136c1bca9b16da92e75446b53a73562cc911574e4934435c
     # via mammamiradio (pyproject.toml)
 anyio==4.13.0 \
     --hash=sha256:08b310f9e24a9594186fd75b4f73f4a4152069e3853f1ed8bfbf58369f4ad708 \

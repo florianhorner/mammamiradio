@@ -7,7 +7,7 @@ dependencies = [
     "fastapi>=0.115",
     "uvicorn[standard]>=0.34",
 
-    "anthropic>=0.52",
+    "anthropic>=0.94.0",
     "edge-tts>=7.0",
     "python-dotenv>=1.0",
     "pydantic>=2.10",
