@@ -434,7 +434,8 @@ def test_evict_cache_lru_handles_oserror(cache_dir):
         evict_cache_lru(cache_dir, 0.0001)
 
 
-def test_evict_cache_lru_skips_norm_cache_files(cache_dir):
+def test_evict_cache_lru_evicts_regular_before_norm(cache_dir):
+    """Regular files are evicted before norm cache; norm evicted if still over budget."""
     from mammamiradio.downloader import evict_cache_lru
 
     norm = cache_dir / "norm_track_192k.mp3"
@@ -442,10 +443,22 @@ def test_evict_cache_lru_skips_norm_cache_files(cache_dir):
     norm.write_bytes(b"x" * 700 * 1024)
     regular.write_bytes(b"x" * 700 * 1024)
 
-    evict_cache_lru(cache_dir, 0.1)
-
+    # Budget allows ~700 KB — regular evicted first, norm survives
+    evict_cache_lru(cache_dir, 1)
     assert norm.exists()
     assert not regular.exists()
+
+
+def test_evict_cache_lru_evicts_norm_when_over_budget(cache_dir):
+    """Norm files are evicted too when the cache is still over budget after regular eviction."""
+    from mammamiradio.downloader import evict_cache_lru
+
+    norm = cache_dir / "norm_track_192k.mp3"
+    norm.write_bytes(b"x" * 700 * 1024)
+
+    # Budget is tiny — norm must be evicted
+    evict_cache_lru(cache_dir, 0.1)
+    assert not norm.exists()
 
 
 # --- search_ytdlp_metadata ---

@@ -74,7 +74,8 @@ def _purge_segment_queue(q) -> int:
     while not q.empty():
         try:
             seg = q.get_nowait()
-            seg.path.unlink(missing_ok=True)
+            if seg.ephemeral:
+                seg.path.unlink(missing_ok=True)
             q.task_done()
             purged += 1
         except Exception:
@@ -603,6 +604,7 @@ async def run_playback_loop(app) -> None:
                     type=SegmentType.BANTER,
                     path=fallback,
                     metadata={"type": "banter", "canned": True, "fallback": True},
+                    ephemeral=False,
                 )
             else:
                 logger.warning("Queue empty for 30s, no fallback clips available")

@@ -19,23 +19,9 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from mammamiradio.models import AdBrand, AdVoice, CampaignSpine, HostPersonality, PersonalityAxes
+from mammamiradio.tts import _EDGE_DEFAULT_FALLBACK_VOICE, _OPENAI_VOICE_IDS, _looks_like_openai_voice
 
 load_dotenv()
-
-_EDGE_DEFAULT_FALLBACK_VOICE = "it-IT-DiegoNeural"
-_OPENAI_VOICE_IDS = {
-    "alloy",
-    "ash",
-    "ballad",
-    "coral",
-    "echo",
-    "fable",
-    "nova",
-    "onyx",
-    "sage",
-    "shimmer",
-    "verse",
-}
 
 
 @dataclass
@@ -148,10 +134,6 @@ class StationConfig:
     ha_token: str = ""
     is_addon: bool = False
     allow_ytdlp: bool = False
-
-
-def _looks_like_openai_voice(voice: str) -> bool:
-    return voice.strip().lower() in _OPENAI_VOICE_IDS
 
 
 def _normalize_tts_voices(config: StationConfig) -> None:

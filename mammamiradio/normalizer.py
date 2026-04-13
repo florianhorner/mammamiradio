@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import logging
 import math
 import re
@@ -29,7 +28,7 @@ def measure_lufs(input_path: Path) -> float | None:
     except (OSError, subprocess.TimeoutExpired):
         return None
     # ebur128 summary prints "I:  -16.2 LUFS" in stderr
-    match = re.search(r"I:\s+(-?\d+\.?\d*)\s+LUFS", result.stderr or "")
+    match = re.search(r"I:\s+(-?\d+\.\d+)\s+LUFS", result.stderr or "")
     if match:
         return float(match.group(1))
     return None
@@ -93,7 +92,7 @@ def normalize(input_path: Path, output_path: Path, config=None, *, loudnorm: boo
     if loudnorm:
         lufs = measure_lufs(input_path)
         if lufs is not None and abs(lufs - (-16.0)) <= 1.5:
-            shutil.copy2(str(input_path), str(output_path))
+            shutil.copy2(input_path, output_path)
             logger.info("LUFS skip (%.1f LUFS, within tolerance): %s", lufs, input_path.name)
             return output_path
 

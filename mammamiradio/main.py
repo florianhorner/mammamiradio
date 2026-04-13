@@ -69,14 +69,16 @@ async def startup():
             "Install: brew install ffmpeg (macOS) or apt install ffmpeg (Linux)"
         )
 
-    # Always clear the stopped flag on restart. A restart is an explicit intent
-    # to bring the station back up — preserving stopped state silently kept
-    # listeners waiting with no audio and no obvious reason.
+    # Restore stop state so a reload/restart honours an operator-issued stop.
+    # The operator's /api/resume is the correct way to clear this — a crash or
+    # watchdog restart should not silently undo a deliberate stop.
     _stopped_flag = config.cache_dir / "session_stopped.flag"
-    if _stopped_flag.exists():
-        _stopped_flag.unlink(missing_ok=True)
-        logger.info("Cleared stopped flag — station will start playing on first listener")
-    _session_stopped = False
+    _session_stopped = _stopped_flag.exists()
+    if _session_stopped:
+        logger.info(
+            "Restoring stopped session state from previous run — "
+            "use /api/resume or the admin panel to start playback"
+        )
 
     persisted_source = read_persisted_source(config.cache_dir)
     logger.info("Fetching startup playlist")

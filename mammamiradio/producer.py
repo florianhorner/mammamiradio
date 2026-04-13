@@ -454,6 +454,7 @@ async def prewarm_first_segment(
                 "crate": crate,
                 "audio_source": "prewarm",
             },
+            ephemeral=(norm_path != norm_cached),
         )
         await queue.put(segment)
         state.after_music(track)
@@ -702,6 +703,7 @@ async def run_producer(
                         "crate": crate,
                         "audio_source": audio_source,
                     },
+                    ephemeral=not norm_is_cached,
                 )
                 _bound_track = track
                 _set_last_music_file(norm_path)

@@ -32,7 +32,9 @@ def validate_download(filepath: Path) -> tuple[bool, str]:
 
     cmd = ["ffprobe", "-v", "quiet", "-print_format", "json", "-show_format", str(filepath)]
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+    except subprocess.TimeoutExpired:
+        return False, "ffprobe timed out"
     except OSError as exc:
         return False, f"ffprobe failed to start: {exc}"
     if result.returncode != 0:
@@ -50,7 +52,7 @@ def validate_download(filepath: Path) -> tuple[bool, str]:
         duration_s = float(duration_raw)
     except (TypeError, ValueError):
         return False, f"invalid duration: {duration_raw!r}"
-    if duration_s < 60:
+    if duration_s < 30:
         return False, f"duration too short ({duration_s:.1f}s)"
 
     return True, "ok"
@@ -89,10 +91,19 @@ def evict_cache_lru(cache_dir: Path, max_size_mb: int) -> None:
     if max_size_mb <= 0:
         return
 
-    mp3_files = sorted(
-        [f for f in cache_dir.glob("*.mp3") if f.name not in _CACHE_PROTECTED and not f.name.startswith("norm_")],
-        key=lambda f: f.stat().st_atime,  # oldest access time first
-    )
+    # Evict regular cache files first, then norm_ files if still over budget.
+    regular = []
+    norm = []
+    for f in cache_dir.glob("*.mp3"):
+        if f.name in _CACHE_PROTECTED:
+            continue
+        if f.name.startswith("norm_"):
+            norm.append(f)
+        else:
+            regular.append(f)
+    regular.sort(key=lambda f: f.stat().st_atime)
+    norm.sort(key=lambda f: f.stat().st_atime)
+    mp3_files = regular + norm
 
     total_bytes = sum(f.stat().st_size for f in mp3_files)
     max_bytes = max_size_mb * 1024 * 1024
