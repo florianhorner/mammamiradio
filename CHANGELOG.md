@@ -35,6 +35,7 @@ The current version source of truth is `pyproject.toml`.
 - **Clip rate limiter**: Replaced `threading.Lock` with `asyncio.Lock` for async-correct rate limiting.
 - **Song request gating**: Song-request keyword detection now only activates when yt-dlp is enabled, preventing dead-end download attempts.
 - **Dead code cleanup**: Removed unused `_diff_states()` and `_build_events_summary()` from `ha_context.py`, unused imports (`cast`, `threading`, `ListenerRequestCommit`).
+- **Listener Casa card visibility**: The Home Assistant "Casa" ambient card now renders on `listener.html` (public `/` and `/listen`) and updates from `/public-status` `ha_moments`, not only on the admin dashboard.
 
 ## [2.8.0] - 2026-04-13
 
