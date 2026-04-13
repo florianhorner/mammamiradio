@@ -97,6 +97,24 @@ async def test_synthesize_happy_path(_mock_all, tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_synthesize_edge_coerces_openai_voice_to_fallback(_mock_all, tmp_path):
+    from mammamiradio.tts import synthesize
+
+    output = tmp_path / "coerced.mp3"
+    result = await synthesize(
+        "Ciao",
+        "onyx",
+        output,
+        engine="edge",
+        edge_fallback_voice="it-IT-GiuseppeMultilingualNeural",
+    )
+
+    assert result == output
+    call_args = _mock_all["Communicate"].call_args
+    assert call_args[0][1] == "it-IT-GiuseppeMultilingualNeural"
+
+
+@pytest.mark.asyncio
 async def test_synthesize_error_retries_fallback_voice(_mock_all, tmp_path):
     """When primary voice fails, synthesize should retry with DiegoNeural before silence."""
     from mammamiradio.tts import synthesize

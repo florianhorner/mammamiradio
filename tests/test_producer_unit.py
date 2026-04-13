@@ -157,6 +157,55 @@ async def test_banter_segment_queued():
     assert list(state.recent_banter_paths) == []
 
 
+@pytest.mark.asyncio
+async def test_station_id_uses_host_engine_when_sweeper_voice_is_host_based():
+    state = _make_state()
+    config = _make_config()
+    config.sonic_brand.sweeper_voice = ""
+    host = config.hosts[0]
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+
+    with (
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.STATION_ID),
+        patch(f"{PRODUCER_MODULE}.random.choice", return_value=host),
+        patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, return_value=_fake_path()) as mock_synthesize,
+        patch(f"{PRODUCER_MODULE}.generate_station_id_bed", side_effect=_fake_path),
+        patch(f"{PRODUCER_MODULE}.mix_voice_with_sting", side_effect=_fake_path),
+        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+    ):
+        await _run_until_queued(queue, state, config)
+
+    seg = queue.get_nowait()
+    assert seg.type == SegmentType.STATION_ID
+    kwargs = mock_synthesize.call_args.kwargs
+    assert kwargs["engine"] == host.engine
+    assert kwargs["edge_fallback_voice"] == host.edge_fallback_voice
+
+
+@pytest.mark.asyncio
+async def test_time_check_uses_host_engine_for_tts():
+    state = _make_state()
+    config = _make_config()
+    host = config.hosts[0]
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+
+    with (
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.TIME_CHECK),
+        patch(f"{PRODUCER_MODULE}.random.choice", return_value=host),
+        patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, return_value=_fake_path()) as mock_synthesize,
+        patch(f"{PRODUCER_MODULE}.generate_tone", side_effect=_fake_path),
+        patch(f"{PRODUCER_MODULE}.concat_files", side_effect=_fake_path),
+        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+    ):
+        await _run_until_queued(queue, state, config)
+
+    seg = queue.get_nowait()
+    assert seg.type == SegmentType.TIME_CHECK
+    kwargs = mock_synthesize.call_args.kwargs
+    assert kwargs["engine"] == host.engine
+    assert kwargs["edge_fallback_voice"] == host.edge_fallback_voice
+
+
 # ---------------------------------------------------------------------------
 # Error recovery — silence fallback
 # ---------------------------------------------------------------------------

@@ -9,6 +9,7 @@ import logging
 import os
 import random
 import re
+import time
 from dataclasses import dataclass
 
 import anthropic
@@ -36,6 +37,9 @@ _anthropic_client: anthropic.AsyncAnthropic | None = None
 _anthropic_key: str = ""
 _openai_client = None
 _openai_key: str = ""
+_anthropic_auth_blocked_key: str = ""
+_anthropic_auth_blocked_until: float = 0.0
+_ANTHROPIC_AUTH_BACKOFF_SECONDS = 600
 
 # Cached system prompt — rebuilt only when config changes
 _cached_system_prompt: str = ""
@@ -179,6 +183,27 @@ def _has_script_llm(config: StationConfig) -> bool:
     return bool(config.anthropic_api_key or config.openai_api_key)
 
 
+def reset_provider_backoff() -> None:
+    """Clear memoized provider downgrade state (used after key updates/tests)."""
+    global _anthropic_auth_blocked_key, _anthropic_auth_blocked_until
+    _anthropic_auth_blocked_key = ""
+    _anthropic_auth_blocked_until = 0.0
+
+
+def _is_anthropic_auth_error(exc: Exception) -> bool:
+    """Best-effort auth failure detection for Anthropic SDK/runtime variants."""
+    exc_type = type(exc).__name__.lower()
+    text = str(exc).lower()
+    if "auth" in exc_type:
+        return True
+    return (
+        "invalid x-api-key" in text
+        or "authentication_error" in text
+        or "unauthorized" in text
+        or "401" in text
+    )
+
+
 async def _generate_json_response(
     *,
     prompt: str,
@@ -188,27 +213,69 @@ async def _generate_json_response(
     max_tokens: int,
 ) -> dict:
     """Generate JSON via Anthropic, falling back to OpenAI when needed."""
+    global _anthropic_auth_blocked_key, _anthropic_auth_blocked_until
+
     system_prompt = _get_system_prompt(config)
 
     if config.anthropic_api_key:
-        try:
-            client = _get_client(config.anthropic_api_key)
-            resp = await client.messages.create(
-                model=model,
-                max_tokens=max_tokens,
-                system=system_prompt,
-                messages=[{"role": "user", "content": prompt}],
-            )
-            if hasattr(resp, "usage") and resp.usage:
-                state.api_calls += 1
-                state.api_input_tokens += resp.usage.input_tokens
-                state.api_output_tokens += resp.usage.output_tokens
-            raw = resp.content[0].text.strip()  # type: ignore[union-attr]
-            return json.loads(_strip_fences(raw))
-        except Exception as exc:
+        now = time.time()
+        key_changed = _anthropic_auth_blocked_key and _anthropic_auth_blocked_key != config.anthropic_api_key
+        if key_changed:
+            reset_provider_backoff()
+            state.anthropic_disabled_until = 0.0
+            state.anthropic_last_error = ""
+
+        blocked = (
+            _anthropic_auth_blocked_key == config.anthropic_api_key
+            and now < _anthropic_auth_blocked_until
+        )
+
+        if blocked:
+            state.anthropic_disabled_until = _anthropic_auth_blocked_until
             if not config.openai_api_key:
-                raise
-            logger.warning("Anthropic %s, falling back to OpenAI: %s", type(exc).__name__, exc)
+                raise RuntimeError(
+                    "Anthropic authentication previously failed; provider is temporarily disabled"
+                )
+            logger.debug(
+                "Anthropic temporarily disabled after auth failure (retry in %ds); using OpenAI fallback",
+                max(1, int(_anthropic_auth_blocked_until - now)),
+            )
+        else:
+            try:
+                client = _get_client(config.anthropic_api_key)
+                resp = await client.messages.create(
+                    model=model,
+                    max_tokens=max_tokens,
+                    system=system_prompt,
+                    messages=[{"role": "user", "content": prompt}],
+                )
+                if hasattr(resp, "usage") and resp.usage:
+                    state.api_calls += 1
+                    state.api_input_tokens += resp.usage.input_tokens
+                    state.api_output_tokens += resp.usage.output_tokens
+                raw = resp.content[0].text.strip()  # type: ignore[union-attr]
+                state.anthropic_disabled_until = 0.0
+                state.anthropic_last_error = ""
+                return json.loads(_strip_fences(raw))
+            except Exception as exc:
+                if _is_anthropic_auth_error(exc):
+                    _anthropic_auth_blocked_key = config.anthropic_api_key
+                    _anthropic_auth_blocked_until = time.time() + _ANTHROPIC_AUTH_BACKOFF_SECONDS
+                    state.anthropic_disabled_until = _anthropic_auth_blocked_until
+                    state.anthropic_last_error_at = time.time()
+                    state.anthropic_last_error = f"{type(exc).__name__}: {exc}"
+                    state.anthropic_auth_failures += 1
+                    if not config.openai_api_key:
+                        raise
+                    logger.warning(
+                        "Anthropic auth failed; suspending Anthropic for %ds and falling back to OpenAI: %s",
+                        _ANTHROPIC_AUTH_BACKOFF_SECONDS,
+                        exc,
+                    )
+                else:
+                    if not config.openai_api_key:
+                        raise
+                    logger.warning("Anthropic %s, falling back to OpenAI: %s", type(exc).__name__, exc)
 
     openai_key = config.openai_api_key or os.getenv("OPENAI_API_KEY", "")
     if not openai_key:

@@ -412,6 +412,11 @@ class StationState:
     api_input_tokens: int = 0
     api_output_tokens: int = 0
     tts_characters: int = 0
+    # Provider health telemetry (for /status and /api/capabilities diagnostics)
+    anthropic_disabled_until: float = 0.0
+    anthropic_last_error: str = ""
+    anthropic_last_error_at: float = 0.0
+    anthropic_auth_failures: int = 0
     # Listener connection tracking for "impossible moments"
     listeners_active: int = 0
     listeners_peak: int = 0

@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+import mammamiradio.scriptwriter as scriptwriter_module
 from mammamiradio.config import load_config
 from mammamiradio.models import (
     AdBrand,
@@ -44,6 +45,13 @@ def config():
 @pytest.fixture()
 def state():
     return StationState(playlist=[Track(title="Test", artist="Artist", duration_ms=1000, spotify_id="test1")])
+
+
+@pytest.fixture(autouse=True)
+def _reset_provider_backoff_state():
+    scriptwriter_module.reset_provider_backoff()
+    yield
+    scriptwriter_module.reset_provider_backoff()
 
 
 def _mock_anthropic_response(text: str):
@@ -272,6 +280,34 @@ async def test_write_banter_falls_back_to_openai_when_anthropic_fails(config, st
     assert len(result) == 1
     assert result[0][0].name == host_name
     assert result[0][1] == "OpenAI salva la diretta."
+
+
+@pytest.mark.asyncio
+async def test_auth_failure_is_memoized_and_skips_repeated_anthropic_calls(config, state):
+    class AuthenticationError(Exception):
+        pass
+
+    config.openai_api_key = "openai-key"
+    host_name = config.hosts[0].name
+    openai_client = _mock_openai_response(json.dumps({"lines": [{"host": host_name, "text": "Fallback."}]}))
+
+    mock_client = MagicMock()
+    mock_client.messages = MagicMock()
+    mock_client.messages.create = AsyncMock(side_effect=AuthenticationError("invalid x-api-key"))
+    mock_cls = MagicMock(return_value=mock_client)
+
+    with (
+        patch("mammamiradio.scriptwriter._anthropic_client", None),
+        patch("mammamiradio.scriptwriter._openai_client", None),
+        patch("mammamiradio.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
+        patch("mammamiradio.scriptwriter._get_openai_client", return_value=openai_client),
+    ):
+        await write_banter(state, config)
+        await write_banter(state, config)
+
+    assert mock_client.messages.create.await_count == 1
+    assert state.anthropic_disabled_until > 0
+    assert state.anthropic_auth_failures == 1
 
 
 # --- persona integration tests ---

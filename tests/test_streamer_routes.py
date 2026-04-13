@@ -313,6 +313,7 @@ async def test_status_includes_station_mode():
     body = resp.json()
     assert "station_mode" in body
     assert "id" in body["station_mode"]
+    assert "provider_health" in body
 
 
 @pytest.mark.asyncio
@@ -632,3 +633,24 @@ async def test_capabilities_trial_exhausted_flag():
     body = resp.json()
     assert body["trial"]["exhausted"] is True
     assert body["trial"]["canned_clips_streamed"] == SHAREWARE_CANNED_LIMIT
+
+
+@pytest.mark.asyncio
+async def test_capabilities_exposes_anthropic_degraded_health():
+    app = _make_test_app()
+    app.state.config.anthropic_api_key = "bad-key"
+    app.state.config.openai_api_key = "openai-key"
+    app.state.station_state.anthropic_disabled_until = time.time() + 90
+    app.state.station_state.anthropic_last_error = "AuthenticationError: invalid x-api-key"
+    app.state.station_state.anthropic_auth_failures = 2
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.get("/api/capabilities")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["capabilities"]["anthropic_degraded"] is True
+    assert body["provider_health"]["anthropic"]["degraded"] is True
+    assert body["provider_health"]["anthropic"]["retry_after_s"] > 0
+    assert body["provider_health"]["anthropic"]["auth_failures"] == 2

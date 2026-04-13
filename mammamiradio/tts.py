@@ -34,11 +34,38 @@ _instructions_cache: dict[int, str] = {}
 # Singleton OpenAI client — reuses HTTP connection pool across calls
 _openai_client = None
 _openai_client_key: str = ""
+_EDGE_DEFAULT_FALLBACK_VOICE = "it-IT-DiegoNeural"
+_OPENAI_VOICE_IDS = {
+    "alloy",
+    "ash",
+    "ballad",
+    "coral",
+    "echo",
+    "fable",
+    "nova",
+    "onyx",
+    "sage",
+    "shimmer",
+    "verse",
+}
 
 # Cap concurrent TTS + FFmpeg jobs to avoid CPU/thermal spikes on constrained hardware
 # (e.g. Home Assistant Green — fanless ARM SoC). Two slots let one TTS+normalize and
 # one SFX/bed generation overlap without saturating all cores.
 _HEAVY_SEM = asyncio.Semaphore(2)
+
+
+def _looks_like_openai_voice(voice: str) -> bool:
+    return voice.strip().lower() in _OPENAI_VOICE_IDS
+
+
+def _coerce_edge_voice(voice: str, *, edge_fallback_voice: str = "") -> str:
+    """Map obvious OpenAI-only voice IDs to a safe Edge fallback before synthesis."""
+    if not _looks_like_openai_voice(voice):
+        return voice
+    fallback = edge_fallback_voice or _EDGE_DEFAULT_FALLBACK_VOICE
+    logger.warning("Edge TTS received OpenAI voice '%s'; using fallback voice '%s'", voice, fallback)
+    return fallback
 
 
 def _openai_instructions_for_host(host: HostPersonality) -> str:
@@ -161,9 +188,11 @@ async def synthesize(
         if edge_fallback_voice:
             voice = edge_fallback_voice
 
+    edge_voice = _coerce_edge_voice(voice, edge_fallback_voice=edge_fallback_voice)
+
     async with _HEAVY_SEM:
         try:
-            comm = edge_tts.Communicate(text, voice, rate=rate or "+0%", pitch=pitch or "+0Hz")
+            comm = edge_tts.Communicate(text, edge_voice, rate=rate or "+0%", pitch=pitch or "+0Hz")
             raw_path = output_path.with_suffix(".raw.mp3")
             await asyncio.wait_for(comm.save(str(raw_path)), timeout=15.0)
 
@@ -171,13 +200,13 @@ async def synthesize(
             await loop.run_in_executor(None, lambda: normalize(raw_path, output_path, loudnorm=loudnorm))
             raw_path.unlink(missing_ok=True)
 
-            logger.info("Synthesized: %s (%s)", output_path.name, voice)
+            logger.info("Synthesized: %s (%s)", output_path.name, edge_voice)
             return output_path
         except Exception as e:
-            logger.error("TTS failed with %s: %s", voice, e)
+            logger.error("TTS failed with %s: %s", edge_voice, e)
             # Retry with a fallback voice before resorting to silence
-            fallback = "it-IT-DiegoNeural"
-            if voice != fallback:
+            fallback = _EDGE_DEFAULT_FALLBACK_VOICE
+            if edge_voice != fallback:
                 try:
                     logger.info("Retrying TTS with fallback voice: %s", fallback)
                     comm = edge_tts.Communicate(text, fallback, rate=rate or "+0%", pitch=pitch or "+0Hz")

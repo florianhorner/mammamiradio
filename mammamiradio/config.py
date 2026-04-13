@@ -22,6 +22,21 @@ from mammamiradio.models import AdBrand, AdVoice, CampaignSpine, HostPersonality
 
 load_dotenv()
 
+_EDGE_DEFAULT_FALLBACK_VOICE = "it-IT-DiegoNeural"
+_OPENAI_VOICE_IDS = {
+    "alloy",
+    "ash",
+    "ballad",
+    "coral",
+    "echo",
+    "fable",
+    "nova",
+    "onyx",
+    "sage",
+    "shimmer",
+    "verse",
+}
+
 
 @dataclass
 class StationSection:
@@ -133,6 +148,50 @@ class StationConfig:
     ha_token: str = ""
     is_addon: bool = False
     allow_ytdlp: bool = False
+
+
+def _looks_like_openai_voice(voice: str) -> bool:
+    return voice.strip().lower() in _OPENAI_VOICE_IDS
+
+
+def _normalize_tts_voices(config: StationConfig) -> None:
+    """Sanitize host/ad voice config before runtime to prevent avoidable TTS errors."""
+    import logging
+
+    log = logging.getLogger(__name__)
+    for host in config.hosts:
+        host.engine = (host.engine or "edge").strip().lower()
+        if host.engine not in {"edge", "openai"}:
+            log.warning("Host '%s' has unknown engine '%s'; using edge", host.name, host.engine)
+            host.engine = "edge"
+
+        if host.engine == "openai" and not host.edge_fallback_voice:
+            host.edge_fallback_voice = _EDGE_DEFAULT_FALLBACK_VOICE
+            log.warning(
+                "Host '%s' uses OpenAI TTS but has no edge_fallback_voice; defaulting to %s",
+                host.name,
+                host.edge_fallback_voice,
+            )
+
+        if host.engine == "edge" and _looks_like_openai_voice(host.voice):
+            fallback = host.edge_fallback_voice or _EDGE_DEFAULT_FALLBACK_VOICE
+            log.warning(
+                "Host '%s' is configured with OpenAI voice '%s' on edge engine; using fallback '%s'",
+                host.name,
+                host.voice,
+                fallback,
+            )
+            host.voice = fallback
+
+    for voice in config.ads.voices:
+        if _looks_like_openai_voice(voice.voice):
+            log.warning(
+                "Ad voice '%s' uses OpenAI voice id '%s'; replacing with fallback '%s'",
+                voice.name,
+                voice.voice,
+                _EDGE_DEFAULT_FALLBACK_VOICE,
+            )
+            voice.voice = _EDGE_DEFAULT_FALLBACK_VOICE
 
 
 def _is_loopback_host(host: str) -> bool:
@@ -361,6 +420,7 @@ def load_config(path: str = "radio.toml") -> StationConfig:
             config.homeassistant.url = "http://supervisor/core"
             config.ha_token = supervisor_token
 
+    _normalize_tts_voices(config)
     _validate(config)
     from mammamiradio.persona import set_arc_thresholds
 

@@ -26,6 +26,50 @@ def test_load_config_from_radio_toml(monkeypatch):
     assert len(config.ads.voices) > 0
 
 
+def test_load_config_sets_default_edge_fallback_for_openai_hosts(tmp_path):
+    source = Path(__file__).parent.parent / "radio.toml"
+    custom = source.read_text().replace('edge_fallback_voice = "it-IT-GiuseppeMultilingualNeural"\n', "")
+    custom_path = tmp_path / "radio.toml"
+    custom_path.write_text(custom)
+
+    config = load_config(str(custom_path))
+
+    marco = next(h for h in config.hosts if h.name == "Marco")
+    assert marco.engine == "openai"
+    assert marco.edge_fallback_voice == "it-IT-DiegoNeural"
+
+
+def test_load_config_normalizes_edge_host_with_openai_voice(tmp_path):
+    source = Path(__file__).parent.parent / "radio.toml"
+    custom = source.read_text().replace(
+        'voice = "onyx"\nengine = "openai"\nedge_fallback_voice = "it-IT-GiuseppeMultilingualNeural"',
+        'voice = "onyx"\nengine = "edge"\nedge_fallback_voice = ""',
+    )
+    custom_path = tmp_path / "radio.toml"
+    custom_path.write_text(custom)
+
+    config = load_config(str(custom_path))
+
+    marco = next(h for h in config.hosts if h.name == "Marco")
+    assert marco.engine == "edge"
+    assert marco.voice == "it-IT-DiegoNeural"
+
+
+def test_load_config_normalizes_ad_voice_with_openai_id(tmp_path):
+    source = Path(__file__).parent.parent / "radio.toml"
+    custom = source.read_text().replace(
+        'name = "Roberto"\nvoice = "it-IT-DiegoNeural"',
+        'name = "Roberto"\nvoice = "onyx"',
+    )
+    custom_path = tmp_path / "radio.toml"
+    custom_path.write_text(custom)
+
+    config = load_config(str(custom_path))
+
+    roberto = next(v for v in config.ads.voices if v.name == "Roberto")
+    assert roberto.voice == "it-IT-DiegoNeural"
+
+
 def test_audio_section_loaded():
     """The [audio] section should be loaded with correct defaults."""
     toml_path = Path(__file__).parent.parent / "radio.toml"

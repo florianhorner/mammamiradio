@@ -8,10 +8,10 @@ import logging
 import os
 import random
 import shutil
-from functools import partial
 from collections import deque
 from collections.abc import Callable
 from dataclasses import replace
+from functools import partial
 from pathlib import Path
 from uuid import uuid4
 
@@ -961,11 +961,22 @@ async def run_producer(
 
                     # Use configured sweeper voice, or a random host
                     sweeper_voice = sb.sweeper_voice
+                    sweeper_engine = "edge"
+                    sweeper_fallback = ""
                     if not sweeper_voice:
-                        sweeper_voice = random.choice(config.hosts).voice
+                        sweeper_host = random.choice(config.hosts)
+                        sweeper_voice = sweeper_host.voice
+                        sweeper_engine = sweeper_host.engine
+                        sweeper_fallback = sweeper_host.edge_fallback_voice
                     loop = asyncio.get_running_loop()
 
-                    voice_task = synthesize(ident_text, sweeper_voice, voice_path)
+                    voice_task = synthesize(
+                        ident_text,
+                        sweeper_voice,
+                        voice_path,
+                        engine=sweeper_engine,
+                        edge_fallback_voice=sweeper_fallback,
+                    )
                     sting_task = loop.run_in_executor(None, generate_station_id_bed, sting_path, 3.0, sb.motif_notes)
                     await asyncio.gather(voice_task, sting_task)
 
@@ -1040,7 +1051,13 @@ async def run_producer(
                     loop = asyncio.get_running_loop()
                     # Voice + chime in parallel (independent)
                     await asyncio.gather(
-                        synthesize(time_text, host.voice, voice_path),
+                        synthesize(
+                            time_text,
+                            host.voice,
+                            voice_path,
+                            engine=host.engine,
+                            edge_fallback_voice=host.edge_fallback_voice,
+                        ),
                         loop.run_in_executor(None, generate_tone, chime_path, 1047, 0.3),
                     )
                     audio_path = config.tmp_dir / f"time_{uuid4().hex[:8]}.mp3"
@@ -1215,7 +1232,13 @@ async def run_producer(
                 outro_text = random.choice(AD_BREAK_OUTROS)
                 await asyncio.gather(
                     loop.run_in_executor(None, generate_bumper_jingle, bumper_out),
-                    synthesize(outro_text, outro_host.voice, outro_path),
+                    synthesize(
+                        outro_text,
+                        outro_host.voice,
+                        outro_path,
+                        engine=outro_host.engine,
+                        edge_fallback_voice=outro_host.edge_fallback_voice,
+                    ),
                 )
                 break_parts.append(bumper_out)
                 break_parts.append(outro_path)

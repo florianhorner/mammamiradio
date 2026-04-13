@@ -186,6 +186,26 @@ def _runtime_health_snapshot(request: Request) -> dict:
     }
 
 
+def _provider_health_snapshot(config, state: StationState) -> dict:
+    """Return current provider degradation state for admin diagnostics."""
+    now = time.time()
+    anthropic_configured = bool(config.anthropic_api_key)
+    anthropic_degraded = anthropic_configured and state.anthropic_disabled_until > now
+    retry_after = max(0, int(state.anthropic_disabled_until - now)) if anthropic_degraded else 0
+    return {
+        "anthropic": {
+            "configured": anthropic_configured,
+            "degraded": anthropic_degraded,
+            "retry_after_s": retry_after,
+            "last_error": state.anthropic_last_error if anthropic_degraded else "",
+            "auth_failures": state.anthropic_auth_failures,
+        },
+        "openai": {
+            "configured": bool(config.openai_api_key),
+        },
+    }
+
+
 def _apply_loaded_source(
     request,
     tracks: list,
@@ -824,10 +844,16 @@ async def save_keys(request: Request):
         await loop.run_in_executor(None, _save_dotenv, updates)
 
     # Update env + live config so re-check sees the values immediately
+    state = request.app.state.station_state
     for k, v in updates.items():
         os.environ[k] = v
     if "ANTHROPIC_API_KEY" in updates:
         config.anthropic_api_key = updates["ANTHROPIC_API_KEY"]
+        from mammamiradio.scriptwriter import reset_provider_backoff
+
+        reset_provider_backoff()
+        state.anthropic_disabled_until = 0.0
+        state.anthropic_last_error = ""
     if "OPENAI_API_KEY" in updates:
         config.openai_api_key = updates["OPENAI_API_KEY"]
 
@@ -909,6 +935,9 @@ async def capabilities(request: Request, _: None = Depends(require_admin_access)
     capabilities["script_llm"] = bool(config.anthropic_api_key or config.openai_api_key)
     capabilities["anthropic_key"] = bool(config.anthropic_api_key)
     capabilities["openai"] = bool(config.openai_api_key)
+    provider_health = _provider_health_snapshot(config, state)
+    capabilities["anthropic_degraded"] = provider_health["anthropic"]["degraded"]
+    capabilities["anthropic_retry_after_s"] = provider_health["anthropic"]["retry_after_s"]
 
     now = state.now_streaming or {}
     result["now_playing"] = now
@@ -923,6 +952,7 @@ async def capabilities(request: Request, _: None = Depends(require_admin_access)
     }
     result["golden_path"] = _golden_path_status(config, state)
     result["startup_source_error"] = state.startup_source_error or ""
+    result["provider_health"] = provider_health
     return result
 
 
@@ -1739,6 +1769,7 @@ async def status(request: Request, _: None = Depends(require_admin_access)):
                 "total": state.listeners_total,
             },
             "runtime_health": runtime_health,
+            "provider_health": _provider_health_snapshot(config, state),
             "force_pending": state.force_next.value if state.force_next else None,
             "session_stopped": state.session_stopped,
             "playlist": [

@@ -157,7 +157,7 @@ async def test_ad_break_segment_queued(tmp_path):
         patch(f"{MODULE}.next_segment_type", return_value=SegmentType.AD),
         patch(f"{MODULE}.write_ad", new_callable=AsyncMock, return_value=fake_script),
         patch(f"{MODULE}.synthesize_ad", new_callable=AsyncMock, return_value=_fake_path()),
-        patch(f"{MODULE}.synthesize", new_callable=AsyncMock),
+        patch(f"{MODULE}.synthesize", new_callable=AsyncMock) as mock_synthesize,
         patch(f"{MODULE}.generate_bumper_jingle", side_effect=_fake_path),
         patch(f"{MODULE}.concat_files", side_effect=_fake_path),
         patch(f"{MODULE}.fetch_home_context", new_callable=AsyncMock),
@@ -169,6 +169,8 @@ async def test_ad_break_segment_queued(tmp_path):
     assert seg.type == SegmentType.AD
     assert "brands" in seg.metadata
     assert "TestBrand" in seg.metadata["brands"]
+    assert mock_synthesize.call_count >= 2
+    assert all("engine" in call.kwargs for call in mock_synthesize.call_args_list)
 
 
 @pytest.mark.asyncio
