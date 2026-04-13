@@ -608,6 +608,7 @@ async def test_listener_request_valid_shoutout():
 @pytest.mark.asyncio
 async def test_listener_request_valid_song_starts_background_download():
     app = _make_test_app()
+    app.state.config.allow_ytdlp = True  # song_request classification requires ytdlp enabled
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
     with patch("mammamiradio.streamer._download_listener_song", new_callable=AsyncMock) as dl_mock:
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:

@@ -11,6 +11,7 @@ import random
 import re
 import time
 from dataclasses import dataclass
+from typing import cast
 
 import anthropic
 
@@ -489,8 +490,7 @@ def _personality_modifier(
 
     if both_high_energy and both_high_chaos:
         # Relative treatment: higher energy leads, lower one cuts with precision
-        assert other_host is not None  # both_high_* checks other_axes is not None, implying other_host is not None
-        if _is_high_chaos_pair_leader(name, axes, other_host):
+        if _is_high_chaos_pair_leader(name, axes, cast("HostPersonality", other_host)):
             parts.append(
                 "You are the runaway train. Manic energy — talk fast, steamroll the conversation, "
                 "start three thoughts before finishing one, fill every silence. Lead the chaos."
