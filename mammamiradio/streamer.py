@@ -164,6 +164,10 @@ def _runtime_health_snapshot(request: Request) -> dict:
     now_streaming = state.now_streaming or {}
     now_metadata = now_streaming.get("metadata", {}) if isinstance(now_streaming, dict) else {}
     audio_source = now_metadata.get("audio_source", "")
+    if not audio_source or audio_source == "prewarm":
+        playlist_source = state.playlist_source
+        if playlist_source is not None:
+            audio_source = playlist_source.kind
     producer_task = getattr(request.app.state, "producer_task", None)
     playback_task = getattr(request.app.state, "playback_task", None)
     producer_alive = True if producer_task is None else not producer_task.done()
@@ -1545,7 +1549,8 @@ async def readyz(request: Request):
     start_time = getattr(request.app.state, "start_time", None)
     queue_depth = runtime["queue_depth"]
     tasks_alive = runtime["producer_task_alive"] and runtime["playback_task_alive"]
-    ready = queue_depth > 0 and tasks_alive
+    startup_complete = start_time is not None and (time.time() - start_time) > 30
+    ready = tasks_alive and (queue_depth > 0 or startup_complete)
     status = "ready" if ready else "starting"
     body = {
         "status": status,
