@@ -9,8 +9,13 @@ The current version source of truth is `pyproject.toml`.
 ### Fixed
 
 - **Instant startup**: Prewarm now runs as a background task instead of blocking FastAPI startup for up to 20 seconds. The app becomes available immediately on boot; the producer's idle-resume fallback (canned banter clip) covers the gap if a listener connects before the first track is ready.
-- **Session auto-resume on restart**: Restarting the HA add-on no longer silently restores a stopped session state. The `session_stopped.flag` is cleared at boot, so the station plays as soon as a listener connects without requiring a manual admin resume.
-- **Normalization cache**: FFmpeg re-encoding is now skipped for tracks that have already been normalized in a previous session. Normalized files are cached at `cache_dir/norm_{track}_{bitrate}k.mp3`. On HA hardware (Raspberry Pi class) this saves 60+ seconds per restart per cached track. Cache is automatically busted if the audio bitrate config changes.
+- **Normalization cache**: FFmpeg re-encoding is now skipped for tracks that have already been normalized in a previous session. Normalized files are cached at `cache_dir/norm_{track}_{bitrate}k.mp3`. On HA hardware (Raspberry Pi class) this saves 60+ seconds per restart per cached track. Cache is automatically busted if the audio bitrate config changes. Cached segments now persist across playbacks (ephemeral flag set correctly). Norm files are included in LRU eviction (regular files evicted first).
+- **Stopped flag preserved**: Operator `/api/stop` now survives crash/restart/watchdog. The flag is only cleared via explicit `/api/resume`, not on every startup.
+- **Playback gap elimination**: Music persistence (SQLite writes) between songs is now fire-and-forget, eliminating audible gaps on Pi-class hardware.
+- **Status endpoint optimization**: Golden path status (10s TTL), cache size computation (30s TTL), and demo/local directory listings are now cached. Admin page no longer fetches `/public-status` redundantly since `/status` already includes all public fields.
+- **Download validation**: Pre-validation floor lowered from 60s to 30s so silence fallbacks (35s) aren't rejected. ffprobe timeout added (30s) to prevent executor thread starvation on corrupt files.
+- **Demo asset protection**: Fallback canned clips in the playback loop are now marked non-ephemeral, preventing permanent deletion of bundled demo assets.
+- **Voice ID deduplication**: `_OPENAI_VOICE_IDS` set is now a single source of truth in `tts.py`, imported by `config.py`.
 
 ## [2.9.0] - 2026-04-13
 
