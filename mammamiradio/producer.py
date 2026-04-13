@@ -939,7 +939,8 @@ async def run_producer(
                         text,
                         host.voice,
                         flash_path,
-                        **flash_prosody,
+                        rate=flash_prosody.get("rate"),
+                        pitch=flash_prosody.get("pitch"),
                         engine=host.engine,
                         edge_fallback_voice=host.edge_fallback_voice,
                     )
