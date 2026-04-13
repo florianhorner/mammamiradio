@@ -178,6 +178,8 @@ def _download_ytdlp(track: Track, cache_dir: Path) -> Path:
         query = f"https://www.youtube.com/watch?v={track.youtube_id}"
     else:
         query = f"ytsearch1:{track.artist} {track.title} official audio"
+    ytdlp_tmp = cache_dir / ".ytdlp_tmp" / track.cache_key
+    ytdlp_tmp.mkdir(parents=True, exist_ok=True)
     opts = {
         "format": "bestaudio/best",
         "outtmpl": str(cache_dir / f"{track.cache_key}.%(ext)s"),
@@ -192,6 +194,10 @@ def _download_ytdlp(track: Track, cache_dir: Path) -> Path:
         "no_warnings": True,
         "noprogress": True,
         "abort_on_unavailable_fragments": True,
+        "throttled_rate": 100_000,  # re-extract URLs if speed drops below 100 KB/s
+        "check_formats": True,  # verify formats are downloadable before selecting
+        "concurrent_fragment_downloads": 2,  # parallel fragment downloads
+        "paths": {"temp": str(ytdlp_tmp)},  # atomic: fragments in temp, move on completion
     }
 
     with yt_dlp.YoutubeDL(opts) as ydl:

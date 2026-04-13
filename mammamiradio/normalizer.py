@@ -2,14 +2,37 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import math
+import re
 import shutil
 import subprocess
 import tempfile
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
+
+
+def measure_lufs(input_path: Path) -> float | None:
+    """Fast integrated loudness measurement via ebur128 (~2-5s on Pi, no upsample).
+
+    Returns integrated LUFS value, or None if measurement fails.
+    """
+    cmd = [
+        "ffmpeg", "-i", str(input_path),
+        "-af", "ebur128=peak=true",
+        "-f", "null", "-",
+    ]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    # ebur128 summary prints "I:  -16.2 LUFS" in stderr
+    match = re.search(r"I:\s+(-?\d+\.?\d*)\s+LUFS", result.stderr or "")
+    if match:
+        return float(match.group(1))
+    return None
 
 # Shared FFmpeg output arguments for consistent MP3 encoding across all generators.
 _MP3_OUTPUT_ARGS: list[str] = ["-ar", "48000", "-ac", "2", "-b:a", "192k", "-f", "mp3"]
@@ -64,6 +87,15 @@ def normalize(input_path: Path, output_path: Path, config=None, *, loudnorm: boo
     sample_rate = str(config.audio.sample_rate) if config else "48000"
     channels = str(config.audio.channels) if config else "2"
     bitrate = f"{config.audio.bitrate}k" if config else "192k"
+
+    # Skip normalization entirely if the file is already within ±1.5 LU of -16 LUFS.
+    # measure_lufs takes ~2-5s on Pi vs 10-75s for a full normalize pass.
+    if loudnorm:
+        lufs = measure_lufs(input_path)
+        if lufs is not None and abs(lufs - (-16.0)) <= 1.5:
+            shutil.copy2(str(input_path), str(output_path))
+            logger.info("LUFS skip (%.1f LUFS, within tolerance): %s", lufs, input_path.name)
+            return output_path
 
     if loudnorm:
         if config is not None and getattr(config, "is_addon", False) is True:
