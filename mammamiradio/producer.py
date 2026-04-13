@@ -11,7 +11,6 @@ from collections import deque
 from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
-
 from uuid import uuid4
 
 from mammamiradio.audio_quality import AudioQualityError, AudioToolError, validate_segment_audio
@@ -29,7 +28,6 @@ from mammamiradio.models import (
     AdFormat,
     AdHistoryEntry,
     AdVoice,
-    HostPersonality,
     Segment,
     SegmentType,
     SonicWorld,
@@ -52,7 +50,6 @@ from mammamiradio.scheduler import next_segment_type
 from mammamiradio.scriptwriter import (
     AD_BREAK_INTROS,
     AD_BREAK_OUTROS,
-
     _has_script_llm,
     write_ad,
     write_banter,
