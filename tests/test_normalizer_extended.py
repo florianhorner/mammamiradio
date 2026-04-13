@@ -200,12 +200,10 @@ def test_generate_music_bed_lounge(mock_subprocess):
     generate_music_bed(out, "lounge", 10.0)
     cmd = mock_run.call_args[0][0]
     joined = " ".join(cmd)
-    # All tones in single aevalsrc
     assert "aevalsrc=" in joined
     assert "220" in joined
-    assert "tremolo" in joined
-    assert "volume=0.15" in joined
-    assert "aecho" in joined
+    assert "aphaser" in joined
+    assert "volume=0.14" in joined
 
 
 def test_generate_music_bed_dramatic(mock_subprocess):
@@ -225,7 +223,8 @@ def test_generate_music_bed_upbeat(mock_subprocess):
     cmd = mock_run.call_args[0][0]
     joined = " ".join(cmd)
     assert "aevalsrc=" in joined
-    assert "440" in joined
+    assert "330" in joined
+    assert "aphaser" in joined
 
 
 def test_generate_music_bed_mysterious(mock_subprocess):
@@ -245,7 +244,8 @@ def test_generate_music_bed_epic(mock_subprocess):
     cmd = mock_run.call_args[0][0]
     joined = " ".join(cmd)
     assert "aevalsrc=" in joined
-    assert "60" in joined
+    assert "65" in joined
+    assert "tremolo" in joined
 
 
 def test_generate_music_bed_unknown_mood_defaults_to_lounge(mock_subprocess):
@@ -361,7 +361,8 @@ def test_generate_music_bed_cheap_synth_romance(mock_subprocess):
     cmd = mock_run.call_args[0][0]
     joined = " ".join(cmd)
     assert "aevalsrc=" in joined
-    assert "300" in joined
+    assert "293" in joined
+    assert "aphaser" in joined
 
 
 def test_generate_music_bed_suspicious_jazz(mock_subprocess):
@@ -382,10 +383,10 @@ def test_generate_music_bed_discount_techno(mock_subprocess):
     cmd = mock_run.call_args[0][0]
     joined = " ".join(cmd)
     assert "aevalsrc=" in joined
-    assert "440" in joined
-    assert "880" in joined
-    # Fast tremolo for techno pulse
-    assert "tremolo=f=6" in joined
+    assert "110" in joined
+    # Fast rhythmic tremolo (f=8) instead of droning echo
+    assert "tremolo=f=8" in joined
+    assert "highpass" in joined
 
 
 def test_generate_music_bed_environment_cafe(mock_subprocess):
@@ -395,7 +396,7 @@ def test_generate_music_bed_environment_cafe(mock_subprocess):
     cmd = mock_run.call_args[0][0]
     joined = " ".join(cmd)
     assert "aevalsrc=" in joined
-    assert "180" in joined
+    assert "174" in joined
 
 
 # ---------------------------------------------------------------------------

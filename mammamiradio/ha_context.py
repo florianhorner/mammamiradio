@@ -20,6 +20,7 @@ from mammamiradio.ha_enrichment import (
     EVENT_BUFFER_SIZE,
     HomeEvent,
     build_events_summary,
+    build_events_summary_en,
     diff_states,
     prune_events,
 )
@@ -170,6 +171,77 @@ STATE_TRANSLATIONS = {
 }
 
 
+# English entity labels for admin UI display (parallel to ENTITY_LABELS)
+ENTITY_LABELS_EN: dict[str, str] = {
+    "switch.bar_kaffeemaschine_steckdose": "Coffee machine",
+    "input_select.kaffee_dad_jokes": "Coffee dad joke",
+    "vacuum.goldstaubsucher": "Robot vacuum Goldstaubsucher",
+    "vacuum.matrix10_ultra": "Robot vacuum Matrix10 Ultra",
+    "weather.forecast_home": "Weather at PentFLOuse",
+    "person.florian_horner": "Florian",
+    "person.sabrina": "Sabrina",
+    "person.schnuffi": "Schnuffi",
+    "lock.lock_ultra_8d3c": "Front door lock",
+    "input_button.foyer_fahrstuhl_fingerbot_push_button": "Elevator (last used)",
+    "binary_sensor.8_stockwerk_group_sensor_wohnzimmer_esszimmer_bar": "Living room/dining/bar presence",
+    "input_select.bedroom_occupancy_state": "Bedroom",
+    "switch.bad_gross_waschmaschine_steckdose": "Washing machine",
+    "media_player.samsung_s95ca_65": "Samsung TV",
+    "media_player.wohnzimmer_sonos_arc_lautsprecher": "Sonos Arc living room",
+    "media_player.esszimmer": "Sonos dining room",
+    "climate.wohnzimmer_tado_heizung": "Heating (living room)",
+    "climate.schlafzimmer": "Heating (bedroom)",
+    "sun.sun": "Sun",
+    "fan.bad_gross_lufter_shelly": "Large bathroom fan",
+    "fan.bad_klein_lufter": "Small bathroom fan",
+    "fan.kuche_lufter": "Kitchen fan",
+    "input_datetime.last_sleep_time": "Last sleep time",
+    "input_datetime.last_wake_time": "Last wake time",
+    "binary_sensor.buro_9_ring_intercom_klingelt": "Intercom",
+    "light.magic_areas_light_groups_wohnzimmer_all_lights": "Living room lights",
+    "light.magic_areas_light_groups_schlafzimmer_all_lights": "Bedroom lights",
+    "light.magic_areas_light_groups_kuche_all_lights": "Kitchen lights",
+    "light.magic_areas_light_groups_esszimmer_all_lights": "Dining room lights",
+    "sensor.bar_bali_boot_steckdose_power": "Washing machine (power)",
+    "sensor.kuche_kaffeemaschine_steckdose_power": "Coffee machine (power)",
+    "light.schlafzimmer_sternenlicht_projektor_2": "Star projector (bedroom)",
+    "light.kleiderschrank_sternenlicht_projektor": "Star projector (wardrobe)",
+    "light.terrasse_9_outdoor_lichtschlauch": "Terrace lights",
+    "sensor.haushalt_stromverbrauch_gesamt": "Total household power",
+}
+
+# English state translations for admin UI display
+STATE_TRANSLATIONS_EN: dict[str, str] = {
+    "home": "home",
+    "not_home": "away",
+    "on": "on",
+    "off": "off",
+    "locked": "locked",
+    "unlocked": "unlocked",
+    "docked": "docked",
+    "cleaning": "cleaning",
+    "paused": "paused",
+    "returning": "returning to base",
+    "idle": "idle",
+    "playing": "playing",
+    "above_horizon": "above horizon",
+    "below_horizon": "below horizon (nighttime)",
+    "auto": "auto",
+    "heat": "heating active",
+    "vacant": "vacant",
+    "occupied": "occupied",
+    "cloudy": "cloudy",
+    "sunny": "sunny",
+    "rainy": "rainy",
+    "partlycloudy": "partly cloudy",
+    "clear-night": "clear night",
+    "fog": "fog",
+    "snowy": "snowy",
+    "windy": "windy",
+    "lightning": "thunderstorm",
+}
+
+
 # ---------------------------------------------------------------------------
 # Phase 4: Reactive triggers
 # ---------------------------------------------------------------------------
@@ -263,6 +335,11 @@ class HomeContext:
     mood: str = ""
     # Phase 3: weather narrative arc
     weather_arc: str = ""
+    # English equivalents for admin UI display
+    mood_en: str = ""
+    weather_arc_en: str = ""
+    events_summary_en: str = ""
+    last_event_label_en: str = ""
 
     @property
     def age_seconds(self) -> float:
@@ -457,11 +534,84 @@ def classify_home_mood(states: dict[str, dict]) -> str:
     return ""
 
 
+def classify_home_mood_en(states: dict[str, dict]) -> str:
+    """English version of classify_home_mood for admin UI display."""
+
+    def _state(eid: str) -> str:
+        return states.get(eid, {}).get("state", "")
+
+    def _brightness(eid: str) -> int | None:
+        data = states.get(eid, {})
+        if data.get("state") != "on":
+            return None
+        val = data.get("attributes", {}).get("brightness")
+        if val is None:
+            return None
+        try:
+            return int(val)
+        except (ValueError, TypeError):
+            return None
+
+    def _power_watts(eid: str) -> float:
+        try:
+            return float(states.get(eid, {}).get("state", "0"))
+        except (ValueError, TypeError):
+            return 0.0
+
+    now_hour = datetime.datetime.now().hour
+
+    if _state("vacuum.goldstaubsucher") == "cleaning" or _state("vacuum.matrix10_ultra") == "cleaning":
+        return "Robot vacuum running"
+    if _state("switch.bar_kaffeemaschine_steckdose") == "on" and 5 <= now_hour <= 10:
+        return "Morning coffee"
+    if _state("fan.kuche_lufter") == "on":
+        return "Someone cooking"
+    if _state("fan.bad_gross_lufter_shelly") == "on" or _state("fan.bad_klein_lufter") == "on":
+        return "Someone showering"
+    if _power_watts("sensor.bar_bali_boot_steckdose_power") > 10:
+        return "Washing machine running"
+    if _power_watts("sensor.kuche_kaffeemaschine_steckdose_power") > 50:
+        return "Coffee brewing"
+    if _state("media_player.samsung_s95ca_65") == "playing" and now_hour >= 18:
+        return "Movie night"
+    if (
+        _state("light.schlafzimmer_sternenlicht_projektor_2") == "on"
+        or _state("light.kleiderschrank_sternenlicht_projektor") == "on"
+    ) and now_hour >= 18:
+        return "Evening under the stars"
+    if (
+        _state("media_player.wohnzimmer_sonos_arc_lautsprecher") == "playing"
+        or _state("media_player.esszimmer") == "playing"
+    ):
+        return "Music at home"
+    if _state("input_select.bedroom_occupancy_state") == "occupied" and (now_hour >= 22 or now_hour < 8):
+        return "Someone sleeping"
+    wz_brightness = _brightness("light.magic_areas_light_groups_wohnzimmer_all_lights")
+    if wz_brightness is not None and wz_brightness < 102 and now_hour >= 18:
+        return "Relaxed atmosphere"
+    if 5 <= now_hour <= 9:
+        lit_rooms = sum(
+            1
+            for eid in (
+                "light.magic_areas_light_groups_wohnzimmer_all_lights",
+                "light.magic_areas_light_groups_kuche_all_lights",
+                "light.magic_areas_light_groups_esszimmer_all_lights",
+            )
+            if _state(eid) == "on"
+        )
+        if lit_rooms >= 2:
+            return "House waking up"
+    if _state("person.florian_horner") == "not_home" and _state("person.sabrina") == "not_home":
+        return "Empty home"
+    return ""
+
+
 # ---------------------------------------------------------------------------
 # Phase 3: Weather narrative arc
 # ---------------------------------------------------------------------------
 
 _weather_forecast_cache: str = ""
+_weather_forecast_cache_en: str = ""
 _weather_forecast_fetched_at: float = 0.0
 _WEATHER_CACHE_TTL = 3600.0
 _SIGNIFICANT_CONDITIONS = {"rainy", "snowy", "lightning", "windy", "fog"}
@@ -501,12 +651,45 @@ def _build_weather_arc(forecast: list[dict]) -> str:
     return ""
 
 
+def _build_weather_arc_en(forecast: list[dict]) -> str:
+    """English version of _build_weather_arc for admin UI display."""
+    if not forecast:
+        return ""
+
+    now_hour = datetime.datetime.now().hour
+    current = forecast[0]
+    current_cond = _sanitize_state_value(str(current.get("condition", "")), max_len=30)
+    current_temp = current.get("temperature")
+
+    upcoming_sig: str | None = None
+    for fc in forecast[1:7]:
+        cond = _sanitize_state_value(str(fc.get("condition", "")), max_len=30)
+        if cond in _SIGNIFICANT_CONDITIONS:
+            upcoming_sig = cond
+            break
+
+    current_is_sig = current_cond in _SIGNIFICANT_CONDITIONS
+    current_en = STATE_TRANSLATIONS_EN.get(current_cond, current_cond)
+
+    if upcoming_sig and now_hour < 12:
+        en = STATE_TRANSLATIONS_EN.get(upcoming_sig, upcoming_sig)
+        return f"Heads up: {en} expected this afternoon."
+    if current_is_sig and 12 <= now_hour < 18:
+        temp_str = f", {current_temp}°C" if current_temp is not None else ""
+        return f"Outside: {current_en}{temp_str} — as forecast."
+    if current_is_sig and now_hour >= 18:
+        return f"Did you survive the {current_en} today?"
+    if current_en and current_temp is not None:
+        return f"Weather: {current_en}, {current_temp}°C."
+    return ""
+
+
 async def fetch_weather_forecast(ha_url: str, ha_token: str) -> str:
-    """Fetch hourly weather forecast from HA and return a narrative arc string.
+    """Fetch hourly weather forecast from HA and return a narrative arc string (Italian).
 
     Cached for 1 hour. Returns "" if HA does not support get_forecasts or on error.
     """
-    global _weather_forecast_cache, _weather_forecast_fetched_at
+    global _weather_forecast_cache, _weather_forecast_cache_en, _weather_forecast_fetched_at
     if time.time() - _weather_forecast_fetched_at < _WEATHER_CACHE_TTL:
         return _weather_forecast_cache
 
@@ -526,15 +709,23 @@ async def fetch_weather_forecast(ha_url: str, ha_token: str) -> str:
         response_data = data.get("response", {}) or data
         forecast_list: list[dict] = next(iter(response_data.values()), {}).get("forecast", [])
         arc = _build_weather_arc(forecast_list)
+        arc_en = _build_weather_arc_en(forecast_list)
         _weather_forecast_cache = arc
+        _weather_forecast_cache_en = arc_en
         _weather_forecast_fetched_at = time.time()
         logger.debug("Weather arc: %s", arc or "(none)")
         return arc
     except Exception as e:
         logger.debug("Weather forecast unavailable: %s", e)
         _weather_forecast_cache = ""
+        _weather_forecast_cache_en = ""
         _weather_forecast_fetched_at = time.time()
         return ""
+
+
+def get_weather_arc_en() -> str:
+    """Return the cached English weather arc string."""
+    return _weather_forecast_cache_en
 
 
 # ---------------------------------------------------------------------------
@@ -629,6 +820,9 @@ async def fetch_home_context(
         now = time.time()
         effective_cache.events = prune_events(effective_cache.events, now=now)
         effective_cache.events_summary = build_events_summary(effective_cache.events, now=now)
+        effective_cache.events_summary_en = build_events_summary_en(
+            effective_cache.events, ENTITY_LABELS_EN, STATE_TRANSLATIONS_EN, now=now
+        )
         return effective_cache
 
     try:
@@ -659,9 +853,18 @@ async def fetch_home_context(
             now=timestamp,
         )
         mood = classify_home_mood(relevant)
+        mood_en = classify_home_mood_en(relevant)
         weather_arc = await fetch_weather_forecast(ha_url, ha_token)
         summary = _build_summary(relevant)
         events_summary = build_events_summary(events, now=timestamp)
+        events_summary_en = build_events_summary_en(
+            events, ENTITY_LABELS_EN, STATE_TRANSLATIONS_EN, now=timestamp
+        )
+        # Determine English label of the most recent event for admin display
+        last_event_label_en = ""
+        if events:
+            newest = max(events, key=lambda e: e.timestamp)
+            last_event_label_en = ENTITY_LABELS_EN.get(newest.entity_id, newest.label)
         context = HomeContext(
             raw_states=relevant,
             summary=summary,
@@ -670,6 +873,10 @@ async def fetch_home_context(
             mood=mood,
             weather_arc=weather_arc,
             timestamp=timestamp,
+            mood_en=mood_en,
+            weather_arc_en=get_weather_arc_en(),
+            events_summary_en=events_summary_en,
+            last_event_label_en=last_event_label_en,
         )
         _ha_cache = context
         logger.info("Fetched HA context: %d entities, %d events, mood=%r", len(relevant), len(events), mood or "none")

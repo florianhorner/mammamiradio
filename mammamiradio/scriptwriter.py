@@ -634,6 +634,9 @@ Rules:
 - PHYSICAL COMEDY: reference the studio physically. Someone knocks something over.
   Someone's headphone cable gets caught. The mic sounds wrong and they complain about it.
 - REACT BEFORE WORDS: a host reacts first — laughs, "eh", groans, "oddio no" — before forming a sentence. Feelings first, words second.
+- BANNED PHRASES: never write these — they are overused clichés that make the station sound fake:
+  "che bomba", "assolutamente", "incredibile", "fantastico", "pazzesco", "spettacolare".
+  If you're about to reach for one of these, find a specific, unexpected reaction instead.
 - Output ONLY valid JSON, no markdown fences or extra text."""
 
 
@@ -697,6 +700,7 @@ async def write_banter(
                 logger.warning("Failed to load song cues for banter", exc_info=True)
 
     host_names = {h.name: h for h in config.hosts}
+    host_names_ci = {h.name.lower(): h for h in config.hosts}
 
     # Home Assistant context — hosts may casually reference home state
     # SECURITY: instructions are placed OUTSIDE the data tags so injected
@@ -890,7 +894,8 @@ Return JSON:
 
         result = []
         for line in data["lines"]:
-            host = host_names.get(line["host"], config.hosts[0])
+            raw_name = str(line.get("host", ""))
+            host = host_names.get(raw_name) or host_names_ci.get(raw_name.lower(), config.hosts[0])
             result.append((host, line["text"]))
 
         # Dedup guard: drop consecutive lines with identical text (LLM copy-paste error)

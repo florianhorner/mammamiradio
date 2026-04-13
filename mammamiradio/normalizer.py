@@ -81,21 +81,43 @@ def _gate_after(onset_sec: float) -> str:
     return f"if(gte(t\\,{_fmt_num(onset)})\\,1\\,0)"
 
 
-def normalize(input_path: Path, output_path: Path, config=None, *, loudnorm: bool = True) -> Path:
+def normalize(
+    input_path: Path,
+    output_path: Path,
+    config=None,
+    *,
+    loudnorm: bool = True,
+    music_eq: bool = False,
+) -> Path:
     """Re-encode an input file to the station's target loudness and format.
 
     Set loudnorm=False for intermediate files that will receive a final loudnorm
     pass later (e.g. individual TTS lines before dialogue assembly). This runs
     ~3x faster on constrained hardware — just re-encodes to station format without
     the EBU R128 analysis pass. Silence trimming is still applied.
+
+    Set music_eq=True for yt-dlp music tracks to apply a gentle broadcast EQ
+    before the loudness pass: removes subsonic rumble, de-muds compressed audio,
+    adds presence, and rolls off HF harshness from lossy re-encoding.
     """
     sample_rate = str(config.audio.sample_rate) if config else "48000"
     channels = str(config.audio.channels) if config else "2"
     bitrate = f"{config.audio.bitrate}k" if config else "192k"
 
-    # Skip normalization entirely if the file is already within ±1.5 LU of -16 LUFS.
-    # measure_lufs takes ~2-5s on Pi vs 10-75s for a full normalize pass.
-    if loudnorm:
+    # Broadcast EQ for music: tonal consistency across yt-dlp rips.
+    # Applied *before* loudnorm so the level measurement sees the equalized signal.
+    # Kept gentle — this is correction, not creative processing.
+    _MUSIC_EQ = (
+        "highpass=f=35,"                          # sub-bass rumble from video codec leakage
+        "equalizer=f=200:t=o:w=150:g=-2,"         # de-mud (compressed video audio)
+        "equalizer=f=3000:t=o:w=1000:g=1.5,"      # presence / clarity
+        "equalizer=f=12000:t=o:w=4000:g=-1.5,"    # tame HF harshness from MP3 re-encoding
+        "acompressor=threshold=0.25:ratio=2:attack=20:release=250:makeup=1"  # gentle radio leveller
+    )
+
+    # Skip normalization entirely if the file is already within ±1.5 LU of -16 LUFS
+    # AND no EQ correction is needed (EQ always requires a re-encode pass).
+    if loudnorm and not music_eq:
         lufs = measure_lufs(input_path)
         if lufs is not None and abs(lufs - (-16.0)) <= 1.5:
             shutil.copy2(input_path, output_path)
@@ -107,9 +129,11 @@ def normalize(input_path: Path, output_path: Path, config=None, *, loudnorm: boo
             norm_part = "dynaudnorm=f=150:g=13,alimiter=limit=0.95"
         else:
             norm_part = "loudnorm=I=-16:LRA=11:TP=-1.5"
-        audio_filter = (
-            f"{norm_part},silenceremove=start_periods=0:stop_periods=1:stop_threshold=-50dB:stop_duration=0.3"
-        )
+        silence_trim = "silenceremove=start_periods=0:stop_periods=1:stop_threshold=-50dB:stop_duration=0.3"
+        if music_eq:
+            audio_filter = f"{_MUSIC_EQ},{norm_part},{silence_trim}"
+        else:
+            audio_filter = f"{norm_part},{silence_trim}"
     else:
         audio_filter = "silenceremove=start_periods=0:stop_periods=1:stop_threshold=-50dB:stop_duration=0.3"
 
@@ -468,106 +492,382 @@ def generate_sfx(output_path: Path, sfx_type: str, sfx_dir: Path | None = None) 
 def generate_music_bed(output_path: Path, mood: str, duration_sec: float) -> Path:
     """Generate a synthetic music bed for an ad based on mood.
 
-    Uses ffmpeg lavfi filters to create layered ambient beds with per-mood
-    tremolo rates, detuned intervals for warmth, and harmonic padding.
-    The suspicious_jazz mood uses a walking bass frequency pattern.
+    Each mood uses a distinct waveform texture (via harmonics) and a distinct
+    effects chain so beds sound different from each other.  The heavy aecho
+    that caused all beds to drone identically has been removed; moods now use
+    aphaser, equalizer, or short room reverb to add space without beating.
     """
     fade_out = min(1.5, duration_sec / 3)
     d = duration_sec
 
-    # Each mood: (root, third, fifth, detune_offset, tremolo_freq, tremolo_depth)
-    # detune_offset adds slight detuning to the third for chorus/warmth
-    _moods: dict[str, tuple[float, float, float, float, float, float]] = {
-        "dramatic": (80, 120, 160, 1.5, 1.0, 0.4),
-        "lounge": (220, 330, 440, 2.0, 2.5, 0.25),
-        "upbeat": (440, 660, 880, 3.0, 4.0, 0.35),
-        "mysterious": (100, 150, 200, 1.0, 0.8, 0.5),
-        "epic": (60, 120, 880, 2.0, 1.5, 0.3),
-        "tarantella_pop": (523, 659, 784, 3.0, 5.0, 0.3),
-        "cheap_synth_romance": (300, 400, 500, 2.5, 3.0, 0.35),
-        "overblown_epic": (55, 110, 220, 1.5, 1.2, 0.4),
-        "suspicious_jazz": (220, 277, 370, 2.0, 1.8, 0.2),
-        "discount_techno": (440, 880, 660, 4.0, 6.0, 0.45),
-        "cafe": (180, 260, 340, 2.0, 2.0, 0.2),
-        "motorway": (60, 90, 120, 1.0, 1.0, 0.35),
-        "beach": (140, 200, 280, 2.5, 1.5, 0.25),
-        "showroom": (300, 450, 600, 3.0, 3.5, 0.3),
-        "stadium": (100, 200, 300, 2.0, 2.5, 0.35),
-        "luxury_spa": (250, 375, 500, 1.5, 1.0, 0.2),
-        "occult_basement": (50, 75, 100, 0.5, 0.6, 0.5),
-        "shopping_channel": (400, 600, 800, 3.0, 4.5, 0.3),
-    }
+    # ── helpers ────────────────────────────────────────────────────────────────
+    def _piano(f: float) -> str:
+        """Harmonic series that sounds like a soft struck string (no pure sine)."""
+        return (
+            f"sin(2*PI*{f}*t)"
+            f"+0.7*sin(2*PI*{f*2}*t)"
+            f"+0.25*sin(2*PI*{f*3}*t)"
+            f"+0.1*sin(2*PI*{f*4}*t)"
+        )
 
-    root, third, fifth, detune, trem_f, trem_d = _moods.get(mood, _moods["lounge"])
-    detuned = third + detune  # slight chorus effect
+    def _hollow(f: float) -> str:
+        """Odd harmonics only — clarinet / organ quality."""
+        return (
+            f"sin(2*PI*{f}*t)"
+            f"+0.33*sin(2*PI*{f*3}*t)"
+            f"+0.2*sin(2*PI*{f*5}*t)"
+            f"+0.14*sin(2*PI*{f*7}*t)"
+        )
 
-    # suspicious_jazz gets a walking bass pattern via aevalsrc
+    def _saw(f: float) -> str:
+        """All harmonics — bright / buzzy sawtooth character."""
+        return (
+            f"sin(2*PI*{f}*t)"
+            f"+0.5*sin(2*PI*{f*2}*t)"
+            f"+0.33*sin(2*PI*{f*3}*t)"
+            f"+0.25*sin(2*PI*{f*4}*t)"
+            f"+0.2*sin(2*PI*{f*5}*t)"
+        )
+
+    def _pad_expr(root: float, third: float, fifth: float, wave_fn) -> str:
+        """Chord built from three voices using the given waveform."""
+        r = wave_fn(root)
+        t = wave_fn(third)
+        fi = wave_fn(fifth)
+        return f"0.5*({r})+0.4*({t})+0.35*({fi})"
+
+    def _fades(d: float, fo: float) -> str:
+        return f"afade=t=in:d=0.6,afade=t=out:st={d - fo}:d={fo}"
+
+    def _run(expr: str, af: str, label: str) -> Path:
+        cmd = [
+            "ffmpeg", "-y", "-f", "lavfi", "-i",
+            f"aevalsrc={expr}|{expr}:d={d}:s=48000:c=stereo",
+            "-af", af, *_MP3_OUTPUT_ARGS, str(output_path),
+        ]
+        _run_ffmpeg(cmd, f"music bed ({label})")
+        logger.info("Generated music bed: %s (%s, %.1fs)", output_path.name, label, d)
+        return output_path
+
+    # ── suspicious_jazz: walking bass with piano harmonics, tiny room reverb ──
     if mood == "suspicious_jazz":
-        return _generate_jazz_bed(output_path, d, fade_out, root, third, fifth, detuned, trem_f, trem_d)
+        root, third, fifth = 220.0, 277.0, 370.0
+        flat7 = root * 1.8
+        bass_expr = (
+            f"0.35*sin(2*PI*{root*0.5}*t)*max(0,1-2*mod(t,2))"
+            f"+0.35*sin(2*PI*{fifth*0.5}*t)*max(0,1-2*abs(mod(t,2)-0.5))"
+            f"+0.35*sin(2*PI*{flat7*0.5}*t)*max(0,1-2*abs(mod(t,2)-1.0))"
+            f"+0.35*sin(2*PI*{third*0.5}*t)*max(0,1-2*abs(mod(t,2)-1.5))"
+        )
+        pad = _pad_expr(root, third, fifth, _piano)
+        expr = f"0.5*({pad})+0.7*({bass_expr})"
+        af = (
+            f"aecho=0.6:0.3:25|55:0.04|0.02,"  # tiny room reverb only
+            f"{_fades(d, fade_out)},"
+            f"volume=0.14"
+        )
+        return _run(expr, af, "suspicious_jazz")
 
-    # All 4 tones in a single aevalsrc (root + third + detuned + fifth)
-    chord_expr = f"1.0*sin(2*PI*{root}*t)+0.6*sin(2*PI*{third}*t)+0.4*sin(2*PI*{detuned}*t)+0.5*sin(2*PI*{fifth}*t)"
-    cmd = [
-        "ffmpeg",
-        "-y",
-        "-f",
-        "lavfi",
-        "-i",
-        f"aevalsrc={chord_expr}|{chord_expr}:d={d}:s=48000:c=stereo",
-        "-af",
-        f"tremolo=f={trem_f}:d={trem_d},"
-        f"aecho=0.8:0.5:60|120:0.15|0.08,"
-        f"afade=t=in:d=0.5,afade=t=out:st={d - fade_out}:d={fade_out},"
-        f"volume=0.15",
-        *_MP3_OUTPUT_ARGS,
-        str(output_path),
-    ]
-    _run_ffmpeg(cmd, f"music bed ({mood})")
-    logger.info("Generated music bed: %s (%s, %.1fs)", output_path.name, mood, d)
-    return output_path
+    # ── discount_techno: sawtooth pulse with fast rhythmic tremolo ────────────
+    if mood == "discount_techno":
+        root, third, fifth = 110.0, 165.0, 220.0
+        expr = _pad_expr(root, third, fifth, _saw)
+        af = (
+            f"tremolo=f=8:d=0.55,"         # fast tremolo → rhythmic pulse, not drone
+            f"highpass=f=180,"             # cut muddy bass
+            f"equalizer=f=3000:t=o:w=800:g=3,"  # presence boost
+            f"{_fades(d, fade_out)},"
+            f"volume=0.13"
+        )
+        return _run(expr, af, "discount_techno")
 
+    # ── tarantella_pop: bright saw chord, phaser for movement ────────────────
+    if mood == "tarantella_pop":
+        root, third, fifth = 523.0, 659.0, 784.0
+        expr = _pad_expr(root, third, fifth, _saw)
+        af = (
+            f"aphaser=in_gain=0.4:out_gain=0.74:delay=3.0:decay=0.4:speed=0.5:type=t,"
+            f"highpass=f=250,"
+            f"{_fades(d, fade_out)},"
+            f"volume=0.13"
+        )
+        return _run(expr, af, "tarantella_pop")
 
-def _generate_jazz_bed(
-    output_path: Path,
-    duration_sec: float,
-    fade_out: float,
-    root: float,
-    third: float,
-    fifth: float,
-    detuned: float,
-    trem_f: float,
-    trem_d: float,
-) -> Path:
-    """Suspicious jazz bed with a walking bass line pattern."""
-    d = duration_sec
-    # Walking bass: cycle through root, third, fifth, flat-seventh
-    flat7 = root * 1.8  # dominant 7th interval
-    # aevalsrc expression cycling through 4 bass notes (each ~0.5s)
-    bass_expr = (
-        f"0.3*sin(2*PI*{root}*t)*max(0,1-2*mod(t,2))"
-        f"+0.3*sin(2*PI*{fifth * 0.5}*t)*max(0,1-2*abs(mod(t,2)-0.5))"
-        f"+0.3*sin(2*PI*{flat7 * 0.5}*t)*max(0,1-2*abs(mod(t,2)-1.0))"
-        f"+0.3*sin(2*PI*{third * 0.5}*t)*max(0,1-2*abs(mod(t,2)-1.5))"
+    # ── upbeat: bright piano chord, fast phaser ───────────────────────────────
+    if mood == "upbeat":
+        root, third, fifth = 330.0, 440.0, 523.0
+        expr = _pad_expr(root, third, fifth, _piano)
+        af = (
+            f"aphaser=in_gain=0.4:out_gain=0.74:delay=2.0:decay=0.3:speed=0.8:type=t,"
+            f"highpass=f=200,"
+            f"{_fades(d, fade_out)},"
+            f"volume=0.13"
+        )
+        return _run(expr, af, "upbeat")
+
+    # ── shopping_channel: bright hollow organ, quick tremolo ─────────────────
+    if mood == "shopping_channel":
+        root, third, fifth = 400.0, 600.0, 800.0
+        expr = _pad_expr(root, third, fifth, _hollow)
+        af = (
+            f"tremolo=f=5:d=0.3,"
+            f"highpass=f=200,"
+            f"{_fades(d, fade_out)},"
+            f"volume=0.13"
+        )
+        return _run(expr, af, "shopping_channel")
+
+    # ── lounge: warm piano pad, gentle slow phaser ───────────────────────────
+    if mood == "lounge":
+        root, third, fifth = 220.0, 330.0, 440.0
+        expr = _pad_expr(root, third, fifth, _piano)
+        af = (
+            f"aphaser=in_gain=0.4:out_gain=0.74:delay=4.0:decay=0.5:speed=0.25:type=t,"
+            f"lowpass=f=1800,"
+            f"{_fades(d, fade_out)},"
+            f"volume=0.14"
+        )
+        return _run(expr, af, "lounge")
+
+    # ── cheap_synth_romance: hollow mid-range, slow phaser ───────────────────
+    if mood == "cheap_synth_romance":
+        root, third, fifth = 293.0, 370.0, 440.0
+        expr = _pad_expr(root, third, fifth, _hollow)
+        af = (
+            f"aphaser=in_gain=0.5:out_gain=0.74:delay=5.0:decay=0.6:speed=0.2:type=t,"
+            f"lowpass=f=1400,"
+            f"{_fades(d, fade_out)},"
+            f"volume=0.14"
+        )
+        return _run(expr, af, "cheap_synth_romance")
+
+    # ── luxury_spa: very soft hollow, minimal movement ───────────────────────
+    if mood == "luxury_spa":
+        root, third, fifth = 250.0, 315.0, 375.0
+        expr = _pad_expr(root, third, fifth, _hollow)
+        af = (
+            f"aphaser=in_gain=0.3:out_gain=0.6:delay=6.0:decay=0.5:speed=0.15:type=t,"
+            f"lowpass=f=900,"
+            f"{_fades(d, fade_out)},"
+            f"volume=0.12"
+        )
+        return _run(expr, af, "luxury_spa")
+
+    # ── mysterious: low hollow chord, very slow phaser ───────────────────────
+    if mood == "mysterious":
+        root, third, fifth = 100.0, 126.0, 150.0
+        expr = _pad_expr(root, third, fifth, _hollow)
+        af = (
+            f"aphaser=in_gain=0.4:out_gain=0.6:delay=8.0:decay=0.6:speed=0.1:type=t,"
+            f"lowpass=f=700,"
+            f"{_fades(d, fade_out)},"
+            f"volume=0.13"
+        )
+        return _run(expr, af, "mysterious")
+
+    # ── dramatic: low piano swell, tremolo for gravitas ──────────────────────
+    if mood == "dramatic":
+        root, third, fifth = 80.0, 100.0, 120.0
+        expr = _pad_expr(root, third, fifth, _piano)
+        af = (
+            f"tremolo=f=0.8:d=0.35,"
+            f"lowpass=f=600,"
+            f"{_fades(d, fade_out)},"
+            f"volume=0.14"
+        )
+        return _run(expr, af, "dramatic")
+
+    # ── epic / overblown_epic: very low, rich harmonics, slow swell ──────────
+    if mood in ("epic", "overblown_epic"):
+        root = 55.0 if mood == "overblown_epic" else 65.0
+        third, fifth = root * 1.25, root * 1.5
+        expr = _pad_expr(root, third, fifth, _saw)
+        af = (
+            f"tremolo=f=0.5:d=0.3,"
+            f"lowpass=f=500,"
+            f"{_fades(d, fade_out)},"
+            f"volume=0.14"
+        )
+        return _run(expr, af, mood)
+
+    # ── showroom: mid piano, slight phaser for polish ────────────────────────
+    if mood == "showroom":
+        root, third, fifth = 300.0, 375.0, 450.0
+        expr = _pad_expr(root, third, fifth, _piano)
+        af = (
+            f"aphaser=in_gain=0.35:out_gain=0.7:delay=3.0:decay=0.4:speed=0.35:type=t,"
+            f"{_fades(d, fade_out)},"
+            f"volume=0.13"
+        )
+        return _run(expr, af, "showroom")
+
+    # ── stadium: low hollow chord, strong tremolo ─────────────────────────────
+    if mood == "stadium":
+        root, third, fifth = 100.0, 150.0, 200.0
+        expr = _pad_expr(root, third, fifth, _hollow)
+        af = (
+            f"tremolo=f=1.2:d=0.4,"
+            f"lowpass=f=800,"
+            f"{_fades(d, fade_out)},"
+            f"volume=0.14"
+        )
+        return _run(expr, af, "stadium")
+
+    # ── motorway: low rumble + sawtooth texture ───────────────────────────────
+    if mood == "motorway":
+        root, third, fifth = 55.0, 82.0, 110.0
+        expr = _pad_expr(root, third, fifth, _saw)
+        af = (
+            f"tremolo=f=1.5:d=0.2,"
+            f"lowpass=f=400,"
+            f"{_fades(d, fade_out)},"
+            f"volume=0.13"
+        )
+        return _run(expr, af, "motorway")
+
+    # ── beach / cafe: light piano at mid frequencies ──────────────────────────
+    if mood in ("beach", "cafe"):
+        root = 174.0 if mood == "cafe" else 196.0
+        third, fifth = root * 1.25, root * 1.5
+        expr = _pad_expr(root, third, fifth, _piano)
+        af = (
+            f"aphaser=in_gain=0.35:out_gain=0.7:delay=3.5:decay=0.4:speed=0.3:type=t,"
+            f"highpass=f=120,"
+            f"{_fades(d, fade_out)},"
+            f"volume=0.13"
+        )
+        return _run(expr, af, mood)
+
+    # ── occult_basement: lowest hollow, barely moving ────────────────────────
+    if mood == "occult_basement":
+        root, third, fifth = 50.0, 63.0, 75.0
+        expr = _pad_expr(root, third, fifth, _hollow)
+        af = (
+            f"tremolo=f=0.4:d=0.45,"
+            f"lowpass=f=350,"
+            f"{_fades(d, fade_out)},"
+            f"volume=0.13"
+        )
+        return _run(expr, af, "occult_basement")
+
+    # ── default fallback: warm lounge pad ────────────────────────────────────
+    root, third, fifth = 220.0, 330.0, 440.0
+    expr = _pad_expr(root, third, fifth, _piano)
+    af = (
+        f"aphaser=in_gain=0.4:out_gain=0.74:delay=4.0:decay=0.5:speed=0.25:type=t,"
+        f"lowpass=f=1800,"
+        f"{_fades(d, fade_out)},"
+        f"volume=0.14"
     )
-    # Pad + walking bass combined in single aevalsrc
-    combined_expr = f"0.4*sin(2*PI*{root}*t)+0.3*sin(2*PI*{third}*t)+0.2*sin(2*PI*{detuned}*t)+0.8*({bass_expr})"
-    cmd = [
-        "ffmpeg",
-        "-y",
-        "-f",
-        "lavfi",
-        "-i",
-        f"aevalsrc={combined_expr}|{combined_expr}:d={d}:s=48000:c=stereo",
-        "-af",
-        f"tremolo=f={trem_f}:d={trem_d},"
-        f"aecho=0.8:0.5:80|160:0.12|0.06,"
-        f"afade=t=in:d=0.5,afade=t=out:st={d - fade_out}:d={fade_out},"
-        f"volume=0.15",
-        *_MP3_OUTPUT_ARGS,
-        str(output_path),
-    ]
-    _run_ffmpeg(cmd, "music bed (suspicious_jazz)")
-    logger.info("Generated music bed: %s (suspicious_jazz, %.1fs)", output_path.name, d)
+    return _run(expr, af, mood)
+
+
+def generate_foley_loop(output_path: Path, environment: str, duration_sec: float) -> Path:
+    """Generate a short ambient foley texture for the given ad environment.
+
+    Unlike the tonal music bed, foley uses noise-based synthesis to create
+    recognisable environmental textures: crowd chatter, road/engine noise,
+    ocean wash, water trickle, etc.  Sits at very low volume under the voice
+    and music bed so the spot feels alive without masking the copy.
+
+    Returns *output_path* unchanged (even on failure) so callers can test
+    ``output_path.exists()`` to decide whether to mix it in.
+    """
+    d = duration_sec
+    fade_out = min(1.0, d / 4)
+    fades = f"afade=t=in:d=0.5,afade=t=out:st={d - fade_out}:d={fade_out}"
+
+    def _noise(color: str, af: str) -> None:
+        """Run ffmpeg with an anoisesrc lavfi input."""
+        cmd = [
+            "ffmpeg", "-y",
+            "-f", "lavfi",
+            "-i", f"anoisesrc=color={color}:r=48000:d={d}",
+            "-af", af,
+            *_MP3_OUTPUT_ARGS,
+            str(output_path),
+        ]
+        _run_ffmpeg(cmd, f"foley loop ({environment})")
+
+    def _expr(expr: str, af: str) -> None:
+        """Run ffmpeg with an aevalsrc lavfi input (for harmonic textures)."""
+        cmd = [
+            "ffmpeg", "-y",
+            "-f", "lavfi",
+            "-i", f"aevalsrc={expr}|{expr}:d={d}:s=48000:c=stereo",
+            "-af", af,
+            *_MP3_OUTPUT_ARGS,
+            str(output_path),
+        ]
+        _run_ffmpeg(cmd, f"foley loop ({environment})")
+
+    try:
+        if environment == "cafe":
+            # Distant café: bandpass pink noise → room chatter texture.
+            # Very slow tremolo → natural energy ebb in a busy room.
+            _noise(
+                "pink",
+                f"bandpass=f=1100:w=900,tremolo=f=0.07:d=0.12,volume=0.055,{fades}",
+            )
+
+        elif environment == "motorway":
+            # Engine harmonics (aevalsrc) + fast piston tremolo → car in motion.
+            engine = (
+                "0.28*sin(2*PI*82*t)"
+                "+0.18*sin(2*PI*164*t)"
+                "+0.10*sin(2*PI*246*t)"
+                "+0.06*sin(2*PI*328*t)"
+            )
+            _expr(
+                engine,
+                f"tremolo=f=13:d=0.28,lowpass=f=380,volume=0.11,{fades}",
+            )
+
+        elif environment == "beach":
+            # Ocean wash: pink noise lowpass + very slow tremolo (wave rhythm ~6 s/cycle).
+            _noise(
+                "pink",
+                f"lowpass=f=650,highpass=f=55,tremolo=f=0.16:d=0.62,volume=0.08,{fades}",
+            )
+
+        elif environment == "stadium":
+            # Crowd roar: pink noise bandpass + short aecho for stadium reverb.
+            _noise(
+                "pink",
+                f"bandpass=f=750:w=650,aecho=0.7:0.35:30|65:0.07|0.03,volume=0.09,{fades}",
+            )
+
+        elif environment == "luxury_spa":
+            # Water trickle: highpass pink noise + slow tremolo.
+            _noise(
+                "pink",
+                f"highpass=f=1400,lowpass=f=6500,tremolo=f=0.32:d=0.48,volume=0.05,{fades}",
+            )
+
+        elif environment == "showroom":
+            # Subtle room tone: very quiet broadband noise, mostly sub-perceptual.
+            _noise(
+                "pink",
+                f"highpass=f=180,lowpass=f=3500,volume=0.04,{fades}",
+            )
+
+        elif environment == "shopping_channel":
+            # Bright studio energy: white noise bandpass → phones/audience shimmer.
+            _noise(
+                "white",
+                f"bandpass=f=2200:w=1600,volume=0.05,{fades}",
+            )
+
+        else:
+            # Unknown environment — nothing to generate.
+            return output_path
+
+        logger.info("Generated foley loop: %s (%s, %.1fs)", output_path.name, environment, d)
+
+    except Exception as exc:
+        logger.warning("Foley loop generation failed (%s): %s — skipping", environment, exc)
+        # Do not create the file; caller checks output_path.exists()
+
     return output_path
 
 

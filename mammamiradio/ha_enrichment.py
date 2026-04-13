@@ -25,6 +25,8 @@ class HomeEvent:
     old_state: str
     new_state: str
     timestamp: float
+    raw_old_state: str = ""
+    raw_new_state: str = ""
 
     def age_seconds(self, *, now: float | None = None) -> float:
         ref_now = time.time() if now is None else now
@@ -33,6 +35,19 @@ class HomeEvent:
     def describe(self, *, now: float | None = None) -> str:
         minutes_ago = max(1, round(self.age_seconds(now=now) / 60))
         return f"- {self.label}: {self.old_state} -> {self.new_state} ({minutes_ago} min fa)"
+
+    def describe_en(
+        self,
+        entity_labels_en: Mapping[str, str],
+        state_translations_en: Mapping[str, str],
+        *,
+        now: float | None = None,
+    ) -> str:
+        minutes_ago = max(1, round(self.age_seconds(now=now) / 60))
+        label_en = entity_labels_en.get(self.entity_id, self.label)
+        old_en = state_translations_en.get(self.raw_old_state, self.raw_old_state or self.old_state)
+        new_en = state_translations_en.get(self.raw_new_state, self.raw_new_state or self.new_state)
+        return f"- {label_en}: {old_en} → {new_en} ({minutes_ago} min ago)"
 
 
 def prune_events(
@@ -94,6 +109,8 @@ def diff_states(
                 old_state=old_state,
                 new_state=new_state,
                 timestamp=ref_now,
+                raw_old_state=old_raw,
+                raw_new_state=new_raw,
             )
         )
 
@@ -114,6 +131,27 @@ def build_events_summary(
         return ""
     lines = [
         event.describe(now=ref_now)
+        for event in sorted(recent_events, key=lambda event: event.timestamp, reverse=True)[:max_lines]
+    ]
+    return "\n".join(lines)
+
+
+def build_events_summary_en(
+    events: Iterable[HomeEvent],
+    entity_labels_en: Mapping[str, str],
+    state_translations_en: Mapping[str, str],
+    *,
+    now: float | None = None,
+    max_lines: int = EVENT_SUMMARY_LIMIT,
+    max_age_seconds: float = EVENT_RETENTION_SECONDS,
+) -> str:
+    """Render the newest bounded events in English for admin display."""
+    ref_now = time.time() if now is None else now
+    recent_events = [event for event in events if ref_now - event.timestamp <= max_age_seconds]
+    if not recent_events:
+        return ""
+    lines = [
+        event.describe_en(entity_labels_en, state_translations_en, now=ref_now)
         for event in sorted(recent_events, key=lambda event: event.timestamp, reverse=True)[:max_lines]
     ]
     return "\n".join(lines)

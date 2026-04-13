@@ -1274,7 +1274,7 @@
         updateCasa(data.ha_moments);
         updateUpNext(data.upcoming, data.upcoming_mode);
         updateJokes(data.running_jokes);
-        updateRecent(data.stream_log);
+        updateRecent(data.stream_log, data.now_streaming);
         renderLaunch();
       })
       .catch(function(){});
@@ -1417,23 +1417,38 @@
       section.style.display = 'none';
       return;
     }
+    // Deduplicate: backend deque can accumulate the same joke if LLM repeats it
+    var unique = jokes.filter(function(v, i, a){ return a.indexOf(v) === i; });
+    if(unique.length === 0){
+      section.style.display = 'none';
+      return;
+    }
     section.style.display = 'block';
     var html = '';
-    for(var i = 0; i < jokes.length; i++){
-      html += '<div class="joke-item">\u201C' + escHtml(jokes[i]) + '\u201D</div>';
+    for(var i = 0; i < unique.length; i++){
+      html += '<div class="joke-item">\u201C' + escHtml(unique[i]) + '\u201D</div>';
     }
     list.innerHTML = html;
   }
 
-  function updateRecent(log){
+  function updateRecent(log, nowStreaming){
     var section = document.getElementById('recentSection');
     var list = document.getElementById('recentList');
     if(!log || log.length === 0){
       section.style.display = 'none';
       return;
     }
+    // Exclude whatever is currently playing so it doesn't appear in both places
+    var nowLabel = nowStreaming && nowStreaming.label ? nowStreaming.label : null;
+    var filtered = nowLabel
+      ? log.filter(function(it){ return it.label !== nowLabel; })
+      : log.slice();
+    if(filtered.length === 0){
+      section.style.display = 'none';
+      return;
+    }
     section.style.display = 'block';
-    var items = log.slice().reverse().slice(0, 5);
+    var items = filtered.slice().reverse().slice(0, 5);
     var html = '';
     for(var i = 0; i < items.length; i++){
       html += '<div class="log-item">' +

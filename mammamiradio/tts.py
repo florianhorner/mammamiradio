@@ -15,6 +15,7 @@ from mammamiradio.models import AdScript, AdVoice, HostPersonality
 from mammamiradio.normalizer import (
     concat_files,
     generate_brand_motif,
+    generate_foley_loop,
     generate_music_bed,
     generate_sfx,
     generate_silence,
@@ -310,25 +311,47 @@ async def synthesize_ad(
         for p in voice_sfx_parts:
             p.unlink(missing_ok=True)
 
-    # 3+4. Generate env bed + music bed in parallel, then mix sequentially
+    # 3+4. Generate foley loop + env bed + music bed in parallel, then mix sequentially.
+    # Layer order (quietest → loudest): foley → env bed → music bed → voice.
     env_name = script.sonic.environment if script.sonic else ""
     mood = script.mood or (script.sonic.music_bed if script.sonic else "lounge")
     voice_duration = _estimate_duration(voice_path)
     output_path = tmp_dir / f"ad_{uuid4().hex[:8]}.mp3"
 
+    foley_path = tmp_dir / f"foley_{uuid4().hex[:8]}.mp3" if env_name else None
     env_bed_path = tmp_dir / f"envbed_{uuid4().hex[:8]}.mp3" if env_name else None
     bed_path = tmp_dir / f"adbed_{uuid4().hex[:8]}.mp3"
 
-    # Generate both beds concurrently
-    bed_tasks = [loop.run_in_executor(None, generate_music_bed, bed_path, mood, voice_duration + 1.0)]
-    if env_bed_path:
-        bed_tasks.append(loop.run_in_executor(None, generate_music_bed, env_bed_path, env_name, voice_duration + 1.0))
+    # Generate all three beds concurrently
+    bed_tasks: list = [
+        loop.run_in_executor(None, generate_music_bed, bed_path, mood, voice_duration + 1.0),
+    ]
+    if env_name:
+        bed_tasks.append(
+            loop.run_in_executor(None, generate_music_bed, env_bed_path, env_name, voice_duration + 1.0)
+        )
+        bed_tasks.append(
+            loop.run_in_executor(None, generate_foley_loop, foley_path, env_name, voice_duration + 1.0)
+        )
     try:
         await asyncio.gather(*bed_tasks)
     except Exception as e:
         logger.warning("Bed generation failed: %s", e)
 
-    # Mix env bed first (if present), then music bed
+    # Mix foley first (quietest layer — ambient texture under everything else)
+    if foley_path and foley_path.exists():
+        try:
+            foley_mixed_path = tmp_dir / f"foley_mix_{uuid4().hex[:8]}.mp3"
+            await loop.run_in_executor(None, mix_with_bed, voice_path, foley_path, foley_mixed_path, 0.07)
+            foley_path.unlink(missing_ok=True)
+            voice_path.unlink(missing_ok=True)
+            voice_path = foley_mixed_path
+        except Exception as e:
+            logger.warning("Foley mix failed (%s), continuing without: %s", env_name, e)
+            if foley_path:
+                foley_path.unlink(missing_ok=True)
+
+    # Mix env bed (medium layer — tonal environment character)
     if env_bed_path and env_bed_path.exists():
         try:
             env_mixed_path = tmp_dir / f"envmix_{uuid4().hex[:8]}.mp3"
@@ -339,11 +362,12 @@ async def synthesize_ad(
         except Exception as e:
             logger.warning("Environment bed mixing failed (%s), continuing without: %s", env_name, e)
 
+    # Mix music bed (loudest bed layer — harmonic colour)
     try:
         await loop.run_in_executor(None, mix_with_bed, voice_path, bed_path, output_path, 0.24)
         bed_path.unlink(missing_ok=True)
         voice_path.unlink(missing_ok=True)
-        logger.info("Ad with music bed (%s): %s", mood, output_path.name)
+        logger.info("Ad with beds (env=%s mood=%s): %s", env_name or "none", mood, output_path.name)
     except Exception as e:
         logger.warning("Music bed mixing failed (%s), using voice-only: %s", mood, e)
         if voice_path != output_path:
