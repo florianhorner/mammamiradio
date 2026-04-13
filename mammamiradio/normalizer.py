@@ -108,10 +108,10 @@ def normalize(
     # Applied *before* loudnorm so the level measurement sees the equalized signal.
     # Kept gentle — this is correction, not creative processing.
     music_eq_chain = (
-        "highpass=f=35,"                          # sub-bass rumble from video codec leakage
-        "equalizer=f=200:t=o:w=150:g=-2,"         # de-mud (compressed video audio)
-        "equalizer=f=3000:t=o:w=1000:g=1.5,"      # presence / clarity
-        "equalizer=f=12000:t=o:w=4000:g=-1.5,"    # tame HF harshness from MP3 re-encoding
+        "highpass=f=35,"  # sub-bass rumble from video codec leakage
+        "equalizer=f=200:t=o:w=150:g=-2,"  # de-mud (compressed video audio)
+        "equalizer=f=3000:t=o:w=1000:g=1.5,"  # presence / clarity
+        "equalizer=f=12000:t=o:w=4000:g=-1.5,"  # tame HF harshness from MP3 re-encoding
         "acompressor=threshold=0.25:ratio=2:attack=20:release=250:makeup=1"  # gentle radio leveller
     )
 
@@ -505,30 +505,20 @@ def generate_music_bed(output_path: Path, mood: str, duration_sec: float) -> Pat
     # ── helpers ────────────────────────────────────────────────────────────────
     def _piano(f: float) -> str:
         """Harmonic series that sounds like a soft struck string (no pure sine)."""
-        return (
-            f"sin(2*PI*{f}*t)"
-            f"+0.7*sin(2*PI*{f*2}*t)"
-            f"+0.25*sin(2*PI*{f*3}*t)"
-            f"+0.1*sin(2*PI*{f*4}*t)"
-        )
+        return f"sin(2*PI*{f}*t)+0.7*sin(2*PI*{f * 2}*t)+0.25*sin(2*PI*{f * 3}*t)+0.1*sin(2*PI*{f * 4}*t)"
 
     def _hollow(f: float) -> str:
         """Odd harmonics only — clarinet / organ quality."""
-        return (
-            f"sin(2*PI*{f}*t)"
-            f"+0.33*sin(2*PI*{f*3}*t)"
-            f"+0.2*sin(2*PI*{f*5}*t)"
-            f"+0.14*sin(2*PI*{f*7}*t)"
-        )
+        return f"sin(2*PI*{f}*t)+0.33*sin(2*PI*{f * 3}*t)+0.2*sin(2*PI*{f * 5}*t)+0.14*sin(2*PI*{f * 7}*t)"
 
     def _saw(f: float) -> str:
         """All harmonics — bright / buzzy sawtooth character."""
         return (
             f"sin(2*PI*{f}*t)"
-            f"+0.5*sin(2*PI*{f*2}*t)"
-            f"+0.33*sin(2*PI*{f*3}*t)"
-            f"+0.25*sin(2*PI*{f*4}*t)"
-            f"+0.2*sin(2*PI*{f*5}*t)"
+            f"+0.5*sin(2*PI*{f * 2}*t)"
+            f"+0.33*sin(2*PI*{f * 3}*t)"
+            f"+0.25*sin(2*PI*{f * 4}*t)"
+            f"+0.2*sin(2*PI*{f * 5}*t)"
         )
 
     def _pad_expr(root: float, third: float, fifth: float, wave_fn) -> str:
@@ -543,9 +533,16 @@ def generate_music_bed(output_path: Path, mood: str, duration_sec: float) -> Pat
 
     def _run(expr: str, af: str, label: str) -> Path:
         cmd = [
-            "ffmpeg", "-y", "-f", "lavfi", "-i",
+            "ffmpeg",
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
             f"aevalsrc={expr}|{expr}:d={d}:s=48000:c=stereo",
-            "-af", af, *_MP3_OUTPUT_ARGS, str(output_path),
+            "-af",
+            af,
+            *_MP3_OUTPUT_ARGS,
+            str(output_path),
         ]
         _run_ffmpeg(cmd, f"music bed ({label})")
         logger.info("Generated music bed: %s (%s, %.1fs)", output_path.name, label, d)
@@ -556,10 +553,10 @@ def generate_music_bed(output_path: Path, mood: str, duration_sec: float) -> Pat
         root, third, fifth = 220.0, 277.0, 370.0
         flat7 = root * 1.8
         bass_expr = (
-            f"0.35*sin(2*PI*{root*0.5}*t)*max(0,1-2*mod(t,2))"
-            f"+0.35*sin(2*PI*{fifth*0.5}*t)*max(0,1-2*abs(mod(t,2)-0.5))"
-            f"+0.35*sin(2*PI*{flat7*0.5}*t)*max(0,1-2*abs(mod(t,2)-1.0))"
-            f"+0.35*sin(2*PI*{third*0.5}*t)*max(0,1-2*abs(mod(t,2)-1.5))"
+            f"0.35*sin(2*PI*{root * 0.5}*t)*max(0,1-2*mod(t,2))"
+            f"+0.35*sin(2*PI*{fifth * 0.5}*t)*max(0,1-2*abs(mod(t,2)-0.5))"
+            f"+0.35*sin(2*PI*{flat7 * 0.5}*t)*max(0,1-2*abs(mod(t,2)-1.0))"
+            f"+0.35*sin(2*PI*{third * 0.5}*t)*max(0,1-2*abs(mod(t,2)-1.5))"
         )
         pad = _pad_expr(root, third, fifth, _piano)
         expr = f"0.5*({pad})+0.7*({bass_expr})"
@@ -575,8 +572,8 @@ def generate_music_bed(output_path: Path, mood: str, duration_sec: float) -> Pat
         root, third, fifth = 110.0, 165.0, 220.0
         expr = _pad_expr(root, third, fifth, _saw)
         af = (
-            f"tremolo=f=8:d=0.55,"         # fast tremolo → rhythmic pulse, not drone
-            f"highpass=f=180,"             # cut muddy bass
+            f"tremolo=f=8:d=0.55,"  # fast tremolo → rhythmic pulse, not drone
+            f"highpass=f=180,"  # cut muddy bass
             f"equalizer=f=3000:t=o:w=800:g=3,"  # presence boost
             f"{_fades(d, fade_out)},"
             f"volume=0.13"
@@ -611,12 +608,7 @@ def generate_music_bed(output_path: Path, mood: str, duration_sec: float) -> Pat
     if mood == "shopping_channel":
         root, third, fifth = 400.0, 600.0, 800.0
         expr = _pad_expr(root, third, fifth, _hollow)
-        af = (
-            f"tremolo=f=5:d=0.3,"
-            f"highpass=f=200,"
-            f"{_fades(d, fade_out)},"
-            f"volume=0.13"
-        )
+        af = f"tremolo=f=5:d=0.3,highpass=f=200,{_fades(d, fade_out)},volume=0.13"
         return _run(expr, af, "shopping_channel")
 
     # ── lounge: warm piano pad, gentle slow phaser ───────────────────────────
@@ -671,12 +663,7 @@ def generate_music_bed(output_path: Path, mood: str, duration_sec: float) -> Pat
     if mood == "dramatic":
         root, third, fifth = 80.0, 100.0, 120.0
         expr = _pad_expr(root, third, fifth, _piano)
-        af = (
-            f"tremolo=f=0.8:d=0.35,"
-            f"lowpass=f=600,"
-            f"{_fades(d, fade_out)},"
-            f"volume=0.14"
-        )
+        af = f"tremolo=f=0.8:d=0.35,lowpass=f=600,{_fades(d, fade_out)},volume=0.14"
         return _run(expr, af, "dramatic")
 
     # ── epic / overblown_epic: very low, rich harmonics, slow swell ──────────
@@ -684,12 +671,7 @@ def generate_music_bed(output_path: Path, mood: str, duration_sec: float) -> Pat
         root = 55.0 if mood == "overblown_epic" else 65.0
         third, fifth = root * 1.25, root * 1.5
         expr = _pad_expr(root, third, fifth, _saw)
-        af = (
-            f"tremolo=f=0.5:d=0.3,"
-            f"lowpass=f=500,"
-            f"{_fades(d, fade_out)},"
-            f"volume=0.14"
-        )
+        af = f"tremolo=f=0.5:d=0.3,lowpass=f=500,{_fades(d, fade_out)},volume=0.14"
         return _run(expr, af, mood)
 
     # ── showroom: mid piano, slight phaser for polish ────────────────────────
@@ -697,9 +679,7 @@ def generate_music_bed(output_path: Path, mood: str, duration_sec: float) -> Pat
         root, third, fifth = 300.0, 375.0, 450.0
         expr = _pad_expr(root, third, fifth, _piano)
         af = (
-            f"aphaser=in_gain=0.35:out_gain=0.7:delay=3.0:decay=0.4:speed=0.35:type=t,"
-            f"{_fades(d, fade_out)},"
-            f"volume=0.13"
+            f"aphaser=in_gain=0.35:out_gain=0.7:delay=3.0:decay=0.4:speed=0.35:type=t,{_fades(d, fade_out)},volume=0.13"
         )
         return _run(expr, af, "showroom")
 
@@ -707,24 +687,14 @@ def generate_music_bed(output_path: Path, mood: str, duration_sec: float) -> Pat
     if mood == "stadium":
         root, third, fifth = 100.0, 150.0, 200.0
         expr = _pad_expr(root, third, fifth, _hollow)
-        af = (
-            f"tremolo=f=1.2:d=0.4,"
-            f"lowpass=f=800,"
-            f"{_fades(d, fade_out)},"
-            f"volume=0.14"
-        )
+        af = f"tremolo=f=1.2:d=0.4,lowpass=f=800,{_fades(d, fade_out)},volume=0.14"
         return _run(expr, af, "stadium")
 
     # ── motorway: low rumble + sawtooth texture ───────────────────────────────
     if mood == "motorway":
         root, third, fifth = 55.0, 82.0, 110.0
         expr = _pad_expr(root, third, fifth, _saw)
-        af = (
-            f"tremolo=f=1.5:d=0.2,"
-            f"lowpass=f=400,"
-            f"{_fades(d, fade_out)},"
-            f"volume=0.13"
-        )
+        af = f"tremolo=f=1.5:d=0.2,lowpass=f=400,{_fades(d, fade_out)},volume=0.13"
         return _run(expr, af, "motorway")
 
     # ── beach / cafe: light piano at mid frequencies ──────────────────────────
@@ -744,12 +714,7 @@ def generate_music_bed(output_path: Path, mood: str, duration_sec: float) -> Pat
     if mood == "occult_basement":
         root, third, fifth = 50.0, 63.0, 75.0
         expr = _pad_expr(root, third, fifth, _hollow)
-        af = (
-            f"tremolo=f=0.4:d=0.45,"
-            f"lowpass=f=350,"
-            f"{_fades(d, fade_out)},"
-            f"volume=0.13"
-        )
+        af = f"tremolo=f=0.4:d=0.45,lowpass=f=350,{_fades(d, fade_out)},volume=0.13"
         return _run(expr, af, "occult_basement")
 
     # ── default fallback: warm lounge pad ────────────────────────────────────
@@ -782,10 +747,14 @@ def generate_foley_loop(output_path: Path, environment: str, duration_sec: float
     def _noise(color: str, af: str) -> None:
         """Run ffmpeg with an anoisesrc lavfi input."""
         cmd = [
-            "ffmpeg", "-y",
-            "-f", "lavfi",
-            "-i", f"anoisesrc=color={color}:r=48000:d={d}",
-            "-af", af,
+            "ffmpeg",
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            f"anoisesrc=color={color}:r=48000:d={d}",
+            "-af",
+            af,
             *_MP3_OUTPUT_ARGS,
             str(output_path),
         ]
@@ -794,10 +763,14 @@ def generate_foley_loop(output_path: Path, environment: str, duration_sec: float
     def _expr(expr: str, af: str) -> None:
         """Run ffmpeg with an aevalsrc lavfi input (for harmonic textures)."""
         cmd = [
-            "ffmpeg", "-y",
-            "-f", "lavfi",
-            "-i", f"aevalsrc={expr}|{expr}:d={d}:s=48000:c=stereo",
-            "-af", af,
+            "ffmpeg",
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            f"aevalsrc={expr}|{expr}:d={d}:s=48000:c=stereo",
+            "-af",
+            af,
             *_MP3_OUTPUT_ARGS,
             str(output_path),
         ]
@@ -814,12 +787,7 @@ def generate_foley_loop(output_path: Path, environment: str, duration_sec: float
 
         elif environment == "motorway":
             # Engine harmonics (aevalsrc) + fast piston tremolo → car in motion.
-            engine = (
-                "0.28*sin(2*PI*82*t)"
-                "+0.18*sin(2*PI*164*t)"
-                "+0.10*sin(2*PI*246*t)"
-                "+0.06*sin(2*PI*328*t)"
-            )
+            engine = "0.28*sin(2*PI*82*t)+0.18*sin(2*PI*164*t)+0.10*sin(2*PI*246*t)+0.06*sin(2*PI*328*t)"
             _expr(
                 engine,
                 f"tremolo=f=13:d=0.28,lowpass=f=380,volume=0.11,{fades}",

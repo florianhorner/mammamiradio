@@ -858,9 +858,7 @@ async def fetch_home_context(
         weather_arc = await fetch_weather_forecast(ha_url, ha_token)
         summary = _build_summary(relevant)
         events_summary = build_events_summary(events, now=timestamp)
-        events_summary_en = build_events_summary_en(
-            events, ENTITY_LABELS_EN, STATE_TRANSLATIONS_EN, now=timestamp
-        )
+        events_summary_en = build_events_summary_en(events, ENTITY_LABELS_EN, STATE_TRANSLATIONS_EN, now=timestamp)
         # Determine English label of the most recent event for admin display
         last_event_label_en = ""
         if events:

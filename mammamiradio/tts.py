@@ -332,12 +332,8 @@ async def synthesize_ad(
         loop.run_in_executor(None, generate_music_bed, bed_path, mood, voice_duration + 1.0),
     ]
     if env_name:
-        bed_tasks.append(
-            loop.run_in_executor(None, generate_music_bed, env_bed_path, env_name, voice_duration + 1.0)
-        )
-        bed_tasks.append(
-            loop.run_in_executor(None, generate_foley_loop, foley_path, env_name, voice_duration + 1.0)
-        )
+        bed_tasks.append(loop.run_in_executor(None, generate_music_bed, env_bed_path, env_name, voice_duration + 1.0))
+        bed_tasks.append(loop.run_in_executor(None, generate_foley_loop, foley_path, env_name, voice_duration + 1.0))
     try:
         await asyncio.gather(*bed_tasks)
     except Exception as e:
