@@ -328,12 +328,16 @@ async def synthesize_ad(
     bed_path = tmp_dir / f"adbed_{uuid4().hex[:8]}.mp3"
 
     # Generate all three beds concurrently
+    _dur = voice_duration + 1.0
     bed_tasks: list = [
-        loop.run_in_executor(None, generate_music_bed, bed_path, mood, voice_duration + 1.0),
+        loop.run_in_executor(None, lambda: generate_music_bed(bed_path, mood, _dur)),
     ]
     if env_name:
-        bed_tasks.append(loop.run_in_executor(None, generate_music_bed, env_bed_path, env_name, voice_duration + 1.0))
-        bed_tasks.append(loop.run_in_executor(None, generate_foley_loop, foley_path, env_name, voice_duration + 1.0))
+        _env = env_name
+        _env_bed_path: Path = env_bed_path  # type: ignore[assignment]  # non-None when env_name is set
+        _foley_path: Path = foley_path  # type: ignore[assignment]  # non-None when env_name is set
+        bed_tasks.append(loop.run_in_executor(None, lambda: generate_music_bed(_env_bed_path, _env, _dur)))
+        bed_tasks.append(loop.run_in_executor(None, lambda: generate_foley_loop(_foley_path, _env, _dur)))
     try:
         await asyncio.gather(*bed_tasks)
     except Exception as e:
