@@ -343,6 +343,10 @@ def load_config(path: str = "radio.toml") -> StationConfig:
         allow_ytdlp=os.getenv("MAMMAMIRADIO_ALLOW_YTDLP", "false").lower() in ("true", "1", "yes"),
     )
 
+    from mammamiradio.persona import set_arc_thresholds
+
+    set_arc_thresholds(config.persona.arc_thresholds)
+
     # Addon overrides: persistent paths, auto-enable HA
     if addon_mode:
         import logging as _log

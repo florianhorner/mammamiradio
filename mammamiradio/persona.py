@@ -24,11 +24,8 @@ PERSONA_SIZE_LIMIT = 2048
 
 # ── Arc phase machine ──────────────────────────────────────────────
 # Relationship phases computed from session_count. Never stored — always derived.
-_ARC_THRESHOLDS: list[tuple[int, str]] = [
-    (26, "old_friend"),
-    (11, "friend"),
-    (4, "acquaintance"),
-]
+_DEFAULT_ARC_THRESHOLDS = (4, 11, 26)
+_ARC_THRESHOLDS: list[tuple[int, str]] = []
 
 _ARC_DIRECTIVES: dict[str, str] = {
     "stranger": (
@@ -56,12 +53,35 @@ _ARC_BUDGETS: dict[str, tuple[int, int]] = {
 }
 
 
+def set_arc_thresholds(thresholds: list[int]) -> None:
+    """Apply configurable session thresholds for arc phases."""
+    global _ARC_THRESHOLDS
+
+    try:
+        parsed = [int(value) for value in thresholds]
+    except (TypeError, ValueError):
+        parsed = list(_DEFAULT_ARC_THRESHOLDS)
+
+    if len(parsed) != 3 or parsed != sorted(parsed) or any(value < 1 for value in parsed):
+        logger.warning("Invalid persona.arc_thresholds=%r; using defaults %s", thresholds, _DEFAULT_ARC_THRESHOLDS)
+        parsed = list(_DEFAULT_ARC_THRESHOLDS)
+
+    _ARC_THRESHOLDS = [
+        (parsed[2], "old_friend"),
+        (parsed[1], "friend"),
+        (parsed[0], "acquaintance"),
+    ]
+
+
 def compute_arc_phase(session_count: int) -> str:
     """Derive the relationship phase from session count."""
     for threshold, phase in _ARC_THRESHOLDS:
         if session_count >= threshold:
             return phase
     return "stranger"
+
+
+set_arc_thresholds(list(_DEFAULT_ARC_THRESHOLDS))
 
 
 # Patterns that look like prompt injection attempts in persona entries
@@ -281,7 +301,7 @@ class PersonaStore:
         skipped: bool = False,
         listen_duration_s: float | None = None,
     ) -> None:
-        """Record a track play in history with optional skip/duration data."""
+        """Record a completed or skipped track play with optional duration data."""
         try:
             async with aiosqlite.connect(str(self.db_path)) as db:
                 cursor = await db.execute("SELECT id FROM tracks WHERE youtube_id = ?", (track_youtube_id,))

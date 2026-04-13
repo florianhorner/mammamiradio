@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import time
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
@@ -13,7 +13,12 @@ from fastapi import FastAPI
 
 from mammamiradio.config import load_config
 from mammamiradio.models import Segment, SegmentType, StationState, Track
-from mammamiradio.streamer import LiveStreamHub, router
+from mammamiradio.streamer import (
+    LiveStreamHub,
+    _persist_completed_music,
+    router,
+    run_playback_loop,
+)
 
 TOML_PATH = str(Path(__file__).parent.parent / "radio.toml")
 
@@ -137,6 +142,93 @@ async def test_get_listen_returns_html():
         resp = await client.get("/listen")
     assert resp.status_code == 200
     assert "text/html" in resp.headers["content-type"]
+
+
+@pytest.mark.asyncio
+async def test_persist_completed_music_records_finished_track():
+    app = _make_test_app()
+    state = app.state.station_state
+    persona_store = MagicMock()
+    persona_store._session_id = "session-1"
+    persona_store.record_motif = AsyncMock()
+    persona_store.record_play = AsyncMock()
+    state.persona_store = persona_store
+
+    metadata = {
+        "title": "Artist 9 – Song 9",
+        "title_only": "Song 9",
+        "artist": "Artist 9",
+        "youtube_id": "yt_9",
+        "spotify_id": "sp_9",
+    }
+
+    with patch("mammamiradio.song_cues.detect_anthem", new=AsyncMock()) as detect_anthem:
+        await _persist_completed_music(state, app.state.config, metadata, listen_sec=123.4)
+
+    persona_store.record_motif.assert_awaited_once_with("Artist 9", "Song 9")
+    persona_store.record_play.assert_awaited_once_with(
+        "yt_9",
+        "session-1",
+        skipped=False,
+        listen_duration_s=123.4,
+    )
+    detect_anthem.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_run_playback_loop_persists_music_only_after_segment_finishes(tmp_path):
+    app = _make_test_app()
+    app.state.config.audio.bitrate = 3200
+    app.state.stream_hub.subscribe()
+
+    audio_path = tmp_path / "segment.mp3"
+    audio_path.write_bytes(b"x" * 4096)
+    app.state.queue.put_nowait(
+        Segment(
+            type=SegmentType.MUSIC,
+            path=audio_path,
+            metadata={"title": "Done", "title_only": "Done", "artist": "Artist", "youtube_id": "yt_done"},
+        )
+    )
+
+    with patch("mammamiradio.streamer._persist_completed_music", new=AsyncMock()) as persist_completed:
+        task = asyncio.create_task(run_playback_loop(app))
+        try:
+            for _ in range(20):
+                if persist_completed.await_count:
+                    break
+                await asyncio.sleep(0.01)
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    persist_completed.assert_awaited_once()
+    assert not audio_path.exists()
+
+
+@pytest.mark.asyncio
+async def test_skip_route_persists_music_skips_with_youtube_id():
+    app = _make_test_app()
+    persona_store = MagicMock()
+    persona_store._session_id = "session-2"
+    persona_store.record_play = AsyncMock()
+    app.state.station_state.persona_store = persona_store
+    app.state.station_state.now_streaming = {
+        "type": "music",
+        "label": "Skipped Song",
+        "started": time.time() - 8,
+        "metadata": {"youtube_id": "yt_skip"},
+    }
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    with patch("mammamiradio.song_cues.detect_skip_bit", new=AsyncMock()) as detect_skip_bit:
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            resp = await client.post("/api/skip")
+
+    assert resp.status_code == 200
+    assert resp.json()["ok"] is True
+    persona_store.record_play.assert_awaited_once()
+    detect_skip_bit.assert_awaited_once()
 
 
 @pytest.mark.asyncio

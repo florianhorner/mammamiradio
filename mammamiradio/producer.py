@@ -65,30 +65,29 @@ from mammamiradio.tts import synthesize, synthesize_ad, synthesize_dialogue
 logger = logging.getLogger(__name__)
 
 
-_background_tasks: set[asyncio.Task] = set()
-
-
-async def _record_motif(state: StationState, track, config=None) -> None:
-    """Record a played track as a motif and play history entry (fire-and-forget)."""
+async def _record_motif(state: StationState, track, config=None, *, listen_duration_s: float | None = None) -> None:
+    """Record a completed streamed track in persona memory and play history."""
     persona_store = getattr(state, "persona_store", None)
     if not persona_store:
         return
     try:
         await persona_store.record_motif(track.artist, track.title)
         # Also record to play_history for cross-session anthem/skip detection
-        yt_id = getattr(track, "youtube_id", "") or getattr(track, "spotify_id", "") or ""
+        yt_id = getattr(track, "youtube_id", "") or ""
         if yt_id:
-            await persona_store.record_play(yt_id, persona_store._session_id, skipped=False)
-            # Fire-and-forget anthem/skip detection
+            await persona_store.record_play(
+                yt_id,
+                persona_store._session_id,
+                skipped=False,
+                listen_duration_s=listen_duration_s,
+            )
             if config:
-                from mammamiradio.song_cues import detect_anthem, detect_skip_bit
+                from mammamiradio.song_cues import detect_anthem
 
                 db_path = config.cache_dir / "mammamiradio.db"
                 persona_cfg = getattr(config, "persona", None)
                 anthem_t = persona_cfg.anthem_threshold if persona_cfg else 3
-                skip_t = persona_cfg.skip_bit_threshold if persona_cfg else 2
                 await detect_anthem(db_path, yt_id, threshold=anthem_t)
-                await detect_skip_bit(db_path, yt_id, threshold=skip_t)
     except Exception:
         logger.warning("Failed to record motif", exc_info=True)
 
@@ -437,6 +436,7 @@ async def prewarm_first_segment(
                 "title": track.display,
                 "artist": track.artist,
                 "title_only": track.title,
+                "youtube_id": track.youtube_id,
                 "spotify_id": track.spotify_id,
                 "album_art": track.album_art,
                 "rationale": rationale,
@@ -674,11 +674,6 @@ async def run_producer(
                 )
                 _bound_track = track
                 _set_last_music_file(norm_path)
-
-                # Record track as a motif in listener persona (async, non-blocking)
-                task = asyncio.create_task(_record_motif(state, track, config))
-                _background_tasks.add(task)
-                task.add_done_callback(_background_tasks.discard)
 
                 def _music_callback(_t=_bound_track) -> None:
                     state.after_music(_t)
