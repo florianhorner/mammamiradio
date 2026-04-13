@@ -14,3 +14,6 @@ configuration:
   admin_token:
     name: Admin Token
     description: "Set a stable token for the admin API and HA media_player integration. If left empty, one is auto-generated on each restart (check the add-on log to retrieve it)."
+  enable_home_assistant:
+    name: Enable Home Assistant Integration
+    description: "Let hosts reference your home state (lights, presence, climate) in banter and ads. Requires the add-on to have API access — enable this if the boot log shows ha=disabled."

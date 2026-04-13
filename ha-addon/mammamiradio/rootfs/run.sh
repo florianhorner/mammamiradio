@@ -22,6 +22,8 @@ for key in ('anthropic_api_key', 'openai_api_key', 'station_name', 'claude_model
     if val:
         env_key = key.upper()
         print(f'export {env_key}={shlex.quote(str(val))}')
+if opts.get('enable_home_assistant', True):
+    print('export HA_ENABLED=true')
 " 2>"$OPTS_LOG"); then
         echo "[mammamiradio] WARNING: Failed to parse options.json, continuing with defaults"
         cat "$OPTS_LOG" 2>/dev/null
