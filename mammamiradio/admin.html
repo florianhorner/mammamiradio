@@ -868,15 +868,20 @@ function updateQueue(up,forcePending,mode){
     const forceType=segmentTypeKey(forcePending);
     parts.push(`<div class="queue-item"><span class="qi-num">!</span><span class="qi-badge" data-t="${esc(forceType)}">${esc(segmentBadge(forceType))}</span><span class="qi-label">Triggered - plays next</span><span class="force-badge">forced</span></div>`)
   }
-  if(up?.length){parts.push(...up.map((it,i)=>{
-    const linked = Number.isInteger(it.playlist_index) || !!it.spotify_id;
-    const typeKey=segmentTypeKey(it.type);
-    const clickAttrs = linked
-      ? `class="queue-item linked" onclick="focusPlaylistTrack(${Number.isInteger(it.playlist_index)?it.playlist_index:-1}, '${esc(it.spotify_id||'')}')"`
-      : 'class="queue-item"';
-    const reason = it.reason ? `<div class="qi-reason">${esc(it.reason)}</div>` : '';
-    return `<div ${clickAttrs}><span class="qi-num">${i+1}</span><span class="qi-badge" data-t="${esc(typeKey)}">${esc(segmentBadge(typeKey))}</span><span class="qi-label">${esc(it.label||it.type)}</span></div>${reason}`;
-  }))}
+  if(up?.length){
+    const musicItems=up.filter(it=>segmentTypeKey(it.type)==='music');
+    const nonMusicCount=up.length-musicItems.length;
+    parts.push(...musicItems.map((it,i)=>{
+      const linked = Number.isInteger(it.playlist_index) || !!it.spotify_id;
+      const typeKey=segmentTypeKey(it.type);
+      const clickAttrs = linked
+        ? `class="queue-item linked" onclick="focusPlaylistTrack(${Number.isInteger(it.playlist_index)?it.playlist_index:-1}, '${esc(it.spotify_id||'')}')"`
+        : 'class="queue-item"';
+      const reason = it.reason ? `<div class="qi-reason">${esc(it.reason)}</div>` : '';
+      return `<div ${clickAttrs}><span class="qi-num">${i+1}</span><span class="qi-badge" data-t="${esc(typeKey)}">${esc(segmentBadge(typeKey))}</span><span class="qi-label">${esc(it.label||it.type)}</span></div>${reason}`;
+    }));
+    if(nonMusicCount>0)parts.push(`<div class="empty" style="padding:6px 0;font-size:10px">+${nonMusicCount} non-music segment${nonMusicCount>1?'s':''} (banter/ads) queued</div>`);
+  }
   meta.textContent=(up?.length||0)+' upcoming';
   el.innerHTML=parts.join('');
 }
