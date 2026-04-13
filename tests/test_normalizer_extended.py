@@ -875,7 +875,7 @@ def test_generate_music_bed_cafe(mock_subprocess):
     assert "174" in joined
 
 
-def test_generate_music_bed_cheap_synth_romance(mock_subprocess):
+def test_generate_music_bed_cheap_synth_romance_v2(mock_subprocess):
     mock_run, _ = mock_subprocess
     out = Path("/tmp/bed.mp3")
     generate_music_bed(out, "cheap_synth_romance", 5.0)
