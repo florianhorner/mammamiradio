@@ -1153,10 +1153,8 @@ async def add_external_track(request: Request, _: None = Depends(require_admin_a
 @router.get("/api/listener-requests")
 async def get_listener_requests(request: Request, _: None = Depends(require_admin_access)):
     """Return current pending listener request queue (admin only)."""
-    import time as _time
-
     state = request.app.state.station_state
-    now = _time.time()
+    now = time.time()
     return {
         "requests": [
             {
@@ -1176,8 +1174,6 @@ async def get_listener_requests(request: Request, _: None = Depends(require_admi
 @router.post("/api/listener-request")
 async def listener_request(request: Request):
     """Accept a listener shoutout or song wish. Public endpoint, IP rate-limited."""
-    import time as _time
-
     body = await request.json()
     if not isinstance(body, dict):
         return JSONResponse({"ok": False, "error": "invalid payload"}, status_code=400)
@@ -1195,7 +1191,7 @@ async def listener_request(request: Request):
     # IP rate limit: 1 request per 30s per IP
     ip = request.client.host if request.client else "unknown"
     state = request.app.state.station_state
-    now = _time.time()
+    now = time.time()
     last = state._listener_request_rl.get(ip, 0)
     if now - last < 30:
         return JSONResponse({"ok": False, "retry_after": int(30 - (now - last))}, status_code=429)
@@ -1475,6 +1471,10 @@ async def create_clip(request: Request):
 
         return JSONResponse({"ok": False, "error": "Rate limited — try again in a few seconds"}, status_code=429)
     _clip_rate[client_ip] = now
+    # Prune stale entries to avoid unbounded growth
+    _clip_rate_pruned = {k: v for k, v in _clip_rate.items() if now - v < 300}
+    _clip_rate.clear()
+    _clip_rate.update(_clip_rate_pruned)
 
     ring_buffer = getattr(request.app.state, "clip_ring_buffer", None)
     if ring_buffer is None or len(ring_buffer) == 0:

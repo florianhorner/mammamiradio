@@ -232,7 +232,7 @@ def fetch_startup_playlist(
             logger.info("Using live Italian charts (%d tracks total)", len(chart_tracks))
             return chart_tracks, _charts_source(len(chart_tracks)), error
 
-    local_present = Path("music").exists() and any(Path("music").glob("*.mp3"))
+    local_present = any(Path("music").glob("*.mp3"))
     if local_present:
         logger.warning(
             "Local music/ files found but MAMMAMIRADIO_ALLOW_YTDLP is not set — "
