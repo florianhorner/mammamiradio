@@ -1,6 +1,6 @@
 # TODOs
 
-### ~~Music catalog depth — multi-source rotation~~ RESOLVED
+## ~~Music catalog depth — multi-source rotation~~ RESOLVED
 - Charts raised to 100 tracks. Local `music/` MP3s auto-blended into chart playlist when `allow_ytdlp=true`. Covers 7h+ of unique content without repetition.
 - **Completed:** v2.8.0 (2026-04-13)
 
