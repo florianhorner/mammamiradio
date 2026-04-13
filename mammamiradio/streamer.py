@@ -74,7 +74,8 @@ def _purge_segment_queue(q) -> int:
     while not q.empty():
         try:
             seg = q.get_nowait()
-            seg.path.unlink(missing_ok=True)
+            if seg.ephemeral:
+                seg.path.unlink(missing_ok=True)
             q.task_done()
             purged += 1
         except Exception:
@@ -89,8 +90,36 @@ def _has_any_mp3(path: Path) -> bool:
     return any(path.glob("*.mp3"))
 
 
+_golden_path_cache: dict | None = None
+_golden_path_cache_ts: float = 0.0
+_GOLDEN_PATH_TTL = 10.0  # seconds — music sources change rarely
+
+_cache_size_mb_val: float = 0.0
+_cache_size_mb_ts: float = 0.0
+_CACHE_SIZE_TTL = 30.0  # seconds — stat()-ing every MP3 is expensive on Pi
+
+
+def _cached_cache_size_mb(cache_dir: Path) -> float:
+    """Return total MP3 cache size in MB, recomputed at most every 30s."""
+    global _cache_size_mb_val, _cache_size_mb_ts
+    now = time.time()
+    if (now - _cache_size_mb_ts) < _CACHE_SIZE_TTL:
+        return _cache_size_mb_val
+    _cache_size_mb_val = round(
+        sum(f.stat().st_size for f in cache_dir.glob("*.mp3") if f.is_file()) / (1024 * 1024),
+        1,
+    )
+    _cache_size_mb_ts = now
+    return _cache_size_mb_val
+
+
 def _golden_path_status(config, state) -> dict:
     """Build a single, explicit music onboarding status for UI surfaces."""
+    global _golden_path_cache, _golden_path_cache_ts
+    now = time.time()
+    if _golden_path_cache is not None and (now - _golden_path_cache_ts) < _GOLDEN_PATH_TTL:
+        return _golden_path_cache
+
     allow_ytdlp = os.getenv("MAMMAMIRADIO_ALLOW_YTDLP", "false").lower() in ("true", "1", "yes")
     has_demo_assets = _has_any_mp3(_PKG_DIR / "demo_assets" / "music")
     has_local_music = _has_any_mp3(Path("music"))
@@ -111,7 +140,7 @@ def _golden_path_status(config, state) -> dict:
     if sources:
         source_label = ", ".join(sources)
         has_llm = bool(config.anthropic_api_key or config.openai_api_key)
-        return {
+        result = {
             "stage": "music_available",
             "blocking": False,
             "headline": f"Music via {source_label}.",
@@ -122,8 +151,11 @@ def _golden_path_status(config, state) -> dict:
             "steps": [],
             **shared,
         }
+        _golden_path_cache = result
+        _golden_path_cache_ts = now
+        return result
 
-    return {
+    result = {
         "stage": "needs_music_source",
         "blocking": True,
         "headline": "No music source configured.",
@@ -134,6 +166,9 @@ def _golden_path_status(config, state) -> dict:
         ],
         **shared,
     }
+    _golden_path_cache = result
+    _golden_path_cache_ts = now
+    return result
 
 
 def _sync_runtime_state(request: Request) -> None:
@@ -183,6 +218,26 @@ def _runtime_health_snapshot(request: Request) -> dict:
         "audio_source": audio_source or "unknown",
         "failover_active": bool(audio_source and audio_source.startswith("fallback")),
         "shadow_queue_corrections": state.shadow_queue_corrections,
+    }
+
+
+def _provider_health_snapshot(config, state: StationState) -> dict:
+    """Return current provider degradation state for admin diagnostics."""
+    now = time.time()
+    anthropic_configured = bool(config.anthropic_api_key)
+    anthropic_degraded = anthropic_configured and state.anthropic_disabled_until > now
+    retry_after = max(0, int(state.anthropic_disabled_until - now)) if anthropic_degraded else 0
+    return {
+        "anthropic": {
+            "configured": anthropic_configured,
+            "degraded": anthropic_degraded,
+            "retry_after_s": retry_after,
+            "last_error": state.anthropic_last_error if anthropic_degraded else "",
+            "auth_failures": state.anthropic_auth_failures,
+        },
+        "openai": {
+            "configured": bool(config.openai_api_key),
+        },
     }
 
 
@@ -562,6 +617,7 @@ async def run_playback_loop(app) -> None:
     config = app.state.config
     hub = app.state.stream_hub
     bytes_per_sec = (config.audio.bitrate * 1000) / 8  # bitrate is in kbps; convert to bytes/sec
+    _persist_tasks: set[asyncio.Task] = set()  # prevent GC of fire-and-forget tasks
 
     while True:
         # Pause when nobody is listening — don't burn API tokens or disk on an empty room.
@@ -570,14 +626,29 @@ async def run_playback_loop(app) -> None:
             await asyncio.sleep(1.0)
             continue
 
+        pulled_from_queue = False
         try:
             segment: Segment = await asyncio.wait_for(segment_queue.get(), timeout=30.0)
+            pulled_from_queue = True
         except TimeoutError:
-            logger.warning("Queue empty for 30s, waiting...")
-            continue
+            # Serve a canned clip instead of dead air while the producer catches up
+            from mammamiradio.producer import _pick_canned_clip
+
+            fallback = _pick_canned_clip("banter", state=state) or _pick_canned_clip("welcome")
+            if fallback:
+                logger.info("Queue empty — serving fallback clip: %s", fallback.name)
+                segment = Segment(
+                    type=SegmentType.BANTER,
+                    path=fallback,
+                    metadata={"type": "banter", "canned": True, "fallback": True},
+                    ephemeral=False,
+                )
+            else:
+                logger.warning("Queue empty for 30s, no fallback clips available")
+                continue
 
         state.on_stream_segment(segment)
-        if state.queued_segments:
+        if pulled_from_queue and state.queued_segments:
             state.queued_segments.pop(0)
         logger.info(
             ">>> NOW STREAMING %s: %s",
@@ -613,11 +684,18 @@ async def run_playback_loop(app) -> None:
                         await asyncio.sleep(ahead)
             if segment.type == SegmentType.MUSIC and not was_skipped:
                 listen_sec = bytes_sent / bytes_per_sec if bytes_per_sec else None
-                await _persist_completed_music(state, config, segment.metadata, listen_sec=listen_sec)
+                # Fire-and-forget: persistence must not block the handoff to the next
+                # segment — on Pi, the SQLite writes can take long enough to cause
+                # audible gaps between songs.
+                coro = _persist_completed_music(state, config, segment.metadata, listen_sec=listen_sec)
+                task = asyncio.create_task(coro)
+                _persist_tasks.add(task)
+                task.add_done_callback(_persist_tasks.discard)
         finally:
             if segment.ephemeral:
                 segment.path.unlink(missing_ok=True)
-            segment_queue.task_done()
+            if pulled_from_queue:
+                segment_queue.task_done()
 
 
 def _track_from_music_metadata(metadata: dict) -> Track | None:
@@ -664,7 +742,14 @@ async def _persist_skipped_music(state: StationState, config, metadata: dict, *,
 
     persona_cfg = getattr(config, "persona", None)
     skip_t = persona_cfg.skip_bit_threshold if persona_cfg else 2
-    await detect_skip_bit(config.cache_dir / "mammamiradio.db", yt_id, threshold=skip_t)
+    is_new_skip_bit = await detect_skip_bit(config.cache_dir / "mammamiradio.db", yt_id, threshold=skip_t)
+
+    if is_new_skip_bit and not state.ha_pending_directive:
+        track_name = metadata.get("title_only") or metadata.get("title") or "questa canzone"
+        state.ha_pending_directive = (
+            f"L'ascoltatore ha saltato '{track_name}' troppe volte — "
+            "reagisci in modo complice, scherzoso. Fai notare che la skippa sempre."
+        )
 
 
 async def _audio_generator(request: Request):
@@ -812,10 +897,16 @@ async def save_keys(request: Request):
         await loop.run_in_executor(None, _save_dotenv, updates)
 
     # Update env + live config so re-check sees the values immediately
+    state = request.app.state.station_state
     for k, v in updates.items():
         os.environ[k] = v
     if "ANTHROPIC_API_KEY" in updates:
         config.anthropic_api_key = updates["ANTHROPIC_API_KEY"]
+        from mammamiradio.scriptwriter import reset_provider_backoff
+
+        reset_provider_backoff()
+        state.anthropic_disabled_until = 0.0
+        state.anthropic_last_error = ""
     if "OPENAI_API_KEY" in updates:
         config.openai_api_key = updates["OPENAI_API_KEY"]
 
@@ -897,6 +988,9 @@ async def capabilities(request: Request, _: None = Depends(require_admin_access)
     capabilities["script_llm"] = bool(config.anthropic_api_key or config.openai_api_key)
     capabilities["anthropic_key"] = bool(config.anthropic_api_key)
     capabilities["openai"] = bool(config.openai_api_key)
+    provider_health = _provider_health_snapshot(config, state)
+    capabilities["anthropic_degraded"] = provider_health["anthropic"]["degraded"]
+    capabilities["anthropic_retry_after_s"] = provider_health["anthropic"]["retry_after_s"]
 
     now = state.now_streaming or {}
     result["now_playing"] = now
@@ -911,6 +1005,7 @@ async def capabilities(request: Request, _: None = Depends(require_admin_access)
     }
     result["golden_path"] = _golden_path_status(config, state)
     result["startup_source_error"] = state.startup_source_error or ""
+    result["provider_health"] = provider_health
     return result
 
 
@@ -1715,10 +1810,7 @@ async def status(request: Request, _: None = Depends(require_admin_access)):
                     state.api_input_tokens * 0.0000008 + state.api_output_tokens * 0.000004,
                     4,
                 ),
-                "cache_size_mb": round(
-                    sum(f.stat().st_size for f in config.cache_dir.glob("*.mp3") if f.is_file()) / (1024 * 1024),
-                    1,
-                ),
+                "cache_size_mb": _cached_cache_size_mb(config.cache_dir),
                 "cache_limit_mb": config.max_cache_size_mb,
             },
             "listeners": {
@@ -1727,6 +1819,7 @@ async def status(request: Request, _: None = Depends(require_admin_access)):
                 "total": state.listeners_total,
             },
             "runtime_health": runtime_health,
+            "provider_health": _provider_health_snapshot(config, state),
             "force_pending": state.force_next.value if state.force_next else None,
             "session_stopped": state.session_stopped,
             "playlist": [

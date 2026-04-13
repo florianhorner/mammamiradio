@@ -6,7 +6,7 @@
 
 <p align="center">AI-powered Italian radio station engine. It streams a continuous MP3 from live Italian charts or local music, layers in Claude-written host banter and absurd AI-generated ads, and exposes both a control-plane dashboard and a public listener page.</p>
 
-The app is designed to degrade gracefully. Music comes from live Italian charts when `MAMMAMIRADIO_ALLOW_YTDLP=true`, otherwise from a bundled demo playlist or local files. If Anthropic is unavailable, banter and ads fall back to short stock lines instead of crashing the station.
+The app is designed to degrade gracefully. Music comes from live Italian charts when `MAMMAMIRADIO_ALLOW_YTDLP=true`, otherwise from a bundled demo playlist or local files. If Anthropic is unavailable, banter and ads fall back to OpenAI or stock lines instead of crashing the station.
 
 ## Screenshots
 
@@ -151,7 +151,12 @@ If you run Home Assistant OS or Supervised:
 5. **Connect the essentials** in Add-on Configuration: optionally `anthropic_api_key` for AI hosts
 6. Start the add-on and open the dashboard from the sidebar
 
-The add-on automatically connects to Home Assistant, so the radio hosts reference your actual home state (lights, temperature, who's home) without any extra configuration.
+The add-on includes `enable_home_assistant` (default: `true`) in **Settings > Add-ons > Mamma Mi Radio > Configuration**.
+
+- `true`: Supervisor token + URL are wired automatically, and hosts can reference live home state (lights, temperature, presence).
+- `false`: Home Assistant context is fully disabled for this add-on run.
+
+Disable it when you want strict privacy, when your HA instance is unavailable/unreliable, or when you want the station to run only with local/model fallbacks.
 
 To play on speakers, use `media_player.play_media` with the stream URL, or add a button to your Lovelace dashboard.
 
@@ -207,7 +212,8 @@ The station is intentionally resilient:
 | Missing dependency | What happens |
 | --- | --- |
 | `MAMMAMIRADIO_ALLOW_YTDLP` not set | Uses a built-in Italian demo playlist instead of live charts |
-| Anthropic API key or Claude request failure | Falls back to OpenAI `gpt-4o-mini` if `OPENAI_API_KEY` is set, then to stock copy |
+| Add-on `enable_home_assistant=false` | Ignores Supervisor HA context and runs without home-state prompts, while music (`MAMMAMIRADIO_ALLOW_YTDLP`) and Anthropic/OpenAI fallbacks continue normally |
+| Anthropic API key or Claude request failure | Falls back to OpenAI `gpt-4o-mini` if `OPENAI_API_KEY` is set, then to stock copy. Authentication failures are memoized for 10 minutes to prevent repeated 401 retries. |
 | OpenAI API key missing or request failure | Falls back to Edge TTS voice for that host |
 | Home Assistant token or API failure | Continues without home context |
 | Ad brands missing | Skips ad generation instead of failing startup |
@@ -244,7 +250,7 @@ The Home Assistant token is never stored in `radio.toml`. Set it via `HA_TOKEN` 
 | `/healthz` | GET | Public | Liveness probe with process uptime |
 | `/readyz` | GET | Public | Readiness probe with queue depth and startup status |
 | `/public-status` | GET | Public | Current segment, recent log, and the real queued segments (`upcoming_mode` is `queued` or `building`) |
-| `/status` | GET | Admin | Full admin JSON: queue depth, uptime, scripts, HA context, errors |
+| `/status` | GET | Admin | Full admin JSON: queue depth, uptime, scripts, HA context, errors, and `provider_health` |
 | `/api/setup/status` | GET | Admin | First-run setup status, detected run mode, and station mode |
 | `/api/setup/recheck` | POST | Admin | Re-run setup probes |
 | `/api/setup/addon-snippet` | GET | Admin | Copy-friendly Home Assistant add-on config snippet |
@@ -260,7 +266,7 @@ The Home Assistant token is never stored in `radio.toml`. Set it via `HA_TOKEN` 
 | `/api/hosts/{name}/personality/reset` | POST | Admin | Reset host personality to defaults |
 | `/api/pacing` | GET | Admin | Current pacing configuration |
 | `/api/setup/save-keys` | POST | Admin | Save API keys via dashboard |
-| `/api/capabilities` | GET | Admin | Capability flags, tier, next-step hint, connect status |
+| `/api/capabilities` | GET | Admin | Capability flags, tier, next-step hint, connect status, and provider degradation telemetry |
 | `/api/trigger` | POST | Admin | Trigger segment production |
 | `/api/stop` | POST | Admin | Gracefully stop the session (skip + purge + pause producer until `/api/resume`) |
 | `/api/resume` | POST | Admin | Resume a stopped session |

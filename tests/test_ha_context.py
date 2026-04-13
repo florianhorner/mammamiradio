@@ -870,3 +870,124 @@ def test_format_state_total_power_normale():
     result = _format_state("sensor.haushalt_stromverbrauch_gesamt", state_data)
     assert result is not None
     assert "normale" in result
+
+
+# ---------------------------------------------------------------------------
+# _build_summary: None return from _format_state is filtered out
+# ---------------------------------------------------------------------------
+
+
+def test_build_summary_skips_format_state_none():
+    """_build_summary must silently skip entities where _format_state returns None."""
+    states = {
+        "switch.bar_kaffeemaschine_steckdose": {"state": "unavailable", "attributes": {}},
+    }
+    result = _build_summary(states)
+    assert "unavailable" not in result
+
+
+# ---------------------------------------------------------------------------
+# classify_home_mood: Casa vuota and _power_watts non-numeric
+# ---------------------------------------------------------------------------
+
+
+def test_mood_casa_vuota():
+    """Both persons not_home → Casa vuota."""
+    states = {
+        "person.florian_horner": {"state": "not_home", "attributes": {}},
+        "person.sabrina": {"state": "not_home", "attributes": {}},
+    }
+    with patch("mammamiradio.ha_context.datetime") as mock_dt:
+        mock_dt.datetime.now.return_value.hour = 14
+        result = classify_home_mood(states)
+    assert result == "Casa vuota"
+
+
+def test_mood_power_watts_non_numeric_returns_default():
+    """_power_watts must gracefully return 0.0 when sensor state is non-numeric."""
+    states = {
+        "sensor.bar_bali_boot_steckdose_power": {"state": "unavailable", "attributes": {}},
+    }
+    with patch("mammamiradio.ha_context.datetime") as mock_dt:
+        mock_dt.datetime.now.return_value.hour = 14
+        result = classify_home_mood(states)
+    assert result != "Lavatrice in funzione"
+
+
+# ---------------------------------------------------------------------------
+# _get_ha_client: creates / recreates when None or closed
+# ---------------------------------------------------------------------------
+
+
+def test_get_ha_client_creates_client_when_none():
+    """_get_ha_client must create a new AsyncClient when _ha_client is None."""
+    import mammamiradio.ha_context as _hc
+    from mammamiradio.ha_context import _get_ha_client
+
+    original = _hc._ha_client
+    try:
+        _hc._ha_client = None
+        client = _get_ha_client()
+        assert client is not None
+        assert not client.is_closed
+    finally:
+        _hc._ha_client = original
+
+
+def test_get_ha_client_recreates_closed_client():
+    """_get_ha_client must replace a closed client with a fresh one."""
+    import asyncio
+
+    import httpx
+
+    import mammamiradio.ha_context as _hc
+    from mammamiradio.ha_context import _get_ha_client
+
+    original = _hc._ha_client
+    try:
+        closed_client = httpx.AsyncClient()
+        asyncio.get_event_loop().run_until_complete(closed_client.aclose())
+        _hc._ha_client = closed_client
+        new_client = _get_ha_client()
+        assert new_client is not closed_client
+        assert not new_client.is_closed
+    finally:
+        _hc._ha_client = original
+
+
+# ---------------------------------------------------------------------------
+# fetch_weather_forecast: upcoming significant condition in lookahead
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_fetch_weather_forecast_upcoming_significant_condition():
+    """Weather arc must surface an upcoming significant condition from forecast[1:7]."""
+    forecast = [
+        {"condition": "sunny", "temperature": 22.0},
+        {"condition": "sunny", "temperature": 21.0},
+        {"condition": "lightning", "temperature": 18.0},
+        {"condition": "rainy", "temperature": 17.0},
+    ]
+    mock_response = MagicMock()
+    mock_response.raise_for_status = MagicMock()
+    mock_response.json.return_value = {
+        "response": {
+            "weather.home": {
+                "forecast": forecast,
+            }
+        }
+    }
+    mock_client = AsyncMock()
+    mock_client.post.return_value = mock_response
+
+    with (
+        patch("mammamiradio.ha_context._get_ha_client", return_value=mock_client),
+        patch("mammamiradio.ha_context.datetime") as mock_dt,
+        patch("mammamiradio.ha_context._weather_forecast_fetched_at", 0.0),
+    ):
+        mock_dt.datetime.now.return_value.hour = 9
+        result = await fetch_weather_forecast("http://ha.local", "mytoken")
+
+    assert result is not None
+    assert len(result) > 0

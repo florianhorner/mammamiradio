@@ -41,12 +41,14 @@ The app persists the last selected source to `cache/playlist_source.json` and re
 That usually means script generation failed and the app fell back to stock copy.
 
 The app tries Anthropic first, then falls back to OpenAI `gpt-4o-mini` if `OPENAI_API_KEY` is set, then to stock lines.
+When Anthropic returns an authentication failure (for example `invalid x-api-key`), the app now suspends Anthropic for 10 minutes in-process and routes script generation to OpenAI immediately to avoid repeated 401 spam.
 
 Check:
 
 - `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` is set (at least one is needed for AI-generated content)
 - outbound network access is available
 - `/status` or the dashboard shows recent producer errors
+- `/api/capabilities` and `/status` now include `provider_health.anthropic` (`degraded`, `retry_after_s`, `auth_failures`)
 
 ## Host voice sounds different than expected
 
@@ -59,6 +61,7 @@ Check:
 - `/status` may show TTS errors in the producer log
 
 Each OpenAI host can define `edge_fallback_voice` in `radio.toml` so they fall back to their own Edge voice rather than a stranger's.
+If a host or ad voice is configured with an OpenAI-only voice ID (for example `onyx`) on Edge, startup normalizes it to a safe Edge fallback before synthesis.
 
 ## Home Assistant references never show up
 

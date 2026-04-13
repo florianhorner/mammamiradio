@@ -22,6 +22,14 @@ def test_ha_enabled_override(monkeypatch):
     assert config.homeassistant.enabled is True
 
 
+def test_ha_enabled_false_override_blocks_auto_enable(monkeypatch):
+    monkeypatch.setenv("HA_ENABLED", "false")
+    monkeypatch.setenv("HA_TOKEN", "test-token")
+    monkeypatch.setenv("HA_URL", "http://supervisor/core/api")
+    config = load_config(TOML_PATH)
+    assert config.homeassistant.enabled is False
+
+
 def test_ha_auto_enable_with_token_and_url(monkeypatch):
     """HA should auto-enable when both token and URL are present."""
     monkeypatch.setenv("HA_TOKEN", "test-token")

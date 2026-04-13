@@ -332,8 +332,8 @@ h1 {
   transform: scale(1.05);
 }
 .play-btn.playing {
-  background: var(--sun2); color: var(--shadow);
-  box-shadow: 0 0 16px rgba(236,204,48,0.6), 0 0 32px rgba(236,204,48,0.3), 0 0 48px rgba(236,204,48,0.1);
+  background: var(--ok); color: #fff;
+  box-shadow: 0 4px 20px rgba(37,99,235,0.4), 0 0 0 6px rgba(37,99,235,0.08), 0 0 28px rgba(37,99,235,0.15);
 }
 
 /* ── CARDS (generic) ── */
@@ -710,9 +710,9 @@ h1 {
 <div class="card" id="request-card">
   <h3>Manda un saluto o chiedi una canzone</h3>
   <div id="request-form">
-    <input type="text" id="req-name" aria-label="Come ti chiami? (opzionale)" placeholder="Come ti chiami? (opzionale)" autocomplete="off" style="width:100%;box-sizing:border-box;background:rgba(0,0,0,0.25);border:1px solid rgba(245,237,216,0.15);border-radius:6px;color:var(--cream);padding:8px 10px;font-size:13px;margin-bottom:8px">
-    <textarea id="req-msg" aria-label="Messaggio o richiesta canzone" placeholder="Es: Ciao a Marco! oppure: puoi mettere Vasco Rossi - Albachiara?" rows="2" autocomplete="off" style="width:100%;box-sizing:border-box;resize:none;background:rgba(0,0,0,0.25);border:1px solid rgba(245,237,216,0.15);border-radius:6px;color:var(--cream);padding:8px 10px;font-size:13px;margin-bottom:8px;font-family:inherit"></textarea>
-    <button onclick="sendRequest()" style="width:100%;padding:9px;background:rgba(244,208,72,0.12);border:1px solid rgba(244,208,72,0.3);border-radius:6px;color:var(--sun);font-size:13px;font-weight:600;cursor:pointer">Manda al DJ ▶</button>
+    <input type="text" id="req-name" class="input" aria-label="Come ti chiami? (opzionale)" placeholder="Come ti chiami? (opzionale)" autocomplete="off" style="margin-bottom:8px">
+    <textarea id="req-msg" class="input" aria-label="Messaggio o richiesta canzone" placeholder="Es: Ciao a Marco! oppure: puoi mettere Vasco Rossi - Albachiara?" rows="2" autocomplete="off" style="resize:none;margin-bottom:8px"></textarea>
+    <button onclick="sendRequest()" class="btn btn-sm" style="width:100%">Manda al DJ ▶</button>
   </div>
   <div id="request-sent" style="display:none;text-align:center;padding:8px 0;font-size:13px;color:rgba(245,237,216,0.7)"></div>
 </div>

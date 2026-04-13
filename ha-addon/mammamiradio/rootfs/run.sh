@@ -1,4 +1,4 @@
-#!/usr/bin/env sh
+#!/usr/bin/with-contenv sh
 # Home Assistant add-on entrypoint for mammamiradio
 # Maps Supervisor environment and add-on options to app env vars.
 set -e
@@ -22,6 +22,8 @@ for key in ('anthropic_api_key', 'openai_api_key', 'station_name', 'claude_model
     if val:
         env_key = key.upper()
         print(f'export {env_key}={shlex.quote(str(val))}')
+enabled = opts.get('enable_home_assistant', True)
+print(f'export HA_ENABLED={"true" if enabled else "false"}')
 " 2>"$OPTS_LOG"); then
         echo "[mammamiradio] WARNING: Failed to parse options.json, continuing with defaults"
         cat "$OPTS_LOG" 2>/dev/null
@@ -31,16 +33,22 @@ for key in ('anthropic_api_key', 'openai_api_key', 'station_name', 'claude_model
 fi
 
 # ---- Map Supervisor token to HA_TOKEN ----
-if [ -n "$SUPERVISOR_TOKEN" ]; then
-    export HA_TOKEN="$SUPERVISOR_TOKEN"
-    export HA_URL="http://supervisor/core"
-    export HA_ENABLED="true"
-    echo "[mammamiradio] Home Assistant API access configured via Supervisor"
-elif [ -n "$HASSIO_TOKEN" ]; then
-    export HA_TOKEN="$HASSIO_TOKEN"
-    export HA_URL="http://supervisor/core"
-    export HA_ENABLED="true"
-    echo "[mammamiradio] Home Assistant API access configured via Supervisor (legacy token)"
+if [ "${HA_ENABLED:-true}" != "false" ]; then
+    if [ -n "$SUPERVISOR_TOKEN" ]; then
+        export HA_TOKEN="$SUPERVISOR_TOKEN"
+        export HA_URL="http://supervisor/core"
+        export HA_ENABLED="true"
+        echo "[mammamiradio] Home Assistant API access configured via Supervisor"
+    elif [ -n "$HASSIO_TOKEN" ]; then
+        export HA_TOKEN="$HASSIO_TOKEN"
+        export HA_URL="http://supervisor/core"
+        export HA_ENABLED="true"
+        echo "[mammamiradio] Home Assistant API access configured via Supervisor (legacy token)"
+    fi
+else
+    unset HA_TOKEN
+    unset HA_URL
+    echo "[mammamiradio] Home Assistant integration disabled by add-on option"
 fi
 
 # ---- Enable yt-dlp as primary music source ----

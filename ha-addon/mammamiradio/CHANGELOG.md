@@ -1,5 +1,16 @@
 # Changelog
 
+## 2.9.1
+
+### Fixed
+- Prewarm runs in background, FastAPI is ready instantly (was blocking up to 20s).
+- Normalization cache skips FFmpeg re-encode for previously-processed tracks, saving 60+ seconds per restart on HA hardware. Cache now persists correctly across playbacks.
+- Operator stop (`/api/stop`) survives crash/restart/watchdog — no more unexpected auto-play after reboot.
+- Fire-and-forget music persistence eliminates audible gaps between songs on Pi hardware.
+- Status endpoint caching reduces I/O overhead from aggressive admin/dashboard polling.
+- Download validation floor lowered so silence fallbacks aren't rejected. ffprobe timeout prevents thread starvation.
+- Fallback clips no longer delete bundled demo assets after playback.
+
 ## 2.9.0
 
 ### Added

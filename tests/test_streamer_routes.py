@@ -207,6 +207,41 @@ async def test_run_playback_loop_persists_music_only_after_segment_finishes(tmp_
 
 
 @pytest.mark.asyncio
+async def test_run_playback_loop_timeout_fallback_keeps_queue_bookkeeping_balanced(tmp_path):
+    app = _make_test_app()
+    app.state.config.audio.bitrate = 3200
+    app.state.stream_hub.subscribe()
+    app.state.station_state.queued_segments = [{"type": "music", "label": "Queued Song"}]
+
+    fallback_path = tmp_path / "fallback.mp3"
+    fallback_path.write_bytes(b"x" * 4096)
+
+    async def _forced_timeout(awaitable, *_args, **_kwargs):
+        awaitable.close()
+        raise TimeoutError
+
+    with (
+        patch("mammamiradio.streamer.asyncio.wait_for", new=AsyncMock(side_effect=_forced_timeout)),
+        patch("mammamiradio.producer._pick_canned_clip", return_value=fallback_path),
+        patch.object(app.state.queue, "task_done") as mock_task_done,
+    ):
+        task = asyncio.create_task(run_playback_loop(app))
+        try:
+            deadline = time.monotonic() + 1.0
+            while not app.state.station_state.now_streaming:
+                if time.monotonic() > deadline:
+                    raise AssertionError("playback loop did not stream fallback segment")
+                await asyncio.sleep(0.01)
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    assert app.state.station_state.now_streaming["metadata"].get("fallback") is True
+    assert app.state.station_state.queued_segments == [{"type": "music", "label": "Queued Song"}]
+    mock_task_done.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_skip_route_persists_music_skips_with_youtube_id():
     app = _make_test_app()
     persona_store = MagicMock()
@@ -229,6 +264,32 @@ async def test_skip_route_persists_music_skips_with_youtube_id():
     assert resp.json()["ok"] is True
     persona_store.record_play.assert_awaited_once()
     detect_skip_bit.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_skip_bit_sets_pending_directive():
+    """When detect_skip_bit returns True, ha_pending_directive is set for reactive banter."""
+    app = _make_test_app()
+    persona_store = MagicMock()
+    persona_store._session_id = "session-3"
+    persona_store.record_play = AsyncMock()
+    app.state.station_state.persona_store = persona_store
+    app.state.station_state.now_streaming = {
+        "type": "music",
+        "label": "Hated Song",
+        "started": time.time() - 5,
+        "metadata": {"youtube_id": "yt_hated", "title_only": "Brutta Canzone"},
+    }
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    with patch("mammamiradio.song_cues.detect_skip_bit", new=AsyncMock(return_value=True)):
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            resp = await client.post("/api/skip")
+
+    assert resp.status_code == 200
+    directive = app.state.station_state.ha_pending_directive
+    assert "Brutta Canzone" in directive
+    assert "saltato" in directive or "skippa" in directive
 
 
 @pytest.mark.asyncio
@@ -313,6 +374,7 @@ async def test_status_includes_station_mode():
     body = resp.json()
     assert "station_mode" in body
     assert "id" in body["station_mode"]
+    assert "provider_health" in body
 
 
 @pytest.mark.asyncio
@@ -632,3 +694,24 @@ async def test_capabilities_trial_exhausted_flag():
     body = resp.json()
     assert body["trial"]["exhausted"] is True
     assert body["trial"]["canned_clips_streamed"] == SHAREWARE_CANNED_LIMIT
+
+
+@pytest.mark.asyncio
+async def test_capabilities_exposes_anthropic_degraded_health():
+    app = _make_test_app()
+    app.state.config.anthropic_api_key = "bad-key"
+    app.state.config.openai_api_key = "openai-key"
+    app.state.station_state.anthropic_disabled_until = time.time() + 90
+    app.state.station_state.anthropic_last_error = "AuthenticationError: invalid x-api-key"
+    app.state.station_state.anthropic_auth_failures = 2
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.get("/api/capabilities")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["capabilities"]["anthropic_degraded"] is True
+    assert body["provider_health"]["anthropic"]["degraded"] is True
+    assert body["provider_health"]["anthropic"]["retry_after_s"] > 0
+    assert body["provider_health"]["anthropic"]["auth_failures"] == 2

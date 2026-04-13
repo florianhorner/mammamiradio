@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
+import subprocess
 from pathlib import Path
 
 from mammamiradio.models import Track
@@ -15,6 +17,45 @@ logger = logging.getLogger(__name__)
 # Files that must never be evicted from the cache directory
 _CACHE_PROTECTED = {"mammamiradio.db", "playlist_source.json", "session_stopped.flag"}
 _TRUTHY = ("true", "1", "yes")
+
+
+def validate_download(filepath: Path) -> tuple[bool, str]:
+    """Quickly reject partial/corrupt downloads before expensive normalization."""
+    min_size_bytes = 500 * 1024
+    try:
+        size = filepath.stat().st_size
+    except OSError as exc:
+        return False, f"stat failed: {exc}"
+
+    if size < min_size_bytes:
+        return False, f"file too small ({size} bytes < {min_size_bytes})"
+
+    cmd = ["ffprobe", "-v", "quiet", "-print_format", "json", "-show_format", str(filepath)]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+    except subprocess.TimeoutExpired:
+        return False, "ffprobe timed out"
+    except OSError as exc:
+        return False, f"ffprobe failed to start: {exc}"
+    if result.returncode != 0:
+        return False, "ffprobe failed"
+
+    try:
+        info = json.loads(result.stdout or "{}")
+    except json.JSONDecodeError:
+        return False, "ffprobe returned invalid JSON"
+
+    duration_raw = (info.get("format") or {}).get("duration")
+    if duration_raw is None:
+        return False, "missing duration"
+    try:
+        duration_s = float(duration_raw)
+    except (TypeError, ValueError):
+        return False, f"invalid duration: {duration_raw!r}"
+    if duration_s < 30:
+        return False, f"duration too short ({duration_s:.1f}s)"
+
+    return True, "ok"
 
 
 def purge_suspect_cache_files(cache_dir: Path, min_size_bytes: int = 10240) -> int:
@@ -50,10 +91,19 @@ def evict_cache_lru(cache_dir: Path, max_size_mb: int) -> None:
     if max_size_mb <= 0:
         return
 
-    mp3_files = sorted(
-        [f for f in cache_dir.glob("*.mp3") if f.name not in _CACHE_PROTECTED],
-        key=lambda f: f.stat().st_atime,  # oldest access time first
-    )
+    # Evict regular cache files first, then norm_ files if still over budget.
+    regular = []
+    norm = []
+    for f in cache_dir.glob("*.mp3"):
+        if f.name in _CACHE_PROTECTED:
+            continue
+        if f.name.startswith("norm_"):
+            norm.append(f)
+        else:
+            regular.append(f)
+    regular.sort(key=lambda f: f.stat().st_atime)
+    norm.sort(key=lambda f: f.stat().st_atime)
+    mp3_files = regular + norm
 
     total_bytes = sum(f.stat().st_size for f in mp3_files)
     max_bytes = max_size_mb * 1024 * 1024
@@ -80,12 +130,23 @@ def evict_cache_lru(cache_dir: Path, max_size_mb: int) -> None:
 
 _DEMO_ASSETS_DIR = Path(__file__).parent / "demo_assets" / "music"
 
+# Cached directory listings to avoid repeated glob() on every track lookup.
+# Demo assets never change at runtime; local music rarely does.
+_demo_files_cache: tuple[str, list[Path]] | None = None
+_local_files_cache: dict[str, tuple[float, list[Path]]] = {}
+_LOCAL_FILES_TTL = 60.0  # seconds
+
 
 def _find_demo_asset(track: Track) -> Path | None:
     """Check bundled demo_assets/music/ for a matching MP3."""
-    if not _DEMO_ASSETS_DIR.exists():
-        return None
-    for f in _DEMO_ASSETS_DIR.glob("*.mp3"):
+    global _demo_files_cache
+    cache_key = str(_DEMO_ASSETS_DIR)
+    if _demo_files_cache is None or _demo_files_cache[0] != cache_key:
+        if not _DEMO_ASSETS_DIR.exists():
+            _demo_files_cache = (cache_key, [])
+        else:
+            _demo_files_cache = (cache_key, list(_DEMO_ASSETS_DIR.glob("*.mp3")))
+    for f in _demo_files_cache[1]:
         name = f.stem.lower()
         if track.cache_key in name or track.title.lower() in name:
             return f
@@ -121,8 +182,16 @@ def _find_local(track: Track, music_dir: Path) -> Path | None:
     """Check if a local MP3 exists in the music/ directory."""
     if not music_dir.exists():
         return None
-    # Try exact match first, then fuzzy
-    for f in music_dir.glob("*.mp3"):
+    import time as _time
+
+    key = str(music_dir)
+    cached = _local_files_cache.get(key)
+    if cached and (_time.time() - cached[0]) < _LOCAL_FILES_TTL:
+        files = cached[1]
+    else:
+        files = list(music_dir.glob("*.mp3"))
+        _local_files_cache[key] = (_time.time(), files)
+    for f in files:
         name = f.stem.lower()
         if track.cache_key in name or track.title.lower() in name:
             return f
@@ -139,6 +208,8 @@ def _download_ytdlp(track: Track, cache_dir: Path) -> Path:
         query = f"https://www.youtube.com/watch?v={track.youtube_id}"
     else:
         query = f"ytsearch1:{track.artist} {track.title} official audio"
+    ytdlp_tmp = cache_dir / ".ytdlp_tmp" / track.cache_key
+    ytdlp_tmp.mkdir(parents=True, exist_ok=True)
     opts = {
         "format": "bestaudio/best",
         "outtmpl": str(cache_dir / f"{track.cache_key}.%(ext)s"),
@@ -152,6 +223,11 @@ def _download_ytdlp(track: Track, cache_dir: Path) -> Path:
         "quiet": True,
         "no_warnings": True,
         "noprogress": True,
+        "abort_on_unavailable_fragments": True,
+        "throttled_rate": 100_000,  # re-extract URLs if speed drops below 100 KB/s
+        "check_formats": True,  # verify formats are downloadable before selecting
+        "concurrent_fragment_downloads": 2,  # parallel fragment downloads
+        "paths": {"temp": str(ytdlp_tmp)},  # atomic: fragments in temp, move on completion
     }
 
     with yt_dlp.YoutubeDL(opts) as ydl:

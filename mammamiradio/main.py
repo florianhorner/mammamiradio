@@ -31,12 +31,13 @@ app.include_router(router)
 
 _producer_task: asyncio.Task | None = None
 _playback_task: asyncio.Task | None = None
+_prewarm_task: asyncio.Task | None = None
 
 
 @app.on_event("startup")
 async def startup():
     """Load config, build initial state, and start producer/playback workers."""
-    global _producer_task, _playback_task
+    global _producer_task, _playback_task, _prewarm_task
 
     config = load_config()
     logger.info("Station: %s (%s)", config.station.name, config.station.language)
@@ -48,6 +49,8 @@ async def startup():
     purged = purge_suspect_cache_files(config.cache_dir)
     if purged:
         logger.info("Cache integrity check: purged %d suspect file(s)", purged)
+    norm_count = len(list(config.cache_dir.glob("norm_*.mp3")))
+    logger.info("Normalization cache: %d tracks pre-normalized", norm_count)
 
     # Evict old cached tracks if the cache exceeds the configured size limit
     evict_cache_lru(config.cache_dir, config.max_cache_size_mb)
@@ -66,11 +69,15 @@ async def startup():
             "Install: brew install ffmpeg (macOS) or apt install ffmpeg (Linux)"
         )
 
-    # Restore stop state so a reload/restart honours an operator-issued stop
+    # Restore stop state so a reload/restart honours an operator-issued stop.
+    # The operator's /api/resume is the correct way to clear this — a crash or
+    # watchdog restart should not silently undo a deliberate stop.
     _stopped_flag = config.cache_dir / "session_stopped.flag"
     _session_stopped = _stopped_flag.exists()
     if _session_stopped:
-        logger.info("Restoring stopped session state from previous run")
+        logger.info(
+            "Restoring stopped session state from previous run — use /api/resume or the admin panel to start playback"
+        )
 
     persisted_source = read_persisted_source(config.cache_dir)
     logger.info("Fetching startup playlist")
@@ -120,16 +127,21 @@ async def startup():
     app.state.config = config
     app.state.start_time = time.time()
 
-    # Pre-produce the first music segment so listeners hear audio instantly.
-    # This runs before the producer loop and bypasses the listener gate.
-    # Bounded to 20s so a slow download doesn't block app readiness.
-    try:
-        await asyncio.wait_for(prewarm_first_segment(queue, state, config), timeout=20)
-    except TimeoutError:
-        logger.warning("Prewarm timed out after 20s; producer will fill queue normally")
+    # Pre-produce music segments in the background so app startup is instant.
+    # If a listener arrives before prewarm finishes, the producer's idle-resume
+    # logic queues a canned clip as an immediate fallback.
+    # On addon hardware (Pi-class), pre-warm 3 tracks since dynaudnorm is
+    # ~10-15s each.  Desktop pre-warms 2.
+    async def _prewarm_multiple():
+        total = 3 if config.is_addon else 2
+        for _ in range(total):
+            await prewarm_first_segment(queue, state, config)
+
+    _prewarm_task = asyncio.create_task(_prewarm_multiple())
 
     _playback_task = asyncio.create_task(run_playback_loop(app))
     _producer_task = asyncio.create_task(run_producer(queue, state, config, skip_event=app.state.skip_event))
+    app.state.prewarm_task = _prewarm_task
     app.state.playback_task = _playback_task
     app.state.producer_task = _producer_task
     # One-line boot summary for operator diagnostics
@@ -157,6 +169,9 @@ async def startup():
 async def shutdown():
     """Stop background workers and close shared streaming resources."""
     tasks_to_cancel = []
+    if _prewarm_task:
+        _prewarm_task.cancel()
+        tasks_to_cancel.append(_prewarm_task)
     if _producer_task:
         _producer_task.cancel()
         tasks_to_cancel.append(_producer_task)
@@ -167,6 +182,8 @@ async def shutdown():
         await asyncio.gather(*tasks_to_cancel, return_exceptions=True)
     if hasattr(app.state, "producer_task"):
         app.state.producer_task = None
+    if hasattr(app.state, "prewarm_task"):
+        app.state.prewarm_task = None
     if hasattr(app.state, "playback_task"):
         app.state.playback_task = None
     if hasattr(app.state, "stream_hub"):

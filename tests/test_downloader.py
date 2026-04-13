@@ -32,6 +32,40 @@ def music_dir(tmp_path):
 # --- _find_local tests ---
 
 
+def test_validate_download_rejects_small_file(tmp_path):
+    from mammamiradio.downloader import validate_download
+
+    file_path = tmp_path / "tiny.mp3"
+    file_path.write_bytes(b"x" * 100)
+
+    with patch("mammamiradio.downloader.subprocess.run") as mock_run:
+        ok, reason = validate_download(file_path)
+
+    assert ok is False
+    assert "too small" in reason
+    mock_run.assert_not_called()
+
+
+def test_validate_download_accepts_valid_duration(tmp_path):
+    from mammamiradio.downloader import validate_download
+
+    file_path = tmp_path / "good.mp3"
+    file_path.write_bytes(b"x" * (600 * 1024))
+    result = MagicMock()
+    result.returncode = 0
+    result.stdout = '{"format":{"duration":"180.2"}}'
+
+    with patch("mammamiradio.downloader.subprocess.run", return_value=result) as mock_run:
+        ok, reason = validate_download(file_path)
+
+    assert ok is True
+    assert reason == "ok"
+    mock_run.assert_called_once()
+    cmd = mock_run.call_args[0][0]
+    assert cmd[:5] == ["ffprobe", "-v", "quiet", "-print_format", "json"]
+    assert str(file_path) in cmd
+
+
 def test_find_local_returns_none_when_dir_missing(track, tmp_path):
     from mammamiradio.downloader import _find_local
 
@@ -202,6 +236,11 @@ def test_ytdlp_uses_no_progress_options(track, cache_dir):
     assert captured_opts["quiet"] is True
     assert captured_opts["no_warnings"] is True
     assert captured_opts["noprogress"] is True
+    assert captured_opts["abort_on_unavailable_fragments"] is True
+    assert captured_opts["throttled_rate"] == 100_000
+    assert captured_opts["check_formats"] is True
+    assert captured_opts["concurrent_fragment_downloads"] == 2
+    assert "temp" in captured_opts.get("paths", {})
 
 
 def test_download_ytdlp_uses_exact_watch_url_when_youtube_id(cache_dir):
@@ -395,6 +434,33 @@ def test_evict_cache_lru_handles_oserror(cache_dir):
         evict_cache_lru(cache_dir, 0.0001)
 
 
+def test_evict_cache_lru_evicts_regular_before_norm(cache_dir):
+    """Regular files are evicted before norm cache; norm evicted if still over budget."""
+    from mammamiradio.downloader import evict_cache_lru
+
+    norm = cache_dir / "norm_track_192k.mp3"
+    regular = cache_dir / "regular.mp3"
+    norm.write_bytes(b"x" * 700 * 1024)
+    regular.write_bytes(b"x" * 700 * 1024)
+
+    # Budget allows ~700 KB — regular evicted first, norm survives
+    evict_cache_lru(cache_dir, 1)
+    assert norm.exists()
+    assert not regular.exists()
+
+
+def test_evict_cache_lru_evicts_norm_when_over_budget(cache_dir):
+    """Norm files are evicted too when the cache is still over budget after regular eviction."""
+    from mammamiradio.downloader import evict_cache_lru
+
+    norm = cache_dir / "norm_track_192k.mp3"
+    norm.write_bytes(b"x" * 700 * 1024)
+
+    # Budget is tiny — norm must be evicted
+    evict_cache_lru(cache_dir, 0.1)
+    assert not norm.exists()
+
+
 # --- search_ytdlp_metadata ---
 
 
@@ -550,6 +616,35 @@ def test_purge_suspect_cache_files_skips_protected_mp3_names(tmp_path):
         assert fake_file.exists()
 
 
+def test_purge_suspect_cache_files_purges_tiny_norm_cache_files(tmp_path):
+    from mammamiradio.downloader import purge_suspect_cache_files
+
+    d = tmp_path / "cache"
+    d.mkdir()
+    norm = d / "norm_song_192k.mp3"
+    tiny = d / "tiny.mp3"
+    norm.write_bytes(b"x" * 100)
+    tiny.write_bytes(b"x" * 100)
+
+    purged = purge_suspect_cache_files(d)
+    assert purged == 2
+    assert not norm.exists()
+    assert not tiny.exists()
+
+
+def test_purge_suspect_cache_files_keeps_large_norm_cache_files(tmp_path):
+    from mammamiradio.downloader import purge_suspect_cache_files
+
+    d = tmp_path / "cache"
+    d.mkdir()
+    norm = d / "norm_song_192k.mp3"
+    norm.write_bytes(b"x" * 20000)
+
+    purged = purge_suspect_cache_files(d)
+    assert purged == 0
+    assert norm.exists()
+
+
 def test_purge_suspect_cache_files_custom_threshold(tmp_path):
     from mammamiradio.downloader import purge_suspect_cache_files
 
@@ -612,3 +707,265 @@ def test_search_ytdlp_metadata_returns_empty_on_extract_exception():
         patch.dict(sys.modules, {"yt_dlp": mock_yt_dlp}),
     ):
         assert search_ytdlp_metadata("vasco", max_results=3) == []
+
+
+# ---------------------------------------------------------------------------
+# validate_download: error paths
+# ---------------------------------------------------------------------------
+
+
+def test_validate_download_oserror_on_stat(tmp_path):
+    from pathlib import Path
+
+    from mammamiradio.downloader import validate_download
+
+    p = tmp_path / "ghost.mp3"
+    p.touch()
+    original_stat = Path.stat
+
+    def _stat_raises(self, *args, **kwargs):
+        if self.name == "ghost.mp3":
+            raise OSError("permission denied")
+        return original_stat(self, *args, **kwargs)
+
+    with patch.object(Path, "stat", _stat_raises):
+        ok, reason = validate_download(p)
+    assert ok is False
+    assert "stat failed" in reason
+
+
+def test_validate_download_ffprobe_timeout(tmp_path):
+    from mammamiradio.downloader import validate_download
+
+    p = tmp_path / "track.mp3"
+    p.write_bytes(b"x" * (600 * 1024))
+
+    import subprocess as _sp
+
+    with patch("mammamiradio.downloader.subprocess.run", side_effect=_sp.TimeoutExpired("ffprobe", 30)):
+        ok, reason = validate_download(p)
+    assert ok is False
+    assert "timed out" in reason
+
+
+def test_validate_download_ffprobe_oserror(tmp_path):
+    from mammamiradio.downloader import validate_download
+
+    p = tmp_path / "track.mp3"
+    p.write_bytes(b"x" * (600 * 1024))
+
+    with patch("mammamiradio.downloader.subprocess.run", side_effect=OSError("not found")):
+        ok, reason = validate_download(p)
+    assert ok is False
+    assert "failed to start" in reason
+
+
+def test_validate_download_ffprobe_nonzero_returncode(tmp_path):
+    from mammamiradio.downloader import validate_download
+
+    p = tmp_path / "track.mp3"
+    p.write_bytes(b"x" * (600 * 1024))
+    result = MagicMock()
+    result.returncode = 1
+    result.stdout = ""
+
+    with patch("mammamiradio.downloader.subprocess.run", return_value=result):
+        ok, reason = validate_download(p)
+    assert ok is False
+    assert "ffprobe failed" in reason
+
+
+def test_validate_download_json_decode_error(tmp_path):
+    from mammamiradio.downloader import validate_download
+
+    p = tmp_path / "track.mp3"
+    p.write_bytes(b"x" * (600 * 1024))
+    result = MagicMock()
+    result.returncode = 0
+    result.stdout = "NOT JSON {"
+
+    with patch("mammamiradio.downloader.subprocess.run", return_value=result):
+        ok, reason = validate_download(p)
+    assert ok is False
+    assert "invalid JSON" in reason
+
+
+def test_validate_download_missing_duration(tmp_path):
+    from mammamiradio.downloader import validate_download
+
+    p = tmp_path / "track.mp3"
+    p.write_bytes(b"x" * (600 * 1024))
+    result = MagicMock()
+    result.returncode = 0
+    result.stdout = '{"format": {}}'
+
+    with patch("mammamiradio.downloader.subprocess.run", return_value=result):
+        ok, reason = validate_download(p)
+    assert ok is False
+    assert "missing duration" in reason
+
+
+def test_validate_download_invalid_duration_float(tmp_path):
+    from mammamiradio.downloader import validate_download
+
+    p = tmp_path / "track.mp3"
+    p.write_bytes(b"x" * (600 * 1024))
+    result = MagicMock()
+    result.returncode = 0
+    result.stdout = '{"format": {"duration": "not_a_number"}}'
+
+    with patch("mammamiradio.downloader.subprocess.run", return_value=result):
+        ok, reason = validate_download(p)
+    assert ok is False
+    assert "invalid duration" in reason
+
+
+# ---------------------------------------------------------------------------
+# evict_cache_lru: protected file in cache dir is skipped
+# ---------------------------------------------------------------------------
+
+
+def test_evict_cache_lru_skips_protected_files(tmp_path):
+    """Files whose names are in _CACHE_PROTECTED must never be evicted."""
+    from mammamiradio.downloader import _CACHE_PROTECTED, evict_cache_lru
+
+    d = tmp_path / "cache"
+    d.mkdir()
+    protected_name = next(iter(_CACHE_PROTECTED))
+    protected_file = d / protected_name
+    protected_file.write_bytes(b"x" * (600 * 1024))
+
+    # Force glob to return the protected file so the skip branch is exercised
+    with patch.object(type(d), "glob", return_value=[protected_file]):
+        evict_cache_lru(d, max_size_mb=0)  # zero budget → would evict non-protected files
+
+    assert protected_file.exists()
+
+
+# ---------------------------------------------------------------------------
+# _find_demo_asset: cache hit on second call
+# ---------------------------------------------------------------------------
+
+
+def test_find_demo_asset_cache_hit_on_second_call(tmp_path):
+    """_find_demo_asset must return a cached result without re-globbing on repeat calls."""
+    import mammamiradio.downloader as _dl
+    from mammamiradio.downloader import _find_demo_asset
+
+    track = Track(title="Test Song", artist="Test Artist", duration_ms=180000)
+    demo_dir = tmp_path / "demo_music"
+    demo_dir.mkdir()
+    mp3 = demo_dir / f"{track.title.lower()}.mp3"
+    mp3.touch()
+
+    # Reset module-level cache so we start clean
+    _dl._demo_files_cache = None
+
+    with patch("mammamiradio.downloader._DEMO_ASSETS_DIR", demo_dir):
+        result1 = _find_demo_asset(track)
+        # Second call: cache should be set, glob should NOT be called again
+        result2 = _find_demo_asset(track)
+
+    assert result1 == mp3
+    assert result2 == mp3
+
+
+# ---------------------------------------------------------------------------
+# _find_local: TTL cache hit path
+# ---------------------------------------------------------------------------
+
+
+def test_find_local_uses_ttl_cache(tmp_path):
+    """_find_local must return a cached file list within the TTL window."""
+    import mammamiradio.downloader as _dl
+    from mammamiradio.downloader import _find_local
+
+    music_dir = tmp_path / "music"
+    music_dir.mkdir()
+    track = Track(title="Cached Song", artist="Artist", duration_ms=180000)
+    mp3 = music_dir / f"{track.title.lower()}.mp3"
+    mp3.touch()
+
+    # Prime the cache
+    key = str(music_dir)
+    import time as _time
+
+    _dl._local_files_cache[key] = (_time.time(), [mp3])
+
+    result = _find_local(track, music_dir)
+    assert result == mp3
+
+
+# ---------------------------------------------------------------------------
+# _download_external_sync: cache hit, local file, ytdlp disabled
+# ---------------------------------------------------------------------------
+
+
+def test_download_external_sync_cache_hit(tmp_path):
+    """_download_external_sync must return the cached file immediately."""
+    from mammamiradio.downloader import _download_external_sync
+
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+    music_dir = tmp_path / "music"
+    music_dir.mkdir()
+    track = Track(title="Cached", artist="Artist", duration_ms=180000)
+    cached = cache_dir / f"{track.cache_key}.mp3"
+    cached.touch()
+
+    result = _download_external_sync(track, cache_dir, music_dir)
+    assert result == cached
+
+
+def test_download_external_sync_local_file(tmp_path):
+    """_download_external_sync must find a local file when cache misses."""
+    from mammamiradio.downloader import _download_external_sync
+
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+    music_dir = tmp_path / "music"
+    music_dir.mkdir()
+    track = Track(title="Local Song", artist="Artist", duration_ms=180000)
+    local = music_dir / f"{track.title.lower()}.mp3"
+    local.touch()
+
+    with patch.dict("os.environ", {"MAMMAMIRADIO_ALLOW_YTDLP": "false"}):
+        result = _download_external_sync(track, cache_dir, music_dir)
+    assert result == local
+
+
+def test_download_external_sync_raises_when_ytdlp_disabled_standalone(tmp_path):
+    """_download_external_sync must raise RuntimeError when yt-dlp is disabled and no cache/local."""
+    from mammamiradio.downloader import _download_external_sync
+
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+    music_dir = tmp_path / "music"
+    music_dir.mkdir()
+    track = Track(title="Unavailable", artist="Nobody", duration_ms=180000)
+
+    with (
+        patch.dict("os.environ", {"MAMMAMIRADIO_ALLOW_YTDLP": "false"}),
+        pytest.raises(RuntimeError, match="yt-dlp is disabled"),
+    ):
+        _download_external_sync(track, cache_dir, music_dir)
+
+
+# ---------------------------------------------------------------------------
+# download_external_track: async wrapper
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_download_external_track_returns_path(tmp_path):
+    """download_external_track must return the path from the sync helper via executor."""
+    from mammamiradio.downloader import download_external_track
+
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+    track = Track(title="Async Song", artist="Artist", duration_ms=180000)
+    expected = cache_dir / f"{track.cache_key}.mp3"
+    expected.touch()
+
+    result = await download_external_track(track, cache_dir, music_dir=tmp_path / "music")
+    assert result == expected

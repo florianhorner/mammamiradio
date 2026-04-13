@@ -19,8 +19,12 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from mammamiradio.models import AdBrand, AdVoice, CampaignSpine, HostPersonality, PersonalityAxes
+from mammamiradio.tts import _EDGE_DEFAULT_FALLBACK_VOICE, _looks_like_openai_voice
 
 load_dotenv()
+
+_TRUTHY = {"true", "1", "yes"}
+_FALSY = {"false", "0", "no"}
 
 
 @dataclass
@@ -133,6 +137,46 @@ class StationConfig:
     ha_token: str = ""
     is_addon: bool = False
     allow_ytdlp: bool = False
+
+
+def _normalize_tts_voices(config: StationConfig) -> None:
+    """Sanitize host/ad voice config before runtime to prevent avoidable TTS errors."""
+    import logging
+
+    log = logging.getLogger(__name__)
+    for host in config.hosts:
+        host.engine = (host.engine or "edge").strip().lower()
+        if host.engine not in {"edge", "openai"}:
+            log.warning("Host '%s' has unknown engine '%s'; using edge", host.name, host.engine)
+            host.engine = "edge"
+
+        if host.engine == "openai" and not host.edge_fallback_voice:
+            host.edge_fallback_voice = _EDGE_DEFAULT_FALLBACK_VOICE
+            log.warning(
+                "Host '%s' uses OpenAI TTS but has no edge_fallback_voice; defaulting to %s",
+                host.name,
+                host.edge_fallback_voice,
+            )
+
+        if host.engine == "edge" and _looks_like_openai_voice(host.voice):
+            fallback = host.edge_fallback_voice or _EDGE_DEFAULT_FALLBACK_VOICE
+            log.warning(
+                "Host '%s' is configured with OpenAI voice '%s' on edge engine; using fallback '%s'",
+                host.name,
+                host.voice,
+                fallback,
+            )
+            host.voice = fallback
+
+    for voice in config.ads.voices:
+        if _looks_like_openai_voice(voice.voice):
+            log.warning(
+                "Ad voice '%s' uses OpenAI voice id '%s'; replacing with fallback '%s'",
+                voice.name,
+                voice.voice,
+                _EDGE_DEFAULT_FALLBACK_VOICE,
+            )
+            voice.voice = _EDGE_DEFAULT_FALLBACK_VOICE
 
 
 def _is_loopback_host(host: str) -> bool:
@@ -286,12 +330,16 @@ def load_config(path: str = "radio.toml") -> StationConfig:
     # Env-var overrides for HA add-on: HA_URL and HA_ENABLED
     if os.getenv("HA_URL"):
         ha_raw["url"] = os.getenv("HA_URL")
-    if os.getenv("HA_ENABLED", "").lower() in ("true", "1", "yes"):
+    ha_enabled_env = os.getenv("HA_ENABLED", "").strip().lower()
+    ha_force_disabled = ha_enabled_env in _FALSY
+    if ha_enabled_env in _TRUTHY:
         ha_raw["enabled"] = True
+    elif ha_force_disabled:
+        ha_raw["enabled"] = False
     ha_section = HomeAssistantSection(**ha_raw)
     ha_token = os.getenv("HA_TOKEN", "")
     # Auto-enable HA if token is present and URL is set (Docker/add-on convenience)
-    if ha_token and ha_section.url and not ha_section.enabled:
+    if ha_token and ha_section.url and not ha_section.enabled and not ha_force_disabled:
         ha_section.enabled = True
     if ha_section.enabled and not ha_token:
         import logging as _log
@@ -354,13 +402,17 @@ def load_config(path: str = "radio.toml") -> StationConfig:
         _log.getLogger(__name__).info("Running as Home Assistant addon")
         config.cache_dir = Path(os.getenv("MAMMAMIRADIO_CACHE_DIR", "/data/cache"))
         config.tmp_dir = Path(os.getenv("MAMMAMIRADIO_TMP_DIR", "/data/tmp"))
-        # Auto-enable HA context via Supervisor API
+        # Auto-enable HA context via Supervisor API unless explicitly disabled.
         supervisor_token = os.getenv("SUPERVISOR_TOKEN") or os.getenv("HASSIO_TOKEN", "")
-        if supervisor_token:
+        if supervisor_token and not ha_force_disabled:
             config.homeassistant.enabled = True
             config.homeassistant.url = "http://supervisor/core"
             config.ha_token = supervisor_token
+        elif ha_force_disabled:
+            config.homeassistant.enabled = False
+            config.ha_token = ""
 
+    _normalize_tts_voices(config)
     _validate(config)
     from mammamiradio.persona import set_arc_thresholds
 

@@ -36,6 +36,12 @@ def _mock_quality_gate():
         yield
 
 
+@pytest.fixture(autouse=True)
+def _mock_download_validation():
+    with patch(f"{MODULE}.validate_download", return_value=(True, "ok")):
+        yield
+
+
 def _make_state() -> StationState:
     return StationState(
         playlist=[
@@ -151,7 +157,7 @@ async def test_ad_break_segment_queued(tmp_path):
         patch(f"{MODULE}.next_segment_type", return_value=SegmentType.AD),
         patch(f"{MODULE}.write_ad", new_callable=AsyncMock, return_value=fake_script),
         patch(f"{MODULE}.synthesize_ad", new_callable=AsyncMock, return_value=_fake_path()),
-        patch(f"{MODULE}.synthesize", new_callable=AsyncMock),
+        patch(f"{MODULE}.synthesize", new_callable=AsyncMock) as mock_synthesize,
         patch(f"{MODULE}.generate_bumper_jingle", side_effect=_fake_path),
         patch(f"{MODULE}.concat_files", side_effect=_fake_path),
         patch(f"{MODULE}.fetch_home_context", new_callable=AsyncMock),
@@ -163,6 +169,8 @@ async def test_ad_break_segment_queued(tmp_path):
     assert seg.type == SegmentType.AD
     assert "brands" in seg.metadata
     assert "TestBrand" in seg.metadata["brands"]
+    assert mock_synthesize.call_count >= 2
+    assert all("engine" in call.kwargs for call in mock_synthesize.call_args_list)
 
 
 @pytest.mark.asyncio
@@ -187,6 +195,7 @@ async def test_ad_break_skipped_without_brands(tmp_path):
         patch(f"{MODULE}.next_segment_type", side_effect=alternating_type),
         patch(f"{MODULE}.download_track", new_callable=AsyncMock, return_value=_fake_path()),
         patch(f"{MODULE}.normalize", side_effect=_fake_path),
+        patch(f"{MODULE}.shutil.copy2"),
         patch(f"{MODULE}.fetch_home_context", new_callable=AsyncMock),
     ):
         await _run_until_queued(queue, state, config)
@@ -348,6 +357,7 @@ async def test_ad_quality_reject_resets_pacing_and_continues(tmp_path):
         patch(f"{MODULE}.validate_segment_audio", side_effect=_quality_side_effect),
         patch(f"{MODULE}.download_track", new_callable=AsyncMock, return_value=_fake_path()),
         patch(f"{MODULE}.normalize", side_effect=_fake_path),
+        patch(f"{MODULE}.shutil.copy2"),
         patch(f"{MODULE}.fetch_home_context", new_callable=AsyncMock),
     ):
         await _run_until_queued(queue, state, config)
@@ -390,6 +400,7 @@ async def test_error_recovery_silence_also_fails(tmp_path):
         ),
         patch(f"{MODULE}.generate_silence", side_effect=[RuntimeError("ffmpeg broken"), _fake_path]),
         patch(f"{MODULE}.normalize", side_effect=_fake_path),
+        patch(f"{MODULE}.shutil.copy2"),
         patch(f"{MODULE}.fetch_home_context", new_callable=AsyncMock),
     ):
         await _run_until_queued(queue, state, config, timeout=10.0)
@@ -431,6 +442,7 @@ async def test_success_resets_failure_counter(tmp_path):
         patch(f"{MODULE}.next_segment_type", return_value=SegmentType.MUSIC),
         patch(f"{MODULE}.download_track", new_callable=AsyncMock, return_value=_fake_path()),
         patch(f"{MODULE}.normalize", side_effect=_fake_path),
+        patch(f"{MODULE}.shutil.copy2"),
         patch(f"{MODULE}.fetch_home_context", new_callable=AsyncMock),
     ):
         await _run_until_queued(queue, state, config)
@@ -540,6 +552,7 @@ async def test_music_quality_reject_retries_next_track(tmp_path):
         patch(f"{MODULE}.next_segment_type", return_value=SegmentType.MUSIC),
         patch(f"{MODULE}.download_track", new_callable=AsyncMock, return_value=_fake_path()),
         patch(f"{MODULE}.normalize", side_effect=_fake_path),
+        patch(f"{MODULE}.shutil.copy2"),
         patch(f"{MODULE}.validate_segment_audio", side_effect=_quality_side_effect),
         patch(f"{MODULE}.fetch_home_context", new_callable=AsyncMock),
     ):
@@ -575,6 +588,7 @@ async def test_music_quality_circuit_breaker_after_3_rejections(tmp_path):
         patch(f"{MODULE}.next_segment_type", return_value=SegmentType.MUSIC),
         patch(f"{MODULE}.download_track", new_callable=AsyncMock, return_value=_fake_path()),
         patch(f"{MODULE}.normalize", side_effect=_fake_path),
+        patch(f"{MODULE}.shutil.copy2"),
         patch(f"{MODULE}.validate_segment_audio", side_effect=_always_reject),
         patch(f"{MODULE}.fetch_home_context", new_callable=AsyncMock),
     ):

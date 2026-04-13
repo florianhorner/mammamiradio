@@ -7,16 +7,18 @@ import datetime
 import logging
 import os
 import random
+import shutil
 from collections import deque
 from collections.abc import Callable
 from dataclasses import replace
+from functools import partial
 from pathlib import Path
 from uuid import uuid4
 
 from mammamiradio.audio_quality import AudioQualityError, AudioToolError, validate_segment_audio
 from mammamiradio.config import StationConfig
 from mammamiradio.context_cues import generate_impossible_line
-from mammamiradio.downloader import download_track, evict_cache_lru
+from mammamiradio.downloader import download_track, evict_cache_lru, validate_download
 from mammamiradio.ha_context import (
     GOLD_ENTITIES,
     HomeContext,
@@ -411,10 +413,29 @@ async def prewarm_first_segment(
     try:
         track = state.select_next_track()
         logger.info("Pre-warming first track: %s", track.display)
-        norm_path = config.tmp_dir / f"music_{uuid4().hex[:8]}.mp3"
         audio_path = await download_track(track, config.cache_dir, music_dir=Path("music"))
         loop = asyncio.get_running_loop()
-        await loop.run_in_executor(None, normalize, audio_path, norm_path)
+        ok, reason = await loop.run_in_executor(None, validate_download, audio_path)
+        if not ok:
+            logger.warning("Skipping prewarm track due to invalid download (%s): %s", track.display, reason)
+            return False
+        norm_cached = config.cache_dir / f"norm_{track.cache_key}_{config.audio.bitrate}k.mp3"
+        if norm_cached.exists():
+            norm_path = norm_cached
+            logger.info("Normalization cache hit (prewarm): %s", norm_cached.name)
+        else:
+            norm_path = config.tmp_dir / f"music_{uuid4().hex[:8]}.mp3"
+            _norm_fn = partial(normalize, audio_path, norm_path, config, loudnorm=True)
+            await loop.run_in_executor(None, _norm_fn)
+            try:
+                await loop.run_in_executor(None, shutil.copy2, str(norm_path), str(norm_cached))
+            except OSError as exc:
+                logger.warning(
+                    "Normalization cache write failed (prewarm) %s -> %s: %s",
+                    norm_path,
+                    norm_cached,
+                    exc,
+                )
         if not os.environ.get("MAMMAMIRADIO_SKIP_QUALITY_GATE"):
             try:
                 await loop.run_in_executor(None, validate_segment_audio, norm_path, SegmentType.MUSIC)
@@ -422,7 +443,8 @@ async def prewarm_first_segment(
                 logger.warning("Audio tool unavailable, skipping prewarm quality check: %s", exc)
             except AudioQualityError as exc:
                 logger.warning("Prewarm quality gate rejected track (%s): %s", norm_path.name, exc)
-                norm_path.unlink(missing_ok=True)
+                if norm_path != norm_cached:
+                    norm_path.unlink(missing_ok=True)
                 return False
         rationale = generate_track_rationale(track, source=state.playlist_source, listener=state.listener)
         crate = classify_track_crate(track, state.playlist_source)
@@ -440,6 +462,7 @@ async def prewarm_first_segment(
                 "crate": crate,
                 "audio_source": "prewarm",
             },
+            ephemeral=(norm_path != norm_cached),
         )
         await queue.put(segment)
         state.after_music(track)
@@ -599,11 +622,35 @@ async def run_producer(
                 track = state.select_next_track()
                 logger.info("Producing MUSIC: %s", track.display)
 
-                norm_path = config.tmp_dir / f"music_{uuid4().hex[:8]}.mp3"
-
                 audio_path = await download_track(track, config.cache_dir, music_dir=Path("music"))
                 loop = asyncio.get_running_loop()
-                await loop.run_in_executor(None, normalize, audio_path, norm_path)
+                ok, reason = await loop.run_in_executor(None, validate_download, audio_path)
+                if not ok:
+                    logger.warning("Skipping track due to invalid download (%s): %s", track.display, reason)
+                    continue
+
+                # Normalization cache: skip FFmpeg re-encode if we already have a
+                # normalized copy in cache_dir from a previous run. Named by track +
+                # bitrate so a config change busts the cache automatically.
+                norm_cached = config.cache_dir / f"norm_{track.cache_key}_{config.audio.bitrate}k.mp3"
+                if norm_cached.exists():
+                    norm_path = norm_cached
+                    norm_is_cached = True
+                    logger.debug("Normalization cache hit: %s", norm_cached.name)
+                else:
+                    norm_path = config.tmp_dir / f"music_{uuid4().hex[:8]}.mp3"
+                    norm_is_cached = False
+                    _norm_fn = partial(normalize, audio_path, norm_path, config, loudnorm=True)
+                    await loop.run_in_executor(None, _norm_fn)
+                    try:
+                        await loop.run_in_executor(None, shutil.copy2, str(norm_path), str(norm_cached))
+                    except OSError as exc:
+                        logger.warning(
+                            "Normalization cache write failed %s -> %s: %s",
+                            norm_path,
+                            norm_cached,
+                            exc,
+                        )
                 audio_source = "download"
 
                 # Quality gate: reject truncated/silent downloads before queueing.
@@ -629,7 +676,8 @@ async def run_producer(
                             _music_qg_rejections = 0
                         else:
                             logger.warning("Quality gate rejected music track (%s): %s", norm_path.name, exc)
-                            norm_path.unlink(missing_ok=True)
+                            if not norm_is_cached:
+                                norm_path.unlink(missing_ok=True)
                             continue
 
                 # Generate "Why this track?" rationale for listener UI
@@ -648,8 +696,10 @@ async def run_producer(
                         bleed_out = config.tmp_dir / f"bleed_{uuid4().hex[:8]}.mp3"
                         try:
                             await loop.run_in_executor(None, mix_quiet_bleed, norm_path, bleed_src, bleed_out)
-                            norm_path.unlink(missing_ok=True)
+                            if not norm_is_cached:
+                                norm_path.unlink(missing_ok=True)
                             norm_path = bleed_out
+                            norm_is_cached = False
                             logger.debug("Studio bleed applied to %s", norm_path.name)
                         except Exception as exc:
                             logger.debug("Studio bleed skipped: %s", exc)
@@ -669,6 +719,7 @@ async def run_producer(
                         "crate": crate,
                         "audio_source": audio_source,
                     },
+                    ephemeral=not norm_is_cached,
                 )
                 _bound_track = track
                 _set_last_music_file(norm_path)
@@ -928,11 +979,22 @@ async def run_producer(
 
                     # Use configured sweeper voice, or a random host
                     sweeper_voice = sb.sweeper_voice
+                    sweeper_engine = "edge"
+                    sweeper_fallback = ""
                     if not sweeper_voice:
-                        sweeper_voice = random.choice(config.hosts).voice
+                        sweeper_host = random.choice(config.hosts)
+                        sweeper_voice = sweeper_host.voice
+                        sweeper_engine = sweeper_host.engine
+                        sweeper_fallback = sweeper_host.edge_fallback_voice
                     loop = asyncio.get_running_loop()
 
-                    voice_task = synthesize(ident_text, sweeper_voice, voice_path)
+                    voice_task = synthesize(
+                        ident_text,
+                        sweeper_voice,
+                        voice_path,
+                        engine=sweeper_engine,
+                        edge_fallback_voice=sweeper_fallback,
+                    )
                     sting_task = loop.run_in_executor(None, generate_station_id_bed, sting_path, 3.0, sb.motif_notes)
                     await asyncio.gather(voice_task, sting_task)
 
@@ -1007,7 +1069,13 @@ async def run_producer(
                     loop = asyncio.get_running_loop()
                     # Voice + chime in parallel (independent)
                     await asyncio.gather(
-                        synthesize(time_text, host.voice, voice_path),
+                        synthesize(
+                            time_text,
+                            host.voice,
+                            voice_path,
+                            engine=host.engine,
+                            edge_fallback_voice=host.edge_fallback_voice,
+                        ),
                         loop.run_in_executor(None, generate_tone, chime_path, 1047, 0.3),
                     )
                     audio_path = config.tmp_dir / f"time_{uuid4().hex[:8]}.mp3"
@@ -1182,7 +1250,13 @@ async def run_producer(
                 outro_text = random.choice(AD_BREAK_OUTROS)
                 await asyncio.gather(
                     loop.run_in_executor(None, generate_bumper_jingle, bumper_out),
-                    synthesize(outro_text, outro_host.voice, outro_path),
+                    synthesize(
+                        outro_text,
+                        outro_host.voice,
+                        outro_path,
+                        engine=outro_host.engine,
+                        edge_fallback_voice=outro_host.edge_fallback_voice,
+                    ),
                 )
                 break_parts.append(bumper_out)
                 break_parts.append(outro_path)

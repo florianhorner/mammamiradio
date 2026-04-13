@@ -516,8 +516,16 @@ h1 {
   }
 
   .search-bar .btn,
-  .transport .btn {
+  .transport .btn-skip,
+  .transport .btn-stop,
+  .transport .btn-resume {
     width: 100%;
+  }
+  .transport .btn-util {
+    flex: 1 1 auto;
+    min-width: 0;
+    font-size: 0.78em;
+    padding: 0.35rem 0.4rem;
   }
 
   .pl-row,
@@ -868,15 +876,20 @@ function updateQueue(up,forcePending,mode){
     const forceType=segmentTypeKey(forcePending);
     parts.push(`<div class="queue-item"><span class="qi-num">!</span><span class="qi-badge" data-t="${esc(forceType)}">${esc(segmentBadge(forceType))}</span><span class="qi-label">Triggered - plays next</span><span class="force-badge">forced</span></div>`)
   }
-  if(up?.length){parts.push(...up.map((it,i)=>{
-    const linked = Number.isInteger(it.playlist_index) || !!it.spotify_id;
-    const typeKey=segmentTypeKey(it.type);
-    const clickAttrs = linked
-      ? `class="queue-item linked" onclick="focusPlaylistTrack(${Number.isInteger(it.playlist_index)?it.playlist_index:-1}, '${esc(it.spotify_id||'')}')"`
-      : 'class="queue-item"';
-    const reason = it.reason ? `<div class="qi-reason">${esc(it.reason)}</div>` : '';
-    return `<div ${clickAttrs}><span class="qi-num">${i+1}</span><span class="qi-badge" data-t="${esc(typeKey)}">${esc(segmentBadge(typeKey))}</span><span class="qi-label">${esc(it.label||it.type)}</span></div>${reason}`;
-  }))}
+  if(up?.length){
+    const musicItems=up.filter(it=>segmentTypeKey(it.type)==='music');
+    const nonMusicCount=up.length-musicItems.length;
+    parts.push(...musicItems.map((it,i)=>{
+      const linked = Number.isInteger(it.playlist_index) || !!it.spotify_id;
+      const typeKey=segmentTypeKey(it.type);
+      const clickAttrs = linked
+        ? `class="queue-item linked" onclick="focusPlaylistTrack(${Number.isInteger(it.playlist_index)?it.playlist_index:-1}, '${esc(it.spotify_id||'')}')"`
+        : 'class="queue-item"';
+      const reason = it.reason ? `<div class="qi-reason">${esc(it.reason)}</div>` : '';
+      return `<div ${clickAttrs}><span class="qi-num">${i+1}</span><span class="qi-badge" data-t="${esc(typeKey)}">${esc(segmentBadge(typeKey))}</span><span class="qi-label">${esc(it.label||it.type)}</span></div>${reason}`;
+    }));
+    if(nonMusicCount>0)parts.push(`<div class="empty" style="padding:6px 0;font-size:10px">+${nonMusicCount} non-music segment${nonMusicCount>1?'s':''} (banter/ads) queued</div>`);
+  }
   meta.textContent=(up?.length||0)+' upcoming';
   el.innerHTML=parts.join('');
 }
@@ -1236,13 +1249,13 @@ function toggleSection(head){head.classList.toggle('open');head.nextElementSibli
 // ── Polling ──
 async function refresh(){
   try{
-    const [sr,pr,cr,or,lrr]=await Promise.all([fetch('/status',{headers:H()}),fetch('/public-status'),fetch('/api/capabilities',{headers:H()}),fetch('/api/setup/status',{headers:H()}),fetch('/api/listener-requests',{headers:H()})]);
-    _st=await sr.json();_pub=await pr.json();
+    const [sr,cr,or,lrr]=await Promise.all([fetch('/status',{headers:H()}),fetch('/api/capabilities',{headers:H()}),fetch('/api/setup/status',{headers:H()}),fetch('/api/listener-requests',{headers:H()})]);
+    _st=await sr.json();_pub=_st;
     _caps=await cr.json();
     const setup=await or.json();
     const lrData=lrr.ok?await lrr.json():{requests:[]};
-    updateNow(_pub.now_streaming);updateQueue(_pub.upcoming,_st.force_pending,_pub.upcoming_mode);updateSystems(_caps,_st,_pub);updateRecent(_st);
-    updateLog(_pub.stream_log);updatePl(_st.playlist||[]);
+    updateNow(_st.now_streaming);updateQueue(_st.upcoming,_st.force_pending,_st.upcoming_mode);updateSystems(_caps,_st,_st);updateRecent(_st);
+    updateLog(_st.stream_log);updatePl(_st.playlist||[]);
     updateListenerRequests(lrData.requests||[]);
     renderSetup(setup);
     updatePaceCounters(_st.pacing);
@@ -1265,13 +1278,21 @@ function updateEngineRoom(st,caps){
   const qd=st.queue_depth!=null?st.queue_depth:'—';
   const pl=st.playlist?st.playlist.length:'—';
   const listeners=st.listeners?st.listeners.active:(st.listeners_active||0);
+  const con=st.consumption||{};
+  const apiCalls=con.api_calls||0;
+  const inTok=con.input_tokens||0;
+  const outTok=con.output_tokens||0;
+  const cost=con.api_cost_estimate_usd!=null?'$'+con.api_cost_estimate_usd.toFixed(4):'—';
+  const ttsCh=con.tts_characters||0;
   rt.innerHTML=[
     'Uptime: <strong>'+uptime+'</strong>',
     'Queue depth: <strong>'+qd+'</strong> segments buffered',
     'Playlist: <strong>'+pl+'</strong> tracks',
     'Listeners: <strong>'+listeners+'</strong> (peak: '+(st.listeners?st.listeners.peak:'—')+')',
     'Segments produced: <strong>'+(st.segments_produced||'—')+'</strong>',
-  ].join('<br>');
+    apiCalls>0?'AI calls: <strong>'+apiCalls+'</strong> ('+inTok.toLocaleString()+' in / '+outTok.toLocaleString()+' out tokens) · est. <strong>'+cost+'</strong>':'AI calls: <strong>0</strong>',
+    ttsCh>0?'TTS characters: <strong>'+ttsCh.toLocaleString()+'</strong>':'',
+  ].filter(Boolean).join('<br>');
 
   const seg=document.getElementById('engineSegments');
   const log=st.produced_log||[];
@@ -1310,8 +1331,14 @@ function updateEngineRoom(st,caps){
 
 // ── Keyboard shortcuts ──
 document.addEventListener('keydown',e=>{
-  if(e.target.tagName==='INPUT')return;
-  switch(e.key.toLowerCase()){case's':doSkip();break;case'b':doTrigger('banter');break;case'a':doTrigger('ad');break;case'n':doTrigger('news_flash');break}
+  const key=e.key.toLowerCase();
+  if(!['s','b','a','n'].includes(key))return;
+  // Allow shortcuts to escape the search filter; block them inside all other inputs.
+  if(e.target.tagName==='INPUT'||e.target.tagName==='TEXTAREA'){
+    if(e.target.id==='searchInput'){e.preventDefault();e.target.blur();}
+    else return;
+  }
+  switch(key){case's':doSkip();break;case'b':doTrigger('banter');break;case'a':doTrigger('ad');break;case'n':doTrigger('news_flash');break}
 });
 
 // ── Init: restore last active tab ──

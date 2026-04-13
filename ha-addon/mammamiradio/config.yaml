@@ -1,7 +1,7 @@
 name: Mamma Mi Radio
 description: AI-powered Italian radio station — streams Claude-generated banter, absurd ads, and music from charts or local files. Hosts reference your Home Assistant state.
 slug: mammamiradio
-version: 2.9.0
+version: 2.9.1
 url: https://github.com/florianhorner/mammamiradio
 image: ghcr.io/florianhorner/mammamiradio-addon-{arch}
 arch:
@@ -29,9 +29,11 @@ options:
   station_name: "Mamma Mi Radio"
   claude_model: "claude-haiku-4-5-20251001"
   admin_token: ""
+  enable_home_assistant: true
 schema:
   anthropic_api_key: password?
   openai_api_key: password?
   station_name: str?
   claude_model: list(claude-haiku-4-5-20251001|claude-sonnet-4-5-20250514|claude-opus-4-5-20250514)?
   admin_token: password?
+  enable_home_assistant: bool?
