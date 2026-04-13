@@ -933,17 +933,17 @@ async def write_transition(
     time_hint = f"It's {now.strftime('%H:%M')}, {'weekend' if now.weekday() >= 5 else 'weekday'}."
 
     # Style-specific instruction injected into the prompt
-    _ECHO_STYLE_INSTRUCTION = (
+    _echo_style_instruction = (
         "STYLE: Echo the song's energy — finish a phrase like you're still INSIDE the song's feeling, "
         "then pivot naturally to what's next. Not literal singing — rhythm and phrasing that mirrors "
         "the track's vibe. Example melancholic: '...sì.' (pause) 'Allora.' "
         "Example upbeat: '—e dai, basta così—' before the pivot."
     )
-    _REACT_STYLE_INSTRUCTION = (
+    _react_style_instruction = (
         "STYLE: React to the song naturally — love it, hate it, or have a conspiracy theory about it. "
         "Then pivot to what's next. Generic 'bella canzone' is banned."
     )
-    style_instruction = _ECHO_STYLE_INSTRUCTION if style == "echo" else _REACT_STYLE_INSTRUCTION
+    style_instruction = _echo_style_instruction if style == "echo" else _react_style_instruction
 
     prompt = f"""Write a SHORT transition line for {host.name} to say OVER the end of the current song.
 This plays while the music is fading out — the classic radio DJ move.

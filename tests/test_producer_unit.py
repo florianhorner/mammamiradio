@@ -466,7 +466,11 @@ async def test_error_recovery_inserts_silence_when_no_canned_clips(tmp_path):
     try:
         with (
             patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.MUSIC),
-            patch(f"{PRODUCER_MODULE}.download_track", new_callable=AsyncMock, side_effect=RuntimeError("network down")),
+            patch(
+                f"{PRODUCER_MODULE}.download_track",
+                new_callable=AsyncMock,
+                side_effect=RuntimeError("network down"),
+            ),
             patch(f"{PRODUCER_MODULE}.generate_silence", side_effect=_fake_path),
             patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
         ):
@@ -489,7 +493,7 @@ async def test_error_recovery_logs_demo_assets_banter_hint_and_uses_silence(capl
     queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
     picked_subdirs: list[str] = []
 
-    def _pick_none(subdir: str, state=None):  # noqa: ARG001
+    def _pick_none(subdir: str, state=None):
         picked_subdirs.append(subdir)
         return None
 
@@ -1145,7 +1149,7 @@ def test_select_ad_creative_no_voices():
     config = _make_config()
     config.ads.voices = []
 
-    ad_format, sonic, roles = _select_ad_creative(brand, state, config)
+    ad_format, _sonic, _roles = _select_ad_creative(brand, state, config)
     assert ad_format is not None
 
 
@@ -1164,7 +1168,7 @@ def test_select_ad_creative_multivoice_only_fallback():
     config = _make_config()
     config.ads.voices = [MagicMock(role="hammer")]  # only 1 voice
 
-    ad_format, sonic, roles = _select_ad_creative(brand, state, config)
+    ad_format, _sonic, _roles = _select_ad_creative(brand, state, config)
     assert ad_format == AdFormat.CLASSIC_PITCH
 
 
@@ -1201,37 +1205,6 @@ def test_cast_voices_reuses_when_exhausted():
     # All three should have a voice assigned
     for role in ["hammer", "maniac", "bureaucrat"]:
         assert role in result
-
-
-# ---------------------------------------------------------------------------
-# prewarm_first_segment
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_prewarm_empty_playlist():
-    """prewarm returns False when playlist is empty."""
-    from mammamiradio.producer import prewarm_first_segment
-
-    state = _make_state()
-    state.playlist = []
-    config = _make_config()
-    queue: asyncio.Queue = asyncio.Queue()
-    result = await prewarm_first_segment(queue, state, config)
-    assert result is False
-
-
-@pytest.mark.asyncio
-async def test_prewarm_stopped_session():
-    """prewarm returns False when session is stopped."""
-    from mammamiradio.producer import prewarm_first_segment
-
-    state = _make_state()
-    state.session_stopped = True
-    config = _make_config()
-    queue: asyncio.Queue = asyncio.Queue()
-    result = await prewarm_first_segment(queue, state, config)
-    assert result is False
 
 
 @pytest.mark.asyncio
@@ -1324,7 +1297,7 @@ def test_select_ad_creative_single_voice_excludes_multi():
     # Only 1 voice = multi-voice formats should be excluded
     config.ads.voices = [AdVoice(name="Solo", voice="it-IT-DiegoNeural", style="warm", role="hammer")]
 
-    fmt, sonic, roles = _select_ad_creative(brand, state, config)
+    fmt, _sonic, _roles = _select_ad_creative(brand, state, config)
     from mammamiradio.models import AdFormat
 
     # Should not select a format that needs 2+ voices

@@ -572,9 +572,8 @@ def test_download_ytdlp_raises_when_no_output_file(cache_dir):
     mock_yt_dlp = MagicMock()
     mock_yt_dlp.YoutubeDL = _FakeYoutubeDL
 
-    with patch.dict(sys.modules, {"yt_dlp": mock_yt_dlp}):
-        with pytest.raises(FileNotFoundError):
-            _download_ytdlp(track, cache_dir)
+    with patch.dict(sys.modules, {"yt_dlp": mock_yt_dlp}), pytest.raises(FileNotFoundError):
+        _download_ytdlp(track, cache_dir)
 
 
 def test_search_ytdlp_metadata_returns_empty_on_extract_exception():

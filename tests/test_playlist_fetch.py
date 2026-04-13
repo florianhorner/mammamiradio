@@ -339,7 +339,7 @@ def test_local_music_skipped_when_dir_missing(config, monkeypatch):
         patch("mammamiradio.playlist._fetch_current_italy_charts", return_value=chart_tracks),
         patch("mammamiradio.playlist._load_local_music_tracks", return_value=[]),
     ):
-        tracks, source, _err = fetch_startup_playlist(config)
+        tracks, _source, _err = fetch_startup_playlist(config)
 
     assert len(tracks) == 1
     assert tracks[0].title == "Solo Chart"

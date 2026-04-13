@@ -72,18 +72,18 @@ def _load_local_music_tracks(music_dir: Path) -> list[Track]:
     otherwise the stem is used as the title with artist "Unknown".  Silently
     returns an empty list if the directory does not exist or contains no MP3s.
     """
-    _MAX_LOCAL_TRACKS = 200
+    _max_local_tracks = 200
     if not music_dir.exists():
         return []
     tracks: list[Track] = []
     all_mp3s = sorted(music_dir.glob("*.mp3"))
-    if len(all_mp3s) > _MAX_LOCAL_TRACKS:
+    if len(all_mp3s) > _max_local_tracks:
         logger.warning(
             "music/ contains %d MP3s; capping at %d to avoid blocking the event loop",
             len(all_mp3s),
-            _MAX_LOCAL_TRACKS,
+            _max_local_tracks,
         )
-        all_mp3s = all_mp3s[:_MAX_LOCAL_TRACKS]
+        all_mp3s = all_mp3s[:_max_local_tracks]
     for mp3 in all_mp3s:
         stem = mp3.stem.strip()
         if " - " in stem:
