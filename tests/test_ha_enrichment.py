@@ -184,3 +184,41 @@ def test_diff_states_numeric_no_translation_passthrough():
     # Raw values passed through, not translated
     assert result[0].old_state == "0"
     assert result[0].new_state == "1200"
+
+
+def test_diff_states_skips_ignored_states():
+    """States in IGNORED_STATES (unknown, unavailable) must be silently skipped."""
+    old_states = {
+        "switch.bar_kaffeemaschine_steckdose": {"state": "unknown", "attributes": {}},
+    }
+    new_states = {
+        "switch.bar_kaffeemaschine_steckdose": {"state": "on", "attributes": {}},
+    }
+    events = diff_states(
+        old_states,
+        new_states,
+        existing_events=None,
+        entity_labels=ENTITY_LABELS,
+        state_translations=STATE_TRANSLATIONS,
+        now=1_000.0,
+    )
+    assert list(events) == []
+
+
+def test_diff_states_skips_entity_with_no_label():
+    """Entities that have no entry in entity_labels are silently skipped."""
+    old_states = {
+        "sensor.completely_unlabeled_entity": {"state": "off", "attributes": {}},
+    }
+    new_states = {
+        "sensor.completely_unlabeled_entity": {"state": "on", "attributes": {}},
+    }
+    events = diff_states(
+        old_states,
+        new_states,
+        existing_events=None,
+        entity_labels=ENTITY_LABELS,  # won't contain this entity_id
+        state_translations=STATE_TRANSLATIONS,
+        now=1_000.0,
+    )
+    assert list(events) == []
