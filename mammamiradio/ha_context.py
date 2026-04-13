@@ -12,6 +12,7 @@ import logging
 import time
 from collections import deque
 from dataclasses import dataclass, field
+from typing import TypedDict
 
 import httpx
 
@@ -225,6 +226,30 @@ REACTIVE_TRIGGERS: list[tuple[str, str, str, int]] = [
 _reactive_cooldowns: dict[str, float] = {}
 
 
+class ThresholdTrigger(TypedDict):
+    """Reactive trigger based on a numeric sensor crossing a threshold."""
+
+    entity_id: str
+    threshold: float
+    direction: str  # "above" or "below"
+    directive: str
+    cooldown: int
+
+
+THRESHOLD_TRIGGERS: list[ThresholdTrigger] = [
+    {
+        "entity_id": "sensor.kuche_kaffeemaschine_steckdose_power",
+        "threshold": 50.0,
+        "direction": "above",
+        "directive": (
+            "La caffettiera si è appena accesa! Caffè in preparazione — "
+            "commentate il momento in modo naturale. Breve e caldo."
+        ),
+        "cooldown": 3600,
+    },
+]
+
+
 @dataclass
 class HomeContext:
     """Snapshot of interesting home state, formatted for scriptwriter."""
@@ -313,6 +338,20 @@ def _format_state(entity_id: str, state_data: dict) -> str | None:
             watts = float(state)
         except (ValueError, TypeError):
             return f"{label}: —"
+        # Coffee machine: qualitative activity phases
+        if entity_id == "sensor.kuche_kaffeemaschine_steckdose_power":
+            if watts > 100:
+                return f"{label}: in funzione"
+            if watts > 5:
+                return f"{label}: riscaldamento"
+            return f"{label}: fredda"
+        # Total household power: qualitative load context
+        if entity_id == "sensor.haushalt_stromverbrauch_gesamt":
+            if watts < 200:
+                return f"{label}: casa tranquilla ({watts:.0f} W)"
+            if watts > 2000:
+                return f"{label}: tutto acceso ({watts:.0f} W)"
+            return f"{label}: normale ({watts:.0f} W)"
         unit = attrs.get("unit_of_measurement", "W")
         if watts < 1:
             return f"{label}: inattivo"
@@ -380,6 +419,8 @@ def classify_home_mood(states: dict[str, dict]) -> str:
         return "Qualcuno sta facendo la doccia"
     if _power_watts("sensor.bar_bali_boot_steckdose_power") > 10:
         return "Lavatrice in funzione"
+    if _power_watts("sensor.kuche_kaffeemaschine_steckdose_power") > 50:
+        return "Caffè in preparazione"
     if _state("media_player.samsung_s95ca_65") == "playing" and now_hour >= 18:
         return "Serata cinema"
     if (
@@ -500,10 +541,19 @@ async def fetch_weather_forecast(ha_url: str, ha_token: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-def check_reactive_triggers(events: deque[HomeEvent]) -> str | None:
-    """Scan recent events for reactive triggers.
+def check_reactive_triggers(
+    events: deque[HomeEvent],
+    current_states: dict[str, dict] | None = None,
+) -> str | None:
+    """Scan recent events and current sensor states for reactive triggers.
 
-    Only considers events less than 2 minutes old. Respects per-trigger cooldowns.
+    Event-based triggers (REACTIVE_TRIGGERS) only consider events less than 2
+    minutes old. Threshold triggers (THRESHOLD_TRIGGERS) check the live sensor
+    value against a wattage threshold each call; the cooldown prevents re-firing.
+    Both share the module-level _reactive_cooldowns dict with namespaced keys to
+    avoid collision: event keys use "entity:state", threshold keys use
+    "entity:threshold:value".
+
     Returns the first matching directive text, or None.
     """
     now = time.time()
@@ -522,6 +572,28 @@ def check_reactive_triggers(events: deque[HomeEvent]) -> str | None:
                 continue
             _reactive_cooldowns[cooldown_key] = now
             return directive
+
+    if current_states is not None:
+        for trigger in THRESHOLD_TRIGGERS:
+            eid = trigger["entity_id"]
+            state_data = current_states.get(eid, {})
+            try:
+                val = float(state_data.get("state", "0"))
+            except (ValueError, TypeError):
+                continue
+            threshold = trigger["threshold"]
+            direction = trigger["direction"]
+            crossed = (direction == "above" and val > threshold) or (
+                direction == "below" and val < threshold
+            )
+            if not crossed:
+                continue
+            cooldown_key = f"{eid}:threshold:{threshold}"
+            if now - _reactive_cooldowns.get(cooldown_key, 0.0) < trigger["cooldown"]:
+                continue
+            _reactive_cooldowns[cooldown_key] = now
+            return trigger["directive"]
+
     return None
 
 

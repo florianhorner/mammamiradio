@@ -8,6 +8,10 @@ The current version source of truth is `pyproject.toml`.
 
 ### Added
 
+- **Threshold reactive triggers**: New `ThresholdTrigger` type and `THRESHOLD_TRIGGERS` list in `ha_context.py`. `check_reactive_triggers` now accepts `current_states` and fires reactive banter when numeric sensor values cross a wattage threshold. First trigger: coffee machine (`> 50W` → "La caffettiera si è appena accesa!"). Cooldown-keyed separately from event triggers to avoid collision.
+- **Coffee machine mood**: `classify_home_mood` now returns "Caffè in preparazione" when coffee machine power exceeds 50W at any time of day (not just morning via switch check).
+- **Qualitative power formatting**: `_format_state` now translates coffee machine power to `in funzione / riscaldamento / fredda` and total household power to `casa tranquilla / normale / tutto acceso` instead of raw watts.
+- **Mood prompt examples**: `_MOOD_EXAMPLES` in `scriptwriter.py` now covers all 11 moods including the 6 previously uncovered (Caffè in preparazione, La casa si sta svegliando, Stanno svegliandosi, Il robot sta pulendo, Casa vuota, Qualcuno sta facendo la doccia).
 - **Deeper HA context**: 10 new entities (room-level light groups, power sensors, star projectors, terrace lights). 4 new mood classifications (Atmosfera rilassata, Lavatrice in funzione, Serata sotto le stelle, La casa si sta svegliando). Terrace lights reactive trigger.
 - **Casa dashboard card**: Ambient awareness card showing HA mood, weather, and recent events on the listener dashboard. Appears only when HA is connected and has data. Fades in/out with eyebrow pulse on updates. WCAG AA compliant.
 - **`ha_moments` API**: `/public-status` now includes `ha_moments` object with mood, weather, and last event (person-filtered, staleness-guarded). `/status` includes full `ha_details` for admin.

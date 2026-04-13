@@ -698,3 +698,175 @@ def test_reactive_new_trigger_cooldown():
     # Second call within cooldown should not fire
     result2 = check_reactive_triggers(events)
     assert result2 is None
+
+
+# ---------------------------------------------------------------------------
+# ThresholdTrigger — check_reactive_triggers with current_states
+# ---------------------------------------------------------------------------
+
+
+def test_threshold_trigger_fires_when_above():
+    import mammamiradio.ha_context as _hc
+
+    _hc._reactive_cooldowns.clear()
+    events: deque[HomeEvent] = deque(maxlen=20)
+    current_states = {
+        "sensor.kuche_kaffeemaschine_steckdose_power": {"state": "120"},
+    }
+    result = check_reactive_triggers(events, current_states)
+    assert result is not None
+    assert "caffettiera" in result.lower()
+
+
+def test_threshold_trigger_no_fire_when_below():
+    import mammamiradio.ha_context as _hc
+
+    _hc._reactive_cooldowns.clear()
+    events: deque[HomeEvent] = deque(maxlen=20)
+    current_states = {
+        "sensor.kuche_kaffeemaschine_steckdose_power": {"state": "5"},
+    }
+    result = check_reactive_triggers(events, current_states)
+    assert result is None
+
+
+def test_threshold_trigger_cooldown_respected():
+    import mammamiradio.ha_context as _hc
+
+    _hc._reactive_cooldowns.clear()
+    events: deque[HomeEvent] = deque(maxlen=20)
+    current_states = {
+        "sensor.kuche_kaffeemaschine_steckdose_power": {"state": "120"},
+    }
+    result1 = check_reactive_triggers(events, current_states)
+    assert result1 is not None
+    result2 = check_reactive_triggers(events, current_states)
+    assert result2 is None
+
+
+def test_threshold_trigger_no_collision_with_string_trigger_cooldown():
+    """Threshold and string trigger cooldown keys must not share namespace."""
+    import mammamiradio.ha_context as _hc
+
+    _hc._reactive_cooldowns.clear()
+    # Fire the threshold trigger
+    current_states = {
+        "sensor.kuche_kaffeemaschine_steckdose_power": {"state": "120"},
+    }
+    events: deque[HomeEvent] = deque(maxlen=20)
+    result = check_reactive_triggers(events, current_states)
+    assert result is not None
+    # Threshold cooldown key uses "entity:threshold:value" format
+    threshold_key = "sensor.kuche_kaffeemaschine_steckdose_power:threshold:50.0"
+    assert threshold_key in _hc._reactive_cooldowns
+    # String trigger key format "entity:state" must NOT be present
+    string_key = "sensor.kuche_kaffeemaschine_steckdose_power:on"
+    assert string_key not in _hc._reactive_cooldowns
+
+
+def test_threshold_trigger_no_current_states_backwards_compat():
+    """Omitting current_states should only check event triggers (no crash)."""
+    import mammamiradio.ha_context as _hc
+
+    _hc._reactive_cooldowns.clear()
+    events: deque[HomeEvent] = deque(maxlen=20)
+    result = check_reactive_triggers(events)
+    assert result is None
+
+
+def test_threshold_trigger_non_numeric_state_ignored():
+    import mammamiradio.ha_context as _hc
+
+    _hc._reactive_cooldowns.clear()
+    events: deque[HomeEvent] = deque(maxlen=20)
+    current_states = {
+        "sensor.kuche_kaffeemaschine_steckdose_power": {"state": "unknown"},
+    }
+    result = check_reactive_triggers(events, current_states)
+    assert result is None
+
+
+def test_threshold_trigger_missing_entity_ignored():
+    import mammamiradio.ha_context as _hc
+
+    _hc._reactive_cooldowns.clear()
+    events: deque[HomeEvent] = deque(maxlen=20)
+    current_states: dict = {}  # entity not present
+    result = check_reactive_triggers(events, current_states)
+    assert result is None
+
+
+def test_threshold_trigger_already_above_after_cooldown_expires():
+    """Level-based: fires again after cooldown even if sensor never dipped below."""
+    import mammamiradio.ha_context as _hc
+
+    _hc._reactive_cooldowns.clear()
+    events: deque[HomeEvent] = deque(maxlen=20)
+    current_states = {
+        "sensor.kuche_kaffeemaschine_steckdose_power": {"state": "120"},
+    }
+    result1 = check_reactive_triggers(events, current_states)
+    assert result1 is not None
+    # Manually expire cooldown
+    threshold_key = "sensor.kuche_kaffeemaschine_steckdose_power:threshold:50.0"
+    _hc._reactive_cooldowns[threshold_key] = 0.0
+    result2 = check_reactive_triggers(events, current_states)
+    assert result2 is not None
+
+
+# ---------------------------------------------------------------------------
+# Coffee machine mood + power formatter
+# ---------------------------------------------------------------------------
+
+
+def test_classify_home_mood_caffe_in_preparazione():
+    states = {
+        "sensor.kuche_kaffeemaschine_steckdose_power": {
+            "state": "120",
+            "attributes": {"device_class": "power"},
+        },
+    }
+    result = classify_home_mood(states)
+    assert result == "Caffè in preparazione"
+
+
+def test_format_state_coffee_machine_in_funzione():
+    state_data = {"state": "150", "attributes": {"device_class": "power"}}
+    result = _format_state("sensor.kuche_kaffeemaschine_steckdose_power", state_data)
+    assert result is not None
+    assert "in funzione" in result
+
+
+def test_format_state_coffee_machine_riscaldamento():
+    state_data = {"state": "60", "attributes": {"device_class": "power"}}
+    result = _format_state("sensor.kuche_kaffeemaschine_steckdose_power", state_data)
+    assert result is not None
+    assert "riscaldamento" in result
+
+
+def test_format_state_coffee_machine_fredda():
+    state_data = {"state": "0.5", "attributes": {"device_class": "power"}}
+    result = _format_state("sensor.kuche_kaffeemaschine_steckdose_power", state_data)
+    assert result is not None
+    assert "fredda" in result
+
+
+def test_format_state_total_power_tranquilla():
+    state_data = {"state": "150", "attributes": {"device_class": "power"}}
+    result = _format_state("sensor.haushalt_stromverbrauch_gesamt", state_data)
+    assert result is not None
+    assert "tranquilla" in result
+
+
+def test_format_state_total_power_tutto_acceso():
+    state_data = {"state": "2500", "attributes": {"device_class": "power"}}
+    result = _format_state("sensor.haushalt_stromverbrauch_gesamt", state_data)
+    assert result is not None
+    assert "tutto acceso" in result
+
+
+def test_format_state_total_power_normale():
+    state_data = {"state": "800", "attributes": {"device_class": "power"}}
+    result = _format_state("sensor.haushalt_stromverbrauch_gesamt", state_data)
+    assert result is not None
+    assert "normale" in result

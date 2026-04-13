@@ -579,7 +579,7 @@ async def run_producer(
                 state.ha_last_event_ts = 0.0
             # Phase 4: only set directive if none is pending (first match wins)
             if not state.ha_pending_directive:
-                directive = check_reactive_triggers(ha_cache.events)
+                directive = check_reactive_triggers(ha_cache.events, ha_cache.raw_states)
                 if directive:
                     state.ha_pending_directive = directive
 
