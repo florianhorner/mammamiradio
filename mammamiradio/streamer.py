@@ -573,8 +573,20 @@ async def run_playback_loop(app) -> None:
         try:
             segment: Segment = await asyncio.wait_for(segment_queue.get(), timeout=30.0)
         except TimeoutError:
-            logger.warning("Queue empty for 30s, waiting...")
-            continue
+            # Serve a canned clip instead of dead air while the producer catches up
+            from mammamiradio.producer import _pick_canned_clip
+
+            fallback = _pick_canned_clip("banter", state=state) or _pick_canned_clip("welcome")
+            if fallback:
+                logger.info("Queue empty — serving fallback clip: %s", fallback.name)
+                segment = Segment(
+                    type=SegmentType.BANTER,
+                    path=fallback,
+                    metadata={"type": "banter", "canned": True, "fallback": True},
+                )
+            else:
+                logger.warning("Queue empty for 30s, no fallback clips available")
+                continue
 
         state.on_stream_segment(segment)
         if state.queued_segments:

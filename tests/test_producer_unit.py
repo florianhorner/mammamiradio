@@ -1284,7 +1284,7 @@ async def test_prewarm_success(tmp_path):
 
     with (
         patch(f"{PRODUCER_MODULE}.download_track", return_value=fake),
-        patch(f"{PRODUCER_MODULE}.normalize", side_effect=lambda src, dst: dst.write_bytes(b"\x00" * 500)),
+        patch(f"{PRODUCER_MODULE}.normalize", side_effect=lambda src, dst, *a, **kw: dst.write_bytes(b"\x00" * 500)),
         patch(f"{PRODUCER_MODULE}.generate_track_rationale", return_value="great track"),
         patch(f"{PRODUCER_MODULE}.classify_track_crate", return_value="charts"),
     ):

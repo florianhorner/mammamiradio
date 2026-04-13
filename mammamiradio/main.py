@@ -123,10 +123,16 @@ async def startup():
     app.state.config = config
     app.state.start_time = time.time()
 
-    # Pre-produce the first music segment in the background so app startup is
-    # instant. If a listener arrives before prewarm finishes, the producer's
-    # idle-resume logic queues a canned clip as an immediate fallback.
-    asyncio.create_task(prewarm_first_segment(queue, state, config))
+    # Pre-produce music segments in the background so app startup is instant.
+    # If a listener arrives before prewarm finishes, the producer's idle-resume
+    # logic queues a canned clip as an immediate fallback.
+    # On addon hardware (Pi-class), pre-warm 2 tracks since normalize is ~75s each.
+    async def _prewarm_multiple():
+        await prewarm_first_segment(queue, state, config)
+        if config.is_addon:
+            await prewarm_first_segment(queue, state, config)
+
+    asyncio.create_task(_prewarm_multiple())
 
     _playback_task = asyncio.create_task(run_playback_loop(app))
     _producer_task = asyncio.create_task(run_producer(queue, state, config, skip_event=app.state.skip_event))

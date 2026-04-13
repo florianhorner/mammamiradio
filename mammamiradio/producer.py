@@ -8,6 +8,7 @@ import logging
 import os
 import random
 import shutil
+from functools import partial
 from collections import deque
 from collections.abc import Callable
 from dataclasses import replace
@@ -420,7 +421,8 @@ async def prewarm_first_segment(
             logger.info("Normalization cache hit (prewarm): %s", norm_cached.name)
         else:
             norm_path = config.tmp_dir / f"music_{uuid4().hex[:8]}.mp3"
-            await loop.run_in_executor(None, normalize, audio_path, norm_path)
+            _norm_fn = partial(normalize, audio_path, norm_path, config, loudnorm=not config.is_addon)
+            await loop.run_in_executor(None, _norm_fn)
             await loop.run_in_executor(None, shutil.copy2, str(norm_path), str(norm_cached))
         if not os.environ.get("MAMMAMIRADIO_SKIP_QUALITY_GATE"):
             try:
@@ -621,7 +623,10 @@ async def run_producer(
                 else:
                     norm_path = config.tmp_dir / f"music_{uuid4().hex[:8]}.mp3"
                     norm_is_cached = False
-                    await loop.run_in_executor(None, normalize, audio_path, norm_path)
+                    # On HA addon hardware (Pi-class), skip loudnorm for ~3x faster
+                    # normalization. Volume consistency is less important than dead air.
+                    _norm_fn = partial(normalize, audio_path, norm_path, config, loudnorm=not config.is_addon)
+                    await loop.run_in_executor(None, _norm_fn)
                     await loop.run_in_executor(None, shutil.copy2, str(norm_path), str(norm_cached))
                 audio_source = "download"
 
