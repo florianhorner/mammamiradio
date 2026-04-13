@@ -4,7 +4,7 @@ All notable changes to `mammamiradio` are documented here.
 
 The current version source of truth is `pyproject.toml`.
 
-## [Unreleased]
+## [2.9.0] - 2026-04-13
 
 ### Added
 
@@ -28,8 +28,13 @@ The current version source of truth is `pyproject.toml`.
 - **Listener song request ordering**: Background downloads now stay attached to their own pending request until that request reaches the head of the queue. Later requests can no longer overwrite `pinned_track` and play before the earlier dedication.
 - **Strict external-track queueing**: `/api/playlist/add-external` now rejects requests when yt-dlp downloads are disabled instead of returning success after generating silence.
 - **`/api/playlist/add-external` payload validation**: Non-object JSON payloads now return a 400 instead of raising `AttributeError`.
-- **Dead code cleanup**: Removed unused `_diff_states()` and `_build_events_summary()` from `ha_context.py` (runtime uses `ha_enrichment.diff_states()`).
-- **Unused import**: Removed `import os` from `playlist.py`.
+- **Song cue youtube_id pinning**: LLM-generated song cues now use the known track ID from playback state instead of trusting the LLM echo, preventing orphan cue rows from hallucinated IDs.
+- **Cue text prompt sanitization**: Song cue text is now sanitized via `_sanitize_prompt_data` on the read path before re-injection into banter prompts, closing a cross-session prompt injection vector.
+- **SQLite NULLS LAST compatibility**: Song cue ordering replaced `NULLS LAST` (requires SQLite 3.30+) with a portable `CASE` expression.
+- **Listener request button**: Fixed `sendRequest()` IIFE scoping bug — button now works via `addEventListener` instead of broken inline `onclick`.
+- **Clip rate limiter**: Replaced `threading.Lock` with `asyncio.Lock` for async-correct rate limiting.
+- **Song request gating**: Song-request keyword detection now only activates when yt-dlp is enabled, preventing dead-end download attempts.
+- **Dead code cleanup**: Removed unused `_diff_states()` and `_build_events_summary()` from `ha_context.py`, unused imports (`cast`, `threading`, `ListenerRequestCommit`).
 
 ## [2.8.0] - 2026-04-13
 

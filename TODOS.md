@@ -110,12 +110,9 @@ The disclaimer_goblin role is defined in SPEAKER_ROLES and has a voice in radio.
 - Differentiated energy instructions when both hosts are high-energy/chaotic: higher-energy host runs the chaos, lower-energy one cuts surgically. No more identical manic robots.
 - **Completed:** v2.8.0 (2026-04-13)
 
-### Song cue + ruleset mechanism
-- User needs to flag a specific song mid-stream → system accumulates per-track rules
-- Example: Aggu Palermo cringe pop → host reaction "spot on cringe fest" was perfect — want to lock that in
-- Build: highlight endpoint → rule stored → ruleset applied at next playback of flagged track
-- This is different from persona memory — it's per-track annotation + reaction rules
-- **Effort:** M | **Files:** mammamiradio/producer.py, mammamiradio/scriptwriter.py, new: mammamiradio/track_rules.py
+### ~~Song cue + ruleset mechanism~~ RESOLVED
+- Machine-derived per-track memory via `song_cues.py`. Anthem detection (3+ plays, never skipped), skip-bit detection (2+ skips), LLM reaction cues. Cues appear in banter prompts as TRACK MEMORY.
+- **Completed:** v2.9.0 (2026-04-13)
 
 ### ~~Studio humanity events~~ RESOLVED
 - One-shot cough/paper-rustle/chair-creak/pen-tap after 15+ segments. 4 SFX files generated.
