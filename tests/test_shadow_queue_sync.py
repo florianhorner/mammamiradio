@@ -289,6 +289,43 @@ class TestRuntimeHealthSnapshot:
 
         assert snap["shadow_queue_corrections"] == 7
 
+    def test_audio_source_falls_back_to_playlist_source_when_prewarm(self):
+        """audio_source 'prewarm' is replaced by playlist_source.kind in the snapshot."""
+        from mammamiradio.models import PlaylistSource
+
+        app = _make_app()
+        app.state.station_state.now_streaming = {"metadata": {"audio_source": "prewarm"}}
+        app.state.station_state.playlist_source = PlaylistSource(kind="demo")
+        req = _fake_request(app)
+
+        snap = _runtime_health_snapshot(req)
+
+        assert snap["audio_source"] == "demo"
+
+    def test_audio_source_falls_back_to_playlist_source_when_empty(self):
+        """Empty audio_source is replaced by playlist_source.kind in the snapshot."""
+        from mammamiradio.models import PlaylistSource
+
+        app = _make_app()
+        app.state.station_state.now_streaming = {}
+        app.state.station_state.playlist_source = PlaylistSource(kind="charts")
+        req = _fake_request(app)
+
+        snap = _runtime_health_snapshot(req)
+
+        assert snap["audio_source"] == "charts"
+
+    def test_audio_source_playlist_source_none_returns_unknown(self):
+        """When both now_streaming and playlist_source are unset, returns 'unknown'."""
+        app = _make_app()
+        app.state.station_state.now_streaming = {}
+        app.state.station_state.playlist_source = None
+        req = _fake_request(app)
+
+        snap = _runtime_health_snapshot(req)
+
+        assert snap["audio_source"] == "unknown"
+
 
 # ---------------------------------------------------------------------------
 # public-status endpoint — upcoming / upcoming_mode selection
@@ -372,6 +409,19 @@ async def test_readyz_not_ready_when_queue_empty():
 async def test_readyz_ready_when_queue_has_segments():
     """readyz returns 200 when queue_depth > 0 and tasks are alive."""
     app = _make_app(shadow=[_seg()], queue_items=1)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        resp = await client.get("/readyz")
+
+    assert resp.status_code == 200
+    assert resp.json()["ready"] is True
+
+
+@pytest.mark.asyncio
+async def test_readyz_ready_after_startup_window():
+    """readyz returns 200 once uptime > 30s even with an empty queue."""
+    app = _make_app(shadow=[], queue_items=0)
+    app.state.start_time = time.time() - 31  # simulate 31s of uptime
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         resp = await client.get("/readyz")

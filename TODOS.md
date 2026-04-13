@@ -1,5 +1,27 @@
 # TODOs
 
+## ~~Music catalog depth — multi-source rotation~~ RESOLVED
+- Charts raised to 100 tracks. Local `music/` MP3s auto-blended into chart playlist when `allow_ytdlp=true`. Covers 7h+ of unique content without repetition.
+- **Completed:** v2.8.0 (2026-04-13)
+
+## P2: Setup friction — still unresolved after 4 sessions
+Every single live session has surfaced setup friction. Stream stability once running is excellent, but getting there takes effort. This is now a pattern, not a one-off.
+
+**Observed across sessions:**
+- Session 1: go-librespot chaos, missing API key
+- Session 2: first user couldn't find stream URL
+- Session 3: admin UI controls felt disconnected
+- Session 4 (2026-04-12): "not super smooth as always" — even for Florian running his own stack
+
+**Action:** Dedicated setup sprint. Goals:
+- Zero-friction start from fresh install to first sound in <60 seconds
+- Surface stream URL and key status immediately on first load
+- Consider a "health check" endpoint that validates config before stream starts
+- Possibly: streamline the HA addon config options (fewer required fields)
+
+**Effort:** M (CC: ~1-2 hours) | **Files:** mammamiradio/main.py, mammamiradio/dashboard.html, ha-addon/mammamiradio/config.yaml
+**Source:** Recurring across all 4 live sessions; confirmed pattern 2026-04-12
+
 ## P1: Product positioning decision
 The product is stuck between "self-hosted household radio engine" and "consumer product with shareware upsell." Both CEO and Eng dual voices flagged this independently. Until this is decided, onboarding, monetization, and multi-tenancy work is built on sand.
 **Action:** Interview 5 potential users (cafe owners, HA enthusiasts, music hobbyists). Decide: household engine or consumer product.
@@ -69,11 +91,9 @@ The disclaimer_goblin role is defined in SPEAKER_ROLES and has a voice in radio.
 - Option B is transformative for immersion; jigginess between segments doesn't matter
 - **Effort:** M-L | **Files:** mammamiradio/producer.py, mammamiradio/scriptwriter.py
 
-### Host chemistry — too controlled, missing energy
-- Hosts sound too "unchaotic" relative to each other
-- Missing: interruptions, strong reactions, real opinions, chaos of actual radio banter
-- Need to feel like two people with real energy, not two robots taking turns
-- **Effort:** M | **Files:** mammamiradio/scriptwriter.py, radio.toml
+### ~~Host chemistry — too controlled, missing energy~~ RESOLVED
+- Differentiated energy instructions when both hosts are high-energy/chaotic: higher-energy host runs the chaos, lower-energy one cuts surgically. No more identical manic robots.
+- **Completed:** v2.8.0 (2026-04-13)
 
 ### Song cue + ruleset mechanism
 - User needs to flag a specific song mid-stream → system accumulates per-track rules

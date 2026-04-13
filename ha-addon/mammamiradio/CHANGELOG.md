@@ -1,5 +1,19 @@
 # Changelog
 
+## 2.8.0
+
+### Added
+- 100-track catalog depth (up from 50). Local music/ blending with chart playlist.
+- Host chemistry: differentiated energy instructions prevent both hosts sounding identical.
+- Echo-style transitions: 20% of handovers mirror the song's fading energy.
+- Banter depth: 4-6 exchanges (was 2-4), doubled token budget, dedup guard.
+
+### Fixed
+- /readyz always 503 when no listener connected — fixed with 30s startup window.
+- audio_source stuck at "prewarm" in /healthz after startup.
+- allow_ytdlp read twice from env; now uses config object as single source of truth.
+- Clip rate-limit dict never pruned — now evicts entries older than 5 minutes.
+
 ## 2.7.0
 
 ### Added

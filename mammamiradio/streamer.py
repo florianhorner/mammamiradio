@@ -8,6 +8,7 @@ import logging
 import os
 import re as _re
 import secrets
+import threading
 import time
 from pathlib import Path
 from urllib.parse import urlparse
@@ -164,6 +165,10 @@ def _runtime_health_snapshot(request: Request) -> dict:
     now_streaming = state.now_streaming or {}
     now_metadata = now_streaming.get("metadata", {}) if isinstance(now_streaming, dict) else {}
     audio_source = now_metadata.get("audio_source", "")
+    if not audio_source or audio_source == "prewarm":
+        playlist_source = state.playlist_source
+        if playlist_source is not None:
+            audio_source = playlist_source.kind
     producer_task = getattr(request.app.state, "producer_task", None)
     playback_task = getattr(request.app.state, "playback_task", None)
     producer_alive = True if producer_task is None else not producer_task.done()
@@ -1153,10 +1158,8 @@ async def add_external_track(request: Request, _: None = Depends(require_admin_a
 @router.get("/api/listener-requests")
 async def get_listener_requests(request: Request, _: None = Depends(require_admin_access)):
     """Return current pending listener request queue (admin only)."""
-    import time as _time
-
     state = request.app.state.station_state
-    now = _time.time()
+    now = time.time()
     return {
         "requests": [
             {
@@ -1176,8 +1179,6 @@ async def get_listener_requests(request: Request, _: None = Depends(require_admi
 @router.post("/api/listener-request")
 async def listener_request(request: Request):
     """Accept a listener shoutout or song wish. Public endpoint, IP rate-limited."""
-    import time as _time
-
     body = await request.json()
     if not isinstance(body, dict):
         return JSONResponse({"ok": False, "error": "invalid payload"}, status_code=400)
@@ -1195,7 +1196,7 @@ async def listener_request(request: Request):
     # IP rate limit: 1 request per 30s per IP
     ip = request.client.host if request.client else "unknown"
     state = request.app.state.station_state
-    now = _time.time()
+    now = time.time()
     last = state._listener_request_rl.get(ip, 0)
     if now - last < 30:
         return JSONResponse({"ok": False, "retry_after": int(30 - (now - last))}, status_code=429)
@@ -1460,6 +1461,7 @@ def _public_status_payload(request: Request) -> dict:
 
 
 _clip_rate: dict[str, float] = {}  # IP -> last clip timestamp
+_clip_rate_lock = threading.Lock()
 
 
 @router.post("/api/clip")
@@ -1470,11 +1472,16 @@ async def create_clip(request: Request):
     # Rate limit: 1 clip per 10 seconds per IP
     client_ip = request.client.host if request.client else "unknown"
     now = time.time()
-    if now - _clip_rate.get(client_ip, 0) < 10:
-        from fastapi.responses import JSONResponse
+    with _clip_rate_lock:
+        if now - _clip_rate.get(client_ip, 0) < 10:
+            from fastapi.responses import JSONResponse
 
-        return JSONResponse({"ok": False, "error": "Rate limited — try again in a few seconds"}, status_code=429)
-    _clip_rate[client_ip] = now
+            return JSONResponse({"ok": False, "error": "Rate limited — try again in a few seconds"}, status_code=429)
+        _clip_rate[client_ip] = now
+        # Prune stale entries to avoid unbounded growth.
+        stale_keys = [k for k, v in _clip_rate.items() if now - v >= 300]
+        for key in stale_keys:
+            _clip_rate.pop(key, None)
 
     ring_buffer = getattr(request.app.state, "clip_ring_buffer", None)
     if ring_buffer is None or len(ring_buffer) == 0:
@@ -1545,7 +1552,8 @@ async def readyz(request: Request):
     start_time = getattr(request.app.state, "start_time", None)
     queue_depth = runtime["queue_depth"]
     tasks_alive = runtime["producer_task_alive"] and runtime["playback_task_alive"]
-    ready = queue_depth > 0 and tasks_alive
+    startup_complete = start_time is not None and (time.time() - start_time) > 30
+    ready = tasks_alive and (queue_depth > 0 or startup_complete)
     status = "ready" if ready else "starting"
     body = {
         "status": status,

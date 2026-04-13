@@ -111,11 +111,10 @@ The dashboard derives a tier label from these flags: Demo Radio, Full AI Radio, 
 
 ## Music sources
 
-Music comes from one of three sources, tried in order:
+Music comes from one of two source modes:
 
-1. **Live Italian charts** (Apple Music RSS): fetched at startup when `MAMMAMIRADIO_ALLOW_YTDLP=true`. Tracks are downloaded via `yt-dlp`.
-2. **Local files**: MP3s in the `music/` directory.
-3. **Built-in demo playlist**: 10 hardcoded Italian tracks with metadata for banter.
+1. **Charts + local blend** (when `MAMMAMIRADIO_ALLOW_YTDLP=true`): Up to 100 tracks fetched from Apple Music Italy RSS. MP3s in `music/` are merged in automatically — deduplicated by `spotify_id`. Total catalog typically 100-300 tracks, covering 7h+ of unique content.
+2. **Built-in demo playlist**: 10 hardcoded Italian tracks used when `MAMMAMIRADIO_ALLOW_YTDLP` is not set.
 
 The station always produces a stream regardless of which source is active.
 

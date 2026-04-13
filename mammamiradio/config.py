@@ -122,6 +122,7 @@ class StationConfig:
     openai_api_key: str = ""
     ha_token: str = ""
     is_addon: bool = False
+    allow_ytdlp: bool = False
 
 
 def _is_loopback_host(host: str) -> bool:
@@ -328,6 +329,7 @@ def load_config(path: str = "radio.toml") -> StationConfig:
         openai_api_key=os.getenv("OPENAI_API_KEY", ""),
         ha_token=ha_token,
         is_addon=addon_mode,
+        allow_ytdlp=os.getenv("MAMMAMIRADIO_ALLOW_YTDLP", "false").lower() in ("true", "1", "yes"),
     )
 
     # Addon overrides: persistent paths, auto-enable HA
