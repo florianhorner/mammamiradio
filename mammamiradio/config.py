@@ -190,6 +190,10 @@ def _validate(config: StationConfig) -> None:
         errors.append("pacing.songs_between_ads must be >= 1")
     if config.pacing.lookahead_segments < 1:
         errors.append("pacing.lookahead_segments must be >= 1")
+    if not isinstance(config.persona.anthem_threshold, int) or config.persona.anthem_threshold < 1:
+        errors.append("persona.anthem_threshold must be >= 1")
+    if not isinstance(config.persona.skip_bit_threshold, int) or config.persona.skip_bit_threshold < 1:
+        errors.append("persona.skip_bit_threshold must be >= 1")
 
     if not (config.anthropic_api_key or config.openai_api_key):
         log.warning("No ANTHROPIC_API_KEY or OPENAI_API_KEY — banter/ads will use fallback text")
@@ -343,10 +347,6 @@ def load_config(path: str = "radio.toml") -> StationConfig:
         allow_ytdlp=os.getenv("MAMMAMIRADIO_ALLOW_YTDLP", "false").lower() in ("true", "1", "yes"),
     )
 
-    from mammamiradio.persona import set_arc_thresholds
-
-    set_arc_thresholds(config.persona.arc_thresholds)
-
     # Addon overrides: persistent paths, auto-enable HA
     if addon_mode:
         import logging as _log
@@ -362,6 +362,9 @@ def load_config(path: str = "radio.toml") -> StationConfig:
             config.ha_token = supervisor_token
 
     _validate(config)
+    from mammamiradio.persona import set_arc_thresholds
+
+    set_arc_thresholds(config.persona.arc_thresholds)
     return config
 
 

@@ -662,6 +662,7 @@ async def run_producer(
                         "title": track.display,
                         "artist": track.artist,
                         "title_only": track.title,
+                        "youtube_id": track.youtube_id,
                         "spotify_id": track.spotify_id,
                         "album_art": track.album_art,
                         "rationale": rationale,

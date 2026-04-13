@@ -81,8 +81,11 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
     for sql in migrations:
         try:
             conn.execute(sql)
-        except sqlite3.OperationalError:
-            pass  # column already exists
+        except sqlite3.OperationalError as exc:
+            msg = str(exc).lower()
+            if "duplicate column name" in msg or "already exists" in msg:
+                continue
+            raise
 
 
 def init_db(db_path: Path) -> None:

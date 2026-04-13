@@ -4,6 +4,8 @@ import json
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+
 from mammamiradio.config import AudioSection, _apply_addon_options, _is_addon, load_config, runtime_json
 
 
@@ -67,6 +69,41 @@ def test_load_config_applies_persona_arc_thresholds(tmp_path):
         assert compute_arc_phase(9) == "old_friend"
     finally:
         set_arc_thresholds([4, 11, 26])
+
+
+def test_load_config_rejects_nonpositive_persona_cue_thresholds(tmp_path):
+    source = Path(__file__).parent.parent / "radio.toml"
+    custom = (
+        source.read_text()
+        .replace("anthem_threshold = 3", "anthem_threshold = 0")
+        .replace(
+            "skip_bit_threshold = 2",
+            "skip_bit_threshold = -1",
+        )
+    )
+    custom_path = tmp_path / "radio.toml"
+    custom_path.write_text(custom)
+
+    with pytest.raises(ValueError, match="persona\\.anthem_threshold must be >= 1"):
+        load_config(str(custom_path))
+
+
+def test_load_config_does_not_leak_arc_thresholds_on_validation_failure(tmp_path):
+    source = Path(__file__).parent.parent / "radio.toml"
+    custom = (
+        source.read_text()
+        .replace("arc_thresholds = [4, 11, 26]", "arc_thresholds = [2, 5, 9]")
+        .replace("songs_between_banter = 2", "songs_between_banter = 0")
+    )
+    custom_path = tmp_path / "radio.toml"
+    custom_path.write_text(custom)
+
+    from mammamiradio.persona import compute_arc_phase, set_arc_thresholds
+
+    set_arc_thresholds([4, 11, 26])
+    with pytest.raises(ValueError, match="pacing\\.songs_between_banter must be >= 1"):
+        load_config(str(custom_path))
+    assert compute_arc_phase(5) == "acquaintance"
 
 
 def test_audio_section_defaults():

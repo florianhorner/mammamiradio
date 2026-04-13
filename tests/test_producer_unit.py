@@ -97,6 +97,8 @@ async def _run_until_queued(queue: asyncio.Queue, state: StationState, config, t
 async def test_music_segment_queued():
     """Producer queues a MUSIC segment when next_segment_type returns MUSIC."""
     state = _make_state()
+    state.playlist[0].youtube_id = "yt_demo1"
+    state.playlist[1].youtube_id = "yt_demo2"
     config = _make_config()
     queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
 
@@ -112,6 +114,7 @@ async def test_music_segment_queued():
     seg = queue.get_nowait()
     assert seg.type == SegmentType.MUSIC
     assert "title" in seg.metadata
+    assert seg.metadata["youtube_id"] in {"yt_demo1", "yt_demo2"}
 
 
 # ---------------------------------------------------------------------------
