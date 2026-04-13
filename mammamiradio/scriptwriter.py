@@ -635,8 +635,12 @@ Rules:
   Someone's headphone cable gets caught. The mic sounds wrong and they complain about it.
 - REACT BEFORE WORDS: a host reacts first — laughs, "eh", groans, "oddio no" — before forming a sentence. Feelings first, words second.
 - BANNED PHRASES: never write these — they are overused clichés that make the station sound fake:
-  "che bomba", "assolutamente", "incredibile", "fantastico", "pazzesco", "spettacolare".
-  If you're about to reach for one of these, find a specific, unexpected reaction instead.
+  "che bomba", "che ritmo", "che musica", "che canzone", "che pezzo", "ah che",
+  "assolutamente", "incredibile", "fantastico", "pazzesco", "spettacolare",
+  "bella canzone", "bella musica", "che bella".
+  These phrases appear after EVERY break and destroy the illusion instantly.
+  If you're about to reach for one of these, stop. Find a specific, unexpected reaction instead —
+  reference something real about the track, invent a grievance, or just move on without commenting.
 - Output ONLY valid JSON, no markdown fences or extra text."""
 
 
@@ -1122,7 +1126,8 @@ RULES:
 - Then pivot to what's next. Smooth, natural, like a real DJ.
 - You MAY reference the time of day if it fits ("perfetta per stasera", "mattina col botto").
 - Recent opener stems to avoid repeating: {banned_openers}
-- If the host would normally say "Che pezzo...", pick something fresher instead.
+- BANNED openers — never start with: "Che pezzo", "Che ritmo", "Che musica", "Che canzone",
+  "Che bomba", "Ah che", "Bella canzone", "Bella musica". These sound like a broken record.
 - ALL text in {config.station.language}.
 - {style_instruction}
 

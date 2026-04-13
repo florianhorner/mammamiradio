@@ -302,14 +302,15 @@ h1 {
 
 /* ── PLAYLIST ── */
 .search-bar { display: flex; gap: 8px; margin-bottom: 12px; }
-.search-input {
+.search-input, .input {
   flex: 1; font-family: var(--font-body); font-size: 13px;
   padding: 10px 14px; border-radius: 8px;
   background: rgba(20,17,15,0.5); color: var(--cream);
   border: 1px solid rgba(245,237,216,0.12); outline: none;
+  width: 100%; box-sizing: border-box;
 }
-.search-input:focus { border-color: rgba(244,208,72,0.5); }
-.search-input::placeholder { color: rgba(245,237,216,0.35); }
+.search-input:focus, .input:focus { border-color: rgba(244,208,72,0.5); }
+.search-input::placeholder, .input::placeholder { color: rgba(245,237,216,0.35); }
 
 .sr-row {
   display: flex; align-items: center; gap: 8px;
