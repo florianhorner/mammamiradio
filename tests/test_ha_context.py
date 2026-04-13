@@ -13,10 +13,12 @@ from mammamiradio.ha_context import (
     HomeEvent,
     _build_summary,
     _build_weather_arc,
+    _build_weather_arc_en,
     _format_state,
     _sanitize_state_value,
     check_reactive_triggers,
     classify_home_mood,
+    classify_home_mood_en,
     fetch_home_context,
     fetch_weather_forecast,
 )
@@ -991,3 +993,197 @@ async def test_fetch_weather_forecast_upcoming_significant_condition():
 
     assert result is not None
     assert len(result) > 0
+
+
+# ---------------------------------------------------------------------------
+# classify_home_mood_en (English version for admin UI)
+# ---------------------------------------------------------------------------
+
+
+def _states_en(*pairs: tuple[str, str], **kwattrs: dict) -> dict[str, dict]:
+    result = {}
+    for eid, state in pairs:
+        result[eid] = {"state": state, "attributes": {}}
+    return result
+
+
+def test_mood_en_robot_cleaning():
+    states = _states_en(("vacuum.goldstaubsucher", "cleaning"))
+    assert classify_home_mood_en(states) == "Robot vacuum running"
+
+
+def test_mood_en_robot_cleaning_matrix():
+    states = _states_en(("vacuum.matrix10_ultra", "cleaning"))
+    assert classify_home_mood_en(states) == "Robot vacuum running"
+
+
+def test_mood_en_morning_coffee():
+    states = _states_en(("switch.bar_kaffeemaschine_steckdose", "on"))
+    with patch("mammamiradio.ha_context.datetime") as mock_dt:
+        mock_dt.datetime.now.return_value.hour = 7
+        result = classify_home_mood_en(states)
+    assert result == "Morning coffee"
+
+
+def test_mood_en_cooking():
+    states = _states_en(("fan.kuche_lufter", "on"))
+    assert classify_home_mood_en(states) == "Someone cooking"
+
+
+def test_mood_en_showering_gross():
+    states = _states_en(("fan.bad_gross_lufter_shelly", "on"))
+    assert classify_home_mood_en(states) == "Someone showering"
+
+
+def test_mood_en_showering_klein():
+    states = _states_en(("fan.bad_klein_lufter", "on"))
+    assert classify_home_mood_en(states) == "Someone showering"
+
+
+def test_mood_en_washing_machine():
+    states = {"sensor.bar_bali_boot_steckdose_power": {"state": "150.0", "attributes": {}}}
+    assert classify_home_mood_en(states) == "Washing machine running"
+
+
+def test_mood_en_coffee_brewing():
+    states = {"sensor.kuche_kaffeemaschine_steckdose_power": {"state": "200.0", "attributes": {}}}
+    assert classify_home_mood_en(states) == "Coffee brewing"
+
+
+def test_mood_en_movie_night():
+    states = _states_en(("media_player.samsung_s95ca_65", "playing"))
+    with patch("mammamiradio.ha_context.datetime") as mock_dt:
+        mock_dt.datetime.now.return_value.hour = 20
+        result = classify_home_mood_en(states)
+    assert result == "Movie night"
+
+
+def test_mood_en_stars_evening():
+    states = _states_en(("light.schlafzimmer_sternenlicht_projektor_2", "on"))
+    with patch("mammamiradio.ha_context.datetime") as mock_dt:
+        mock_dt.datetime.now.return_value.hour = 21
+        result = classify_home_mood_en(states)
+    assert result == "Evening under the stars"
+
+
+def test_mood_en_music_at_home():
+    states = _states_en(("media_player.wohnzimmer_sonos_arc_lautsprecher", "playing"))
+    assert classify_home_mood_en(states) == "Music at home"
+
+
+def test_mood_en_music_dining():
+    states = _states_en(("media_player.esszimmer", "playing"))
+    assert classify_home_mood_en(states) == "Music at home"
+
+
+def test_mood_en_someone_sleeping():
+    states = _states_en(("input_select.bedroom_occupancy_state", "occupied"))
+    with patch("mammamiradio.ha_context.datetime") as mock_dt:
+        mock_dt.datetime.now.return_value.hour = 23
+        result = classify_home_mood_en(states)
+    assert result == "Someone sleeping"
+
+
+def test_mood_en_relaxed_atmosphere():
+    states = {
+        "light.magic_areas_light_groups_wohnzimmer_all_lights": {
+            "state": "on",
+            "attributes": {"brightness": 80},
+        }
+    }
+    with patch("mammamiradio.ha_context.datetime") as mock_dt:
+        mock_dt.datetime.now.return_value.hour = 20
+        result = classify_home_mood_en(states)
+    assert result == "Relaxed atmosphere"
+
+
+def test_mood_en_house_waking_up():
+    states = {
+        "light.magic_areas_light_groups_wohnzimmer_all_lights": {"state": "on", "attributes": {}},
+        "light.magic_areas_light_groups_kuche_all_lights": {"state": "on", "attributes": {}},
+        "light.magic_areas_light_groups_esszimmer_all_lights": {"state": "off", "attributes": {}},
+    }
+    with patch("mammamiradio.ha_context.datetime") as mock_dt:
+        mock_dt.datetime.now.return_value.hour = 6
+        result = classify_home_mood_en(states)
+    assert result == "House waking up"
+
+
+def test_mood_en_empty_home():
+    states = _states_en(
+        ("person.florian_horner", "not_home"),
+        ("person.sabrina", "not_home"),
+    )
+    assert classify_home_mood_en(states) == "Empty home"
+
+
+def test_mood_en_no_match():
+    assert classify_home_mood_en({}) == ""
+
+
+def test_mood_en_brightness_invalid_value():
+    """_brightness() should return None for non-integer brightness values."""
+    states = {
+        "light.magic_areas_light_groups_wohnzimmer_all_lights": {
+            "state": "on",
+            "attributes": {"brightness": "not-a-number"},
+        }
+    }
+    with patch("mammamiradio.ha_context.datetime") as mock_dt:
+        mock_dt.datetime.now.return_value.hour = 20
+        # brightness parse fails → no relaxed atmosphere → falls through
+        result = classify_home_mood_en(states)
+    assert result == ""
+
+
+def test_mood_en_power_watts_invalid():
+    """_power_watts() should return 0.0 for non-float state."""
+    states = {"sensor.bar_bali_boot_steckdose_power": {"state": "unavailable", "attributes": {}}}
+    # Washing machine threshold not met → falls through
+    result = classify_home_mood_en(states)
+    assert result != "Washing machine running"
+
+
+# ---------------------------------------------------------------------------
+# _build_weather_arc_en (English weather narrative)
+# ---------------------------------------------------------------------------
+
+
+def test_weather_arc_en_morning_warning():
+    forecast = [
+        {"condition": "sunny", "temperature": 20.0},
+        {"condition": "rainy", "temperature": 15.0},
+    ]
+    with patch("mammamiradio.ha_context.datetime") as mock_dt:
+        mock_dt.datetime.now.return_value.hour = 9
+        arc = _build_weather_arc_en(forecast)
+    assert "afternoon" in arc
+    assert "rainy" in arc.lower() or "rain" in arc.lower()
+
+
+def test_weather_arc_en_afternoon_current():
+    forecast = [{"condition": "rainy", "temperature": 14.0}]
+    with patch("mammamiradio.ha_context.datetime") as mock_dt:
+        mock_dt.datetime.now.return_value.hour = 14
+        arc = _build_weather_arc_en(forecast)
+    assert "14.0" in arc
+
+
+def test_weather_arc_en_evening_retrospective():
+    forecast = [{"condition": "lightning", "temperature": 18.0}]
+    with patch("mammamiradio.ha_context.datetime") as mock_dt:
+        mock_dt.datetime.now.return_value.hour = 20
+        arc = _build_weather_arc_en(forecast)
+    assert "survive" in arc.lower()
+
+
+def test_weather_arc_en_simple_sunny():
+    forecast = [{"condition": "sunny", "temperature": 22.0}]
+    with patch("mammamiradio.ha_context.datetime") as mock_dt:
+        mock_dt.datetime.now.return_value.hour = 10
+        arc = _build_weather_arc_en(forecast)
+    assert "22.0" in arc
+
+
+def test_weather_arc_en_empty():
+    assert _build_weather_arc_en([]) == ""

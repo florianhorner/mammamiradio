@@ -641,3 +641,72 @@ async def test_synthesize_openai_cleans_up_raw_on_normalize_failure(_mock_all, t
             await synthesize_openai("Ciao", "onyx", output)
 
     assert not raw.exists(), "raw_path must be cleaned up on normalize failure"
+
+
+# ---------------------------------------------------------------------------
+# _instructions_for_host — low-energy and low-warmth branches
+# ---------------------------------------------------------------------------
+
+
+def test_instructions_for_host_low_energy():
+    from mammamiradio.models import PersonalityAxes
+    from mammamiradio.tts import _openai_instructions_for_host as _instructions_for_host
+
+    host = HostPersonality(
+        name="Quieta",
+        voice="it-IT-IsabellaNeural",
+        style="calm",
+        personality=PersonalityAxes(energy=30, warmth=70, chaos=50),
+    )
+    instructions = _instructions_for_host(host)
+    assert "Calm" in instructions or "measured" in instructions
+
+
+def test_instructions_for_host_low_warmth():
+    from mammamiradio.models import PersonalityAxes
+    from mammamiradio.tts import _openai_instructions_for_host as _instructions_for_host
+
+    host = HostPersonality(
+        name="Freddo",
+        voice="it-IT-DiegoNeural",
+        style="cool",
+        personality=PersonalityAxes(energy=50, warmth=20, chaos=50),
+    )
+    instructions = _instructions_for_host(host)
+    assert "Cool" in instructions or "detached" in instructions
+
+
+def test_synthesize_openai_raises_when_no_key(monkeypatch):
+    """synthesize_openai raises RuntimeError when OPENAI_API_KEY is missing."""
+    import asyncio
+
+    from mammamiradio.tts import synthesize_openai
+
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+    async def _run():
+        await synthesize_openai("Ciao", "onyx", Path("/tmp/noop.mp3"))
+
+    with pytest.raises(RuntimeError, match="OPENAI_API_KEY"):
+        asyncio.get_event_loop().run_until_complete(_run())
+
+
+def test_get_openai_client_singleton(monkeypatch):
+    """_get_openai_client returns the same instance for the same API key."""
+    import mammamiradio.tts as tts_mod
+
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    tts_mod._openai_client = None
+    tts_mod._openai_client_key = ""
+
+    mock_cls = MagicMock()
+    mock_instance = MagicMock()
+    mock_cls.return_value = mock_instance
+
+    with patch("mammamiradio.tts.OpenAI", mock_cls, create=True):
+        # First call creates the client
+        c1 = tts_mod._get_openai_client("sk-test")
+        # Second call with same key returns cached
+        c2 = tts_mod._get_openai_client("sk-test")
+
+    assert c1 is c2

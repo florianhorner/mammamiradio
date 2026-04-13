@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import random
 from pathlib import Path
 from unittest.mock import patch
+
+import pytest
 
 from mammamiradio.models import ListenerProfile, Segment, SegmentType, StationState, Track
 
@@ -329,3 +332,51 @@ def test_describe_for_prompt_wrong_prediction_callback():
     p.last_prediction_correct = False
     desc = p.describe_for_prompt()
     assert "PREDIZIONE PRECEDENTE SBAGLIATA" in desc
+
+
+def test_describe_for_prompt_unknown_pattern_returns_empty():
+    """Patterns that exist but have no description entry return empty string."""
+    p = ListenerProfile()
+    # Inject a pattern that is not in the descriptions dict
+    p.patterns.append("unknown_pattern_xyz")
+    assert p.describe_for_prompt() == ""
+
+
+def test_reserve_next_track_raises_on_empty_playlist():
+    state = StationState(playlist=[])
+    with pytest.raises(RuntimeError, match="Playlist is empty"):
+        state.reserve_next_track()
+
+
+def test_select_next_track_artist_over_represented():
+    """Track with artist appearing >=2 times in recent 10 gets near-zero weight."""
+    import random
+
+    t1 = Track(title="Song A", artist="TestArtist", duration_ms=180000)
+    t2 = Track(title="Song B", artist="OtherArtist", duration_ms=180000)
+    state = StationState(playlist=[t1, t2])
+    # Put TestArtist in played_tracks 3 times recently to trigger near-zero weight
+    for _ in range(3):
+        state.played_tracks.append(t1)
+
+    # With TestArtist heavily penalized, OtherArtist should win consistently
+    random.seed(42)
+    results = [state.select_next_track() for _ in range(10)]
+    assert all(r.artist == "OtherArtist" for r in results)
+
+
+def test_select_next_track_popularity_boost():
+    """Tracks with popularity score use popularity weight branch."""
+    t_pop = Track(title="Popular", artist="A", duration_ms=180000, popularity=80)
+    t_nop = Track(title="Obscure", artist="B", duration_ms=180000, popularity=0)
+    state = StationState(playlist=[t_pop, t_nop])
+    # Just verify selection works without error and picks one
+    result = state.select_next_track()
+    assert result in (t_pop, t_nop)
+
+
+def test_add_joke_duplicate_not_added():
+    state = StationState()
+    state.add_joke("same joke")
+    state.add_joke("same joke")
+    assert state.running_jokes.count("same joke") == 1
