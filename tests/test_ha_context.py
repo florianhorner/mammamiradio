@@ -981,7 +981,10 @@ async def test_fetch_weather_forecast_upcoming_significant_condition():
     mock_client.post.return_value = mock_response
 
     with patch("mammamiradio.ha_context._get_ha_client", return_value=mock_client):
-        result = await fetch_weather_forecast("http://ha.local", "mytoken")
+        with patch("mammamiradio.ha_context.datetime") as mock_dt:
+            with patch("mammamiradio.ha_context._weather_forecast_fetched_at", 0.0):
+                mock_dt.datetime.now.return_value.hour = 9
+                result = await fetch_weather_forecast("http://ha.local", "mytoken")
 
     assert result is not None
     assert len(result) > 0
