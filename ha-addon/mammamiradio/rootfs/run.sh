@@ -1,4 +1,4 @@
-#!/usr/bin/env sh
+#!/usr/bin/with-contenv sh
 # Home Assistant add-on entrypoint for mammamiradio
 # Maps Supervisor environment and add-on options to app env vars.
 set -e
