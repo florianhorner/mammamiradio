@@ -176,6 +176,10 @@ async def test_startup_clip_ring_buffer_type_error(tmp_path: Path):
     """Clip ring buffer init handles TypeError from config.audio.bitrate."""
     from mammamiradio.models import Track
 
+    class _BadBitrate:
+        def __int__(self) -> int:
+            raise TypeError("cannot convert")
+
     mock_config = MagicMock()
     mock_config.station.name = "TestRadio"
     mock_config.station.language = "it"
@@ -187,8 +191,8 @@ async def test_startup_clip_ring_buffer_type_error(tmp_path: Path):
     mock_config.cache_dir = tmp_path / "cache"
     mock_config.homeassistant.enabled = False
     mock_config.allow_ytdlp = False
-    # Make audio.bitrate raise TypeError when int() is called
-    mock_config.audio.bitrate = MagicMock(side_effect=TypeError("cannot convert"))
+    # Use a real __int__ failure; MagicMock coerces to 1 here and misses the fallback branch.
+    mock_config.audio.bitrate = _BadBitrate()
 
     tracks = [Track(title="S", artist="A", duration_ms=1, spotify_id="x")]
 
