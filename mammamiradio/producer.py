@@ -396,6 +396,58 @@ def _cast_voices(
     return result
 
 
+async def _prefetch_next(
+    state: StationState,
+    config: StationConfig,
+) -> None:
+    """Pre-normalize the predicted next music track into the norm cache.
+
+    Fires as a background task immediately after a music segment is queued so
+    that slow-hardware normalization (~75s on Pi) completes during the current
+    track's playback (~3-4 min) rather than after the queue drains.
+
+    Uses a non-mutating peek: finds the first track outside the repeat-cooldown
+    window without calling select_next_track (which has weighted-random side
+    effects). Falls back to playlist[0] if all tracks are in cooldown.
+    Non-fatal — any failure is swallowed after a DEBUG log.
+    """
+    try:
+        if not state.playlist:
+            return
+        cooldown = config.playlist.repeat_cooldown
+        recent_keys = {t.cache_key for t in list(state.played_tracks)[-cooldown:]}
+        candidate = next(
+            (t for t in state.playlist if t.cache_key not in recent_keys),
+            state.playlist[0],
+        )
+        norm_cached = config.cache_dir / f"norm_{candidate.cache_key}_{config.audio.bitrate}k.mp3"
+        if norm_cached.exists():
+            logger.debug("Prefetch: norm already cached for %s", candidate.display)
+            return
+        logger.info("Prefetch: pre-normalizing %s in background", candidate.display)
+        audio_path = await download_track(candidate, config.cache_dir, music_dir=Path("music"))
+        loop = asyncio.get_running_loop()
+        ok, _ = await loop.run_in_executor(None, validate_download, audio_path)
+        if not ok:
+            logger.debug("Prefetch: skipping invalid download for %s", candidate.display)
+            return
+        norm_path = config.tmp_dir / f"prefetch_{uuid4().hex[:8]}.mp3"
+        _norm_fn = partial(normalize, audio_path, norm_path, config, loudnorm=True, music_eq=True)
+        await loop.run_in_executor(None, _norm_fn)
+        try:
+            await loop.run_in_executor(None, shutil.copy2, str(norm_path), str(norm_cached))
+            logger.info("Prefetch: cached norm for %s", candidate.display)
+        except OSError as exc:
+            logger.warning("Prefetch: cache write failed for %s: %s", candidate.display, exc)
+        finally:
+            norm_path.unlink(missing_ok=True)
+    except asyncio.CancelledError:
+        logger.debug("Prefetch task cancelled")
+        raise
+    except Exception as exc:
+        logger.debug("Prefetch failed (non-fatal): %s", exc)
+
+
 async def prewarm_first_segment(
     queue: asyncio.Queue[Segment],
     state: StationState,
@@ -509,6 +561,8 @@ async def run_producer(
     _segments_produced = 0  # count for humanity event gating
     _producer_idle_logged = False
     _was_idle = False
+    _prefetch_task: asyncio.Task[None] | None = None  # background norm prefetch for next track
+    _drain_guard_queued = False  # True after a drain-recovery clip is inserted, until a real segment lands
     while True:
         if state.session_stopped:
             await asyncio.sleep(1)
@@ -538,6 +592,25 @@ async def run_producer(
                     )
             _was_idle = False
         _producer_idle_logged = False
+
+        # Mid-playback drain guard: if the queue hits zero during active playback
+        # (after at least one real segment has been produced), insert a canned clip
+        # to bridge the gap while the producer or prefetch task catches up.
+        # _drain_guard_queued prevents re-firing until a real segment lands.
+        if queue.empty() and _segments_produced > 0 and not _drain_guard_queued:
+            fallback = _pick_canned_clip("banter", state=state) or _pick_canned_clip("welcome")
+            if fallback:
+                logger.warning(
+                    "Queue empty during active playback — inserting canned clip as bridge"
+                )
+                await _queue_segment(
+                    Segment(
+                        type=SegmentType.BANTER,
+                        path=fallback,
+                        metadata={"type": "banter", "canned": True, "queue_drain_recovery": True},
+                    )
+                )
+                _drain_guard_queued = True
 
         if queue.qsize() >= config.pacing.lookahead_segments and state.force_next is None:
             # Periodically evict stale cache files while the producer is idle
@@ -1386,4 +1459,15 @@ async def run_producer(
                 if success_callback:
                     success_callback()
                 state.failed_segments = 0  # Reset backoff on success
+                _drain_guard_queued = False  # Real segment landed — allow drain guard to fire again if needed
+                # #144/#146: Launch background normalization of the predicted next music track.
+                # By the time the current track finishes playing (~3-4 min), the next norm
+                # is already cached — avoids the 75-second Pi stall when the queue drains.
+                if seg_type == SegmentType.MUSIC and state.force_next is None and state.playlist:
+                    if _prefetch_task and not _prefetch_task.done():
+                        _prefetch_task.cancel()
+                    _prefetch_task = asyncio.create_task(
+                        _prefetch_next(state, config),
+                        name="prefetch-norm",
+                    )
             logger.info("Queued %s (queue size: %d)", seg_type.value, queue.qsize())
