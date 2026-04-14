@@ -207,6 +207,61 @@ def test_cast_voices_no_voices_configured():
 
 
 # ---------------------------------------------------------------------------
+# disclaimer_goblin in classic_pitch
+# ---------------------------------------------------------------------------
+
+
+def test_classic_pitch_includes_disclaimer_goblin():
+    """classic_pitch _FORMAT_ROLES must include disclaimer_goblin."""
+    from mammamiradio.producer import _FORMAT_ROLES
+    from mammamiradio.models import AdFormat
+
+    roles = _FORMAT_ROLES[AdFormat.CLASSIC_PITCH]
+    assert "disclaimer_goblin" in roles
+
+
+def test_classic_pitch_single_voice_fallback_still_casts_disclaimer_goblin():
+    """With 1 ad voice, classic_pitch falls back cleanly and casts disclaimer_goblin."""
+    brand = AdBrand(name="Test", tagline="T", category="tech")
+    state = StationState()
+    config = MagicMock()
+    config.ads.voices = [AdVoice(name="Solo", voice="it-voice", style="warm", role="hammer")]
+
+    # With 1 voice, classic_pitch is a valid single-voice candidate
+    fmt, _, roles = _select_ad_creative(brand, state, config)
+    assert AdFormat(fmt).voice_count < 2  # must be a single-voice format
+
+    # If classic_pitch was selected, disclaimer_goblin must be in its roles
+    if fmt == AdFormat.CLASSIC_PITCH:
+        assert "disclaimer_goblin" in roles
+
+    # _cast_voices must assign every role even when voices are exhausted
+    result = _cast_voices(brand, config, roles)
+    for role in roles:
+        assert role in result
+        assert result[role].voice is not None
+
+
+def test_classic_pitch_zero_voice_fallback_casts_disclaimer_goblin():
+    """With zero ad voices, classic_pitch host-fallback still covers disclaimer_goblin."""
+    host = MagicMock()
+    host.name = "Marco"
+    host.voice = "it-IT-DiegoNeural"
+    host.style = "warm"
+    config = MagicMock()
+    config.ads.voices = []
+    config.hosts = [host]
+    brand = AdBrand(name="Test", tagline="T", category="tech")
+
+    result = _cast_voices(brand, config, ["hammer", "disclaimer_goblin"])
+    assert "hammer" in result
+    assert "disclaimer_goblin" in result
+    # Both roles get a voice (same fallback voice is acceptable)
+    assert result["hammer"].voice is not None
+    assert result["disclaimer_goblin"].voice is not None
+
+
+# ---------------------------------------------------------------------------
 # _latest_music_file / _set_last_music_file
 # ---------------------------------------------------------------------------
 

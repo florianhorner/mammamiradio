@@ -269,7 +269,7 @@ _CATEGORY_SONIC: dict[str, list[SonicWorld]] = {
 
 # Default roles needed per format
 _FORMAT_ROLES: dict[str, list[str]] = {
-    AdFormat.CLASSIC_PITCH: ["hammer"],
+    AdFormat.CLASSIC_PITCH: ["hammer", "disclaimer_goblin"],
     AdFormat.TESTIMONIAL: ["witness", "hammer"],
     AdFormat.DUO_SCENE: ["hammer", "maniac"],
     AdFormat.LIVE_REMOTE: ["hammer"],
@@ -366,10 +366,10 @@ def _cast_voices(
     """
     voices = config.ads.voices
     if not voices:
-        # No voices configured, use a host as fallback
+        # No voices configured — assign the same host voice to every needed role
         host = random.choice(config.hosts)
         fallback = AdVoice(name=host.name, voice=host.voice, style=host.style)
-        return {roles_needed[0] if roles_needed else "default": fallback}
+        return {role: fallback for role in roles_needed} if roles_needed else {"default": fallback}
 
     # Build role->voice index
     role_index: dict[str, AdVoice] = {}
