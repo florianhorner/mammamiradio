@@ -52,6 +52,43 @@ async def test_startup_creates_state_and_tasks():
 
 
 @pytest.mark.asyncio
+async def test_startup_prewarm_is_capped_to_two_on_addon(tmp_path: Path):
+    """startup() prewarms exactly two segments even when running as HA addon."""
+    from mammamiradio.models import Track
+
+    mock_config = MagicMock()
+    mock_config.station.name = "TestRadio"
+    mock_config.station.language = "it"
+    mock_config.bind_host = "127.0.0.1"
+    mock_config.port = 8000
+    mock_config.pacing.lookahead_segments = 3
+    mock_config.max_cache_size_mb = 500
+    mock_config.tmp_dir = tmp_path / "tmp"
+    mock_config.cache_dir = tmp_path / "cache"
+    mock_config.audio.bitrate = 192
+    mock_config.is_addon = True
+    mock_config.allow_ytdlp = False
+    mock_config.homeassistant.enabled = False
+
+    tracks = [Track(title="S", artist="A", duration_ms=1, spotify_id="x")]
+
+    with (
+        patch(f"{MODULE}.load_config", return_value=mock_config),
+        patch(f"{MODULE}.read_persisted_source", return_value=None),
+        patch(f"{MODULE}.fetch_startup_playlist", return_value=(tracks, None, "")),
+        patch(f"{MODULE}.run_producer", new_callable=AsyncMock),
+        patch(f"{MODULE}.run_playback_loop", new_callable=AsyncMock),
+        patch(f"{MODULE}.prewarm_first_segment", new_callable=AsyncMock) as mock_prewarm,
+    ):
+        from mammamiradio.main import app, startup
+
+        await startup()
+        await app.state.prewarm_task
+
+    assert mock_prewarm.await_count == 2
+
+
+@pytest.mark.asyncio
 async def test_startup_reads_persisted_source_before_fetching():
     from mammamiradio.models import PlaylistSource, Track
 

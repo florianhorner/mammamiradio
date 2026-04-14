@@ -9,8 +9,12 @@ import shutil
 import subprocess
 import tempfile
 from pathlib import Path
+from threading import BoundedSemaphore
 
 logger = logging.getLogger(__name__)
+
+# Limit concurrent ffmpeg normalization runs across sync + executor call sites.
+_NORM_SEM = BoundedSemaphore(2)
 
 
 def measure_lufs(input_path: Path) -> float | None:
@@ -157,7 +161,8 @@ def normalize(
         "mp3",
         str(output_path),
     ]
-    _run_ffmpeg(cmd, f"normalize {input_path.name}")
+    with _NORM_SEM:
+        _run_ffmpeg(cmd, f"normalize {input_path.name}")
     logger.info("Normalized%s: %s -> %s", "" if loudnorm else " (fast)", input_path.name, output_path.name)
     return output_path
 
