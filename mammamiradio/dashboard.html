@@ -916,6 +916,8 @@ function _dialLock(target, label, statusText) {
   _dialState = 'locking';
   _dialTarget = target;
   const needle = document.getElementById('dial-needle');
+  needle.style.opacity = '';
+  needle.style.animation = 'none';
   needle.classList.remove('seeking');
   needle.classList.add('locked');
 
@@ -1228,6 +1230,7 @@ function updateStatus(d) {
     const _npEl = document.getElementById('now-playing');
     _npEl.style.opacity = '0';
     _npEl.style.transition = 'opacity 0s';
+    _npEl.style.pointerEvents = 'none';
     _dialCollapseTimer = setTimeout(() => {
       const dial = document.getElementById('radio-dial');
       dial.style.transition = 'opacity 1.4s ease';
@@ -1235,6 +1238,7 @@ function updateStatus(d) {
       // Fade now-playing in as dial fades out
       _npEl.style.transition = 'opacity 1.4s ease';
       _npEl.style.opacity = '1';
+      _npEl.style.pointerEvents = '';
       _dialCollapseHideTimer = setTimeout(() => {
         const h = dial.getBoundingClientRect().height;
         dial.style.overflow = 'hidden';
