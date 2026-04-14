@@ -1,5 +1,21 @@
 # Changelog
 
+## 2.9.3
+
+### Added
+- Startup diagnostics: boot log now shows config file path, cache dir, API key presence, and dependency status (ffmpeg/ytdlp). Diagnose broken startups without grepping logs.
+- yt-dlp binary check: warns at boot when yt-dlp is enabled in config but not installed.
+
+### Fixed
+- yt-dlp temp fragment dirs are now cleaned up after every download (success or failure). Prevents `.ytdlp_tmp/` accumulation on storage-constrained Pi hardware.
+
+## 2.9.2
+
+### Fixed
+- HA context strings now generated in English by default (Italian was confusing non-Italian hosts).
+- Admin tab layout and input styling improvements.
+- Host cliché filter updated.
+
 ## 2.9.1
 
 ### Fixed

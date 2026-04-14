@@ -6,6 +6,7 @@ import asyncio
 import json
 import logging
 import os
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -230,8 +231,11 @@ def _download_ytdlp(track: Track, cache_dir: Path) -> Path:
         "paths": {"temp": str(ytdlp_tmp)},  # atomic: fragments in temp, move on completion
     }
 
-    with yt_dlp.YoutubeDL(opts) as ydl:
-        ydl.download([query])
+    try:
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            ydl.download([query])
+    finally:
+        shutil.rmtree(ytdlp_tmp, ignore_errors=True)
 
     out_path = cache_dir / f"{track.cache_key}.mp3"
     if not out_path.exists():
