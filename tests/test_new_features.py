@@ -448,7 +448,7 @@ async def test_synthesize_dialogue_passes_loudnorm_false(tmp_path):
     mock_comm_instance.save = AsyncMock(side_effect=lambda p: _touch(p))
     mock_communicate = MagicMock(return_value=mock_comm_instance)
 
-    def _normalize_side_effect(input_path, output_path, config=None):
+    def _normalize_side_effect(input_path, output_path, config=None, *, loudnorm=True, music_eq=False):
         _touch(output_path)
         return output_path
 

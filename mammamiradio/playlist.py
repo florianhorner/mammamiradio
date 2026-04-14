@@ -265,12 +265,6 @@ def fetch_startup_playlist(
     return tracks, _demo_source(), error
 
 
-def fetch_playlist(config: StationConfig) -> list[Track]:
-    """Legacy wrapper that preserves charts -> demo fallback behavior."""
-    tracks, _, _ = fetch_startup_playlist(config)
-    return tracks
-
-
 def fetch_chart_refresh(existing_ids: set[str]) -> list[Track]:
     """Fetch the latest Italian charts and return only tracks not already in the playlist.
 

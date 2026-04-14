@@ -1510,11 +1510,13 @@ async def load_playlist(request: Request, _: None = Depends(require_admin_access
             return {"ok": False, "error": "Failed to load playlist"}
 
         _apply_loaded_source(request, tracks, resolved_source)
+        result: dict[str, object] = {"ok": True, "tracks": len(tracks), "url": url, "persisted": True}
         try:
             await asyncio.to_thread(write_persisted_source, config.cache_dir, resolved_source)
         except Exception:
-            logger.warning("Failed to persist playlist load, live switch still applied")
-        return {"ok": True, "tracks": len(tracks), "url": url}
+            logger.warning("Failed to persist playlist load, live switch still applied", exc_info=True)
+            result["persisted"] = False
+        return result
 
 
 @router.post("/api/playlist/move_to_next")

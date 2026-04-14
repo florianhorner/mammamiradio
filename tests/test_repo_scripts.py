@@ -20,6 +20,7 @@ def _init_git_repo(path: Path) -> None:
     _run(["git", "init", "-q"], cwd=path)
     _run(["git", "config", "user.email", "tests@example.com"], cwd=path)
     _run(["git", "config", "user.name", "Test User"], cwd=path)
+    _run(["git", "config", "commit.gpgsign", "false"], cwd=path)
 
 
 def _write(path: Path, content: str) -> None:

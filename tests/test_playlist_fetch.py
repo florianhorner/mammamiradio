@@ -12,7 +12,6 @@ from mammamiradio.models import PlaylistSource, Track
 from mammamiradio.playlist import (
     DEMO_TRACKS,
     fetch_chart_refresh,
-    fetch_playlist,
     fetch_startup_playlist,
     load_explicit_source,
     read_persisted_source,
@@ -31,17 +30,17 @@ def test_no_credentials_returns_demo_tracks(config, monkeypatch):
     # Ensure yt-dlp is disabled so we get demo tracks, not live charts
     monkeypatch.delenv("MAMMAMIRADIO_ALLOW_YTDLP", raising=False)
     config.allow_ytdlp = False
-    result = fetch_playlist(config)
-    assert len(result) == len(DEMO_TRACKS)
+    tracks, _, _ = fetch_startup_playlist(config)
+    assert len(tracks) == len(DEMO_TRACKS)
     demo_titles = {t.title for t in DEMO_TRACKS}
-    for t in result:
+    for t in tracks:
         assert t.title in demo_titles
 
 
 def test_no_credentials_shuffles_when_configured(config):
     config.playlist.shuffle = True
     # Run multiple times -- at least one ordering should differ (probabilistic but near-certain)
-    results = [tuple(t.title for t in fetch_playlist(config)) for _ in range(10)]
+    results = [tuple(t.title for t in fetch_startup_playlist(config)[0]) for _ in range(10)]
     # With 10 tracks shuffled 10 times, extremely unlikely all orderings are identical
     assert len(set(results)) > 1
 
