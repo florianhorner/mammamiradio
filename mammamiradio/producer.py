@@ -1119,6 +1119,7 @@ async def run_producer(
                 break_brands: list[str] = []
                 break_summaries: list[str] = []
                 break_texts: list[str] = []
+                break_sonic_worlds: list[str] = []
 
                 loop = asyncio.get_running_loop()
                 sfx_dir = Path(config.ads.sfx_dir) if config.ads.sfx_dir else None
@@ -1126,6 +1127,7 @@ async def run_producer(
                 # ── Pre-compute brand selections (pure sync, no I/O) ──
                 used_brands_this_break: list[str] = []
                 break_formats: list[str] = []
+                break_roles: list[list[str]] = []
                 spot_params = []
                 for spot_idx in range(num_spots):
                     brand = _pick_brand(
@@ -1243,6 +1245,8 @@ async def run_producer(
                     break_brands.append(brand.name)
                     break_summaries.append(script.summary)
                     break_formats.append(script.format)
+                    break_sonic_worlds.append(script.sonic.music_bed if script.sonic else "")
+                    break_roles.append(script.roles_used or [])
                     full_text = " ".join(p.text for p in script.parts if p.type == "voice" and p.text)
                     break_texts.append(full_text)
                     state.record_ad_spot(
@@ -1312,6 +1316,8 @@ async def run_producer(
                     "summaries": break_summaries,
                     "formats": break_formats,
                     "spots": num_spots,
+                    "sonic_worlds": break_sonic_worlds,
+                    "roles_used": break_roles,
                 }
                 segment = Segment(
                     type=SegmentType.AD,
@@ -1321,6 +1327,8 @@ async def run_producer(
                         "brands": break_brands,
                         "spots": num_spots,
                         "formats": break_formats,
+                        "sonic_worlds": break_sonic_worlds,
+                        "roles_used": break_roles,
                     },
                 )
                 _bound_brands = break_brands

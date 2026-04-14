@@ -1164,6 +1164,15 @@ function _updateAdMeta(ns) {
   }
   if (meta.brands && meta.brands.length) parts.push(meta.brands.join(' & '));
   if (meta.spots) parts.push(meta.spots + ' spot' + (meta.spots > 1 ? 's' : ''));
+  if (meta.sonic_worlds && meta.sonic_worlds.length) {
+    const unique = [...new Set(meta.sonic_worlds.filter(Boolean))].map(s => s.replace(/_/g, ' '));
+    if (unique.length) parts.push(unique.join(', '));
+  }
+  if (meta.roles_used && meta.roles_used.length) {
+    const flat = [].concat(...meta.roles_used).filter(Boolean);
+    const unique = [...new Set(flat)].map(r => r.replace(/_/g, ' '));
+    if (unique.length) parts.push(unique.join(', '));
+  }
   if (parts.length) {
     el.textContent = parts.join(' \u00b7 ');
     el.style.display = '';
