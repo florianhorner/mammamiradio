@@ -265,7 +265,6 @@ def fetch_startup_playlist(
     return tracks, _demo_source(), error
 
 
-
 def fetch_chart_refresh(existing_ids: set[str]) -> list[Track]:
     """Fetch the latest Italian charts and return only tracks not already in the playlist.
 

@@ -938,6 +938,7 @@ async def test_load_playlist_success():
     body = resp.json()
     assert body["ok"] is True
     assert body["tracks"] == 1
+    assert body["persisted"] is True
     assert app.state.station_state.playlist[0].title == "New A"
 
 
