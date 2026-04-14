@@ -137,9 +137,9 @@ dashboard.html is now 1600+ lines with ~620 lines of inline setup gate CSS/JS/HT
 The signature ad system uses synthetic ffmpeg sine waves for all SFX and environment beds. The sfx_dir mechanism already supports pre-recorded files (checked first before synthetic fallback). A curated pack of 10-15 real SFX files (cash register, cafe ambience, beach waves, mandolin sting, etc.) would make the biggest single-item audio quality improvement with zero code changes.
 **Effort:** S (CC: n/a, manual curation) | **Depends on:** signature ad system (defines SFX type names) | **Files:** sfx/
 
-## P3: Dashboard ad format display
-The signature ad system adds format, sonic world, and speaker role metadata to state.last_ad_script. The dashboard at / reads this via /status but doesn't render the new fields yet. Show ad format, sonic palette, and cast info in the ad break section.
-**Effort:** S (CC: ~10min) | **Depends on:** signature ad system | **Files:** mammamiradio/dashboard.html
+## ~~P3: Dashboard ad format display~~ RESOLVED
+Ad format names and brand list now rendered in the ad-meta element during ad breaks. `formats` added to Segment metadata in producer.py; `_updateAdMeta()` updated to use `meta.formats` (deduplicated list) and `meta.brands` as a proper array.
+**Completed:** 2026-04-14
 
 ## P3: LLM eval suite for ad format compliance
 The signature ad system provides rich format instructions (duo_scene should produce 2 roles, late_night_whisper should use slow pacing, etc.) but no automated way to verify LLM output follows them. An eval suite with golden examples and scoring rubrics would catch prompt regressions when the ad prompt or Claude model changes.
