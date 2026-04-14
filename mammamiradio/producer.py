@@ -427,8 +427,7 @@ async def _prefetch_next(
             (
                 t
                 for t in state.playlist
-                if t.cache_key not in recent_keys
-                and (_failed_keys is None or t.cache_key not in _failed_keys)
+                if t.cache_key not in recent_keys and (_failed_keys is None or t.cache_key not in _failed_keys)
             ),
             state.playlist[0],
         )
