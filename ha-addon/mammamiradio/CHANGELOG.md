@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.9.4
+
+### Fixed
+- Pre-normalize next track before playback: prevents queue starvation on Raspberry Pi hardware where FFmpeg encoding was blocking the playback loop.
+- Ad sonic metadata now visible in dashboard during ad breaks.
+
 ## 2.9.3
 
 ### Added
