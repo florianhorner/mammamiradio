@@ -12,10 +12,12 @@ import pytest
 
 from mammamiradio.config import load_config
 from mammamiradio.models import (
+    AdScript,
     HostPersonality,
     PlaylistSource,
     Segment,
     SegmentType,
+    SonicWorld,
     StationState,
     Track,
 )
@@ -1532,3 +1534,54 @@ async def test_force_next_bypasses_full_queue(tmp_path):
 
     # force_next was consumed — the trigger was not silently dropped.
     assert state.force_next is None
+
+
+# ---------------------------------------------------------------------------
+# Ad break metadata — sonic_worlds and roles_used
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_ad_break_sets_sonic_worlds_and_roles_in_last_ad_script():
+    """last_ad_script and segment.metadata must include sonic_worlds and roles_used.
+
+    Regression guard: ensures future refactors of the ad assembly loop
+    cannot silently drop these fields from the dashboard state.
+    """
+    state = _make_state()
+    config = _make_config()
+    config.pacing.ad_spots_per_break = 1
+    queue: asyncio.Queue = asyncio.Queue()
+
+    fake_script = AdScript(
+        brand="Prezzoforte",
+        summary="Great deals at Prezzoforte",
+        format="classic_pitch",
+        sonic=SonicWorld(music_bed="cinematic", environment="piazza", transition_motif="fanfare"),
+        roles_used=["hammer", "disclaimer_goblin"],
+    )
+
+    with (
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.AD),
+        patch(f"{PRODUCER_MODULE}.write_ad", new_callable=AsyncMock, return_value=fake_script),
+        patch(f"{PRODUCER_MODULE}.synthesize_ad", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(f"{PRODUCER_MODULE}.generate_bumper_jingle", return_value=_fake_path()),
+        patch(f"{PRODUCER_MODULE}.concat_files", return_value=_fake_path()),
+        patch(f"{PRODUCER_MODULE}.validate_segment_audio"),
+        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+        patch.dict("os.environ", {"MAMMAMIRADIO_SKIP_QUALITY_GATE": "1"}),
+    ):
+        await _run_until_queued(queue, state, config)
+
+    assert state.last_ad_script is not None, "last_ad_script was not set"
+    assert "sonic_worlds" in state.last_ad_script, "sonic_worlds missing from last_ad_script"
+    assert "roles_used" in state.last_ad_script, "roles_used missing from last_ad_script"
+    assert state.last_ad_script["sonic_worlds"] == ["cinematic"]
+    assert state.last_ad_script["roles_used"] == [["hammer", "disclaimer_goblin"]]
+
+    seg: Segment = queue.get_nowait()
+    assert "sonic_worlds" in seg.metadata, "sonic_worlds missing from segment.metadata"
+    assert "roles_used" in seg.metadata, "roles_used missing from segment.metadata"
+    assert seg.metadata["sonic_worlds"] == ["cinematic"]
+    assert seg.metadata["roles_used"] == [["hammer", "disclaimer_goblin"]]
