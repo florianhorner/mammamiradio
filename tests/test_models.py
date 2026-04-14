@@ -208,6 +208,37 @@ def test_on_stream_segment_does_not_add_canned_banter_to_bleed_pool():
     assert list(state.recent_banter_paths) == []
 
 
+def test_on_stream_segment_label_falls_back_to_seg_type_when_no_title():
+    # Regression: ISSUE-004 — failed normalization produces metadata={"error": "..."}
+    # with no "title" key. label must fall back to seg_type.value, not crash or return None.
+    # Found by /qa on 2026-04-14
+    # Report: .gstack/qa-reports/qa-report-localhost-8200-2026-04-14.md
+    state = StationState()
+    seg = Segment(
+        type=SegmentType.MUSIC,
+        path=Path("/tmp/silence.mp3"),
+        metadata={"error": "ffmpeg died with SIGABRT"},
+    )
+    state.on_stream_segment(seg)
+
+    assert state.now_streaming["type"] == "music"
+    assert state.now_streaming["label"] == "music"  # raw fallback — UI masks it as "Preparing..."
+
+
+def test_on_stream_segment_uses_brand_for_ad_when_no_title():
+    # Regression: ad segments use "brand" field as label when no "title" present.
+    # Found by /qa on 2026-04-14
+    state = StationState()
+    seg = Segment(
+        type=SegmentType.AD,
+        path=Path("/tmp/ad.mp3"),
+        metadata={"brand": "Acqua di Fuoco"},
+    )
+    state.on_stream_segment(seg)
+
+    assert state.now_streaming["label"] == "Acqua di Fuoco"
+
+
 def test_after_sweeper_logs_and_increments_segments():
     state = StationState()
     state.after_sweeper()

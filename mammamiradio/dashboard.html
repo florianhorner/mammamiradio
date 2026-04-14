@@ -1024,7 +1024,7 @@ function escHtml(v) { return String(v ?? '').replace(/&/g,'&amp;').replace(/</g,
 
 let _lastTrackLabel = null;
 function _updateNowPlaying(ns) {
-  const label = ns.label || 'Waiting for first segment...';
+  const label = (ns.label && ns.label !== ns.type) ? ns.label : 'Waiting for first segment...';
   const type = ns.type || '';
   const trackEl = document.getElementById('np-track');
   const metaEl = document.getElementById('np-meta');

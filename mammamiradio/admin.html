@@ -873,7 +873,7 @@ function updateNow(ns){
   const typeKey=segmentTypeKey(ns.type);
   const ty=document.getElementById('nowType');
   ty.setAttribute('data-t',typeKey);ty.textContent=segmentBadge(typeKey);
-  document.getElementById('nowTitle').textContent=ns.label||ns.type;
+  document.getElementById('nowTitle').textContent=(ns.label && ns.label !== ns.type) ? ns.label : 'Preparing...';
   document.getElementById('progFill').setAttribute('data-t',typeKey);
   document.getElementById('progLabel').textContent=`${segmentBadge(typeKey)} - estimated`;
   const dur=ns.metadata?.duration_ms?ns.metadata.duration_ms/1000:ns.type==='music'?240:ns.type==='banter'?30:ns.type==='ad'?60:20;
