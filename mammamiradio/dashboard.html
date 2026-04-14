@@ -1158,8 +1158,11 @@ function _updateAdMeta(ns) {
   if (!ns || ns.type !== 'ad') { el.style.display = 'none'; return; }
   const meta = ns.metadata || {};
   const parts = [];
-  if (meta.format) parts.push(meta.format.replace(/_/g, ' '));
-  if (meta.brands) parts.push(meta.brands);
+  if (meta.formats && meta.formats.length) {
+    const unique = [...new Set(meta.formats)].map(f => f.replace(/_/g, ' '));
+    parts.push(unique.join(', '));
+  }
+  if (meta.brands && meta.brands.length) parts.push(meta.brands.join(' & '));
   if (meta.spots) parts.push(meta.spots + ' spot' + (meta.spots > 1 ? 's' : ''));
   if (parts.length) {
     el.textContent = parts.join(' \u00b7 ');

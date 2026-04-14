@@ -101,6 +101,15 @@ The app now treats first run as setup, not as "the dashboard happened to load". 
 
 - Python 3.11+
 - FFmpeg
+
+```bash
+# macOS
+brew install python@3.11 ffmpeg
+
+# Debian/Ubuntu
+sudo apt install python3.11 ffmpeg
+```
+
 - Optional: Anthropic API key, for Claude-generated banter and ads (falls back to OpenAI or stock copy without it)
 - Optional: OpenAI API key, for `gpt-4o-mini-tts` host voices and as a script generation fallback when Anthropic is unavailable
 - Optional: Home Assistant long-lived token, for ambient home-state references in scripts
