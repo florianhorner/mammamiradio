@@ -6,53 +6,31 @@ The current version source of truth is `pyproject.toml`.
 
 ## [Unreleased]
 
-### Fixed
-
-- **Now-playing label fallback**: When audio normalization fails (e.g. FFmpeg SIGABRT on macOS), the dashboard and admin panel now show "Preparing..." / "Waiting for first segment..." instead of the raw segment type string ("music", "banter"). Added regression tests for the label derivation path.
-
-## [2.9.4] - 2026-04-14
-
-### Fixed
-
-- **Pre-normalize next track**: The next track in the queue is now normalized before playback begins, preventing the Pi from stalling mid-stream while FFmpeg encodes. Eliminates the queue starvation pattern where the producer couldn't keep up with the playback loop on Raspberry Pi class hardware.
-- **Ad sonic metadata in dashboard**: Ad segments now surface their sonic metadata (format name, sound bed type) in the dashboard during ad breaks. Previously the "Now Playing" card showed a blank or generic label during ads.
-
-## [2.9.3] - 2026-04-14
+## [2.10.0] - 2026-04-14
 
 ### Added
 
-- **Startup diagnostics**: Boot logging now prints a structured multi-line block in the first 5 seconds — resolved `config_file` path, `cache_dir`, active audio source, track count, API key presence (`anthropic`/`openai`/`ha_token` set/missing without values), and dependency status (`ffmpeg`/`ytdlp` found/missing). Operators can diagnose broken startups without grepping scattered output.
+- **Startup diagnostics**: Boot logging now prints a structured block in the first 5 seconds — resolved `config_file` path, `cache_dir`, active audio source, track count, API key presence (`anthropic`/`openai`/`ha_token` set/missing without values), and dependency status (`ffmpeg`/`ytdlp` found/missing). Operators can diagnose broken startups without grepping scattered output.
 - **yt-dlp binary check**: Warns at boot when `MAMMAMIRADIO_ALLOW_YTDLP` is enabled but the `yt-dlp` binary is not installed. Previously only FFmpeg was checked; a missing yt-dlp would silently fall back to demo tracks with no explanation.
 
 ### Fixed
 
-- **yt-dlp temp dir cleanup**: Fragment directories under `.ytdlp_tmp/{cache_key}` are now removed after every download attempt (success or failure) using `try/finally`. Previously they accumulated silently, wasting disk space on storage-constrained deployments like Raspberry Pi.
-
-## [2.9.2] - 2026-04-13
-
-### Fixed
-
-- **Engine Room shows English**: Home Assistant context (mood, weather arc, recent events, last event label) now displays in English in the admin Engine Room panel. Italian strings are preserved internally for the scriptwriter — the dual-track approach adds parallel `_en` fields through `HomeContext`, `StationState`, and the status API without touching LLM prompt content.
-- **Tab reorganization**: Installation Onboarding and Systems cards moved from the Radio tab to the Engine Room tab where they belong. The setup-incomplete alert dot now appears on the Engine Room tab button.
-- **Input field styling**: API key input fields in the admin panel now use the same dark pill style as search inputs (`.input` aliased to `.search-input` CSS rules). Previously fell through to browser defaults.
-- **Host clichés banned**: `"che bomba"`, `"che ritmo"`, `"che musica"`, `"che canzone"`, `"che pezzo"`, `"ah che"`, `"assolutamente"`, `"incredibile"`, `"fantastico"`, `"pazzesco"`, `"spettacolare"`, `"bella canzone"`, `"bella musica"`, `"che bella"` added to the banter system prompt banned-phrases list and to the transition voiceover prompt. Hosts were opening every segment with the same exclamation; these phrases now cause a retry.
-- **Listener request "Done" button**: The "Play next" button on listener requests was showing a misleading toast without actually queuing the track. Relabelled to "Done" with an honest dismiss-and-acknowledge behaviour.
-- **Triggers not heard when queue is full**: `/api/trigger` (banter, news flash, ad) was silently ignored when the producer queue was already at lookahead capacity. The queue-full gate now checks `force_next` first and falls through to produce the forced segment immediately. Regression test added.
-- **Admin keyboard shortcuts removed**: Global `keydown` listener (`s`/`b`/`a`/`n`) was firing skip/banter/ad/news-flash commands while the user was typing in the search box. The shortcuts were removed entirely. A regression test guards against reintroduction.
-- **HA addon config lost on every restart**: `run.sh` had a shell quoting bug — an f-string containing `"double quotes"` inside a shell `"double-quoted"` string caused the Python options parser to receive mangled code. Result: `NameError: name 'true' is not defined` on every restart, `ANTHROPIC_API_KEY` never exported, all Anthropic calls falling back to OpenAI. Fixed by removing the inner double-quotes. 11 functional tests now execute the real parser snippet against JSON fixtures.
-
-## [2.9.1] - 2026-04-13
-
-### Fixed
-
-- **Instant startup**: Prewarm now runs as a background task instead of blocking FastAPI startup for up to 20 seconds. The app becomes available immediately on boot; the producer's idle-resume fallback (canned banter clip) covers the gap if a listener connects before the first track is ready.
-- **Normalization cache**: FFmpeg re-encoding is now skipped for tracks that have already been normalized in a previous session. Normalized files are cached at `cache_dir/norm_{track}_{bitrate}k.mp3`. On HA hardware (Raspberry Pi class) this saves 60+ seconds per restart per cached track. Cache is automatically busted if the audio bitrate config changes. Cached segments now persist across playbacks (ephemeral flag set correctly). Norm files are included in LRU eviction (regular files evicted first).
+- **HA addon config lost on every restart** *(critical)*: `run.sh` had a shell quoting bug — an f-string containing `"double quotes"` inside a shell `"double-quoted"` string caused the Python options parser to receive mangled code. Result: `NameError: name 'true' is not defined` on every restart, `ANTHROPIC_API_KEY` never exported, all Anthropic calls falling back to OpenAI silently. 11 functional tests now cover the parser.
+- **Instant startup**: Prewarm now runs as a background task instead of blocking FastAPI startup for up to 20 seconds. The app becomes available immediately on boot.
+- **Normalization cache**: FFmpeg re-encoding is now skipped for tracks already normalized in a previous session. Cached at `cache_dir/norm_{track}_{bitrate}k.mp3`. On Raspberry Pi this saves 60+ seconds per restart per cached track. Cache is busted automatically if the audio bitrate config changes.
+- **Pre-normalize next track**: The upcoming track is now normalized before playback begins, preventing the Pi from stalling mid-stream while FFmpeg encodes. Eliminates the queue starvation pattern on Pi-class hardware.
 - **Stopped flag preserved**: Operator `/api/stop` now survives crash/restart/watchdog. The flag is only cleared via explicit `/api/resume`, not on every startup.
-- **Playback gap elimination**: Music persistence (SQLite writes) between songs is now fire-and-forget, eliminating audible gaps on Pi-class hardware.
-- **Status endpoint optimization**: Golden path status (10s TTL), cache size computation (30s TTL), and demo/local directory listings are now cached. Admin page no longer fetches `/public-status` redundantly since `/status` already includes all public fields.
-- **Download validation**: Pre-validation floor lowered from 60s to 30s so silence fallbacks (35s) aren't rejected. ffprobe timeout added (30s) to prevent executor thread starvation on corrupt files.
-- **Demo asset protection**: Fallback canned clips in the playback loop are now marked non-ephemeral, preventing permanent deletion of bundled demo assets.
-- **Voice ID deduplication**: `_OPENAI_VOICE_IDS` set is now a single source of truth in `tts.py`, imported by `config.py`.
+- **Playback gap elimination**: SQLite writes between songs are now fire-and-forget, eliminating audible gaps on Pi-class hardware.
+- **Triggers not heard when queue is full**: `/api/trigger` (banter, news flash, ad) was silently ignored when the producer queue was at lookahead capacity. The queue-full gate now checks `force_next` first and falls through immediately. Regression test added.
+- **Host clichés banned**: 14 overused Italian exclamations (`"che bomba"`, `"assolutamente"`, `"pazzesco"`, etc.) added to the banter system prompt banned-phrases list. Hosts were opening every segment with the same exclamation; these phrases now cause a retry.
+- **Engine Room shows English**: Home Assistant context (mood, weather arc, recent events) now displays in English in the admin Engine Room panel. Italian strings are preserved internally for the scriptwriter prompt.
+- **Ad sonic metadata in dashboard**: Ad segments now surface their format name and sound bed type in the "Now Playing" card during ad breaks.
+- **Now-playing label fallback**: When audio normalization fails (e.g. FFmpeg SIGABRT on macOS), the dashboard shows "Preparing..." / "Waiting for first segment..." instead of raw segment type strings ("music", "banter").
+- **yt-dlp temp dir cleanup**: Fragment directories under `.ytdlp_tmp/{cache_key}` are now removed after every download attempt (success or failure). Previously accumulated silently on Pi hardware.
+- **Status endpoint optimization**: Golden path status (10s TTL), cache size computation (30s TTL), and directory listings are now cached to reduce Pi CPU load.
+- **Admin keyboard shortcuts removed**: Global `keydown` listener (`s`/`b`/`a`/`n`) was firing commands while the user typed in the search box. Removed entirely; regression test added.
+- **Download validation**: Pre-validation floor lowered from 60s to 30s so silence fallbacks (35s) aren't rejected. `ffprobe` timeout added (30s) to prevent executor thread starvation on corrupt files.
+- **Demo asset protection**: Fallback canned clips are now marked non-ephemeral, preventing permanent deletion of bundled demo assets by the LRU eviction pass.
 
 ## [2.9.0] - 2026-04-13
 

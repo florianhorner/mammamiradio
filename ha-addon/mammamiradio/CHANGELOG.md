@@ -1,33 +1,24 @@
 # Changelog
 
-## 2.9.4
-
-### Fixed
-- Pre-normalize next track before playback: prevents queue starvation on Raspberry Pi hardware where FFmpeg encoding was blocking the playback loop.
-- Ad sonic metadata now visible in dashboard during ad breaks.
-
-## 2.9.3
+## 2.10.0
 
 ### Added
-- Startup diagnostics: boot log now shows config file path, cache dir, API key presence, and dependency status (ffmpeg/ytdlp). Diagnose broken startups without grepping logs.
-- yt-dlp binary check: warns at boot when yt-dlp is enabled in config but not installed.
+- Startup diagnostics: boot log shows config file path, cache dir, API key presence, and dependency status (ffmpeg/ytdlp).
+- yt-dlp binary check: warns at boot when yt-dlp is enabled but not installed.
 
 ### Fixed
-- yt-dlp temp fragment dirs are now cleaned up after every download (success or failure). Prevents `.ytdlp_tmp/` accumulation on storage-constrained Pi hardware.
-
-## 2.9.2
-
-### Fixed
-- HA context strings now generated in English by default (Italian was confusing non-Italian hosts).
-- Admin tab layout and input styling improvements.
-- Host cliché filter updated.
-
-## 2.9.1
-
-### Fixed
-- Prewarm runs in background, FastAPI is ready instantly (was blocking up to 20s).
-- Normalization cache skips FFmpeg re-encode for previously-processed tracks, saving 60+ seconds per restart on HA hardware. Cache now persists correctly across playbacks.
+- **Critical**: HA addon config quoting bug caused `ANTHROPIC_API_KEY` to never be exported on every restart, silently falling back to OpenAI.
+- Prewarm now runs in background — FastAPI is ready instantly (was blocking up to 20s).
+- Normalization cache: skips FFmpeg re-encode for previously-processed tracks, saving 60+ seconds per restart on Pi hardware.
+- Pre-normalize upcoming track before playback begins, eliminating queue starvation on Pi-class hardware.
 - Operator stop (`/api/stop`) survives crash/restart/watchdog — no more unexpected auto-play after reboot.
+- Triggers (banter, news flash, ad) were silently ignored when producer queue was full. Now handled immediately.
+- Host cliché filter: 14 overused phrases now cause a retry.
+- Engine Room HA context now shows in English.
+- Ad format name and sound bed type now visible in dashboard during ad breaks.
+- Dashboard shows "Preparing..." instead of raw type string when normalization fails.
+- yt-dlp temp fragment dirs cleaned up after every download.
+- Admin keyboard shortcuts removed (were firing while typing in search box).
 - Fire-and-forget music persistence eliminates audible gaps between songs on Pi hardware.
 - Status endpoint caching reduces I/O overhead from aggressive admin/dashboard polling.
 - Download validation floor lowered so silence fallbacks aren't rejected. ffprobe timeout prevents thread starvation.
