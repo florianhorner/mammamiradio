@@ -550,6 +550,40 @@ async def test_banter_quality_reject_falls_back_to_canned_clip(tmp_path):
     assert seg.metadata.get("canned") is True
 
 
+@pytest.mark.asyncio
+async def test_banter_no_llm_impossible_tts_failure_falls_back_to_canned(tmp_path):
+    """No-LLM banter falls back to canned clip when impossible-moment TTS fails."""
+    state = _make_run_state()
+    config = _make_run_config()
+    config.tmp_dir = tmp_path
+    config.anthropic_api_key = ""
+    config.openai_api_key = ""
+    # Force the "gold closer" branch instead of immediate canned-pick branch.
+    state.canned_clips_streamed = 2
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+
+    canned_clip = tmp_path / "canned_no_llm.mp3"
+    canned_clip.write_bytes(b"canned audio" * 100)
+
+    with (
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.BANTER),
+        patch(
+            f"{PRODUCER_MODULE}._synthesize_impossible_moment",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("tts failure"),
+        ),
+        patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=canned_clip),
+        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+        patch.dict("os.environ", {"MAMMAMIRADIO_SKIP_QUALITY_GATE": "1"}, clear=False),
+    ):
+        await _run_until_n_queued(queue, state, config, n=1)
+
+    assert queue.qsize() >= 1
+    seg = queue.get_nowait()
+    assert seg.type == SegmentType.BANTER
+    assert seg.metadata.get("canned") is True
+
+
 # ---------------------------------------------------------------------------
 # Gap 3 — Studio humanity one-shot: fires only once per session
 # ---------------------------------------------------------------------------
