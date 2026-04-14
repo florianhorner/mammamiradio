@@ -396,3 +396,145 @@ async def test_update_persona_persists_guesses_on_conflict(store):
     persona = await store.get_persona()
     assert "night owl" in persona.personality_guesses
     assert "loves Italian pop" in persona.theories
+
+
+# ---------------------------------------------------------------------------
+# set_arc_thresholds — invalid / unparseable threshold values (lines 62-63)
+# ---------------------------------------------------------------------------
+
+
+def test_set_arc_thresholds_with_unparseable_values():
+    """Non-integer threshold values fall back to defaults without raising."""
+    from mammamiradio.persona import _DEFAULT_ARC_THRESHOLDS, compute_arc_phase, set_arc_thresholds
+
+    # These should all fall back to defaults silently
+    set_arc_thresholds(["abc", None, []])  # type: ignore[list-item]
+    # After fallback, arc phase computation should still work with default thresholds
+    assert compute_arc_phase(0) == "stranger"
+    assert compute_arc_phase(4) == "acquaintance"
+    assert compute_arc_phase(11) == "friend"
+    assert compute_arc_phase(26) == "old_friend"
+
+    # Restore defaults explicitly so other tests are unaffected
+    set_arc_thresholds(list(_DEFAULT_ARC_THRESHOLDS))
+
+
+def test_set_arc_thresholds_with_none_entries():
+    """A list containing None falls back to defaults (TypeError path)."""
+    from mammamiradio.persona import _DEFAULT_ARC_THRESHOLDS, compute_arc_phase, set_arc_thresholds
+
+    set_arc_thresholds([None, None, None])  # type: ignore[list-item]
+    assert compute_arc_phase(0) == "stranger"
+    set_arc_thresholds(list(_DEFAULT_ARC_THRESHOLDS))
+
+
+# ---------------------------------------------------------------------------
+# callbacks trimmed to 20 (lines 252-253)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_callbacks_trimmed_to_20(store):
+    """When callbacks_used grows beyond 20 entries, only the last 20 are kept."""
+    # Add 25 callbacks in batches
+    for i in range(25):
+        await store.update_persona({"callbacks_used": [f"Song {i}"]})
+
+    persona = await store.get_persona()
+    assert len(persona.callbacks) <= 20
+    # The last song added should be present
+    assert any(cb["song"] == "Song 24" for cb in persona.callbacks)
+    # The earliest songs should have been trimmed
+    assert not any(cb["song"] == "Song 0" for cb in persona.callbacks)
+
+
+# ---------------------------------------------------------------------------
+# get_recent_plays — DB exception returns [] (lines 339-341)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_recent_plays_returns_empty_on_db_error(tmp_path):
+    """get_recent_plays returns [] when aiosqlite raises an exception."""
+    from unittest.mock import patch
+
+    from mammamiradio.sync import init_db
+
+    db_path = tmp_path / "persona_err.db"
+    init_db(db_path)
+    s = PersonaStore(db_path)
+
+    with patch("aiosqlite.connect", side_effect=Exception("DB unavailable")):
+        result = await s.get_recent_plays(n=5)
+
+    assert result == []
+
+
+# ---------------------------------------------------------------------------
+# consume_milestone — no pending milestone returns None without hitting DB (line 387)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_consume_milestone_no_op_when_no_pending(store):
+    """consume_milestone returns without DB writes when pending_milestone is None."""
+    from unittest.mock import patch
+
+    # Seed row with session_count=6 — not a milestone session
+    await store.update_persona({})
+    # Manually verify there is no pending milestone before proceeding
+    persona = await store.get_persona()
+    assert persona.pending_milestone is None
+
+    # Patch aiosqlite.connect to assert it is NOT called when milestone is None
+    with patch("aiosqlite.connect"):
+        await store.consume_milestone()
+        # get_persona itself is called first (which uses aiosqlite), but
+        # the early return should prevent the UPDATE from running.
+        # We verify by checking the returned state is unchanged.
+
+    # State should be unchanged — no milestone fired
+    persona = await store.get_persona()
+    assert persona.arc_metadata.get("milestones_fired", []) == []
+
+
+# ---------------------------------------------------------------------------
+# record_motif — DB exception swallowed silently (lines 297-298)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_record_motif_swallows_db_exception(tmp_path):
+    """record_motif does not propagate exceptions from aiosqlite."""
+    from unittest.mock import patch
+
+    from mammamiradio.sync import init_db
+
+    db_path = tmp_path / "motif_err.db"
+    init_db(db_path)
+    s = PersonaStore(db_path)
+
+    with patch("aiosqlite.connect", side_effect=Exception("DB write failure")):
+        # Must not raise
+        await s.record_motif("Test Artist", "Test Song")
+
+
+# ---------------------------------------------------------------------------
+# increment_session — DB exception swallowed (lines 339-341)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_increment_session_swallows_db_exception(tmp_path):
+    """increment_session does not propagate exceptions from aiosqlite."""
+    from unittest.mock import patch
+
+    from mammamiradio.sync import init_db
+
+    db_path = tmp_path / "incr_err.db"
+    init_db(db_path)
+    s = PersonaStore(db_path)
+
+    with patch("aiosqlite.connect", side_effect=Exception("DB write failure")):
+        # Must not raise
+        await s.increment_session()
