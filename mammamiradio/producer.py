@@ -399,6 +399,7 @@ def _cast_voices(
 async def _prefetch_next(
     state: StationState,
     config: StationConfig,
+    _failed_keys: set[str] | None = None,
 ) -> None:
     """Pre-normalize the predicted next music track into the norm cache.
 
@@ -410,16 +411,30 @@ async def _prefetch_next(
     window without calling select_next_track (which has weighted-random side
     effects). Falls back to playlist[0] if all tracks are in cooldown.
     Non-fatal — any failure is swallowed after a DEBUG log.
+
+    _failed_keys: caller-owned set; on failure the candidate's cache_key is added
+    so the caller can skip it on the next cycle, preventing repeated retries of
+    the same broken track on slow hardware.
     """
+    norm_path: Path | None = None
+    candidate_key: str | None = None
     try:
         if not state.playlist:
             return
         cooldown = config.playlist.repeat_cooldown
         recent_keys = {t.cache_key for t in list(state.played_tracks)[-cooldown:]}
         candidate = next(
-            (t for t in state.playlist if t.cache_key not in recent_keys),
+            (
+                t
+                for t in state.playlist
+                if t.cache_key not in recent_keys
+                and (_failed_keys is None or t.cache_key not in _failed_keys)
+            ),
             state.playlist[0],
         )
+        candidate_key = candidate.cache_key
+        if _failed_keys is not None and candidate_key in _failed_keys:
+            return  # all candidates have failed — nothing useful to prefetch
         norm_cached = config.cache_dir / f"norm_{candidate.cache_key}_{config.audio.bitrate}k.mp3"
         if norm_cached.exists():
             logger.debug("Prefetch: norm already cached for %s", candidate.display)
@@ -437,15 +452,21 @@ async def _prefetch_next(
         try:
             await loop.run_in_executor(None, shutil.copy2, str(norm_path), str(norm_cached))
             logger.info("Prefetch: cached norm for %s", candidate.display)
-        except OSError as exc:
-            logger.warning("Prefetch: cache write failed for %s: %s", candidate.display, exc)
-        finally:
-            norm_path.unlink(missing_ok=True)
+        except Exception:
+            # Partial write: remove incomplete cache file so the main producer
+            # doesn't mistake it for a valid cached segment on the next cycle.
+            norm_cached.unlink(missing_ok=True)
+            raise
     except asyncio.CancelledError:
         logger.debug("Prefetch task cancelled")
         raise
     except Exception as exc:
         logger.debug("Prefetch failed (non-fatal): %s", exc)
+        if _failed_keys is not None and candidate_key is not None:
+            _failed_keys.add(candidate_key)
+    finally:
+        if norm_path is not None:
+            norm_path.unlink(missing_ok=True)
 
 
 async def prewarm_first_segment(
@@ -563,8 +584,11 @@ async def run_producer(
     _was_idle = False
     _prefetch_task: asyncio.Task[None] | None = None  # background norm prefetch for next track
     _drain_guard_queued = False  # True after a drain-recovery clip is inserted, until a real segment lands
+    _prefetch_failed_keys: set[str] = set()  # tracks whose prefetch failed — skip until playlist rotates
     while True:
         if state.session_stopped:
+            if _prefetch_task is not None and not _prefetch_task.done():
+                _prefetch_task.cancel()
             await asyncio.sleep(1)
             continue
 
@@ -1473,7 +1497,7 @@ async def run_producer(
                     if _prefetch_task and not _prefetch_task.done():
                         _prefetch_task.cancel()
                     _prefetch_task = asyncio.create_task(
-                        _prefetch_next(state, config),
+                        _prefetch_next(state, config, _prefetch_failed_keys),
                         name="prefetch-norm",
                     )
             logger.info("Queued %s (queue size: %d)", seg_type.value, queue.qsize())
