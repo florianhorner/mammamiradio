@@ -67,7 +67,7 @@ branch = true
 source = ["mammamiradio"]
 
 [tool.coverage.report]
-fail_under = 90
+fail_under = 91
 exclude_lines = [
     "pragma: no cover",
     "if TYPE_CHECKING:",
