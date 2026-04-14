@@ -6,8 +6,10 @@ import asyncio
 import logging
 import os
 import secrets
+import shutil
 import time
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI
 
@@ -69,12 +71,17 @@ async def startup():
     persona_store = PersonaStore(db_path)
 
     # Dependency checks with install hints
-    import shutil
-
-    if not shutil.which("ffmpeg"):
+    _ffmpeg_found = bool(shutil.which("ffmpeg"))
+    _ytdlp_found = bool(shutil.which("yt-dlp"))
+    if not _ffmpeg_found:
         logger.warning(
             "FFmpeg not found — audio generation will fail. "
             "Install: brew install ffmpeg (macOS) or apt install ffmpeg (Linux)"
+        )
+    if config.allow_ytdlp and not _ytdlp_found:
+        logger.warning(
+            "yt-dlp not found but MAMMAMIRADIO_ALLOW_YTDLP is enabled — charts will fall back to demo. "
+            "Install: brew install yt-dlp (macOS) or pip install yt-dlp"
         )
 
     # Restore stop state so a reload/restart honours an operator-issued stop.
@@ -152,19 +159,25 @@ async def startup():
     app.state.prewarm_task = _prewarm_task
     app.state.playback_task = _playback_task
     app.state.producer_task = _producer_task
-    # One-line boot summary for operator diagnostics
+    # Startup diagnostics — first 5 seconds of logs must be actionable for debugging
+    _config_file = Path("radio.toml").resolve()
     _audio_src = {"charts": "yt-dlp", "demo": "demo", "local": "local"}.get(
         (playlist_source.kind if playlist_source else ""), "unknown"
     )
+    logger.info("Startup diagnostics:")
+    logger.info("  config_file=%s  cache_dir=%s", _config_file, config.cache_dir)
+    logger.info("  audio_source=%s  tracks=%d", _audio_src, len(tracks))
     logger.info(
-        "Boot summary: config_dir=%s audio_source=%s anthropic=%s openai=%s ha=%s ytdlp=%s tracks=%d",
-        config.cache_dir,
-        _audio_src,
-        "yes" if os.getenv("ANTHROPIC_API_KEY") else "no",
-        "yes" if os.getenv("OPENAI_API_KEY") else "no",
-        "enabled" if config.homeassistant.enabled else "disabled",
-        "allowed" if config.allow_ytdlp else "blocked",
-        len(tracks),
+        "  keys: anthropic=%s  openai=%s  ha_token=%s",
+        "set" if os.getenv("ANTHROPIC_API_KEY") else "missing",
+        "set" if os.getenv("OPENAI_API_KEY") else "missing",
+        "set" if os.getenv("HA_TOKEN") else "missing",
+    )
+    logger.info(
+        "  deps: ffmpeg=%s  ytdlp=%s (allowed=%s)",
+        "found" if _ffmpeg_found else "MISSING",
+        "found" if _ytdlp_found else "missing",
+        "yes" if config.allow_ytdlp else "no",
     )
     logger.info(
         "Producer started. Stream at http://%s:%d/stream",

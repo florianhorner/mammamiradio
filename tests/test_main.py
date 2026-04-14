@@ -368,6 +368,85 @@ async def test_startup_clip_ring_buffer_fallback_to_240(tmp_path: Path):
 
 
 @pytest.mark.asyncio
+async def test_startup_warns_when_ytdlp_missing_but_allowed(tmp_path: Path, caplog):
+    """startup() warns when yt-dlp is allowed in config but the binary is not installed."""
+    import logging
+
+    from mammamiradio.models import PlaylistSource, Track
+
+    mock_config = MagicMock()
+    mock_config.station.name = "TestRadio"
+    mock_config.station.language = "it"
+    mock_config.bind_host = "127.0.0.1"
+    mock_config.port = 8000
+    mock_config.pacing.lookahead_segments = 3
+    mock_config.max_cache_size_mb = 500
+    mock_config.tmp_dir = tmp_path / "tmp"
+    mock_config.cache_dir = tmp_path / "cache"
+    mock_config.homeassistant.enabled = False
+    mock_config.allow_ytdlp = True
+    mock_config.audio.bitrate = 192
+
+    ps = PlaylistSource(kind="charts", source_id="it", label="Italian charts")
+    tracks = [Track(title="S", artist="A", duration_ms=1, spotify_id="x")]
+
+    with (
+        patch(f"{MODULE}.load_config", return_value=mock_config),
+        patch(f"{MODULE}.read_persisted_source", return_value=None),
+        patch(f"{MODULE}.fetch_startup_playlist", return_value=(tracks, ps, "")),
+        patch(f"{MODULE}.run_producer", new_callable=AsyncMock),
+        patch(f"{MODULE}.run_playback_loop", new_callable=AsyncMock),
+        patch(f"{MODULE}.prewarm_first_segment", new_callable=AsyncMock),
+        patch(f"{MODULE}.shutil.which", return_value=None),
+        caplog.at_level(logging.WARNING, logger="mammamiradio"),
+    ):
+        from mammamiradio.main import startup
+
+        await startup()
+
+    assert any("yt-dlp" in r.message and "not found" in r.message for r in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_startup_no_ytdlp_warning_when_blocked(tmp_path: Path, caplog):
+    """startup() does not warn about missing yt-dlp when allow_ytdlp is False."""
+    import logging
+
+    from mammamiradio.models import Track
+
+    mock_config = MagicMock()
+    mock_config.station.name = "TestRadio"
+    mock_config.station.language = "it"
+    mock_config.bind_host = "127.0.0.1"
+    mock_config.port = 8000
+    mock_config.pacing.lookahead_segments = 3
+    mock_config.max_cache_size_mb = 500
+    mock_config.tmp_dir = tmp_path / "tmp"
+    mock_config.cache_dir = tmp_path / "cache"
+    mock_config.homeassistant.enabled = False
+    mock_config.allow_ytdlp = False
+    mock_config.audio.bitrate = 192
+
+    tracks = [Track(title="S", artist="A", duration_ms=1, spotify_id="x")]
+
+    with (
+        patch(f"{MODULE}.load_config", return_value=mock_config),
+        patch(f"{MODULE}.read_persisted_source", return_value=None),
+        patch(f"{MODULE}.fetch_startup_playlist", return_value=(tracks, None, "")),
+        patch(f"{MODULE}.run_producer", new_callable=AsyncMock),
+        patch(f"{MODULE}.run_playback_loop", new_callable=AsyncMock),
+        patch(f"{MODULE}.prewarm_first_segment", new_callable=AsyncMock),
+        patch(f"{MODULE}.shutil.which", return_value=None),
+        caplog.at_level(logging.WARNING, logger="mammamiradio"),
+    ):
+        from mammamiradio.main import startup
+
+        await startup()
+
+    assert not any("yt-dlp" in r.message and "not found" in r.message for r in caplog.records)
+
+
+@pytest.mark.asyncio
 async def test_lifespan_calls_startup_and_shutdown(tmp_path):
     """_lifespan context manager calls startup() then shutdown() around the yield."""
 
@@ -396,3 +475,57 @@ async def test_lifespan_calls_startup_and_shutdown(tmp_path):
 
         async with _lifespan(app):
             assert hasattr(app.state, "station_state")
+
+
+@pytest.mark.asyncio
+async def test_startup_clip_ring_buffer_invalid_string_bitrate(tmp_path: Path):
+    """Ring buffer maxlen falls back to 240 when config.audio.bitrate is an unparseable string."""
+    from mammamiradio.models import Track
+
+    mock_config = MagicMock()
+    mock_config.station.name = "TestRadio"
+    mock_config.station.language = "it"
+    mock_config.bind_host = "127.0.0.1"
+    mock_config.port = 8000
+    mock_config.pacing.lookahead_segments = 3
+    mock_config.max_cache_size_mb = 500
+    mock_config.tmp_dir = tmp_path / "tmp"
+    mock_config.cache_dir = tmp_path / "cache"
+    mock_config.homeassistant.enabled = False
+    mock_config.allow_ytdlp = False
+    # A plain string causes ValueError from int()
+    mock_config.audio.bitrate = "not-a-number"
+
+    tracks = [Track(title="S", artist="A", duration_ms=1, spotify_id="x")]
+
+    with (
+        patch(f"{MODULE}.load_config", return_value=mock_config),
+        patch(f"{MODULE}.read_persisted_source", return_value=None),
+        patch(f"{MODULE}.fetch_startup_playlist", return_value=(tracks, None, "")),
+        patch(f"{MODULE}.run_producer", new_callable=AsyncMock),
+        patch(f"{MODULE}.run_playback_loop", new_callable=AsyncMock),
+        patch(f"{MODULE}.prewarm_first_segment", new_callable=AsyncMock),
+    ):
+        from mammamiradio.main import app, startup
+
+        await startup()
+
+    assert app.state.clip_ring_buffer.maxlen == 240
+
+
+@pytest.mark.asyncio
+async def test_shutdown_with_no_tasks_set():
+    """shutdown() handles the case where all module-level task refs are None."""
+    import mammamiradio.main as main_mod
+
+    main_mod._producer_task = None
+    main_mod._playback_task = None
+    main_mod._prewarm_task = None
+
+    from mammamiradio.main import shutdown
+
+    # Should complete without calling asyncio.gather (no tasks to cancel)
+    with patch("asyncio.gather", new_callable=AsyncMock) as mock_gather:
+        await shutdown()
+
+    mock_gather.assert_not_called()

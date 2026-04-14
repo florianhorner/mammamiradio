@@ -243,6 +243,64 @@ def test_ytdlp_uses_no_progress_options(track, cache_dir):
     assert "temp" in captured_opts.get("paths", {})
 
 
+def test_ytdlp_cleans_up_temp_dir_on_success(track, cache_dir):
+    """Temp fragment dir is removed after a successful download."""
+    import sys
+
+    from mammamiradio.downloader import _download_ytdlp
+
+    class _FakeYoutubeDL:
+        def __init__(self, _opts):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def download(self, _queries):
+            (cache_dir / f"{track.cache_key}.mp3").write_text("audio")
+
+    mock_yt_dlp = MagicMock()
+    mock_yt_dlp.YoutubeDL = _FakeYoutubeDL
+
+    with patch.dict(sys.modules, {"yt_dlp": mock_yt_dlp}):
+        _download_ytdlp(track, cache_dir)
+
+    assert not (cache_dir / ".ytdlp_tmp" / track.cache_key).exists()
+
+
+def test_ytdlp_cleans_up_temp_dir_on_failure(track, cache_dir):
+    """Temp fragment dir is removed even when the download raises."""
+    import sys
+
+    import pytest
+
+    from mammamiradio.downloader import _download_ytdlp
+
+    class _FakeYoutubeDL:
+        def __init__(self, _opts):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def download(self, _queries):
+            raise RuntimeError("network error")
+
+    mock_yt_dlp = MagicMock()
+    mock_yt_dlp.YoutubeDL = _FakeYoutubeDL
+
+    with patch.dict(sys.modules, {"yt_dlp": mock_yt_dlp}), pytest.raises(RuntimeError):
+        _download_ytdlp(track, cache_dir)
+
+    assert not (cache_dir / ".ytdlp_tmp" / track.cache_key).exists()
+
+
 def test_download_ytdlp_uses_exact_watch_url_when_youtube_id(cache_dir):
     from mammamiradio.downloader import _download_ytdlp
 
