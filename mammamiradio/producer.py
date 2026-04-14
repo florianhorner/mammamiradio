@@ -600,9 +600,7 @@ async def run_producer(
         if queue.empty() and _segments_produced > 0 and not _drain_guard_queued:
             fallback = _pick_canned_clip("banter", state=state) or _pick_canned_clip("welcome")
             if fallback:
-                logger.warning(
-                    "Queue empty during active playback — inserting canned clip as bridge"
-                )
+                logger.warning("Queue empty during active playback — inserting canned clip as bridge")
                 await _queue_segment(
                     Segment(
                         type=SegmentType.BANTER,
