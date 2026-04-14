@@ -33,10 +33,10 @@ artist_cooldown = 3     # Min songs before the same artist replays
 max_artist_per_hour = 3 # Hard cap on same artist within ~60 min window
 
 [pacing]
-songs_between_banter = 2
+songs_between_banter = 3
 songs_between_ads = 4
-ad_spots_per_break = 2
-lookahead_segments = 3
+ad_spots_per_break = 1
+lookahead_segments = 2
 
 [[hosts]]
 name = "Marco"

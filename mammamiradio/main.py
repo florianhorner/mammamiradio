@@ -145,10 +145,10 @@ async def startup():
     # Pre-produce music segments in the background so app startup is instant.
     # If a listener arrives before prewarm finishes, the producer's idle-resume
     # logic queues a canned clip as an immediate fallback.
-    # On addon hardware (Pi-class), pre-warm 3 tracks since dynaudnorm is
-    # ~10-15s each.  Desktop pre-warms 2.
+    # Keep prewarm capped at 2 across environments to avoid ffmpeg pileups on
+    # constrained addon hardware while still buffering enough for smooth start.
     async def _prewarm_multiple():
-        total = 3 if config.is_addon else 2
+        total = 2
         for _ in range(total):
             await prewarm_first_segment(queue, state, config)
 

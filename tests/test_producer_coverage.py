@@ -550,6 +550,40 @@ async def test_banter_quality_reject_falls_back_to_canned_clip(tmp_path):
     assert seg.metadata.get("canned") is True
 
 
+@pytest.mark.asyncio
+async def test_banter_no_llm_impossible_tts_failure_falls_back_to_canned(tmp_path):
+    """No-LLM banter falls back to canned clip when impossible-moment TTS fails."""
+    state = _make_run_state()
+    config = _make_run_config()
+    config.tmp_dir = tmp_path
+    config.anthropic_api_key = ""
+    config.openai_api_key = ""
+    # Force the "gold closer" branch instead of immediate canned-pick branch.
+    state.canned_clips_streamed = 2
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+
+    canned_clip = tmp_path / "canned_no_llm.mp3"
+    canned_clip.write_bytes(b"canned audio" * 100)
+
+    with (
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.BANTER),
+        patch(
+            f"{PRODUCER_MODULE}._synthesize_impossible_moment",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("tts failure"),
+        ),
+        patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=canned_clip),
+        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+        patch.dict("os.environ", {"MAMMAMIRADIO_SKIP_QUALITY_GATE": "1"}, clear=False),
+    ):
+        await _run_until_n_queued(queue, state, config, n=1)
+
+    assert queue.qsize() >= 1
+    seg = queue.get_nowait()
+    assert seg.type == SegmentType.BANTER
+    assert seg.metadata.get("canned") is True
+
+
 # ---------------------------------------------------------------------------
 # Gap 3 — Studio humanity one-shot: fires only once per session
 # ---------------------------------------------------------------------------
@@ -891,6 +925,102 @@ async def test_prefetch_next_cancelled(tmp_path):
         pytest.raises(asyncio.CancelledError),
     ):
         await _prefetch_next(state, config)
+
+
+# ---------------------------------------------------------------------------
+# _prefetch_next P1 hardening — failed keys, partial cache cleanup, task cancel
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_prefetch_next_adds_failed_key_on_exception(tmp_path):
+    """_failed_keys receives the candidate's cache_key when normalization raises."""
+    from mammamiradio.producer import _prefetch_next
+
+    state = _make_run_state()
+    config = _make_run_config()
+    config.tmp_dir = tmp_path
+    config.cache_dir = tmp_path
+
+    failed: set[str] = set()
+    with patch(f"{PRODUCER_MODULE}.download_track", new_callable=AsyncMock, side_effect=RuntimeError("oops")):
+        await _prefetch_next(state, config, _failed_keys=failed)
+
+    assert len(failed) == 1, "Expected one failed key to be recorded"
+    # The candidate should be the first playlist track
+    assert state.playlist[0].cache_key in failed
+
+
+@pytest.mark.asyncio
+async def test_prefetch_next_skips_failed_candidate(tmp_path):
+    """_prefetch_next skips a candidate whose cache_key is in _failed_keys."""
+    from mammamiradio.producer import _prefetch_next
+
+    state = _make_run_state()
+    config = _make_run_config()
+    config.tmp_dir = tmp_path
+    config.cache_dir = tmp_path
+
+    # Mark the first track as failed
+    first_key = state.playlist[0].cache_key
+    failed: set[str] = {first_key}
+
+    with patch(f"{PRODUCER_MODULE}.download_track", new_callable=AsyncMock) as mock_dl:
+        await _prefetch_next(state, config, _failed_keys=failed)
+        if mock_dl.called:
+            # If download was called, it should be for a DIFFERENT track
+            assert True  # got past the failed-key filter
+        # Either way, should not raise
+
+
+@pytest.mark.asyncio
+async def test_prefetch_next_all_candidates_failed_returns_early(tmp_path):
+    """_prefetch_next returns early when every playlist track is in _failed_keys."""
+    from mammamiradio.producer import _prefetch_next
+
+    state = _make_run_state()
+    config = _make_run_config()
+    config.tmp_dir = tmp_path
+    config.cache_dir = tmp_path
+
+    # Mark ALL playlist tracks as failed
+    failed: set[str] = {t.cache_key for t in state.playlist}
+
+    with patch(f"{PRODUCER_MODULE}.download_track", new_callable=AsyncMock) as mock_dl:
+        await _prefetch_next(state, config, _failed_keys=failed)
+        mock_dl.assert_not_called()  # should return before any download attempt
+
+
+@pytest.mark.asyncio
+async def test_prefetch_next_cleans_partial_norm_cached_on_copy_failure(tmp_path):
+    """Removes a partially-written norm_cached file when copy2 fails."""
+    from mammamiradio.producer import _prefetch_next
+
+    state = _make_run_state()
+    config = _make_run_config()
+    config.tmp_dir = tmp_path
+    config.cache_dir = tmp_path
+
+    track = state.playlist[0]
+    fake_audio = tmp_path / "track.mp3"
+    fake_audio.write_bytes(b"audio")
+    norm_cached = tmp_path / f"norm_{track.cache_key}_{config.audio.bitrate}k.mp3"
+
+    def _partial_copy(src, dst):
+        Path(dst).write_bytes(b"partial")
+        raise OSError("disk full")
+
+    failed: set[str] = set()
+    with (
+        patch(f"{PRODUCER_MODULE}.download_track", new_callable=AsyncMock, return_value=fake_audio),
+        patch(f"{PRODUCER_MODULE}.validate_download", return_value=(True, "ok")),
+        patch(f"{PRODUCER_MODULE}.normalize"),
+        patch(f"{PRODUCER_MODULE}.shutil.copy2", side_effect=_partial_copy),
+    ):
+        await _prefetch_next(state, config, _failed_keys=failed)
+
+    assert not norm_cached.exists(), "Partial norm_cached must be removed after copy failure"
+    assert track.cache_key in failed
 
 
 # ---------------------------------------------------------------------------

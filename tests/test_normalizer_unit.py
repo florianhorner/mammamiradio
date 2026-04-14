@@ -127,6 +127,20 @@ def test_normalize_forces_single_thread(mock_subprocess):
     assert cmd[threads_idx + 1] == "1"
 
 
+def test_normalize_uses_global_ffmpeg_semaphore(mock_subprocess):
+    mock_run, _ = mock_subprocess
+    inp = Path("/tmp/in.mp3")
+    out = Path("/tmp/out.mp3")
+    sem = MagicMock()
+
+    with patch("mammamiradio.normalizer._NORM_SEM", sem):
+        normalize(inp, out, loudnorm=False)
+
+    sem.__enter__.assert_called_once()
+    sem.__exit__.assert_called_once()
+    mock_run.assert_called_once()
+
+
 def test_normalize_without_loudnorm_uses_fast_filter(mock_subprocess):
     mock_run, _ = mock_subprocess
     inp = Path("/tmp/in.mp3")
