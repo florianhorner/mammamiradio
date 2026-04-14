@@ -774,3 +774,205 @@ def test_cast_voices_no_voices_all_roles_assigned():
     # All roles map to the same fallback voice when there are no configured ad voices
     voices_used = {result[role].voice for role in roles}
     assert len(voices_used) == 1, "Expected single fallback voice for all roles with no ad voices configured"
+
+
+# ---------------------------------------------------------------------------
+# Gap 7 — _prefetch_next: background normalization of predicted next track
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_prefetch_next_empty_playlist(tmp_path):
+    """_prefetch_next returns early when playlist is empty."""
+    from mammamiradio.producer import _prefetch_next
+
+    state = _make_run_state()
+    state.playlist.clear()
+    config = _make_run_config()
+    config.tmp_dir = tmp_path
+    config.cache_dir = tmp_path
+
+    # Should return without raising
+    await _prefetch_next(state, config)
+
+
+@pytest.mark.asyncio
+async def test_prefetch_next_cache_hit(tmp_path):
+    """_prefetch_next skips normalization when the norm cache already exists."""
+    from mammamiradio.producer import _prefetch_next
+
+    state = _make_run_state()
+    config = _make_run_config()
+    config.tmp_dir = tmp_path
+    config.cache_dir = tmp_path
+
+    # Pre-create the norm cache file for the first track
+    track = state.playlist[0]
+    norm_cached = tmp_path / f"norm_{track.cache_key}_{config.audio.bitrate}k.mp3"
+    norm_cached.write_bytes(b"cached norm audio")
+
+    with patch(f"{PRODUCER_MODULE}.download_track", new_callable=AsyncMock) as mock_dl:
+        await _prefetch_next(state, config)
+        mock_dl.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_prefetch_next_invalid_download(tmp_path):
+    """_prefetch_next returns early when validate_download returns False."""
+    from mammamiradio.producer import _prefetch_next
+
+    state = _make_run_state()
+    config = _make_run_config()
+    config.tmp_dir = tmp_path
+    config.cache_dir = tmp_path
+
+    with (
+        patch(f"{PRODUCER_MODULE}.download_track", new_callable=AsyncMock, return_value=tmp_path / "dl.mp3"),
+        patch(f"{PRODUCER_MODULE}.validate_download", return_value=(False, "bad download")),
+        patch(f"{PRODUCER_MODULE}.normalize") as mock_norm,
+    ):
+        await _prefetch_next(state, config)
+        mock_norm.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_prefetch_next_cache_write_failure(tmp_path):
+    """_prefetch_next logs a warning when cache write fails but doesn't raise."""
+    from mammamiradio.producer import _prefetch_next
+
+    state = _make_run_state()
+    config = _make_run_config()
+    config.tmp_dir = tmp_path
+    config.cache_dir = tmp_path
+
+    norm_out = tmp_path / "norm_out.mp3"
+    norm_out.write_bytes(b"normed audio")
+
+    def _fake_normalize(src, dst, *args, **kwargs):
+        dst.write_bytes(b"normed audio")
+
+    with (
+        patch(f"{PRODUCER_MODULE}.download_track", new_callable=AsyncMock, return_value=tmp_path / "dl.mp3"),
+        patch(f"{PRODUCER_MODULE}.validate_download", return_value=(True, "ok")),
+        patch(f"{PRODUCER_MODULE}.normalize", side_effect=_fake_normalize),
+        patch(f"{PRODUCER_MODULE}.shutil.copy2", side_effect=OSError("disk full")),
+    ):
+        # Should not raise despite OSError
+        await _prefetch_next(state, config)
+
+
+@pytest.mark.asyncio
+async def test_prefetch_next_exception_swallowed(tmp_path):
+    """_prefetch_next swallows unexpected exceptions (non-fatal)."""
+    from mammamiradio.producer import _prefetch_next
+
+    state = _make_run_state()
+    config = _make_run_config()
+    config.tmp_dir = tmp_path
+    config.cache_dir = tmp_path
+
+    with patch(f"{PRODUCER_MODULE}.download_track", new_callable=AsyncMock, side_effect=RuntimeError("oops")):
+        # Must not raise
+        await _prefetch_next(state, config)
+
+
+@pytest.mark.asyncio
+async def test_prefetch_next_cancelled(tmp_path):
+    """_prefetch_next re-raises CancelledError so the task is properly cancelled."""
+    from mammamiradio.producer import _prefetch_next
+
+    state = _make_run_state()
+    config = _make_run_config()
+    config.tmp_dir = tmp_path
+    config.cache_dir = tmp_path
+
+    with (
+        patch(f"{PRODUCER_MODULE}.download_track", new_callable=AsyncMock, side_effect=asyncio.CancelledError),
+        pytest.raises(asyncio.CancelledError),
+    ):
+        await _prefetch_next(state, config)
+
+
+# ---------------------------------------------------------------------------
+# Gap 8 — Drain guard: canned clip inserted when queue drains mid-playback
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_drain_guard_inserts_canned_clip_on_queue_drain(tmp_path):
+    """When the queue drains to zero after at least one segment is produced,
+    the drain guard inserts a canned banter clip to prevent dead air."""
+    state = _make_run_state()
+    config = _make_run_config()
+    config.tmp_dir = tmp_path
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+
+    canned_clip = tmp_path / "canned_banter.mp3"
+    canned_clip.write_bytes(b"canned banter audio" * 100)
+
+    real_audio = tmp_path / "music.mp3"
+    real_audio.write_bytes(b"music audio" * 100)
+
+    def _fake_normalize(src, dst, *args, **kwargs):
+        dst.write_bytes(b"normed audio")
+
+    # We want: first iteration produces one real MUSIC segment, then on the next
+    # loop iteration (queue is empty again) the drain guard fires.
+    # Use a counter to switch next_segment_type after the first call.
+    call_count = 0
+
+    def _seg_type_switcher(state, pacing):
+        nonlocal call_count
+        call_count += 1
+        return SegmentType.MUSIC
+
+    with (
+        patch(f"{PRODUCER_MODULE}.next_segment_type", side_effect=_seg_type_switcher),
+        patch(f"{PRODUCER_MODULE}.download_track", new_callable=AsyncMock, return_value=real_audio),
+        patch(f"{PRODUCER_MODULE}.validate_download", return_value=(True, "ok")),
+        patch(f"{PRODUCER_MODULE}.normalize", side_effect=_fake_normalize),
+        patch(f"{PRODUCER_MODULE}.shutil.copy2"),
+        patch(f"{PRODUCER_MODULE}.validate_segment_audio", return_value=None),
+        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+        patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=canned_clip),
+        patch(f"{PRODUCER_MODULE}._prefetch_next", new_callable=AsyncMock),
+        patch.dict("os.environ", {"MAMMAMIRADIO_SKIP_QUALITY_GATE": "1"}),
+    ):
+        # Set lookahead to 1 so after 1 real segment fills the queue, production pauses.
+        # Then drain the queue manually to trigger the drain guard on the next pass.
+        config.pacing.lookahead_segments = 2
+
+        from mammamiradio.producer import run_producer
+
+        task = asyncio.create_task(run_producer(queue, state, config))
+        try:
+            # Wait for the first real segment to land
+            deadline = asyncio.get_event_loop().time() + 5.0
+            while queue.qsize() < 1:
+                if asyncio.get_event_loop().time() > deadline:
+                    raise TimeoutError("No segment produced in time")
+                await asyncio.sleep(0.01)
+
+            # Drain the queue to simulate the streamer consuming all segments
+            while not queue.empty():
+                queue.get_nowait()
+
+            # Wait for the drain guard to fire (should produce a canned clip)
+            deadline = asyncio.get_event_loop().time() + 3.0
+            while queue.empty():
+                if asyncio.get_event_loop().time() > deadline:
+                    break
+                await asyncio.sleep(0.01)
+        finally:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+    # The drain guard should have inserted a canned banter clip
+    if not queue.empty():
+        seg = queue.get_nowait()
+        assert seg.type == SegmentType.BANTER
+        assert seg.metadata.get("canned") is True
+        assert seg.metadata.get("queue_drain_recovery") is True
