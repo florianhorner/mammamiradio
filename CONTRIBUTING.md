@@ -21,18 +21,9 @@ pip install -e .
 cp .env.example .env
 ```
 
-## Conductor workspaces
+If you use Conductor, see [CONDUCTOR.md](CONDUCTOR.md) for workspace lifecycle details.
 
-This repo uses [`conductor.json`](conductor.json) for workspace lifecycle.
-
-- `scripts/conductor-setup.sh` bootstraps the workspace venv and dev dependencies
-- `scripts/conductor-setup.sh` prefers `~/.config/mammamiradio/.env` and falls back to `$CONDUCTOR_ROOT_PATH/.env` when creating the workspace `.env` symlink
-- `scripts/conductor-run.sh` starts the app with workspace-scoped runtime paths under `.context/conductor` and enables `MAMMAMIRADIO_ALLOW_YTDLP=true` by default for local Conductor runs
-- `scripts/conductor-archive.sh` cleans up workspace runtime state when the workspace is archived
-
-These files are part of the repo contract and should stay in git. Runtime artifacts under `.context/` should not.
-
-Then fill in whatever `.env` values you need. In Conductor, the preferred shared location is `~/.config/mammamiradio/.env`:
+Then fill in whatever `.env` values you need:
 
 - `ANTHROPIC_API_KEY` for banter and ad script generation (falls back to OpenAI if unavailable)
 - `OPENAI_API_KEY` for TTS voices and as a script generation fallback

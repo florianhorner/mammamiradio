@@ -269,7 +269,7 @@ Dark interior, cream text, golden focus ring.
 
 ## Colorblind accessibility
 
-Florian is **red-green colorblind**. This affects all UI work:
+This design system is built for **red-green colorblind accessibility**. This affects all UI work:
 
 - Success / connected / active: `#2563EB` (blue), never green
 - Error: `#c44a4a` (red — only for errors, not active states)
