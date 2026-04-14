@@ -270,27 +270,36 @@ async def test_healthz_and_readyz_contract_after_startup(tmp_path: Path):
 
 @pytest.mark.asyncio
 async def test_shutdown_cancels_tasks():
-    """shutdown() cancels producer and playback tasks and awaits gather."""
+    """shutdown() cancels all lifecycle tasks and clears app.state handles."""
     import mammamiradio.main as main_mod
 
-    mock_task = AsyncMock()
-    mock_task.cancel = MagicMock()
+    prewarm_task = AsyncMock()
+    producer_task = AsyncMock()
+    playback_task = AsyncMock()
+    for task in (prewarm_task, producer_task, playback_task):
+        task.cancel = MagicMock()
 
-    main_mod._producer_task = mock_task
-    main_mod._playback_task = mock_task
-
-    from mammamiradio.main import shutdown
+    main_mod._prewarm_task = prewarm_task
+    main_mod._producer_task = producer_task
+    main_mod._playback_task = playback_task
+    main_mod.app.state.prewarm_task = prewarm_task
+    main_mod.app.state.producer_task = producer_task
+    main_mod.app.state.playback_task = playback_task
+    main_mod.app.state.stream_hub = MagicMock()
 
     with patch("asyncio.gather", new_callable=AsyncMock) as mock_gather:
-        await shutdown()
+        await main_mod.shutdown()
 
-    assert mock_task.cancel.call_count == 2
-    mock_gather.assert_called_once()
-    # Verify return_exceptions=True was passed
-    _, kwargs = mock_gather.call_args
-    assert kwargs.get("return_exceptions") is True
+    for task in (prewarm_task, producer_task, playback_task):
+        task.cancel.assert_called_once()
+    mock_gather.assert_called_once_with(prewarm_task, producer_task, playback_task, return_exceptions=True)
+    assert main_mod.app.state.prewarm_task is None
+    assert main_mod.app.state.producer_task is None
+    assert main_mod.app.state.playback_task is None
+    main_mod.app.state.stream_hub.close.assert_called_once()
 
     # Cleanup
+    main_mod._prewarm_task = None
     main_mod._producer_task = None
     main_mod._playback_task = None
 
@@ -522,10 +531,12 @@ async def test_shutdown_with_no_tasks_set():
     main_mod._playback_task = None
     main_mod._prewarm_task = None
 
-    from mammamiradio.main import shutdown
+    for attr in ("producer_task", "prewarm_task", "playback_task", "stream_hub"):
+        if hasattr(main_mod.app.state, attr):
+            delattr(main_mod.app.state, attr)
 
     # Should complete without calling asyncio.gather (no tasks to cancel)
     with patch("asyncio.gather", new_callable=AsyncMock) as mock_gather:
-        await shutdown()
+        await main_mod.shutdown()
 
     mock_gather.assert_not_called()
