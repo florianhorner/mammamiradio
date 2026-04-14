@@ -213,8 +213,8 @@ def test_cast_voices_no_voices_configured():
 
 def test_classic_pitch_includes_disclaimer_goblin():
     """classic_pitch _FORMAT_ROLES must include disclaimer_goblin."""
-    from mammamiradio.producer import _FORMAT_ROLES
     from mammamiradio.models import AdFormat
+    from mammamiradio.producer import _FORMAT_ROLES
 
     roles = _FORMAT_ROLES[AdFormat.CLASSIC_PITCH]
     assert "disclaimer_goblin" in roles
