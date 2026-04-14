@@ -1320,6 +1320,7 @@ async def run_producer(
                         "type": "ad_break",
                         "brands": break_brands,
                         "spots": num_spots,
+                        "formats": break_formats,
                     },
                 )
                 _bound_brands = break_brands
