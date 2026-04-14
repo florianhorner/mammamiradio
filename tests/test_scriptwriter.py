@@ -310,6 +310,42 @@ async def test_auth_failure_is_memoized_and_skips_repeated_anthropic_calls(confi
     assert state.anthropic_auth_failures == 1
 
 
+@pytest.mark.asyncio
+async def test_blocked_anthropic_no_openai_raises(config, state):
+    """_generate_json_response raises when Anthropic is auth-blocked and no OpenAI key (line 229)."""
+    import mammamiradio.scriptwriter as sw
+    from mammamiradio.scriptwriter import _generate_json_response
+
+    config.openai_api_key = ""
+    sw._anthropic_auth_blocked_key = config.anthropic_api_key
+    sw._anthropic_auth_blocked_until = float("inf")
+
+    with pytest.raises(RuntimeError, match="temporarily disabled"):
+        await _generate_json_response(prompt="prompt", config=config, state=state, model="model", max_tokens=100)
+
+
+@pytest.mark.asyncio
+async def test_live_auth_error_no_openai_reraises(config, state):
+    """_generate_json_response re-raises auth error when no OpenAI key (line 260)."""
+    from mammamiradio.scriptwriter import _generate_json_response
+
+    class AuthenticationError(Exception):
+        pass
+
+    config.openai_api_key = ""
+    mock_client = MagicMock()
+    mock_client.messages.create = AsyncMock(side_effect=AuthenticationError("invalid x-api-key"))
+
+    with (
+        patch("mammamiradio.scriptwriter._anthropic_client", None),
+        patch("mammamiradio.scriptwriter.anthropic.AsyncAnthropic", MagicMock(return_value=mock_client)),
+        pytest.raises(AuthenticationError),
+    ):
+        await _generate_json_response(prompt="prompt", config=config, state=state, model="model", max_tokens=100)
+
+    assert state.anthropic_auth_failures == 1
+
+
 # --- persona integration tests ---
 
 

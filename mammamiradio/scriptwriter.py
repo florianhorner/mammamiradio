@@ -372,9 +372,10 @@ def _ensure_attention_grabbing_ad_parts(parts: list[AdPart], sonic: SonicWorld) 
 
 AD_FORMATS: dict[str, str] = {
     AdFormat.CLASSIC_PITCH: (
-        "One aggressive announcer delivers the pitch. Fast close, clean joke. "
-        "Structure: hook -> build tension -> deliver the pitch -> fast tagline or disclaimer. "
-        "Single speaker. Confident, polished, slightly unhinged sincerity."
+        "One aggressive announcer delivers the pitch, ending with a ultra-fast legal disclaimer. "
+        "Structure: hook -> build tension -> deliver the pitch -> DISCLAIMER_GOBLIN rattles off "
+        "the fine print at machine-gun speed. Two speakers: HAMMER sells it, DISCLAIMER_GOBLIN "
+        "buries the bad news. Confident, polished, slightly unhinged sincerity."
     ),
     AdFormat.TESTIMONIAL: (
         "A fake customer testimonial followed by an announcer button. Two speakers: "

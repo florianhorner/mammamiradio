@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -235,3 +236,98 @@ async def test_detect_skip_bit_empty_youtube_id(tmp_path):
     """detect_skip_bit returns False immediately for empty youtube_id."""
     result = await detect_skip_bit(tmp_path / "any.db", "")
     assert result is False
+
+
+# ---------------------------------------------------------------------------
+# New gap-coverage tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_detect_anthem_no_plays(db):
+    """detect_anthem returns False when a track exists but has never been played."""
+    _insert_track(db, "yt_no_plays")
+    # No play_history rows inserted → plays == 0 → below any threshold
+    result = await detect_anthem(db, "yt_no_plays", threshold=3)
+    assert result is False
+
+
+@pytest.mark.asyncio
+async def test_detect_anthem_existing_cue_updates_not_duplicates(db):
+    """detect_anthem updates the cue text and returns False when the cue already exists."""
+    track_id = _insert_track(db, "yt_anthem_update")
+    for _ in range(3):
+        _insert_play(db, track_id, skipped=0)
+    # First call creates the cue
+    first = await detect_anthem(db, "yt_anthem_update", threshold=3)
+    assert first is True
+
+    # Add more plays so the text would change
+    for _ in range(2):
+        _insert_play(db, track_id, skipped=0)
+
+    # Second call should update the existing cue (not insert a duplicate)
+    second = await detect_anthem(db, "yt_anthem_update", threshold=3)
+    assert second is False  # Updated, not newly created
+
+    # Exactly one anthem row should exist
+    conn = sqlite3.connect(str(db))
+    rows = conn.execute(
+        "SELECT cue_text FROM song_cues WHERE youtube_id = ? AND cue_type = 'anthem'",
+        ("yt_anthem_update",),
+    ).fetchall()
+    conn.close()
+    assert len(rows) == 1
+    assert "5th play" in rows[0][0]
+
+
+@pytest.mark.asyncio
+async def test_detect_skip_bit_no_skips(db):
+    """detect_skip_bit returns False when track exists but has never been skipped."""
+    track_id = _insert_track(db, "yt_never_skipped")
+    # Play it several times with skipped=0 — SUM(skipped) will be 0 / None
+    for _ in range(3):
+        _insert_play(db, track_id, skipped=0)
+    result = await detect_skip_bit(db, "yt_never_skipped", threshold=2)
+    assert result is False
+
+
+@pytest.mark.asyncio
+async def test_detect_skip_bit_existing_cue_updates_not_duplicates(db):
+    """detect_skip_bit updates the cue text and returns False when the cue already exists."""
+    track_id = _insert_track(db, "yt_skip_update")
+    _insert_play(db, track_id, skipped=1)
+    _insert_play(db, track_id, skipped=1)
+    # First call creates the cue
+    first = await detect_skip_bit(db, "yt_skip_update", threshold=2)
+    assert first is True
+
+    # Skip once more so the count changes
+    _insert_play(db, track_id, skipped=1)
+
+    # Second call should update, not duplicate
+    second = await detect_skip_bit(db, "yt_skip_update", threshold=2)
+    assert second is False
+
+    conn = sqlite3.connect(str(db))
+    rows = conn.execute(
+        "SELECT cue_text FROM song_cues WHERE youtube_id = ? AND cue_type = 'skip_bit'",
+        ("yt_skip_update",),
+    ).fetchall()
+    conn.close()
+    assert len(rows) == 1
+    assert "3" in rows[0][0]  # "skipped 3 times"
+
+
+@pytest.mark.asyncio
+async def test_add_cue_db_exception_is_swallowed(db, monkeypatch):
+    """add_cue must not propagate exceptions from the database layer."""
+    import aiosqlite
+
+    # Return a context manager whose __aenter__ raises immediately
+    bad_cm = MagicMock()
+    bad_cm.__aenter__ = AsyncMock(side_effect=aiosqlite.Error("simulated DB failure"))
+    bad_cm.__aexit__ = AsyncMock(return_value=False)
+    monkeypatch.setattr(aiosqlite, "connect", MagicMock(return_value=bad_cm))
+    # Should complete without raising
+    await add_cue(db, "yt_except", "reaction", "some cue text")

@@ -376,34 +376,63 @@ h1 {
 .pace-row input[type="range"]::-webkit-slider-thumb:hover { background: var(--sun); }
 .pace-row .pv { font-size: 13px; font-weight: 600; color: var(--sun); width: 24px; text-align: right; }
 
-.host-block { margin-bottom: 12px; }
+.host-block { margin-bottom: 14px; padding-bottom: 14px; border-bottom: 1px solid var(--line); }
+.host-block:last-child { margin-bottom: 0; padding-bottom: 0; border-bottom: none; }
 .host-name { font-weight: 700; font-size: 13px; }
-.host-style { font-size: 10px; color: rgba(245,237,216,0.4); margin-bottom: 4px; line-height: 1.3; }
-.ha { display: flex; align-items: center; margin-bottom: 3px; }
-.ha label { font-size: 10px; color: rgba(245,237,216,0.4); width: 58px; }
+.host-style { font-size: 10px; color: rgba(245,237,216,0.38); margin-bottom: 10px; line-height: 1.4; }
+/* presets */
+.host-presets-label { font-size: 8px; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase; color: rgba(245,237,216,0.25); margin-bottom: 6px; }
+.host-presets { display: flex; gap: 7px; margin-bottom: 14px; }
+.host-preset {
+  flex: 1; padding: 7px 5px 6px; border-radius: 8px; cursor: pointer;
+  font-family: inherit; text-align: center;
+  background: rgba(20,17,15,0.55); border: 1px solid rgba(245,237,216,0.11);
+  transition: border-color 0.15s, background 0.15s;
+}
+.host-preset:hover { border-color: rgba(244,208,72,0.32); background: rgba(244,208,72,0.06); }
+.host-preset.active { border-color: rgba(244,208,72,0.48); background: rgba(244,208,72,0.09); }
+.host-preset-name { display: block; font-size: 9px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: rgba(245,237,216,0.5); margin-bottom: 5px; }
+.host-preset.active .host-preset-name { color: var(--sun); }
+.preset-bars { display: flex; gap: 2px; align-items: flex-end; height: 16px; justify-content: center; }
+.preset-bar { width: 5px; border-radius: 2px 2px 0 0; background: rgba(245,237,216,0.14); transition: background 0.15s; }
+.host-preset.active .preset-bar { background: var(--sun2); }
+.host-preset:hover .preset-bar { background: rgba(244,208,72,0.48); }
+.preset-axis-labels { display: flex; gap: 2px; justify-content: center; margin-top: 3px; }
+.preset-axis-lbl { width: 5px; font-size: 5.5px; color: rgba(245,237,216,0.18); text-align: center; font-weight: 700; }
+.host-preset.active .preset-axis-lbl { color: rgba(244,208,72,0.36); }
+/* sliders */
+.ha { margin-bottom: 9px; }
+.ha-top { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 4px; }
+.ha-axis { font-size: 9px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; color: rgba(245,237,216,0.4); }
+.ha-word { font-size: 11px; font-weight: 600; color: var(--sun); }
 .ha input[type="range"] {
-  -webkit-appearance: none; appearance: none; flex: 1; height: 3px;
-  background: rgba(20,17,15,0.5); border-radius: 2px; outline: none; margin: 0 6px;
+  -webkit-appearance: none; appearance: none; width: 100%; height: 6px;
+  border-radius: 3px; outline: none; cursor: pointer;
+  background: rgba(20,17,15,0.85);
 }
 .ha input[type="range"]::-webkit-slider-thumb {
-  -webkit-appearance: none; width: 14px; height: 14px; border-radius: 50%;
+  -webkit-appearance: none; width: 16px; height: 16px; border-radius: 50%;
   background: var(--cream-dk); border: 2px solid var(--sienna); cursor: pointer;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.5);
 }
-.ha .hv { font-size: 11px; font-weight: 600; color: var(--sun); width: 22px; text-align: right; }
+.ha input[type="range"]::-webkit-slider-thumb:hover { background: var(--sun); }
+/* host preview */
+.host-preview {
+  margin-top: 11px; padding: 10px 12px;
+  background: rgba(20,17,15,0.65); border-radius: 8px;
+  border-left: 2px solid rgba(244,208,72,0.32);
+  border-top: 1px solid rgba(245,237,216,0.05);
+  border-right: 1px solid rgba(245,237,216,0.05);
+  border-bottom: 1px solid rgba(245,237,216,0.05);
+}
+.host-preview-label { font-size: 8px; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase; color: rgba(245,237,216,0.22); margin-bottom: 5px; }
+.host-preview-text { font-size: 12px; font-style: italic; color: var(--cream-dk); line-height: 1.6; font-family: 'Playfair Display', Georgia, serif; transition: opacity 0.2s; min-height: 38px; }
 .host-reset {
-  font-size: 10px; padding: 2px 8px; border-radius: 4px; margin-top: 2px;
-  background: transparent; color: rgba(245,237,216,0.4);
-  border: 1px solid rgba(245,237,216,0.12); cursor: pointer;
+  font-size: 10px; margin-top: 10px; padding: 0;
+  background: transparent; border: none; cursor: pointer;
+  color: rgba(245,237,216,0.28); font-family: inherit; transition: color 0.15s;
 }
-.host-reset:hover { color: var(--error); border-color: rgba(196,74,74,0.4); }
-.host-hint { font-size: 10px; color: rgba(245,237,216,0.45); margin-bottom: 8px; }
-.host-presets { display: flex; gap: 6px; margin: 2px 0 8px; }
-.host-preset {
-  font-size: 10px; padding: 2px 8px; border-radius: 4px;
-  background: rgba(20,17,15,0.4); color: rgba(245,237,216,0.7);
-  border: 1px solid rgba(245,237,216,0.14); cursor: pointer;
-}
-.host-preset:hover { color: var(--cream); border-color: rgba(245,237,216,0.35); }
+.host-reset:hover { color: var(--error); }
 
 /* ── LOG ── */
 .log-entry { display: flex; gap: 8px; padding: 3px 0; font-size: 11px; }
@@ -460,7 +489,7 @@ h1 {
 .pace-counter strong { color: var(--sun); font-weight: 600; }
 
 /* ── HOST AXIS LABELS ── */
-.ha-labels { display: flex; justify-content: space-between; font-size: 9px; color: rgba(245,237,216,0.3); margin-top: -2px; margin-bottom: 2px; padding: 0 22px 0 58px; }
+.ha-labels { display: flex; justify-content: space-between; font-size: 8px; color: rgba(245,237,216,0.18); margin-top: 2px; padding: 0 2px; }
 
 /* ── FORCE PENDING ── */
 .force-badge { font-size: 9px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; padding: 1px 7px; border-radius: 8px; background: rgba(244,208,72,0.2); color: var(--sun); margin-left: 4px; }
@@ -684,7 +713,6 @@ h1 {
         <span class="collapse-arrow">&#9658;</span>
       </div>
       <div class="collapse-body">
-        <div class="host-hint">0 = opposite trait, 50 = balanced, 100 = strong trait. Presets are quick starting points.</div>
         <div id="hostsBody"></div>
       </div>
     </div>
@@ -1184,19 +1212,94 @@ function updatePaceCounters(pacing){
 // ── Hosts ──
 const AX=['energy','chaos','warmth','verbosity','nostalgia'];
 const AX_LABEL={'energy':'Energy','chaos':'Chaos','warmth':'Warmth','verbosity':'Verbosity','nostalgia':'Nostalgia'};
-const AX_LOW ={'energy':'calm','chaos':'orderly','warmth':'distant','verbosity':'concise','nostalgia':'present'};
-const AX_HIGH={'energy':'hyped','chaos':'chaotic','warmth':'intimate','verbosity':'verbose','nostalgia':'nostalgic'};
+const AX_LOW ={'energy':'Mellow','chaos':'Orderly','warmth':'Distant','verbosity':'Concise','nostalgia':'Present-day'};
+const AX_HIGH={'energy':'Fired Up','chaos':'Anarchic','warmth':'Intimate','verbosity':'Non-stop','nostalgia':'Time Traveler'};
+const AX_WORDS={
+  energy:   ['Mellow','Lively','Energetic','Fired Up'],
+  chaos:    ['Orderly','Spontaneous','Unpredictable','Anarchic'],
+  warmth:   ['Distant','Cordial','Warm','Intimate'],
+  verbosity:['Concise','Balanced','Talkative','Non-stop'],
+  nostalgia:['Present-day','Retro-tinted','Nostalgic','Time Traveler'],
+};
 const HOST_PRESETS={
   Balanced:{energy:50,chaos:50,warmth:50,verbosity:50,nostalgia:50},
   Calm:{energy:25,chaos:25,warmth:65,verbosity:40,nostalgia:60},
   Hype:{energy:85,chaos:70,warmth:55,verbosity:65,nostalgia:45},
 };
-function renderHosts(hosts){
-  document.getElementById('hostsBody').innerHTML=hosts.map(h=>
-    `<div class="host-block" data-h="${esc(h.name)}"><div class="host-name">${esc(h.name)}</div><div class="host-style">${esc(h.style)}</div><div class="host-presets">${Object.keys(HOST_PRESETS).map(p=>`<button class="host-preset" onclick="applyHostPreset('${esc(h.name)}','${p}')">${p}</button>`).join('')}</div>${AX.map(a=>`<div class="ha"><label>${AX_LABEL[a]}</label><input type="range" min="0" max="100" value="${h.personality[a]}" data-a="${a}" oninput="this.parentElement.querySelector('.hv').textContent=this.value" onchange="updHost('${esc(h.name)}')"><span class="hv">${h.personality[a]}</span></div><div class="ha-labels"><span>${AX_LOW[a]}</span><span>${AX_HIGH[a]}</span></div>`).join('')}<button class="host-reset" onclick="rstHost('${esc(h.name)}')">Reset</button></div>`
-  ).join('');
+const AX_SHORT=['E','C','W','V','N'];
+// Derive bar heights for preset mini-charts from HOST_PRESETS so they stay in sync
+const PRESET_BARS=Object.fromEntries(Object.entries(HOST_PRESETS).map(([p,v])=>[p,AX.map(a=>v[a])]));
+
+function axWord(ax,val){return AX_WORDS[ax][Math.min(3,Math.floor(val/26))];}
+
+function sliderBg(val){
+  const pct=val+'%';
+  const mid=val>60?'var(--accent-warm)':'#7a5020';
+  const hi=val>60?',var(--sun)':'';
+  return `linear-gradient(90deg,#3a2010,${mid}${hi} ${pct},rgba(20,17,15,0.85) ${pct})`;
 }
-async function updHost(n){const b={};document.querySelector(`[data-h="${n}"]`).querySelectorAll('input[type="range"]').forEach(e=>{b[e.dataset.a]=+e.value});await api('PATCH',`/api/hosts/${encodeURIComponent(n)}/personality`,b);toast(n+' updated')}
+
+function buildHostPreview(block){
+  const vals={};
+  block.querySelectorAll('input[type="range"]').forEach(sl=>{vals[sl.dataset.a]=+sl.value;});
+  const v=vals;
+  const energyLine=v.energy>70?"Cuts in before the song fades — no dead air, ever.":v.energy>40?"Picks moments carefully. Won't rush the music.":"Slow, deliberate. Long pauses after songs.";
+  const chaosLine=v.chaos>70?"Expect mid-sentence pivots and tangents that somehow land.":v.chaos>40?"Mostly on-script, with the odd detour.":"Tight and structured. Every word earns its place.";
+  const warmthLine=v.warmth>65?"Listeners feel like they're being talked to directly.":v.warmth>35?"Friendly but not too familiar.":"Professional distance. Think late-night news, not morning radio.";
+  const verbosityLine=v.verbosity>70?"Three minutes of talk between tracks, minimum.":v.verbosity>40?"One or two lines between songs — enough to feel live.":"Barely speaks. Lets the music do it.";
+  const nostalgiaLine=v.nostalgia>65?"Expect a Sanremo reference between every other track.":v.nostalgia>35?"Mixes references — last week and twenty years ago.":"Everything sounds current. No callbacks.";
+  const entries=[
+    {val:v.energy,line:energyLine},
+    {val:v.chaos,line:chaosLine},
+    {val:v.warmth,line:warmthLine},
+    {val:v.verbosity,line:verbosityLine},
+    {val:v.nostalgia,line:nostalgiaLine},
+  ];
+  entries.sort((a,b)=>Math.abs(b.val-50)-Math.abs(a.val-50));
+  return entries[0].line+' '+entries[1].line;
+}
+
+function refreshHostPreview(block){
+  const el=block.querySelector('.host-preview-text');
+  if(!el)return;
+  clearTimeout(el._pt);
+  el.style.opacity='0.3';
+  el._pt=setTimeout(()=>{el.textContent=buildHostPreview(block);el.style.opacity='1';},100);
+}
+
+function renderHosts(hosts){
+  document.getElementById('hostsBody').innerHTML=hosts.map(h=>{
+    const nm=esc(h.name);
+    const presetBtns=Object.keys(HOST_PRESETS).map(p=>{
+      const bars=PRESET_BARS[p].map((b,i)=>`<div class="preset-bar" style="height:${b}%"></div>`).join('');
+      const axLabels=AX_SHORT.map(s=>`<span class="preset-axis-lbl">${s}</span>`).join('');
+      return `<button class="host-preset" onclick="applyHostPreset('${nm}','${p}')"><span class="host-preset-name">${p}</span><div class="preset-bars">${bars}</div><div class="preset-axis-labels">${axLabels}</div></button>`;
+    }).join('');
+    const sliders=AX.map(a=>{
+      const val=h.personality[a];
+      return `<div class="ha"><div class="ha-top"><span class="ha-axis">${AX_LABEL[a]}</span><span class="ha-word" id="hw-${nm}-${a}">${axWord(a,val)}</span></div><input type="range" min="0" max="100" value="${val}" data-a="${a}" style="background:${sliderBg(val)}" oninput="onSliderInput(this,'${nm}')" onchange="updHost('${nm}')"><div class="ha-labels"><span>${AX_LOW[a]}</span><span>${AX_HIGH[a]}</span></div></div>`;
+    }).join('');
+    return `<div class="host-block" data-h="${nm}"><div class="host-name">${nm}</div><div class="host-style">${esc(h.style)}</div><div class="host-presets-label">Character preset — moves all sliders</div><div class="host-presets">${presetBtns}</div>${sliders}<div class="host-preview"><div class="host-preview-label">What you'll hear</div><div class="host-preview-text"></div></div><button class="host-reset" onclick="rstHost('${nm}')">Reset to defaults</button></div>`;
+  }).join('');
+  // init previews and slider backgrounds
+  document.querySelectorAll('.host-block').forEach(block=>{
+    refreshHostPreview(block);
+  });
+}
+
+function onSliderInput(sl,n){
+  const val=+sl.value,ax=sl.dataset.a;
+  sl.style.background=sliderBg(val);
+  const wordEl=document.getElementById(`hw-${n}-${ax}`);
+  if(wordEl)wordEl.textContent=axWord(ax,val);
+  const block=sl.closest('.host-block');
+  if(block){
+    block.querySelectorAll('.host-preset').forEach(b=>b.classList.remove('active'));
+    refreshHostPreview(block);
+  }
+}
+
+async function updHost(n,vals=null){const b=vals||{};if(!vals){document.querySelector(`[data-h="${n}"]`).querySelectorAll('input[type="range"]').forEach(e=>{b[e.dataset.a]=+e.value});}await api('PATCH',`/api/hosts/${encodeURIComponent(n)}/personality`,b);toast(n+' updated')}
 async function rstHost(n){await api('POST',`/api/hosts/${encodeURIComponent(n)}/personality/reset`);toast(n+' reset');const r=await fetch('/api/hosts',{headers:H()});renderHosts((await r.json()).hosts||[])}
 async function applyHostPreset(n,presetName){
   const preset=HOST_PRESETS[presetName];
@@ -1204,14 +1307,18 @@ async function applyHostPreset(n,presetName){
   const block=document.querySelector(`[data-h="${n}"]`);
   if(!block)return;
   block.querySelectorAll('input[type="range"]').forEach(sl=>{
-    const axis=sl.dataset.a;
-    if(axis in preset){
-      sl.value=preset[axis];
-      sl.parentElement.querySelector('.hv').textContent=String(preset[axis]);
+    const ax=sl.dataset.a;
+    if(ax in preset){
+      sl.value=preset[ax];
+      sl.style.background=sliderBg(preset[ax]);
+      const wordEl=document.getElementById(`hw-${n}-${ax}`);
+      if(wordEl)wordEl.textContent=axWord(ax,preset[ax]);
     }
   });
-  await updHost(n);
-  toast(`${n}: ${presetName} preset`);
+  block.querySelectorAll('.host-preset').forEach(b=>b.classList.toggle('active',b.querySelector('.host-preset-name').textContent===presetName));
+  refreshHostPreview(block);
+  await updHost(n,preset);
+  toast(`${n}: ${presetName} preset applied`);
 }
 
 // ── Listener Requests ──

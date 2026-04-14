@@ -292,6 +292,78 @@ async def test_shutdown_cancels_tasks():
 
 
 @pytest.mark.asyncio
+async def test_startup_demo_fallback_on_fetch_exception(tmp_path: Path):
+    """When fetch_startup_playlist raises, startup falls back to DEMO_TRACKS."""
+    from mammamiradio.main import app, startup
+    from mammamiradio.playlist import DEMO_TRACKS
+
+    mock_config = MagicMock()
+    mock_config.station.name = "TestRadio"
+    mock_config.station.language = "it"
+    mock_config.bind_host = "127.0.0.1"
+    mock_config.port = 8000
+    mock_config.pacing.lookahead_segments = 3
+    mock_config.max_cache_size_mb = 500
+    mock_config.tmp_dir = tmp_path / "tmp"
+    mock_config.cache_dir = tmp_path / "cache"
+    mock_config.homeassistant.enabled = False
+    mock_config.allow_ytdlp = False
+    mock_config.audio.bitrate = 128
+
+    with (
+        patch(f"{MODULE}.load_config", return_value=mock_config),
+        patch(f"{MODULE}.read_persisted_source", return_value=None),
+        patch(f"{MODULE}.fetch_startup_playlist", side_effect=RuntimeError("network down")),
+        patch(f"{MODULE}.run_producer", new_callable=AsyncMock),
+        patch(f"{MODULE}.run_playback_loop", new_callable=AsyncMock),
+        patch(f"{MODULE}.prewarm_first_segment", new_callable=AsyncMock),
+    ):
+        await startup()
+
+    # State should contain the demo tracks, not an empty list
+    assert app.state.station_state.playlist == list(DEMO_TRACKS)
+    assert app.state.station_state.startup_source_error == "network down"
+    # playlist_source should be demo kind
+    assert app.state.station_state.playlist_source.kind == "demo"
+
+
+@pytest.mark.asyncio
+async def test_startup_clip_ring_buffer_fallback_to_240(tmp_path: Path):
+    """Ring buffer maxlen falls back to 240 when config.audio.bitrate raises ValueError."""
+    from mammamiradio.models import Track
+
+    mock_config = MagicMock()
+    mock_config.station.name = "TestRadio"
+    mock_config.station.language = "it"
+    mock_config.bind_host = "127.0.0.1"
+    mock_config.port = 8000
+    mock_config.pacing.lookahead_segments = 3
+    mock_config.max_cache_size_mb = 500
+    mock_config.tmp_dir = tmp_path / "tmp"
+    mock_config.cache_dir = tmp_path / "cache"
+    mock_config.homeassistant.enabled = False
+    mock_config.allow_ytdlp = False
+    # Simulate a config value that causes ValueError when int() is called
+    mock_config.audio.bitrate = MagicMock(side_effect=ValueError("not a number"))
+
+    tracks = [Track(title="S", artist="A", duration_ms=1, spotify_id="x")]
+
+    with (
+        patch(f"{MODULE}.load_config", return_value=mock_config),
+        patch(f"{MODULE}.read_persisted_source", return_value=None),
+        patch(f"{MODULE}.fetch_startup_playlist", return_value=(tracks, None, "")),
+        patch(f"{MODULE}.run_producer", new_callable=AsyncMock),
+        patch(f"{MODULE}.run_playback_loop", new_callable=AsyncMock),
+        patch(f"{MODULE}.prewarm_first_segment", new_callable=AsyncMock),
+    ):
+        from mammamiradio.main import app, startup
+
+        await startup()
+
+    assert app.state.clip_ring_buffer.maxlen == 240
+
+
+@pytest.mark.asyncio
 async def test_lifespan_calls_startup_and_shutdown(tmp_path):
     """_lifespan context manager calls startup() then shutdown() around the yield."""
 
