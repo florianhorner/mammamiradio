@@ -4,6 +4,12 @@ All notable changes to `mammamiradio` are documented here.
 
 The current version source of truth is `pyproject.toml`.
 
+## [Unreleased]
+
+### Fixed
+
+- **Now-playing label fallback**: When audio normalization fails (e.g. FFmpeg SIGABRT on macOS), the dashboard and admin panel now show "Preparing..." / "Waiting for first segment..." instead of the raw segment type string ("music", "banter"). Added regression tests for the label derivation path.
+
 ## [2.9.4] - 2026-04-14
 
 ### Fixed
