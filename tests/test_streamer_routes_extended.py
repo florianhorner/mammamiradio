@@ -976,6 +976,39 @@ async def test_load_playlist_empty_result():
     assert resp.json()["ok"] is False
 
 
+@pytest.mark.asyncio
+async def test_load_playlist_persist_failure_signals_persisted_false():
+    """When write_persisted_source raises, the live switch still applies but persisted=False is returned."""
+    app = _make_test_app()
+    new_tracks = [Track(title="Persist Fail Track", artist="NA", duration_ms=200_000, spotify_id="pf1")]
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    with (
+        patch(
+            "mammamiradio.streamer.load_explicit_source",
+            return_value=(
+                new_tracks,
+                MagicMock(
+                    kind="url",
+                    source_id="pf1",
+                    url="https://open.spotify.com/playlist/pf1",
+                    label="Persist Fail Track",
+                    track_count=1,
+                    selected_at=1.0,
+                ),
+            ),
+        ),
+        patch("mammamiradio.streamer.write_persisted_source", side_effect=OSError("disk full")),
+    ):
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            resp = await client.post("/api/playlist/load", json={"url": "https://open.spotify.com/playlist/pf1"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ok"] is True
+    assert body["persisted"] is False
+    # Live switch still applied despite persist failure
+    assert app.state.station_state.playlist[0].title == "Persist Fail Track"
+
+
 # ---------------------------------------------------------------------------
 # Logs endpoint
 # ---------------------------------------------------------------------------
