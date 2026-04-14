@@ -6,6 +6,11 @@ The current version source of truth is `pyproject.toml`.
 
 ## [Unreleased]
 
+### Added
+
+- **Startup diagnostics**: Boot logging now prints a structured multi-line block in the first 5 seconds — resolved `config_file` path, `cache_dir`, active audio source, track count, API key presence (`anthropic`/`openai`/`ha_token` set/missing without values), and dependency status (`ffmpeg`/`ytdlp` found/missing). Operators can diagnose broken startups without grepping scattered output.
+- **yt-dlp binary check**: Warns at boot when `MAMMAMIRADIO_ALLOW_YTDLP` is enabled but the `yt-dlp` binary is not installed. Previously only FFmpeg was checked; a missing yt-dlp would silently fall back to demo tracks with no explanation.
+
 ## [2.9.2] - 2026-04-13
 
 ### Fixed
