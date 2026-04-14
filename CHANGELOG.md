@@ -4,6 +4,13 @@ All notable changes to `mammamiradio` are documented here.
 
 The current version source of truth is `pyproject.toml`.
 
+## [2.9.4] - 2026-04-14
+
+### Fixed
+
+- **Pre-normalize next track**: The next track in the queue is now normalized before playback begins, preventing the Pi from stalling mid-stream while FFmpeg encodes. Eliminates the queue starvation pattern where the producer couldn't keep up with the playback loop on Raspberry Pi class hardware.
+- **Ad sonic metadata in dashboard**: Ad segments now surface their sonic metadata (format name, sound bed type) in the dashboard during ad breaks. Previously the "Now Playing" card showed a blank or generic label during ads.
+
 ## [2.9.3] - 2026-04-14
 
 ### Added
