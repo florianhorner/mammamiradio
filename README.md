@@ -1,12 +1,5 @@
 <p align="center">
-  <img src="mammamiradio/logo.svg" width="128" height="128" alt="Mamma Mi Radio logo">
-</p>
-
-<h1 align="center">Mamma Mi Radio</h1>
-
-<p align="center">
-An AI radio station that runs in your home. Two Italian hosts, fictional ads,<br>
-live charts, and the uncanny feeling that the radio knows who you are.
+  <img src="docs/banner.png" width="1280" alt="Mamma Mi Radio">
 </p>
 
 <p align="center">
