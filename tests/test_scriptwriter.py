@@ -413,6 +413,8 @@ async def test_write_banter_prompt_includes_optional_context_blocks(config, stat
 
     db_path = tmp_path / "persona.db"
     init_db(db_path)
+    config.cache_dir = tmp_path
+    init_db(config.cache_dir / "mammamiradio.db")
     store = PersonaStore(db_path)
     await store.update_persona({"new_theories": ["torna sempre dopo mezzanotte"]})
     await store.increment_session()
@@ -474,6 +476,29 @@ async def test_write_banter_prompt_includes_optional_context_blocks(config, stat
     assert '"persona_updates"' in prompt
     assert '"song_cues"' in prompt
     assert state.ha_pending_directive == ""
+
+
+@pytest.mark.asyncio
+async def test_write_banter_prompt_includes_new_listener_block_for_non_first_listener(config, state):
+    state.ha_home_mood = "Mood sconosciuto"
+    state.ha_weather_arc = "Pioggia in avvicinamento"
+    captured = {}
+
+    async def _fake_generate_json_response(**kwargs):
+        captured["prompt"] = kwargs["prompt"]
+        return {
+            "lines": [{"host": config.hosts[0].name, "text": "Ci siete?"}],
+            "new_joke": None,
+        }
+
+    with patch("mammamiradio.scriptwriter._generate_json_response", side_effect=_fake_generate_json_response):
+        result, _ = await write_banter(state, config, is_new_listener=True, is_first_listener=False)
+
+    assert len(result) == 1
+    prompt = captured["prompt"]
+    assert "A new listener JUST tuned in right now!" in prompt
+    assert "FIRST listener" not in prompt
+    assert "HOME MOOD: Mood sconosciuto" in prompt
 
 
 @pytest.mark.asyncio

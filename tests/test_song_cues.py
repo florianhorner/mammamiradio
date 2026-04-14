@@ -218,6 +218,18 @@ async def test_bump_usage_nonexistent_is_noop(db):
 
 
 @pytest.mark.asyncio
+async def test_bump_usage_db_exception_is_swallowed(db, monkeypatch):
+    """bump_usage must not propagate exceptions from the database layer."""
+    import aiosqlite
+
+    bad_cm = MagicMock()
+    bad_cm.__aenter__ = AsyncMock(side_effect=aiosqlite.Error("simulated DB failure"))
+    bad_cm.__aexit__ = AsyncMock(return_value=False)
+    monkeypatch.setattr(aiosqlite, "connect", MagicMock(return_value=bad_cm))
+    await bump_usage(db, "yt_except", "reaction")
+
+
+@pytest.mark.asyncio
 async def test_get_cues_missing_db(tmp_path):
     """get_cues returns empty list immediately when the db file does not exist."""
     result = await get_cues(tmp_path / "nonexistent.db", "any-id")
