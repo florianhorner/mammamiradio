@@ -1588,14 +1588,19 @@ async def test_ad_break_sets_sonic_worlds_and_roles_in_last_ad_script():
 
 
 # ---------------------------------------------------------------------------
-# Resume bridge (_was_stopped path) — INSTANT AUDIO after admin stop/restart
+# Removed: resume bridge (_was_stopped path) — auto-bridge after stop/restart
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_resume_bridge_uses_canned_clip_when_available(tmp_path):
-    """After a stopped session resumes, the producer seeds a canned clip immediately
-    so the listener hears audio before the first track finishes normalizing."""
+async def test_session_stop_to_resume_does_not_queue_bridge_segment(tmp_path):
+    """After a stopped session resumes, the producer does NOT insert a bridge segment.
+
+    The resume bridge was removed from producer.py.  Transitioning out of
+    session_stopped no longer seeds a canned clip or norm-cache file.  The
+    queue should remain empty until the normal segment production pipeline
+    generates content.
+    """
     state = _make_state()
     state.session_stopped = True
     config = _make_config()
@@ -1603,56 +1608,30 @@ async def test_resume_bridge_uses_canned_clip_when_available(tmp_path):
     config.tmp_dir = tmp_path
     queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
 
-    canned_clip = tmp_path / "canned.mp3"
-    canned_clip.write_bytes(b"fake audio")
-
-    with patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=canned_clip):
-        task = asyncio.create_task(run_producer(queue, state, config))
-        try:
-            # Resume the session — the bridge should fire on the next loop iteration.
-            await asyncio.sleep(0.05)
-            state.session_stopped = False
-            deadline = asyncio.get_event_loop().time() + 3.0
-            while queue.empty():
-                if asyncio.get_event_loop().time() > deadline:
-                    raise TimeoutError("Resume bridge did not queue a segment")
-                await asyncio.sleep(0.05)
-        finally:
-            task.cancel()
-            try:
-                await task
-            except asyncio.CancelledError:
-                pass
-
-    seg = queue.get_nowait()
-    assert seg.type == SegmentType.BANTER
-    assert seg.metadata.get("resume_bridge") is True
-
-
-@pytest.mark.asyncio
-async def test_resume_bridge_falls_back_to_norm_cache_when_no_canned_clips(tmp_path):
-    """When no canned clips exist, the bridge seeds the first pre-normalized track
-    from cache_dir so the queue isn't empty after resume."""
-    state = _make_state()
-    state.session_stopped = True
-    config = _make_config()
-    config.cache_dir = tmp_path
-    config.tmp_dir = tmp_path
-    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
-
+    # Place a norm_*.mp3 file in cache_dir — the old bridge used to pick this up.
     norm_file = tmp_path / "norm_abc123.mp3"
     norm_file.write_bytes(b"pre-normalized audio")
 
-    with patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=None):
+    canned_clip = tmp_path / "canned.mp3"
+    canned_clip.write_bytes(b"fake canned audio")
+
+    # Block actual segment production so we can observe the bridge-only window.
+    with (
+        patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=canned_clip),
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.MUSIC),
+        patch(f"{PRODUCER_MODULE}.download_track", new_callable=AsyncMock, return_value=tmp_path / "src.mp3"),
+        patch(f"{PRODUCER_MODULE}.normalize"),
+        patch(f"{PRODUCER_MODULE}.shutil.copy2"),
+        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+    ):
         task = asyncio.create_task(run_producer(queue, state, config))
         try:
-            await asyncio.sleep(0.05)
+            # Give the producer time to process the stopped state.
+            await asyncio.sleep(0.1)
+            # Resume the session.
             state.session_stopped = False
-            deadline = asyncio.get_event_loop().time() + 3.0
-            while queue.empty():
-                if asyncio.get_event_loop().time() > deadline:
-                    raise TimeoutError("Norm-cache resume bridge did not queue a segment")
-                await asyncio.sleep(0.05)
+            # Wait briefly — long enough that a bridge would have fired if it existed.
+            await asyncio.sleep(0.2)
         finally:
             task.cancel()
             try:
@@ -1660,129 +1639,55 @@ async def test_resume_bridge_falls_back_to_norm_cache_when_no_canned_clips(tmp_p
             except asyncio.CancelledError:
                 pass
 
-    seg = queue.get_nowait()
-    assert seg.type == SegmentType.MUSIC
-    assert seg.metadata.get("resume_bridge") is True
-    assert seg.metadata.get("audio_source") == "norm_cache"
-    assert seg.path == norm_file
+    # The queue may or may not have a real segment by now (timing-dependent),
+    # but critically: no segment should have resume_bridge=True metadata.
+    resume_bridge_found = False
+    while not queue.empty():
+        seg = queue.get_nowait()
+        if seg.metadata.get("resume_bridge") is True:
+            resume_bridge_found = True
+            break
+
+    assert not resume_bridge_found, (
+        "resume_bridge segment found in queue — the resume bridge was removed and must not fire"
+    )
 
 
 @pytest.mark.asyncio
-async def test_resume_bridge_noop_when_no_canned_clips_and_empty_norm_cache(tmp_path):
-    """When neither canned clips nor pre-normalized files exist, the bridge is a
-    no-op — the producer should not crash and should eventually queue real content."""
+async def test_idle_bridge_with_no_canned_clips_does_not_use_norm_cache(tmp_path):
+    """When the idle bridge fires and no canned clips exist, norm-cache fallback is gone.
+
+    The norm-cache fallback (seeding a pre-normalized track when no canned clips
+    are available) was removed from the idle bridge path.  With no canned clips,
+    the queue must stay empty — the producer should not touch norm_*.mp3 files.
+    """
     state = _make_state()
-    state.session_stopped = True
+    state.listeners_active = 0  # start idle
     config = _make_config()
     config.cache_dir = tmp_path
     config.tmp_dir = tmp_path
     queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
 
-    # No norm_*.mp3 files in tmp_path, no canned clips.
+    # Place a norm_*.mp3 file — the old fallback used to seed this.
+    norm_file = tmp_path / "norm_idle123.mp3"
+    norm_file.write_bytes(b"pre-normalized idle audio")
+
+    # No canned clips available.
     with (
         patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=None),
         patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.MUSIC),
         patch(f"{PRODUCER_MODULE}.download_track", new_callable=AsyncMock, return_value=tmp_path / "src.mp3"),
         patch(f"{PRODUCER_MODULE}.normalize"),
         patch(f"{PRODUCER_MODULE}.shutil.copy2"),
-        patch(f"{PRODUCER_MODULE}.validate_segment_audio"),
         patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
     ):
         task = asyncio.create_task(run_producer(queue, state, config))
         try:
-            await asyncio.sleep(0.05)
-            state.session_stopped = False
-            # Allow the producer to run — it should not crash even with no bridge.
-            await asyncio.sleep(0.2)
-        finally:
-            task.cancel()
-            try:
-                await task
-            except asyncio.CancelledError:
-                pass
-
-    # No crash is the primary assertion. The producer may or may not have queued
-    # a real segment depending on timing — just verify it is alive.
-
-
-# ---------------------------------------------------------------------------
-# Idle bridge norm-cache fallback (_was_idle else branch)
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_idle_bridge_falls_back_to_norm_cache_when_no_canned_clips(tmp_path):
-    """When a listener reconnects after idle and no canned clips exist, the idle
-    bridge seeds the first pre-normalized track from cache_dir."""
-    state = _make_state()
-    state.listeners_active = 0  # start idle
-    config = _make_config()
-    config.cache_dir = tmp_path
-    config.tmp_dir = tmp_path
-    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
-
-    norm_file = tmp_path / "norm_idle123.mp3"
-    norm_file.write_bytes(b"pre-normalized idle audio")
-
-    with patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=None):
-        task = asyncio.create_task(run_producer(queue, state, config))
-        try:
             # Let the producer enter idle state.
             await asyncio.sleep(0.15)
-            # Simulate a listener connecting.
+            # A listener connects.
             state.listeners_active = 1
-            deadline = asyncio.get_event_loop().time() + 3.0
-            while queue.empty():
-                if asyncio.get_event_loop().time() > deadline:
-                    raise TimeoutError("Idle norm-cache bridge did not queue a segment")
-                await asyncio.sleep(0.05)
-        finally:
-            task.cancel()
-            try:
-                await task
-            except asyncio.CancelledError:
-                pass
-
-    seg = queue.get_nowait()
-    assert seg.type == SegmentType.MUSIC
-    assert seg.metadata.get("idle_bridge") is True
-    assert seg.metadata.get("audio_source") == "norm_cache"
-    assert seg.path == norm_file
-
-
-# ---------------------------------------------------------------------------
-# Additional bridge edge-case tests
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_resume_bridge_skipped_when_queue_already_has_items(tmp_path):
-    """The resume bridge must NOT queue an additional segment when the queue is
-    already non-empty.  Seeding into a non-empty queue would cause duplicate audio."""
-    state = _make_state()
-    state.session_stopped = True
-    config = _make_config()
-    config.cache_dir = tmp_path
-    config.tmp_dir = tmp_path
-    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
-
-    canned_clip = tmp_path / "canned.mp3"
-    canned_clip.write_bytes(b"fake audio")
-
-    # Pre-fill the queue with an existing segment before the session resumes.
-    pre_existing = Segment(
-        type=SegmentType.BANTER,
-        path=canned_clip,
-        metadata={"type": "banter", "pre_existing": True},
-    )
-    queue.put_nowait(pre_existing)
-
-    with patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=canned_clip):
-        task = asyncio.create_task(run_producer(queue, state, config))
-        try:
-            await asyncio.sleep(0.05)
-            state.session_stopped = False
-            # Give the producer a few iterations to (potentially) add a bridge segment.
+            # Wait briefly for any bridge to fire.
             await asyncio.sleep(0.2)
         finally:
             task.cancel()
@@ -1791,139 +1696,14 @@ async def test_resume_bridge_skipped_when_queue_already_has_items(tmp_path):
             except asyncio.CancelledError:
                 pass
 
-    # The queue should still have exactly ONE segment — the pre-existing one.
-    # The bridge must not have added a second segment since the queue was non-empty.
-    assert queue.qsize() == 1, (
-        f"Expected queue size 1 (pre-existing only), got {queue.qsize()}. "
-        "Resume bridge must be a no-op when queue is non-empty."
+    # Verify no idle_bridge segment sourced from norm_cache appeared.
+    norm_cache_bridge_found = False
+    while not queue.empty():
+        seg = queue.get_nowait()
+        if seg.metadata.get("idle_bridge") is True and seg.metadata.get("audio_source") == "norm_cache":
+            norm_cache_bridge_found = True
+            break
+
+    assert not norm_cache_bridge_found, (
+        "idle_bridge norm-cache segment found — this fallback was removed and must not fire"
     )
-    seg = queue.get_nowait()
-    assert seg.metadata.get("pre_existing") is True
-
-
-@pytest.mark.asyncio
-async def test_resume_bridge_picks_first_sorted_norm_file_when_multiple_exist(tmp_path):
-    """When multiple pre-normalized files exist, the resume bridge seeds the first
-    one in sorted (alphabetical) order, not an arbitrary file."""
-    state = _make_state()
-    state.session_stopped = True
-    config = _make_config()
-    config.cache_dir = tmp_path
-    config.tmp_dir = tmp_path
-    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
-
-    # Create multiple norm files — alphabetical sort must pick "norm_aaa.mp3".
-    norm_zzz = tmp_path / "norm_zzz.mp3"
-    norm_zzz.write_bytes(b"last file")
-    norm_aaa = tmp_path / "norm_aaa.mp3"
-    norm_aaa.write_bytes(b"first file")
-    norm_mmm = tmp_path / "norm_mmm.mp3"
-    norm_mmm.write_bytes(b"middle file")
-
-    with patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=None):
-        task = asyncio.create_task(run_producer(queue, state, config))
-        try:
-            await asyncio.sleep(0.05)
-            state.session_stopped = False
-            deadline = asyncio.get_event_loop().time() + 3.0
-            while queue.empty():
-                if asyncio.get_event_loop().time() > deadline:
-                    raise TimeoutError("Resume bridge did not queue a segment")
-                await asyncio.sleep(0.05)
-        finally:
-            task.cancel()
-            try:
-                await task
-            except asyncio.CancelledError:
-                pass
-
-    seg = queue.get_nowait()
-    assert seg.path == norm_aaa, (
-        f"Expected norm_aaa.mp3 (first sorted), got {seg.path.name}"
-    )
-
-
-@pytest.mark.asyncio
-async def test_idle_bridge_picks_first_sorted_norm_file_when_multiple_exist(tmp_path):
-    """When multiple pre-normalized files exist, the idle bridge seeds the first
-    one in sorted (alphabetical) order."""
-    state = _make_state()
-    state.listeners_active = 0  # start idle
-    config = _make_config()
-    config.cache_dir = tmp_path
-    config.tmp_dir = tmp_path
-    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
-
-    norm_zzz = tmp_path / "norm_zzz.mp3"
-    norm_zzz.write_bytes(b"last file")
-    norm_aaa = tmp_path / "norm_aaa.mp3"
-    norm_aaa.write_bytes(b"first file")
-
-    with patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=None):
-        task = asyncio.create_task(run_producer(queue, state, config))
-        try:
-            await asyncio.sleep(0.15)
-            state.listeners_active = 1
-            deadline = asyncio.get_event_loop().time() + 3.0
-            while queue.empty():
-                if asyncio.get_event_loop().time() > deadline:
-                    raise TimeoutError("Idle bridge did not queue a segment")
-                await asyncio.sleep(0.05)
-        finally:
-            task.cancel()
-            try:
-                await task
-            except asyncio.CancelledError:
-                pass
-
-    seg = queue.get_nowait()
-    assert seg.path == norm_aaa, (
-        f"Expected norm_aaa.mp3 (first sorted), got {seg.path.name}"
-    )
-
-
-@pytest.mark.asyncio
-async def test_was_stopped_initialized_true_when_session_already_stopped(tmp_path):
-    """_was_stopped is initialised from state.session_stopped at producer startup.
-
-    If the producer starts with session_stopped=True (e.g. after an HA watchdog
-    restart where the flag file was re-read), _was_stopped must already be True so
-    that the resume bridge fires immediately on the first transition to not-stopped,
-    without requiring a second stop/resume cycle."""
-    state = _make_state()
-    state.session_stopped = True  # producer starts already stopped
-    config = _make_config()
-    config.cache_dir = tmp_path
-    config.tmp_dir = tmp_path
-    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
-
-    norm_file = tmp_path / "norm_startup.mp3"
-    norm_file.write_bytes(b"startup track")
-
-    with patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=None):
-        task = asyncio.create_task(run_producer(queue, state, config))
-        try:
-            # Only one stop→resume cycle (no extra stop needed because _was_stopped
-            # starts True).
-            await asyncio.sleep(0.05)
-            state.session_stopped = False
-            deadline = asyncio.get_event_loop().time() + 3.0
-            while queue.empty():
-                if asyncio.get_event_loop().time() > deadline:
-                    raise TimeoutError(
-                        "_was_stopped not initialised from session_stopped — "
-                        "bridge did not fire on first resume"
-                    )
-                await asyncio.sleep(0.05)
-        finally:
-            task.cancel()
-            try:
-                await task
-            except asyncio.CancelledError:
-                pass
-
-    seg = queue.get_nowait()
-    assert seg.metadata.get("resume_bridge") is True, (
-        "Bridge segment must carry resume_bridge=True metadata"
-    )
-    assert seg.path == norm_file
