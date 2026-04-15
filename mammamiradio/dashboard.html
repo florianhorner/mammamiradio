@@ -1166,6 +1166,7 @@ function _updatePipelineStatus() {
   el.innerHTML = html;
 }
 
+let _wasStopped = false;
 function _updateStoppedState(d) {
   const stopped = d.session_stopped === true;
   const banner = document.getElementById('stopped-banner');
@@ -1180,7 +1181,11 @@ function _updateStoppedState(d) {
     trackEl.textContent = 'Station Stopped';
     metaEl.textContent = '';
     _lastTrackLabel = 'Station Stopped';
+  } else if (_wasStopped && _wantsPlay) {
+    // Session just resumed — reconnect the stream so audio restarts automatically
+    setTimeout(_startStream, 300);
   }
+  _wasStopped = stopped;
 }
 
 function _updateAdMeta(ns) {
