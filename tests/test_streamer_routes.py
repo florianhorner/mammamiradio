@@ -751,9 +751,7 @@ async def test_audio_generator_does_not_auto_resume_stopped_session(tmp_path):
         "was removed and must not be re-introduced here."
     )
     # The flag file must still exist
-    assert flag.exists(), (
-        "session_stopped.flag was deleted by _audio_generator; only /api/resume should do this."
-    )
+    assert flag.exists(), "session_stopped.flag was deleted by _audio_generator; only /api/resume should do this."
 
 
 @pytest.mark.asyncio
