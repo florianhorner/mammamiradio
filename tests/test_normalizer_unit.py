@@ -473,8 +473,7 @@ def test_normalize_filter_chain_has_exactly_three_equalizers_with_music_eq(mock_
     assert af_value, "No -filter:a filter chain found in ffmpeg command"
     equalizer_count = af_value.count("equalizer=")
     assert equalizer_count == 3, (
-        f"Expected exactly 3 equalizer filters with music_eq=True, got {equalizer_count}. "
-        f"Filter chain: {af_value}"
+        f"Expected exactly 3 equalizer filters with music_eq=True, got {equalizer_count}. Filter chain: {af_value}"
     )
 
 
@@ -518,6 +517,5 @@ def test_normalize_music_eq_false_still_has_no_equalizer_filters(mock_subprocess
     assert af_value, "No -filter:a filter chain found in ffmpeg command"
     equalizer_count = af_value.count("equalizer=")
     assert equalizer_count == 0, (
-        f"Expected 0 equalizer filters with music_eq=False, got {equalizer_count}. "
-        f"Filter chain: {af_value}"
+        f"Expected 0 equalizer filters with music_eq=False, got {equalizer_count}. Filter chain: {af_value}"
     )
