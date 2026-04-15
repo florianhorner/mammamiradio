@@ -275,25 +275,15 @@ h1 {
 
 /* ── NOW PLAYING ── */
 .now-playing {
-  position: relative; z-index: 1; overflow: hidden;
+  position: relative; z-index: 1; overflow: visible;
   background: var(--surface);
-  border: 1px solid rgba(245,237,216,0.08);
-  border-top: 2px solid rgba(236,204,48,0.4);
+  border: 1px solid rgba(245,237,216,0.1);
+  border-top: 2px solid rgba(236,204,48,0.5);
   border-radius: 12px;
   padding: 24px 24px 22px;
   margin-top: 20px; margin-bottom: 0;
 }
-.now-playing::before {
-  content: '';
-  position: absolute; top: -1px; left: 24px; right: 24px; height: 2px;
-  background: linear-gradient(90deg, transparent, var(--sun), transparent);
-}
-.now-playing::after {
-  content: '';
-  position: absolute; top: 0; left: 0; bottom: 0; width: 3px;
-  background: linear-gradient(180deg, var(--sun2) 0%, rgba(236,204,48,0.1) 100%);
-}
-.np-body { padding-left: 14px; }
+.np-body { padding-left: 0; }
 .np-eyebrow {
   font-size: 9px; font-weight: 700; letter-spacing: 0.2em; text-transform: uppercase;
   color: var(--sun2); margin-bottom: 12px;
