@@ -715,3 +715,92 @@ async def test_capabilities_exposes_anthropic_degraded_health():
     assert body["provider_health"]["anthropic"]["degraded"] is True
     assert body["provider_health"]["anthropic"]["retry_after_s"] > 0
     assert body["provider_health"]["anthropic"]["auth_failures"] == 2
+
+
+# ---------------------------------------------------------------------------
+# Auto-resume removed from _audio_generator
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_audio_generator_does_not_auto_resume_stopped_session(tmp_path):
+    """_audio_generator must NOT clear session_stopped when a listener connects.
+
+    The auto-resume logic was removed in this PR. A stopped session stays stopped
+    even when a listener connects — only an explicit POST /api/resume clears the flag.
+    """
+    from mammamiradio.streamer import _audio_generator
+
+    app = _make_test_app()
+    state = app.state.station_state
+    state.session_stopped = True
+    flag = tmp_path / "session_stopped.flag"
+    flag.touch()
+    app.state.config.cache_dir = tmp_path
+
+    mock_request = MagicMock()
+    mock_request.app = app
+    mock_request.is_disconnected = AsyncMock(return_value=True)
+
+    async for _ in _audio_generator(mock_request):
+        pass
+
+    # session_stopped must remain True — auto-resume was removed
+    assert state.session_stopped is True, (
+        "session_stopped was cleared by _audio_generator; the auto-resume logic "
+        "was removed and must not be re-introduced here."
+    )
+    # The flag file must still exist
+    assert flag.exists(), (
+        "session_stopped.flag was deleted by _audio_generator; only /api/resume should do this."
+    )
+
+
+@pytest.mark.asyncio
+async def test_audio_generator_leaves_stopped_flag_file_intact(tmp_path):
+    """When the session is stopped, _audio_generator must not delete the flag file.
+
+    The auto-resume logic (which called flag.unlink()) was removed. The flag file
+    must survive listener connects so that an HA watchdog restart does not silently
+    re-read a stale 'stopped' state.
+    """
+    from mammamiradio.streamer import _audio_generator
+
+    app = _make_test_app()
+    app.state.station_state.session_stopped = True
+    flag = tmp_path / "session_stopped.flag"
+    flag.touch()
+    app.state.config.cache_dir = tmp_path
+
+    mock_request = MagicMock()
+    mock_request.app = app
+    mock_request.is_disconnected = AsyncMock(return_value=True)
+
+    async for _ in _audio_generator(mock_request):
+        pass
+
+    assert flag.exists(), "Flag file must not be removed by _audio_generator."
+
+
+@pytest.mark.asyncio
+async def test_audio_generator_active_session_is_unaffected(tmp_path):
+    """When the session is not stopped, _audio_generator subscribes normally.
+
+    Regression guard: the auto-resume removal must not break the normal
+    (session_stopped=False) path — the generator should subscribe without error.
+    """
+    from mammamiradio.streamer import _audio_generator
+
+    app = _make_test_app()
+    state = app.state.station_state
+    state.session_stopped = False
+
+    mock_request = MagicMock()
+    mock_request.app = app
+    mock_request.is_disconnected = AsyncMock(return_value=True)
+
+    # Generator should run and exit cleanly (listener immediately disconnects)
+    async for _ in _audio_generator(mock_request):
+        pass
+
+    assert state.session_stopped is False

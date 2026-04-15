@@ -433,3 +433,91 @@ def test_normalize_proceeds_when_lufs_out_of_tolerance(mock_subprocess, tmp_path
 
     # ffmpeg should have been called for normalization
     mock_run.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# Regression: 3rd equalizer restored (equalizer=f=12000 for HF harshness)
+# ---------------------------------------------------------------------------
+
+
+def _extract_af_value(mock_run) -> str:
+    """Helper: extract the -filter:a value from the ffmpeg call args."""
+    assert mock_run.called, "subprocess.run was not called"
+    cmd = mock_run.call_args[0][0]
+    for i, arg in enumerate(cmd):
+        if arg == "-filter:a" and i + 1 < len(cmd):
+            return cmd[i + 1]
+    return ""
+
+
+def test_normalize_filter_chain_has_exactly_three_equalizers_with_music_eq(mock_subprocess, tmp_path):
+    """With music_eq=True the filter chain must contain exactly three equalizer filters.
+
+    The 3rd equalizer (f=12000, HF harshness shelf) was restored in this PR.
+    Previously it was removed due to a Pi/ffmpeg 8.x crash concern; it has been
+    added back, making the count 3:
+      1. de-mud at 200 Hz
+      2. presence at 3 kHz
+      3. HF harshness at 12 kHz
+    """
+    input_file = tmp_path / "input.mp3"
+    input_file.write_bytes(b"\xff" * 1000)
+    output_file = tmp_path / "output.mp3"
+
+    mock_run, _ = mock_subprocess
+
+    with patch("mammamiradio.normalizer.measure_lufs", return_value=-25.0):
+        normalize(input_file, output_file, loudnorm=True, music_eq=True)
+
+    af_value = _extract_af_value(mock_run)
+    assert af_value, "No -filter:a filter chain found in ffmpeg command"
+    equalizer_count = af_value.count("equalizer=")
+    assert equalizer_count == 3, (
+        f"Expected exactly 3 equalizer filters with music_eq=True, got {equalizer_count}. "
+        f"Filter chain: {af_value}"
+    )
+
+
+def test_normalize_filter_chain_includes_hf_shelf_at_12khz(mock_subprocess, tmp_path):
+    """The 3rd equalizer (HF harshness shelf at 12kHz) must be present in the music_eq chain.
+
+    This was the filter that was removed in a prior commit and is now restored.
+    """
+    input_file = tmp_path / "input.mp3"
+    input_file.write_bytes(b"\xff" * 1000)
+    output_file = tmp_path / "output.mp3"
+
+    mock_run, _ = mock_subprocess
+
+    with patch("mammamiradio.normalizer.measure_lufs", return_value=-25.0):
+        normalize(input_file, output_file, loudnorm=True, music_eq=True)
+
+    af_value = _extract_af_value(mock_run)
+    assert af_value, "No -filter:a filter chain found in ffmpeg command"
+    # The HF shelf: equalizer=f=12000:t=o:w=4000:g=-1.5
+    assert "equalizer=f=12000" in af_value, (
+        f"HF harshness shelf (equalizer=f=12000) missing from filter chain: {af_value}"
+    )
+
+
+def test_normalize_music_eq_false_still_has_no_equalizer_filters(mock_subprocess, tmp_path):
+    """With music_eq=False (the default), no equalizer= filters appear in the chain.
+
+    Equalizers are only added by the broadcast EQ branch (music_eq=True).
+    """
+    input_file = tmp_path / "input.mp3"
+    input_file.write_bytes(b"\xff" * 1000)
+    output_file = tmp_path / "output.mp3"
+
+    mock_run, _ = mock_subprocess
+
+    with patch("mammamiradio.normalizer.measure_lufs", return_value=-25.0):
+        normalize(input_file, output_file, loudnorm=True, music_eq=False)
+
+    af_value = _extract_af_value(mock_run)
+    assert af_value, "No -filter:a filter chain found in ffmpeg command"
+    equalizer_count = af_value.count("equalizer=")
+    assert equalizer_count == 0, (
+        f"Expected 0 equalizer filters with music_eq=False, got {equalizer_count}. "
+        f"Filter chain: {af_value}"
+    )

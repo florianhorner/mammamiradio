@@ -58,11 +58,21 @@ jobs:
             exit 1
           fi
 
-      - name: Validate addon radio.toml matches root radio.toml
+      - name: Validate addon radio.toml matches root radio.toml (HA pacing overrides allowed)
         run: |
-          if ! cmp -s radio.toml ha-addon/mammamiradio/radio.toml; then
-            echo "::error::ha-addon/mammamiradio/radio.toml drifted from root radio.toml"
-            diff -u radio.toml ha-addon/mammamiradio/radio.toml || true
+          # The HA addon intentionally overrides three pacing knobs for Pi/HA Green
+          # performance (fewer concurrent segments and ad spots to reduce CPU load).
+          # Mirror the logic in tests/test_addon_radio_sync.py: apply the known
+          # HA-specific substitutions to the root file, then compare.
+          EXPECTED=$(sed \
+            -e 's/songs_between_banter = 2/songs_between_banter = 3/' \
+            -e 's/ad_spots_per_break = 2/ad_spots_per_break = 1/' \
+            -e 's/lookahead_segments = 3/lookahead_segments = 2/' \
+            radio.toml)
+          ACTUAL=$(cat ha-addon/mammamiradio/radio.toml)
+          if [ "$EXPECTED" != "$ACTUAL" ]; then
+            echo "::error::ha-addon/mammamiradio/radio.toml drifted from root radio.toml (beyond the allowed HA pacing overrides)"
+            diff <(echo "$EXPECTED") <(echo "$ACTUAL") || true
             exit 1
           fi
 
@@ -96,7 +106,11 @@ jobs:
         run: |
           cp -r mammamiradio/ ha-addon/mammamiradio/mammamiradio/
           cp pyproject.toml ha-addon/mammamiradio/
-          cp radio.toml ha-addon/mammamiradio/
+          # NOTE: do NOT copy root radio.toml here.
+          # ha-addon/mammamiradio/radio.toml already exists with HA-specific pacing
+          # tuning for Pi/HA Green (lower ad_spots_per_break, lookahead_segments).
+          # Overwriting it with the root version would ship the wrong config baked
+          # into the Docker image, silently discarding the Pi performance tuning.
 
       - uses: docker/setup-qemu-action@ce360397dd3f832beb865e1373c09c0e9f86d70a # v4.0.0
 
@@ -108,7 +122,7 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - uses: docker/build-push-action@d08e5c354a6adb9ed34480a06d141179aa583294 # v7.0.0
+      - uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7.1.0
         with:
           context: ha-addon/mammamiradio
           file: ha-addon/mammamiradio/Dockerfile

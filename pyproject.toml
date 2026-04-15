@@ -1,13 +1,13 @@
 [project]
 name = "mammamiradio"
-version = "2.10.0"
+version = "2.10.2"
 description = "AI-powered Italian radio station engine"
 requires-python = ">=3.11"
 dependencies = [
     "fastapi>=0.115",
     "uvicorn[standard]>=0.34",
 
-    "anthropic>=0.52",
+    "anthropic>=0.94.0",
     "edge-tts>=7.0",
     "python-dotenv>=1.0",
     "pydantic>=2.10",
@@ -26,7 +26,7 @@ packages = ["mammamiradio"]
 mammamiradio = ["*.html", "static/*", "demo_assets/**/*"]
 
 [build-system]
-requires = ["setuptools>=75"]
+requires = ["setuptools>=82.0.1"]
 build-backend = "setuptools.build_meta"
 
 [tool.ruff]
@@ -67,7 +67,7 @@ branch = true
 source = ["mammamiradio"]
 
 [tool.coverage.report]
-fail_under = 91
+fail_under = 92
 exclude_lines = [
     "pragma: no cover",
     "if TYPE_CHECKING:",

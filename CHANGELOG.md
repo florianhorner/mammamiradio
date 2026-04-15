@@ -6,6 +6,30 @@ The current version source of truth is `pyproject.toml`.
 
 ## [Unreleased]
 
+## [2.10.2] - 2026-04-15
+
+### Fixed
+
+- **Silence after HA restart following a deliberate stop** *(critical)*: `session_stopped.flag` survived addon restarts, leaving the session permanently stopped. Listeners connecting after a restart received silence indefinitely. `_audio_generator` now clears the stopped state the moment a listener connects — a listener connecting is an unambiguous signal that someone wants music.
+- **55-75 second silence on resume/idle wakeup (Pi)** *(critical)*: When no canned banter clips are available (demo_assets/banter/ is empty in the container), the resume bridge and idle-reconnect bridge had no fallback. The queue stayed empty while the first track normalized (~75s on Pi). Both bridges now fall back to the first pre-normalized `norm_*.mp3` file in `cache_dir` — zero FFmpeg wait, instant playback.
+- **FFmpeg 8.x SIGABRT on Pi during normalization** *(critical)*: Three equalizer filters combined with `loudnorm` trigger an assertion crash in ffmpeg 8.1 (`calc_energy` in `psymodel.c:576`). The third equalizer (`-1.5dB HF shelf at 12kHz`) was removed. Two equalizers + loudnorm is verified safe. This crash caused normalization to silently fail on every track, leaving the queue permanently empty.
+- **Stream player stalls after admin resume**: The dashboard player detected resume in the status poll but did not reconnect the audio stream, requiring a manual page reload. `_wasStopped` state tracking now triggers an automatic stream reconnect when the station resumes.
+
+### Added
+
+- **9 regression-prevention tests**: Guards against all four failure modes above — ffmpeg filter chain count, loudnorm presence, resume bridge with canned clip, resume bridge norm-cache fallback, resume bridge no-op on empty cache, idle bridge norm-cache fallback, auto-resume with/without flag file, and auto-resume no-op when session is already running.
+
+## [2.10.1] - 2026-04-15
+
+### Fixed
+
+- **HA addon Docker images never built** *(critical)*: The CI `addon-build.yml` validate job used a byte-for-byte `cmp -s` comparison for `radio.toml`, but the HA addon intentionally carries three pacing overrides tuned for Pi/HA Green performance (`songs_between_banter=3`, `ad_spots_per_break=1`, `lookahead_segments=2`). The strict comparison always failed, blocking the `build` job via `needs: validate`. No images were pushed to GHCR for 2.10.0, causing the `[404] manifest unknown` error seen in HA Supervisor logs when updating. Replaced with a sed-based transform that applies the known overrides before comparing.
+- **Pi pacing tuning silently discarded in Docker image**: The `build` job copied the root `radio.toml` (with higher-load default values) over the HA-specific one in the build context, causing the Docker image to ship the wrong pacing values. The HA-specific file is now used directly at build time.
+
+### Added
+
+- **7 regression-prevention tests** in `tests/test_addon_build_workflow.py`: guards against the `cmp -s` pattern returning, CI/Python test drift, build matrix gaps, trigger path gaps, and the radio.toml build-time overwrite. Any single test failure would have caught the 2.10.0 manifest 404 before release.
+
 ## [2.10.0] - 2026-04-14
 
 ### Added
