@@ -126,6 +126,12 @@ h1 {
   color: var(--cream); line-height: 0.92; letter-spacing: -0.02em;
   text-shadow: 0 2px 20px rgba(42,16,8,0.4);
 }
+h1 .mi { color: var(--sun); }
+.tricolor-stripe {
+  height: 2px; width: 180px; margin-top: 8px; border-radius: 1px;
+  background: linear-gradient(90deg, #009246 33%, rgba(255,255,255,0.85) 33%, rgba(255,255,255,0.85) 66%, #CE2B37 66%);
+  opacity: 0.6;
+}
 .station-sub {
   font-family: var(--font-display);
   font-size: 12px; font-weight: 400; font-style: italic;
@@ -586,7 +592,8 @@ h1 {
 
 <div class="header">
   <div class="header-left">
-    <h1>Mamma Mi Radio</h1>
+    <h1>Mamma <span class="mi">Mi</span> Radio</h1>
+    <div class="tricolor-stripe"></div>
     <div class="station-sub">96.7 FM &middot; Milano &middot; Est. 1987</div>
   </div>
   <div class="header-actions">
