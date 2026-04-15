@@ -60,9 +60,15 @@ jobs:
 
       - name: Validate addon radio.toml matches root radio.toml
         run: |
-          if ! cmp -s radio.toml ha-addon/mammamiradio/radio.toml; then
+          EXPECTED=$(sed \
+            -e 's/songs_between_banter = 2/songs_between_banter = 3/' \
+            -e 's/ad_spots_per_break = 2/ad_spots_per_break = 1/' \
+            -e 's/lookahead_segments = 3/lookahead_segments = 2/' \
+            radio.toml)
+          ACTUAL=$(cat ha-addon/mammamiradio/radio.toml)
+          if [ "$EXPECTED" != "$ACTUAL" ]; then
             echo "::error::ha-addon/mammamiradio/radio.toml drifted from root radio.toml — keep them in sync"
-            diff radio.toml ha-addon/mammamiradio/radio.toml || true
+            diff <(echo "$EXPECTED") <(echo "$ACTUAL") || true
             exit 1
           fi
 
@@ -96,7 +102,6 @@ jobs:
         run: |
           cp -r mammamiradio/ ha-addon/mammamiradio/mammamiradio/
           cp pyproject.toml ha-addon/mammamiradio/
-          cp radio.toml ha-addon/mammamiradio/
 
       - uses: docker/setup-qemu-action@ce360397dd3f832beb865e1373c09c0e9f86d70a # v4.0.0
 

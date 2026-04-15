@@ -115,7 +115,8 @@ def normalize(
         "highpass=f=35,"  # sub-bass rumble from video codec leakage
         "equalizer=f=200:t=o:w=150:g=-2,"  # de-mud (compressed video audio)
         "equalizer=f=3000:t=o:w=1000:g=1.5,"  # presence / clarity
-        "equalizer=f=12000:t=o:w=4000:g=-1.5,"  # HF harshness shelf
+        # NOTE: f=12000 HF shelf removed — 3 equalizers + loudnorm triggers
+        # psymodel.c:576 SIGABRT (calc_energy) in ffmpeg 8.x on Pi aarch64.
         "acompressor=threshold=0.25:ratio=2:attack=20:release=250:makeup=1"  # gentle radio leveller
     )
 

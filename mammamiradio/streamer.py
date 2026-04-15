@@ -755,6 +755,12 @@ async def _persist_skipped_music(state: StationState, config, metadata: dict, *,
 
 async def _audio_generator(request: Request):
     """Stream the live station feed from the playback loop."""
+    state = request.app.state.station_state
+    config = request.app.state.config
+    if state.session_stopped:
+        state.session_stopped = False
+        (config.cache_dir / "session_stopped.flag").unlink(missing_ok=True)
+
     hub = request.app.state.stream_hub
     listener_id, listener_queue = hub.subscribe()
 
