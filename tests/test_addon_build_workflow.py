@@ -6,7 +6,7 @@ for Pi/HA Green performance.  The strict comparison always failed → the `valid
 always failed → `build` (which `needs: validate`) never ran → images were never pushed
 → HA Supervisor got a 404 when trying to pull the update.
 
-These tests lock down the three structural invariants that, had they existed, would have
+These tests lock down six structural invariants that, had they existed, would have
 caught the problem before it shipped:
 
   1. The forbidden `cmp -s` pattern is absent.
@@ -14,6 +14,7 @@ caught the problem before it shipped:
   3. The build job cannot run if validate fails (needs: validate).
   4. Both target architectures are in the build matrix.
   5. The workflow triggers cover every file touched by a version-bump commit.
+  6. The build step never overwrites the HA-specific radio.toml.
 """
 
 from __future__ import annotations

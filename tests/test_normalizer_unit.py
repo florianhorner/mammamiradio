@@ -450,15 +450,15 @@ def _extract_af_value(mock_run) -> str:
     return ""
 
 
-def test_normalize_filter_chain_has_exactly_three_equalizers_with_music_eq(mock_subprocess, tmp_path):
-    """With music_eq=True the filter chain must contain exactly three equalizer filters.
+def test_normalize_filter_chain_has_exactly_two_equalizers_with_music_eq(mock_subprocess, tmp_path):
+    """With music_eq=True the filter chain must contain exactly two equalizer filters.
 
-    The 3rd equalizer (f=12000, HF harshness shelf) was removed because three
-    equalizers combined with loudnorm trigger a psymodel.c:576 assertion crash
-    (calc_energy SIGABRT) in ffmpeg 8.x on Pi aarch64. The chain is:
+    The chain is:
       1. de-mud at 200 Hz
       2. presence at 3 kHz
-    The 3rd EQ must NOT be added back until ffmpeg resolves the psymodel bug.
+    A 3rd equalizer (f=12000, HF harshness shelf) must NOT be added back — three
+    equalizers combined with loudnorm trigger a psymodel.c:576 assertion crash
+    (calc_energy SIGABRT) in ffmpeg 8.x on Pi aarch64.
     """
     input_file = tmp_path / "input.mp3"
     input_file.write_bytes(b"\xff" * 1000)
