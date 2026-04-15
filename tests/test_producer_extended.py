@@ -595,9 +595,46 @@ async def test_music_quality_circuit_breaker_after_3_rejections(tmp_path):
         await _run_until_queued(queue, state, config)
 
     seg = queue.get_nowait()
+    # No banter clips available in test env → circuit breaker falls back to queuing the
+    # silent music track as a last resort (the "no fallback" path).
     assert seg.type == SegmentType.MUSIC
     # Circuit breaker fires on the 3rd rejection, so we should see exactly 3 quality checks
     assert call_count == 3
+
+
+@pytest.mark.asyncio
+async def test_circuit_breaker_silence_inserts_banter_when_available(tmp_path):
+    """When all-silence rejections hit the circuit breaker AND a canned banter clip
+    is available, the breaker must queue BANTER instead of the silent track."""
+    state = _make_state()
+    state.playlist = [
+        Track(title=f"Track {i}", artist="A", duration_ms=200_000, spotify_id=f"demo{i}") for i in range(6)
+    ]
+    config = _make_config(tmp_path)
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+
+    fake_banter = tmp_path / "fallback_banter.mp3"
+    fake_banter.write_bytes(b"fake")
+
+    def _always_silence(path, seg_type):
+        if seg_type == SegmentType.MUSIC:
+            raise AudioQualityError("music has too much silence (100% > 95%)")
+
+    with (
+        patch(f"{MODULE}.next_segment_type", return_value=SegmentType.MUSIC),
+        patch(f"{MODULE}.download_track", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(f"{MODULE}.normalize", side_effect=_fake_path),
+        patch(f"{MODULE}.shutil.copy2"),
+        patch(f"{MODULE}.validate_segment_audio", side_effect=_always_silence),
+        patch(f"{MODULE}.fetch_home_context", new_callable=AsyncMock),
+        patch(f"{MODULE}._pick_canned_clip", return_value=fake_banter),
+    ):
+        await _run_until_queued(queue, state, config)
+
+    seg = queue.get_nowait()
+    # Banter was available → circuit breaker must queue BANTER not the silent track
+    assert seg.type == SegmentType.BANTER
+    assert seg.metadata.get("silence_fallback") is True
 
 
 # ---------------------------------------------------------------------------
