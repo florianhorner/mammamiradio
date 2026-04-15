@@ -281,7 +281,6 @@ def _resolve_cached_or_local(track: Track, cache_dir: Path, music_dir: Path) -> 
 
 def _download_sync(track: Track, cache_dir: Path, music_dir: Path) -> Path:
     """Resolve a track from cache, local files, yt-dlp, or a placeholder tone."""
-    out_path = cache_dir / f"{track.cache_key}.mp3"
     existing = _resolve_cached_or_local(track, cache_dir, music_dir)
     if existing is not None:
         return existing
