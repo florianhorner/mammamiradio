@@ -1838,12 +1838,9 @@ def test_producer_imports_scriptwriter_as_module() -> None:
     import mammamiradio.scriptwriter as _sw_mod
 
     assert hasattr(_prod_mod, "_sw"), (
-        "producer.py must expose '_sw' (import mammamiradio.scriptwriter as _sw). "
-        "Name-bound imports break hot-reload."
+        "producer.py must expose '_sw' (import mammamiradio.scriptwriter as _sw). Name-bound imports break hot-reload."
     )
-    assert _prod_mod._sw is _sw_mod, (
-        "producer._sw must be the same object as mammamiradio.scriptwriter module."
-    )
+    assert _prod_mod._sw is _sw_mod, "producer._sw must be the same object as mammamiradio.scriptwriter module."
 
 
 def test_write_banter_resolves_via_module_after_reload() -> None:
