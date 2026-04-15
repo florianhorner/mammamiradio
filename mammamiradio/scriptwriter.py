@@ -179,7 +179,7 @@ def _get_openai_client(api_key: str):
     return _openai_client
 
 
-def _has_script_llm(config: StationConfig) -> bool:
+def has_script_llm(config: StationConfig) -> bool:
     """Return whether any script-generation backend is configured."""
     return bool(config.anthropic_api_key or config.openai_api_key)
 
@@ -661,7 +661,7 @@ async def write_banter(
     persona into the prompt and requests persona_updates from the LLM.  The
     returned updates are persisted asynchronously so sessions compound.
     """
-    if not _has_script_llm(config):
+    if not has_script_llm(config):
         host = random.choice(config.hosts)
         fallback = {"it": "E torniamo alla musica!", "en": "And back to the music!"}
         return [(host, fallback.get(config.station.language, fallback["en"]))], None
@@ -1020,7 +1020,7 @@ async def write_news_flash(
 
     Returns (host, text, category) — the host delivers the flash solo.
     """
-    if not _has_script_llm(config):
+    if not has_script_llm(config):
         host = random.choice(config.hosts)
         return (host, "Notizia dell'ultima ora: tutto a posto. Più o meno.", "breaking")
 
@@ -1088,7 +1088,7 @@ async def write_transition(
     - ``"echo"`` — finish a phrase as if still inside the song's feeling, then pivot naturally
     - ``"react"`` — explicitly use the default react-to-the-song style
     """
-    if not _has_script_llm(config):
+    if not has_script_llm(config):
         host = random.choice(config.hosts)
         fallback = {"banter": "Allora...", "ad": "E adesso...", "news_flash": "Attenzione..."}
         return (host, fallback.get(next_segment, "Allora..."))
@@ -1164,7 +1164,7 @@ async def write_ad(
     sonic: SonicWorld | None = None,
 ) -> AdScript:
     """Generate a structured fictional ad script for one brand with role-based voices."""
-    if not _has_script_llm(config):
+    if not has_script_llm(config):
         return AdScript(
             brand=brand.name,
             parts=[AdPart(type="voice", text=f"{brand.name}. {brand.tagline}")],

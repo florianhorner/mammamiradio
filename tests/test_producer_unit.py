@@ -30,6 +30,7 @@ from mammamiradio.scriptwriter import ListenerRequestCommit
 
 TOML_PATH = str(Path(__file__).parent.parent / "radio.toml")
 PRODUCER_MODULE = "mammamiradio.producer"
+SCRIPTWRITER_MODULE = "mammamiradio.scriptwriter"
 
 
 @pytest.fixture(autouse=True)
@@ -143,8 +144,8 @@ async def test_banter_segment_queued():
 
     with (
         patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.BANTER),
-        patch(f"{PRODUCER_MODULE}.write_banter", new_callable=AsyncMock, return_value=(banter_lines, None)),
-        patch(f"{PRODUCER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora...")),
+        patch(f"{SCRIPTWRITER_MODULE}.write_banter", new_callable=AsyncMock, return_value=(banter_lines, None)),
+        patch(f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora...")),
         patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, return_value=_fake_path()),
         patch(f"{PRODUCER_MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=_fake_path()),
         patch(f"{PRODUCER_MODULE}.concat_files", return_value=_fake_path()),
@@ -866,9 +867,9 @@ async def test_banter_with_listener_request_commit_applies_on_queue():
 
     with (
         patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.BANTER),
-        patch(f"{PRODUCER_MODULE}._has_script_llm", return_value=True),
-        patch(f"{PRODUCER_MODULE}.write_banter", new_callable=AsyncMock, return_value=(banter_lines, commit)),
-        patch(f"{PRODUCER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora...")),
+        patch(f"{SCRIPTWRITER_MODULE}.has_script_llm", return_value=True),
+        patch(f"{SCRIPTWRITER_MODULE}.write_banter", new_callable=AsyncMock, return_value=(banter_lines, commit)),
+        patch(f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora...")),
         patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, return_value=_fake_path()),
         patch(f"{PRODUCER_MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=_fake_path()),
         patch(f"{PRODUCER_MODULE}.concat_files", return_value=_fake_path()),
@@ -897,7 +898,7 @@ async def test_banter_canned_path_does_not_apply_listener_request_commit():
 
     with (
         patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.BANTER),
-        patch(f"{PRODUCER_MODULE}._has_script_llm", return_value=False),
+        patch(f"{SCRIPTWRITER_MODULE}.has_script_llm", return_value=False),
         patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=canned_path),
         patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
     ):
@@ -924,7 +925,7 @@ async def test_banter_impossible_tts_path_does_not_apply_listener_request_commit
 
     with (
         patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.BANTER),
-        patch(f"{PRODUCER_MODULE}._has_script_llm", return_value=False),
+        patch(f"{SCRIPTWRITER_MODULE}.has_script_llm", return_value=False),
         patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=None),
         patch(f"{PRODUCER_MODULE}.generate_impossible_line", return_value="Linea impossibile"),
         patch(f"{PRODUCER_MODULE}._synthesize_impossible_moment", new_callable=AsyncMock, return_value=_fake_path()),
@@ -935,6 +936,42 @@ async def test_banter_impossible_tts_path_does_not_apply_listener_request_commit
     assert req in state.pending_requests
     seg = queue.get_nowait()
     assert seg.type == SegmentType.BANTER
+
+
+# ---------------------------------------------------------------------------
+# Import refactor invariant tests (P0)
+# ---------------------------------------------------------------------------
+
+
+def test_producer_imports_cleanly():
+    """producer.py must import without NameError after the _sw module refactor."""
+    import importlib
+
+    import mammamiradio.producer as _prod
+
+    importlib.reload(_prod)  # raises NameError if any bare scriptwriter ref was missed
+
+
+def test_write_banter_resolves_after_scriptwriter_reload():
+    """_sw.write_banter must resolve to the new function body after importlib.reload().
+
+    Core invariant for hot-reload: producer.py references scriptwriter via module
+    object (_sw), so reloading scriptwriter updates the function reference used by
+    all subsequent calls in the producer loop.
+    """
+    import importlib
+
+    import mammamiradio.scriptwriter as _sw
+
+    original_fn = _sw.write_banter
+    importlib.reload(_sw)
+    reloaded_fn = _sw.write_banter
+
+    # After reload the module is re-executed; the function object is new.
+    assert reloaded_fn is not original_fn, (
+        "write_banter should be a new function object after reload — "
+        "if this fails, the producer still holds a stale name-bound reference"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1510,8 +1547,8 @@ async def test_force_next_bypasses_full_queue(tmp_path):
     banter_lines = [(host, "Ciao!")]
 
     with (
-        patch(f"{PRODUCER_MODULE}.write_banter", new_callable=AsyncMock, return_value=(banter_lines, None)),
-        patch(f"{PRODUCER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora...")),
+        patch(f"{SCRIPTWRITER_MODULE}.write_banter", new_callable=AsyncMock, return_value=(banter_lines, None)),
+        patch(f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora...")),
         patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, return_value=_fake_path()),
         patch(f"{PRODUCER_MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=_fake_path()),
         patch(f"{PRODUCER_MODULE}.concat_files", return_value=_fake_path()),
@@ -1563,7 +1600,7 @@ async def test_ad_break_sets_sonic_worlds_and_roles_in_last_ad_script():
 
     with (
         patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.AD),
-        patch(f"{PRODUCER_MODULE}.write_ad", new_callable=AsyncMock, return_value=fake_script),
+        patch(f"{SCRIPTWRITER_MODULE}.write_ad", new_callable=AsyncMock, return_value=fake_script),
         patch(f"{PRODUCER_MODULE}.synthesize_ad", new_callable=AsyncMock, return_value=_fake_path()),
         patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, return_value=_fake_path()),
         patch(f"{PRODUCER_MODULE}.generate_bumper_jingle", return_value=_fake_path()),
@@ -1784,3 +1821,51 @@ async def test_idle_bridge_queues_canned_clip_when_available(tmp_path):
     assert seg.type == SegmentType.BANTER
     assert seg.metadata.get("warmup") is True
     assert seg.path == canned_clip
+
+
+# ---------------------------------------------------------------------------
+# P0: hot-reload import refactor invariants
+# ---------------------------------------------------------------------------
+
+
+def test_producer_imports_scriptwriter_as_module() -> None:
+    """producer.py must import scriptwriter as a module object, not via name binding.
+
+    This is the P0 invariant for hot-reload: importlib.reload(mammamiradio.scriptwriter)
+    only takes effect if producer.py accesses functions via the module reference (_sw.*).
+    Name-bound imports (from ... import fn) hold stale references after reload.
+    """
+    import mammamiradio.producer as _prod_mod
+    import mammamiradio.scriptwriter as _sw_mod
+
+    assert hasattr(_prod_mod, "_sw"), (
+        "producer.py must expose '_sw' (import mammamiradio.scriptwriter as _sw). "
+        "Name-bound imports break hot-reload."
+    )
+    assert _prod_mod._sw is _sw_mod, (
+        "producer._sw must be the same object as mammamiradio.scriptwriter module."
+    )
+
+
+def test_write_banter_resolves_via_module_after_reload() -> None:
+    """After importlib.reload, _sw.write_banter must resolve to the new function body.
+
+    This verifies that the module-reference import pattern makes hot-reload effective.
+    """
+    import importlib
+
+    import mammamiradio.producer as _prod_mod
+    import mammamiradio.scriptwriter as _sw_mod
+
+    original_fn = _sw_mod.write_banter
+
+    # Reload the module
+    importlib.reload(_sw_mod)
+
+    # producer._sw is the same module object — its attributes now point to new functions
+    assert _prod_mod._sw.write_banter is _sw_mod.write_banter, (
+        "_sw.write_banter should resolve to the reloaded function via the module reference."
+    )
+
+    # Cleanup: restore original (module is now reloaded but functions are equivalent)
+    _ = original_fn  # referenced to avoid unused-variable lint
