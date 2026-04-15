@@ -122,6 +122,7 @@ Do not deviate without explicit user approval. In QA mode, flag any code that do
 
 ## Brand assets
 
+- **Hero banner**: `docs/banner.png` — 1280×640 README hero. DALL-E background composited with Playfair italic typography. Source template: `docs/hero-composite.html` (contains regeneration instructions in comment header). The background image (`radio-hero-bg.png`) is generated via ChatGPT Images and not committed to git.
 - **Logo SVG**: `mammamiradio/logo.svg` — canonical vector source (variant G: classic radio with Italian flag stripe and sound waves)
 - **Palette**: Volare Refined — espresso dark with Italian warmth in accents. See `DESIGN.md` for the full design system.
   - Background: espresso dark (`#14110F`) with subtle warm gradient at top
@@ -170,6 +171,18 @@ Why: the scriptwriter generates fake ads in the brand's voice, makes false produ
   - On main merge: `update` mode — auto-ratchets all floors up and commits the new values. Zero human intervention.
 - **Local check**: `make coverage-check` to verify locally. `make coverage-ratchet` to preview what CI would commit.
 - **Adding tests**: Write tests, push. CI will auto-raise the floors on merge. The next PR that drops any module will fail.
+
+## Protected UI elements
+
+These UI elements have regressed in past refactors. Always verify they survive after any HTML edit:
+
+- **Token cost counter** (`admin.html` Engine Room) — backend computes `api_cost_estimate_usd` on every `/status` call. UI must display it. Has disappeared twice in refactors.
+- **Play button blue state** (`dashboard.html`) — `.play-btn.playing` must use `var(--ok)` (blue), never `var(--sun2)` (golden). Colorblind safety.
+- **Station name localStorage** (`dashboard.html`) — reads `stationName` from localStorage. Admin writes it. Broken when dashboard.html was rewritten.
+- **Gold "Mi" accent** (`dashboard.html`, `admin.html`) — `<span class="mi">` in h1, styled `color: var(--sun)`. Brand signature from hero banner.
+- **Italian tricolor stripe** (`dashboard.html`, `admin.html`) — `.tricolor-stripe` div below h1. Must match hero banner.
+
+When editing any HTML file, grep for these elements before committing.
 
 ## Doc sync
 
