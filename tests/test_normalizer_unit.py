@@ -450,15 +450,14 @@ def _extract_af_value(mock_run) -> str:
     return ""
 
 
-def test_normalize_filter_chain_has_exactly_three_equalizers_with_music_eq(mock_subprocess, tmp_path):
-    """With music_eq=True the filter chain must contain exactly three equalizer filters.
+def test_normalize_filter_chain_has_exactly_two_equalizers_with_music_eq(mock_subprocess, tmp_path):
+    """With music_eq=True the filter chain must contain exactly two equalizer filters.
 
-    The 3rd equalizer (f=12000, HF harshness shelf) was restored in this PR.
-    Previously it was removed due to a Pi/ffmpeg 8.x crash concern; it has been
-    added back, making the count 3:
+    The 3rd equalizer (f=12000, HF harshness shelf) was dropped to avoid a
+    psymodel assertion crash in ffmpeg 8.x when 3+ equalizers are chained.
+    The two remaining filters are:
       1. de-mud at 200 Hz
       2. presence at 3 kHz
-      3. HF harshness at 12 kHz
     """
     input_file = tmp_path / "input.mp3"
     input_file.write_bytes(b"\xff" * 1000)
@@ -472,16 +471,17 @@ def test_normalize_filter_chain_has_exactly_three_equalizers_with_music_eq(mock_
     af_value = _extract_af_value(mock_run)
     assert af_value, "No -filter:a filter chain found in ffmpeg command"
     equalizer_count = af_value.count("equalizer=")
-    assert equalizer_count == 3, (
-        f"Expected exactly 3 equalizer filters with music_eq=True, got {equalizer_count}. "
+    assert equalizer_count == 2, (
+        f"Expected exactly 2 equalizer filters with music_eq=True, got {equalizer_count}. "
         f"Filter chain: {af_value}"
     )
 
 
-def test_normalize_filter_chain_includes_hf_shelf_at_12khz(mock_subprocess, tmp_path):
-    """The 3rd equalizer (HF harshness shelf at 12kHz) must be present in the music_eq chain.
+def test_normalize_filter_chain_excludes_hf_shelf_at_12khz(mock_subprocess, tmp_path):
+    """The HF harshness shelf (equalizer=f=12000) must NOT be in the music_eq chain.
 
-    This was the filter that was removed in a prior commit and is now restored.
+    It was dropped to fix a psymodel assertion crash in ffmpeg 8.x triggered by
+    chaining 3+ equalizer filters. The filter chain should only have 2 equalizers.
     """
     input_file = tmp_path / "input.mp3"
     input_file.write_bytes(b"\xff" * 1000)
@@ -494,9 +494,9 @@ def test_normalize_filter_chain_includes_hf_shelf_at_12khz(mock_subprocess, tmp_
 
     af_value = _extract_af_value(mock_run)
     assert af_value, "No -filter:a filter chain found in ffmpeg command"
-    # The HF shelf: equalizer=f=12000:t=o:w=4000:g=-1.5
-    assert "equalizer=f=12000" in af_value, (
-        f"HF harshness shelf (equalizer=f=12000) missing from filter chain: {af_value}"
+    assert "equalizer=f=12000" not in af_value, (
+        f"HF shelf (equalizer=f=12000) found in filter chain but was dropped for ffmpeg 8.x "
+        f"compatibility. Filter chain: {af_value}"
     )
 
 

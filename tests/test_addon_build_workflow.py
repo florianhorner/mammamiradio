@@ -1,17 +1,17 @@
-"""Guards for the addon-build.yml CI workflow after the 2.10.1 revert.
+"""Guards for the addon-build.yml CI workflow.
 
-This PR reverted the sed-based radio.toml comparison back to a strict byte-for-byte
-`cmp -s` check, and also restored the `cp radio.toml ha-addon/mammamiradio/` step
-so that the HA addon always ships the same radio.toml as the root.
+The HA addon ships a radio.toml with Pi-appropriate pacing overrides that differ
+from the root radio.toml. The CI workflow uses a sed-based transformation to apply
+those overrides before comparing — this is the correct and intentional approach.
 
-These tests lock down the new structural invariants:
+These tests lock down the structural invariants:
 
-  1. The workflow uses `cmp -s` for the strict radio.toml comparison.
-  2. The build step copies the root radio.toml into the addon build context.
-  3. The build job still depends on the validate job (needs: validate).
-  4. Both target architectures remain in the build matrix.
-  5. The trigger paths still cover every file touched by a version-bump commit.
-  6. The sed-based comparison (introduced in 2.10.1) is absent.
+  1. The workflow uses sed-based comparison (not cmp -s) to handle pacing overrides.
+  2. The build job still depends on the validate job (needs: validate).
+  3. Both target architectures remain in the build matrix.
+  4. The trigger paths still cover every file touched by a version-bump commit.
+  5. The sed-based comparison must NOT revert to a strict cmp -s check (which would
+     break whenever pacing overrides diverge from root).
 """
 
 from __future__ import annotations
@@ -28,43 +28,28 @@ def _workflow_text() -> str:
 
 
 # ---------------------------------------------------------------------------
-# 1. The workflow must use strict cmp -s for radio.toml comparison
+# 1. The workflow must use the sed-based comparison for radio.toml
 # ---------------------------------------------------------------------------
 
 
-def test_ci_radio_toml_check_uses_strict_cmp():
-    """The validate step must use `cmp -s` for an exact byte comparison of radio.toml.
+def test_ci_radio_toml_check_uses_sed_transform():
+    """The validate step must use sed to apply pacing overrides before comparison.
 
-    After the 2.10.1 sed-based workaround was reverted, both files must be
-    identical. The strict `cmp -s` comparison enforces this invariant.
+    The HA addon radio.toml has different pacing defaults (fewer songs between
+    banter, fewer ad spots) to suit Raspberry Pi hardware. A plain `cmp -s`
+    comparison would fail whenever these intentional overrides diverge from root.
+    The sed approach is the correct and intentional validation strategy.
     """
     text = _workflow_text()
-    assert "cmp -s radio.toml ha-addon/mammamiradio/radio.toml" in text, (
-        "Expected `cmp -s radio.toml ha-addon/mammamiradio/radio.toml` in addon-build.yml.\n"
-        "The strict comparison was restored after the 2.10.1 sed-workaround was reverted."
+    assert "EXPECTED=$(sed" in text, (
+        "Expected a sed-based EXPECTED=$(sed ...) comparison in addon-build.yml.\n"
+        "The HA addon radio.toml has intentional pacing overrides — a plain cmp -s\n"
+        "would reject valid configurations. Use sed to normalize before comparing."
     )
 
 
 # ---------------------------------------------------------------------------
-# 2. The build step must copy the root radio.toml into the addon build context
-# ---------------------------------------------------------------------------
-
-
-def test_ci_build_step_copies_root_radio_toml():
-    """The build job must include `cp radio.toml ha-addon/mammamiradio/`.
-
-    This was restored after the 2.10.1 revert. The addon build context needs the
-    radio.toml file copied in alongside the mammamiradio source.
-    """
-    text = _workflow_text()
-    assert "cp radio.toml ha-addon/mammamiradio/" in text, (
-        "Expected `cp radio.toml ha-addon/mammamiradio/` in the build step.\n"
-        "This copy was restored when the HA-specific pacing override approach was reverted."
-    )
-
-
-# ---------------------------------------------------------------------------
-# 3. The build job must still depend on validate
+# 2. The build job must still depend on validate
 # ---------------------------------------------------------------------------
 
 
@@ -85,7 +70,7 @@ def test_ci_build_job_needs_validate():
 
 
 # ---------------------------------------------------------------------------
-# 4. Both target architectures must remain in the build matrix
+# 3. Both target architectures must remain in the build matrix
 # ---------------------------------------------------------------------------
 
 
@@ -111,7 +96,7 @@ def test_ci_build_matrix_includes_amd64():
 
 
 # ---------------------------------------------------------------------------
-# 5. Trigger paths must still cover version-bump files
+# 4. Trigger paths must still cover version-bump files
 # ---------------------------------------------------------------------------
 
 
@@ -139,20 +124,20 @@ def test_ci_trigger_paths_cover_version_bump_files():
 
 
 # ---------------------------------------------------------------------------
-# 6. The sed-based comparison (from 2.10.1) must be absent
+# 5. Guard: do not regress to strict cmp -s (would break pacing overrides)
 # ---------------------------------------------------------------------------
 
 
-def test_ci_sed_based_radio_toml_comparison_is_absent():
-    """The sed-based EXPECTED=$(sed ...) workaround from 2.10.1 must not be present.
+def test_ci_strict_cmp_is_absent():
+    """The workflow must NOT use `cmp -s radio.toml ha-addon/mammamiradio/radio.toml`.
 
-    In 2.10.1 a sed transform was used to apply pacing overrides before comparing.
-    That approach was reverted in this PR — the files must match exactly.
-    Reintroducing the sed block would silently allow pacing drift again.
+    A strict byte-for-byte comparison would fail because the HA addon intentionally
+    ships different pacing defaults. If this assert fires, someone replaced the
+    sed-based validation with a naive cmp check.
     """
     text = _workflow_text()
-    assert "EXPECTED=$(sed" not in text, (
-        "The sed-based EXPECTED=$(sed ...) block was reintroduced.\n"
-        "This approach was removed when the HA pacing overrides were reverted.\n"
-        "Use `cmp -s` for an exact comparison instead."
+    assert "cmp -s radio.toml ha-addon/mammamiradio/radio.toml" not in text, (
+        "Strict `cmp -s` comparison found in addon-build.yml.\n"
+        "The HA addon radio.toml has intentional pacing overrides — a plain cmp -s\n"
+        "would reject valid configurations. Use the sed-based comparison instead."
     )

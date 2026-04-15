@@ -1003,8 +1003,8 @@ Return JSON:
     except Exception as e:
         logger.error("Banter generation failed (%s): %s", type(e).__name__, e, exc_info=True)
         hosts = config.hosts
-        h0 = hosts[0] if hosts else None
-        h1 = hosts[1] if len(hosts) > 1 else h0
+        h0: HostPersonality = hosts[0] if hosts else HostPersonality(name="Host", voice="en-US-GuyNeural", style="")
+        h1: HostPersonality = hosts[1] if len(hosts) > 1 else h0
         if config.station.language == "it":
             # Pre-written short exchanges — sound like real radio, not a shutdown line
             _fallback_pools = [
