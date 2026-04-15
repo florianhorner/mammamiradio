@@ -808,8 +808,11 @@ async def run_producer(
                 audio_source = "download"
 
                 # Quality gate: reject truncated/silent downloads before queueing.
-                # Circuit breaker: after 3 consecutive rejections, let the next track
-                # through so the stream doesn't starve (silence > dead air).
+                # Circuit breaker: after 3 consecutive rejections, either serve a
+                # pre-bundled banter clip (when the rejection is due to silence — i.e. all
+                # tracks are silence placeholders and playing them would cause dead air) or
+                # let the track through as-is (when rejected for other reasons such as being
+                # short — silence is still worse than a slightly-short real track).
                 if not os.environ.get("MAMMAMIRADIO_SKIP_QUALITY_GATE"):
                     _music_loop = asyncio.get_running_loop()
                     try:
@@ -820,14 +823,50 @@ async def run_producer(
                     except AudioQualityError as exc:
                         _music_qg_rejections += 1
                         if _music_qg_rejections >= 3:
-                            logger.warning(
-                                "Quality gate circuit breaker: %d consecutive rejections, "
-                                "allowing track through to prevent stream starvation (%s: %s)",
-                                _music_qg_rejections,
-                                norm_path.name,
-                                exc,
-                            )
                             _music_qg_rejections = 0
+                            if "silence" in str(exc).lower():
+                                # All available tracks are silence placeholders.  Playing
+                                # them would break the illusion with dead air.  Insert a
+                                # bundled banter clip instead so the stream stays alive.
+                                fallback = _pick_canned_clip("banter", state=state) or _pick_canned_clip("welcome")
+                                if fallback:
+                                    logger.warning(
+                                        "Quality gate circuit breaker: %d consecutive silence rejections — "
+                                        "inserting fallback banter to prevent dead air (%s: %s)",
+                                        3,
+                                        norm_path.name,
+                                        exc,
+                                    )
+                                    if not norm_is_cached:
+                                        norm_path.unlink(missing_ok=True)
+                                    await _queue_segment(
+                                        Segment(
+                                            type=SegmentType.BANTER,
+                                            path=fallback,
+                                            metadata={"type": "banter", "canned": True, "silence_fallback": True},
+                                            ephemeral=False,
+                                        )
+                                    )
+                                    continue
+                                # No banter clips available — fall through to queue the
+                                # silent track as a last resort (preserves original behaviour).
+                                logger.warning(
+                                    "Quality gate circuit breaker: %d consecutive silence rejections, "
+                                    "no fallback banter available — allowing silent track through (%s: %s)",
+                                    3,
+                                    norm_path.name,
+                                    exc,
+                                )
+                            else:
+                                # Short/quiet track — likely a real file that just barely
+                                # missed the threshold.  Let it through; it's better than silence.
+                                logger.warning(
+                                    "Quality gate circuit breaker: %d consecutive rejections, "
+                                    "allowing track through to prevent stream starvation (%s: %s)",
+                                    3,
+                                    norm_path.name,
+                                    exc,
+                                )
                         else:
                             logger.warning("Quality gate rejected music track (%s): %s", norm_path.name, exc)
                             if not norm_is_cached:

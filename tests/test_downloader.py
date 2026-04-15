@@ -360,7 +360,7 @@ def test_ytdlp_failure_falls_back_to_placeholder(track, cache_dir, music_dir):
         result = _download_sync(track, cache_dir, music_dir)
 
     mock_ffmpeg.assert_called_once()
-    expected_path = cache_dir / f"{track.cache_key}.mp3"
+    expected_path = cache_dir / f"_silence_{track.cache_key}.mp3"
     assert result == expected_path
 
 
@@ -381,7 +381,7 @@ def test_ytdlp_import_error_falls_back_to_placeholder(track, cache_dir, music_di
         result = _download_sync(track, cache_dir, music_dir)
 
     mock_ffmpeg.assert_called_once()
-    expected_path = cache_dir / f"{track.cache_key}.mp3"
+    expected_path = cache_dir / f"_silence_{track.cache_key}.mp3"
     assert result == expected_path
 
 
@@ -404,6 +404,29 @@ def test_generate_silence_calls_ffmpeg(track, tmp_path):
     duration_index = cmd.index("-t") + 1
     assert cmd[duration_index] == "210"
     assert str(out_path) in cmd
+
+
+def test_silence_placeholder_uses_prefixed_path(track, cache_dir, music_dir):
+    """When yt-dlp is disabled and no local/cache file exists, the silence placeholder
+    must be written to _silence_<cache_key>.mp3, NOT <cache_key>.mp3.
+
+    This prevents stale silence files from being served as 'Cache hit' on subsequent
+    iterations or restarts, which would cause an endless quality-gate rejection loop.
+    """
+    import os
+
+    from mammamiradio.downloader import _download_sync
+
+    with (
+        patch.dict(os.environ, {"MAMMAMIRADIO_ALLOW_YTDLP": "false"}),
+        patch("mammamiradio.downloader._run_ffmpeg"),
+    ):
+        result = _download_sync(track, cache_dir, music_dir)
+
+    # Must NOT be the plain cache-key path that _resolve_cached_or_local would find
+    assert result.name != f"{track.cache_key}.mp3", "silence must not clobber the real cache slot"
+    assert result.name.startswith("_silence_"), f"silence must use _silence_ prefix, got: {result.name}"
+    assert str(cache_dir) in str(result), "silence must still be under cache_dir for purge_suspect to find it"
 
 
 # --- download_track async wrapper ---
@@ -713,6 +736,26 @@ def test_purge_suspect_cache_files_custom_threshold(tmp_path):
     # With higher threshold, this should be purged
     assert purge_suspect_cache_files(d, min_size_bytes=1000) == 1
     assert not f.exists()
+
+
+def test_purge_suspect_cache_files_removes_silence_placeholders(tmp_path):
+    """_silence_*.mp3 files must always be purged regardless of size."""
+    from mammamiradio.downloader import purge_suspect_cache_files
+
+    d = tmp_path / "cache"
+    d.mkdir()
+    # A large silence placeholder — size alone would not trigger the small-file heuristic
+    silence = d / "_silence_some_track_key.mp3"
+    silence.write_bytes(b"x" * 900_000)  # ~900KB, well above default 10KB threshold
+    # A regular large file that should NOT be purged
+    real = d / "real_track.mp3"
+    real.write_bytes(b"x" * 900_000)
+
+    purged = purge_suspect_cache_files(d)
+
+    assert purged == 1
+    assert not silence.exists(), "_silence_ placeholder must be deleted"
+    assert real.exists(), "real track cache must be preserved"
 
 
 def test_download_ytdlp_raises_when_no_output_file(cache_dir):

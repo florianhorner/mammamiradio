@@ -62,7 +62,7 @@ export MAMMAMIRADIO_PORT="8000"
 # ---- Admin token: use config option if set, otherwise auto-generate ----
 if [ -z "$ADMIN_TOKEN" ]; then
     export ADMIN_TOKEN="$(python3 -c 'import uuid; print(uuid.uuid4().hex)')"
-    echo "[mammamiradio] Auto-generated ADMIN_TOKEN: $ADMIN_TOKEN"
+    echo "[mammamiradio] Auto-generated ADMIN_TOKEN for non-loopback bind"
 fi
 
 # ---- Point cache/tmp at persistent /data ----
