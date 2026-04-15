@@ -94,3 +94,4 @@ def test_cleanup_old_clips_skips_file_on_stat_oserror(tmp_path):
         removed = cleanup_old_clips(clips_dir, max_age_hours=0)
 
     assert removed == 0  # file skipped because stat raised OSError
+    assert clip_a.exists()  # file was not deleted

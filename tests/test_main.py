@@ -454,6 +454,51 @@ async def test_startup_warns_when_ytdlp_missing_but_allowed(tmp_path: Path, capl
 
 
 @pytest.mark.asyncio
+async def test_startup_no_ffmpeg_warning_when_ffmpeg_is_installed(tmp_path: Path, caplog):
+    """startup() skips the FFmpeg-not-found warning when shutil.which('ffmpeg') returns a path.
+
+    This exercises the False branch of `if not _ffmpeg_found` (line 76→81 in main.py)
+    so the coverage gate passes regardless of whether ffmpeg is installed on the runner.
+    """
+    import logging
+
+    from mammamiradio.models import Track
+
+    mock_config = MagicMock()
+    mock_config.station.name = "TestRadio"
+    mock_config.station.language = "it"
+    mock_config.bind_host = "127.0.0.1"
+    mock_config.port = 8000
+    mock_config.pacing.lookahead_segments = 3
+    mock_config.max_cache_size_mb = 500
+    mock_config.tmp_dir = tmp_path / "tmp"
+    mock_config.cache_dir = tmp_path / "cache"
+    mock_config.homeassistant.enabled = False
+    mock_config.allow_ytdlp = False
+    mock_config.audio.bitrate = 192
+
+    tracks = [Track(title="S", artist="A", duration_ms=1, spotify_id="x")]
+
+    with (
+        patch(f"{MODULE}.load_config", return_value=mock_config),
+        patch(f"{MODULE}.read_persisted_source", return_value=None),
+        patch(f"{MODULE}.fetch_startup_playlist", return_value=(tracks, None, "")),
+        patch(f"{MODULE}.run_producer", new_callable=AsyncMock),
+        patch(f"{MODULE}.run_playback_loop", new_callable=AsyncMock),
+        patch(f"{MODULE}.prewarm_first_segment", new_callable=AsyncMock),
+        # Simulate ffmpeg present, yt-dlp absent
+        patch(f"{MODULE}.shutil.which", side_effect=lambda name: "/usr/bin/ffmpeg" if name == "ffmpeg" else None),
+        caplog.at_level(logging.WARNING, logger="mammamiradio"),
+    ):
+        from mammamiradio.main import startup
+
+        await startup()
+
+    # No FFmpeg warning should appear when the binary is detected
+    assert not any("FFmpeg not found" in r.message for r in caplog.records)
+
+
+@pytest.mark.asyncio
 async def test_startup_no_ytdlp_warning_when_blocked(tmp_path: Path, caplog):
     """startup() does not warn about missing yt-dlp when allow_ytdlp is False."""
     import logging

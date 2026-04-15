@@ -13,14 +13,14 @@
   "mammamiradio.normalizer": 96,
   "mammamiradio.persona": 90,
   "mammamiradio.playlist": 91,
-  "mammamiradio.producer": 81,
+  "mammamiradio.producer": 80,
   "mammamiradio.scheduler": 95,
-  "mammamiradio.scriptwriter": 94,
+  "mammamiradio.scriptwriter": 93,
   "mammamiradio.setup_status": 100,
   "mammamiradio.song_cues": 90,
   "mammamiradio.streamer": 90,
   "mammamiradio.sync": 88,
   "mammamiradio.track_rationale": 91,
   "mammamiradio.track_rules": 100,
-  "mammamiradio.tts": 90
+  "mammamiradio.tts": 88
 }

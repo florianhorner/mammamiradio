@@ -974,11 +974,10 @@ async def test_prefetch_next_skips_failed_candidate(tmp_path):
         patch(f"{PRODUCER_MODULE}.validate_download", return_value=(False, "skipped in test")),
     ):
         await _prefetch_next(state, config, _failed_keys=failed)
-        if mock_dl.called:
-            # Download was attempted for the second (non-failed) track
-            called_track = mock_dl.call_args[0][0]
-            assert called_track.cache_key == second_key, "Should skip the failed track and use the second"
-        # Either way, should not raise
+        assert mock_dl.called, "Expected _prefetch_next to attempt a non-failed candidate"
+        # Download was attempted for the second (non-failed) track
+        called_track = mock_dl.call_args[0][0]
+        assert called_track.cache_key == second_key, "Should skip the failed track and use the second"
 
 
 @pytest.mark.asyncio
