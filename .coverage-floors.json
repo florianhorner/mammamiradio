@@ -1,8 +1,8 @@
 {
   "mammamiradio.__init__": 100,
-  "mammamiradio.audio_quality": 88,
+  "mammamiradio.audio_quality": 100,
   "mammamiradio.capabilities": 100,
-  "mammamiradio.clip": 89,
+  "mammamiradio.clip": 96,
   "mammamiradio.config": 90,
   "mammamiradio.context_cues": 94,
   "mammamiradio.downloader": 98,
@@ -14,13 +14,13 @@
   "mammamiradio.persona": 90,
   "mammamiradio.playlist": 91,
   "mammamiradio.producer": 83,
-  "mammamiradio.scheduler": 95,
+  "mammamiradio.scheduler": 100,
   "mammamiradio.scriptwriter": 93,
   "mammamiradio.setup_status": 100,
-  "mammamiradio.song_cues": 90,
+  "mammamiradio.song_cues": 100,
   "mammamiradio.streamer": 91,
   "mammamiradio.sync": 88,
-  "mammamiradio.track_rationale": 91,
+  "mammamiradio.track_rationale": 100,
   "mammamiradio.track_rules": 100,
   "mammamiradio.tts": 90
 }

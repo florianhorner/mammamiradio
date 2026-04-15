@@ -343,3 +343,107 @@ async def test_add_cue_db_exception_is_swallowed(db, monkeypatch):
     monkeypatch.setattr(aiosqlite, "connect", MagicMock(return_value=bad_cm))
     # Should complete without raising
     await add_cue(db, "yt_except", "reaction", "some cue text")
+
+
+@pytest.mark.asyncio
+async def test_detect_anthem_no_track_returns_false(db):
+    """detect_anthem returns False when the youtube_id has no play history."""
+    result = await detect_anthem(db, "yt_no_plays", threshold=3)
+    assert result is False
+
+
+@pytest.mark.asyncio
+async def test_detect_anthem_db_exception_returns_false(db, monkeypatch):
+    """detect_anthem swallows DB exceptions and returns False."""
+    import aiosqlite
+
+    bad_cm = MagicMock()
+    bad_cm.__aenter__ = AsyncMock(side_effect=aiosqlite.Error("simulated failure"))
+    bad_cm.__aexit__ = AsyncMock(return_value=False)
+    monkeypatch.setattr(aiosqlite, "connect", MagicMock(return_value=bad_cm))
+    result = await detect_anthem(db, "yt_anthem_fail", threshold=3)
+    assert result is False
+
+
+@pytest.mark.asyncio
+async def test_detect_skip_bit_db_exception_returns_false(db, monkeypatch):
+    """detect_skip_bit swallows DB exceptions and returns False."""
+    import aiosqlite
+
+    bad_cm = MagicMock()
+    bad_cm.__aenter__ = AsyncMock(side_effect=aiosqlite.Error("simulated failure"))
+    bad_cm.__aexit__ = AsyncMock(return_value=False)
+    monkeypatch.setattr(aiosqlite, "connect", MagicMock(return_value=bad_cm))
+    result = await detect_skip_bit(db, "yt_skip_fail", threshold=2)
+    assert result is False
+
+
+@pytest.mark.asyncio
+async def test_get_cues_includes_legacy_operator_rules(db):
+    """get_cues includes track_rules rows as 'operator' type cues."""
+    _insert_track(db, "yt_rules")
+    conn = sqlite3.connect(str(db))
+    conn.execute(
+        "INSERT INTO track_rules (youtube_id, rule_text) VALUES (?, 'Play during sunrise')",
+        ("yt_rules",),
+    )
+    conn.commit()
+    conn.close()
+
+    cues = await get_cues(db, "yt_rules")
+    operator_cues = [c for c in cues if c["type"] == "operator"]
+    assert len(operator_cues) == 1
+    assert "sunrise" in operator_cues[0]["text"]
+
+
+@pytest.mark.asyncio
+async def test_get_cues_exception_returns_empty_list(db, monkeypatch):
+    """get_cues swallows DB exceptions and returns an empty list."""
+    import aiosqlite
+
+    bad_cm = MagicMock()
+    bad_cm.__aenter__ = AsyncMock(side_effect=aiosqlite.Error("simulated failure"))
+    bad_cm.__aexit__ = AsyncMock(return_value=False)
+    monkeypatch.setattr(aiosqlite, "connect", MagicMock(return_value=bad_cm))
+    result = await get_cues(db, "yt_get_fail")
+    assert result == []
+
+
+@pytest.mark.asyncio
+async def test_get_cues_skips_track_rules_when_limit_filled(db):
+    """get_cues does not fetch track_rules when song_cues fills the limit (remaining == 0)."""
+    # Fill all 3 limit slots with song_cues (3 distinct cue_types)
+    await add_cue(db, "yt_full", "reaction", "cue one", source_session=1)
+    await add_cue(db, "yt_full", "lore", "cue two", source_session=2)
+    await add_cue(db, "yt_full", "anthem", "cue three", source_session=3)
+    # Insert a track_rules entry — it should NOT appear since all slots are taken
+    conn = sqlite3.connect(str(db))
+    conn.execute(
+        "INSERT INTO track_rules (youtube_id, rule_text) VALUES (?, ?)",
+        ("yt_full", "should be excluded"),
+    )
+    conn.commit()
+    conn.close()
+
+    cues = await get_cues(db, "yt_full")
+    assert len(cues) == 3
+    assert not any(c["text"] == "should be excluded" for c in cues)
+
+
+@pytest.mark.asyncio
+async def test_detect_anthem_fetchone_none_returns_false(db, monkeypatch):
+    """detect_anthem returns False when fetchone returns None (dead-code guard for COUNT*)."""
+    import aiosqlite
+
+    # Build a mock cursor whose fetchone returns None
+    mock_cursor = AsyncMock()
+    mock_cursor.fetchone = AsyncMock(return_value=None)
+
+    mock_db = AsyncMock()
+    mock_db.execute = AsyncMock(return_value=mock_cursor)
+    mock_db.__aenter__ = AsyncMock(return_value=mock_db)
+    mock_db.__aexit__ = AsyncMock(return_value=False)
+    monkeypatch.setattr(aiosqlite, "connect", MagicMock(return_value=mock_db))
+
+    result = await detect_anthem(db, "yt_none_row", threshold=3)
+    assert result is False

@@ -498,6 +498,10 @@ h1 .mi { color: var(--sun); }
 /* ── HOST AXIS LABELS ── */
 .ha-labels { display: flex; justify-content: space-between; font-size: 8px; color: rgba(245,237,216,0.18); margin-top: 2px; padding: 0 2px; }
 
+/* ── LIVE DOT ── */
+@keyframes live-pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
+.live-dot { display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--ok);margin-right:6px;vertical-align:middle;animation:live-pulse 2s ease-in-out infinite; }
+
 /* ── FORCE PENDING ── */
 .force-badge { font-size: 9px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; padding: 1px 7px; border-radius: 8px; background: rgba(244,208,72,0.2); color: var(--sun); margin-left: 4px; }
 
@@ -654,14 +658,14 @@ h1 .mi { color: var(--sun); }
 
   <!-- UP NEXT -->
   <div class="card">
-    <div class="card-label">Up Next <span id="queueMeta" style="float:right;font-weight:400"></span></div>
+    <div class="card-label"><span class="live-dot" id="queueLiveDot"></span>Up Next <span id="queueMeta" style="float:right;font-weight:400"></span></div>
     <div id="queueBody"><div class="empty">Waiting...</div></div>
   </div>
 
   <!-- LISTENER REQUESTS -->
   <div class="card">
     <div class="card-label">Listener Requests <span id="lrMeta" style="float:right;font-weight:400;color:var(--muted)"></span></div>
-    <div id="lrBody"><div class="empty">No requests yet</div></div>
+    <div id="lrBody"><div class="empty">No requests yet — listeners can send song requests or shoutouts from the radio page</div></div>
   </div>
 
   <!-- PLAYLIST -->
@@ -925,7 +929,7 @@ function updateQueue(up,forcePending,mode){
       const reason = it.reason ? `<div class="qi-reason">${esc(it.reason)}</div>` : '';
       return `<div ${clickAttrs}><span class="qi-num">${i+1}</span><span class="qi-badge" data-t="${esc(typeKey)}">${esc(segmentBadge(typeKey))}</span><span class="qi-label">${esc(it.label||it.type)}</span></div>${reason}`;
     }));
-    if(nonMusicCount>0)parts.push(`<div class="empty" style="padding:6px 0;font-size:10px">+${nonMusicCount} non-music segment${nonMusicCount>1?'s':''} (banter/ads) queued</div>`);
+    if(nonMusicCount>0)parts.push(`<div class="empty" style="padding:6px 0;font-size:10px">+ ${nonMusicCount} host segment${nonMusicCount>1?'s':''} queued</div>`);
   }
   meta.textContent=(up?.length||0)+' upcoming';
   el.innerHTML=parts.join('');
@@ -1386,17 +1390,15 @@ function updateLog(log){
 function toggleSection(head){head.classList.toggle('open');head.nextElementSibling.classList.toggle('open')}
 
 // ── Polling ──
-async function refresh(){
+// Fast poll: live playback state + listener requests (every 3s)
+async function refreshFast(){
   try{
-    const [sr,cr,or,lrr]=await Promise.all([fetch('/status',{headers:H()}),fetch('/api/capabilities',{headers:H()}),fetch('/api/setup/status',{headers:H()}),fetch('/api/listener-requests',{headers:H()})]);
+    const [sr,lrr]=await Promise.all([fetch('/status',{headers:H()}),fetch('/api/listener-requests',{headers:H()})]);
     _st=await sr.json();_pub=_st;
-    _caps=await cr.json();
-    const setup=await or.json();
     const lrData=lrr.ok?await lrr.json():{requests:[]};
-    updateNow(_st.now_streaming);updateQueue(_st.upcoming,_st.force_pending,_st.upcoming_mode);updateSystems(_caps,_st,_st);updateRecent(_st);
+    updateNow(_st.now_streaming);updateQueue(_st.upcoming,_st.force_pending,_st.upcoming_mode);updateRecent(_st);
     updateLog(_st.stream_log);updatePl(_st.playlist||[]);
     updateListenerRequests(lrData.requests||[]);
-    renderSetup(setup);
     updatePaceCounters(_st.pacing);
     updateEngineRoom(_st,_caps);
     if(_st.session_stopped!==undefined)updateStopState(_st.session_stopped);
@@ -1406,8 +1408,19 @@ async function refresh(){
       document.getElementById('pSpots').value=_st.pacing.ad_spots_per_break;document.getElementById('pvSpots').textContent=_st.pacing.ad_spots_per_break;
     }
     if(!_hostsOk){_hostsOk=true;const r=await fetch('/api/hosts',{headers:H()});renderHosts((await r.json()).hosts||[])}
-  }catch(e){console.error('refresh',e)}
+  }catch(e){console.error('refreshFast',e)}
 }
+// Slow poll: capabilities + setup (every 30s — these rarely change)
+async function refreshSlow(){
+  try{
+    const [cr,or]=await Promise.all([fetch('/api/capabilities',{headers:H()}),fetch('/api/setup/status',{headers:H()})]);
+    _caps=await cr.json();
+    const setup=await or.json();
+    updateSystems(_caps,_st,_st);
+    renderSetup(setup);
+  }catch(e){console.error('refreshSlow',e)}
+}
+async function refresh(){await Promise.all([refreshFast(),refreshSlow()])}
 
 // ── Engine Room ──
 function updateEngineRoom(st,caps){
@@ -1473,7 +1486,7 @@ document.addEventListener('DOMContentLoaded', () => {
   switchTab(localStorage.getItem('adminTab') || 'music');
 });
 
-refresh();setInterval(refresh,5000);
+refresh();setInterval(refreshFast,3000);setInterval(refreshSlow,30000);
 </script>
 </body>
 </html>
