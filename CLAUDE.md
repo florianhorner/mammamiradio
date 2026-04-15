@@ -192,6 +192,18 @@ Review question to apply before merge:
 
 `What invariant failed here, where else could it fail the same way, and what automated check will catch the next instance before a user does?`
 
+## Audio delivery test coverage rule
+
+Every PR touching audio delivery (producer, streamer, normalizer, any bridge/fallback path) must include tests for all three scenarios. Missing any one = untested blast radius, do not ship.
+
+**Scenario 1 — Normal:** feature works as designed.
+
+**Scenario 2 — Empty fallback:** canned clips absent, norm cache empty, no assets in container. The real container ships only README stubs in `demo_assets/banter/`. Tests that mock `_pick_canned_clip` to return a real file are hiding this class of bug.
+
+**Scenario 3 — Post-restart:** flag files persisted from a prior run, `session_stopped` still set, HA watchdog has restarted. Test that a listener connecting AFTER a restart + stopped state still gets audio.
+
+This rule was added after 4 production silence incidents caused by untested Scenarios 2 and 3. The test suite was proving features worked; it was not proving the product worked under real conditions (Pi hardware, container filesystem, HA watchdog restarts).
+
 ## Skill routing
 
 When the user's request matches an available skill, ALWAYS invoke it using the Skill
