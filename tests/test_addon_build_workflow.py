@@ -136,8 +136,17 @@ def test_ci_trigger_paths_cover_version_bump_files():
     If a trigger path is missing, the workflow doesn't run on version bumps and
     images are never built — exactly what happened with 2.10.0 (pyproject.toml is
     the key file bumped in a release; ha-addon/** is also touched).
+
+    IMPORTANT: search only within the `on:` block, not the full file. Strings like
+    "pyproject.toml" and "radio.toml" also appear in the build job's `cp` commands —
+    a full-file search would pass even if the trigger path was removed.
     """
     text = _workflow_text()
+
+    # Extract only the on: block (everything before the first `jobs:` heading)
+    trigger_section_match = re.search(r"\bon:\s*\n(.*?)(?=\njobs:)", text, re.DOTALL)
+    assert trigger_section_match, "Could not locate `on:` block in addon-build.yml"
+    trigger_block = trigger_section_match.group(0)
 
     required_trigger_patterns = [
         "ha-addon/**",
@@ -146,9 +155,35 @@ def test_ci_trigger_paths_cover_version_bump_files():
         "radio.toml",
     ]
 
-    missing = [p for p in required_trigger_patterns if p not in text]
+    missing = [p for p in required_trigger_patterns if p not in trigger_block]
     assert not missing, (
-        f"Trigger paths missing from addon-build.yml: {missing}\n"
+        f"Trigger paths missing from addon-build.yml `on:` block: {missing}\n"
         "These files are touched on every version bump. Without matching trigger "
         "paths, the workflow won't run and images won't be built."
+    )
+
+
+# ---------------------------------------------------------------------------
+# 6. Build job must NOT overwrite the HA-specific radio.toml
+# ---------------------------------------------------------------------------
+
+
+def test_ci_build_step_does_not_overwrite_ha_radio_toml():
+    """The build job must not copy the root radio.toml over the HA-specific one.
+
+    ha-addon/mammamiradio/radio.toml carries Pi/HA Green performance tuning
+    (songs_between_banter=3, ad_spots_per_break=1, lookahead_segments=2).
+    Copying the root radio.toml (which has 2/2/3) into the build context at
+    build time silently discards that tuning — the Docker image ships with the
+    wrong pacing values baked in, and users on Raspberry Pi get higher CPU load.
+
+    The HA-specific file is already in the build context at checkout time.
+    It must NOT be overwritten.
+    """
+    text = _workflow_text()
+    assert "cp radio.toml ha-addon/mammamiradio/" not in text, (
+        "Forbidden: `cp radio.toml ha-addon/mammamiradio/` overwrites the "
+        "HA-specific radio.toml with the root version.\n"
+        "The HA-specific file (with Pi/HA Green tuned pacing) is already present "
+        "at checkout — do not overwrite it in the build step."
     )

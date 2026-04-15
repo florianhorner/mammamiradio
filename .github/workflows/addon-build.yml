@@ -106,7 +106,11 @@ jobs:
         run: |
           cp -r mammamiradio/ ha-addon/mammamiradio/mammamiradio/
           cp pyproject.toml ha-addon/mammamiradio/
-          cp radio.toml ha-addon/mammamiradio/
+          # NOTE: do NOT copy root radio.toml here.
+          # ha-addon/mammamiradio/radio.toml already exists with HA-specific pacing
+          # tuning for Pi/HA Green (lower ad_spots_per_break, lookahead_segments).
+          # Overwriting it with the root version would ship the wrong config baked
+          # into the Docker image, silently discarding the Pi performance tuning.
 
       - uses: docker/setup-qemu-action@ce360397dd3f832beb865e1373c09c0e9f86d70a # v4.0.0
 
