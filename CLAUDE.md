@@ -112,6 +112,7 @@ Do not deviate without explicit user approval. In QA mode, flag any code that do
 
 ## Brand assets
 
+- **Hero banner**: `docs/banner.png` — 1280×640 README hero. DALL-E background composited with Playfair italic typography. Source template: `docs/hero-composite.html` (contains regeneration instructions in comment header). The background image (`radio-hero-bg.png`) is generated via ChatGPT Images and not committed to git.
 - **Logo SVG**: `mammamiradio/logo.svg` — canonical vector source (variant G: classic radio with Italian flag stripe and sound waves)
 - **Palette**: Volare Refined — espresso dark with Italian warmth in accents. See `DESIGN.md` for the full design system.
   - Background: espresso dark (`#14110F`) with subtle warm gradient at top

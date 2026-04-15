@@ -1,0 +1,189 @@
+<!--
+  Hero banner source template for docs/banner.png
+
+  Workflow to regenerate:
+  1. Generate a background image via ChatGPT Images (prompt below), save as docs/radio-hero-bg.png
+  2. Serve this dir: python3 -m http.server 9191 (from docs/)
+  3. Screenshot at 1280x640: browse goto http://localhost:9191/hero-composite.html && browse viewport 1280x640 && browse screenshot banner.png
+  4. Crop to exact 1280x640 if needed
+  5. Delete radio-hero-bg.png (don't commit it, ~2.6MB)
+
+  Background image prompt:
+  "Wide cinematic banner, 1280x640, landscape. Vintage Italian tabletop radio receiver on dark
+  espresso-stained wood. Warm terracotta and brass tones, circular speaker grille, tuning dial,
+  small antenna. Shallow depth of field. Golden ambient light from left, late afternoon through
+  cafe window. Background fades to very dark brown/black (#14110F). Film grain. Espresso cup in
+  bokeh. No text. Left 40% darker/emptier for text overlay. Wes Anderson meets 1960s Italian radio."
+-->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,700;1,400;1,700&family=Outfit:wght@300;400;600;700&display=swap');
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    width: 1280px;
+    height: 640px;
+    overflow: hidden;
+    position: relative;
+    font-family: 'Outfit', system-ui, sans-serif;
+  }
+
+  .bg {
+    position: absolute;
+    inset: 0;
+    background: url('radio-hero-bg.png') center right / cover no-repeat;
+  }
+
+  .overlay-left {
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(
+      90deg,
+      rgba(20,17,15,0.92) 0%,
+      rgba(20,17,15,0.85) 25%,
+      rgba(20,17,15,0.55) 50%,
+      rgba(20,17,15,0.15) 70%,
+      transparent 85%
+    );
+  }
+
+  .overlay-vignette {
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(
+      180deg,
+      rgba(20,17,15,0.4) 0%,
+      transparent 20%,
+      transparent 80%,
+      rgba(20,17,15,0.5) 100%
+    );
+  }
+
+  .content {
+    position: absolute;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    width: 560px;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    padding: 0 64px;
+    gap: 20px;
+  }
+
+  .on-air {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 8px;
+  }
+
+  .on-air-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #F4D048;
+    box-shadow: 0 0 8px rgba(244,208,72,0.7), 0 0 20px rgba(244,208,72,0.3);
+  }
+
+  .on-air-label {
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.25em;
+    text-transform: uppercase;
+    color: rgba(244,208,72,0.7);
+  }
+
+  .station-name {
+    font-family: 'Playfair Display', Georgia, serif;
+    font-style: italic;
+    font-weight: 700;
+    font-size: 56px;
+    line-height: 1.05;
+    color: #F5EDD8;
+    letter-spacing: -0.01em;
+    text-shadow: 0 2px 20px rgba(0,0,0,0.6);
+  }
+
+  .station-name em {
+    color: #F4D048;
+    font-style: italic;
+  }
+
+  .tricolor {
+    display: flex;
+    height: 3px;
+    width: 320px;
+    gap: 2px;
+    border-radius: 2px;
+    overflow: hidden;
+  }
+  .tricolor span { flex: 1; }
+  .tricolor .g { background: #009246; }
+  .tricolor .w { background: rgba(255,255,255,0.85); }
+  .tricolor .r { background: #CE2B37; }
+
+  .tagline {
+    font-size: 15px;
+    font-weight: 400;
+    color: rgba(203,185,166,0.9);
+    line-height: 1.55;
+    max-width: 380px;
+    text-shadow: 0 1px 8px rgba(0,0,0,0.5);
+  }
+
+  .badges {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-top: 4px;
+  }
+
+  .badge {
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: rgba(244,208,72,0.75);
+    background: rgba(244,208,72,0.08);
+    border: 1px solid rgba(244,208,72,0.2);
+    padding: 4px 10px;
+    border-radius: 20px;
+    backdrop-filter: blur(4px);
+  }
+</style>
+</head>
+<body>
+  <div class="bg"></div>
+  <div class="overlay-left"></div>
+  <div class="overlay-vignette"></div>
+
+  <div class="content">
+    <div class="on-air">
+      <span class="on-air-dot"></span>
+      <span class="on-air-label">On Air</span>
+    </div>
+
+    <div class="station-name">Mamma<br><em>Mi</em> Radio</div>
+
+    <div class="tricolor">
+      <span class="g"></span>
+      <span class="w"></span>
+      <span class="r"></span>
+    </div>
+
+    <p class="tagline">AI-powered Italian radio. Claude-written hosts, absurd ads, and the uncanny feeling that the radio knows who you are.</p>
+
+    <div class="badges">
+      <span class="badge">Self-hosted</span>
+      <span class="badge">Open Source</span>
+      <span class="badge">Home Assistant</span>
+    </div>
+  </div>
+</body>
+</html>
