@@ -225,9 +225,12 @@ async def test_write_banter_falls_back_on_api_exception(config, state):
     ):
         result, _ = await write_banter(state, config)
 
-    assert len(result) == 1
-    # Fallback text for Italian
-    assert result[0][1] in ("E torniamo alla musica!", "And back to the music!")
+    # Fallback now returns a multi-line exchange (3 lines) so banter sounds complete
+    assert len(result) >= 2
+    for host, text in result:
+        assert isinstance(host, HostPersonality)
+        assert isinstance(text, str)
+        assert len(text) > 0
 
 
 @pytest.mark.asyncio
@@ -240,10 +243,12 @@ async def test_write_banter_falls_back_on_malformed_json(config, state):
     ):
         result, _ = await write_banter(state, config)
 
-    assert len(result) == 1
-    # Should be fallback copy
-    assert isinstance(result[0][0], HostPersonality)
-    assert isinstance(result[0][1], str)
+    # Fallback now returns a multi-line exchange so banter sounds complete
+    assert len(result) >= 2
+    for host, text in result:
+        assert isinstance(host, HostPersonality)
+        assert isinstance(text, str)
+        assert len(text) > 0
 
 
 @pytest.mark.asyncio
@@ -1224,6 +1229,34 @@ def test_personality_modifier_energy_controls_runaway_when_axes_conflict():
     assert host_a_modifier != host_b_modifier
     assert "runaway" in host_a_modifier.lower() or "lead" in host_a_modifier.lower()
     assert "surgical" in host_b_modifier.lower() or "controlled" in host_b_modifier.lower()
+
+
+def test_fix_wrong_station_names_replaces_competitor():
+    """Sanitizer swaps competitor station names with the correct station name."""
+    from mammamiradio.scriptwriter import _fix_wrong_station_names
+
+    station = "Mamma Mi Radio"
+
+    # "siamo su <wrong>" → "siamo su <ours>"
+    result = _fix_wrong_station_names(
+        "Siamo su Radio Kiss Kiss Moosach e la musica!", station
+    )
+    assert "Kiss Kiss" not in result
+    assert station in result
+
+    # standalone "Radio <wrong>" → station name
+    result2 = _fix_wrong_station_names("Radio Kiss Kiss vi dà il benvenuto.", station)
+    assert "Kiss Kiss" not in result2
+    assert station in result2
+
+    # correct station name left unchanged
+    result3 = _fix_wrong_station_names(f"Siamo su {station} sempre!", station)
+    assert station in result3
+    assert result3 == f"Siamo su {station} sempre!"
+
+    # no station mention — text passes through unchanged
+    result4 = _fix_wrong_station_names("E adesso la musica.", station)
+    assert result4 == "E adesso la musica."
 
 
 @pytest.mark.asyncio

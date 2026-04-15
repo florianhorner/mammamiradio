@@ -234,11 +234,14 @@ async def _generate_json_response(
         else:
             try:
                 client = _get_client(config.anthropic_api_key)
-                resp = await client.messages.create(
-                    model=model,
-                    max_tokens=max_tokens,
-                    system=system_prompt,
-                    messages=[{"role": "user", "content": prompt}],
+                resp = await asyncio.wait_for(
+                    client.messages.create(
+                        model=model,
+                        max_tokens=max_tokens,
+                        system=system_prompt,
+                        messages=[{"role": "user", "content": prompt}],
+                    ),
+                    timeout=45.0,
                 )
                 if hasattr(resp, "usage") and resp.usage:
                     state.api_calls += 1
@@ -320,6 +323,40 @@ def _sanitize_prompt_data(text: str, max_len: int = 80) -> str:
     if len(text) > max_len:
         text = text[:max_len] + "..."
     return text
+
+
+_WRONG_STATION_PATTERN = re.compile(
+    # Match station-name-like phrases. Inline (?i:…) makes "Radio" / "siamo su"
+    # case-insensitive while requiring Title Case on the proper-noun words that
+    # follow, which stops the match before Italian function words like "e", "la".
+    r"\b(?i:Radio)(?:\s+[A-Z]\w*){1,3}|\b(?i:siamo\s+su)(?:\s+[A-Z]\w*){1,5}",
+)
+
+
+def _fix_wrong_station_names(text: str, station_name: str) -> str:
+    """Replace any radio station name that isn't ours with the correct one.
+
+    Guards against LLM training-data bleed where it writes competitor station
+    names (e.g. 'Radio Kiss Kiss Moosach') — the single hardest illusion break.
+    """
+    station_lower = station_name.lower()
+
+    def _replace(m: re.Match) -> str:
+        s = m.group(0)
+        # Keep the match if our station name is in it
+        if station_lower in s.lower():
+            return s
+        # "siamo su <wrong>" → "siamo su <ours>"
+        if s.lower().startswith("siamo su "):
+            logger.warning("Replaced wrong station name in banter: %r", s)
+            return f"siamo su {station_name}"
+        # "Radio <wrong>" → station name
+        if s.lower().startswith("radio "):
+            logger.warning("Replaced wrong station name in banter: %r", s)
+            return station_name
+        return s
+
+    return _WRONG_STATION_PATTERN.sub(_replace, text)
 
 
 def _strip_fences(raw: str) -> str:
@@ -613,6 +650,11 @@ Rules:
   the way a real DJ does. Not an announcement, just woven in. "...siamo su {config.station.name},
   che altro?" or just "{config.station.name}." at the end of a thought. Never more than once
   per banter block. Never forced.
+- CRITICAL — STATION NAME ONLY: The ONLY radio station name you may ever write is
+  "{config.station.name}". Never write any other real or invented station name — not
+  Kiss Kiss, not RDS, not RTL, not Radio Italia, not any variant. If you feel the urge
+  to mention a station, use "{config.station.name}" or skip it entirely. Writing the wrong
+  station name is the single most damaging thing you can do to the listener's experience.
 - CONFLICT IS MANDATORY. Hosts must disagree at least once per exchange. Not just
   "beh, forse..." — actual opposition. "No, ma che stai dicendo?" levels. They never
   just agree and move on. Even when one is right, the other defends the wrong take.
@@ -913,6 +955,12 @@ Return JSON:
             deduped.append(entry)
         result = deduped
 
+        # Sanitize: replace any wrong station names the LLM may have hallucinated
+        result = [
+            (host, _fix_wrong_station_names(text, config.station.name))
+            for host, text in result
+        ]
+
         if data.get("new_joke"):
             state.add_joke(data["new_joke"])
 
@@ -953,14 +1001,38 @@ Return JSON:
         return result, listener_request_commit
 
     except Exception as e:
-        logger.error("Banter generation failed: %s", e)
-        host = random.choice(config.hosts)
-        fallback = {
-            "it": "E torniamo alla musica!",
-            "en": "And back to the music!",
-        }
-        text = fallback.get(config.station.language, fallback["en"])
-        return [(host, text)], None
+        logger.error("Banter generation failed (%s): %s", type(e).__name__, e, exc_info=True)
+        hosts = config.hosts
+        h0 = hosts[0] if hosts else None
+        h1 = hosts[1] if len(hosts) > 1 else h0
+        if config.station.language == "it":
+            # Pre-written short exchanges — sound like real radio, not a shutdown line
+            _fallback_pools = [
+                [
+                    (h0, "Comunque, mica male questa."),
+                    (h1, "No, dai. Dai, aspetta—"),
+                    (h0, "Musica. Adesso. Fidiamoci."),
+                ],
+                [
+                    (h1, "Senti, non ne parliamo."),
+                    (h0, "Giusto. Andiamo avanti."),
+                    (h1, "Come sempre, come da sempre."),
+                ],
+                [
+                    (h0, "Cos'era quello? No, niente. Niente."),
+                    (h1, "Il corridoio. Lascia stare."),
+                    (h0, "Sì. Lasciamo stare. Musica."),
+                ],
+            ]
+        else:
+            _fallback_pools = [
+                [
+                    (h0, "Anyway. Not bad."),
+                    (h1, "No, wait—"),
+                    (h0, "Music. Now. Trust the process."),
+                ],
+            ]
+        return random.choice(_fallback_pools), None
 
 
 AD_BREAK_INTROS = [
