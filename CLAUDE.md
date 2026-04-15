@@ -2,6 +2,16 @@
 
 AI-powered Italian radio station engine. Python 3.11+, FastAPI, FFmpeg, optional Home Assistant integration.
 
+## Leadership Principles
+
+Every proposal — architecture, feature, fix, deployment plan — must pass both of these in order:
+
+**1. NEVER BREAK THE ILLUSION**
+The listener must always believe they are hearing a real radio station. Dead air, abrupt cuts, silence gaps, or anything that exposes the machine behind the curtain is a product failure. If a change risks breaking the illusion for a live listener, it needs a mitigation before shipping.
+
+**2. INSTANT AUDIO**
+A listener who connects must hear sound within 1–2 seconds, every time. No exceptions for cold starts, session resumes, idle wakeups, or addon restarts. Every connect path needs an immediate audio source — pre-normalized track, canned clip, anything. Build the bridge first, fix root causes second.
+
 ## Docs
 
 - `README.md` - product overview and operator quick start
