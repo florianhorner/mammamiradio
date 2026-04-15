@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import importlib
 import ipaddress
 import logging
 import os
@@ -755,17 +756,6 @@ async def _persist_skipped_music(state: StationState, config, metadata: dict, *,
 async def _audio_generator(request: Request):
     """Stream the live station feed from the playback loop."""
     hub = request.app.state.stream_hub
-
-    # Auto-resume if the session was left stopped (e.g. HA watchdog restart after a
-    # deliberate stop).  A listener connecting is the clearest possible signal that
-    # someone wants music — honour it rather than serving silence.
-    state = request.app.state.station_state
-    config = request.app.state.config
-    if state.session_stopped:
-        state.session_stopped = False
-        (config.cache_dir / "session_stopped.flag").unlink(missing_ok=True)
-        logger.info("Auto-resumed stopped session on listener connect")
-
     listener_id, listener_queue = hub.subscribe()
 
     try:
@@ -1110,6 +1100,58 @@ async def trigger_segment(request: Request, _: None = Depends(require_admin_acce
     state = request.app.state.station_state
     state.force_next = valid[seg_type]
     return {"ok": True, "triggered": seg_type}
+
+
+@router.post("/api/hot-reload")
+async def hot_reload_modules(request: Request, _: None = Depends(require_admin_access)):
+    """Reload scriptwriter module in-place. Stream continues uninterrupted.
+
+    Safe to reload: scriptwriter (stateless functions + lazy-init clients).
+    NOT reloaded: producer, streamer, persona (hold live task/instance state).
+    Requires --workers 1 (importlib reloads only the worker handling the request).
+    """
+    import mammamiradio.scriptwriter as _scriptwriter_mod
+
+    # Debounce: reject if called within 5s of last reload (monotonic to avoid NTP skew)
+    last_reload: float = getattr(request.app.state, "_last_hot_reload_ts", 0.0)
+    now = time.monotonic()
+    if now - last_reload < 5.0:
+        return JSONResponse(
+            status_code=429,
+            content={
+                "ok": False,
+                "error_code": "debounced",
+                "retry_after_s": int(5.0 - (now - last_reload)),
+                "stream_status": "unaffected",
+                "retryable": True,
+            },
+        )
+
+    t0 = time.monotonic()
+    try:
+        importlib.reload(_scriptwriter_mod)
+        duration_ms = int((time.monotonic() - t0) * 1000)
+        request.app.state._last_hot_reload_ts = now
+        logger.info("hot-reload: reloaded mammamiradio.scriptwriter in %dms", duration_ms)
+        return {
+            "ok": True,
+            "reloaded_modules": ["mammamiradio.scriptwriter"],
+            "duration_ms": duration_ms,
+            "effective_on": "next_banter_generation",
+            "stream_status": "unaffected",
+        }
+    except Exception as exc:
+        logger.error("hot-reload: importlib.reload failed: %s", exc)
+        return JSONResponse(
+            status_code=500,
+            content={
+                "ok": False,
+                "error_code": "reload_failed",
+                "exception": str(exc),
+                "stream_status": "unaffected",
+                "retryable": True,
+            },
+        )
 
 
 @router.get("/api/pacing")

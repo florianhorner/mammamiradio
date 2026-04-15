@@ -28,6 +28,7 @@ from mammamiradio.producer import _cast_voices, _pick_brand, _select_ad_creative
 
 TOML_PATH = str(Path(__file__).parent.parent / "radio.toml")
 MODULE = "mammamiradio.producer"
+SCRIPTWRITER_MODULE = "mammamiradio.scriptwriter"
 
 
 @pytest.fixture(autouse=True)
@@ -155,7 +156,7 @@ async def test_ad_break_segment_queued(tmp_path):
 
     with (
         patch(f"{MODULE}.next_segment_type", return_value=SegmentType.AD),
-        patch(f"{MODULE}.write_ad", new_callable=AsyncMock, return_value=fake_script),
+        patch(f"{SCRIPTWRITER_MODULE}.write_ad", new_callable=AsyncMock, return_value=fake_script),
         patch(f"{MODULE}.synthesize_ad", new_callable=AsyncMock, return_value=_fake_path()),
         patch(f"{MODULE}.synthesize", new_callable=AsyncMock) as mock_synthesize,
         patch(f"{MODULE}.generate_bumper_jingle", side_effect=_fake_path),
@@ -226,7 +227,7 @@ async def test_ad_break_host_fallback_voice(tmp_path):
 
     with (
         patch(f"{MODULE}.next_segment_type", return_value=SegmentType.AD),
-        patch(f"{MODULE}.write_ad", new_callable=AsyncMock, return_value=fake_script),
+        patch(f"{SCRIPTWRITER_MODULE}.write_ad", new_callable=AsyncMock, return_value=fake_script),
         patch(f"{MODULE}.synthesize_ad", new_callable=AsyncMock, return_value=_fake_path()),
         patch(f"{MODULE}.synthesize", new_callable=AsyncMock),
         patch(f"{MODULE}.generate_bumper_jingle", side_effect=_fake_path),
@@ -261,8 +262,8 @@ async def test_ha_context_refreshed_for_banter(tmp_path):
 
     with (
         patch(f"{MODULE}.next_segment_type", return_value=SegmentType.BANTER),
-        patch(f"{MODULE}.write_banter", new_callable=AsyncMock, return_value=(banter_lines, None)),
-        patch(f"{MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora...")),
+        patch(f"{SCRIPTWRITER_MODULE}.write_banter", new_callable=AsyncMock, return_value=(banter_lines, None)),
+        patch(f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora...")),
         patch(f"{MODULE}.synthesize", new_callable=AsyncMock, return_value=_fake_path()),
         patch(f"{MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=_fake_path()),
         patch(f"{MODULE}.concat_files", return_value=_fake_path()),
@@ -300,8 +301,12 @@ async def test_banter_quality_reject_uses_canned_fallback(tmp_path):
 
     with (
         patch(f"{MODULE}.next_segment_type", return_value=SegmentType.BANTER),
-        patch(f"{MODULE}.write_banter", new_callable=AsyncMock, return_value=([(host, "Linea test")], None)),
-        patch(f"{MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora...")),
+        patch(
+            f"{SCRIPTWRITER_MODULE}.write_banter",
+            new_callable=AsyncMock,
+            return_value=([(host, "Linea test")], None),
+        ),
+        patch(f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora...")),
         patch(f"{MODULE}.synthesize", new_callable=AsyncMock, return_value=generated),
         patch(f"{MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=generated),
         patch(f"{MODULE}.concat_files", return_value=generated),
@@ -349,7 +354,7 @@ async def test_ad_quality_reject_resets_pacing_and_continues(tmp_path):
 
     with (
         patch(f"{MODULE}.next_segment_type", side_effect=_seg_type),
-        patch(f"{MODULE}.write_ad", new_callable=AsyncMock, return_value=fake_script),
+        patch(f"{SCRIPTWRITER_MODULE}.write_ad", new_callable=AsyncMock, return_value=fake_script),
         patch(f"{MODULE}.synthesize_ad", new_callable=AsyncMock, return_value=_fake_path()),
         patch(f"{MODULE}.synthesize", new_callable=AsyncMock),
         patch(f"{MODULE}.generate_bumper_jingle", side_effect=_fake_path),
@@ -474,8 +479,8 @@ async def test_audio_tool_error_in_banter_does_not_drop_segment(tmp_path):
 
     with (
         patch(f"{MODULE}.next_segment_type", return_value=SegmentType.BANTER),
-        patch(f"{MODULE}.write_banter", new_callable=AsyncMock, return_value=([(host, "Ciao!")], None)),
-        patch(f"{MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora...")),
+        patch(f"{SCRIPTWRITER_MODULE}.write_banter", new_callable=AsyncMock, return_value=([(host, "Ciao!")], None)),
+        patch(f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora...")),
         patch(f"{MODULE}.synthesize", new_callable=AsyncMock, return_value=generated),
         patch(f"{MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=generated),
         patch(f"{MODULE}.concat_files", return_value=generated),
@@ -512,7 +517,7 @@ async def test_audio_tool_error_in_ad_does_not_drop_segment(tmp_path):
 
     with (
         patch(f"{MODULE}.next_segment_type", return_value=SegmentType.AD),
-        patch(f"{MODULE}.write_ad", new_callable=AsyncMock, return_value=fake_script),
+        patch(f"{SCRIPTWRITER_MODULE}.write_ad", new_callable=AsyncMock, return_value=fake_script),
         patch(f"{MODULE}.synthesize_ad", new_callable=AsyncMock, return_value=_fake_path()),
         patch(f"{MODULE}.synthesize", new_callable=AsyncMock),
         patch(f"{MODULE}.generate_bumper_jingle", side_effect=_fake_path),
