@@ -58,11 +58,21 @@ jobs:
             exit 1
           fi
 
-      - name: Validate addon radio.toml matches root radio.toml
+      - name: Validate addon radio.toml matches root radio.toml (HA pacing overrides allowed)
         run: |
-          if ! cmp -s radio.toml ha-addon/mammamiradio/radio.toml; then
-            echo "::error::ha-addon/mammamiradio/radio.toml drifted from root radio.toml"
-            diff -u radio.toml ha-addon/mammamiradio/radio.toml || true
+          # The HA addon intentionally overrides three pacing knobs for Pi/HA Green
+          # performance (fewer concurrent segments and ad spots to reduce CPU load).
+          # Mirror the logic in tests/test_addon_radio_sync.py: apply the known
+          # HA-specific substitutions to the root file, then compare.
+          EXPECTED=$(sed \
+            -e 's/songs_between_banter = 2/songs_between_banter = 3/' \
+            -e 's/ad_spots_per_break = 2/ad_spots_per_break = 1/' \
+            -e 's/lookahead_segments = 3/lookahead_segments = 2/' \
+            radio.toml)
+          ACTUAL=$(cat ha-addon/mammamiradio/radio.toml)
+          if [ "$EXPECTED" != "$ACTUAL" ]; then
+            echo "::error::ha-addon/mammamiradio/radio.toml drifted from root radio.toml (beyond the allowed HA pacing overrides)"
+            diff <(echo "$EXPECTED") <(echo "$ACTUAL") || true
             exit 1
           fi
 
