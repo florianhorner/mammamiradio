@@ -581,6 +581,7 @@ async def run_producer(
     _segments_produced = 0  # count for humanity event gating
     _producer_idle_logged = False
     _was_idle = False
+    _was_stopped = state.session_stopped  # True when transitioning out of a stopped state
     _prefetch_task: asyncio.Task[None] | None = None  # background norm prefetch for next track
     _drain_guard_queued = False  # True after a drain-recovery clip is inserted, until a real segment lands
     _prefetch_failed_keys: set[str] = set()  # tracks whose prefetch failed — skip until playlist rotates
@@ -588,8 +589,46 @@ async def run_producer(
         if state.session_stopped:
             if _prefetch_task is not None and not _prefetch_task.done():
                 _prefetch_task.cancel()
+            _was_stopped = True
             await asyncio.sleep(1)
             continue
+
+        # Resume bridge: when transitioning out of a stopped state, immediately seed
+        # audio so the listener hears something within ~1s rather than waiting 55s+
+        # for the first track to normalize on slow hardware (Pi).
+        if _was_stopped:
+            _was_stopped = False
+            if queue.empty():
+                bridge = _pick_canned_clip("banter", state=state) or _pick_canned_clip("welcome")
+                if bridge:
+                    await _queue_segment(
+                        Segment(
+                            type=SegmentType.BANTER,
+                            path=bridge,
+                            metadata={"type": "banter", "canned": True, "resume_bridge": True},
+                            ephemeral=False,
+                        )
+                    )
+                else:
+                    # No canned clips — grab the first pre-normalized track from the
+                    # norm cache (already processed, no FFmpeg wait needed).
+                    norm_files = sorted(config.cache_dir.glob("norm_*.mp3"))
+                    if norm_files:
+                        norm_path = norm_files[0]
+                        logger.info("Resume bridge: seeding pre-normalized track %s", norm_path.name)
+                        await _queue_segment(
+                            Segment(
+                                type=SegmentType.MUSIC,
+                                path=norm_path,
+                                metadata={
+                                    "title": norm_path.stem,
+                                    "artist": "",
+                                    "resume_bridge": True,
+                                    "audio_source": "norm_cache",
+                                },
+                                ephemeral=False,
+                            )
+                        )
 
         if state.listeners_active == 0:
             if not _producer_idle_logged:
@@ -601,8 +640,8 @@ async def run_producer(
 
         if _was_idle:
             logger.info("Producer resuming (%d listener(s) connected)", state.listeners_active)
-            # Queue is empty after idle — immediately seed a canned clip so the first
-            # listener hears something while the producer generates real content.
+            # Queue is empty after idle — immediately seed audio so the listener hears
+            # something while the producer generates real content.
             if queue.empty():
                 fallback = _pick_canned_clip("banter", state=state) or _pick_canned_clip("welcome")
                 if fallback:
@@ -613,6 +652,24 @@ async def run_producer(
                             metadata={"type": "banter", "canned": True, "warmup": True},
                         )
                     )
+                else:
+                    norm_files = sorted(config.cache_dir.glob("norm_*.mp3"))
+                    if norm_files:
+                        norm_path = norm_files[0]
+                        logger.info("Idle bridge: seeding pre-normalized track %s", norm_path.name)
+                        await _queue_segment(
+                            Segment(
+                                type=SegmentType.MUSIC,
+                                path=norm_path,
+                                metadata={
+                                    "title": norm_path.stem,
+                                    "artist": "",
+                                    "idle_bridge": True,
+                                    "audio_source": "norm_cache",
+                                },
+                                ephemeral=False,
+                            )
+                        )
             _was_idle = False
         _producer_idle_logged = False
 
