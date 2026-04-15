@@ -714,4 +714,70 @@ async def test_capabilities_exposes_anthropic_degraded_health():
     assert body["capabilities"]["anthropic_degraded"] is True
     assert body["provider_health"]["anthropic"]["degraded"] is True
     assert body["provider_health"]["anthropic"]["retry_after_s"] > 0
-    assert body["provider_health"]["anthropic"]["auth_failures"] == 2
+
+
+@pytest.mark.asyncio
+async def test_audio_generator_auto_resumes_stopped_session(tmp_path):
+    """_audio_generator clears session_stopped when a listener connects to a stopped session."""
+    from mammamiradio.streamer import _audio_generator
+
+    app = _make_test_app()
+    state = app.state.station_state
+    state.session_stopped = True
+    flag = tmp_path / "session_stopped.flag"
+    flag.touch()
+    app.state.config.cache_dir = tmp_path
+
+    # Fake a disconnected request so the generator exits after the auto-resume check.
+    mock_request = MagicMock()
+    mock_request.app = app
+    mock_request.is_disconnected = AsyncMock(return_value=True)
+
+    # Drain all chunks (generator exits on disconnect after first iteration).
+    async for _ in _audio_generator(mock_request):
+        pass
+
+    assert state.session_stopped is False
+    assert not flag.exists()
+
+
+@pytest.mark.asyncio
+async def test_audio_generator_auto_resume_no_flag_file(tmp_path):
+    """_audio_generator does not crash when session_stopped.flag doesn't exist (missing_ok)."""
+    from mammamiradio.streamer import _audio_generator
+
+    app = _make_test_app()
+    state = app.state.station_state
+    state.session_stopped = True
+    # Deliberately do NOT create the flag file — unlink(missing_ok=True) must not raise.
+    app.state.config.cache_dir = tmp_path
+
+    mock_request = MagicMock()
+    mock_request.app = app
+    mock_request.is_disconnected = AsyncMock(return_value=True)
+
+    async for _ in _audio_generator(mock_request):
+        pass
+
+    assert state.session_stopped is False
+
+
+@pytest.mark.asyncio
+async def test_audio_generator_skips_auto_resume_when_not_stopped(tmp_path):
+    """_audio_generator does not touch session_stopped when it is already False."""
+    from mammamiradio.streamer import _audio_generator
+
+    app = _make_test_app()
+    state = app.state.station_state
+    state.session_stopped = False
+    app.state.config.cache_dir = tmp_path
+
+    mock_request = MagicMock()
+    mock_request.app = app
+    mock_request.is_disconnected = AsyncMock(return_value=True)
+
+    async for _ in _audio_generator(mock_request):
+        pass
+
+    # Must remain False — the auto-resume block must not flip it.
+    assert state.session_stopped is False

@@ -2,6 +2,16 @@
 
 AI-powered Italian radio station engine. Python 3.11+, FastAPI, FFmpeg, optional Home Assistant integration.
 
+## Leadership Principles
+
+Every proposal — architecture, feature, fix, deployment plan — must pass both of these in order:
+
+**1. NEVER BREAK THE ILLUSION**
+The listener must always believe they are hearing a real radio station. Dead air, abrupt cuts, silence gaps, or anything that exposes the machine behind the curtain is a product failure. If a change risks breaking the illusion for a live listener, it needs a mitigation before shipping.
+
+**2. INSTANT AUDIO**
+A listener who connects must hear sound within 1–2 seconds, every time. No exceptions for cold starts, session resumes, idle wakeups, or addon restarts. Every connect path needs an immediate audio source — pre-normalized track, canned clip, anything. Build the bridge first, fix root causes second.
+
 ## Docs
 
 - `README.md` - product overview and operator quick start
@@ -181,6 +191,18 @@ For every bug fix or behavior change, do not stop at the first broken instance.
 Review question to apply before merge:
 
 `What invariant failed here, where else could it fail the same way, and what automated check will catch the next instance before a user does?`
+
+## Audio delivery test coverage rule
+
+Every PR touching audio delivery (producer, streamer, normalizer, any bridge/fallback path) must include tests for all three scenarios. Missing any one = untested blast radius, do not ship.
+
+**Scenario 1 — Normal:** feature works as designed.
+
+**Scenario 2 — Empty fallback:** canned clips absent, norm cache empty, no assets in container. The real container ships only README stubs in `demo_assets/banter/`. Tests that mock `_pick_canned_clip` to return a real file are hiding this class of bug.
+
+**Scenario 3 — Post-restart:** flag files persisted from a prior run, `session_stopped` still set, HA watchdog has restarted. Test that a listener connecting AFTER a restart + stopped state still gets audio.
+
+This rule was added after 4 production silence incidents caused by untested Scenarios 2 and 3. The test suite was proving features worked; it was not proving the product worked under real conditions (Pi hardware, container filesystem, HA watchdog restarts).
 
 ## Skill routing
 
