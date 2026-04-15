@@ -162,6 +162,18 @@ Why: the scriptwriter generates fake ads in the brand's voice, makes false produ
 - **Local check**: `make coverage-check` to verify locally. `make coverage-ratchet` to preview what CI would commit.
 - **Adding tests**: Write tests, push. CI will auto-raise the floors on merge. The next PR that drops any module will fail.
 
+## Protected UI elements
+
+These UI elements have regressed in past refactors. Always verify they survive after any HTML edit:
+
+- **Token cost counter** (`admin.html` Engine Room) — backend computes `api_cost_estimate_usd` on every `/status` call. UI must display it. Has disappeared twice in refactors.
+- **Play button blue state** (`dashboard.html`) — `.play-btn.playing` must use `var(--ok)` (blue), never `var(--sun2)` (golden). Colorblind safety.
+- **Station name localStorage** (`dashboard.html`) — reads `stationName` from localStorage. Admin writes it. Broken when dashboard.html was rewritten.
+- **Gold "Mi" accent** (`dashboard.html`, `admin.html`) — `<span class="mi">` in h1, styled `color: var(--sun)`. Brand signature from hero banner.
+- **Italian tricolor stripe** (`dashboard.html`, `admin.html`) — `.tricolor-stripe` div below h1. Must match hero banner.
+
+When editing any HTML file, grep for these elements before committing.
+
 ## Doc sync
 
 **Any change to a route, config key, env var, auth rule, or fallback path must update at least one of the following docs in the same commit:**
