@@ -181,10 +181,7 @@ h1 {
   border-radius: 10px; padding: 20px 22px;
   margin-bottom: 14px; position: relative;
 }
-.dial-card::before {
-  content: ''; position: absolute; top: -1px; left: 22px; right: 22px; height: 2px;
-  background: linear-gradient(90deg, transparent, rgba(240,200,64,0.6), transparent);
-}
+/* dial-card golden gradient removed — clean border-top matches admin cards */
 .dial-header { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 16px; }
 .dial-label {
   font-size: 9px; font-weight: 600; letter-spacing: 0.2em; text-transform: uppercase;
@@ -367,7 +364,7 @@ h1 {
 /* ── QUEUE ── */
 .queue { list-style: none; }
 .queue li {
-  font-size: 13px; padding: 4px 0; color: rgba(245,237,216,0.7);
+  font-size: 13px; padding: 8px 0; color: rgba(245,237,216,0.7);
   border-bottom: 1px solid rgba(245,237,216,0.08);
 }
 .queue li:last-child { border-bottom: none; }
