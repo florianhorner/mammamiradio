@@ -124,16 +124,6 @@ The add-on entrypoint (`ha-addon/mammamiradio/rootfs/run.sh`) maps Supervisor-in
 
 The dashboard is accessible via HA ingress (sidebar). The first-run flow exposes the same setup checks there as every other run mode, and the stream URL can be played on any HA media player.
 
-### Performance tuning (HA Green / 1GB-class hardware)
-
-The add-on `radio.toml` intentionally uses calmer pacing defaults than desktop:
-
-- `songs_between_banter = 3`
-- `ad_spots_per_break = 1`
-- `lookahead_segments = 2`
-
-These values reduce overlapping ffmpeg workload and memory pressure on fanless ARM devices while preserving steady playback. Startup prewarm is also capped at 2 segments.
-
 ## What is still not documented because it does not exist yet
 
 - no systemd unit
