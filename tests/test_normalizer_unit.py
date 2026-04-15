@@ -436,7 +436,7 @@ def test_normalize_proceeds_when_lufs_out_of_tolerance(mock_subprocess, tmp_path
 
 
 # ---------------------------------------------------------------------------
-# Regression: 3rd equalizer restored (equalizer=f=12000 for HF harshness)
+# Equalizer chain: 2 filters only — 3rd EQ removed to prevent ffmpeg 8.x SIGABRT
 # ---------------------------------------------------------------------------
 
 
@@ -450,15 +450,15 @@ def _extract_af_value(mock_run) -> str:
     return ""
 
 
-def test_normalize_filter_chain_has_exactly_three_equalizers_with_music_eq(mock_subprocess, tmp_path):
-    """With music_eq=True the filter chain must contain exactly three equalizer filters.
+def test_normalize_filter_chain_has_exactly_two_equalizers_with_music_eq(mock_subprocess, tmp_path):
+    """With music_eq=True the filter chain must contain exactly two equalizer filters.
 
-    The 3rd equalizer (f=12000, HF harshness shelf) was restored in this PR.
-    Previously it was removed due to a Pi/ffmpeg 8.x crash concern; it has been
-    added back, making the count 3:
+    The 3rd equalizer (f=12000, HF harshness shelf) was removed because three
+    equalizers combined with loudnorm trigger a psymodel.c:576 assertion crash
+    (calc_energy SIGABRT) in ffmpeg 8.x on Pi aarch64. The chain is:
       1. de-mud at 200 Hz
       2. presence at 3 kHz
-      3. HF harshness at 12 kHz
+    The 3rd EQ must NOT be added back until ffmpeg resolves the psymodel bug.
     """
     input_file = tmp_path / "input.mp3"
     input_file.write_bytes(b"\xff" * 1000)
@@ -472,16 +472,19 @@ def test_normalize_filter_chain_has_exactly_three_equalizers_with_music_eq(mock_
     af_value = _extract_af_value(mock_run)
     assert af_value, "No -filter:a filter chain found in ffmpeg command"
     equalizer_count = af_value.count("equalizer=")
-    assert equalizer_count == 3, (
-        f"Expected exactly 3 equalizer filters with music_eq=True, got {equalizer_count}. "
+    assert equalizer_count == 2, (
+        f"Expected exactly 2 equalizer filters with music_eq=True, got {equalizer_count}. "
+        f"3 equalizers + loudnorm = psymodel.c:576 SIGABRT on ffmpeg 8.x (Pi aarch64). "
         f"Filter chain: {af_value}"
     )
 
 
-def test_normalize_filter_chain_includes_hf_shelf_at_12khz(mock_subprocess, tmp_path):
-    """The 3rd equalizer (HF harshness shelf at 12kHz) must be present in the music_eq chain.
+def test_normalize_filter_chain_excludes_hf_shelf_at_12khz(mock_subprocess, tmp_path):
+    """The 3rd equalizer (HF harshness shelf at 12kHz) must NOT be in the music_eq chain.
 
-    This was the filter that was removed in a prior commit and is now restored.
+    Three equalizers combined with loudnorm trigger a calc_energy assertion crash
+    (psymodel.c:576 SIGABRT) in ffmpeg 8.x on Pi aarch64. The HF shelf was removed
+    as the safest fix. Do not re-add it until ffmpeg resolves the underlying bug.
     """
     input_file = tmp_path / "input.mp3"
     input_file.write_bytes(b"\xff" * 1000)
@@ -494,9 +497,10 @@ def test_normalize_filter_chain_includes_hf_shelf_at_12khz(mock_subprocess, tmp_
 
     af_value = _extract_af_value(mock_run)
     assert af_value, "No -filter:a filter chain found in ffmpeg command"
-    # The HF shelf: equalizer=f=12000:t=o:w=4000:g=-1.5
-    assert "equalizer=f=12000" in af_value, (
-        f"HF harshness shelf (equalizer=f=12000) missing from filter chain: {af_value}"
+    assert "equalizer=f=12000" not in af_value, (
+        f"Forbidden: HF shelf (equalizer=f=12000) is in the filter chain: {af_value}\n"
+        "Three equalizers + loudnorm = psymodel.c:576 SIGABRT on ffmpeg 8.x (Pi aarch64).\n"
+        "Do not re-add the 3rd EQ until ffmpeg resolves the psymodel bug."
     )
 
 
