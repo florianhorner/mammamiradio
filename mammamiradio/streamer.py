@@ -1112,9 +1112,9 @@ async def hot_reload_modules(request: Request, _: None = Depends(require_admin_a
     """
     import mammamiradio.scriptwriter as _scriptwriter_mod
 
-    # Debounce: reject if called within 5s of last reload
+    # Debounce: reject if called within 5s of last reload (monotonic to avoid NTP skew)
     last_reload: float = getattr(request.app.state, "_last_hot_reload_ts", 0.0)
-    now = time.time()
+    now = time.monotonic()
     if now - last_reload < 5.0:
         return JSONResponse(
             status_code=429,

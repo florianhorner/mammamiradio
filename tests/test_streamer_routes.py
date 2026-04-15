@@ -865,7 +865,7 @@ async def test_hot_reload_debounce_returns_429_on_rapid_calls():
     """A second hot-reload call within 5s returns 429 with retry_after_s."""
     app = _make_test_app(admin_token="testtoken")
     # Prime the debounce timestamp to now
-    app.state._last_hot_reload_ts = time.time()
+    app.state._last_hot_reload_ts = time.monotonic()
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
         resp = await client.post(

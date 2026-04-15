@@ -650,12 +650,6 @@ h1 .mi { color: var(--sun); }
     <button class="btn btn-util" onclick="doPurge(this)">&#128465; Purge</button>
     <button class="btn btn-util" onclick="flagCurrentTrack(this)">&#128681; Flag</button>
   </div>
-  <div class="transport" style="margin-top:6px;flex-wrap:wrap;gap:5px">
-    <button class="btn btn-chip" onclick="doChip('less_banter',this)">Less banter</button>
-    <button class="btn btn-chip" onclick="doChip('more_chaos',this)">More chaos</button>
-    <button class="btn btn-chip" onclick="doChip('fewer_ads',this)">Fewer ads</button>
-    <button class="btn btn-chip" onclick="doChip('great_moment',this)">&#11088; Great moment</button>
-  </div>
 </div>
 
 <!-- TAB NAV -->
@@ -894,30 +888,10 @@ async function doQuickAction(action,el){
     const r=await api('POST','/api/hot-reload',{});
     if(r.ok)toast('Scriptwriter reloaded in '+r.duration_ms+'ms — next banter uses new code');
     else if(r.error_code==='debounced')toast('Reload skipped — retry in '+r.retry_after_s+'s');
-    else toast('Reload failed: '+(r.exception||r.error_code||'unknown'));
+    else toast('Reload failed: '+(r.exception||r.error_code||r.error||'unknown'));
   }
 }
 async function doShuffle(el){flash(el);await api('POST','/api/shuffle');toast('Playlist shuffled')}
-async function doChip(action,el){
-  flash(el);
-  const sb=+document.getElementById('pBanter').value||2;
-  const sa=+document.getElementById('pAds').value||4;
-  if(action==='less_banter'){
-    const next=Math.min(sb+1,6);
-    await api('PATCH','/api/pacing',{songs_between_banter:next});
-    toast('Banter reduced (every '+next+' songs)');
-  } else if(action==='more_chaos'){
-    const r=await api('POST','/api/trigger',{type:'banter'});
-    if(r.ok)toast('Banter queued — chaos incoming');else toast('Failed: '+(r.error||'unknown'));
-  } else if(action==='fewer_ads'){
-    const next=Math.min(sa+2,12);
-    await api('PATCH','/api/pacing',{songs_between_ads:next});
-    toast('Ad frequency reduced (every '+next+' songs)');
-  } else if(action==='great_moment'){
-    const r=await api('POST','/api/trigger',{type:'banter'});
-    if(r.ok)toast('Banter queued to mark the moment \u2B50');else toast('Failed: '+(r.error||'unknown'));
-  }
-}
 async function doPurge(el){flash(el);const r=await api('POST','/api/purge');toast('Purged '+r.purged+' segments from queue')}
 async function doStop(el){flash(el);await api('POST','/api/stop');toast('Session stopped');updateStopState(true)}
 async function doResume(el){flash(el);await api('POST','/api/resume');toast('Session resumed');updateStopState(false)}
