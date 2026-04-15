@@ -433,3 +433,65 @@ def test_normalize_proceeds_when_lufs_out_of_tolerance(mock_subprocess, tmp_path
 
     # ffmpeg should have been called for normalization
     mock_run.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# Regression: ffmpeg 8.x psymodel assertion crash (3 equalizers + loudnorm)
+# ---------------------------------------------------------------------------
+
+
+def test_normalize_filter_chain_has_at_most_two_equalizers(mock_subprocess, tmp_path):
+    """Regression guard: the normalize filter chain must not contain more than two
+    equalizer filters.  Three equalizers combined with loudnorm triggers an assertion
+    crash in ffmpeg 8.x (calc_energy in psymodel.c:576).
+
+    If this test fails it means someone added a third equalizer back — do not do that
+    without first verifying the ffmpeg version on the target platform (Pi runs 8.1).
+    """
+    input_file = tmp_path / "input.mp3"
+    input_file.write_bytes(b"\xff" * 1000)
+    output_file = tmp_path / "output.mp3"
+
+    with patch("mammamiradio.normalizer.measure_lufs", return_value=-25.0):
+        normalize(input_file, output_file, loudnorm=True)
+
+    # Capture the ffmpeg command that was passed to subprocess.run
+    mock_run, _ = mock_subprocess
+    assert mock_run.called, "subprocess.run was not called"
+    cmd = mock_run.call_args[0][0]
+    # Find the -af argument value (the filter chain string)
+    af_value = ""
+    for i, arg in enumerate(cmd):
+        if arg == "-filter:a" and i + 1 < len(cmd):
+            af_value = cmd[i + 1]
+            break
+
+    assert af_value, "No -filter:a filter chain found in ffmpeg command"
+    equalizer_count = af_value.count("equalizer=")
+    assert equalizer_count <= 2, (
+        f"Filter chain has {equalizer_count} equalizer filters — must be ≤ 2 to avoid "
+        "the ffmpeg 8.x psymodel.c:576 assertion crash on Pi hardware. "
+        f"Filter chain: {af_value}"
+    )
+
+
+def test_normalize_filter_chain_contains_loudnorm(mock_subprocess, tmp_path):
+    """normalize must include loudnorm in the filter chain for proper loudness levelling."""
+    input_file = tmp_path / "input.mp3"
+    input_file.write_bytes(b"\xff" * 1000)
+    output_file = tmp_path / "output.mp3"
+
+    with patch("mammamiradio.normalizer.measure_lufs", return_value=-25.0):
+        normalize(input_file, output_file, loudnorm=True)
+
+    mock_run, _ = mock_subprocess
+    cmd = mock_run.call_args[0][0]
+    af_value = ""
+    for i, arg in enumerate(cmd):
+        if arg == "-filter:a" and i + 1 < len(cmd):
+            af_value = cmd[i + 1]
+            break
+
+    assert "loudnorm" in af_value or "dynaudnorm" in af_value, (
+        f"Neither loudnorm nor dynaudnorm in filter chain: {af_value}"
+    )
