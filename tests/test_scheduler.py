@@ -348,8 +348,8 @@ def test_preview_upcoming_includes_time_check():
         songs_since_banter=0,
         songs_since_ad=0,
         songs_since_news=0,
-        segments_since_station_id=2,   # below STATION_ID threshold (5)
-        segments_since_time_check=8,   # at TIME_CHECK threshold (8)
+        segments_since_station_id=2,  # below STATION_ID threshold (5)
+        segments_since_time_check=8,  # at TIME_CHECK threshold (8)
     )
     state.playlist = tracks
     preview = preview_upcoming(state, pacing, tracks, count=5)
