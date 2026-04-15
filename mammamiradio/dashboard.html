@@ -1221,6 +1221,8 @@ function updateStatus(d) {
   if (!firstDataReceived) {
     firstDataReceived = true;
     clearTimeout(_dialTimeoutId);
+    const dialNeedle = document.getElementById('dial-needle');
+    if (dialNeedle) dialNeedle.style.opacity = '';
     if (_dialAnimFrame) { cancelAnimationFrame(_dialAnimFrame); _dialAnimFrame = null; }
     _dialLock(DEMO_FREQ, 'Mamma Mi Radio', 'Signal locked');
     // Collapse dial gently — fade then height-slide, then reveal now-playing underneath
