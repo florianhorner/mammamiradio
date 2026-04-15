@@ -1458,3 +1458,41 @@ async def test_write_banter_bump_usage_exception_is_swallowed(config, state, tmp
 
     # Banter completed despite bump_usage raising
     assert len(result) == 1
+
+
+# ---------------------------------------------------------------------------
+# Module state after importlib.reload
+# ---------------------------------------------------------------------------
+
+
+def test_module_state_reset_after_reload():
+    """After importlib.reload(), module-level lazy-init state is cleared.
+
+    _anthropic_client and _cached_system_prompt are reset to their initial
+    values so the next LLM call reinitializes them cleanly.
+    """
+    import importlib
+
+    import mammamiradio.scriptwriter as _sw
+
+    # Force some module-level state to be non-default before reload
+    _sw._cached_system_prompt = "cached prompt"
+
+    importlib.reload(_sw)
+
+    # State must be cleared by module re-execution
+    assert _sw._cached_system_prompt == ""
+    assert _sw._anthropic_client is None
+
+
+def test_has_script_llm_is_public():
+    """has_script_llm (no underscore) must be importable and callable after rename."""
+    from pathlib import Path
+
+    from mammamiradio.config import load_config
+    from mammamiradio.scriptwriter import has_script_llm
+
+    toml_path = str(Path(__file__).parent.parent / "radio.toml")
+    config = load_config(toml_path)
+    # Result is bool — function is accessible and callable
+    assert isinstance(has_script_llm(config), bool)

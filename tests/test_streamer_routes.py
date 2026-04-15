@@ -723,8 +723,8 @@ async def test_capabilities_exposes_anthropic_degraded_health():
 
 
 @pytest.mark.asyncio
-async def test_audio_generator_auto_resumes_stopped_session(tmp_path):
-    """_audio_generator must clear session_stopped when a listener connects.
+async def test_audio_generator_does_not_auto_resume_stopped_session(tmp_path):
+    """_audio_generator must NOT clear session_stopped when a listener connects.
 
     A stopped session is resumed automatically when a listener connects —
     the listener connecting is the clearest signal that someone wants music.
@@ -809,3 +809,78 @@ async def test_audio_generator_active_session_is_unaffected(tmp_path):
         pass
 
     assert state.session_stopped is False
+
+
+# ---------------------------------------------------------------------------
+# POST /api/hot-reload tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_hot_reload_authenticated_200():
+    """POST /api/hot-reload with valid admin token returns 200 with expected fields."""
+    app = _make_test_app(admin_token="testtoken")
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.post(
+            "/api/hot-reload",
+            headers={"X-Radio-Admin-Token": "testtoken"},
+        )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ok"] is True
+    assert "mammamiradio.scriptwriter" in body["reloaded_modules"]
+    assert body["stream_status"] == "unaffected"
+    assert body["effective_on"] == "next_banter_generation"
+    assert isinstance(body["duration_ms"], int)
+
+
+@pytest.mark.asyncio
+async def test_hot_reload_unauthenticated_rejected():
+    """POST /api/hot-reload without auth credentials is rejected."""
+    app = _make_test_app(admin_password="secret", admin_token="tok")
+    transport = httpx.ASGITransport(app=app, client=("10.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.post("/api/hot-reload")
+    assert resp.status_code in (401, 403)
+
+
+@pytest.mark.asyncio
+async def test_hot_reload_importerror_returns_500_with_stream_status():
+    """When importlib.reload raises, the endpoint returns 500 with stream_status=unaffected."""
+    app = _make_test_app(admin_token="testtoken")
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    with patch("mammamiradio.streamer.importlib.reload", side_effect=ImportError("syntax error in scriptwriter.py")):
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            resp = await client.post(
+                "/api/hot-reload",
+                headers={"X-Radio-Admin-Token": "testtoken"},
+            )
+    assert resp.status_code == 500
+    body = resp.json()
+    assert body["ok"] is False
+    assert body["stream_status"] == "unaffected"
+    assert body["error_code"] == "reload_failed"
+    assert body["retryable"] is True
+    assert "syntax error in scriptwriter.py" in body["exception"]
+
+
+@pytest.mark.asyncio
+async def test_hot_reload_debounce_returns_429_on_rapid_calls():
+    """A second hot-reload call within 5s returns 429 with retry_after_s."""
+    app = _make_test_app(admin_token="testtoken")
+    # Prime the debounce timestamp to now
+    app.state._last_hot_reload_ts = time.monotonic()
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.post(
+            "/api/hot-reload",
+            headers={"X-Radio-Admin-Token": "testtoken"},
+        )
+    assert resp.status_code == 429
+    body = resp.json()
+    assert body["ok"] is False
+    assert body["error_code"] == "debounced"
+    assert body["stream_status"] == "unaffected"
+    assert body["retryable"] is True
+    assert body["retry_after_s"] > 0

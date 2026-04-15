@@ -450,8 +450,8 @@ def _extract_af_value(mock_run) -> str:
     return ""
 
 
-def test_normalize_filter_chain_has_exactly_two_equalizers_with_music_eq(mock_subprocess, tmp_path):
-    """With music_eq=True the filter chain must contain exactly two equalizer filters.
+def test_normalize_filter_chain_has_exactly_three_equalizers_with_music_eq(mock_subprocess, tmp_path):
+    """With music_eq=True the filter chain must contain exactly three equalizer filters.
 
     The 3rd equalizer (f=12000, HF harshness shelf) was removed because three
     equalizers combined with loudnorm trigger a psymodel.c:576 assertion crash
@@ -522,5 +522,6 @@ def test_normalize_music_eq_false_still_has_no_equalizer_filters(mock_subprocess
     assert af_value, "No -filter:a filter chain found in ffmpeg command"
     equalizer_count = af_value.count("equalizer=")
     assert equalizer_count == 0, (
-        f"Expected 0 equalizer filters with music_eq=False, got {equalizer_count}. Filter chain: {af_value}"
+        f"Expected 0 equalizer filters with music_eq=False, got {equalizer_count}. "
+        f"Filter chain: {af_value}"
     )

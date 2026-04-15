@@ -108,7 +108,8 @@ def test_ci_build_job_needs_validate():
 
     build_block = build_section_match.group(1)
     assert "needs: validate" in build_block, (
-        "The build job must declare `needs: validate`.\nWithout it, image builds proceed even when validation fails."
+        "The build job must declare `needs: validate`.\n"
+        "Without it, image builds proceed even when validation fails."
     )
 
 
@@ -141,7 +142,9 @@ def test_ci_build_matrix_includes_amd64():
     build_section_match = re.search(r"\n  build:\n((?:    .+\n|\n)*)", _workflow_text())
     assert build_section_match, "Could not locate `build:` job block in addon-build.yml"
     build_block = build_section_match.group(1)
-    assert re.search(r"arch:\s*\[[^\]]*\bamd64\b", build_block), "amd64 missing from addon-build.yml build matrix."
+    assert re.search(r"arch:\s*\[[^\]]*\bamd64\b", build_block), (
+        "amd64 missing from addon-build.yml build matrix."
+    )
 
 
 # ---------------------------------------------------------------------------

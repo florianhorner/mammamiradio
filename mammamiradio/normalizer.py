@@ -115,9 +115,7 @@ def normalize(
         "highpass=f=35,"  # sub-bass rumble from video codec leakage
         "equalizer=f=200:t=o:w=150:g=-2,"  # de-mud (compressed video audio)
         "equalizer=f=3000:t=o:w=1000:g=1.5,"  # presence / clarity
-        # NOTE: a 3rd equalizer here triggers a psymodel assertion crash in ffmpeg 8.x
-        # when combined with loudnorm (calc_energy assertion in psymodel.c:576).
-        # The -1.5dB HF shelf was dropped as the safest fix until ffmpeg resolves the bug.
+        "equalizer=f=12000:t=o:w=4000:g=-1.5,"  # HF harshness shelf
         "acompressor=threshold=0.25:ratio=2:attack=20:release=250:makeup=1"  # gentle radio leveller
     )
 
