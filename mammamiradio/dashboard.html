@@ -203,8 +203,8 @@ h1 {
 .sb:nth-child(1){height:5px}.sb:nth-child(2){height:9px}
 .sb:nth-child(3){height:13px}.sb:nth-child(4){height:17px}.sb:nth-child(5){height:22px}
 .dial-band {
-  position: relative; height: 56px;
-  background: var(--shadow);
+  position: relative; height: 76px;
+  background: rgba(8,6,5,0.9);
   border: 1px solid rgba(245,237,216,0.08); border-radius: 5px; overflow: hidden;
   cursor: pointer;
 }
@@ -258,6 +258,11 @@ h1 {
 }
 .dial-needle.seeking {
   transition: left 0.12s linear, box-shadow 0.4s ease;
+  animation: needle-pulse 0.85s ease-in-out infinite;
+}
+@keyframes needle-pulse {
+  0%, 100% { box-shadow: 0 0 8px rgba(184,44,32,0.9), 0 0 18px rgba(184,44,32,0.4); }
+  50%       { box-shadow: 0 0 14px rgba(184,44,32,1),  0 0 32px rgba(184,44,32,0.7), 0 0 48px rgba(184,44,32,0.2); }
 }
 .dial-needle.locked {
   transition: left 0.8s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.6s ease;
@@ -617,8 +622,11 @@ h1 {
   <div class="dial-header">
     <div>
       <div class="dial-label" id="dial-label">Searching for signal...</div>
-      <div class="dial-freq"><span id="dial-freq-val">--.-</span><span class="unit">MHz</span></div>
+      <div class="dial-freq"><span id="dial-freq-val">98.0</span><span class="unit">MHz</span></div>
       <div class="dial-status" id="dial-status">Searching for signal...</div>
+    </div>
+    <div class="signal-bars" id="signal-bars">
+      <span class="sb"></span><span class="sb"></span><span class="sb"></span><span class="sb"></span><span class="sb"></span>
     </div>
   </div>
   <div class="dial-band" onclick="togglePlay()">
@@ -908,6 +916,8 @@ function _dialLock(target, label, statusText) {
   _dialState = 'locking';
   _dialTarget = target;
   const needle = document.getElementById('dial-needle');
+  needle.style.opacity = '';
+  needle.style.animation = 'none';
   needle.classList.remove('seeking');
   needle.classList.add('locked');
 
@@ -1019,6 +1029,26 @@ _startStatic();
 const _seekNeedle = document.getElementById('dial-needle');
 if (_seekNeedle) _seekNeedle.classList.add('seeking');
 requestAnimationFrame(_dialSeek);
+
+// Timeout: if no signal after 20s, show error state with tap-to-retry
+const _dialTimeoutId = setTimeout(() => {
+  if (_dialState !== 'searching') return;
+  if (_dialAnimFrame) { cancelAnimationFrame(_dialAnimFrame); _dialAnimFrame = null; }
+  _stopStatic();
+  _dialState = 'error';
+  const needle = document.getElementById('dial-needle');
+  if (needle) {
+    needle.classList.remove('seeking');
+    needle.style.opacity = '0.3';
+  }
+  const lbl = document.getElementById('dial-label');
+  const status = document.getElementById('dial-status');
+  if (lbl) lbl.textContent = 'No signal found';
+  if (status) {
+    status.innerHTML = '<span style="cursor:pointer;text-decoration:underline" onclick="location.reload()">Tap to retry</span>';
+  }
+  _setSignalBars(0);
+}, 20000);
 
 function escHtml(v) { return String(v ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 
@@ -1193,13 +1223,22 @@ function updateStatus(d) {
   // Lock the dial on first data — signal found
   if (!firstDataReceived) {
     firstDataReceived = true;
+    clearTimeout(_dialTimeoutId);
     if (_dialAnimFrame) { cancelAnimationFrame(_dialAnimFrame); _dialAnimFrame = null; }
     _dialLock(DEMO_FREQ, 'Mamma Mi Radio', 'Signal locked');
-    // Collapse dial gently — fade then height-slide (same pattern as _dialShiftTo)
+    // Collapse dial gently — fade then height-slide, then reveal now-playing underneath
+    const _npEl = document.getElementById('now-playing');
+    _npEl.style.opacity = '0';
+    _npEl.style.transition = 'opacity 0s';
+    _npEl.style.pointerEvents = 'none';
     _dialCollapseTimer = setTimeout(() => {
       const dial = document.getElementById('radio-dial');
       dial.style.transition = 'opacity 1.4s ease';
       dial.style.opacity = '0';
+      // Fade now-playing in as dial fades out
+      _npEl.style.transition = 'opacity 1.4s ease';
+      _npEl.style.opacity = '1';
+      _npEl.style.pointerEvents = '';
       _dialCollapseHideTimer = setTimeout(() => {
         const h = dial.getBoundingClientRect().height;
         dial.style.overflow = 'hidden';
@@ -1210,7 +1249,7 @@ function updateStatus(d) {
         dial.style.marginTop = '0';
       }, 1500);
     }, 5000);
-    document.getElementById('now-playing').style.display = '';
+    _npEl.style.display = '';
     _initTicker();
     // Auto-start stream on first click
     if (!_wantsPlay) {

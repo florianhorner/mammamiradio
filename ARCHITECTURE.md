@@ -176,40 +176,46 @@ This is opportunistic context, not a hard dependency. Failures there should not 
 
 ## Access model
 
-Public routes:
+### Route table
 
-- `/` (listener dashboard)
-- `/listen` (legacy, redirects to `/`)
-- `/stream`
-- `/public-status`
-- `/healthz`, `/readyz`
-- `/api/clip` (rate-limited)
-- `/clips/{id}.mp3`
-- `/api/listener-request`
+| Route | Method | Access | Description |
+| --- | --- | --- | --- |
+| `/` | GET | Public | Listener page |
+| `/admin` | GET | Admin | Dashboard HTML |
+| `/stream` | GET | Public | Infinite MP3 stream |
+| `/healthz` | GET | Public | Liveness probe with process uptime |
+| `/readyz` | GET | Public | Readiness probe with queue depth and startup status |
+| `/public-status` | GET | Public | Current segment, recent log, and the real queued segments (`upcoming_mode` is `queued` or `building`) |
+| `/status` | GET | Admin | Full admin JSON: queue depth, uptime, scripts, HA context, errors, and `provider_health` |
+| `/api/setup/status` | GET | Admin | First-run setup status, detected run mode, and station mode |
+| `/api/setup/recheck` | POST | Admin | Re-run setup probes |
+| `/api/setup/addon-snippet` | GET | Admin | Copy-friendly Home Assistant add-on config snippet |
+| `/api/shuffle` | POST | Admin | Shuffle playlist |
+| `/api/skip` | POST | Admin | Skip current segment |
+| `/api/purge` | POST | Admin | Remove queued segments |
+| `/api/playlist/remove` | POST | Admin | Remove track by index |
+| `/api/playlist/move` | POST | Admin | Move track with `{from, to}` |
+| `/api/playlist/move_to_next` | POST | Admin | Move track to position 0 in upcoming |
+| `/api/playlist/add` | POST | Admin | Add a track to the playlist |
+| `/api/playlist/load` | POST | Admin | Load a playlist by URL |
+| `/api/hosts` | GET | Admin | List hosts with personality settings |
+| `/api/hosts/{name}/personality/reset` | POST | Admin | Reset host personality to defaults |
+| `/api/pacing` | GET | Admin | Current pacing configuration |
+| `/api/setup/save-keys` | POST | Admin | Save API keys via dashboard |
+| `/api/capabilities` | GET | Admin | Capability flags, tier, next-step hint, connect status, and provider degradation telemetry |
+| `/api/trigger` | POST | Admin | Trigger segment production |
+| `/api/stop` | POST | Admin | Gracefully stop the session (skip + purge + pause producer until `/api/resume`) |
+| `/api/resume` | POST | Admin | Resume a stopped session |
+| `/api/credentials` | POST | Admin | Update credentials at runtime |
+| `/api/clip` | POST | Public | Capture last 30s of audio into a shareable clip |
+| `/clips/{id}.mp3` | GET | Public | Serve a saved clip (no auth, for sharing) |
+| `/api/track-rules` | POST | Admin | Flag a reaction rule for the current track |
+| `/api/listener-request` | POST | Public | Submit a song request or shoutout |
+| `/api/listener-requests` | GET | Admin | List pending listener requests |
+| `/api/search` | GET | Admin | Search playlist and external sources |
+| `/api/playlist/add-external` | POST | Admin | Add external track from search results |
 
-Admin routes:
-
-- `/admin`
-- `/status`
-- `/api/shuffle`
-- `/api/skip`
-- `/api/purge`
-- `/api/playlist/remove`
-- `/api/playlist/move`
-- `/api/playlist/move_to_next`
-- `/api/playlist/add`
-- `/api/playlist/add-external`
-- `/api/playlist/load`
-- `/api/search`
-- `/api/stop`
-- `/api/resume`
-- `/api/trigger`
-- `/api/track-rules`
-- `/api/listener-requests`
-- `/api/hosts`, `/api/hosts/{name}/personality`
-- `/api/pacing`
-- `/api/credentials`
-- `/api/capabilities`
+### Auth rules
 
 Admin access is granted by one of:
 
