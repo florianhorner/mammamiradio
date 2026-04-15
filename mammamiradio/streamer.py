@@ -756,17 +756,6 @@ async def _persist_skipped_music(state: StationState, config, metadata: dict, *,
 async def _audio_generator(request: Request):
     """Stream the live station feed from the playback loop."""
     hub = request.app.state.stream_hub
-
-    # Auto-resume if the session was left stopped (e.g. HA watchdog restart after a
-    # deliberate stop).  A listener connecting is the clearest possible signal that
-    # someone wants music — honour it rather than serving silence.
-    state = request.app.state.station_state
-    config = request.app.state.config
-    if state.session_stopped:
-        state.session_stopped = False
-        (config.cache_dir / "session_stopped.flag").unlink(missing_ok=True)
-        logger.info("Auto-resumed stopped session on listener connect")
-
     listener_id, listener_queue = hub.subscribe()
 
     try:

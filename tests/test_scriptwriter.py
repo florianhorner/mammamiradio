@@ -1456,9 +1456,10 @@ def test_module_state_reset_after_reload():
 
 def test_has_script_llm_is_public():
     """has_script_llm (no underscore) must be importable and callable after rename."""
-    from mammamiradio.scriptwriter import has_script_llm
-    from mammamiradio.config import load_config
     from pathlib import Path
+
+    from mammamiradio.config import load_config
+    from mammamiradio.scriptwriter import has_script_llm
 
     toml_path = str(Path(__file__).parent.parent / "radio.toml")
     config = load_config(toml_path)

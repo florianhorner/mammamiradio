@@ -301,7 +301,11 @@ async def test_banter_quality_reject_uses_canned_fallback(tmp_path):
 
     with (
         patch(f"{MODULE}.next_segment_type", return_value=SegmentType.BANTER),
-        patch(f"{SCRIPTWRITER_MODULE}.write_banter", new_callable=AsyncMock, return_value=([(host, "Linea test")], None)),
+        patch(
+            f"{SCRIPTWRITER_MODULE}.write_banter",
+            new_callable=AsyncMock,
+            return_value=([(host, "Linea test")], None),
+        ),
         patch(f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora...")),
         patch(f"{MODULE}.synthesize", new_callable=AsyncMock, return_value=generated),
         patch(f"{MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=generated),
