@@ -718,16 +718,18 @@ async def test_capabilities_exposes_anthropic_degraded_health():
 
 
 # ---------------------------------------------------------------------------
-# Auto-resume removed from _audio_generator
+# Auto-resume on listener connect (_audio_generator)
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_audio_generator_does_not_auto_resume_stopped_session(tmp_path):
-    """_audio_generator must NOT clear session_stopped when a listener connects.
+async def test_audio_generator_auto_resumes_stopped_session(tmp_path):
+    """_audio_generator must clear session_stopped when a listener connects.
 
-    The auto-resume logic was removed in this PR. A stopped session stays stopped
-    even when a listener connects — only an explicit POST /api/resume clears the flag.
+    Added in v2.10.2 to fix production silence incidents: when the HA watchdog
+    restarts the addon after a deliberate stop, a listener connecting is an
+    unambiguous signal that someone wants music. The auto-resume clears the
+    stopped state so the stream starts immediately rather than serving silence.
     """
     from mammamiradio.streamer import _audio_generator
 
@@ -745,24 +747,20 @@ async def test_audio_generator_does_not_auto_resume_stopped_session(tmp_path):
     async for _ in _audio_generator(mock_request):
         pass
 
-    # session_stopped must remain True — auto-resume was removed
-    assert state.session_stopped is True, (
-        "session_stopped was cleared by _audio_generator; the auto-resume logic "
-        "was removed and must not be re-introduced here."
-    )
-    # The flag file must still exist
-    assert flag.exists(), (
-        "session_stopped.flag was deleted by _audio_generator; only /api/resume should do this."
+    # session_stopped must be cleared by auto-resume on listener connect
+    assert state.session_stopped is False, (
+        "session_stopped was not cleared by _audio_generator on listener connect. "
+        "Auto-resume (v2.10.2) must clear the stopped state so the stream starts."
     )
 
 
 @pytest.mark.asyncio
-async def test_audio_generator_leaves_stopped_flag_file_intact(tmp_path):
-    """When the session is stopped, _audio_generator must not delete the flag file.
+async def test_audio_generator_removes_stopped_flag_on_listener_connect(tmp_path):
+    """When a listener connects to a stopped session, _audio_generator removes the flag.
 
-    The auto-resume logic (which called flag.unlink()) was removed. The flag file
-    must survive listener connects so that an HA watchdog restart does not silently
-    re-read a stale 'stopped' state.
+    The auto-resume logic (v2.10.2) unlinks the session_stopped.flag when a
+    listener connects. This prevents a stale flag from keeping the stream stopped
+    after an HA watchdog restart following a deliberate stop.
     """
     from mammamiradio.streamer import _audio_generator
 
@@ -779,7 +777,10 @@ async def test_audio_generator_leaves_stopped_flag_file_intact(tmp_path):
     async for _ in _audio_generator(mock_request):
         pass
 
-    assert flag.exists(), "Flag file must not be removed by _audio_generator."
+    assert not flag.exists(), (
+        "session_stopped.flag was not removed by _audio_generator on listener connect. "
+        "Auto-resume (v2.10.2) must unlink the flag to reset stopped state."
+    )
 
 
 @pytest.mark.asyncio

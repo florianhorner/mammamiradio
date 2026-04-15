@@ -154,3 +154,60 @@ def test_guardrail_patterns_compile():
 
     for pattern in _GUARDRAIL_BANNED_PATTERNS:
         re.compile(pattern, re.IGNORECASE)  # Should not raise
+
+
+def test_rationale_with_ballad_lover_pattern():
+    """Includes ballad-specific reason when listener is a ballad_lover."""
+    track = Track(title="Test", artist="Artist", duration_ms=200000)
+    listener = ListenerProfile()
+    # 3+ slow songs, none skipped → ballad_lover
+    for _ in range(3):
+        listener.record_outcome(skipped=False, listen_sec=200, energy_hint="low", track_display="Slow Song")
+    for _ in range(5):
+        listener.record_outcome(skipped=False, listen_sec=200, energy_hint="med", track_display="Med Song")
+
+    assert "ballad_lover" in listener.patterns
+
+    rationales = set()
+    for _ in range(200):
+        rationales.add(generate_track_rationale(track, listener=listener))
+    found = any("romantic" in r or "feelings" in r for r in rationales)
+    assert found, f"No ballad_lover rationale found in {len(rationales)} attempts"
+
+
+def test_rationale_with_energy_seeker_pattern():
+    """Includes energy-specific reason when listener is an energy_seeker."""
+    track = Track(title="Test", artist="Artist", duration_ms=200000)
+    listener = ListenerProfile()
+    # 3+ high-energy completions → energy_seeker
+    for _ in range(3):
+        listener.record_outcome(skipped=False, listen_sec=200, energy_hint="high", track_display="Fast Song")
+    for _ in range(3):
+        listener.record_outcome(skipped=False, listen_sec=200, energy_hint="med", track_display="Med Song")
+
+    assert "energy_seeker" in listener.patterns
+
+    rationales = set()
+    for _ in range(200):
+        rationales.add(generate_track_rationale(track, listener=listener))
+    found = any("BPM" in r or "moving" in r for r in rationales)
+    assert found, f"No energy_seeker rationale found in {len(rationales)} attempts"
+
+
+def test_rationale_with_bails_on_intros_pattern():
+    """Includes intro-specific reason when listener bails on intros."""
+    track = Track(title="Test", artist="Artist", duration_ms=200000)
+    listener = ListenerProfile()
+    # 2+ intro bails (skipped in < 30s) → bails_on_intros
+    for _ in range(2):
+        listener.record_outcome(skipped=True, listen_sec=10, energy_hint="med", track_display="Song A")
+    for _ in range(3):
+        listener.record_outcome(skipped=False, listen_sec=200, energy_hint="med", track_display="Song B")
+
+    assert "bails_on_intros" in listener.patterns
+
+    rationales = set()
+    for _ in range(200):
+        rationales.add(generate_track_rationale(track, listener=listener))
+    found = any("point fast" in r or "impatience" in r for r in rationales)
+    assert found, f"No bails_on_intros rationale found in {len(rationales)} attempts"

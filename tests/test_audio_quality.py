@@ -186,3 +186,67 @@ def test_music_segment_passes_at_30s(tmp_path):
 
     with patch("mammamiradio.audio_quality.subprocess.run", side_effect=_run):
         validate_segment_audio(audio, SegmentType.MUSIC)  # must not raise
+
+
+# ── Additional edge-case coverage ────────────────────────────────────────────
+
+
+def test_validate_segment_audio_raises_if_file_missing(tmp_path):
+    """Missing audio file raises AudioQualityError immediately."""
+    with pytest.raises(AudioQualityError, match="missing"):
+        validate_segment_audio(tmp_path / "nonexistent.mp3", SegmentType.BANTER)
+
+
+def test_validate_segment_audio_raises_if_file_too_small(tmp_path):
+    """A file smaller than 1024 bytes raises AudioQualityError."""
+    tiny = tmp_path / "tiny.mp3"
+    tiny.write_bytes(b"\xff" * 100)
+    with pytest.raises(AudioQualityError, match="too small"):
+        validate_segment_audio(tiny, SegmentType.BANTER)
+
+
+def test_validate_segment_audio_raises_on_long_silence_span(tmp_path):
+    """A banter segment with a long silent span raises AudioQualityError.
+
+    Total silence is kept below the ratio threshold so the span check is reached.
+    """
+    audio = _mk_audio(tmp_path / "ok.mp3")
+
+    def _run(cmd, capture_output, text, check):
+        joined = " ".join(cmd)
+        if "ffprobe" in joined:
+            return _cp(stdout="60.0\n")  # 60s so a 5s silence is only 8% ratio
+        if "silencedetect" in joined:
+            return _cp(stderr="silence_duration: 5.0\n")  # below ratio, above span
+        if "volumedetect" in joined:
+            return _cp(stderr="mean_volume: -20.0 dB\nmax_volume: -3.0 dB\n")
+        raise AssertionError(f"Unexpected command: {joined}")
+
+    with (
+        patch("mammamiradio.audio_quality.subprocess.run", side_effect=_run),
+        pytest.raises(AudioQualityError, match="silent gap"),
+    ):
+        validate_segment_audio(audio, SegmentType.BANTER)
+
+
+def test_probe_duration_raises_on_invalid_float_output(tmp_path):
+    """_probe_duration_sec raises AudioQualityError when ffprobe output is not a float."""
+    with (
+        patch(
+            "mammamiradio.audio_quality.subprocess.run",
+            return_value=_cp(returncode=0, stdout="not-a-float\n"),
+        ),
+        pytest.raises(AudioQualityError, match="Could not parse"),
+    ):
+        _probe_duration_sec(tmp_path / "x.mp3")
+
+
+def test_probe_silence_returns_zero_when_no_silence_detected(tmp_path):
+    """_probe_silence returns (0.0, 0.0) when ffmpeg produces no silence_duration lines."""
+    with patch(
+        "mammamiradio.audio_quality.subprocess.run",
+        return_value=_cp(returncode=0, stderr=""),
+    ):
+        total, maximum = _probe_silence(tmp_path / "x.mp3")
+    assert total == 0.0
+    assert maximum == 0.0

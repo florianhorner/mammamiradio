@@ -329,3 +329,98 @@ def test_preview_upcoming_includes_news_flash():
     preview = preview_upcoming(state, pacing, tracks, count=12)
     types = [p["type"] for p in preview]
     assert "news_flash" in types
+
+
+def test_preview_upcoming_force_next_fires_first():
+    """preview_upcoming emits force_next segment type as the very first item."""
+    from mammamiradio.scheduler import preview_upcoming
+
+    tracks = [Track(title="T", artist="A", duration_ms=200000, spotify_id="t1")]
+    state = _make_state(segments_produced=5, songs_since_banter=0, songs_since_ad=0)
+    state.force_next = SegmentType.BANTER
+    pacing = PacingSection(songs_between_banter=99, songs_between_ads=99)
+    preview = preview_upcoming(state, pacing, tracks, count=3)
+    assert preview[0]["type"] == "banter"
+
+
+def test_preview_upcoming_pinned_track_plays_next():
+    """preview_upcoming uses pinned_track for the next music slot."""
+    from mammamiradio.scheduler import preview_upcoming
+
+    tracks = [Track(title="Regular", artist="A", duration_ms=200000, spotify_id="r1")]
+    pinned = Track(title="Pinned", artist="P", duration_ms=200000, spotify_id="pin1")
+    state = _make_state(segments_produced=5, songs_since_banter=0, songs_since_ad=0)
+    state.pinned_track = pinned
+    pacing = PacingSection(songs_between_banter=99, songs_between_ads=99)
+    preview = preview_upcoming(state, pacing, tracks, count=3)
+    music_items = [p for p in preview if p["type"] == "music"]
+    assert music_items[0]["label"] == "P – Pinned"
+
+
+def test_preview_upcoming_unhandled_segment_type_does_not_crash():
+    """preview_upcoming silently skips unhandled segment types (e.g. SWEEPER via force_next)."""
+    from mammamiradio.scheduler import preview_upcoming
+
+    tracks = [Track(title="T", artist="A", duration_ms=200000, spotify_id="t1")]
+    state = _make_state(segments_produced=5, songs_since_banter=0, songs_since_ad=0)
+    state.force_next = SegmentType.SWEEPER  # Not in preview_upcoming elif chain
+    pacing = PacingSection(songs_between_banter=99, songs_between_ads=99)
+    preview = preview_upcoming(state, pacing, tracks, count=2)
+    # SWEEPER is consumed but produces no entry; second slot is MUSIC
+    assert any(p["type"] == "music" for p in preview)
+
+
+def test_preview_upcoming_includes_ad():
+    """preview_upcoming simulation produces an AD when songs_since_ad is primed."""
+    from mammamiradio.scheduler import preview_upcoming
+
+    pacing = PacingSection(songs_between_banter=99, songs_between_ads=3)
+    tracks = [Track(title=f"T{i}", artist="A", duration_ms=200000, spotify_id=str(i)) for i in range(10)]
+    state = _make_state(
+        segments_produced=5,
+        songs_since_banter=0,
+        songs_since_ad=3,
+    )
+    state.playlist = tracks
+    preview = preview_upcoming(state, pacing, tracks, count=5)
+    types = [p["type"] for p in preview]
+    assert "ad" in types
+
+
+def test_preview_upcoming_includes_station_id():
+    """preview_upcoming simulation produces a STATION_ID when segments_since_station_id is primed."""
+    from mammamiradio.scheduler import preview_upcoming
+
+    pacing = PacingSection(songs_between_banter=99, songs_between_ads=99)
+    tracks = [Track(title=f"T{i}", artist="A", duration_ms=200000, spotify_id=str(i)) for i in range(10)]
+    state = _make_state(
+        segments_produced=5,
+        songs_since_banter=0,
+        songs_since_ad=0,
+        segments_since_station_id=5,
+        segments_since_time_check=5,
+    )
+    state.playlist = tracks
+    preview = preview_upcoming(state, pacing, tracks, count=8)
+    types = [p["type"] for p in preview]
+    assert "station_id" in types
+
+
+def test_preview_upcoming_includes_time_check():
+    """preview_upcoming simulation produces a TIME_CHECK when segments_since_time_check is primed."""
+    from mammamiradio.scheduler import preview_upcoming
+
+    pacing = PacingSection(songs_between_banter=99, songs_between_ads=99)
+    tracks = [Track(title=f"T{i}", artist="A", duration_ms=200000, spotify_id=str(i)) for i in range(10)]
+    state = _make_state(
+        segments_produced=5,
+        songs_since_banter=0,
+        songs_since_ad=0,
+        # station_id guard must NOT fire, so keep it below 5
+        segments_since_station_id=2,
+        segments_since_time_check=8,
+    )
+    state.playlist = tracks
+    preview = preview_upcoming(state, pacing, tracks, count=8)
+    types = [p["type"] for p in preview]
+    assert "time_check" in types
