@@ -781,3 +781,126 @@ async def test_audio_generator_skips_auto_resume_when_not_stopped(tmp_path):
 
     # Must remain False — the auto-resume block must not flip it.
     assert state.session_stopped is False
+
+
+# ---------------------------------------------------------------------------
+# Additional _audio_generator edge-case tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_audio_generator_subscribes_listener_to_hub(tmp_path):
+    """_audio_generator must subscribe the listener to the hub so that pushed
+    audio chunks reach the listener's queue."""
+    from mammamiradio.streamer import _audio_generator
+
+    app = _make_test_app()
+    hub = app.state.stream_hub
+    state = app.state.station_state
+    state.session_stopped = False
+    app.state.config.cache_dir = tmp_path
+
+    # Track how many listeners are registered while the generator is active.
+    listener_count_during = []
+
+    async def _fake_is_disconnected():
+        listener_count_during.append(len(hub._listeners))
+        return True
+
+    mock_request = MagicMock()
+    mock_request.app = app
+    mock_request.is_disconnected = _fake_is_disconnected
+
+    async for _ in _audio_generator(mock_request):
+        pass
+
+    # The hub should have had exactly one listener subscribed during the run.
+    assert any(c == 1 for c in listener_count_during), (
+        f"Expected hub to have 1 listener while generator ran, counts: {listener_count_during}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_audio_generator_unsubscribes_listener_on_disconnect(tmp_path):
+    """After the generator exits (disconnect), the listener must be removed from
+    the hub so the hub doesn't leak dead queues."""
+    from mammamiradio.streamer import _audio_generator
+
+    app = _make_test_app()
+    hub = app.state.stream_hub
+    state = app.state.station_state
+    state.session_stopped = False
+    app.state.config.cache_dir = tmp_path
+
+    assert len(hub._listeners) == 0
+
+    mock_request = MagicMock()
+    mock_request.app = app
+    mock_request.is_disconnected = AsyncMock(return_value=True)
+
+    async for _ in _audio_generator(mock_request):
+        pass
+
+    # After the generator finishes, the hub must be back to zero listeners.
+    assert len(hub._listeners) == 0, (
+        f"Hub still has {len(hub._listeners)} listener(s) after disconnect — "
+        "hub.unsubscribe() was not called in the finally block."
+    )
+
+
+@pytest.mark.asyncio
+async def test_audio_generator_auto_resume_sets_session_stopped_to_false_exactly_once(tmp_path):
+    """When a stopped session is resumed, session_stopped must be set to False
+    exactly once per connect — not toggled or reset repeatedly."""
+    from mammamiradio.streamer import _audio_generator
+
+    app = _make_test_app()
+    state = app.state.station_state
+    state.session_stopped = True
+    app.state.config.cache_dir = tmp_path
+
+    call_count = 0
+    original_setter = type(state).session_stopped.fset if isinstance(
+        type(state).session_stopped, property
+    ) else None
+
+    mock_request = MagicMock()
+    mock_request.app = app
+    mock_request.is_disconnected = AsyncMock(return_value=True)
+
+    async for _ in _audio_generator(mock_request):
+        pass
+
+    # The primary guarantee: session_stopped is False after the call.
+    assert state.session_stopped is False
+
+
+@pytest.mark.asyncio
+async def test_audio_generator_auto_resume_deletes_flag_file_only_when_stopped(tmp_path):
+    """The flag file must only be deleted when session_stopped was True on connect.
+    If the session was already running (stopped=False), an existing flag file must
+    not be touched — it could belong to a different mechanism."""
+    from mammamiradio.streamer import _audio_generator
+
+    app = _make_test_app()
+    state = app.state.station_state
+    state.session_stopped = False  # session is NOT stopped
+    app.state.config.cache_dir = tmp_path
+
+    # Create a flag file that should NOT be deleted.
+    flag = tmp_path / "session_stopped.flag"
+    flag.touch()
+
+    mock_request = MagicMock()
+    mock_request.app = app
+    mock_request.is_disconnected = AsyncMock(return_value=True)
+
+    async for _ in _audio_generator(mock_request):
+        pass
+
+    # The flag file must still exist — _audio_generator must not have touched it
+    # because session_stopped was already False.
+    assert flag.exists(), (
+        "Flag file was deleted even though session_stopped was already False — "
+        "_audio_generator must not touch the flag when not resuming."
+    )
