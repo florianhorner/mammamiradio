@@ -65,12 +65,23 @@ def purge_suspect_cache_files(cache_dir: Path, min_size_bytes: int = 10240) -> i
     A failed yt-dlp run can cache a silence placeholder that's only a few KB.
     Subsequent boots serve silence from cache without re-downloading.  Purging
     these on startup forces a fresh download.
+
+    Also purges ``_silence_*.mp3`` files unconditionally — these are silence
+    placeholders generated when yt-dlp is disabled or fails.  They must not
+    persist across restarts or they will be re-queued by the producer and trigger
+    an endless quality-gate rejection loop.
     """
     if not cache_dir.is_dir():
         return 0
     purged = 0
     for f in cache_dir.glob("*.mp3"):
         if f.name in _CACHE_PROTECTED:
+            continue
+        # Silence placeholders always get purged regardless of size.
+        if f.name.startswith("_silence_"):
+            logger.info("Purging silence placeholder: %s", f.name)
+            f.unlink(missing_ok=True)
+            purged += 1
             continue
         try:
             size = f.stat().st_size
@@ -284,8 +295,12 @@ def _download_sync(track: Track, cache_dir: Path, music_dir: Path) -> Path:
     else:
         logger.info("yt-dlp disabled for %s (set MAMMAMIRADIO_ALLOW_YTDLP=true to enable)", track.display)
 
-    # 4. Fallback: brief silence (never a sine wave tone)
-    return _generate_silence(track, out_path)
+    # 4. Fallback: brief silence (never a sine wave tone).
+    # Write to a _silence_ prefixed path so it is NOT treated as a real cached download
+    # on the next iteration or the next boot — it will always be regenerated rather than
+    # being served as a "Cache hit" that loops through the quality gate forever.
+    silence_path = cache_dir / f"_silence_{track.cache_key}.mp3"
+    return _generate_silence(track, silence_path)
 
 
 def _download_external_sync(track: Track, cache_dir: Path, music_dir: Path) -> Path:
