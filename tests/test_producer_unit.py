@@ -1668,8 +1668,7 @@ async def test_producer_session_stopped_state_pauses_production(tmp_path):
             await asyncio.sleep(0.15)
             # Queue must be empty while stopped
             assert queue.empty(), (
-                "Producer queued a segment while session_stopped=True; "
-                "it must sleep without producing anything."
+                "Producer queued a segment while session_stopped=True; it must sleep without producing anything."
             )
         finally:
             task.cancel()
@@ -2044,8 +2043,7 @@ async def test_was_stopped_initialized_true_when_session_already_stopped(tmp_pat
             while queue.empty():
                 if asyncio.get_event_loop().time() > deadline:
                     raise TimeoutError(
-                        "_was_stopped not initialised from session_stopped — "
-                        "bridge did not fire on first resume"
+                        "_was_stopped not initialised from session_stopped — bridge did not fire on first resume"
                     )
                 await asyncio.sleep(0.05)
         finally:

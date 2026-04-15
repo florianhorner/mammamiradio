@@ -1238,9 +1238,7 @@ def test_fix_wrong_station_names_replaces_competitor():
     station = "Mamma Mi Radio"
 
     # "siamo su <wrong>" → "siamo su <ours>"
-    result = _fix_wrong_station_names(
-        "Siamo su Radio Kiss Kiss Moosach e la musica!", station
-    )
+    result = _fix_wrong_station_names("Siamo su Radio Kiss Kiss Moosach e la musica!", station)
     assert "Kiss Kiss" not in result
     assert station in result
 

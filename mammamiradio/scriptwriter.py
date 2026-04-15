@@ -956,10 +956,7 @@ Return JSON:
         result = deduped
 
         # Sanitize: replace any wrong station names the LLM may have hallucinated
-        result = [
-            (host, _fix_wrong_station_names(text, config.station.name))
-            for host, text in result
-        ]
+        result = [(host, _fix_wrong_station_names(text, config.station.name)) for host, text in result]
 
         if data.get("new_joke"):
             state.add_joke(data["new_joke"])
