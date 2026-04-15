@@ -82,7 +82,7 @@ body {
   font-family: var(--font-body);
   color: var(--cream);
   line-height: 1.5;
-  padding: 0 24px 96px;
+  padding: 0 24px 120px;
   max-width: 960px;
   margin: 0 auto;
 }
@@ -195,7 +195,7 @@ h1 {
   font-size: 28px; font-weight: 400; color: var(--cream);
   font-variant-numeric: tabular-nums; line-height: 1;
 }
-.dial-freq .unit { font-family: 'Outfit', sans-serif; font-size: 11px; color: rgba(245,237,216,0.4); margin-left: 3px; }
+.dial-freq .unit { font-family: var(--font-body); font-size: 11px; color: rgba(245,237,216,0.4); margin-left: 3px; }
 .dial-status { font-size: 10px; color: var(--sun2); margin-top: 5px; min-height: 16px; }
 .signal-bars { display: flex; align-items: flex-end; gap: 3px; height: 22px; }
 .sb { width: 5px; border-radius: 1px; background: rgba(240,200,64,0.18); transition: background 0.4s ease; }
@@ -345,9 +345,9 @@ h1 {
 .card {
   position: relative; z-index: 1;
   background: var(--sienna2);
-  border: 1px solid rgba(245,237,216,0.08);
+  border: 1px solid rgba(245,237,216,0.1);
   border-top: 1px solid rgba(245,237,216,0.14);
-  border-radius: 8px; padding: 18px; margin-bottom: 12px;
+  border-radius: 10px; padding: 18px 20px; margin-bottom: 12px;
 }
 .card h3 { font-size: 14px; font-weight: 600; margin-bottom: 6px; color: var(--cream); }
 .card p { font-size: 13px; color: rgba(245,237,216,0.65); margin-bottom: 8px; line-height: 1.6; }
@@ -416,8 +416,8 @@ h1 {
 /* ── BUTTONS ── */
 .btn {
   display: inline-flex; align-items: center; justify-content: center;
-  padding: 8px 16px; font-size: 13px; font-weight: 600;
-  font-family: var(--font-body); border: none; border-radius: 6px;
+  padding: 10px 16px; font-size: 13px; font-weight: 600;
+  font-family: var(--font-body); border: none; border-radius: 8px;
   background: var(--sun2); color: var(--shadow);
   cursor: pointer; min-height: 44px; min-width: 44px;
   box-shadow: 0 2px 12px rgba(236,204,48,0.3);
@@ -443,8 +443,8 @@ h1 {
 .input {
   background: rgba(20,17,15,0.6);
   border: 1px solid rgba(245,237,216,0.16);
-  border-radius: 6px; color: var(--cream);
-  padding: 8px 12px; font-size: 13px; font-family: var(--font-body);
+  border-radius: 8px; color: var(--cream);
+  padding: 10px 14px; font-size: 13px; font-family: var(--font-body);
   outline: none; width: 100%; min-height: 44px;
 }
 .input:focus { border-color: rgba(236,204,48,0.6); }
@@ -509,9 +509,9 @@ h1 {
 /* ── TOAST ── */
 .toast {
   position: fixed; bottom: 80px; left: 50%; transform: translateX(-50%);
-  background: var(--surface); color: var(--cream);
-  border: 1px solid rgba(245,237,216,0.12);
-  padding: 10px 20px; border-radius: 8px; font-size: 13px;
+  background: var(--sun); color: var(--shadow);
+  border: none;
+  padding: 8px 20px; border-radius: 8px; font-size: 13px; font-weight: 600;
   opacity: 0; transition: opacity 0.3s; pointer-events: none; z-index: 50;
 }
 .toast.show { opacity: 1; }
