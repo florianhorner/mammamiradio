@@ -94,6 +94,7 @@ Admin routes:
 - `/api/playlist/add-external`
 - `/api/hosts`, `/api/hosts/{name}/personality`
 - `/api/pacing`
+- `/api/hot-reload` — reload `scriptwriter.py` in-place without stopping the stream. Requires `--workers 1` (importlib reloads only the worker that handles the request; multi-worker deployments get inconsistent results).
 
 ## Recommended production shape
 

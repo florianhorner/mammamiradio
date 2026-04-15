@@ -247,6 +247,12 @@ h1 .mi { color: var(--sun); }
   border: 1px solid rgba(245,237,216,0.12);
 }
 .btn-util:hover { color: var(--cream); border-color: rgba(245,237,216,0.3); }
+.btn-chip {
+  background: rgba(20,17,15,0.35); color: rgba(245,237,216,0.7);
+  border: 1px solid rgba(245,237,216,0.15); font-size: 12px; padding: 5px 12px;
+  border-radius: 20px;
+}
+.btn-chip:hover { color: var(--cream); border-color: rgba(245,237,216,0.35); background: rgba(245,237,216,0.06); }
 .btn .key {
   font-size: 9px; font-weight: 400; opacity: 0.5;
   background: rgba(0,0,0,0.2); padding: 1px 5px; border-radius: 3px;
@@ -640,6 +646,12 @@ h1 .mi { color: var(--sun); }
     <button class="btn btn-util" onclick="doPurge(this)">&#128465; Purge</button>
     <button class="btn btn-util" onclick="flagCurrentTrack(this)">&#128681; Flag</button>
   </div>
+  <div class="transport" style="margin-top:6px;flex-wrap:wrap;gap:5px">
+    <button class="btn btn-chip" onclick="doChip('less_banter',this)">Less banter</button>
+    <button class="btn btn-chip" onclick="doChip('more_chaos',this)">More chaos</button>
+    <button class="btn btn-chip" onclick="doChip('fewer_ads',this)">Fewer ads</button>
+    <button class="btn btn-chip" onclick="doChip('great_moment',this)">&#11088; Great moment</button>
+  </div>
 </div>
 
 <!-- TAB NAV -->
@@ -689,6 +701,17 @@ h1 .mi { color: var(--sun); }
         <button class="btn btn-trigger" onclick="doTrigger('banter',this)">&#127897; Banter <span class="key">B</span></button>
         <button class="btn btn-trigger" onclick="doTrigger('ad',this)">&#128226; Ad <span class="key">A</span></button>
         <button class="btn btn-trigger" onclick="doTrigger('news_flash',this)">&#9889; News <span class="key">N</span></button>
+      </div>
+    </div>
+
+    <!-- QUICK ACTIONS -->
+    <div class="card">
+      <div class="card-label">Quick Actions</div>
+      <div class="transport" style="flex-wrap:wrap;gap:6px">
+        <button class="btn btn-chip" onclick="doQuickAction('less_banter',this)" title="Increase songs between banter">&#128266; Less banter</button>
+        <button class="btn btn-chip" onclick="doQuickAction('more_chaos',this)" title="Trigger an unscheduled banter now">&#127775; More chaos</button>
+        <button class="btn btn-chip" onclick="doQuickAction('too_many_ads',this)" title="Increase songs between ad breaks">&#128561; Too many ads</button>
+        <button class="btn btn-chip" onclick="doQuickAction('hot_reload',this)" title="Reload scriptwriter.py without stopping the stream">&#9654;&#65039; Hot reload</button>
       </div>
     </div>
 
@@ -848,7 +871,49 @@ function switchTab(name) {
 // ── Transport ──
 async function doSkip(el){flash(el);await api('POST','/api/skip');toast('Skipped — advancing to next segment')}
 async function doTrigger(t,el){flash(el);const r=await api('POST','/api/trigger',{type:t});if(r.ok)toast('Queued: '+t.replace('_',' ')+' (plays after current song)');else toast('Failed: '+(r.error||'unknown'))}
+async function doQuickAction(action,el){
+  flash(el);
+  if(action==='less_banter'){
+    const v=Math.min(6,parseInt(document.getElementById('pBanter').value||'2')+1);
+    document.getElementById('pBanter').value=v;document.getElementById('pvBanter').textContent=v;
+    await api('PATCH','/api/pacing',{songs_between_banter:v,songs_between_ads:parseInt(document.getElementById('pAds').value||'4'),ad_spots_per_break:parseInt(document.getElementById('pSpots').value||'2')});
+    toast('Less banter: every '+v+' songs');
+  }else if(action==='more_chaos'){
+    const r=await api('POST','/api/trigger',{type:'banter'});
+    toast(r.ok?'Chaos incoming — unscheduled banter queued':'Failed: '+(r.error||'unknown'));
+  }else if(action==='too_many_ads'){
+    const v=Math.min(10,parseInt(document.getElementById('pAds').value||'4')+2);
+    document.getElementById('pAds').value=v;document.getElementById('pvAds').textContent=v;
+    await api('PATCH','/api/pacing',{songs_between_banter:parseInt(document.getElementById('pBanter').value||'2'),songs_between_ads:v,ad_spots_per_break:parseInt(document.getElementById('pSpots').value||'2')});
+    toast('Fewer ads: every '+v+' songs');
+  }else if(action==='hot_reload'){
+    const r=await api('POST','/api/hot-reload',{});
+    if(r.ok)toast('Scriptwriter reloaded in '+r.duration_ms+'ms — next banter uses new code');
+    else if(r.error_code==='debounced')toast('Reload skipped — retry in '+r.retry_after_s+'s');
+    else toast('Reload failed: '+(r.exception||r.error_code||'unknown'));
+  }
+}
 async function doShuffle(el){flash(el);await api('POST','/api/shuffle');toast('Playlist shuffled')}
+async function doChip(action,el){
+  flash(el);
+  const sb=+document.getElementById('pBanter').value||2;
+  const sa=+document.getElementById('pAds').value||4;
+  if(action==='less_banter'){
+    const next=Math.min(sb+1,6);
+    await api('PATCH','/api/pacing',{songs_between_banter:next});
+    toast('Banter reduced (every '+next+' songs)');
+  } else if(action==='more_chaos'){
+    const r=await api('POST','/api/trigger',{type:'banter'});
+    if(r.ok)toast('Banter queued — chaos incoming');else toast('Failed: '+(r.error||'unknown'));
+  } else if(action==='fewer_ads'){
+    const next=Math.min(sa+2,12);
+    await api('PATCH','/api/pacing',{songs_between_ads:next});
+    toast('Ad frequency reduced (every '+next+' songs)');
+  } else if(action==='great_moment'){
+    const r=await api('POST','/api/trigger',{type:'banter'});
+    if(r.ok)toast('Banter queued to mark the moment \u2B50');else toast('Failed: '+(r.error||'unknown'));
+  }
+}
 async function doPurge(el){flash(el);const r=await api('POST','/api/purge');toast('Purged '+r.purged+' segments from queue')}
 async function doStop(el){flash(el);await api('POST','/api/stop');toast('Session stopped');updateStopState(true)}
 async function doResume(el){flash(el);await api('POST','/api/resume');toast('Session resumed');updateStopState(false)}
