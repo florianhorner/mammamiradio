@@ -71,8 +71,15 @@ def test_ci_radio_toml_sed_substitutions_match_python_test():
     """
     text = _workflow_text()
 
-    # Extract all  -e 's/old/new/'  pairs from the workflow (handles optional spaces)
-    sed_pairs = re.findall(r"-e\s+'s/([^/]+)/([^/]+)/'", text)
+    # Scope to the EXPECTED=$(sed ...) block in the validate step only.
+    # Searching the full file would capture any unrelated sed commands added later.
+    sed_block_match = re.search(
+        r"EXPECTED=\$\(sed \\\n(.*?)\n\s*radio\.toml\)",
+        text,
+        re.DOTALL,
+    )
+    assert sed_block_match, "Could not locate EXPECTED=$(sed ...) block in addon-build.yml"
+    sed_pairs = re.findall(r"-e\s+'s/([^/]+)/([^/]+)/'", sed_block_match.group(1))
     ci_overrides = dict(sed_pairs)
 
     assert ci_overrides == HA_PACING_OVERRIDES, (
@@ -111,16 +118,30 @@ def test_ci_build_job_needs_validate():
 
 
 def test_ci_build_matrix_includes_aarch64():
-    """aarch64 must be in the build matrix — it is the Raspberry Pi / HA Green arch."""
-    assert "aarch64" in _workflow_text(), (
+    """aarch64 must be in the build matrix — it is the Raspberry Pi / HA Green arch.
+
+    Scoped to the build job's arch: [...] list so the test doesn't false-pass from
+    the string appearing in a base image name, comment, or other unrelated location.
+    """
+    build_section_match = re.search(r"\n  build:\n((?:    .+\n|\n)*)", _workflow_text())
+    assert build_section_match, "Could not locate `build:` job block in addon-build.yml"
+    build_block = build_section_match.group(1)
+    assert re.search(r"arch:\s*\[[^\]]*\baarch64\b", build_block), (
         "aarch64 missing from addon-build.yml build matrix. "
         "HA Green and Raspberry Pi users would receive a 404 on every update."
     )
 
 
 def test_ci_build_matrix_includes_amd64():
-    """amd64 must be in the build matrix — it covers x86 NUC / VM HA installs."""
-    assert "amd64" in _workflow_text(), "amd64 missing from addon-build.yml build matrix."
+    """amd64 must be in the build matrix — it covers x86 NUC / VM HA installs.
+
+    Scoped to the build job's arch: [...] list so the test doesn't false-pass from
+    the string appearing in a base image name, comment, or other unrelated location.
+    """
+    build_section_match = re.search(r"\n  build:\n((?:    .+\n|\n)*)", _workflow_text())
+    assert build_section_match, "Could not locate `build:` job block in addon-build.yml"
+    build_block = build_section_match.group(1)
+    assert re.search(r"arch:\s*\[[^\]]*\bamd64\b", build_block), "amd64 missing from addon-build.yml build matrix."
 
 
 # ---------------------------------------------------------------------------
