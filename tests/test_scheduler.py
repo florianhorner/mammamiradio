@@ -329,3 +329,102 @@ def test_preview_upcoming_includes_news_flash():
     preview = preview_upcoming(state, pacing, tracks, count=12)
     types = [p["type"] for p in preview]
     assert "news_flash" in types
+
+
+def test_preview_upcoming_includes_time_check():
+    """preview_upcoming simulation produces a TIME_CHECK when the cadence counter is primed.
+
+    Station ID check (>= 5 segments) must NOT fire first, so set
+    segments_since_station_id low (2) but segments_since_time_check high (8).
+    The deterministic path always fires TIME_CHECK at 8+ segments, skipping
+    the 25% probability gate.
+    """
+    from mammamiradio.scheduler import preview_upcoming
+
+    pacing = PacingSection(songs_between_banter=5, songs_between_ads=10)
+    tracks = [Track(title=f"T{i}", artist="A", duration_ms=200000, spotify_id=str(i)) for i in range(10)]
+    state = _make_state(
+        segments_produced=1,
+        songs_since_banter=0,
+        songs_since_ad=0,
+        songs_since_news=0,
+        segments_since_station_id=2,  # below STATION_ID threshold (5)
+        segments_since_time_check=8,  # at TIME_CHECK threshold (8)
+    )
+    state.playlist = tracks
+    preview = preview_upcoming(state, pacing, tracks, count=5)
+    types = [p["type"] for p in preview]
+    assert "time_check" in types, f"Expected time_check in preview but got: {types}"
+
+
+def test_preview_upcoming_station_id_fires_before_time_check_when_both_ready():
+    """When both station_id and time_check thresholds are met, station_id fires first.
+
+    station_id (>= 5) is checked before time_check (>= 8) in _decide_with_reason.
+    """
+    from mammamiradio.scheduler import preview_upcoming
+
+    pacing = PacingSection(songs_between_banter=5, songs_between_ads=10)
+    tracks = [Track(title=f"T{i}", artist="A", duration_ms=200000, spotify_id=str(i)) for i in range(10)]
+    state = _make_state(
+        segments_produced=1,
+        songs_since_banter=0,
+        songs_since_ad=0,
+        songs_since_news=0,
+        segments_since_station_id=5,  # at STATION_ID threshold (5)
+        segments_since_time_check=8,  # also at TIME_CHECK threshold (8)
+    )
+    state.playlist = tracks
+    preview = preview_upcoming(state, pacing, tracks, count=5)
+    types = [p["type"] for p in preview]
+    # station_id fires before time_check in the decision chain
+    assert "station_id" in types, f"Expected station_id in preview but got: {types}"
+
+
+def test_decide_no_time_check_when_below_threshold():
+    """TIME_CHECK does not fire via _decide when segments_since_time_check is below threshold (7 < 8).
+
+    Uses _decide directly so counter evolution in the preview simulation doesn't interfere.
+    Also, last_micro = min(2, 7) = 2 >= 2, so the guard passes — the time_check check is
+    reached but fails because 7 < 8.
+    """
+    from mammamiradio.scheduler import _decide
+
+    pacing = PacingSection(songs_between_banter=10, songs_between_ads=20)
+    result = _decide(
+        segments_produced=5,
+        songs_since_ad=0,
+        songs_since_banter=0,
+        pacing=pacing,
+        deterministic=True,
+        songs_since_news=0,
+        segments_since_station_id=2,  # below STATION_ID threshold (5)
+        segments_since_time_check=7,  # one below TIME_CHECK threshold (8)
+    )
+    # last_micro=min(2,7)=2 >= 2, station_id=2 < 5, time_check=7 < 8 → falls through to MUSIC
+    assert result == SegmentType.MUSIC
+
+
+def test_preview_upcoming_last_micro_guard_prevents_micro_segments():
+    """Micro-segments (station_id, time_check) are suppressed when last_micro < 2.
+
+    last_micro = min(segments_since_station_id, segments_since_time_check).
+    When one counter is 1 (< 2), the guard prevents micro-segments even if the
+    other counter has crossed its threshold.
+    """
+    from mammamiradio.scheduler import _decide
+
+    pacing = PacingSection(songs_between_banter=10, songs_between_ads=20)
+    # segments_since_station_id=5 (at threshold) but segments_since_time_check=1 (< 2)
+    # last_micro = min(5, 1) = 1 < 2 → guard fires → returns MUSIC
+    result = _decide(
+        segments_produced=5,
+        songs_since_ad=0,
+        songs_since_banter=0,
+        pacing=pacing,
+        deterministic=True,
+        songs_since_news=0,
+        segments_since_station_id=5,
+        segments_since_time_check=1,
+    )
+    assert result == SegmentType.MUSIC
