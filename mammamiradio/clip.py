@@ -42,9 +42,6 @@ def extract_clip(
         if total >= bytes_needed:
             break
 
-    if not chunks:
-        return None
-
     chunks.reverse()
     # Return whole chunks to avoid cutting into MP3 frames.
     # The result may be slightly longer than requested but stays frame-aligned.

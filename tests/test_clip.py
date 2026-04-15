@@ -64,3 +64,33 @@ def test_cleanup_old_clips(tmp_path):
     assert removed == 1
     assert fresh.exists()
     assert not old.exists()
+
+
+def test_cleanup_old_clips_returns_zero_when_dir_missing(tmp_path):
+    """cleanup_old_clips returns 0 immediately when the clips directory doesn't exist."""
+    removed = cleanup_old_clips(tmp_path / "nonexistent")
+    assert removed == 0
+
+
+def test_cleanup_old_clips_skips_file_on_stat_oserror(tmp_path):
+    """OSError during stat is silently skipped; function returns 0 removed."""
+    from pathlib import Path
+    from unittest.mock import patch
+
+    clips_dir = tmp_path / "clips"
+    clips_dir.mkdir()
+
+    clip_a = clips_dir / "a.mp3"
+    clip_a.write_bytes(b"\x00" * 100)
+
+    _orig_stat = Path.stat
+
+    def _raise_for_mp3(self, *, follow_symlinks=True):
+        if self.suffix == ".mp3":
+            raise OSError("permission denied")
+        return _orig_stat(self, follow_symlinks=follow_symlinks)
+
+    with patch.object(Path, "stat", _raise_for_mp3):
+        removed = cleanup_old_clips(clips_dir, max_age_hours=0)
+
+    assert removed == 0  # file skipped because stat raised OSError
