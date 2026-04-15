@@ -718,18 +718,16 @@ async def test_capabilities_exposes_anthropic_degraded_health():
 
 
 # ---------------------------------------------------------------------------
-# Auto-resume on listener connect (_audio_generator)
+# Auto-resume removed from _audio_generator
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_audio_generator_auto_resumes_stopped_session(tmp_path):
-    """_audio_generator must clear session_stopped when a listener connects.
+async def test_audio_generator_does_not_auto_resume_stopped_session(tmp_path):
+    """_audio_generator must NOT clear session_stopped when a listener connects.
 
-    Added in v2.10.2 to fix production silence incidents: when the HA watchdog
-    restarts the addon after a deliberate stop, a listener connecting is an
-    unambiguous signal that someone wants music. The auto-resume clears the
-    stopped state so the stream starts immediately rather than serving silence.
+    The auto-resume logic was removed in this PR. A stopped session stays stopped
+    even when a listener connects — only an explicit POST /api/resume clears the flag.
     """
     from mammamiradio.streamer import _audio_generator
 
@@ -747,20 +745,24 @@ async def test_audio_generator_auto_resumes_stopped_session(tmp_path):
     async for _ in _audio_generator(mock_request):
         pass
 
-    # session_stopped must be cleared by auto-resume on listener connect
-    assert state.session_stopped is False, (
-        "session_stopped was not cleared by _audio_generator on listener connect. "
-        "Auto-resume (v2.10.2) must clear the stopped state so the stream starts."
+    # session_stopped must remain True — auto-resume was removed
+    assert state.session_stopped is True, (
+        "session_stopped was cleared by _audio_generator; the auto-resume logic "
+        "was removed and must not be re-introduced here."
+    )
+    # The flag file must still exist
+    assert flag.exists(), (
+        "session_stopped.flag was deleted by _audio_generator; only /api/resume should do this."
     )
 
 
 @pytest.mark.asyncio
-async def test_audio_generator_removes_stopped_flag_on_listener_connect(tmp_path):
-    """When a listener connects to a stopped session, _audio_generator removes the flag.
+async def test_audio_generator_leaves_stopped_flag_file_intact(tmp_path):
+    """When the session is stopped, _audio_generator must not delete the flag file.
 
-    The auto-resume logic (v2.10.2) unlinks the session_stopped.flag when a
-    listener connects. This prevents a stale flag from keeping the stream stopped
-    after an HA watchdog restart following a deliberate stop.
+    The auto-resume logic (which called flag.unlink()) was removed. The flag file
+    must survive listener connects so that an HA watchdog restart does not silently
+    re-read a stale 'stopped' state.
     """
     from mammamiradio.streamer import _audio_generator
 
@@ -777,10 +779,7 @@ async def test_audio_generator_removes_stopped_flag_on_listener_connect(tmp_path
     async for _ in _audio_generator(mock_request):
         pass
 
-    assert not flag.exists(), (
-        "session_stopped.flag was not removed by _audio_generator on listener connect. "
-        "Auto-resume (v2.10.2) must unlink the flag to reset stopped state."
-    )
+    assert flag.exists(), "Flag file must not be removed by _audio_generator."
 
 
 @pytest.mark.asyncio
@@ -805,3 +804,78 @@ async def test_audio_generator_active_session_is_unaffected(tmp_path):
         pass
 
     assert state.session_stopped is False
+
+
+# ---------------------------------------------------------------------------
+# POST /api/hot-reload tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_hot_reload_authenticated_200():
+    """POST /api/hot-reload with valid admin token returns 200 with expected fields."""
+    app = _make_test_app(admin_token="testtoken")
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.post(
+            "/api/hot-reload",
+            headers={"X-Radio-Admin-Token": "testtoken"},
+        )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ok"] is True
+    assert "mammamiradio.scriptwriter" in body["reloaded_modules"]
+    assert body["stream_status"] == "unaffected"
+    assert body["effective_on"] == "next_banter_generation"
+    assert isinstance(body["duration_ms"], int)
+
+
+@pytest.mark.asyncio
+async def test_hot_reload_unauthenticated_rejected():
+    """POST /api/hot-reload without auth credentials is rejected."""
+    app = _make_test_app(admin_password="secret", admin_token="tok")
+    transport = httpx.ASGITransport(app=app, client=("10.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.post("/api/hot-reload")
+    assert resp.status_code in (401, 403)
+
+
+@pytest.mark.asyncio
+async def test_hot_reload_importerror_returns_500_with_stream_status():
+    """When importlib.reload raises, the endpoint returns 500 with stream_status=unaffected."""
+    app = _make_test_app(admin_token="testtoken")
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    with patch("mammamiradio.streamer.importlib.reload", side_effect=ImportError("syntax error in scriptwriter.py")):
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            resp = await client.post(
+                "/api/hot-reload",
+                headers={"X-Radio-Admin-Token": "testtoken"},
+            )
+    assert resp.status_code == 500
+    body = resp.json()
+    assert body["ok"] is False
+    assert body["stream_status"] == "unaffected"
+    assert body["error_code"] == "reload_failed"
+    assert body["retryable"] is True
+    assert "syntax error in scriptwriter.py" in body["exception"]
+
+
+@pytest.mark.asyncio
+async def test_hot_reload_debounce_returns_429_on_rapid_calls():
+    """A second hot-reload call within 5s returns 429 with retry_after_s."""
+    app = _make_test_app(admin_token="testtoken")
+    # Prime the debounce timestamp to now
+    app.state._last_hot_reload_ts = time.monotonic()
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.post(
+            "/api/hot-reload",
+            headers={"X-Radio-Admin-Token": "testtoken"},
+        )
+    assert resp.status_code == 429
+    body = resp.json()
+    assert body["ok"] is False
+    assert body["error_code"] == "debounced"
+    assert body["stream_status"] == "unaffected"
+    assert body["retryable"] is True
+    assert body["retry_after_s"] > 0

@@ -214,6 +214,7 @@ This is opportunistic context, not a hard dependency. Failures there should not 
 | `/api/listener-requests` | GET | Admin | List pending listener requests |
 | `/api/search` | GET | Admin | Search playlist and external sources |
 | `/api/playlist/add-external` | POST | Admin | Add external track from search results |
+| `/api/hot-reload` | POST | Admin | Reload `scriptwriter.py` in-place via `importlib.reload()` — stream continues uninterrupted, next banter uses new code. Requires `--workers 1`. |
 
 ### Auth rules
 

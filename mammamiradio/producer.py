@@ -15,6 +15,7 @@ from functools import partial
 from pathlib import Path
 from uuid import uuid4
 
+import mammamiradio.scriptwriter as _sw
 from mammamiradio.audio_quality import AudioQualityError, AudioToolError, validate_segment_audio
 from mammamiradio.config import StationConfig
 from mammamiradio.context_cues import generate_impossible_line
@@ -49,15 +50,6 @@ from mammamiradio.normalizer import (
 )
 from mammamiradio.playlist import fetch_chart_refresh
 from mammamiradio.scheduler import next_segment_type
-from mammamiradio.scriptwriter import (
-    AD_BREAK_INTROS,
-    AD_BREAK_OUTROS,
-    _has_script_llm,
-    write_ad,
-    write_banter,
-    write_news_flash,
-    write_transition,
-)
 from mammamiradio.track_rationale import classify_track_crate, generate_track_rationale
 from mammamiradio.tts import synthesize, synthesize_ad, synthesize_dialogue
 
@@ -946,7 +938,7 @@ async def run_producer(
                 listener_request_commit = None
                 loop = asyncio.get_running_loop()
 
-                if not _has_script_llm(config):
+                if not _sw.has_script_llm(config):
                     # No LLM — use canned clips + impossible TTS lines
                     if _is_new_listener:
                         line = generate_impossible_line(
@@ -986,8 +978,8 @@ async def run_producer(
                 elif not impossible_tts:
                     try:
                         # Generate transition voice + banter in parallel
-                        transition_task = write_transition(state, config, next_segment="banter")
-                        banter_task = write_banter(
+                        transition_task = _sw.write_transition(state, config, next_segment="banter")
+                        banter_task = _sw.write_banter(
                             state,
                             config,
                             is_new_listener=_is_new_listener,
@@ -1126,7 +1118,7 @@ async def run_producer(
                 logger.info("Producing NEWS FLASH")
 
                 try:
-                    host, text, category = await write_news_flash(state, config)
+                    host, text, category = await _sw.write_news_flash(state, config)
                     flash_path = config.tmp_dir / f"flash_{uuid4().hex[:8]}.mp3"
 
                     # Synthesize with extra energy for sports
@@ -1345,10 +1337,10 @@ async def run_producer(
                     """Intro: transition LLM → TTS → crossfade + promo tag."""
                     parts = []
                     try:
-                        ihost, itext = await write_transition(state, config, next_segment="ad")
+                        ihost, itext = await _sw.write_transition(state, config, next_segment="ad")
                     except Exception:
                         ihost = random.choice(config.hosts)
-                        itext = random.choice(AD_BREAK_INTROS)
+                        itext = random.choice(_sw.AD_BREAK_INTROS)
                     ipath = config.tmp_dir / f"ad_intro_{uuid4().hex[:8]}.mp3"
                     await synthesize(
                         itext,
@@ -1408,7 +1400,7 @@ async def run_producer(
                     _build_intro(),
                     asyncio.gather(
                         *(
-                            write_ad(brand, vm, state, config, ad_format=af, sonic=sn)
+                            _sw.write_ad(brand, vm, state, config, ad_format=af, sonic=sn)
                             for brand, af, sn, vm in spot_params
                         )
                     ),
@@ -1455,7 +1447,7 @@ async def run_producer(
                 bumper_out = config.tmp_dir / f"bumper_out_{uuid4().hex[:8]}.mp3"
                 outro_host = random.choice(config.hosts)
                 outro_path = config.tmp_dir / f"ad_outro_{uuid4().hex[:8]}.mp3"
-                outro_text = random.choice(AD_BREAK_OUTROS)
+                outro_text = random.choice(_sw.AD_BREAK_OUTROS)
                 await asyncio.gather(
                     loop.run_in_executor(None, generate_bumper_jingle, bumper_out),
                     synthesize(

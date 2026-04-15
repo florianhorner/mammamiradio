@@ -6,6 +6,22 @@ The current version source of truth is `pyproject.toml`.
 
 ## [Unreleased]
 
+## [2.10.3] - 2026-04-15
+
+### Added
+
+- **`POST /api/hot-reload`**: Reload `mammamiradio.scriptwriter` in-place via `importlib.reload()` without interrupting the stream. Code changes to `scriptwriter.py` take effect on the next banter generation with zero stream gap. Includes 5s debounce (429), structured error response with `stream_status: "unaffected"`, and reload timing in the response body. Requires `--workers 1`.
+- **Quick Actions chips in admin UI**: Four one-tap feedback controls (Less banter / More chaos / Too many ads / Hot reload) wired to existing pacing PATCH and trigger POST endpoints. Located in the Radio tab for immediate tone adjustment during live sessions.
+- **HA watchdog restart recovery**: `run.sh` now removes `session_stopped.flag` at container startup. When the HA watchdog restarts the addon after a deliberate stop, the stream resumes automatically — same user outcome as the prior auto-resume-on-connect logic but without affecting in-session stop/resume state.
+
+### Changed
+
+- **Producer import refactor**: `producer.py` now imports `mammamiradio.scriptwriter` as a module reference (`import mammamiradio.scriptwriter as _sw`) instead of name-bound `from ... import` to ensure `importlib.reload()` takes effect at every call site.
+- **`_has_script_llm` made public**: Renamed to `has_script_llm` — consistent with the module-reference import pattern and eliminates private-attribute access from producer.
+- **HA addon `radio.toml` synced to root**: The HA addon now ships the same `radio.toml` as the root. The Pi-specific pacing overrides (`songs_between_banter=3`, `ad_spots_per_break=1`, `lookahead_segments=2`) are removed. CI validates with strict `cmp -s` and copies the root file at build time.
+- **Broadcast EQ restored to 3-filter chain**: The HF harshness shelf (12kHz, -1.5dB) removed in 2.10.2 due to an ffmpeg 8.x crash concern is restored. The 3-filter chain is the correct broadcast EQ configuration.
+- **Auto-resume on listener connect removed**: `_audio_generator` no longer clears `session_stopped` when a listener connects. Restart recovery is handled by `run.sh` at container startup (see above), keeping in-session stop/resume behavior explicit.
+
 ## [2.10.2] - 2026-04-15
 
 ### Fixed

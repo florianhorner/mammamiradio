@@ -156,6 +156,7 @@ Why: the scriptwriter generates fake ads in the brand's voice, makes false produ
 - Treat 60 minutes of uninterrupted runtime per live station object as the default minimum when tinkering around an active stream.
 - Built-in demo music should favor current modern tracks, not nostalgic or older fallback selections.
 - Advertisements need a convincing underlying sound bed. Prefer CC-free music or sound design beds under ad voiceovers instead of dry voice-only spots.
+- To tune scriptwriter behavior without a stream gap: edit `mammamiradio/scriptwriter.py`, run `make check`, then `POST /api/hot-reload` (admin auth, empty body), then `POST /api/trigger {"type": "banter"}` to generate a segment with the new code. The stream stays live throughout. If reload fails (syntax error), the endpoint returns 500 and the stream keeps running with the old code.
 
 ## Quality gates
 

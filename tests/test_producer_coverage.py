@@ -36,6 +36,7 @@ from mammamiradio.producer import (
 )
 
 PRODUCER_MODULE = "mammamiradio.producer"
+SCRIPTWRITER_MODULE = "mammamiradio.scriptwriter"
 
 # ---------------------------------------------------------------------------
 # _pick_brand
@@ -528,8 +529,8 @@ async def test_banter_quality_reject_falls_back_to_canned_clip(tmp_path):
 
     with (
         patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.BANTER),
-        patch(f"{PRODUCER_MODULE}.write_banter", new_callable=AsyncMock, return_value=(banter_lines, None)),
-        patch(f"{PRODUCER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora...")),
+        patch(f"{SCRIPTWRITER_MODULE}.write_banter", new_callable=AsyncMock, return_value=(banter_lines, None)),
+        patch(f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora...")),
         patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, return_value=tmp_path / "voice.mp3"),
         patch(f"{PRODUCER_MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=tmp_path / "dia.mp3"),
         patch(f"{PRODUCER_MODULE}.concat_files", return_value=tmp_path / "banter.mp3"),
@@ -634,8 +635,8 @@ async def test_humanity_event_fires_only_once(tmp_path):
 
     with (
         patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.BANTER),
-        patch(f"{PRODUCER_MODULE}.write_banter", new_callable=AsyncMock, return_value=(banter_lines, None)),
-        patch(f"{PRODUCER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora...")),
+        patch(f"{SCRIPTWRITER_MODULE}.write_banter", new_callable=AsyncMock, return_value=(banter_lines, None)),
+        patch(f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora...")),
         patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, side_effect=lambda **kw: banter_audio),
         patch(f"{PRODUCER_MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=banter_audio),
         patch(f"{PRODUCER_MODULE}.concat_files", side_effect=_concat_files_side_effect),
@@ -709,12 +710,12 @@ async def test_ad_break_quality_reject_resets_songs_since_ad(tmp_path):
     with (
         patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.AD),
         patch(
-            f"{PRODUCER_MODULE}.write_transition",
+            f"{SCRIPTWRITER_MODULE}.write_transition",
             new_callable=AsyncMock,
             return_value=(config.hosts[0], "Pubblicità!"),
         ),
         patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, return_value=fake_audio),
-        patch(f"{PRODUCER_MODULE}.write_ad", new_callable=AsyncMock, return_value=fake_script),
+        patch(f"{SCRIPTWRITER_MODULE}.write_ad", new_callable=AsyncMock, return_value=fake_script),
         patch(f"{PRODUCER_MODULE}.synthesize_ad", new_callable=AsyncMock, return_value=fake_audio),
         patch(f"{PRODUCER_MODULE}.generate_bumper_jingle", return_value=None),
         patch(f"{PRODUCER_MODULE}.concat_files", return_value=fake_audio),
