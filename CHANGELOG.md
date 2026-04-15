@@ -6,6 +6,17 @@ The current version source of truth is `pyproject.toml`.
 
 ## [Unreleased]
 
+## [2.10.1] - 2026-04-15
+
+### Fixed
+
+- **HA addon Docker images never built** *(critical)*: The CI `addon-build.yml` validate job used a byte-for-byte `cmp -s` comparison for `radio.toml`, but the HA addon intentionally carries three pacing overrides tuned for Pi/HA Green performance (`songs_between_banter=3`, `ad_spots_per_break=1`, `lookahead_segments=2`). The strict comparison always failed, blocking the `build` job via `needs: validate`. No images were pushed to GHCR for 2.10.0, causing the `[404] manifest unknown` error seen in HA Supervisor logs when updating. Replaced with a sed-based transform that applies the known overrides before comparing.
+- **Pi pacing tuning silently discarded in Docker image**: The `build` job copied the root `radio.toml` (with higher-load default values) over the HA-specific one in the build context, causing the Docker image to ship the wrong pacing values. The HA-specific file is now used directly at build time.
+
+### Added
+
+- **7 regression-prevention tests** in `tests/test_addon_build_workflow.py`: guards against the `cmp -s` pattern returning, CI/Python test drift, build matrix gaps, trigger path gaps, and the radio.toml build-time overwrite. Any single test failure would have caught the 2.10.0 manifest 404 before release.
+
 ## [2.10.0] - 2026-04-14
 
 ### Added
