@@ -15,6 +15,7 @@ caught the problem before it shipped:
   4. Both target architectures are in the build matrix.
   5. The workflow triggers cover every file touched by a version-bump commit.
 """
+
 from __future__ import annotations
 
 import re
@@ -100,8 +101,7 @@ def test_ci_build_job_needs_validate():
 
     build_block = build_section_match.group(1)
     assert "needs: validate" in build_block, (
-        "The build job must declare `needs: validate`.\n"
-        "Without it, image builds proceed even when validation fails."
+        "The build job must declare `needs: validate`.\nWithout it, image builds proceed even when validation fails."
     )
 
 
@@ -120,9 +120,7 @@ def test_ci_build_matrix_includes_aarch64():
 
 def test_ci_build_matrix_includes_amd64():
     """amd64 must be in the build matrix — it covers x86 NUC / VM HA installs."""
-    assert "amd64" in _workflow_text(), (
-        "amd64 missing from addon-build.yml build matrix."
-    )
+    assert "amd64" in _workflow_text(), "amd64 missing from addon-build.yml build matrix."
 
 
 # ---------------------------------------------------------------------------
