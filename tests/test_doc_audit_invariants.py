@@ -89,6 +89,26 @@ async def test_root_serves_admin_for_ha_ingress():
     )
 
 
+@pytest.mark.asyncio
+async def test_root_keeps_listener_ui_for_untrusted_ingress_header():
+    """A public client that forges `X-Ingress-Path` must still see the listener UI.
+
+    The ingress-flip guard requires all three: `config.is_addon`, a non-empty
+    `X-Ingress-Path`, AND a hassio/loopback client IP. A spoofed header from a public
+    IP must never be enough to hand out the admin cockpit.
+    """
+    app = _build_app(is_addon=True)
+    transport = httpx.ASGITransport(app=app, client=("203.0.113.50", 9999))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.get("/", headers={"X-Ingress-Path": "/api/hassio_ingress/abc123"})
+    assert resp.status_code == 200
+    assert "Regia — Control Room" not in resp.text, (
+        "`/` handed out the admin UI to a public client that spoofed `X-Ingress-Path`. "
+        "The ingress flip MUST also verify the client IP is hassio/loopback. See "
+        "finding #6 in the 2026-04-16 audit."
+    )
+
+
 # ---------------------------------------------------------------------------
 # Finding #13 — single repository.yaml contract
 # ---------------------------------------------------------------------------

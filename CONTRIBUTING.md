@@ -10,7 +10,7 @@ Do the local setup, run targeted tests, then do a quick listen-through.
 - FFmpeg on your `PATH`
 - Optional: Anthropic and/or OpenAI credentials for the full AI radio experience
 
-The app uses live Italian charts when `MAMMAMIRADIO_ALLOW_YTDLP=true`, otherwise local `music/` files, otherwise silence. No external service credentials are required to run the station.
+Music source fallback chain: when `MAMMAMIRADIO_ALLOW_YTDLP=true` the app blends live Italian charts with anything in `music/`; with yt-dlp disabled it plays local `music/` only; if neither is available it falls through to silence. No external service credentials are required to run the station.
 
 ## Local setup
 
@@ -57,10 +57,10 @@ python -m uvicorn mammamiradio.main:app --reload --reload-dir mammamiradio
 
 Useful URLs:
 
-- `http://127.0.0.1:8000/` — listener page (admin auth not required)
-- `http://127.0.0.1:8000/listen` — alias of `/`
-- `http://127.0.0.1:8000/admin` — admin control room (requires admin auth if non-loopback)
-- `http://127.0.0.1:8000/dashboard` — authenticated dashboard
+- `http://127.0.0.1:8000/` — listener page for public callers; flips to the admin control room when the request carries a trusted HA ingress header
+- `http://127.0.0.1:8000/listen` — explicit listener alias (always the public UI)
+- `http://127.0.0.1:8000/admin` — admin control room (guarded by `require_admin_access`: loopback, private network including HA Supervisor ingress, admin token, or basic auth)
+- `http://127.0.0.1:8000/dashboard` — authenticated dashboard, same auth rules as `/admin`
 - `http://127.0.0.1:8000/stream` — infinite MP3 stream
 - `http://127.0.0.1:8000/public-status` — public JSON
 - `http://127.0.0.1:8000/status` — admin JSON

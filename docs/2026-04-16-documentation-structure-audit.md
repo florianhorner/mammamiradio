@@ -237,4 +237,4 @@ Updated after remediation work on 2026-04-16.
 - #10 Add-on `radio.toml` contract — fixed: CI workflow uses `cmp -s`, matching local validator and Python tests. `tests/test_addon_build_workflow.py` locks the byte-identical contract; sed-based split-brain is forbidden.
 - #11 Changelog sync — fixed: `ha-addon/mammamiradio/CHANGELOG.md` now has the 2.10.3 entry.
 - #12 `CONDUCTOR.md` `.env` discovery — fixed: narrowed to the two paths the script actually checks.
-- #13 Duplicate trees — fixed: `demo_assets/` consolidated into `mammamiradio/demo_assets/`; `ha-addon/repository.yaml` deleted (root copy is the only one HA consumes). Both locked by `tests/test_doc_audit_invariants.py`.
+- #13 Duplicate trees — fixed: `demo_assets/` consolidated into `mammamiradio/demo_assets/`; `ha-addon/repository.yaml` deleted (root copy is the only one HA consumes). The single-source `repository.yaml` invariant is locked by `tests/test_doc_audit_invariants.py`; the `demo_assets/` consolidation is currently enforced by review, since the subtree still contains empty placeholder dirs awaiting the demo-asset contract.

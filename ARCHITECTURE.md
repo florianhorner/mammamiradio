@@ -111,10 +111,11 @@ The dashboard derives a tier label from these flags: Demo Radio, Full AI Radio, 
 
 ## Music sources
 
-Music comes from one of two source modes:
+Music comes from the first available source in this order:
 
 1. **Charts + local blend** (when `MAMMAMIRADIO_ALLOW_YTDLP=true`): Up to 100 tracks fetched from Apple Music Italy RSS. MP3s in `music/` are merged in automatically — deduplicated by `spotify_id`. Total catalog typically 100-300 tracks, covering 7h+ of unique content.
-2. **Built-in demo playlist**: 10 hardcoded Italian tracks used when `MAMMAMIRADIO_ALLOW_YTDLP` is not set.
+2. **Local `music/` files only** (when `MAMMAMIRADIO_ALLOW_YTDLP` is not set or yt-dlp fails): whatever MP3s the operator has dropped into the `music/` directory.
+3. **Silence fallback**: when no local music is present and yt-dlp is disabled or unreachable, the station emits silence rather than dropping the stream. This matches the MUSIC fallback contract at producer.py (§ Segment production).
 
 The station always produces a stream regardless of which source is active.
 
@@ -203,8 +204,8 @@ This is opportunistic context, not a hard dependency. Failures there should not 
 | `/api/playlist/add` | POST | Admin | Add a track to the playlist |
 | `/api/playlist/load` | POST | Admin | Load a playlist by URL |
 | `/api/hosts` | GET | Admin | List hosts with personality settings |
-| `/api/hosts/{name}/personality` | PATCH | Admin | Patch host personality axes (energy, warmth, chaos) |
-| `/api/hosts/{name}/personality/reset` | POST | Admin | Reset host personality to defaults |
+| `/api/hosts/{host_name}/personality` | PATCH | Admin | Patch host personality axes (energy, warmth, chaos) |
+| `/api/hosts/{host_name}/personality/reset` | POST | Admin | Reset host personality to defaults |
 | `/api/pacing` | GET | Admin | Current pacing configuration |
 | `/api/pacing` | PATCH | Admin | Patch pacing fields (songs between banter, ad spots per break, etc.) |
 | `/api/setup/save-keys` | POST | Admin | Save API keys via dashboard |

@@ -24,7 +24,6 @@
 ### Added
 - `POST /api/hot-reload`: reloads `mammamiradio.scriptwriter` in place without interrupting the stream.
 - Quick Actions chips in admin UI: one-tap controls for Less banter / More chaos / Too many ads / Hot reload.
-- HA watchdog restart recovery: `run.sh` clears `session_stopped.flag` at container startup so a watchdog-driven restart resumes audio automatically.
 
 ### Changed
 - Producer now imports `mammamiradio.scriptwriter` as a module reference so hot reload applies at every call site.

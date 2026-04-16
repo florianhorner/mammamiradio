@@ -78,7 +78,7 @@ If silence is in cache from a failed run: stop the addon, SSH to the HA host, de
 
 ### TTS banter not generating
 
-**Symptom**: Log shows `TTS synthesis failed` or `edge-tts connection error`. Banter falls back to pre-bundled demo clips.
+**Symptom**: Log shows `TTS synthesis failed` or `edge-tts connection error`. Banter falls back to stock copy or silence.
 
 **Cause**: `edge-tts` requires outbound websocket to Microsoft's TTS API. If your HA instance blocks outbound websockets, TTS fails silently and the producer falls back to stock copy or silence.
 
