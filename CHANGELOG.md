@@ -6,6 +6,14 @@ The current version source of truth is `pyproject.toml`.
 
 ## [Unreleased]
 
+## [2.10.4] - 2026-04-16
+
+### Changed
+
+- **Admin UI redesign**: Full two-column control room layout. Warm sidebar (260px, gold left border) with compact now-playing card, 5-bar animated waveform, progress bar, and 2×2 quick-controls grid (Next song / Pause / Shuffle / Banter). Right panel shows a unified "On Air" programme list — past segments dimmed, current row gold-highlighted with NOW badge and inline waveform, upcoming with "— coming up —" Playfair italic divider. Filter pills (All / Music / Banter / Ads). Pacing, Hosts, Station Log, and Engine Room collapse into accordions below. Replaces the old single-column tab layout.
+- **Token cost counter regression fix**: Removed a static `<div id="apiCostEl">` that shadowed the dynamic element injected by `updateEngineRoom()`, preventing the cost display from ever rendering.
+- **Stop/Resume grid fix**: Wrapped Stop and Resume buttons in a `display:contents` cell so toggling between them no longer leaves a visual gap in the 2×2 controls grid.
+
 ## [2.10.3] - 2026-04-15
 
 ### Added
