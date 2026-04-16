@@ -790,6 +790,121 @@ async def test_prewarm_download_exception():
 
 
 @pytest.mark.asyncio
+async def test_prewarm_norm_cache_hit(tmp_path):
+    """prewarm uses existing norm cache file and skips re-normalization."""
+    from mammamiradio.producer import prewarm_first_segment
+
+    state = _make_state()
+    config = _make_config()
+    config.tmp_dir = tmp_path
+    config.cache_dir = tmp_path
+    queue: asyncio.Queue = asyncio.Queue()
+
+    source = tmp_path / "source.mp3"
+    source.write_bytes(b"\x00" * 1000)
+
+    # Pre-create norm cache files for all playlist tracks so the cache-hit branch
+    # (lines 491-492) executes regardless of which track select_next_track() picks.
+    norm_cached_files = []
+    for track in state.playlist:
+        norm_cached = tmp_path / f"norm_{track.cache_key}_{config.audio.bitrate}k.mp3"
+        norm_cached.write_bytes(b"\x00" * 1000)
+        norm_cached_files.append(norm_cached)
+
+    with (
+        patch(f"{PRODUCER_MODULE}.download_track", new_callable=AsyncMock, return_value=source),
+        patch(f"{PRODUCER_MODULE}.normalize") as mock_norm,
+        patch(f"{PRODUCER_MODULE}._set_last_music_file"),
+    ):
+        result = await prewarm_first_segment(queue, state, config)
+
+    assert result is True
+    assert queue.qsize() == 1
+    mock_norm.assert_not_called()  # cache hit: normalize should be skipped
+    segment = queue.get_nowait()
+    assert segment.path in norm_cached_files
+
+
+@pytest.mark.asyncio
+async def test_prewarm_quality_gate_audio_tool_error(tmp_path):
+    """prewarm continues (returns True) when the quality gate tool is unavailable."""
+    from mammamiradio.audio_quality import AudioToolError
+    from mammamiradio.producer import prewarm_first_segment
+
+    state = _make_state()
+    config = _make_config()
+    config.tmp_dir = tmp_path
+    config.cache_dir = tmp_path
+    queue: asyncio.Queue = asyncio.Queue()
+
+    source = tmp_path / "source.mp3"
+    source.write_bytes(b"\x00" * 1000)
+
+    def _norm(_src, dst, *_a, **_kw):
+        dst.write_bytes(b"\x00" * 1000)
+
+    def _tool_unavailable(*_a, **_kw):
+        raise AudioToolError("ffprobe not found")
+
+    with (
+        patch(f"{PRODUCER_MODULE}.download_track", new_callable=AsyncMock, return_value=source),
+        patch(f"{PRODUCER_MODULE}.normalize", side_effect=_norm),
+        patch(f"{PRODUCER_MODULE}.shutil.copy2"),
+        patch(f"{PRODUCER_MODULE}.validate_segment_audio", side_effect=_tool_unavailable),
+        patch(f"{PRODUCER_MODULE}._set_last_music_file"),
+    ):
+        result = await prewarm_first_segment(queue, state, config)
+
+    # AudioToolError should be swallowed — segment still queued
+    assert result is True
+    assert queue.qsize() == 1
+
+
+@pytest.mark.asyncio
+async def test_prewarm_quality_gate_rejects_cached_norm(tmp_path):
+    """prewarm returns False when quality gate rejects an already-cached norm file.
+
+    Exercises the branch where norm_path == norm_cached (lines 491-492 cache hit)
+    and then AudioQualityError is raised (branch 513→515 False: unlink skipped).
+    """
+    from mammamiradio.audio_quality import AudioQualityError
+    from mammamiradio.producer import prewarm_first_segment
+
+    state = _make_state()
+    config = _make_config()
+    config.tmp_dir = tmp_path
+    config.cache_dir = tmp_path
+    queue: asyncio.Queue = asyncio.Queue()
+
+    source = tmp_path / "source.mp3"
+    source.write_bytes(b"\x00" * 1000)
+
+    # Pre-create norm cache for all playlist tracks; track selection is non-deterministic
+    norm_cached_files = []
+    for track in state.playlist:
+        norm_cached = tmp_path / f"norm_{track.cache_key}_{config.audio.bitrate}k.mp3"
+        norm_cached.write_bytes(b"\x00" * 1000)
+        norm_cached_files.append(norm_cached)
+
+    def _reject(*_a, **_kw):
+        raise AudioQualityError("all silence in cached norm")
+
+    with (
+        patch(f"{PRODUCER_MODULE}.download_track", new_callable=AsyncMock, return_value=source),
+        patch(f"{PRODUCER_MODULE}.normalize") as mock_norm,
+        patch(f"{PRODUCER_MODULE}.validate_segment_audio", side_effect=_reject),
+    ):
+        result = await prewarm_first_segment(queue, state, config)
+
+    assert result is False
+    assert queue.empty()
+    mock_norm.assert_not_called()  # cache hit: normalize must not run
+    # norm_path == norm_cached: cached file must NOT be deleted
+    for nc in norm_cached_files:
+        assert nc.exists(), f"Cached norm file {nc.name} must not be deleted when norm_path == norm_cached"
+
+
+@pytest.mark.asyncio
 async def test_music_segment_skips_invalid_download_before_normalize():
     """Main producer loop should skip invalid downloads before normalization."""
     state = _make_state()
