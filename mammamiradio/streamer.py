@@ -216,10 +216,16 @@ def _runtime_health_snapshot(request: Request) -> dict:
         "producer_task_alive": producer_alive,
         "playback_task_alive": playback_alive,
         "playback_epoch": state.playback_epoch,
+        "queue_empty_since": state.queue_empty_since,
         "audio_source": audio_source or "unknown",
         "failover_active": bool(audio_source and audio_source.startswith("fallback")),
         "shadow_queue_corrections": state.shadow_queue_corrections,
     }
+
+
+def _runtime_monotonic() -> float:
+    """Monotonic clock for readiness and silence accounting."""
+    return time.monotonic()
 
 
 def _provider_health_snapshot(config, state: StationState) -> dict:
@@ -624,20 +630,35 @@ async def run_playback_loop(app) -> None:
         # Pause when nobody is listening — don't burn API tokens or disk on an empty room.
         # The queue stays full; the moment a listener connects, playback resumes instantly.
         if not hub._listeners:
+            state.queue_empty_since = None
             await asyncio.sleep(1.0)
             continue
 
         pulled_from_queue = False
+        if segment_queue.empty() and state.queue_empty_since is None:
+            # Mark the exact moment playback ran out of audio. The 30s wait_for()
+            # below is part of the listener-visible silence window.
+            state.queue_empty_since = _runtime_monotonic()
         try:
             segment: Segment = await asyncio.wait_for(segment_queue.get(), timeout=30.0)
             pulled_from_queue = True
+            state.queue_empty_since = None
         except TimeoutError:
+            if not hub._listeners:
+                state.queue_empty_since = None
+                continue
+
+            if state.queue_empty_since is None:
+                state.queue_empty_since = _runtime_monotonic()
+            elapsed = _runtime_monotonic() - state.queue_empty_since
+
             # Serve a canned clip instead of dead air while the producer catches up
             from mammamiradio.producer import _pick_canned_clip
 
             fallback = _pick_canned_clip("banter", state=state) or _pick_canned_clip("welcome")
             if fallback:
                 logger.info("Queue empty — serving fallback clip: %s", fallback.name)
+                state.queue_empty_since = None
                 segment = Segment(
                     type=SegmentType.BANTER,
                     path=fallback,
@@ -645,8 +666,47 @@ async def run_playback_loop(app) -> None:
                     ephemeral=False,
                 )
             else:
-                logger.warning("Queue empty for 30s, no fallback clips available")
-                continue
+                rescued_from_norm = False
+                if elapsed >= 30.0:
+                    norm_files = sorted(config.cache_dir.glob("norm_*.mp3"))
+                    if norm_files:
+                        rescue = norm_files[0]
+                        logger.warning(
+                            "Queue empty %ds - rescuing with norm cache: %s",
+                            int(elapsed),
+                            rescue.name,
+                        )
+                        state.queue_empty_since = None
+                        rescued_from_norm = True
+                        segment = Segment(
+                            type=SegmentType.MUSIC,
+                            path=rescue,
+                            metadata={
+                                "type": "music",
+                                "title": f"Recovered: {rescue.name}",
+                                "audio_source": "fallback_norm_cache",
+                                "fallback": True,
+                            },
+                            ephemeral=False,
+                        )
+
+                if rescued_from_norm:
+                    pass
+                elif elapsed >= 60.0:
+                    # Request forced banter once per silence episode to avoid producer thrash.
+                    # queue_empty_since is intentionally NOT reset — the silence gate on
+                    # /healthz and /readyz must stay active until real audio resumes.
+                    if state.force_next is None:
+                        state.force_next = SegmentType.BANTER
+                        logger.error(
+                            "Queue empty %ds with %d active listeners - requesting forced banter from producer",
+                            int(elapsed),
+                            len(hub._listeners),
+                        )
+                    continue
+                else:
+                    logger.warning("Queue empty for %ds, no fallback clips available", int(elapsed))
+                    continue
 
         state.on_stream_segment(segment)
         if pulled_from_queue and state.queued_segments:
@@ -1796,12 +1856,22 @@ async def serve_clip(clip_id: str, request: Request):
 
 @router.get("/healthz")
 async def healthz(request: Request):
-    """Unauthenticated liveness probe — is the process alive?"""
+    """Unauthenticated liveness probe — alive AND not silently failing with listeners."""
     start_time = getattr(request.app.state, "start_time", None)
     uptime = round(time.time() - start_time, 1) if start_time else 0
     _sync_runtime_state(request)
     runtime = _runtime_health_snapshot(request)
-    return {"status": "ok", "uptime_s": uptime, "runtime": runtime}
+    state = request.app.state.station_state
+    queue_empty_elapsed = _runtime_monotonic() - state.queue_empty_since if state.queue_empty_since is not None else 0.0
+    silence_with_listeners = queue_empty_elapsed > 30.0 and state.listeners_active > 0
+    body = {
+        "status": "failing" if silence_with_listeners else "ok",
+        "uptime_s": uptime,
+        "silence_with_listeners": silence_with_listeners,
+        "queue_empty_elapsed_s": round(queue_empty_elapsed, 1),
+        "runtime": runtime,
+    }
+    return JSONResponse(content=body, status_code=503 if silence_with_listeners else 200)
 
 
 @router.get("/readyz")
@@ -1813,13 +1883,18 @@ async def readyz(request: Request):
     queue_depth = runtime["queue_depth"]
     tasks_alive = runtime["producer_task_alive"] and runtime["playback_task_alive"]
     startup_complete = start_time is not None and (time.time() - start_time) > 30
-    ready = tasks_alive and (queue_depth > 0 or startup_complete)
+    state = request.app.state.station_state
+    queue_empty_elapsed = _runtime_monotonic() - state.queue_empty_since if state.queue_empty_since is not None else 0.0
+    silence_with_listeners = queue_empty_elapsed > 30.0 and state.listeners_active > 0
+    ready = tasks_alive and (queue_depth > 0 or startup_complete) and not silence_with_listeners
     status = "ready" if ready else "starting"
     body = {
         "status": status,
         "ready": ready,
         "watchdog_status": "ok",
         "queue_depth": queue_depth,
+        "silence_with_listeners": silence_with_listeners,
+        "queue_empty_elapsed_s": round(queue_empty_elapsed, 1),
         "runtime": runtime,
         "uptime_s": round(time.time() - start_time, 1) if start_time else 0,
     }

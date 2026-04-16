@@ -1,0 +1,50 @@
+name: Pi Smoke (aarch64)
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  pi-smoke:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install static ffmpeg (arm64) matching HA addon runtime
+        # apt on ubuntu-24.04-arm ships ffmpeg 6.x, but the HA addon's Alpine base
+        # runs ffmpeg 7.x and the Pi runs the same. John Van Sickle's static
+        # release build mirrors the production runtime; accept 7.x or 8.x so the
+        # check keeps passing when JVS bumps the release track.
+        run: |
+          set -euo pipefail
+          cd /tmp
+          curl -fsSL --retry 3 --retry-delay 2 \
+            https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-arm64-static.tar.xz \
+            -o ffmpeg.tar.xz
+          mkdir -p ffmpeg-static
+          tar -xJf ffmpeg.tar.xz -C ffmpeg-static --strip-components=1
+          sudo install -m 0755 ffmpeg-static/ffmpeg /usr/local/bin/ffmpeg
+          sudo install -m 0755 ffmpeg-static/ffprobe /usr/local/bin/ffprobe
+          ffmpeg -version | head -1
+          ffmpeg -version | head -1 | grep -E 'ffmpeg version (7|n7|8|n8)'
+
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          pip install -e .
+          pip install -r requirements-dev.txt
+
+      - name: Run normalizer smoke tests (mocked)
+        run: pytest tests/test_normalizer_unit.py tests/test_normalizer_extended.py -v
+
+      - name: Run normalizer real-ffmpeg integration tests
+        run: pytest tests/test_normalizer_real_ffmpeg.py -v

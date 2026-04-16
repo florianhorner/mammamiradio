@@ -756,6 +756,7 @@
     font-size:0.85rem;
     font-weight:600;
     letter-spacing:0.02em;
+    min-height:44px;
     padding:0.5rem 1.2rem;
     transition:opacity 0.2s,transform 0.1s;
   }
@@ -772,6 +773,16 @@
       animation-iteration-count: 1 !important;
       transition-duration: 0.01ms !important;
     }
+  }
+  button:focus-visible,
+  input[type="text"]:focus-visible,
+  textarea:focus-visible {
+    outline: 2px solid rgba(244,208,72,0.7);
+    outline-offset: 2px;
+  }
+  input[type="range"]:focus-visible {
+    outline: 2px solid rgba(244,208,72,0.7);
+    outline-offset: 3px;
   }
 </style>
 </head>
