@@ -24,7 +24,7 @@ curl http://127.0.0.1:8000/healthz
 curl http://127.0.0.1:8000/readyz
 ```
 
-`/healthz` just answers "is the process alive?". `/readyz` answers "has the queue filled enough to stream yet?" and returns `starting` until at least one segment is ready.
+`/healthz` just answers "is the process alive?". `/readyz` answers "is the station actually ready to play audio right now?" and returns `starting` while startup is still warming the queue or when active listeners have hit prolonged silence.
 
 ## The app starts but there is no real music
 
@@ -33,6 +33,8 @@ The station uses live Italian charts when `MAMMAMIRADIO_ALLOW_YTDLP=true`, other
 - Check that `ffmpeg` is installed
 - Check that `MAMMAMIRADIO_ALLOW_YTDLP=true` is set (it is by default in HA addon and Conductor)
 - A quality gate circuit breaker lets tracks through after 3 consecutive rejections to prevent stream starvation
+
+When listeners are connected, `/readyz` now also flips back to `503 starting` if playback has been silent for more than 30 seconds. The playback loop first tries a canned clip, then the oldest `cache/norm_*.mp3`, and after 60 seconds without any bridge asset it requests a forced banter segment from the producer so the queue can recover without a restart.
 
 The app persists the last selected source to `cache/playlist_source.json` and restores it on restart. If a persisted source fails to load, startup falls back to charts then demo tracks.
 
