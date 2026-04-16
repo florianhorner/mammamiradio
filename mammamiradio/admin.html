@@ -155,7 +155,8 @@ body { font-family: var(--font-body); color: var(--cream); line-height: 1.5; }
 }
 .ctrl-btn {
   font-family: var(--font-body); font-size: 11px; font-weight: 600;
-  padding: 8px 6px; border-radius: 6px;
+  padding: 8px 6px; border-radius: 6px; min-height: 44px;
+  display: flex; align-items: center; justify-content: center;
   border: 1px solid rgba(245,237,216,0.15);
   background: rgba(20,17,15,0.4); color: rgba(245,237,216,0.8);
   cursor: pointer; text-align: center;
@@ -230,7 +231,7 @@ body { font-family: var(--font-body); color: var(--cream); line-height: 1.5; }
 }
 .filter-pill {
   font-family: var(--font-body); font-size: 11px; font-weight: 600;
-  padding: 4px 12px; border-radius: 20px; border: none;
+  padding: 6px 12px; border-radius: 20px; border: none; min-height: 32px;
   background: rgba(20,17,15,0.5); color: rgba(245,237,216,0.5);
   border: 1px solid rgba(245,237,216,0.1);
   cursor: pointer; transition: background 0.15s, color 0.15s;
@@ -398,8 +399,8 @@ body { font-family: var(--font-body); color: var(--cream); line-height: 1.5; }
 .btn-util:hover { color: var(--cream); border-color: rgba(245,237,216,0.3); }
 .btn-chip {
   background: rgba(20,17,15,0.35); color: rgba(245,237,216,0.7);
-  border: 1px solid rgba(245,237,216,0.15); font-size: 12px; padding: 5px 12px;
-  border-radius: 20px;
+  border: 1px solid rgba(245,237,216,0.15); font-size: 12px; padding: 7px 12px;
+  border-radius: 20px; min-height: 36px;
 }
 .btn-chip:hover { color: var(--cream); border-color: rgba(245,237,216,0.35); background: rgba(245,237,216,0.06); }
 .btn .key {
