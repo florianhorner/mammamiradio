@@ -1,4 +1,4 @@
-.PHONY: dev test test-watch lint format typecheck check validate coverage-check coverage-ratchet
+.PHONY: dev test test-watch lint format typecheck check validate coverage-check coverage-ratchet pre-release
 
 PYTHON := .venv/bin/python
 PYTEST := $(PYTHON) -m pytest
@@ -34,3 +34,6 @@ coverage-check:
 
 coverage-ratchet:
 	$(PYTHON) scripts/coverage-ratchet.py update
+
+pre-release:
+	./scripts/pre-release-check.sh
