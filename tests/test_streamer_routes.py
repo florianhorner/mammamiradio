@@ -724,7 +724,7 @@ async def test_capabilities_exposes_anthropic_degraded_health():
 
 @pytest.mark.asyncio
 async def test_audio_generator_does_not_auto_resume_stopped_session(tmp_path):
-    """_audio_generator must NOT clear session_stopped when a listener connects.
+    """_audio_generator must clear session_stopped when a listener connects.
 
     A stopped session is resumed automatically when a listener connects —
     the listener connecting is the clearest signal that someone wants music.

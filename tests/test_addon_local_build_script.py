@@ -47,3 +47,12 @@ def test_addon_run_sh_respects_home_assistant_toggle():
     assert "export HA_ENABLED" in run_sh
     assert 'if [ "${HA_ENABLED:-true}" != "false" ]; then' in run_sh
     assert "Home Assistant integration disabled by add-on option" in run_sh
+
+
+def test_addon_run_sh_preserves_operator_stop_flag():
+    run_sh = (REPO_ROOT / "ha-addon" / "mammamiradio" / "rootfs" / "run.sh").read_text()
+
+    assert "session_stopped.flag" not in run_sh, (
+        "run.sh must not clear the persisted stop flag at container startup; "
+        "only POST /api/resume may resume a deliberately stopped station."
+    )

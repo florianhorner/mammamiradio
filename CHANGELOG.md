@@ -6,13 +6,24 @@ The current version source of truth is `pyproject.toml`.
 
 ## [Unreleased]
 
-## [2.10.4] - 2026-04-16
+## [2.10.5] - 2026-04-16
 
 ### Changed
 
 - **Admin UI redesign**: Full two-column control room layout. Warm sidebar (260px, gold left border) with compact now-playing card, 5-bar animated waveform, progress bar, and 2×2 quick-controls grid (Next song / Pause / Shuffle / Banter). Right panel shows a unified "On Air" programme list — past segments dimmed, current row gold-highlighted with NOW badge and inline waveform, upcoming with "— coming up —" Playfair italic divider. Filter pills (All / Music / Banter / Ads). Pacing, Hosts, Station Log, and Engine Room collapse into accordions below. Replaces the old single-column tab layout.
 - **Token cost counter regression fix**: Removed a static `<div id="apiCostEl">` that shadowed the dynamic element injected by `updateEngineRoom()`, preventing the cost display from ever rendering.
 - **Stop/Resume grid fix**: Wrapped Stop and Resume buttons in a `display:contents` cell so toggling between them no longer leaves a visual gap in the 2×2 controls grid.
+- **Accessibility polish**: Keyboard `:focus-visible` ring added to buttons and inputs; control buttons now enforce 44px min-height (36px chips, 32px filter pills) for touch targets; base font-size raised from 15px to 16px (WCAG floor); queue song names raised from 13px to 14px; Home Assistant slider range labels raised from 8px/18% to 9px/32% opacity.
+- **Quick Action labels clarified**: Renamed to action-oriented verbs ("trim" / "force") for immediate comprehension.
+- **Dead code removal**: Dropped unused `btn-skip` CSS; replaced hardcoded hover hex with `color-mix` so hover states follow the accent token.
+
+## [2.10.4] - 2026-04-16
+
+### Security
+
+- **CI action SHA-pinned**: `dependabot/fetch-metadata` is now pinned to commit SHA `ffa630c65fa7e0ecfa0625b5ceda64399aea1b36` (v3). Eliminates supply chain risk from a mutable semver tag running with `contents: write` + `pull-requests: write` in `pull_request_target` context.
+- **Secret scanning**: Added `.gitleaks.toml` with custom rules for Anthropic API keys (`sk-ant-…`) and Home Assistant long-lived access tokens. Extends gitleaks default ruleset with project-specific patterns and an allowlist for `.env.example`.
+- **yt-dlp version floor raised**: Minimum `yt-dlp` version bumped from `>=2024.0` to `>=2026.2.21`, patching GHSA-g3gw-q23r-pgqm (RCE via `--netrc-cmd`, fixed in 2026.2.21).
 
 ## [2.10.3] - 2026-04-15
 
@@ -20,7 +31,6 @@ The current version source of truth is `pyproject.toml`.
 
 - **`POST /api/hot-reload`**: Reload `mammamiradio.scriptwriter` in-place via `importlib.reload()` without interrupting the stream. Code changes to `scriptwriter.py` take effect on the next banter generation with zero stream gap. Includes 5s debounce (429), structured error response with `stream_status: "unaffected"`, and reload timing in the response body. Requires `--workers 1`.
 - **Quick Actions chips in admin UI**: Four one-tap feedback controls (Less banter / More chaos / Too many ads / Hot reload) wired to existing pacing PATCH and trigger POST endpoints. Located in the Radio tab for immediate tone adjustment during live sessions.
-- **HA watchdog restart recovery**: `run.sh` now removes `session_stopped.flag` at container startup. When the HA watchdog restarts the addon after a deliberate stop, the stream resumes automatically — same user outcome as the prior auto-resume-on-connect logic but without affecting in-session stop/resume state.
 
 ### Changed
 
@@ -28,7 +38,7 @@ The current version source of truth is `pyproject.toml`.
 - **`_has_script_llm` made public**: Renamed to `has_script_llm` — consistent with the module-reference import pattern and eliminates private-attribute access from producer.
 - **HA addon `radio.toml` synced to root**: The HA addon now ships the same `radio.toml` as the root. The Pi-specific pacing overrides (`songs_between_banter=3`, `ad_spots_per_break=1`, `lookahead_segments=2`) are removed. CI validates with strict `cmp -s` and copies the root file at build time.
 - **Broadcast EQ restored to 3-filter chain**: The HF harshness shelf (12kHz, -1.5dB) removed in 2.10.2 due to an ffmpeg 8.x crash concern is restored. The 3-filter chain is the correct broadcast EQ configuration.
-- **Auto-resume on listener connect removed**: `_audio_generator` no longer clears `session_stopped` when a listener connects. Restart recovery is handled by `run.sh` at container startup (see above), keeping in-session stop/resume behavior explicit.
+- **Auto-resume on listener connect removed**: `_audio_generator` no longer clears `session_stopped` when a listener connects. A deliberate `/api/stop` now remains paused across restarts until explicit `/api/resume`, keeping stop/resume behavior fully operator-controlled.
 
 ## [2.10.2] - 2026-04-15
 
