@@ -382,11 +382,6 @@ body { font-family: var(--font-body); color: var(--cream); line-height: 1.5; }
   display: inline-flex; align-items: center; gap: 6px;
 }
 .btn:active { transform: scale(0.96); }
-.btn-skip {
-  background: var(--lancia2); color: var(--cream);
-  flex: 1; justify-content: center; min-height: 48px; font-size: 15px;
-}
-.btn-skip:hover { background: #cc3424; }
 .btn-trigger {
   background: rgba(20,17,15,0.5); color: var(--sun);
   border: 1px solid rgba(244,208,72,0.25);
@@ -409,9 +404,9 @@ body { font-family: var(--font-body); color: var(--cream); line-height: 1.5; }
 }
 .btn.flash { animation: btn-flash 0.4s ease; }
 .btn-stop { background: var(--error); color: var(--cream); min-height: 44px; }
-.btn-stop:hover { background: #d45555; }
+.btn-stop:hover { background: color-mix(in srgb, var(--error) 80%, white); }
 .btn-resume { background: var(--ok); color: var(--cream); min-height: 44px; }
-.btn-resume:hover { background: #3b7bff; }
+.btn-resume:hover { background: color-mix(in srgb, var(--ok) 80%, white); }
 
 .transport { display: flex; gap: 8px; flex-wrap: wrap; }
 
