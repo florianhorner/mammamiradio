@@ -6,6 +6,17 @@ The current version source of truth is `pyproject.toml`.
 
 ## [Unreleased]
 
+## [2.10.5] - 2026-04-16
+
+### Changed
+
+- **Admin UI redesign**: Full two-column control room layout. Warm sidebar (260px, gold left border) with compact now-playing card, 5-bar animated waveform, progress bar, and 2×2 quick-controls grid (Next song / Pause / Shuffle / Banter). Right panel shows a unified "On Air" programme list — past segments dimmed, current row gold-highlighted with NOW badge and inline waveform, upcoming with "— coming up —" Playfair italic divider. Filter pills (All / Music / Banter / Ads). Pacing, Hosts, Station Log, and Engine Room collapse into accordions below. Replaces the old single-column tab layout.
+- **Token cost counter regression fix**: Removed a static `<div id="apiCostEl">` that shadowed the dynamic element injected by `updateEngineRoom()`, preventing the cost display from ever rendering.
+- **Stop/Resume grid fix**: Wrapped Stop and Resume buttons in a `display:contents` cell so toggling between them no longer leaves a visual gap in the 2×2 controls grid.
+- **Accessibility polish**: Keyboard `:focus-visible` ring added to buttons and inputs; control buttons now enforce 44px min-height (36px chips, 32px filter pills) for touch targets; base font-size raised from 15px to 16px (WCAG floor); queue song names raised from 13px to 14px; Home Assistant slider range labels raised from 8px/18% to 9px/32% opacity.
+- **Quick Action labels clarified**: Renamed to action-oriented verbs ("trim" / "force") for immediate comprehension.
+- **Dead code removal**: Dropped unused `btn-skip` CSS; replaced hardcoded hover hex with `color-mix` so hover states follow the accent token.
+
 ## [2.10.4] - 2026-04-16
 
 ### Security

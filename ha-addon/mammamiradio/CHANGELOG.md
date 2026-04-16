@@ -1,5 +1,16 @@
 # Changelog
 
+## 2.10.5
+
+### Changed
+
+- Admin UI redesign: two-column control room layout with warm sidebar, compact now-playing card, waveform/progress, 2×2 quick-controls grid (Next / Pause / Shuffle / Banter), unified "On Air" programme list with NOW badge, and filter pills (All / Music / Banter / Ads). Pacing, Hosts, Station Log, Engine Room collapsed into accordions.
+- Token cost counter regression fix: static element no longer shadows the dynamic Engine Room cost display.
+- Stop/Resume 2×2 grid fix: no more visual gap when toggling Stop↔Resume.
+- Accessibility polish: keyboard `:focus-visible` ring on buttons/inputs, 44px touch-target floor on controls (36px chips, 32px pills), base font-size raised to 16px (WCAG), queue title raised to 14px, HA slider labels raised to 9px/32% opacity.
+- Quick Action labels renamed to action-oriented verbs (trim / force).
+- Dead `btn-skip` CSS removed; hardcoded hover hex replaced with `color-mix` on the accent token.
+
 ## 2.10.4
 
 ### Security
