@@ -36,200 +36,349 @@ html {
     url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='200' height='200' filter='url(%23n)' opacity='0.04'/%3E%3C/svg%3E") repeat,
     linear-gradient(180deg, #1E1610 0%, #14110F 12%, #14110F 100%);
 }
-body {
-  font-family: var(--font-body); color: var(--cream);
-  line-height: 1.5; padding: 0 24px 120px;
-  max-width: 960px; margin: 0 auto;
+
+body { font-family: var(--font-body); color: var(--cream); line-height: 1.5; }
+
+/* ── TWO-COLUMN LAYOUT ── */
+.admin-layout {
+  display: grid;
+  grid-template-columns: 260px 1fr;
+  min-height: 100vh;
+  gap: 0;
 }
-body::before {
-  content: ''; position: fixed; top: -120px; right: 20%; z-index: 0;
-  width: 400px; height: 400px; border-radius: 50%;
-  background: radial-gradient(circle, rgba(244,208,72,0.10) 0%, rgba(236,204,48,0.03) 40%, transparent 70%);
-  pointer-events: none;
+
+/* ── SIDEBAR ── */
+.admin-sidebar {
+  background: #1C1714;
+  border-right: 1px solid rgba(245,237,216,0.08);
+  border-left: 3px solid var(--sun2);
+  padding: 20px 16px;
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
 }
-/* ── HEADER ── */
-.header {
-  position: relative; z-index: 1;
-  display: flex; align-items: flex-start; justify-content: space-between;
-  padding: 24px 0 18px;
-  border-bottom: 1px solid rgba(245,237,216,0.15);
-  margin-bottom: 16px;
-}
-h1 {
+
+.sidebar-station h1 {
   font-family: var(--font-display);
-  font-size: 36px; font-weight: 700; font-style: italic;
-  color: var(--cream); line-height: 0.95;
-  text-shadow: 0 2px 20px rgba(20,17,15,0.4);
+  font-size: 20px; font-weight: 700; font-style: italic;
+  color: var(--cream); line-height: 1.1;
 }
-h1 .mi { color: var(--sun); }
+.sidebar-station h1 .mi { color: var(--sun); }
 .tricolor-stripe {
-  height: 2px; width: 180px; margin-top: 8px; border-radius: 1px;
+  height: 2px; width: 140px; margin-top: 6px; border-radius: 1px;
   background: linear-gradient(90deg, #009246 33%, rgba(255,255,255,0.85) 33%, rgba(255,255,255,0.85) 66%, #CE2B37 66%);
   opacity: 0.6;
 }
-.header-sub {
-  font-family: var(--font-display); font-size: 12px; font-style: italic;
-  color: rgba(245,237,216,0.65); margin-top: 4px;
-}
-.on-air {
-  display: flex; align-items: center; gap: 5px;
-  font-size: 9px; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase;
-  color: var(--cream);
-  padding: 5px 12px; border-radius: 20px;
-  background: rgba(20,17,15,0.5); border: 1px solid rgba(245,237,216,0.15);
-}
-.on-air-dot {
-  width: 6px; height: 6px; border-radius: 50%;
-  background: var(--sun); box-shadow: 0 0 8px var(--sun);
-  animation: blink 1.4s ease-in-out infinite;
-}
-@keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.25} }
 
-/* ── CARDS ── */
-.card {
-  position: relative; z-index: 1;
-  background: var(--sienna);
-  border: 1px solid rgba(245,237,216,0.1);
-  border-top: 1px solid rgba(245,237,216,0.14);
-  border-radius: 10px;
-  padding: 18px 20px;
-  margin-bottom: 12px;
-}
-.card-label {
-  font-size: 9px; font-weight: 600; letter-spacing: 0.18em; text-transform: uppercase;
-  color: rgba(245,237,216,0.45); margin-bottom: 10px;
-}
-.now-card {
-  overflow: visible;
-  border-top: 2px solid rgba(236,204,48,0.5);
-  border-radius: 12px;
-}
-.setup-card { border-top-color: var(--sun); }
-.setup-headline {
+.eyebrow {
   font-family: var(--font-display);
-  font-size: 18px;
-  font-style: italic;
-  margin-bottom: 4px;
-}
-.setup-meta { font-size: 12px; color: rgba(245,237,216,0.72); margin-bottom: 10px; }
-.setup-next {
-  font-size: 12px;
-  color: rgba(245,237,216,0.85);
-  background: rgba(20,17,15,0.35);
-  border: 1px solid rgba(245,237,216,0.1);
-  border-radius: 8px;
-  padding: 8px 10px;
-  margin-bottom: 10px;
-}
-.setup-subhead {
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  color: rgba(245,237,216,0.45);
-  margin: 10px 0 6px;
-}
-.setup-list { display: flex; flex-direction: column; gap: 6px; }
-.setup-row {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 10px;
-  background: rgba(20,17,15,0.2);
-  border: 1px solid rgba(245,237,216,0.08);
-  border-radius: 8px;
-  padding: 8px 10px;
-}
-.setup-title { font-size: 12px; font-weight: 700; color: var(--cream); }
-.setup-detail { font-size: 11px; color: rgba(245,237,216,0.62); margin-top: 2px; line-height: 1.35; }
-.setup-steps { list-style: none; display: flex; flex-direction: column; gap: 6px; margin: 0; padding: 0; }
-.setup-steps li {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
-  font-size: 12px;
-  color: rgba(245,237,216,0.82);
-}
-.setup-step-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  margin-top: 6px;
-  background: rgba(245,237,216,0.3);
-}
-.setup-steps li[data-s="done"] .setup-step-dot { background: var(--ok); }
-.setup-steps li[data-s="todo"] .setup-step-dot { background: var(--warning); }
-.setup-steps li[data-s="blocked"] .setup-step-dot { background: var(--error); }
-.setup-step-shape {
-  font-size: 10px; font-weight: 700; margin-left: auto; padding-left: 8px;
-}
-.setup-steps li[data-s="done"] .setup-step-shape { color: var(--ok); }
-.setup-steps li[data-s="todo"] .setup-step-shape { color: var(--warning); }
-.setup-steps li[data-s="blocked"] .setup-step-shape { color: var(--error); }
-.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
-.setup-actions { margin-top: 10px; display: flex; gap: 8px; flex-wrap: wrap; }
-.setup-keys { display: grid; gap: 8px; margin-top: 8px; }
-.setup-snippet {
-  display: none;
-  margin-top: 10px;
-  background: rgba(20,17,15,0.35);
-  border: 1px solid rgba(245,237,216,0.1);
-  border-radius: 8px;
-  padding: 10px;
-}
-.setup-snippet.show { display: block; }
-.setup-pre {
-  margin-top: 8px;
-  white-space: pre-wrap;
-  word-break: break-word;
-  font-family: var(--font-mono);
-  font-size: 11px;
-  color: rgba(245,237,216,0.82);
+  font-size: 10px; font-style: italic;
+  color: var(--muted);
+  margin: 16px 0 6px;
+  letter-spacing: 0.05em;
 }
 
-/* ── NOW PLAYING CARD ── */
-.now-type {
+/* ── SIDEBAR NOW PLAYING ── */
+.sidebar-now {
+  background: rgba(20,17,15,0.5);
+  border: 1px solid rgba(245,237,216,0.1);
+  border-radius: 8px;
+  padding: 10px 12px;
+  min-height: 90px;
+}
+.sidebar-now .now-type {
   display: inline-block;
-  font-size: 10px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase;
-  padding: 2px 10px; border-radius: 12px;
-  margin-bottom: 8px;
+  font-size: 9px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase;
+  padding: 2px 8px; border-radius: 10px; margin-bottom: 6px;
 }
 .now-type[data-t="music"] { background: rgba(37,99,235,0.2); color: var(--ok); }
 .now-type[data-t="banter"] { background: rgba(244,208,72,0.15); color: var(--sun); }
 .now-type[data-t="ad"] { background: rgba(196,160,74,0.15); color: var(--warning); }
 .now-type[data-t="news_flash"] { background: rgba(224,112,56,0.15); color: var(--news); }
 
-.now-title {
+.sidebar-now .now-title {
   font-family: var(--font-display);
-  font-size: 20px; font-weight: 700; font-style: italic;
-  color: var(--cream); line-height: 1.2; margin-bottom: 4px;
+  font-size: 16px; font-weight: 700; font-style: italic;
+  color: var(--cream); line-height: 1.2; margin-bottom: 2px;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.now-meta {
-  font-size: 12px; color: rgba(245,237,216,0.5);
-  display: flex; align-items: center; gap: 12px; margin-bottom: 12px;
-}
-.now-time {
-  font-variant-numeric: tabular-nums; font-weight: 600; color: var(--sun);
+.sidebar-now .now-artist {
+  font-size: 11px; color: var(--muted); margin-bottom: 8px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 
-/* Progress */
-.progress { height: 4px; background: rgba(20,17,15,0.4); border-radius: 2px; margin-bottom: 16px; overflow: hidden; }
-.progress-fill { height: 100%; border-radius: 2px; transition: width 1s linear; width: 0; }
-.progress-fill[data-t="music"] { background: var(--ok); }
-.progress-fill[data-t="banter"] { background: var(--sun); }
-.progress-fill[data-t="ad"] { background: var(--warning); }
-.progress-fill[data-t="news_flash"] { background: var(--news); }
+/* Waveform animation */
+.sidebar-waveform {
+  display: flex; align-items: flex-end; gap: 2px; height: 14px; margin-bottom: 6px;
+}
+.sw-bar {
+  width: 3px; border-radius: 2px 2px 0 0; background: var(--sun2);
+  animation: sw-bounce 0.8s ease-in-out infinite;
+}
+.sw-bar:nth-child(1) { animation-delay: 0s; }
+.sw-bar:nth-child(2) { animation-delay: 0.12s; }
+.sw-bar:nth-child(3) { animation-delay: 0.24s; }
+.sw-bar:nth-child(4) { animation-delay: 0.36s; }
+.sw-bar:nth-child(5) { animation-delay: 0.48s; }
+@keyframes sw-bounce {
+  0%,100% { height: 4px; opacity: 0.5; }
+  50% { height: 14px; opacity: 1; }
+}
 
-/* ── TRANSPORT BUTTONS ── */
-.transport { display: flex; gap: 8px; flex-wrap: wrap; }
+.sidebar-progress-row {
+  display: flex; align-items: center; gap: 6px;
+}
+.sidebar-progress {
+  flex: 1; height: 2px; background: rgba(20,17,15,0.6); border-radius: 1px; overflow: hidden;
+}
+.sidebar-progress-fill {
+  height: 100%; border-radius: 1px; transition: width 1s linear; width: 0;
+  background: var(--ok);
+}
+.sidebar-progress-fill[data-t="banter"] { background: var(--sun); }
+.sidebar-progress-fill[data-t="ad"] { background: var(--warning); }
+.sidebar-progress-fill[data-t="news_flash"] { background: var(--news); }
+.sidebar-time {
+  font-family: var(--font-mono); font-size: 10px; color: var(--muted);
+  white-space: nowrap;
+}
+
+/* ── SIDEBAR CONTROLS GRID ── */
+.sidebar-controls {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  margin-top: 10px;
+}
+.ctrl-btn {
+  font-family: var(--font-body); font-size: 11px; font-weight: 600;
+  padding: 8px 6px; border-radius: 6px;
+  border: 1px solid rgba(245,237,216,0.15);
+  background: rgba(20,17,15,0.4); color: rgba(245,237,216,0.8);
+  cursor: pointer; text-align: center;
+  transition: background 0.15s, border-color 0.15s, transform 0.1s;
+  user-select: none;
+}
+.ctrl-btn:hover { background: rgba(245,237,216,0.07); border-color: rgba(245,237,216,0.3); color: var(--cream); }
+.ctrl-toggle-cell { display: contents; }
+.ctrl-btn:active { transform: scale(0.95); }
+.ctrl-btn.flash { animation: btn-flash 0.4s ease; }
+@keyframes btn-flash { 0% { box-shadow: 0 0 0 3px rgba(244,208,72,0.5); } 100% { box-shadow: 0 0 0 3px transparent; } }
+.ctrl-btn.danger { border-color: rgba(196,74,74,0.3); color: var(--error); }
+.ctrl-btn.danger:hover { background: rgba(196,74,74,0.15); }
+.ctrl-btn.resume { border-color: rgba(37,99,235,0.4); color: var(--ok); }
+.ctrl-btn.resume:hover { background: rgba(37,99,235,0.15); }
+
+.sidebar-divider {
+  height: 1px; background: rgba(245,237,216,0.08);
+  margin: 14px 0;
+}
+
+/* ── SIDEBAR STATUS ── */
+.sidebar-status {
+  display: flex; align-items: center; gap: 6px;
+  font-size: 11px; color: rgba(245,237,216,0.6);
+}
+.on-air-dot {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--sun); box-shadow: 0 0 8px var(--sun);
+  animation: blink 1.4s ease-in-out infinite;
+  display: inline-block;
+}
+@keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.25} }
+
+.sidebar-bottom {
+  margin-top: auto;
+  padding-top: 14px;
+  border-top: 1px solid rgba(245,237,216,0.06);
+}
+.sidebar-live-line {
+  font-family: var(--font-mono); font-size: 9px;
+  color: rgba(245,237,216,0.35); letter-spacing: 0.04em;
+}
+
+/* ── CONTENT AREA ── */
+.admin-content {
+  background: var(--bg);
+  padding: 24px 28px;
+  min-height: 100vh;
+  overflow-y: auto;
+}
+
+/* ── CONTENT HEADER ── */
+.content-header {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 16px;
+}
+.content-header h2 {
+  font-family: var(--font-display);
+  font-size: 24px; font-weight: 700; font-style: italic;
+  color: var(--cream);
+}
+.content-clock {
+  font-family: var(--font-mono); font-size: 11px;
+  color: var(--muted); text-align: right;
+}
+
+/* ── FILTER PILLS ── */
+.filter-pills {
+  display: flex; align-items: center; gap: 6px;
+  flex-wrap: wrap; margin-bottom: 14px;
+}
+.filter-pill {
+  font-family: var(--font-body); font-size: 11px; font-weight: 600;
+  padding: 4px 12px; border-radius: 20px; border: none;
+  background: rgba(20,17,15,0.5); color: rgba(245,237,216,0.5);
+  border: 1px solid rgba(245,237,216,0.1);
+  cursor: pointer; transition: background 0.15s, color 0.15s;
+  user-select: none;
+}
+.filter-pill:hover { color: var(--cream); border-color: rgba(245,237,216,0.25); }
+.filter-pill.active { background: var(--sun2); color: #14110F; border-color: var(--sun2); }
+.filter-count { font-size: 10px; color: var(--muted); margin-left: auto; font-family: var(--font-mono); }
+
+/* ── STOPPED BANNER ── */
+.stopped-banner {
+  background: rgba(196,74,74,0.2); border: 1px solid rgba(196,74,74,0.4);
+  border-radius: 8px; padding: 10px 14px; margin-bottom: 14px;
+  text-align: center; font-size: 13px; font-weight: 600;
+  color: var(--error); display: none;
+}
+.stopped-banner.show { display: block; }
+
+/* ── PROGRAMME LIST ── */
+.programme-list {
+  display: flex; flex-direction: column;
+  background: rgba(20,17,15,0.3);
+  border: 1px solid rgba(245,237,216,0.08);
+  border-radius: 10px;
+  overflow: hidden;
+  margin-bottom: 16px;
+}
+.prog-row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 0 14px;
+  height: 36px;
+  border-bottom: 1px solid rgba(245,237,216,0.05);
+  position: relative;
+  transition: background 0.15s;
+}
+.prog-row:last-child { border-bottom: none; }
+.prog-row.past { opacity: 0.55; }
+.prog-row.current {
+  height: 44px;
+  background: rgba(244,208,72,0.07);
+}
+.prog-divider {
+  display: flex; align-items: center; justify-content: center;
+  padding: 6px 14px; font-family: var(--font-display);
+  font-size: 11px; font-style: italic; color: var(--muted);
+  border-bottom: 1px solid rgba(245,237,216,0.05);
+  gap: 8px;
+}
+.prog-divider::before, .prog-divider::after {
+  content: ''; flex: 1; height: 1px;
+  background: rgba(245,237,216,0.06);
+}
+.prog-border {
+  position: absolute; left: 0; top: 0; bottom: 0;
+  width: 3px;
+}
+.prog-row[data-type="music"] .prog-border { background: var(--ok); }
+.prog-row[data-type="banter"] .prog-border { background: var(--sun2); }
+.prog-row[data-type="ad"] .prog-border { background: var(--warning); }
+.prog-row[data-type="news_flash"] .prog-border { background: var(--news); }
+
+.prog-badge {
+  font-size: 9px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase;
+  padding: 1px 7px; border-radius: 8px; white-space: nowrap; flex-shrink: 0;
+}
+.prog-row[data-type="music"] .prog-badge { background: rgba(37,99,235,0.2); color: var(--ok); }
+.prog-row[data-type="banter"] .prog-badge { background: rgba(244,208,72,0.15); color: var(--sun); }
+.prog-row[data-type="ad"] .prog-badge { background: rgba(196,160,74,0.15); color: var(--warning); }
+.prog-row[data-type="news_flash"] .prog-badge { background: rgba(224,112,56,0.15); color: var(--news); }
+
+.now-badge {
+  font-size: 9px; font-weight: 700; letter-spacing: 0.1em;
+  color: var(--sun); margin-left: 2px; flex-shrink: 0;
+}
+.prog-info { flex: 1; min-width: 0; display: flex; flex-direction: column; justify-content: center; }
+.prog-title {
+  font-family: var(--font-display); font-size: 13px; font-style: italic;
+  color: var(--cream); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  line-height: 1.3;
+}
+.prog-artist {
+  font-size: 10px; color: var(--muted);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.prog-waveform {
+  display: flex; align-items: flex-end; gap: 2px; height: 12px; flex-shrink: 0;
+}
+.pw-bar {
+  width: 2px; border-radius: 1px; background: var(--sun2);
+  animation: pw-bounce 0.7s ease-in-out infinite;
+}
+.pw-bar:nth-child(1) { animation-delay: 0s; }
+.pw-bar:nth-child(2) { animation-delay: 0.1s; }
+.pw-bar:nth-child(3) { animation-delay: 0.2s; }
+.pw-bar:nth-child(4) { animation-delay: 0.3s; }
+.pw-bar:nth-child(5) { animation-delay: 0.4s; }
+@keyframes pw-bounce {
+  0%,100% { height: 2px; opacity: 0.4; }
+  50% { height: 12px; opacity: 1; }
+}
+.prog-dur {
+  font-family: var(--font-mono); font-size: 10px; color: var(--muted);
+  flex-shrink: 0; min-width: 32px; text-align: right;
+}
+.prog-time {
+  font-family: var(--font-mono); font-size: 10px; color: rgba(245,237,216,0.3);
+  flex-shrink: 0; min-width: 38px; text-align: right;
+}
+.prog-empty { padding: 20px; text-align: center; font-size: 12px; font-style: italic; color: var(--muted); }
+
+/* ── ACCORDION SECTIONS ── */
+.accordion {
+  background: rgba(20,17,15,0.3);
+  border: 1px solid rgba(245,237,216,0.08);
+  border-radius: 10px;
+  margin-bottom: 10px;
+  overflow: hidden;
+}
+.accordion-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 12px 16px; cursor: pointer; user-select: none;
+  transition: background 0.15s;
+}
+.accordion-head:hover { background: rgba(245,237,216,0.03); }
+.accordion-title {
+  font-size: 9px; font-weight: 700; letter-spacing: 0.18em; text-transform: uppercase;
+  color: rgba(245,237,216,0.5);
+}
+.accordion-meta { font-size: 10px; color: rgba(245,237,216,0.35); margin-left: 8px; }
+.accordion-arrow { font-size: 10px; color: rgba(245,237,216,0.3); transition: transform 0.2s; }
+.accordion-head.open .accordion-arrow { transform: rotate(90deg); }
+.accordion-body { display: none; padding: 0 16px 16px; }
+.accordion-body.open { display: block; }
+
+/* ── CARDS (for accordion content) ── */
+.card-label {
+  font-size: 9px; font-weight: 600; letter-spacing: 0.18em; text-transform: uppercase;
+  color: rgba(245,237,216,0.45); margin-bottom: 10px;
+}
+
+/* ── TRANSPORT BUTTONS (full size, for Broadcast Triggers etc.) ── */
 .btn {
   font-family: var(--font-body); font-size: 13px; font-weight: 600;
   padding: 10px 16px; border-radius: 8px; border: none;
   cursor: pointer;
   transition: background 0.15s ease, color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;
   user-select: none;
-  display: flex; align-items: center; gap: 6px;
+  display: inline-flex; align-items: center; gap: 6px;
 }
 .btn:active { transform: scale(0.96); }
 .btn-skip {
@@ -258,33 +407,20 @@ h1 .mi { color: var(--sun); }
   background: rgba(0,0,0,0.2); padding: 1px 5px; border-radius: 3px;
 }
 .btn.flash { animation: btn-flash 0.4s ease; }
-@keyframes btn-flash { 0% { box-shadow: 0 0 0 3px rgba(244,208,72,0.5); } 100% { box-shadow: 0 0 0 3px transparent; } }
+.btn-stop { background: var(--error); color: var(--cream); min-height: 44px; }
+.btn-stop:hover { background: #d45555; }
+.btn-resume { background: var(--ok); color: var(--cream); min-height: 44px; }
+.btn-resume:hover { background: #3b7bff; }
 
-/* ── QUEUE ── */
-.queue-item {
-  display: flex; align-items: center; gap: 10px;
-  padding: 8px 0;
-  border-bottom: 1px solid rgba(245,237,216,0.08);
-}
-.queue-item:last-child { border-bottom: none; }
-.qi-num { font-size: 11px; font-weight: 600; color: rgba(245,237,216,0.35); width: 18px; text-align: right; }
-.qi-badge {
-  font-size: 9px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase;
-  padding: 1px 7px; border-radius: 8px;
-}
-.qi-badge[data-t="music"] { background: rgba(37,99,235,0.2); color: var(--ok); }
-.qi-badge[data-t="banter"] { background: rgba(244,208,72,0.15); color: var(--sun); }
-.qi-badge[data-t="ad"] { background: rgba(196,160,74,0.15); color: var(--warning); }
-.qi-badge[data-t="news_flash"] { background: rgba(224,112,56,0.15); color: var(--news); }
-.qi-label { flex: 1; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.qi-reason { font-size: 10px; color: rgba(245,237,216,0.45); margin-top: 2px; margin-left: 28px; }
-.queue-item.linked { cursor: pointer; }
-.queue-item.linked:hover { background: rgba(245,237,216,0.04); border-radius: 4px; }
+.transport { display: flex; gap: 8px; flex-wrap: wrap; }
 
-/* ── SCRIPT PREVIEW ── */
+/* ── QUICK ACTIONS ── */
+.quick-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+
+/* ── SCRIPT BOX ── */
 .script-box {
   background: rgba(20,17,15,0.3); border: 1px solid rgba(245,237,216,0.08);
-  border-radius: 8px; padding: 12px 14px; margin-top: 10px;
+  border-radius: 8px; padding: 12px 14px;
   font-size: 12px; line-height: 1.6;
   word-wrap: break-word; overflow-wrap: break-word;
   max-height: 160px; overflow-y: auto;
@@ -293,89 +429,10 @@ h1 .mi { color: var(--sun); }
 .script-host[data-h="Marco"] { color: var(--ok); }
 .script-host[data-h="Giulia"] { color: var(--sun); }
 
-/* ── SYSTEMS ── */
-.status-stack { display: flex; flex-direction: column; gap: 4px; }
-.status-row {
-  display: flex; align-items: flex-start; justify-content: space-between; gap: 12px;
-  padding: 8px 0; border-bottom: 1px solid rgba(245,237,216,0.08);
-}
-.status-row:last-child { border-bottom: none; }
-.status-copy { flex: 1; min-width: 0; }
-.status-title { font-size: 12px; font-weight: 700; color: var(--cream); }
-.status-detail { font-size: 11px; color: rgba(245,237,216,0.5); margin-top: 2px; line-height: 1.4; }
-.status-pill {
-  flex-shrink: 0;
-  font-size: 9px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase;
-  padding: 4px 8px; border-radius: 999px;
-}
-.status-pill[data-s="ok"] { background: rgba(37,99,235,0.2); color: var(--ok); }
-.status-pill[data-s="warn"] { background: rgba(244,208,72,0.16); color: var(--sun); }
-.status-pill[data-s="error"] { background: rgba(196,74,74,0.18); color: #ff8c8c; }
-.status-pill[data-s="info"] { background: rgba(245,237,216,0.12); color: rgba(245,237,216,0.75); }
-
-/* ── PLAYLIST ── */
-.search-bar { display: flex; gap: 8px; margin-bottom: 12px; }
-.search-input, .input {
-  flex: 1; font-family: var(--font-body); font-size: 13px;
-  padding: 10px 14px; border-radius: 8px;
-  background: rgba(20,17,15,0.5); color: var(--cream);
-  border: 1px solid rgba(245,237,216,0.12); outline: none;
-  width: 100%; box-sizing: border-box;
-}
-.search-input:focus, .input:focus { border-color: rgba(244,208,72,0.5); }
-.search-input::placeholder, .input::placeholder { color: rgba(245,237,216,0.35); }
-
-.sr-row {
-  display: flex; align-items: center; gap: 8px;
-  padding: 6px 0; font-size: 12px;
-  border-bottom: 1px solid rgba(245,237,216,0.06);
-}
-.sr-add {
-  margin-left: auto; font-size: 10px; font-weight: 600; padding: 3px 10px;
-  border-radius: 4px; background: rgba(244,208,72,0.12); color: var(--sun);
-  border: 1px solid rgba(244,208,72,0.3); cursor: pointer;
-}
-.sr-add:hover { background: rgba(244,208,72,0.22); }
-.sr-add.external { background: rgba(37,99,235,0.12); color: var(--ok); border-color: rgba(37,99,235,0.3); }
-.sr-add.external:hover { background: rgba(37,99,235,0.22); }
-.sr-add.loading { opacity: 0.5; pointer-events: none; }
-.sr-label { font-size: 10px; color: rgba(245,237,216,0.4); margin: 8px 0 4px; letter-spacing: 0.08em; text-transform: uppercase; font-weight: 600; }
-
-.pl-row {
-  display: flex; align-items: center; gap: 8px;
-  padding: 6px 0; border-bottom: 1px solid rgba(245,237,216,0.06);
-  font-size: 12px; transition: background 0.15s;
-}
-.pl-row:hover { background: rgba(245,237,216,0.03); border-radius: 4px; }
-.pl-row.focus { background: rgba(37,99,235,0.22); border-radius: 4px; }
-.pl-row.drag-over { border-top: 2px solid var(--sun); padding-top: 4px; }
-.pl-row.dragging { opacity: 0.4; }
-.pl-grip {
-  cursor: grab; color: rgba(245,237,216,0.25); font-size: 12px; width: 14px; text-align: center;
-  user-select: none; -webkit-user-select: none;
-}
-.pl-grip:active { cursor: grabbing; }
-.pl-n { font-size: 10px; color: rgba(245,237,216,0.3); width: 22px; text-align: right; }
-.pl-t { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.pl-a { display: flex; gap: 4px; opacity: 0; transition: opacity 0.15s; }
-.pl-row:hover .pl-a { opacity: 1; }
-.pl-btn {
-  font-size: 10px; font-weight: 600; padding: 3px 8px; border-radius: 4px;
-  background: rgba(20,17,15,0.5); color: rgba(245,237,216,0.6);
-  border: 1px solid rgba(245,237,216,0.12); cursor: pointer;
-}
-.pl-btn:hover { color: var(--cream); border-color: rgba(245,237,216,0.3); }
-
-/* ── PACING + HOSTS (collapsible) ── */
-.collapse-head {
-  display: flex; align-items: center; justify-content: space-between;
-  cursor: pointer; user-select: none;
-}
-.collapse-arrow { font-size: 10px; color: rgba(245,237,216,0.4); transition: transform 0.2s; }
-.collapse-body { display: none; padding-top: 10px; }
-.collapse-body.open { display: block; }
-.collapse-head.open .collapse-arrow { transform: rotate(90deg); }
-
+/* ── PACING ── */
+.pace-hint { font-size: 10px; color: rgba(245,237,216,0.35); margin-bottom: 4px; }
+.pace-counter { font-size: 10px; color: rgba(245,237,216,0.4); margin-top: 2px; }
+.pace-counter strong { color: var(--sun); font-weight: 600; }
 .pace-row { display: flex; align-items: center; gap: 0; margin-bottom: 6px; }
 .pace-row label { font-size: 12px; color: rgba(245,237,216,0.5); width: 65px; }
 .pace-row input[type="range"] {
@@ -389,11 +446,11 @@ h1 .mi { color: var(--sun); }
 .pace-row input[type="range"]::-webkit-slider-thumb:hover { background: var(--sun); }
 .pace-row .pv { font-size: 13px; font-weight: 600; color: var(--sun); width: 24px; text-align: right; }
 
+/* ── HOSTS ── */
 .host-block { margin-bottom: 14px; padding-bottom: 14px; border-bottom: 1px solid var(--line); }
 .host-block:last-child { margin-bottom: 0; padding-bottom: 0; border-bottom: none; }
 .host-name { font-weight: 700; font-size: 13px; }
 .host-style { font-size: 10px; color: rgba(245,237,216,0.38); margin-bottom: 10px; line-height: 1.4; }
-/* presets */
 .host-presets-label { font-size: 8px; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase; color: rgba(245,237,216,0.25); margin-bottom: 6px; }
 .host-presets { display: flex; gap: 7px; margin-bottom: 14px; }
 .host-preset {
@@ -413,7 +470,6 @@ h1 .mi { color: var(--sun); }
 .preset-axis-labels { display: flex; gap: 2px; justify-content: center; margin-top: 3px; }
 .preset-axis-lbl { width: 5px; font-size: 5.5px; color: rgba(245,237,216,0.18); text-align: center; font-weight: 700; }
 .host-preset.active .preset-axis-lbl { color: rgba(244,208,72,0.36); }
-/* sliders */
 .ha { margin-bottom: 9px; }
 .ha-top { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 4px; }
 .ha-axis { font-size: 9px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; color: rgba(245,237,216,0.4); }
@@ -429,7 +485,7 @@ h1 .mi { color: var(--sun); }
   box-shadow: 0 1px 4px rgba(0,0,0,0.5);
 }
 .ha input[type="range"]::-webkit-slider-thumb:hover { background: var(--sun); }
-/* host preview */
+.ha-labels { display: flex; justify-content: space-between; font-size: 8px; color: rgba(245,237,216,0.18); margin-top: 2px; padding: 0 2px; }
 .host-preview {
   margin-top: 11px; padding: 10px 12px;
   background: rgba(20,17,15,0.65); border-radius: 8px;
@@ -440,11 +496,7 @@ h1 .mi { color: var(--sun); }
 }
 .host-preview-label { font-size: 8px; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase; color: rgba(245,237,216,0.22); margin-bottom: 5px; }
 .host-preview-text { font-size: 12px; font-style: italic; color: var(--cream-dk); line-height: 1.6; font-family: 'Playfair Display', Georgia, serif; transition: opacity 0.2s; min-height: 38px; }
-.host-reset {
-  font-size: 10px; margin-top: 10px; padding: 0;
-  background: transparent; border: none; cursor: pointer;
-  color: rgba(245,237,216,0.28); font-family: inherit; transition: color 0.15s;
-}
+.host-reset { font-size: 10px; margin-top: 10px; padding: 0; background: transparent; border: none; cursor: pointer; color: rgba(245,237,216,0.28); font-family: inherit; transition: color 0.15s; }
 .host-reset:hover { color: var(--error); }
 
 /* ── LOG ── */
@@ -457,19 +509,80 @@ h1 .mi { color: var(--sun); }
 .le-type[data-t="news_flash"] { color: var(--news); }
 .le-label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: rgba(245,237,216,0.7); }
 
-/* ── TOAST ── */
-.toast {
-  position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%) translateY(16px);
-  font-size: 13px; font-weight: 600; padding: 8px 20px;
-  background: var(--sun); color: var(--shadow); border-radius: 8px;
-  opacity: 0; transition: opacity 0.2s ease, transform 0.2s ease; pointer-events: none; z-index: 99;
+/* ── SYSTEMS / STATUS ── */
+.status-stack { display: flex; flex-direction: column; gap: 4px; }
+.status-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding: 8px 0; border-bottom: 1px solid rgba(245,237,216,0.08); }
+.status-row:last-child { border-bottom: none; }
+.status-copy { flex: 1; min-width: 0; }
+.status-title { font-size: 12px; font-weight: 700; color: var(--cream); }
+.status-detail { font-size: 11px; color: rgba(245,237,216,0.5); margin-top: 2px; line-height: 1.4; }
+.status-pill { flex-shrink: 0; font-size: 9px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; padding: 4px 8px; border-radius: 999px; }
+.status-pill[data-s="ok"] { background: rgba(37,99,235,0.2); color: var(--ok); }
+.status-pill[data-s="warn"] { background: rgba(244,208,72,0.16); color: var(--sun); }
+.status-pill[data-s="error"] { background: rgba(196,74,74,0.18); color: #ff8c8c; }
+.status-pill[data-s="info"] { background: rgba(245,237,216,0.12); color: rgba(245,237,216,0.75); }
+
+/* ── SETUP CARD ── */
+.setup-headline { font-family: var(--font-display); font-size: 18px; font-style: italic; margin-bottom: 4px; }
+.setup-meta { font-size: 12px; color: rgba(245,237,216,0.72); margin-bottom: 10px; }
+.setup-next { font-size: 12px; color: rgba(245,237,216,0.85); background: rgba(20,17,15,0.35); border: 1px solid rgba(245,237,216,0.1); border-radius: 8px; padding: 8px 10px; margin-bottom: 10px; }
+.setup-subhead { font-size: 10px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; color: rgba(245,237,216,0.45); margin: 10px 0 6px; }
+.setup-list { display: flex; flex-direction: column; gap: 6px; }
+.setup-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; background: rgba(20,17,15,0.2); border: 1px solid rgba(245,237,216,0.08); border-radius: 8px; padding: 8px 10px; }
+.setup-title { font-size: 12px; font-weight: 700; color: var(--cream); }
+.setup-detail { font-size: 11px; color: rgba(245,237,216,0.62); margin-top: 2px; line-height: 1.35; }
+.setup-steps { list-style: none; display: flex; flex-direction: column; gap: 6px; margin: 0; padding: 0; }
+.setup-steps li { display: flex; align-items: flex-start; gap: 8px; font-size: 12px; color: rgba(245,237,216,0.82); }
+.setup-step-dot { width: 7px; height: 7px; border-radius: 50%; margin-top: 6px; background: rgba(245,237,216,0.3); }
+.setup-steps li[data-s="done"] .setup-step-dot { background: var(--ok); }
+.setup-steps li[data-s="todo"] .setup-step-dot { background: var(--warning); }
+.setup-steps li[data-s="blocked"] .setup-step-dot { background: var(--error); }
+.setup-step-shape { font-size: 10px; font-weight: 700; margin-left: auto; padding-left: 8px; }
+.setup-steps li[data-s="done"] .setup-step-shape { color: var(--ok); }
+.setup-steps li[data-s="todo"] .setup-step-shape { color: var(--warning); }
+.setup-steps li[data-s="blocked"] .setup-step-shape { color: var(--error); }
+.setup-actions { margin-top: 10px; display: flex; gap: 8px; flex-wrap: wrap; }
+.setup-keys { display: grid; gap: 8px; margin-top: 8px; }
+.setup-snippet { display: none; margin-top: 10px; background: rgba(20,17,15,0.35); border: 1px solid rgba(245,237,216,0.1); border-radius: 8px; padding: 10px; }
+.setup-snippet.show { display: block; }
+.setup-pre { margin-top: 8px; white-space: pre-wrap; word-break: break-word; font-family: var(--font-mono); font-size: 11px; color: rgba(245,237,216,0.82); }
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
+
+/* ── PLAYLIST / SEARCH ── */
+.search-bar { display: flex; gap: 8px; margin-bottom: 12px; }
+.search-input, .input {
+  flex: 1; font-family: var(--font-body); font-size: 13px;
+  padding: 10px 14px; border-radius: 8px;
+  background: rgba(20,17,15,0.5); color: var(--cream);
+  border: 1px solid rgba(245,237,216,0.12); outline: none;
+  width: 100%; box-sizing: border-box;
 }
-.toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+.search-input:focus, .input:focus { border-color: rgba(244,208,72,0.5); }
+.search-input::placeholder, .input::placeholder { color: rgba(245,237,216,0.35); }
 
-.empty { font-size: 12px; color: rgba(245,237,216,0.35); text-align: center; padding: 16px 0; font-style: italic; }
-.section-divider { height: 1px; background: rgba(245,237,216,0.08); margin: 4px 0 12px; }
+.sr-row { display: flex; align-items: center; gap: 8px; padding: 6px 0; font-size: 12px; border-bottom: 1px solid rgba(245,237,216,0.06); }
+.sr-add { margin-left: auto; font-size: 10px; font-weight: 600; padding: 3px 10px; border-radius: 4px; background: rgba(244,208,72,0.12); color: var(--sun); border: 1px solid rgba(244,208,72,0.3); cursor: pointer; }
+.sr-add:hover { background: rgba(244,208,72,0.22); }
+.sr-add.external { background: rgba(37,99,235,0.12); color: var(--ok); border-color: rgba(37,99,235,0.3); }
+.sr-add.external:hover { background: rgba(37,99,235,0.22); }
+.sr-add.loading { opacity: 0.5; pointer-events: none; }
+.sr-label { font-size: 10px; color: rgba(245,237,216,0.4); margin: 8px 0 4px; letter-spacing: 0.08em; text-transform: uppercase; font-weight: 600; }
 
-/* ── Listener Requests ── */
+.pl-row { display: flex; align-items: center; gap: 8px; padding: 6px 0; border-bottom: 1px solid rgba(245,237,216,0.06); font-size: 12px; transition: background 0.15s; }
+.pl-row:hover { background: rgba(245,237,216,0.03); border-radius: 4px; }
+.pl-row.focus { background: rgba(37,99,235,0.22); border-radius: 4px; }
+.pl-row.drag-over { border-top: 2px solid var(--sun); padding-top: 4px; }
+.pl-row.dragging { opacity: 0.4; }
+.pl-grip { cursor: grab; color: rgba(245,237,216,0.25); font-size: 12px; width: 14px; text-align: center; user-select: none; -webkit-user-select: none; }
+.pl-grip:active { cursor: grabbing; }
+.pl-n { font-size: 10px; color: rgba(245,237,216,0.3); width: 22px; text-align: right; }
+.pl-t { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pl-a { display: flex; gap: 4px; opacity: 0; transition: opacity 0.15s; }
+.pl-row:hover .pl-a { opacity: 1; }
+.pl-btn { font-size: 10px; font-weight: 600; padding: 3px 8px; border-radius: 4px; background: rgba(20,17,15,0.5); color: rgba(245,237,216,0.6); border: 1px solid rgba(245,237,216,0.12); cursor: pointer; }
+.pl-btn:hover { color: var(--cream); border-color: rgba(245,237,216,0.3); }
+
+/* ── LISTENER REQUESTS ── */
 .lr-item { padding: 8px 0; border-bottom: 1px solid rgba(245,237,216,0.07); }
 .lr-item:last-child { border-bottom: none; }
 .lr-head { display: flex; align-items: center; gap: 6px; margin-bottom: 3px; }
@@ -488,244 +601,202 @@ h1 .mi { color: var(--sun); }
 .lr-searching { background: rgba(244,208,72,0.15); color: var(--sun); }
 .lr-err { background: rgba(184,44,32,0.18); color: var(--error); }
 
-/* ── STOP/RESUME ── */
-.btn-stop { background: var(--error); color: var(--cream); min-height: 44px; }
-.btn-stop:hover { background: #d45555; }
-.btn-resume { background: var(--ok); color: var(--cream); min-height: 44px; }
-.btn-resume:hover { background: #3b7bff; }
-.stopped-banner { background: rgba(196,74,74,0.2); border: 1px solid rgba(196,74,74,0.4); border-radius: 8px; padding: 10px 14px; margin-bottom: 14px; text-align: center; font-size: 13px; font-weight: 600; color: var(--error); display: none; }
-.stopped-banner.show { display: block; }
-
-/* ── PACING HINT ── */
-.pace-hint { font-size: 10px; color: rgba(245,237,216,0.35); margin-bottom: 4px; }
-.pace-counter { font-size: 10px; color: rgba(245,237,216,0.4); margin-top: 2px; }
-.pace-counter strong { color: var(--sun); font-weight: 600; }
-
-/* ── HOST AXIS LABELS ── */
-.ha-labels { display: flex; justify-content: space-between; font-size: 8px; color: rgba(245,237,216,0.18); margin-top: 2px; padding: 0 2px; }
-
-/* ── LIVE DOT ── */
-@keyframes live-pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
-.live-dot { display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--ok);margin-right:6px;vertical-align:middle;animation:live-pulse 2s ease-in-out infinite; }
-
-/* ── FORCE PENDING ── */
+/* ── MISC ── */
+.empty { font-size: 12px; color: rgba(245,237,216,0.35); text-align: center; padding: 16px 0; font-style: italic; }
 .force-badge { font-size: 9px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; padding: 1px 7px; border-radius: 8px; background: rgba(244,208,72,0.2); color: var(--sun); margin-left: 4px; }
+.live-dot { display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--ok);margin-right:6px;vertical-align:middle;animation:live-pulse 2s ease-in-out infinite; }
+@keyframes live-pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
+.section-divider { height: 1px; background: rgba(245,237,216,0.08); margin: 4px 0 12px; }
 
-/* ── PROGRESS LABEL ── */
-.progress-label { font-size: 9px; color: rgba(245,237,216,0.3); text-align: right; margin-top: 2px; }
+/* ── TOAST ── */
+.toast {
+  position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%) translateY(16px);
+  font-size: 13px; font-weight: 600; padding: 8px 20px;
+  background: var(--sun); color: var(--shadow); border-radius: 8px;
+  opacity: 0; transition: opacity 0.2s ease, transform 0.2s ease; pointer-events: none; z-index: 99;
+}
+.toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
 
-/* ── TABS ── */
-.tab-nav { display: flex; gap: 2px; margin-bottom: 16px; position: relative; z-index: 1; }
-.tab-btn {
-  padding: 6px 18px; border-radius: 4px; border: none;
-  background: transparent; color: rgba(245,237,216,0.45);
-  font-family: var(--font-body); font-size: 13px; font-weight: 600;
-  cursor: pointer; letter-spacing: 0.05em; text-transform: uppercase;
-  transition: background 0.15s ease, color 0.15s ease; position: relative;
-}
-.tab-btn.active {
-  background: rgba(244,208,72,0.12); color: var(--sun);
-  border-bottom: 2px solid var(--sun);
-}
-.tab-btn .tab-alert {
-  display: none; position: absolute; top: 4px; right: 4px;
-  width: 6px; height: 6px; border-radius: 50%;
-  background: var(--warning);
-}
-.tab-btn.needs-attention .tab-alert { display: block; }
-.tab-pane { display: none; }
-.tab-pane.active { display: block; }
+/* ── COLLAPSE (legacy, kept for accordion content that uses toggleSection) ── */
+.collapse-head { display: flex; align-items: center; justify-content: space-between; cursor: pointer; user-select: none; }
+.collapse-arrow { font-size: 10px; color: rgba(245,237,216,0.4); transition: transform 0.2s; }
+.collapse-body { display: none; padding-top: 10px; }
+.collapse-body.open { display: block; }
+.collapse-head.open .collapse-arrow { transform: rotate(90deg); }
 
+/* ── QUEUE ITEM (kept for queue fallback display) ── */
+.queue-item { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid rgba(245,237,216,0.08); }
+.queue-item:last-child { border-bottom: none; }
+.qi-num { font-size: 11px; font-weight: 600; color: rgba(245,237,216,0.35); width: 18px; text-align: right; }
+.qi-badge { font-size: 9px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; padding: 1px 7px; border-radius: 8px; }
+.qi-badge[data-t="music"] { background: rgba(37,99,235,0.2); color: var(--ok); }
+.qi-badge[data-t="banter"] { background: rgba(244,208,72,0.15); color: var(--sun); }
+.qi-badge[data-t="ad"] { background: rgba(196,160,74,0.15); color: var(--warning); }
+.qi-badge[data-t="news_flash"] { background: rgba(224,112,56,0.15); color: var(--news); }
+.qi-label { flex: 1; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.qi-reason { font-size: 10px; color: rgba(245,237,216,0.45); margin-top: 2px; margin-left: 28px; }
+.queue-item.linked { cursor: pointer; }
+.queue-item.linked:hover { background: rgba(245,237,216,0.04); border-radius: 4px; }
+
+/* ── RESPONSIVE ── */
 @media (prefers-reduced-motion: reduce) {
-  *, *::before, *::after {
-    animation-duration: 0.01ms !important;
-    animation-iteration-count: 1 !important;
-    transition-duration: 0.01ms !important;
-  }
+  *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; }
 }
 
-@media (max-width: 640px) {
-  .header {
-    flex-direction: column;
-    align-items: flex-start;
+@media (max-width: 768px) {
+  .admin-layout {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto 1fr;
   }
-
-  .on-air {
-    align-self: flex-start;
+  .admin-sidebar {
+    position: static;
+    height: auto;
+    border-left: none;
+    border-bottom: 1px solid rgba(245,237,216,0.08);
+    border-top: 3px solid var(--sun2);
   }
-
-  .transport,
-  .search-bar,
-  .pace-row,
-  .sr-row,
-  .pl-row,
-  .queue-item,
-  .log-entry {
-    align-items: flex-start;
-  }
-
-  .search-bar {
-    flex-direction: column;
-  }
-
-  .search-bar .btn,
-  .transport .btn-skip,
-  .transport .btn-stop,
-  .transport .btn-resume {
-    width: 100%;
-  }
-  .transport .btn-util {
-    flex: 1 1 auto;
-    min-width: 0;
-    font-size: 0.78em;
-    padding: 0.35rem 0.4rem;
-  }
-
-  .pl-row,
-  .sr-row,
-  .queue-item {
-    flex-wrap: wrap;
-  }
-
-  .pl-a {
-    width: 100%;
-    padding-left: 30px;
-    opacity: 1;
-  }
-
-  .force-badge {
-    margin-left: 28px;
-  }
-}
-
-/* Column wrappers are transparent on mobile — cards flow as normal block elements */
-.radio-col-left, .radio-col-right { display: contents; }
-
-@media (min-width: 960px) {
-  body { padding: 0 40px 120px; }
-  .tab-pane[data-tab="radio"].active {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 0 20px;
-    align-items: start;
-  }
-  /* Restore wrappers as block grid cells at desktop width */
-  .radio-col-left, .radio-col-right { display: block; }
+  .admin-content { padding: 16px 16px; }
+  .sidebar-bottom { margin-top: 14px; }
+  .search-bar { flex-direction: column; }
+  .search-bar .btn, .transport .btn-skip, .transport .btn-stop, .transport .btn-resume { width: 100%; }
+  .transport .btn-util { flex: 1 1 auto; min-width: 0; font-size: 0.78em; padding: 0.35rem 0.4rem; }
+  .pl-row, .sr-row, .queue-item { flex-wrap: wrap; }
+  .pl-a { width: 100%; padding-left: 30px; opacity: 1; }
+  .force-badge { margin-left: 28px; }
 }
 </style>
 </head>
 <body>
 
-<!-- HEADER -->
-<div class="header">
-  <div>
-    <h1>Mamma <span class="mi">Mi</span> Radio</h1>
-    <div class="tricolor-stripe"></div>
-    <div class="header-sub">Regia — Control Room</div>
-  </div>
-  <div class="on-air" id="onAirBadge"><span class="on-air-dot"></span>ON AIR</div>
-</div>
+<div class="admin-layout">
 
-<div class="stopped-banner" id="stoppedBanner" role="alert">&#9632; Session stopped — hit Resume to continue.</div>
+  <!-- ══════════════════ SIDEBAR ══════════════════ -->
+  <aside class="admin-sidebar">
 
-<!-- NOW PLAYING — always visible above tabs -->
-<div class="card now-card">
-  <div class="card-label">Now Playing</div>
-  <div class="now-type" id="nowType" data-t="music">—</div>
-  <div class="now-title" id="nowTitle">Waiting for signal...</div>
-  <div class="now-meta">
-    <span class="now-time" id="nowTime">—</span>
-    <span id="nowElapsed" style="font-variant-numeric:tabular-nums"></span>
-  </div>
-  <div class="progress"><div class="progress-fill" id="progFill" data-t="music"></div></div>
-  <div class="progress-label" id="progLabel">estimated</div>
-  <div class="transport">
-    <button class="btn btn-skip" onclick="doSkip(this)">&#9197; SKIP <span class="key">S</span></button>
-    <button class="btn btn-stop" id="stopBtn" onclick="doStop(this)">&#9632; Stop</button>
-    <button class="btn btn-resume" id="resumeBtn" onclick="doResume(this)" style="display:none">&#9654; Resume</button>
-  </div>
-  <!-- prompt() is intentional here: flag is an operator-only action, browser dialog is acceptable -->
-  <div class="transport" style="margin-top:6px">
-    <button class="btn btn-util" onclick="doShuffle(this)">&#128256; Shuffle</button>
-    <button class="btn btn-util" onclick="doPurge(this)">&#128465; Purge</button>
-    <button class="btn btn-util" onclick="flagCurrentTrack(this)">&#128681; Flag</button>
-  </div>
-</div>
-
-<!-- TAB NAV -->
-<div class="tab-nav" role="tablist" aria-label="Admin panels">
-  <button class="tab-btn" role="tab" aria-selected="true" aria-controls="tab-panel-music" id="tab-music" data-tab="music" onclick="switchTab('music')">Music</button>
-  <button class="tab-btn" role="tab" aria-selected="false" aria-controls="tab-panel-radio" id="tab-radio" data-tab="radio" onclick="switchTab('radio')">Radio</button>
-  <button class="tab-btn" role="tab" aria-selected="false" aria-controls="tab-panel-engine" id="tab-engine" data-tab="engine" onclick="switchTab('engine')">Engine Room<span class="tab-alert" aria-hidden="true"></span></button>
-</div>
-
-<!-- TAB: MUSIC -->
-<div class="tab-pane" role="tabpanel" id="tab-panel-music" aria-labelledby="tab-music" data-tab="music">
-
-  <!-- UP NEXT -->
-  <div class="card">
-    <div class="card-label"><span class="live-dot" id="queueLiveDot"></span>Up Next <span id="queueMeta" style="float:right;font-weight:400"></span></div>
-    <div id="queueBody"><div class="empty">Waiting...</div></div>
-  </div>
-
-  <!-- LISTENER REQUESTS -->
-  <div class="card">
-    <div class="card-label">Listener Requests <span id="lrMeta" style="float:right;font-weight:400;color:var(--muted)"></span></div>
-    <div id="lrBody"><div class="empty">No requests yet — listeners can send song requests or shoutouts from the radio page</div></div>
-  </div>
-
-  <!-- PLAYLIST -->
-  <div class="card">
-    <div class="card-label">Playlist <span id="plMeta" style="float:right;font-weight:400"></span></div>
-    <div class="search-bar">
-      <input type="text" class="search-input" id="searchInput" placeholder="Search music (playlist + web)..." autocomplete="off">
-      <button class="btn btn-util" onclick="doSearch()">Search</button>
+    <!-- Station header -->
+    <div class="sidebar-station">
+      <h1>Mamma <span class="mi">Mi</span> Radio</h1>
+      <div class="tricolor-stripe"></div>
+      <span class="sr-only">Regia — Control Room</span>
     </div>
-    <div id="searchResults"></div>
-    <div id="plBody" style="max-height:400px;overflow-y:auto;overflow-x:hidden"></div>
-  </div>
 
-</div><!-- /tab music -->
+    <!-- ora in onda label -->
+    <p class="eyebrow">ora in onda</p>
 
-<!-- TAB: RADIO -->
-<div class="tab-pane" role="tabpanel" id="tab-panel-radio" aria-labelledby="tab-radio" data-tab="radio">
-
-  <div class="radio-col-right">
-
-    <!-- TRIGGERS -->
-    <div class="card">
-      <div class="card-label">Broadcast Triggers</div>
-      <div class="transport">
-        <button class="btn btn-trigger" onclick="doTrigger('banter',this)">&#127897; Banter <span class="key">B</span></button>
-        <button class="btn btn-trigger" onclick="doTrigger('ad',this)">&#128226; Ad <span class="key">A</span></button>
-        <button class="btn btn-trigger" onclick="doTrigger('news_flash',this)">&#9889; News <span class="key">N</span></button>
+    <!-- Now-playing compact card -->
+    <div class="sidebar-now">
+      <div class="now-type" id="nowType" data-t="music">—</div>
+      <div class="now-title" id="nowTitle">Waiting for signal...</div>
+      <div class="now-artist" id="nowArtist"></div>
+      <div class="sidebar-waveform" id="sidebarWaveform">
+        <div class="sw-bar"></div>
+        <div class="sw-bar"></div>
+        <div class="sw-bar"></div>
+        <div class="sw-bar"></div>
+        <div class="sw-bar"></div>
+      </div>
+      <div class="sidebar-progress-row">
+        <div class="sidebar-progress">
+          <div class="sidebar-progress-fill" id="progFill" data-t="music"></div>
+        </div>
+        <span class="sidebar-time" id="nowElapsed">—</span>
       </div>
     </div>
 
-    <!-- QUICK ACTIONS -->
-    <div class="card">
-      <div class="card-label">Quick Actions</div>
-      <div class="transport" style="flex-wrap:wrap;gap:6px">
-        <button class="btn btn-chip" onclick="doQuickAction('less_banter',this)" title="Increase songs between banter">&#128266; Less banter</button>
-        <button class="btn btn-chip" onclick="doQuickAction('more_chaos',this)" title="Trigger an unscheduled banter now">&#127775; More chaos</button>
-        <button class="btn btn-chip" onclick="doQuickAction('too_many_ads',this)" title="Increase songs between ad breaks">&#128561; Too many ads</button>
-        <button class="btn btn-chip" onclick="doQuickAction('hot_reload',this)" title="Reload scriptwriter.py without stopping the stream">&#9654;&#65039; Hot reload</button>
+    <!-- 2×2 controls grid -->
+    <div class="sidebar-controls">
+      <button class="ctrl-btn" onclick="doSkip(this)">&#9197; Next song</button>
+      <div class="ctrl-toggle-cell">
+        <button class="ctrl-btn" id="stopBtn" onclick="doStop(this)">&#9632; Pause</button>
+        <button class="ctrl-btn" id="resumeBtn" onclick="doResume(this)" style="display:none">&#9654; Resume</button>
+      </div>
+      <button class="ctrl-btn" onclick="doShuffle(this)">&#128256; Shuffle</button>
+      <button class="ctrl-btn" onclick="doTrigger('banter',this)">&#127897; Banter</button>
+    </div>
+
+    <div class="sidebar-divider"></div>
+
+    <!-- Status -->
+    <div class="sidebar-status">
+      <span class="on-air-dot" id="onAirDot"></span>
+      <span id="onAirBadge">Live</span>
+      <span style="margin-left:auto;font-family:var(--font-mono);font-size:10px;color:var(--muted)" id="sidebarUptime">—</span>
+    </div>
+
+    <!-- Bottom sticky line -->
+    <div class="sidebar-bottom">
+      <div class="sidebar-live-line" id="sidebarLiveLine">&#9679; Live</div>
+    </div>
+
+  </aside>
+
+  <!-- ══════════════════ CONTENT ══════════════════ -->
+  <main class="admin-content">
+
+    <div class="stopped-banner" id="stoppedBanner" role="alert">&#9632; Session stopped — hit Resume to continue.</div>
+
+    <!-- Content header -->
+    <div class="content-header">
+      <h2>On Air</h2>
+      <div class="content-clock" id="contentClock"></div>
+    </div>
+
+    <!-- Filter pills -->
+    <div class="filter-pills">
+      <button class="filter-pill active" data-filter="all" onclick="setProgrammeFilter('all',this)">All</button>
+      <button class="filter-pill" data-filter="music" onclick="setProgrammeFilter('music',this)">Music</button>
+      <button class="filter-pill" data-filter="banter" onclick="setProgrammeFilter('banter',this)">Banter</button>
+      <button class="filter-pill" data-filter="ad" onclick="setProgrammeFilter('ad',this)">Ads</button>
+      <span class="filter-count" id="programmeCount"></span>
+    </div>
+
+    <!-- Unified programme list -->
+    <div class="programme-list" id="programmeList">
+      <div class="prog-empty">Loading programme...</div>
+    </div>
+
+    <!-- ── ACCORDION: BROADCAST TRIGGERS ── -->
+    <div class="accordion">
+      <div class="accordion-head open" onclick="toggleAccordion(this)">
+        <span><span class="accordion-title">Broadcast Triggers</span></span>
+        <span class="accordion-arrow">&#9658;</span>
+      </div>
+      <div class="accordion-body open">
+        <div class="transport" style="margin-bottom:10px">
+          <button class="btn btn-trigger" onclick="doTrigger('banter',this)">&#127897; Banter <span class="key">B</span></button>
+          <button class="btn btn-trigger" onclick="doTrigger('ad',this)">&#128226; Ad <span class="key">A</span></button>
+          <button class="btn btn-trigger" onclick="doTrigger('news_flash',this)">&#9889; News <span class="key">N</span></button>
+        </div>
+        <div class="card-label" style="margin-top:10px">Quick Actions</div>
+        <div class="quick-actions">
+          <button class="btn btn-chip" onclick="doQuickAction('less_banter',this)" title="Increase songs between banter">&#128266; Less banter</button>
+          <button class="btn btn-chip" onclick="doQuickAction('more_chaos',this)" title="Trigger an unscheduled banter now">&#127775; More chaos</button>
+          <button class="btn btn-chip" onclick="doQuickAction('too_many_ads',this)" title="Increase songs between ad breaks">&#128561; Too many ads</button>
+          <button class="btn btn-chip" onclick="doQuickAction('hot_reload',this)" title="Reload scriptwriter.py without stopping the stream">&#9654;&#65039; Hot reload</button>
+        </div>
+        <div class="card-label" style="margin-top:14px">More Controls</div>
+        <div class="transport">
+          <button class="btn btn-util" onclick="doPurge(this)">&#128465; Purge queue</button>
+          <!-- prompt() is intentional here: flag is an operator-only action, browser dialog is acceptable -->
+          <button class="btn btn-util" onclick="flagCurrentTrack(this)">&#128681; Flag track</button>
+        </div>
+        <div style="margin-top:10px">
+          <div class="card-label">Last Break</div>
+          <div class="script-box" id="recentBody"><div class="empty">Nothing aired yet</div></div>
+        </div>
       </div>
     </div>
 
-    <!-- LAST BREAK -->
-    <div class="card">
-      <div class="card-label">Last Break</div>
-      <div class="script-box" id="recentBody"><div class="empty">Nothing aired yet</div></div>
-    </div>
-
-    <!-- PACING -->
-    <div class="card">
-      <div class="collapse-head" onclick="toggleSection(this)">
-        <span class="card-label" style="margin-bottom:0">Pacing</span>
-        <span class="collapse-arrow">&#9658;</span>
+    <!-- ── ACCORDION: PACING ── -->
+    <div class="accordion">
+      <div class="accordion-head" onclick="toggleAccordion(this)">
+        <span>
+          <span class="accordion-title">Pacing</span>
+          <span class="accordion-meta" id="pacingMeta">4 music · 1 banter</span>
+        </span>
+        <span class="accordion-arrow">&#9658;</span>
       </div>
-      <div class="collapse-body">
+      <div class="accordion-body">
         <div class="pace-hint">Higher = more songs between segments (less frequent)</div>
         <div class="pace-row"><label>Banter</label><input type="range" id="pBanter" min="1" max="6" value="2"><span class="pv" id="pvBanter">2</span></div>
         <div class="pace-counter" id="pcBanter"></div>
@@ -735,103 +806,124 @@ h1 .mi { color: var(--sun); }
       </div>
     </div>
 
-    <!-- HOSTS -->
-    <div class="card">
-      <div class="collapse-head" onclick="toggleSection(this)">
-        <span class="card-label" style="margin-bottom:0">Host Personality</span>
-        <span class="collapse-arrow">&#9658;</span>
+    <!-- ── ACCORDION: HOSTS ── -->
+    <div class="accordion">
+      <div class="accordion-head" onclick="toggleAccordion(this)">
+        <span>
+          <span class="accordion-title">Hosts</span>
+          <span class="accordion-meta" id="hostsMeta">Marco, Giulia</span>
+        </span>
+        <span class="accordion-arrow">&#9658;</span>
       </div>
-      <div class="collapse-body">
+      <div class="accordion-body">
         <div id="hostsBody"></div>
       </div>
     </div>
 
-    <!-- LOG -->
-    <div class="card">
-      <div class="collapse-head" onclick="toggleSection(this)">
-        <span class="card-label" style="margin-bottom:0">Station Log</span>
-        <span class="collapse-arrow">&#9658;</span>
+    <!-- ── ACCORDION: MUSIC ── -->
+    <div class="accordion">
+      <div class="accordion-head" onclick="toggleAccordion(this)">
+        <span>
+          <span class="accordion-title">Music</span>
+          <span class="accordion-meta" id="plMeta"></span>
+        </span>
+        <span class="accordion-arrow">&#9658;</span>
       </div>
-      <div class="collapse-body" id="logBody" style="max-height:200px;overflow-y:auto"></div>
-    </div>
-
-  </div><!-- /radio-col-right -->
-
-</div><!-- /tab radio -->
-
-<!-- TAB: ENGINE ROOM -->
-<div class="tab-pane" role="tabpanel" id="tab-panel-engine" aria-labelledby="tab-engine" data-tab="engine">
-
-  <!-- INSTALL ONBOARDING -->
-  <div class="card setup-card">
-    <div class="card-label">Installation Onboarding</div>
-    <div class="setup-headline" id="setupHeadline">Checking setup status...</div>
-    <div class="setup-meta" id="setupMeta"></div>
-    <div class="setup-next" id="setupNext">Collecting first-run diagnostics.</div>
-
-    <div class="setup-subhead">Step Checklist</div>
-    <ul class="setup-steps" id="setupSteps"></ul>
-
-    <div class="setup-subhead">Essentials</div>
-    <div class="setup-list" id="setupEssentials"></div>
-
-    <div class="setup-subhead">Preflight Checks</div>
-    <div class="setup-list" id="setupChecks"></div>
-
-    <div id="setupKeysConfigured" style="display:none;padding:0.75rem 1rem;background:rgba(37,99,235,0.1);border:1px solid rgba(37,99,235,0.3);border-radius:8px;margin-bottom:0.75rem">
-      <span style="color:var(--ok);font-weight:600" id="setupKeysLabel">&#10003; AI keys configured</span>
-      <span style="opacity:0.7;margin-left:0.5rem;font-size:0.85em" id="setupKeysDetail"></span>
-      <button class="btn btn-util" style="margin-left:0.75rem;font-size:0.8em;padding:0.2rem 0.6rem" onclick="_keysEditMode=true;document.getElementById('setupKeysForm').style.display='block'">Replace</button>
-    </div>
-    <div id="setupKeysForm">
-      <div class="setup-subhead">Save Keys</div>
-      <div class="setup-keys">
-        <input class="input" id="setupAnthropicKey" type="password" placeholder="ANTHROPIC_API_KEY (optional)" autocomplete="off">
-        <input class="input" id="setupOpenaiKey" type="password" placeholder="OPENAI_API_KEY (optional)" autocomplete="off">
-      </div>
-      <div class="setup-actions" style="margin-top:10px">
-        <button class="btn btn-trigger" id="setupSaveBtn" onclick="setupSaveKeys(this)">Save Keys</button>
+      <div class="accordion-body">
+        <div class="card-label">Listener Requests <span id="lrMeta" style="float:right;font-weight:400;color:var(--muted)"></span></div>
+        <div id="lrBody" style="margin-bottom:14px"><div class="empty">No requests yet</div></div>
+        <div class="card-label">Playlist</div>
+        <div class="search-bar">
+          <input type="text" class="search-input" id="searchInput" placeholder="Search music (playlist + web)..." autocomplete="off">
+          <button class="btn btn-util" onclick="doSearch()">Search</button>
+        </div>
+        <div id="searchResults"></div>
+        <div id="plBody" style="max-height:400px;overflow-y:auto;overflow-x:hidden"></div>
       </div>
     </div>
 
-    <div class="setup-actions">
-      <button class="btn btn-util" onclick="setupRecheck(this)">Re-check</button>
+    <!-- ── ACCORDION: STATION LOG ── -->
+    <div class="accordion">
+      <div class="accordion-head" onclick="toggleAccordion(this)">
+        <span><span class="accordion-title">Station Log</span></span>
+        <span class="accordion-arrow">&#9658;</span>
+      </div>
+      <div class="accordion-body">
+        <div id="logBody" style="max-height:200px;overflow-y:auto"></div>
+      </div>
     </div>
 
-    <div class="setup-snippet" id="setupSnippetWrap">
-      <div class="setup-subhead" style="margin-top:0">Home Assistant Add-on Snippet</div>
-      <button class="btn btn-util" onclick="copySetupSnippet()">Copy Snippet</button>
-      <pre class="setup-pre" id="setupSnippet"></pre>
+    <!-- ── ACCORDION: ENGINE ROOM ── -->
+    <div class="accordion">
+      <div class="accordion-head" onclick="toggleAccordion(this)">
+        <span><span class="accordion-title">Engine Room</span><span class="tab-alert" aria-hidden="true" id="engineAlertDot" style="display:none;width:6px;height:6px;border-radius:50%;background:var(--warning);margin-left:6px;vertical-align:middle;display:none"></span></span>
+        <span class="accordion-arrow">&#9658;</span>
+      </div>
+      <div class="accordion-body">
+
+        <!-- Systems -->
+        <div class="card-label">Systems</div>
+        <div class="status-stack" id="systemsBody" style="margin-bottom:14px"><div class="empty">Checking AI and music systems...</div></div>
+
+        <!-- Runtime — token cost counter lives here -->
+        <div class="card-label">Runtime</div>
+        <div id="engineRuntime" style="font-family:var(--font-mono);font-size:12px;line-height:1.8;color:var(--text-secondary);margin-bottom:14px">Loading...</div>
+
+        <!-- Segment counts -->
+        <div class="card-label">Segment Counts</div>
+        <div id="engineSegments" style="font-family:var(--font-mono);font-size:12px;line-height:1.8;color:var(--text-secondary);margin-bottom:14px"></div>
+
+        <!-- Capabilities -->
+        <div class="card-label">Capabilities</div>
+        <div id="engineCaps" style="font-family:var(--font-mono);font-size:12px;line-height:1.8;color:var(--text-secondary);margin-bottom:14px"></div>
+
+        <!-- HA Context -->
+        <div id="ha-details-card" style="display:none">
+          <div class="card-label">HA Context</div>
+          <div id="haDetails" style="font-family:var(--font-mono);font-size:12px;line-height:1.8;color:var(--text-secondary);margin-bottom:14px"></div>
+        </div>
+
+        <!-- Installation onboarding -->
+        <div class="card-label">Installation Onboarding</div>
+        <div class="setup-headline" id="setupHeadline">Checking setup status...</div>
+        <div class="setup-meta" id="setupMeta"></div>
+        <div class="setup-next" id="setupNext">Collecting first-run diagnostics.</div>
+        <div class="setup-subhead">Step Checklist</div>
+        <ul class="setup-steps" id="setupSteps"></ul>
+        <div class="setup-subhead">Essentials</div>
+        <div class="setup-list" id="setupEssentials"></div>
+        <div class="setup-subhead">Preflight Checks</div>
+        <div class="setup-list" id="setupChecks"></div>
+        <div id="setupKeysConfigured" style="display:none;padding:0.75rem 1rem;background:rgba(37,99,235,0.1);border:1px solid rgba(37,99,235,0.3);border-radius:8px;margin-bottom:0.75rem">
+          <span style="color:var(--ok);font-weight:600" id="setupKeysLabel">&#10003; AI keys configured</span>
+          <span style="opacity:0.7;margin-left:0.5rem;font-size:0.85em" id="setupKeysDetail"></span>
+          <button class="btn btn-util" style="margin-left:0.75rem;font-size:0.8em;padding:0.2rem 0.6rem" onclick="_keysEditMode=true;document.getElementById('setupKeysForm').style.display='block'">Replace</button>
+        </div>
+        <div id="setupKeysForm">
+          <div class="setup-subhead">Save Keys</div>
+          <div class="setup-keys">
+            <input class="input" id="setupAnthropicKey" type="password" placeholder="ANTHROPIC_API_KEY (optional)" autocomplete="off">
+            <input class="input" id="setupOpenaiKey" type="password" placeholder="OPENAI_API_KEY (optional)" autocomplete="off">
+          </div>
+          <div class="setup-actions" style="margin-top:10px">
+            <button class="btn btn-trigger" id="setupSaveBtn" onclick="setupSaveKeys(this)">Save Keys</button>
+          </div>
+        </div>
+        <div class="setup-actions">
+          <button class="btn btn-util" onclick="setupRecheck(this)">Re-check</button>
+        </div>
+        <div class="setup-snippet" id="setupSnippetWrap">
+          <div class="setup-subhead" style="margin-top:0">Home Assistant Add-on Snippet</div>
+          <button class="btn btn-util" onclick="copySetupSnippet()">Copy Snippet</button>
+          <pre class="setup-pre" id="setupSnippet"></pre>
+        </div>
+
+      </div>
     </div>
-  </div>
 
-  <!-- SYSTEMS -->
-  <div class="card">
-    <div class="card-label">Systems</div>
-    <div class="status-stack" id="systemsBody"><div class="empty">Checking AI and music systems...</div></div>
-  </div>
+  </main>
 
-  <div class="card">
-    <div class="card-label">Runtime</div>
-    <div id="engineRuntime" style="font-family:var(--font-mono);font-size:12px;line-height:1.8;color:var(--text-secondary)">Loading...</div>
-  </div>
-
-  <div class="card">
-    <div class="card-label">Segment Counts</div>
-    <div id="engineSegments" style="font-family:var(--font-mono);font-size:12px;line-height:1.8;color:var(--text-secondary)"></div>
-  </div>
-
-  <div class="card">
-    <div class="card-label">Capabilities</div>
-    <div id="engineCaps" style="font-family:var(--font-mono);font-size:12px;line-height:1.8;color:var(--text-secondary)"></div>
-  </div>
-
-  <div class="card" id="ha-details-card" style="display:none">
-    <div class="card-label">HA Context</div>
-    <div id="haDetails" style="font-family:var(--font-mono);font-size:12px;line-height:1.8;color:var(--text-secondary)"></div>
-  </div>
-
-</div><!-- /tab engine -->
+</div><!-- /admin-layout -->
 
 <div class="toast" id="toast"></div>
 
@@ -840,9 +932,9 @@ const _csrf = document.querySelector('meta[name="mammamiradio-csrf-token"]')?.co
 const H = () => ({'Content-Type':'application/json','X-Radio-CSRF-Token':_csrf});
 let _st={}, _pub={}, _caps={}, _hostsOk=false, _paceOk=false, _searchTo=null, _keysEditMode=false;
 let _nowStart=0, _nowDur=0, _tick=null, _prevLabel='';
+let _programmeFilter='all';
 const SHAPE={ok:'✓',warn:'△',error:'✕',info:'·'};
 const SEGMENT_GLYPH={music:'♪',banter:'🎙',ad:'[Ad]',news_flash:'[!]'};
-const _radioTabBtn=document.querySelector('.tab-btn[data-tab="engine"]');
 let _lastSetupJson=null;
 
 function toast(m){const e=document.getElementById('toast');e.textContent=m;e.classList.add('show');setTimeout(()=>e.classList.remove('show'),1600)}
@@ -855,16 +947,26 @@ function segmentBadge(type){return `${segmentGlyph(type)} ${segmentText(type)}`}
 
 async function api(m,p,b){const o={method:m,headers:H()};if(b)o.body=JSON.stringify(b);return(await fetch(p,o)).json()}
 
-// ── Tab switching ──
-function switchTab(name) {
-  document.querySelectorAll('.tab-btn').forEach(b => {
-    const active = b.dataset.tab === name;
-    b.classList.toggle('active', active);
-    b.setAttribute('aria-selected', active ? 'true' : 'false');
-  });
-  document.querySelectorAll('.tab-pane').forEach(p => p.classList.toggle('active', p.dataset.tab === name));
-  localStorage.setItem('adminTab', name);
+// ── Clock ──
+function updateClock(){
+  const now=new Date();
+  const d=now.toLocaleDateString('it-IT',{weekday:'short',day:'numeric',month:'short'});
+  const t=now.toLocaleTimeString('it-IT',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
+  const el=document.getElementById('contentClock');
+  if(el)el.innerHTML=d+'<br>'+t;
 }
+setInterval(updateClock,1000);
+updateClock();
+
+// ── Accordion ──
+function toggleAccordion(head){
+  head.classList.toggle('open');
+  const body=head.nextElementSibling;
+  if(body)body.classList.toggle('open');
+}
+
+// ── Legacy collapse (used in dynamically rendered content) ──
+function toggleSection(head){head.classList.toggle('open');head.nextElementSibling.classList.toggle('open')}
 
 // ── Transport ──
 async function doSkip(el){flash(el);await api('POST','/api/skip');toast('Skipped — advancing to next segment')}
@@ -900,7 +1002,14 @@ function updateStopState(stopped){
   document.getElementById('stopBtn').style.display=stopped?'none':'';
   document.getElementById('resumeBtn').style.display=stopped?'':'none';
   const badge=document.getElementById('onAirBadge');
-  badge.innerHTML=stopped?'<span style="color:var(--error)">STOPPED</span>':'<span class="on-air-dot"></span>ON AIR';
+  const dot=document.getElementById('onAirDot');
+  if(stopped){
+    badge.textContent='Stopped';
+    if(dot){dot.style.background='var(--error)';dot.style.boxShadow='0 0 8px var(--error)';}
+  }else{
+    badge.textContent='Live';
+    if(dot){dot.style.background='var(--sun)';dot.style.boxShadow='0 0 8px var(--sun)';}
+  }
 }
 
 // ── Flag Track — operator-only action, prompt() dialog is acceptable here ──
@@ -914,19 +1023,32 @@ async function flagCurrentTrack(el) {
   toast(r.ok ? 'Rule saved!' : 'Failed: ' + (r.error || 'unknown'));
 }
 
-// ── Now Playing ──
+// ── Now Playing (sidebar) ──
 function updateNow(ns){
   if(!ns||!ns.type){
-    document.getElementById('nowType').textContent='—';document.getElementById('nowType').setAttribute('data-t','music');
-    document.getElementById('progLabel').textContent='estimated';
-    document.getElementById('nowTitle').textContent='Waiting for signal...';document.getElementById('nowTime').textContent='—';return;
+    document.getElementById('nowType').textContent='—';
+    document.getElementById('nowType').setAttribute('data-t','music');
+    document.getElementById('nowTitle').textContent='Waiting for signal...';
+    document.getElementById('nowArtist').textContent='';
+    return;
   }
   const typeKey=segmentTypeKey(ns.type);
   const ty=document.getElementById('nowType');
   ty.setAttribute('data-t',typeKey);ty.textContent=segmentBadge(typeKey);
-  document.getElementById('nowTitle').textContent=(ns.label && ns.label !== ns.type) ? ns.label : 'Preparing...';
+  const titleEl=document.getElementById('nowTitle');
+  titleEl.textContent=(ns.label && ns.label !== ns.type) ? ns.label : 'Preparing...';
+  // Artist: extract from label if music, else show type
+  const artistEl=document.getElementById('nowArtist');
+  if(typeKey==='music'&&ns.metadata?.artist){
+    artistEl.textContent=ns.metadata.artist;
+  }else if(typeKey==='music'&&ns.label){
+    // Try to split "Title — Artist" pattern
+    const parts=ns.label.split(/\s[—–-]\s/);
+    artistEl.textContent=parts.length>1?parts[1]:'';
+  }else{
+    artistEl.textContent='';
+  }
   document.getElementById('progFill').setAttribute('data-t',typeKey);
-  document.getElementById('progLabel').textContent=`${segmentBadge(typeKey)} - estimated`;
   const dur=ns.metadata?.duration_ms?ns.metadata.duration_ms/1000:ns.type==='music'?240:ns.type==='banter'?30:ns.type==='ad'?60:20;
   const label=ns.label||'';
   if(label!==_prevLabel){_prevLabel=label;_nowStart=ns.started?ns.started*1000:Date.now();_nowDur=dur}
@@ -934,44 +1056,92 @@ function updateNow(ns){
     const el=Math.max(0,(Date.now()-_nowStart)/1000);
     const rem=Math.max(0,Math.floor(_nowDur-el));
     const m=Math.floor(rem/60);const s=String(rem%60).padStart(2,'0');
-    document.getElementById('nowTime').textContent=rem>0?'-'+m+':'+s:'0:00';
     const em=Math.floor(el/60);const es=String(Math.floor(el)%60).padStart(2,'0');
-    document.getElementById('nowElapsed').textContent=em+':'+es+' elapsed';
+    document.getElementById('nowElapsed').textContent=em+':'+es;
     document.getElementById('progFill').style.width=Math.min(100,(el/Math.max(_nowDur,1))*100)+'%';
   },500)}
 }
 
-// ── Queue ──
+// ── Programme Filter ──
+function setProgrammeFilter(filter, btn){
+  _programmeFilter=filter;
+  document.querySelectorAll('.filter-pill').forEach(p=>p.classList.toggle('active',p.dataset.filter===filter));
+  renderProgramme(_st);
+}
+
+// ── Programme List (unified past + current + upcoming) ──
+function renderProgramme(st){
+  const el=document.getElementById('programmeList');
+  if(!el)return;
+  const now=st.now_streaming;
+  const upcoming=st.upcoming||[];
+  const history=[...(st.stream_log||[])].reverse().slice(0,5);
+  const rows=[];
+  let totalCount=0;
+
+  function matchFilter(type){
+    if(_programmeFilter==='all')return true;
+    return segmentTypeKey(type)===_programmeFilter;
+  }
+
+  // Past rows (from stream_log, most recent last so we show oldest first)
+  const histFiltered=history.filter(e=>matchFilter(e.type));
+  histFiltered.reverse().forEach(e=>{
+    totalCount++;
+    const typeKey=segmentTypeKey(e.type);
+    const d=new Date(e.timestamp*1000);
+    const t=d.toLocaleTimeString('it-IT',{hour:'2-digit',minute:'2-digit'});
+    const artistPart=e.metadata?.artist?`<span class="prog-artist">${esc(e.metadata.artist)}</span>`:'';
+    rows.push(`<div class="prog-row past" data-type="${typeKey}"><div class="prog-border"></div><span class="prog-badge">${esc(segmentText(typeKey))}</span><div class="prog-info"><span class="prog-title">${esc(e.label||typeKey)}</span>${artistPart}</div><span class="prog-time">${t}</span></div>`);
+  });
+
+  // Current row
+  if(now&&now.type&&matchFilter(now.type)){
+    totalCount++;
+    const typeKey=segmentTypeKey(now.type);
+    const artistPart=now.metadata?.artist?`<span class="prog-artist">${esc(now.metadata.artist)}</span>`:'';
+    const waveform='<div class="prog-waveform"><div class="pw-bar"></div><div class="pw-bar"></div><div class="pw-bar"></div><div class="pw-bar"></div><div class="pw-bar"></div></div>';
+    rows.push(`<div class="prog-row current" data-type="${typeKey}"><div class="prog-border"></div><span class="prog-badge">${esc(segmentText(typeKey))}</span><span class="now-badge">NOW</span><div class="prog-info"><span class="prog-title">${esc((now.label&&now.label!==now.type)?now.label:'Playing...')}</span>${artistPart}</div>${waveform}</div>`);
+  }
+
+  // Divider
+  if((histFiltered.length>0||now)&&upcoming.length>0){
+    rows.push('<div class="prog-divider">coming up</div>');
+  }
+
+  // Upcoming rows
+  const upFiltered=upcoming.filter(it=>matchFilter(it.type));
+  upFiltered.slice(0,10).forEach(it=>{
+    totalCount++;
+    const typeKey=segmentTypeKey(it.type);
+    const linked=Number.isInteger(it.playlist_index)||!!it.spotify_id;
+    const clickAttrs=linked?`onclick="focusPlaylistTrack(${Number.isInteger(it.playlist_index)?it.playlist_index:-1},'${esc(it.spotify_id||'')}')"style="cursor:pointer"`:'';
+    const artistPart=it.metadata?.artist?`<span class="prog-artist">${esc(it.metadata.artist)}</span>`:'';
+    const reason=it.reason?`<span class="prog-artist">${esc(it.reason)}</span>`:'';
+    rows.push(`<div class="prog-row" data-type="${typeKey}" ${clickAttrs}><div class="prog-border"></div><span class="prog-badge">${esc(segmentText(typeKey))}</span><div class="prog-info"><span class="prog-title">${esc(it.label||typeKey)}</span>${artistPart||reason}</div></div>`);
+  });
+
+  if(upFiltered.length>10){
+    rows.push(`<div class="prog-empty">+ ${upFiltered.length-10} more upcoming</div>`);
+  }
+
+  const countEl=document.getElementById('programmeCount');
+  if(countEl)countEl.textContent=totalCount+' entries';
+
+  el.innerHTML=rows.length?rows.join(''):'<div class="prog-empty">Waiting for signal...</div>';
+}
+
+// ── Queue (kept for focusPlaylistTrack compatibility) ──
 function updateQueue(up,forcePending,mode){
-  const el=document.getElementById('queueBody');const meta=document.getElementById('queueMeta');
-  if(!up?.length&&!forcePending){
-    el.innerHTML = mode==='building'
-      ? '<div class="empty">Preparing next segments…</div>'
-      : '<div class="empty">Queue empty</div>';
-    meta.textContent='';
-    return
+  // Programme list is the primary display; queueBody may not exist in new layout
+  renderProgramme(_st);
+  // Update pacing meta in accordion
+  const pacingMeta=document.getElementById('pacingMeta');
+  if(pacingMeta&&_st.pacing){
+    const b=_st.pacing.songs_between_banter||2;
+    const a=_st.pacing.songs_between_ads||4;
+    pacingMeta.textContent=a+' music · 1 banter every '+b;
   }
-  const parts=[];
-  if(forcePending){
-    const forceType=segmentTypeKey(forcePending);
-    parts.push(`<div class="queue-item"><span class="qi-num">!</span><span class="qi-badge" data-t="${esc(forceType)}">${esc(segmentBadge(forceType))}</span><span class="qi-label">Triggered - plays next</span><span class="force-badge">forced</span></div>`)
-  }
-  if(up?.length){
-    const musicItems=up.filter(it=>segmentTypeKey(it.type)==='music');
-    const nonMusicCount=up.length-musicItems.length;
-    parts.push(...musicItems.map((it,i)=>{
-      const linked = Number.isInteger(it.playlist_index) || !!it.spotify_id;
-      const typeKey=segmentTypeKey(it.type);
-      const clickAttrs = linked
-        ? `class="queue-item linked" onclick="focusPlaylistTrack(${Number.isInteger(it.playlist_index)?it.playlist_index:-1}, '${esc(it.spotify_id||'')}')"`
-        : 'class="queue-item"';
-      const reason = it.reason ? `<div class="qi-reason">${esc(it.reason)}</div>` : '';
-      return `<div ${clickAttrs}><span class="qi-num">${i+1}</span><span class="qi-badge" data-t="${esc(typeKey)}">${esc(segmentBadge(typeKey))}</span><span class="qi-label">${esc(it.label||it.type)}</span></div>${reason}`;
-    }));
-    if(nonMusicCount>0)parts.push(`<div class="empty" style="padding:6px 0;font-size:10px">+ ${nonMusicCount} host segment${nonMusicCount>1?'s':''} queued</div>`);
-  }
-  meta.textContent=(up?.length||0)+' upcoming';
-  el.innerHTML=parts.join('');
 }
 
 function statusRow(title,state,label,detail){
@@ -1020,7 +1190,6 @@ function renderSetup(setup){
   });
   document.getElementById('setupChecks').innerHTML=checks.join('')||'<div class="empty">No checks reported</div>';
 
-  // Show configured indicator or input fields based on key status
   const llmEssential=(setup.essentials||[]).find(e=>e.key==='llm_keys');
   const configuredKeys=llmEssential?.configured_keys||[];
   const keysConfigured=configuredKeys.length>0;
@@ -1040,7 +1209,8 @@ function renderSetup(setup){
   }
 
   const needsAction=(setup.onboarding_steps||[]).some(s=>s.status==='todo'||s.status==='blocked');
-  _radioTabBtn?.classList.toggle('needs-attention',needsAction);
+  const alertDot=document.getElementById('engineAlertDot');
+  if(alertDot)alertDot.style.display=needsAction?'inline-block':'none';
 }
 async function setupRecheck(el){
   flash(el);
@@ -1160,8 +1330,6 @@ function focusPlaylistTrack(index, trackId){
 }
 async function moveNext(i){
   const trackName=document.querySelector(`.pl-row[data-i="${i}"] .pl-t`)?.textContent||'track';
-  const el=document.getElementById('queueBody');const meta=document.getElementById('queueMeta');
-  if(el){el.innerHTML=`<div class="queue-item"><span class="qi-num">1</span><span class="qi-badge" data-t="music">${esc(segmentBadge('music'))}</span><span class="qi-label">${esc(trackName)}</span><span class="force-badge">rendering…</span></div>`;meta.textContent='1 upcoming';}
   const r=await api('POST','/api/playlist/move_to_next',{index:i});
   if(r.ok)toast('Playing next: '+r.moved);else toast('Failed to move track');
 }
@@ -1172,9 +1340,7 @@ const si=document.getElementById('searchInput');
 si.addEventListener('keydown',e=>{if(e.key==='Enter')doSearch()});
 si.addEventListener('input',()=>{
   _plFilter=si.value.trim();
-  // Instantly filter the visible playlist
   if(_st.playlist)updatePl(_st.playlist);
-  // Also debounce a backend search
   clearTimeout(_searchTo);
   if(_plFilter.length>=2)_searchTo=setTimeout(doSearch,400);
   else document.getElementById('searchResults').innerHTML='';
@@ -1278,7 +1444,6 @@ const HOST_PRESETS={
   Hype:{energy:85,chaos:70,warmth:55,verbosity:65,nostalgia:45},
 };
 const AX_SHORT=['E','C','W','V','N'];
-// Derive bar heights for preset mini-charts from HOST_PRESETS so they stay in sync
 const PRESET_BARS=Object.fromEntries(Object.entries(HOST_PRESETS).map(([p,v])=>[p,AX.map(a=>v[a])]));
 
 function axWord(ax,val){return AX_WORDS[ax][Math.min(3,Math.floor(val/26))];}
@@ -1319,7 +1484,10 @@ function refreshHostPreview(block){
 }
 
 function renderHosts(hosts){
-  document.getElementById('hostsBody').innerHTML=hosts.map(h=>{
+  const hostsBody=document.getElementById('hostsBody');
+  const hostsMeta=document.getElementById('hostsMeta');
+  if(hostsMeta&&hosts.length)hostsMeta.textContent=hosts.map(h=>h.name).join(', ');
+  hostsBody.innerHTML=hosts.map(h=>{
     const nm=esc(h.name);
     const presetBtns=Object.keys(HOST_PRESETS).map(p=>{
       const bars=PRESET_BARS[p].map((b,i)=>`<div class="preset-bar" style="height:${b}%"></div>`).join('');
@@ -1332,7 +1500,6 @@ function renderHosts(hosts){
     }).join('');
     return `<div class="host-block" data-h="${nm}"><div class="host-name">${nm}</div><div class="host-style">${esc(h.style)}</div><div class="host-presets-label">Character preset — moves all sliders</div><div class="host-presets">${presetBtns}</div>${sliders}<div class="host-preview"><div class="host-preview-label">What you'll hear</div><div class="host-preview-text"></div></div><button class="host-reset" onclick="rstHost('${nm}')">Reset to defaults</button></div>`;
   }).join('');
-  // init previews and slider backgrounds
   document.querySelectorAll('.host-block').forEach(block=>{
     refreshHostPreview(block);
   });
@@ -1376,7 +1543,7 @@ async function applyHostPreset(n,presetName){
 function updateListenerRequests(reqs){
   const el=document.getElementById('lrBody');
   const meta=document.getElementById('lrMeta');
-  if(!reqs?.length){el.innerHTML='<div class="empty">No requests yet</div>';meta.textContent='';return}
+  if(!reqs?.length){el.innerHTML='<div class="empty">No requests yet — listeners can send song requests or shoutouts from the radio page</div>';meta.textContent='';return}
   meta.textContent=reqs.length+' pending';
   _lrReqs=reqs;
   el.innerHTML=reqs.map((r,i)=>{
@@ -1425,42 +1592,6 @@ function updateLog(log){
   el.innerHTML=[...log].reverse().slice(0,20).map(e=>{const d=new Date(e.timestamp*1000);const t=d.toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit',second:'2-digit'});return`<div class="log-entry"><span class="le-time">${t}</span><span class="le-type" data-t="${e.type}">${e.type.replace('_',' ')}</span><span class="le-label">${esc(e.label)}</span></div>`}).join('');
 }
 
-// ── Collapsible sections ──
-function toggleSection(head){head.classList.toggle('open');head.nextElementSibling.classList.toggle('open')}
-
-// ── Polling ──
-// Fast poll: live playback state + listener requests (every 3s)
-async function refreshFast(){
-  try{
-    const [sr,lrr]=await Promise.all([fetch('/status',{headers:H()}),fetch('/api/listener-requests',{headers:H()})]);
-    _st=await sr.json();_pub=_st;
-    const lrData=lrr.ok?await lrr.json():{requests:[]};
-    updateNow(_st.now_streaming);updateQueue(_st.upcoming,_st.force_pending,_st.upcoming_mode);updateRecent(_st);
-    updateLog(_st.stream_log);updatePl(_st.playlist||[]);
-    updateListenerRequests(lrData.requests||[]);
-    updatePaceCounters(_st.pacing);
-    updateEngineRoom(_st,_caps);
-    if(_st.session_stopped!==undefined)updateStopState(_st.session_stopped);
-    if(!_paceOk&&_st.pacing){_paceOk=true;
-      document.getElementById('pBanter').value=_st.pacing.songs_between_banter;document.getElementById('pvBanter').textContent=_st.pacing.songs_between_banter;
-      document.getElementById('pAds').value=_st.pacing.songs_between_ads;document.getElementById('pvAds').textContent=_st.pacing.songs_between_ads;
-      document.getElementById('pSpots').value=_st.pacing.ad_spots_per_break;document.getElementById('pvSpots').textContent=_st.pacing.ad_spots_per_break;
-    }
-    if(!_hostsOk){_hostsOk=true;const r=await fetch('/api/hosts',{headers:H()});renderHosts((await r.json()).hosts||[])}
-  }catch(e){console.error('refreshFast',e)}
-}
-// Slow poll: capabilities + setup (every 30s — these rarely change)
-async function refreshSlow(){
-  try{
-    const [cr,or]=await Promise.all([fetch('/api/capabilities',{headers:H()}),fetch('/api/setup/status',{headers:H()})]);
-    _caps=await cr.json();
-    const setup=await or.json();
-    updateSystems(_caps,_st,_st);
-    renderSetup(setup);
-  }catch(e){console.error('refreshSlow',e)}
-}
-async function refresh(){await Promise.all([refreshFast(),refreshSlow()])}
-
 // ── Engine Room ──
 function updateEngineRoom(st,caps){
   const rt=document.getElementById('engineRuntime');
@@ -1475,13 +1606,20 @@ function updateEngineRoom(st,caps){
   const outTok=con.output_tokens||0;
   const cost=con.api_cost_estimate_usd!=null?'$'+con.api_cost_estimate_usd.toFixed(4):'—';
   const ttsCh=con.tts_characters||0;
+
+  // Update sidebar uptime
+  const sidebarUptime=document.getElementById('sidebarUptime');
+  if(sidebarUptime)sidebarUptime.textContent=uptime;
+  const sidebarLiveLine=document.getElementById('sidebarLiveLine');
+  if(sidebarLiveLine)sidebarLiveLine.textContent='● Live · '+uptime;
+
   rt.innerHTML=[
     'Uptime: <strong>'+uptime+'</strong>',
     'Queue depth: <strong>'+qd+'</strong> segments buffered',
     'Playlist: <strong>'+pl+'</strong> tracks',
     'Listeners: <strong>'+listeners+'</strong> (peak: '+(st.listeners?st.listeners.peak:'—')+')',
     'Segments produced: <strong>'+(st.segments_produced||'—')+'</strong>',
-    apiCalls>0?'AI calls: <strong>'+apiCalls+'</strong> ('+inTok.toLocaleString()+' in / '+outTok.toLocaleString()+' out tokens) · est. <strong>'+cost+'</strong>':'AI calls: <strong>0</strong>',
+    apiCalls>0?'AI calls: <strong>'+apiCalls+'</strong> ('+inTok.toLocaleString()+' in / '+outTok.toLocaleString()+' out tokens) · est. <strong id="apiCostEl">'+cost+'</strong>':'AI calls: <strong>0</strong>',
     ttsCh>0?'TTS characters: <strong>'+ttsCh.toLocaleString()+'</strong>':'',
   ].filter(Boolean).join('<br>');
 
@@ -1501,7 +1639,6 @@ function updateEngineRoom(st,caps){
     ].join('<br>');
   }
 
-  // HA Context details
   const haCard=document.getElementById('ha-details-card');
   const haEl=document.getElementById('haDetails');
   const hd=st.ha_details;
@@ -1520,12 +1657,43 @@ function updateEngineRoom(st,caps){
   }
 }
 
-// ── Init: restore last active tab ──
-document.addEventListener('DOMContentLoaded', () => {
-  switchTab(localStorage.getItem('adminTab') || 'music');
-});
+// ── Polling ──
+async function refreshFast(){
+  try{
+    const [sr,lrr]=await Promise.all([fetch('/status',{headers:H()}),fetch('/api/listener-requests',{headers:H()})]);
+    _st=await sr.json();_pub=_st;
+    const lrData=lrr.ok?await lrr.json():{requests:[]};
+    updateNow(_st.now_streaming);
+    renderProgramme(_st);
+    updateRecent(_st);
+    updateLog(_st.stream_log);
+    updatePl(_st.playlist||[]);
+    updateListenerRequests(lrData.requests||[]);
+    updatePaceCounters(_st.pacing);
+    updateEngineRoom(_st,_caps);
+    if(_st.session_stopped!==undefined)updateStopState(_st.session_stopped);
+    if(!_paceOk&&_st.pacing){_paceOk=true;
+      document.getElementById('pBanter').value=_st.pacing.songs_between_banter;document.getElementById('pvBanter').textContent=_st.pacing.songs_between_banter;
+      document.getElementById('pAds').value=_st.pacing.songs_between_ads;document.getElementById('pvAds').textContent=_st.pacing.songs_between_ads;
+      document.getElementById('pSpots').value=_st.pacing.ad_spots_per_break;document.getElementById('pvSpots').textContent=_st.pacing.ad_spots_per_break;
+    }
+    if(!_hostsOk){_hostsOk=true;const r=await fetch('/api/hosts',{headers:H()});renderHosts((await r.json()).hosts||[])}
+  }catch(e){console.error('refreshFast',e)}
+}
+async function refreshSlow(){
+  try{
+    const [cr,or]=await Promise.all([fetch('/api/capabilities',{headers:H()}),fetch('/api/setup/status',{headers:H()})]);
+    _caps=await cr.json();
+    const setup=await or.json();
+    updateSystems(_caps,_st,_st);
+    renderSetup(setup);
+  }catch(e){console.error('refreshSlow',e)}
+}
+async function refresh(){await Promise.all([refreshFast(),refreshSlow()])}
 
-refresh();setInterval(refreshFast,3000);setInterval(refreshSlow,30000);
+refresh();
+setInterval(refreshFast,3000);
+setInterval(refreshSlow,30000);
 </script>
 </body>
 </html>
