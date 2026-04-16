@@ -4,7 +4,7 @@ This repo ships a `conductor.json` that defines workspace lifecycle for [Conduct
 
 ## Scripts
 
-- `scripts/conductor-setup.sh` — bootstraps the workspace venv and dev dependencies. Looks for a shared `.env` file in a location of your choice, or falls back to `$CONDUCTOR_ROOT_PATH/.env`, and symlinks it into the workspace.
+- `scripts/conductor-setup.sh` — bootstraps the workspace venv and dev dependencies. Looks for `~/.config/mammamiradio/.env`, then falls back to `$CONDUCTOR_ROOT_PATH/.env`, and symlinks the first match into the workspace.
 - `scripts/conductor-run.sh` — starts the app with workspace-scoped runtime paths under `.context/conductor/` and sets `MAMMAMIRADIO_ALLOW_YTDLP=true` by default.
 - `scripts/conductor-archive.sh` — cleans up workspace runtime state when the workspace is archived.
 
@@ -14,4 +14,4 @@ Runtime artifacts created by these scripts land under `.context/` which is gitig
 
 ## Shared credentials
 
-The setup script expects your API keys and secrets in a `.env` file. Create one at a path of your choice (e.g. `~/.config/mammamiradio/.env`) and point the setup script at it, or drop a `.env` at the workspace root. See `.env.example` for the required keys.
+The setup script expects your API keys and secrets in a `.env` file at one of two known paths: `~/.config/mammamiradio/.env` (preferred, shared across workspaces) or `$CONDUCTOR_ROOT_PATH/.env` (per-Conductor-root fallback). See `.env.example` for the required keys.

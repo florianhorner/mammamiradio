@@ -28,7 +28,7 @@
 ### Changed
 - Producer now imports `mammamiradio.scriptwriter` as a module reference so hot reload applies at every call site.
 - `_has_script_llm` renamed to `has_script_llm` for the new module-reference import pattern.
-- HA add-on `radio.toml` now matches the root `radio.toml`; Pi-specific pacing overrides were removed.
+- HA add-on `radio.toml` now ships byte-for-byte identical to the root `radio.toml`. The Pi-specific pacing overrides (`songs_between_banter=3`, `ad_spots_per_break=1`, `lookahead_segments=2`) are removed; CI, the local validator, and `tests/test_addon_radio_sync.py` all enforce strict `cmp -s`.
 - Broadcast EQ restored to the 3-filter chain.
 - Auto-resume on listener connect removed. A deliberate `/api/stop` stays paused across restarts until explicit `/api/resume`.
 

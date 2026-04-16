@@ -14,7 +14,7 @@ Add: `https://github.com/florianhorner/mammamiradio`
 In the add-on Configuration tab, set your `anthropic_api_key` (required for AI banter and ads).
 `openai_api_key` is optional — used as TTS fallback when Anthropic is unavailable.
 
-Without any API key, the station runs in Demo Mode using pre-bundled banter clips.
+Without any API key, the station runs in Demo Mode: music plays, banter falls back to stock copy (the bundled-clip inventory is a TODO — `demo_assets/banter/` ships empty today).
 
 ### 3. Start the add-on
 
@@ -78,11 +78,11 @@ If silence is in cache from a failed run: stop the addon, SSH to the HA host, de
 
 ### TTS banter not generating
 
-**Symptom**: Log shows `TTS synthesis failed` or `edge-tts connection error`. Banter falls back to pre-bundled demo clips.
+**Symptom**: Log shows `TTS synthesis failed` or `edge-tts connection error`. Banter falls back to stock copy or silence.
 
-**Cause**: `edge-tts` requires outbound websocket to Microsoft's TTS API. If your HA instance blocks outbound websockets, TTS fails silently and demo clips play instead.
+**Cause**: `edge-tts` requires outbound websocket to Microsoft's TTS API. If your HA instance blocks outbound websockets, TTS fails silently and the producer falls back to stock copy or silence.
 
-**Fix**: This is a network policy issue. Demo clips are acceptable — the station still plays. If you need live AI banter, ensure outbound websocket traffic is allowed.
+**Fix**: This is a network policy issue. The station still plays music. If you need live AI banter, ensure outbound websocket traffic is allowed.
 
 ### Ingress 404s (all API calls return 404)
 
@@ -123,7 +123,7 @@ If silence is in cache from a failed run: stop the addon, SSH to the HA host, de
 
 **Symptom**: Direct access to `http://<ha-ip>:8000/admin` returns 401.
 
-**Cause**: `ADMIN_TOKEN` is auto-generated on each restart and not logged. Use HA ingress as the primary UI.
+**Cause**: If you left `admin_token` blank in the Configuration tab, `run.sh` auto-generates a token on each restart and does not log it. Set a value in `admin_token` to pin it across restarts, or use HA ingress as the primary UI.
 
 **Fix**: Access the addon via the HA sidebar (ingress). The exposed port 8000 on the host is intended for streaming clients only.
 
@@ -144,16 +144,17 @@ If silence is in cache from a failed run: stop the addon, SSH to the HA host, de
   |
   +-- run.sh reads JSON, exports as env vars
   |     ANTHROPIC_API_KEY, OPENAI_API_KEY,
-  |     STATION_NAME, CLAUDE_MODEL
+  |     STATION_NAME, CLAUDE_MODEL,
+  |     ADMIN_TOKEN (blank => auto-generated),
+  |     HA_ENABLED (from enable_home_assistant)
   |
   +-- run.sh maps Supervisor token
-  |     SUPERVISOR_TOKEN -> HA_TOKEN, HA_URL=http://supervisor/core, HA_ENABLED=true
+  |     SUPERVISOR_TOKEN -> HA_TOKEN, HA_URL=http://supervisor/core
   |
   +-- run.sh sets addon defaults
   |     MAMMAMIRADIO_BIND_HOST=0.0.0.0, MAMMAMIRADIO_PORT=8000,
   |     MAMMAMIRADIO_CACHE_DIR=/data/cache, MAMMAMIRADIO_TMP_DIR=/data/tmp,
-  |     MAMMAMIRADIO_ALLOW_YTDLP=true,
-  |     ADMIN_TOKEN=(auto-generated)
+  |     MAMMAMIRADIO_ALLOW_YTDLP=true
   |
   +-- config.py reads env vars, applies addon overrides
         homeassistant.url -> http://supervisor/core
@@ -286,6 +287,6 @@ The dashboard shows one of three tiers based on your configuration:
 
 | Tier | What you hear | What it needs |
 |------|--------------|---------------|
-| Demo Radio | Pre-bundled banter, yt-dlp charts | Nothing (works out of the box) |
+| Demo Radio | Music from yt-dlp charts; banter falls back to stock copy (bundled clips TBD) | Nothing (works out of the box) |
 | Full AI Radio | Live AI banter and ads, yt-dlp charts | `anthropic_api_key` or `openai_api_key` |
 | Connected Home | Above + home-aware banter | API key + HA running (automatic in addon mode) |

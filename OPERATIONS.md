@@ -9,7 +9,7 @@ This repo supports three deployment models: Docker container, Home Assistant add
 - writable `tmp/` and `cache/` directories
 - outbound network access for Apple Music charts API, Anthropic/OpenAI, and optional Home Assistant
 
-Music comes from live Italian charts (via yt-dlp) when `MAMMAMIRADIO_ALLOW_YTDLP=true`, otherwise from a bundled demo playlist or local files.
+Music comes from live Italian charts (via yt-dlp) when `MAMMAMIRADIO_ALLOW_YTDLP=true`, otherwise from local `music/` files. If neither is available the producer inserts silence segments rather than crashing.
 
 ## Required secrets and config
 
@@ -53,48 +53,33 @@ Shared Conductor scripts live in [`conductor.json`](conductor.json):
 
 ## HTTP surface
 
-Public routes:
+`mammamiradio/streamer.py` is the single source of truth. `ARCHITECTURE.md` has the full route table with methods. Summary grouped by access level:
 
-- `/` (listener dashboard)
-- `/listen` (legacy, redirects to /)
-- `/stream`
-- `/healthz`
-- `/readyz`
-- `/public-status`
-- `/api/clip` (rate-limited, 1 per 10s per IP)
-- `/clips/{id}.mp3` (no auth, for sharing)
-- `/api/listener-request`
+Public:
+
+- `GET /` (listener page; HA ingress serves admin)
+- `GET /listen` (alias of `/`)
+- `GET /stream`
+- `GET /healthz`, `GET /readyz`, `GET /public-status`
+- `GET /sw.js`, `GET /static/{filename:path}` (PWA assets)
+- `POST /api/clip` (rate-limited, 1 per 10s per IP)
+- `GET /clips/{id}.mp3` (no auth, for sharing)
+- `POST /api/listener-request`
 
 The read-only sidecar monitor in `scripts/stream_watch_server.py` is intentionally limited to `/public-status`, `/healthz`, and `/readyz` so it still works when admin auth is enabled.
 
-Admin routes:
+Admin (require `ADMIN_PASSWORD` or `ADMIN_TOKEN` unless on loopback):
 
-- `/`
-- `/status`
-- `/api/logs`
-- `/api/setup/status`
-- `/api/setup/recheck`
-- `/api/setup/addon-snippet`
-- `/api/shuffle`
-- `/api/skip`
-- `/api/purge`
-- `/api/playlist/remove`
-- `/api/playlist/move`
-- `/api/playlist/move_to_next`
-- `/api/search`
-- `/api/playlist/add`
-- `/api/playlist/load`
-- `/api/capabilities`
-- `/api/credentials`
-- `/api/trigger`
-- `/api/stop`
-- `/api/resume`
-- `/api/track-rules`
-- `/api/listener-requests`
-- `/api/playlist/add-external`
-- `/api/hosts`, `/api/hosts/{name}/personality`
-- `/api/pacing`
-- `/api/hot-reload` — reload `scriptwriter.py` in-place without stopping the stream. Requires `--workers 1` (importlib reloads only the worker that handles the request; multi-worker deployments get inconsistent results).
+- `GET /admin`, `GET /dashboard`
+- `GET /status`, `GET /api/capabilities`
+- `GET /api/setup/status`, `POST /api/setup/recheck`, `POST /api/setup/save-keys`, `GET /api/setup/addon-snippet`
+- `POST /api/shuffle`, `POST /api/skip`, `POST /api/purge`, `POST /api/stop`, `POST /api/resume`, `POST /api/trigger`
+- `GET /api/pacing`, `PATCH /api/pacing`
+- `GET /api/hosts`, `PATCH /api/hosts/{host_name}/personality`, `POST /api/hosts/{host_name}/personality/reset`
+- `POST /api/credentials`, `POST /api/track-rules`
+- `GET /api/listener-requests`, `POST /api/listener-requests/dismiss`
+- `GET /api/search`, `POST /api/playlist/add`, `POST /api/playlist/remove`, `POST /api/playlist/move`, `POST /api/playlist/move_to_next`, `POST /api/playlist/load`, `POST /api/playlist/add-external`
+- `POST /api/hot-reload` — reload `scriptwriter.py` in-place without stopping the stream. Requires `--workers 1` (importlib reloads only the worker that handles the request; multi-worker deployments get inconsistent results).
 
 ## Recommended production shape
 

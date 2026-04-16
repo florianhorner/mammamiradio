@@ -10,8 +10,13 @@ services:
       - MAMMAMIRADIO_TMP_DIR=/data/tmp
       # Set an admin token for non-loopback access
       - ADMIN_TOKEN=${ADMIN_TOKEN:?Set ADMIN_TOKEN in .env or environment}
+      # Enable yt-dlp chart music by default so `docker compose up` has something to play.
+      # Set MAMMAMIRADIO_ALLOW_YTDLP=false in .env to restrict to local MP3s.
+      - MAMMAMIRADIO_ALLOW_YTDLP=${MAMMAMIRADIO_ALLOW_YTDLP:-true}
       # Optional: Anthropic API key for AI-generated banter/ads
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      # Optional: OpenAI API key (TTS voices + script generation fallback)
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       # Optional: Home Assistant
       - HA_TOKEN=${HA_TOKEN:-}
       - HA_URL=${HA_URL:-}

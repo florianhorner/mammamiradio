@@ -29,10 +29,11 @@
 ```bash
 git clone https://github.com/florianhorner/mammamiradio.git
 cd mammamiradio && cp .env.example .env
+# Set ADMIN_TOKEN in .env first — required because the container binds to 0.0.0.0
 docker compose up
 ```
 
-Open `http://localhost:8000` and the station is playing. No API keys required.
+Open `http://localhost:8000` for the listener page (`/admin` for the control room, `/dashboard` for the authenticated dashboard). Music plays from live Italian charts when `MAMMAMIRADIO_ALLOW_YTDLP=true` (enabled in `docker-compose.yml`), otherwise from local files or silence while you add `music/` MP3s.
 
 ### Home Assistant Add-on
 
@@ -61,7 +62,7 @@ python3.11 -m venv .venv && source .venv/bin/activate && pip install -e .
 ./start.sh
 ```
 
-Open `http://localhost:8000` for the dashboard, `/admin` for the control room.
+Open `http://localhost:8000` for the listener page, `/admin` for the control room, `/dashboard` for the authenticated dashboard.
 
 #### Conductor
 
@@ -71,7 +72,7 @@ This repo ships a [`conductor.json`](conductor.json) that handles `.venv` creati
 
 ## What You'll Experience
 
-**It just plays.** `docker compose up` and you have a working radio station in 30 seconds. Music from live Italian charts or a bundled demo playlist. No setup wizard, no API keys needed to hear sound.
+**It just plays.** `docker compose up` and you have a working radio station. Music from live Italian charts (yt-dlp enabled in `docker-compose.yml`) or local files dropped into `music/`. No setup wizard, no API keys needed to hear sound.
 
 **Nobody notices it's AI.** Two Italian hosts banter between tracks, roast each other, react to the music. The format absorbs AI imperfection... timing gaps and rough edges read as radio character, not failure. There is no uncanny valley in radio.
 
@@ -116,7 +117,7 @@ The station plays immediately. Add keys to unlock more:
 
 | Tier | What you get | What you need |
 |------|-------------|---------------|
-| **Demo Radio** | Music + pre-bundled banter clips + ads | Nothing. Works out of the box. |
+| **Demo Radio** | Music + silence fallback for banter and ads | Nothing. Works out of the box. |
 | **Full AI Radio** | Claude-written hosts with distinct personalities, reactive banter, dynamic ads | `ANTHROPIC_API_KEY` (falls back to OpenAI) |
 | **Connected Home** | Hosts reference live home state: lights, temperature, presence, appliances | Home Assistant + `HA_TOKEN` |
 
@@ -126,8 +127,8 @@ The station degrades gracefully instead of failing:
 
 | What's missing | What happens |
 |----------------|-------------|
-| `MAMMAMIRADIO_ALLOW_YTDLP` not set | Bundled Italian demo playlist instead of live charts |
-| Anthropic API key | Falls back to OpenAI `gpt-4o-mini`, then pre-bundled clips |
+| `MAMMAMIRADIO_ALLOW_YTDLP` not set | Falls back to local `music/` files, then silence |
+| Anthropic API key | Falls back to OpenAI `gpt-4o-mini`, then stock copy |
 | OpenAI API key | Falls back to Edge TTS voices |
 | Home Assistant token | Continues without home context |
 | Ad brands in config | Skips ads instead of crashing |
