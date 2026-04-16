@@ -1,5 +1,16 @@
 # Changelog
 
+## 2.10.3
+
+### Added
+- `POST /api/hot-reload`: reload `scriptwriter.py` in-place without stopping the stream. Useful for tuning host tone on a live session.
+- Admin UI quick-action chips (Less banter / More chaos / Too many ads / Hot reload) for one-tap adjustments during a live listen.
+- HA watchdog restart recovery: `run.sh` clears `session_stopped.flag` at container startup so a watchdog-driven restart resumes audio automatically.
+
+### Changed
+- `radio.toml` now ships byte-for-byte identical to the root `radio.toml`. The Pi-specific pacing overrides (`songs_between_banter=3`, `ad_spots_per_break=1`, `lookahead_segments=2`) are removed; CI, the local validator, and `tests/test_addon_radio_sync.py` all enforce strict `cmp -s`.
+- Broadcast EQ restored to the 3-filter chain (the 2.10.2 regression-mitigation removal is reverted).
+
 ## 2.10.2
 
 ### Fixed

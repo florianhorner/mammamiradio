@@ -10,7 +10,7 @@ Do the local setup, run targeted tests, then do a quick listen-through.
 - FFmpeg on your `PATH`
 - Optional: Anthropic and/or OpenAI credentials for the full AI radio experience
 
-The app falls back to live Italian charts when `MAMMAMIRADIO_ALLOW_YTDLP=true`, otherwise to the bundled demo tracks. No external service credentials are required to run the station.
+The app uses live Italian charts when `MAMMAMIRADIO_ALLOW_YTDLP=true`, otherwise local `music/` files, otherwise silence. No external service credentials are required to run the station.
 
 ## Local setup
 
@@ -57,11 +57,13 @@ python -m uvicorn mammamiradio.main:app --reload --reload-dir mammamiradio
 
 Useful URLs:
 
-- `http://127.0.0.1:8000/`
-- `http://127.0.0.1:8000/listen`
-- `http://127.0.0.1:8000/stream`
-- `http://127.0.0.1:8000/public-status`
-- `http://127.0.0.1:8000/status`
+- `http://127.0.0.1:8000/` — listener page (admin auth not required)
+- `http://127.0.0.1:8000/listen` — alias of `/`
+- `http://127.0.0.1:8000/admin` — admin control room (requires admin auth if non-loopback)
+- `http://127.0.0.1:8000/dashboard` — authenticated dashboard
+- `http://127.0.0.1:8000/stream` — infinite MP3 stream
+- `http://127.0.0.1:8000/public-status` — public JSON
+- `http://127.0.0.1:8000/status` — admin JSON
 
 ## Tests
 
@@ -111,8 +113,8 @@ The repo wires `scripts/test-addon-local.sh` into both `pre-commit` and `pre-pus
 
 After starting the app:
 
-1. Open `http://127.0.0.1:8000/` and confirm the dashboard loads.
-2. Open `http://127.0.0.1:8000/listen` and confirm the listener page loads.
+1. Open `http://127.0.0.1:8000/` and confirm the listener page loads.
+2. Open `http://127.0.0.1:8000/admin` (with admin auth if non-loopback) and confirm the control room loads.
 3. Open `http://127.0.0.1:8000/stream` in a browser or player and confirm audio starts once the first segment is queued.
 4. Hit `/public-status` and confirm the upcoming list reflects the real queued segments, or returns `upcoming_mode="building"` while the producer is warming up.
 5. Use the dashboard controls for skip, shuffle, purge, and playlist reorder.

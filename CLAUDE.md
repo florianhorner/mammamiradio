@@ -70,8 +70,8 @@ A listener who connects must hear sound within 1–2 seconds, every time. No exc
 - Startup loads `radio.toml`, validates config, purges suspect cache files (< 10KB), restores persisted source selection from `cache/playlist_source.json`, fetches the playlist, initializes the clip ring buffer, then launches producer and playback tasks. Logs a one-line boot summary at the end.
 - **Capability flags** (`anthropic`, `ha`) drive a three-tier system. The dashboard derives a tier label from them: Demo Radio, Full AI Radio, Connected Home. `GET /api/capabilities` returns flags, tier, and a `next_step` hint guiding the user toward the next setup action.
 - Demo-first: the app boots immediately with charts or built-in demo tracks and pre-bundled banter clips. No wizard, no gates.
-- If no LLM key is configured (neither Anthropic nor OpenAI), banter uses pre-bundled clips from `demo_assets/banter/` instead of calling an API.
-- Music comes from live Italian charts (via yt-dlp), local `music/` files, or placeholder tones.
+- If no LLM key is configured (neither Anthropic nor OpenAI), banter falls back to stock copy. `mammamiradio/demo_assets/banter/` is currently empty — the bundled-clip inventory is a TODO.
+- Music comes from live Italian charts (via yt-dlp), local `music/` files, or silence fallback as the terminal degradation path.
 - If Anthropic fails mid-session, script generation falls back to OpenAI `gpt-4o-mini` when `OPENAI_API_KEY` is set, then to short stock copy.
 - If Home Assistant is enabled and `HA_TOKEN` is present, banter and ads may reference current home state.
 - `audio.bitrate` is the single source of truth for encoding, ICY headers, and playback throttling.
@@ -105,10 +105,10 @@ mammamiradio/
   track_rules.py      Per-track personality rules flagged via /api/track-rules
   audio_quality.py    Audio quality gate: duration and silence checks before segments reach the queue
   setup_status.py     Legacy setup status classification (kept for /status endpoint compat)
-  dashboard.html      Listener-facing dashboard served at /
-  admin.html          Admin control room panel served at /admin
-  listener.html       Listener HTML (legacy, redirects to /)
-  demo_assets/        Pre-bundled banter clips, ads, music, and jingles for demo-first boot
+  dashboard.html      Authenticated dashboard served at /dashboard
+  admin.html          Admin control room panel served at /admin (and at / over HA ingress)
+  listener.html       Listener page served at / and /listen
+  demo_assets/        Demo asset tree: sfx/studio/ SFX are committed; banter/ads/music/jingles/welcome are empty placeholders pending the demo-asset contract
 radio.toml            station config
 start.sh              dev entrypoint with uvicorn and reload
 tests/                pytest coverage

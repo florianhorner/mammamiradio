@@ -60,15 +60,11 @@ jobs:
 
       - name: Validate addon radio.toml matches root radio.toml
         run: |
-          EXPECTED=$(sed \
-            -e 's/songs_between_banter = 2/songs_between_banter = 3/' \
-            -e 's/ad_spots_per_break = 2/ad_spots_per_break = 1/' \
-            -e 's/lookahead_segments = 3/lookahead_segments = 2/' \
-            radio.toml)
-          ACTUAL=$(cat ha-addon/mammamiradio/radio.toml)
-          if [ "$EXPECTED" != "$ACTUAL" ]; then
-            echo "::error::ha-addon/mammamiradio/radio.toml drifted from root radio.toml — keep them in sync"
-            diff <(echo "$EXPECTED") <(echo "$ACTUAL") || true
+          # Contract since 2.10.3: ha-addon/mammamiradio/radio.toml is byte-for-byte identical to root radio.toml.
+          # scripts/test-addon-local.sh and tests/test_addon_radio_sync.py enforce the same invariant.
+          if ! cmp -s radio.toml ha-addon/mammamiradio/radio.toml; then
+            echo "::error::ha-addon/mammamiradio/radio.toml drifted from root radio.toml — keep them byte-identical"
+            diff radio.toml ha-addon/mammamiradio/radio.toml || true
             exit 1
           fi
 

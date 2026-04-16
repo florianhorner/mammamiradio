@@ -1,20 +1,26 @@
-"""Guards against the failure mode that caused the 2.10.0 manifest 404.
+"""Guards for the add-on build workflow.
 
-Root cause: addon-build.yml used `cmp -s radio.toml ha-addon/mammamiradio/radio.toml`
-to validate the config sync, but the HA addon intentionally carries three pacing overrides
-for Pi/HA Green performance.  The strict comparison always failed → the `validate` job
-always failed → `build` (which `needs: validate`) never ran → images were never pushed
-→ HA Supervisor got a 404 when trying to pull the update.
+Contract (from 2.10.3 onward): `ha-addon/mammamiradio/radio.toml` is byte-for-byte
+identical to root `radio.toml`. The Pi-specific pacing overrides
+(`songs_between_banter=3`, `ad_spots_per_break=1`, `lookahead_segments=2`) that lived
+in the add-on copy before 2.10.3 are gone. Three places must agree on this:
 
-These tests lock down six structural invariants that, had they existed, would have
-caught the problem before it shipped:
+  * `tests/test_addon_radio_sync.py` (Python: addon == root)
+  * `scripts/test-addon-local.sh` (shell: `cmp -s`)
+  * `.github/workflows/addon-build.yml` (CI: `cmp -s`)
 
-  1. The forbidden `cmp -s` pattern is absent.
-  2. The CI sed substitutions are identical to what the Python test expects.
-  3. The build job cannot run if validate fails (needs: validate).
+Before 2.10.3 the CI workflow applied a sed transform to pre-add the Pi overrides
+before comparing.  If that pattern comes back, CI will silently pass while the other
+two gates fail — the exact kind of split-brain that caused the 2.10.0 manifest 404
+in the opposite direction.
+
+These tests lock down the structural invariants:
+
+  1. The CI check uses `cmp -s` (matches shell validator + Python test).
+  2. No sed substitution that re-introduces the Pi overrides.
+  3. The build job cannot run if validate fails (`needs: validate`).
   4. Both target architectures are in the build matrix.
   5. The workflow triggers cover every file touched by a version-bump commit.
-  6. The build step never overwrites the HA-specific radio.toml.
 """
 
 from __future__ import annotations
@@ -25,14 +31,9 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 WORKFLOW = REPO_ROOT / ".github" / "workflows" / "addon-build.yml"
 
-# The three substitutions the Python test applies (test_addon_radio_sync.py).
-# This dict is the single source of truth — both tests and the CI sed script
-# are verified against it.
-HA_PACING_OVERRIDES: dict[str, str] = {
-    "songs_between_banter = 2": "songs_between_banter = 3",
-    "ad_spots_per_break = 2": "ad_spots_per_break = 1",
-    "lookahead_segments = 3": "lookahead_segments = 2",
-}
+# Pacing keys whose historical HA-only overrides must never be re-applied at build time.
+# If any future sed expression in the workflow substitutes these values, the test fails.
+FORBIDDEN_OVERRIDE_KEYS = ("songs_between_banter", "ad_spots_per_break", "lookahead_segments")
 
 
 def _workflow_text() -> str:
@@ -40,53 +41,34 @@ def _workflow_text() -> str:
 
 
 # ---------------------------------------------------------------------------
-# 1. The broken pattern must never come back
+# 1. CI must use `cmp -s` (strict byte equality) for the radio.toml check
 # ---------------------------------------------------------------------------
 
 
-def test_ci_radio_toml_check_forbids_raw_cmp():
-    """cmp -s on the two radio.toml files is the exact line that broke 2.10.0.
-
-    A raw byte comparison fails whenever any intentional HA-specific value
-    differs, making the validate job fail and silently preventing all image builds.
-    """
+def test_ci_radio_toml_uses_strict_cmp():
+    """CI must enforce byte-for-byte identity, matching the Python test and the shell validator."""
     text = _workflow_text()
-    assert "cmp -s radio.toml ha-addon" not in text, (
-        "Forbidden: `cmp -s radio.toml ha-addon/mammamiradio/radio.toml` is too strict.\n"
-        "It rejects the intentional HA pacing overrides and blocks the build job.\n"
-        "Use the sed-based check that applies the known overrides before comparing."
+    assert "cmp -s radio.toml ha-addon/mammamiradio/radio.toml" in text, (
+        "addon-build.yml must run `cmp -s radio.toml ha-addon/mammamiradio/radio.toml` in the validate job.\n"
+        "This mirrors tests/test_addon_radio_sync.py and scripts/test-addon-local.sh. If you "
+        "change the contract, update all three locations together."
     )
 
 
 # ---------------------------------------------------------------------------
-# 2. CI sed substitutions must exactly match the Python test
+# 2. No sed substitution on radio.toml may re-introduce Pi overrides at build time
 # ---------------------------------------------------------------------------
 
 
-def test_ci_radio_toml_sed_substitutions_match_python_test():
-    """The sed replacements in addon-build.yml must be identical to HA_PACING_OVERRIDES.
-
-    Both the CI shell step and test_addon_radio_sync.py encode the same three
-    substitutions.  If they drift, one check passes while the other fails — creating
-    a false positive that hides real drift or re-introduces the broken-build bug.
-    """
+def test_ci_has_no_radio_toml_sed_transform():
+    """Re-introducing the pre-2.10.3 sed transform would silently let the addon radio.toml drift."""
     text = _workflow_text()
-
-    # Scope to the EXPECTED=$(sed ...) block in the validate step only.
-    # Searching the full file would capture any unrelated sed commands added later.
-    sed_block_match = re.search(
-        r"EXPECTED=\$\(sed \\\n(.*?)\n\s*radio\.toml\)",
-        text,
-        re.DOTALL,
-    )
-    assert sed_block_match, "Could not locate EXPECTED=$(sed ...) block in addon-build.yml"
-    sed_pairs = re.findall(r"-e\s+'s/([^/]+)/([^/]+)/'", sed_block_match.group(1))
-    ci_overrides = dict(sed_pairs)
-
-    assert ci_overrides == HA_PACING_OVERRIDES, (
-        f"CI sed substitutions {ci_overrides} differ from expected HA_PACING_OVERRIDES.\n"
-        f"Update addon-build.yml and HA_PACING_OVERRIDES in this file together."
-    )
+    for key in FORBIDDEN_OVERRIDE_KEYS:
+        assert not re.search(rf"sed[^\n]*{re.escape(key)}", text), (
+            f"Forbidden: the CI workflow is transforming `{key}` via sed before the radio.toml comparison.\n"
+            "Since 2.10.3 the add-on and root radio.toml are byte-identical. A sed-based CI transform "
+            "re-creates the split-brain this rule exists to prevent."
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -119,11 +101,7 @@ def test_ci_build_job_needs_validate():
 
 
 def test_ci_build_matrix_includes_aarch64():
-    """aarch64 must be in the build matrix — it is the Raspberry Pi / HA Green arch.
-
-    Scoped to the build job's arch: [...] list so the test doesn't false-pass from
-    the string appearing in a base image name, comment, or other unrelated location.
-    """
+    """aarch64 must be in the build matrix — it is the Raspberry Pi / HA Green arch."""
     build_section_match = re.search(r"\n  build:\n((?:    .+\n|\n)*)", _workflow_text())
     assert build_section_match, "Could not locate `build:` job block in addon-build.yml"
     build_block = build_section_match.group(1)
@@ -134,11 +112,7 @@ def test_ci_build_matrix_includes_aarch64():
 
 
 def test_ci_build_matrix_includes_amd64():
-    """amd64 must be in the build matrix — it covers x86 NUC / VM HA installs.
-
-    Scoped to the build job's arch: [...] list so the test doesn't false-pass from
-    the string appearing in a base image name, comment, or other unrelated location.
-    """
+    """amd64 must be in the build matrix — it covers x86 NUC / VM HA installs."""
     build_section_match = re.search(r"\n  build:\n((?:    .+\n|\n)*)", _workflow_text())
     assert build_section_match, "Could not locate `build:` job block in addon-build.yml"
     build_block = build_section_match.group(1)
@@ -180,30 +154,4 @@ def test_ci_trigger_paths_cover_version_bump_files():
         f"Trigger paths missing from addon-build.yml `on:` block: {missing}\n"
         "These files are touched on every version bump. Without matching trigger "
         "paths, the workflow won't run and images won't be built."
-    )
-
-
-# ---------------------------------------------------------------------------
-# 6. Build job must NOT overwrite the HA-specific radio.toml
-# ---------------------------------------------------------------------------
-
-
-def test_ci_build_step_does_not_overwrite_ha_radio_toml():
-    """The build job must not copy the root radio.toml over the HA-specific one.
-
-    ha-addon/mammamiradio/radio.toml carries Pi/HA Green performance tuning
-    (songs_between_banter=3, ad_spots_per_break=1, lookahead_segments=2).
-    Copying the root radio.toml (which has 2/2/3) into the build context at
-    build time silently discards that tuning — the Docker image ships with the
-    wrong pacing values baked in, and users on Raspberry Pi get higher CPU load.
-
-    The HA-specific file is already in the build context at checkout time.
-    It must NOT be overwritten.
-    """
-    text = _workflow_text()
-    assert "cp radio.toml ha-addon/mammamiradio/" not in text, (
-        "Forbidden: `cp radio.toml ha-addon/mammamiradio/` overwrites the "
-        "HA-specific radio.toml with the root version.\n"
-        "The HA-specific file (with Pi/HA Green tuned pacing) is already present "
-        "at checkout — do not overwrite it in the build step."
     )

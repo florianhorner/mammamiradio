@@ -52,7 +52,7 @@ Live Italian charts / local files / demo tracks
 `producer.py` turns that pacing decision into actual audio files:
 
 - `MUSIC`
-  - uses local `music/` files, then `yt-dlp` for chart tracks, then a generated placeholder tone
+  - uses local `music/` files, then `yt-dlp` for chart tracks, then silence as the terminal fallback
   - normalizes output before queueing
 - `BANTER`
   - asks Claude (or OpenAI as fallback) for structured dialogue JSON
@@ -76,7 +76,7 @@ Bounded state lists (`played_tracks`, `running_jokes`, `segment_log`, `stream_lo
 Two features create the illusion of a live radio studio:
 
 - **Studio bleed**: After producing a music segment, the producer mixes a faint (-22dB) snippet of a previously-played banter clip under ~35% of music segments. This creates the "someone left a mic on" feeling.
-- **Humanity events**: A one-shot event system (cough, paper rustle, chair creak, pen tap) fires exactly once per session after 15+ segments have been produced. SFX files live in `demo_assets/sfx/studio/`.
+- **Humanity events**: A one-shot event system (cough, paper rustle, chair creak, pen tap) fires exactly once per session after 15+ segments have been produced. SFX files live in `mammamiradio/demo_assets/sfx/studio/` (inside the package so `producer.py` and packaging find them together).
 
 ### Clip sharing
 
@@ -180,8 +180,12 @@ This is opportunistic context, not a hard dependency. Failures there should not 
 
 | Route | Method | Access | Description |
 | --- | --- | --- | --- |
-| `/` | GET | Public | Listener page |
-| `/admin` | GET | Admin | Dashboard HTML |
+| `/` | GET | Public | Listener page. Over trusted HA ingress the admin panel is served instead. |
+| `/listen` | GET | Public | Alias of `/` for backwards compatibility |
+| `/admin` | GET | Admin | Admin control room panel |
+| `/dashboard` | GET | Admin | Authenticated dashboard |
+| `/sw.js` | GET | Public | PWA service worker |
+| `/static/{filename:path}` | GET | Public | PWA static assets (manifest, icons) |
 | `/stream` | GET | Public | Infinite MP3 stream |
 | `/healthz` | GET | Public | Liveness probe with process uptime |
 | `/readyz` | GET | Public | Readiness probe with queue depth and startup status |
@@ -199,8 +203,10 @@ This is opportunistic context, not a hard dependency. Failures there should not 
 | `/api/playlist/add` | POST | Admin | Add a track to the playlist |
 | `/api/playlist/load` | POST | Admin | Load a playlist by URL |
 | `/api/hosts` | GET | Admin | List hosts with personality settings |
+| `/api/hosts/{name}/personality` | PATCH | Admin | Patch host personality axes (energy, warmth, chaos) |
 | `/api/hosts/{name}/personality/reset` | POST | Admin | Reset host personality to defaults |
 | `/api/pacing` | GET | Admin | Current pacing configuration |
+| `/api/pacing` | PATCH | Admin | Patch pacing fields (songs between banter, ad spots per break, etc.) |
 | `/api/setup/save-keys` | POST | Admin | Save API keys via dashboard |
 | `/api/capabilities` | GET | Admin | Capability flags, tier, next-step hint, connect status, and provider degradation telemetry |
 | `/api/trigger` | POST | Admin | Trigger segment production |
@@ -212,6 +218,7 @@ This is opportunistic context, not a hard dependency. Failures there should not 
 | `/api/track-rules` | POST | Admin | Flag a reaction rule for the current track |
 | `/api/listener-request` | POST | Public | Submit a song request or shoutout |
 | `/api/listener-requests` | GET | Admin | List pending listener requests |
+| `/api/listener-requests/dismiss` | POST | Admin | Dismiss a pending listener request |
 | `/api/search` | GET | Admin | Search playlist and external sources |
 | `/api/playlist/add-external` | POST | Admin | Add external track from search results |
 | `/api/hot-reload` | POST | Admin | Reload `scriptwriter.py` in-place via `importlib.reload()` — stream continues uninterrupted, next banter uses new code. Requires `--workers 1`. |

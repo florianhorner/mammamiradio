@@ -21,6 +21,9 @@ After installing, go to the add-on's **Configuration** tab:
 - **Anthropic API Key** (optional): Enables Claude-generated banter and ads. Get one at [console.anthropic.com](https://console.anthropic.com). Without this, the station uses stock banter lines.
 - **OpenAI API Key** (optional): Enables OpenAI `gpt-4o-mini-tts` host voices and serves as a script generation fallback when Anthropic is unavailable.
 - **Station Name**: Customize your station's name (default: "Mamma Mi Radio").
+- **Claude Model**: Pick between Haiku, Sonnet, and Opus Claude models (default: Haiku 4.5).
+- **Admin Token** (optional): Shared secret for the admin API. If blank, `run.sh` auto-generates one at startup.
+- **Enable Home Assistant**: Toggle ambient home context in hosts' banter (default: on).
 
 ## Usage
 
