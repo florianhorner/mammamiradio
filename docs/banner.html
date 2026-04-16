@@ -1,0 +1,275 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=Playfair+Display:ital,wght@0,700;1,700&family=Inter:wght@400;500;600;700;800&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      * { margin: 0; padding: 0; box-sizing: border-box; }
+      html, body {
+        width: 1280px;
+        height: 640px;
+        background: #14110F;
+        font-family: 'Inter', -apple-system, system-ui, sans-serif;
+        color: #F5EDD8;
+        overflow: hidden;
+      }
+      .stage {
+        width: 1280px;
+        height: 640px;
+        display: grid;
+        grid-template-columns: 1.05fr 0.95fr;
+        position: relative;
+        background:
+          radial-gradient(1100px 700px at 18% 20%, rgba(206, 43, 55, 0.18), transparent 60%),
+          radial-gradient(900px 600px at 92% 90%, rgba(244, 208, 72, 0.16), transparent 65%),
+          linear-gradient(135deg, #14110F 0%, #241813 60%, #14110F 100%);
+      }
+      .grid-bg {
+        position: absolute; inset: 0;
+        background-image:
+          linear-gradient(rgba(244, 208, 72, 0.05) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(244, 208, 72, 0.05) 1px, transparent 1px);
+        background-size: 40px 40px;
+        mask-image: radial-gradient(ellipse at center, black 40%, transparent 80%);
+      }
+      .left {
+        position: relative;
+        padding: 64px 56px 64px 76px;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        gap: 22px;
+      }
+      .eyebrow {
+        display: inline-flex;
+        align-items: center;
+        gap: 10px;
+        font-size: 13px;
+        font-weight: 700;
+        letter-spacing: 0.22em;
+        text-transform: uppercase;
+        color: #F4D048;
+        width: fit-content;
+        padding: 8px 14px;
+        border: 1px solid rgba(244, 208, 72, 0.3);
+        border-radius: 999px;
+        background: rgba(244, 208, 72, 0.06);
+      }
+      .dot {
+        width: 8px; height: 8px; border-radius: 50%;
+        background: #F4D048;
+        box-shadow: 0 0 10px #F4D048, 0 0 20px rgba(244,208,72,0.4);
+      }
+      h1 {
+        font-family: 'Playfair Display', Georgia, serif;
+        font-size: 86px;
+        line-height: 0.98;
+        font-weight: 700;
+        letter-spacing: -0.02em;
+        color: #F5EDD8;
+      }
+      h1 em {
+        font-style: italic;
+        background: linear-gradient(120deg, #F4D048 0%, #E8A339 100%);
+        -webkit-background-clip: text;
+        background-clip: text;
+        color: transparent;
+      }
+      .tricolor {
+        display: flex;
+        height: 4px;
+        width: 280px;
+        gap: 3px;
+        border-radius: 3px;
+        overflow: hidden;
+      }
+      .tricolor span { flex: 1; border-radius: 2px; }
+      .tricolor .c { background: #F5EDD8; }
+      .tricolor .g { background: #F4D048; }
+      .tricolor .r { background: #CE2B37; }
+      .tagline {
+        font-size: 21px;
+        line-height: 1.45;
+        color: #CBB9A6;
+        max-width: 500px;
+      }
+      .tagline strong { color: #F5EDD8; font-weight: 600; }
+      .chips { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 6px; }
+      .chip {
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 13px;
+        padding: 8px 14px;
+        border-radius: 8px;
+        border: 1px solid rgba(244, 208, 72, 0.22);
+        background: rgba(20, 17, 15, 0.7);
+        color: #D9C9B3;
+      }
+      .chip strong { color: #F4D048; font-weight: 600; }
+
+      .right {
+        position: relative;
+        padding: 56px 72px 56px 24px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+      .window {
+        width: 100%;
+        max-width: 470px;
+        background: #1C1410;
+        border: 1px solid rgba(244, 208, 72, 0.22);
+        border-radius: 14px;
+        box-shadow:
+          0 30px 60px -20px rgba(0, 0, 0, 0.7),
+          0 0 0 1px rgba(244, 208, 72, 0.08);
+        overflow: hidden;
+      }
+      .win-bar {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 12px 16px;
+        background: #14110F;
+        border-bottom: 1px solid rgba(244, 208, 72, 0.12);
+      }
+      .win-bar .b { width: 12px; height: 12px; border-radius: 50%; }
+      .b1 { background: #CE2B37; }
+      .b2 { background: #F4D048; }
+      .b3 { background: #E8A339; }
+      .win-title {
+        margin-left: 12px;
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 12px;
+        color: #F4D048;
+      }
+      .on-air {
+        margin-left: auto;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 10px;
+        letter-spacing: 0.2em;
+        color: #CE2B37;
+        padding: 3px 8px;
+        border: 1px solid rgba(206, 43, 55, 0.45);
+        border-radius: 4px;
+        background: rgba(206, 43, 55, 0.08);
+      }
+      .on-air .live-dot {
+        width: 6px; height: 6px; border-radius: 50%;
+        background: #CE2B37;
+        box-shadow: 0 0 8px #CE2B37;
+      }
+      .graph { padding: 28px 24px; display: flex; flex-direction: column; gap: 12px; }
+      .node {
+        position: relative;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 12px 16px;
+        border-radius: 10px;
+        background: rgba(244, 208, 72, 0.05);
+        border: 1px solid rgba(244, 208, 72, 0.22);
+      }
+      .node .icon {
+        width: 30px; height: 30px;
+        display: flex; align-items: center; justify-content: center;
+        border-radius: 8px;
+        background: rgba(244, 208, 72, 0.15);
+        font-size: 16px;
+      }
+      .node .label {
+        font-size: 14px; font-weight: 600; color: #F5EDD8;
+      }
+      .node .kind {
+        margin-left: auto;
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 10px;
+        color: #F4D048;
+        padding: 3px 8px;
+        border-radius: 4px;
+        background: rgba(244, 208, 72, 0.1);
+        letter-spacing: 0.05em;
+      }
+      .arrow {
+        align-self: center;
+        color: #F4D048;
+        font-size: 14px;
+        line-height: 1;
+        opacity: 0.55;
+      }
+      .node.accent {
+        background: linear-gradient(135deg, rgba(244, 208, 72, 0.22), rgba(232, 163, 57, 0.08));
+        border-color: #F4D048;
+        box-shadow: 0 0 0 1px rgba(244, 208, 72, 0.25), 0 8px 24px -8px rgba(244, 208, 72, 0.35);
+      }
+      .node.accent .kind {
+        color: #14110F;
+        background: #F4D048;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="stage">
+      <div class="grid-bg"></div>
+      <div class="left">
+        <div class="eyebrow"><span class="dot"></span> AI Radio Station &middot; Self-hosted &middot; FM 92.6</div>
+        <h1>Mamma<br /><em>Mi</em> Radio</h1>
+        <div class="tricolor">
+          <span class="c"></span>
+          <span class="g"></span>
+          <span class="r"></span>
+        </div>
+        <div class="tagline">
+          <strong>Seven guests at a dinner party. Nobody noticed it was AI.</strong><br />
+          Italian hosts written by Claude, absurd fake ads, live chart music, and Home Assistant context that makes the station reference your actual house.
+        </div>
+        <div class="chips">
+          <span class="chip"><strong>&rarr;</strong> docker compose up</span>
+          <span class="chip"><strong>&rarr;</strong> HA add-on</span>
+          <span class="chip"><strong>&rarr;</strong> Never crashes</span>
+        </div>
+      </div>
+      <div class="right">
+        <div class="window">
+          <div class="win-bar">
+            <span class="b b1"></span><span class="b b2"></span><span class="b b3"></span>
+            <span class="win-title">studio.on-air</span>
+            <span class="on-air"><span class="live-dot"></span>LIVE</span>
+          </div>
+          <div class="graph">
+            <div class="node">
+              <div class="icon">&#127925;</div>
+              <div class="label">Italian charts + music/</div>
+              <div class="kind">SOURCE</div>
+            </div>
+            <div class="arrow">&darr;</div>
+            <div class="node accent">
+              <div class="icon">&#127908;</div>
+              <div class="label">Claude hosts + fake ads</div>
+              <div class="kind">BANTER</div>
+            </div>
+            <div class="arrow">&darr;</div>
+            <div class="node">
+              <div class="icon">&#127968;</div>
+              <div class="label">Home Assistant context</div>
+              <div class="kind">CASA</div>
+            </div>
+            <div class="arrow">&darr;</div>
+            <div class="node">
+              <div class="icon">&#128251;</div>
+              <div class="label">/stream &middot; listeners</div>
+              <div class="kind">ON AIR</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </body>
+</html>
