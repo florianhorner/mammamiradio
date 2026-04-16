@@ -975,12 +975,10 @@ async def test_prefetch_next_skips_failed_candidate(tmp_path):
         patch(f"{PRODUCER_MODULE}.normalize"),
     ):
         await _prefetch_next(state, config, _failed_keys=failed)
-        if mock_dl.called:
-            # If download was called, it must be for a DIFFERENT track (not the failed one)
-            called_args = mock_dl.call_args[0]
-            downloaded_track = called_args[0]
-            assert downloaded_track.cache_key != first_key, "Must not retry a failed candidate"
-        # Either way, should not raise
+        # Only one of two tracks is failed so a download of the other must occur.
+        mock_dl.assert_awaited_once()
+        downloaded_track = mock_dl.call_args.args[0]
+        assert downloaded_track.cache_key != first_key, "Must not retry a failed candidate"
 
 
 @pytest.mark.asyncio
