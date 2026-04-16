@@ -6,6 +6,14 @@ The current version source of truth is `pyproject.toml`.
 
 ## [Unreleased]
 
+## [2.10.4] - 2026-04-16
+
+### Security
+
+- **CI action SHA-pinned**: `dependabot/fetch-metadata` is now pinned to commit SHA `ffa630c65fa7e0ecfa0625b5ceda64399aea1b36` (v3). Eliminates supply chain risk from a mutable semver tag running with `contents: write` + `pull-requests: write` in `pull_request_target` context.
+- **Secret scanning**: Added `.gitleaks.toml` with custom rules for Anthropic API keys (`sk-ant-…`) and Home Assistant long-lived access tokens. Extends gitleaks default ruleset with project-specific patterns and an allowlist for `.env.example`.
+- **yt-dlp version floor raised**: Minimum `yt-dlp` version bumped from `>=2024.0` to `>=2026.2.21`, patching GHSA-g3gw-q23r-pgqm (RCE via `--netrc-cmd`, fixed in 2026.2.21).
+
 ## [2.10.3] - 2026-04-15
 
 ### Added

@@ -1,5 +1,12 @@
 # Changelog
 
+## 2.10.4
+
+### Security
+- CI action SHA-pinned: `dependabot/fetch-metadata` now pinned to commit SHA (supply chain hardening).
+- Added `.gitleaks.toml` for secret scanning (Anthropic API keys, HA tokens).
+- Raised `yt-dlp` minimum version to `>=2026.2.21` (patches GHSA-g3gw-q23r-pgqm).
+
 ## 2.10.2
 
 ### Fixed
