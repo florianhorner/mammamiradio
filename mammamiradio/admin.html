@@ -404,6 +404,7 @@ body { font-family: var(--font-body); color: var(--cream); line-height: 1.5; }
   font-size: 9px; font-weight: 400; opacity: 0.5;
   background: rgba(0,0,0,0.2); padding: 1px 5px; border-radius: 3px;
 }
+.ic { width: 1em; height: 1em; vertical-align: -0.12em; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; flex-shrink: 0; }
 .btn.flash { animation: btn-flash 0.4s ease; }
 .btn-stop { background: var(--error); color: var(--cream); min-height: 44px; }
 .btn-stop:hover { background: color-mix(in srgb, var(--error) 80%, white); }
@@ -660,6 +661,24 @@ input[type="range"]:focus-visible {
 </head>
 <body>
 
+<!-- SVG icon sprite (Lucide, MIT) -->
+<svg style="display:none" aria-hidden="true">
+  <defs>
+    <symbol id="ic-skip" viewBox="0 0 24 24"><polygon points="5 4 15 12 5 20 5 4"/><line x1="19" y1="4" x2="19" y2="20"/></symbol>
+    <symbol id="ic-pause" viewBox="0 0 24 24"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></symbol>
+    <symbol id="ic-play" viewBox="0 0 24 24"><polygon points="5 3 19 12 5 21 5 3"/></symbol>
+    <symbol id="ic-shuffle" viewBox="0 0 24 24"><polyline points="16 3 21 3 21 8"/><line x1="4" y1="20" x2="21" y2="3"/><polyline points="21 16 21 21 16 21"/><line x1="15" y1="15" x2="21" y2="21"/></symbol>
+    <symbol id="ic-mic" viewBox="0 0 24 24"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="22"/><line x1="8" y1="22" x2="16" y2="22"/></symbol>
+    <symbol id="ic-mic-off" viewBox="0 0 24 24"><line x1="2" x2="22" y1="2" y2="22"/><path d="M18.89 13.23A7.12 7.12 0 0 0 19 12v-2"/><path d="M5 10v2a7 7 0 0 0 12 5"/><path d="M15 9.34V5a3 3 0 0 0-5.68-1.33"/><path d="M9 9v3a3 3 0 0 0 5.12 2.12"/><line x1="12" x2="12" y1="19" y2="22"/></symbol>
+    <symbol id="ic-megaphone" viewBox="0 0 24 24"><path d="m3 11 18-5v12L3 13"/><path d="M11.6 16.8a3 3 0 1 1-5.8-1.6"/></symbol>
+    <symbol id="ic-zap" viewBox="0 0 24 24"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></symbol>
+    <symbol id="ic-ban" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/></symbol>
+    <symbol id="ic-rotate-cw" viewBox="0 0 24 24"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></symbol>
+    <symbol id="ic-trash" viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></symbol>
+    <symbol id="ic-flag" viewBox="0 0 24 24"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><line x1="4" y1="22" x2="4" y2="15"/></symbol>
+  </defs>
+</svg>
+
 <div class="admin-layout">
 
   <!-- ══════════════════ SIDEBAR ══════════════════ -->
@@ -697,13 +716,13 @@ input[type="range"]:focus-visible {
 
     <!-- 2×2 controls grid -->
     <div class="sidebar-controls">
-      <button type="button" class="ctrl-btn" onclick="doSkip(this)">&#9197; Next song</button>
+      <button type="button" class="ctrl-btn" onclick="doSkip(this)"><svg class="ic" aria-hidden="true"><use href="#ic-skip"/></svg> Next song</button>
       <div class="ctrl-toggle-cell">
-        <button type="button" class="ctrl-btn" id="stopBtn" onclick="doStop(this)">&#9632; Pause</button>
-        <button type="button" class="ctrl-btn" id="resumeBtn" onclick="doResume(this)" style="display:none">&#9654; Resume</button>
+        <button type="button" class="ctrl-btn" id="stopBtn" onclick="doStop(this)"><svg class="ic" aria-hidden="true"><use href="#ic-pause"/></svg> Pause</button>
+        <button type="button" class="ctrl-btn" id="resumeBtn" onclick="doResume(this)" style="display:none"><svg class="ic" aria-hidden="true"><use href="#ic-play"/></svg> Resume</button>
       </div>
-      <button type="button" class="ctrl-btn" onclick="doShuffle(this)">&#128256; Shuffle</button>
-      <button type="button" class="ctrl-btn" onclick="doTrigger('banter',this)">&#127897; Banter</button>
+      <button type="button" class="ctrl-btn" onclick="doShuffle(this)"><svg class="ic" aria-hidden="true"><use href="#ic-shuffle"/></svg> Shuffle</button>
+      <button type="button" class="ctrl-btn" onclick="doTrigger('banter',this)"><svg class="ic" aria-hidden="true"><use href="#ic-mic"/></svg> Banter</button>
     </div>
 
     <div class="sidebar-divider"></div>
@@ -755,22 +774,22 @@ input[type="range"]:focus-visible {
       </button>
       <div class="accordion-body open">
         <div class="transport" style="margin-bottom:10px">
-          <button class="btn btn-trigger" onclick="doTrigger('banter',this)">&#127897; Banter <span class="key">B</span></button>
-          <button class="btn btn-trigger" onclick="doTrigger('ad',this)">&#128226; Ad <span class="key">A</span></button>
-          <button class="btn btn-trigger" onclick="doTrigger('news_flash',this)">&#9889; News <span class="key">N</span></button>
+          <button class="btn btn-trigger" onclick="doTrigger('banter',this)"><svg class="ic" aria-hidden="true"><use href="#ic-mic"/></svg> Banter <span class="key">B</span></button>
+          <button class="btn btn-trigger" onclick="doTrigger('ad',this)"><svg class="ic" aria-hidden="true"><use href="#ic-megaphone"/></svg> Ad <span class="key">A</span></button>
+          <button class="btn btn-trigger" onclick="doTrigger('news_flash',this)"><svg class="ic" aria-hidden="true"><use href="#ic-zap"/></svg> News <span class="key">N</span></button>
         </div>
         <div class="card-label" style="margin-top:10px">Quick Actions</div>
         <div class="quick-actions">
-          <button class="btn btn-chip" onclick="doQuickAction('less_banter',this)" title="Increase songs between banter">&#128266; Trim banter</button>
-          <button class="btn btn-chip" onclick="doQuickAction('more_chaos',this)" title="Trigger an unscheduled banter now">&#127775; Force banter</button>
-          <button class="btn btn-chip" onclick="doQuickAction('too_many_ads',this)" title="Increase songs between ad breaks">&#128561; Trim ads</button>
-          <button class="btn btn-chip" onclick="doQuickAction('hot_reload',this)" title="Reload scriptwriter.py without stopping the stream">&#9654;&#65039; Hot reload</button>
+          <button class="btn btn-chip" onclick="doQuickAction('less_banter',this)" title="Increase songs between banter"><svg class="ic" aria-hidden="true"><use href="#ic-mic-off"/></svg> Trim banter</button>
+          <button class="btn btn-chip" onclick="doQuickAction('more_chaos',this)" title="Trigger an unscheduled banter now"><svg class="ic" aria-hidden="true"><use href="#ic-mic"/></svg> Force banter</button>
+          <button class="btn btn-chip" onclick="doQuickAction('too_many_ads',this)" title="Increase songs between ad breaks"><svg class="ic" aria-hidden="true"><use href="#ic-ban"/></svg> Trim ads</button>
+          <button class="btn btn-chip" onclick="doQuickAction('hot_reload',this)" title="Reload scriptwriter.py without stopping the stream"><svg class="ic" aria-hidden="true"><use href="#ic-rotate-cw"/></svg> Hot reload</button>
         </div>
         <div class="card-label" style="margin-top:14px">More Controls</div>
         <div class="transport">
-          <button class="btn btn-util" onclick="doPurge(this)">&#128465; Purge queue</button>
+          <button class="btn btn-util" onclick="doPurge(this)"><svg class="ic" aria-hidden="true"><use href="#ic-trash"/></svg> Purge queue</button>
           <!-- prompt() is intentional here: flag is an operator-only action, browser dialog is acceptable -->
-          <button class="btn btn-util" onclick="flagCurrentTrack(this)">&#128681; Flag track</button>
+          <button class="btn btn-util" onclick="flagCurrentTrack(this)"><svg class="ic" aria-hidden="true"><use href="#ic-flag"/></svg> Flag track</button>
         </div>
         <div style="margin-top:10px">
           <div class="card-label">Last Break</div>
@@ -1035,18 +1054,18 @@ function updateNow(ns){
   const ty=document.getElementById('nowType');
   ty.setAttribute('data-t',typeKey);ty.textContent=segmentBadge(typeKey);
   const titleEl=document.getElementById('nowTitle');
-  titleEl.textContent=(ns.label && ns.label !== ns.type) ? ns.label : 'Preparing...';
-  // Artist: extract from label if music, else show type
   const artistEl=document.getElementById('nowArtist');
+  let title=(ns.label && ns.label !== ns.type) ? ns.label : 'Preparing...';
   if(typeKey==='music'&&ns.metadata?.artist){
     artistEl.textContent=ns.metadata.artist;
   }else if(typeKey==='music'&&ns.label){
-    // Try to split "Title — Artist" pattern
     const parts=ns.label.split(/\s[—–-]\s/);
-    artistEl.textContent=parts.length>1?parts[1]:'';
+    if(parts.length>1){title=parts[0];artistEl.textContent=parts[1];}
+    else{artistEl.textContent='';}
   }else{
     artistEl.textContent='';
   }
+  titleEl.textContent=title;
   document.getElementById('progFill').setAttribute('data-t',typeKey);
   const dur=ns.metadata?.duration_ms?ns.metadata.duration_ms/1000:typeKey==='music'?240:typeKey==='banter'?30:typeKey==='ad'?60:20;
   const label=ns.label||'';
@@ -1608,7 +1627,7 @@ function updateEngineRoom(st,caps){
   const sidebarUptime=document.getElementById('sidebarUptime');
   if(sidebarUptime)sidebarUptime.textContent=uptime;
   const sidebarLiveLine=document.getElementById('sidebarLiveLine');
-  if(sidebarLiveLine)sidebarLiveLine.textContent='● Live · '+uptime;
+  if(sidebarLiveLine)sidebarLiveLine.textContent=(st.session_stopped?'■ Stopped · ':'● Live · ')+uptime;
 
   rt.innerHTML=[
     'Uptime: <strong>'+uptime+'</strong>',
