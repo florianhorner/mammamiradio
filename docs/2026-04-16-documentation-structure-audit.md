@@ -220,3 +220,21 @@ Impact:
 3. Pick one source of truth for route docs and update `README.md`, `CONTRIBUTING.md`, `OPERATIONS.md`, and `CLAUDE.md` together.
 4. Resolve the add-on `radio.toml` contract, then make CI, local validation, changelogs, and runbooks say the same thing.
 5. Remove or document duplicated trees (`demo_assets`, `repository.yaml`) so future drift has an explicit boundary.
+
+## Resolution Status
+
+Updated after remediation work on 2026-04-16.
+
+- #1 Docker quick start — fixed: `docker-compose.yml` now defaults `MAMMAMIRADIO_ALLOW_YTDLP=true` and passes `OPENAI_API_KEY` through, matching docs.
+- #2 Demo mode packaging — partial: the `mammamiradio/demo_assets/` tree is now the single source of truth and ships as package data. SFX are populated; `banter/`, `ads/`, `music/`, `jingles/`, `welcome/` still need real MP3s. Tracked in memory `project_demo_asset_contract.md`.
+- #3 Phantom generator command — fixed: `mammamiradio/demo_assets/README.md` no longer points to a non-existent module.
+- #4 SFX in wrong tree — fixed: `demo_assets/sfx/studio/*.mp3` moved to `mammamiradio/demo_assets/sfx/studio/`, matching the `producer.py` lookup.
+- #5 Stale placeholder-tone wording — fixed: README, CLAUDE.md, ARCHITECTURE.md now describe silence fallback.
+- #6 Route drift — fixed: README, CONTRIBUTING, OPERATIONS, CLAUDE, ARCHITECTURE aligned on `/ = listener (HA ingress flips to admin)`, `/admin` and `/dashboard` admin-auth, `/listen` = listener alias. Contract locked by `tests/test_doc_audit_invariants.py`.
+- #7 Route inventory gaps — fixed: ARCHITECTURE.md and OPERATIONS.md now list `/dashboard`, `/sw.js`, `/static/{filename:path}`, `PATCH /api/pacing`, `PATCH /api/hosts/{name}/personality`, `POST /api/listener-requests/dismiss`.
+- #8 `/api/logs` stub — fixed: removed from admin API tables.
+- #9 Add-on docs stale — fixed: `HA_ADDON_RUNBOOK.md`, `ha-addon/README.md`, `ha-addon/mammamiradio/DOCS.md` now include `admin_token` and `enable_home_assistant`.
+- #10 Add-on `radio.toml` contract — fixed: CI workflow uses `cmp -s`, matching local validator and Python tests. `tests/test_addon_build_workflow.py` locks the byte-identical contract; sed-based split-brain is forbidden.
+- #11 Changelog sync — fixed: `ha-addon/mammamiradio/CHANGELOG.md` now has the 2.10.3 entry.
+- #12 `CONDUCTOR.md` `.env` discovery — fixed: narrowed to the two paths the script actually checks.
+- #13 Duplicate trees — fixed: `demo_assets/` consolidated into `mammamiradio/demo_assets/`; `ha-addon/repository.yaml` deleted (root copy is the only one HA consumes). Both locked by `tests/test_doc_audit_invariants.py`.
