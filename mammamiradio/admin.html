@@ -354,6 +354,8 @@ body { font-family: var(--font-body); color: var(--cream); line-height: 1.5; }
   display: flex; align-items: center; justify-content: space-between;
   padding: 12px 16px; cursor: pointer; user-select: none;
   transition: background 0.15s;
+  width: 100%; background: transparent; border: 0; color: inherit;
+  font: inherit; text-align: left;
 }
 .accordion-head:hover { background: rgba(245,237,216,0.03); }
 .accordion-title {
@@ -633,7 +635,7 @@ body { font-family: var(--font-body); color: var(--cream); line-height: 1.5; }
     border-top: 3px solid var(--sun2);
   }
   .admin-content { padding: 16px 16px; }
-  .sidebar-bottom { margin-top: 14px; }
+  .sidebar-bottom { display: none; }
   .search-bar { flex-direction: column; }
   .search-bar .btn, .transport .btn-skip, .transport .btn-stop, .transport .btn-resume { width: 100%; }
   .transport .btn-util { flex: 1 1 auto; min-width: 0; font-size: 0.78em; padding: 0.35rem 0.4rem; }
@@ -695,13 +697,13 @@ input[type="range"]:focus-visible {
 
     <!-- 2×2 controls grid -->
     <div class="sidebar-controls">
-      <button class="ctrl-btn" onclick="doSkip(this)">&#9197; Next song</button>
+      <button type="button" class="ctrl-btn" onclick="doSkip(this)">&#9197; Next song</button>
       <div class="ctrl-toggle-cell">
-        <button class="ctrl-btn" id="stopBtn" onclick="doStop(this)">&#9632; Pause</button>
-        <button class="ctrl-btn" id="resumeBtn" onclick="doResume(this)" style="display:none">&#9654; Resume</button>
+        <button type="button" class="ctrl-btn" id="stopBtn" onclick="doStop(this)">&#9632; Pause</button>
+        <button type="button" class="ctrl-btn" id="resumeBtn" onclick="doResume(this)" style="display:none">&#9654; Resume</button>
       </div>
-      <button class="ctrl-btn" onclick="doShuffle(this)">&#128256; Shuffle</button>
-      <button class="ctrl-btn" onclick="doTrigger('banter',this)">&#127897; Banter</button>
+      <button type="button" class="ctrl-btn" onclick="doShuffle(this)">&#128256; Shuffle</button>
+      <button type="button" class="ctrl-btn" onclick="doTrigger('banter',this)">&#127897; Banter</button>
     </div>
 
     <div class="sidebar-divider"></div>
@@ -747,10 +749,10 @@ input[type="range"]:focus-visible {
 
     <!-- ── ACCORDION: BROADCAST TRIGGERS ── -->
     <div class="accordion">
-      <div class="accordion-head open" onclick="toggleAccordion(this)">
+      <button type="button" class="accordion-head open" aria-expanded="true" onclick="toggleAccordion(this)">
         <span><span class="accordion-title">Broadcast Triggers</span></span>
         <span class="accordion-arrow">&#9658;</span>
-      </div>
+      </button>
       <div class="accordion-body open">
         <div class="transport" style="margin-bottom:10px">
           <button class="btn btn-trigger" onclick="doTrigger('banter',this)">&#127897; Banter <span class="key">B</span></button>
@@ -779,13 +781,13 @@ input[type="range"]:focus-visible {
 
     <!-- ── ACCORDION: PACING ── -->
     <div class="accordion">
-      <div class="accordion-head" onclick="toggleAccordion(this)">
+      <button type="button" class="accordion-head" aria-expanded="false" onclick="toggleAccordion(this)">
         <span>
           <span class="accordion-title">Pacing</span>
           <span class="accordion-meta" id="pacingMeta">4 music · 1 banter</span>
         </span>
         <span class="accordion-arrow">&#9658;</span>
-      </div>
+      </button>
       <div class="accordion-body">
         <div class="pace-hint">Higher = more songs between segments (less frequent)</div>
         <div class="pace-row"><label>Banter</label><input type="range" id="pBanter" min="1" max="6" value="2"><span class="pv" id="pvBanter">2</span></div>
@@ -798,13 +800,13 @@ input[type="range"]:focus-visible {
 
     <!-- ── ACCORDION: HOSTS ── -->
     <div class="accordion">
-      <div class="accordion-head" onclick="toggleAccordion(this)">
+      <button type="button" class="accordion-head" aria-expanded="false" onclick="toggleAccordion(this)">
         <span>
           <span class="accordion-title">Hosts</span>
           <span class="accordion-meta" id="hostsMeta">Marco, Giulia</span>
         </span>
         <span class="accordion-arrow">&#9658;</span>
-      </div>
+      </button>
       <div class="accordion-body">
         <div id="hostsBody"></div>
       </div>
@@ -812,19 +814,19 @@ input[type="range"]:focus-visible {
 
     <!-- ── ACCORDION: MUSIC ── -->
     <div class="accordion">
-      <div class="accordion-head" onclick="toggleAccordion(this)">
+      <button type="button" class="accordion-head" aria-expanded="false" onclick="toggleAccordion(this)">
         <span>
           <span class="accordion-title">Music</span>
           <span class="accordion-meta" id="plMeta"></span>
         </span>
         <span class="accordion-arrow">&#9658;</span>
-      </div>
+      </button>
       <div class="accordion-body">
         <div class="card-label">Listener Requests <span id="lrMeta" style="float:right;font-weight:400;color:var(--muted)"></span></div>
         <div id="lrBody" style="margin-bottom:14px"><div class="empty">No requests yet</div></div>
         <div class="card-label">Playlist</div>
         <div class="search-bar">
-          <input type="text" class="search-input" id="searchInput" placeholder="Search music (playlist + web)..." autocomplete="off">
+          <input type="text" class="search-input" id="searchInput" placeholder="Search music (playlist + web)..." autocomplete="off" aria-label="Search music">
           <button class="btn btn-util" onclick="doSearch()">Search</button>
         </div>
         <div id="searchResults"></div>
@@ -834,10 +836,10 @@ input[type="range"]:focus-visible {
 
     <!-- ── ACCORDION: STATION LOG ── -->
     <div class="accordion">
-      <div class="accordion-head" onclick="toggleAccordion(this)">
+      <button type="button" class="accordion-head" aria-expanded="false" onclick="toggleAccordion(this)">
         <span><span class="accordion-title">Station Log</span></span>
         <span class="accordion-arrow">&#9658;</span>
-      </div>
+      </button>
       <div class="accordion-body">
         <div id="logBody" style="max-height:200px;overflow-y:auto"></div>
       </div>
@@ -845,10 +847,10 @@ input[type="range"]:focus-visible {
 
     <!-- ── ACCORDION: ENGINE ROOM ── -->
     <div class="accordion">
-      <div class="accordion-head" onclick="toggleAccordion(this)">
+      <button type="button" class="accordion-head" aria-expanded="false" onclick="toggleAccordion(this)">
         <span><span class="accordion-title">Engine Room</span><span class="tab-alert" aria-hidden="true" id="engineAlertDot" style="display:none;width:6px;height:6px;border-radius:50%;background:var(--warning);margin-left:6px;vertical-align:middle"></span></span>
         <span class="accordion-arrow">&#9658;</span>
-      </div>
+      </button>
       <div class="accordion-body">
 
         <!-- Systems -->
@@ -892,8 +894,8 @@ input[type="range"]:focus-visible {
         <div id="setupKeysForm">
           <div class="setup-subhead">Save Keys</div>
           <div class="setup-keys">
-            <input class="input" id="setupAnthropicKey" type="password" placeholder="ANTHROPIC_API_KEY (optional)" autocomplete="off">
-            <input class="input" id="setupOpenaiKey" type="password" placeholder="OPENAI_API_KEY (optional)" autocomplete="off">
+            <input class="input" id="setupAnthropicKey" type="password" placeholder="ANTHROPIC_API_KEY (optional)" autocomplete="off" aria-label="Anthropic API key">
+            <input class="input" id="setupOpenaiKey" type="password" placeholder="OPENAI_API_KEY (optional)" autocomplete="off" aria-label="OpenAI API key">
           </div>
           <div class="setup-actions" style="margin-top:10px">
             <button class="btn btn-trigger" id="setupSaveBtn" onclick="setupSaveKeys(this)">Save Keys</button>
@@ -929,6 +931,7 @@ let _lastSetupJson=null;
 
 function toast(m){const e=document.getElementById('toast');e.textContent=m;e.classList.add('show');setTimeout(()=>e.classList.remove('show'),1600)}
 function esc(s){const d=document.createElement('div');d.textContent=s||'';return d.innerHTML}
+function escJs(s){return String(s||'').replace(/\\/g,'\\\\').replace(/'/g,"\\'");}
 function flash(el){if(!el)return;el.classList.remove('flash');void el.offsetWidth;el.classList.add('flash')}
 function segmentTypeKey(type){const raw=String(type||'music');return raw==='welcome'?'banter':raw}
 function segmentText(type){return segmentTypeKey(type).replace('_',' ')}
@@ -951,6 +954,8 @@ updateClock();
 // ── Accordion ──
 function toggleAccordion(head){
   head.classList.toggle('open');
+  const expanded=head.classList.contains('open');
+  head.setAttribute('aria-expanded',expanded?'true':'false');
   const body=head.nextElementSibling;
   if(body)body.classList.toggle('open');
 }
@@ -1020,6 +1025,9 @@ function updateNow(ns){
     document.getElementById('nowType').setAttribute('data-t','music');
     document.getElementById('nowTitle').textContent='Waiting for signal...';
     document.getElementById('nowArtist').textContent='';
+    document.getElementById('nowElapsed').textContent='—';
+    const pf=document.getElementById('progFill');
+    if(pf){pf.style.width='0';pf.setAttribute('data-t','music');}
     if(_tick){clearInterval(_tick);_tick=null;_prevLabel='';}
     return;
   }
@@ -1099,18 +1107,19 @@ function renderProgramme(st){
     rows.push(`<div class="prog-row current" data-type="${typeKey}"><div class="prog-border"></div><span class="prog-badge">${esc(segmentText(typeKey))}</span><span class="now-badge">NOW</span><div class="prog-info"><span class="prog-title">${esc((now.label&&now.label!==now.type)?now.label:'Playing...')}</span>${artistPart}</div>${waveform}</div>`);
   }
 
+  // Upcoming rows
+  const upFiltered=upcoming.filter(it=>matchFilter(it.type));
+
   // Divider
-  if((histFiltered.length>0||now)&&upcoming.length>0){
+  if((histFiltered.length>0||now)&&upFiltered.length>0){
     rows.push('<div class="prog-divider">coming up</div>');
   }
 
-  // Upcoming rows
-  const upFiltered=upcoming.filter(it=>matchFilter(it.type));
   upFiltered.slice(0,10).forEach(it=>{
     totalCount++;
     const typeKey=segmentTypeKey(it.type);
     const linked=Number.isInteger(it.playlist_index)||!!it.spotify_id;
-    const clickAttrs=linked?`onclick="focusPlaylistTrack(${Number.isInteger(it.playlist_index)?it.playlist_index:-1},'${esc(it.spotify_id||'')}')"style="cursor:pointer"`:'';
+    const clickAttrs=linked?`onclick="focusPlaylistTrack(${Number.isInteger(it.playlist_index)?it.playlist_index:-1},'${escJs(it.spotify_id||'')}')" style="cursor:pointer"`:'';
     const artistPart=it.metadata?.artist?`<span class="prog-artist">${esc(it.metadata.artist)}</span>`:'';
     const reason=it.reason?`<span class="prog-artist">${esc(it.reason)}</span>`:'';
     rows.push(`<div class="prog-row" data-type="${typeKey}" ${clickAttrs}><div class="prog-border"></div><span class="prog-badge">${esc(segmentText(typeKey))}</span><div class="prog-info"><span class="prog-title">${esc(it.label||typeKey)}</span>${artistPart||reason}</div></div>`);
