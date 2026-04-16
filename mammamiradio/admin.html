@@ -31,7 +31,7 @@
 }
 
 html {
-  font-size: 15px; -webkit-font-smoothing: antialiased; min-height: 100vh;
+  font-size: 16px; -webkit-font-smoothing: antialiased; min-height: 100vh;
   background:
     url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='200' height='200' filter='url(%23n)' opacity='0.04'/%3E%3C/svg%3E") repeat,
     linear-gradient(180deg, #1E1610 0%, #14110F 12%, #14110F 100%);
@@ -613,26 +613,7 @@ body { font-family: var(--font-body); color: var(--cream); line-height: 1.5; }
 }
 .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
 
-/* ── COLLAPSE (legacy, kept for accordion content that uses toggleSection) ── */
-.collapse-head { display: flex; align-items: center; justify-content: space-between; cursor: pointer; user-select: none; }
-.collapse-arrow { font-size: 10px; color: rgba(245,237,216,0.4); transition: transform 0.2s; }
-.collapse-body { display: none; padding-top: 10px; }
-.collapse-body.open { display: block; }
-.collapse-head.open .collapse-arrow { transform: rotate(90deg); }
 
-/* ── QUEUE ITEM (kept for queue fallback display) ── */
-.queue-item { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid rgba(245,237,216,0.08); }
-.queue-item:last-child { border-bottom: none; }
-.qi-num { font-size: 11px; font-weight: 600; color: rgba(245,237,216,0.35); width: 18px; text-align: right; }
-.qi-badge { font-size: 9px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; padding: 1px 7px; border-radius: 8px; }
-.qi-badge[data-t="music"] { background: rgba(37,99,235,0.2); color: var(--ok); }
-.qi-badge[data-t="banter"] { background: rgba(244,208,72,0.15); color: var(--sun); }
-.qi-badge[data-t="ad"] { background: rgba(196,160,74,0.15); color: var(--warning); }
-.qi-badge[data-t="news_flash"] { background: rgba(224,112,56,0.15); color: var(--news); }
-.qi-label { flex: 1; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.qi-reason { font-size: 10px; color: rgba(245,237,216,0.45); margin-top: 2px; margin-left: 28px; }
-.queue-item.linked { cursor: pointer; }
-.queue-item.linked:hover { background: rgba(245,237,216,0.04); border-radius: 4px; }
 
 /* ── RESPONSIVE ── */
 @media (prefers-reduced-motion: reduce) {
@@ -865,7 +846,7 @@ input[type="range"]:focus-visible {
     <!-- ── ACCORDION: ENGINE ROOM ── -->
     <div class="accordion">
       <div class="accordion-head" onclick="toggleAccordion(this)">
-        <span><span class="accordion-title">Engine Room</span><span class="tab-alert" aria-hidden="true" id="engineAlertDot" style="display:none;width:6px;height:6px;border-radius:50%;background:var(--warning);margin-left:6px;vertical-align:middle;display:none"></span></span>
+        <span><span class="accordion-title">Engine Room</span><span class="tab-alert" aria-hidden="true" id="engineAlertDot" style="display:none;width:6px;height:6px;border-radius:50%;background:var(--warning);margin-left:6px;vertical-align:middle"></span></span>
         <span class="accordion-arrow">&#9658;</span>
       </div>
       <div class="accordion-body">
@@ -939,9 +920,9 @@ input[type="range"]:focus-visible {
 <script>
 const _csrf = document.querySelector('meta[name="mammamiradio-csrf-token"]')?.content || '';
 const H = () => ({'Content-Type':'application/json','X-Radio-CSRF-Token':_csrf});
-let _st={}, _pub={}, _caps={}, _hostsOk=false, _paceOk=false, _searchTo=null, _keysEditMode=false;
+let _st={}, _caps={}, _hostsOk=false, _paceOk=false, _searchTo=null, _keysEditMode=false;
 let _nowStart=0, _nowDur=0, _tick=null, _prevLabel='';
-let _programmeFilter='all';
+let _programmeFilter='all', _lastProgrammeHash='';
 const SHAPE={ok:'✓',warn:'△',error:'✕',info:'·'};
 const SEGMENT_GLYPH={music:'♪',banter:'🎙',ad:'[Ad]',news_flash:'[!]'};
 let _lastSetupJson=null;
@@ -1039,6 +1020,7 @@ function updateNow(ns){
     document.getElementById('nowType').setAttribute('data-t','music');
     document.getElementById('nowTitle').textContent='Waiting for signal...';
     document.getElementById('nowArtist').textContent='';
+    if(_tick){clearInterval(_tick);_tick=null;_prevLabel='';}
     return;
   }
   const typeKey=segmentTypeKey(ns.type);
@@ -1058,7 +1040,7 @@ function updateNow(ns){
     artistEl.textContent='';
   }
   document.getElementById('progFill').setAttribute('data-t',typeKey);
-  const dur=ns.metadata?.duration_ms?ns.metadata.duration_ms/1000:ns.type==='music'?240:ns.type==='banter'?30:ns.type==='ad'?60:20;
+  const dur=ns.metadata?.duration_ms?ns.metadata.duration_ms/1000:typeKey==='music'?240:typeKey==='banter'?30:typeKey==='ad'?60:20;
   const label=ns.label||'';
   if(label!==_prevLabel){_prevLabel=label;_nowStart=ns.started?ns.started*1000:Date.now();_nowDur=dur}
   if(!_tick){_tick=setInterval(()=>{
@@ -1079,7 +1061,11 @@ function setProgrammeFilter(filter, btn){
 }
 
 // ── Programme List (unified past + current + upcoming) ──
+let _lastLogHash='';
 function renderProgramme(st){
+  const hash=JSON.stringify([st?.now_streaming?.label,st?.upcoming?.map(u=>u.label),(st?.stream_log||[]).slice(0,5).map(e=>e.label),_programmeFilter]);
+  if(hash===_lastProgrammeHash)return;
+  _lastProgrammeHash=hash;
   const el=document.getElementById('programmeList');
   if(!el)return;
   const now=st.now_streaming;
@@ -1140,18 +1126,6 @@ function renderProgramme(st){
   el.innerHTML=rows.length?rows.join(''):'<div class="prog-empty">Waiting for signal...</div>';
 }
 
-// ── Queue (kept for focusPlaylistTrack compatibility) ──
-function updateQueue(up,forcePending,mode){
-  // Programme list is the primary display; queueBody may not exist in new layout
-  renderProgramme(_st);
-  // Update pacing meta in accordion
-  const pacingMeta=document.getElementById('pacingMeta');
-  if(pacingMeta&&_st.pacing){
-    const b=_st.pacing.songs_between_banter||2;
-    const a=_st.pacing.songs_between_ads||4;
-    pacingMeta.textContent=a+' music · 1 banter every '+b;
-  }
-}
 
 function statusRow(title,state,label,detail){
   return `<div class="status-row"><div class="status-copy"><div class="status-title">${esc(title)}</div><div class="status-detail">${esc(detail)}</div></div><span class="status-pill" data-s="${state}">${esc(label)}</span></div>`;
@@ -1255,16 +1229,16 @@ async function copySetupSnippet(){
   }
 }
 
-function updateSystems(caps,st,pub){
+function updateSystems(caps,st){
   const el=document.getElementById('systemsBody');
   const c=caps?.capabilities||{};
-  const gp=caps?.golden_path||pub?.golden_path||{};
+  const gp=caps?.golden_path||st?.golden_path||{};
   if(!Object.keys(c).length&&!Object.keys(gp).length){
     el.innerHTML='<div class="empty">System status unavailable</div>';
     return;
   }
 
-  const recentBanter=[...(pub?.stream_log||[])].reverse().find(e=>e.type==='banter'&&e.metadata&&Object.prototype.hasOwnProperty.call(e.metadata,'canned'));
+  const recentBanter=[...(st?.stream_log||[])].reverse().find(e=>e.type==='banter'&&e.metadata&&Object.prototype.hasOwnProperty.call(e.metadata,'canned'));
   let aiState='info',aiLabel=`${SHAPE.info} Unknown`,aiDetail='No AI diagnostics yet.';
   if(!c.script_llm){
     aiState='warn';aiLabel=`${SHAPE.warn} Demo`;aiDetail='No AI script key configured. The station falls back to canned or local copy.';
@@ -1276,12 +1250,12 @@ function updateSystems(caps,st,pub){
     aiState='info';aiLabel=`${SHAPE.info} Ready`;aiDetail='AI key is present but no fresh generated break has been detected yet.';
   }
 
-  const sourceLabel=pub?.current_source?.label||st?.playlist_source?.label||'No playlist source';
-  const upcomingMusic=(pub?.upcoming||[]).filter(it=>it.type==='music').map(it=>it.label).slice(0,2);
+  const sourceLabel=st?.current_source?.label||st?.playlist_source?.label||'No playlist source';
+  const upcomingMusic=(st?.upcoming||[]).filter(it=>it.type==='music').map(it=>it.label).slice(0,2);
   let musicState='ok',musicLabel=`${SHAPE.ok} Ready`,musicDetail=`Source: ${sourceLabel}.`;
   if(upcomingMusic.length){
     musicDetail=`Source: ${sourceLabel}. Next music: ${upcomingMusic.join(' • ')}.`;
-  }else if(pub?.upcoming_mode==='building'){
+  }else if(st?.upcoming_mode==='building'){
     musicState='info';musicLabel=`${SHAPE.info} Building`;musicDetail=`Source: ${sourceLabel}. Producer is still building the next music segment.`;
   }
 
@@ -1296,12 +1270,12 @@ function updateRecent(st){
   const parts=[];
   const lines=st.last_banter_script||[];
   if(lines.length){
-    parts.push('<div style="font-size:9px;font-weight:600;letter-spacing:0.12em;text-transform:uppercase;color:rgba(245,237,216,0.4);margin-bottom:6px">Last Banter</div>'+
+    parts.push('<div class="card-label">Last Banter</div>'+
       lines.map(l=>`<div><span class="script-host" data-h="${esc(l.host)}">${esc(l.host)}:</span> ${esc(l.text)}</div>`).join(''));
   }
   const ad=st.last_ad_script||{};
   if(ad.brands?.length){
-    parts.push('<div style="font-size:9px;font-weight:600;letter-spacing:0.12em;text-transform:uppercase;color:rgba(245,237,216,0.4);margin:10px 0 6px">Last Ad Break</div>'+
+    parts.push('<div class="card-label" style="margin-top:10px">Last Ad Break</div>'+
       ad.brands.map((brand,i)=>`<div><span class="script-host">${esc(brand)}:</span> ${esc((ad.summaries&&ad.summaries[i])||(ad.formats&&ad.formats[i])||'Aired')}</div>`).join(''));
   }
   body.innerHTML=parts.length?parts.join(''):'<div class="empty">Nothing aired yet</div>';
@@ -1433,6 +1407,8 @@ function updatePaceCounters(pacing){
   const a=pacing.songs_since_ad||0,aMax=pacing.songs_between_ads||4;
   document.getElementById('pcBanter').innerHTML='<strong>'+b+'/'+bMax+'</strong> songs since last banter'+(b>=bMax?' — next up':'');
   document.getElementById('pcAds').innerHTML='<strong>'+a+'/'+aMax+'</strong> songs since last ad'+(a>=aMax?' — next up':'');
+  const pacingMeta=document.getElementById('pacingMeta');
+  if(pacingMeta)pacingMeta.textContent=a+' music · 1 banter every '+bMax;
 }
 
 // ── Hosts ──
@@ -1597,7 +1573,10 @@ async function lrQueueNext(i){
 // ── Log ──
 function updateLog(log){
   const el=document.getElementById('logBody');
-  if(!log?.length){el.innerHTML='<div class="empty">No entries yet</div>';return}
+  if(!log?.length){el.innerHTML='<div class="empty">No entries yet</div>';_lastLogHash='';return}
+  const hash=log.length+'|'+(log[0]?.timestamp||'');
+  if(hash===_lastLogHash)return;
+  _lastLogHash=hash;
   el.innerHTML=[...log].reverse().slice(0,20).map(e=>{const d=new Date(e.timestamp*1000);const t=d.toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit',second:'2-digit'});return`<div class="log-entry"><span class="le-time">${t}</span><span class="le-type" data-t="${e.type}">${e.type.replace('_',' ')}</span><span class="le-label">${esc(e.label)}</span></div>`}).join('');
 }
 
@@ -1670,7 +1649,7 @@ function updateEngineRoom(st,caps){
 async function refreshFast(){
   try{
     const [sr,lrr]=await Promise.all([fetch('/status',{headers:H()}),fetch('/api/listener-requests',{headers:H()})]);
-    _st=await sr.json();_pub=_st;
+    _st=await sr.json();
     const lrData=lrr.ok?await lrr.json():{requests:[]};
     updateNow(_st.now_streaming);
     renderProgramme(_st);
@@ -1694,7 +1673,7 @@ async function refreshSlow(){
     const [cr,or]=await Promise.all([fetch('/api/capabilities',{headers:H()}),fetch('/api/setup/status',{headers:H()})]);
     _caps=await cr.json();
     const setup=await or.json();
-    updateSystems(_caps,_st,_st);
+    updateSystems(_caps,_st);
     renderSetup(setup);
   }catch(e){console.error('refreshSlow',e)}
 }
