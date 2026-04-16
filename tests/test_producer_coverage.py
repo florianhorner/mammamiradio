@@ -966,11 +966,20 @@ async def test_prefetch_next_skips_failed_candidate(tmp_path):
     first_key = state.playlist[0].cache_key
     failed: set[str] = {first_key}
 
-    with patch(f"{PRODUCER_MODULE}.download_track", new_callable=AsyncMock) as mock_dl:
+    fake_audio = tmp_path / "track.mp3"
+    fake_audio.write_bytes(b"audio")
+
+    with (
+        patch(f"{PRODUCER_MODULE}.download_track", new_callable=AsyncMock, return_value=fake_audio) as mock_dl,
+        patch(f"{PRODUCER_MODULE}.validate_download", return_value=(False, "mocked")),
+        patch(f"{PRODUCER_MODULE}.normalize"),
+    ):
         await _prefetch_next(state, config, _failed_keys=failed)
         if mock_dl.called:
-            # If download was called, it should be for a DIFFERENT track
-            assert True  # got past the failed-key filter
+            # If download was called, it must be for a DIFFERENT track (not the failed one)
+            called_args = mock_dl.call_args[0]
+            downloaded_track = called_args[0]
+            assert downloaded_track.cache_key != first_key, "Must not retry a failed candidate"
         # Either way, should not raise
 
 
