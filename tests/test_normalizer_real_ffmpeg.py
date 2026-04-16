@@ -30,10 +30,18 @@ def _make_silent_mp3(path) -> None:
     """Generate a 3-second silent MP3 using ffmpeg lavfi source."""
     subprocess.run(
         [
-            "ffmpeg", "-y",
-            "-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo",
-            "-t", "3",
-            "-acodec", "libmp3lame", "-ab", "128k",
+            "ffmpeg",
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            "anullsrc=r=44100:cl=stereo",
+            "-t",
+            "3",
+            "-acodec",
+            "libmp3lame",
+            "-ab",
+            "128k",
             str(path),
         ],
         check=True,
