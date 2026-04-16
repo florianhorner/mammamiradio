@@ -427,6 +427,7 @@ class StationState:
     listeners_peak: int = 0
     listeners_total: int = 0
     new_listeners_pending: int = 0
+    queue_empty_since: float | None = None
     # Runtime integrity counters for long-lived sessions
     runtime_sync_events: int = 0
     shadow_queue_corrections: int = 0

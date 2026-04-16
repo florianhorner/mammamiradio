@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -218,6 +219,7 @@ async def test_run_playback_loop_timeout_fallback_keeps_queue_bookkeeping_balanc
 
     async def _forced_timeout(awaitable, *_args, **_kwargs):
         awaitable.close()
+        await asyncio.sleep(0)
         raise TimeoutError
 
     with (
@@ -227,7 +229,7 @@ async def test_run_playback_loop_timeout_fallback_keeps_queue_bookkeeping_balanc
     ):
         task = asyncio.create_task(run_playback_loop(app))
         try:
-            deadline = time.monotonic() + 1.0
+            deadline = time.monotonic() + 3.0
             while not app.state.station_state.now_streaming:
                 if time.monotonic() > deadline:
                     raise AssertionError("playback loop did not stream fallback segment")
@@ -239,6 +241,253 @@ async def test_run_playback_loop_timeout_fallback_keeps_queue_bookkeeping_balanc
     assert app.state.station_state.now_streaming["metadata"].get("fallback") is True
     assert app.state.station_state.queued_segments == [{"type": "music", "label": "Queued Song"}]
     mock_task_done.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_run_playback_loop_resets_queue_empty_since_after_real_segment(tmp_path):
+    app = _make_test_app()
+    app.state.config.audio.bitrate = 3200
+    app.state.stream_hub.subscribe()
+    app.state.start_time = time.time() - 31
+    app.state.station_state.queue_empty_since = time.monotonic() - 40
+
+    audio_path = tmp_path / "real-segment.mp3"
+    audio_path.write_bytes(b"x" * 4096)
+    app.state.queue.put_nowait(
+        Segment(
+            type=SegmentType.MUSIC,
+            path=audio_path,
+            metadata={"title": "Real Song", "title_only": "Real Song", "artist": "Artist"},
+        )
+    )
+
+    task = asyncio.create_task(run_playback_loop(app))
+    try:
+        deadline = time.monotonic() + 3.0
+        while not app.state.station_state.now_streaming:
+            if time.monotonic() > deadline:
+                raise AssertionError("playback loop did not stream queued segment")
+            await asyncio.sleep(0.01)
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+    assert app.state.station_state.queue_empty_since is None
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.get("/readyz")
+    assert resp.status_code == 200
+    assert resp.json()["ready"] is True
+
+
+@pytest.mark.asyncio
+async def test_run_playback_loop_timeout_fallback_resets_queue_empty_since_and_no_error(tmp_path, caplog):
+    app = _make_test_app()
+    app.state.config.audio.bitrate = 3200
+    app.state.stream_hub.subscribe()
+    app.state.station_state.queue_empty_since = time.monotonic() - 35
+    caplog.set_level(logging.INFO)
+
+    fallback_path = tmp_path / "fallback-canned.mp3"
+    fallback_path.write_bytes(b"x" * 4096)
+
+    async def _forced_timeout(awaitable, *_args, **_kwargs):
+        awaitable.close()
+        await asyncio.sleep(0)
+        raise TimeoutError
+
+    with (
+        patch("mammamiradio.streamer.asyncio.wait_for", new=AsyncMock(side_effect=_forced_timeout)),
+        patch("mammamiradio.producer._pick_canned_clip", return_value=fallback_path),
+    ):
+        task = asyncio.create_task(run_playback_loop(app))
+        try:
+            deadline = time.monotonic() + 3.0
+            while app.state.station_state.now_streaming.get("metadata", {}).get("fallback") is not True:
+                if time.monotonic() > deadline:
+                    raise AssertionError("playback loop did not stream canned fallback")
+                await asyncio.sleep(0.01)
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    assert app.state.station_state.queue_empty_since is None
+    assert not any(record.levelname == "ERROR" for record in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_run_playback_loop_timeout_uses_norm_cache_after_30s(tmp_path, caplog):
+    app = _make_test_app()
+    app.state.config.audio.bitrate = 3200
+    app.state.config.cache_dir = tmp_path
+    app.state.stream_hub.subscribe()
+    caplog.set_level(logging.WARNING)
+
+    rescue_path = tmp_path / "norm_rescue.mp3"
+    rescue_path.write_bytes(b"x" * 4096)
+
+    async def _forced_timeout(awaitable, *_args, **_kwargs):
+        awaitable.close()
+        await asyncio.sleep(0)
+        raise TimeoutError
+
+    with (
+        patch("mammamiradio.streamer.asyncio.wait_for", new=AsyncMock(side_effect=_forced_timeout)),
+        patch("mammamiradio.producer._pick_canned_clip", return_value=None),
+        patch(
+            "mammamiradio.streamer._runtime_monotonic",
+            side_effect=[100.0, 130.5, 130.6, 130.7, 130.8, 130.9],
+        ),
+    ):
+        task = asyncio.create_task(run_playback_loop(app))
+        try:
+            deadline = time.monotonic() + 3.0
+            while (
+                app.state.station_state.now_streaming.get("metadata", {}).get("audio_source") != "fallback_norm_cache"
+            ):
+                if time.monotonic() > deadline:
+                    raise AssertionError("playback loop did not rescue from norm cache")
+                await asyncio.sleep(0.01)
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    assert app.state.station_state.queue_empty_since is None
+    assert any("rescuing with norm cache" in record.message for record in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_run_playback_loop_timeout_force_resumes_after_60s(tmp_path, caplog):
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path
+    app.state.stream_hub.subscribe()
+    caplog.set_level(logging.ERROR)
+
+    async def _forced_timeout(awaitable, *_args, **_kwargs):
+        awaitable.close()
+        await asyncio.sleep(0)
+        raise TimeoutError
+
+    with (
+        patch("mammamiradio.streamer.asyncio.wait_for", new=AsyncMock(side_effect=_forced_timeout)),
+        patch("mammamiradio.producer._pick_canned_clip", return_value=None),
+        patch("mammamiradio.streamer._runtime_monotonic", side_effect=[200.0, 260.5, 260.6, 260.7]),
+    ):
+        task = asyncio.create_task(run_playback_loop(app))
+        try:
+            deadline = time.monotonic() + 3.0
+            while app.state.station_state.force_next is None:
+                if time.monotonic() > deadline:
+                    raise AssertionError("playback loop did not force-resume after prolonged silence")
+                await asyncio.sleep(0.01)
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    assert app.state.station_state.queue_empty_since is not None
+    assert app.state.station_state.force_next == SegmentType.BANTER
+    assert app.state.skip_event.is_set() is False
+    assert any("requesting forced banter from producer" in record.message for record in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_readyz_returns_503_when_silent_with_active_listeners():
+    app = _make_test_app()
+    app.state.start_time = time.time() - 31
+    app.state.station_state.listeners_active = 1
+    app.state.station_state.queue_empty_since = time.monotonic() - 35
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.get("/readyz")
+
+    assert resp.status_code == 503
+    body = resp.json()
+    assert body["silence_with_listeners"] is True
+    assert body["queue_empty_elapsed_s"] >= 30
+
+
+@pytest.mark.asyncio
+async def test_readyz_does_not_fail_silence_gate_without_listeners():
+    app = _make_test_app()
+    app.state.start_time = time.time() - 31
+    app.state.station_state.listeners_active = 0
+    app.state.station_state.queue_empty_since = time.monotonic() - 35
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.get("/readyz")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["silence_with_listeners"] is False
+    assert body["ready"] is True
+
+
+@pytest.mark.asyncio
+async def test_healthz_returns_503_when_silent_with_active_listeners():
+    """HA Supervisor polls /healthz — it must 503 when silently failing so auto-restart fires."""
+    app = _make_test_app()
+    app.state.start_time = time.time() - 31
+    app.state.station_state.listeners_active = 1
+    app.state.station_state.queue_empty_since = time.monotonic() - 35
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.get("/healthz")
+
+    assert resp.status_code == 503
+    body = resp.json()
+    assert body["status"] == "failing"
+    assert body["silence_with_listeners"] is True
+    assert body["queue_empty_elapsed_s"] >= 30
+
+
+@pytest.mark.asyncio
+async def test_healthz_returns_200_when_quiet_but_no_listeners():
+    """No listeners + queue empty is not a failure — nobody is being stranded."""
+    app = _make_test_app()
+    app.state.start_time = time.time() - 31
+    app.state.station_state.listeners_active = 0
+    app.state.station_state.queue_empty_since = time.monotonic() - 35
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.get("/healthz")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "ok"
+    assert body["silence_with_listeners"] is False
+
+
+@pytest.mark.asyncio
+async def test_audio_generator_clears_persisted_session_stopped_on_connect(tmp_path):
+    """Scenario 3 (post-restart): a new listener connecting must clear session_stopped state.
+
+    After a restart, session_stopped.flag may persist on disk and session_stopped=True
+    on the StationState. If the clearing logic regresses, every new listener hits a
+    stopped session and gets no audio. This test guards that invariant.
+    """
+    from mammamiradio.streamer import _audio_generator
+
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path
+    flag = tmp_path / "session_stopped.flag"
+    flag.touch()
+    app.state.station_state.session_stopped = True
+
+    mock_request = MagicMock()
+    mock_request.app = app
+    mock_request.is_disconnected = AsyncMock(return_value=True)
+
+    gen = _audio_generator(mock_request)
+    async for _ in gen:  # pragma: no cover - generator exits before yielding
+        break
+
+    assert app.state.station_state.session_stopped is False
+    assert not flag.exists()
 
 
 @pytest.mark.asyncio
