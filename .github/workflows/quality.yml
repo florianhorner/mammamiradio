@@ -38,6 +38,11 @@ jobs:
       - name: Mypy
         run: mypy mammamiradio/ tests/
 
+      # On PRs: enforce admin panel standards when HTML files changed
+      - name: Admin panel standards check
+        if: github.event_name == 'pull_request'
+        run: bash scripts/check-admin-standards.sh
+
       # On PRs: enforce per-module coverage floors (no regressions allowed)
       - name: Coverage gate (per-module floors)
         if: github.event_name == 'pull_request'
