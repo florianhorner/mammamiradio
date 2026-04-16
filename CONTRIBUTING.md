@@ -79,7 +79,7 @@ pytest tests/
 
 Notes:
 
-- `tests/test_ads.py` exercises audio helpers and needs FFmpeg installed.
+- `tests/test_ads.py` and `tests/test_normalizer_real_ffmpeg.py` exercise audio helpers and need FFmpeg installed. The real-ffmpeg tests skip automatically when FFmpeg is absent; the pi-smoke CI job (`ubuntu-24.04-arm`) runs them on ARM hardware to catch aarch64-specific crashes.
 - Home Assistant add-on changes must also pass the local add-on build check:
 
 ```bash

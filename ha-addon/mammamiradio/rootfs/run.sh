@@ -85,12 +85,6 @@ if [ ! -f /app/radio.toml ]; then
     exit 1
 fi
 
-# ---- Clear stopped flag on container startup (HA watchdog restart recovery) ----
-# When the HA watchdog restarts the addon after a deliberate stop, we clear the
-# session_stopped.flag so the stream resumes automatically. A watchdog restart is
-# an explicit operator signal to bring the service back — honour it.
-rm -f "${MAMMAMIRADIO_CACHE_DIR}/session_stopped.flag" 2>/dev/null || true
-
 echo "[mammamiradio] Station: ${STATION_NAME:-Mamma Mi Radio}"
 echo "[mammamiradio] Starting uvicorn on 0.0.0.0:8000..."
 

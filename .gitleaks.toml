@@ -1,0 +1,31 @@
+# gitleaks configuration — prevent accidental credential commits
+# https://github.com/gitleaks/gitleaks
+
+title = "mammamiradio gitleaks config"
+
+[extend]
+# Extend the default rules
+useDefault = true
+
+[[rules]]
+id = "anthropic-api-key"
+description = "Anthropic API key"
+regex = '''sk-ant-[a-zA-Z0-9\-_]{20,}'''
+tags = ["anthropic", "api-key"]
+
+[[rules]]
+id = "ha-long-lived-token"
+description = "Home Assistant long-lived access token"
+regex = '''eyJ[a-zA-Z0-9\-_]{100,}'''
+tags = ["home-assistant", "token"]
+
+[allowlist]
+description = "Global allowlist"
+paths = [
+    ".env.example",
+    ".gitleaks.toml",
+]
+regexes = [
+    # Placeholder values in example files
+    '''(your_|changeme|placeholder|<YOUR_|TODO)''',
+]
