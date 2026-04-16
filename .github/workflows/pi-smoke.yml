@@ -15,8 +15,21 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Install ffmpeg
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
+      - name: Install static ffmpeg 8.x (arm64)
+        # apt on ubuntu-24.04-arm ships ffmpeg 6.x; our filter chain targets 8.x.
+        # Use John Van Sickle's static builds for arm64 (mirrors what the Pi runs).
+        run: |
+          set -euo pipefail
+          cd /tmp
+          curl -fsSL --retry 3 --retry-delay 2 \
+            https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-arm64-static.tar.xz \
+            -o ffmpeg.tar.xz
+          mkdir -p ffmpeg-static
+          tar -xJf ffmpeg.tar.xz -C ffmpeg-static --strip-components=1
+          sudo install -m 0755 ffmpeg-static/ffmpeg /usr/local/bin/ffmpeg
+          sudo install -m 0755 ffmpeg-static/ffprobe /usr/local/bin/ffprobe
+          ffmpeg -version | head -1
+          ffmpeg -version | head -1 | grep -E 'ffmpeg version (8|n8)'
 
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
