@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import os
 import time
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -1592,6 +1593,65 @@ async def test_clip_create_with_data(tmp_path):
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("_clear_clip_rate")
+async def test_clip_create_returns_buffer_empty_when_extract_returns_empty_bytes(tmp_path):
+    """POST /api/clip returns a specific error when extraction yields empty bytes."""
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path / "cache"
+    app.state.config.cache_dir.mkdir()
+    app.state.config.audio.bitrate = 192
+    from collections import deque
+
+    ring = deque(maxlen=240)
+    ring.append(b"\xff" * 4096)
+    app.state.clip_ring_buffer = ring
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    with patch("mammamiradio.clip.extract_clip", return_value=b""):
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            resp = await client.post("/api/clip")
+
+    assert resp.status_code == 200
+    assert resp.json() == {"ok": False, "error": "Buffer empty"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_clear_clip_rate")
+async def test_clip_create_prunes_oldest_saved_clips_before_writing_new_one(tmp_path):
+    """POST /api/clip keeps at most 50 clips by unlinking the oldest saved files first."""
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path / "cache"
+    app.state.config.cache_dir.mkdir()
+    app.state.config.audio.bitrate = 192
+    clips_dir = app.state.config.cache_dir / "clips"
+    clips_dir.mkdir(parents=True)
+
+    from collections import deque
+
+    ring = deque(maxlen=240)
+    for _ in range(10):
+        ring.append(b"\xff" * 4096)
+    app.state.clip_ring_buffer = ring
+
+    now = time.time()
+    for idx in range(50):
+        clip_path = clips_dir / f"existing_{idx:02d}.mp3"
+        clip_path.write_bytes(b"data")
+        ts = now - (1000 - idx)
+        os.utime(clip_path, (ts, ts))
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    with patch("mammamiradio.clip.cleanup_old_clips", return_value=0):
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            resp = await client.post("/api/clip")
+
+    assert resp.status_code == 200
+    assert resp.json()["ok"] is True
+    assert not (clips_dir / "existing_00.mp3").exists()
+    assert len(list(clips_dir.glob("*.mp3"))) == 50
+
+
+@pytest.mark.asyncio
 async def test_clip_serve_valid(tmp_path):
     """GET /clips/{id}.mp3 serves an existing clip file."""
     app = _make_test_app()
@@ -1634,6 +1694,30 @@ async def test_clip_serve_path_traversal(tmp_path):
     body = resp.json()
     assert body["ok"] is False
     assert "Invalid" in body["error"]
+
+
+@pytest.mark.asyncio
+async def test_clip_serve_expired_deletes_file(tmp_path):
+    """GET /clips/{id}.mp3 returns 404 and deletes expired clips."""
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path / "cache"
+    clips_dir = app.state.config.cache_dir / "clips"
+    clips_dir.mkdir(parents=True)
+    clip_file = clips_dir / "expired.mp3"
+    clip_file.write_bytes(b"\xff" * 1000)
+
+    now = 1_700_000_000.0
+    expired = now - (25 * 3600)
+    os.utime(clip_file, (expired, expired))
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    with patch("mammamiradio.streamer.time.time", return_value=now):
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            resp = await client.get("/clips/expired.mp3")
+
+    assert resp.status_code == 404
+    assert resp.json() == {"ok": False, "error": "Clip expired"}
+    assert not clip_file.exists()
 
 
 @pytest.mark.asyncio
