@@ -15,9 +15,11 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Install static ffmpeg 8.x (arm64)
-        # apt on ubuntu-24.04-arm ships ffmpeg 6.x; our filter chain targets 8.x.
-        # Use John Van Sickle's static builds for arm64 (mirrors what the Pi runs).
+      - name: Install static ffmpeg (arm64) matching HA addon runtime
+        # apt on ubuntu-24.04-arm ships ffmpeg 6.x, but the HA addon's Alpine base
+        # runs ffmpeg 7.x and the Pi runs the same. John Van Sickle's static
+        # release build mirrors the production runtime; accept 7.x or 8.x so the
+        # check keeps passing when JVS bumps the release track.
         run: |
           set -euo pipefail
           cd /tmp
@@ -29,7 +31,7 @@ jobs:
           sudo install -m 0755 ffmpeg-static/ffmpeg /usr/local/bin/ffmpeg
           sudo install -m 0755 ffmpeg-static/ffprobe /usr/local/bin/ffprobe
           ffmpeg -version | head -1
-          ffmpeg -version | head -1 | grep -E 'ffmpeg version (8|n8)'
+          ffmpeg -version | head -1 | grep -E 'ffmpeg version (7|n7|8|n8)'
 
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
