@@ -9,6 +9,7 @@ The current version source of truth is `pyproject.toml`.
 ### Fixed
 
 - **Anthropic auth flood prevented across concurrent tasks** (WS3-A): concurrent banter/ad/transition generations no longer race past the auth-block check. A module-level `asyncio.Lock` serializes the Anthropic attempt so the first 401 trips the 10-minute cooldown and sibling calls queued on the lock see the block and fall straight to OpenAI. Backoff expiry logs once (`Anthropic auth backoff expired; retrying Anthropic after cooldown`), the next call retries exactly once, and a fresh success clears the block atomically. Fixes the 8/8/22-minute 401 bursts from the 2026-04-13 log.
+- **TTS voice validation at config load** (WS3-B): Every host and ad voice is now checked against the catalog for its backend (`mammamiradio/voice_catalog.py`) during `load_config()`. Invalid voice IDs — e.g. OpenAI names like `onyx` on an edge-tts host, or typos in edge voice IDs — are logged once as a WARNING and replaced with `it-IT-DiegoNeural` before the first synthesis attempt. Stops the `Invalid voice 'onyx'` flood that repeated per segment in 2026-04-13 logs (windows `15:56`, `16:09`, `18:30`, `18:40`). Runtime TTS failures are also memoized per-session so a flaky voice doesn't re-attempt for every segment. `/api/capabilities` gains a `tts_degraded` flag when any voice was substituted.
 
 ### Added
 

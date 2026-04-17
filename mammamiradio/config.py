@@ -20,6 +20,7 @@ from dotenv import load_dotenv
 
 from mammamiradio.models import AdBrand, AdVoice, CampaignSpine, HostPersonality, PersonalityAxes
 from mammamiradio.tts import _EDGE_DEFAULT_FALLBACK_VOICE, _looks_like_openai_voice
+from mammamiradio.voice_catalog import is_known_edge_voice
 
 load_dotenv()
 
@@ -137,13 +138,25 @@ class StationConfig:
     ha_token: str = ""
     is_addon: bool = False
     allow_ytdlp: bool = False
+    # Names of hosts or ad voices that had their configured voice replaced
+    # during config load because the configured ID wasn't valid for the chosen
+    # backend. Empty when all voices passed validation.
+    tts_degraded_voices: list[str] = field(default_factory=list)
 
 
 def _normalize_tts_voices(config: StationConfig) -> None:
-    """Sanitize host/ad voice config before runtime to prevent avoidable TTS errors."""
+    """Sanitize host/ad voice config before runtime to prevent avoidable TTS errors.
+
+    Pre-flight validation: each voice is checked against the catalog for its
+    backend. Invalid voices are logged once (WARNING) and substituted with a
+    known-good default before any synthesis is attempted. Substitutions are
+    recorded on config.tts_degraded_voices so capability reporting can
+    surface a degraded-TTS state to the dashboard.
+    """
     import logging
 
     log = logging.getLogger(__name__)
+    degraded: list[str] = []
     for host in config.hosts:
         host.engine = (host.engine or "edge").strip().lower()
         if host.engine not in {"edge", "openai"}:
@@ -158,15 +171,41 @@ def _normalize_tts_voices(config: StationConfig) -> None:
                 host.edge_fallback_voice,
             )
 
-        if host.engine == "edge" and _looks_like_openai_voice(host.voice):
+        # Validate edge-engine hosts against the edge voice catalog.
+        if host.engine == "edge":
+            if _looks_like_openai_voice(host.voice):
+                fallback = host.edge_fallback_voice or _EDGE_DEFAULT_FALLBACK_VOICE
+                log.warning(
+                    "Host '%s' is configured with OpenAI voice '%s' on edge engine; using fallback '%s'",
+                    host.name,
+                    host.voice,
+                    fallback,
+                )
+                host.voice = fallback
+                degraded.append(host.name)
+            elif host.voice and not is_known_edge_voice(host.voice):
+                fallback = host.edge_fallback_voice or _EDGE_DEFAULT_FALLBACK_VOICE
+                log.warning(
+                    "Host '%s' has unknown edge voice '%s'; using fallback '%s'",
+                    host.name,
+                    host.voice,
+                    fallback,
+                )
+                host.voice = fallback
+                degraded.append(host.name)
+        elif host.engine == "openai" and host.voice and not _looks_like_openai_voice(host.voice):
+            # engine=openai but voice isn't an OpenAI ID → runtime would fail.
+            # Flip the host to edge using the fallback voice so synthesis works.
             fallback = host.edge_fallback_voice or _EDGE_DEFAULT_FALLBACK_VOICE
             log.warning(
-                "Host '%s' is configured with OpenAI voice '%s' on edge engine; using fallback '%s'",
+                "Host '%s' has engine='openai' but non-OpenAI voice '%s'; switching to edge fallback '%s'",
                 host.name,
                 host.voice,
                 fallback,
             )
+            host.engine = "edge"
             host.voice = fallback
+            degraded.append(host.name)
 
     for voice in config.ads.voices:
         if _looks_like_openai_voice(voice.voice):
@@ -177,6 +216,18 @@ def _normalize_tts_voices(config: StationConfig) -> None:
                 _EDGE_DEFAULT_FALLBACK_VOICE,
             )
             voice.voice = _EDGE_DEFAULT_FALLBACK_VOICE
+            degraded.append(voice.name)
+        elif voice.voice and not is_known_edge_voice(voice.voice):
+            log.warning(
+                "Ad voice '%s' has unknown edge voice '%s'; replacing with fallback '%s'",
+                voice.name,
+                voice.voice,
+                _EDGE_DEFAULT_FALLBACK_VOICE,
+            )
+            voice.voice = _EDGE_DEFAULT_FALLBACK_VOICE
+            degraded.append(voice.name)
+
+    config.tts_degraded_voices = degraded
 
 
 def _is_loopback_host(host: str) -> bool:

@@ -23,6 +23,12 @@ from mammamiradio.normalizer import (
     normalize,
     normalize_ad,
 )
+from mammamiradio.voice_catalog import (
+    EDGE_DEFAULT_FALLBACK_VOICE as _EDGE_DEFAULT_FALLBACK_VOICE,
+)
+from mammamiradio.voice_catalog import (
+    is_openai_voice as _catalog_is_openai_voice,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -35,20 +41,10 @@ _instructions_cache: dict[int, str] = {}
 # Singleton OpenAI client — reuses HTTP connection pool across calls
 _openai_client = None
 _openai_client_key: str = ""
-_EDGE_DEFAULT_FALLBACK_VOICE = "it-IT-DiegoNeural"
-_OPENAI_VOICE_IDS = {
-    "alloy",
-    "ash",
-    "ballad",
-    "coral",
-    "echo",
-    "fable",
-    "nova",
-    "onyx",
-    "sage",
-    "shimmer",
-    "verse",
-}
+# Runtime memoization: edge voices that failed synthesis in this session.
+# Prevents repeated per-segment failures for the same voice ID when edge-tts
+# returns "Invalid voice" or similar. Reset via reset_voice_failures().
+_failed_edge_voices: set[str] = set()
 
 # Cap concurrent TTS + FFmpeg jobs to avoid CPU/thermal spikes on constrained hardware
 # (e.g. Home Assistant Green — fanless ARM SoC). Two slots let one TTS+normalize and
@@ -57,7 +53,12 @@ _HEAVY_SEM = asyncio.Semaphore(2)
 
 
 def _looks_like_openai_voice(voice: str) -> bool:
-    return voice.strip().lower() in _OPENAI_VOICE_IDS
+    return _catalog_is_openai_voice(voice)
+
+
+def reset_voice_failures() -> None:
+    """Clear the session-memoized edge voice failure set. Used by tests."""
+    _failed_edge_voices.clear()
 
 
 def _coerce_edge_voice(voice: str, *, edge_fallback_voice: str = "") -> str:
@@ -195,6 +196,17 @@ async def synthesize(
 
     edge_voice = _coerce_edge_voice(voice, edge_fallback_voice=edge_fallback_voice)
 
+    # Honour runtime memoization: if this voice already failed once this
+    # session, skip the primary attempt and go straight to the fallback.
+    fallback_voice = edge_fallback_voice or _EDGE_DEFAULT_FALLBACK_VOICE
+    if edge_voice in _failed_edge_voices and edge_voice != fallback_voice:
+        logger.debug(
+            "Edge voice '%s' previously failed this session; using fallback '%s'",
+            edge_voice,
+            fallback_voice,
+        )
+        edge_voice = fallback_voice
+
     async with _HEAVY_SEM:
         raw_path = output_path.with_suffix(".raw.mp3")
         try:
@@ -210,6 +222,8 @@ async def synthesize(
         except Exception as e:
             raw_path.unlink(missing_ok=True)  # clean up orphaned raw file on any failure
             logger.error("TTS failed with %s: %s", edge_voice, e)
+            # Memoize the failure so subsequent segments skip this voice.
+            _failed_edge_voices.add(edge_voice)
             # Retry with a fallback voice before resorting to silence
             fallback = _EDGE_DEFAULT_FALLBACK_VOICE
             if edge_voice != fallback:
