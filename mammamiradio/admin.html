@@ -1651,9 +1651,22 @@ function updateEngineRoom(st,caps){
   const ce=document.getElementById('engineCaps');
   if(caps&&caps.capabilities){
     const c=caps.capabilities;
+    // Anthropic is three-state: connected / suspended (auth failed, OpenAI
+    // fallback active) / not configured. `anthropic_degraded` comes from the
+    // runtime — presence alone can't tell the truth about auth health.
+    let anthropicLine;
+    if(!c.anthropic_key){
+      anthropicLine='<strong style="color:var(--warning)">✕ not configured</strong>';
+    }else if(c.anthropic_degraded){
+      const secs=Math.max(0,c.anthropic_retry_after_s||0);
+      const retry=secs>0?' · retry in '+(secs>=60?Math.ceil(secs/60)+'m':secs+'s'):'';
+      anthropicLine='<strong style="color:var(--warning)" title="Auth failed; falling back to OpenAI">⚠ suspended'+retry+'</strong>';
+    }else{
+      anthropicLine='<strong style="color:var(--ok)">✓ connected</strong>';
+    }
     ce.innerHTML=[
       'Tier: <strong>'+(caps.tier_label||caps.tier||'—')+'</strong>',
-      'Anthropic: '+(c.anthropic_key?'<strong style="color:var(--ok)">✓ connected</strong>':'<strong style="color:var(--warning)">✕ not set</strong>'),
+      'Anthropic: '+anthropicLine,
       'OpenAI: '+(c.openai?'<strong style="color:var(--ok)">✓ available</strong>':'—'),
       'Home Assistant: '+(c.ha?'<strong style="color:var(--ok)">✓ connected</strong>':'disabled'),
     ].join('<br>');

@@ -15,8 +15,10 @@ Disconnects targeted (findings from UI audit):
    or producer state (documented gap: UI flips to ON AIR but now_streaming
    still says "stopped" until the playback loop overwrites it)
  - Purge: clears both real queue and shadow list, reports count
- - Capabilities: reports key *presence* (bool), not runtime API health —
-   dot can show "connected" while the API is actually down
+ - Capabilities: reports BOTH key presence (`anthropic_key`) AND runtime auth
+   health (`anthropic_degraded`, `anthropic_retry_after_s`). The admin UI
+   renders three states — connected / suspended / not configured — so the
+   dot no longer lies while the API is suspended after a 401 (Item 11).
  - Pending requests: cleared silently on playlist switch (request can be lost)
  - Trigger: sets force_next, not consumed until next producer cycle
 """
@@ -611,4 +613,41 @@ class TestSchedulerReasonsDoNotLeakToUI:
         assert "||reason}" not in block, (
             "admin.html upcoming-rows render is falling back to reason text "
             "when artist is empty — this re-leaks scheduler internals."
+        )
+
+
+# ── Item 11: capabilities status reflects runtime health, not just key presence ─
+
+
+class TestCapabilitiesStatusIsHonest:
+    """The admin engine room must show three states for Anthropic — connected,
+    suspended (auth failed, OpenAI fallback active), not configured — instead of
+    claiming "connected" whenever a key is set in config.
+    """
+
+    def test_admin_html_reads_anthropic_degraded_flag(self):
+        # Regression guard: the render for the Anthropic line must consult
+        # `anthropic_degraded`, not just key presence. Re-introducing a
+        # presence-only render would be Item 11 regression.
+        html_path = Path(__file__).parent.parent / "mammamiradio" / "admin.html"
+        html = html_path.read_text()
+        assert "anthropic_degraded" in html, (
+            "admin.html engine-room capabilities render must consult "
+            "`c.anthropic_degraded` so the dot can't lie about a 401'd key "
+            "(Item 11). If you removed the runtime-health check, UI will "
+            "once again show ✓ connected while scriptwriter is suspended."
+        )
+
+    def test_admin_html_renders_suspended_state_label(self):
+        # Anchor the copy so a future refactor can't silently collapse the
+        # three-state render back into connected/not-set.
+        html_path = Path(__file__).parent.parent / "mammamiradio" / "admin.html"
+        html = html_path.read_text()
+        assert "suspended" in html, (
+            "admin.html should render a 'suspended' label when Anthropic "
+            "auth failed and we're falling back to OpenAI (Item 11)."
+        )
+        assert "retry in" in html, (
+            "admin.html should surface the retry countdown when Anthropic "
+            "is in backoff (Item 11)."
         )
