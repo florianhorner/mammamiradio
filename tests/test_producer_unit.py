@@ -2138,3 +2138,211 @@ async def test_was_stopped_initialized_true_when_session_already_stopped(tmp_pat
     seg = queue.get_nowait()
     assert seg.metadata.get("resume_bridge") is True
     assert seg.path == norm_file
+
+
+# ---------------------------------------------------------------------------
+# Coverage gap-fill: normalization cache hit, AudioToolError, chart refresh, HA events
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_prewarm_norm_cache_hit(tmp_path):
+    """prewarm reuses a pre-existing normalized cache file (lines 306-307)."""
+    from mammamiradio.producer import prewarm_first_segment
+
+    state = _make_state()
+    config = _make_config()
+    config.tmp_dir = tmp_path
+    config.cache_dir = tmp_path
+    queue: asyncio.Queue = asyncio.Queue()
+
+    # Pre-create normalized cache files for all playlist tracks so whichever is
+    # selected, prewarm takes the cache-hit branch (lines 306-307).
+    for t in state.playlist:
+        (tmp_path / f"norm_{t.cache_key}_{config.audio.bitrate}k.mp3").write_bytes(b"\x00" * 1000)
+
+    with (
+        patch(f"{PRODUCER_MODULE}.download_track", new_callable=AsyncMock, return_value=Path("/tmp/fake.mp3")),
+        patch(f"{PRODUCER_MODULE}._set_last_music_file"),
+    ):
+        result = await prewarm_first_segment(queue, state, config)
+
+    assert result is True
+    assert queue.qsize() == 1
+    assert queue.get_nowait().type == SegmentType.MUSIC
+
+
+@pytest.mark.asyncio
+async def test_prewarm_quality_gate_audiotoolerror(tmp_path):
+    """prewarm continues gracefully when quality gate raises AudioToolError (line 325)."""
+    from mammamiradio.audio_quality import AudioToolError
+    from mammamiradio.producer import prewarm_first_segment
+
+    state = _make_state()
+    config = _make_config()
+    config.tmp_dir = tmp_path
+    queue: asyncio.Queue = asyncio.Queue()
+
+    with (
+        patch(f"{PRODUCER_MODULE}.download_track", new_callable=AsyncMock, return_value=Path("/tmp/fake.mp3")),
+        patch(f"{PRODUCER_MODULE}.normalize"),
+        patch(f"{PRODUCER_MODULE}.shutil.copy2"),
+        patch(f"{PRODUCER_MODULE}.validate_segment_audio", side_effect=AudioToolError("ffprobe missing")),
+        patch(f"{PRODUCER_MODULE}._set_last_music_file"),
+    ):
+        result = await prewarm_first_segment(queue, state, config)
+
+    assert result is True  # AudioToolError is non-fatal; segment still queued
+    assert queue.qsize() == 1
+
+
+@pytest.mark.asyncio
+async def test_chart_refresh_triggers_when_interval_elapsed():
+    """Producer triggers chart refresh once the refresh interval has elapsed (lines 514-519)."""
+    state = _make_state()
+    state.playlist_source = PlaylistSource(kind="charts", source_id="it", label="Italian charts")
+    config = _make_config()
+    config.pacing.lookahead_segments = 1
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    # Seed the queue so qsize >= lookahead_segments → producer enters the idle path
+    await queue.put(
+        Segment(type=SegmentType.BANTER, path=Path("/tmp/seed.mp3"), metadata={"type": "banter"})
+    )
+
+    new_track = Track(title="Nuova Canzone", artist="Nuovo Artista", duration_ms=200_000, spotify_id="new1")
+
+    # First call returns 0.0 (initialises _last_playlist_refresh), every subsequent call
+    # returns 6000.0 so that 6000.0 - 0.0 = 6000 s > 5400 s interval → refresh fires.
+    _call_count = 0
+
+    def _time_fn():
+        nonlocal _call_count
+        _call_count += 1
+        return 0.0 if _call_count == 1 else 6000.0
+
+    fake_loop = MagicMock()
+    fake_loop.time.side_effect = _time_fn
+
+    with (
+        patch(f"{PRODUCER_MODULE}.asyncio.get_running_loop", return_value=fake_loop),
+        patch(f"{PRODUCER_MODULE}.fetch_chart_refresh", return_value=[new_track]) as mock_refresh,
+        patch(f"{PRODUCER_MODULE}.evict_cache_lru"),
+    ):
+        task = asyncio.create_task(run_producer(queue, state, config))
+        try:
+            await asyncio.sleep(0.2)
+        finally:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+    mock_refresh.assert_called_once()
+    assert new_track in state.playlist
+
+
+@pytest.mark.asyncio
+async def test_ha_gold_event_updates_state():
+    """HA context with non-person events updates ha_last_event_label (lines 565-575)."""
+    from collections import deque
+
+    from mammamiradio.ha_context import HomeContext
+    from mammamiradio.ha_enrichment import HomeEvent
+
+    state = _make_state()
+    config = _make_config()
+    config.homeassistant.enabled = True
+    config.ha_token = "test-token"
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+
+    ha_event = HomeEvent(
+        entity_id="light.living_room",
+        label="Soggiorno acceso",
+        old_state="off",
+        new_state="on",
+        timestamp=time.time(),
+    )
+    ha_ctx = HomeContext(summary="Casa attiva", events=deque([ha_event]))
+
+    host = config.hosts[0] if config.hosts else HostPersonality(name="Marco", voice="it-IT-DiegoNeural", style="warm")
+    banter_lines = [(host, "Tutto bene!")]
+
+    with (
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.BANTER),
+        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock, return_value=ha_ctx),
+        patch(f"{PRODUCER_MODULE}.check_reactive_triggers", return_value=None),
+        patch(f"{SCRIPTWRITER_MODULE}.write_banter", new_callable=AsyncMock, return_value=(banter_lines, None)),
+        patch(f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora...")),
+        patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(f"{PRODUCER_MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(f"{PRODUCER_MODULE}.concat_files", return_value=_fake_path()),
+    ):
+        task = asyncio.create_task(run_producer(queue, state, config))
+        try:
+            await asyncio.sleep(0.2)
+        finally:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+    assert state.ha_last_event_label == "Soggiorno acceso"
+    assert state.ha_last_event_ts == ha_event.timestamp
+
+
+@pytest.mark.asyncio
+async def test_music_segment_uses_normalization_cache_hit(tmp_path):
+    """Producer uses pre-cached normalization file instead of re-normalizing (lines 606-608)."""
+    state = _make_state()
+    config = _make_config()
+    config.tmp_dir = tmp_path
+    config.cache_dir = tmp_path
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+
+    # Pre-create norm files for all playlist tracks so the cache-hit branch (606-608)
+    # is taken regardless of which track select_next_track() picks.
+    for t in state.playlist:
+        (tmp_path / f"norm_{t.cache_key}_{config.audio.bitrate}k.mp3").write_bytes(b"\x00" * 1000)
+
+    with (
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.MUSIC),
+        patch(f"{PRODUCER_MODULE}.download_track", new_callable=AsyncMock, return_value=Path("/tmp/fake.mp3")),
+        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+        patch(f"{PRODUCER_MODULE}._set_last_music_file"),
+    ):
+        await _run_until_queued(queue, state, config)
+
+    assert queue.qsize() >= 1
+    seg = queue.get_nowait()
+    assert seg.type == SegmentType.MUSIC
+
+
+@pytest.mark.asyncio
+async def test_music_quality_gate_audiotoolerror_nonfatal(tmp_path):
+    """Music quality gate AudioToolError is non-fatal — segment still queued (line 637)."""
+    from mammamiradio.audio_quality import AudioToolError
+
+    state = _make_state()
+    config = _make_config()
+    config.tmp_dir = tmp_path
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+
+    def _fake_normalize(src, dst, *_args, **_kwargs):
+        dst.write_bytes(b"\x00" * 1000)
+        return dst
+
+    with (
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.MUSIC),
+        patch(f"{PRODUCER_MODULE}.download_track", new_callable=AsyncMock, return_value=Path("/tmp/fake.mp3")),
+        patch(f"{PRODUCER_MODULE}.normalize", side_effect=_fake_normalize),
+        patch(f"{PRODUCER_MODULE}.shutil.copy2"),
+        patch(f"{PRODUCER_MODULE}.validate_segment_audio", side_effect=AudioToolError("ffprobe missing")),
+        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+        patch(f"{PRODUCER_MODULE}._set_last_music_file"),
+    ):
+        await _run_until_queued(queue, state, config)
+
+    assert queue.qsize() >= 1
+    assert queue.get_nowait().type == SegmentType.MUSIC

@@ -160,9 +160,11 @@ def _select_ad_creative(
     # Determine available distinct voices
     num_voices = len(config.ads.voices) if config.ads.voices else 1
 
-    # Pick format
+    # Pick format — filter unknown strings so AdFormat(f) never raises ValueError
     if brand.campaign and brand.campaign.format_pool:
-        candidates = list(brand.campaign.format_pool)
+        candidates = [f for f in brand.campaign.format_pool if f in ALL_FORMATS]
+        if not candidates:
+            candidates = list(ALL_FORMATS)
     else:
         candidates = list(ALL_FORMATS)
 

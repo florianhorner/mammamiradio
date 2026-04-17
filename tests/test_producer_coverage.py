@@ -155,6 +155,23 @@ def test_select_ad_creative_campaign_sonic_signature():
     assert sonic.transition_motif == "piano"
 
 
+def test_select_ad_creative_invalid_format_pool_falls_back_to_all_formats():
+    """All-invalid format_pool falls back to ALL_FORMATS (line 167 guard)."""
+    campaign = CampaignSpine(format_pool=["not_a_real_format", "also_invalid"])
+    brand = AdBrand(name="TestBrand", tagline="Test", category="tech", campaign=campaign)
+    state = StationState()
+    config = MagicMock()
+    config.ads.voices = [
+        AdVoice(name="V1", voice="v1", style="warm"),
+        AdVoice(name="V2", voice="v2", style="warm"),
+    ]
+
+    from mammamiradio.ad_creative import ALL_FORMATS
+
+    fmt, _, _ = _select_ad_creative(brand, state, config)
+    assert fmt in ALL_FORMATS
+
+
 def test_select_ad_creative_campaign_spokesperson():
     """Uses campaign spokesperson as primary role."""
     campaign = CampaignSpine(spokesperson="seductress")

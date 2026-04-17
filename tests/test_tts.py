@@ -749,4 +749,6 @@ async def test_synthesize_ad_motif_generation_failure_continues_without_motif(_m
     result = await synthesize_ad(script, voices, tmp_path)
     assert result.exists()
     _mock_all["generate_brand_motif"].assert_called_once()
-    # motif_result is None → ad_parts stays empty → no motif prepended to final ad
+    # motif_result is None → ad_parts stays empty → concat_files never called for motif prepend
+    # (single voice part also means no voice+sfx concat)
+    _mock_all["concat_files"].assert_not_called()

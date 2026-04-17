@@ -168,8 +168,10 @@ async def test_startup_restores_stopped_session_flag(tmp_path: Path, flag_exists
 
 
 @pytest.mark.asyncio
-async def test_startup_no_ffmpeg_warning_when_ffmpeg_found(tmp_path: Path):
+async def test_startup_no_ffmpeg_warning_when_ffmpeg_found(tmp_path: Path, caplog):
     """startup() does NOT log an FFmpeg warning when ffmpeg is found on PATH."""
+    import logging
+
     from mammamiradio.models import Track
 
     mock_config = MagicMock()
@@ -195,10 +197,16 @@ async def test_startup_no_ffmpeg_warning_when_ffmpeg_found(tmp_path: Path):
         patch(f"{MODULE}.run_playback_loop", new_callable=AsyncMock),
         patch(f"{MODULE}.prewarm_first_segment", new_callable=AsyncMock),
         patch(f"{MODULE}.shutil.which", return_value="/usr/bin/ffmpeg"),
+        caplog.at_level(logging.WARNING, logger="mammamiradio"),
     ):
         from mammamiradio.main import startup
 
-        await startup()  # should not raise, covers the 76->81 branch (ffmpeg found)
+        await startup()  # covers the 76->81 branch (ffmpeg found)
+
+    assert not any(
+        "ffmpeg" in r.message.lower() and "not found" in r.message.lower()
+        for r in caplog.records
+    )
 
 
 @pytest.mark.asyncio
