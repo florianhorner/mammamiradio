@@ -44,16 +44,42 @@ fi
 pass "25h-ago prior allowed"
 
 # Case 5: empty prior (first release ever) => allowed
-if ! bash "$SCRIPT" "" "$NOW" 2>/dev/null; then
-  # Empty prior with no gh CLI could exit 2 (lookup error). Allow both 0 and 2
-  # as "not a cooldown block" outcomes for local testing. In CI, gh CLI is
-  # available so this path returns 0.
-  rc=$?
-  if (( rc == 1 )); then
-    fail "empty-prior should not be treated as a cooldown block"
-  fi
+set +e
+bash "$SCRIPT" "" "$NOW" >/dev/null 2>&1
+rc=$?
+set -e
+if (( rc == 1 )); then
+  fail "empty-prior should not be treated as a cooldown block (exit=${rc})"
 fi
-pass "empty-prior not blocked"
+pass "empty-prior not blocked (exit=${rc})"
+
+# Case 6: MIN_COOLDOWN_HOURS=0 disables the gate
+if ! MIN_COOLDOWN_HOURS=0 bash "$SCRIPT" "2026-04-17T11:59:59Z" "$NOW" >/dev/null 2>&1; then
+  fail "MIN_COOLDOWN_HOURS=0 should disable the gate"
+fi
+pass "MIN_COOLDOWN_HOURS=0 disables gate"
+
+# Case 7: MIN_COOLDOWN_HOURS=48 with a 25h-old prior => blocked
+if MIN_COOLDOWN_HOURS=48 bash "$SCRIPT" "2026-04-16T11:00:00Z" "$NOW" >/dev/null 2>&1; then
+  fail "MIN_COOLDOWN_HOURS=48 with 25h-old prior should block"
+fi
+pass "MIN_COOLDOWN_HOURS=48 blocks 25h-old prior"
+
+# Case 8: malformed ISO => exit 2 (lookup / parse error, not block)
+set +e
+bash "$SCRIPT" "not-an-iso" "$NOW" >/dev/null 2>&1
+rc=$?
+set -e
+if (( rc != 2 )); then
+  fail "malformed ISO should exit 2, got ${rc}"
+fi
+pass "malformed ISO returns exit 2"
+
+# Case 9: clock skew (prior in the future) => allowed with warning, not blocked
+if ! bash "$SCRIPT" "2026-04-17T13:00:00Z" "$NOW" >/dev/null 2>&1; then
+  fail "clock-skew (prior in future) should be allowed, not blocked"
+fi
+pass "clock-skew prior-in-future allowed"
 
 echo
-echo "All 5 cooldown gate cases passed."
+echo "All 9 cooldown gate cases passed."

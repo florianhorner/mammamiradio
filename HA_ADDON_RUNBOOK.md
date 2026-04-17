@@ -115,6 +115,17 @@ Before merging ANY change that touches addon files:
 - [ ] If path changed: grep all files for the old path
 - [ ] If renamed anything: `grep -r "old_name" .` returns zero hits
 
+## Release cooldown (stabilization run, 2026-04-17 onward)
+
+A 24-hour minimum gap is enforced between consecutive published releases. The gate is `.github/workflows/release-cooldown.yml`; it runs on every `v*` tag push and queries GitHub Releases for the prior published (non-draft, non-prerelease) release's `publishedAt`.
+
+- Block rule: `prior_release_time + 24h > now` => status check fails, release surfaces red.
+- Bypass: the PR that introduced the tagged commit carries the `hotfix` label. The workflow skips the cooldown check entirely. Intended for P0/P1 regressions the existing release just introduced.
+- Override: `MIN_COOLDOWN_HOURS=<n>` at workflow level (not set by default) tightens or relaxes the window.
+- Self-test: `bash tests/workflows/test_cooldown_gate.sh` runs 9 scenarios (1h / 24h boundary / 25h / MIN_COOLDOWN_HOURS override / malformed ISO / clock skew / no-prior). Wired into `quality.yml` — runs on every PR.
+
+**Trust model:** the `hotfix` label is not access-controlled beyond the repo's default label permissions. Anyone with triage rights can apply it. Acceptable for the current single-maintainer team; revisit if PR volume grows. Day 8 Go/No-Go uses `STABILIZATION_LOG.md` to evaluate whether the gate is working.
+
 ## Post-merge verification
 
 After merging to main, verify the full chain:

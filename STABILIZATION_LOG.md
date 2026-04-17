@@ -14,6 +14,8 @@ Active window: **2026-04-17 through 2026-04-24** (7 days).
 
 Only change shipped: `release-cooldown.yml` (24h minimum gap between releases; `hotfix` label bypasses).
 
+**Bypass trust model (explicit):** the `hotfix` label is not access-controlled beyond the repo's default label permissions. Anyone with triage rights can apply it. The design doc's aspirational criteria (≤50 LOC, P0/P1 severity) are *not* enforced by the workflow in Day 1 scope — only the label is checked. Acceptable for the current single-maintainer team; if PR volume grows or the label gets abused, tighten via a GitHub label-protection rule or a CODEOWNERS-gated check. Log any hotfix use below with a 1-line rationale so Day 8 has data.
+
 Day 8 Go/No-Go rubric:
 
 - `fix_hours < 2` **and** `emergency_patches == 0` in the window → cooldown alone may be sufficient. Weeks 2–4 reclassify from scheduled to opportunistic (still ship CONTRACTS.yaml + validator for durability; skip canary + Claude-review until a future regression motivates them).

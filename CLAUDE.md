@@ -37,6 +37,7 @@ A listener who connects must hear sound within 1–2 seconds, every time. No exc
 - All checks: `make check` (lint + typecheck + coverage gate with per-module floors)
 - Pre-commit: `pip install pre-commit && pre-commit install --hook-type pre-commit --hook-type pre-push --hook-type commit-msg`
 - **Validate addon before push**: `./scripts/validate-addon.sh` (add `--build` for Docker build test)
+- **Release cooldown self-test**: `bash tests/workflows/test_cooldown_gate.sh` (9 scenarios, runs in `quality.yml` on every PR)
 
 ## Docker / Home Assistant
 
@@ -64,6 +65,7 @@ A listener who connects must hear sound within 1–2 seconds, every time. No exc
 - `STATION_NAME`, `STATION_THEME`: override station identity from `radio.toml`
 - `CLAUDE_MODEL`: override Claude model from `radio.toml`
 - `MAMMAMIRADIO_ALLOW_YTDLP`: enable yt-dlp for chart music (`true`/`1`/`yes`; default: disabled for copyright safety, but enabled by default in HA addon and Conductor)
+- `MIN_COOLDOWN_HOURS`: override the release-cooldown window (default `24`, read by `scripts/check-release-cooldown.sh`)
 
 ## Runtime behavior
 
@@ -172,6 +174,7 @@ Why: the scriptwriter generates fake ads in the brand's voice, makes false produ
   - On main merge: `update` mode — auto-ratchets all floors up and commits the new values. Zero human intervention.
 - **Local check**: `make coverage-check` to verify locally. `make coverage-ratchet` to preview what CI would commit.
 - **Adding tests**: Write tests, push. CI will auto-raise the floors on merge. The next PR that drops any module will fail.
+- **Release cooldown gate**: `.github/workflows/release-cooldown.yml` blocks any `v*` tag push if the prior published release is <24h old. Bypass by adding the `hotfix` label to the PR that introduced the tagged commit. Self-test: `bash tests/workflows/test_cooldown_gate.sh` (9 cases; also runs in `quality.yml` on every PR). See `HA_ADDON_RUNBOOK.md` and `STABILIZATION_LOG.md` for the measurement plan.
 
 ## Protected UI elements
 

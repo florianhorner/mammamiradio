@@ -31,7 +31,11 @@ if [[ -z "$prior_iso" ]]; then
     echo "check-release-cooldown: gh CLI not available and no prior_iso provided" >&2
     exit 2
   fi
-  prior_iso=$(gh release list --limit 1 --json publishedAt --jq '.[0].publishedAt // ""' 2>/dev/null || echo "")
+  # Ignore drafts and pre-releases; fall back to empty so the "no prior" path
+  # fires cleanly rather than comparing against a null publishedAt.
+  prior_iso=$(gh release list --limit 20 --json publishedAt,isDraft,isPrerelease \
+    --jq 'map(select(.isDraft == false and .isPrerelease == false and .publishedAt != null)) | .[0].publishedAt // ""' \
+    2>/dev/null || echo "")
 fi
 
 if [[ -z "$prior_iso" ]]; then

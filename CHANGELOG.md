@@ -6,6 +6,10 @@ The current version source of truth is `pyproject.toml`.
 
 ## [Unreleased]
 
+### Added
+
+- **Release cooldown gate** (stabilization run Day 1): `.github/workflows/release-cooldown.yml` blocks any `v*` tag push if the prior published release is less than 24 hours old. Bypass: `hotfix` label on the source PR. Tunable via `MIN_COOLDOWN_HOURS`. Self-test at `tests/workflows/test_cooldown_gate.sh` covers 9 scenarios and runs on every PR via `quality.yml`. `STABILIZATION_LOG.md` records weekly fix-hours and emergency-patch counts; Day 8 Go/No-Go lives in that file.
+
 ## [2.10.5] - 2026-04-16
 
 ### Changed
