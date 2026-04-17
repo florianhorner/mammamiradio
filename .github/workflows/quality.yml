@@ -29,6 +29,9 @@ jobs:
           pip install -e .
           pip install -r requirements-dev.txt
 
+      - name: Release cooldown gate self-test
+        run: bash tests/workflows/test_cooldown_gate.sh
+
       - name: Ruff lint
         run: ruff check .
 

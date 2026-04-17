@@ -1,0 +1,48 @@
+name: Release Cooldown
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  cooldown-check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+
+      - name: Detect hotfix label on source PR
+        id: hotfix
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          pr_number=$(gh pr list --state merged --search "$TAG_SHA" --json number \
+            --jq '.[0].number // empty' || echo "")
+          if [[ -z "$pr_number" ]]; then
+            echo "hotfix=false" >> "$GITHUB_OUTPUT"
+            echo "No merged PR found for $TAG_SHA. Hotfix bypass not applicable."
+            exit 0
+          fi
+          labels=$(gh pr view "$pr_number" --json labels --jq '[.labels[].name] | join(",")')
+          echo "PR #${pr_number} labels: ${labels}"
+          if [[ ",${labels}," == *",hotfix,"* ]]; then
+            echo "hotfix=true" >> "$GITHUB_OUTPUT"
+            echo "hotfix label present — cooldown bypassed."
+          else
+            echo "hotfix=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Enforce 24h release cooldown
+        if: steps.hotfix.outputs.hotfix != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: bash scripts/check-release-cooldown.sh
