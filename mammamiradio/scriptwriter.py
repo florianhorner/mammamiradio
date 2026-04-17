@@ -15,6 +15,7 @@ from typing import cast
 
 import anthropic
 
+from mammamiradio.ad_creative import AD_FORMATS, SONIC_ENVIRONMENTS, SPEAKER_ROLES
 from mammamiradio.config import StationConfig
 from mammamiradio.context_cues import compute_context_block
 from mammamiradio.models import (
@@ -404,76 +405,6 @@ def _ensure_attention_grabbing_ad_parts(parts: list[AdPart], sonic: SonicWorld) 
 
     return updated
 
-
-# --- Ad creative system constants ---
-
-AD_FORMATS: dict[str, str] = {
-    AdFormat.CLASSIC_PITCH: (
-        "One aggressive announcer delivers the pitch, ending with a ultra-fast legal disclaimer. "
-        "Structure: hook -> build tension -> deliver the pitch -> DISCLAIMER_GOBLIN rattles off "
-        "the fine print at machine-gun speed. Two speakers: HAMMER sells it, DISCLAIMER_GOBLIN "
-        "buries the bad news. Confident, polished, slightly unhinged sincerity."
-    ),
-    AdFormat.TESTIMONIAL: (
-        "A fake customer testimonial followed by an announcer button. Two speakers: "
-        "the WITNESS delivers their suspiciously specific praise, then the main speaker "
-        "wraps with a tagline. The witness should sound rehearsed but trying to sound natural."
-    ),
-    AdFormat.DUO_SCENE: (
-        "Two characters in a scene, arguing or negotiating. One is clearly losing the argument. "
-        "The comedy comes from the dynamic between them. End with a product plug that resolves "
-        "(or fails to resolve) the conflict. Two speakers with distinct roles."
-    ),
-    AdFormat.LIVE_REMOTE: (
-        "A field reporter at a ridiculous location or event related to the brand. "
-        "Background chaos implied. The reporter struggles to maintain professionalism. "
-        "Single speaker pretending to be on-location. Use environment cues."
-    ),
-    AdFormat.LATE_NIGHT_WHISPER: (
-        "Intimate, sensual, slightly cursed. ASMR energy. The product is described "
-        "with inappropriate levels of tenderness. Slow pacing, dramatic pauses. "
-        "Single speaker. Think late-night Italian TV shopping meets poetry."
-    ),
-    AdFormat.INSTITUTIONAL_PSA: (
-        "Serious public-service announcement tone for something completely deranged. "
-        "Official language, bureaucratic gravitas, absurd content. "
-        "Single speaker. The contrast between tone and subject IS the joke."
-    ),
-}
-
-SPEAKER_ROLES: dict[str, str] = {
-    "hammer": "The Hammer: booming national TV voice, dramatic pauses, sells the apocalypse with a smile",
-    "seductress": "The Seductress: whisper-ASMR menace, makes everything sound inappropriately intimate",
-    "bureaucrat": "The Bureaucrat: dry official notice voice, reads absurd things with total sincerity",
-    "maniac": "The Maniac: oversold shopping-channel energy, everything is THE GREATEST THING EVER",
-    "witness": "The Witness: fake customer testimonial, suspiciously specific, clearly reading a script",
-    "disclaimer_goblin": "The Disclaimer Goblin: ultra-fast legal cleanup, buries the bad news in speed",
-}
-
-SONIC_ENVIRONMENTS: dict[str, str] = {
-    "cafe": "Italian cafe ambience, espresso machine hissing, distant chatter",
-    "motorway": "Highway noise, car engine hum, wind rushing past",
-    "beach": "Mediterranean beach, waves lapping, distant seagulls",
-    "showroom": "Echoey showroom floor, polished surfaces, muzak undertone",
-    "stadium": "Crowd roar, echo of announcer PA system",
-    "luxury_spa": "Zen water trickling, soft chimes, hushed whispers",
-    "occult_basement": "Dripping water, distant chanting, candle-flicker ambience",
-    "shopping_channel": "Bright studio energy, phone ringing, audience gasps",
-}
-
-SONIC_MUSIC_BEDS: dict[str, str] = {
-    "lounge": "warm mid-frequency hum, gentle modulation",
-    "tarantella_pop": "fast bright rhythm, Italian folk-pop energy",
-    "cheap_synth_romance": "mid frequencies, slow tremolo, warm synth pads",
-    "overblown_epic": "layered low+high drones, cinematic grandiosity",
-    "suspicious_jazz": "detuned intervals, slow modulation, noir vibes",
-    "discount_techno": "fast pulse, rapid tremolo, budget club energy",
-    # Legacy moods kept as aliases
-    "dramatic": "low rumbling drone with slow LFO",
-    "upbeat": "bright rhythmic pulse",
-    "mysterious": "dark filtered noise with reverb feel",
-    "epic": "layered low+high drones",
-}
 
 _BANTER_EXCHANGE_COUNT: str = "4-6"
 
