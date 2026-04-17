@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import math
 import re
@@ -15,6 +16,50 @@ logger = logging.getLogger(__name__)
 
 # Limit concurrent ffmpeg normalization runs across sync + executor call sites.
 _NORM_SEM = BoundedSemaphore(2)
+
+
+def _norm_sidecar_path(norm_path: Path) -> Path:
+    """Companion JSON path for a normalized cache file."""
+    return norm_path.parent / f"{norm_path.name}.json"
+
+
+def save_track_metadata(norm_path: Path, title: str, artist: str) -> None:
+    """Persist title+artist alongside a normalized cache file so rescue paths can
+    surface human-readable metadata instead of the raw filename."""
+    sidecar = _norm_sidecar_path(norm_path)
+    try:
+        sidecar.write_text(json.dumps({"title": title, "artist": artist}))
+    except OSError as exc:
+        logger.debug("Could not write norm metadata sidecar %s: %s", sidecar.name, exc)
+
+
+def load_track_metadata(norm_path: Path) -> dict[str, str] | None:
+    """Return {'title', 'artist'} from a norm cache sidecar if present and valid."""
+    sidecar = _norm_sidecar_path(norm_path)
+    if not sidecar.exists():
+        return None
+    try:
+        data = json.loads(sidecar.read_text())
+    except (OSError, json.JSONDecodeError):
+        return None
+    title = data.get("title")
+    artist = data.get("artist")
+    if isinstance(title, str) and isinstance(artist, str) and title and artist:
+        return {"title": title, "artist": artist}
+    return None
+
+
+def humanize_norm_filename(name: str) -> str:
+    """Best-effort readable label from a ``norm_<slug>_<bitrate>k.mp3`` filename when no sidecar exists."""
+    stem = Path(name).stem
+    if stem.startswith("norm_"):
+        stem = stem[len("norm_") :]
+    # Drop a trailing _<digits>k bitrate segment if present.
+    stem = re.sub(r"_\d+k$", "", stem)
+    words = [w for w in stem.split("_") if w]
+    if not words:
+        return "Recovered track"
+    return " ".join(words).title()
 
 
 def measure_lufs(input_path: Path) -> float | None:

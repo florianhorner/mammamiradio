@@ -13,9 +13,12 @@ from mammamiradio.normalizer import (
     concat_files,
     generate_silence,
     generate_sweep,
+    humanize_norm_filename,
+    load_track_metadata,
     mix_oneshot_sfx,
     mix_quiet_bleed,
     normalize,
+    save_track_metadata,
 )
 
 
@@ -524,3 +527,69 @@ def test_normalize_music_eq_false_still_has_no_equalizer_filters(mock_subprocess
     assert equalizer_count == 0, (
         f"Expected 0 equalizer filters with music_eq=False, got {equalizer_count}. Filter chain: {af_value}"
     )
+
+
+# ── Track metadata sidecars (Item 20) ──────────────────────────────────────────
+
+
+def test_save_and_load_track_metadata_roundtrip(tmp_path):
+    norm = tmp_path / "norm_artie_5ive_sogno_americano_192k.mp3"
+    norm.write_bytes(b"pretend mp3")
+    save_track_metadata(norm, title="SOGNO AMERICANO", artist="Artie 5ive")
+    meta = load_track_metadata(norm)
+    assert meta == {"title": "SOGNO AMERICANO", "artist": "Artie 5ive"}
+
+
+def test_load_track_metadata_missing_sidecar_returns_none(tmp_path):
+    norm = tmp_path / "norm_missing_192k.mp3"
+    norm.write_bytes(b"pretend mp3")
+    assert load_track_metadata(norm) is None
+
+
+def test_load_track_metadata_malformed_json_returns_none(tmp_path):
+    norm = tmp_path / "norm_bad_192k.mp3"
+    norm.write_bytes(b"pretend mp3")
+    sidecar = tmp_path / "norm_bad_192k.mp3.json"
+    sidecar.write_text("{not valid json")
+    assert load_track_metadata(norm) is None
+
+
+def test_load_track_metadata_incomplete_data_returns_none(tmp_path):
+    norm = tmp_path / "norm_incomplete_192k.mp3"
+    norm.write_bytes(b"pretend mp3")
+    sidecar = tmp_path / "norm_incomplete_192k.mp3.json"
+    sidecar.write_text('{"title": "only title, no artist"}')
+    assert load_track_metadata(norm) is None
+
+
+def test_save_track_metadata_swallows_oserror_on_readonly_dir(tmp_path):
+    # Create a directory where we cannot write; on POSIX, chmod 555 prevents writes.
+    # save_track_metadata must not raise — it logs and returns.
+    ro_dir = tmp_path / "ro"
+    ro_dir.mkdir()
+    norm = ro_dir / "norm_x_192k.mp3"
+    norm.write_bytes(b"ok")
+    ro_dir.chmod(0o555)
+    try:
+        save_track_metadata(norm, title="t", artist="a")  # must not raise
+        # Sidecar did not get written; load returns None cleanly.
+        assert load_track_metadata(norm) is None
+    finally:
+        ro_dir.chmod(0o755)  # restore so pytest tmp cleanup works
+
+
+def test_humanize_norm_filename_typical():
+    assert humanize_norm_filename("norm_artie_5ive_sogno_americano_192k.mp3") == "Artie 5Ive Sogno Americano"
+
+
+def test_humanize_norm_filename_no_bitrate_suffix():
+    assert humanize_norm_filename("norm_simple_track.mp3") == "Simple Track"
+
+
+def test_humanize_norm_filename_fallback_empty():
+    assert humanize_norm_filename("norm_.mp3") == "Recovered track"
+
+
+def test_humanize_norm_filename_passthrough_when_no_norm_prefix():
+    # Legacy or externally-named files still get humanized.
+    assert humanize_norm_filename("rescue_thing.mp3") == "Rescue Thing"
