@@ -571,3 +571,44 @@ class TestNowStreamingInvariants:
 
         assert state.now_streaming["type"] == "music"
         assert state.now_streaming.get("label") != "Skipping..."
+
+
+# ── Item 21: scheduler reason strings must not leak into admin queue rows ─────
+
+
+class TestSchedulerReasonsDoNotLeakToUI:
+    """Scheduler exposes a `reason` field on each upcoming entry for debugging.
+    The admin UI must not render those developer-copy strings as row text.
+    """
+
+    def test_scheduler_reason_strings_are_developer_copy(self):
+        # Anchor the exact strings that must never appear in listener/admin-visible text.
+        from mammamiradio.scheduler import _reason_for_decision
+
+        assert _reason_for_decision("ad_due") == "Ad pacing threshold reached."
+        assert _reason_for_decision("music_default") == "No pacing trigger active; continue music flow."
+
+    def test_admin_html_does_not_render_it_reason_into_rows(self):
+        # Regression guard: the admin queue render path stripped out `it.reason`
+        # on 2026-04-17. Re-adding it would re-introduce "pacing threshold reached"
+        # and "No pacing trigger active" rows in the up-next queue.
+        html_path = Path(__file__).parent.parent / "mammamiradio" / "admin.html"
+        html = html_path.read_text()
+
+        # Find the upcoming-rows render section (starts at `upFiltered.slice(0,10).forEach`).
+        start = html.find("upFiltered.slice(0,10).forEach")
+        assert start != -1, "could not locate upcoming-rows render section"
+        # Scan through to the end of that forEach block.
+        end = html.find("});", start) + 3
+        block = html[start:end]
+
+        # The scheduler's `reason` field must not be templated into the row HTML.
+        assert "${reason}" not in block, (
+            "admin.html upcoming-rows render is interpolating scheduler "
+            "reason strings again — these are developer copy and must stay "
+            "out of user-facing row text (Item 21)."
+        )
+        assert "||reason}" not in block, (
+            "admin.html upcoming-rows render is falling back to reason text "
+            "when artist is empty — this re-leaks scheduler internals."
+        )
