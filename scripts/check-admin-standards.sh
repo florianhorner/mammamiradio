@@ -44,7 +44,7 @@ if [[ -z "$PR_BODY" ]]; then
 fi
 
 # Require at least one checked item in the Admin Panel Standards section
-if echo "$PR_BODY" | grep -qF "- [x]"; then
+if echo "$PR_BODY" | grep -qF -- "- [x]"; then
   echo "Admin Panel Standards section contains checked items — OK."
   exit 0
 fi
