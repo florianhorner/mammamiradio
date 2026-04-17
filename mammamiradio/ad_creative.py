@@ -218,7 +218,9 @@ def _select_ad_creative(
             secondary = next((r for r in default_roles if r != primary_role), default_roles[-1])
             roles = [primary_role, secondary]
         else:
-            roles = [primary_role]
+            # Preserve any extra format-required roles (e.g. disclaimer_goblin for classic_pitch)
+            extra_roles = [r for r in default_roles[1:] if r != primary_role]
+            roles = [primary_role, *extra_roles]
     else:
         roles = _FORMAT_ROLES.get(ad_format, ["hammer"])
 
@@ -248,19 +250,20 @@ def _cast_voices(
             role_index[v.role] = v
 
     result: dict[str, AdVoice] = {}
-    used_voices: set[str] = set()
+    used_voice_ids: set[str] = set()
 
     for role in roles_needed:
-        if role in role_index:
-            result[role] = role_index[role]
-            used_voices.add(role_index[role].name)
+        preferred = role_index.get(role)
+        if preferred and preferred.voice not in used_voice_ids:
+            result[role] = preferred
+            used_voice_ids.add(preferred.voice)
         else:
             # Fallback: pick a random voice not already used
-            available = [v for v in voices if v.name not in used_voices]
+            available = [v for v in voices if v.voice not in used_voice_ids]
             if not available:
                 available = list(voices)
             pick = random.choice(available)
             result[role] = pick
-            used_voices.add(pick.name)
+            used_voice_ids.add(pick.voice)
 
     return result

@@ -186,6 +186,28 @@ def test_select_ad_creative_campaign_spokesperson():
     assert "seductress" in roles
 
 
+def test_select_ad_creative_spokesperson_classic_pitch_preserves_disclaimer_goblin():
+    """Spokesperson + classic_pitch must preserve disclaimer_goblin even though voice_count=1.
+
+    classic_pitch has voice_count=1 but _FORMAT_ROLES defines two roles:
+    [hammer, disclaimer_goblin]. When a spokesperson overrides the primary role,
+    the extra format role must survive so the ad contract is preserved.
+    """
+    campaign = CampaignSpine(spokesperson="hammer", format_pool=["classic_pitch"])
+    brand = AdBrand(name="PitchBrand", tagline="Buy it", category="tech", campaign=campaign)
+    state = StationState()
+    config = MagicMock()
+    config.ads.voices = [
+        AdVoice(name="V1", voice="v1", style="warm", role="hammer"),
+        AdVoice(name="V2", voice="v2", style="fast", role="disclaimer_goblin"),
+    ]
+
+    fmt, _, roles = _select_ad_creative(brand, state, config)
+    assert fmt == "classic_pitch"
+    assert roles[0] == "hammer"
+    assert "disclaimer_goblin" in roles
+
+
 # ---------------------------------------------------------------------------
 # _cast_voices
 # ---------------------------------------------------------------------------
@@ -204,6 +226,29 @@ def test_cast_voices_with_matching_roles():
     result = _cast_voices(brand, config, ["hammer", "maniac"])
     assert result["hammer"].name == "Hammer"
     assert result["maniac"].name == "Maniac"
+
+
+def test_cast_voices_deduplicates_by_underlying_voice_id():
+    """Deduplication uses AdVoice.voice (TTS id), not AdVoice.name.
+
+    Two aliases sharing the same underlying voice are treated as one distinct voice,
+    so the second role falls through to the next available distinct TTS id.
+    """
+    voices = [
+        AdVoice(name="HammerA", voice="shared-tts", style="aggressive", role="hammer"),
+        AdVoice(name="HammerB", voice="shared-tts", style="loud", role="maniac"),
+        AdVoice(name="Goblin", voice="distinct-tts", style="fast", role="disclaimer_goblin"),
+    ]
+    config = MagicMock()
+    config.ads.voices = voices
+    brand = AdBrand(name="Test", tagline="T", category="tech")
+
+    result = _cast_voices(brand, config, ["hammer", "maniac"])
+    # Both roles must exist
+    assert "hammer" in result
+    assert "maniac" in result
+    # They must use different underlying TTS voices
+    assert result["hammer"].voice != result["maniac"].voice
 
 
 def test_cast_voices_fallback_random():
