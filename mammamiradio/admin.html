@@ -243,12 +243,29 @@ body { font-family: var(--font-body); color: var(--cream); line-height: 1.5; }
 
 /* ── STOPPED BANNER ── */
 .stopped-banner {
-  background: rgba(196,74,74,0.2); border: 1px solid rgba(196,74,74,0.4);
+  background: rgba(245,237,216,0.06); border: 1px solid rgba(245,237,216,0.18);
   border-radius: 8px; padding: 10px 14px; margin-bottom: 14px;
   text-align: center; font-size: 13px; font-weight: 600;
-  color: var(--error); display: none;
+  color: var(--cream-dk); display: none;
 }
 .stopped-banner.show { display: block; }
+
+/* ── STOPPED STATE — the station is paused; the UI quiets down with it ──
+   Driven by `data-stopped="true"` on <body>, toggled by updateStopState(). */
+body[data-stopped="true"] .sidebar-waveform .wb,
+body[data-stopped="true"] .pw-bar,
+body[data-stopped="true"] .live-dot,
+body[data-stopped="true"] .on-air-dot { animation-play-state: paused; }
+/* Producer actions are meaningless while paused — dim and disable them so the
+   operator can't fire a banter/ad/news trigger into a stopped stream. */
+body[data-stopped="true"] .btn-trigger,
+body[data-stopped="true"] .btn-chip,
+body[data-stopped="true"] .btn-util {
+  opacity: 0.35; pointer-events: none; filter: saturate(0.5);
+}
+/* Freeze the sidebar progress fill so it stops advancing visually. */
+body[data-stopped="true"] .sidebar-progress-fill { animation-play-state: paused; }
+body[data-stopped="true"] .sidebar-live-line { color: var(--cream-dk); }
 
 /* ── PROGRAMME LIST ── */
 .programme-list {
@@ -744,7 +761,7 @@ input[type="range"]:focus-visible {
   <!-- ══════════════════ CONTENT ══════════════════ -->
   <main class="admin-content">
 
-    <div class="stopped-banner" id="stoppedBanner" role="alert">&#9632; Session stopped — hit Resume to continue.</div>
+    <div class="stopped-banner" id="stoppedBanner" role="status" aria-live="polite">&#9632; Station paused · hit Resume when you're ready.</div>
 
     <!-- Content header -->
     <div class="content-header">
@@ -1012,6 +1029,8 @@ async function doPurge(el){flash(el);const r=await api('POST','/api/purge');toas
 async function doStop(el){flash(el);await api('POST','/api/stop');toast('Session stopped');updateStopState(true)}
 async function doResume(el){flash(el);await api('POST','/api/resume');toast('Session resumed');updateStopState(false)}
 function updateStopState(stopped){
+  // Global toggle so CSS can dim animations, producer buttons, etc.
+  document.body.setAttribute('data-stopped',stopped?'true':'false');
   document.getElementById('stoppedBanner').classList.toggle('show',stopped);
   document.getElementById('stopBtn').style.display=stopped?'none':'';
   document.getElementById('resumeBtn').style.display=stopped?'':'none';
@@ -1020,6 +1039,10 @@ function updateStopState(stopped){
   if(stopped){
     badge.textContent='Stopped';
     if(dot){dot.style.background='var(--error)';dot.style.boxShadow='0 0 8px var(--error)';}
+    // Freeze the elapsed counter so "271:26" doesn't keep ticking past a
+    // stopped stream. _tick resumes when updateNow() runs on the next live
+    // segment (see sidebar now_streaming handling).
+    if(_tick){clearInterval(_tick);_tick=null;}
   }else{
     badge.textContent='Live';
     if(dot){dot.style.background='var(--sun)';dot.style.boxShadow='0 0 8px var(--sun)';}
@@ -1139,9 +1162,13 @@ function renderProgramme(st){
     const typeKey=segmentTypeKey(it.type);
     const linked=Number.isInteger(it.playlist_index)||!!it.spotify_id;
     const clickAttrs=linked?`onclick="focusPlaylistTrack(${Number.isInteger(it.playlist_index)?it.playlist_index:-1},'${escJs(it.spotify_id||'')}')" style="cursor:pointer"`:'';
+    // Only render the artist sub-line when we have real artist metadata. The
+    // scheduler's internal reason strings ("Ad pacing threshold reached", "No
+    // pacing trigger active; continue music flow") are developer copy and must
+    // not reach listeners or operators as row text. They remain in the data
+    // payload (`it.reason`) for logs/debug.
     const artistPart=it.metadata?.artist?`<span class="prog-artist">${esc(it.metadata.artist)}</span>`:'';
-    const reason=it.reason?`<span class="prog-artist">${esc(it.reason)}</span>`:'';
-    rows.push(`<div class="prog-row" data-type="${typeKey}" ${clickAttrs}><div class="prog-border"></div><span class="prog-badge">${esc(segmentText(typeKey))}</span><div class="prog-info"><span class="prog-title">${esc(it.label||typeKey)}</span>${artistPart||reason}</div></div>`);
+    rows.push(`<div class="prog-row" data-type="${typeKey}" ${clickAttrs}><div class="prog-border"></div><span class="prog-badge">${esc(segmentText(typeKey))}</span><div class="prog-info"><span class="prog-title">${esc(it.label||typeKey)}</span>${artistPart}</div></div>`);
   });
 
   if(upFiltered.length>10){
@@ -1647,9 +1674,22 @@ function updateEngineRoom(st,caps){
   const ce=document.getElementById('engineCaps');
   if(caps&&caps.capabilities){
     const c=caps.capabilities;
+    // Anthropic is three-state: connected / suspended (auth failed, OpenAI
+    // fallback active) / not configured. `anthropic_degraded` comes from the
+    // runtime — presence alone can't tell the truth about auth health.
+    let anthropicLine;
+    if(!c.anthropic_key){
+      anthropicLine='<strong style="color:var(--warning)">✕ not configured</strong>';
+    }else if(c.anthropic_degraded){
+      const secs=Math.max(0,c.anthropic_retry_after_s||0);
+      const retry=secs>0?' · retry in '+(secs>=60?Math.ceil(secs/60)+'m':secs+'s'):'';
+      anthropicLine='<strong style="color:var(--warning)" title="Auth failed; falling back to OpenAI">⚠ suspended'+retry+'</strong>';
+    }else{
+      anthropicLine='<strong style="color:var(--ok)">✓ connected</strong>';
+    }
     ce.innerHTML=[
       'Tier: <strong>'+(caps.tier_label||caps.tier||'—')+'</strong>',
-      'Anthropic: '+(c.anthropic_key?'<strong style="color:var(--ok)">✓ connected</strong>':'<strong style="color:var(--warning)">✕ not set</strong>'),
+      'Anthropic: '+anthropicLine,
       'OpenAI: '+(c.openai?'<strong style="color:var(--ok)">✓ available</strong>':'—'),
       'Home Assistant: '+(c.ha?'<strong style="color:var(--ok)">✓ connected</strong>':'disabled'),
     ].join('<br>');

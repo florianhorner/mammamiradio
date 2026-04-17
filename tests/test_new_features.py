@@ -248,7 +248,12 @@ def test_concat_files_without_loudnorm():
 
     paths = [Path("/fake/a.mp3"), Path("/fake/b.mp3")]
 
-    with patch("mammamiradio.normalizer.subprocess.run", return_value=completed) as mock_run:
+    # Patch the duration-guard probe so the ffmpeg call is the only subprocess
+    # invocation the mock sees (Item 1 added a post-concat ffprobe sanity check).
+    with (
+        patch("mammamiradio.normalizer.subprocess.run", return_value=completed) as mock_run,
+        patch("mammamiradio.normalizer._ffprobe_duration_sec", return_value=None),
+    ):
         concat_files(paths, Path("/fake/out.mp3"), loudnorm=False)
 
     call_args = mock_run.call_args[0][0]
@@ -269,7 +274,10 @@ def test_concat_files_with_loudnorm():
 
     paths = [Path("/fake/a.mp3"), Path("/fake/b.mp3")]
 
-    with patch("mammamiradio.normalizer.subprocess.run", return_value=completed) as mock_run:
+    with (
+        patch("mammamiradio.normalizer.subprocess.run", return_value=completed) as mock_run,
+        patch("mammamiradio.normalizer._ffprobe_duration_sec", return_value=None),
+    ):
         concat_files(paths, Path("/fake/out.mp3"), loudnorm=True)
 
     call_args = mock_run.call_args[0][0]

@@ -20,6 +20,7 @@ from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from mammamiradio.capabilities import capabilities_to_dict, get_capabilities
 from mammamiradio.ha_enrichment import EVENT_RETENTION_SECONDS
 from mammamiradio.models import PersonalityAxes, PlaylistSource, Segment, SegmentType, StationState, Track
+from mammamiradio.normalizer import humanize_norm_filename, load_track_metadata
 from mammamiradio.playlist import (
     ExplicitSourceError,
     load_explicit_source,
@@ -678,12 +679,20 @@ async def run_playback_loop(app) -> None:
                         )
                         state.queue_empty_since = None
                         rescued_from_norm = True
+                        sidecar = load_track_metadata(rescue)
+                        if sidecar:
+                            rescue_title = f"{sidecar['artist']} – {sidecar['title']}"
+                            rescue_artist: str | None = sidecar["artist"]
+                        else:
+                            rescue_title = humanize_norm_filename(rescue.name)
+                            rescue_artist = None
                         segment = Segment(
                             type=SegmentType.MUSIC,
                             path=rescue,
                             metadata={
                                 "type": "music",
-                                "title": f"Recovered: {rescue.name}",
+                                "title": rescue_title,
+                                **({"artist": rescue_artist} if rescue_artist else {}),
                                 "audio_source": "fallback_norm_cache",
                                 "fallback": True,
                             },
@@ -1765,6 +1774,7 @@ def _public_status_payload(request: Request) -> dict:
         "current_source": _serialize_source(state.playlist_source),
         "golden_path": _golden_path_status(config, state),
         "runtime_health": runtime_health,
+        "session_stopped": state.session_stopped,
         "stream_log": [
             {"type": e.type, "label": e.label, "timestamp": e.timestamp, "metadata": e.metadata}
             for e in state.stream_log

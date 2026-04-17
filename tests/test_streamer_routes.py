@@ -355,6 +355,110 @@ async def test_run_playback_loop_timeout_uses_norm_cache_after_30s(tmp_path, cap
 
     assert app.state.station_state.queue_empty_since is None
     assert any("rescuing with norm cache" in record.message for record in caplog.records)
+    # Item 20: title must NEVER be the raw filename ("Recovered: norm_rescue.mp3").
+    # Without a sidecar, humanize_norm_filename turns "norm_rescue.mp3" → "Rescue".
+    now_meta = app.state.station_state.now_streaming.get("metadata", {})
+    assert now_meta.get("title") == "Rescue", (
+        f"rescue path should humanize filename when no sidecar present; got {now_meta.get('title')!r}"
+    )
+    assert "Recovered:" not in (now_meta.get("title") or ""), (
+        "'Recovered:' prefix must not leak to listener-facing title"
+    )
+
+
+@pytest.mark.asyncio
+async def test_run_playback_loop_rescue_reads_sidecar_metadata(tmp_path, caplog):
+    """When a norm-cache file has a `.json` sidecar, the rescue path should use
+    its title+artist instead of the humanized filename fallback (Item 20)."""
+    app = _make_test_app()
+    app.state.config.audio.bitrate = 3200
+    app.state.config.cache_dir = tmp_path
+    app.state.stream_hub.subscribe()
+    caplog.set_level(logging.WARNING)
+
+    rescue_path = tmp_path / "norm_rescue.mp3"
+    rescue_path.write_bytes(b"x" * 4096)
+    # Write the sidecar the way producer.save_track_metadata would.
+    import json
+
+    (tmp_path / "norm_rescue.mp3.json").write_text(json.dumps({"title": "Esibizionista", "artist": "Annalisa"}))
+
+    async def _forced_timeout(awaitable, *_args, **_kwargs):
+        awaitable.close()
+        await asyncio.sleep(0)
+        raise TimeoutError
+
+    with (
+        patch("mammamiradio.streamer.asyncio.wait_for", new=AsyncMock(side_effect=_forced_timeout)),
+        patch("mammamiradio.producer._pick_canned_clip", return_value=None),
+        patch(
+            "mammamiradio.streamer._runtime_monotonic",
+            side_effect=[100.0, 130.5, 130.6, 130.7, 130.8, 130.9],
+        ),
+    ):
+        task = asyncio.create_task(run_playback_loop(app))
+        try:
+            deadline = time.monotonic() + 3.0
+            while (
+                app.state.station_state.now_streaming.get("metadata", {}).get("audio_source") != "fallback_norm_cache"
+            ):
+                if time.monotonic() > deadline:
+                    raise AssertionError("playback loop did not rescue from norm cache")
+                await asyncio.sleep(0.01)
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    now_meta = app.state.station_state.now_streaming.get("metadata", {})
+    assert now_meta.get("title") == "Annalisa – Esibizionista", (
+        f"sidecar metadata should yield 'Annalisa – Esibizionista'; got {now_meta.get('title')!r}"
+    )
+    assert now_meta.get("artist") == "Annalisa"
+
+
+@pytest.mark.asyncio
+async def test_run_playback_loop_rescue_handles_malformed_sidecar(tmp_path, caplog):
+    """Malformed sidecar JSON must not crash; rescue falls back to humanize (Item 20)."""
+    app = _make_test_app()
+    app.state.config.audio.bitrate = 3200
+    app.state.config.cache_dir = tmp_path
+    app.state.stream_hub.subscribe()
+    caplog.set_level(logging.WARNING)
+
+    rescue_path = tmp_path / "norm_busted.mp3"
+    rescue_path.write_bytes(b"x" * 4096)
+    (tmp_path / "norm_busted.mp3.json").write_text("{not valid json")
+
+    async def _forced_timeout(awaitable, *_args, **_kwargs):
+        awaitable.close()
+        await asyncio.sleep(0)
+        raise TimeoutError
+
+    with (
+        patch("mammamiradio.streamer.asyncio.wait_for", new=AsyncMock(side_effect=_forced_timeout)),
+        patch("mammamiradio.producer._pick_canned_clip", return_value=None),
+        patch(
+            "mammamiradio.streamer._runtime_monotonic",
+            side_effect=[100.0, 130.5, 130.6, 130.7, 130.8, 130.9],
+        ),
+    ):
+        task = asyncio.create_task(run_playback_loop(app))
+        try:
+            deadline = time.monotonic() + 3.0
+            while (
+                app.state.station_state.now_streaming.get("metadata", {}).get("audio_source") != "fallback_norm_cache"
+            ):
+                if time.monotonic() > deadline:
+                    raise AssertionError("playback loop did not rescue from norm cache")
+                await asyncio.sleep(0.01)
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    now_meta = app.state.station_state.now_streaming.get("metadata", {})
+    assert now_meta.get("title") == "Busted", (
+        f"malformed sidecar should fall back to humanize; got {now_meta.get('title')!r}"
+    )
 
 
 @pytest.mark.asyncio
@@ -568,6 +672,21 @@ async def test_public_status_returns_json():
     assert "upcoming" in body
     assert "upcoming_mode" in body
     assert "stream_log" in body
+    # Item 19: listener.html relies on session_stopped being in the public
+    # payload so it can freeze the launch-waveform when the operator pauses.
+    assert "session_stopped" in body
+    assert body["session_stopped"] is False  # default for fresh test app
+
+
+@pytest.mark.asyncio
+async def test_public_status_reflects_session_stopped_flag():
+    app = _make_test_app()
+    app.state.station_state.session_stopped = True
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.get("/public-status")
+    assert resp.status_code == 200
+    assert resp.json()["session_stopped"] is True
 
 
 @pytest.mark.asyncio

@@ -47,6 +47,7 @@ from mammamiradio.normalizer import (
     mix_quiet_bleed,
     mix_voice_with_sting,
     normalize,
+    save_track_metadata,
 )
 from mammamiradio.playlist import fetch_chart_refresh
 from mammamiradio.scheduler import next_segment_type
@@ -448,6 +449,7 @@ async def _prefetch_next(
             # doesn't mistake it for a valid cached segment on the next cycle.
             norm_cached.unlink(missing_ok=True)
             raise
+        save_track_metadata(norm_cached, candidate.title, candidate.artist)
     except asyncio.CancelledError:
         logger.debug("Prefetch task cancelled")
         raise
@@ -503,6 +505,8 @@ async def prewarm_first_segment(
                     norm_cached,
                     exc,
                 )
+            else:
+                save_track_metadata(norm_cached, track.title, track.artist)
         if not os.environ.get("MAMMAMIRADIO_SKIP_QUALITY_GATE"):
             try:
                 await loop.run_in_executor(None, validate_segment_audio, norm_path, SegmentType.MUSIC)
@@ -805,6 +809,8 @@ async def run_producer(
                             norm_cached,
                             exc,
                         )
+                    else:
+                        save_track_metadata(norm_cached, track.title, track.artist)
                 audio_source = "download"
 
                 # Quality gate: reject truncated/silent downloads before queueing.

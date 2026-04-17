@@ -1,5 +1,17 @@
 # Changelog
 
+## 2.10.6
+
+Operator honesty pass — five UI and log fixes, plus a normalizer concat duration guard.
+
+### Fixed
+
+- Normalizer `concat_files` now probes input durations with `ffprobe` and logs a WARNING when the concatenated output is shorter than expected (Item 1, phase 1). Fail-open when ffprobe is unavailable.
+- Stopped state actually stops: Stop freezes dashboard animations, pauses the elapsed-time counter, and disables producer buttons (Item 19).
+- Admin panel distinguishes *connected*, *not configured*, and *suspended* Anthropic states instead of flashing "connected" while 401s are failing every call (Item 11).
+- Scheduler reason strings (`cooldown: 45s`, `banter_due_in=3`) no longer leak to listener-facing up-next rows (Item 21).
+- Norm-cache rescue path no longer shows raw filenames as titles (Item 20). Sidecar metadata used when present; otherwise humanized (`norm_busted.mp3` → `Busted`).
+
 ## 2.10.5
 
 ### Changed

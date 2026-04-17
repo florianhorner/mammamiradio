@@ -15,8 +15,10 @@ Disconnects targeted (findings from UI audit):
    or producer state (documented gap: UI flips to ON AIR but now_streaming
    still says "stopped" until the playback loop overwrites it)
  - Purge: clears both real queue and shadow list, reports count
- - Capabilities: reports key *presence* (bool), not runtime API health —
-   dot can show "connected" while the API is actually down
+ - Capabilities: reports BOTH key presence (`anthropic_key`) AND runtime auth
+   health (`anthropic_degraded`, `anthropic_retry_after_s`). The admin UI
+   renders three states — connected / suspended / not configured — so the
+   dot no longer lies while the API is suspended after a 401 (Item 11).
  - Pending requests: cleared silently on playlist switch (request can be lost)
  - Trigger: sets force_next, not consumed until next producer cycle
 """
@@ -571,3 +573,159 @@ class TestNowStreamingInvariants:
 
         assert state.now_streaming["type"] == "music"
         assert state.now_streaming.get("label") != "Skipping..."
+
+
+# ── Item 21: scheduler reason strings must not leak into admin queue rows ─────
+
+
+class TestSchedulerReasonsDoNotLeakToUI:
+    """Scheduler exposes a `reason` field on each upcoming entry for debugging.
+    The admin UI must not render those developer-copy strings as row text.
+    """
+
+    def test_scheduler_reason_strings_are_developer_copy(self):
+        # Anchor the exact strings that must never appear in listener/admin-visible text.
+        from mammamiradio.scheduler import _reason_for_decision
+
+        assert _reason_for_decision("ad_due") == "Ad pacing threshold reached."
+        assert _reason_for_decision("music_default") == "No pacing trigger active; continue music flow."
+
+    def test_admin_html_does_not_render_it_reason_into_rows(self):
+        # Regression guard: the admin queue render path stripped out `it.reason`
+        # on 2026-04-17. Re-adding it would re-introduce "pacing threshold reached"
+        # and "No pacing trigger active" rows in the up-next queue.
+        html_path = Path(__file__).parent.parent / "mammamiradio" / "admin.html"
+        html = html_path.read_text()
+
+        # Find the upcoming-rows render section (starts at `upFiltered.slice(0,10).forEach`).
+        start = html.find("upFiltered.slice(0,10).forEach")
+        assert start != -1, "could not locate upcoming-rows render section"
+        # Scan through to the end of that forEach block.
+        end = html.find("});", start) + 3
+        block = html[start:end]
+
+        # The scheduler's `reason` field must not be templated into the row HTML.
+        assert "${reason}" not in block, (
+            "admin.html upcoming-rows render is interpolating scheduler "
+            "reason strings again — these are developer copy and must stay "
+            "out of user-facing row text (Item 21)."
+        )
+        assert "||reason}" not in block, (
+            "admin.html upcoming-rows render is falling back to reason text "
+            "when artist is empty — this re-leaks scheduler internals."
+        )
+
+
+# ── Item 11: capabilities status reflects runtime health, not just key presence ─
+
+
+class TestCapabilitiesStatusIsHonest:
+    """The admin engine room must show three states for Anthropic — connected,
+    suspended (auth failed, OpenAI fallback active), not configured — instead of
+    claiming "connected" whenever a key is set in config.
+    """
+
+    def test_admin_html_reads_anthropic_degraded_flag(self):
+        # Regression guard: the render for the Anthropic line must consult
+        # `anthropic_degraded`, not just key presence. Re-introducing a
+        # presence-only render would be Item 11 regression.
+        html_path = Path(__file__).parent.parent / "mammamiradio" / "admin.html"
+        html = html_path.read_text()
+        assert "anthropic_degraded" in html, (
+            "admin.html engine-room capabilities render must consult "
+            "`c.anthropic_degraded` so the dot can't lie about a 401'd key "
+            "(Item 11). If you removed the runtime-health check, UI will "
+            "once again show ✓ connected while scriptwriter is suspended."
+        )
+
+    def test_admin_html_renders_suspended_state_label(self):
+        # Anchor the copy so a future refactor can't silently collapse the
+        # three-state render back into connected/not-set.
+        html_path = Path(__file__).parent.parent / "mammamiradio" / "admin.html"
+        html = html_path.read_text()
+        assert "suspended" in html, (
+            "admin.html should render a 'suspended' label when Anthropic "
+            "auth failed and we're falling back to OpenAI (Item 11)."
+        )
+        assert "retry in" in html, (
+            "admin.html should surface the retry countdown when Anthropic is in backoff (Item 11)."
+        )
+
+
+# ── Item 19: stopped-state UI actually stops (timer, waveform, producer btns) ──
+
+
+class TestStoppedStateQuietsTheUI:
+    """When the station is paused, the UI must visibly stop too — animations
+    freeze, the elapsed timer stops ticking, and producer action buttons
+    (Banter/Ad/News triggers, quick actions) dim/disable because firing any of
+    them against a stopped stream is a no-op footgun.
+    """
+
+    def test_admin_html_toggles_data_stopped_on_body(self):
+        html_path = Path(__file__).parent.parent / "mammamiradio" / "admin.html"
+        html = html_path.read_text()
+        assert "setAttribute('data-stopped'" in html, (
+            "admin.html updateStopState() must flip a global `data-stopped` "
+            "attribute on <body> so CSS can freeze animations + dim producer "
+            "controls declaratively (Item 19)."
+        )
+
+    def test_admin_html_has_css_rules_for_stopped_animations_and_buttons(self):
+        html_path = Path(__file__).parent.parent / "mammamiradio" / "admin.html"
+        html = html_path.read_text()
+        # Animations pause
+        assert 'body[data-stopped="true"]' in html and "animation-play-state: paused" in html, (
+            "admin.html must pause animations under the stopped state (Item 19)."
+        )
+        # Producer buttons dim + become unclickable
+        assert 'body[data-stopped="true"] .btn-trigger' in html, (
+            "admin.html must dim producer trigger buttons when stopped (Item 19)."
+        )
+        assert "pointer-events: none" in html, "admin.html must disable producer buttons under stopped state (Item 19)."
+
+    def test_admin_html_clears_tick_interval_on_stop(self):
+        html_path = Path(__file__).parent.parent / "mammamiradio" / "admin.html"
+        html = html_path.read_text()
+        assert "clearInterval(_tick)" in html, (
+            "admin.html updateStopState() must clearInterval the elapsed-timer "
+            "tick so the top-left counter freezes instead of counting past a "
+            "stopped stream (Item 19)."
+        )
+
+    def test_dashboard_html_toggles_data_stopped_on_body(self):
+        html_path = Path(__file__).parent.parent / "mammamiradio" / "dashboard.html"
+        html = html_path.read_text()
+        assert "setAttribute('data-stopped'" in html, (
+            "dashboard.html _updateStoppedState must flip `data-stopped` on "
+            "<body> so the waveform and live-dot freeze together (Item 19)."
+        )
+        assert 'body[data-stopped="true"] .waveform .wb' in html, (
+            "dashboard.html must pause the waveform under stopped state."
+        )
+
+    def test_listener_html_toggles_data_stopped_on_body(self):
+        html_path = Path(__file__).parent.parent / "mammamiradio" / "listener.html"
+        html = html_path.read_text()
+        assert "setAttribute('data-stopped'" in html, (
+            "listener.html fetchStatus must flip `data-stopped` on <body> "
+            "so the launch-waveform freezes when the station is paused."
+        )
+        assert 'body[data-stopped="true"] .launch-waveform .wb' in html, (
+            "listener.html must pause the launch waveform under stopped state."
+        )
+
+    def test_admin_banner_copy_does_not_use_harsh_error_tone(self):
+        # "Session stopped — hit Resume to continue" read as an error.
+        # New copy is calmer — "Station paused · hit Resume when you're ready."
+        html_path = Path(__file__).parent.parent / "mammamiradio" / "admin.html"
+        html = html_path.read_text()
+        assert "Station paused" in html, "admin.html stopped banner should read 'Station paused' (Item 19)."
+        # Only check the banner element's text, not toast strings in JS callbacks.
+        banner_start = html.find('id="stoppedBanner"')
+        banner_end = html.find("</div>", banner_start)
+        banner_block = html[banner_start:banner_end]
+        assert "Session stopped" not in banner_block, (
+            "admin.html stopped banner element should not use the harsh "
+            "'Session stopped — hit Resume' phrasing (Item 19)."
+        )
