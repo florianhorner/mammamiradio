@@ -82,6 +82,14 @@ def test_pick_brand_weights_recurring():
     assert recurring_count > 25  # Should be weighted 3:1
 
 
+def test_pick_brand_empty_list_raises():
+    """Empty brands list raises ValueError instead of an IndexError from random.choices."""
+    import pytest
+
+    with pytest.raises(ValueError, match="brand"):
+        _pick_brand([], [])
+
+
 # ---------------------------------------------------------------------------
 # _select_ad_creative
 # ---------------------------------------------------------------------------
@@ -1169,3 +1177,114 @@ async def test_drain_guard_inserts_canned_clip_on_queue_drain(tmp_path):
     assert seg.type == SegmentType.BANTER
     assert seg.metadata.get("canned") is True
     assert seg.metadata.get("queue_drain_recovery") is True
+
+
+@pytest.mark.asyncio
+async def test_drain_guard_empty_fallback_no_deadlock(tmp_path):
+    """When _pick_canned_clip returns None (empty asset tree), drain guard fires but
+    producer continues without deadlocking and eventually produces real segments."""
+    state = _make_run_state()
+    config = _make_run_config()
+    config.tmp_dir = tmp_path
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+
+    real_audio = tmp_path / "music.mp3"
+    real_audio.write_bytes(b"music audio" * 100)
+
+    def _fake_normalize(src, dst, *args, **kwargs):
+        dst.write_bytes(b"normed audio")
+
+    with (
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.MUSIC),
+        patch(f"{PRODUCER_MODULE}.download_track", new_callable=AsyncMock, return_value=real_audio),
+        patch(f"{PRODUCER_MODULE}.validate_download", return_value=(True, "ok")),
+        patch(f"{PRODUCER_MODULE}.normalize", side_effect=_fake_normalize),
+        patch(f"{PRODUCER_MODULE}.shutil.copy2"),
+        patch(f"{PRODUCER_MODULE}.validate_segment_audio", return_value=None),
+        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+        patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=None),
+        patch(f"{PRODUCER_MODULE}._prefetch_next", new_callable=AsyncMock),
+        patch.dict("os.environ", {"MAMMAMIRADIO_SKIP_QUALITY_GATE": "1"}),
+    ):
+        config.pacing.lookahead_segments = 2
+
+        from mammamiradio.producer import run_producer
+
+        task = asyncio.create_task(run_producer(queue, state, config))
+        try:
+            # Producer must eventually fill the queue with real segments even though
+            # _pick_canned_clip returns None (empty asset tree, no canned fallback).
+            deadline = asyncio.get_event_loop().time() + 5.0
+            while queue.qsize() < 1:
+                if asyncio.get_event_loop().time() > deadline:
+                    raise TimeoutError("Producer deadlocked with empty canned clip tree")
+                await asyncio.sleep(0.01)
+        finally:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+    # At least one real segment must have landed — no deadlock
+    assert queue.qsize() >= 1
+    seg = queue.get_nowait()
+    assert seg.type == SegmentType.MUSIC
+
+
+@pytest.mark.asyncio
+async def test_drain_guard_post_restart_produces_audio(tmp_path):
+    """After a stopped session resumes (session_stopped=True → False), the producer
+    recovers and delivers segments even when no canned clips are available."""
+    state = _make_run_state()
+    state.session_stopped = True  # simulate persisted stop from prior run
+    config = _make_run_config()
+    config.tmp_dir = tmp_path
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+
+    real_audio = tmp_path / "music.mp3"
+    real_audio.write_bytes(b"music audio" * 100)
+
+    def _fake_normalize(src, dst, *args, **kwargs):
+        dst.write_bytes(b"normed audio")
+
+    with (
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.MUSIC),
+        patch(f"{PRODUCER_MODULE}.download_track", new_callable=AsyncMock, return_value=real_audio),
+        patch(f"{PRODUCER_MODULE}.validate_download", return_value=(True, "ok")),
+        patch(f"{PRODUCER_MODULE}.normalize", side_effect=_fake_normalize),
+        patch(f"{PRODUCER_MODULE}.shutil.copy2"),
+        patch(f"{PRODUCER_MODULE}.validate_segment_audio", return_value=None),
+        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+        patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=None),
+        patch(f"{PRODUCER_MODULE}._prefetch_next", new_callable=AsyncMock),
+        patch.dict("os.environ", {"MAMMAMIRADIO_SKIP_QUALITY_GATE": "1"}),
+    ):
+        config.pacing.lookahead_segments = 1
+
+        from mammamiradio.producer import run_producer
+
+        task = asyncio.create_task(run_producer(queue, state, config))
+        try:
+            # Let the producer spin in the stopped state briefly
+            await asyncio.sleep(0.05)
+
+            # Simulate operator resuming the session
+            state.session_stopped = False
+
+            # Producer must recover and produce audio after the restart
+            deadline = asyncio.get_event_loop().time() + 5.0
+            while queue.qsize() < 1:
+                if asyncio.get_event_loop().time() > deadline:
+                    raise TimeoutError("Producer did not recover after session restart")
+                await asyncio.sleep(0.01)
+        finally:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+    assert queue.qsize() >= 1
+    seg = queue.get_nowait()
+    assert seg.type == SegmentType.MUSIC

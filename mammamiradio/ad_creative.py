@@ -124,6 +124,12 @@ _CATEGORY_SONIC: dict[str, list[SonicWorld]] = {
     ],
 }
 
+# Fallback palette for unknown or misspelled brand.category values.
+_GENERIC_SONIC_PALETTE: list[SonicWorld] = [
+    SonicWorld(environment="showroom", music_bed="lounge", transition_motif="whoosh"),
+    SonicWorld(environment="shopping_channel", music_bed="discount_techno", transition_motif="chime"),
+]
+
 # Default roles needed per format
 _FORMAT_ROLES: dict[str, list[str]] = {
     AdFormat.CLASSIC_PITCH: ["hammer", "disclaimer_goblin"],
@@ -139,6 +145,8 @@ ALL_FORMATS = [f.value for f in AdFormat]
 
 def _pick_brand(brands: list[AdBrand], ad_history: list) -> AdBrand:
     """Pick a brand, avoiding the last 3 aired and weighting recurring brands higher."""
+    if not brands:
+        raise ValueError("At least one ad brand is required")
     recent_names = {e.brand for e in list(ad_history)[-3:]}
     eligible = [b for b in brands if b.name not in recent_names]
     if not eligible:
@@ -185,7 +193,7 @@ def _select_ad_creative(
     ad_format = random.choice(candidates)
 
     # Pick sonic world
-    sonic_variants = _CATEGORY_SONIC.get(brand.category, [SonicWorld()])
+    sonic_variants = _CATEGORY_SONIC.get(brand.category, _GENERIC_SONIC_PALETTE)
     if brand_history and len(sonic_variants) > 1:
         last_sonic = brand_history[-1]
         sonic_variants = [
