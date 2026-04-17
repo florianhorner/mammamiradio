@@ -2205,9 +2205,7 @@ async def test_chart_refresh_triggers_when_interval_elapsed():
     config.pacing.lookahead_segments = 1
     queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
     # Seed the queue so qsize >= lookahead_segments → producer enters the idle path
-    await queue.put(
-        Segment(type=SegmentType.BANTER, path=Path("/tmp/seed.mp3"), metadata={"type": "banter"})
-    )
+    await queue.put(Segment(type=SegmentType.BANTER, path=Path("/tmp/seed.mp3"), metadata={"type": "banter"}))
 
     new_track = Track(title="Nuova Canzone", artist="Nuovo Artista", duration_ms=200_000, spotify_id="new1")
 

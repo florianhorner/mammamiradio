@@ -203,10 +203,7 @@ async def test_startup_no_ffmpeg_warning_when_ffmpeg_found(tmp_path: Path, caplo
 
         await startup()  # covers the 76->81 branch (ffmpeg found)
 
-    assert not any(
-        "ffmpeg" in r.message.lower() and "not found" in r.message.lower()
-        for r in caplog.records
-    )
+    assert not any("ffmpeg" in r.message.lower() and "not found" in r.message.lower() for r in caplog.records)
 
 
 @pytest.mark.asyncio
