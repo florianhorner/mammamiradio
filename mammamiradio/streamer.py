@@ -701,6 +701,35 @@ async def run_playback_loop(app) -> None:
 
                 if rescued_from_norm:
                     pass
+                else:
+                    # Try bundled demo assets as a last-resort audio source before
+                    # forcing banter. Raw (un-normalized) audio beats dead air.
+                    demo_music_dir = _PKG_DIR / "demo_assets" / "music"
+                    demo_files = list(demo_music_dir.glob("*.mp3")) if demo_music_dir.exists() else []
+                    if demo_files:
+                        import random as _random
+
+                        rescue = _random.choice(demo_files)
+                        logger.warning(
+                            "Queue empty %ds - rescuing with demo asset: %s",
+                            int(elapsed),
+                            rescue.name,
+                        )
+                        state.queue_empty_since = None
+                        segment = Segment(
+                            type=SegmentType.MUSIC,
+                            path=rescue,
+                            metadata={
+                                "type": "music",
+                                "title": rescue.stem,
+                                "audio_source": "fallback_demo_asset",
+                                "fallback": True,
+                            },
+                            ephemeral=False,
+                        )
+
+                if rescued_from_norm or (segment_queue.empty() and state.queue_empty_since is None):
+                    pass
                 elif elapsed >= 60.0:
                     # Request forced banter once per silence episode to avoid producer thrash.
                     # queue_empty_since is intentionally NOT reset — the silence gate on
@@ -1896,7 +1925,12 @@ async def readyz(request: Request):
     state = request.app.state.station_state
     queue_empty_elapsed = _runtime_monotonic() - state.queue_empty_since if state.queue_empty_since is not None else 0.0
     silence_with_listeners = queue_empty_elapsed > 30.0 and state.listeners_active > 0
-    ready = tasks_alive and (queue_depth > 0 or startup_complete) and not silence_with_listeners
+    ready = (
+        tasks_alive
+        and (queue_depth > 0 or startup_complete)
+        and not silence_with_listeners
+        and not state.session_stopped
+    )
     status = "ready" if ready else "starting"
     body = {
         "status": status,

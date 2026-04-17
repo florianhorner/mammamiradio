@@ -13,6 +13,8 @@ from urllib.request import urlopen
 from mammamiradio.config import StationConfig
 from mammamiradio.models import PlaylistSource, Track
 
+_DEMO_ASSETS_MUSIC_DIR = Path(__file__).parent / "demo_assets" / "music"
+
 logger = logging.getLogger(__name__)
 
 DEMO_TRACKS = [
@@ -34,6 +36,32 @@ _APPLE_MUSIC_IT_CHARTS_URL = "https://rss.applemarketingtools.com/api/v2/it/musi
 
 class ExplicitSourceError(RuntimeError):
     """Raised when an explicit user-selected source cannot be loaded."""
+
+
+def _load_demo_asset_tracks() -> list[Track]:
+    """Return Track objects for MP3s bundled in demo_assets/music/.
+
+    Files are expected to be named ``Artist - Title.mp3`` or ``Title.mp3``.
+    The downloader finds them via title/cache_key substring match.
+    """
+    if not _DEMO_ASSETS_MUSIC_DIR.exists():
+        return []
+    tracks: list[Track] = []
+    for mp3 in sorted(_DEMO_ASSETS_MUSIC_DIR.glob("*.mp3")):
+        stem = mp3.stem.strip()
+        if " - " in stem:
+            artist_part, title_part = stem.split(" - ", 1)
+        else:
+            artist_part, title_part = "Unknown", stem
+        tracks.append(
+            Track(
+                title=title_part.strip(),
+                artist=artist_part.strip(),
+                duration_ms=210000,
+                spotify_id=f"demo_asset_{mp3.stem.lower().replace(' ', '_')}",
+            )
+        )
+    return tracks
 
 
 def _shuffle_if_needed(config: StationConfig, tracks: list[Track]) -> list[Track]:
@@ -260,6 +288,18 @@ def fetch_startup_playlist(
             "Local music/ files found but MAMMAMIRADIO_ALLOW_YTDLP is not set — "
             "set it to 'true' to blend local tracks into the playlist"
         )
+
+    # Prefer real bundled MP3s over metadata-only demo placeholders.
+    # When demo_assets/music/ contains actual files, the queue fills with
+    # real audio instead of generated silence.
+    demo_asset_tracks = _load_demo_asset_tracks()
+    if demo_asset_tracks:
+        logger.info("Using bundled demo assets (%d tracks)", len(demo_asset_tracks))
+        tracks = _shuffle_if_needed(config, demo_asset_tracks)
+        src = _demo_source()
+        src.track_count = len(tracks)
+        return tracks, src, error
+
     logger.info("Using built-in modern Italian demo mix")
     tracks = _shuffle_if_needed(config, list(DEMO_TRACKS))
     return tracks, _demo_source(), error

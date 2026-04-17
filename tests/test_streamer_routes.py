@@ -530,6 +530,40 @@ async def test_readyz_does_not_fail_silence_gate_without_listeners():
 
 
 @pytest.mark.asyncio
+async def test_readyz_returns_503_when_session_stopped():
+    """readyz must return 503 when session_stopped=True — station is not ready for listeners."""
+    app = _make_test_app()
+    app.state.start_time = time.time() - 31  # startup_complete=True
+    app.state.queue.put_nowait(object())  # queue_depth > 0
+    app.state.station_state.session_stopped = True
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.get("/readyz")
+
+    assert resp.status_code == 503
+    body = resp.json()
+    assert body["ready"] is False
+
+
+@pytest.mark.asyncio
+async def test_readyz_returns_200_when_session_resumed():
+    """readyz must return 200 once session_stopped is cleared and queue has audio."""
+    app = _make_test_app()
+    app.state.start_time = time.time() - 31
+    app.state.queue.put_nowait(object())
+    app.state.station_state.session_stopped = False
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.get("/readyz")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ready"] is True
+
+
+@pytest.mark.asyncio
 async def test_healthz_returns_503_when_silent_with_active_listeners():
     """HA Supervisor polls /healthz — it must 503 when silently failing so auto-restart fires."""
     app = _make_test_app()

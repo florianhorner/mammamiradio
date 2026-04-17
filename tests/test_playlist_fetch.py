@@ -27,10 +27,11 @@ def config():
 
 
 def test_no_credentials_returns_demo_tracks(config, monkeypatch):
-    # Ensure yt-dlp is disabled so we get demo tracks, not live charts
+    # Ensure yt-dlp is disabled and demo_assets/music/ is empty so we get DEMO_TRACKS
     monkeypatch.delenv("MAMMAMIRADIO_ALLOW_YTDLP", raising=False)
     config.allow_ytdlp = False
-    tracks, _, _ = fetch_startup_playlist(config)
+    with patch("mammamiradio.playlist._load_demo_asset_tracks", return_value=[]):
+        tracks, _, _ = fetch_startup_playlist(config)
     assert len(tracks) == len(DEMO_TRACKS)
     demo_titles = {t.title for t in DEMO_TRACKS}
     for t in tracks:
@@ -436,3 +437,83 @@ def test_local_music_deduplicates_against_chart_artist_title(config, monkeypatch
     assert ("battisti", "emozioni") in normalized_keys
     assert ("mina", "grande grande grande") in normalized_keys
     assert len(tracks) == 2
+
+
+# ---------------------------------------------------------------------------
+# _load_demo_asset_tracks
+# ---------------------------------------------------------------------------
+
+
+def test_load_demo_asset_tracks_empty_when_dir_missing(tmp_path):
+    """Returns empty list when demo_assets/music/ does not exist."""
+    from mammamiradio.playlist import _load_demo_asset_tracks
+
+    with patch("mammamiradio.playlist._DEMO_ASSETS_MUSIC_DIR", tmp_path / "nonexistent"):
+        tracks = _load_demo_asset_tracks()
+    assert tracks == []
+
+
+def test_load_demo_asset_tracks_parses_artist_title(tmp_path):
+    """Parses Artist - Title.mp3 filenames into Track objects."""
+    from mammamiradio.playlist import _load_demo_asset_tracks
+
+    (tmp_path / "Pino Daniele - Napule E.mp3").write_bytes(b"")
+    (tmp_path / "NoHyphen.mp3").write_bytes(b"")
+
+    with patch("mammamiradio.playlist._DEMO_ASSETS_MUSIC_DIR", tmp_path):
+        tracks = _load_demo_asset_tracks()
+
+    by_title = {t.title: t for t in tracks}
+    assert "Napule E" in by_title
+    assert by_title["Napule E"].artist == "Pino Daniele"
+    assert by_title["Napule E"].spotify_id.startswith("demo_asset_")
+
+    assert "NoHyphen" in by_title
+    assert by_title["NoHyphen"].artist == "Unknown"
+
+
+def test_load_demo_asset_tracks_empty_dir(tmp_path):
+    """Returns empty list when directory exists but has no MP3s."""
+    from mammamiradio.playlist import _load_demo_asset_tracks
+
+    with patch("mammamiradio.playlist._DEMO_ASSETS_MUSIC_DIR", tmp_path):
+        tracks = _load_demo_asset_tracks()
+    assert tracks == []
+
+
+# ---------------------------------------------------------------------------
+# fetch_startup_playlist — demo asset preference
+# ---------------------------------------------------------------------------
+
+
+def test_fetch_startup_prefers_demo_assets_over_demo_tracks_list(config, tmp_path):
+    """When demo_assets/music/ has MP3s, use them instead of metadata-only DEMO_TRACKS."""
+    (tmp_path / "Pino Daniele - Napule E.mp3").write_bytes(b"")
+    (tmp_path / "Lucio Battisti - Emozioni.mp3").write_bytes(b"")
+    config.allow_ytdlp = False
+
+    with patch("mammamiradio.playlist._DEMO_ASSETS_MUSIC_DIR", tmp_path):
+        tracks, source, _err = fetch_startup_playlist(config)
+
+    assert len(tracks) == 2
+    titles = {t.title for t in tracks}
+    assert "Napule E" in titles
+    assert "Emozioni" in titles
+    assert source.kind == "demo"
+    # Tracks come from actual files, not the metadata placeholder list
+    for t in tracks:
+        assert t.spotify_id.startswith("demo_asset_")
+
+
+def test_fetch_startup_falls_back_to_demo_tracks_when_demo_assets_empty(config, tmp_path):
+    """When demo_assets/music/ exists but is empty, fall back to DEMO_TRACKS."""
+    config.allow_ytdlp = False
+
+    with patch("mammamiradio.playlist._DEMO_ASSETS_MUSIC_DIR", tmp_path):
+        tracks, source, _err = fetch_startup_playlist(config)
+
+    assert len(tracks) == len(DEMO_TRACKS)
+    demo_titles = {t.title for t in DEMO_TRACKS}
+    for t in tracks:
+        assert t.title in demo_titles
+    assert source.kind == "demo"
