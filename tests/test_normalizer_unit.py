@@ -691,3 +691,89 @@ class TestConcatFilesDurationInvariant:
         norm.concat_files(inputs, output, silence_ms=0, loudnorm=False)
         warnings = [r for r in caplog.records if r.levelname == "WARNING" and "duration shortfall" in r.message]
         assert not warnings, "Guard must stay silent when probes can't determine durations."
+
+
+# ── _ffprobe_duration_sec parser: exercise the real function body, not the fixture mock ──
+
+
+class TestFFprobeDurationSecParser:
+    """Every concat_files test above monkeypatches `_ffprobe_duration_sec` to
+    None. That leaves the real function body uncovered by the suite. These
+    tests hit the real function directly, mocking only `subprocess.run`, so the
+    parser + error branches are measured by the coverage ratchet.
+    """
+
+    def _fake_completed(self, returncode=0, stdout="", stderr=""):
+        cp = MagicMock(spec=subprocess.CompletedProcess)
+        cp.returncode = returncode
+        cp.stdout = stdout
+        cp.stderr = stderr
+        return cp
+
+    def test_valid_duration_parses_as_float(self, tmp_path, monkeypatch):
+        from mammamiradio.normalizer import _ffprobe_duration_sec
+
+        p = tmp_path / "ok.mp3"
+        p.write_bytes(b"x")
+        monkeypatch.setattr(
+            "mammamiradio.normalizer.subprocess.run",
+            lambda *a, **kw: self._fake_completed(returncode=0, stdout="12.345\n"),
+        )
+        assert _ffprobe_duration_sec(p) == 12.345
+
+    def test_nonzero_returncode_returns_none(self, tmp_path, monkeypatch):
+        from mammamiradio.normalizer import _ffprobe_duration_sec
+
+        p = tmp_path / "bad.mp3"
+        p.write_bytes(b"x")
+        monkeypatch.setattr(
+            "mammamiradio.normalizer.subprocess.run",
+            lambda *a, **kw: self._fake_completed(returncode=1, stderr="bogus"),
+        )
+        assert _ffprobe_duration_sec(p) is None
+
+    def test_unparseable_stdout_returns_none(self, tmp_path, monkeypatch):
+        from mammamiradio.normalizer import _ffprobe_duration_sec
+
+        p = tmp_path / "junk.mp3"
+        p.write_bytes(b"x")
+        monkeypatch.setattr(
+            "mammamiradio.normalizer.subprocess.run",
+            lambda *a, **kw: self._fake_completed(returncode=0, stdout="not-a-number"),
+        )
+        assert _ffprobe_duration_sec(p) is None
+
+    def test_oserror_returns_none(self, tmp_path, monkeypatch):
+        from mammamiradio.normalizer import _ffprobe_duration_sec
+
+        p = tmp_path / "missing.mp3"
+        p.write_bytes(b"x")
+
+        def _raises(*a, **kw):
+            raise OSError("ffprobe not installed")
+
+        monkeypatch.setattr("mammamiradio.normalizer.subprocess.run", _raises)
+        assert _ffprobe_duration_sec(p) is None
+
+    def test_timeout_returns_none(self, tmp_path, monkeypatch):
+        from mammamiradio.normalizer import _ffprobe_duration_sec
+
+        p = tmp_path / "slow.mp3"
+        p.write_bytes(b"x")
+
+        def _timesout(*a, **kw):
+            raise subprocess.TimeoutExpired(cmd=["ffprobe"], timeout=5)
+
+        monkeypatch.setattr("mammamiradio.normalizer.subprocess.run", _timesout)
+        assert _ffprobe_duration_sec(p) is None
+
+    def test_empty_stdout_returns_none(self, tmp_path, monkeypatch):
+        from mammamiradio.normalizer import _ffprobe_duration_sec
+
+        p = tmp_path / "empty.mp3"
+        p.write_bytes(b"x")
+        monkeypatch.setattr(
+            "mammamiradio.normalizer.subprocess.run",
+            lambda *a, **kw: self._fake_completed(returncode=0, stdout=""),
+        )
+        assert _ffprobe_duration_sec(p) is None
