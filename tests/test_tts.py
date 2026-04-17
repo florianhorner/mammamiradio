@@ -728,8 +728,9 @@ async def test_synthesize_ad_sfx_empty_sfx_yields_none_part(_mock_all, tmp_path)
     voices = {"default": AdVoice(name="Ann", voice="it-IT-DiegoNeural", style="warm")}
     result = await synthesize_ad(script, voices, tmp_path)
     assert result.exists()
-    # Empty sfx part produces None and is excluded; only the voice part survives
+    # Empty sfx _render_part returns None — no sfx and no silence substituted
     _mock_all["generate_sfx"].assert_not_called()
+    _mock_all["generate_silence"].assert_not_called()
 
 
 @pytest.mark.asyncio

@@ -157,8 +157,9 @@ def _select_ad_creative(
     Voice-count guard: if fewer than 2 distinct voices are available, multi-voice
     formats (duo_scene, testimonial) are excluded from candidates.
     """
-    # Determine available distinct voices
-    num_voices = len(config.ads.voices) if config.ads.voices else 1
+    # Count distinct underlying TTS voices (role aliases for the same voice don't add a speaker)
+    distinct_voices = {v.voice for v in config.ads.voices} if config.ads.voices else set()
+    num_voices = len(distinct_voices) or 1
 
     # Pick format — filter unknown strings so AdFormat(f) never raises ValueError
     if brand.campaign and brand.campaign.format_pool:
@@ -213,9 +214,9 @@ def _select_ad_creative(
         primary_role = brand.campaign.spokesperson
         default_roles = _FORMAT_ROLES.get(ad_format, ["hammer"])
         if AdFormat(ad_format).voice_count >= 2:
-            # Primary is the spokesperson, secondary is the other role
-            secondary = [r for r in default_roles if r != primary_role]
-            roles = [primary_role] + (secondary if secondary else [default_roles[-1]])
+            # Primary is the spokesperson, secondary is exactly one other format role
+            secondary = next((r for r in default_roles if r != primary_role), default_roles[-1])
+            roles = [primary_role, secondary]
         else:
             roles = [primary_role]
     else:

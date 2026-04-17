@@ -2163,6 +2163,8 @@ async def test_prewarm_norm_cache_hit(tmp_path):
 
     with (
         patch(f"{PRODUCER_MODULE}.download_track", new_callable=AsyncMock, return_value=Path("/tmp/fake.mp3")),
+        patch(f"{PRODUCER_MODULE}.normalize") as mock_norm,
+        patch(f"{PRODUCER_MODULE}.shutil.copy2") as mock_copy,
         patch(f"{PRODUCER_MODULE}._set_last_music_file"),
     ):
         result = await prewarm_first_segment(queue, state, config)
@@ -2170,6 +2172,9 @@ async def test_prewarm_norm_cache_hit(tmp_path):
     assert result is True
     assert queue.qsize() == 1
     assert queue.get_nowait().type == SegmentType.MUSIC
+    # Cache hit → no re-normalization and no cache copy
+    mock_norm.assert_not_called()
+    mock_copy.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -2308,6 +2313,8 @@ async def test_music_segment_uses_normalization_cache_hit(tmp_path):
         patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.MUSIC),
         patch(f"{PRODUCER_MODULE}.download_track", new_callable=AsyncMock, return_value=Path("/tmp/fake.mp3")),
         patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+        patch(f"{PRODUCER_MODULE}.normalize") as mock_norm,
+        patch(f"{PRODUCER_MODULE}.shutil.copy2") as mock_copy,
         patch(f"{PRODUCER_MODULE}._set_last_music_file"),
     ):
         await _run_until_queued(queue, state, config)
@@ -2315,6 +2322,9 @@ async def test_music_segment_uses_normalization_cache_hit(tmp_path):
     assert queue.qsize() >= 1
     seg = queue.get_nowait()
     assert seg.type == SegmentType.MUSIC
+    # Cache hit → no re-normalization and no cache copy
+    mock_norm.assert_not_called()
+    mock_copy.assert_not_called()
 
 
 @pytest.mark.asyncio

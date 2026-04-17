@@ -1119,8 +1119,8 @@ async def test_drain_guard_inserts_canned_clip_on_queue_drain(tmp_path):
                 pass
 
     # The drain guard should have inserted a canned banter clip
-    if not queue.empty():
-        seg = queue.get_nowait()
-        assert seg.type == SegmentType.BANTER
-        assert seg.metadata.get("canned") is True
-        assert seg.metadata.get("queue_drain_recovery") is True
+    assert not queue.empty(), "drain guard never queued a recovery clip"
+    seg = queue.get_nowait()
+    assert seg.type == SegmentType.BANTER
+    assert seg.metadata.get("canned") is True
+    assert seg.metadata.get("queue_drain_recovery") is True
