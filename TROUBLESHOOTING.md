@@ -63,7 +63,13 @@ Check:
 - `/status` may show TTS errors in the producer log
 
 Each OpenAI host can define `edge_fallback_voice` in `radio.toml` so they fall back to their own Edge voice rather than a stranger's.
-If a host or ad voice is configured with an OpenAI-only voice ID (for example `onyx`) on Edge, startup normalizes it to a safe Edge fallback before synthesis.
+
+Voice validation now runs at config load, not at synthesis time:
+
+- Every configured voice is checked against `mammamiradio/voice_catalog.py` (OpenAI catalog for `engine = "openai"` hosts, Italian edge-tts catalog for `engine = "edge"` hosts and all ad voices).
+- Invalid voices are logged once as a WARNING and replaced with `it-IT-DiegoNeural` before the first synthesis attempt, so you never see repeated `Invalid voice 'onyx'` errors per segment.
+- If a runtime synthesis still fails (edge-tts endpoint down, throttle), the failing voice ID is memoized for the session and the next segment goes straight to the fallback voice — one attempt per voice per session, not one per segment.
+- When any voice was substituted at load, `/api/capabilities` reports `tts_degraded: true` so the dashboard can show a degraded-TTS badge.
 
 ## Home Assistant references never show up
 

@@ -20,3 +20,14 @@ def _isolate_env():
     for k, v in saved.items():
         if v is not None:
             os.environ[k] = v
+
+
+@pytest.fixture(autouse=True)
+def _reset_tts_voice_memoization():
+    """Clear runtime voice-failure memoization between tests to prevent
+    state leaking across tests that share the same edge voice IDs."""
+    from mammamiradio.tts import reset_voice_failures
+
+    reset_voice_failures()
+    yield
+    reset_voice_failures()

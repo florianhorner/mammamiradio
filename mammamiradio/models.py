@@ -720,6 +720,9 @@ class Capabilities:
     ha: bool = False
     """Home Assistant token present and integration enabled."""
 
+    tts_degraded: bool = False
+    """True when one or more configured TTS voices were replaced with a fallback at config load."""
+
     @property
     def tier(self) -> str:
         """Derive a human-friendly tier label from capability flags."""

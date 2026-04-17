@@ -15,6 +15,7 @@ def _config(**overrides):
     cfg.openai_api_key = overrides.get("openai_api_key", "")
     cfg.ha_token = overrides.get("ha_token", "")
     cfg.homeassistant.enabled = overrides.get("ha_enabled", False)
+    cfg.tts_degraded_voices = overrides.get("tts_degraded_voices", [])
     return cfg
 
 

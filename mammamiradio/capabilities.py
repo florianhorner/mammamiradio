@@ -15,6 +15,7 @@ def get_capabilities(config: StationConfig, state: StationState) -> Capabilities
     return Capabilities(
         llm=bool(config.anthropic_api_key or config.openai_api_key),
         ha=bool(config.homeassistant.enabled and config.ha_token),
+        tts_degraded=bool(getattr(config, "tts_degraded_voices", [])),
     )
 
 
@@ -51,5 +52,6 @@ def capabilities_to_dict(caps: Capabilities) -> dict:
         },
         "tier": caps.tier,
         "tier_label": caps.tier_label,
+        "tts_degraded": caps.tts_degraded,
         "next_step": next_step(caps),
     }
