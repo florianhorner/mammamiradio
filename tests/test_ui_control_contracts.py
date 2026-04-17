@@ -651,3 +651,84 @@ class TestCapabilitiesStatusIsHonest:
             "admin.html should surface the retry countdown when Anthropic "
             "is in backoff (Item 11)."
         )
+
+
+# ── Item 19: stopped-state UI actually stops (timer, waveform, producer btns) ──
+
+
+class TestStoppedStateQuietsTheUI:
+    """When the station is paused, the UI must visibly stop too — animations
+    freeze, the elapsed timer stops ticking, and producer action buttons
+    (Banter/Ad/News triggers, quick actions) dim/disable because firing any of
+    them against a stopped stream is a no-op footgun.
+    """
+
+    def test_admin_html_toggles_data_stopped_on_body(self):
+        html_path = Path(__file__).parent.parent / "mammamiradio" / "admin.html"
+        html = html_path.read_text()
+        assert "setAttribute('data-stopped'" in html, (
+            "admin.html updateStopState() must flip a global `data-stopped` "
+            "attribute on <body> so CSS can freeze animations + dim producer "
+            "controls declaratively (Item 19)."
+        )
+
+    def test_admin_html_has_css_rules_for_stopped_animations_and_buttons(self):
+        html_path = Path(__file__).parent.parent / "mammamiradio" / "admin.html"
+        html = html_path.read_text()
+        # Animations pause
+        assert 'body[data-stopped="true"]' in html and "animation-play-state: paused" in html, (
+            "admin.html must pause animations under the stopped state (Item 19)."
+        )
+        # Producer buttons dim + become unclickable
+        assert 'body[data-stopped="true"] .btn-trigger' in html, (
+            "admin.html must dim producer trigger buttons when stopped (Item 19)."
+        )
+        assert "pointer-events: none" in html, (
+            "admin.html must disable producer buttons under stopped state (Item 19)."
+        )
+
+    def test_admin_html_clears_tick_interval_on_stop(self):
+        html_path = Path(__file__).parent.parent / "mammamiradio" / "admin.html"
+        html = html_path.read_text()
+        assert "clearInterval(_tick)" in html, (
+            "admin.html updateStopState() must clearInterval the elapsed-timer "
+            "tick so the top-left counter freezes instead of counting past a "
+            "stopped stream (Item 19)."
+        )
+
+    def test_dashboard_html_toggles_data_stopped_on_body(self):
+        html_path = Path(__file__).parent.parent / "mammamiradio" / "dashboard.html"
+        html = html_path.read_text()
+        assert "setAttribute('data-stopped'" in html, (
+            "dashboard.html _updateStoppedState must flip `data-stopped` on "
+            "<body> so the waveform and live-dot freeze together (Item 19)."
+        )
+        assert 'body[data-stopped="true"] .waveform .wb' in html, (
+            "dashboard.html must pause the waveform under stopped state."
+        )
+
+    def test_listener_html_toggles_data_stopped_on_body(self):
+        html_path = Path(__file__).parent.parent / "mammamiradio" / "listener.html"
+        html = html_path.read_text()
+        assert "setAttribute('data-stopped'" in html, (
+            "listener.html fetchStatus must flip `data-stopped` on <body> "
+            "so the launch-waveform freezes when the station is paused."
+        )
+        assert 'body[data-stopped="true"] .launch-waveform .wb' in html, (
+            "listener.html must pause the launch waveform under stopped state."
+        )
+
+    def test_admin_banner_copy_does_not_use_harsh_error_tone(self):
+        # "Session stopped — hit Resume to continue" read as an error.
+        # New copy is calmer — "Station paused · hit Resume when you're ready."
+        html_path = Path(__file__).parent.parent / "mammamiradio" / "admin.html"
+        html = html_path.read_text()
+        assert "Station paused" in html, "admin.html stopped banner should read 'Station paused' (Item 19)."
+        # Only check the banner element's text, not toast strings in JS callbacks.
+        banner_start = html.find('id="stoppedBanner"')
+        banner_end = html.find("</div>", banner_start)
+        banner_block = html[banner_start:banner_end]
+        assert "Session stopped" not in banner_block, (
+            "admin.html stopped banner element should not use the harsh "
+            "'Session stopped — hit Resume' phrasing (Item 19)."
+        )

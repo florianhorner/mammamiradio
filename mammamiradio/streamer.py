@@ -1774,6 +1774,7 @@ def _public_status_payload(request: Request) -> dict:
         "current_source": _serialize_source(state.playlist_source),
         "golden_path": _golden_path_status(config, state),
         "runtime_health": runtime_health,
+        "session_stopped": state.session_stopped,
         "stream_log": [
             {"type": e.type, "label": e.label, "timestamp": e.timestamp, "metadata": e.metadata}
             for e in state.stream_log

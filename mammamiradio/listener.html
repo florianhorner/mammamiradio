@@ -247,6 +247,9 @@
     animation-play-state:paused;
   }
   .launch-waveform.active .wb{animation-play-state:running}
+  /* When the station is stopped, freeze the waveform regardless of `active`.
+     Driven by `data-stopped="true"` on <body>, toggled by fetchStatus. Item 19. */
+  body[data-stopped="true"] .launch-waveform .wb{animation-play-state:paused}
   @keyframes launch-wave{
     from{height:5px;opacity:0.35}
     to{height:var(--h);opacity:0.92}
@@ -1280,6 +1283,9 @@
         state.nowStreaming = data.now_streaming || null;
         state.upcoming = data.upcoming || [];
         state.streamReady = !!(data.now_streaming || (data.upcoming && data.upcoming.length));
+        state.sessionStopped = data.session_stopped === true;
+        // Freeze launch-waveform animation when the operator paused the station.
+        document.body.setAttribute('data-stopped', state.sessionStopped ? 'true' : 'false');
         updateGoldenPath(data.golden_path);
         updateNowPlaying(data.now_streaming);
         updateCasa(data.ha_moments);

@@ -568,6 +568,21 @@ async def test_public_status_returns_json():
     assert "upcoming" in body
     assert "upcoming_mode" in body
     assert "stream_log" in body
+    # Item 19: listener.html relies on session_stopped being in the public
+    # payload so it can freeze the launch-waveform when the operator pauses.
+    assert "session_stopped" in body
+    assert body["session_stopped"] is False  # default for fresh test app
+
+
+@pytest.mark.asyncio
+async def test_public_status_reflects_session_stopped_flag():
+    app = _make_test_app()
+    app.state.station_state.session_stopped = True
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.get("/public-status")
+    assert resp.status_code == 200
+    assert resp.json()["session_stopped"] is True
 
 
 @pytest.mark.asyncio

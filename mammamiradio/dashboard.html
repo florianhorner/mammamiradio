@@ -396,12 +396,19 @@ h1 .mi { color: var(--sun); }
 /* ── STOPPED STATE ── */
 .stopped-banner {
   display: none; padding: 10px 14px; text-align: center; border-radius: 8px;
-  background: rgba(196,74,74,0.2); border: 1px solid rgba(196,74,74,0.4);
-  color: var(--error); font-size: 13px; font-weight: 600; margin-bottom: 14px;
+  background: rgba(245,237,216,0.06); border: 1px solid rgba(245,237,216,0.18);
+  color: var(--cream-dk); font-size: 13px; font-weight: 600; margin-bottom: 14px;
 }
 .stopped-banner.show { display: block; }
-.stopped-banner h3 { font-size: 13px; margin-bottom: 6px; color: var(--error); }
-.live-dot.stopped { background: var(--error); box-shadow: 0 0 8px var(--error); animation: none; }
+.stopped-banner h3 { font-size: 13px; margin-bottom: 6px; color: var(--cream); }
+.live-dot.stopped { background: rgba(245,237,216,0.5); box-shadow: none; animation: none; }
+
+/* When the session is stopped, the whole page quiets down — animations hold,
+   waveform freezes, the LIVE dot stops pulsing. Driven by `data-stopped="true"`
+   on <body>, toggled in _updateStoppedState(). */
+body[data-stopped="true"] .waveform .wb,
+body[data-stopped="true"] .needle,
+body[data-stopped="true"] .live-dot { animation-play-state: paused; }
 
 /* ── AD META ── */
 .ad-meta {
@@ -607,8 +614,8 @@ h1 .mi { color: var(--sun); }
 </div>
 
 <div class="stopped-banner" id="stopped-banner">
-  <h3>&#9632; Station Stopped</h3>
-  <p style="font-size:12px;opacity:0.7;margin-bottom:10px">The station was stopped by the operator.</p>
+  <h3>&#9632; Station paused</h3>
+  <p style="font-size:12px;opacity:0.7;margin-bottom:10px">The operator paused the station. Resume when you're ready.</p>
   <button class="btn" onclick="doResume()">&#9654; Resume</button>
 </div>
 
@@ -1169,15 +1176,17 @@ function _updateStoppedState(d) {
   const banner = document.getElementById('stopped-banner');
   const dot = document.getElementById('live-dot');
   const queueCard = document.getElementById('queue-card');
+  // Global toggle so CSS can pause animations and quiet the page down.
+  document.body.setAttribute('data-stopped', stopped ? 'true' : 'false');
   banner.classList.toggle('show', stopped);
   dot.classList.toggle('stopped', stopped);
   if (stopped) {
     queueCard.style.display = 'none';
     const trackEl = document.getElementById('np-track');
     const metaEl = document.getElementById('np-meta');
-    trackEl.textContent = 'Station Stopped';
+    trackEl.textContent = 'Station paused';
     metaEl.textContent = '';
-    _lastTrackLabel = 'Station Stopped';
+    _lastTrackLabel = 'Station paused';
   } else if (_wasStopped && _wantsPlay) {
     // Session just resumed — reconnect the stream so audio restarts automatically
     setTimeout(_startStream, 300);
