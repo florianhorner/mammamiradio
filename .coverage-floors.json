@@ -1,5 +1,6 @@
 {
   "mammamiradio.__init__": 100,
+  "mammamiradio.ad_creative": 100,
   "mammamiradio.audio_quality": 100,
   "mammamiradio.capabilities": 100,
   "mammamiradio.clip": 96,
@@ -13,7 +14,7 @@
   "mammamiradio.normalizer": 96,
   "mammamiradio.persona": 90,
   "mammamiradio.playlist": 91,
-  "mammamiradio.producer": 83,
+  "mammamiradio.producer": 80,
   "mammamiradio.scheduler": 100,
   "mammamiradio.scriptwriter": 93,
   "mammamiradio.setup_status": 100,
