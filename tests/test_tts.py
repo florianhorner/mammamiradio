@@ -710,3 +710,43 @@ def test_get_openai_client_singleton(monkeypatch):
         c2 = tts_mod._get_openai_client("sk-test")
 
     assert c1 is c2
+
+
+@pytest.mark.asyncio
+async def test_synthesize_ad_sfx_empty_sfx_yields_none_part(_mock_all, tmp_path):
+    """sfx part with empty sfx falls through _render_part to return None (line 273)."""
+    from mammamiradio.tts import synthesize_ad
+
+    script = AdScript(
+        brand="TestBrand",
+        parts=[
+            AdPart(type="voice", text="Ciao!"),
+            AdPart(type="sfx", sfx=""),  # empty sfx — _render_part returns None at line 273
+        ],
+        mood="lounge",
+    )
+    voices = {"default": AdVoice(name="Ann", voice="it-IT-DiegoNeural", style="warm")}
+    result = await synthesize_ad(script, voices, tmp_path)
+    assert result.exists()
+    # Empty sfx part produces None and is excluded; only the voice part survives
+    _mock_all["generate_sfx"].assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_synthesize_ad_motif_generation_failure_continues_without_motif(_mock_all, tmp_path):
+    """When brand motif generation raises, ad assembles without the motif (lines 289-291, branch 295->297)."""
+    from mammamiradio.tts import synthesize_ad
+
+    _mock_all["generate_brand_motif"].side_effect = RuntimeError("motif gen failed")
+
+    script = AdScript(
+        brand="MotifFailBrand",
+        parts=[AdPart(type="voice", text="Compra ora!")],
+        mood="lounge",
+        sonic=SonicWorld(sonic_signature="chime+thud"),
+    )
+    voices = {"default": AdVoice(name="Ann", voice="it-IT-DiegoNeural", style="warm")}
+    result = await synthesize_ad(script, voices, tmp_path)
+    assert result.exists()
+    _mock_all["generate_brand_motif"].assert_called_once()
+    # motif_result is None → ad_parts stays empty → no motif prepended to final ad

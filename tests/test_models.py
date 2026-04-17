@@ -366,10 +366,13 @@ def test_describe_for_prompt_wrong_prediction_callback():
 
 def test_describe_for_prompt_unknown_pattern_returns_empty():
     """Patterns that exist but have no description entry return empty string."""
+    from unittest.mock import PropertyMock, patch
+
     p = ListenerProfile()
-    # Inject a pattern that is not in the descriptions dict
-    p.patterns.append("unknown_pattern_xyz")
-    assert p.describe_for_prompt() == ""
+    # The patterns property is computed from recent_outcomes — patch it directly
+    # to inject an unknown pattern without reverse-engineering the skip thresholds.
+    with patch.object(type(p), "patterns", new_callable=PropertyMock, return_value=["unknown_xyz"]):
+        assert p.describe_for_prompt() == ""
 
 
 def test_reserve_next_track_raises_on_empty_playlist():

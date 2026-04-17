@@ -168,6 +168,40 @@ async def test_startup_restores_stopped_session_flag(tmp_path: Path, flag_exists
 
 
 @pytest.mark.asyncio
+async def test_startup_no_ffmpeg_warning_when_ffmpeg_found(tmp_path: Path):
+    """startup() does NOT log an FFmpeg warning when ffmpeg is found on PATH."""
+    from mammamiradio.models import Track
+
+    mock_config = MagicMock()
+    mock_config.station.name = "TestRadio"
+    mock_config.station.language = "it"
+    mock_config.bind_host = "127.0.0.1"
+    mock_config.port = 8000
+    mock_config.pacing.lookahead_segments = 3
+    mock_config.max_cache_size_mb = 500
+    mock_config.tmp_dir = tmp_path / "tmp"
+    mock_config.cache_dir = tmp_path / "cache"
+    mock_config.homeassistant.enabled = False
+    mock_config.allow_ytdlp = False
+    mock_config.audio.bitrate = 128
+
+    tracks = [Track(title="S", artist="A", duration_ms=1, spotify_id="x")]
+
+    with (
+        patch(f"{MODULE}.load_config", return_value=mock_config),
+        patch(f"{MODULE}.read_persisted_source", return_value=None),
+        patch(f"{MODULE}.fetch_startup_playlist", return_value=(tracks, None, "")),
+        patch(f"{MODULE}.run_producer", new_callable=AsyncMock),
+        patch(f"{MODULE}.run_playback_loop", new_callable=AsyncMock),
+        patch(f"{MODULE}.prewarm_first_segment", new_callable=AsyncMock),
+        patch(f"{MODULE}.shutil.which", return_value="/usr/bin/ffmpeg"),
+    ):
+        from mammamiradio.main import startup
+
+        await startup()  # should not raise, covers the 76->81 branch (ffmpeg found)
+
+
+@pytest.mark.asyncio
 async def test_startup_boot_summary_and_purge(tmp_path: Path):
     """startup() calls purge_suspect_cache_files and logs boot summary."""
     from mammamiradio.models import PlaylistSource, Track
