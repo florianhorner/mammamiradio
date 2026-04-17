@@ -10,6 +10,23 @@ The current version source of truth is `pyproject.toml`.
 
 - **Release cooldown gate** (stabilization run Day 1): `.github/workflows/release-cooldown.yml` blocks any `v*` tag push if the prior published release is less than 24 hours old. Bypass: `hotfix` label on the source PR. Tunable via `MIN_COOLDOWN_HOURS`. Self-test at `tests/workflows/test_cooldown_gate.sh` covers 9 scenarios and runs on every PR via `quality.yml`. `STABILIZATION_LOG.md` records weekly fix-hours and emergency-patch counts; Day 8 Go/No-Go lives in that file.
 
+## [2.10.6] - 2026-04-17
+
+Operator honesty pass — five UI and log fixes that stop the admin panel from lying to the operator, plus a normalizer safety guard.
+
+### Fixed
+
+- **Normalizer concat duration guard** (Item 1, phase 1): `concat_files` now probes input durations with `ffprobe` and logs a `WARNING` when the concatenated output is shorter than the sum of its inputs, surfacing silent truncation instead of producing a mysteriously short track. Fail-open: when ffprobe is unavailable or cannot parse, the guard stays silent rather than blocking playback.
+- **Stopped state actually stops** (Item 19): Clicking Stop now freezes the dashboard animations, pauses the elapsed-time counter, and disables producer buttons until Resume. Previously the UI kept ticking as if the stream were live.
+- **Three-state Anthropic status** (Item 11): Admin panel distinguishes *connected*, *not configured*, and *suspended* (401 from Anthropic) instead of flashing "connected" while every script call was failing.
+- **Scheduler reason strings no longer leak to listeners** (Item 21): Up-next rows used to render raw strings like `"cooldown: 45s"` and `"banter_due_in=3"`. Those are now stripped before the row reaches the UI.
+- **Raw norm-cache filenames never show as titles** (Item 20): The rescue path that replays a pre-normalized track on producer stall no longer displays `Recovered: norm_abc123.mp3`. Sidecar metadata is used when present; otherwise the filename is humanized (`norm_busted.mp3` → `Busted`).
+
+### Tests
+
+- `TestFFprobeDurationSecParser`: exercises the real `_ffprobe_duration_sec` parser (returncode, unparseable, OSError, timeout, empty stdout) so the concat guard's dependency is covered by the per-module ratchet.
+- Rescue-path coverage: sidecar-present, malformed-sidecar, and no-sidecar paths are all asserted at the listener-facing title level.
+
 ## [2.10.5] - 2026-04-16
 
 ### Changed
