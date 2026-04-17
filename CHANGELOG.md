@@ -6,6 +6,10 @@ The current version source of truth is `pyproject.toml`.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Anthropic auth flood prevented across concurrent tasks** (WS3-A): concurrent banter/ad/transition generations no longer race past the auth-block check. A module-level `asyncio.Lock` serializes the Anthropic attempt so the first 401 trips the 10-minute cooldown and sibling calls queued on the lock see the block and fall straight to OpenAI. Backoff expiry logs once (`Anthropic auth backoff expired; retrying Anthropic after cooldown`), the next call retries exactly once, and a fresh success clears the block atomically. Fixes the 8/8/22-minute 401 bursts from the 2026-04-13 log.
+
 ### Added
 
 - **Release cooldown gate** (stabilization run Day 1): `.github/workflows/release-cooldown.yml` blocks any `v*` tag push if the prior published release is less than 24 hours old. Bypass: `hotfix` label on the source PR. Tunable via `MIN_COOLDOWN_HOURS`. Self-test at `tests/workflows/test_cooldown_gate.sh` covers 9 scenarios and runs on every PR via `quality.yml`. `STABILIZATION_LOG.md` records weekly fix-hours and emergency-patch counts; Day 8 Go/No-Go lives in that file.

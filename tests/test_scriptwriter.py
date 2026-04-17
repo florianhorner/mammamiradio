@@ -1496,3 +1496,157 @@ def test_has_script_llm_is_public():
     config = load_config(toml_path)
     # Result is bool — function is accessible and callable
     assert isinstance(has_script_llm(config), bool)
+
+
+# --- WS3-A concurrent auth-flood prevention ---
+
+
+@pytest.mark.asyncio
+async def test_concurrent_401s_trigger_exactly_one_anthropic_attempt(config, state):
+    """N tasks racing _generate_json_response against a bad key must serialize.
+
+    Reproduces the 2026-04-13 flood: concurrent banter/ad/transition tasks all
+    raced past the block check before any could set _anthropic_auth_blocked_until.
+    After the fix, the attempt lock serializes the critical section so only the
+    first concurrent task hits Anthropic; the rest see the block and fall back.
+    """
+    import asyncio as _asyncio
+
+    from mammamiradio.scriptwriter import _generate_json_response
+
+    class _AuthError(Exception):
+        pass
+
+    config.openai_api_key = "openai-key"
+    host_name = config.hosts[0].name
+    openai_client = _mock_openai_response(json.dumps({"lines": [{"host": host_name, "text": "Fallback."}]}))
+
+    mock_client = MagicMock()
+    mock_client.messages = MagicMock()
+    mock_client.messages.create = AsyncMock(side_effect=_AuthError("invalid x-api-key"))
+
+    with (
+        patch("mammamiradio.scriptwriter._anthropic_client", None),
+        patch("mammamiradio.scriptwriter._openai_client", None),
+        patch("mammamiradio.scriptwriter.anthropic.AsyncAnthropic", MagicMock(return_value=mock_client)),
+        patch("mammamiradio.scriptwriter._get_openai_client", return_value=openai_client),
+    ):
+        results = await _asyncio.gather(
+            *(
+                _generate_json_response(prompt="p", config=config, state=state, model="claude-test", max_tokens=100)
+                for _ in range(8)
+            ),
+            return_exceptions=True,
+        )
+
+    assert mock_client.messages.create.await_count == 1, (
+        f"expected 1 Anthropic attempt across 8 concurrent calls, got {mock_client.messages.create.await_count}"
+    )
+    assert state.anthropic_auth_failures == 1
+    assert all(not isinstance(r, Exception) for r in results), f"unexpected exceptions: {results}"
+
+
+@pytest.mark.asyncio
+async def test_concurrent_400s_no_openai_all_reraise(config, state):
+    """Concurrent auth failures with no OpenAI fallback: first raises, rest see block and raise cleanly."""
+    import asyncio as _asyncio
+
+    from mammamiradio.scriptwriter import _generate_json_response
+
+    class _AuthError(Exception):
+        pass
+
+    config.openai_api_key = ""
+    mock_client = MagicMock()
+    mock_client.messages = MagicMock()
+    mock_client.messages.create = AsyncMock(side_effect=_AuthError("invalid x-api-key"))
+
+    with (
+        patch("mammamiradio.scriptwriter._anthropic_client", None),
+        patch("mammamiradio.scriptwriter.anthropic.AsyncAnthropic", MagicMock(return_value=mock_client)),
+    ):
+        results = await _asyncio.gather(
+            *(
+                _generate_json_response(prompt="p", config=config, state=state, model="claude-test", max_tokens=100)
+                for _ in range(5)
+            ),
+            return_exceptions=True,
+        )
+
+    # Exactly one real HTTP attempt; the rest see the block and RuntimeError out.
+    assert mock_client.messages.create.await_count == 1
+    assert state.anthropic_auth_failures == 1
+    assert sum(isinstance(r, _AuthError) for r in results) == 1
+    assert sum(isinstance(r, RuntimeError) for r in results) == 4
+
+
+@pytest.mark.asyncio
+async def test_backoff_expiry_allows_exactly_one_retry_and_logs_once(config, state, caplog):
+    """After backoff expires, next call retries Anthropic once (not a flood); log fires once."""
+    import logging as _logging
+
+    import mammamiradio.scriptwriter as sw
+    from mammamiradio.scriptwriter import _generate_json_response
+
+    config.openai_api_key = "openai-key"
+    host_name = config.hosts[0].name
+    openai_client = _mock_openai_response(json.dumps({"lines": [{"host": host_name, "text": "Fallback."}]}))
+
+    class _AuthError(Exception):
+        pass
+
+    mock_client = MagicMock()
+    mock_client.messages = MagicMock()
+    mock_client.messages.create = AsyncMock(side_effect=_AuthError("invalid x-api-key"))
+
+    # Pre-set an expired block for the current key.
+    sw._anthropic_auth_blocked_key = config.anthropic_api_key
+    sw._anthropic_auth_blocked_until = 1.0  # in the past
+    sw._anthropic_block_expired_logged = False
+
+    caplog.set_level(_logging.INFO, logger="mammamiradio.scriptwriter")
+
+    with (
+        patch("mammamiradio.scriptwriter._anthropic_client", None),
+        patch("mammamiradio.scriptwriter._openai_client", None),
+        patch("mammamiradio.scriptwriter.anthropic.AsyncAnthropic", MagicMock(return_value=mock_client)),
+        patch("mammamiradio.scriptwriter._get_openai_client", return_value=openai_client),
+    ):
+        # First call after expiry: should retry Anthropic once.
+        await _generate_json_response(prompt="p", config=config, state=state, model="claude-test", max_tokens=100)
+        # Second call within the new backoff: no Anthropic attempt.
+        await _generate_json_response(prompt="p", config=config, state=state, model="claude-test", max_tokens=100)
+
+    assert mock_client.messages.create.await_count == 1
+    expiry_logs = [r for r in caplog.records if "backoff expired" in r.getMessage()]
+    assert len(expiry_logs) == 1, (
+        f"expected 1 expiry log, got {len(expiry_logs)}: {[r.getMessage() for r in caplog.records]}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_key_rotation_clears_block(config, state):
+    """Loading a different anthropic_api_key resets the block so the new key is tried."""
+    import mammamiradio.scriptwriter as sw
+    from mammamiradio.scriptwriter import _generate_json_response
+
+    # Simulate prior block on the OLD key.
+    sw._anthropic_auth_blocked_key = "old-key-that-401d"
+    sw._anthropic_auth_blocked_until = float("inf")
+
+    config.anthropic_api_key = "fresh-rotated-key"
+    config.openai_api_key = ""
+
+    ok_client = _mock_anthropic_response(json.dumps({"ok": True}))
+
+    with (
+        patch("mammamiradio.scriptwriter._anthropic_client", None),
+        patch("mammamiradio.scriptwriter.anthropic.AsyncAnthropic", ok_client),
+    ):
+        result = await _generate_json_response(
+            prompt="p", config=config, state=state, model="claude-test", max_tokens=100
+        )
+
+    assert result == {"ok": True}
+    assert sw._anthropic_auth_blocked_key == ""
+    assert sw._anthropic_auth_blocked_until == 0.0
