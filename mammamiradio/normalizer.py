@@ -213,6 +213,39 @@ def normalize(
     return output_path
 
 
+def _ffprobe_duration_sec(path: Path) -> float | None:
+    """Best-effort mp3 duration probe; None if ffprobe fails.
+
+    Used by concat_files for a duration-invariant sanity check. We don't want
+    a probe failure to crash a concat — just skip the check.
+    """
+    try:
+        result = subprocess.run(
+            [
+                "ffprobe",
+                "-v",
+                "error",
+                "-show_entries",
+                "format=duration",
+                "-of",
+                "default=noprint_wrappers=1:nokey=1",
+                str(path),
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=5,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if result.returncode != 0:
+        return None
+    try:
+        return float(result.stdout.strip())
+    except ValueError:
+        return None
+
+
 def concat_files(
     paths: list[Path],
     output_path: Path,
@@ -276,6 +309,38 @@ def concat_files(
     ]
     _run_ffmpeg(cmd, f"concat {len(paths)} files")
     logger.info("Concatenated %d files -> %s", len(paths), output_path.name)
+
+    # Duration-invariant guard (Item 1, banter mid-sentence cutoff):
+    # If the output is materially shorter than the sum of inputs + gaps, the
+    # concat likely truncated on a bad frame header in one of the inputs. Log
+    # loudly with all three numbers so post-mortem can identify the culprit
+    # input without re-running the session. Never crash — the stream keeps
+    # playing whatever made it into the file.
+    try:
+        output_dur = _ffprobe_duration_sec(output_path)
+        if output_dur is None or output_dur <= 0:
+            return output_path
+        input_durs = [_ffprobe_duration_sec(p) for p in paths]
+        if any(d is None or d <= 0 for d in input_durs):
+            return output_path
+        expected = sum(input_durs) + (len(paths) - 1) * silence_dur  # type: ignore[operator]
+        # Allow 5% slack for ffmpeg encoding rounding + loudnorm edge trimming.
+        threshold = 0.95 * expected
+        if output_dur < threshold:
+            logger.warning(
+                "concat_files duration shortfall: output=%.2fs expected>=%.2fs "
+                "(sum_inputs=%.2fs + %d gaps x %.2fs). Output: %s. Inputs (dur): %s",
+                output_dur,
+                threshold,
+                sum(input_durs),  # type: ignore[arg-type]
+                max(0, len(paths) - 1),
+                silence_dur,
+                output_path.name,
+                [(p.name, f"{d:.2f}") for p, d in zip(paths, input_durs, strict=False)],
+            )
+    except Exception as exc:  # defense-in-depth — never let instrumentation break prod
+        logger.debug("concat_files duration probe skipped: %s", exc)
+
     return output_path
 
 

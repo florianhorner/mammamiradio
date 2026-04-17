@@ -29,13 +29,21 @@ from mammamiradio.normalizer import (
 
 @pytest.fixture
 def mock_subprocess():
-    """Patch subprocess.run to return success by default."""
+    """Patch subprocess.run to return success by default.
+
+    Also disables the post-concat duration probe (Item 1 guard) so tests that
+    inspect `mock_run.call_args` see the ffmpeg call as the last subprocess
+    invocation, not a trailing ffprobe.
+    """
     completed = MagicMock(spec=subprocess.CompletedProcess)
     completed.returncode = 0
     completed.stderr = b""
     completed.stdout = b""
 
-    with patch("mammamiradio.normalizer.subprocess.run", return_value=completed) as mock_run:
+    with (
+        patch("mammamiradio.normalizer.subprocess.run", return_value=completed) as mock_run,
+        patch("mammamiradio.normalizer._ffprobe_duration_sec", return_value=None),
+    ):
         yield mock_run, completed
 
 

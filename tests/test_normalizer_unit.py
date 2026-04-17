@@ -24,13 +24,22 @@ from mammamiradio.normalizer import (
 
 @pytest.fixture
 def mock_subprocess():
-    """Patch subprocess.run to return success by default."""
+    """Patch subprocess.run to return success by default.
+
+    Also disables the post-concat duration probe (`_ffprobe_duration_sec`) so
+    tests that inspect `mock_run.call_args` see the ffmpeg call as the last
+    subprocess invocation, not a trailing ffprobe from the Item 1 guard.
+    Tests that want to exercise the guard explicitly monkeypatch the probe.
+    """
     completed = MagicMock(spec=subprocess.CompletedProcess)
     completed.returncode = 0
     completed.stderr = b""
     completed.stdout = b""
 
-    with patch("mammamiradio.normalizer.subprocess.run", return_value=completed) as mock_run:
+    with (
+        patch("mammamiradio.normalizer.subprocess.run", return_value=completed) as mock_run,
+        patch("mammamiradio.normalizer._ffprobe_duration_sec", return_value=None),
+    ):
         yield mock_run, completed
 
 
@@ -593,3 +602,92 @@ def test_humanize_norm_filename_fallback_empty():
 def test_humanize_norm_filename_passthrough_when_no_norm_prefix():
     # Legacy or externally-named files still get humanized.
     assert humanize_norm_filename("rescue_thing.mp3") == "Rescue Thing"
+
+
+# ── Item 1: concat duration-invariant guard ───────────────────────────────────
+
+
+class TestConcatFilesDurationInvariant:
+    """concat_files must warn when ffmpeg silently produced a short output —
+    the canonical fingerprint of Item 1 (banter mid-sentence cutoff). Never
+    crash on probe failure; just log the shortfall with enough detail to
+    identify the culprit input from the warning alone.
+    """
+
+    def test_duration_guard_logs_warning_when_output_too_short(self, tmp_path, caplog, monkeypatch):
+        import mammamiradio.normalizer as norm
+
+        # Stub ffmpeg run so no real encode happens.
+        monkeypatch.setattr(norm, "_run_ffmpeg", lambda *a, **kw: None)
+
+        # Simulate a concat where the 3 input MP3s are each 10s (total 30s
+        # + 2*0.3s silence gaps = 30.6s) but the "output" came out 15s —
+        # exactly the class of failure Item 1 is guarding against.
+        durations = {
+            "input_a.mp3": 10.0,
+            "input_b.mp3": 10.0,
+            "input_c.mp3": 10.0,
+            "concat_out.mp3": 15.0,  # ← truncated
+        }
+
+        def fake_probe(path):
+            return durations.get(Path(path).name)
+
+        monkeypatch.setattr(norm, "_ffprobe_duration_sec", fake_probe)
+
+        inputs = [tmp_path / "input_a.mp3", tmp_path / "input_b.mp3", tmp_path / "input_c.mp3"]
+        for p in inputs:
+            p.write_bytes(b"stub")
+        output = tmp_path / "concat_out.mp3"
+        output.write_bytes(b"stub")
+
+        caplog.set_level("WARNING", logger="mammamiradio.normalizer")
+        norm.concat_files(inputs, output, silence_ms=300, loudnorm=False)
+
+        warnings = [r for r in caplog.records if r.levelname == "WARNING"]
+        assert any("duration shortfall" in r.message for r in warnings), (
+            "concat_files should log a 'duration shortfall' warning when the "
+            "output is shorter than the sum of inputs by more than 5%."
+        )
+
+    def test_duration_guard_silent_when_output_matches(self, tmp_path, caplog, monkeypatch):
+        import mammamiradio.normalizer as norm
+
+        monkeypatch.setattr(norm, "_run_ffmpeg", lambda *a, **kw: None)
+        durations = {
+            "input_a.mp3": 10.0,
+            "input_b.mp3": 10.0,
+            "concat_out.mp3": 20.3,  # matches inputs + 1*0.3s gap
+        }
+        monkeypatch.setattr(norm, "_ffprobe_duration_sec", lambda p: durations.get(Path(p).name))
+
+        inputs = [tmp_path / "input_a.mp3", tmp_path / "input_b.mp3"]
+        for p in inputs:
+            p.write_bytes(b"stub")
+        output = tmp_path / "concat_out.mp3"
+        output.write_bytes(b"stub")
+
+        caplog.set_level("WARNING", logger="mammamiradio.normalizer")
+        norm.concat_files(inputs, output, silence_ms=300, loudnorm=False)
+
+        warnings = [r for r in caplog.records if r.levelname == "WARNING" and "duration shortfall" in r.message]
+        assert not warnings, "No warning expected when output duration matches expected sum."
+
+    def test_duration_guard_silent_when_probe_fails(self, tmp_path, caplog, monkeypatch):
+        import mammamiradio.normalizer as norm
+
+        monkeypatch.setattr(norm, "_run_ffmpeg", lambda *a, **kw: None)
+        # Probe returns None on every call — guard must skip gracefully.
+        monkeypatch.setattr(norm, "_ffprobe_duration_sec", lambda p: None)
+
+        inputs = [tmp_path / "a.mp3", tmp_path / "b.mp3"]
+        for p in inputs:
+            p.write_bytes(b"stub")
+        output = tmp_path / "out.mp3"
+        output.write_bytes(b"stub")
+
+        caplog.set_level("WARNING", logger="mammamiradio.normalizer")
+        # Must not raise.
+        norm.concat_files(inputs, output, silence_ms=0, loudnorm=False)
+        warnings = [r for r in caplog.records if r.levelname == "WARNING" and "duration shortfall" in r.message]
+        assert not warnings, "Guard must stay silent when probes can't determine durations."
