@@ -361,7 +361,9 @@ async def test_run_playback_loop_timeout_uses_norm_cache_after_30s(tmp_path, cap
     assert now_meta.get("title") == "Rescue", (
         f"rescue path should humanize filename when no sidecar present; got {now_meta.get('title')!r}"
     )
-    assert "Recovered:" not in (now_meta.get("title") or ""), "'Recovered:' prefix must not leak to listener-facing title"
+    assert "Recovered:" not in (now_meta.get("title") or ""), (
+        "'Recovered:' prefix must not leak to listener-facing title"
+    )
 
 
 @pytest.mark.asyncio

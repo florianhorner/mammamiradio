@@ -323,7 +323,7 @@ def concat_files(
         input_durs = [_ffprobe_duration_sec(p) for p in paths]
         if any(d is None or d <= 0 for d in input_durs):
             return output_path
-        expected = sum(input_durs) + (len(paths) - 1) * silence_dur  # type: ignore[operator]
+        expected = sum(input_durs) + (len(paths) - 1) * silence_dur  # type: ignore[arg-type,operator]
         # Allow 5% slack for ffmpeg encoding rounding + loudnorm edge trimming.
         threshold = 0.95 * expected
         if output_dur < threshold:
