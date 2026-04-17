@@ -1071,7 +1071,7 @@ async def test_drain_guard_inserts_canned_clip_on_queue_drain(tmp_path):
     ):
         # Set lookahead to 1 so after 1 real segment fills the queue, production pauses.
         # Then drain the queue manually to trigger the drain guard on the next pass.
-        config.pacing.lookahead_segments = 2
+        config.pacing.lookahead_segments = 1
 
         from mammamiradio.producer import run_producer
 
