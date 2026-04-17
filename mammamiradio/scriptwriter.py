@@ -41,6 +41,11 @@ _openai_key: str = ""
 _anthropic_auth_blocked_key: str = ""
 _anthropic_auth_blocked_until: float = 0.0
 _ANTHROPIC_AUTH_BACKOFF_SECONDS = 600
+# Serializes Anthropic attempts so concurrent async tasks can't all race past
+# the block check and issue parallel 401 floods before the first failure trips
+# the circuit. Created lazily inside the running event loop.
+_anthropic_attempt_lock: asyncio.Lock | None = None
+_anthropic_block_expired_logged: bool = False
 
 # Cached system prompt — rebuilt only when config changes
 _cached_system_prompt: str = ""
@@ -186,9 +191,10 @@ def has_script_llm(config: StationConfig) -> bool:
 
 def reset_provider_backoff() -> None:
     """Clear memoized provider downgrade state (used after key updates/tests)."""
-    global _anthropic_auth_blocked_key, _anthropic_auth_blocked_until
+    global _anthropic_auth_blocked_key, _anthropic_auth_blocked_until, _anthropic_block_expired_logged
     _anthropic_auth_blocked_key = ""
     _anthropic_auth_blocked_until = 0.0
+    _anthropic_block_expired_logged = False
 
 
 def _is_anthropic_auth_error(exc: Exception) -> bool:
@@ -200,6 +206,18 @@ def _is_anthropic_auth_error(exc: Exception) -> bool:
     return "invalid x-api-key" in text or "authentication_error" in text or "unauthorized" in text or "401" in text
 
 
+def _get_anthropic_attempt_lock() -> asyncio.Lock:
+    """Return the module-level Anthropic attempt lock, creating it on first use.
+
+    Lazy construction avoids pinning the lock to the wrong event loop when the
+    module is imported before a loop exists.
+    """
+    global _anthropic_attempt_lock
+    if _anthropic_attempt_lock is None:
+        _anthropic_attempt_lock = asyncio.Lock()
+    return _anthropic_attempt_lock
+
+
 async def _generate_json_response(
     *,
     prompt: str,
@@ -209,7 +227,7 @@ async def _generate_json_response(
     max_tokens: int,
 ) -> dict:
     """Generate JSON via Anthropic, falling back to OpenAI when needed."""
-    global _anthropic_auth_blocked_key, _anthropic_auth_blocked_until
+    global _anthropic_auth_blocked_key, _anthropic_auth_blocked_until, _anthropic_block_expired_logged
 
     system_prompt = _get_system_prompt(config)
 
@@ -232,44 +250,67 @@ async def _generate_json_response(
                 max(1, int(_anthropic_auth_blocked_until - now)),
             )
         else:
-            try:
-                client = _get_client(config.anthropic_api_key)
-                resp = await asyncio.wait_for(
-                    client.messages.create(
-                        model=model,
-                        max_tokens=max_tokens,
-                        system=system_prompt,
-                        messages=[{"role": "user", "content": prompt}],
-                    ),
-                    timeout=45.0,
+            async with _get_anthropic_attempt_lock():
+                # Re-check inside the lock: a sibling task may have just 401'd and
+                # set the block while we were waiting to acquire.
+                now = time.time()
+                blocked_now = (
+                    _anthropic_auth_blocked_key == config.anthropic_api_key and now < _anthropic_auth_blocked_until
                 )
-                if hasattr(resp, "usage") and resp.usage:
-                    state.api_calls += 1
-                    state.api_input_tokens += resp.usage.input_tokens
-                    state.api_output_tokens += resp.usage.output_tokens
-                raw = resp.content[0].text.strip()  # type: ignore[union-attr]
-                state.anthropic_disabled_until = 0.0
-                state.anthropic_last_error = ""
-                return json.loads(_strip_fences(raw))
-            except Exception as exc:
-                if _is_anthropic_auth_error(exc):
-                    _anthropic_auth_blocked_key = config.anthropic_api_key
-                    _anthropic_auth_blocked_until = time.time() + _ANTHROPIC_AUTH_BACKOFF_SECONDS
+                if blocked_now:
                     state.anthropic_disabled_until = _anthropic_auth_blocked_until
-                    state.anthropic_last_error_at = time.time()
-                    state.anthropic_last_error = f"{type(exc).__name__}: {exc}"
-                    state.anthropic_auth_failures += 1
                     if not config.openai_api_key:
-                        raise
-                    logger.warning(
-                        "Anthropic auth failed; suspending Anthropic for %ds and falling back to OpenAI: %s",
-                        _ANTHROPIC_AUTH_BACKOFF_SECONDS,
-                        exc,
-                    )
+                        raise RuntimeError(
+                            "Anthropic authentication previously failed; provider is temporarily disabled"
+                        )
                 else:
-                    if not config.openai_api_key:
-                        raise
-                    logger.warning("Anthropic %s, falling back to OpenAI: %s", type(exc).__name__, exc)
+                    if _anthropic_auth_blocked_key and not _anthropic_block_expired_logged:
+                        logger.info(
+                            "Anthropic auth backoff expired; retrying Anthropic after cooldown",
+                        )
+                        _anthropic_block_expired_logged = True
+                    try:
+                        client = _get_client(config.anthropic_api_key)
+                        resp = await asyncio.wait_for(
+                            client.messages.create(
+                                model=model,
+                                max_tokens=max_tokens,
+                                system=system_prompt,
+                                messages=[{"role": "user", "content": prompt}],
+                            ),
+                            timeout=45.0,
+                        )
+                        if hasattr(resp, "usage") and resp.usage:
+                            state.api_calls += 1
+                            state.api_input_tokens += resp.usage.input_tokens
+                            state.api_output_tokens += resp.usage.output_tokens
+                        raw = resp.content[0].text.strip()  # type: ignore[union-attr]
+                        state.anthropic_disabled_until = 0.0
+                        state.anthropic_last_error = ""
+                        _anthropic_auth_blocked_key = ""
+                        _anthropic_auth_blocked_until = 0.0
+                        _anthropic_block_expired_logged = False
+                        return json.loads(_strip_fences(raw))
+                    except Exception as exc:
+                        if _is_anthropic_auth_error(exc):
+                            _anthropic_auth_blocked_key = config.anthropic_api_key
+                            _anthropic_auth_blocked_until = time.time() + _ANTHROPIC_AUTH_BACKOFF_SECONDS
+                            _anthropic_block_expired_logged = False
+                            state.anthropic_disabled_until = _anthropic_auth_blocked_until
+                            state.anthropic_last_error_at = time.time()
+                            state.anthropic_last_error = f"{type(exc).__name__}: {exc}"
+                            state.anthropic_auth_failures += 1
+                            if not config.openai_api_key:
+                                raise
+                            logger.warning(
+                                "Anthropic auth failed; suspending Anthropic for %ds and falling back to OpenAI: %s",
+                                _ANTHROPIC_AUTH_BACKOFF_SECONDS,
+                                exc,
+                            )
+                        else:
+                            if not config.openai_api_key:
+                                raise
+                            logger.warning("Anthropic %s, falling back to OpenAI: %s", type(exc).__name__, exc)
 
     openai_key = config.openai_api_key or os.getenv("OPENAI_API_KEY", "")
     if not openai_key:

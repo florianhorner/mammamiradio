@@ -43,7 +43,7 @@ The app persists the last selected source to `cache/playlist_source.json` and re
 That usually means script generation failed and the app fell back to stock copy.
 
 The app tries Anthropic first, then falls back to OpenAI `gpt-4o-mini` if `OPENAI_API_KEY` is set, then to stock lines.
-When Anthropic returns an authentication failure (for example `invalid x-api-key`), the app now suspends Anthropic for 10 minutes in-process and routes script generation to OpenAI immediately to avoid repeated 401 spam.
+When Anthropic returns an authentication failure (for example `invalid x-api-key`), the app suspends Anthropic for 10 minutes in-process and routes script generation to OpenAI immediately to avoid repeated 401 spam. Concurrent banter, ad, and transition generations share a single attempt lock: the first call trips the circuit; sibling calls queued on the lock see the block and fall straight to OpenAI instead of each racing through their own 401. After the 10-minute cooldown the next call logs `Anthropic auth backoff expired; retrying Anthropic after cooldown` and makes exactly one retry; a successful retry clears the block, a fresh 401 re-arms it for another 10 minutes.
 
 Check:
 
