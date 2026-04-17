@@ -648,8 +648,7 @@ class TestCapabilitiesStatusIsHonest:
             "auth failed and we're falling back to OpenAI (Item 11)."
         )
         assert "retry in" in html, (
-            "admin.html should surface the retry countdown when Anthropic "
-            "is in backoff (Item 11)."
+            "admin.html should surface the retry countdown when Anthropic is in backoff (Item 11)."
         )
 
 
@@ -683,9 +682,7 @@ class TestStoppedStateQuietsTheUI:
         assert 'body[data-stopped="true"] .btn-trigger' in html, (
             "admin.html must dim producer trigger buttons when stopped (Item 19)."
         )
-        assert "pointer-events: none" in html, (
-            "admin.html must disable producer buttons under stopped state (Item 19)."
-        )
+        assert "pointer-events: none" in html, "admin.html must disable producer buttons under stopped state (Item 19)."
 
     def test_admin_html_clears_tick_interval_on_stop(self):
         html_path = Path(__file__).parent.parent / "mammamiradio" / "admin.html"
