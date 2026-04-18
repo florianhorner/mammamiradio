@@ -19,6 +19,47 @@ logger = logging.getLogger(__name__)
 _CACHE_PROTECTED = {"mammamiradio.db", "playlist_source.json", "session_stopped.flag"}
 _TRUTHY = ("true", "1", "yes")
 
+# Per-session denylist of track cache keys rejected by validate_download or the
+# quality gate. Keeps a poisoned cache file or a structurally-bad track from
+# looping through the quality gate forever — once rejected, the track stays
+# rejected for the lifetime of the process. Cleared explicitly by tests and at
+# startup via `clear_rejected_cache_keys()`.
+_REJECTED_CACHE_KEYS: set[str] = set()
+
+
+def reject_cached_download(cache_dir: Path, cache_key: str, reason: str) -> bool:
+    """Purge a rejected download from cache and denylist the key for the session.
+
+    Called by the producer when validate_download or the audio-quality gate
+    rejects a track. Without this, the file would remain at
+    ``cache_dir/{cache_key}.mp3`` and become a cache hit on the next selection
+    of the same track, endlessly re-rejected with no progress.
+
+    Returns True if a cache file was actually removed.
+    """
+    if not cache_key:
+        return False
+    _REJECTED_CACHE_KEYS.add(cache_key)
+    path = cache_dir / f"{cache_key}.mp3"
+    try:
+        if path.exists():
+            path.unlink()
+            logger.warning("Purged rejected cache file %s: %s", path.name, reason)
+            return True
+    except OSError as exc:
+        logger.warning("Failed to purge rejected cache file %s: %s", path, exc)
+    return False
+
+
+def is_rejected_cache_key(cache_key: str) -> bool:
+    """Return True if the cache key was rejected earlier in this session."""
+    return bool(cache_key) and cache_key in _REJECTED_CACHE_KEYS
+
+
+def clear_rejected_cache_keys() -> None:
+    """Reset the session-level rejection set (startup and tests)."""
+    _REJECTED_CACHE_KEYS.clear()
+
 
 def validate_download(filepath: Path) -> tuple[bool, str]:
     """Quickly reject partial/corrupt downloads before expensive normalization."""
