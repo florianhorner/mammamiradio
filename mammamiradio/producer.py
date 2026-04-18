@@ -19,7 +19,13 @@ import mammamiradio.scriptwriter as _sw
 from mammamiradio.audio_quality import AudioQualityError, AudioToolError, validate_segment_audio
 from mammamiradio.config import StationConfig
 from mammamiradio.context_cues import generate_impossible_line
-from mammamiradio.downloader import download_track, evict_cache_lru, validate_download
+from mammamiradio.downloader import (
+    download_track,
+    evict_cache_lru,
+    is_rejected_cache_key,
+    reject_cached_download,
+    validate_download,
+)
 from mammamiradio.ha_context import (
     GOLD_ENTITIES,
     HomeContext,
@@ -431,11 +437,15 @@ async def _prefetch_next(
         if norm_cached.exists():
             logger.debug("Prefetch: norm already cached for %s", candidate.display)
             return
+        if is_rejected_cache_key(candidate.cache_key):
+            logger.debug("Prefetch: skipping denylisted candidate %s", candidate.display)
+            return
         logger.info("Prefetch: pre-normalizing %s in background", candidate.display)
         audio_path = await download_track(candidate, config.cache_dir, music_dir=Path("music"))
         loop = asyncio.get_running_loop()
-        ok, _ = await loop.run_in_executor(None, validate_download, audio_path)
+        ok, reason = await loop.run_in_executor(None, validate_download, audio_path)
         if not ok:
+            reject_cached_download(config.cache_dir, candidate.cache_key, reason)
             logger.debug("Prefetch: skipping invalid download for %s", candidate.display)
             return
         norm_path = config.tmp_dir / f"prefetch_{uuid4().hex[:8]}.mp3"
@@ -486,6 +496,7 @@ async def prewarm_first_segment(
         loop = asyncio.get_running_loop()
         ok, reason = await loop.run_in_executor(None, validate_download, audio_path)
         if not ok:
+            reject_cached_download(config.cache_dir, track.cache_key, reason)
             logger.warning("Skipping prewarm track due to invalid download (%s): %s", track.display, reason)
             return False
         norm_cached = config.cache_dir / f"norm_{track.cache_key}_{config.audio.bitrate}k.mp3"
@@ -774,16 +785,30 @@ async def run_producer(
 
         try:
             if seg_type == SegmentType.MUSIC:
-                track = state.select_next_track(
-                    repeat_cooldown=config.playlist.repeat_cooldown,
-                    artist_cooldown=config.playlist.artist_cooldown,
-                )
+                track = None
+                for _ in range(20):
+                    candidate = state.select_next_track(
+                        repeat_cooldown=config.playlist.repeat_cooldown,
+                        artist_cooldown=config.playlist.artist_cooldown,
+                    )
+                    if not is_rejected_cache_key(candidate.cache_key):
+                        track = candidate
+                        break
+                    logger.debug(
+                        "Skipping denylisted track (already rejected this session): %s",
+                        candidate.display,
+                    )
+                if track is None:
+                    # All recent candidates denylisted — yield to event loop and retry.
+                    await asyncio.sleep(0.1)
+                    continue
                 logger.info("Producing MUSIC: %s", track.display)
 
                 audio_path = await download_track(track, config.cache_dir, music_dir=Path("music"))
                 loop = asyncio.get_running_loop()
                 ok, reason = await loop.run_in_executor(None, validate_download, audio_path)
                 if not ok:
+                    reject_cached_download(config.cache_dir, track.cache_key, reason)
                     logger.warning("Skipping track due to invalid download (%s): %s", track.display, reason)
                     continue
 
@@ -874,6 +899,13 @@ async def run_producer(
                                     exc,
                                 )
                         else:
+                            # Drop the cached normalization so a poisoned output
+                            # doesn't get re-served.  We intentionally do NOT
+                            # session-denylist the source cache_key here: quality-gate
+                            # rejections are normalization artifacts, and the
+                            # circuit breaker (3 consecutive rejections) is the
+                            # right escape valve, not a per-track block.
+                            norm_cached.unlink(missing_ok=True)
                             logger.warning("Quality gate rejected music track (%s): %s", norm_path.name, exc)
                             if not norm_is_cached:
                                 norm_path.unlink(missing_ok=True)

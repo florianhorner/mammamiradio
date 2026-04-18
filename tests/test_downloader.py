@@ -738,6 +738,117 @@ def test_purge_suspect_cache_files_custom_threshold(tmp_path):
     assert not f.exists()
 
 
+def test_reject_cached_download_purges_and_denylists(tmp_path):
+    """WS5: rejected downloads must be removed from cache AND flagged for the session.
+
+    Without purging, the next selection of the same track returns the broken
+    file from ``cache_dir/{cache_key}.mp3`` and the quality gate rejects it
+    again forever — the endless rejection loop the plan explicitly calls out.
+    """
+    from mammamiradio.downloader import (
+        clear_rejected_cache_keys,
+        is_rejected_cache_key,
+        reject_cached_download,
+    )
+
+    clear_rejected_cache_keys()
+    try:
+        cache = tmp_path / "cache"
+        cache.mkdir()
+        cache_key = "poisoned_key_abc"
+        cached = cache / f"{cache_key}.mp3"
+        cached.write_bytes(b"x" * 2048)
+
+        assert not is_rejected_cache_key(cache_key)
+
+        removed = reject_cached_download(cache, cache_key, "duration too short (8.2s)")
+
+        assert removed is True
+        assert not cached.exists(), "rejected cache file must be purged"
+        assert is_rejected_cache_key(cache_key), "rejected key must be denylisted"
+    finally:
+        clear_rejected_cache_keys()
+
+
+def test_reject_cached_download_is_no_op_without_cache_key(tmp_path):
+    """Empty cache_key short-circuits (no IO, no denylist entry)."""
+    from mammamiradio.downloader import (
+        clear_rejected_cache_keys,
+        is_rejected_cache_key,
+        reject_cached_download,
+    )
+
+    clear_rejected_cache_keys()
+    cache = tmp_path / "cache"
+    cache.mkdir()
+
+    assert reject_cached_download(cache, "", "no key") is False
+    assert not is_rejected_cache_key("")
+
+
+def test_reject_cached_download_denylists_even_if_file_missing(tmp_path):
+    """Denylisting must survive even when the cache file was already gone.
+
+    If another task removed the file first, we still need the key blacklisted
+    so the producer skips re-downloading it.
+    """
+    from mammamiradio.downloader import (
+        clear_rejected_cache_keys,
+        is_rejected_cache_key,
+        reject_cached_download,
+    )
+
+    clear_rejected_cache_keys()
+    try:
+        cache = tmp_path / "cache"
+        cache.mkdir()
+        removed = reject_cached_download(cache, "ghost_key", "never existed")
+        assert removed is False
+        assert is_rejected_cache_key("ghost_key"), "key must still be denylisted even when the file was already gone"
+    finally:
+        clear_rejected_cache_keys()
+
+
+def test_reject_cached_download_tolerates_unlink_errors(tmp_path):
+    """OSError on unlink must not crash — denylist must still be populated."""
+    from mammamiradio.downloader import (
+        clear_rejected_cache_keys,
+        is_rejected_cache_key,
+        reject_cached_download,
+    )
+
+    clear_rejected_cache_keys()
+    try:
+        cache = tmp_path / "cache"
+        cache.mkdir()
+        cache_key = "err_key"
+        (cache / f"{cache_key}.mp3").write_bytes(b"x" * 2048)
+
+        with patch("mammamiradio.downloader.Path.unlink", side_effect=OSError("simulated permission denied")):
+            removed = reject_cached_download(cache, cache_key, "simulated")
+
+        assert removed is False
+        assert is_rejected_cache_key(cache_key), "denylist must be populated even when unlink raises OSError"
+    finally:
+        clear_rejected_cache_keys()
+
+
+def test_clear_rejected_cache_keys_empties_session_denylist():
+    """Explicit reset must empty the set."""
+    from pathlib import Path as _Path
+
+    from mammamiradio.downloader import (
+        clear_rejected_cache_keys,
+        is_rejected_cache_key,
+        reject_cached_download,
+    )
+
+    reject_cached_download(_Path("/tmp"), "some_key", "test")
+    assert is_rejected_cache_key("some_key")
+    clear_rejected_cache_keys()
+    assert not is_rejected_cache_key("some_key")
+
+
 def test_purge_suspect_cache_files_removes_silence_placeholders(tmp_path):
     """_silence_*.mp3 files must always be purged regardless of size."""
     from mammamiradio.downloader import purge_suspect_cache_files

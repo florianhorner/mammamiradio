@@ -161,6 +161,50 @@ def _load_chart_source_tracks(config: StationConfig) -> list[Track]:
     return _shuffle_if_needed(config, chart_tracks)
 
 
+# Markers that reliably indicate a chart entry is NOT music (podcast, comedy,
+# audiobook, interview, etc.). Conservative list — each marker must be something
+# that would almost never appear in a legitimate song title or artist name.
+_NON_MUSIC_MARKERS: tuple[str, ...] = (
+    "podcast",
+    "bbc comedy",
+    "bbc studios",
+    "audiobook",
+    "audio book",
+    "interview with",
+    "interview -",
+    "tutorial",
+    "how to ",
+    "how-to ",
+    "lecture",
+    "documentary",
+    "radio drama",
+    "audio drama",
+    "sleep story",
+    "meditation guided",
+    "asmr ",
+    "news briefing",
+    "news roundup",
+)
+
+
+def _is_plausible_music_title(title: str, artist: str) -> bool:
+    """Conservative heuristic to reject obvious non-music chart entries.
+
+    Apple Music's Italian chart sometimes surfaces BBC comedy, podcasts, or
+    audiobooks. Playing them breaks the radio illusion harder than anything
+    else. Reject these at ingest so they never enter the queue.
+
+    Filter is deliberately narrow — only rejects markers almost never found in
+    real song titles so valid tracks are never dropped.
+    """
+    if not title or not artist:
+        return False
+    if len(title) > 150 or len(artist) > 100:
+        return False
+    haystack = f"{title}  {artist}".lower()
+    return not any(marker in haystack for marker in _NON_MUSIC_MARKERS)
+
+
 def _fetch_current_italy_charts(limit: int = 100, max_per_artist: int = 2) -> list[Track]:
     """Fetch a live Top Songs Italy list from Apple Music charts RSS."""
     try:
@@ -173,6 +217,7 @@ def _fetch_current_italy_charts(limit: int = 100, max_per_artist: int = 2) -> li
     results = payload.get("feed", {}).get("results", [])
     tracks: list[Track] = []
     artist_counts: dict[str, int] = {}
+    rejected = 0
     for item in results:
         if len(tracks) >= limit:
             break
@@ -180,6 +225,10 @@ def _fetch_current_italy_charts(limit: int = 100, max_per_artist: int = 2) -> li
         artist = str(item.get("artistName", "")).strip()
         item_id = str(item.get("id", "")).strip()
         if not title or not artist:
+            continue
+        if not _is_plausible_music_title(title, artist):
+            rejected += 1
+            logger.info("Rejecting non-music chart entry: %s - %s", artist, title)
             continue
         # Cap tracks per artist to ensure variety across the playlist
         artist_key = artist.lower()
@@ -194,6 +243,8 @@ def _fetch_current_italy_charts(limit: int = 100, max_per_artist: int = 2) -> li
                 spotify_id=f"chart_{item_id or len(tracks) + 1}",
             )
         )
+    if rejected:
+        logger.info("Chart ingest: filtered %d non-music entries", rejected)
     return tracks
 
 

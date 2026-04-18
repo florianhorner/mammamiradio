@@ -142,6 +142,29 @@ After merging to main, verify the full chain:
 
 Do NOT merge the next PR until all 7 steps pass.
 
+## Expected log signatures after a release
+
+Use these to tell intentional degradation from a real regression during post-merge verification and soak runs.
+
+**Healthy startup**: boot summary line, one `Producing MUSIC:` within a few seconds, no repeated `queue empty` warnings.
+
+**Anthropic auth suspended (intentional)**: one `Anthropic auth failed — suspending for 10 minutes` followed by OpenAI script generation. If you see this line repeating every few seconds, the WS3-A cooldown broke.
+
+**TTS voice substituted (intentional)**: one `Invalid voice 'X' for backend edge; falling back to it-IT-DiegoNeural` at boot. Zero per-segment `Invalid voice` lines. Dashboard shows `tts_degraded` badge.
+
+**Chart content filter (intentional)**: `INFO Rejecting non-music chart entry: …` and `INFO Chart ingest: filtered N non-music entries` each time the chart is refreshed. Normal values are 0-3 rejections per refresh.
+
+**Session track denylist (intentional)**: `WARNING Skipping track due to invalid download (…): …` plus `WARNING Purged rejected cache file …` when a download fails validation. Subsequent reselections log `DEBUG Skipping denylisted track (already rejected this session)` instead of retrying.
+
+**Queue starvation rescue (intentional)**: `Queue empty Ns - rescuing with canned clip` or `… with norm cache` or `… with demo asset` within 30-60s of silence. A forced-banter `force_next = BANTER` after 60s is the last-resort escape.
+
+**Regression signatures** (these indicate a real problem, not intended behaviour):
+
+- Repeated `Invalid voice '…' for backend …` on every segment
+- Repeated `Anthropic auth failed` more than once per ~10 minutes
+- `music audio too short (…)` on the same track more than once per session
+- `/readyz` staying at `503 starting` for more than 90 seconds with listeners connected
+
 ## Common failures
 
 ### "An unknown error occurred with addon"

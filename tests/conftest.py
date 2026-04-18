@@ -31,3 +31,14 @@ def _reset_tts_voice_memoization():
     reset_voice_failures()
     yield
     reset_voice_failures()
+
+
+@pytest.fixture(autouse=True)
+def _reset_rejected_cache_denylist():
+    """Clear the session-scoped rejected-download denylist between tests so
+    that a track rejected by one test does not poison selection in the next."""
+    from mammamiradio.downloader import clear_rejected_cache_keys
+
+    clear_rejected_cache_keys()
+    yield
+    clear_rejected_cache_keys()

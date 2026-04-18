@@ -153,6 +153,84 @@ def test_fetch_current_italy_charts_invalid_json():
     assert tracks == []
 
 
+def test_fetch_current_italy_charts_filters_non_music_entries():
+    """WS5: BBC comedy / podcast / audiobook entries must be dropped at ingest.
+
+    Apple's Italian chart has surfaced entries like
+    'BBC Studios - Do You Speak English? - Big Train - BBC comedy' which play
+    as dead-eye audio and break the radio illusion harder than anything else.
+    """
+    from mammamiradio.playlist import _fetch_current_italy_charts
+
+    payload = {
+        "feed": {
+            "results": [
+                {"name": "Real Song", "artistName": "Real Artist", "id": "1"},
+                {
+                    "name": "Do You Speak English? - Big Train",
+                    "artistName": "BBC Studios",
+                    "id": "2",
+                },
+                {
+                    "name": "Morning News Briefing",
+                    "artistName": "Some Outlet",
+                    "id": "3",
+                },
+                {
+                    "name": "Harry Potter Audiobook Ch. 1",
+                    "artistName": "Narrator X",
+                    "id": "4",
+                },
+                {"name": "Another Real Song", "artistName": "Other Artist", "id": "5"},
+            ]
+        }
+    }
+
+    with patch("mammamiradio.playlist.urlopen") as mock_urlopen:
+        mock_response = MagicMock()
+        mock_response.read.return_value = json.dumps(payload).encode("utf-8")
+        mock_response.__enter__ = lambda s: s
+        mock_response.__exit__ = MagicMock(return_value=False)
+        mock_urlopen.return_value = mock_response
+
+        tracks = _fetch_current_italy_charts()
+
+    titles = {t.title for t in tracks}
+    assert titles == {"Real Song", "Another Real Song"}, f"non-music markers must be filtered; got {titles}"
+
+
+def test_is_plausible_music_title_keeps_legitimate_songs():
+    """Filter must never drop canonical Italian song titles."""
+    from mammamiradio.playlist import _is_plausible_music_title
+
+    legitimate = [
+        ("Volare", "Domenico Modugno"),
+        ("Bella Ciao", "Partisan Choir"),
+        ("L'Italiano", "Toto Cutugno"),
+        ("Caruso", "Lucio Dalla"),
+        ("News For You", "Some Band"),
+    ]
+    for title, artist in legitimate:
+        assert _is_plausible_music_title(title, artist), f"{title!r} by {artist!r} incorrectly rejected"
+
+
+def test_is_plausible_music_title_rejects_empty_inputs():
+    """Empty title or artist fails the plausibility check."""
+    from mammamiradio.playlist import _is_plausible_music_title
+
+    assert not _is_plausible_music_title("", "Artist")
+    assert not _is_plausible_music_title("Title", "")
+    assert not _is_plausible_music_title("", "")
+
+
+def test_is_plausible_music_title_rejects_oversize_strings():
+    """Titles or artist names wildly longer than any real song are rejected."""
+    from mammamiradio.playlist import _is_plausible_music_title
+
+    assert not _is_plausible_music_title("x" * 200, "Artist")
+    assert not _is_plausible_music_title("Title", "x" * 120)
+
+
 # ---------------------------------------------------------------------------
 # read_persisted_source / write_persisted_source
 # ---------------------------------------------------------------------------

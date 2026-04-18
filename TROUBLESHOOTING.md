@@ -38,6 +38,37 @@ When listeners are connected, `/readyz` now also flips back to `503 starting` if
 
 The app persists the last selected source to `cache/playlist_source.json` and restores it on restart. If a persisted source fails to load, startup falls back to charts then demo tracks.
 
+## A chart entry sounded like a podcast or audiobook
+
+Apple Music's Italian chart occasionally surfaces non-music entries (BBC comedy, news briefings, audiobooks). These used to reach the queue and play as flat voice audio that broke the radio illusion. The WS5 ingest filter now rejects them before they enter the candidate pool.
+
+Expected log signature on chart load:
+
+```
+INFO Rejecting non-music chart entry: BBC Studios - Do You Speak English? - Big Train
+INFO Chart ingest: filtered 3 non-music entries
+```
+
+If a legitimate song is being rejected, check `mammamiradio/playlist.py::_NON_MUSIC_MARKERS`. The list is deliberately narrow (podcast, bbc comedy, audiobook, news briefing, asmr, …) so real titles almost never trip it. If a real Italian song title legitimately contains one of these markers, remove the marker from the list rather than loosening the check.
+
+## The station keeps rejecting the same track
+
+If a track fails `validate_download` (too short, corrupt, missing duration), the cached copy at `cache_dir/{cache_key}.mp3` used to stay put. The next selection of the same track returned it as a cache hit and the gate rejected it again. Endless loop.
+
+WS5 purges the file and adds the cache key to an in-process denylist for the remainder of the session. The producer's main-loop, prefetch, and prewarm paths short-circuit on denylisted keys before calling `download_track` again.
+
+The music quality gate (mostly silence, short normalization output) has a different escape valve — the 3-consecutive-rejection circuit breaker — and does NOT denylist source tracks. A quality-gate rejection drops the cached normalization so it's recomputed next time, but the source track can still be re-picked (the gate failure is usually a normalization artifact, not source corruption).
+
+Expected log signature:
+
+```
+WARNING Skipping track due to invalid download (Some Artist - Some Title): duration too short (8.2s)
+WARNING Purged rejected cache file abc123.mp3: duration too short (8.2s)
+DEBUG Skipping denylisted track (already rejected this session): Some Artist - Some Title
+```
+
+The denylist is process-local — it clears on restart so a track that was transiently bad gets another chance after the next boot.
+
 ## The stream works but banter or ads are bland
 
 That usually means script generation failed and the app fell back to stock copy.
