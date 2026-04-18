@@ -221,12 +221,28 @@ def test_read_persisted_source_ignores_invalid_numeric_fields(tmp_path):
 
 
 def test_load_explicit_demo_source(config):
-    """demo kind returns DEMO_TRACKS without any external call."""
-    tracks, source = load_explicit_source(
-        config,
-        PlaylistSource(kind="demo", source_id="", label="Demo"),
-    )
+    """demo kind returns DEMO_TRACKS when demo_assets/music/ is empty."""
+    with patch("mammamiradio.playlist._load_demo_asset_tracks", return_value=[]):
+        tracks, source = load_explicit_source(
+            config,
+            PlaylistSource(kind="demo", source_id="", label="Demo"),
+        )
     assert len(tracks) == len(DEMO_TRACKS)
+    assert source.kind == "demo"
+
+
+def test_load_explicit_demo_source_prefers_demo_assets(config, tmp_path):
+    """demo kind must prefer bundled MP3s over the static DEMO_TRACKS placeholder list."""
+    asset_mp3 = tmp_path / "Pino Daniele - Napule E.mp3"
+    asset_mp3.write_bytes(b"fake")
+    with patch("mammamiradio.playlist._DEMO_ASSETS_MUSIC_DIR", tmp_path):
+        tracks, source = load_explicit_source(
+            config,
+            PlaylistSource(kind="demo", source_id="", label="Demo"),
+        )
+    assert len(tracks) == 1
+    assert tracks[0].title == "Napule E"
+    assert tracks[0].artist == "Pino Daniele"
     assert source.kind == "demo"
 
 

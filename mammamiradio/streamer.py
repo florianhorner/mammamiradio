@@ -7,6 +7,7 @@ import importlib
 import ipaddress
 import logging
 import os
+import random as _random
 import re as _re
 import secrets
 import time
@@ -707,8 +708,6 @@ async def run_playback_loop(app) -> None:
                     demo_music_dir = _PKG_DIR / "demo_assets" / "music"
                     demo_files = list(demo_music_dir.glob("*.mp3")) if demo_music_dir.exists() else []
                     if demo_files:
-                        import random as _random
-
                         rescue = _random.choice(demo_files)
                         logger.warning(
                             "Queue empty %ds - rescuing with demo asset: %s",

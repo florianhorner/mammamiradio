@@ -462,6 +462,52 @@ async def test_run_playback_loop_rescue_handles_malformed_sidecar(tmp_path, capl
 
 
 @pytest.mark.asyncio
+async def test_run_playback_loop_timeout_uses_demo_assets_after_30s(tmp_path, caplog):
+    """Scenario 2 (empty fallback): no canned clips, no norm cache — demo assets must rescue."""
+    app = _make_test_app()
+    app.state.config.audio.bitrate = 3200
+    app.state.config.cache_dir = tmp_path
+    app.state.stream_hub.subscribe()
+    caplog.set_level(logging.WARNING)
+
+    demo_dir = tmp_path / "demo_assets" / "music"
+    demo_dir.mkdir(parents=True)
+    rescue_mp3 = demo_dir / "Pino Daniele - Napule E.mp3"
+    rescue_mp3.write_bytes(b"x" * 4096)
+
+    async def _forced_timeout(awaitable, *_args, **_kwargs):
+        awaitable.close()
+        await asyncio.sleep(0)
+        raise TimeoutError
+
+    with (
+        patch("mammamiradio.streamer.asyncio.wait_for", new=AsyncMock(side_effect=_forced_timeout)),
+        patch("mammamiradio.producer._pick_canned_clip", return_value=None),
+        patch(
+            "mammamiradio.streamer._runtime_monotonic",
+            side_effect=[100.0, 130.5, 130.6, 130.7, 130.8, 130.9],
+        ),
+        patch("mammamiradio.streamer._PKG_DIR", tmp_path),
+    ):
+        task = asyncio.create_task(run_playback_loop(app))
+        try:
+            deadline = time.monotonic() + 3.0
+            while (
+                app.state.station_state.now_streaming.get("metadata", {}).get("audio_source")
+                != "fallback_demo_asset"
+            ):
+                if time.monotonic() > deadline:
+                    raise AssertionError("playback loop did not rescue from demo assets")
+                await asyncio.sleep(0.01)
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    assert app.state.station_state.queue_empty_since is None
+    assert any("rescuing with demo asset" in record.message for record in caplog.records)
+
+
+@pytest.mark.asyncio
 async def test_run_playback_loop_timeout_force_resumes_after_60s(tmp_path, caplog):
     app = _make_test_app()
     app.state.config.cache_dir = tmp_path

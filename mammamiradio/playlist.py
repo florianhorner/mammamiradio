@@ -244,7 +244,11 @@ def write_persisted_source(cache_dir: Path, source: PlaylistSource) -> None:
 def load_explicit_source(config: StationConfig, source: PlaylistSource) -> tuple[list[Track], PlaylistSource]:
     """Load a user-chosen source without any silent fallback."""
     if source.kind == "demo":
-        tracks = _shuffle_if_needed(config, list(DEMO_TRACKS))
+        demo_asset_tracks = _load_demo_asset_tracks()
+        if demo_asset_tracks:
+            tracks = _shuffle_if_needed(config, demo_asset_tracks)
+        else:
+            tracks = _shuffle_if_needed(config, list(DEMO_TRACKS))
         resolved = _demo_source()
         resolved.track_count = len(tracks)
         return tracks, resolved
