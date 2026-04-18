@@ -2138,3 +2138,86 @@ async def test_was_stopped_initialized_true_when_session_already_stopped(tmp_pat
     seg = queue.get_nowait()
     assert seg.metadata.get("resume_bridge") is True
     assert seg.path == norm_file
+
+
+class TestBanterTitle:
+    """Item #8: BANTER segments must render a meaningful label in queue rows
+    rather than the bare segment-type name (e.g., "banter")."""
+
+    def test_single_host_from_script(self):
+        from mammamiradio.producer import _banter_title
+
+        script = [{"host": "Marco", "text": "ciao"}]
+        assert _banter_title(script, canned=False) == "Marco"
+
+    def test_two_unique_hosts_joined(self):
+        from mammamiradio.producer import _banter_title
+
+        script = [
+            {"host": "Marco", "text": "a"},
+            {"host": "Luca", "text": "b"},
+            {"host": "Marco", "text": "c"},
+        ]
+        assert _banter_title(script, canned=False) == "Marco & Luca"
+
+    def test_three_hosts_caps_at_two(self):
+        from mammamiradio.producer import _banter_title
+
+        script = [
+            {"host": "A", "text": "1"},
+            {"host": "B", "text": "2"},
+            {"host": "C", "text": "3"},
+        ]
+        assert _banter_title(script, canned=False) == "A & B"
+
+    def test_canned_fallback_when_script_empty(self):
+        from mammamiradio.producer import _banter_title
+
+        assert _banter_title([], canned=True) == "Pre-recorded banter"
+        assert _banter_title(None, canned=True) == "Pre-recorded banter"
+
+    def test_canned_wins_over_sentinel_host(self):
+        """When the quality-gate rescue path swaps in a canned clip it also
+        overwrites `state.last_banter_script` with a synthetic `Radio` host.
+        Queue label must reflect the canned nature, not the sentinel host."""
+        from mammamiradio.producer import _banter_title
+
+        sentinel = [{"host": "Radio", "text": "(pre-recorded banter)"}]
+        assert _banter_title(sentinel, canned=True) == "Pre-recorded banter"
+
+    def test_generic_fallback_when_no_signal(self):
+        from mammamiradio.producer import _banter_title
+
+        assert _banter_title(None, canned=False) == "Banter"
+        assert _banter_title([{"text": "no host"}], canned=False) == "Banter"
+
+
+class TestAdTitle:
+    """Item #8: AD break segments must render a brand-aware label rather than
+    the bare segment-type name (e.g., "ad")."""
+
+    def test_single_brand(self):
+        from mammamiradio.producer import _ad_title
+
+        assert _ad_title(["Barella Pasta"]) == "Ad: Barella Pasta"
+
+    def test_two_brands_summarized(self):
+        from mammamiradio.producer import _ad_title
+
+        assert _ad_title(["Brand A", "Brand B"]) == "Ad: Brand A +1 more"
+
+    def test_four_brands_summarized(self):
+        from mammamiradio.producer import _ad_title
+
+        assert _ad_title(["A", "B", "C", "D"]) == "Ad: A +3 more"
+
+    def test_empty_brands_falls_back(self):
+        from mammamiradio.producer import _ad_title
+
+        assert _ad_title([]) == "Ad break"
+        assert _ad_title(None) == "Ad break"
+
+    def test_whitespace_only_brand_skipped(self):
+        from mammamiradio.producer import _ad_title
+
+        assert _ad_title(["   ", "Real Brand"]) == "Ad: Real Brand"

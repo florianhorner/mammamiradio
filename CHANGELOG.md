@@ -6,6 +6,10 @@ The current version source of truth is `pyproject.toml`.
 
 ## [Unreleased]
 
+## [2.10.7] - 2026-04-18
+
+Operator honesty II — aggregates the WS2/WS3/WS5/WS6 reliability fixes shipped on `main` since 2.10.6, plus two UI-truth fixes from the 2026-04-17 live session (queue row labels for BANTER/AD, dashboard AI pipeline pill three-state).
+
 ### Fixed
 
 - **Source and content hygiene at ingest** (WS5): Apple Music's Italian chart occasionally surfaced podcasts, BBC comedy, and audiobook entries that played as dead-eye audio and broke the radio illusion harder than any other failure. `mammamiradio/playlist.py` now filters chart results through `_is_plausible_music_title` at ingest — conservative markers (`podcast`, `bbc comedy`, `audiobook`, `news briefing`, …) drop obvious non-music before it ever reaches the queue. The filter is narrow on purpose: oversize titles (>150 chars) and empty inputs are also rejected, but normal Italian song titles pass through untouched.
@@ -14,10 +18,16 @@ The current version source of truth is `pyproject.toml`.
 - **TTS voice validation at config load** (WS3-B): Every host and ad voice is now checked against the catalog for its backend (`mammamiradio/voice_catalog.py`) during `load_config()`. Invalid voice IDs — e.g. OpenAI names like `onyx` on an edge-tts host, or typos in edge voice IDs — are logged once as a WARNING and replaced with `it-IT-DiegoNeural` before the first synthesis attempt. Stops the `Invalid voice 'onyx'` flood that repeated per segment in 2026-04-13 logs (windows `15:56`, `16:09`, `18:30`, `18:40`). Runtime TTS failures are also memoized per-session so a flaky voice doesn't re-attempt for every segment. `/api/capabilities` gains a `tts_degraded` flag when any voice was substituted.
 - **Queue starvation rescue via bundled demo assets** (WS2): When the playback queue has been empty for more than 30 seconds and neither a canned clip nor a pre-normalized track is available, `run_playback_loop` now falls back to a random MP3 from `mammamiradio/demo_assets/music/` before triggering forced banter. Eliminates the silent 30-second dead-air loop on fresh installs and empty-cache container starts. Bundled demo tracks in `demo_assets/music/` (named `Artist - Title.mp3`) are now also preferred over the metadata-only `DEMO_TRACKS` placeholder list at startup and when the operator explicitly selects the demo source. Source: 2026-04-13 log-resolution plan WS2.
 - **`/readyz` honors stopped state** (WS2): `/readyz` now returns `503 stopped` when `session_stopped=True`, even with queue depth > 0 and startup complete. Prevents Home Assistant Supervisor and external load balancers from routing fresh listeners to a deliberately paused station. The auto-resume-on-connect path in `_audio_generator` clears `session_stopped` before audio begins, so the guard does not create a deadlock.
+- **Queue rows render real titles for every segment type** (finding #8, 2026-04-17 live session): Admin queue rows used to display bare segment types like `BANTER banter` or `AD ad`. `producer.py` now populates `segment.metadata["title"]` at every construction site — LLM banter shows participating hosts (`Marco & Luca`), canned clips show `Pre-recorded banter` (even when the quality-gate rescue path rewrites `state.last_banter_script`), ad breaks show `Ad: Barella Pasta +2 more` when multiple brands appear. Station IDs, sweepers, and time checks (`Time check — Sono le 19 e 42 su Mamma Mi Radio.`) also render human labels instead of bare enum keys. News-flash and error-recovery segments pick up their own labels. `admin.html`'s queue render now also hides a label that equals the bare type, so a future producer path that forgets to set a title can't re-introduce the `BANTER banter` row.
+- **Dashboard AI pipeline pill honors `anthropic_degraded`** (finding #11, 2026-04-17 live session): When the Anthropic key is configured but currently auth-suspended, `dashboard.html` showed a solid "AI" dot while every script call was failing. The pipeline pill now mirrors the three-state logic `admin.html` already had — a configured-but-suspended Anthropic renders as `AI Fallback` (triangle icon, OpenAI is generating scripts), not `AI`.
 
 ### Added
 
 - **Release cooldown gate** (stabilization run Day 1): `.github/workflows/release-cooldown.yml` blocks any `v*` tag push if the prior published release is less than 24 hours old. Bypass: `hotfix` label on the source PR. Tunable via `MIN_COOLDOWN_HOURS`. Self-test at `tests/workflows/test_cooldown_gate.sh` covers 9 scenarios and runs on every PR via `quality.yml`. `STABILIZATION_LOG.md` records weekly fix-hours and emergency-patch counts; Day 8 Go/No-Go lives in that file.
+
+### Tests
+
+- `TestBanterTitle` and `TestAdTitle` in `tests/test_producer_unit.py`: 10 cases covering single/multi-host banter, canned-clip fallback, generic fallback, single/multi-brand ad summarization, empty brand list, and whitespace-only brand skipping. Guards the queue-row label contract against future regressions.
 
 ## [2.10.6] - 2026-04-17
 

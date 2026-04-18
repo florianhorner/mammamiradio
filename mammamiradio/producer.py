@@ -63,6 +63,40 @@ from mammamiradio.tts import synthesize, synthesize_ad, synthesize_dialogue
 logger = logging.getLogger(__name__)
 
 
+def _banter_title(script: list[dict] | None, *, canned: bool) -> str:
+    """Produce a user-facing label for a BANTER segment.
+
+    Prefers unique host names from the script (joined with ' & '). Falls back
+    to "Pre-recorded banter" when the audio came from a canned clip with no
+    script attached, and finally to a generic label. The goal is that queue
+    rows never render a bare "banter" type name to operators or listeners.
+    """
+    if canned:
+        return "Pre-recorded banter"
+    hosts: list[str] = []
+    for line in script or []:
+        name = (line or {}).get("host", "").strip() if isinstance(line, dict) else ""
+        if name and name not in hosts:
+            hosts.append(name)
+    if hosts:
+        return " & ".join(hosts[:2])
+    return "Banter"
+
+
+def _ad_title(brands: list[str] | None) -> str:
+    """Produce a user-facing label for an AD break.
+
+    One brand → brand name. Multiple brands → "BrandA +N more". Empty list
+    falls back to "Ad break" so the row never shows the bare "ad" type.
+    """
+    clean = [b.strip() for b in (brands or []) if b and b.strip()]
+    if not clean:
+        return "Ad break"
+    if len(clean) == 1:
+        return f"Ad: {clean[0]}"
+    return f"Ad: {clean[0]} +{len(clean) - 1} more"
+
+
 async def _record_motif(state: StationState, track, config=None, *, listen_duration_s: float | None = None) -> None:
     """Record a completed streamed track in persona memory and play history."""
     persona_store = getattr(state, "persona_store", None)
@@ -612,7 +646,12 @@ async def run_producer(
                         Segment(
                             type=SegmentType.BANTER,
                             path=bridge,
-                            metadata={"type": "banter", "canned": True, "resume_bridge": True},
+                            metadata={
+                                "type": "banter",
+                                "canned": True,
+                                "resume_bridge": True,
+                                "title": "Resume bridge",
+                            },
                             ephemeral=False,
                         )
                     )
@@ -656,7 +695,12 @@ async def run_producer(
                         Segment(
                             type=SegmentType.BANTER,
                             path=fallback,
-                            metadata={"type": "banter", "canned": True, "warmup": True},
+                            metadata={
+                                "type": "banter",
+                                "canned": True,
+                                "warmup": True,
+                                "title": "Station warm-up",
+                            },
                         )
                     )
                 else:
@@ -692,7 +736,12 @@ async def run_producer(
                     Segment(
                         type=SegmentType.BANTER,
                         path=fallback,
-                        metadata={"type": "banter", "canned": True, "queue_drain_recovery": True},
+                        metadata={
+                            "type": "banter",
+                            "canned": True,
+                            "queue_drain_recovery": True,
+                            "title": "Recovery banter",
+                        },
                     )
                 )
                 _drain_guard_queued = True
@@ -874,7 +923,12 @@ async def run_producer(
                                         Segment(
                                             type=SegmentType.BANTER,
                                             path=fallback,
-                                            metadata={"type": "banter", "canned": True, "silence_fallback": True},
+                                            metadata={
+                                                "type": "banter",
+                                                "canned": True,
+                                                "silence_fallback": True,
+                                                "title": "Recovery banter",
+                                            },
                                             ephemeral=False,
                                         )
                                     )
@@ -1133,7 +1187,12 @@ async def run_producer(
                 segment = Segment(
                     type=SegmentType.BANTER,
                     path=audio_path,
-                    metadata={"type": "banter", "lines": state.last_banter_script, "canned": canned is not None},
+                    metadata={
+                        "type": "banter",
+                        "lines": state.last_banter_script,
+                        "canned": canned is not None,
+                        "title": _banter_title(state.last_banter_script, canned=canned is not None),
+                    },
                     ephemeral=canned is None,
                 )
 
@@ -1190,7 +1249,12 @@ async def run_producer(
                 segment = Segment(
                     type=SegmentType.NEWS_FLASH,
                     path=audio_path,
-                    metadata={"type": "news_flash", "category": category, "host": host.name},
+                    metadata={
+                        "type": "news_flash",
+                        "category": category,
+                        "host": host.name,
+                        "title": f"News flash: {category}" if category else "News flash",
+                    },
                 )
 
                 _bound_cat = category
@@ -1244,7 +1308,7 @@ async def run_producer(
                 segment = Segment(
                     type=SegmentType.STATION_ID,
                     path=audio_path,
-                    metadata={"type": "station_id", "text": ident_text},
+                    metadata={"type": "station_id", "text": ident_text, "title": "Station ID"},
                 )
                 success_callback = state.after_station_id
 
@@ -1279,7 +1343,7 @@ async def run_producer(
                 segment = Segment(
                     type=SegmentType.SWEEPER,
                     path=audio_path,
-                    metadata={"type": "sweeper", "text": sweeper_text},
+                    metadata={"type": "sweeper", "text": sweeper_text, "title": "Station sweeper"},
                 )
                 success_callback = state.after_sweeper
 
@@ -1323,7 +1387,7 @@ async def run_producer(
                 segment = Segment(
                     type=SegmentType.TIME_CHECK,
                     path=audio_path,
-                    metadata={"type": "time_check", "time": time_text},
+                    metadata={"type": "time_check", "time": time_text, "title": f"Time check — {time_text}"},
                 )
                 success_callback = state.after_time_check
 
@@ -1549,6 +1613,7 @@ async def run_producer(
                         "formats": break_formats,
                         "sonic_worlds": break_sonic_worlds,
                         "roles_used": break_roles,
+                        "title": _ad_title(break_brands),
                     },
                 )
                 _bound_brands = break_brands
@@ -1575,7 +1640,12 @@ async def run_producer(
                 segment = Segment(
                     type=SegmentType.BANTER,
                     path=fallback_path,
-                    metadata={"type": "banter", "canned": True, "error_recovery": True},
+                    metadata={
+                        "type": "banter",
+                        "canned": True,
+                        "error_recovery": True,
+                        "title": "Recovery banter",
+                    },
                 )
             else:
                 logger.warning("No canned clips available — inserting silence (check demo_assets/banter/)")
@@ -1590,7 +1660,7 @@ async def run_producer(
                 segment = Segment(
                     type=seg_type,
                     path=silence_path,
-                    metadata={"error": str(e)},
+                    metadata={"error": str(e), "title": "Brief silence"},
                 )
             # Do NOT advance state counters — failed segment doesn't count
 

@@ -1,13 +1,19 @@
 # Changelog
 
-## Unreleased
+## 2.10.7
+
+Operator honesty II — aggregates the WS2/WS3/WS5/WS6 reliability fixes shipped on main since 2.10.6, plus two UI-truth fixes from the 2026-04-17 live session.
 
 ### Fixed
 
-- Anthropic auth flood no longer fires under concurrent load: attempt lock serializes the 401 cooldown check across sibling banter/ad/transition calls. First 401 trips the 10-minute backoff; concurrent callers see the block and use the OpenAI fallback.
+- Anthropic auth flood no longer fires under concurrent load (WS3-A): attempt lock serializes the 401 cooldown check across sibling banter/ad/transition calls. First 401 trips the 10-minute backoff; concurrent callers see the block and use the OpenAI fallback.
 - TTS voice validation at config load (WS3-B): invalid voice IDs (e.g. `onyx` on an edge-tts host, typos in edge voice IDs) are now logged once and replaced with `it-IT-DiegoNeural` before any synthesis attempt. Runtime TTS failures are memoized per-session so a flaky voice doesn't re-attempt per segment. `/api/capabilities` gains a `tts_degraded` flag when any voice was substituted.
 - Queue starvation rescue (WS2): when the queue is empty for 30s and no canned clip or norm-cache is available, playback falls back to a random MP3 from `demo_assets/music/` instead of looping silently. Bundled demo tracks in `demo_assets/music/` (named `Artist - Title.mp3`) are preferred over placeholder tones at startup and when demo source is explicitly selected.
 - `/readyz` honors stopped state (WS2): a stopped session now returns `503 stopped` even when the queue is populated, so HA Supervisor no longer routes listeners to a deliberately paused station.
+- Chart ingest filters non-music entries (WS5): Apple Music's Italian chart occasionally surfaces podcasts, BBC comedy, and audiobooks that played as dead-eye audio and broke the radio illusion. Narrow content filter drops obvious non-music before it reaches the queue.
+- Rejected downloads purge + denylist (WS5): `validate_download` failures now purge the cache file and add the cache key to a per-session denylist. Producer, prefetch, and prewarm short-circuit on denylisted keys so the same broken track cannot loop forever.
+- Queue rows no longer render bare segment types for BANTER, AD, STATION ID, SWEEPER, or TIME CHECK (finding #8, 2026-04-17 live session). BANTER rows now show the participating hosts (`Marco & Luca`), canned clips show `Pre-recorded banter`, AD breaks show `Ad: Barella Pasta +2 more`, station IDs show `Station ID`, sweepers show `Station sweeper`, and time checks show the spoken time. News-flash and error-recovery segments pick up their own labels. Admin queue render also hardened to hide a label that equals the bare type, so a future producer path that forgets to set a title can't re-introduce the `BANTER banter` row.
+- Dashboard "AI" pipeline pill no longer lies when Anthropic is auth-suspended (finding #11, 2026-04-17 live session). Dashboard now mirrors the three-state logic admin.html already had: a configured-but-suspended Anthropic shows `AI Fallback` instead of `AI`.
 
 ## 2.10.6
 
