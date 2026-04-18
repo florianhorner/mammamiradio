@@ -506,6 +506,70 @@ async def test_run_playback_loop_timeout_uses_demo_assets_after_30s(tmp_path, ca
     assert app.state.station_state.queue_empty_since is None
     assert any("rescuing with demo asset" in record.message for record in caplog.records)
 
+    now_meta = app.state.station_state.now_streaming.get("metadata", {})
+    assert now_meta.get("title") == "Napule E", (
+        "demo-asset rescue must parse 'Artist - Title.mp3' stems; "
+        f"got title={now_meta.get('title')!r}"
+    )
+    assert now_meta.get("artist") == "Pino Daniele", (
+        "demo-asset rescue must parse 'Artist - Title.mp3' stems; "
+        f"got artist={now_meta.get('artist')!r}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_run_playback_loop_timeout_fully_empty_container_forces_banter(tmp_path, caplog):
+    """Scenario 2 (fully empty): no canned, no norm cache, no demo assets.
+
+    Guards the only remaining escape hatch — forced banter — when the operator
+    has stripped every bundled audio rescue from the container. Silence must
+    never be terminal.
+    """
+    app = _make_test_app()
+    app.state.config.audio.bitrate = 3200
+    app.state.config.cache_dir = tmp_path
+    app.state.stream_hub.subscribe()
+    caplog.set_level(logging.ERROR)
+
+    empty_pkg = tmp_path / "empty_pkg"
+    empty_pkg.mkdir()
+
+    async def _forced_timeout(awaitable, *_args, **_kwargs):
+        awaitable.close()
+        await asyncio.sleep(0)
+        raise TimeoutError
+
+    with (
+        patch("mammamiradio.streamer.asyncio.wait_for", new=AsyncMock(side_effect=_forced_timeout)),
+        patch("mammamiradio.producer._pick_canned_clip", return_value=None),
+        patch(
+            "mammamiradio.streamer._runtime_monotonic",
+            side_effect=[200.0, 260.5, 260.6, 260.7, 260.8, 260.9],
+        ),
+        patch("mammamiradio.streamer._PKG_DIR", empty_pkg),
+    ):
+        task = asyncio.create_task(run_playback_loop(app))
+        try:
+            deadline = time.monotonic() + 3.0
+            while app.state.station_state.force_next is None:
+                if time.monotonic() > deadline:
+                    raise AssertionError(
+                        "empty-container run did not reach forced banter fallback"
+                    )
+                await asyncio.sleep(0.01)
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    assert app.state.station_state.force_next == SegmentType.BANTER
+    assert app.state.station_state.queue_empty_since is not None, (
+        "queue_empty_since must stay set so /readyz keeps reporting 503 starting "
+        "until real audio resumes"
+    )
+    assert not any(
+        "rescuing with demo asset" in record.message for record in caplog.records
+    ), "demo-asset rescue fired despite empty _PKG_DIR"
+
 
 @pytest.mark.asyncio
 async def test_run_playback_loop_timeout_force_resumes_after_60s(tmp_path, caplog):

@@ -709,6 +709,16 @@ async def run_playback_loop(app) -> None:
                     demo_files = list(demo_music_dir.glob("*.mp3")) if demo_music_dir.exists() else []
                     if demo_files:
                         rescue = _random.choice(demo_files)
+                        # Parse "Artist - Title.mp3" so the listener UI shows proper
+                        # metadata instead of the raw stem. Preserves the illusion.
+                        stem = rescue.stem
+                        if " - " in stem:
+                            rescue_artist, rescue_title = stem.split(" - ", 1)
+                            rescue_artist = rescue_artist.strip() or "Unknown"
+                            rescue_title = rescue_title.strip() or stem
+                        else:
+                            rescue_artist = "Unknown"
+                            rescue_title = stem
                         logger.warning(
                             "Queue empty %ds - rescuing with demo asset: %s",
                             int(elapsed),
@@ -720,7 +730,8 @@ async def run_playback_loop(app) -> None:
                             path=rescue,
                             metadata={
                                 "type": "music",
-                                "title": rescue.stem,
+                                "title": rescue_title,
+                                "artist": rescue_artist,
                                 "audio_source": "fallback_demo_asset",
                                 "fallback": True,
                             },
