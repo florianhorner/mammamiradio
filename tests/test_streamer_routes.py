@@ -462,6 +462,110 @@ async def test_run_playback_loop_rescue_handles_malformed_sidecar(tmp_path, capl
 
 
 @pytest.mark.asyncio
+async def test_run_playback_loop_timeout_uses_demo_assets_after_30s(tmp_path, caplog):
+    """Scenario 2 (empty fallback): no canned clips, no norm cache — demo assets must rescue."""
+    app = _make_test_app()
+    app.state.config.audio.bitrate = 3200
+    app.state.config.cache_dir = tmp_path
+    app.state.stream_hub.subscribe()
+    caplog.set_level(logging.WARNING)
+
+    demo_dir = tmp_path / "demo_assets" / "music"
+    demo_dir.mkdir(parents=True)
+    rescue_mp3 = demo_dir / "Pino Daniele - Napule E.mp3"
+    rescue_mp3.write_bytes(b"x" * 4096)
+
+    async def _forced_timeout(awaitable, *_args, **_kwargs):
+        awaitable.close()
+        await asyncio.sleep(0)
+        raise TimeoutError
+
+    with (
+        patch("mammamiradio.streamer.asyncio.wait_for", new=AsyncMock(side_effect=_forced_timeout)),
+        patch("mammamiradio.producer._pick_canned_clip", return_value=None),
+        patch(
+            "mammamiradio.streamer._runtime_monotonic",
+            side_effect=[100.0, 130.5, 130.6, 130.7, 130.8, 130.9],
+        ),
+        patch("mammamiradio.streamer._PKG_DIR", tmp_path),
+    ):
+        task = asyncio.create_task(run_playback_loop(app))
+        try:
+            deadline = time.monotonic() + 3.0
+            while (
+                app.state.station_state.now_streaming.get("metadata", {}).get("audio_source") != "fallback_demo_asset"
+            ):
+                if time.monotonic() > deadline:
+                    raise AssertionError("playback loop did not rescue from demo assets")
+                await asyncio.sleep(0.01)
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    assert app.state.station_state.queue_empty_since is None
+    assert any("rescuing with demo asset" in record.message for record in caplog.records)
+
+    now_meta = app.state.station_state.now_streaming.get("metadata", {})
+    assert now_meta.get("title") == "Napule E", (
+        f"demo-asset rescue must parse 'Artist - Title.mp3' stems; got title={now_meta.get('title')!r}"
+    )
+    assert now_meta.get("artist") == "Pino Daniele", (
+        f"demo-asset rescue must parse 'Artist - Title.mp3' stems; got artist={now_meta.get('artist')!r}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_run_playback_loop_timeout_fully_empty_container_forces_banter(tmp_path, caplog):
+    """Scenario 2 (fully empty): no canned, no norm cache, no demo assets.
+
+    Guards the only remaining escape hatch — forced banter — when the operator
+    has stripped every bundled audio rescue from the container. Silence must
+    never be terminal.
+    """
+    app = _make_test_app()
+    app.state.config.audio.bitrate = 3200
+    app.state.config.cache_dir = tmp_path
+    app.state.stream_hub.subscribe()
+    caplog.set_level(logging.ERROR)
+
+    empty_pkg = tmp_path / "empty_pkg"
+    empty_pkg.mkdir()
+
+    async def _forced_timeout(awaitable, *_args, **_kwargs):
+        awaitable.close()
+        await asyncio.sleep(0)
+        raise TimeoutError
+
+    with (
+        patch("mammamiradio.streamer.asyncio.wait_for", new=AsyncMock(side_effect=_forced_timeout)),
+        patch("mammamiradio.producer._pick_canned_clip", return_value=None),
+        patch(
+            "mammamiradio.streamer._runtime_monotonic",
+            side_effect=[200.0, 260.5, 260.6, 260.7, 260.8, 260.9],
+        ),
+        patch("mammamiradio.streamer._PKG_DIR", empty_pkg),
+    ):
+        task = asyncio.create_task(run_playback_loop(app))
+        try:
+            deadline = time.monotonic() + 3.0
+            while app.state.station_state.force_next is None:
+                if time.monotonic() > deadline:
+                    raise AssertionError("empty-container run did not reach forced banter fallback")
+                await asyncio.sleep(0.01)
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    assert app.state.station_state.force_next == SegmentType.BANTER
+    assert app.state.station_state.queue_empty_since is not None, (
+        "queue_empty_since must stay set so /readyz keeps reporting 503 starting until real audio resumes"
+    )
+    assert not any("rescuing with demo asset" in record.message for record in caplog.records), (
+        "demo-asset rescue fired despite empty _PKG_DIR"
+    )
+
+
+@pytest.mark.asyncio
 async def test_run_playback_loop_timeout_force_resumes_after_60s(tmp_path, caplog):
     app = _make_test_app()
     app.state.config.cache_dir = tmp_path
@@ -526,6 +630,40 @@ async def test_readyz_does_not_fail_silence_gate_without_listeners():
     assert resp.status_code == 200
     body = resp.json()
     assert body["silence_with_listeners"] is False
+    assert body["ready"] is True
+
+
+@pytest.mark.asyncio
+async def test_readyz_returns_503_when_session_stopped():
+    """readyz must return 503 when session_stopped=True — station is not ready for listeners."""
+    app = _make_test_app()
+    app.state.start_time = time.time() - 31  # startup_complete=True
+    app.state.queue.put_nowait(object())  # queue_depth > 0
+    app.state.station_state.session_stopped = True
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.get("/readyz")
+
+    assert resp.status_code == 503
+    body = resp.json()
+    assert body["ready"] is False
+
+
+@pytest.mark.asyncio
+async def test_readyz_returns_200_when_session_resumed():
+    """readyz must return 200 once session_stopped is cleared and queue has audio."""
+    app = _make_test_app()
+    app.state.start_time = time.time() - 31
+    app.state.queue.put_nowait(object())
+    app.state.station_state.session_stopped = False
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.get("/readyz")
+
+    assert resp.status_code == 200
+    body = resp.json()
     assert body["ready"] is True
 
 
