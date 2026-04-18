@@ -1168,7 +1168,12 @@ function renderProgramme(st){
     // not reach listeners or operators as row text. They remain in the data
     // payload (`it.reason`) for logs/debug.
     const artistPart=it.metadata?.artist?`<span class="prog-artist">${esc(it.metadata.artist)}</span>`:'';
-    rows.push(`<div class="prog-row" data-type="${typeKey}" ${clickAttrs}><div class="prog-border"></div><span class="prog-badge">${esc(segmentText(typeKey))}</span><div class="prog-info"><span class="prog-title">${esc(it.label||typeKey)}</span>${artistPart}</div></div>`);
+    // Hide title when it equals the bare segment type — prevents rows like
+    // "BANTER banter" if a producer code path ever forgets to set a title.
+    const rawLabel=it.label||'';
+    const titleText=(rawLabel && rawLabel.toLowerCase()!==typeKey)?rawLabel:'';
+    const titleHtml=titleText?`<span class="prog-title">${esc(titleText)}</span>`:'';
+    rows.push(`<div class="prog-row" data-type="${typeKey}" ${clickAttrs}><div class="prog-border"></div><span class="prog-badge">${esc(segmentText(typeKey))}</span><div class="prog-info">${titleHtml}${artistPart}</div></div>`);
   });
 
   if(upFiltered.length>10){

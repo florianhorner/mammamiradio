@@ -1157,7 +1157,13 @@ function _updatePipelineStatus() {
   const c = caps.capabilities || {};
   const el = document.getElementById('pipeline-status');
   let html = '';
-  if (c.anthropic_key || c.llm) {
+  // Mirror admin.html three-state logic: an Anthropic key can be configured
+  // AND simultaneously auth-suspended (401 → 10 min backoff, OpenAI taking
+  // the calls). Showing "AI" here while the dashboard lies about provider
+  // health is exactly the regression Item #11 was filed against.
+  if (c.anthropic_key && c.anthropic_degraded) {
+    html += '<span class="pipeline-dot" title="Anthropic auth failed; falling back to OpenAI"><span class="tri">&#9650;</span>AI Fallback</span>';
+  } else if (c.anthropic_key || c.llm) {
     html += '<span class="pipeline-dot"><span class="dot ok"></span>AI</span>';
   } else if (c.openai) {
     html += '<span class="pipeline-dot"><span class="tri">&#9650;</span>AI Fallback</span>';
