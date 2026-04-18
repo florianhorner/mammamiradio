@@ -493,8 +493,7 @@ async def test_run_playback_loop_timeout_uses_demo_assets_after_30s(tmp_path, ca
         try:
             deadline = time.monotonic() + 3.0
             while (
-                app.state.station_state.now_streaming.get("metadata", {}).get("audio_source")
-                != "fallback_demo_asset"
+                app.state.station_state.now_streaming.get("metadata", {}).get("audio_source") != "fallback_demo_asset"
             ):
                 if time.monotonic() > deadline:
                     raise AssertionError("playback loop did not rescue from demo assets")
@@ -508,12 +507,10 @@ async def test_run_playback_loop_timeout_uses_demo_assets_after_30s(tmp_path, ca
 
     now_meta = app.state.station_state.now_streaming.get("metadata", {})
     assert now_meta.get("title") == "Napule E", (
-        "demo-asset rescue must parse 'Artist - Title.mp3' stems; "
-        f"got title={now_meta.get('title')!r}"
+        f"demo-asset rescue must parse 'Artist - Title.mp3' stems; got title={now_meta.get('title')!r}"
     )
     assert now_meta.get("artist") == "Pino Daniele", (
-        "demo-asset rescue must parse 'Artist - Title.mp3' stems; "
-        f"got artist={now_meta.get('artist')!r}"
+        f"demo-asset rescue must parse 'Artist - Title.mp3' stems; got artist={now_meta.get('artist')!r}"
     )
 
 
@@ -553,9 +550,7 @@ async def test_run_playback_loop_timeout_fully_empty_container_forces_banter(tmp
             deadline = time.monotonic() + 3.0
             while app.state.station_state.force_next is None:
                 if time.monotonic() > deadline:
-                    raise AssertionError(
-                        "empty-container run did not reach forced banter fallback"
-                    )
+                    raise AssertionError("empty-container run did not reach forced banter fallback")
                 await asyncio.sleep(0.01)
         finally:
             task.cancel()
@@ -563,12 +558,11 @@ async def test_run_playback_loop_timeout_fully_empty_container_forces_banter(tmp
 
     assert app.state.station_state.force_next == SegmentType.BANTER
     assert app.state.station_state.queue_empty_since is not None, (
-        "queue_empty_since must stay set so /readyz keeps reporting 503 starting "
-        "until real audio resumes"
+        "queue_empty_since must stay set so /readyz keeps reporting 503 starting until real audio resumes"
     )
-    assert not any(
-        "rescuing with demo asset" in record.message for record in caplog.records
-    ), "demo-asset rescue fired despite empty _PKG_DIR"
+    assert not any("rescuing with demo asset" in record.message for record in caplog.records), (
+        "demo-asset rescue fired despite empty _PKG_DIR"
+    )
 
 
 @pytest.mark.asyncio
