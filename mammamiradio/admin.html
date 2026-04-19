@@ -1706,12 +1706,12 @@ function updateEngineRoom(st,caps){
   if(hd){
     haCard.style.display='';
     const lines=[];
-    if(hd.mood_en||hd.mood)lines.push('Mood: <strong>'+(hd.mood_en||hd.mood)+'</strong>');
-    if(hd.weather_arc_en||hd.weather_arc)lines.push('Weather: '+(hd.weather_arc_en||hd.weather_arc));
-    if(hd.events_summary_en||hd.events_summary)lines.push('Events:<br>'+(hd.events_summary_en||hd.events_summary).replace(/\n/g,'<br>'));
-    if(hd.pending_directive)lines.push('Pending directive: <strong style="color:var(--warning)">'+hd.pending_directive.substring(0,80)+'...</strong>');
+    if(hd.mood_en||hd.mood)lines.push('Mood: <strong>'+esc(hd.mood_en||hd.mood)+'</strong>');
+    if(hd.weather_arc_en||hd.weather_arc)lines.push('Weather: '+esc(hd.weather_arc_en||hd.weather_arc));
+    if(hd.events_summary_en||hd.events_summary)lines.push('Events:<br>'+esc(hd.events_summary_en||hd.events_summary).replace(/\n/g,'<br>'));
+    if(hd.pending_directive)lines.push('Pending directive: <strong style="color:var(--warning)">'+esc(hd.pending_directive.substring(0,80))+'...</strong>');
     lines.push('Recent events: '+(hd.recent_event_count||0));
-    if(hd.last_event_label_en||hd.last_event_label)lines.push('Last event: '+(hd.last_event_label_en||hd.last_event_label));
+    if(hd.last_event_label_en||hd.last_event_label)lines.push('Last event: '+esc(hd.last_event_label_en||hd.last_event_label));
     haEl.innerHTML=lines.join('<br>')||'No HA data';
   }else{
     haCard.style.display='none';

@@ -6,6 +6,20 @@ The current version source of truth is `pyproject.toml`.
 
 ## [Unreleased]
 
+## [2.10.8] - 2026-04-19
+
+Security fix: stored XSS in admin panel Engine Room (HA entity state injection + yt-dlp track title injection).
+
+### Security
+
+- **Stored XSS via HA entity state values** (admin.html Engine Room): Five Home Assistant-sourced fields (`mood`, `weather_arc`, `events_summary`, `pending_directive`, `last_event_label`) were rendered via `innerHTML` without HTML escaping. An attacker with write access to any HA entity feeding the admin panel could inject arbitrary HTML/JS that would execute in the authenticated admin session. Fix: all five fields now wrapped with `esc()` (DOM-based escape helper) before `innerHTML` assignment. `esc()` is applied before `.replace(/\n/g,'<br>')` on `events_summary` so the newline replacement operates on already-escaped content.
+- **Stored XSS via yt-dlp track titles** (admin.html Engine Room): When a track is skipped past the repeat threshold, `ha_pending_directive` stores a raw yt-dlp track title. A maliciously named YouTube video could inject HTML/JS via this field. Fix: same `esc()` wrapper in admin.html covers this field. Raw storage in `ha_pending_directive` is intentional — the field feeds LLM prompts, and server-side HTML encoding would corrupt LLM input. Design decision documented in code comment and regression test.
+- **Content-Security-Policy on `/admin`**: The `/admin` route now returns `Content-Security-Policy: script-src 'self'` as defense-in-depth. Blocks inline script execution even if a future `esc()` gap is introduced.
+
+### Tests
+
+- `tests/test_xss_regression.py` (new): 6 regression guards covering all five HA fields, correct `esc()`-before-`.replace()` ordering, CSP presence, LLM injection phrase filtering, and the intentional raw-storage design contract for `ha_pending_directive`.
+
 ## [2.10.7] - 2026-04-18
 
 Operator honesty II — aggregates the WS2/WS3/WS5/WS6 reliability fixes shipped on `main` since 2.10.6, plus two UI-truth fixes from the 2026-04-17 live session (queue row labels for BANTER/AD, dashboard AI pipeline pill three-state).

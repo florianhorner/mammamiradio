@@ -855,6 +855,9 @@ async def _persist_skipped_music(state: StationState, config, metadata: dict, *,
 
     if is_new_skip_bit and not state.ha_pending_directive:
         track_name = metadata.get("title_only") or metadata.get("title") or "questa canzone"
+        # Raw title stored intentionally — ha_pending_directive feeds LLM prompts.
+        # HTML encoding here would corrupt LLM input. The admin.html esc() call is
+        # the XSS defense boundary for this field when it reaches the UI.
         state.ha_pending_directive = (
             f"L'ascoltatore ha saltato '{track_name}' troppe volte — "
             "reagisci in modo complice, scherzoso. Fai notare che la skippa sempre."
@@ -919,7 +922,7 @@ async def admin_panel(request: Request):
     prefix = request.headers.get("X-Ingress-Path", "")
     html = _get_injected_html("admin", _ADMIN_HTML, prefix)
     html = _inject_csrf_token(html, _get_csrf_token(request.app))
-    return html
+    return HTMLResponse(content=html, headers={"Content-Security-Policy": "script-src 'self'"})
 
 
 @router.get("/listen", response_class=HTMLResponse)
