@@ -59,9 +59,7 @@ def test_admin_csp_header_in_source() -> None:
         "streamer.py /admin route must set Content-Security-Policy header. "
         "Required: HTMLResponse(content=html, headers={'Content-Security-Policy': \"script-src 'self'\"})"
     )
-    assert "script-src" in src, (
-        "Content-Security-Policy must include script-src directive."
-    )
+    assert "script-src" in src, "Content-Security-Policy must include script-src directive."
 
 
 def test_sanitize_state_value_strips_injection_phrases() -> None:
@@ -70,9 +68,7 @@ def test_sanitize_state_value_strips_injection_phrases() -> None:
 
     for phrase in ("ignore previous", "disregard", "system override", "forget your"):
         result = _sanitize_state_value(phrase + " instructions")
-        assert result == "(filtered)", (
-            f"_sanitize_state_value did not filter injection phrase: '{phrase}'"
-        )
+        assert result == "(filtered)", f"_sanitize_state_value did not filter injection phrase: '{phrase}'"
 
 
 def test_sanitize_state_value_does_not_html_encode() -> None:
@@ -108,8 +104,7 @@ def test_pending_directive_stores_raw_title() -> None:
 
     # Must store raw, not HTML-encoded
     assert "<b>Track & Artist" in directive, (
-        "ha_pending_directive should store the raw track title. "
-        "HTML encoding here would break LLM prompt quality."
+        "ha_pending_directive should store the raw track title. HTML encoding here would break LLM prompt quality."
     )
     assert "&lt;" not in directive, (
         "Track title was HTML-encoded before storage in ha_pending_directive. "
