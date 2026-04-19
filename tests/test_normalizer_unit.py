@@ -615,8 +615,9 @@ def test_save_track_metadata_swallows_oserror_on_readonly_dir(tmp_path):
     # has no effect when the process runs as root.
     norm = tmp_path / "norm_x_192k.mp3"
     norm.write_bytes(b"ok")
-    with patch("pathlib.Path.write_text", side_effect=OSError("read-only filesystem")):
+    with patch("pathlib.Path.write_text", side_effect=OSError("read-only filesystem")) as mock_write:
         save_track_metadata(norm, title="t", artist="a")  # must not raise
+    mock_write.assert_called_once()
     # Sidecar was not written; load returns None cleanly.
     assert load_track_metadata(norm) is None
 
