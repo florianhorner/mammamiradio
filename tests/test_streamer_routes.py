@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import time
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -1140,6 +1141,26 @@ async def test_admin_panel_with_basic_auth_returns_html():
         resp = await client.get("/admin", auth=("admin", "secret"))
     assert resp.status_code == 200
     assert "text/html" in resp.headers["content-type"]
+
+
+@pytest.mark.asyncio
+async def test_admin_panel_csp_nonce_matches_rendered_script_nonce():
+    """GET /admin must inject one nonce value into both CSP and the inline script."""
+    app = _make_test_app()
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.get("/admin")
+
+    assert resp.status_code == 200
+    csp = resp.headers.get("Content-Security-Policy", "")
+    csp_match = re.search(r"script-src 'self' 'nonce-([^']+)'", csp)
+    assert csp_match is not None, "Admin CSP must include a per-request script nonce."
+
+    html_match = re.search(r'<script nonce="([^"]+)">', resp.text)
+    assert html_match is not None, "Admin HTML must render the inline script with a nonce."
+
+    assert csp_match.group(1) == html_match.group(1)
+    assert "__MAMMAMIRADIO_SCRIPT_NONCE__" not in resp.text
 
 
 # ---------------------------------------------------------------------------

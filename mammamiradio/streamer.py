@@ -353,6 +353,11 @@ def _inject_csrf_token(html: str, token: str) -> str:
 
 
 def _inject_script_nonce(html: str, nonce: str) -> str:
+    if _SCRIPT_NONCE_PLACEHOLDER not in html:
+        raise RuntimeError(
+            f"admin.html is missing {_SCRIPT_NONCE_PLACEHOLDER!r} — "
+            "nonce injection failed; the inline script will be CSP-blocked"
+        )
     return html.replace(_SCRIPT_NONCE_PLACEHOLDER, nonce)
 
 
@@ -927,6 +932,9 @@ async def admin_panel(request: Request):
     prefix = request.headers.get("X-Ingress-Path", "")
     html = _get_injected_html("admin", _ADMIN_HTML, prefix)
     html = _inject_csrf_token(html, _get_csrf_token(request.app))
+    # esc() in admin.html is the load-bearing XSS defense. This nonce is defense-in-depth:
+    # it allows the one legitimate inline script while blocking injected external scripts.
+    # Never cache or reuse a nonce — each request must generate a fresh one.
     nonce = secrets.token_urlsafe(16)
     html = _inject_script_nonce(html, nonce)
     csp = f"script-src 'self' 'nonce-{nonce}'"

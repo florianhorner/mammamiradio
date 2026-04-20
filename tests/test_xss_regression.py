@@ -14,8 +14,11 @@ esc() in admin.html is the XSS boundary for that field.
 
 from __future__ import annotations
 
+import asyncio
 import re
 from pathlib import Path
+
+import pytest
 
 ADMIN_HTML = Path(__file__).parent.parent / "mammamiradio" / "admin.html"
 STREAMER_PY = Path(__file__).parent.parent / "mammamiradio" / "streamer.py"
@@ -101,6 +104,57 @@ def test_sanitize_state_value_does_not_html_encode() -> None:
         "Server-side HTML encoding was applied in _sanitize_state_value. "
         "This is intentionally NOT done — it causes double-encoding when admin.html esc() also runs. "
         "The defense boundary is client-side esc() in admin.html."
+    )
+
+
+@pytest.mark.asyncio
+async def test_admin_csp_header_sent_and_nonce_matches_html() -> None:
+    """GET /admin must return a Content-Security-Policy header whose nonce matches the <script> tag.
+
+    This is an HTTP-level test — it verifies the runtime wiring, not just the static source.
+    A static source scan (test_admin_csp_uses_nonce) cannot catch: misspelled header keys,
+    exceptions thrown before the header is set, or a future caching bug that reuses a stale nonce.
+    """
+    import httpx
+    from fastapi import FastAPI
+
+    from mammamiradio.config import load_config
+    from mammamiradio.models import StationState, Track
+    from mammamiradio.streamer import LiveStreamHub, router
+
+    toml = str(Path(__file__).parent.parent / "radio.toml")
+    app = FastAPI()
+    app.include_router(router)
+    config = load_config(toml)
+    config.admin_password = ""
+    state = StationState(
+        playlist=[Track(title="T", artist="A", duration_ms=180_000, spotify_id="t1")],
+    )
+    app.state.queue = asyncio.Queue()
+    app.state.skip_event = asyncio.Event()
+    hub = LiveStreamHub()
+    hub.bind_state(state)
+    app.state.stream_hub = hub
+    app.state.station_state = state
+    app.state.config = config
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.get("/admin")
+
+    assert resp.status_code == 200
+    csp = resp.headers.get("content-security-policy", "")
+    assert "nonce-" in csp, f"CSP header missing nonce: {csp!r}"
+
+    # Extract the nonce value from the CSP header
+    match = re.search(r"'nonce-([^']+)'", csp)
+    assert match, f"Could not parse nonce from CSP: {csp!r}"
+    header_nonce = match.group(1)
+
+    # The same nonce must appear in the rendered HTML
+    assert f'nonce="{header_nonce}"' in resp.text, (
+        f"Nonce in CSP header ({header_nonce!r}) does not appear in <script nonce=...> in the HTML. "
+        "Nonce injection is broken."
     )
 
 
