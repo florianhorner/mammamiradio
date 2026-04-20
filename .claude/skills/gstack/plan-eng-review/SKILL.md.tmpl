@@ -9,6 +9,10 @@ description: |
   "review the architecture", "engineering review", or "lock in the plan".
   Proactively suggest when the user has a plan or design doc and is about to
   start coding — to catch architecture issues before implementation. (gstack)
+voice-triggers:
+  - "tech review"
+  - "technical review"
+  - "plan engineering review"
 benefits-from: [office-hours]
 allowed-tools:
   - Read
@@ -18,9 +22,15 @@ allowed-tools:
   - AskUserQuestion
   - Bash
   - WebSearch
+triggers:
+  - review architecture
+  - eng plan review
+  - check the implementation plan
 ---
 
 {{PREAMBLE}}
+
+{{GBRAIN_CONTEXT_LOAD}}
 
 # Plan Review Mode
 
@@ -35,7 +45,7 @@ If the user asks you to compress or the system triggers context compaction: Step
 * I want code that's "engineered enough" — not under-engineered (fragile, hacky) and not over-engineered (premature abstraction, unnecessary complexity).
 * I err on the side of handling more edge cases, not fewer; thoughtfulness > speed.
 * Bias toward explicit over clever.
-* Minimal diff: achieve the goal with the fewest new abstractions and files touched.
+* Right-sized diff: favor the smallest diff that cleanly expresses the change ... but don't compress a necessary rewrite into a minimal patch. If the existing foundation is broken, say "scrap it and do this instead."
 
 ## Cognitive Patterns — How Great Eng Managers Think
 
@@ -109,6 +119,8 @@ Always work through the full interactive review: one section at a time (Architec
 **Critical: Once the user accepts or rejects a scope reduction recommendation, commit fully.** Do not re-argue for smaller scope during later review sections. Do not silently reduce scope or skip planned components.
 
 ## Review Sections (after scope is agreed)
+
+**Anti-skip rule:** Never condense, abbreviate, or skip any review section (1-4) regardless of plan type (strategy, spec, code, infra). Every section in this skill exists for a reason. "This is a strategy doc so implementation sections don't apply" is always wrong — implementation details are where strategy breaks down. If a section genuinely has zero findings, say "No issues found" and move on — but you must evaluate it.
 
 {{LEARNINGS_SEARCH}}
 
@@ -286,6 +298,10 @@ Substitute values from the Completion Summary:
 {{REVIEW_DASHBOARD}}
 
 {{PLAN_FILE_REVIEW_REPORT}}
+
+{{LEARNINGS_LOG}}
+
+{{GBRAIN_SAVE_RESULTS}}
 
 ## Next Steps — Review Chaining
 
