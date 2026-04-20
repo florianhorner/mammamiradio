@@ -6,9 +6,22 @@ The current version source of truth is `pyproject.toml`.
 
 ## [Unreleased]
 
+## [2.10.9] - 2026-04-20
+
+Hardens the CSP nonce machinery shipped in v2.10.8, closing a silent-failure path and adding HTTP-level test coverage.
+
 ### Fixed
 
 - **Admin panel broken by v2.10.8 CSP regression**: The `Content-Security-Policy: script-src 'self'` header added in v2.10.8 blocked the inline `<script>` block in `admin.html`, leaving the entire admin UI stuck at "Waiting for signal...". Fixed by using a per-request nonce: the server generates `secrets.token_urlsafe(16)` per request, injects it into the CSP as `script-src 'self' 'nonce-{nonce}'`, and into the `<script nonce="...">` tag. The real XSS protection (`esc()` on all HA fields) is unchanged; the CSP is now correctly scoped defense-in-depth.
+- **Silent nonce injection failure**: `_inject_script_nonce` previously used a bare `str.replace` that returned the original HTML unchanged if `__MAMMAMIRADIO_SCRIPT_NONCE__` was absent (e.g. after a future template refactor). The admin panel would have served a page with the CSP header set but no nonce in the `<script>` tag — blocking the inline script again, silently. Fixed by raising `RuntimeError` when the placeholder is not found.
+
+### Security
+
+- Added code comment at nonce generation site clarifying that `esc()` in admin.html is the load-bearing XSS defense; the nonce is defense-in-depth. Prevents future maintainers from misattributing XSS protection to the CSP header.
+
+### Tests
+
+- Added HTTP-level nonce test (`test_admin_csp_header_sent_and_nonce_matches_html`): fires a real `GET /admin` request and asserts the nonce value in the `Content-Security-Policy` header matches the `nonce="..."` attribute in the rendered `<script>` tag. Prior tests only scanned source files statically.
 
 ## [2.10.8] - 2026-04-19
 
