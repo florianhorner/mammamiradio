@@ -353,11 +353,11 @@ def _inject_csrf_token(html: str, token: str) -> str:
 
 
 def _inject_script_nonce(html: str, nonce: str) -> str:
-    if _SCRIPT_NONCE_PLACEHOLDER not in html:
-        raise RuntimeError(
-            f"admin.html is missing {_SCRIPT_NONCE_PLACEHOLDER!r} — "
-            "nonce injection failed; the inline script will be CSP-blocked"
-        )
+    # Nonce injection is no longer used — admin.html has inline event handlers
+    # (onclick, oninput, onchange) throughout that cannot carry a nonce attribute.
+    # script-src 'nonce-{x}' blocks those handlers even when the <script> block is allowed.
+    # The CSP uses 'unsafe-inline' instead, which allows all inline code while still
+    # blocking external script sources. esc() in admin.html remains the XSS boundary.
     return html.replace(_SCRIPT_NONCE_PLACEHOLDER, nonce)
 
 
@@ -932,12 +932,12 @@ async def admin_panel(request: Request):
     prefix = request.headers.get("X-Ingress-Path", "")
     html = _get_injected_html("admin", _ADMIN_HTML, prefix)
     html = _inject_csrf_token(html, _get_csrf_token(request.app))
-    # esc() in admin.html is the load-bearing XSS defense. This nonce is defense-in-depth:
-    # it allows the one legitimate inline script while blocking injected external scripts.
-    # Never cache or reuse a nonce — each request must generate a fresh one.
-    nonce = secrets.token_urlsafe(16)
-    html = _inject_script_nonce(html, nonce)
-    csp = f"script-src 'self' 'nonce-{nonce}'"
+    # CSP: 'unsafe-inline' is required because admin.html has inline event handlers
+    # (onclick, oninput, onchange) on ~40 elements that cannot carry a nonce attribute.
+    # A nonce-only CSP blocks those handlers. 'unsafe-inline' allows all inline code
+    # while still blocking external script sources (CDNs, attacker domains).
+    # esc() on all HA fields in admin.html is the load-bearing XSS defense.
+    csp = "script-src 'self' 'unsafe-inline'"
     return HTMLResponse(content=html, headers={"Content-Security-Policy": csp})
 
 

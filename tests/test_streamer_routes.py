@@ -1144,8 +1144,12 @@ async def test_admin_panel_with_basic_auth_returns_html():
 
 
 @pytest.mark.asyncio
-async def test_admin_panel_csp_nonce_matches_rendered_script_nonce():
-    """GET /admin must inject one nonce value into both CSP and the inline script."""
+async def test_admin_panel_csp_allows_inline_handlers():
+    """GET /admin must return CSP with 'unsafe-inline' so onclick/oninput handlers work.
+
+    admin.html has ~40 inline event handlers. A nonce-only CSP blocks them even when
+    the <script> block loads — nonces cover <script> elements, not attribute handlers.
+    """
     app = _make_test_app()
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
@@ -1153,14 +1157,13 @@ async def test_admin_panel_csp_nonce_matches_rendered_script_nonce():
 
     assert resp.status_code == 200
     csp = resp.headers.get("Content-Security-Policy", "")
-    csp_match = re.search(r"script-src 'self' 'nonce-([^']+)'", csp)
-    assert csp_match is not None, "Admin CSP must include a per-request script nonce."
-
-    html_match = re.search(r'<script nonce="([^"]+)">', resp.text)
-    assert html_match is not None, "Admin HTML must render the inline script with a nonce."
-
-    assert csp_match.group(1) == html_match.group(1)
-    assert "__MAMMAMIRADIO_SCRIPT_NONCE__" not in resp.text
+    assert "script-src" in csp, f"Admin response must set script-src CSP: {csp!r}"
+    assert "'unsafe-inline'" in csp, (
+        f"Admin CSP must include 'unsafe-inline' to allow inline event handlers: {csp!r}"
+    )
+    assert "__MAMMAMIRADIO_SCRIPT_NONCE__" not in resp.text, (
+        "Stale nonce placeholder found in rendered HTML."
+    )
 
 
 # ---------------------------------------------------------------------------

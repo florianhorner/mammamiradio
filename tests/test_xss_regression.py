@@ -56,26 +56,24 @@ def test_admin_events_summary_esc_before_replace() -> None:
     )
 
 
-def test_admin_csp_uses_nonce() -> None:
-    """The /admin CSP must use a per-request nonce so inline scripts are allowed.
+def test_admin_csp_allows_inline() -> None:
+    """The /admin CSP must use 'unsafe-inline' so inline event handlers are allowed.
 
-    script-src 'self' (without a nonce) blocks the inline <script> block in admin.html,
-    leaving the page stuck at 'Waiting for signal...'. The fix: generate a nonce per
-    request, inject it into both the CSP header and the <script nonce="..."> tag.
+    admin.html has ~40 inline event handlers (onclick, oninput, onchange) throughout.
+    A nonce-only CSP (script-src 'self' 'nonce-{x}') blocks those handlers even when
+    the <script> block is allowed — nonces cover <script> elements, not attribute
+    event handlers. 'unsafe-inline' is required to allow them while still blocking
+    external script sources (CDNs, attacker domains).
+    esc() on all HA fields in admin.html is the load-bearing XSS defense.
     """
     src = STREAMER_PY.read_text()
-    html = ADMIN_HTML.read_text()
     assert "Content-Security-Policy" in src, (
         "streamer.py /admin route must set Content-Security-Policy header."
     )
     assert "script-src" in src, "Content-Security-Policy must include script-src directive."
-    assert "nonce-" in src, (
-        "CSP must use a per-request nonce (e.g. f\"script-src 'self' 'nonce-{nonce}'\"). "
-        "script-src 'self' without a nonce blocks the inline admin.html script block."
-    )
-    assert "__MAMMAMIRADIO_SCRIPT_NONCE__" in html, (
-        "admin.html <script> tag must include nonce='__MAMMAMIRADIO_SCRIPT_NONCE__' "
-        "so the server can inject the per-request nonce."
+    assert "'unsafe-inline'" in src, (
+        "CSP must include 'unsafe-inline' to allow the inline event handlers in admin.html. "
+        "A nonce-only CSP blocks onclick/oninput/onchange handlers, breaking the admin UI."
     )
 
 
@@ -108,12 +106,12 @@ def test_sanitize_state_value_does_not_html_encode() -> None:
 
 
 @pytest.mark.asyncio
-async def test_admin_csp_header_sent_and_nonce_matches_html() -> None:
-    """GET /admin must return a Content-Security-Policy header whose nonce matches the <script> tag.
+async def test_admin_csp_header_sent_with_unsafe_inline() -> None:
+    """GET /admin must return a Content-Security-Policy header with 'unsafe-inline'.
 
-    This is an HTTP-level test — it verifies the runtime wiring, not just the static source.
-    A static source scan (test_admin_csp_uses_nonce) cannot catch: misspelled header keys,
-    exceptions thrown before the header is set, or a future caching bug that reuses a stale nonce.
+    This is an HTTP-level test — verifies the CSP header is actually set on the response,
+    not just present in source code. Also verifies the placeholder is NOT in the rendered
+    HTML (no stale template leak).
     """
     import httpx
     from fastapi import FastAPI
@@ -144,17 +142,12 @@ async def test_admin_csp_header_sent_and_nonce_matches_html() -> None:
 
     assert resp.status_code == 200
     csp = resp.headers.get("content-security-policy", "")
-    assert "nonce-" in csp, f"CSP header missing nonce: {csp!r}"
-
-    # Extract the nonce value from the CSP header
-    match = re.search(r"'nonce-([^']+)'", csp)
-    assert match, f"Could not parse nonce from CSP: {csp!r}"
-    header_nonce = match.group(1)
-
-    # The same nonce must appear in the rendered HTML
-    assert f'nonce="{header_nonce}"' in resp.text, (
-        f"Nonce in CSP header ({header_nonce!r}) does not appear in <script nonce=...> in the HTML. "
-        "Nonce injection is broken."
+    assert "script-src" in csp, f"CSP header missing script-src: {csp!r}"
+    assert "'unsafe-inline'" in csp, (
+        f"CSP must include 'unsafe-inline' to allow inline event handlers: {csp!r}"
+    )
+    assert "__MAMMAMIRADIO_SCRIPT_NONCE__" not in resp.text, (
+        "Stale nonce placeholder found in rendered HTML — template injection broken."
     )
 
 
