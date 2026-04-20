@@ -1157,12 +1157,8 @@ async def test_admin_panel_csp_allows_inline_handlers():
     assert resp.status_code == 200
     csp = resp.headers.get("Content-Security-Policy", "")
     assert "script-src" in csp, f"Admin response must set script-src CSP: {csp!r}"
-    assert "'unsafe-inline'" in csp, (
-        f"Admin CSP must include 'unsafe-inline' to allow inline event handlers: {csp!r}"
-    )
-    assert "__MAMMAMIRADIO_SCRIPT_NONCE__" not in resp.text, (
-        "Stale nonce placeholder found in rendered HTML."
-    )
+    assert "'unsafe-inline'" in csp, f"Admin CSP must include 'unsafe-inline' to allow inline event handlers: {csp!r}"
+    assert "__MAMMAMIRADIO_SCRIPT_NONCE__" not in resp.text, "Stale nonce placeholder found in rendered HTML."
 
 
 # ---------------------------------------------------------------------------
