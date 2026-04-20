@@ -788,9 +788,9 @@ propcache==0.4.1 \
     # via
     #   aiohttp
     #   yarl
-pydantic==2.12.5 \
-    --hash=sha256:4d351024c75c0f085a9febbb665ce8c0c6ec5d30e903bdb6394b7ede26aebb49 \
-    --hash=sha256:e561593fccf61e8a20fc46dfc2dfe075b8be7d0188df33f221ad1f0139180f9d
+pydantic==2.13.2 \
+    --hash=sha256:a525087f4c03d7e7456a3de89b64cd693d2229933bb1068b9af6befd5563694e \
+    --hash=sha256:b418196607e61081c3226dcd4f0672f2a194828abb9109e9cfb84026564df2d1
     # via
     #   anthropic
     #   fastapi
