@@ -69,6 +69,7 @@ def _as_int_index(value, default: int = -1) -> int:
 
 _MUTATING_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 _CSRF_TOKEN_PLACEHOLDER = "__MAMMAMIRADIO_CSRF_TOKEN__"
+_SCRIPT_NONCE_PLACEHOLDER = "__MAMMAMIRADIO_SCRIPT_NONCE__"
 
 
 def _purge_segment_queue(q) -> int:
@@ -349,6 +350,10 @@ def _get_csrf_token(app) -> str:
 
 def _inject_csrf_token(html: str, token: str) -> str:
     return html.replace(_CSRF_TOKEN_PLACEHOLDER, token)
+
+
+def _inject_script_nonce(html: str, nonce: str) -> str:
+    return html.replace(_SCRIPT_NONCE_PLACEHOLDER, nonce)
 
 
 def _same_origin(request: Request, candidate: str) -> bool:
@@ -922,7 +927,10 @@ async def admin_panel(request: Request):
     prefix = request.headers.get("X-Ingress-Path", "")
     html = _get_injected_html("admin", _ADMIN_HTML, prefix)
     html = _inject_csrf_token(html, _get_csrf_token(request.app))
-    return HTMLResponse(content=html, headers={"Content-Security-Policy": "script-src 'self'"})
+    nonce = secrets.token_urlsafe(16)
+    html = _inject_script_nonce(html, nonce)
+    csp = f"script-src 'self' 'nonce-{nonce}'"
+    return HTMLResponse(content=html, headers={"Content-Security-Policy": csp})
 
 
 @router.get("/listen", response_class=HTMLResponse)

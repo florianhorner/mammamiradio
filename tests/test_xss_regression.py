@@ -5,7 +5,8 @@ Two attack paths were identified and fixed:
 - Path B: yt-dlp track titles stored raw in ha_pending_directive, rendered via innerHTML
 
 Fix: esc() applied to all five HA fields in admin.html before innerHTML assignment.
-Defense-in-depth: Content-Security-Policy header on /admin blocks inline script execution.
+Defense-in-depth: Content-Security-Policy header on /admin with per-request nonce allows the
+inline script block while blocking injected external scripts.
 
 ha_pending_directive intentionally stores raw titles (LLM prompts need unencoded text).
 esc() in admin.html is the XSS boundary for that field.
@@ -52,14 +53,27 @@ def test_admin_events_summary_esc_before_replace() -> None:
     )
 
 
-def test_admin_csp_header_in_source() -> None:
-    """The /admin route must set a Content-Security-Policy header."""
+def test_admin_csp_uses_nonce() -> None:
+    """The /admin CSP must use a per-request nonce so inline scripts are allowed.
+
+    script-src 'self' (without a nonce) blocks the inline <script> block in admin.html,
+    leaving the page stuck at 'Waiting for signal...'. The fix: generate a nonce per
+    request, inject it into both the CSP header and the <script nonce="..."> tag.
+    """
     src = STREAMER_PY.read_text()
+    html = ADMIN_HTML.read_text()
     assert "Content-Security-Policy" in src, (
-        "streamer.py /admin route must set Content-Security-Policy header. "
-        "Required: HTMLResponse(content=html, headers={'Content-Security-Policy': \"script-src 'self'\"})"
+        "streamer.py /admin route must set Content-Security-Policy header."
     )
     assert "script-src" in src, "Content-Security-Policy must include script-src directive."
+    assert "nonce-" in src, (
+        "CSP must use a per-request nonce (e.g. f\"script-src 'self' 'nonce-{nonce}'\"). "
+        "script-src 'self' without a nonce blocks the inline admin.html script block."
+    )
+    assert "__MAMMAMIRADIO_SCRIPT_NONCE__" in html, (
+        "admin.html <script> tag must include nonce='__MAMMAMIRADIO_SCRIPT_NONCE__' "
+        "so the server can inject the per-request nonce."
+    )
 
 
 def test_sanitize_state_value_strips_injection_phrases() -> None:

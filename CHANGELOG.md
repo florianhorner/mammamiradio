@@ -6,6 +6,10 @@ The current version source of truth is `pyproject.toml`.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Admin panel broken by v2.10.8 CSP regression**: The `Content-Security-Policy: script-src 'self'` header added in v2.10.8 blocked the inline `<script>` block in `admin.html`, leaving the entire admin UI stuck at "Waiting for signal...". Fixed by using a per-request nonce: the server generates `secrets.token_urlsafe(16)` per request, injects it into the CSP as `script-src 'self' 'nonce-{nonce}'`, and into the `<script nonce="...">` tag. The real XSS protection (`esc()` on all HA fields) is unchanged; the CSP is now correctly scoped defense-in-depth.
+
 ## [2.10.8] - 2026-04-19
 
 Security fix: stored XSS in admin panel Engine Room (HA entity state injection + yt-dlp track title injection).
@@ -14,7 +18,7 @@ Security fix: stored XSS in admin panel Engine Room (HA entity state injection +
 
 - **Stored XSS via HA entity state values** (admin.html Engine Room): Five Home Assistant-sourced fields (`mood`, `weather_arc`, `events_summary`, `pending_directive`, `last_event_label`) were rendered via `innerHTML` without HTML escaping. An attacker with write access to any HA entity feeding the admin panel could inject arbitrary HTML/JS that would execute in the authenticated admin session. Fix: all five fields now wrapped with `esc()` (DOM-based escape helper) before `innerHTML` assignment. `esc()` is applied before `.replace(/\n/g,'<br>')` on `events_summary` so the newline replacement operates on already-escaped content.
 - **Stored XSS via yt-dlp track titles** (admin.html Engine Room): When a track is skipped past the repeat threshold, `ha_pending_directive` stores a raw yt-dlp track title. A maliciously named YouTube video could inject HTML/JS via this field. Fix: same `esc()` wrapper in admin.html covers this field. Raw storage in `ha_pending_directive` is intentional — the field feeds LLM prompts, and server-side HTML encoding would corrupt LLM input. Design decision documented in code comment and regression test.
-- **Content-Security-Policy on `/admin`**: The `/admin` route now returns `Content-Security-Policy: script-src 'self'` as defense-in-depth. Blocks inline script execution even if a future `esc()` gap is introduced.
+- **Content-Security-Policy on `/admin`**: The `/admin` route now returns a `Content-Security-Policy` header with a per-request nonce (`script-src 'self' 'nonce-{nonce}'`) as defense-in-depth. Note: initial v2.10.8 used `script-src 'self'` without a nonce, which broke the admin panel by blocking the inline script block — fixed in the next patch.
 
 ### Tests
 
