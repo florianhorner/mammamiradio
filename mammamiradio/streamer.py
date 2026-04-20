@@ -69,7 +69,6 @@ def _as_int_index(value, default: int = -1) -> int:
 
 _MUTATING_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 _CSRF_TOKEN_PLACEHOLDER = "__MAMMAMIRADIO_CSRF_TOKEN__"
-_SCRIPT_NONCE_PLACEHOLDER = "__MAMMAMIRADIO_SCRIPT_NONCE__"
 
 
 def _purge_segment_queue(q) -> int:
@@ -351,14 +350,6 @@ def _get_csrf_token(app) -> str:
 def _inject_csrf_token(html: str, token: str) -> str:
     return html.replace(_CSRF_TOKEN_PLACEHOLDER, token)
 
-
-def _inject_script_nonce(html: str, nonce: str) -> str:
-    # Nonce injection is no longer used — admin.html has inline event handlers
-    # (onclick, oninput, onchange) throughout that cannot carry a nonce attribute.
-    # script-src 'nonce-{x}' blocks those handlers even when the <script> block is allowed.
-    # The CSP uses 'unsafe-inline' instead, which allows all inline code while still
-    # blocking external script sources. esc() in admin.html remains the XSS boundary.
-    return html.replace(_SCRIPT_NONCE_PLACEHOLDER, nonce)
 
 
 def _same_origin(request: Request, candidate: str) -> bool:

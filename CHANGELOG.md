@@ -8,20 +8,22 @@ The current version source of truth is `pyproject.toml`.
 
 ## [2.10.9] - 2026-04-20
 
-Hardens the CSP nonce machinery shipped in v2.10.8, closing a silent-failure path and adding HTTP-level test coverage.
+Fixes the admin panel regression introduced in v2.10.8 and adds producer bridge metadata improvements.
 
 ### Fixed
 
-- **Admin panel broken by v2.10.8 CSP regression**: The `Content-Security-Policy: script-src 'self'` header added in v2.10.8 blocked the inline `<script>` block in `admin.html`, leaving the entire admin UI stuck at "Waiting for signal...". Fixed by using a per-request nonce: the server generates `secrets.token_urlsafe(16)` per request, injects it into the CSP as `script-src 'self' 'nonce-{nonce}'`, and into the `<script nonce="...">` tag. The real XSS protection (`esc()` on all HA fields) is unchanged; the CSP is now correctly scoped defense-in-depth.
-- **Silent nonce injection failure**: `_inject_script_nonce` previously used a bare `str.replace` that returned the original HTML unchanged if `__MAMMAMIRADIO_SCRIPT_NONCE__` was absent (e.g. after a future template refactor). The admin panel would have served a page with the CSP header set but no nonce in the `<script>` tag — blocking the inline script again, silently. Fixed by raising `RuntimeError` when the placeholder is not found.
+- **Admin panel broken by v2.10.8 CSP regression** (pacing sliders, skip controls, all interactive elements): `script-src 'self'` blocked the entire inline script block in `admin.html`, and `script-src 'self' 'nonce-{x}'` (attempted intermediate fix) blocked the ~40 inline `onclick`/`oninput`/`onchange` event handlers throughout admin.html — nonces cover `<script>` elements only, not attribute event handlers. Final fix: `script-src 'self' 'unsafe-inline'`, which allows all inline code while still blocking external script sources (CDNs, attacker domains). `esc()` on all five HA fields in admin.html remains the load-bearing XSS defense.
+- **Producer bridge track metadata**: Resume bridge and idle bridge segments now call `load_track_metadata(norm_path)` before humanizing the filename, so `title` and `artist` are populated from the sidecar JSON when available instead of falling back to raw filename stems.
 
 ### Security
 
-- Added code comment at nonce generation site clarifying that `esc()` in admin.html is the load-bearing XSS defense; the nonce is defense-in-depth. Prevents future maintainers from misattributing XSS protection to the CSP header.
+- CSP on `/admin` now uses `script-src 'self' 'unsafe-inline'`. This blocks external script injection (the operationally relevant threat) while allowing the existing inline code that the admin panel depends on. The rationale — and why nonces alone are insufficient for this HTML structure — is documented in streamer.py.
 
 ### Tests
 
-- Added HTTP-level nonce test (`test_admin_csp_header_sent_and_nonce_matches_html`): fires a real `GET /admin` request and asserts the nonce value in the `Content-Security-Policy` header matches the `nonce="..."` attribute in the rendered `<script>` tag. Prior tests only scanned source files statically.
+- Updated CSP tests to assert `'unsafe-inline'` and verify the nonce placeholder is absent from rendered HTML (`test_admin_csp_allows_inline`, `test_admin_csp_header_sent_with_unsafe_inline`).
+- Added HTTP-level CSP test (`test_admin_csp_header_sent_with_unsafe_inline`): fires a real `GET /admin` via `httpx.ASGITransport` and asserts the header is actually set on the response.
+- Added producer unit tests for sidecar metadata loading on resume and idle bridge paths (`tests/test_producer_unit.py`).
 
 ## [2.10.8] - 2026-04-19
 
