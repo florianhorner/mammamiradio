@@ -17,6 +17,10 @@ allowed-tools:
   - Glob
   - Bash
   - AskUserQuestion
+triggers:
+  - design plan review
+  - review ux plan
+  - check design decisions
 ---
 
 {{PREAMBLE}}
@@ -91,9 +95,11 @@ These aren't a checklist — they're how you see. The perceptual instincts that 
 11. **Design for trust** — Every design decision either builds or erodes trust. Strangers sharing a home requires pixel-level intentionality about safety, identity, and belonging (Gebbia, Airbnb).
 12. **Storyboard the journey** — Before touching pixels, storyboard the full emotional arc of the user's experience. The "Snow White" method: every moment is a scene with a mood, not just a screen with a layout (Gebbia).
 
-Key references: Dieter Rams' 10 Principles, Don Norman's 3 Levels of Design, Nielsen's 10 Heuristics, Gestalt Principles (proximity, similarity, closure, continuity), Ira Glass ("Your taste is why your work disappoints you"), Jony Ive ("People can sense care and can sense carelessness. Different and new is relatively easy. Doing something that's genuinely better is very hard."), Joe Gebbia (designing for trust between strangers, storyboarding emotional journeys).
+Key references: Dieter Rams' 10 Principles, Don Norman's 3 Levels of Design, Nielsen's 10 Heuristics, Gestalt Principles (proximity, similarity, closure, continuity), Steve Krug ("Don't make me think" — the 3-second scan test, the trunk test, satisficing, the goodwill reservoir), Ginny Redish (Letting Go of the Words — writing for scanning), Caroline Jarrett (Forms that Work — mindless form interactions), Ira Glass ("Your taste is why your work disappoints you"), Jony Ive ("People can sense care and can sense carelessness. Different and new is relatively easy. Doing something that's genuinely better is very hard."), Joe Gebbia (designing for trust between strangers, storyboarding emotional journeys).
 
 When reviewing a plan, empathy as simulation runs automatically. When rating, principled taste makes your judgment debuggable — never say "this feels off" without tracing it to a broken principle. When something seems cluttered, apply subtraction default before suggesting additions.
+
+{{UX_PRINCIPLES}}
 
 ## Priority Hierarchy Under Context Pressure
 
@@ -182,7 +188,7 @@ First, set up the output directory. Name it after the screen/feature being desig
 
 ```bash
 eval "$(~/.claude/skills/gstack/bin/gstack-slug 2>/dev/null)"
-_DESIGN_DIR=~/.gstack/projects/$SLUG/designs/<screen-name>-$(date +%Y%m%d)
+_DESIGN_DIR="$HOME/.gstack/projects/$SLUG/designs/<screen-name>-$(date +%Y%m%d)"
 mkdir -p "$_DESIGN_DIR"
 echo "DESIGN_DIR: $_DESIGN_DIR"
 ```
@@ -208,11 +214,10 @@ $D check --image "$_DESIGN_DIR/variant-A.png" --brief "<the original brief>"
 
 Flag any variants that fail the quality check. Offer to regenerate failures.
 
-Show each variant inline (Read tool on each PNG) so the user sees them immediately.
-
-Tell the user: "I've generated design directions. Take a look at the variants above,
-then use the comparison board that just opened in your browser to pick your favorite,
-rate the others, remix elements, and click Submit when you're done."
+**Do NOT show variants inline via Read tool and ask for preferences.** Proceed
+directly to the Comparison Board + Feedback Loop section below. The comparison board
+IS the chooser — it has rating controls, comments, remix/regenerate, and structured
+feedback output. Showing mockups inline is a degraded experience.
 
 {{DESIGN_SHOTGUN_LOOP}}
 
@@ -256,6 +261,10 @@ If the design binary is not available, skip this and continue with text-based
 descriptions of what 10/10 looks like.
 
 ## Review Sections (7 passes, after scope is agreed)
+
+**Anti-skip rule:** Never condense, abbreviate, or skip any review pass (1-7) regardless of plan type (strategy, spec, code, infra). Every pass in this skill exists for a reason. "This is a strategy doc so design passes don't apply" is always wrong — design gaps are where implementation breaks down. If a pass genuinely has zero findings, say "No issues found" and move on — but you must evaluate it.
+
+{{LEARNINGS_SEARCH}}
 
 ### Pass 1: Information Architecture
 Rate 0-10: Does the plan define what the user sees first, second, third?
@@ -337,6 +346,7 @@ Follow the AskUserQuestion format from the Preamble above. Additional rules for 
 * **Map to Design Principles above.** One sentence connecting your recommendation to a specific principle.
 * Label with issue NUMBER + option LETTER (e.g., "3A", "3B").
 * **Escape hatch:** If a section has no issues, say so and move on. If a gap has an obvious fix, state what you'll add and move on — don't waste a question on it. Only use AskUserQuestion when there is a genuine design choice with meaningful tradeoffs.
+* **NEVER use AskUserQuestion to ask which variant the user prefers.** Always create a comparison board first (`$D compare --serve`) and open it in the browser. The board has rating controls, comments, remix/regenerate buttons, and structured feedback output. Use AskUserQuestion ONLY to notify the user the board is open and wait for them to finish — not to present variants inline and ask "which do you prefer?" That is a degraded experience.
 
 ## Required Outputs
 
@@ -431,6 +441,8 @@ Substitute values from the Completion Summary:
 
 {{PLAN_FILE_REVIEW_REPORT}}
 
+{{LEARNINGS_LOG}}
+
 ## Next Steps — Review Chaining
 
 After displaying the Review Readiness Dashboard, recommend the next review(s) based on what this design review discovered. Read the dashboard output to see which reviews have already been run and whether they are stale.
@@ -441,10 +453,18 @@ After displaying the Review Readiness Dashboard, recommend the next review(s) ba
 
 **If both are needed, recommend eng review first** (required gate).
 
+**Recommend design exploration skills when appropriate** — /design-shotgun and /design-html
+produce design artifacts (mockups, HTML previews), not application code. They belong in
+plan mode alongside reviews. If this design review found visual issues that would benefit
+from exploring new directions, recommend /design-shotgun. If approved mockups exist and
+need to be turned into working HTML, recommend /design-html.
+
 Use AskUserQuestion to present the next step. Include only applicable options:
 - **A)** Run /plan-eng-review next (required gate)
 - **B)** Run /plan-ceo-review (only if fundamental product gaps found)
-- **C)** Skip — I'll handle reviews manually
+- **C)** Run /design-shotgun — explore visual design variants for issues found
+- **D)** Run /design-html — generate Pretext-native HTML from approved mockups
+- **E)** Skip — I'll handle next steps manually
 
 ## Formatting Rules
 * NUMBER issues (1, 2, 3...) and LETTERS for options (A, B, C...).

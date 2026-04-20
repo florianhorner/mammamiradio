@@ -5,7 +5,10 @@ Two attack paths were identified and fixed:
 - Path B: yt-dlp track titles stored raw in ha_pending_directive, rendered via innerHTML
 
 Fix: esc() applied to all five HA fields in admin.html before innerHTML assignment.
-Defense-in-depth: Content-Security-Policy header on /admin blocks inline script execution.
+Defense-in-depth: Content-Security-Policy header on /admin uses `script-src 'self' 'unsafe-inline'`
+to allow the existing inline event handlers (onclick/oninput/onchange) while still blocking
+external script sources. A nonce-based CSP was tried and abandoned because nonces do not
+apply to attribute event handlers, which admin.html uses heavily.
 
 ha_pending_directive intentionally stores raw titles (LLM prompts need unencoded text).
 esc() in admin.html is the XSS boundary for that field.
@@ -13,8 +16,11 @@ esc() in admin.html is the XSS boundary for that field.
 
 from __future__ import annotations
 
+import asyncio
 import re
 from pathlib import Path
+
+import pytest
 
 ADMIN_HTML = Path(__file__).parent.parent / "mammamiradio" / "admin.html"
 STREAMER_PY = Path(__file__).parent.parent / "mammamiradio" / "streamer.py"
@@ -52,14 +58,23 @@ def test_admin_events_summary_esc_before_replace() -> None:
     )
 
 
-def test_admin_csp_header_in_source() -> None:
-    """The /admin route must set a Content-Security-Policy header."""
+def test_admin_csp_allows_inline() -> None:
+    """The /admin CSP must use 'unsafe-inline' so inline event handlers are allowed.
+
+    admin.html has ~40 inline event handlers (onclick, oninput, onchange) throughout.
+    A nonce-only CSP (script-src 'self' 'nonce-{x}') blocks those handlers even when
+    the <script> block is allowed — nonces cover <script> elements, not attribute
+    event handlers. 'unsafe-inline' is required to allow them while still blocking
+    external script sources (CDNs, attacker domains).
+    esc() on all HA fields in admin.html is the load-bearing XSS defense.
+    """
     src = STREAMER_PY.read_text()
-    assert "Content-Security-Policy" in src, (
-        "streamer.py /admin route must set Content-Security-Policy header. "
-        "Required: HTMLResponse(content=html, headers={'Content-Security-Policy': \"script-src 'self'\"})"
-    )
+    assert "Content-Security-Policy" in src, "streamer.py /admin route must set Content-Security-Policy header."
     assert "script-src" in src, "Content-Security-Policy must include script-src directive."
+    assert "'unsafe-inline'" in src, (
+        "CSP must include 'unsafe-inline' to allow the inline event handlers in admin.html. "
+        "A nonce-only CSP blocks onclick/oninput/onchange handlers, breaking the admin UI."
+    )
 
 
 def test_sanitize_state_value_strips_injection_phrases() -> None:
@@ -88,6 +103,93 @@ def test_sanitize_state_value_does_not_html_encode() -> None:
         "This is intentionally NOT done — it causes double-encoding when admin.html esc() also runs. "
         "The defense boundary is client-side esc() in admin.html."
     )
+
+
+@pytest.mark.asyncio
+async def test_admin_csp_header_sent_with_unsafe_inline() -> None:
+    """GET /admin must return a Content-Security-Policy header with 'unsafe-inline'.
+
+    This is an HTTP-level test — verifies the CSP header is actually set on the response,
+    not just present in source code. Also verifies the placeholder is NOT in the rendered
+    HTML (no stale template leak).
+    """
+    import httpx
+    from fastapi import FastAPI
+
+    from mammamiradio.config import load_config
+    from mammamiradio.models import StationState, Track
+    from mammamiradio.streamer import LiveStreamHub, router
+
+    toml = str(Path(__file__).parent.parent / "radio.toml")
+    app = FastAPI()
+    app.include_router(router)
+    config = load_config(toml)
+    config.admin_password = ""
+    state = StationState(
+        playlist=[Track(title="T", artist="A", duration_ms=180_000, spotify_id="t1")],
+    )
+    app.state.queue = asyncio.Queue()
+    app.state.skip_event = asyncio.Event()
+    hub = LiveStreamHub()
+    hub.bind_state(state)
+    app.state.stream_hub = hub
+    app.state.station_state = state
+    app.state.config = config
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.get("/admin")
+
+    assert resp.status_code == 200
+    csp = resp.headers.get("content-security-policy", "")
+    assert "script-src" in csp, f"CSP header missing script-src: {csp!r}"
+    assert "'unsafe-inline'" in csp, f"CSP must include 'unsafe-inline' to allow inline event handlers: {csp!r}"
+    assert "__MAMMAMIRADIO_SCRIPT_NONCE__" not in resp.text, (
+        "Stale nonce placeholder found in rendered HTML — template injection broken."
+    )
+
+
+@pytest.mark.asyncio
+async def test_admin_csp_header_sent_on_ha_ingress_root() -> None:
+    """HA ingress `/` must return admin.html with the same CSP header as `/admin`.
+
+    In addon mode, trusted Hassio ingress traffic to `/` is served admin.html instead of
+    the listener UI. That path must carry the same Content-Security-Policy header as the
+    dedicated `/admin` route — otherwise the control room has two different security
+    contracts depending on entrypoint.
+    """
+    import httpx
+    from fastapi import FastAPI
+
+    from mammamiradio.config import load_config
+    from mammamiradio.models import StationState, Track
+    from mammamiradio.streamer import LiveStreamHub, router
+
+    toml = str(Path(__file__).parent.parent / "radio.toml")
+    app = FastAPI()
+    app.include_router(router)
+    config = load_config(toml)
+    config.admin_password = ""
+    config.is_addon = True
+    state = StationState(
+        playlist=[Track(title="T", artist="A", duration_ms=180_000, spotify_id="t1")],
+    )
+    app.state.queue = asyncio.Queue()
+    app.state.skip_event = asyncio.Event()
+    hub = LiveStreamHub()
+    hub.bind_state(state)
+    app.state.stream_hub = hub
+    app.state.station_state = state
+    app.state.config = config
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.get("/", headers={"X-Ingress-Path": "/api/hassio_ingress/abc"})
+
+    assert resp.status_code == 200
+    csp = resp.headers.get("content-security-policy", "")
+    assert "script-src" in csp, f"HA ingress `/` admin response missing CSP: {csp!r}"
+    assert "'unsafe-inline'" in csp, f"HA ingress `/` admin response must carry the same CSP as /admin: {csp!r}"
 
 
 def test_pending_directive_stores_raw_title() -> None:

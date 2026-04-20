@@ -895,15 +895,23 @@ async def _audio_generator(request: Request):
         hub.unsubscribe(listener_id)
 
 
+def _render_admin_response(request: Request, prefix: str) -> HTMLResponse:
+    # CSP: 'unsafe-inline' is required because admin.html has inline event handlers
+    # (onclick, oninput, onchange) on ~40 elements that cannot carry a nonce attribute.
+    # esc() on all HA fields in admin.html is the load-bearing XSS defense.
+    html = _get_injected_html("admin", _ADMIN_HTML, prefix)
+    html = _inject_csrf_token(html, _get_csrf_token(request.app))
+    csp = "script-src 'self' 'unsafe-inline'"
+    return HTMLResponse(content=html, headers={"Content-Security-Policy": csp})
+
+
 @router.get("/", response_class=HTMLResponse)
 async def listener_home(request: Request):
     """Serve the public listener UI, except trusted HA ingress opens the control room."""
     prefix = request.headers.get("X-Ingress-Path", "")
     config = request.app.state.config
     if config.is_addon and prefix and _is_hassio_or_loopback(request):
-        html = _get_injected_html("admin", _ADMIN_HTML, prefix)
-        html = _inject_csrf_token(html, _get_csrf_token(request.app))
-        return html
+        return _render_admin_response(request, prefix)
     return _get_injected_html("listener", _LISTENER_HTML, prefix)
 
 
@@ -920,9 +928,7 @@ async def dashboard(request: Request):
 async def admin_panel(request: Request):
     """Serve the admin control room panel."""
     prefix = request.headers.get("X-Ingress-Path", "")
-    html = _get_injected_html("admin", _ADMIN_HTML, prefix)
-    html = _inject_csrf_token(html, _get_csrf_token(request.app))
-    return HTMLResponse(content=html, headers={"Content-Security-Policy": "script-src 'self'"})
+    return _render_admin_response(request, prefix)
 
 
 @router.get("/listen", response_class=HTMLResponse)

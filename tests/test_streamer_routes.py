@@ -1142,6 +1142,25 @@ async def test_admin_panel_with_basic_auth_returns_html():
     assert "text/html" in resp.headers["content-type"]
 
 
+@pytest.mark.asyncio
+async def test_admin_panel_csp_allows_inline_handlers():
+    """GET /admin must return CSP with 'unsafe-inline' so onclick/oninput handlers work.
+
+    admin.html has ~40 inline event handlers. A nonce-only CSP blocks them even when
+    the <script> block loads — nonces cover <script> elements, not attribute handlers.
+    """
+    app = _make_test_app()
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.get("/admin")
+
+    assert resp.status_code == 200
+    csp = resp.headers.get("Content-Security-Policy", "")
+    assert "script-src" in csp, f"Admin response must set script-src CSP: {csp!r}"
+    assert "'unsafe-inline'" in csp, f"Admin CSP must include 'unsafe-inline' to allow inline event handlers: {csp!r}"
+    assert "__MAMMAMIRADIO_SCRIPT_NONCE__" not in resp.text, "Stale nonce placeholder found in rendered HTML."
+
+
 # ---------------------------------------------------------------------------
 # /api/capabilities route tests
 # ---------------------------------------------------------------------------

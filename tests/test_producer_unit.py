@@ -21,6 +21,7 @@ from mammamiradio.models import (
     StationState,
     Track,
 )
+from mammamiradio.normalizer import save_track_metadata
 from mammamiradio.producer import (
     SHAREWARE_CANNED_LIMIT,
     _pick_canned_clip,
@@ -1944,6 +1945,45 @@ async def test_resume_bridge_falls_back_to_norm_cache_when_no_canned_clips(tmp_p
     assert seg.metadata.get("resume_bridge") is True
     assert seg.metadata.get("audio_source") == "norm_cache"
     assert seg.path == norm_file
+    assert seg.metadata.get("title") == "Abc123"
+    assert seg.metadata.get("artist") == ""
+
+
+@pytest.mark.asyncio
+async def test_resume_bridge_uses_norm_sidecar_metadata_when_available(tmp_path):
+    """Resume bridge should restore title and artist from the norm-cache sidecar."""
+    state = _make_state()
+    state.session_stopped = True
+    config = _make_config()
+    config.cache_dir = tmp_path
+    config.tmp_dir = tmp_path
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+
+    norm_file = tmp_path / "norm_rescue_track_192k.mp3"
+    norm_file.write_bytes(b"pre-normalized audio")
+    save_track_metadata(norm_file, title="Sogno Americano", artist="Artie 5ive")
+
+    with patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=None):
+        task = asyncio.create_task(run_producer(queue, state, config))
+        try:
+            await asyncio.sleep(0.05)
+            state.session_stopped = False
+            deadline = asyncio.get_event_loop().time() + 3.0
+            while queue.empty():
+                if asyncio.get_event_loop().time() > deadline:
+                    raise TimeoutError("Norm-cache resume bridge did not queue a segment")
+                await asyncio.sleep(0.05)
+        finally:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+    seg = queue.get_nowait()
+    assert seg.metadata.get("resume_bridge") is True
+    assert seg.metadata.get("title") == "Sogno Americano"
+    assert seg.metadata.get("artist") == "Artie 5ive"
 
 
 @pytest.mark.asyncio
@@ -2017,6 +2057,45 @@ async def test_idle_bridge_falls_back_to_norm_cache_when_no_canned_clips(tmp_pat
     assert seg.metadata.get("idle_bridge") is True
     assert seg.metadata.get("audio_source") == "norm_cache"
     assert seg.path == norm_file
+    assert seg.metadata.get("title") == "Idle123"
+    assert seg.metadata.get("artist") == ""
+
+
+@pytest.mark.asyncio
+async def test_idle_bridge_uses_norm_sidecar_metadata_when_available(tmp_path):
+    """Idle bridge should restore title and artist from the norm-cache sidecar."""
+    state = _make_state()
+    state.listeners_active = 0
+    config = _make_config()
+    config.cache_dir = tmp_path
+    config.tmp_dir = tmp_path
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+
+    norm_file = tmp_path / "norm_idle_rescue_track_192k.mp3"
+    norm_file.write_bytes(b"pre-normalized idle audio")
+    save_track_metadata(norm_file, title="Musica Leggera", artist="Colapesce Dimartino")
+
+    with patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=None):
+        task = asyncio.create_task(run_producer(queue, state, config))
+        try:
+            await asyncio.sleep(0.15)
+            state.listeners_active = 1
+            deadline = asyncio.get_event_loop().time() + 3.0
+            while queue.empty():
+                if asyncio.get_event_loop().time() > deadline:
+                    raise TimeoutError("Idle norm-cache bridge did not queue a segment")
+                await asyncio.sleep(0.05)
+        finally:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+    seg = queue.get_nowait()
+    assert seg.metadata.get("idle_bridge") is True
+    assert seg.metadata.get("title") == "Musica Leggera"
+    assert seg.metadata.get("artist") == "Colapesce Dimartino"
 
 
 @pytest.mark.asyncio

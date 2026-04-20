@@ -13,7 +13,7 @@ export function generateCommandReference(_ctx: TemplateContext): string {
 
   // Category display order
   const categoryOrder = [
-    'Navigation', 'Reading', 'Interaction', 'Inspection',
+    'Navigation', 'Reading', 'Extraction', 'Interaction', 'Inspection',
     'Visual', 'Snapshot', 'Meta', 'Tabs', 'Server',
   ];
 
@@ -54,6 +54,9 @@ export function generateCommandReference(_ctx: TemplateContext): string {
 export function generateSnapshotFlags(_ctx: TemplateContext): string {
   const lines: string[] = [
     'The snapshot is your primary tool for understanding and interacting with pages.',
+    '`$B` is the browse binary (resolved from `$_ROOT/.claude/skills/gstack/browse/dist/browse` or `~/.claude/skills/gstack/browse/dist/browse`).',
+    '',
+    '**Syntax:** `$B snapshot [flags]`',
     '',
     '```',
   ];
@@ -67,6 +70,12 @@ export function generateSnapshotFlags(_ctx: TemplateContext): string {
   lines.push('');
   lines.push('All flags can be combined freely. `-o` only applies when `-a` is also used.');
   lines.push('Example: `$B snapshot -i -a -C -o /tmp/annotated.png`');
+  lines.push('');
+  lines.push('**Flag details:**');
+  lines.push('- `-d <N>`: depth 0 = root element only, 1 = root + direct children, etc. Default: unlimited. Works with all other flags including `-i`.');
+  lines.push('- `-s <sel>`: any valid CSS selector (`#main`, `.content`, `nav > ul`, `[data-testid="hero"]`). Scopes the tree to that subtree.');
+  lines.push('- `-D`: outputs a unified diff (lines prefixed with `+`/`-`/` `) comparing the current snapshot against the previous one. First call stores the baseline and returns the full tree. Baseline persists across navigations until the next `-D` call resets it.');
+  lines.push('- `-a`: saves an annotated screenshot (PNG) with red overlay boxes and @ref labels drawn on each interactive element. The screenshot is a separate output from the text tree — both are produced when `-a` is used.');
   lines.push('');
   lines.push('**Ref numbering:** @e refs are assigned sequentially (@e1, @e2, ...) in tree order.');
   lines.push('@c refs from `-C` are numbered separately (@c1, @c2, ...).');
@@ -97,7 +106,7 @@ export function generateBrowseSetup(ctx: TemplateContext): string {
 _ROOT=$(git rev-parse --show-toplevel 2>/dev/null)
 B=""
 [ -n "$_ROOT" ] && [ -x "$_ROOT/${ctx.paths.localSkillRoot}/browse/dist/browse" ] && B="$_ROOT/${ctx.paths.localSkillRoot}/browse/dist/browse"
-[ -z "$B" ] && B=${ctx.paths.browseDir}/browse
+[ -z "$B" ] && B="$HOME${ctx.paths.browseDir.replace(/^~/, '')}/browse"
 if [ -x "$B" ]; then
   echo "READY: $B"
 else

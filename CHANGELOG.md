@@ -6,6 +6,25 @@ The current version source of truth is `pyproject.toml`.
 
 ## [Unreleased]
 
+## [2.10.9] - 2026-04-20
+
+Fixes the admin panel regression introduced in v2.10.8 and adds producer bridge metadata improvements.
+
+### Fixed
+
+- **Admin panel broken by v2.10.8 CSP regression** (pacing sliders, skip controls, all interactive elements): `script-src 'self'` blocked the entire inline script block in `admin.html`, and `script-src 'self' 'nonce-{x}'` (attempted intermediate fix) blocked the ~40 inline `onclick`/`oninput`/`onchange` event handlers throughout admin.html — nonces cover `<script>` elements only, not attribute event handlers. Final fix: `script-src 'self' 'unsafe-inline'`, which allows all inline code while still blocking external script sources (CDNs, attacker domains). `esc()` on all five HA fields in admin.html remains the load-bearing XSS defense.
+- **Producer bridge track metadata**: Resume bridge and idle bridge segments now call `load_track_metadata(norm_path)` before humanizing the filename, so `title` and `artist` are populated from the sidecar JSON when available instead of falling back to raw filename stems.
+
+### Security
+
+- CSP on `/admin` now uses `script-src 'self' 'unsafe-inline'`. This blocks external script injection (the operationally relevant threat) while allowing the existing inline code that the admin panel depends on. The rationale — and why nonces alone are insufficient for this HTML structure — is documented in streamer.py.
+
+### Tests
+
+- Updated CSP tests to assert `'unsafe-inline'` and verify the nonce placeholder is absent from rendered HTML (`test_admin_csp_allows_inline`, `test_admin_csp_header_sent_with_unsafe_inline`).
+- Added HTTP-level CSP test (`test_admin_csp_header_sent_with_unsafe_inline`): fires a real `GET /admin` via `httpx.ASGITransport` and asserts the header is actually set on the response.
+- Added producer unit tests for sidecar metadata loading on resume and idle bridge paths (`tests/test_producer_unit.py`).
+
 ## [2.10.8] - 2026-04-19
 
 Security fix: stored XSS in admin panel Engine Room (HA entity state injection + yt-dlp track title injection).
@@ -14,7 +33,7 @@ Security fix: stored XSS in admin panel Engine Room (HA entity state injection +
 
 - **Stored XSS via HA entity state values** (admin.html Engine Room): Five Home Assistant-sourced fields (`mood`, `weather_arc`, `events_summary`, `pending_directive`, `last_event_label`) were rendered via `innerHTML` without HTML escaping. An attacker with write access to any HA entity feeding the admin panel could inject arbitrary HTML/JS that would execute in the authenticated admin session. Fix: all five fields now wrapped with `esc()` (DOM-based escape helper) before `innerHTML` assignment. `esc()` is applied before `.replace(/\n/g,'<br>')` on `events_summary` so the newline replacement operates on already-escaped content.
 - **Stored XSS via yt-dlp track titles** (admin.html Engine Room): When a track is skipped past the repeat threshold, `ha_pending_directive` stores a raw yt-dlp track title. A maliciously named YouTube video could inject HTML/JS via this field. Fix: same `esc()` wrapper in admin.html covers this field. Raw storage in `ha_pending_directive` is intentional — the field feeds LLM prompts, and server-side HTML encoding would corrupt LLM input. Design decision documented in code comment and regression test.
-- **Content-Security-Policy on `/admin`**: The `/admin` route now returns `Content-Security-Policy: script-src 'self'` as defense-in-depth. Blocks inline script execution even if a future `esc()` gap is introduced.
+- **Content-Security-Policy on `/admin`**: The `/admin` route now returns a `Content-Security-Policy` header with a per-request nonce (`script-src 'self' 'nonce-{nonce}'`) as defense-in-depth. Note: initial v2.10.8 used `script-src 'self'` without a nonce, which broke the admin panel by blocking the inline script block — fixed in the next patch.
 
 ### Tests
 

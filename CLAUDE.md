@@ -12,6 +12,33 @@ The listener must always believe they are hearing a real radio station. Dead air
 **2. INSTANT AUDIO**
 A listener who connects must hear sound within 1–2 seconds, every time. No exceptions for cold starts, session resumes, idle wakeups, or addon restarts. Every connect path needs an immediate audio source — pre-normalized track, canned clip, anything. Build the bridge first, fix root causes second.
 
+## Production Systems Discipline — HARD STOP
+
+**Principle: No live surgery on the HA Green.** The only legitimate code-change path for the mammamiradio addon is:
+
+`branch → PR → merge → CI builds image → addon updates to new image`
+
+The restart happens once, planned, when the addon updates. Not during the day. Not as an experiment. Not to "test the fix live."
+
+**NEVER do any of these against the running mammamiradio addon without Florian's explicit confirmation in the current message:**
+
+1. **No live code patching.** `docker cp` into the addon container, `docker exec` with write operations (`sh -c "cat > ..."`, `tee`, `echo >`, `sed -i`, any redirection into a file), editing files inside a running container by any other means. These changes are wiped on the next restart and mask the real state of production.
+2. **No process signals.** `pkill`, `kill`, `killall`, `docker kill`, `docker restart` targeting any process inside the addon. s6-rc in this container does NOT auto-restart killed services reliably — killing a process kills the container, and killing the container kills the stream.
+3. **No addon restarts.** `ha apps restart`, `ha apps stop`, `docker restart addon_*_mammamiradio`, `supervisor restart`. Ask before any of these. Exception: recovery from an already-broken state (container exited, stream already dead) — restoring is correct there, but still announce it first.
+4. **No live config edits.** Writing to `/config/` from a shell, editing `radio.toml` on the Pi, modifying addon options via CLI without going through the HA addon config UI.
+5. **No ad-hoc Docker image changes.** Building, tagging, or pushing addon images from the Pi. Images come from CI only.
+6. **No volume mounts introduced for debugging.** Mounting host paths into the container to sidestep the rebuild chain.
+
+**Legitimate operations (no confirmation needed):**
+- `docker ps`, `docker logs`, `docker exec <container> <read-only command>` (cat, ls, grep, env, ps)
+- `ha apps info`, `ha apps list`, `ha apps logs`
+- `ssh root@100.98.177.107 <read-only inspection>`
+- `ha apps start <slug>` when the addon is already stopped/exited (recovery, not experiment)
+
+**Why this rule exists:** On 2026-04-20, an agent live-patched via `docker cp`, the patches got wiped on addon restart, then the agent killed uvicorn assuming s6 would restart it in place. Container exited. Stream dropped. Leadership principle #1 was violated. The PR with the real fix (#213) was already open — the live patches were theater. This rule closes the loophole between "don't restart HA core" and "don't experiment on the running addon."
+
+**When a fix is urgent:** the fastest legitimate path is usually merge → wait ~5-10min for CI → update addon. This is faster than the live-surgery path turned out to be, and it leaves a permanent fix in place instead of an ephemeral one. The legitimate path also preserves the illusion — one planned restart beats three unplanned drops.
+
 ## Docs
 
 - `README.md` - product overview and operator quick start

@@ -49,6 +49,8 @@ from mammamiradio.normalizer import (
     generate_silence,
     generate_station_id_bed,
     generate_tone,
+    humanize_norm_filename,
+    load_track_metadata,
     mix_oneshot_sfx,
     mix_quiet_bleed,
     mix_voice_with_sting,
@@ -662,13 +664,14 @@ async def run_producer(
                     if norm_files:
                         norm_path = norm_files[0]
                         logger.info("Resume bridge: seeding pre-normalized track %s", norm_path.name)
+                        _meta = load_track_metadata(norm_path) or {}
                         await _queue_segment(
                             Segment(
                                 type=SegmentType.MUSIC,
                                 path=norm_path,
                                 metadata={
-                                    "title": norm_path.stem,
-                                    "artist": "",
+                                    "title": _meta.get("title") or humanize_norm_filename(norm_path.name),
+                                    "artist": _meta.get("artist", ""),
                                     "resume_bridge": True,
                                     "audio_source": "norm_cache",
                                 },
@@ -708,13 +711,14 @@ async def run_producer(
                     if norm_files:
                         norm_path = norm_files[0]
                         logger.info("Idle bridge: seeding pre-normalized track %s", norm_path.name)
+                        _meta = load_track_metadata(norm_path) or {}
                         await _queue_segment(
                             Segment(
                                 type=SegmentType.MUSIC,
                                 path=norm_path,
                                 metadata={
-                                    "title": norm_path.stem,
-                                    "artist": "",
+                                    "title": _meta.get("title") or humanize_norm_filename(norm_path.name),
+                                    "artist": _meta.get("artist", ""),
                                     "idle_bridge": True,
                                     "audio_source": "norm_cache",
                                 },
