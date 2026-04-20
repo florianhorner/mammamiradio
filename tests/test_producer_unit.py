@@ -21,12 +21,12 @@ from mammamiradio.models import (
     StationState,
     Track,
 )
+from mammamiradio.normalizer import save_track_metadata
 from mammamiradio.producer import (
     SHAREWARE_CANNED_LIMIT,
     _pick_canned_clip,
     run_producer,
 )
-from mammamiradio.normalizer import save_track_metadata
 from mammamiradio.scriptwriter import ListenerRequestCommit
 
 TOML_PATH = str(Path(__file__).parent.parent / "radio.toml")
