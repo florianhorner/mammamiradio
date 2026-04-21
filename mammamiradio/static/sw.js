@@ -1,5 +1,5 @@
 // Service Worker for Mamma Mi Radio PWA
-const CACHE_NAME = 'radio-itali-v1';
+const CACHE_NAME = 'radio-itali-v2';
 const PRECACHE_URLS = [
   '/listen',
   '/static/manifest.json',

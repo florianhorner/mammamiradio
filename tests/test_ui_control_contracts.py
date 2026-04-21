@@ -694,14 +694,22 @@ class TestStoppedStateQuietsTheUI:
         )
 
     def test_dashboard_html_toggles_data_stopped_on_body(self):
-        html_path = Path(__file__).parent.parent / "mammamiradio" / "dashboard.html"
-        html = html_path.read_text()
+        # Inline CSS and JS were extracted to mammamiradio/static/{styles,script}.js
+        # in the dashboard refactor (PR #203). Read all three files so the
+        # invariant still fires if the stopped-state feature gets stripped
+        # silently during future extractions.
+        base = Path(__file__).parent.parent / "mammamiradio"
+        html = (
+            (base / "dashboard.html").read_text()
+            + (base / "static" / "styles.css").read_text()
+            + (base / "static" / "script.js").read_text()
+        )
         assert "setAttribute('data-stopped'" in html, (
-            "dashboard.html _updateStoppedState must flip `data-stopped` on "
+            "dashboard _updateStoppedState must flip `data-stopped` on "
             "<body> so the waveform and live-dot freeze together (Item 19)."
         )
         assert 'body[data-stopped="true"] .waveform .wb' in html, (
-            "dashboard.html must pause the waveform under stopped state."
+            "dashboard must pause the waveform under stopped state."
         )
 
     def test_listener_html_toggles_data_stopped_on_body(self):

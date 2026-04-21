@@ -330,6 +330,7 @@ def _inject_ingress_prefix(html: str, prefix: str) -> str:
     # paths without _base. NEVER rewrite single-quoted JS strings that use _base
     # (e.g. _base + '/api/hosts') — that causes double-prefixing.
     html = html.replace('href="/static/', f'href="{prefix}/static/')
+    html = html.replace('src="/static/', f'src="{prefix}/static/')
     html = html.replace('href="/listen"', f'href="{prefix}/listen"')
     html = html.replace('href="/dashboard"', f'href="{prefix}/dashboard"')
     html = html.replace('href="/admin"', f'href="{prefix}/admin"')
