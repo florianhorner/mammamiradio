@@ -233,6 +233,24 @@ tagline = "Intestix. Perché la salute inizia dove non si parla a cena."
 category = "pharma"
 recurring = false
 
+[[ads.brands]]
+name = "Negroni as a Service"
+tagline = "NaaS. Sempre in cloud, mai nel bicchiere."
+category = "tech"
+recurring = true
+[ads.brands.campaign]
+premise = "A startup delivering negroni cocktails via cloud infrastructure, but the drinks never actually arrive"
+sonic_signature = "ice_clink+startup_synth"
+format_pool = ["classic_pitch", "institutional_psa", "live_remote"]
+spokesperson = "hammer"
+escalation_rule = "Each ad reveals a worse subscription tier or a more absurd cloud-computing metaphor"
+
+[[ads.brands]]
+name = "Mausoleo Berlusconi"
+tagline = "Le donne in gonna entrano gratis. I bambini pagano doppio."
+category = "tourism"
+recurring = false
+
 [[ads.voices]]
 name = "Roberto"
 voice = "it-IT-DiegoNeural"
