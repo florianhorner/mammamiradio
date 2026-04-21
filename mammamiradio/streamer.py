@@ -616,6 +616,61 @@ def require_admin_access(
     )
 
 
+_MPEG1_L3_BITRATES_KBPS = (0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320)
+_MPEG1_SAMPLE_RATES = (44100, 48000, 32000)
+
+
+def _skip_id3_and_xing_header(f) -> None:
+    """Advance the file pointer past any leading ID3v2 tag and Xing/Info metadata frame.
+
+    Safari's ``<audio>`` element honors the Xing/Info duration header of each
+    concatenated segment as end-of-track, causing short segments (banter ~9 s,
+    news flash ~6 s) to fire ``ended`` at the declared duration instead of
+    playing through the ongoing stream. Long music segments (180 s+) don't
+    trip this because the listener tops up buffered bytes before the counter
+    expires. Stripping the tag on every segment makes the stream look like a
+    continuous ICECast feed, which all browsers handle correctly.
+
+    The helper is defensive: any unexpected header shape rewinds to the start,
+    so the worst case is "did nothing" rather than "cut a real audio frame".
+    """
+    header = f.read(10)
+    if len(header) == 10 and header[:3] == b"ID3":
+        size = ((header[6] & 0x7F) << 21) | ((header[7] & 0x7F) << 14) | ((header[8] & 0x7F) << 7) | (header[9] & 0x7F)
+        f.seek(10 + size)
+    else:
+        f.seek(0)
+
+    frame_start = f.tell()
+    frame_header = f.read(4)
+    if len(frame_header) < 4 or frame_header[0] != 0xFF or (frame_header[1] & 0xE0) != 0xE0:
+        f.seek(frame_start)
+        return
+
+    version = (frame_header[1] >> 3) & 0x03
+    layer = (frame_header[1] >> 1) & 0x03
+    bitrate_idx = (frame_header[2] >> 4) & 0x0F
+    sample_rate_idx = (frame_header[2] >> 2) & 0x03
+    padding = (frame_header[2] >> 1) & 0x01
+    channel_mode = (frame_header[3] >> 6) & 0x03
+
+    if version != 3 or layer != 1 or bitrate_idx in (0, 0x0F) or sample_rate_idx == 3:
+        f.seek(frame_start)
+        return
+
+    bitrate_kbps = _MPEG1_L3_BITRATES_KBPS[bitrate_idx]
+    sample_rate = _MPEG1_SAMPLE_RATES[sample_rate_idx]
+    frame_length = (144 * bitrate_kbps * 1000 // sample_rate) + padding
+
+    magic_offset = 21 if channel_mode == 3 else 36
+    f.seek(frame_start + magic_offset)
+    magic = f.read(4)
+    if magic in (b"Xing", b"Info"):
+        f.seek(frame_start + frame_length)
+    else:
+        f.seek(frame_start)
+
+
 async def run_playback_loop(app) -> None:
     """Play queued segments on a single station timeline and fan out audio chunks."""
     chunk_size = 4096
@@ -770,6 +825,7 @@ async def run_playback_loop(app) -> None:
             was_skipped = False
             skip_event.clear()
             with open(segment.path, "rb") as f:
+                _skip_id3_and_xing_header(f)
                 while chunk := f.read(chunk_size):
                     if skip_event.is_set():
                         logger.info("Skipping current segment")
