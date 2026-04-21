@@ -126,15 +126,117 @@ This IS dark mode. There is no light mode. Both listener and admin pages use thi
 
 ## Motion
 
-### Waveform
-36 golden bars bouncing independently. Each bar has randomized duration (0.45–1.3s) and delay (0–0.7s). The lack of sync is what makes it organic.
+### Waveform — canonical, two variants, four states
+
+Golden bars bouncing independently. Each bar has randomized target height, duration, and delay. The lack of sync is what makes it organic. **One component, two variants, four states. Used in all surfaces.** (Before consolidation there were four divergent waveforms across listener, dashboard, admin sidebar, and admin now-playing. This spec replaces all of them.)
+
+**Variants:**
+- `.waveform.hero` — large and dramatic. Used for the "tuning in / waiting for a listener" moment. Rounded pill bars (`border-radius: 999px`), 4px wide, 56px tall, breathes with height + opacity together.
+- `.waveform.strip` — compact and unobtrusive. Used in now-playing strips during playback. Rectangular bars (`border-radius: 2px`), 3px wide, 24px tall.
+
+**States (driven by classes / attrs):**
+- **tuning / default** — active animation. Hero variant uses this on page load before first audio event.
+- **playing** — same animation, strip variant swap. JS switches variant when `firstDataReceived` fires.
+- **`.paused`** — `animation-play-state: paused`. Frozen mid-pose. Triggered by `togglePlay()` / `pause`.
+- **`body[data-stopped="true"]`** — frozen AND faded to 40% opacity. Triggered by `session_stopped`; quiets the whole page while the operator has paused the station.
+
+**CSS (lives in `static/base.css`):**
+
 ```css
-.waveform { display: flex; align-items: center; gap: 3px; height: 28px; }
-.wb { width: 3px; border-radius: 2px; background: rgba(240,200,64,0.4);
-      animation: wv var(--d) ease-in-out infinite alternate; animation-delay: var(--dl); }
-@keyframes wv { from { height: 3px; } to { height: var(--h); } }
+.waveform {
+  display: flex;
+  align-items: flex-end;
+  transition: opacity 0.3s ease;
+}
+.waveform-bar {
+  background: var(--sun);
+  animation: waveform-pulse var(--d, 0.8s) ease-in-out infinite alternate;
+  animation-delay: var(--dl, 0s);
+}
+
+.waveform.hero {
+  gap: 6px;
+  height: 56px;
+}
+.waveform.hero .waveform-bar {
+  width: 4px;
+  border-radius: 999px;
+  opacity: 0.42;
+}
+
+.waveform.strip {
+  gap: 3px;
+  height: 24px;
+  align-items: center;
+}
+.waveform.strip .waveform-bar {
+  width: 3px;
+  border-radius: 2px;
+  opacity: 0.45;
+}
+
+.waveform.paused .waveform-bar,
+body[data-stopped="true"] .waveform .waveform-bar {
+  animation-play-state: paused;
+}
+body[data-stopped="true"] .waveform { opacity: 0.4; }
+
+@keyframes waveform-pulse {
+  from { height: 4px;  opacity: 0.35; }
+  to   { height: var(--h, 24px); opacity: 0.92; }
+}
 ```
-Add `.paused` class when not playing: `.waveform.paused .wb { animation-play-state: paused; }`
+
+**JS (lives in `static/waveform.js`) — initializer + state toggle:**
+
+```js
+// Usage:
+//   <div class="waveform" data-variant="hero"></div>
+//   initWaveform(el)  // fills with 24 or 36 bars depending on variant
+function initWaveform(el) {
+  const variant = el.dataset.variant === 'hero' ? 'hero' : 'strip';
+  el.classList.add('waveform', variant);
+  const barCount = variant === 'hero' ? 24 : 36;
+  const maxHeight = variant === 'hero' ? 56 : 22;
+  for (let i = 0; i < barCount; i++) {
+    const bar = document.createElement('div');
+    bar.className = 'waveform-bar';
+    const h = 6 + Math.random() * (maxHeight - 6);
+    const d = (0.45 + Math.random() * 0.85).toFixed(2);
+    const dl = (Math.random() * 0.7).toFixed(2);
+    bar.style.setProperty('--h', h + 'px');
+    bar.style.setProperty('--d', d + 's');
+    bar.style.setProperty('--dl', dl + 's');
+    el.appendChild(bar);
+  }
+}
+
+function setWaveformPaused(el, paused) {
+  el.classList.toggle('paused', paused);
+}
+
+function setWaveformVariant(el, variant) {
+  el.classList.remove('hero', 'strip');
+  el.classList.add(variant);
+  el.dataset.variant = variant;
+  // Re-init for correct bar count + height
+  el.innerHTML = '';
+  initWaveform(el);
+}
+
+// Auto-init on DOMContentLoaded
+document.addEventListener('DOMContentLoaded', () => {
+  document.querySelectorAll('.waveform:empty').forEach(initWaveform);
+});
+```
+
+**Per-surface use:**
+- Listener hero (`/`, first-load tuning-in): `<div class="waveform" data-variant="hero"></div>`
+- Listener now-playing strip (after first audio): swap to `strip` via `setWaveformVariant`
+- Admin sidebar "waiting for a listener" mini-slot: `data-variant="hero"` (dramatic but small surface — relies on height cap via sidebar container)
+- Admin now-playing strip: `data-variant="strip"`
+
+**Migration note:** deletes `.launch-waveform`, `.equalizer`, `.sw-bar` / `.sidebar-waveform`, `.pw-bar`, and the legacy `.wb` class. All per-surface waveforms collapse into this one component.
 
 ### Ticker scroll
 32 seconds for full loop. Slow, ambient, hypnotic. Playfair Display italic text.
@@ -215,20 +317,148 @@ Golden with three-layer glow. Blue when playing.
 }
 ```
 
-### Status badges
-Always pair color with shape icon. Color alone is never sufficient.
+### Status system — canonical, 5 states × 3 visual forms
+
+**One status system. Five states. Three visual forms.** Every state declaration pairs color with a unique SHAPE — color alone is never sufficient. Red-green colorblindness rules: `--ok` is blue, never green; `--warning` is amber, not orange; `--error` is red with ✗ shape.
+
+Lives in `static/base.css`. Replaces the ad-hoc Engine Room green-button-vs-blue-check inconsistency, the admin sidebar `.pipeline-dot` class family, and any per-surface status chips.
+
+**The 5 states:**
+
+| State | Color | Shape | Meaning |
+|-------|-------|-------|---------|
+| `ready` | `--ok` (blue #2563EB) | ✓ | Active and healthy. Default "working correctly." |
+| `working` | `--sun` (gold) | pulsing ● | Transient busy state (banter generating, track downloading). Not a long-term display. |
+| `degraded` | `--warning` (amber) | △ | **Operator-honesty case (v2.10.6).** Functioning, but on fallback. "Anthropic key configured, auth suspended, OpenAI taking calls." |
+| `blocked` | `--error` (red) | ✗ | Failed. Not functioning. Needs attention. |
+| `idle` | `--muted` (gray) | ○ | Not running, not failed. Waiting or off. |
+
+**Rationale for the 5:** Before this spec, the project's status UI conflated "ready" and "degraded" (green button showing ready while fallback was active was the operator-dishonest case that Florian flagged twice). A "degraded" state distinct from "ready" makes the operator-honesty principle mechanically visible: if the UI says ✓, the thing is actually ready. If it's on fallback, you see △.
+
+**The 3 visual forms (same states, different density):**
+
+1. **`.status-chip`** — full chip with label. Used in Engine Room rows, admin card headers. ~10-12px label, rounded pill, bordered.
+2. **`.status-dot`** — compact pill with icon + short label. Used in admin sidebar pipeline status, header chips. ~9-10px label.
+3. **`.status-inline`** — icon only, no pill. Used inline next to text (queue-source tags, log entries).
+
+**CSS:**
+
 ```css
-.badge { padding: 4px 12px; border-radius: 20px; font-size: 10px; font-weight: 700;
-         letter-spacing: 0.12em; text-transform: uppercase; }
-.badge-ok { background: rgba(37,99,235,0.12); border: 1px solid rgba(37,99,235,0.3);
-            color: var(--ok); } /* prefix: ✓ */
-.badge-live { background: rgba(236,204,48,0.12); border: 1px solid rgba(236,204,48,0.3);
-              color: var(--sun2); } /* prefix: pulsing dot */
-.badge-warn { background: rgba(217,119,6,0.12); border: 1px solid rgba(217,119,6,0.3);
-              color: var(--warning); } /* prefix: △ */
-.badge-err { background: rgba(196,74,74,0.12); border: 1px solid rgba(196,74,74,0.3);
-             color: var(--error); } /* prefix: ✗ */
+/* Base (shared across all three forms) */
+.status-chip, .status-dot {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 4px 10px;
+  border-radius: 20px;
+  border: 1px solid currentColor;
+  background: color-mix(in srgb, currentColor 8%, transparent);
+}
+.status-chip { font-size: 10px; }
+.status-dot  { font-size: 9px; padding: 3px 8px; }
+
+.status-chip::before {
+  font-weight: 700;
+  font-size: 0.95em;
+  line-height: 1;
+}
+.status-dot > .dot {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: currentColor;
+  display: inline-block;
+}
+.status-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.9em;
+}
+.status-inline::before { font-weight: 700; }
+
+/* State: ready */
+.status-chip.ready,
+.status-dot.ready,
+.status-inline.ready       { color: var(--ok); }
+.status-chip.ready::before,
+.status-inline.ready::before { content: "\2713"; }       /* ✓ */
+
+/* State: working */
+.status-chip.working,
+.status-dot.working,
+.status-inline.working     { color: var(--sun); }
+.status-chip.working::before,
+.status-inline.working::before { content: "\25CF"; animation: status-pulse 1.4s ease-in-out infinite; } /* ● */
+.status-dot.working > .dot   { animation: status-pulse 1.4s ease-in-out infinite; }
+
+/* State: degraded (operator-honesty fallback) */
+.status-chip.degraded,
+.status-dot.degraded,
+.status-inline.degraded    { color: var(--warning); }
+.status-chip.degraded::before,
+.status-inline.degraded::before { content: "\25B3"; }    /* △ */
+.status-dot.degraded > .dot { border-radius: 0; width: 0; height: 0;
+  border-left: 4px solid transparent; border-right: 4px solid transparent;
+  border-bottom: 7px solid currentColor; background: transparent; }
+
+/* State: blocked */
+.status-chip.blocked,
+.status-dot.blocked,
+.status-inline.blocked     { color: var(--error); }
+.status-chip.blocked::before,
+.status-inline.blocked::before { content: "\2717"; }     /* ✗ */
+
+/* State: idle */
+.status-chip.idle,
+.status-dot.idle,
+.status-inline.idle        { color: var(--muted); }
+.status-chip.idle::before,
+.status-inline.idle::before { content: "\25CB"; }        /* ○ */
+
+@keyframes status-pulse {
+  0%, 100% { opacity: 0.4; }
+  50%      { opacity: 1; }
+}
 ```
+
+**Usage examples:**
+
+```html
+<!-- Engine Room row -->
+<span class="status-chip ready">AI Writing</span>
+<span class="status-chip ready">Music Sources</span>
+<span class="status-chip degraded">AI Fallback</span>
+<span class="status-chip blocked">HA Disconnected</span>
+
+<!-- Admin sidebar pipeline -->
+<span class="status-dot ready"><span class="dot"></span>AI</span>
+<span class="status-dot degraded"><span class="dot"></span>AI Fallback</span>
+<span class="status-dot idle"><span class="dot"></span>HA</span>
+
+<!-- Inline (queue log) -->
+<li>Banter generated <span class="status-inline ready">ok</span></li>
+<li>Ad generation <span class="status-inline working">running</span></li>
+```
+
+**Accessibility:**
+- Every status element MUST carry `aria-label="status: <state>"` for screen readers — color+shape is for sighted users, aria-label is for the rest.
+- `.status-chip.working` animation respects `prefers-reduced-motion`; pulse disables, color+shape communicates the state.
+
+**Migration map — what gets replaced when we implement:**
+
+| Current | → | New |
+|---------|---|-----|
+| Engine Room "AI writing ready" green button | → | `.status-chip.ready AI Writing` |
+| Engine Room "Music Sources ready" blue+check | → | `.status-chip.ready Music Sources` |
+| Admin `.pipeline-dot .dot.ok` (current: `#2563EB`) | → | `.status-dot.ready` |
+| Admin `.pipeline-dot .dot.warn` with `▲` | → | `.status-dot.degraded` |
+| Admin `.pipeline-dot .tri` + "No AI" | → | `.status-dot.blocked No AI` or `.status-dot.idle AI Off` |
+| `.badge-ok / .badge-live / .badge-warn / .badge-err` (legacy) | → | `.status-chip.ready / .working / .degraded / .blocked` |
+| Ad-hoc `<span class="dot ok">` colored circles | → | `.status-inline.<state>` |
+
+The legacy `.badge-*` classes stay temporarily as aliases to the new `.status-chip.<state>` during migration. After migration completes, delete the `.badge-*` classes.
 
 ### Inputs
 Dark interior, cream text, golden focus ring.
@@ -251,6 +481,75 @@ Dark interior, cream text, golden focus ring.
   /* or: color: var(--muted);  for structural labels */
 }
 ```
+
+## Listener site composition — canonical
+
+The listener surface (served at `/` and `/listen`) is a radio station website, not a player widget. Five-band vertical composition, designed for desktop first (1440px), scales down gracefully. Reference wireframe: `.context/designs/unified-player-20260421/site-v1.html` (approved 2026-04-21).
+
+**Ordering is normative. Each band can be edited independently, but the order and presence of all five cannot.**
+
+### 1. Tricolor + Nav
+- 3px tricolor band flush to page top (green `#009246` / cream `rgba(255,255,255,0.9)` / red `#CE2B37`, equal thirds).
+- Sticky nav below: `backdrop-filter: blur(12px)` on `rgba(20,17,15,0.85)` background, 1px bottom border in `--line`.
+- Layout: `[logo + station name] [center nav links] [primary CTA pill]`.
+- Logo: 38px gold gradient circle with italic "M" + Lancia-red "i", paired with `<h1>Mamma <span class="mi">Mi</span> Radio</h1>` in Playfair italic 24pt.
+- Nav links: "In Onda / Palinsesto / Dediche / About" in Outfit 13pt, active state `--sun`.
+- CTA: golden pill "Ascolta Ora" with chevron. Distinct from the small play button in the now-playing strip — this is the invitation to restart, that is playback control.
+
+### 2. Now-playing strip (persistent band below nav)
+- Layout: `[ON AIR chip] [track · artist] [progress bar with time codes] [prev/play/next controls]`.
+- ON AIR chip: Lancia red background, cream dot, uppercase letter-spaced "On Air" label.
+- Track in Playfair italic 16pt, artist in Outfit 13pt muted.
+- Progress bar: 3px track in `rgba(245,237,216,0.12)`, fill in `--sun`, time codes in JetBrains Mono 11pt.
+- Play button: 36px gold pill matching `.play-btn` spec.
+- Persistent — same strip, same state, same position on every listener page.
+
+### 3. Hero (2-column grid)
+- Grid: `1.1fr 1fr`, min-height 540px. No padding between columns; the two sides meet edge-to-edge.
+- **Left column** (copy): padding `72px 32px 72px 64px`. Vertical stack:
+  1. Eyebrow kicker "In Diretta · 96,7 FM · Milano" — Outfit 11pt uppercase letter-spaced `0.28em`, gold, with a 32px gold rule prefix.
+  2. Headline in Playfair Display italic, `font-size: 72px; line-height: 0.98`. Color-accented word pattern: `<span class="accent">italiana</span>` in `--sun`. The accent-word doubles as a brand signature parallel to Gold-Mi.
+  3. Subcopy in Playfair italic 17pt, 48ch max-width, `rgba(245,237,216,0.65)`.
+  4. Action pair: primary golden pill "Ascolta Ora" + ghost border "Il Palinsesto".
+  5. Stats row (3 cells): Playfair italic 28pt number + Outfit 10pt uppercase letter-spaced label. Separated from above by a `--line` top border with 24px padding.
+- **Right column** (image + widget): aspect-filled hero image. Until AI scene is available, sepia-warm gradient placeholder. Edge-gradient mask to `--bg` on both sides so the image reads as inset, not edge-to-edge.
+- **Dial widget overlay**: absolutely positioned bottom-right, 28px inset from corner, 340px wide. Compact version of the FM tuning dial — frequency readout, signal bars, band with needle locked at 96.7. On first-page-load does the tuning-in animation; after signal-lock settles to static ambient state. Radio metaphor preserved without dominating.
+
+### 4. Palinsesto
+- Section head: "Stasera in Onda" in Playfair italic 34pt + right-aligned dateline in Outfit 12pt uppercase.
+- Bottom border on section head in `--line` with 18px padding.
+- Grid: `1.2fr 1fr 1fr 1fr` — 4 slot cards, first cell wider to emphasize the NOW slot.
+- Each slot card:
+  - Background `--surface`, border `--line`, `border-top: 1px solid rgba(245,237,216,0.14)`, 12px rounded.
+  - `.slot.now` variant: `border-top: 2px solid var(--sun2)`, subtle gold wash gradient top-to-surface, gold glow box-shadow.
+  - Content vertical stack:
+    1. Time range + optional `<span class="live">` badge (Lancia background when NOW).
+    2. Kind label — 9pt uppercase letter-spaced: `Musica` / `Banter` / `Sponsored` / `News` / `Jingle`.
+    3. Title — Playfair italic 22pt.
+    4. Host/byline — Outfit 12pt `--text-secondary`, with `·` dot separator between entries.
+- Source of truth: the producer queue (`/status` upcoming array). Real data from the stream, rendered in the role-play frame.
+
+### 5. Dediche & Saluti
+- Section head: "Dediche & Saluti" Playfair italic 34pt + right-aligned "Dai nostri ascoltatori" Outfit 12pt uppercase.
+- Grid: `1.6fr 1fr` — quote stack on left, form sidecar on right.
+- **Pull-quote card** (stack):
+  - Background `--surface`, 14px rounded, 32x36 padding, `--line` border.
+  - Large Playfair italic quote glyph `"` absolutely positioned top-left, 84pt gold at 30% opacity.
+  - Quote text: Playfair italic 20pt, tight leading 1.5.
+  - First letter dropcap: Playfair 900 italic 68pt, Lancia red, float-left with margin adjustment.
+  - Meta line (bottom, above a `--line` top border): `<strong>Name</strong>` (gold uppercase letter-spaced) · city · "letta in onda alle HH:MM" · right-aligned date in JetBrains Mono.
+- **Form sidecar**:
+  - Same surface treatment as pull-quote but with `border-top: 2px solid var(--sun2)` accent.
+  - Stack: eyebrow "Manda un Saluto" + Playfair italic title "La tua voce, in diretta." + Outfit 14pt description + name input + message textarea + golden "Manda al DJ ▶" submit.
+- Closes the loop: listener submits a message → host reads it on-air → it appears in this section with the "letta in onda alle HH:MM" annotation. This is the operator-honesty payoff on the listener side (what you said got heard, and here is the time).
+
+### 6. Ticker + 7. Footer
+- Ticker: already specified in Motion section. Italian local color scroll.
+- Footer: 28px padding 64px horizontal, three cells: left "Mamma Mi Radio · 96,7 FM Milano · dal 1987" · center mini tricolor 90px wide 3px tall · right "Produced by AI · written in Italia". Outfit 12pt, 40% opacity cream.
+
+### Accent-word pattern (reusable)
+
+The Gold-Mi rule extends. Any Playfair italic heading of 28pt+ may use a single accent-word in `--sun` for brand signature. Examples: `La notte è <span class="accent">italiana</span>`, `L'anima <span class="accent">della vera Italia</span>`. One accent-word per heading, always the emotional anchor of the phrase, always `--sun` (or `--lancia` if the phrase warrants physical-instrument energy — rare, use sparingly). Never more than one accent word per heading.
 
 ## Rules and anti-patterns
 
@@ -303,3 +602,7 @@ cairosvg mammamiradio/logo.svg -o ha-addon/mammamiradio/logo.png -W 512 -H 512
 | 2026-04-11 | Replaced Inter with Outfit for body | Inter is overused and generic. Outfit is warmer, more geometric, with enough personality for an Italian radio station |
 | 2026-04-11 | Added JetBrains Mono for technical readouts | Timestamps, bitrates, queue depth, diagnostics. Clear signal that this data is for the operator. |
 | 2026-04-11 | Reviewed by Codex (GPT-5.4) and Claude subagent | Both independently converged on the same core direction: warm dark, serif display, unified palette. Codex proposed Fraunces, subagent proposed Cormorant Garamond. User chose to keep Playfair. |
+| 2026-04-21 | Waveform spec formalized: one component, two variants (hero / strip), four states (tuning / playing / paused / stopped) | Before: four divergent waveform implementations across listener, dashboard, admin sidebar, admin now-playing. Consolidation dictated by `/design-consultation` during the three-surfaces-to-two migration. |
+| 2026-04-21 | Status system formalized: 5 states × 3 visual forms with color + shape pair per state | Engine Room "AI ready = green button" while Anthropic auth was suspended was the operator-dishonest lie flagged in live tests. `degraded` state (amber △) now exists as a first-class state. |
+| 2026-04-21 | Listener surface re-scoped from "player widget" to "radio station website" | Perplexity-generated Italian-radio mockups (Sole / Bella Italia / Notturno) made visible that "cohesive, not disjointed" means the full website: nav + persistent now-playing strip + hero with image + palinsesto + dediche. Florian approved `site-v1.html` direction. Role-play schedule ("Stasera in Onda") + magazine pull-quote Dediche pattern are net-new sections. |
+| 2026-04-21 | Accent-word pattern extends Gold-Mi | One italic accent-word per Playfair heading, always in `--sun`, always the emotional anchor. Extends the brand signature from the station name to every major heading. Confirmed by Perplexity Bella Italia variant ("*della vera Italia*" pattern). |
