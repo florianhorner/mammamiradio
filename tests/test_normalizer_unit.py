@@ -165,6 +165,44 @@ def test_normalize_without_loudnorm_uses_fast_filter(mock_subprocess):
     audio_filter = cmd[filter_idx + 1]
     assert "silenceremove" in audio_filter
     assert "loudnorm" not in audio_filter
+    # Fast path = intermediate TTS lines for dialogue assembly. A per-line
+    # fade-in would produce choppy speech; it belongs only on final output.
+    assert "afade" not in audio_filter
+
+
+def test_normalize_applies_fade_in_on_final_output(mock_subprocess):
+    """Every final-output segment carries a soft fade-in so music→voice
+    hand-offs aren't hard cuts. Florian flagged the drop as audible during
+    a 2026-04-21 listening session; this test guards against regression.
+    """
+    mock_run, _ = mock_subprocess
+    inp = Path("/tmp/in.mp3")
+    out = Path("/tmp/out.mp3")
+
+    normalize(inp, out, loudnorm=True)
+
+    cmd = mock_run.call_args[0][0]
+    filter_idx = cmd.index("-filter:a")
+    audio_filter = cmd[filter_idx + 1]
+    assert "afade=t=in:d=0.25" in audio_filter
+    # Fade must come after silence trim, otherwise it fades into silence.
+    assert audio_filter.index("silenceremove") < audio_filter.index("afade=t=in")
+
+
+def test_normalize_music_eq_also_gets_fade_in(mock_subprocess):
+    """music_eq=True (yt-dlp tracks) goes through the same final-output
+    pipeline and also needs a soft entry."""
+    mock_run, _ = mock_subprocess
+    inp = Path("/tmp/song.mp3")
+    out = Path("/tmp/song_norm.mp3")
+
+    normalize(inp, out, loudnorm=True, music_eq=True)
+
+    cmd = mock_run.call_args[0][0]
+    filter_idx = cmd.index("-filter:a")
+    audio_filter = cmd[filter_idx + 1]
+    assert "afade=t=in:d=0.25" in audio_filter
+    assert "highpass" in audio_filter  # music EQ still applied first
 
 
 def test_normalize_addon_uses_dynaudnorm(mock_subprocess):
