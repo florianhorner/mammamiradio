@@ -15,7 +15,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 
 from mammamiradio.capabilities import capabilities_to_dict, get_capabilities
@@ -37,8 +37,6 @@ security = HTTPBasic(auto_error=False)
 
 _PKG_DIR = Path(__file__).parent
 _STATIC_DIR = _PKG_DIR / "static"
-
-_DASHBOARD_HTML = _PKG_DIR.joinpath("dashboard.html").read_text()
 
 _LISTENER_HTML = _PKG_DIR.joinpath("listener.html").read_text()
 
@@ -916,13 +914,11 @@ async def listener_home(request: Request):
     return _get_injected_html("listener", _LISTENER_HTML, prefix)
 
 
-@router.get("/dashboard", response_class=HTMLResponse, dependencies=[Depends(require_admin_access)])
+@router.get("/dashboard", response_class=RedirectResponse, dependencies=[Depends(require_admin_access)])
 async def dashboard(request: Request):
-    """Serve the authenticated control-plane dashboard."""
+    """Redirect legacy dashboard traffic to the admin control room."""
     prefix = request.headers.get("X-Ingress-Path", "")
-    html = _get_injected_html("dashboard", _DASHBOARD_HTML, prefix)
-    html = _inject_csrf_token(html, _get_csrf_token(request.app))
-    return html
+    return RedirectResponse(url=f"{prefix}/admin", status_code=301)
 
 
 @router.get("/admin", response_class=HTMLResponse, dependencies=[Depends(require_admin_access)])
