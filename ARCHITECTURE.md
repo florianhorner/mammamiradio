@@ -184,7 +184,7 @@ This is opportunistic context, not a hard dependency. Failures there should not 
 | `/` | GET | Public | Listener page. Over trusted HA ingress the admin panel is served instead. |
 | `/listen` | GET | Public | Alias of `/` for backwards compatibility |
 | `/admin` | GET | Admin | Admin control room panel |
-| `/dashboard` | GET | Admin | Authenticated dashboard |
+| `/dashboard` | GET | Admin | 301 redirect to `/admin` (legacy) |
 | `/sw.js` | GET | Public | PWA service worker |
 | `/static/{filename:path}` | GET | Public | PWA static assets (manifest, icons) |
 | `/stream` | GET | Public | Infinite MP3 stream |

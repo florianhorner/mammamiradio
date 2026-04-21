@@ -60,7 +60,6 @@ Useful URLs:
 - `http://127.0.0.1:8000/` — listener page for public callers; flips to the admin control room when the request carries a trusted HA ingress header
 - `http://127.0.0.1:8000/listen` — explicit listener alias (always the public UI)
 - `http://127.0.0.1:8000/admin` — admin control room (guarded by `require_admin_access`: loopback, private network including HA Supervisor ingress, admin token, or basic auth)
-- `http://127.0.0.1:8000/dashboard` — authenticated dashboard, same auth rules as `/admin`
 - `http://127.0.0.1:8000/stream` — infinite MP3 stream
 - `http://127.0.0.1:8000/public-status` — public JSON
 - `http://127.0.0.1:8000/status` — admin JSON

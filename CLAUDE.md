@@ -134,7 +134,6 @@ mammamiradio/
   track_rules.py      Per-track personality rules flagged via /api/track-rules
   audio_quality.py    Audio quality gate: duration and silence checks before segments reach the queue
   setup_status.py     Legacy setup status classification (kept for /status endpoint compat)
-  dashboard.html      Authenticated dashboard served at /dashboard
   admin.html          Admin control room panel served at /admin (and at / over HA ingress)
   listener.html       Listener page served at / and /listen
   demo_assets/        Demo asset tree: sfx/studio/ SFX are committed; banter/ads/music/jingles/welcome are empty placeholders pending the demo-asset contract
@@ -161,7 +160,7 @@ Do not deviate without explicit user approval. In QA mode, flag any code that do
   - Text: cream (`#F5EDD8`)
   - Success/connected: blue (`#2563EB`) — never green (colorblind)
 - **Typography**: Playfair Display italic (station name, display text) + Outfit (body) + JetBrains Mono (technical)
-- **Favicon**: inline SVG data URI in `dashboard.html` and `listener.html` (simplified version of logo)
+- **Favicon**: inline SVG data URI in `admin.html` and `listener.html` (simplified version of logo)
 - **HA add-on icon**: `ha-addon/mammamiradio/icon.png` (256px) and `logo.png` (512px), rasterized from the SVG
 - To regenerate PNGs from SVG: `cairosvg mammamiradio/logo.svg -o icon.png -W 256 -H 256`
 - **Full design system**: `DESIGN.md` — colors, typography, components, motion, anti-patterns
@@ -208,10 +207,10 @@ Why: the scriptwriter generates fake ads in the brand's voice, makes false produ
 These UI elements have regressed in past refactors. Always verify they survive after any HTML edit:
 
 - **Token cost counter** (`admin.html` Engine Room) — backend computes `api_cost_estimate_usd` on every `/status` call. UI must display it. Has disappeared twice in refactors.
-- **Play button blue state** (`dashboard.html`) — `.play-btn.playing` must use `var(--ok)` (blue), never `var(--sun2)` (golden). Colorblind safety.
-- **Station name localStorage** (`dashboard.html`) — reads `stationName` from localStorage. Admin writes it. Broken when dashboard.html was rewritten.
-- **Gold "Mi" accent** (`dashboard.html`, `admin.html`) — `<span class="mi">` in h1, styled `color: var(--sun)`. Brand signature from hero banner.
-- **Italian tricolor stripe** (`dashboard.html`, `admin.html`) — `.tricolor-stripe` div below h1. Must match hero banner.
+- **Play button blue state** (`mammamiradio/static/base.css`) — `.play-btn.playing` must use `var(--ok)` (blue), never `var(--sun2)` (golden). Colorblind safety.
+- **Station name localStorage** (`mammamiradio/static/listener.js`) — reads `stationName` from localStorage. Admin writes it. Broken when dashboard.html was rewritten.
+- **Gold "Mi" accent** (`listener.html`, `admin.html`) — `<span class="mi">` in h1, styled `color: var(--sun)`. Brand signature from hero banner.
+- **Italian tricolor stripe** (`admin.html` uses `.tricolor-stripe`; `listener.html` uses `.tricolor-band`) — present below h1. Must match hero banner.
 
 When editing any HTML file, grep for these elements before committing.
 
