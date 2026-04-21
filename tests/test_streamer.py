@@ -322,9 +322,7 @@ def test_skip_xing_present_advances_by_frame_length():
     # 192 kbps at 48 kHz: (144 * 192000 // 48000) + 0 padding = 576 bytes.
     buf = io.BytesIO(_xing_frame(b"Xing") + _audio_frame())
     _skip_id3_and_xing_header(buf)
-    assert buf.tell() == _L3_FRAME_LEN, (
-        f"expected pointer at {_L3_FRAME_LEN} after Xing skip; got {buf.tell()}"
-    )
+    assert buf.tell() == _L3_FRAME_LEN, f"expected pointer at {_L3_FRAME_LEN} after Xing skip; got {buf.tell()}"
 
 
 def test_skip_free_bitrate_rewinds_safely():
@@ -351,6 +349,4 @@ def test_skip_id3v2_max_syncsafe_size_seeks_past_eof():
     buf = io.BytesIO(id3_header + b"\x00" * 8)
     _skip_id3_and_xing_header(buf)
     expected_size = (0x7F << 21) | (0x7F << 14) | (0x7F << 7) | 0x7F  # 0x0FFFFFFF
-    assert buf.tell() == 10 + expected_size, (
-        f"expected pointer at 10+{expected_size}; got {buf.tell()}"
-    )
+    assert buf.tell() == 10 + expected_size, f"expected pointer at 10+{expected_size}; got {buf.tell()}"
