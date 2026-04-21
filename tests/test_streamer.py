@@ -256,3 +256,101 @@ def test_run_playback_loop_strips_per_segment_metadata():
             break
     else:
         raise AssertionError("run_playback_loop not found")
+
+
+# --- Additional branch coverage for _skip_id3_and_xing_header ---
+#
+# The helper has several defensive fall-through branches (non-MPEG-1, free
+# bitrate, non-Layer-III, mono channel mode, ID3v2 with max syncsafe size).
+# These tests exercise each branch with synthetic BytesIO inputs so the 92%
+# coverage floor on the streamer module holds even as helpers grow.
+
+
+def test_skip_id3v1_trailer_is_ignored():
+    """Audio frame followed by ID3v1 'TAG' trailer at end of file.
+
+    The helper only inspects the leading bytes; a trailing ID3v1 tag should
+    not affect positioning. With no leading ID3v2 and no Xing at offset 36,
+    the helper rewinds to frame_start (0) so the first audio frame plays.
+    Hits: the no-ID3 branch (lines 642-643), the sync-word-valid path
+    through lines 651-667, and the Xing-magic-absent rewind at line 672.
+    """
+    id3v1_trailer = b"TAG" + b"\x00" * 125  # 128-byte ID3v1 tag
+    buf = io.BytesIO(_audio_frame() + id3v1_trailer)
+    _skip_id3_and_xing_header(buf)
+    assert buf.tell() == 0, f"expected pointer at 0, got {buf.tell()}"
+    head = buf.read(4)
+    assert head[0] == 0xFF and (head[1] & 0xE0) == 0xE0, "expected MPEG sync word at start"
+
+
+def test_skip_mpeg2_header_rewinds():
+    """MPEG-2 header (version bits = 0b10) triggers the 'version != 3' fall-through.
+
+    Hits: line 658 version check → lines 659-660 rewind. Without this test the
+    `if version != 3 or ...` short-circuit only fires on happy-path inputs.
+    """
+    # byte1 = 0xF3 → 1111_0011: sync(11 bits set) | mpeg-2(10) | layer-III(01) | no-crc(1)
+    mpeg2_header = bytes([0xFF, 0xF3, 0xB4, 0x00])
+    buf = io.BytesIO(mpeg2_header + b"\x00" * 572)
+    _skip_id3_and_xing_header(buf)
+    assert buf.tell() == 0, f"MPEG-2 should rewind; got {buf.tell()}"
+
+
+def test_skip_cbr_mp3_without_xing_rewinds():
+    """Valid MPEG-1 L3 frame but no Xing/Info magic at offset 36 → rewind.
+
+    Hits: line 669 magic check fails, line 672 else: seek frame_start.
+    Assert the pointer is at frame_start (0 here) and the next 4 bytes are
+    the sync word — the first audio frame is preserved for playback.
+    """
+    body = b"\x00" * _L3_SIDE_INFO_LEN + b"DATA" + b"\x00" * 12
+    frame = _l3_frame(body)
+    buf = io.BytesIO(frame + _audio_frame())
+    _skip_id3_and_xing_header(buf)
+    assert buf.tell() == 0, f"CBR-without-Xing should rewind to 0; got {buf.tell()}"
+    head = buf.read(4)
+    assert head == _L3_HEADER, f"expected sync word preserved; got {head!r}"
+
+
+def test_skip_xing_present_advances_by_frame_length():
+    """Xing magic at offset 36 → pointer advances frame_start + frame_length.
+
+    Hits: lines 669-670 (Xing detected, seek frame_start + frame_length).
+    Per the helper's actual behavior: no sync-word verification on the next
+    frame — it simply advances. Assert absolute position equals frame_length.
+    """
+    # 192 kbps at 48 kHz: (144 * 192000 // 48000) + 0 padding = 576 bytes.
+    buf = io.BytesIO(_xing_frame(b"Xing") + _audio_frame())
+    _skip_id3_and_xing_header(buf)
+    assert buf.tell() == _L3_FRAME_LEN, (
+        f"expected pointer at {_L3_FRAME_LEN} after Xing skip; got {buf.tell()}"
+    )
+
+
+def test_skip_free_bitrate_rewinds_safely():
+    """Bitrate index 0 (free-bitrate) → rewind without crash.
+
+    Hits: line 658 `bitrate_idx in (0, 0x0F)` → lines 659-660 rewind.
+    byte2 = 0x04 → bitrate_idx=0, sample_rate_idx=1, no padding.
+    """
+    free_bitrate_header = bytes([0xFF, 0xFB, 0x04, 0x00])  # bitrate_idx = 0
+    buf = io.BytesIO(free_bitrate_header + b"\x00" * 572)
+    _skip_id3_and_xing_header(buf)
+    assert buf.tell() == 0, f"free-bitrate should rewind to 0; got {buf.tell()}"
+
+
+def test_skip_id3v2_max_syncsafe_size_seeks_past_eof():
+    """ID3v2 header with max syncsafe size (0x7F 0x7F 0x7F 0x7F = 0x0FFFFFFF).
+
+    Hits: line 640 size computation exercises all four shift operations,
+    then line 641 seeks past EOF. BytesIO accepts past-EOF seeks; the
+    subsequent 4-byte read returns 0 bytes so the length check at line 647
+    rewinds back to that huge frame_start. Asserts no crash.
+    """
+    id3_header = b"ID3\x04\x00\x00" + bytes([0x7F, 0x7F, 0x7F, 0x7F])
+    buf = io.BytesIO(id3_header + b"\x00" * 8)
+    _skip_id3_and_xing_header(buf)
+    expected_size = (0x7F << 21) | (0x7F << 14) | (0x7F << 7) | 0x7F  # 0x0FFFFFFF
+    assert buf.tell() == 10 + expected_size, (
+        f"expected pointer at 10+{expected_size}; got {buf.tell()}"
+    )
