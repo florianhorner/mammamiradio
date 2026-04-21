@@ -82,7 +82,4 @@ def test_tokens_css_has_core_primitives() -> None:
         "--font-mono",
     }
     missing = sorted(required - defined)
-    assert not missing, (
-        "mammamiradio/static/tokens.css is missing required primitives: "
-        f"{missing}"
-    )
+    assert not missing, f"mammamiradio/static/tokens.css is missing required primitives: {missing}"
