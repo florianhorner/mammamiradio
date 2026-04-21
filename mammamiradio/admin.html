@@ -1059,6 +1059,17 @@ function setProgrammeFilter(filter, btn){
 
 // ── Programme List (unified past + current + upcoming) ──
 let _lastLogHash='';
+// Music segments carry labels as "Artist \u2014 Title" AND metadata.artist.
+// Rendering both doubles the artist on screen. Split for music, keep raw otherwise.
+function splitTrackLabel(seg){
+  const label=(seg&&seg.label)||'';
+  if(seg&&seg.type==='music'){
+    const sep=' \u2014 ';
+    const idx=label.indexOf(sep);
+    if(idx>0) return {title:label.slice(idx+sep.length),artist:label.slice(0,idx)};
+  }
+  return {title:label,artist:(seg&&seg.metadata&&seg.metadata.artist)||''};
+}
 function renderProgramme(st){
   const hash=JSON.stringify([st?.now_streaming?.label,st?.upcoming?.map(u=>u.label),(st?.stream_log||[]).slice(0,5).map(e=>e.label),_programmeFilter]);
   if(hash===_lastProgrammeHash)return;
@@ -1083,17 +1094,20 @@ function renderProgramme(st){
     const typeKey=segmentTypeKey(e.type);
     const d=new Date(e.timestamp*1000);
     const t=d.toLocaleTimeString('it-IT',{hour:'2-digit',minute:'2-digit'});
-    const artistPart=e.metadata?.artist?`<span class="prog-artist">${esc(e.metadata.artist)}</span>`:'';
-    rows.push(`<div class="prog-row past" data-type="${typeKey}"><div class="prog-border"></div><span class="prog-badge">${esc(segmentText(typeKey))}</span><div class="prog-info"><span class="prog-title">${esc(e.label||typeKey)}</span>${artistPart}</div><span class="prog-time">${t}</span></div>`);
+    const parts=splitTrackLabel(e);
+    const artistPart=parts.artist?`<span class="prog-artist">${esc(parts.artist)}</span>`:'';
+    rows.push(`<div class="prog-row past" data-type="${typeKey}"><div class="prog-border"></div><span class="prog-badge">${esc(segmentText(typeKey))}</span><div class="prog-info"><span class="prog-title">${esc(parts.title||typeKey)}</span>${artistPart}</div><span class="prog-time">${t}</span></div>`);
   });
 
   // Current row
   if(now&&now.type&&matchFilter(now.type)){
     totalCount++;
     const typeKey=segmentTypeKey(now.type);
-    const artistPart=now.metadata?.artist?`<span class="prog-artist">${esc(now.metadata.artist)}</span>`:'';
+    const parts=splitTrackLabel(now);
+    const artistPart=parts.artist?`<span class="prog-artist">${esc(parts.artist)}</span>`:'';
     const waveform='<div class="waveform" data-variant="strip"></div>';
-    rows.push(`<div class="prog-row current" data-type="${typeKey}"><div class="prog-border"></div><span class="prog-badge">${esc(segmentText(typeKey))}</span><span class="now-badge">NOW</span><div class="prog-info"><span class="prog-title">${esc((now.label&&now.label!==now.type)?now.label:'Playing...')}</span>${artistPart}</div>${waveform}</div>`);
+    const titleText=parts.title&&parts.title!==now.type?parts.title:'Playing...';
+    rows.push(`<div class="prog-row current" data-type="${typeKey}"><div class="prog-border"></div><span class="prog-badge">${esc(segmentText(typeKey))}</span><span class="now-badge">NOW</span><div class="prog-info"><span class="prog-title">${esc(titleText)}</span>${artistPart}</div>${waveform}</div>`);
   }
 
   // Upcoming rows
@@ -1109,16 +1123,16 @@ function renderProgramme(st){
     const typeKey=segmentTypeKey(it.type);
     const linked=Number.isInteger(it.playlist_index)||!!it.spotify_id;
     const clickAttrs=linked?`onclick="focusPlaylistTrack(${Number.isInteger(it.playlist_index)?it.playlist_index:-1},'${escJs(it.spotify_id||'')}')" style="cursor:pointer"`:'';
+    const parts=splitTrackLabel(it);
     // Only render the artist sub-line when we have real artist metadata. The
     // scheduler's internal reason strings ("Ad pacing threshold reached", "No
     // pacing trigger active; continue music flow") are developer copy and must
     // not reach listeners or operators as row text. They remain in the data
     // payload (`it.reason`) for logs/debug.
-    const artistPart=it.metadata?.artist?`<span class="prog-artist">${esc(it.metadata.artist)}</span>`:'';
+    const artistPart=parts.artist?`<span class="prog-artist">${esc(parts.artist)}</span>`:'';
     // Hide title when it equals the bare segment type — prevents rows like
     // "BANTER banter" if a producer code path ever forgets to set a title.
-    const rawLabel=it.label||'';
-    const titleText=(rawLabel && rawLabel.toLowerCase()!==typeKey)?rawLabel:'';
+    const titleText=(parts.title && parts.title.toLowerCase()!==typeKey)?parts.title:'';
     const titleHtml=titleText?`<span class="prog-title">${esc(titleText)}</span>`:'';
     rows.push(`<div class="prog-row" data-type="${typeKey}" ${clickAttrs}><div class="prog-border"></div><span class="prog-badge">${esc(segmentText(typeKey))}</span><div class="prog-info">${titleHtml}${artistPart}</div></div>`);
   });
@@ -1140,31 +1154,37 @@ function renderProgramme(st){
 
 
 function statusDot(state,label,title=''){
-  const titleAttr=title?` title="${esc(title)}"`:'';
-  return `<span class="status-dot ${state}"${titleAttr}><span class="dot"></span>${esc(label)}</span>`;
+  // Title serves as tooltip (desktop) AND aria-label (screen readers + mobile).
+  // Florian flagged on 2026-04-21: color + shape alone don't convey meaning,
+  // and tooltips don't work on mobile. The label itself must carry semantic
+  // weight; the title repeats it in a full sentence for a11y.
+  const safeTitle=title||label;
+  return `<span class="status-dot ${state}" title="${esc(safeTitle)}" aria-label="${esc(safeTitle)}"><span class="dot"></span>${esc(label)}</span>`;
 }
 function updatePipelineStatus(caps){
   const el=document.getElementById('pipelineStatus');
   if(!el)return;
   const c=caps?.capabilities||{};
   if(!Object.keys(c).length){
-    el.innerHTML=statusDot('working','Checking');
+    el.innerHTML=statusDot('working','AI: checking…','Probing LLM and HA capabilities.');
     return;
   }
   let html='';
   if(c.anthropic_key&&c.anthropic_degraded){
-    html+=statusDot('degraded','AI Fallback','Anthropic auth failed; falling back to OpenAI');
+    const secs=Math.max(0,c.anthropic_retry_after_s||0);
+    const retry=secs?` · retry in ${secs}s`:'';
+    html+=statusDot('degraded','AI: fallback (OpenAI)','Anthropic auth suspended; OpenAI is generating scripts. Quality may vary.'+retry);
   }else if(c.anthropic_key||c.llm){
-    html+=statusDot('ready','AI');
+    html+=statusDot('ready','AI: Claude live','Anthropic API connected. Claude is generating scripts and banter.');
   }else if(c.openai){
-    html+=statusDot('degraded','AI Fallback');
+    html+=statusDot('degraded','AI: OpenAI only','No Anthropic key. Using OpenAI fallback for all scripts.');
   }else{
-    html+=statusDot('blocked','No AI');
+    html+=statusDot('blocked','AI: offline','No LLM credentials. Using stock copy — no fresh banter or ads.');
   }
   if(c.ha){
-    html+=statusDot('ready','HA');
+    html+=statusDot('ready','HA: connected','Home Assistant live. Hosts can reference real-time home state (lights, presence, weather).');
   }else if(Object.prototype.hasOwnProperty.call(c,'ha')){
-    html+=statusDot('idle','HA');
+    html+=statusDot('idle','HA: off','Home Assistant not configured. Hosts use generic copy, no home-state references.');
   }
   el.innerHTML=html;
 }

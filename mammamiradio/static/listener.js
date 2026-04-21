@@ -227,15 +227,17 @@
     const cards = [];
 
     if (now) {
-      cards.push({ when: 'Ora in onda', live: true, type: now.type, label: now.label, host: hostLine(now) });
+      const p = splitMusicLabel(now);
+      cards.push({ when: 'Ora in onda', live: true, type: now.type, label: p.title, host: p.host });
     }
     upcoming.slice(0, cards.length ? 3 : 4).forEach((seg, i) => {
+      const p = splitMusicLabel(seg);
       cards.push({
         when: 'Prossimo \u00b7 ' + (i + 1),
         live: false,
         type: seg.type,
-        label: seg.label || segmentKindLabel(seg.type),
-        host: hostLine(seg),
+        label: p.title || segmentKindLabel(seg.type),
+        host: p.host,
       });
     });
 
@@ -260,6 +262,21 @@
     if (m.artist) return escHtml(m.artist);
     if (m.year) return escHtml(String(m.year));
     return '';
+  }
+
+  // Producer emits music labels as "Artist \u2014 Title". Rendering the full
+  // label in slot-title AND the artist again in slot-host doubles the artist.
+  // Split the label for music, fall back to raw label + hostLine otherwise.
+  function splitMusicLabel(seg) {
+    const label = (seg && seg.label) || '';
+    if (seg && seg.type === 'music') {
+      const sep = ' \u2014 ';
+      const idx = label.indexOf(sep);
+      if (idx > 0) {
+        return { title: label.slice(idx + sep.length), host: escHtml(label.slice(0, idx)) };
+      }
+    }
+    return { title: label, host: hostLine(seg) };
   }
 
   function renderDediche(requests) {
