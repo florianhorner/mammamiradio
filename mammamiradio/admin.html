@@ -12,6 +12,7 @@
 <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,600;0,700;1,400;1,700&family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/static/tokens.css">
 <link rel="stylesheet" href="/static/base.css">
+<script src="/static/waveform.js" defer></script>
 <style>
 *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
 
@@ -99,23 +100,7 @@ body { font-family: var(--font-body); color: var(--cream); line-height: 1.5; }
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 
-/* Waveform animation */
-.sidebar-waveform {
-  display: flex; align-items: flex-end; gap: 2px; height: 14px; margin-bottom: 6px;
-}
-.sw-bar {
-  width: 3px; border-radius: 2px 2px 0 0; background: var(--sun2);
-  animation: sw-bounce 0.8s ease-in-out infinite;
-}
-.sw-bar:nth-child(1) { animation-delay: 0s; }
-.sw-bar:nth-child(2) { animation-delay: 0.12s; }
-.sw-bar:nth-child(3) { animation-delay: 0.24s; }
-.sw-bar:nth-child(4) { animation-delay: 0.36s; }
-.sw-bar:nth-child(5) { animation-delay: 0.48s; }
-@keyframes sw-bounce {
-  0%,100% { height: 4px; opacity: 0.5; }
-  50% { height: 14px; opacity: 1; }
-}
+.sidebar-now .waveform { margin-bottom: 6px; }
 
 .sidebar-progress-row {
   display: flex; align-items: center; gap: 6px;
@@ -172,6 +157,7 @@ body { font-family: var(--font-body); color: var(--cream); line-height: 1.5; }
   display: flex; align-items: center; gap: 6px;
   font-size: 11px; color: rgba(245,237,216,0.6);
 }
+.pipeline-status { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
 .on-air-dot {
   width: 6px; height: 6px; border-radius: 50%;
   background: var(--sun); box-shadow: 0 0 8px var(--sun);
@@ -241,8 +227,6 @@ body { font-family: var(--font-body); color: var(--cream); line-height: 1.5; }
 
 /* ── STOPPED STATE — the station is paused; the UI quiets down with it ──
    Driven by `data-stopped="true"` on <body>, toggled by updateStopState(). */
-body[data-stopped="true"] .sidebar-waveform .wb,
-body[data-stopped="true"] .pw-bar,
 body[data-stopped="true"] .live-dot,
 body[data-stopped="true"] .on-air-dot { animation-play-state: paused; }
 /* Producer actions are meaningless while paused — dim and disable them so the
@@ -321,22 +305,6 @@ body[data-stopped="true"] .sidebar-live-line { color: var(--cream-dk); }
 .prog-artist {
   font-size: 10px; color: var(--muted);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-}
-.prog-waveform {
-  display: flex; align-items: flex-end; gap: 2px; height: 12px; flex-shrink: 0;
-}
-.pw-bar {
-  width: 2px; border-radius: 1px; background: var(--sun2);
-  animation: pw-bounce 0.7s ease-in-out infinite;
-}
-.pw-bar:nth-child(1) { animation-delay: 0s; }
-.pw-bar:nth-child(2) { animation-delay: 0.1s; }
-.pw-bar:nth-child(3) { animation-delay: 0.2s; }
-.pw-bar:nth-child(4) { animation-delay: 0.3s; }
-.pw-bar:nth-child(5) { animation-delay: 0.4s; }
-@keyframes pw-bounce {
-  0%,100% { height: 2px; opacity: 0.4; }
-  50% { height: 12px; opacity: 1; }
 }
 .prog-dur {
   font-family: var(--font-mono); font-size: 10px; color: var(--muted);
@@ -521,11 +489,6 @@ body[data-stopped="true"] .sidebar-live-line { color: var(--cream-dk); }
 .status-copy { flex: 1; min-width: 0; }
 .status-title { font-size: 12px; font-weight: 700; color: var(--cream); }
 .status-detail { font-size: 11px; color: rgba(245,237,216,0.5); margin-top: 2px; line-height: 1.4; }
-.status-pill { flex-shrink: 0; font-size: 9px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; padding: 4px 8px; border-radius: 999px; }
-.status-pill[data-s="ok"] { background: rgba(37,99,235,0.2); color: var(--ok); }
-.status-pill[data-s="warn"] { background: rgba(244,208,72,0.16); color: var(--sun); }
-.status-pill[data-s="error"] { background: rgba(196,74,74,0.18); color: #ff8c8c; }
-.status-pill[data-s="info"] { background: rgba(245,237,216,0.12); color: rgba(245,237,216,0.75); }
 
 /* ── SETUP CARD ── */
 .setup-headline { font-family: var(--font-display); font-size: 18px; font-style: italic; margin-bottom: 4px; }
@@ -554,7 +517,7 @@ body[data-stopped="true"] .sidebar-live-line { color: var(--cream-dk); }
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
 
 /* ── PLAYLIST / SEARCH ── */
-.search-bar { display: flex; gap: 8px; margin-bottom: 12px; }
+.search-row { display: flex; gap: 8px; margin-bottom: 12px; }
 .search-input, .input {
   flex: 1; font-family: var(--font-body); font-size: 13px;
   padding: 10px 14px; border-radius: 8px;
@@ -643,8 +606,8 @@ body[data-stopped="true"] .sidebar-live-line { color: var(--cream-dk); }
   }
   .admin-content { padding: 16px 16px; }
   .sidebar-bottom { display: none; }
-  .search-bar { flex-direction: column; }
-  .search-bar .btn, .transport .btn-skip, .transport .btn-stop, .transport .btn-resume { width: 100%; }
+  .search-row { flex-direction: column; }
+  .search-row .btn, .transport .btn-skip, .transport .btn-stop, .transport .btn-resume { width: 100%; }
   .transport .btn-util { flex: 1 1 auto; min-width: 0; font-size: 0.78em; padding: 0.35rem 0.4rem; }
   .pl-row, .sr-row { flex-wrap: wrap; }
   .pl-a { width: 100%; padding-left: 30px; opacity: 1; }
@@ -705,13 +668,7 @@ input[type="range"]:focus-visible {
       <div class="now-type" id="nowType" data-t="music">—</div>
       <div class="now-title" id="nowTitle">Waiting for signal...</div>
       <div class="now-artist" id="nowArtist"></div>
-      <div class="sidebar-waveform" id="sidebarWaveform">
-        <div class="sw-bar"></div>
-        <div class="sw-bar"></div>
-        <div class="sw-bar"></div>
-        <div class="sw-bar"></div>
-        <div class="sw-bar"></div>
-      </div>
+      <div class="waveform" id="sidebarWaveform" data-variant="strip"></div>
       <div class="sidebar-progress-row">
         <div class="sidebar-progress">
           <div class="sidebar-progress-fill" id="progFill" data-t="music"></div>
@@ -739,6 +696,7 @@ input[type="range"]:focus-visible {
       <span id="onAirBadge">Live</span>
       <span style="margin-left:auto;font-family:var(--font-mono);font-size:10px;color:var(--muted)" id="sidebarUptime">—</span>
     </div>
+    <div class="pipeline-status" id="pipelineStatus"></div>
 
     <!-- Bottom sticky line -->
     <div class="sidebar-bottom">
@@ -850,7 +808,7 @@ input[type="range"]:focus-visible {
         <div class="card-label">Listener Requests <span id="lrMeta" style="float:right;font-weight:400;color:var(--muted)"></span></div>
         <div id="lrBody" style="margin-bottom:14px"><div class="empty">No requests yet</div></div>
         <div class="card-label">Playlist</div>
-        <div class="search-bar">
+        <div class="search-row">
           <input type="text" class="search-input" id="searchInput" placeholder="Search music (playlist + web)..." autocomplete="off" aria-label="Search music">
           <button class="btn btn-util" onclick="doSearch()">Search</button>
         </div>
@@ -1134,7 +1092,7 @@ function renderProgramme(st){
     totalCount++;
     const typeKey=segmentTypeKey(now.type);
     const artistPart=now.metadata?.artist?`<span class="prog-artist">${esc(now.metadata.artist)}</span>`:'';
-    const waveform='<div class="prog-waveform"><div class="pw-bar"></div><div class="pw-bar"></div><div class="pw-bar"></div><div class="pw-bar"></div><div class="pw-bar"></div></div>';
+    const waveform='<div class="waveform" data-variant="strip"></div>';
     rows.push(`<div class="prog-row current" data-type="${typeKey}"><div class="prog-border"></div><span class="prog-badge">${esc(segmentText(typeKey))}</span><span class="now-badge">NOW</span><div class="prog-info"><span class="prog-title">${esc((now.label&&now.label!==now.type)?now.label:'Playing...')}</span>${artistPart}</div>${waveform}</div>`);
   }
 
@@ -1173,22 +1131,56 @@ function renderProgramme(st){
   if(countEl)countEl.textContent=totalCount+' entries';
 
   el.innerHTML=rows.length?rows.join(''):'<div class="prog-empty">Waiting for signal...</div>';
+  if(typeof initWaveform==='function'){
+    el.querySelectorAll('.waveform').forEach((wv)=>{
+      if(!wv.children.length) initWaveform(wv);
+    });
+  }
 }
 
 
+function statusDot(state,label,title=''){
+  const titleAttr=title?` title="${esc(title)}"`:'';
+  return `<span class="status-dot ${state}"${titleAttr}><span class="dot"></span>${esc(label)}</span>`;
+}
+function updatePipelineStatus(caps){
+  const el=document.getElementById('pipelineStatus');
+  if(!el)return;
+  const c=caps?.capabilities||{};
+  if(!Object.keys(c).length){
+    el.innerHTML=statusDot('working','Checking');
+    return;
+  }
+  let html='';
+  if(c.anthropic_key&&c.anthropic_degraded){
+    html+=statusDot('degraded','AI Fallback','Anthropic auth failed; falling back to OpenAI');
+  }else if(c.anthropic_key||c.llm){
+    html+=statusDot('ready','AI');
+  }else if(c.openai){
+    html+=statusDot('degraded','AI Fallback');
+  }else{
+    html+=statusDot('blocked','No AI');
+  }
+  if(c.ha){
+    html+=statusDot('ready','HA');
+  }else if(Object.prototype.hasOwnProperty.call(c,'ha')){
+    html+=statusDot('idle','HA');
+  }
+  el.innerHTML=html;
+}
 function statusRow(title,state,label,detail){
-  return `<div class="status-row"><div class="status-copy"><div class="status-title">${esc(title)}</div><div class="status-detail">${esc(detail)}</div></div><span class="status-pill" data-s="${state}">${esc(label)}</span></div>`;
+  return `<div class="status-row"><div class="status-copy"><div class="status-title">${esc(title)}</div><div class="status-detail">${esc(detail)}</div></div><span class="status-chip ${state}">${esc(label)}</span></div>`;
 }
 function setupPill(status){
-  if(status==='configured'||status==='ok'||status==='done') return {state:'ok',label:`${SHAPE.ok} Ready`};
-  if(status==='warn'||status==='missing'||status==='todo') return {state:'warn',label:`${SHAPE.warn} Needs action`};
-  if(status==='fail'||status==='blocked') return {state:'error',label:`${SHAPE.error} Blocked`};
-  if(status==='skipped') return {state:'info',label:`${SHAPE.info} Skipped`};
-  return {state:'info',label:'Info'};
+  if(status==='configured'||status==='ok'||status==='done') return {state:'ready',label:'Ready'};
+  if(status==='warn'||status==='missing'||status==='todo') return {state:'degraded',label:'Needs action'};
+  if(status==='fail'||status==='blocked') return {state:'blocked',label:'Blocked'};
+  if(status==='skipped') return {state:'idle',label:'Skipped'};
+  return {state:'idle',label:'Info'};
 }
 function setupRow(label, detail, status){
   const pill=setupPill(status);
-  return `<div class="setup-row"><div class="status-copy"><div class="setup-title">${esc(label)}</div><div class="setup-detail">${esc(detail)}</div></div><span class="status-pill" data-s="${pill.state}">${esc(pill.label)}</span></div>`;
+  return `<div class="setup-row"><div class="status-copy"><div class="setup-title">${esc(label)}</div><div class="setup-detail">${esc(detail)}</div></div><span class="status-chip ${pill.state}">${esc(pill.label)}</span></div>`;
 }
 function renderSetup(setup){
   if(!setup) return;
@@ -1282,35 +1274,38 @@ function updateSystems(caps,st){
   const el=document.getElementById('systemsBody');
   const c=caps?.capabilities||{};
   const gp=caps?.golden_path||st?.golden_path||{};
+  updatePipelineStatus(caps);
   if(!Object.keys(c).length&&!Object.keys(gp).length){
     el.innerHTML='<div class="empty">System status unavailable</div>';
     return;
   }
 
   const recentBanter=[...(st?.stream_log||[])].reverse().find(e=>e.type==='banter'&&e.metadata&&Object.prototype.hasOwnProperty.call(e.metadata,'canned'));
-  let aiState='info',aiLabel=`${SHAPE.info} Unknown`,aiDetail='No AI diagnostics yet.';
+  let aiState='working',aiLabel='Checking',aiDetail='No AI diagnostics yet.';
   if(!c.script_llm){
-    aiState='warn';aiLabel=`${SHAPE.warn} Demo`;aiDetail='No AI script key configured. The station falls back to canned or local copy.';
+    aiState='blocked';aiLabel='Error';aiDetail='No AI script key configured. The station falls back to canned or local copy.';
   }else if(recentBanter&&recentBanter.metadata?.canned===false){
-    aiState='ok';aiLabel=`${SHAPE.ok} Working`;aiDetail='Recent banter was generated live, not played from the canned demo pool.';
+    aiState='ready';aiLabel='Ready';aiDetail='Recent banter was generated live, not played from the canned demo pool.';
   }else if((st?.consumption?.api_calls||0)>0){
-    aiState='ok';aiLabel=`${SHAPE.ok} Working`;aiDetail=`${st.consumption.api_calls} AI call${st.consumption.api_calls===1?'':'s'} this session.`;
+    aiState='ready';aiLabel='Ready';aiDetail=`${st.consumption.api_calls} AI call${st.consumption.api_calls===1?'':'s'} this session.`;
   }else{
-    aiState='info';aiLabel=`${SHAPE.info} Ready`;aiDetail='AI key is present but no fresh generated break has been detected yet.';
+    aiState='working';aiLabel='Checking';aiDetail='AI key is present but no fresh generated break has been detected yet.';
   }
 
   const sourceLabel=st?.current_source?.label||st?.playlist_source?.label||'No playlist source';
   const upcomingMusic=(st?.upcoming||[]).filter(it=>it.type==='music').map(it=>it.label).slice(0,2);
-  let musicState='ok',musicLabel=`${SHAPE.ok} Ready`,musicDetail=`Source: ${sourceLabel}.`;
+  let musicState='ready',musicLabel='Ready',musicDetail=`Source: ${sourceLabel}.`;
   if(upcomingMusic.length){
     musicDetail=`Source: ${sourceLabel}. Next music: ${upcomingMusic.join(' • ')}.`;
   }else if(st?.upcoming_mode==='building'){
-    musicState='info';musicLabel=`${SHAPE.info} Building`;musicDetail=`Source: ${sourceLabel}. Producer is still building the next music segment.`;
+    musicState='working';musicLabel='Checking';musicDetail=`Source: ${sourceLabel}. Producer is still building the next music segment.`;
+  }else if(sourceLabel==='No playlist source'){
+    musicState='blocked';musicLabel='Error';musicDetail='No music source configured.';
   }
 
   el.innerHTML=[
     statusRow('AI Writing',aiState,aiLabel,aiDetail),
-    statusRow('Music Source',musicState,musicLabel,musicDetail),
+    statusRow('Music Sources',musicState,musicLabel,musicDetail),
   ].join('');
 }
 
