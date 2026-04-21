@@ -155,6 +155,5 @@ def test_normalize_applies_soft_fade_in_on_real_audio(tmp_path):
     # (rough — allow wide margin for ffmpeg encoding + loudnorm variability).
     assert mid_rms > 0, "mid-track RMS should be non-zero on a steady tone"
     assert head_rms < mid_rms * 0.6, (
-        f"first 100ms ({head_rms:.4f}) should be noticeably quieter than "
-        f"mid-track ({mid_rms:.4f}) due to 250ms fade-in"
+        f"first 100ms ({head_rms:.4f}) should be noticeably quieter than mid-track ({mid_rms:.4f}) due to 250ms fade-in"
     )
