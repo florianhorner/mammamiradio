@@ -33,7 +33,7 @@ cd mammamiradio && cp .env.example .env
 docker compose up
 ```
 
-Open `http://localhost:8000` for the listener page (`/admin` for the control room, `/dashboard` for the authenticated dashboard). Music plays from live Italian charts when `MAMMAMIRADIO_ALLOW_YTDLP=true` (enabled in `docker-compose.yml`), otherwise from local files or silence while you add `music/` MP3s.
+Open `http://localhost:8000` for the listener page (`/admin` for the control room). Music plays from live Italian charts when `MAMMAMIRADIO_ALLOW_YTDLP=true` (enabled in `docker-compose.yml`), otherwise from local files or silence while you add `music/` MP3s.
 
 ### Home Assistant Add-on
 
@@ -62,7 +62,7 @@ python3.11 -m venv .venv && source .venv/bin/activate && pip install -e .
 ./start.sh
 ```
 
-Open `http://localhost:8000` for the listener page, `/admin` for the control room, `/dashboard` for the authenticated dashboard.
+Open `http://localhost:8000` for the listener page, `/admin` for the control room.
 
 #### Conductor
 

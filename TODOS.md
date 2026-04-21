@@ -1,5 +1,15 @@
 # TODOS
 
+## Listener UX
+
+### Dialer revival (listener.js first-class port)
+
+- **Source:** pre-PR#218 `static/script.js` (see `.context/research/dialer-port-blueprint.md`)
+- **Scope:** ~220 LOC JS + wiring, CSS class rename, `--needle-x` token
+- **Effort:** 4–6 hours
+- **Gate:** design sprint (`/office-hours` on dial UX first) — do not build speculatively
+- **Trigger phrase:** "bring the dial alive" / "implement the dialer"
+
 ## Infrastructure
 
 **Priority:** P2
