@@ -1,7 +1,7 @@
 # Admin Panel Standards
 <!-- version: 1 | owner: @florianhorner -->
 
-Every PR that modifies `mammamiradio/admin.html` or `mammamiradio/dashboard.html` must pass this checklist before merge. CI enforces acknowledgment of this section in the PR body.
+Every PR that modifies `mammamiradio/admin.html` or `mammamiradio/listener.html` must pass this checklist before merge. CI enforces acknowledgment of this section in the PR body.
 
 ## Protected UI elements
 
@@ -10,10 +10,10 @@ These have regressed in past refactors. Verify all five survive every HTML edit.
 | Element | File | How to check |
 |---|---|---|
 | Token cost counter | `admin.html` Engine Room | Grep for `api_cost_estimate_usd`; verify it appears in the rendered status block |
-| Play button blue state | `dashboard.html` | `.play-btn.playing` uses `var(--ok)` (blue `#2563EB`), never `var(--sun2)` (golden) |
-| Station name from localStorage | `dashboard.html` | JS reads `localStorage.stationName`; admin panel writes it |
-| Gold "Mi" accent | `admin.html`, `dashboard.html` | `<span class="mi">` present in `<h1>`, styled `color: var(--sun)` |
-| Italian tricolor stripe | `admin.html`, `dashboard.html` | `.tricolor-stripe` div present below `<h1>` |
+| Play button blue state | `static/base.css` | `.play-btn.playing` uses `var(--ok)` (blue `#2563EB`), never `var(--sun2)` (golden) |
+| Station name from localStorage | `static/listener.js` | JS reads `localStorage.getItem('stationName')`; admin panel writes it |
+| Gold "Mi" accent | `admin.html`, `listener.html` | `<span class="mi">` present in `<h1>`, styled `color: var(--sun)` |
+| Italian tricolor stripe | `admin.html` (`.tricolor-stripe`), `listener.html` (`.tricolor-band`) | tricolor div present below `<h1>` on each surface |
 
 ## Colorblind safety
 
@@ -57,7 +57,7 @@ Both must pass. A single combined run is insufficient.
 - [ ] Play button uses `var(--ok)` (blue) for playing state — not golden
 - [ ] Station name reads from `localStorage.stationName`
 - [ ] `<span class="mi">` present in `<h1>` in every modified HTML file
-- [ ] `.tricolor-stripe` div present below `<h1>` in every modified HTML file
+- [ ] Tricolor div present below `<h1>` in every modified HTML file (`.tricolor-stripe` on admin, `.tricolor-band` on listener)
 - [ ] No green used for any success/connected state (colorblind safety)
 - [ ] Player QA run passed on `/`
 - [ ] Admin QA run passed on `/admin`
