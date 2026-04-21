@@ -183,7 +183,18 @@ def normalize(
         else:
             norm_part = "loudnorm=I=-16:LRA=11:TP=-1.5"
         silence_trim = "silenceremove=start_periods=0:stop_periods=1:stop_threshold=-50dB:stop_duration=0.3"
-        audio_filter = f"{music_eq_chain},{norm_part},{silence_trim}" if music_eq else f"{norm_part},{silence_trim}"
+        # Soft fade-in on every final-output segment: music → banter hand-offs
+        # used to be a hard cut at full volume. A short ramp-in on the incoming
+        # segment turns the perceived "drop" into a gentle entry without
+        # breaking the illusion. Not applied on the fast path (loudnorm=False)
+        # because those are intermediate TTS lines that get concatenated into
+        # dialogue — a per-line fade would produce choppy speech.
+        fade_in = "afade=t=in:d=0.25"
+        audio_filter = (
+            f"{music_eq_chain},{norm_part},{silence_trim},{fade_in}"
+            if music_eq
+            else f"{norm_part},{silence_trim},{fade_in}"
+        )
     else:
         audio_filter = "silenceremove=start_periods=0:stop_periods=1:stop_threshold=-50dB:stop_duration=0.3"
 
