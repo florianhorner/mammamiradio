@@ -581,7 +581,7 @@ All semantic states must pair a color with a **shape**: checkmark (✓), triangl
 
 | Asset | Path |
 |-------|------|
-| Dashboard | `mammamiradio/dashboard.html` |
+| Admin | `mammamiradio/admin.html` |
 | Listener | `mammamiradio/listener.html` |
 | Logo SVG | `mammamiradio/logo.svg` |
 | HA add-on icon | `ha-addon/mammamiradio/icon.png` (256px) |

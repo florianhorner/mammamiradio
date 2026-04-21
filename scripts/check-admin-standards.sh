@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# CI guard: when admin.html or dashboard.html changed, PR body must include
+# CI guard: when admin.html or listener.html changed, PR body must include
 # at least one checked item from the Admin Panel Standards checklist.
 # Exit 0 = pass, Exit 1 = fail.
 
@@ -7,7 +7,7 @@ set -euo pipefail
 
 ADMIN_FILES=(
   "mammamiradio/admin.html"
-  "mammamiradio/dashboard.html"
+  "mammamiradio/listener.html"
 )
 
 # Determine changed files relative to base (PR context) or HEAD~1 (push context)
