@@ -37,6 +37,10 @@ sed -i '' 's/^version:.*/version: X.Y.Z/' ha-addon/mammamiradio/config.yaml
 sed -i '' 's/^version = .*/version = "X.Y.Z"/' pyproject.toml
 ```
 
+## Addon stage: experimental (pre-1.0)
+
+`ha-addon/mammamiradio/config.yaml` declares `stage: experimental`. This produces the orange "Experimental" badge in the HACS addon store and signals pre-1.0 status to new installers. Revisit at the v1.0 cut — either delete the line or flip to `stage: stable` once the product is stable.
+
 ## Config options: the contract
 
 When you add an option to the HA addon configuration UI, you must update THREE files in the same commit:

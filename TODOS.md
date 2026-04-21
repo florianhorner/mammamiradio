@@ -1,15 +1,5 @@
 # TODOS
 
-## Before next release (blocks version bump)
-
-### Mark addon as experimental in HACS
-
-- **What:** Add `stage: experimental` to `ha-addon/mammamiradio/config.yaml` so the HACS addon store shows the orange "Experimental" badge (like Govee2MQTT Bridge does today — see `.context/attachments/image.png`).
-- **Why:** Signal pre-1.0 status to new installers. Current HACS listing shows "Mamma Mi Radio" with no qualifier next to Govee2MQTT which has the badge.
-- **Scope:** one-line YAML addition. No code changes.
-- **Docs to update in same commit:** `HA_ADDON_RUNBOOK.md` (mention the stage flag in the release checklist), `CHANGELOG.md` (note the flag at next version bump).
-- **Ship gate:** land before the next `v*` tag push.
-
 ## Listener UX
 
 ### Dialer revival (listener.js first-class port)
@@ -33,6 +23,10 @@ Catches "server starts but can't produce audio" — the exact production failure
 **Files:** `.github/workflows/addon-build.yml`
 
 ## Completed
+
+### Mark addon as experimental in HACS
+**Completed:** 2026-04-21
+Added `stage: experimental` to `ha-addon/mammamiradio/config.yaml` + runbook note. HACS will show the orange Experimental badge next to the addon in the store. Revisit at v1.0 cut.
 
 ### Silence health gate + /healthz/readyz 503 + norm-cache rescue + force-resume
 **Completed:** 2026-04-16 (florianhorner/list-p1-items-v1)
