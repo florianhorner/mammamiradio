@@ -1041,9 +1041,13 @@ async def test_hassio_ingress_auth_bypass():
         resp = await client.get("/", headers={"X-Ingress-Path": "/api/hassio_ingress/abc123"})
         assert resp.status_code == 200
         assert "Regia — Control Room" in resp.text
-        # /dashboard requires auth — Hassio internal network should bypass
-        resp = await client.get("/dashboard", headers={"X-Ingress-Path": "/api/hassio_ingress/abc123"})
-    assert resp.status_code == 200
+        resp = await client.get(
+            "/dashboard",
+            headers={"X-Ingress-Path": "/api/hassio_ingress/abc123"},
+            follow_redirects=False,
+        )
+    assert resp.status_code == 301
+    assert resp.headers["location"] == "/api/hassio_ingress/abc123/admin"
 
 
 @pytest.mark.asyncio
@@ -1055,9 +1059,9 @@ async def test_hassio_internal_request_without_ingress_header_bypasses_auth():
         # / is public (no auth needed)
         resp = await client.get("/")
         assert resp.status_code == 200
-        # /dashboard should also work for Hassio internal requests
-        resp = await client.get("/dashboard")
-    assert resp.status_code == 200
+        resp = await client.get("/dashboard", follow_redirects=False)
+    assert resp.status_code == 301
+    assert resp.headers["location"] == "/admin"
 
 
 @pytest.mark.asyncio
@@ -1069,7 +1073,6 @@ async def test_hassio_ingress_spoofed_external():
         resp = await client.get("/", headers={"X-Ingress-Path": "/api/hassio_ingress/abc123"})
         assert resp.status_code == 200
         assert "Regia — Control Room" not in resp.text
-        # /dashboard requires admin auth — spoofed ingress should NOT bypass
         resp = await client.get("/dashboard", headers={"X-Ingress-Path": "/api/hassio_ingress/abc123"})
     assert resp.status_code == 401
 
@@ -1112,8 +1115,11 @@ async def test_basic_auth_mutation_allows_csrf_token_without_origin():
     app = _make_test_app(admin_password="secret")
     transport = httpx.ASGITransport(app=app, client=("203.0.113.50", 9999))
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
-        dashboard = await client.get("/dashboard", headers=_basic_auth_header())
-        assert dashboard.status_code == 200
+        dashboard = await client.get("/dashboard", headers=_basic_auth_header(), follow_redirects=False)
+        assert dashboard.status_code == 301
+        assert dashboard.headers["location"] == "/admin"
+        admin = await client.get("/admin", headers=_basic_auth_header())
+        assert admin.status_code == 200
         resp = await client.post(
             "/api/shuffle",
             headers={**_basic_auth_header(), "X-Radio-CSRF-Token": app.state.csrf_token},

@@ -112,13 +112,13 @@ def test_inject_ingress_prefix_rewrites_static_paths():
 def test_inject_ingress_prefix_rewrites_script_src_static():
     """Ingress prefix must rewrite <script src="/static/..."> alongside href= attributes.
 
-    Guards the dashboard.html refactor that moved inline JS into /static/script.js.
-    Without this, HA Ingress users hit dead <script> tags and the dashboard loses
-    all interactivity under the Supervisor proxy.
+    Guards the listener site-v1 split that serves its client code from
+    /static/listener.js. Without this, HA Ingress users hit dead <script> tags
+    and the listener loses its runtime wiring under the Supervisor proxy.
     """
     prefix = "/api/hassio_ingress/abc123"
-    html = '<script src="/static/script.js" defer></script>'
-    expected = f'<script src="{prefix}/static/script.js" defer></script>'
+    html = '<script src="/static/listener.js" defer></script>'
+    expected = f'<script src="{prefix}/static/listener.js" defer></script>'
     assert _inject_ingress_prefix(html, prefix) == expected
 
 
