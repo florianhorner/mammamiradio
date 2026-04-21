@@ -1,1612 +1,181 @@
 <!DOCTYPE html>
 <html lang="it">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Mamma Mi Radio - Late-night Italian radio</title>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mamma Mi Radio — 96,7 FM Milano</title>
 <meta name="theme-color" content="#14110F">
+<meta property="og:title" content="Mamma Mi Radio">
+<meta property="og:description" content="AI-powered Italian radio station. La notte è italiana.">
+<meta property="og:type" content="website">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<meta name="apple-mobile-web-app-title" content="Mamma Mi Radio">
-<meta name="mobile-web-app-capable" content="yes">
-<meta property="og:title" content="Mamma Mi Radio">
-<meta property="og:description" content="Late-night Milan talk radio — Late-night AI-powered Italian radio station">
-<meta property="og:type" content="website">
+<meta name="mammamiradio-csrf-token" content="__MAMMAMIRADIO_CSRF_TOKEN__">
 <link rel="manifest" href="/static/manifest.json">
 <link rel="icon" href="/static/icon-192.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="/static/icon-192.svg">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,600;0,700;1,400;1,700&family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,600;0,700;1,400;1,600;1,700&family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/static/tokens.css">
 <link rel="stylesheet" href="/static/base.css">
-<style>
-  *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
-
-  /* Palette, typography, spacing tokens now live in /static/tokens.css.
-     Do NOT redefine :root primitives here — they'd shadow the shared tokens
-     and the drift we just fixed would re-open. See DESIGN.md. */
-
-  html{font-size:16px;-webkit-font-smoothing:antialiased}
-
-  body{
-    background:
-      url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='200' height='200' filter='url(%23n)' opacity='0.04'/%3E%3C/svg%3E") repeat,
-      radial-gradient(circle at top center, rgba(244,208,72,0.06), transparent 28%),
-      linear-gradient(180deg,#1E1610 0%,#14110F 12%,#14110F 100%);
-    color:var(--cream);
-    font-family:var(--font-body);
-    line-height:1.6;
-    min-height:100vh;
-    padding-bottom:160px;
-    overflow-x:hidden;
-  }
-  body::before{
-    content:'';
-    position:fixed;
-    top:-120px;
-    right:20%;
-    width:400px;
-    height:400px;
-    border-radius:50%;
-    background:radial-gradient(circle, rgba(244,208,72,0.10) 0%, rgba(236,204,48,0.03) 40%, transparent 70%);
-    pointer-events:none;
-    z-index:0;
-  }
-  body > *{position:relative;z-index:1}
-
-  /* ---- Station Header ---- */
-  .station-header{
-    text-align:center;
-    padding:2.5rem 1.5rem 1.5rem;
-  }
-  .station-name{
-    font-family:var(--font-display);
-    font-size:clamp(2.4rem,6vw,3.6rem);
-    font-weight:700;
-    font-style:italic;
-    letter-spacing:0.02em;
-    color:var(--cream);
-    margin-bottom:0.15em;
-  }
-  .station-subtitle{
-    font-size:0.9rem;
-    font-weight:300;
-    color:var(--muted);
-    letter-spacing:0.08em;
-    text-transform:uppercase;
-  }
-  .on-air{
-    display:inline-flex;
-    align-items:center;
-    gap:0.45rem;
-    margin-top:0.75rem;
-    font-size:0.72rem;
-    font-weight:600;
-    letter-spacing:0.14em;
-    text-transform:uppercase;
-    color:var(--sun2);
-    opacity:0;
-    transition:opacity 0.4s;
-  }
-  .on-air.visible{opacity:1}
-  .on-air-dot{
-    width:8px;height:8px;
-    border-radius:50%;
-    background:var(--sun);
-    animation:pulse-glow 1.8s ease-in-out infinite;
-  }
-  @keyframes pulse-glow{
-    0%,100%{box-shadow:0 0 4px var(--sun);opacity:1}
-    50%{box-shadow:0 0 14px var(--sun),0 0 28px rgba(244,208,72,0.3);opacity:0.7}
-  }
-
-  /* ---- Shared container ---- */
-  .container{
-    max-width:640px;
-    margin:0 auto;
-    padding:0 1.25rem;
-    display:grid;
-    gap:1rem;
-  }
-
-  /* ---- Launch Scene ---- */
-  .launch-scene{
-    background:var(--surface);
-    border:1px solid var(--line);
-    border-top:2px solid rgba(236,204,48,0.4);
-    border-radius:12px;
-    padding:1.5rem 1.25rem 1.25rem;
-    position:relative;
-    overflow:hidden;
-    box-shadow:0 24px 48px rgba(0,0,0,0.25);
-    transition:padding 0.4s ease, transform 0.4s ease, box-shadow 0.4s ease;
-  }
-  .launch-scene::before{
-    content:'';
-    position:absolute;
-    top:-1px;
-    left:24px;
-    right:24px;
-    height:2px;
-    background:linear-gradient(90deg, transparent, rgba(244,208,72,0.6), transparent);
-  }
-  .launch-scene::after{
-    content:'';
-    position:absolute;
-    inset:0;
-    background:
-      radial-gradient(circle at top right, rgba(244,208,72,0.10), transparent 35%),
-      linear-gradient(180deg, rgba(255,255,255,0.01), transparent 30%);
-    pointer-events:none;
-  }
-  .launch-top{
-    display:flex;
-    align-items:center;
-    justify-content:space-between;
-    gap:1rem;
-    margin-bottom:1rem;
-  }
-  .launch-eyebrow{
-    font-size:0.66rem;
-    font-weight:700;
-    letter-spacing:0.18em;
-    text-transform:uppercase;
-    color:var(--sun2);
-  }
-  .launch-lamp{
-    display:inline-flex;
-    align-items:center;
-    gap:0.45rem;
-    padding:0.38rem 0.7rem;
-    border-radius:999px;
-    border:1px solid rgba(245,237,216,0.14);
-    background:rgba(245,237,216,0.04);
-    font-size:0.68rem;
-    font-weight:600;
-    letter-spacing:0.14em;
-    text-transform:uppercase;
-    color:var(--muted);
-  }
-  .launch-lamp-dot{
-    width:8px;
-    height:8px;
-    border-radius:50%;
-    background:rgba(245,237,216,0.28);
-    box-shadow:none;
-    transition:background 0.25s ease, box-shadow 0.25s ease;
-  }
-  .launch-lamp[data-state="warming"] .launch-lamp-dot,
-  .launch-lamp[data-state="ready"] .launch-lamp-dot{
-    background:var(--warning);
-    box-shadow:0 0 14px rgba(217,119,6,0.32);
-  }
-  .launch-lamp[data-state="live"]{
-    color:var(--sun2);
-    border-color:rgba(236,204,48,0.3);
-    background:rgba(236,204,48,0.12);
-  }
-  .launch-lamp[data-state="live"] .launch-lamp-dot{
-    background:var(--sun);
-    box-shadow:0 0 16px rgba(244,208,72,0.45);
-    animation:pulse-glow 1.8s ease-in-out infinite;
-  }
-  .launch-title{
-    font-family:var(--font-display);
-    font-size:clamp(2rem, 7vw, 3.2rem);
-    font-style:italic;
-    line-height:1;
-    color:var(--cream);
-    max-width:12ch;
-  }
-  .launch-detail{
-    margin-top:0.65rem;
-    max-width:34rem;
-    font-size:0.98rem;
-    color:var(--cream-dk);
-    line-height:1.55;
-  }
-  .launch-promise{
-    margin-top:1rem;
-    font-size:0.74rem;
-    font-weight:600;
-    letter-spacing:0.16em;
-    text-transform:uppercase;
-    color:rgba(245,237,216,0.5);
-  }
-  .launch-waveform{
-    display:flex;
-    align-items:flex-end;
-    gap:4px;
-    height:48px;
-    margin:1.25rem 0 0.95rem;
-  }
-  .launch-waveform .wb{
-    width:4px;
-    border-radius:999px;
-    background:rgba(240,200,64,0.42);
-    height:8px;
-    animation:launch-wave var(--d) ease-in-out infinite alternate;
-    animation-delay:var(--dl);
-    animation-play-state:paused;
-  }
-  .launch-waveform.active .wb{animation-play-state:running}
-  /* When the station is stopped, freeze the waveform regardless of `active`.
-     Driven by `data-stopped="true"` on <body>, toggled by fetchStatus. Item 19. */
-  body[data-stopped="true"] .launch-waveform .wb{animation-play-state:paused}
-  @keyframes launch-wave{
-    from{height:5px;opacity:0.35}
-    to{height:var(--h);opacity:0.92}
-  }
-  .launch-preview{
-    padding:0.85rem 0.95rem;
-    border:1px solid rgba(245,237,216,0.08);
-    border-radius:10px;
-    background:rgba(20,17,15,0.42);
-    font-size:0.86rem;
-    color:var(--cream-dk);
-    min-height:3.4rem;
-  }
-  .launch-preview strong{
-    display:block;
-    margin-bottom:0.16rem;
-    font-size:0.68rem;
-    font-weight:700;
-    letter-spacing:0.16em;
-    text-transform:uppercase;
-    color:var(--sun2);
-  }
-  .launch-cues{
-    list-style:none;
-    display:grid;
-    gap:0.65rem;
-    margin:1rem 0 0;
-  }
-  .launch-cue{
-    display:flex;
-    align-items:flex-start;
-    gap:0.8rem;
-    padding:0.78rem 0.9rem;
-    border-radius:10px;
-    border:1px solid rgba(245,237,216,0.08);
-    background:rgba(20,17,15,0.36);
-  }
-  .launch-cue-dot{
-    width:18px;
-    height:18px;
-    border-radius:50%;
-    margin-top:0.18rem;
-    background:rgba(245,237,216,0.18);
-    color:transparent;
-    display:inline-flex;
-    align-items:center;
-    justify-content:center;
-    font-size:10px;
-    font-weight:700;
-    line-height:1;
-    flex-shrink:0;
-    transition:background 0.2s ease, box-shadow 0.2s ease;
-  }
-  .launch-cue[data-state="active"] .launch-cue-dot{
-    background:var(--warning);
-    color:#fff;
-    box-shadow:0 0 14px rgba(217,119,6,0.28);
-    animation:launch-step-pulse 1.1s ease-in-out infinite;
-  }
-  .launch-cue[data-state="done"] .launch-cue-dot{
-    background:var(--sun);
-    color:#14110F;
-    box-shadow:0 0 16px rgba(244,208,72,0.35);
-  }
-  .launch-cue[data-state="blocked"] .launch-cue-dot{
-    background:var(--error);
-    color:#fff;
-    box-shadow:0 0 12px rgba(196,74,74,0.35);
-  }
-  @keyframes launch-step-pulse{
-    0%,100%{transform:scale(1);opacity:0.85}
-    50%{transform:scale(1.12);opacity:1}
-  }
-  .launch-cue-title{
-    font-size:0.86rem;
-    font-weight:600;
-    color:var(--cream);
-  }
-  .launch-cue-detail{
-    margin-top:0.18rem;
-    font-size:0.8rem;
-    color:var(--muted);
-    line-height:1.45;
-  }
-  .launch-actions{
-    margin-top:1.1rem;
-    display:flex;
-    flex-direction:column;
-    align-items:flex-start;
-    gap:0.55rem;
-  }
-  .launch-btn{
-    min-height:52px;
-    border:none;
-    border-radius:999px;
-    padding:0.9rem 1.45rem;
-    background:var(--sun2);
-    color:var(--bg);
-    font-family:var(--font-body);
-    font-size:0.95rem;
-    font-weight:700;
-    cursor:pointer;
-    box-shadow:0 4px 20px rgba(236,204,48,0.4),0 0 0 6px rgba(236,204,48,0.08),0 0 28px rgba(236,204,48,0.15);
-    transition:transform 0.15s ease, background 0.2s ease, box-shadow 0.3s ease;
-  }
-  .launch-btn:hover{
-    background:var(--sun);
-    transform:scale(1.02);
-    box-shadow:0 4px 24px rgba(244,208,72,0.55),0 0 0 8px rgba(244,208,72,0.12),0 0 36px rgba(244,208,72,0.2);
-  }
-  .launch-btn:active{transform:scale(0.98)}
-  .launch-btn[disabled]{
-    cursor:default;
-    opacity:0.86;
-    transform:none;
-  }
-  .launch-note{
-    font-size:0.82rem;
-    color:var(--muted);
-    line-height:1.45;
-  }
-  .post-launch{
-    display:grid;
-    gap:1rem;
-    opacity:0.28;
-    transform:translateY(18px);
-    transition:opacity 0.45s ease, transform 0.45s ease;
-  }
-  body[data-launch-state="live"] .post-launch{
-    opacity:1;
-    transform:none;
-  }
-  body[data-launch-state="live"] .launch-scene{
-    padding-bottom:1rem;
-    box-shadow:0 18px 36px rgba(0,0,0,0.22);
-  }
-
-  /* ---- Now Playing ---- */
-  .now-playing{
-    background:var(--surface);
-    border:1px solid var(--line);
-    border-top:2px solid rgba(236,204,48,0.4);
-    border-radius:12px;
-    padding:2rem 1.75rem;
-    position:relative;
-    overflow:hidden;
-    transition:background 0.3s;
-    box-shadow:0 24px 48px rgba(0,0,0,0.25);
-  }
-  .now-playing::before{
-    content:'';
-    position:absolute;
-    top:-1px;left:24px;right:24px;
-    height:2px;
-    background:linear-gradient(90deg,transparent,rgba(244,208,72,0.6),transparent);
-  }
-  .np-section-label{
-    font-size:0.7rem;
-    font-weight:600;
-    letter-spacing:0.12em;
-    text-transform:uppercase;
-    color:var(--muted);
-    margin-bottom:0.75rem;
-  }
-  .np-type-badge{
-    display:inline-flex;
-    align-items:center;
-    gap:0.45rem;
-    font-size:0.92rem;
-    font-weight:600;
-    letter-spacing:0.06em;
-    text-transform:uppercase;
-    margin-bottom:0.5rem;
-  }
-  .np-type-icon{font-size:1.1rem}
-  .np-type-text{color:var(--cream-dk)}
-  .np-label{
-    font-family:var(--font-display);
-    font-size:clamp(1.35rem,4vw,1.75rem);
-    font-weight:600;
-    color:var(--cream);
-    line-height:1.35;
-    transition:opacity 0.3s;
-  }
-  .np-sublabel{
-    font-size:0.85rem;
-    color:var(--cream-dk);
-    margin-top:0.35rem;
-    font-weight:400;
-  }
-
-  /* Equalizer — 36 bars, JS-driven */
-  .equalizer{
-    display:flex;
-    align-items:center;
-    gap:3px;
-    height:28px;
-    margin-top:1.25rem;
-  }
-  .equalizer .wb{
-    width:3px;
-    border-radius:2px;
-    background:rgba(240,200,64,0.45);
-    animation:eq-wave var(--d) ease-in-out infinite alternate;
-    animation-delay:var(--dl);
-    animation-play-state:paused;
-  }
-  .equalizer.active .wb{animation-play-state:running}
-  @keyframes eq-wave{
-    from{height:3px;opacity:0.4}
-    to{height:var(--h);opacity:0.8}
-  }
-
-  /* ---- Section cards ---- */
-  .section-card{
-    background:var(--surface);
-    border:1px solid var(--line);
-    border-radius:12px;
-    padding:1.1rem 1.1rem 0.2rem;
-  }
-  .section-title{
-    font-family:var(--font-display);
-    font-size:1rem;
-    font-weight:600;
-    color:var(--cream-dk);
-    margin-bottom:0.75rem;
-    letter-spacing:0.02em;
-  }
-  .golden-path-notice{
-  }
-  .golden-path-head{
-    font-size:0.72rem;
-    font-weight:600;
-    letter-spacing:0.1em;
-    text-transform:uppercase;
-    color:var(--sun2);
-    margin-bottom:0.4rem;
-  }
-  .golden-path-title{
-    font-family:var(--font-display);
-    font-size:1rem;
-    color:var(--cream);
-    margin-bottom:0.35rem;
-  }
-  .golden-path-detail{
-    font-size:0.84rem;
-    color:var(--cream-dk);
-    margin-bottom:0.55rem;
-  }
-  .golden-path-steps{
-    margin-left:1.1rem;
-    color:var(--cream-dk);
-    font-size:0.82rem;
-    line-height:1.45;
-  }
-  .golden-path-steps li{margin-bottom:0.25rem}
-
-  /* Up Next list */
-  .upcoming-list{display:flex;flex-direction:column}
-  .upcoming-item{
-    display:flex;
-    align-items:center;
-    gap:0.75rem;
-    padding:0.65rem 0;
-    border-bottom:1px solid rgba(245,237,216,0.2);
-    transition:opacity 0.3s,transform 0.3s;
-  }
-  .upcoming-item:last-child{border-bottom:none}
-  .item-icon{
-    font-size:0.95rem;
-    width:1.5rem;
-    text-align:center;
-    flex-shrink:0;
-  }
-  .item-label{
-    font-size:0.88rem;
-    color:var(--cream-dk);
-    font-weight:400;
-  }
-
-  /* Recently Played */
-  .log-item{
-    display:flex;
-    align-items:center;
-    gap:0.75rem;
-    padding:0.5rem 0;
-    border-bottom:1px solid rgba(245,237,216,0.1);
-  }
-  .log-item:last-child{border-bottom:none}
-  .log-time{
-    font-size:0.72rem;
-    color:var(--muted);
-    font-variant-numeric:tabular-nums;
-    flex-shrink:0;
-    width:3.2rem;
-  }
-  .log-icon{font-size:0.85rem;width:1.3rem;text-align:center;flex-shrink:0}
-  .log-label{font-size:0.82rem;color:var(--muted);font-weight:300}
-
-  /* Running Jokes */
-  .jokes-section{
-    background:var(--surface);
-    border:1px solid var(--line);
-    border-radius:12px;
-    padding:1rem 1rem 0.9rem;
-  }
-  .jokes-title{
-    font-family:var(--font-display);
-    font-size:0.85rem;
-    font-weight:600;
-    color:var(--sun2);
-    margin-bottom:0.5rem;
-    letter-spacing:0.04em;
-  }
-  .joke-item{
-    font-size:0.82rem;
-    font-style:italic;
-    color:var(--muted);
-    padding:0.25rem 0;
-    line-height:1.5;
-  }
-
-  /* ---- Fixed Bottom Player ---- */
-  .player-bar{
-    position:fixed;
-    bottom:0;left:0;right:0;
-    background:none;
-    padding:1rem 1rem calc(env(safe-area-inset-bottom, 0px) + 1rem);
-    z-index:100;
-    display:flex;
-    justify-content:center;
-    pointer-events:none;
-    opacity:0;
-    transform:translateY(24px);
-    transition:opacity 0.35s ease, transform 0.35s ease;
-  }
-  body[data-launch-state="live"] .player-bar{
-    opacity:1;
-    transform:none;
-  }
-  .player-inner{
-    width:min(640px,100%);
-    margin:0 auto;
-    padding:0.95rem 1.15rem;
-    display:flex;
-    align-items:center;
-    gap:1rem;
-    border:1px solid var(--line);
-    border-radius:12px;
-    background:rgba(28,23,20,0.95);
-    box-shadow:0 18px 45px rgba(0,0,0,0.35);
-    backdrop-filter:blur(12px);
-    pointer-events:auto;
-  }
-  .play-btn{
-    width:56px;height:56px;
-    border-radius:50%;
-    background:var(--sun2);
-    border:none;
-    cursor:pointer;
-    display:flex;
-    align-items:center;
-    justify-content:center;
-    flex-shrink:0;
-    transition:background 0.2s,transform 0.15s,box-shadow 0.3s;
-    box-shadow:0 4px 20px rgba(236,204,48,0.4),0 0 0 6px rgba(236,204,48,0.08),0 0 28px rgba(236,204,48,0.15);
-  }
-  .play-btn:hover{background:var(--sun);transform:scale(1.05);box-shadow:0 4px 24px rgba(244,208,72,0.55),0 0 0 8px rgba(244,208,72,0.12),0 0 36px rgba(244,208,72,0.2)}
-  .play-btn:active{transform:scale(0.97)}
-  .play-btn svg{width:22px;height:22px;fill:#14110F;margin-left:2px}
-  .play-btn.playing{background:var(--ok);box-shadow:0 4px 20px rgba(37,99,235,0.4),0 0 0 6px rgba(37,99,235,0.08)}
-  .play-btn.playing svg{margin-left:0;fill:#fff}
-
-  .player-meta{flex:1;min-width:0}
-  .player-live{
-    font-size:0.62rem;
-    font-weight:600;
-    letter-spacing:0.14em;
-    text-transform:uppercase;
-    color:var(--sun2);
-    display:flex;
-    align-items:center;
-    gap:0.35rem;
-  }
-  .player-live-dot{
-    width:6px;height:6px;
-    border-radius:50%;
-    background:var(--sun);
-    animation:pulse-glow 1.8s ease-in-out infinite;
-  }
-  .player-now{
-    font-size:0.82rem;
-    color:var(--cream-dk);
-    white-space:nowrap;
-    overflow:hidden;
-    text-overflow:ellipsis;
-    margin-top:0.1rem;
-  }
-
-  .volume-wrap{
-    display:flex;
-    align-items:center;
-    gap:0.5rem;
-    flex-shrink:0;
-  }
-  .volume-icon{
-    font-size:0.85rem;
-    color:var(--muted);
-    cursor:pointer;
-  }
-  .volume-slider{
-    -webkit-appearance:none;
-    appearance:none;
-    width:80px;
-    height:4px;
-    border-radius:2px;
-    background:rgba(245,237,216,0.3);
-    outline:none;
-  }
-  .volume-slider::-webkit-slider-thumb{
-    -webkit-appearance:none;
-    width:14px;height:14px;
-    border-radius:50%;
-    background:var(--muted);
-    cursor:pointer;
-    transition:background 0.2s;
-  }
-  .volume-slider::-webkit-slider-thumb:hover{background:#CBB9A6}
-  .volume-slider::-moz-range-thumb{
-    width:14px;height:14px;
-    border-radius:50%;
-    background:var(--muted);
-    cursor:pointer;
-    border:none;
-  }
-  .volume-slider::-moz-range-track{
-    height:4px;
-    border-radius:2px;
-    background:rgba(245,237,216,0.3);
-    border:none;
-  }
-
-  /* Loading state */
-  .loading-shimmer{
-    background:linear-gradient(90deg,transparent 0%,rgba(245,239,230,0.04) 50%,transparent 100%);
-    background-size:200% 100%;
-    animation:shimmer 1.8s infinite;
-  }
-  @keyframes shimmer{0%{background-position:200% 0}100%{background-position:-200% 0}}
-
-  /* Fade transitions */
-  .fade-content{transition:opacity 0.25s ease}
-  .fade-content.updating{opacity:0.6}
-
-  /* Responsive */
-  @media(min-width:768px){
-    .station-header{padding-top:3.5rem}
-    .launch-scene{padding:1.8rem 1.6rem 1.45rem}
-    .now-playing{padding:2.5rem 2.25rem}
-    .volume-slider{width:100px}
-  }
-  @media(max-width:640px){
-    body{padding-bottom:180px}
-    .launch-top{align-items:flex-start;flex-direction:column}
-    .launch-title{max-width:none}
-    .section-card,.jokes-section,.launch-scene{border-radius:16px}
-    .player-bar{padding-left:0.75rem;padding-right:0.75rem}
-    .player-inner{border-radius:18px}
-  }
-  @media(max-width:380px){
-    .volume-wrap{display:none}
-    .player-inner{gap:0.75rem}
-  }
-
-  /* Safe area for iOS */
-  @supports(padding-bottom:env(safe-area-inset-bottom)){
-    .player-bar{padding-bottom:env(safe-area-inset-bottom)}
-  }
-
-  /* ---- Listener Request Form ---- */
-  .request-form{display:flex;flex-direction:column;gap:0.65rem;padding-bottom:0.8rem}
-  .request-input{
-    background:#1a1410;
-    border:1px solid var(--line);
-    border-radius:8px;
-    color:var(--cream);
-    font-family:var(--font-body);
-    font-size:0.88rem;
-    padding:0.55rem 0.75rem;
-    outline:none;
-    resize:none;
-    width:100%;
-    box-sizing:border-box;
-    transition:border-color 0.2s;
-  }
-  .request-input::placeholder{color:var(--muted);opacity:0.7}
-  .request-input:focus{border-color:var(--sun2)}
-  .request-textarea{min-height:72px}
-  .request-btn{
-    align-self:flex-start;
-    background:var(--sun2);
-    border:none;
-    border-radius:8px;
-    color:#14110f;
-    cursor:pointer;
-    font-family:var(--font-body);
-    font-size:0.85rem;
-    font-weight:600;
-    letter-spacing:0.02em;
-    min-height:44px;
-    padding:0.5rem 1.2rem;
-    transition:opacity 0.2s,transform 0.1s;
-  }
-  .request-btn:hover{opacity:0.85}
-  .request-btn:active{transform:scale(0.97)}
-  .request-btn:disabled{opacity:0.4;cursor:not-allowed}
-  .request-feedback{font-size:0.88rem;color:var(--muted);margin-top:0.5rem;padding:0.5rem 0.75rem;border-radius:6px;background:rgba(255,255,255,0.05)}
-  .request-feedback.ok{color:#6fa3ef;background:rgba(37,99,235,0.12)}
-  .request-feedback.err{color:#e07070;background:rgba(184,44,32,0.12)}
-
-  @media (prefers-reduced-motion: reduce) {
-    *, *::before, *::after {
-      animation-duration: 0.01ms !important;
-      animation-iteration-count: 1 !important;
-      transition-duration: 0.01ms !important;
-    }
-  }
-  button:focus-visible,
-  input[type="text"]:focus-visible,
-  textarea:focus-visible {
-    outline: 2px solid rgba(244,208,72,0.7);
-    outline-offset: 2px;
-  }
-  input[type="range"]:focus-visible {
-    outline: 2px solid rgba(244,208,72,0.7);
-    outline-offset: 3px;
-  }
-</style>
+<link rel="stylesheet" href="/static/listener.css">
+<script src="/static/waveform.js" defer></script>
+<script src="/static/listener.js" defer></script>
 </head>
-<body data-launch-state="idle">
+<body>
 
-<!-- Station Header -->
-<header class="station-header">
-  <svg width="48" height="48" viewBox="0 0 100 100" style="margin-bottom: 8px;"><rect width="100" height="100" rx="12" fill="#14110F"/><rect x="14" y="32" width="72" height="50" rx="6" fill="#ECCC30"/><rect x="14" y="32" width="24" height="4" fill="#B82C20"/><rect x="38" y="32" width="24" height="4" fill="#F5EDD8"/><rect x="62" y="32" width="24" height="4" fill="#ECCC30"/><rect x="18" y="40" width="64" height="38" rx="4" fill="#251E19"/><circle cx="42" cy="61" r="16" fill="#14110F" stroke="#CBB9A6" stroke-width="1"/><circle cx="42" cy="61" r="3" fill="#ECCC30"/><circle cx="70" cy="61" r="6" fill="#CBB9A6"/><circle cx="70" cy="61" r="2" fill="#F5EDD8"/><line x1="72" y1="32" x2="80" y2="14" stroke="#CBB9A6" stroke-width="2" stroke-linecap="round"/><path d="M86 48 A3 6 0 0 1 86 64" fill="none" stroke="#F5EDD8" stroke-width="2" stroke-linecap="round" opacity="0.8"/><path d="M90 44 A4 8 0 0 1 90 68" fill="none" stroke="#F5EDD8" stroke-width="1.5" stroke-linecap="round" opacity="0.5"/></svg>
-  <h1 class="station-name">Mamma Mi Radio</h1>
-  <p class="station-subtitle">Late-night Milan talk radio</p>
-  <div class="on-air" id="onAirBadge">
-    <span class="on-air-dot"></span>
-    ON AIR
+<div class="tricolor-band"><div></div><div></div><div></div></div>
+
+<!-- BAND 1 — NAV -->
+<nav class="nav">
+  <div class="nav-logo">
+    <div class="nav-mark">M</div>
+    <h1>Mamma <span class="mi">Mi</span> Radio</h1>
   </div>
-</header>
+  <div class="nav-links">
+    <a href="#" class="active">In Onda</a>
+    <a href="#palinsesto">Palinsesto</a>
+    <a href="#dediche">Dediche</a>
+    <a href="#about">About</a>
+  </div>
+  <button class="nav-cta" id="nav-cta" type="button" aria-label="Ascolta ora">Ascolta Ora</button>
+</nav>
 
-<div class="container">
-  <section class="launch-scene" id="launchScene">
-    <div class="launch-top">
-      <div class="launch-eyebrow" id="launchEyebrow">Sign-on sequence</div>
-      <div class="launch-lamp" id="launchLamp" data-state="idle">
-        <span class="launch-lamp-dot"></span>
-        <span id="launchLampLabel">Stand by</span>
+<!-- BAND 2 — PERSISTENT NOW-PLAYING STRIP -->
+<div class="np-strip" aria-live="polite">
+  <span class="np-chip">On Air</span>
+  <div class="np-info">
+    <div class="np-track" id="np-track">In arrivo…</div>
+    <div class="np-artist" id="np-artist"></div>
+  </div>
+  <div class="np-prog">
+    <span class="np-time" id="np-time-cur">0:00</span>
+    <div class="np-track-bar"><div class="np-fill" id="np-fill"></div></div>
+    <span class="np-time" id="np-time-tot">—</span>
+  </div>
+  <div class="np-ctrl">
+    <button class="np-play" id="np-play" type="button" aria-label="Play">&#9654;</button>
+  </div>
+</div>
+
+<!-- BAND 3 — HERO -->
+<section class="hero" id="hero">
+  <div class="hero-left">
+    <div class="hero-kicker">In Diretta &middot; 96,7 FM &middot; Milano</div>
+    <h1 class="hero-h1">La notte<br>è <span class="accent">italiana</span></h1>
+    <p class="hero-sub">Radio scritta dall'intelligenza artificiale, voci umane dai conduttori di piazza, musica dal cuore del Bel Paese. Dalle sei del mattino all'una di notte.</p>
+    <div class="hero-actions">
+      <button class="btn-primary" id="hero-play" type="button">Ascolta Ora</button>
+      <button class="btn-ghost" id="hero-palinsesto" type="button">Il Palinsesto</button>
+    </div>
+    <div class="hero-stats">
+      <div>
+        <div class="stat-num" id="stat-airtime">—</div>
+        <div class="stat-lbl">In onda oggi</div>
+      </div>
+      <div>
+        <div class="stat-num" id="stat-tracks">—</div>
+        <div class="stat-lbl">Tracce in playlist</div>
+      </div>
+      <div>
+        <div class="stat-num" id="stat-hosts">Marco &middot; Giulia</div>
+        <div class="stat-lbl">I conduttori</div>
       </div>
     </div>
-    <h2 class="launch-title fade-content" id="launchTitle">We're lighting the sign.</h2>
-    <p class="launch-detail fade-content" id="launchDetail">AI hosts. Italian music. Live absurdity.</p>
-    <div class="launch-waveform" id="launchWaveform" aria-hidden="true">
-      <span class="wb" style="--h:30px;--d:0.62s;--dl:0.00s"></span>
-      <span class="wb" style="--h:24px;--d:0.78s;--dl:0.08s"></span>
-      <span class="wb" style="--h:38px;--d:0.69s;--dl:0.13s"></span>
-      <span class="wb" style="--h:20px;--d:0.84s;--dl:0.21s"></span>
-      <span class="wb" style="--h:44px;--d:0.71s;--dl:0.04s"></span>
-      <span class="wb" style="--h:28px;--d:0.66s;--dl:0.18s"></span>
-      <span class="wb" style="--h:40px;--d:0.74s;--dl:0.26s"></span>
-      <span class="wb" style="--h:18px;--d:0.92s;--dl:0.11s"></span>
-      <span class="wb" style="--h:35px;--d:0.58s;--dl:0.09s"></span>
-      <span class="wb" style="--h:26px;--d:0.82s;--dl:0.28s"></span>
-      <span class="wb" style="--h:42px;--d:0.63s;--dl:0.17s"></span>
-      <span class="wb" style="--h:22px;--d:0.88s;--dl:0.05s"></span>
-      <span class="wb" style="--h:36px;--d:0.67s;--dl:0.24s"></span>
-      <span class="wb" style="--h:19px;--d:0.77s;--dl:0.15s"></span>
-      <span class="wb" style="--h:46px;--d:0.72s;--dl:0.03s"></span>
-      <span class="wb" style="--h:32px;--d:0.81s;--dl:0.29s"></span>
-      <span class="wb" style="--h:24px;--d:0.64s;--dl:0.12s"></span>
-      <span class="wb" style="--h:39px;--d:0.76s;--dl:0.22s"></span>
-      <span class="wb" style="--h:21px;--d:0.85s;--dl:0.06s"></span>
-      <span class="wb" style="--h:34px;--d:0.61s;--dl:0.19s"></span>
+  </div>
+  <div class="hero-right">
+    <div class="hero-img-placeholder" aria-hidden="true">
+      <span>R</span>
+      <span>Hero image · AI-generated scene</span>
     </div>
-    <div class="launch-preview" id="launchPreview"><strong>First cue</strong>You are arriving exactly at sign-on.</div>
-    <ol class="launch-cues" id="launchCues"></ol>
-    <div class="launch-actions">
-      <button class="launch-btn" id="launchBtn" type="button">Start the station</button>
-      <p class="launch-note" id="launchNote">Sound starts the moment you tap.</p>
+    <aside class="dial-widget" aria-label="FM tuning dial">
+      <div class="dw-top">
+        <div>
+          <div class="dw-label">Frequency</div>
+          <div class="dw-freq">96,7<span class="unit">MHz</span></div>
+        </div>
+        <div class="dw-bars" aria-hidden="true">
+          <span></span><span></span><span></span><span></span><span></span>
+        </div>
+      </div>
+      <div class="dw-band" aria-hidden="true">
+        <div class="dw-scale">
+          <div class="dw-sm"><div class="t"></div><span>88</span></div>
+          <div class="dw-sm"><div class="t"></div><span>92</span></div>
+          <div class="dw-sm active"><div class="t"></div><span>96.7</span></div>
+          <div class="dw-sm"><div class="t"></div><span>101</span></div>
+          <div class="dw-sm"><div class="t"></div><span>107</span></div>
+        </div>
+        <div class="dw-needle"></div>
+      </div>
+    </aside>
+    <aside class="casa-card" id="casa-card" role="status" aria-live="polite" hidden>
+      <div class="casa-eyebrow" id="casa-eyebrow">Casa</div>
+      <div class="casa-mood" id="casa-mood"></div>
+      <div class="casa-weather" id="casa-weather"></div>
+      <div class="casa-event" id="casa-event"></div>
+    </aside>
+  </div>
+</section>
+
+<!-- BAND 4 — PALINSESTO -->
+<section class="palinsesto" id="palinsesto">
+  <div class="section-head">
+    <h2>Stasera in Onda</h2>
+    <span class="meta" id="palinsesto-date">—</span>
+  </div>
+  <div class="slots" id="slots" aria-live="polite">
+    <div class="slot"><div class="slot-time">—</div><div class="slot-kind">—</div><div class="slot-title">In attesa…</div><div class="slot-host"></div></div>
+    <div class="slot next"><div class="slot-time">—</div><div class="slot-kind">—</div><div class="slot-title">In attesa…</div><div class="slot-host"></div></div>
+    <div class="slot next"><div class="slot-time">—</div><div class="slot-kind">—</div><div class="slot-title">In attesa…</div><div class="slot-host"></div></div>
+    <div class="slot next"><div class="slot-time">—</div><div class="slot-kind">—</div><div class="slot-title">In attesa…</div><div class="slot-host"></div></div>
+  </div>
+</section>
+
+<!-- BAND 5 — DEDICHE -->
+<section class="dediche" id="dediche">
+  <div class="section-head">
+    <h2>Dediche &amp; Saluti</h2>
+    <span class="meta">Dai nostri ascoltatori</span>
+  </div>
+  <div class="dediche-grid">
+    <div class="quote-stack" id="quote-stack">
+      <div class="quote">
+        <div class="quote-text">La sezione dediche si riempirà non appena i nostri ascoltatori manderanno un saluto. Prova tu.</div>
+        <div class="quote-meta"><strong>Mamma Mi Radio</strong> &middot; in attesa di voci</div>
+      </div>
     </div>
-  </section>
-
-  <div class="post-launch" id="postLaunch">
-
-  <!-- Now Playing -->
-  <div class="now-playing" id="nowPlaying">
-    <div class="np-section-label">Live now</div>
-    <div class="np-type-badge" id="npTypeBadge"><span class="np-type-icon" id="npIcon" aria-hidden="true">&#9835;</span><span class="np-type-text" id="npTypeText">Music</span></div>
-    <div class="np-label fade-content" id="npLabel">The booth is warming up...</div>
-    <div class="np-sublabel fade-content" id="npSublabel"></div>
-    <div class="equalizer" id="equalizer"></div>
+    <aside class="form-side" id="form-side">
+      <div class="form-eyebrow">Manda un Saluto</div>
+      <div class="form-title">La tua voce, in diretta.</div>
+      <p class="form-desc">Saluti, dediche, richieste musicali. I conduttori leggono tutto e rispondono sull'onda.</p>
+      <form id="request-form">
+        <input class="form-input" type="text" id="req-name" placeholder="Come ti chiami? (opzionale)" autocomplete="name">
+        <textarea class="form-textarea" id="req-msg" placeholder="Il tuo messaggio o la canzone che vuoi ascoltare..." rows="3" autocomplete="off"></textarea>
+        <button class="form-submit" type="submit">Manda al DJ &#9654;</button>
+      </form>
+      <div class="form-sent" id="request-sent" style="display:none" role="status" aria-live="polite"></div>
+    </aside>
   </div>
+</section>
 
-  <div class="section-card golden-path-notice" id="goldenPathNotice" style="display:none">
-    <div class="golden-path-head" id="goldenPathHead">Studio note</div>
-    <div class="golden-path-title" id="goldenPathTitle"></div>
-    <div class="golden-path-detail" id="goldenPathDetail"></div>
-    <ol class="golden-path-steps" id="goldenPathSteps"></ol>
-  </div>
-
-  <!-- Casa — HA ambient awareness (hidden when HA not connected or no data) -->
-  <div class="section-card" id="casa-card" role="status" aria-live="polite" aria-hidden="true" style="display:none;opacity:0;transition:opacity 250ms ease-out">
-    <div class="section-title" id="casa-eyebrow" style="color:var(--sun2);letter-spacing:0.18em">CASA</div>
-    <div id="casa-mood" style="font-family:var(--font-display);font-style:italic;font-size:1.2rem;color:var(--cream);line-height:1.3"></div>
-    <div id="casa-weather" style="font-size:0.88rem;color:var(--text-secondary);margin-top:0.2rem"></div>
-    <div id="casa-event" style="font-size:0.88rem;color:var(--muted);margin-top:0.2rem"></div>
-  </div>
-
-  <!-- Up Next -->
-  <div class="section-card" id="upNextSection" style="display:none">
-    <div class="section-title">Up next</div>
-    <div class="upcoming-list" id="upNextList"></div>
-  </div>
-
-  <!-- Running Jokes -->
-  <div class="jokes-section" id="jokesSection" style="display:none">
-    <div class="jokes-title">Callback corner</div>
-    <div id="jokesList"></div>
-  </div>
-
-  <!-- Recently Played -->
-  <div class="section-card" id="recentSection" style="display:none">
-    <div class="section-title">Recently played</div>
-    <div id="recentList"></div>
-  </div>
-
-  <!-- Listener Request -->
-  <div class="section-card" id="requestCard">
-    <div class="section-title">Manda un messaggio in studio</div>
-    <div class="request-form">
-      <input type="text" id="requestName" class="request-input" placeholder="Il tuo nome (opzionale)" maxlength="40" autocomplete="off" aria-label="Il tuo nome">
-      <textarea id="requestMsg" class="request-input request-textarea" placeholder="Chiedi una canzone o manda un saluto… I conduttori potrebbero leggerlo in diretta!" maxlength="280" rows="3" aria-label="Messaggio o richiesta canzone"></textarea>
-      <button class="request-btn" id="requestSendBtn">Manda al DJ</button>
-      <div id="requestFeedback" class="request-feedback" style="display:none"></div>
-    </div>
-  </div>
+<!-- BAND 6 — TICKER -->
+<div class="ticker-wrap" aria-hidden="true">
+  <div class="ticker">
+    Milano 22° soleggiato<span class="ts">·</span>Traffico A4 scorrevole<span class="ts">·</span>Serie A: Napoli 2 – Juventus 1<span class="ts">·</span>Borsa: FTSE MIB +0.8%<span class="ts">·</span>Firenze 20° sereno<span class="ts">·</span>Prossimo treno Roma–Milano 14:35<span class="ts">·</span>Palermo 27° sole splendido<span class="ts">·</span>Torino 18° coperto<span class="ts">·</span>Mare: Liguria calmo, Adriatico mosso<span class="ts">·</span>Milano 22° soleggiato<span class="ts">·</span>Traffico A4 scorrevole<span class="ts">·</span>Serie A: Napoli 2 – Juventus 1<span class="ts">·</span>Borsa: FTSE MIB +0.8%<span class="ts">·</span>Firenze 20° sereno<span class="ts">·</span>Prossimo treno Roma–Milano 14:35<span class="ts">·</span>Palermo 27° sole splendido<span class="ts">·</span>Torino 18° coperto<span class="ts">·</span>Mare: Liguria calmo, Adriatico mosso
   </div>
 </div>
 
-<!-- Audio element (hidden) -->
-<audio id="radioAudio" preload="none"></audio>
+<!-- BAND 7 — FOOTER -->
+<footer class="footer" id="about">
+  <div>Mamma Mi Radio &middot; 96,7 FM Milano &middot; dal 1987</div>
+  <div class="footer-tricolor" aria-hidden="true"></div>
+  <div>Produced by AI · written in Italia</div>
+</footer>
 
-<!-- Fixed Bottom Player -->
-<div class="player-bar">
-  <div class="player-inner">
-    <button class="play-btn" id="playBtn" aria-label="Play Mamma Mi Radio">
-      <svg id="playIcon" viewBox="0 0 24 24"><polygon points="6,3 20,12 6,21"/></svg>
-      <svg id="pauseIcon" viewBox="0 0 24 24" style="display:none"><rect x="5" y="3" width="4" height="18"/><rect x="15" y="3" width="4" height="18"/></svg>
-    </button>
-    <div class="player-meta">
-      <div class="player-live"><span class="player-live-dot"></span> LIVE</div>
-      <div class="player-now fade-content" id="playerNow">Mamma Mi Radio</div>
-    </div>
-    <div class="volume-wrap">
-      <span class="volume-icon" id="volumeToggle">&#128266;</span>
-      <input type="range" class="volume-slider" id="volumeSlider" min="0" max="1" step="0.05" value="0.8" aria-label="Volume">
-    </div>
-  </div>
-</div>
+<!-- Audio stream element -->
+<audio id="radio-audio" preload="none" crossorigin="anonymous"></audio>
 
-<script>
-(function(){
-  // Derive base path for HA ingress compatibility (empty string when accessed directly)
-  const _base = (() => {
-    const p = window.location.pathname.replace(/\/+$/, '');
-    // Listener is served at / (primary) and /listen (compat alias)
-    if (p.endsWith('/listen')) return p.slice(0, -7);
-    return p === '' ? '' : p;
-  })();
-  const audio = document.getElementById('radioAudio');
-  const body = document.body;
-  const playBtn = document.getElementById('playBtn');
-  const playIcon = document.getElementById('playIcon');
-  const pauseIcon = document.getElementById('pauseIcon');
-  const eq = document.getElementById('equalizer');
-  const onAir = document.getElementById('onAirBadge');
-  const volumeSlider = document.getElementById('volumeSlider');
-  const volumeToggle = document.getElementById('volumeToggle');
-  const launchBtn = document.getElementById('launchBtn');
-  const launchTitle = document.getElementById('launchTitle');
-  const launchDetail = document.getElementById('launchDetail');
-  const launchEyebrow = document.getElementById('launchEyebrow');
-  const launchLamp = document.getElementById('launchLamp');
-  const launchLampLabel = document.getElementById('launchLampLabel');
-  const launchPreview = document.getElementById('launchPreview');
-  const launchCues = document.getElementById('launchCues');
-  const launchNote = document.getElementById('launchNote');
-  const launchWaveform = document.getElementById('launchWaveform');
-  const goldenPathHead = document.getElementById('goldenPathHead');
-
-  // Equalizer — populate 36 bars with randomised timings
-  (function() {
-    const eq = document.getElementById('equalizer');
-    if (!eq) return;
-    for (let i = 0; i < 36; i++) {
-      const b = document.createElement('div');
-      b.className = 'wb';
-      const h = 4 + Math.random() * 20;
-      b.style.cssText = `--h:${h}px;--d:${(0.45+Math.random()*0.85).toFixed(2)}s;--dl:${(Math.random()*0.7).toFixed(2)}s;height:${Math.round(h*0.4)}px`;
-      eq.appendChild(b);
-    }
-  })();
-
-  const state = {
-    isPlaying: false,
-    lastVolume: 0.8,
-    currentLabel: '',
-    attemptedStart: false,
-    launchResolved: false,
-    waitingForAudio: false,
-    hasFetchedStatus: false,
-    streamReady: false,
-    nowStreaming: null,
-    upcoming: [],
-    goldenPath: null,
-  };
-
-  audio.volume = 0.8;
-
-  function icon(type){
-    if(type==='music') return '\u266B';
-    if(type==='welcome') return '\uD83C\uDF99';
-    if(type==='banter') return '\uD83C\uDF99\uFE0F';
-    if(type==='ad') return '[Ad]';
-    if(type==='news_flash') return '[!]';
-    return '\u266B';
-  }
-
-  function typeLabel(type){
-    if(type==='music') return 'Music';
-    if(type==='welcome') return 'Banter';
-    if(type==='banter') return 'Banter';
-    if(type==='ad') return 'Ad';
-    if(type==='news_flash') return 'News';
-    return type||'';
-  }
-
-  function timeScene(){
-    var hour = new Date().getHours();
-    if(hour < 6) return {
-      title: "We're lighting the sign.",
-      detail: "After-hours Italian radio, ready before the city admits it's awake."
-    };
-    if(hour < 12) return {
-      title: "We're lighting the sign.",
-      detail: "A fresh broadcast, warm mics, and the first record already in the room."
-    };
-    if(hour < 18) return {
-      title: "The studio is taking the afternoon.",
-      detail: "AI hosts. Italian music. Live absurdity, right on cue."
-    };
-    return {
-      title: "Tonight is coming on air.",
-      detail: "The booth is warm, the hosts are sharp, and the next record is waiting."
-    };
-  }
-
-  function friendlyGoldenPath(gp){
-    if(!gp || !gp.blocking) return null;
-    return {
-      head: 'Studio note',
-      title: 'The station wants a real crate of records.',
-      detail: 'The room is ready, but the station still needs a dependable music source before it can keep the fantasy alive for guests.',
-      steps: ['Enable chart music in the control room, or drop MP3s into the local music library.']
-    };
-  }
-
-  function cueState(done, active){
-    if(done) return 'done';
-    if(active) return 'active';
-    return 'pending';
-  }
-
-  function normalizeCueStatus(status){
-    if(status === 'done' || status === 'active' || status === 'blocked') return status;
-    return 'pending';
-  }
-
-  function cueGlyph(status){
-    if(status === 'done') return '\u2713';
-    if(status === 'blocked') return '\u2717';
-    if(status === 'active') return '\u25CF';
-    return '';
-  }
-
-  function updateWaveform(){
-    launchWaveform.classList.toggle('active', state.attemptedStart || state.launchResolved || state.streamReady);
-  }
-
-  function renderLaunch(){
-    var mood = timeScene();
-    var nextLabel = '';
-    if(state.nowStreaming && state.nowStreaming.label) nextLabel = state.nowStreaming.label;
-    else if(state.upcoming && state.upcoming.length) nextLabel = state.upcoming[0].label || '';
-
-    var title = mood.title;
-    var detail = mood.detail;
-    var previewHead = 'First cue';
-    var previewText = 'You are arriving exactly at sign-on.';
-    var buttonText = state.launchResolved
-      ? (state.isPlaying ? 'Pause the station' : 'Resume the station')
-      : 'Start the station';
-    var note = 'Sound starts the moment you tap.';
-    var lampState = 'idle';
-    var lampLabel = 'Stand by';
-    var eyebrow = 'Sign-on sequence';
-
-    if(state.attemptedStart && !state.streamReady){
-      title = 'Mamma Mi Radio is going live.';
-      detail = 'The booth is warming up. Stay with us while the first signal hits the room.';
-      previewHead = 'In the room';
-      previewText = 'Checking the airwaves, warming the hosts, and lining up the first entrance.';
-      buttonText = 'Going on air...';
-      note = 'If your browser hesitates, tap again. The station should answer immediately.';
-      lampState = 'warming';
-      lampLabel = 'Warming';
-      eyebrow = 'Going live';
-    } else if(state.streamReady && !state.launchResolved){
-      title = "Tonight's first record is on the platter.";
-      detail = nextLabel ? nextLabel : 'The booth is ready. All it needs is your tap to open the room.';
-      previewHead = state.nowStreaming ? 'Now cued' : 'First up';
-      previewText = nextLabel || 'The first entrance is loaded and waiting.';
-      buttonText = 'Go on air';
-      note = 'Tap once and the station should open straight into the live feed.';
-      lampState = 'ready';
-      lampLabel = 'Ready';
-      eyebrow = 'Ready to break in';
-    }
-    if(state.waitingForAudio && !state.launchResolved){
-      title = 'The red light is about to flip.';
-      detail = nextLabel ? ('Stay with us. ' + nextLabel + ' is already on deck.') : 'The station is already moving. Stay with the sign-on.';
-      previewHead = 'On deck';
-      previewText = nextLabel || 'The first voice or record is already lined up.';
-      buttonText = 'Opening the room...';
-      note = 'The sign turns ON AIR the moment sound actually lands.';
-      lampState = 'warming';
-      lampLabel = 'Arming';
-      eyebrow = 'Sound incoming';
-    }
-    if(state.launchResolved){
-      title = 'You arrived exactly on time.';
-      detail = state.isPlaying
-        ? 'The station is live. Let it run.'
-        : 'The station already knows how to come alive. Bring it back whenever you want.';
-      previewHead = state.nowStreaming ? 'Now airing' : 'On air';
-      previewText = nextLabel || 'The room is open and the next moment is already forming.';
-      note = state.isPlaying
-        ? 'The first hit landed. Stay through the next segue.'
-        : 'The scene stays warm. Tap to throw the switch again.';
-      lampState = state.isPlaying ? 'live' : 'ready';
-      lampLabel = state.isPlaying ? 'On air' : 'Ready';
-      eyebrow = 'Live sign-on';
-    }
-
-    launchTitle.textContent = title;
-    launchDetail.textContent = detail;
-    launchEyebrow.textContent = eyebrow;
-    launchLamp.dataset.state = lampState;
-    launchLampLabel.textContent = lampLabel;
-    launchBtn.textContent = buttonText;
-    launchBtn.disabled = !state.launchResolved && state.attemptedStart && !state.streamReady && !state.waitingForAudio;
-    launchNote.textContent = note;
-    launchPreview.innerHTML = '<strong>' + escHtml(previewHead) + '</strong>' + escHtml(previewText);
-
-    var cues = [
-      {
-        title: 'Checking the airwaves',
-        detail: state.hasFetchedStatus ? 'The signal made it into the booth.' : 'The booth is listening for the first pulse.',
-        status: cueState(state.hasFetchedStatus, state.attemptedStart)
-      },
-      {
-        title: 'The hosts are taking their seats',
-        detail: state.nowStreaming && (state.nowStreaming.type === 'banter' || state.nowStreaming.type === 'welcome')
-          ? 'They are already in the room, leaning into the first line.'
-          : 'Warm mics, a low hum, and just enough trouble.',
-        status: cueState(Boolean(state.nowStreaming), state.attemptedStart || state.streamReady)
-      },
-      {
-        title: "Tonight's first record is on the platter",
-        detail: nextLabel || 'The first entrance is lined up and waiting for the red light.',
-        status: cueState(Boolean(nextLabel), state.streamReady || state.waitingForAudio)
-      },
-      {
-        title: 'Opening the room to you',
-        detail: state.launchResolved
-          ? 'The station is fully live now.'
-          : 'The ON AIR lamp only flips when real sound starts.',
-        status: cueState(state.launchResolved, state.waitingForAudio || state.attemptedStart)
-      }
-    ];
-
-    launchCues.innerHTML = cues.map(function(cue){
-      var cueStatus = normalizeCueStatus(cue.status);
-      var currentAttr = cueStatus === 'active' ? ' aria-current="step"' : '';
-      return '<li class="launch-cue" data-state="' + cueStatus + '"' + currentAttr + '>' +
-        '<span class="launch-cue-dot" aria-hidden="true">' + cueGlyph(cueStatus) + '</span>' +
-        '<div><div class="launch-cue-title">' + escHtml(cue.title) + '</div>' +
-        '<div class="launch-cue-detail">' + escHtml(cue.detail) + '</div></div>' +
-        '</li>';
-    }).join('');
-
-    if(state.launchResolved) body.setAttribute('data-launch-state', 'live');
-    else if(state.waitingForAudio) body.setAttribute('data-launch-state', 'priming');
-    else if(state.streamReady) body.setAttribute('data-launch-state', 'ready');
-    else body.setAttribute('data-launch-state', state.attemptedStart ? 'priming' : 'idle');
-    updateWaveform();
-  }
-
-  function resolveLaunch(){
-    if(state.launchResolved) return;
-    state.launchResolved = true;
-    renderLaunch();
-  }
-
-  function startStream(){
-    state.attemptedStart = true;
-    state.waitingForAudio = true;
-    if(audio.src !== _base + '/stream'){
-      audio.src = _base + '/stream';
-    }
-    audio.load();
-    var playAttempt = audio.play();
-    if(playAttempt && playAttempt.catch){
-      playAttempt.catch(function(){
-        state.waitingForAudio = false;
-        renderLaunch();
-      });
-    }
-    renderLaunch();
-  }
-
-  function togglePlayback(){
-    if(state.isPlaying){
-      audio.pause();
-      return;
-    }
-    startStream();
-  }
-
-  playBtn.addEventListener('click', togglePlayback);
-  launchBtn.addEventListener('click', function(){
-    if(!state.launchResolved && state.attemptedStart && !state.streamReady && !state.waitingForAudio){
-      startStream();
-      return;
-    }
-    togglePlayback();
-  });
-
-  audio.addEventListener('play', function(){
-    state.isPlaying = true;
-    playIcon.style.display = 'none';
-    pauseIcon.style.display = 'block';
-    playBtn.classList.add('playing');
-    eq.classList.add('active');
-    if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'playing';
-    renderLaunch();
-  });
-
-  audio.addEventListener('pause', function(){
-    state.isPlaying = false;
-    state.waitingForAudio = false;
-    playIcon.style.display = 'block';
-    pauseIcon.style.display = 'none';
-    if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'paused';
-    playBtn.classList.remove('playing');
-    eq.classList.remove('active');
-    onAir.classList.remove('visible');
-    renderLaunch();
-  });
-
-  audio.addEventListener('waiting', function(){
-    state.waitingForAudio = true;
-    eq.classList.remove('active');
-    renderLaunch();
-  });
-
-  audio.addEventListener('playing', function(){
-    state.isPlaying = true;
-    state.waitingForAudio = false;
-    if(!audio.paused) eq.classList.add('active');
-    onAir.classList.add('visible');
-    resolveLaunch();
-  });
-
-  volumeSlider.addEventListener('input', function(){
-    audio.volume = this.value;
-    state.lastVolume = this.value;
-    updateVolumeIcon();
-  });
-
-  volumeToggle.addEventListener('click', function(){
-    if(audio.volume > 0){
-      state.lastVolume = audio.volume;
-      audio.volume = 0;
-      volumeSlider.value = 0;
-    } else {
-      audio.volume = state.lastVolume || 0.8;
-      volumeSlider.value = audio.volume;
-    }
-    updateVolumeIcon();
-  });
-
-  function updateVolumeIcon(){
-    if(audio.volume === 0) volumeToggle.innerHTML = '\uD83D\uDD07';
-    else if(audio.volume < 0.4) volumeToggle.innerHTML = '\uD83D\uDD09';
-    else volumeToggle.innerHTML = '\uD83D\uDD0A';
-  }
-
-  function fmtTime(ts){
-    if(!ts) return '';
-    var d = new Date(ts * 1000);
-    var h = d.getHours();
-    var m = d.getMinutes();
-    return (h<10?'0':'')+h+':'+(m<10?'0':'')+m;
-  }
-
-  function fetchStatus(){
-    fetch(_base + '/public-status')
-      .then(function(r){return r.json()})
-      .then(function(data){
-        state.hasFetchedStatus = true;
-        state.nowStreaming = data.now_streaming || null;
-        state.upcoming = data.upcoming || [];
-        state.streamReady = !!(data.now_streaming || (data.upcoming && data.upcoming.length));
-        state.sessionStopped = data.session_stopped === true;
-        // Freeze launch-waveform animation when the operator paused the station.
-        document.body.setAttribute('data-stopped', state.sessionStopped ? 'true' : 'false');
-        updateGoldenPath(data.golden_path);
-        updateNowPlaying(data.now_streaming);
-        updateCasa(data.ha_moments);
-        updateUpNext(data.upcoming, data.upcoming_mode);
-        updateJokes(data.running_jokes);
-        updateRecent(data.stream_log, data.now_streaming);
-        renderLaunch();
-      })
-      .catch(function(){});
-  }
-
-  function updateGoldenPath(gp){
-    state.goldenPath = gp;
-    var wrap = document.getElementById('goldenPathNotice');
-    var friendly = friendlyGoldenPath(gp);
-    if(!friendly || !state.launchResolved){
-      wrap.style.display = 'none';
-      return;
-    }
-    wrap.style.display = 'block';
-    goldenPathHead.textContent = friendly.head;
-    document.getElementById('goldenPathTitle').textContent = friendly.title;
-    document.getElementById('goldenPathDetail').textContent = friendly.detail;
-    var stepsHtml = (friendly.steps || []).map(function(step){
-      return '<li>' + escHtml(step) + '</li>';
-    }).join('');
-    document.getElementById('goldenPathSteps').innerHTML = stepsHtml;
-  }
-
-  function updateNowPlaying(np){
-    if(!np) return;
-    var label = np.label || '';
-    var npLabel = document.getElementById('npLabel');
-    var npSublabel = document.getElementById('npSublabel');
-    var npIcon = document.getElementById('npIcon');
-    var npTypeText = document.getElementById('npTypeText');
-    var playerNow = document.getElementById('playerNow');
-
-    if(label === state.currentLabel) return;
-    state.currentLabel = label;
-
-    npLabel.classList.add('updating');
-    playerNow.classList.add('updating');
-
-    setTimeout(function(){
-      npIcon.textContent = icon(np.type);
-      npTypeText.textContent = typeLabel(np.type);
-
-      if(np.type === 'music'){
-        var parts = label.split(' \u2014 ');
-        if(parts.length === 2){
-          npLabel.textContent = parts[0];
-          npSublabel.textContent = parts[1];
-        } else {
-          npLabel.textContent = label;
-          npSublabel.textContent = '';
-        }
-      } else if(np.type === 'welcome'){
-        npLabel.textContent = 'The station has noticed you.';
-        npSublabel.textContent = 'Straight into the room, no dead air.';
-      } else if(np.type === 'banter'){
-        npLabel.textContent = label ? label + ' are talking\u2026' : 'The hosts are talking\u2026';
-        npSublabel.textContent = '';
-      } else if(np.type === 'ad'){
-        npLabel.textContent = 'A word from our sponsors\u2026';
-        npSublabel.textContent = '';
-      } else {
-        npLabel.textContent = label;
-        npSublabel.textContent = '';
-      }
-
-      playerNow.textContent = label || localStorage.getItem('stationName') || 'Mamma Mi Radio';
-
-      npLabel.classList.remove('updating');
-      playerNow.classList.remove('updating');
-
-      updateMediaSession(np);
-    }, 200);
-  }
-
-  /* Media Session API — lock screen + Bluetooth + Control Center integration.
-     Shows current track metadata on iOS Control Center, Android lock screen,
-     macOS Now Playing, Windows volume popup, Bluetooth headphones and smart
-     watches. Zero server changes; pure feature-detect. */
-  function updateMediaSession(np){
-    if (!('mediaSession' in navigator) || !np) return;
-    var title, artist;
-    var stationName = localStorage.getItem('stationName') || 'Mamma Mi Radio';
-    var album = stationName + ' \u2014 96,7 FM Milano';
-    var label = np.label || '';
-    if (np.type === 'music') {
-      var parts = label.split(' \u2014 ');
-      if (parts.length === 2) { artist = parts[0]; title = parts[1]; }
-      else { artist = stationName; title = label || 'In onda'; }
-    } else if (np.type === 'banter') {
-      artist = label || 'Marco & Giulia';
-      title = 'In diretta \u2014 banter';
-    } else if (np.type === 'ad') {
-      var brand = (np.metadata && np.metadata.brand) ? np.metadata.brand : 'Sponsored';
-      artist = brand;
-      title = 'A word from our sponsors';
-    } else if (np.type === 'welcome') {
-      artist = stationName;
-      title = 'The station has noticed you';
-    } else if (np.type === 'news_flash' || np.type === 'news') {
-      artist = stationName;
-      title = label || 'News flash';
-    } else {
-      artist = stationName;
-      title = label || 'In onda';
-    }
-    var artwork = [];
-    var artUrl = np.metadata && np.metadata.album_art;
-    if (artUrl) {
-      artwork.push({ src: artUrl, sizes: '512x512', type: 'image/jpeg' });
-      artwork.push({ src: artUrl, sizes: '256x256', type: 'image/jpeg' });
-      artwork.push({ src: artUrl, sizes: '96x96', type: 'image/jpeg' });
-    } else {
-      artwork.push({ src: (_base || '') + '/static/icon-512.svg', sizes: '512x512', type: 'image/svg+xml' });
-      artwork.push({ src: (_base || '') + '/static/icon-192.svg', sizes: '192x192', type: 'image/svg+xml' });
-    }
-    try {
-      navigator.mediaSession.metadata = new MediaMetadata({
-        title: title,
-        artist: artist,
-        album: album,
-        artwork: artwork,
-      });
-    } catch (e) { /* older browsers may not support MediaMetadata */ }
-  }
-
-  /* Register Media Session action handlers once. Play/pause work via the
-     audio element events; skipping/previous are not meaningful for a live
-     radio stream so they are intentionally not bound. Stop ends the
-     session cleanly (listener closed the tab via lock-screen). */
-  if ('mediaSession' in navigator) {
-    try {
-      navigator.mediaSession.setActionHandler('play', function(){
-        if (!state.isPlaying) startStream();
-      });
-      navigator.mediaSession.setActionHandler('pause', function(){
-        audio.pause();
-      });
-      navigator.mediaSession.setActionHandler('stop', function(){
-        audio.pause();
-        state.isPlaying = false;
-      });
-    } catch (e) { /* some browsers restrict handlers; ignore */ }
-  }
-
-  function updateCasa(ha){
-    var casaEl = document.getElementById('casa-card');
-    if(!casaEl) return;
-    if(ha){
-      var moodEl = document.getElementById('casa-mood');
-      var weatherEl = document.getElementById('casa-weather');
-      var eventEl = document.getElementById('casa-event');
-      var prevMood = moodEl.textContent;
-      moodEl.textContent = ha.mood || '';
-      weatherEl.textContent = ha.weather || '';
-      if(ha.last_event_label){
-        var agoText = ha.last_event_ago_min ? ' · rilevato ' + ha.last_event_ago_min + ' min fa' : '';
-        eventEl.innerHTML = escHtml(ha.last_event_label) + '<span aria-hidden="true">' + escHtml(agoText) + '</span>';
-      } else {
-        eventEl.textContent = '';
-      }
-      casaEl.style.display = '';
-      casaEl.removeAttribute('aria-hidden');
-      requestAnimationFrame(function(){ casaEl.style.opacity = '1'; });
-      if(prevMood && ha.mood && prevMood !== ha.mood){
-        var eyebrow = document.getElementById('casa-eyebrow');
-        if(eyebrow){
-          eyebrow.style.transition = 'opacity 200ms';
-          eyebrow.style.opacity = '0.4';
-          setTimeout(function(){ eyebrow.style.opacity = '1'; }, 200);
-          setTimeout(function(){ eyebrow.style.opacity = ''; eyebrow.style.transition = ''; }, 600);
-        }
-      }
-    } else {
-      casaEl.style.opacity = '0';
-      setTimeout(function(){
-        if(casaEl.style.opacity === '0'){ casaEl.style.display = 'none'; casaEl.setAttribute('aria-hidden', 'true'); }
-      }, 260);
-    }
-  }
-
-  function updateUpNext(upcoming, mode){
-    var section = document.getElementById('upNextSection');
-    var list = document.getElementById('upNextList');
-    if((!upcoming || upcoming.length === 0) && mode !== 'building'){
-      section.style.display = 'none';
-      return;
-    }
-    section.style.display = 'block';
-    if(!upcoming || upcoming.length === 0){
-      list.innerHTML = '<div class="upcoming-item"><span class="item-icon">...</span><span class="item-label">Building next segments...</span></div>';
-      return;
-    }
-    var musicOnly = upcoming.filter(function(it){ var t = it.type || ''; return t !== 'banter' && t !== 'welcome' && t !== 'ad_break'; });
-    var items = (musicOnly.length ? musicOnly : upcoming).slice(0, 4);
-    var html = '';
-    for(var i = 0; i < items.length; i++){
-      var item = items[i] || {};
-      var itemType = typeof item.type === 'string' ? item.type : '';
-      var itemLabel = item.label || [item.artist, item.title].filter(Boolean).join(' \u2014 ') || itemType || 'Upcoming';
-      html += '<div class="upcoming-item">' +
-        '<span class="item-icon">' + icon(itemType) + '</span>' +
-        '<span class="item-label">' + escHtml(itemLabel) + '</span>' +
-        '</div>';
-    }
-    list.innerHTML = html;
-  }
-
-  function updateJokes(jokes){
-    var section = document.getElementById('jokesSection');
-    var list = document.getElementById('jokesList');
-    if(!jokes || jokes.length === 0){
-      section.style.display = 'none';
-      return;
-    }
-    // Deduplicate: backend deque can accumulate the same joke if LLM repeats it
-    var unique = jokes.filter(function(v, i, a){ return a.indexOf(v) === i; });
-    if(unique.length === 0){
-      section.style.display = 'none';
-      return;
-    }
-    section.style.display = 'block';
-    var html = '';
-    for(var i = 0; i < unique.length; i++){
-      html += '<div class="joke-item">\u201C' + escHtml(unique[i]) + '\u201D</div>';
-    }
-    list.innerHTML = html;
-  }
-
-  function updateRecent(log, nowStreaming){
-    var section = document.getElementById('recentSection');
-    var list = document.getElementById('recentList');
-    if(!log || log.length === 0){
-      section.style.display = 'none';
-      return;
-    }
-    // Exclude whatever is currently playing so it doesn't appear in both places
-    var nowLabel = nowStreaming && nowStreaming.label ? nowStreaming.label : null;
-    var filtered = nowLabel
-      ? log.filter(function(it){ return it.label !== nowLabel; })
-      : log.slice();
-    if(filtered.length === 0){
-      section.style.display = 'none';
-      return;
-    }
-    section.style.display = 'block';
-    var items = filtered.slice().reverse().slice(0, 5);
-    var html = '';
-    for(var i = 0; i < items.length; i++){
-      html += '<div class="log-item">' +
-        '<span class="log-time">' + fmtTime(items[i].timestamp) + '</span>' +
-        '<span class="log-icon">' + icon(items[i].type) + '</span>' +
-        '<span class="log-label">' + escHtml(items[i].label) + '</span>' +
-        '</div>';
-    }
-    list.innerHTML = html;
-  }
-
-  function escHtml(s){
-    if(!s) return '';
-    return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
-  }
-
-  function sendRequest(){
-    var nameEl = document.getElementById('requestName');
-    var msgEl = document.getElementById('requestMsg');
-    var btn = document.getElementById('requestSendBtn');
-    var fb = document.getElementById('requestFeedback');
-    var name = (nameEl.value || '').trim();
-    var msg = (msgEl.value || '').trim();
-    if(!msg){ fb.textContent='Scrivi qualcosa prima!'; fb.className='request-feedback err'; fb.style.display='block'; return; }
-    btn.disabled = true;
-    fb.style.display = 'none';
-    fetch(_base + '/api/listener-request', {
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({name: name || null, message: msg})
-    })
-    .then(function(r){ return r.json().then(function(d){ return {ok:r.ok, d:d}; }); })
-    .then(function(res){
-      if(res.ok){
-        fb.textContent = res.d.message || 'Messaggio ricevuto! I DJ lo leggeranno presto.';
-        fb.className = 'request-feedback ok';
-        msgEl.value = '';
-      } else if(res.d && res.d.retry_after){
-        fb.textContent = 'Un attimo — aspetta ' + res.d.retry_after + ' secondi prima del prossimo messaggio.';
-        fb.className = 'request-feedback err';
-      } else {
-        fb.textContent = 'Ops, qualcosa è andato storto. Riprova!';
-        fb.className = 'request-feedback err';
-      }
-      fb.style.display = 'block';
-    })
-    .catch(function(){
-      fb.textContent = 'Ops, qualcosa è andato storto. Riprova!';
-      fb.className = 'request-feedback err';
-      fb.style.display = 'block';
-    })
-    .finally(function(){ btn.disabled = false; });
-  }
-
-  function applyStationName(newName){
-    var n = newName || localStorage.getItem('stationName') || 'Mamma Mi Radio';
-    var h1 = document.querySelector('.station-name');
-    if(h1) h1.textContent = n;
-    document.title = n + ' — Live';
-    var playerNow = document.getElementById('playerNow');
-    if(playerNow) playerNow.textContent = n;
-    var og = document.querySelector('meta[property="og:title"]');
-    if(og) og.content = n;
-  }
-
-  applyStationName();
-
-  // Re-apply whenever admin changes the name in another tab
-  window.addEventListener('storage', function(e){
-    if(e.key !== 'stationName') return;
-    applyStationName(e.newValue || null);
-  });
-
-  document.getElementById('requestSendBtn').addEventListener('click', sendRequest);
-
-  renderLaunch();
-  fetchStatus();
-  setInterval(fetchStatus, 3000);
-
-  if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register(_base + '/static/sw.js').catch(function(){});
-  }
-})();
-</script>
 </body>
 </html>
