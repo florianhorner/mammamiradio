@@ -713,14 +713,27 @@ class TestStoppedStateQuietsTheUI:
         )
 
     def test_listener_html_toggles_data_stopped_on_body(self):
-        html_path = Path(__file__).parent.parent / "mammamiradio" / "listener.html"
-        html = html_path.read_text()
-        assert "setAttribute('data-stopped'" in html, (
-            "listener.html fetchStatus must flip `data-stopped` on <body> "
-            "so the launch-waveform freezes when the station is paused."
+        # Post site-v1 refactor the listener CSS + JS live in static/listener.*;
+        # the data-stopped invariant is still required but the markers now
+        # live across html + css + js. Read all three so this test still
+        # fires if the stopped-state feature gets stripped silently.
+        base = Path(__file__).parent.parent / "mammamiradio"
+        blob = (
+            (base / "listener.html").read_text()
+            + (base / "static" / "listener.css").read_text()
+            + (base / "static" / "listener.js").read_text()
+            # Also consult base.css — the unified waveform pause rule lives there.
+            + (base / "static" / "base.css").read_text()
         )
-        assert 'body[data-stopped="true"] .launch-waveform .wb' in html, (
-            "listener.html must pause the launch waveform under stopped state."
+        assert "setAttribute('data-stopped'" in blob, (
+            "listener fetchStatus must flip `data-stopped` on <body> "
+            "so the waveform freezes when the station is paused (Item 19)."
+        )
+        # After the waveform unification the class name is `.waveform`; the
+        # canonical pause rule in base.css targets
+        # `body[data-stopped="true"] .waveform .waveform-bar`.
+        assert 'body[data-stopped="true"] .waveform .waveform-bar' in blob, (
+            "listener must pause the unified waveform under stopped state."
         )
 
     def test_admin_banner_copy_does_not_use_harsh_error_tone(self):

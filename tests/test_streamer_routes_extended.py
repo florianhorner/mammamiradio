@@ -1227,29 +1227,37 @@ async def test_stream_returns_audio_headers():
 
 @pytest.mark.asyncio
 async def test_listener_page_registers_service_worker_inside_main_script():
+    """Service worker registration lives in listener.js after the site-v1 refactor."""
     app = _make_test_app()
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
         resp = await client.get("/listen")
+        js_resp = await client.get("/static/listener.js")
 
     assert resp.status_code == 200
-    assert "navigator.serviceWorker.register(_base + '/static/sw.js')" in resp.text
-    assert "</script>\n<script>\nif ('serviceWorker' in navigator)" not in resp.text
+    assert js_resp.status_code == 200
+    assert "navigator.serviceWorker.register(_base + '/static/sw.js')" in js_resp.text
 
 
 @pytest.mark.asyncio
 async def test_listener_page_includes_casa_card_and_public_status_binding():
-    """Listener UI must render HA moments from /public-status via Casa card IDs."""
+    """Listener UI must render HA moments from /public-status via Casa card IDs.
+
+    Post site-v1 refactor: the Casa card markup lives in listener.html, the
+    update + fetch wiring live in /static/listener.js. Assertions span both.
+    """
     app = _make_test_app()
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
         resp = await client.get("/listen")
+        js_resp = await client.get("/static/listener.js")
 
     assert resp.status_code == 200
+    assert js_resp.status_code == 200
     assert 'id="casa-card"' in resp.text
     assert 'id="casa-mood"' in resp.text
-    assert "updateCasa(data.ha_moments);" in resp.text
-    assert "fetch(_base + '/public-status')" in resp.text
+    assert "updateCasa(data.ha_moments);" in js_resp.text
+    assert "fetch(_base + '/public-status')" in js_resp.text
 
 
 # ---------------------------------------------------------------------------

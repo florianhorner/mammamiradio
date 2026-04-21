@@ -793,8 +793,10 @@ async def test_get_root_serves_listener_page():
     assert resp.status_code == 200
     assert "text/html" in resp.headers["content-type"]
     assert "Mamma Mi Radio" in resp.text
-    assert "We're lighting the sign." in resp.text
-    assert "Start the station" in resp.text
+    # Post site-v1 refactor: the hero tagline + CTA copy lives on the new
+    # radio-station website surface. Asserts on the identity-bearing copy.
+    assert "La notte" in resp.text and "italiana" in resp.text
+    assert "Ascolta Ora" in resp.text
 
 
 @pytest.mark.asyncio
