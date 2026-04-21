@@ -1,0 +1,86 @@
+/*
+ * Mamma Mi Radio — Design Tokens
+ * The SOLE source of truth for palette, typography, spacing, and radii.
+ *
+ * THIS FILE IS AUTHORITATIVE. Every surface (listener.html, admin.html,
+ * and any future HTML) MUST @import or <link> this file. Root-level
+ * palette token definitions are ONLY permitted in this file. Any other
+ * root block defining palette primitives fails the design-tokens guard
+ * test.
+ *
+ * Palette: Volare Refined — espresso dark with Italian warmth in accents.
+ * Full design system: see DESIGN.md at repo root.
+ */
+:root {
+  /* ── Espresso foundation ── */
+  --bg:              #14110F;
+  --bg-elevated:     #1C1714;
+  --bg2:             #1C1714;  /* legacy alias for --bg-elevated — used by listener.html pre-migration */
+  --surface:         #251E19;
+  --surface-hover:   #2E2520;
+  --surface-strong:  #362B25;
+
+  /* ── Sun — golden highlight (brand anchor) ── */
+  --sun:             #F4D048;
+  --sun2:            #ECCC30;
+
+  /* ── Legacy card aliases (keep for backward-compat during migration) ── */
+  --sienna:          #251E19;
+  --sienna2:         #251E19;
+  --sienna3:         #2E2520;
+
+  /* ── Cream — primary text ── */
+  --cream:           #F5EDD8;
+  --cream-dk:        #EADDC4;
+  --text-secondary:  #CBB9A6;
+
+  /* ── Deepest dark — FM dial interior, heavy shadows ── */
+  --shadow:          #0E0C0A;
+
+  /* ── Lancia red — interactive / ON AIR / needle ── */
+  --lancia:          #A02018;
+  --lancia2:         #B82C20;
+
+  /* ── Warm amber accent ── */
+  --accent-warm:     #E8A030;
+
+  /* ── Structural lines ── */
+  --line:            rgba(245, 237, 216, 0.10);
+  --line-strong:     rgba(245, 237, 216, 0.16);
+
+  /* ── Semantic (blue for success — red-green colorblind safe) ── */
+  --ok:              #2563EB;
+  --error:           #c44a4a;
+  --warning:         #D97706;
+  --news:            #e07038;
+  --muted:           #9B8574;
+
+  /* ── Typography ── */
+  --font-display:    'Playfair Display', georgia, serif;
+  --font-body:       'Outfit', system-ui, -apple-system, sans-serif;
+  --font-mono:       'JetBrains Mono', monospace;
+
+  /* ── Spacing scale (base 4px) ── */
+  --space-1:  0.25rem;
+  --space-2:  0.5rem;
+  --space-3:  0.75rem;
+  --space-4:  1rem;
+  --space-5:  1.25rem;
+  --space-6:  1.5rem;
+  --space-8:  2rem;
+  --space-10: 2.5rem;
+  --space-12: 3rem;
+  --space-16: 4rem;
+
+  /* ── Radii ── */
+  --radius-sm:   0.375rem;
+  --radius-md:   0.5rem;
+  --radius-lg:   0.75rem;
+  --radius-xl:   1rem;
+  --radius-full: 9999px;
+
+  /* ── Motion ── */
+  --transition-fast: 120ms cubic-bezier(0.16, 1, 0.3, 1);
+  --transition:      180ms cubic-bezier(0.16, 1, 0.3, 1);
+  --transition-slow: 320ms cubic-bezier(0.16, 1, 0.3, 1);
+}

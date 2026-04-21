@@ -8,55 +8,9 @@ html {
     linear-gradient(180deg, #1E1610 0%, #14110F 12%, #14110F 100%);
 }
 
-/* ── VOLARE REFINED — espresso dark, Italian warmth in accents ── */
-:root {
-  /* Espresso foundation */
-  --bg:         #14110F;
-  --bg-elevated:#1C1714;
-  --surface:    #251E19;
-  --surface-hover:#2E2520;
-  --surface-strong:#362B25;
-
-  /* Sun — golden highlight (kept from Volare) */
-  --sun:    #F4D048;
-  --sun2:   #ECCC30;
-
-  /* Legacy aliases for card surfaces */
-  --sienna: #251E19;
-  --sienna2:#251E19;
-  --sienna3:#2E2520;
-
-  /* Cream — text */
-  --cream:  #F5EDD8;
-  --cream-dk: #EADDC4;
-
-  /* Deepest dark — FM dial interior */
-  --shadow: #0E0C0A;
-
-  /* Lancia red — interactive */
-  --lancia: #A02018;
-  --lancia2:#B82C20;
-
-  /* Cream hierarchy */
-  --text-secondary: #CBB9A6;
-
-  /* Warm amber accent */
-  --accent-warm: #E8A030;
-
-  /* Structural */
-  --line:       rgba(245,237,216,0.10);
-  --line-strong:rgba(245,237,216,0.16);
-
-  /* Semantic (blue for success — red-green colorblind) */
-  --ok:      #2563EB;
-  --error:   #c44a4a;
-  --warning: #D97706;
-  --muted:   #9B8574;
-
-  --font-display: 'Playfair Display', georgia, serif;
-  --font-body: 'Outfit', system-ui, -apple-system, sans-serif;
-  --font-mono: 'JetBrains Mono', monospace;
-}
+/* Palette, typography, and spacing tokens live in /static/tokens.css.
+ * dashboard.html loads tokens.css BEFORE this file, so every var is resolved
+ * via the shared tokens. Do NOT redefine :root primitives here. */
 
 body {
   font-family: var(--font-body);

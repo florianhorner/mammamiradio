@@ -10,25 +10,14 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,600;0,700;1,400;1,700&family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/tokens.css">
+<link rel="stylesheet" href="/static/base.css">
 <style>
 *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
 
-:root {
-  --bg: #14110F; --bg-elevated: #1C1714;
-  --surface: #251E19; --surface-hover: #2E2520; --surface-strong: #362B25;
-  --sun: #F4D048; --sun2: #ECCC30; --accent-warm: #E8A030;
-  --sienna: #251E19; --sienna2: #251E19; --sienna3: #2E2520;
-  --cream: #F5EDD8; --cream-dk: #EADDC4;
-  --text-secondary: #CBB9A6;
-  --shadow: #0E0C0A;
-  --lancia: #A02018; --lancia2: #B82C20;
-  --ok: #2563EB; --error: #c44a4a; --warning: #D97706; --news: #e07038;
-  --muted: #9B8574;
-  --line: rgba(245,237,216,0.10); --line-strong: rgba(245,237,216,0.16);
-  --font-display: 'Playfair Display', Georgia, serif;
-  --font-body: 'Outfit', system-ui, -apple-system, sans-serif;
-  --font-mono: 'JetBrains Mono', monospace;
-}
+/* Palette, typography, and spacing tokens now live in /static/tokens.css.
+   Do NOT redefine :root primitives here — they'd shadow the shared tokens
+   and the drift we just fixed would re-open. See DESIGN.md. */
 
 html {
   font-size: 16px; -webkit-font-smoothing: antialiased; min-height: 100vh;

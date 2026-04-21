@@ -18,30 +18,14 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,600;0,700;1,400;1,700&family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/tokens.css">
+<link rel="stylesheet" href="/static/base.css">
 <style>
   *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 
-  :root{
-    --bg:#14110F;
-    --bg2:#1C1714;
-    --surface:#251E19;
-    --surface-hover:#2E2520;
-    --cream:#F5EDD8;
-    --cream-dk:#EADDC4;
-    --muted:#9B8574;
-    --line:rgba(245,237,216,0.10);
-    --line-strong:rgba(245,237,216,0.16);
-    --text-secondary:#CBB9A6;
-    --accent-warm:#E8A030;
-    --warning:#D97706;
-    --ok:#2563EB;
-    --error:#c44a4a;
-    --sun:#F4D048;
-    --sun2:#ECCC30;
-    --font-display:'Playfair Display',Georgia,serif;
-    --font-body:'Outfit',system-ui,-apple-system,sans-serif;
-    --font-mono:'JetBrains Mono',monospace;
-  }
+  /* Palette, typography, spacing tokens now live in /static/tokens.css.
+     Do NOT redefine :root primitives here — they'd shadow the shared tokens
+     and the drift we just fixed would re-open. See DESIGN.md. */
 
   html{font-size:16px;-webkit-font-smoothing:antialiased}
 
@@ -1215,6 +1199,7 @@
     pauseIcon.style.display = 'block';
     playBtn.classList.add('playing');
     eq.classList.add('active');
+    if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'playing';
     renderLaunch();
   });
 
@@ -1223,6 +1208,7 @@
     state.waitingForAudio = false;
     playIcon.style.display = 'block';
     pauseIcon.style.display = 'none';
+    if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'paused';
     playBtn.classList.remove('playing');
     eq.classList.remove('active');
     onAir.classList.remove('visible');
@@ -1361,7 +1347,79 @@
 
       npLabel.classList.remove('updating');
       playerNow.classList.remove('updating');
+
+      updateMediaSession(np);
     }, 200);
+  }
+
+  /* Media Session API — lock screen + Bluetooth + Control Center integration.
+     Shows current track metadata on iOS Control Center, Android lock screen,
+     macOS Now Playing, Windows volume popup, Bluetooth headphones and smart
+     watches. Zero server changes; pure feature-detect. */
+  function updateMediaSession(np){
+    if (!('mediaSession' in navigator) || !np) return;
+    var title, artist;
+    var stationName = localStorage.getItem('stationName') || 'Mamma Mi Radio';
+    var album = stationName + ' \u2014 96,7 FM Milano';
+    var label = np.label || '';
+    if (np.type === 'music') {
+      var parts = label.split(' \u2014 ');
+      if (parts.length === 2) { artist = parts[0]; title = parts[1]; }
+      else { artist = stationName; title = label || 'In onda'; }
+    } else if (np.type === 'banter') {
+      artist = label || 'Marco & Giulia';
+      title = 'In diretta \u2014 banter';
+    } else if (np.type === 'ad') {
+      var brand = (np.metadata && np.metadata.brand) ? np.metadata.brand : 'Sponsored';
+      artist = brand;
+      title = 'A word from our sponsors';
+    } else if (np.type === 'welcome') {
+      artist = stationName;
+      title = 'The station has noticed you';
+    } else if (np.type === 'news_flash' || np.type === 'news') {
+      artist = stationName;
+      title = label || 'News flash';
+    } else {
+      artist = stationName;
+      title = label || 'In onda';
+    }
+    var artwork = [];
+    var artUrl = np.metadata && np.metadata.album_art;
+    if (artUrl) {
+      artwork.push({ src: artUrl, sizes: '512x512', type: 'image/jpeg' });
+      artwork.push({ src: artUrl, sizes: '256x256', type: 'image/jpeg' });
+      artwork.push({ src: artUrl, sizes: '96x96', type: 'image/jpeg' });
+    } else {
+      artwork.push({ src: (_base || '') + '/static/icon-512.svg', sizes: '512x512', type: 'image/svg+xml' });
+      artwork.push({ src: (_base || '') + '/static/icon-192.svg', sizes: '192x192', type: 'image/svg+xml' });
+    }
+    try {
+      navigator.mediaSession.metadata = new MediaMetadata({
+        title: title,
+        artist: artist,
+        album: album,
+        artwork: artwork,
+      });
+    } catch (e) { /* older browsers may not support MediaMetadata */ }
+  }
+
+  /* Register Media Session action handlers once. Play/pause work via the
+     audio element events; skipping/previous are not meaningful for a live
+     radio stream so they are intentionally not bound. Stop ends the
+     session cleanly (listener closed the tab via lock-screen). */
+  if ('mediaSession' in navigator) {
+    try {
+      navigator.mediaSession.setActionHandler('play', function(){
+        if (!state.isPlaying) startStream();
+      });
+      navigator.mediaSession.setActionHandler('pause', function(){
+        audio.pause();
+      });
+      navigator.mediaSession.setActionHandler('stop', function(){
+        audio.pause();
+        state.isPlaying = false;
+      });
+    } catch (e) { /* some browsers restrict handlers; ignore */ }
   }
 
   function updateCasa(ha){
