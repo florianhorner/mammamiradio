@@ -6,6 +6,10 @@ The current version source of truth is `pyproject.toml`.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Conductor setup fails on machines with broken Python 3.13**: `conductor-setup.sh` now prefers `python3.11 → python3.12 → python3.13 → python3` instead of leading with 3.13. On machines where 3.13 is installed but its `ensurepip` is broken, the setup no longer fails — it falls back to the project's target interpreter (3.11) automatically.
+
 ## [2.10.9] - 2026-04-20
 
 Fixes the admin panel regression introduced in v2.10.8 and adds producer bridge metadata improvements.
