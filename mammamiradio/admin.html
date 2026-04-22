@@ -1727,6 +1727,9 @@ async function refreshFast(){
   try{
     const [sr,lrr]=await Promise.all([fetch('/status',{headers:H()}),fetch('/api/listener-requests',{headers:H()})]);
     _st=await sr.json();
+    if (_st.station) {
+      try { localStorage.setItem('stationName', _st.station); } catch (_) {}
+    }
     const lrData=lrr.ok?await lrr.json():{requests:[]};
     updateNow(_st.now_streaming);
     renderProgramme(_st);

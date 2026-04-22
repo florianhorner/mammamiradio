@@ -610,19 +610,16 @@ def test_load_track_metadata_incomplete_data_returns_none(tmp_path):
 
 
 def test_save_track_metadata_swallows_oserror_on_readonly_dir(tmp_path):
-    # Create a directory where we cannot write; on POSIX, chmod 555 prevents writes.
-    # save_track_metadata must not raise — it logs and returns.
-    ro_dir = tmp_path / "ro"
-    ro_dir.mkdir()
-    norm = ro_dir / "norm_x_192k.mp3"
+    # save_track_metadata must not raise when the sidecar cannot be written.
+    # We mock write_text to raise OSError rather than relying on chmod, which
+    # has no effect when the process runs as root.
+    norm = tmp_path / "norm_x_192k.mp3"
     norm.write_bytes(b"ok")
-    ro_dir.chmod(0o555)
-    try:
+    with patch("pathlib.Path.write_text", side_effect=OSError("read-only filesystem")) as mock_write:
         save_track_metadata(norm, title="t", artist="a")  # must not raise
-        # Sidecar did not get written; load returns None cleanly.
-        assert load_track_metadata(norm) is None
-    finally:
-        ro_dir.chmod(0o755)  # restore so pytest tmp cleanup works
+    mock_write.assert_called_once()
+    # Sidecar was not written; load returns None cleanly.
+    assert load_track_metadata(norm) is None
 
 
 def test_humanize_norm_filename_typical():
