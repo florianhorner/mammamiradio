@@ -22,6 +22,30 @@ After `addon-build.yml` builds the image, run a 30s smoke test:
 Catches "server starts but can't produce audio" — the exact production failure class.
 **Files:** `.github/workflows/addon-build.yml`
 
+## Admin UI — Regia (Time-Horizon Stack)
+
+**Source:** `/research` + `/design-shotgun` on 2026-04-21 → approved direction is Concept A modified (Variant E2 warmth iteration).
+**IA reference:** `.context/attachments/Radio Control-Room IA  Architecture Comparison, Recommendation & MVP Build Order.md`
+**Design reference:** `~/.gstack/projects/florianhorner-mammamiradio/designs/admin-regia-concepts-20260421/variant-E2.png` + `approved.json`
+**Prototype shipped (this branch):** `mammamiradio/regia.html` served at `/regia` (admin-gated). Screen 1 ON AIR + 260px read-only Peek Panel + persistent status strip + tab bar (tabs 2–5 are inert placeholders).
+
+### P1 — Wire Screen 1 ON AIR to real behavior
+- **Pause button** — no backend endpoint today. Either add `/api/pause` (session-level pause distinct from `/api/session/stop`) or remove the button until a pause semantic is agreed. Today it logs `[regia] pause not yet wired`.
+- **Panic Overlay** — full-screen SILENCE NOW + FORCE FALLBACK modal per IA doc. Needs a backend trigger (likely `force_next = SILENCE` segment type + emergency fallback push). Currently the Panico button only logs a warning.
+- **AI Approval badge** — surface needs a backend concept. Today `/status` exposes `last_banter_script` (already generated, already approved). For the approval workflow we need a pending-segment queue with APPROVE/REJECT state. Placeholder card hidden in prototype.
+
+### P1 — Build Screen 2 QUEUE
+Phase 1 MVP per IA doc. Reuse the color-coded item pattern from the peek panel. Drag-to-reorder, break-structure card (next break slot with segment-type mini-timeline), inline search against existing `/api/search` endpoint, skip/remove controls.
+
+### P2 — Build Screen 3 REVIEW, Screen 4 PROGRAMME, Screen 5 MOTORE
+Phase 2 per IA doc. Screen 3 is AI content approval (banter + ad preview with audio + APPROVE/REJECT/EDIT). Screen 4 is format-clock + pacing. Screen 5 is the current admin Engine Room — API cost counter, capability flags, model info, logs.
+
+### P2 — Swap `/admin` to point at the new stack
+Once Screens 1+2 are solid, move the current 1744-line `admin.html` behind `/admin/legacy` and make `/admin` land on `/regia`. Do not touch `admin.html` until the new architecture covers all the current admin features (hosts config, pacing sliders, listener requests, playlist management).
+
+### P3 — Italianize remaining UI copy
+The prototype uses Italian labels (CODA, REVISIONE, PALINSESTO, MOTORE, PANICO). Once Screens 2–5 are built, audit all existing admin.html strings and normalize to the same voice.
+
 ## Completed
 
 ### Mark addon as experimental in HACS

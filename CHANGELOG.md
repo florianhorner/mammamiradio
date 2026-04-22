@@ -6,6 +6,11 @@ The current version source of truth is `pyproject.toml`.
 
 ## [Unreleased]
 
+### Added
+
+- **Regia admin prototype at `/regia`** (dev preview, admin-gated): Screen 1 ON AIR of the new Concept A Time-Horizon Stack admin architecture. Persistent 16px status strip, 5-tab bar (only ON AIR wired; CODA/REVISIONE/PALINSESTO/MOTORE are placeholders), hero Now Playing with Playfair italic track name, countdown as Italian prose, banter preview as editorial pull-quote with gold quote glyph + Lancia red dropcap, 4-button trigger row (AVANTI / PAUSA / VOCE AI / SPOT), 260px read-only peek panel showing 8 upcoming items, ambient FM dial. Polls `/status` every 3s; AVANTI/VOCE AI/SPOT wired to existing `/api/skip` and `/api/trigger`. PAUSA and PANICO log warnings pending backend endpoints. `admin.html` untouched — this is a prototype at a new route, not a replacement. See `TODOS.md` § Admin UI — Regia for Phase 1 MVP follow-ups.
+- **`--ai-purple` semantic token** in `mammamiradio/static/tokens.css`: `#A855F7` reserved exclusively for AI-generated segments so operators can distinguish AI content from human/music at a glance. Used in the Regia banter cards and peek-panel type dots.
+
 ### Fixed
 
 - **Conductor setup fails on machines with broken Python 3.13**: `conductor-setup.sh` now prefers `python3.11 → python3.12 → python3.13 → python3` instead of leading with 3.13. On machines where 3.13 is installed but its `ensurepip` is broken, the setup no longer fails — it falls back to the project's target interpreter (3.11) automatically.
