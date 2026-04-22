@@ -41,6 +41,7 @@ _STATIC_DIR = _PKG_DIR / "static"
 _LISTENER_HTML = _PKG_DIR.joinpath("listener.html").read_text()
 
 _ADMIN_HTML = _PKG_DIR.joinpath("admin.html").read_text()
+_REGIA_HTML = _PKG_DIR.joinpath("regia.html").read_text()
 
 _INGRESS_PREFIX_RE = _re.compile(r"^/[a-zA-Z0-9/_-]+$")
 
@@ -982,6 +983,16 @@ async def admin_panel(request: Request):
     """Serve the admin control room panel."""
     prefix = request.headers.get("X-Ingress-Path", "")
     return _render_admin_response(request, prefix)
+
+
+@router.get("/regia", response_class=HTMLResponse, dependencies=[Depends(require_admin_access)])
+async def regia_prototype(request: Request):
+    """Serve the Regia Screen 1 (ON AIR) prototype — Concept A Time-Horizon Stack MVP."""
+    prefix = request.headers.get("X-Ingress-Path", "")
+    html = _get_injected_html("regia", _REGIA_HTML, prefix)
+    html = _inject_csrf_token(html, _get_csrf_token(request.app))
+    csp = "script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com"
+    return HTMLResponse(content=html, headers={"Content-Security-Policy": csp})
 
 
 @router.get("/listen", response_class=HTMLResponse)
