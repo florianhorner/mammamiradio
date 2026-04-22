@@ -55,6 +55,11 @@
   --news:            #e07038;
   --muted:           #9B8574;
 
+  /* ── AI content marker — purple reserved exclusively for AI-generated
+       segments so operators can distinguish AI from human/music content
+       at a glance. Added for Regia Screen 1 ON AIR prototype. ── */
+  --ai-purple:       #A855F7;
+
   /* ── Typography ── */
   --font-display:    'Playfair Display', georgia, serif;
   --font-body:       'Outfit', system-ui, -apple-system, sans-serif;
