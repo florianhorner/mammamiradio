@@ -760,10 +760,6 @@ body::before {
           <span>Avanti ⏭</span>
           <span class="btn-key">N</span>
         </button>
-        <button class="btn btn--outline" id="btn-pause" title="Pausa (Spazio)">
-          <span>Pausa ‖</span>
-          <span class="btn-key">Spazio</span>
-        </button>
         <button class="btn btn--ai" id="btn-banter" title="Inietta voce AI (B)">
           <span>Voce AI ✦</span>
           <span class="btn-key">B</span>
@@ -1099,10 +1095,6 @@ body::before {
   document.getElementById('btn-next').addEventListener('click', () => postTrigger('skip'));
   document.getElementById('btn-banter').addEventListener('click', () => postTrigger('banter'));
   document.getElementById('btn-ad').addEventListener('click', () => postTrigger('ad'));
-  document.getElementById('btn-pause').addEventListener('click', () => {
-    // TODO: wire to a pause endpoint once Screen 1 panic/pause is specified
-    console.info('[regia] pause not yet wired');
-  });
 
   // Keyboard shortcuts
   document.addEventListener('keydown', (e) => {
@@ -1110,13 +1102,26 @@ body::before {
     if (e.key === 'n' || e.key === 'N') { e.preventDefault(); postTrigger('skip'); }
     if (e.key === 'b' || e.key === 'B') { e.preventDefault(); postTrigger('banter'); }
     if (e.key === 'a' || e.key === 'A') { e.preventDefault(); postTrigger('ad'); }
-    if (e.key === ' ') { e.preventDefault(); /* pause placeholder */ }
   });
 
-  // Panic button — placeholder (no action yet; avoids breaking the stream)
-  document.getElementById('panic-btn').addEventListener('click', () => {
-    if (!confirm('Attivare silenzio di emergenza? (non ancora collegato)')) return;
-    console.warn('[regia] panic pressed — not wired to backend yet');
+  // Panic button — purge queue, skip current, force next music (stream stays live)
+  const panicBtn = document.getElementById('panic-btn');
+  panicBtn.addEventListener('click', async () => {
+    if (!confirm('Taglio di emergenza: interrompe il segmento corrente e passa subito a musica. Continuare?')) return;
+    panicBtn.disabled = true;
+    try {
+      await fetch(api('/api/panic'), {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: csrfHeaders(),
+        body: JSON.stringify({}),
+      });
+      poll();
+    } catch (e) {
+      console.warn('[regia] panic failed:', e.message);
+    } finally {
+      panicBtn.disabled = false;
+    }
   });
 })();
 </script>
