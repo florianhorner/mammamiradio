@@ -705,11 +705,12 @@ async def test_synthesize_ad_motif_generation_failure_is_skipped(_mock_all, tmp_
     voices = {"hammer": AdVoice(name="Marco", voice="it-IT-DiegoNeural", style="bold", role="hammer")}
 
     # Make brand motif generation fail so the exception handler (304-306) is hit
-    with patch("mammamiradio.tts.generate_brand_motif", side_effect=RuntimeError("motif unavailable")):
+    with patch("mammamiradio.tts.generate_brand_motif", side_effect=RuntimeError("motif unavailable")) as mock_motif:
         result = await synthesize_ad(script, voices, tmp_path)
 
     # The ad must still be produced even without the brand motif
     assert result.exists()
+    mock_motif.assert_called_once()
 
 
 def test_get_openai_client_singleton(monkeypatch):

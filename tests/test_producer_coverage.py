@@ -228,6 +228,14 @@ def test_cast_voices_no_voices_configured():
     assert "hammer" in result
 
 
+def test_cast_voices_no_voices_and_no_hosts_raises():
+    """Raises ValueError when both ad voices and hosts are empty — surfaces the config gap."""
+    brand = AdBrand(name="Test", tagline="T", category="tech")
+
+    with pytest.raises(ValueError, match="host or ad voice"):
+        _cast_voices(brand, [], [], ["hammer"])
+
+
 # ---------------------------------------------------------------------------
 # disclaimer_goblin in classic_pitch
 # ---------------------------------------------------------------------------

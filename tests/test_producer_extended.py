@@ -818,7 +818,7 @@ async def test_news_flash_segment_is_produced(tmp_path):
             new_callable=AsyncMock,
             return_value=(host, "Aggiornamento traffico!", "traffic"),
         ),
-        patch(f"{MODULE}.synthesize", new_callable=AsyncMock, return_value=flash_path),
+        patch(f"{MODULE}.synthesize", new_callable=AsyncMock, return_value=flash_path) as mock_synthesize,
         patch(f"{MODULE}._try_crossfade", new_callable=AsyncMock, return_value=flash_path),
         patch(f"{MODULE}.fetch_home_context", new_callable=AsyncMock),
     ):
@@ -828,6 +828,8 @@ async def test_news_flash_segment_is_produced(tmp_path):
     assert seg.type == SegmentType.NEWS_FLASH
     assert seg.metadata.get("category") == "traffic"
     assert seg.metadata.get("host") == host.name
+    assert mock_synthesize.await_args.kwargs.get("rate") == "+10%"
+    assert mock_synthesize.await_args.kwargs.get("pitch") is None
 
 
 @pytest.mark.asyncio

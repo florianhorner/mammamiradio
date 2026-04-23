@@ -338,6 +338,8 @@ def _cast_voices(
     Falls back to random voice from pool if no voice matches a needed role.
     """
     if not voices:
+        if not hosts:
+            raise ValueError("At least one host or ad voice is required to cast ad voices")
         # No voices configured — assign the same host voice to every needed role
         host = random.choice(hosts)
         fallback = AdVoice(name=host.name, voice=host.voice, style=host.style)
