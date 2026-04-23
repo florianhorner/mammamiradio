@@ -1105,8 +1105,10 @@ body::before {
   });
 
   // Panic button — purge queue, skip current, force next music (stream stays live)
-  document.getElementById('panic-btn').addEventListener('click', async () => {
+  const panicBtn = document.getElementById('panic-btn');
+  panicBtn.addEventListener('click', async () => {
     if (!confirm('Taglio di emergenza: interrompe il segmento corrente e passa subito a musica. Continuare?')) return;
+    panicBtn.disabled = true;
     try {
       await fetch(api('/api/panic'), {
         method: 'POST',
@@ -1117,6 +1119,8 @@ body::before {
       poll();
     } catch (e) {
       console.warn('[regia] panic failed:', e.message);
+    } finally {
+      panicBtn.disabled = false;
     }
   });
 })();

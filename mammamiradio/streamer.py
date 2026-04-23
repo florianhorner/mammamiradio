@@ -1256,6 +1256,8 @@ async def panic_cut(request: Request, _: None = Depends(require_admin_access)):
     state.queued_segments.clear()
     if state.now_streaming:
         request.app.state.skip_event.set()
+    # force_next is set AFTER skip_event to avoid the producer consuming it
+    # before the current segment has been cut.
     state.force_next = SegmentType.MUSIC
     logger.warning("Panic cut triggered by admin — purged %d segments, forcing next=music", purged)
     return {"ok": True, "purged": purged}
