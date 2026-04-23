@@ -8,18 +8,20 @@ from pathlib import Path
 
 import pytest
 
-from mammamiradio.models import (
+from mammamiradio.ad_creative import (
     AdBrand,
     AdFormat,
-    AdHistoryEntry,
     AdPart,
     AdScript,
     AdVoice,
     CampaignSpine,
     SonicWorld,
+    _pick_brand,
+)
+from mammamiradio.models import (
+    AdHistoryEntry,
     StationState,
 )
-from mammamiradio.producer import _pick_brand
 from mammamiradio.scriptwriter import AD_BREAK_INTROS, AD_BREAK_OUTROS
 
 # --- _pick_brand tests ---

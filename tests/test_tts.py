@@ -7,7 +7,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from mammamiradio.models import AdPart, AdScript, AdVoice, HostPersonality, SonicWorld
+from mammamiradio.ad_creative import AdPart, AdScript, AdVoice, SonicWorld
+from mammamiradio.models import HostPersonality
 
 
 def _touch(path: Path) -> Path:

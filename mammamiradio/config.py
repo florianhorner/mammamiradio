@@ -18,7 +18,8 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-from mammamiradio.models import AdBrand, AdVoice, CampaignSpine, HostPersonality, PersonalityAxes
+from mammamiradio.ad_creative import AdBrand, AdVoice, CampaignSpine
+from mammamiradio.models import HostPersonality, PersonalityAxes
 from mammamiradio.tts import _EDGE_DEFAULT_FALLBACK_VOICE, _looks_like_openai_voice
 from mammamiradio.voice_catalog import is_known_edge_voice
 

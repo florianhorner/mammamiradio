@@ -10,21 +10,26 @@ import pytest
 
 from mammamiradio.audio_quality import AudioQualityError, AudioToolError
 from mammamiradio.config import load_config
-from mammamiradio.models import (
+from mammamiradio.ad_creative import (
     AdBrand,
     AdFormat,
-    AdHistoryEntry,
     AdPart,
     AdScript,
     AdVoice,
     CampaignSpine,
+    _cast_voices,
+    _pick_brand,
+    _select_ad_creative,
+)
+from mammamiradio.models import (
+    AdHistoryEntry,
     HostPersonality,
     Segment,
     SegmentType,
     StationState,
     Track,
 )
-from mammamiradio.producer import _cast_voices, _pick_brand, _select_ad_creative, run_producer
+from mammamiradio.producer import run_producer
 
 TOML_PATH = str(Path(__file__).parent.parent / "radio.toml")
 MODULE = "mammamiradio.producer"
@@ -662,7 +667,7 @@ def test_select_ad_creative_uses_format_pool():
     ]
 
     for _ in range(20):
-        fmt, _sonic, _roles = _select_ad_creative(brand, state, config)
+        fmt, _sonic, _roles = _select_ad_creative(brand, state, len(config.ads.voices))
         assert fmt in ("late_night_whisper", "institutional_psa")
 
 
@@ -672,7 +677,7 @@ def test_select_ad_creative_default_format():
     state = StationState()
     config = _make_config(Path("/tmp"))
 
-    fmt, _sonic, _roles = _select_ad_creative(brand, state, config)
+    fmt, _sonic, _roles = _select_ad_creative(brand, state, len(config.ads.voices))
     all_formats = [f.value for f in AdFormat]
     assert fmt in all_formats
 
@@ -689,7 +694,7 @@ def test_select_ad_creative_voice_count_guard():
     config.ads.voices = [AdVoice(name="Solo", voice="v1", style="s")]  # only 1 voice
 
     for _ in range(20):
-        fmt, _sonic, _roles = _select_ad_creative(brand, state, config)
+        fmt, _sonic, _roles = _select_ad_creative(brand, state, len(config.ads.voices))
         assert fmt not in ("duo_scene", "testimonial")
 
 
@@ -707,7 +712,7 @@ def test_select_ad_creative_speaker_count():
         AdVoice(name="B", voice="v2", style="s", role="maniac"),
     ]
 
-    fmt, _sonic, roles = _select_ad_creative(brand, state, config)
+    fmt, _sonic, roles = _select_ad_creative(brand, state, len(config.ads.voices))
     assert fmt == "duo_scene"
     assert len(roles) == 2
 
@@ -725,7 +730,7 @@ def test_cast_voices_with_spokesperson():
         AdVoice(name="Fiamma", voice="it-IT-FiammaNeural", style="enthusiastic", role="maniac"),
     ]
 
-    voice_map = _cast_voices(brand, config, ["hammer"])
+    voice_map = _cast_voices(brand, config.ads.voices, config.hosts, ["hammer"])
     assert "hammer" in voice_map
     assert voice_map["hammer"].name == "Roberto"
 
@@ -738,7 +743,7 @@ def test_cast_voices_fallback_random():
         AdVoice(name="Roberto", voice="it-IT-GianniNeural", style="booming", role="hammer"),
     ]
 
-    voice_map = _cast_voices(brand, config, ["unknown_role"])
+    voice_map = _cast_voices(brand, config.ads.voices, [], ["unknown_role"])
     assert "unknown_role" in voice_map
     assert voice_map["unknown_role"].name == "Roberto"  # only option
 
@@ -758,7 +763,7 @@ def test_select_ad_creative_avoids_last_format():
 
     # With only 2 options and last-used excluded, should always pick live_remote
     for _ in range(20):
-        fmt, _sonic, _roles = _select_ad_creative(brand, state, config)
+        fmt, _sonic, _roles = _select_ad_creative(brand, state, len(config.ads.voices))
         assert fmt == "live_remote"
 
 
@@ -768,7 +773,7 @@ def test_select_ad_creative_category_sonic_defaults():
     state = StationState()
     config = _make_config(Path("/tmp"))
 
-    _fmt, sonic, _roles = _select_ad_creative(brand, state, config)
+    _fmt, sonic, _roles = _select_ad_creative(brand, state, len(config.ads.voices))
     assert sonic.environment in {"cafe", "shopping_channel"}
     assert sonic.music_bed in {"tarantella_pop", "cheap_synth_romance", "upbeat"}
     assert sonic.transition_motif in {"register_hit", "ice_clink", "mandolin_sting"}
@@ -786,7 +791,7 @@ def test_select_ad_creative_avoids_last_sonic_variant_when_possible():
     )
 
     for _ in range(20):
-        _fmt, sonic, _roles = _select_ad_creative(brand, state, config)
+        _fmt, sonic, _roles = _select_ad_creative(brand, state, len(config.ads.voices))
         assert not (
             sonic.environment == "cafe"
             and sonic.music_bed == "tarantella_pop"
@@ -800,7 +805,7 @@ def test_cast_voices_host_fallback():
     config = _make_config(Path("/tmp"))
     config.ads.voices = []  # no ad voices
 
-    voice_map = _cast_voices(brand, config, ["hammer"])
+    voice_map = _cast_voices(brand, config.ads.voices, config.hosts, ["hammer"])
     assert "hammer" in voice_map
     # Should be one of the configured hosts
     host_names = {h.name for h in config.hosts}

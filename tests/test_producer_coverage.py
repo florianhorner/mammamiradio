@@ -14,24 +14,26 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from mammamiradio.audio_quality import AudioQualityError
-from mammamiradio.models import (
+from mammamiradio.ad_creative import (
     AdBrand,
     AdFormat,
-    AdHistoryEntry,
     AdVoice,
     CampaignSpine,
+    SonicWorld,
+    _cast_voices,
+    _pick_brand,
+    _select_ad_creative,
+)
+from mammamiradio.models import (
+    AdHistoryEntry,
     HostPersonality,
     Segment,
     SegmentType,
-    SonicWorld,
     StationState,
     Track,
 )
 from mammamiradio.producer import (
-    _cast_voices,
     _latest_music_file,
-    _pick_brand,
-    _select_ad_creative,
     _set_last_music_file,
 )
 
@@ -94,7 +96,7 @@ def test_select_ad_creative_basic():
     config = MagicMock()
     config.ads.voices = []
 
-    fmt, sonic, roles = _select_ad_creative(brand, state, config)
+    fmt, sonic, roles = _select_ad_creative(brand, state, len(config.ads.voices))
     assert isinstance(fmt, str)
     assert isinstance(sonic, SonicWorld)
     assert isinstance(roles, list)
@@ -108,7 +110,7 @@ def test_select_ad_creative_campaign_format():
     config = MagicMock()
     config.ads.voices = []
 
-    fmt, _, _ = _select_ad_creative(brand, state, config)
+    fmt, _, _ = _select_ad_creative(brand, state, len(config.ads.voices))
     assert fmt in ["classic_pitch", "live_remote"]
 
 
@@ -119,7 +121,7 @@ def test_select_ad_creative_voice_guard():
     config = MagicMock()
     config.ads.voices = [AdVoice(name="Solo", voice="it-voice", style="warm")]
 
-    fmt, _, _ = _select_ad_creative(brand, state, config)
+    fmt, _, _ = _select_ad_creative(brand, state, len(config.ads.voices))
     assert AdFormat(fmt).voice_count < 2
 
 
@@ -137,7 +139,7 @@ def test_select_ad_creative_avoids_last_format():
     # Run many times — should not always pick classic_pitch
     formats = set()
     for _ in range(20):
-        fmt, _, _ = _select_ad_creative(brand, state, config)
+        fmt, _, _ = _select_ad_creative(brand, state, len(config.ads.voices))
         formats.add(fmt)
     assert len(formats) > 1
 
@@ -150,7 +152,7 @@ def test_select_ad_creative_campaign_sonic_signature():
     config = MagicMock()
     config.ads.voices = []
 
-    _, sonic, _ = _select_ad_creative(brand, state, config)
+    _, sonic, _ = _select_ad_creative(brand, state, len(config.ads.voices))
     assert sonic.sonic_signature == "piano+strings"
     assert sonic.transition_motif == "piano"
 
@@ -165,7 +167,7 @@ def test_select_ad_creative_campaign_spokesperson():
         AdVoice(name="V1", voice="v1", style="warm", role="seductress"),
     ]
 
-    _, _, roles = _select_ad_creative(brand, state, config)
+    _, _, roles = _select_ad_creative(brand, state, len(config.ads.voices))
     assert "seductress" in roles
 
 
@@ -184,7 +186,7 @@ def test_cast_voices_with_matching_roles():
     config.ads.voices = voices
     brand = AdBrand(name="Test", tagline="T", category="tech")
 
-    result = _cast_voices(brand, config, ["hammer", "maniac"])
+    result = _cast_voices(brand, config.ads.voices, [], ["hammer", "maniac"])
     assert result["hammer"].name == "Hammer"
     assert result["maniac"].name == "Maniac"
 
@@ -196,7 +198,7 @@ def test_cast_voices_fallback_random():
     config.ads.voices = voices
     brand = AdBrand(name="Test", tagline="T", category="tech")
 
-    result = _cast_voices(brand, config, ["unknown_role"])
+    result = _cast_voices(brand, config.ads.voices, [], ["unknown_role"])
     assert "unknown_role" in result
     assert result["unknown_role"].name == "Generic"
 
@@ -212,7 +214,7 @@ def test_cast_voices_no_voices_configured():
     config.hosts = [host]
     brand = AdBrand(name="Test", tagline="T", category="tech")
 
-    result = _cast_voices(brand, config, ["hammer"])
+    result = _cast_voices(brand, config.ads.voices, config.hosts, ["hammer"])
     assert "hammer" in result
 
 
@@ -223,8 +225,7 @@ def test_cast_voices_no_voices_configured():
 
 def test_classic_pitch_includes_disclaimer_goblin():
     """classic_pitch _FORMAT_ROLES must include disclaimer_goblin."""
-    from mammamiradio.models import AdFormat
-    from mammamiradio.producer import _FORMAT_ROLES
+    from mammamiradio.ad_creative import AdFormat, _FORMAT_ROLES
 
     roles = _FORMAT_ROLES[AdFormat.CLASSIC_PITCH]
     assert "disclaimer_goblin" in roles
@@ -238,7 +239,7 @@ def test_classic_pitch_single_voice_fallback_still_casts_disclaimer_goblin():
     config.ads.voices = [AdVoice(name="Solo", voice="it-voice", style="warm", role="hammer")]
 
     # With 1 voice, classic_pitch is a valid single-voice candidate
-    fmt, _, roles = _select_ad_creative(brand, state, config)
+    fmt, _, roles = _select_ad_creative(brand, state, len(config.ads.voices))
     assert AdFormat(fmt).voice_count < 2  # must be a single-voice format
 
     # If classic_pitch was selected, disclaimer_goblin must be in its roles
@@ -246,7 +247,7 @@ def test_classic_pitch_single_voice_fallback_still_casts_disclaimer_goblin():
         assert "disclaimer_goblin" in roles
 
     # _cast_voices must assign every role even when voices are exhausted
-    result = _cast_voices(brand, config, roles)
+    result = _cast_voices(brand, config.ads.voices, [], roles)
     for role in roles:
         assert role in result
         assert result[role].voice is not None
@@ -263,7 +264,7 @@ def test_classic_pitch_zero_voice_fallback_casts_disclaimer_goblin():
     config.hosts = [host]
     brand = AdBrand(name="Test", tagline="T", category="tech")
 
-    result = _cast_voices(brand, config, ["hammer", "disclaimer_goblin"])
+    result = _cast_voices(brand, config.ads.voices, config.hosts, ["hammer", "disclaimer_goblin"])
     assert "hammer" in result
     assert "disclaimer_goblin" in result
     # Both roles get a voice (same fallback voice is acceptable)
@@ -799,7 +800,7 @@ def test_cast_voices_no_voices_all_roles_assigned():
     brand = AdBrand(name="FakeRadioBrand", tagline="Italian Radio!", category="tech")
 
     roles = ["hammer", "sidekick", "disclaimer_goblin"]
-    result = _cast_voices(brand, config, roles)
+    result = _cast_voices(brand, config.ads.voices, config.hosts, roles)
 
     # Every requested role must be present
     for role in roles:

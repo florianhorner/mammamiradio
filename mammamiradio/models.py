@@ -8,7 +8,7 @@ import re
 import time
 from collections import deque
 from dataclasses import dataclass, field
-from enum import Enum, StrEnum
+from enum import Enum
 from pathlib import Path
 from typing import TYPE_CHECKING, ClassVar
 
@@ -103,90 +103,6 @@ class HostPersonality:
     personality: PersonalityAxes = field(default_factory=PersonalityAxes)
     engine: str = "edge"  # "edge" for edge-tts, "openai" for OpenAI gpt-4o-mini-tts
     edge_fallback_voice: str = ""  # edge-tts voice used when OpenAI engine falls back
-
-
-class AdFormat(StrEnum):
-    """Available ad creative formats that shape how the joke is delivered."""
-
-    CLASSIC_PITCH = "classic_pitch"
-    TESTIMONIAL = "testimonial"
-    DUO_SCENE = "duo_scene"
-    LIVE_REMOTE = "live_remote"
-    LATE_NIGHT_WHISPER = "late_night_whisper"
-    INSTITUTIONAL_PSA = "institutional_psa"
-
-    @property
-    def voice_count(self) -> int:
-        """Number of distinct voices this format needs."""
-        return 2 if self in (AdFormat.DUO_SCENE, AdFormat.TESTIMONIAL) else 1
-
-
-@dataclass
-class SonicWorld:
-    """Sonic palette for an ad: environment, music bed, and transition motif."""
-
-    environment: str = ""
-    music_bed: str = "lounge"
-    transition_motif: str = "chime"
-    sonic_signature: str = ""  # e.g. "ice_clink+startup_synth" for brand motif generation
-
-
-@dataclass
-class CampaignSpine:
-    """Per-brand creative memory that shapes recurring ad campaigns."""
-
-    premise: str = ""
-    sonic_signature: str = ""  # e.g. "ice_clink+startup_synth"
-    format_pool: list[str] = field(default_factory=list)
-    spokesperson: str = ""  # speaker role name
-    escalation_rule: str = ""  # natural language for prompt
-
-
-@dataclass
-class AdBrand:
-    """A fictional advertiser that can recur across breaks."""
-
-    name: str
-    tagline: str
-    category: str = "general"
-    recurring: bool = True
-    campaign: CampaignSpine | None = None
-
-
-@dataclass
-class AdVoice:
-    """A non-host voice used to perform commercial copy."""
-
-    name: str
-    voice: str  # edge-tts voice ID
-    style: str  # character description for the prompt
-    role: str = ""  # speaker role: "hammer", "seductress", etc.
-
-
-@dataclass
-class AdPart:
-    """One structured unit inside an ad script: voice, SFX, pause, or environment."""
-
-    type: str  # "voice", "sfx", "pause", "environment"
-    text: str = ""
-    voice: str = ""
-    sfx: str = ""
-    duration: float = 0.0
-    role: str = ""  # which speaker role delivers this part
-    environment: str = ""  # environment cue for ambience
-
-
-@dataclass
-class AdScript:
-    """Structured ad script returned by the LLM before audio synthesis."""
-
-    brand: str
-    parts: list[AdPart] = field(default_factory=list)
-    summary: str = ""
-    mood: str = ""  # legacy alias, set to sonic.music_bed
-    format: str = "classic_pitch"
-    sonic: SonicWorld = field(default_factory=SonicWorld)
-    roles_used: list[str] = field(default_factory=list)
 
 
 @dataclass
