@@ -439,8 +439,7 @@ def test_select_next_track_artist_over_represented_as_candidate():
     import random
 
     filler = [
-        Track(title=f"Filler{i}", artist="FillArtist", duration_ms=180000, spotify_id=f"fill{i}")
-        for i in range(8)
+        Track(title=f"Filler{i}", artist="FillArtist", duration_ms=180000, spotify_id=f"fill{i}") for i in range(8)
     ]
     t_pop = Track(title="PopSong", artist="PopArtist", duration_ms=180000, spotify_id="pop1")
     t_other = Track(title="Other", artist="OtherArtist", duration_ms=180000, spotify_id="oth1")

@@ -191,7 +191,11 @@ def has_script_llm(config: StationConfig) -> bool:
 
 def reset_provider_backoff() -> None:
     """Clear memoized provider downgrade state (used after key updates/tests)."""
-    global _anthropic_auth_blocked_key, _anthropic_auth_blocked_until, _anthropic_block_expired_logged, _anthropic_attempt_lock
+    global \
+        _anthropic_auth_blocked_key, \
+        _anthropic_auth_blocked_until, \
+        _anthropic_block_expired_logged, \
+        _anthropic_attempt_lock
     _anthropic_auth_blocked_key = ""
     _anthropic_auth_blocked_until = 0.0
     _anthropic_block_expired_logged = False
