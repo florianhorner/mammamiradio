@@ -1040,6 +1040,64 @@ async def test_stop_and_resume_toggle_session_state():
 
 
 @pytest.mark.asyncio
+async def test_panic_cut_while_streaming():
+    """Panic while a segment is playing: purges queue, fires skip_event, forces next=music, leaves stream live."""
+    from mammamiradio.models import SegmentType
+
+    app = _make_test_app()
+    state = app.state.station_state
+    state.now_streaming = {"type": "music", "label": "Test", "started": time.time()}
+    # Pre-populate shadow queue so we can verify it is cleared
+    state.queued_segments.append({"type": "banter"})  # type: ignore[attr-defined]
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.post("/api/panic")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["ok"] is True
+    assert "purged" in data
+    # skip_event must have been set (skip fires for the current segment)
+    assert app.state.skip_event.is_set()
+    # force_next must be MUSIC
+    assert state.force_next == SegmentType.MUSIC
+    # session_stopped must NOT be set — stream stays live
+    assert state.session_stopped is False
+    # shadow queue must be cleared
+    assert len(state.queued_segments) == 0
+
+
+@pytest.mark.asyncio
+async def test_panic_cut_when_idle():
+    """Panic while nothing is playing: skip_event stays unset, force_next still set to music."""
+    from mammamiradio.models import SegmentType
+
+    app = _make_test_app()
+    state = app.state.station_state
+    state.now_streaming = None  # nothing streaming
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.post("/api/panic")
+    assert resp.status_code == 200
+    assert resp.json()["ok"] is True
+    # No segment to skip — skip_event should not be fired
+    assert not app.state.skip_event.is_set()
+    assert state.force_next == SegmentType.MUSIC
+    assert state.session_stopped is False
+
+
+@pytest.mark.asyncio
+async def test_panic_does_not_set_session_stopped():
+    """Panic must never set session_stopped — that would drop all active listeners."""
+    app = _make_test_app()
+    state = app.state.station_state
+    state.now_streaming = {"type": "banter", "label": "AI banter", "started": time.time()}
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        await client.post("/api/panic")
+    assert state.session_stopped is False
+
+
+@pytest.mark.asyncio
 async def test_loopback_bypasses_auth_when_no_password():
     """Loopback client with no admin_password/token configured gets through."""
     app = _make_test_app()  # no password, no token
