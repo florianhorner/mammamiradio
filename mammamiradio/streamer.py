@@ -1244,6 +1244,23 @@ async def purge_queue(request: Request, _: None = Depends(require_admin_access))
     return {"ok": True, "purged": purged}
 
 
+@router.post("/api/panic")
+async def panic_cut(request: Request, _: None = Depends(require_admin_access)):
+    """Emergency cut: purge queue, skip current segment, force next segment to music.
+
+    Does NOT set session_stopped — the stream stays live and listeners do not
+    disconnect. Use /api/stop when a full session halt is intended.
+    """
+    state = request.app.state.station_state
+    purged = _purge_segment_queue(request.app.state.queue)
+    state.queued_segments.clear()
+    if state.now_streaming:
+        request.app.state.skip_event.set()
+    state.force_next = SegmentType.MUSIC
+    logger.warning("Panic cut triggered by admin — purged %d segments, forcing next=music", purged)
+    return {"ok": True, "purged": purged}
+
+
 @router.post("/api/stop")
 async def stop_session(request: Request, _: None = Depends(require_admin_access)):
     """Gracefully stop the station: skip current, purge queue, cancel producer."""
