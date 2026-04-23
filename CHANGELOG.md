@@ -6,7 +6,24 @@ The current version source of truth is `pyproject.toml`.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Producer wakes immediately on session resume** (P0-1): replaced 1-second `asyncio.sleep` poll with `asyncio.wait_for(state.resume_event.wait(), timeout=1.0)`. `StationState` now carries a `resume_event` asyncio.Event; both the streaming gateway and `/api/resume` set it on session resume, collapsing the worst-case resume lag from 1s to milliseconds.
+- **Silence fallback never queues a silent track** (P1-2): audio quality circuit breaker now recycles the last-known-good music file (via `_get_last_music_file(state)`) or drops the segment rather than letting silent audio reach the playback queue. Prevents dead-air from corrupt/zero-length norm files reaching listeners.
+- **LRU cache eviction respects playback queue** (P1): `evict_cache_lru` now accepts an optional `protected_paths: set[Path]` argument. Producer passes currently-queued norm paths so in-flight audio is never deleted mid-stream.
+- **LLM prompt injection hardening** (H2/H3): `_sanitize_prompt_data` now strips six quote variants (`"`, `` ` ``, `"`, `"`, `'`, `'`) and fake role markers (`System:`, `Assistant:`, `Human:`, `User:` — case-insensitive, with optional spacing). Prevents listener-submitted metadata from breaking out of interpolated prompt strings or injecting synthetic conversation turns.
+- **ICY header injection guard** (M1): station name and genre are CRLF-scrubbed before writing to ICY response headers, closing an HTTP response-splitting vector for operators who set `STATION_NAME` with embedded newlines.
+- **youtube\_id format validation** (M4): `/api/playlist/add-external` now validates the `youtube_id` parameter against `[A-Za-z0-9_-]{11}` before passing it to yt-dlp, blocking path traversal and injection payloads.
+- **HA addon version sync**: `ha-addon/mammamiradio/config.yaml` version bumped to `2.10.9` to match `pyproject.toml` (was stale at `2.10.8`).
+
+### Changed
+
+- **`StationState` carries `last_music_file`**: mirrors the module-level `_last_music_file` cache into the state object so tests can inject per-state isolation without mutating shared module globals.
+
 ### Added
+
+- **Accessibility (WCAG 2.1 AA)**: `<html lang="it">` on `admin.html`; sr-only labels on song-request form inputs in `listener.html`; `aria-hidden` on decorative tricolor band; `.sr-only` and `:focus-visible` CSS utilities in `base.css`; `outline: none` removed from form inputs in `listener.css`; `aria-pressed` synced to play button in `listener.js`.
+- **Regression test suite** (`tests/test_qa_regression_guards.py`): 14 automated guards covering LRU eviction protection, prompt sanitization (quotes, role markers, control chars, truncation), ICY header injection, youtube\_id regex, HA addon version sync, `resume_event` presence, and the `_get_last_music_file` three-tier fallback chain.
 
 - **Regia admin prototype at `/regia`** (dev preview, admin-gated): Screen 1 ON AIR of the new Concept A Time-Horizon Stack admin architecture. Persistent 16px status strip, 5-tab bar (only ON AIR wired; CODA/REVISIONE/PALINSESTO/MOTORE are placeholders), hero Now Playing with Playfair italic track name, countdown as Italian prose, banter preview as editorial pull-quote with gold quote glyph + Lancia red dropcap, 4-button trigger row (AVANTI / PAUSA / VOCE AI / SPOT), 260px read-only peek panel showing 8 upcoming items, ambient FM dial. Polls `/status` every 3s; AVANTI/VOCE AI/SPOT wired to existing `/api/skip` and `/api/trigger`. PAUSA and PANICO log warnings pending backend endpoints. `admin.html` untouched — this is a prototype at a new route, not a replacement. See `TODOS.md` § Admin UI — Regia for Phase 1 MVP follow-ups.
 - **`--ai-purple` semantic token** in `mammamiradio/static/tokens.css`: `#A855F7` reserved exclusively for AI-generated segments so operators can distinguish AI content from human/music at a glance. Used in the Regia banter cards and peek-panel type dots.
