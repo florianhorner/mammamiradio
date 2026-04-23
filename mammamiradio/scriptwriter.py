@@ -352,15 +352,24 @@ def _get_system_prompt(config: StationConfig) -> str:
 
 # Matches characters that could be used for prompt injection delimiters
 _CONTROL_CHARS_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f<>{}]")
+# Matches quote characters and role markers that could break out of an
+# interpolated string or fake a new conversation turn.
+_QUOTE_CHARS_RE = re.compile(r"[\"`\u201c\u201d\u2018\u2019]")
+_ROLE_MARKER_RE = re.compile(
+    r"(?i)\b(?:system|assistant|human|user)\s*:\s*",
+)
 
 
 def _sanitize_prompt_data(text: str, max_len: int = 80) -> str:
     """Sanitize external data before interpolating into LLM prompts.
 
-    Strips control characters, XML-like tags, and truncates to prevent
-    prompt injection via track metadata or other user-controlled strings.
+    Strips control characters, XML-like tags, and quote characters; strips
+    role markers that could fake a new conversation turn; and truncates to
+    prevent prompt injection via track metadata or listener-submitted text.
     """
     text = _CONTROL_CHARS_RE.sub("", text)
+    text = _QUOTE_CHARS_RE.sub("'", text)
+    text = _ROLE_MARKER_RE.sub("", text)
     if len(text) > max_len:
         text = text[:max_len] + "..."
     return text

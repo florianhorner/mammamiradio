@@ -714,13 +714,13 @@ async def test_add_external_track_success(tmp_path):
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
             resp = await client.post(
                 "/api/playlist/add-external",
-                json={"youtube_id": "abc123", "title": "Brano", "artist": "Artista", "duration_ms": 123000},
+                json={"youtube_id": "dQw4w9WgXcQ", "title": "Brano", "artist": "Artista", "duration_ms": 123000},
             )
     assert resp.status_code == 200
     assert resp.json()["ok"] is True
     assert len(app.state.station_state.playlist) == original_len + 1
     assert app.state.station_state.pinned_track is not None
-    assert app.state.station_state.pinned_track.youtube_id == "abc123"
+    assert app.state.station_state.pinned_track.youtube_id == "dQw4w9WgXcQ"
 
 
 @pytest.mark.asyncio
@@ -765,7 +765,7 @@ async def test_add_external_track_rejected_when_ytdlp_disabled():
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
         resp = await client.post(
             "/api/playlist/add-external",
-            json={"youtube_id": "abc123", "title": "Brano", "artist": "Artista", "duration_ms": 123000},
+            json={"youtube_id": "dQw4w9WgXcQ", "title": "Brano", "artist": "Artista", "duration_ms": 123000},
         )
     assert resp.status_code == 409
     assert resp.json()["error"] == "external_downloads_disabled"

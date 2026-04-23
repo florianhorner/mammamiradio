@@ -163,6 +163,20 @@ def _latest_music_file(tmp_dir: Path) -> Path | None:
     return max(files, key=lambda p: p.stat().st_mtime)
 
 
+def _get_last_music_file(state: StationState) -> Path | None:
+    """Return a playable last-known-good music file for recovery paths.
+
+    Prefers the state-attached path (test-isolatable, per-session); falls back to
+    module-level cache when state hasn't tracked one yet.
+    """
+    candidate = state.last_music_file
+    if candidate and candidate.exists():
+        return candidate
+    if _last_music_file and _last_music_file.exists():
+        return _last_music_file
+    return None
+
+
 async def _try_crossfade(
     voice_path: Path,
     config: StationConfig,
@@ -191,6 +205,7 @@ async def _try_crossfade(
         return output_path
     except Exception as exc:
         logger.warning("Crossfade failed, using standalone: %s", exc)
+        output_path.unlink(missing_ok=True)
         return voice_path
 
 
@@ -585,6 +600,7 @@ async def prewarm_first_segment(
         await queue.put(segment)
         state.after_music(track)
         _set_last_music_file(norm_path)
+        state.last_music_file = norm_path
         logger.info("Pre-warmed first segment: %s (ready for instant playback)", track.display)
         return True
     except Exception:
@@ -633,7 +649,11 @@ async def run_producer(
             if _prefetch_task is not None and not _prefetch_task.done():
                 _prefetch_task.cancel()
             _was_stopped = True
-            await asyncio.sleep(1)
+            try:
+                await asyncio.wait_for(state.resume_event.wait(), timeout=1.0)
+            except TimeoutError:
+                pass
+            state.resume_event.clear()
             continue
 
         # Resume bridge: when transitioning out of a stopped state, immediately seed
@@ -755,7 +775,15 @@ async def run_producer(
             now = asyncio.get_running_loop().time()
             if now - _last_cache_eviction >= _cache_eviction_interval:
                 _last_cache_eviction = now
-                await asyncio.to_thread(evict_cache_lru, config.cache_dir, config.max_cache_size_mb)
+                # Protect norm files currently in the playback queue from eviction.
+                # Evicting a queued file would break audio delivery mid-stream.
+                queued_paths = {seg.path for seg in list(queue._queue) if seg.path}  # type: ignore[attr-defined]
+                await asyncio.to_thread(
+                    evict_cache_lru,
+                    config.cache_dir,
+                    config.max_cache_size_mb,
+                    queued_paths,
+                )
             # Periodically refresh the chart playlist mid-session so long-running
             # stations don't loop the same 50 tracks after ~3 hours.  Only merges
             # tracks not already in the playlist — played_tracks history is preserved.
@@ -937,15 +965,44 @@ async def run_producer(
                                         )
                                     )
                                     continue
-                                # No banter clips available — fall through to queue the
-                                # silent track as a last resort (preserves original behaviour).
-                                logger.warning(
-                                    "Quality gate circuit breaker: %d consecutive silence rejections, "
-                                    "no fallback banter available — allowing silent track through (%s: %s)",
-                                    3,
+                                # No banter clips — recycle the last known-good music
+                                # norm rather than letting a silent file through.
+                                last_good = _get_last_music_file(state)
+                                if last_good:
+                                    logger.warning(
+                                        "Quality gate circuit breaker: silence with no banter fallback — "
+                                        "recycling last-known-good music (%s: %s)",
+                                        norm_path.name,
+                                        exc,
+                                    )
+                                    if not norm_is_cached:
+                                        norm_path.unlink(missing_ok=True)
+                                    await _queue_segment(
+                                        Segment(
+                                            type=SegmentType.MUSIC,
+                                            path=last_good,
+                                            metadata={
+                                                "type": "music",
+                                                "recycled": True,
+                                                "silence_fallback": True,
+                                                "title": last_good.name,
+                                            },
+                                            ephemeral=False,
+                                        )
+                                    )
+                                    continue
+                                # No banter, no last-known-good.  Drop this track and let
+                                # the streamer's rescue path handle the gap — queueing a
+                                # silent file would break the illusion.
+                                logger.error(
+                                    "Quality gate circuit breaker: silence, no banter, "
+                                    "no last-known-good music — dropping track (%s: %s)",
                                     norm_path.name,
                                     exc,
                                 )
+                                if not norm_is_cached:
+                                    norm_path.unlink(missing_ok=True)
+                                continue
                             else:
                                 # Short/quiet track — likely a real file that just barely
                                 # missed the threshold.  Let it through; it's better than silence.
@@ -1012,6 +1069,7 @@ async def run_producer(
                 )
                 _bound_track = track
                 _set_last_music_file(norm_path)
+                state.last_music_file = norm_path
 
                 def _music_callback(_t=_bound_track) -> None:
                     state.after_music(_t)

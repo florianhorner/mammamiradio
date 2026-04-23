@@ -135,20 +135,30 @@ def purge_suspect_cache_files(cache_dir: Path, min_size_bytes: int = 10240) -> i
     return purged
 
 
-def evict_cache_lru(cache_dir: Path, max_size_mb: int) -> None:
+def evict_cache_lru(
+    cache_dir: Path,
+    max_size_mb: int,
+    protected_paths: set[Path] | None = None,
+) -> None:
     """Delete oldest MP3s from cache_dir until total size is under max_size_mb.
 
     Only .mp3 files are evicted. The SQLite database, playlist source JSON, and
-    session flag are always preserved.
+    session flag are always preserved. Paths in ``protected_paths`` (typically
+    files currently queued for playback) are skipped — evicting a queued norm
+    file would break audio delivery mid-stream.
     """
     if max_size_mb <= 0:
         return
+
+    protected_names = {p.name for p in (protected_paths or set())}
 
     # Evict regular cache files first, then norm_ files if still over budget.
     regular = []
     norm = []
     for f in cache_dir.glob("*.mp3"):
         if f.name in _CACHE_PROTECTED:
+            continue
+        if f.name in protected_names:
             continue
         if f.name.startswith("norm_"):
             norm.append(f)

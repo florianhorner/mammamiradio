@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import math
 import random
 import re
@@ -370,6 +371,11 @@ class StationState:
     last_ad_script: dict = field(default_factory=dict)
     ad_history: deque[AdHistoryEntry] = field(default_factory=lambda: deque(maxlen=20))
     session_stopped: bool = False
+    # Set by streamer when session_stopped flips False, so producer's
+    # stopped-state sleep wakes immediately instead of polling up to 1s.
+    resume_event: asyncio.Event = field(default_factory=asyncio.Event)
+    # Last successful music norm, recycled when every chart candidate is silent.
+    last_music_file: Path | None = None
     playlist_source: PlaylistSource | None = None
     startup_source_error: str = ""
     # What the listener is hearing RIGHT NOW
