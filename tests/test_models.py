@@ -447,7 +447,7 @@ def test_select_next_track_artist_over_represented_as_candidate():
     state = StationState(playlist=[t_pop, t_other])
     # t_pop played at positions 0-1 (not in recent_keys for cooldown=8 with 10 total),
     # but within recent_artist_10 (all 10 plays) → recent_artist_10[PopArtist] = 2 ≥ 2
-    state.played_tracks.extend([t_pop, t_pop] + filler)  # 10 total
+    state.played_tracks.extend([t_pop, t_pop, *filler])  # 10 total
     # Both t_pop and t_other are candidates (t_pop not in recent_keys).
     # t_pop weight should be near-zero so t_other wins consistently.
     random.seed(0)
