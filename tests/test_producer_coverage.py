@@ -972,7 +972,11 @@ async def test_prefetch_next_skips_failed_candidate(tmp_path):
     # validate_download (which runs in a thread) calls .stat() on an AsyncMock
     # and creates an unawaited coroutine, triggering a RuntimeWarning.
     with (
-        patch(f"{PRODUCER_MODULE}.download_track", new_callable=AsyncMock, return_value=tmp_path / "fake.mp3") as mock_dl,
+        patch(
+            f"{PRODUCER_MODULE}.download_track",
+            new_callable=AsyncMock,
+            return_value=tmp_path / "fake.mp3",
+        ) as mock_dl,
         patch(f"{PRODUCER_MODULE}.validate_download", return_value=(False, "test")),
     ):
         await _prefetch_next(state, config, _failed_keys=failed)

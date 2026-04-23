@@ -1638,7 +1638,7 @@ async def test_producer_no_resume_bridge_after_session_resume(tmp_path):
     never fires and the queue stays empty throughout.
 
     Note: the resume bridge code itself still exists in the producer (_was_stopped
-    path, lines ~642–682).  When session_stopped flips back to False the producer
+    path, lines ~642-682).  When session_stopped flips back to False the producer
     will, on the NEXT iteration, inject a canned clip (if available) or seed from
     the norm cache.  This test does not exercise that path — it only verifies that
     nothing is queued during the stopped sleep window.
@@ -1729,7 +1729,7 @@ async def test_producer_session_stopped_state_pauses_production(tmp_path):
 @pytest.mark.asyncio
 async def test_idle_bridge_no_norm_cache_fallback_when_no_canned_clips(tmp_path):
     """When no canned clips exist and the idle bridge runs, the producer still
-    falls through to the norm-cache path (lines ~710–727) — but this test
+    falls through to the norm-cache path (lines ~710-727) -- but this test
     cancels the task before the 1 s idle sleep completes, so the bridge path
     never fires and no idle_bridge / norm_cache segment appears in the queue.
 
