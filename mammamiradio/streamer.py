@@ -1539,8 +1539,6 @@ async def add_external_track(request: Request, _: None = Depends(require_admin_a
         duration_ms = int(body.get("duration_ms") or 0)
     except (TypeError, ValueError):
         return JSONResponse({"ok": False, "error": "invalid duration_ms"}, status_code=400)
-    import re as _re
-
     if not youtube_id:
         return JSONResponse({"ok": False, "error": "youtube_id required"}, status_code=400)
     if not _re.fullmatch(r"[A-Za-z0-9_-]{11}", youtube_id):
