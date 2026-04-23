@@ -52,7 +52,7 @@ Live Italian charts / local files / demo tracks
 `producer.py` turns that pacing decision into actual audio files:
 
 - `MUSIC`
-  - uses local `music/` files, then `yt-dlp` for chart tracks, then silence as the terminal fallback
+  - uses local `music/` files, then `yt-dlp` for chart tracks; when all candidates fail the audio quality gate, recycles the last-known-good music norm file, then drops the track and lets the playback rescue path handle the gap — silent audio is never queued
   - normalizes output before queueing
 - `BANTER`
   - asks Claude (or OpenAI as fallback) for structured dialogue JSON
@@ -115,7 +115,7 @@ Music comes from the first available source in this order:
 
 1. **Charts + local blend** (when `MAMMAMIRADIO_ALLOW_YTDLP=true`): Up to 100 tracks fetched from Apple Music Italy RSS. MP3s in `music/` are merged in automatically — deduplicated by `spotify_id`. Total catalog typically 100-300 tracks, covering 7h+ of unique content.
 2. **Local `music/` files only** (when `MAMMAMIRADIO_ALLOW_YTDLP` is not set or yt-dlp fails): whatever MP3s the operator has dropped into the `music/` directory.
-3. **Silence fallback**: when no local music is present and yt-dlp is disabled or unreachable, the station emits silence rather than dropping the stream. This matches the MUSIC fallback contract at producer.py (§ Segment production).
+3. **Last-known-good recycle**: when no local music is present and yt-dlp is disabled or unreachable, the producer recycles the last successfully-normalized music file rather than queueing silence. If no prior good file exists the track is dropped and the streamer's rescue path fills the gap. Silent audio is never queued intentionally.
 
 The station always produces a stream regardless of which source is active.
 

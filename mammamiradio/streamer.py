@@ -910,10 +910,10 @@ async def _persist_skipped_music(state: StationState, config, metadata: dict, *,
     is_new_skip_bit = await detect_skip_bit(config.cache_dir / "mammamiradio.db", yt_id, threshold=skip_t)
 
     if is_new_skip_bit and not state.ha_pending_directive:
-        track_name = metadata.get("title_only") or metadata.get("title") or "questa canzone"
-        # Raw title stored intentionally — ha_pending_directive feeds LLM prompts.
-        # HTML encoding here would corrupt LLM input. The admin.html esc() call is
-        # the XSS defense boundary for this field when it reaches the UI.
+        from mammamiradio.scriptwriter import _sanitize_prompt_data
+
+        raw_name = metadata.get("title_only") or metadata.get("title") or "questa canzone"
+        track_name = _sanitize_prompt_data(str(raw_name), max_len=80)
         state.ha_pending_directive = (
             f"L'ascoltatore ha saltato '{track_name}' troppe volte — "
             "reagisci in modo complice, scherzoso. Fai notare che la skippa sempre."
@@ -926,6 +926,7 @@ async def _audio_generator(request: Request):
     config = request.app.state.config
     if state.session_stopped:
         state.session_stopped = False
+        state.resume_event.set()
         (config.cache_dir / "session_stopped.flag").unlink(missing_ok=True)
 
     hub = request.app.state.stream_hub
@@ -1027,8 +1028,8 @@ async def stream(request: Request):
     config = request.app.state.config
     headers = {
         "Content-Type": "audio/mpeg",
-        "icy-name": config.station.name,
-        "icy-genre": config.station.theme[:64],
+        "icy-name": config.station.name.replace("\r", "").replace("\n", ""),
+        "icy-genre": config.station.theme[:64].replace("\r", "").replace("\n", ""),
         "icy-br": str(config.audio.bitrate),
         "Cache-Control": "no-cache, no-store",
         "Connection": "keep-alive",
@@ -1288,6 +1289,7 @@ async def resume_session(request: Request, _: None = Depends(require_admin_acces
     """Resume a stopped session."""
     state = request.app.state.station_state
     state.session_stopped = False
+    state.resume_event.set()
     config = request.app.state.config
     (config.cache_dir / "session_stopped.flag").unlink(missing_ok=True)
     logger.info("Session resumed by admin")
@@ -1539,6 +1541,8 @@ async def add_external_track(request: Request, _: None = Depends(require_admin_a
         return JSONResponse({"ok": False, "error": "invalid duration_ms"}, status_code=400)
     if not youtube_id:
         return JSONResponse({"ok": False, "error": "youtube_id required"}, status_code=400)
+    if not _re.fullmatch(r"[A-Za-z0-9_-]{11}", youtube_id):
+        return JSONResponse({"ok": False, "error": "invalid youtube_id format"}, status_code=400)
 
     state = request.app.state.station_state
     config = request.app.state.config

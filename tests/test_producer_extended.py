@@ -570,15 +570,23 @@ async def test_music_quality_reject_retries_next_track(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_music_quality_circuit_breaker_after_3_rejections(tmp_path):
-    """After 3 consecutive quality gate rejections the circuit breaker lets the next track through."""
+async def test_music_quality_circuit_breaker_recycles_last_good_music(tmp_path):
+    """Silence-rejection circuit breaker recycles last-known-good music instead of
+    queueing silent audio (leadership principle #1 — NEVER BREAK THE ILLUSION).
+
+    When three consecutive tracks fail the silence gate, no canned banter is available,
+    but a prior music norm exists, the breaker must queue that file — not the silent one.
+    """
     state = _make_state()
-    # Need enough tracks so the producer can keep retrying
     state.playlist = [
         Track(title=f"Track {i}", artist="A", duration_ms=200_000, spotify_id=f"demo{i}") for i in range(6)
     ]
     config = _make_config(tmp_path)
     queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+
+    last_good = tmp_path / "prior_good_norm.mp3"
+    last_good.write_bytes(b"real audio bytes")
+    state.last_music_file = last_good
 
     call_count = 0
 
@@ -600,10 +608,10 @@ async def test_music_quality_circuit_breaker_after_3_rejections(tmp_path):
         await _run_until_queued(queue, state, config)
 
     seg = queue.get_nowait()
-    # No banter clips available in test env → circuit breaker falls back to queuing the
-    # silent music track as a last resort (the "no fallback" path).
     assert seg.type == SegmentType.MUSIC
-    # Circuit breaker fires on the 3rd rejection, so we should see exactly 3 quality checks
+    assert seg.path == last_good, "breaker must recycle last-known-good, not silent track"
+    assert seg.metadata.get("recycled") is True
+    assert seg.metadata.get("silence_fallback") is True
     assert call_count == 3
 
 

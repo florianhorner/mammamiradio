@@ -106,6 +106,7 @@
       playBtnSmall.classList.toggle('playing', isPlaying);
       playBtnSmall.innerHTML = isPlaying ? '&#9208;' : '&#9654;';
       playBtnSmall.setAttribute('aria-label', isPlaying ? 'Pause' : 'Play');
+      playBtnSmall.setAttribute('aria-pressed', isPlaying ? 'true' : 'false');
     }
     if ('mediaSession' in navigator) {
       navigator.mediaSession.playbackState = isPlaying ? 'playing' : 'paused';

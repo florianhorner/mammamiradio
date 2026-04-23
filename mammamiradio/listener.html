@@ -25,7 +25,7 @@
 </head>
 <body>
 
-<div class="tricolor-band"><div></div><div></div><div></div></div>
+<div class="tricolor-band" aria-hidden="true"><div></div><div></div><div></div></div>
 
 <!-- BAND 1 — NAV -->
 <nav class="nav">
@@ -151,7 +151,9 @@
       <div class="form-title">La tua voce, in diretta.</div>
       <p class="form-desc">Saluti, dediche, richieste musicali. I conduttori leggono tutto e rispondono sull'onda.</p>
       <form id="request-form">
+        <label for="req-name" class="sr-only">Nome (opzionale)</label>
         <input class="form-input" type="text" id="req-name" placeholder="Come ti chiami? (opzionale)" autocomplete="name">
+        <label for="req-msg" class="sr-only">Messaggio o richiesta musicale</label>
         <textarea class="form-textarea" id="req-msg" placeholder="Il tuo messaggio o la canzone che vuoi ascoltare..." rows="3" autocomplete="off"></textarea>
         <button class="form-submit" type="submit">Manda al DJ &#9654;</button>
       </form>

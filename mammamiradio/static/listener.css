@@ -488,7 +488,7 @@ html, body {
   border: 1px solid var(--line-strong);
   border-radius: var(--radius-md);
   color: var(--cream); padding: 11px 14px; font-size: 13px;
-  font-family: var(--font-body); margin-bottom: 10px; outline: none;
+  font-family: var(--font-body); margin-bottom: 10px;
   transition: border-color var(--transition-fast);
 }
 .form-input:focus, .form-textarea:focus {
