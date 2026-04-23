@@ -184,6 +184,15 @@ make check         # lint + typecheck + coverage gate
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for full local setup, [ARCHITECTURE.md](ARCHITECTURE.md) for runtime flow and API routes, [TROUBLESHOOTING.md](TROUBLESHOOTING.md) for common failures, and [OPERATIONS.md](OPERATIONS.md) for deploy reality.
 
+## Contributors
+
+Thanks to the people who've shaped `mammamiradio`:
+
+- [@florianhorner](https://github.com/florianhorner) — maintainer
+- [@ashika-rai-n](https://github.com/ashika-rai-n) — dashboard CSS/JS extraction into `/static/` ([PR #203](https://github.com/florianhorner/mammamiradio/pull/203), [commit `2028d40`](https://github.com/florianhorner/mammamiradio/commit/2028d408499cd98b15c82a39a5cd3912cdfbb1d9))
+
+Want to contribute? See [CONTRIBUTING.md](CONTRIBUTING.md) and pick any open issue. First-time contributors are especially welcome — and are protected by the [merge-first protocol](CLAUDE.md#first-time-contributor-protocol) so your PR lands before any refactoring on top.
+
 ## Star History
 
 [![Star History Chart](https://api.star-history.com/svg?repos=florianhorner/mammamiradio&type=Date)](https://star-history.com/#florianhorner/mammamiradio&Date)
