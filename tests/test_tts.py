@@ -710,3 +710,193 @@ def test_get_openai_client_singleton(monkeypatch):
         c2 = tts_mod._get_openai_client("sk-test")
 
     assert c1 is c2
+
+
+# ---------------------------------------------------------------------------
+# synthesize_ad error-path coverage (previously uncovered branches)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_synthesize_ad_sfx_empty_sfx_skipped(_mock_all, tmp_path):
+    """An sfx part with empty sfx string hits the _render_part return None branch (line 287)."""
+    from mammamiradio.tts import synthesize_ad
+
+    script = AdScript(
+        brand="TestBrand",
+        parts=[
+            AdPart(type="voice", text="Hello"),
+            AdPart(type="sfx", sfx=""),  # empty sfx → _render_part returns None
+        ],
+        mood="lounge",
+    )
+    voices = {"default": AdVoice(name="Ann", voice="it-IT-DiegoNeural", style="warm")}
+    result = await synthesize_ad(script, voices, tmp_path)
+    assert result.exists()
+    _mock_all["generate_sfx"].assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_synthesize_ad_brand_motif_gen_failure_skips_motif(_mock_all, tmp_path):
+    """When generate_brand_motif raises, motif is skipped gracefully (lines 303-305, 309->311)."""
+    from mammamiradio.tts import synthesize_ad
+
+    _mock_all["generate_brand_motif"].side_effect = RuntimeError("motif gen failed")
+    script = AdScript(
+        brand="MotifBrand",
+        parts=[AdPart(type="voice", text="Compra!")],
+        mood="lounge",
+        sonic=SonicWorld(sonic_signature="ice_clink+startup_synth"),
+    )
+    voices = {"default": AdVoice(name="Ann", voice="it-IT-DiegoNeural", style="warm")}
+    result = await synthesize_ad(script, voices, tmp_path)
+    assert result.exists()
+    _mock_all["generate_brand_motif"].assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_synthesize_ad_foley_mix_failure_continues(_mock_all, tmp_path):
+    """When foley mix raises, ad continues without foley layer (lines 362-371)."""
+    from mammamiradio.tts import synthesize_ad
+
+    mix_call_count = [0]
+
+    def _mix_fails_first(voice_path, bed_path, output_path, volume_scale=0.12):
+        mix_call_count[0] += 1
+        if mix_call_count[0] == 1:
+            raise RuntimeError("foley mix failed")
+        _touch(output_path)
+        return output_path
+
+    _mock_all["mix_with_bed"].side_effect = _mix_fails_first
+
+    def _foley_creates(output_path, env, duration):
+        _touch(output_path)
+        return output_path
+
+    script = AdScript(
+        brand="FoleyBrand",
+        parts=[AdPart(type="voice", text="Ciao!")],
+        mood="lounge",
+        sonic=SonicWorld(environment="beach"),
+    )
+    voices = {"default": AdVoice(name="Ann", voice="it-IT-DiegoNeural", style="warm")}
+
+    with patch("mammamiradio.tts.generate_foley_loop", side_effect=_foley_creates):
+        result = await synthesize_ad(script, voices, tmp_path)
+
+    assert result.exists()
+
+
+@pytest.mark.asyncio
+async def test_synthesize_ad_env_bed_mix_failure_continues(_mock_all, tmp_path):
+    """When env bed mix raises, ad continues without env bed layer (lines 381-382)."""
+    from mammamiradio.tts import synthesize_ad
+
+    mix_call_count = [0]
+
+    def _mix_fails_env(voice_path, bed_path, output_path, volume_scale=0.12):
+        mix_call_count[0] += 1
+        if mix_call_count[0] == 1:
+            raise RuntimeError("env mix failed")
+        _touch(output_path)
+        return output_path
+
+    _mock_all["mix_with_bed"].side_effect = _mix_fails_env
+
+    script = AdScript(
+        brand="EnvBrand",
+        parts=[AdPart(type="voice", text="Dalla spiaggia!")],
+        mood="lounge",
+        sonic=SonicWorld(environment="beach"),
+    )
+    voices = {"default": AdVoice(name="Ann", voice="it-IT-DiegoNeural", style="warm")}
+
+    # Patch generate_foley_loop to a no-op so foley_path is never written to disk.
+    # This ensures foley_path.exists() is False and the foley mix branch is skipped,
+    # making env mix the first mix_with_bed call.
+    with patch("mammamiradio.tts.generate_foley_loop"):
+        result = await synthesize_ad(script, voices, tmp_path)
+
+    assert result.exists()
+
+
+@pytest.mark.asyncio
+async def test_synthesize_ad_music_bed_mix_failure_moves_voice(_mock_all, tmp_path):
+    """When music bed mix fails, shutil.move copies voice to output_path (lines 390-393)."""
+    from mammamiradio.tts import synthesize_ad
+
+    _mock_all["mix_with_bed"].side_effect = RuntimeError("all mixes failed")
+
+    script = AdScript(
+        brand="TestBrand",
+        parts=[AdPart(type="voice", text="Compra ora!")],
+        mood="dramatic",
+    )
+    voices = {"default": AdVoice(name="Ann", voice="it-IT-DiegoNeural", style="bold")}
+    result = await synthesize_ad(script, voices, tmp_path)
+    assert result.exists()
+
+
+@pytest.mark.asyncio
+async def test_synthesize_ad_motif_concat_failure_uses_ad_without_motif(_mock_all, tmp_path):
+    """When motif concat raises, ad is returned without motif (lines 404-407)."""
+    from mammamiradio.tts import synthesize_ad
+
+    _mock_all["concat_files"].side_effect = RuntimeError("concat failed")
+
+    script = AdScript(
+        brand="MotifBrand",
+        parts=[AdPart(type="voice", text="Compra!")],
+        mood="lounge",
+        sonic=SonicWorld(sonic_signature="ice_clink+startup_synth"),
+    )
+    voices = {"default": AdVoice(name="Ann", voice="it-IT-DiegoNeural", style="warm")}
+    result = await synthesize_ad(script, voices, tmp_path)
+    assert result.exists()
+
+
+@pytest.mark.asyncio
+async def test_synthesize_ad_normalize_ad_success_returns_broadcast(_mock_all, tmp_path):
+    """normalize_ad produces a non-empty broadcast file → broadcast_path is returned (lines 414-416)."""
+    from mammamiradio.tts import synthesize_ad
+
+    def _normalize_ad_creates(output_path, broadcast_path):
+        _touch(broadcast_path)
+        return broadcast_path
+
+    script = AdScript(
+        brand="TestBrand",
+        parts=[AdPart(type="voice", text="Compra ora!")],
+        mood="lounge",
+    )
+    voices = {"default": AdVoice(name="Ann", voice="it-IT-DiegoNeural", style="warm")}
+
+    with patch("mammamiradio.tts.normalize_ad", side_effect=_normalize_ad_creates):
+        result = await synthesize_ad(script, voices, tmp_path)
+
+    assert result.exists()
+    assert "broadcast" in result.name
+
+
+@pytest.mark.asyncio
+async def test_synthesize_ad_normalize_ad_empty_falls_back_to_unprocessed(_mock_all, tmp_path):
+    """normalize_ad creates an empty broadcast file → unprocessed ad path returned (lines 417-419)."""
+    from mammamiradio.tts import synthesize_ad
+
+    def _normalize_ad_empty(output_path, broadcast_path):
+        broadcast_path.touch()  # 0-byte file
+        return broadcast_path
+
+    script = AdScript(
+        brand="TestBrand",
+        parts=[AdPart(type="voice", text="Compra ora!")],
+        mood="lounge",
+    )
+    voices = {"default": AdVoice(name="Ann", voice="it-IT-DiegoNeural", style="warm")}
+
+    with patch("mammamiradio.tts.normalize_ad", side_effect=_normalize_ad_empty):
+        result = await synthesize_ad(script, voices, tmp_path)
+
+    assert result.exists()
+    assert "broadcast" not in result.name

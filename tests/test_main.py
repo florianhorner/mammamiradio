@@ -493,6 +493,48 @@ async def test_startup_no_ytdlp_warning_when_blocked(tmp_path: Path, caplog):
 
 
 @pytest.mark.asyncio
+async def test_startup_no_ffmpeg_warning_when_ffmpeg_found(tmp_path: Path, caplog):
+    """startup() does not warn about missing FFmpeg when it is available on PATH."""
+    import logging
+
+    from mammamiradio.models import Track
+
+    mock_config = MagicMock()
+    mock_config.station.name = "TestRadio"
+    mock_config.station.language = "it"
+    mock_config.bind_host = "127.0.0.1"
+    mock_config.port = 8000
+    mock_config.pacing.lookahead_segments = 3
+    mock_config.max_cache_size_mb = 500
+    mock_config.tmp_dir = tmp_path / "tmp"
+    mock_config.cache_dir = tmp_path / "cache"
+    mock_config.homeassistant.enabled = False
+    mock_config.allow_ytdlp = True
+    mock_config.audio.bitrate = 192
+
+    tracks = [Track(title="S", artist="A", duration_ms=1, spotify_id="x")]
+
+    def _which(name: str):
+        return "/usr/bin/ffmpeg" if name == "ffmpeg" else None
+
+    with (
+        patch(f"{MODULE}.load_config", return_value=mock_config),
+        patch(f"{MODULE}.read_persisted_source", return_value=None),
+        patch(f"{MODULE}.fetch_startup_playlist", return_value=(tracks, None, "")),
+        patch(f"{MODULE}.run_producer", new_callable=AsyncMock),
+        patch(f"{MODULE}.run_playback_loop", new_callable=AsyncMock),
+        patch(f"{MODULE}.prewarm_first_segment", new_callable=AsyncMock),
+        patch(f"{MODULE}.shutil.which", side_effect=_which),
+        caplog.at_level(logging.WARNING, logger="mammamiradio"),
+    ):
+        from mammamiradio.main import startup
+
+        await startup()
+
+    assert not any("FFmpeg" in r.message and "not found" in r.message for r in caplog.records)
+
+
+@pytest.mark.asyncio
 async def test_lifespan_calls_startup_and_shutdown(tmp_path):
     """_lifespan context manager calls startup() then shutdown() around the yield."""
 
