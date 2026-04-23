@@ -314,9 +314,9 @@ def _select_ad_creative(
     if brand.campaign and brand.campaign.spokesperson and brand.campaign.spokesperson in SPEAKER_ROLES:
         default_roles = _FORMAT_ROLES.get(ad_format, ["hammer"])
         primary_role = brand.campaign.spokesperson
+        if primary_role not in default_roles:
+            primary_role = default_roles[0]
         if AdFormat(ad_format).voice_count >= 2:
-            if primary_role not in default_roles:
-                primary_role = default_roles[0]
             secondary = next((r for r in default_roles if r != primary_role), default_roles[-1])
             roles = [primary_role, secondary]
         else:

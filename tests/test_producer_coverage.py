@@ -168,17 +168,26 @@ def test_select_ad_creative_campaign_sonic_signature():
 
 
 def test_select_ad_creative_campaign_spokesperson():
-    """Uses campaign spokesperson as primary role."""
-    campaign = CampaignSpine(spokesperson="seductress")
+    """Uses campaign spokesperson as primary role when compatible with the format."""
+    # Force late_night_whisper — its default role is seductress, so the override is compatible
+    campaign = CampaignSpine(spokesperson="seductress", format_pool=["late_night_whisper"])
     brand = AdBrand(name="TestBrand", tagline="Test", category="beauty", campaign=campaign)
     state = StationState()
-    config = MagicMock()
-    config.ads.voices = [
-        AdVoice(name="V1", voice="v1", style="warm", role="seductress"),
-    ]
 
-    _, _, roles = _select_ad_creative(brand, state, len(config.ads.voices))
+    _, _, roles = _select_ad_creative(brand, state, 1)
     assert "seductress" in roles
+
+
+def test_select_ad_creative_campaign_spokesperson_clamped_to_format_role():
+    """Spokesperson incompatible with chosen format is clamped to that format's first role."""
+    # Force institutional_psa (roles: ["bureaucrat"]); spokesperson "seductress" is incompatible
+    campaign = CampaignSpine(spokesperson="seductress", format_pool=["institutional_psa"])
+    brand = AdBrand(name="TestBrand", tagline="Test", category="tech", campaign=campaign)
+    state = StationState()
+
+    ad_format, _, roles = _select_ad_creative(brand, state, 1)
+    assert ad_format == "institutional_psa"
+    assert roles == ["bureaucrat"]  # clamped — seductress is not in institutional_psa's roles
 
 
 # ---------------------------------------------------------------------------

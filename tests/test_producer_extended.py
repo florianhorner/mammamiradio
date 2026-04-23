@@ -868,6 +868,105 @@ async def test_news_flash_sports_uses_faster_rate(tmp_path):
     assert synthesize_calls[0]["pitch"] == "+12Hz"
 
 
+@pytest.mark.asyncio
+async def test_news_flash_tts_failure_skips_gracefully(tmp_path):
+    """Scenario 2 (empty fallback): when write_news_flash raises, producer skips the
+    NEWS_FLASH and continues — no crash, no dead air, next iteration produces audio."""
+    state = _make_state()
+    config = _make_config(tmp_path)
+    config.anthropic_api_key = "test-key"
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+
+    host = config.hosts[0]
+    banter_path = tmp_path / "banter.mp3"
+    banter_path.write_bytes(b"\x00" * 2048)
+
+    call_count = 0
+
+    def _seg_type_switch(*args, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        # First iteration: NEWS_FLASH that will fail; subsequent: BANTER
+        return SegmentType.NEWS_FLASH if call_count <= 1 else SegmentType.BANTER
+
+    with (
+        patch(f"{MODULE}.next_segment_type", side_effect=_seg_type_switch),
+        patch(
+            f"{SCRIPTWRITER_MODULE}.write_news_flash",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("news backend down"),
+        ),
+        patch(
+            f"{SCRIPTWRITER_MODULE}.write_banter",
+            new_callable=AsyncMock,
+            return_value=([(host, "Dopo il guasto, eccoci!")], None),
+        ),
+        patch(
+            f"{SCRIPTWRITER_MODULE}.write_transition",
+            new_callable=AsyncMock,
+            return_value=(host, "Bentornati."),
+        ),
+        patch(f"{MODULE}.synthesize", new_callable=AsyncMock, return_value=banter_path),
+        patch(f"{MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=banter_path),
+        patch(f"{MODULE}.concat_files", return_value=banter_path),
+        patch(f"{MODULE}._pick_canned_clip", return_value=None),
+        patch(f"{MODULE}.fetch_home_context", new_callable=AsyncMock),
+    ):
+        await _run_until_queued(queue, state, config, timeout=8.0)
+
+    # Producer must recover: queue must have a non-NEWS_FLASH segment
+    assert not queue.empty(), "Producer must enqueue a segment after NEWS_FLASH failure"
+    seg = queue.get_nowait()
+    assert seg.type != SegmentType.NEWS_FLASH, "Failed NEWS_FLASH must not appear in queue"
+
+
+@pytest.mark.asyncio
+async def test_news_flash_produced_after_session_resume(tmp_path):
+    """Scenario 3 (post-restart): producer pauses with session_stopped=True, then resumes
+    and produces NEWS_FLASH once session_stopped is cleared."""
+    state = _make_state()
+    state.session_stopped = True  # simulate post-restart stopped state
+    config = _make_config(tmp_path)
+    config.anthropic_api_key = "test-key"
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+
+    host = config.hosts[0]
+    flash_path = tmp_path / "flash.mp3"
+    flash_path.write_bytes(b"\x00" * 2048)
+
+    with (
+        patch(f"{MODULE}.next_segment_type", return_value=SegmentType.NEWS_FLASH),
+        patch(
+            f"{SCRIPTWRITER_MODULE}.write_news_flash",
+            new_callable=AsyncMock,
+            return_value=(host, "Notizie aggiornate!", "traffic"),
+        ),
+        patch(f"{MODULE}.synthesize", new_callable=AsyncMock, return_value=flash_path),
+        patch(f"{MODULE}._try_crossfade", new_callable=AsyncMock, return_value=flash_path),
+        patch(f"{MODULE}.fetch_home_context", new_callable=AsyncMock),
+    ):
+        task = asyncio.create_task(run_producer(queue, state, config))
+        try:
+            await asyncio.sleep(0.05)  # let producer enter the stopped loop
+            state.session_stopped = False  # simulate operator resuming session
+            deadline = asyncio.get_event_loop().time() + 8.0
+            while queue.empty():
+                if asyncio.get_event_loop().time() > deadline:
+                    raise TimeoutError("Producer did not produce NEWS_FLASH after resume")
+                await asyncio.sleep(0.05)
+        finally:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+    assert not queue.empty(), "Producer must have queued a segment after session resume"
+    seg = queue.get_nowait()
+    assert seg.type == SegmentType.NEWS_FLASH
+    assert seg.metadata.get("category") == "traffic"
+
+
 def test_cast_voices_host_fallback():
     """When no ad voices are configured, _cast_voices falls back to a host voice."""
     brand = AdBrand(name="Test", tagline="T")
