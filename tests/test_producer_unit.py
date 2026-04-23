@@ -1632,11 +1632,16 @@ async def test_ad_break_sets_sonic_worlds_and_roles_in_last_ad_script():
 
 @pytest.mark.asyncio
 async def test_producer_no_resume_bridge_after_session_resume(tmp_path):
-    """After a stopped session resumes, the producer must NOT add a resume bridge segment.
+    """While session_stopped=True, the producer sleeps for 1 s per loop iteration
+    and queues nothing.  This test cancels the task well within that 1 s window
+    (0.05 s stopped + 0.2 s resumed), so the _was_stopped → resume-bridge path
+    never fires and the queue stays empty throughout.
 
-    The resume bridge (_was_stopped path) was removed in this PR. The producer
-    now waits with session_stopped=True and resumes normal segment generation
-    when session_stopped becomes False. No instant-seed clip is injected.
+    Note: the resume bridge code itself still exists in the producer (_was_stopped
+    path, lines ~642–682).  When session_stopped flips back to False the producer
+    will, on the NEXT iteration, inject a canned clip (if available) or seed from
+    the norm cache.  This test does not exercise that path — it only verifies that
+    nothing is queued during the stopped sleep window.
     """
     state = _make_state()
     state.session_stopped = True
@@ -1723,12 +1728,15 @@ async def test_producer_session_stopped_state_pauses_production(tmp_path):
 
 @pytest.mark.asyncio
 async def test_idle_bridge_no_norm_cache_fallback_when_no_canned_clips(tmp_path):
-    """When a listener reconnects after idle and no canned clips exist, the idle
-    bridge is a no-op. The norm_cache fallback was removed in this PR.
+    """When no canned clips exist and the idle bridge runs, the producer still
+    falls through to the norm-cache path (lines ~710–727) — but this test
+    cancels the task before the 1 s idle sleep completes, so the bridge path
+    never fires and no idle_bridge / norm_cache segment appears in the queue.
 
-    Previously the idle bridge would seed the first pre-normalized track from
-    cache_dir. Now it does nothing when no canned clips are available — the
-    queue stays empty until the producer generates a real segment.
+    The norm_file created in tmp_path (norm_test.mp3) would be picked up by the
+    glob IF the idle bridge ran.  The test verifies behaviour within the
+    cancellation window only; it does not assert that the norm-cache fallback
+    has been removed from the code.
     """
     state = _make_state()
     state.listeners_active = 0  # start idle

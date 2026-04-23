@@ -461,7 +461,7 @@ async def synthesize_dialogue(
                     openai_instructions=_openai_instructions_for_host(host),
                     loudnorm=not multi_line,
                 )
-                for (host, text), path in zip(lines, paths, strict=False)
+                for (host, text), path in zip(lines, paths, strict=True)
             )
         )
     )
