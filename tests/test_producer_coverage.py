@@ -13,7 +13,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from mammamiradio.audio_quality import AudioQualityError
 from mammamiradio.ad_creative import (
     AdBrand,
     AdFormat,
@@ -24,6 +23,7 @@ from mammamiradio.ad_creative import (
     _pick_brand,
     _select_ad_creative,
 )
+from mammamiradio.audio_quality import AudioQualityError
 from mammamiradio.models import (
     AdHistoryEntry,
     HostPersonality,
@@ -112,6 +112,16 @@ def test_select_ad_creative_campaign_format():
 
     fmt, _, _ = _select_ad_creative(brand, state, len(config.ads.voices))
     assert fmt in ["classic_pitch", "live_remote"]
+
+
+def test_select_ad_creative_campaign_format_pool_all_invalid_falls_back():
+    """Falls back to ALL_FORMATS when every format_pool entry is an unknown format."""
+    campaign = CampaignSpine(format_pool=["nonexistent_format_xyz", "another_bad_one"])
+    brand = AdBrand(name="TestBrand", tagline="Test", category="tech", campaign=campaign)
+    state = StationState()
+
+    fmt, _, _ = _select_ad_creative(brand, state, 2)
+    assert fmt in [f.value for f in AdFormat]
 
 
 def test_select_ad_creative_voice_guard():
@@ -225,7 +235,7 @@ def test_cast_voices_no_voices_configured():
 
 def test_classic_pitch_includes_disclaimer_goblin():
     """classic_pitch _FORMAT_ROLES must include disclaimer_goblin."""
-    from mammamiradio.ad_creative import AdFormat, _FORMAT_ROLES
+    from mammamiradio.ad_creative import _FORMAT_ROLES, AdFormat
 
     roles = _FORMAT_ROLES[AdFormat.CLASSIC_PITCH]
     assert "disclaimer_goblin" in roles

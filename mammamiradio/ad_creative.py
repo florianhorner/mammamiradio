@@ -262,9 +262,11 @@ def _select_ad_creative(
     Voice-count guard: if fewer than 2 distinct voices are available, multi-voice
     formats (duo_scene, testimonial) are excluded from candidates.
     """
-    # Pick format
+    # Pick format — filter format_pool to known formats to avoid ValueError at AdFormat(f)
     if brand.campaign and brand.campaign.format_pool:
-        candidates = list(brand.campaign.format_pool)
+        candidates = [f for f in brand.campaign.format_pool if f in ALL_FORMATS]
+        if not candidates:
+            candidates = list(ALL_FORMATS)
     else:
         candidates = list(ALL_FORMATS)
 
@@ -308,8 +310,8 @@ def _select_ad_creative(
     else:
         sonic = cat_sonic
 
-    # Determine needed roles
-    if brand.campaign and brand.campaign.spokesperson:
+    # Determine needed roles — validate spokesperson against known roles
+    if brand.campaign and brand.campaign.spokesperson and brand.campaign.spokesperson in SPEAKER_ROLES:
         primary_role = brand.campaign.spokesperson
         default_roles = _FORMAT_ROLES.get(ad_format, ["hammer"])
         if AdFormat(ad_format).voice_count >= 2:

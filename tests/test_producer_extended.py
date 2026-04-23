@@ -8,8 +8,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from mammamiradio.audio_quality import AudioQualityError, AudioToolError
-from mammamiradio.config import load_config
 from mammamiradio.ad_creative import (
     AdBrand,
     AdFormat,
@@ -21,6 +19,8 @@ from mammamiradio.ad_creative import (
     _pick_brand,
     _select_ad_creative,
 )
+from mammamiradio.audio_quality import AudioQualityError, AudioToolError
+from mammamiradio.config import load_config
 from mammamiradio.models import (
     AdHistoryEntry,
     HostPersonality,

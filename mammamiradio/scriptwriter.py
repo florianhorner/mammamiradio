@@ -15,12 +15,9 @@ from typing import cast
 
 import anthropic
 
-from mammamiradio.config import StationConfig
-from mammamiradio.context_cues import compute_context_block
 from mammamiradio.ad_creative import (
     AD_FORMATS,
     SONIC_ENVIRONMENTS,
-    SONIC_MUSIC_BEDS,
     SPEAKER_ROLES,
     AdBrand,
     AdFormat,
@@ -29,6 +26,8 @@ from mammamiradio.ad_creative import (
     AdVoice,
     SonicWorld,
 )
+from mammamiradio.config import StationConfig
+from mammamiradio.context_cues import compute_context_block
 from mammamiradio.models import (
     HostPersonality,
     PersonalityAxes,

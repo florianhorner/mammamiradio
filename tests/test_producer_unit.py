@@ -10,8 +10,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from mammamiradio.config import load_config
 from mammamiradio.ad_creative import AdScript, SonicWorld
+from mammamiradio.config import load_config
 from mammamiradio.models import (
     HostPersonality,
     PlaylistSource,
