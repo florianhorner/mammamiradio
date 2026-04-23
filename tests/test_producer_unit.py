@@ -1360,7 +1360,7 @@ def test_select_ad_creative_no_voices():
 
 
 def test_select_ad_creative_multivoice_only_fallback():
-    """When format_pool is all multi-voice and only 1 voice, falls back to CLASSIC_PITCH."""
+    """When format_pool is all multi-voice and only 1 voice, falls back to a 1-voice format."""
     from mammamiradio.ad_creative import AdBrand, AdFormat, CampaignSpine, _select_ad_creative
 
     brand = AdBrand(
@@ -1374,7 +1374,9 @@ def test_select_ad_creative_multivoice_only_fallback():
     config.ads.voices = [MagicMock(role="hammer")]  # only 1 voice
 
     ad_format, _sonic, _roles = _select_ad_creative(brand, state, len(config.ads.voices))
-    assert ad_format == AdFormat.CLASSIC_PITCH
+    # CLASSIC_PITCH is now 2-voice; fallback is one of the genuine 1-voice formats
+    assert AdFormat(ad_format).voice_count < 2
+    assert ad_format != AdFormat.CLASSIC_PITCH
 
 
 # ---------------------------------------------------------------------------

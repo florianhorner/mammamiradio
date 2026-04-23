@@ -35,7 +35,7 @@ class AdFormat(StrEnum):
     @property
     def voice_count(self) -> int:
         """Number of distinct voices this format needs."""
-        return 2 if self in (AdFormat.DUO_SCENE, AdFormat.TESTIMONIAL) else 1
+        return 2 if self in (AdFormat.CLASSIC_PITCH, AdFormat.DUO_SCENE, AdFormat.TESTIMONIAL) else 1
 
 
 @dataclass
@@ -274,7 +274,7 @@ def _select_ad_creative(
     if num_voices < 2:
         candidates = [f for f in candidates if AdFormat(f).voice_count < 2]
         if not candidates:
-            candidates = [AdFormat.CLASSIC_PITCH]
+            candidates = [f.value for f in AdFormat if f.voice_count < 2]
 
     # Avoid last-used format for this brand
     brand_history = [e for e in state.ad_history if e.brand == brand.name]
@@ -312,12 +312,13 @@ def _select_ad_creative(
 
     # Determine needed roles — validate spokesperson against known roles
     if brand.campaign and brand.campaign.spokesperson and brand.campaign.spokesperson in SPEAKER_ROLES:
-        primary_role = brand.campaign.spokesperson
         default_roles = _FORMAT_ROLES.get(ad_format, ["hammer"])
+        primary_role = brand.campaign.spokesperson
         if AdFormat(ad_format).voice_count >= 2:
-            # Primary is the spokesperson, secondary is the other role
-            secondary = [r for r in default_roles if r != primary_role]
-            roles = [primary_role] + (secondary if secondary else [default_roles[-1]])
+            if primary_role not in default_roles:
+                primary_role = default_roles[0]
+            secondary = next((r for r in default_roles if r != primary_role), default_roles[-1])
+            roles = [primary_role, secondary]
         else:
             roles = [primary_role]
     else:

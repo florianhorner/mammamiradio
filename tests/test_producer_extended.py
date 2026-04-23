@@ -799,6 +799,73 @@ def test_select_ad_creative_avoids_last_sonic_variant_when_possible():
         )
 
 
+@pytest.mark.asyncio
+async def test_news_flash_segment_is_produced(tmp_path):
+    """Producer produces a NEWS_FLASH segment when the scheduler asks for one."""
+    state = _make_state()
+    config = _make_config(tmp_path)
+    config.anthropic_api_key = "test-key"
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+
+    host = config.hosts[0]
+    flash_path = tmp_path / "flash.mp3"
+    flash_path.write_bytes(b"\x00" * 2048)
+
+    with (
+        patch(f"{MODULE}.next_segment_type", return_value=SegmentType.NEWS_FLASH),
+        patch(
+            f"{SCRIPTWRITER_MODULE}.write_news_flash",
+            new_callable=AsyncMock,
+            return_value=(host, "Aggiornamento traffico!", "traffic"),
+        ),
+        patch(f"{MODULE}.synthesize", new_callable=AsyncMock, return_value=flash_path),
+        patch(f"{MODULE}._try_crossfade", new_callable=AsyncMock, return_value=flash_path),
+        patch(f"{MODULE}.fetch_home_context", new_callable=AsyncMock),
+    ):
+        await _run_until_queued(queue, state, config)
+
+    seg = queue.get_nowait()
+    assert seg.type == SegmentType.NEWS_FLASH
+    assert seg.metadata.get("category") == "traffic"
+    assert seg.metadata.get("host") == host.name
+
+
+@pytest.mark.asyncio
+async def test_news_flash_sports_uses_faster_rate(tmp_path):
+    """Producer applies a faster TTS rate for sports news flashes."""
+    state = _make_state()
+    config = _make_config(tmp_path)
+    config.anthropic_api_key = "test-key"
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+
+    host = config.hosts[0]
+    flash_path = tmp_path / "flash.mp3"
+    flash_path.write_bytes(b"\x00" * 2048)
+
+    synthesize_calls: list[dict] = []
+
+    async def _capture_synthesize(text, voice, path, rate=None, pitch=None, **kw):
+        synthesize_calls.append({"rate": rate, "pitch": pitch})
+        return path
+
+    with (
+        patch(f"{MODULE}.next_segment_type", return_value=SegmentType.NEWS_FLASH),
+        patch(
+            f"{SCRIPTWRITER_MODULE}.write_news_flash",
+            new_callable=AsyncMock,
+            return_value=(host, "Gooool!", "sports"),
+        ),
+        patch(f"{MODULE}.synthesize", side_effect=_capture_synthesize),
+        patch(f"{MODULE}._try_crossfade", new_callable=AsyncMock, return_value=flash_path),
+        patch(f"{MODULE}.fetch_home_context", new_callable=AsyncMock),
+    ):
+        await _run_until_queued(queue, state, config)
+
+    assert synthesize_calls, "synthesize must be called"
+    assert synthesize_calls[0]["rate"] == "+25%"
+    assert synthesize_calls[0]["pitch"] == "+12Hz"
+
+
 def test_cast_voices_host_fallback():
     """When no ad voices are configured, _cast_voices falls back to a host voice."""
     brand = AdBrand(name="Test", tagline="T")

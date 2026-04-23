@@ -242,19 +242,16 @@ def test_classic_pitch_includes_disclaimer_goblin():
 
 
 def test_classic_pitch_single_voice_fallback_still_casts_disclaimer_goblin():
-    """With 1 ad voice, classic_pitch falls back cleanly and casts disclaimer_goblin."""
+    """With 1 ad voice, classic_pitch is excluded (needs 2 voices); single-voice format is chosen."""
     brand = AdBrand(name="Test", tagline="T", category="tech")
     state = StationState()
     config = MagicMock()
     config.ads.voices = [AdVoice(name="Solo", voice="it-voice", style="warm", role="hammer")]
 
-    # With 1 voice, classic_pitch is a valid single-voice candidate
+    # With 1 voice, CLASSIC_PITCH is excluded (voice_count == 2); a 1-voice format is chosen
     fmt, _, roles = _select_ad_creative(brand, state, len(config.ads.voices))
     assert AdFormat(fmt).voice_count < 2  # must be a single-voice format
-
-    # If classic_pitch was selected, disclaimer_goblin must be in its roles
-    if fmt == AdFormat.CLASSIC_PITCH:
-        assert "disclaimer_goblin" in roles
+    assert fmt != AdFormat.CLASSIC_PITCH
 
     # _cast_voices must assign every role even when voices are exhausted
     result = _cast_voices(brand, config.ads.voices, [], roles)
