@@ -964,14 +964,22 @@ async def test_prefetch_next_skips_failed_candidate(tmp_path):
 
     # Mark the first track as failed
     first_key = state.playlist[0].cache_key
+    second_key = state.playlist[1].cache_key
     failed: set[str] = {first_key}
 
-    with patch(f"{PRODUCER_MODULE}.download_track", new_callable=AsyncMock) as mock_dl:
+    # validate_download must be mocked: the AsyncMock return value from
+    # download_track is itself awaitable, so passing it to the real
+    # validate_download (which runs in a thread) calls .stat() on an AsyncMock
+    # and creates an unawaited coroutine, triggering a RuntimeWarning.
+    with (
+        patch(f"{PRODUCER_MODULE}.download_track", new_callable=AsyncMock, return_value=tmp_path / "fake.mp3") as mock_dl,
+        patch(f"{PRODUCER_MODULE}.validate_download", return_value=(False, "test")),
+    ):
         await _prefetch_next(state, config, _failed_keys=failed)
-        if mock_dl.called:
-            # If download was called, it should be for a DIFFERENT track
-            assert True  # got past the failed-key filter
-        # Either way, should not raise
+        # download_track must have been called for the second (non-failed) track
+        assert mock_dl.called
+        called_track = mock_dl.call_args[0][0]
+        assert called_track.cache_key == second_key, "Should skip the failed first track"
 
 
 @pytest.mark.asyncio
