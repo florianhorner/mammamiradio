@@ -7,7 +7,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from mammamiradio.models import AdPart, AdScript, AdVoice, HostPersonality, SonicWorld
+from mammamiradio.ad_creative import AdPart, AdScript, AdVoice, SonicWorld
+from mammamiradio.models import HostPersonality
 
 
 def _touch(path: Path) -> Path:
@@ -689,6 +690,27 @@ def test_synthesize_openai_raises_when_no_key(monkeypatch):
 
     with pytest.raises(RuntimeError, match="OPENAI_API_KEY"):
         asyncio.get_event_loop().run_until_complete(_run())
+
+
+@pytest.mark.asyncio
+async def test_synthesize_ad_motif_generation_failure_is_skipped(_mock_all, tmp_path):
+    """When brand motif generation raises, synthesize_ad skips the motif and still returns output."""
+    from mammamiradio.tts import synthesize_ad
+
+    script = AdScript(
+        brand="Motif Co",
+        parts=[AdPart(type="voice", text="Our product!", role="hammer")],
+        sonic=SonicWorld(sonic_signature="ice_clink+startup_synth"),
+    )
+    voices = {"hammer": AdVoice(name="Marco", voice="it-IT-DiegoNeural", style="bold", role="hammer")}
+
+    # Make brand motif generation fail so the exception handler (304-306) is hit
+    with patch("mammamiradio.tts.generate_brand_motif", side_effect=RuntimeError("motif unavailable")) as mock_motif:
+        result = await synthesize_ad(script, voices, tmp_path)
+
+    # The ad must still be produced even without the brand motif
+    assert result.exists()
+    mock_motif.assert_called_once()
 
 
 def test_get_openai_client_singleton(monkeypatch):

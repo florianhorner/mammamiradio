@@ -8,23 +8,28 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from mammamiradio.audio_quality import AudioQualityError, AudioToolError
-from mammamiradio.config import load_config
-from mammamiradio.models import (
+from mammamiradio.ad_creative import (
     AdBrand,
     AdFormat,
-    AdHistoryEntry,
     AdPart,
     AdScript,
     AdVoice,
     CampaignSpine,
+    _cast_voices,
+    _pick_brand,
+    _select_ad_creative,
+)
+from mammamiradio.audio_quality import AudioQualityError, AudioToolError
+from mammamiradio.config import load_config
+from mammamiradio.models import (
+    AdHistoryEntry,
     HostPersonality,
     Segment,
     SegmentType,
     StationState,
     Track,
 )
-from mammamiradio.producer import _cast_voices, _pick_brand, _select_ad_creative, run_producer
+from mammamiradio.producer import run_producer
 
 TOML_PATH = str(Path(__file__).parent.parent / "radio.toml")
 MODULE = "mammamiradio.producer"
@@ -670,7 +675,7 @@ def test_select_ad_creative_uses_format_pool():
     ]
 
     for _ in range(20):
-        fmt, _sonic, _roles = _select_ad_creative(brand, state, config)
+        fmt, _sonic, _roles = _select_ad_creative(brand, state, len(config.ads.voices))
         assert fmt in ("late_night_whisper", "institutional_psa")
 
 
@@ -680,7 +685,7 @@ def test_select_ad_creative_default_format():
     state = StationState()
     config = _make_config(Path("/tmp"))
 
-    fmt, _sonic, _roles = _select_ad_creative(brand, state, config)
+    fmt, _sonic, _roles = _select_ad_creative(brand, state, len(config.ads.voices))
     all_formats = [f.value for f in AdFormat]
     assert fmt in all_formats
 
@@ -697,7 +702,7 @@ def test_select_ad_creative_voice_count_guard():
     config.ads.voices = [AdVoice(name="Solo", voice="v1", style="s")]  # only 1 voice
 
     for _ in range(20):
-        fmt, _sonic, _roles = _select_ad_creative(brand, state, config)
+        fmt, _sonic, _roles = _select_ad_creative(brand, state, len(config.ads.voices))
         assert fmt not in ("duo_scene", "testimonial")
 
 
@@ -715,7 +720,7 @@ def test_select_ad_creative_speaker_count():
         AdVoice(name="B", voice="v2", style="s", role="maniac"),
     ]
 
-    fmt, _sonic, roles = _select_ad_creative(brand, state, config)
+    fmt, _sonic, roles = _select_ad_creative(brand, state, len(config.ads.voices))
     assert fmt == "duo_scene"
     assert len(roles) == 2
 
@@ -733,7 +738,7 @@ def test_cast_voices_with_spokesperson():
         AdVoice(name="Fiamma", voice="it-IT-FiammaNeural", style="enthusiastic", role="maniac"),
     ]
 
-    voice_map = _cast_voices(brand, config, ["hammer"])
+    voice_map = _cast_voices(brand, config.ads.voices, config.hosts, ["hammer"])
     assert "hammer" in voice_map
     assert voice_map["hammer"].name == "Roberto"
 
@@ -746,7 +751,7 @@ def test_cast_voices_fallback_random():
         AdVoice(name="Roberto", voice="it-IT-GianniNeural", style="booming", role="hammer"),
     ]
 
-    voice_map = _cast_voices(brand, config, ["unknown_role"])
+    voice_map = _cast_voices(brand, config.ads.voices, [], ["unknown_role"])
     assert "unknown_role" in voice_map
     assert voice_map["unknown_role"].name == "Roberto"  # only option
 
@@ -766,7 +771,7 @@ def test_select_ad_creative_avoids_last_format():
 
     # With only 2 options and last-used excluded, should always pick live_remote
     for _ in range(20):
-        fmt, _sonic, _roles = _select_ad_creative(brand, state, config)
+        fmt, _sonic, _roles = _select_ad_creative(brand, state, len(config.ads.voices))
         assert fmt == "live_remote"
 
 
@@ -776,7 +781,7 @@ def test_select_ad_creative_category_sonic_defaults():
     state = StationState()
     config = _make_config(Path("/tmp"))
 
-    _fmt, sonic, _roles = _select_ad_creative(brand, state, config)
+    _fmt, sonic, _roles = _select_ad_creative(brand, state, len(config.ads.voices))
     assert sonic.environment in {"cafe", "shopping_channel"}
     assert sonic.music_bed in {"tarantella_pop", "cheap_synth_romance", "upbeat"}
     assert sonic.transition_motif in {"register_hit", "ice_clink", "mandolin_sting"}
@@ -794,12 +799,180 @@ def test_select_ad_creative_avoids_last_sonic_variant_when_possible():
     )
 
     for _ in range(20):
-        _fmt, sonic, _roles = _select_ad_creative(brand, state, config)
+        _fmt, sonic, _roles = _select_ad_creative(brand, state, len(config.ads.voices))
         assert not (
             sonic.environment == "cafe"
             and sonic.music_bed == "tarantella_pop"
             and sonic.transition_motif == "register_hit"
         )
+
+
+@pytest.mark.asyncio
+async def test_news_flash_segment_is_produced(tmp_path):
+    """Producer produces a NEWS_FLASH segment when the scheduler asks for one."""
+    state = _make_state()
+    config = _make_config(tmp_path)
+    config.anthropic_api_key = "test-key"
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+
+    host = config.hosts[0]
+    flash_path = tmp_path / "flash.mp3"
+    flash_path.write_bytes(b"\x00" * 2048)
+
+    with (
+        patch(f"{MODULE}.next_segment_type", return_value=SegmentType.NEWS_FLASH),
+        patch(
+            f"{SCRIPTWRITER_MODULE}.write_news_flash",
+            new_callable=AsyncMock,
+            return_value=(host, "Aggiornamento traffico!", "traffic"),
+        ),
+        patch(f"{MODULE}.synthesize", new_callable=AsyncMock, return_value=flash_path) as mock_synthesize,
+        patch(f"{MODULE}._try_crossfade", new_callable=AsyncMock, return_value=flash_path),
+        patch(f"{MODULE}.fetch_home_context", new_callable=AsyncMock),
+    ):
+        await _run_until_queued(queue, state, config)
+
+    seg = queue.get_nowait()
+    assert seg.type == SegmentType.NEWS_FLASH
+    assert seg.metadata.get("category") == "traffic"
+    assert seg.metadata.get("host") == host.name
+    assert mock_synthesize.await_args.kwargs.get("rate") == "+10%"
+    assert mock_synthesize.await_args.kwargs.get("pitch") is None
+
+
+@pytest.mark.asyncio
+async def test_news_flash_sports_uses_faster_rate(tmp_path):
+    """Producer applies a faster TTS rate for sports news flashes."""
+    state = _make_state()
+    config = _make_config(tmp_path)
+    config.anthropic_api_key = "test-key"
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+
+    host = config.hosts[0]
+    flash_path = tmp_path / "flash.mp3"
+    flash_path.write_bytes(b"\x00" * 2048)
+
+    synthesize_calls: list[dict] = []
+
+    async def _capture_synthesize(text, voice, path, rate=None, pitch=None, **kw):
+        synthesize_calls.append({"rate": rate, "pitch": pitch})
+        return path
+
+    with (
+        patch(f"{MODULE}.next_segment_type", return_value=SegmentType.NEWS_FLASH),
+        patch(
+            f"{SCRIPTWRITER_MODULE}.write_news_flash",
+            new_callable=AsyncMock,
+            return_value=(host, "Gooool!", "sports"),
+        ),
+        patch(f"{MODULE}.synthesize", side_effect=_capture_synthesize),
+        patch(f"{MODULE}._try_crossfade", new_callable=AsyncMock, return_value=flash_path),
+        patch(f"{MODULE}.fetch_home_context", new_callable=AsyncMock),
+    ):
+        await _run_until_queued(queue, state, config)
+
+    assert synthesize_calls, "synthesize must be called"
+    assert synthesize_calls[0]["rate"] == "+25%"
+    assert synthesize_calls[0]["pitch"] == "+12Hz"
+
+
+@pytest.mark.asyncio
+async def test_news_flash_tts_failure_skips_gracefully(tmp_path):
+    """Scenario 2 (empty fallback): when write_news_flash raises, producer skips the
+    NEWS_FLASH and continues — no crash, no dead air, next iteration produces audio."""
+    state = _make_state()
+    config = _make_config(tmp_path)
+    config.anthropic_api_key = "test-key"
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+
+    host = config.hosts[0]
+    banter_path = tmp_path / "banter.mp3"
+    banter_path.write_bytes(b"\x00" * 2048)
+
+    call_count = 0
+
+    def _seg_type_switch(*args, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        # First iteration: NEWS_FLASH that will fail; subsequent: BANTER
+        return SegmentType.NEWS_FLASH if call_count <= 1 else SegmentType.BANTER
+
+    with (
+        patch(f"{MODULE}.next_segment_type", side_effect=_seg_type_switch),
+        patch(
+            f"{SCRIPTWRITER_MODULE}.write_news_flash",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("news backend down"),
+        ),
+        patch(
+            f"{SCRIPTWRITER_MODULE}.write_banter",
+            new_callable=AsyncMock,
+            return_value=([(host, "Dopo il guasto, eccoci!")], None),
+        ),
+        patch(
+            f"{SCRIPTWRITER_MODULE}.write_transition",
+            new_callable=AsyncMock,
+            return_value=(host, "Bentornati."),
+        ),
+        patch(f"{MODULE}.synthesize", new_callable=AsyncMock, return_value=banter_path),
+        patch(f"{MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=banter_path),
+        patch(f"{MODULE}.concat_files", return_value=banter_path),
+        patch(f"{MODULE}._pick_canned_clip", return_value=None),
+        patch(f"{MODULE}.fetch_home_context", new_callable=AsyncMock),
+    ):
+        await _run_until_queued(queue, state, config, timeout=8.0)
+
+    # Producer must recover: queue must have a non-NEWS_FLASH segment
+    assert not queue.empty(), "Producer must enqueue a segment after NEWS_FLASH failure"
+    seg = queue.get_nowait()
+    assert seg.type != SegmentType.NEWS_FLASH, "Failed NEWS_FLASH must not appear in queue"
+
+
+@pytest.mark.asyncio
+async def test_news_flash_produced_after_session_resume(tmp_path):
+    """Scenario 3 (post-restart): producer pauses with session_stopped=True, then resumes
+    and produces NEWS_FLASH once session_stopped is cleared."""
+    state = _make_state()
+    state.session_stopped = True  # simulate post-restart stopped state
+    config = _make_config(tmp_path)
+    config.anthropic_api_key = "test-key"
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+
+    host = config.hosts[0]
+    flash_path = tmp_path / "flash.mp3"
+    flash_path.write_bytes(b"\x00" * 2048)
+
+    with (
+        patch(f"{MODULE}.next_segment_type", return_value=SegmentType.NEWS_FLASH),
+        patch(
+            f"{SCRIPTWRITER_MODULE}.write_news_flash",
+            new_callable=AsyncMock,
+            return_value=(host, "Notizie aggiornate!", "traffic"),
+        ),
+        patch(f"{MODULE}.synthesize", new_callable=AsyncMock, return_value=flash_path),
+        patch(f"{MODULE}._try_crossfade", new_callable=AsyncMock, return_value=flash_path),
+        patch(f"{MODULE}.fetch_home_context", new_callable=AsyncMock),
+    ):
+        task = asyncio.create_task(run_producer(queue, state, config))
+        try:
+            await asyncio.sleep(0.05)  # let producer enter the stopped loop
+            state.session_stopped = False  # simulate operator resuming session
+            deadline = asyncio.get_event_loop().time() + 8.0
+            while queue.empty():
+                if asyncio.get_event_loop().time() > deadline:
+                    raise TimeoutError("Producer did not produce NEWS_FLASH after resume")
+                await asyncio.sleep(0.05)
+        finally:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+    assert not queue.empty(), "Producer must have queued a segment after session resume"
+    seg = queue.get_nowait()
+    assert seg.type == SegmentType.NEWS_FLASH
+    assert seg.metadata.get("category") == "traffic"
 
 
 def test_cast_voices_host_fallback():
@@ -808,7 +981,7 @@ def test_cast_voices_host_fallback():
     config = _make_config(Path("/tmp"))
     config.ads.voices = []  # no ad voices
 
-    voice_map = _cast_voices(brand, config, ["hammer"])
+    voice_map = _cast_voices(brand, config.ads.voices, config.hosts, ["hammer"])
     assert "hammer" in voice_map
     # Should be one of the configured hosts
     host_names = {h.name for h in config.hosts}

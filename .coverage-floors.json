@@ -1,5 +1,6 @@
 {
   "mammamiradio.__init__": 100,
+  "mammamiradio.ad_creative": 100,
   "mammamiradio.audio_quality": 100,
   "mammamiradio.capabilities": 100,
   "mammamiradio.clip": 96,

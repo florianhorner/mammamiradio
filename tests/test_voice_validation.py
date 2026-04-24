@@ -20,11 +20,10 @@ from unittest.mock import patch
 
 import pytest
 
+from mammamiradio.ad_creative import AdBrand, AdVoice
 from mammamiradio.capabilities import capabilities_to_dict, get_capabilities
 from mammamiradio.config import AdsSection, StationConfig, _normalize_tts_voices
 from mammamiradio.models import (
-    AdBrand,
-    AdVoice,
     HostPersonality,
     PersonalityAxes,
     StationState,

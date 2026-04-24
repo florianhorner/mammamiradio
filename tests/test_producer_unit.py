@@ -10,14 +10,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from mammamiradio.ad_creative import AdScript, SonicWorld
 from mammamiradio.config import load_config
 from mammamiradio.models import (
-    AdScript,
     HostPersonality,
     PlaylistSource,
     Segment,
     SegmentType,
-    SonicWorld,
     StationState,
     Track,
 )
@@ -1124,8 +1123,7 @@ async def test_maybe_start_session_not_new():
 
 def test_pick_brand_avoids_recent():
     """_pick_brand avoids recently-aired brands."""
-    from mammamiradio.models import AdBrand
-    from mammamiradio.producer import _pick_brand
+    from mammamiradio.ad_creative import AdBrand, _pick_brand
 
     brands = [
         AdBrand(name="BrandA", tagline="A", category="tech"),
@@ -1146,8 +1144,7 @@ def test_pick_brand_avoids_recent():
 
 def test_pick_brand_all_recent_allows_repeats():
     """_pick_brand allows repeats when all brands are recently aired."""
-    from mammamiradio.models import AdBrand
-    from mammamiradio.producer import _pick_brand
+    from mammamiradio.ad_creative import AdBrand, _pick_brand
 
     brands = [
         AdBrand(name="BrandA", tagline="A", category="tech"),
@@ -1317,8 +1314,7 @@ async def test_synthesize_impossible_moment(tmp_path):
 
 def test_pick_brand_weights_recurring():
     """_pick_brand weights recurring brands 3x higher."""
-    from mammamiradio.models import AdBrand
-    from mammamiradio.producer import _pick_brand
+    from mammamiradio.ad_creative import AdBrand, _pick_brand
 
     brands = [
         AdBrand(name="Recurring", tagline="R", category="tech", recurring=True),
@@ -1336,8 +1332,7 @@ def test_pick_brand_weights_recurring():
 
 def test_select_ad_creative_voice_count_guard():
     """_select_ad_creative excludes multi-voice formats when only 1 voice available."""
-    from mammamiradio.models import AdBrand
-    from mammamiradio.producer import _select_ad_creative
+    from mammamiradio.ad_creative import AdBrand, _select_ad_creative
 
     brand = AdBrand(name="TestBrand", tagline="Test", category="tech")
     state = _make_state()
@@ -1345,7 +1340,7 @@ def test_select_ad_creative_voice_count_guard():
     # Ensure only 1 voice
     config.ads.voices = [MagicMock(role="hammer")]
 
-    ad_format, sonic, roles = _select_ad_creative(brand, state, config)
+    ad_format, sonic, roles = _select_ad_creative(brand, state, len(config.ads.voices))
     assert ad_format is not None
     assert sonic is not None
     assert len(roles) >= 1
@@ -1353,22 +1348,20 @@ def test_select_ad_creative_voice_count_guard():
 
 def test_select_ad_creative_no_voices():
     """_select_ad_creative handles empty voice list."""
-    from mammamiradio.models import AdBrand
-    from mammamiradio.producer import _select_ad_creative
+    from mammamiradio.ad_creative import AdBrand, _select_ad_creative
 
     brand = AdBrand(name="TestBrand", tagline="Test", category="food")
     state = _make_state()
     config = _make_config()
     config.ads.voices = []
 
-    ad_format, _sonic, _roles = _select_ad_creative(brand, state, config)
+    ad_format, _sonic, _roles = _select_ad_creative(brand, state, len(config.ads.voices))
     assert ad_format is not None
 
 
 def test_select_ad_creative_multivoice_only_fallback():
-    """When format_pool is all multi-voice and only 1 voice, falls back to CLASSIC_PITCH."""
-    from mammamiradio.models import AdBrand, AdFormat, CampaignSpine
-    from mammamiradio.producer import _select_ad_creative
+    """When format_pool is all multi-voice and only 1 voice, falls back to a 1-voice format."""
+    from mammamiradio.ad_creative import AdBrand, AdFormat, CampaignSpine, _select_ad_creative
 
     brand = AdBrand(
         name="MultiVoiceBrand",
@@ -1380,8 +1373,10 @@ def test_select_ad_creative_multivoice_only_fallback():
     config = _make_config()
     config.ads.voices = [MagicMock(role="hammer")]  # only 1 voice
 
-    ad_format, _sonic, _roles = _select_ad_creative(brand, state, config)
-    assert ad_format == AdFormat.CLASSIC_PITCH
+    ad_format, _sonic, _roles = _select_ad_creative(brand, state, len(config.ads.voices))
+    # CLASSIC_PITCH is now 2-voice; fallback is one of the genuine 1-voice formats
+    assert AdFormat(ad_format).voice_count < 2
+    assert ad_format != AdFormat.CLASSIC_PITCH
 
 
 # ---------------------------------------------------------------------------
@@ -1391,28 +1386,26 @@ def test_select_ad_creative_multivoice_only_fallback():
 
 def test_cast_voices_no_voices_configured():
     """_cast_voices falls back to host when no ad voices configured."""
-    from mammamiradio.models import AdBrand
-    from mammamiradio.producer import _cast_voices
+    from mammamiradio.ad_creative import AdBrand, _cast_voices
 
     brand = AdBrand(name="TestBrand", tagline="Test", category="tech")
     config = _make_config()
     config.ads.voices = []
 
-    result = _cast_voices(brand, config, ["hammer"])
+    result = _cast_voices(brand, config.ads.voices, config.hosts, ["hammer"])
     assert "hammer" in result
     assert result["hammer"].voice is not None
 
 
 def test_cast_voices_reuses_when_exhausted():
     """_cast_voices reuses voices when more roles than available voices."""
-    from mammamiradio.models import AdBrand, AdVoice
-    from mammamiradio.producer import _cast_voices
+    from mammamiradio.ad_creative import AdBrand, AdVoice, _cast_voices
 
     brand = AdBrand(name="TestBrand", tagline="Test", category="tech")
     config = _make_config()
     config.ads.voices = [AdVoice(name="Ann", voice="it-IT-DiegoNeural", style="warm", role="hammer")]
 
-    result = _cast_voices(brand, config, ["hammer", "maniac", "bureaucrat"])
+    result = _cast_voices(brand, config.ads.voices, config.hosts, ["hammer", "maniac", "bureaucrat"])
     assert len(result) == 3
     # All three should have a voice assigned
     for role in ["hammer", "maniac", "bureaucrat"]:
@@ -1500,17 +1493,12 @@ async def test_prewarm_success(tmp_path):
 
 def test_select_ad_creative_single_voice_excludes_multi():
     """_select_ad_creative excludes duo formats when only 1 voice available."""
-    from mammamiradio.models import AdBrand, AdVoice
-    from mammamiradio.producer import _select_ad_creative
+    from mammamiradio.ad_creative import AdBrand, AdFormat, _select_ad_creative
 
     brand = AdBrand(name="Test", tagline="test", category="food")
     state = _make_state()
-    config = _make_config()
-    # Only 1 voice = multi-voice formats should be excluded
-    config.ads.voices = [AdVoice(name="Solo", voice="it-IT-DiegoNeural", style="warm", role="hammer")]
 
-    fmt, _sonic, _roles = _select_ad_creative(brand, state, config)
-    from mammamiradio.models import AdFormat
+    fmt, _sonic, _roles = _select_ad_creative(brand, state, num_voices=1)
 
     # Should not select a format that needs 2+ voices
     assert AdFormat(fmt).voice_count < 2

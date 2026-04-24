@@ -11,7 +11,8 @@ from uuid import uuid4
 
 import edge_tts
 
-from mammamiradio.models import AdScript, AdVoice, HostPersonality
+from mammamiradio.ad_creative import AdScript, AdVoice
+from mammamiradio.models import HostPersonality
 from mammamiradio.normalizer import (
     concat_files,
     generate_brand_motif,
