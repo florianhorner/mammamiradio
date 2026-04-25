@@ -1,5 +1,56 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **Regia admin prototype at `/regia`** (dev preview, admin-gated): Screen 1 ON AIR of the new Concept A Time-Horizon Stack admin UI. Persistent status strip, 5-tab bar, Playfair italic Now Playing, Italian prose countdown, banter as editorial pull-quote, 4-button trigger row (AVANTI / PAUSA / VOCE AI / SPOT). PAUSA and PANICO log warnings; all other triggers wired to existing endpoints. Polls `/status` every 3s. `admin.html` untouched — prototype at a new route only.
+- **`--ai-purple` semantic token** in `tokens.css`: `#A855F7` reserved for AI-generated segments, used in Regia banter cards and peek-panel type dots.
+- **Accessibility (WCAG 2.1 AA)**: `<html lang="it">` on `admin.html`; sr-only labels on song-request inputs in `listener.html`; `aria-hidden` on decorative tricolor; `.sr-only` and `:focus-visible` utilities in `base.css`; `aria-pressed` synced to play button.
+
+### Fixed
+
+- **Producer wakes immediately on session resume**: replaced 1-second `asyncio.sleep` poll with `asyncio.wait_for(resume_event.wait(), timeout=1.0)`. Resume lag drops from worst-case 1s to milliseconds.
+- **Silence fallback never queues a silent track**: audio quality circuit breaker now recycles the last-known-good music file or drops the segment rather than letting silent audio reach the queue.
+- **LRU cache eviction respects playback queue**: `evict_cache_lru` accepts `protected_paths: set[Path]` — currently-queued norm paths are never deleted mid-stream.
+- **LLM prompt injection hardening**: `_sanitize_prompt_data` strips six quote variants and fake role markers (`System:`, `Assistant:`, `Human:`, `User:`, case-insensitive).
+- **ICY header injection guard**: station name and genre are CRLF-scrubbed before writing to ICY response headers.
+- **`youtube_id` format validation**: `/api/playlist/add-external` validates against `[A-Za-z0-9_-]{11}` before passing to yt-dlp.
+- **HA addon version sync**: `ha-addon/mammamiradio/config.yaml` version kept in sync with `pyproject.toml`.
+
+### Refactored
+
+- **Design system Phase A**: `tokens.css` / `base.css` / `waveform.js` extracted; `admin.html` migrated to canonical base.css components; `listener.html` rewritten to site-v1 five-band radio-station composition; `/dashboard` surface deleted, redirects to `/admin`.
+- **Ad creative system extracted** into `ad_creative.py` (closes #161).
+- **Dashboard CSS/JS extraction** (PR #203) — first outside contribution by [@ashika-rai-n](https://github.com/ashika-rai-n).
+
+**Contributors:** [@ashika-rai-n](https://github.com/ashika-rai-n)
+
+## 2.10.9
+
+Fixes the admin panel regression introduced in v2.10.8 and adds producer bridge metadata improvements.
+
+### Fixed
+
+- **Admin panel broken by v2.10.8 CSP regression**: `script-src 'self'` blocked the entire inline script block in `admin.html`, and a `nonce`-based intermediate attempt blocked the ~40 inline event handlers. Final fix: `script-src 'self' 'unsafe-inline'`, which allows all inline code while still blocking external script sources. The `esc()` wrappers from 2.10.8 remain the load-bearing XSS defense.
+- **Producer bridge track metadata**: Resume bridge and idle bridge segments now call `load_track_metadata()` before humanizing the filename, so `title` and `artist` are populated from the sidecar JSON when available instead of falling back to raw filename stems.
+
+### Security
+
+- CSP on `/admin` now uses `script-src 'self' 'unsafe-inline'`, blocking external script injection (the operationally relevant threat) while allowing the inline code the admin panel depends on.
+
+
+## 2.10.8
+
+Security fix: stored XSS in admin panel Engine Room via HA entity state injection and yt-dlp track title injection.
+
+### Security
+
+- **Stored XSS via HA entity state values**: Five Home Assistant-sourced fields (`mood`, `weather_arc`, `events_summary`, `pending_directive`, `last_event_label`) were rendered via `innerHTML` without escaping. All five are now wrapped with `esc()` before assignment.
+- **Stored XSS via yt-dlp track titles**: Maliciously named YouTube videos could inject HTML/JS via `ha_pending_directive`. Same `esc()` wrapper in `admin.html` covers this field. Raw storage is preserved for LLM prompt quality; HTML encoding only happens at the render site.
+- **Content-Security-Policy on `/admin`**: The `/admin` route now sets a `Content-Security-Policy` header as defense-in-depth.
+
+
 ## 2.10.7
 
 Operator honesty II — aggregates the WS2/WS3/WS5/WS6 reliability fixes shipped on main since 2.10.6, plus two UI-truth fixes from the 2026-04-17 live session.
@@ -15,6 +66,7 @@ Operator honesty II — aggregates the WS2/WS3/WS5/WS6 reliability fixes shipped
 - Queue rows no longer render bare segment types for BANTER, AD, STATION ID, SWEEPER, or TIME CHECK (finding #8, 2026-04-17 live session). BANTER rows now show the participating hosts (`Marco & Luca`), canned clips show `Pre-recorded banter`, AD breaks show `Ad: Barella Pasta +2 more`, station IDs show `Station ID`, sweepers show `Station sweeper`, and time checks show the spoken time. News-flash and error-recovery segments pick up their own labels. Admin queue render also hardened to hide a label that equals the bare type, so a future producer path that forgets to set a title can't re-introduce the `BANTER banter` row.
 - Dashboard "AI" pipeline pill no longer lies when Anthropic is auth-suspended (finding #11, 2026-04-17 live session). Dashboard now mirrors the three-state logic admin.html already had: a configured-but-suspended Anthropic shows `AI Fallback` instead of `AI`.
 
+
 ## 2.10.6
 
 Operator honesty pass — five UI and log fixes, plus a normalizer concat duration guard.
@@ -27,6 +79,7 @@ Operator honesty pass — five UI and log fixes, plus a normalizer concat durati
 - Scheduler reason strings (`cooldown: 45s`, `banter_due_in=3`) no longer leak to listener-facing up-next rows (Item 21).
 - Norm-cache rescue path no longer shows raw filenames as titles (Item 20). Sidecar metadata used when present; otherwise humanized (`norm_busted.mp3` → `Busted`).
 
+
 ## 2.10.5
 
 ### Changed
@@ -38,6 +91,7 @@ Operator honesty pass — five UI and log fixes, plus a normalizer concat durati
 - Quick Action labels renamed to action-oriented verbs (trim / force).
 - Dead `btn-skip` CSS removed; hardcoded hover hex replaced with `color-mix` on the accent token.
 
+
 ## 2.10.4
 
 ### Security
@@ -45,6 +99,7 @@ Operator honesty pass — five UI and log fixes, plus a normalizer concat durati
 - CI action SHA-pinned: `dependabot/fetch-metadata` now pinned to commit SHA (supply chain hardening).
 - Added `.gitleaks.toml` for secret scanning (Anthropic API keys, HA tokens).
 - Raised `yt-dlp` minimum version to `>=2026.2.21` (patches GHSA-g3gw-q23r-pgqm).
+
 
 ## 2.10.3
 
@@ -59,6 +114,7 @@ Operator honesty pass — five UI and log fixes, plus a normalizer concat durati
 - Broadcast EQ restored to the 3-filter chain.
 - Auto-resume on listener connect removed. A deliberate `/api/stop` stays paused across restarts until explicit `/api/resume`.
 
+
 ## 2.10.2
 
 ### Fixed
@@ -67,8 +123,10 @@ Operator honesty pass — five UI and log fixes, plus a normalizer concat durati
 - **Critical**: FFmpeg 8.1 SIGABRT during normalization on Pi aarch64. Three equalizer filters + loudnorm trigger a `calc_energy` assertion crash (`psymodel.c:576`). Third equalizer removed. Every track was silently failing to normalize, leaving the queue permanently empty.
 - Stream player no longer requires a page reload after admin resume. Auto-reconnects within 300ms of the status flip.
 
+
 ## 2.10.1
 
 ### Fixed
 - **Critical**: Docker images for 2.10.0 were never built. The CI validate job used a strict byte-comparison of `radio.toml` files, but the HA add-on intentionally carries Pi/HA Green pacing overrides. Validate always failed, blocking image builds — HA Supervisor got `[404] manifest unknown` on every update attempt.
 - **Pi pacing tuning discarded**: The build step was copying the root `radio.toml` (higher CPU load defaults) over the HA-specific one, shipping the wrong pacing values baked into the image.
+
