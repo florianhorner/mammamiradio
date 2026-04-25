@@ -25,159 +25,279 @@
 </head>
 <body>
 
+<!-- Protected: tricolor-band — kept in DOM for invariant (see CLAUDE.md) -->
 <div class="tricolor-band" aria-hidden="true"><div></div><div></div><div></div></div>
 
-<!-- BAND 1 — NAV -->
-<nav class="nav">
-  <div class="nav-logo">
-    <div class="nav-mark">M</div>
-    <h1>Mamma <span class="mi">Mi</span> Radio</h1>
+<!-- NAV -->
+<header class="mmr-nav">
+  <div class="mmr-nav-inner">
+    <a class="mmr-brand" href="#">
+      <img src="/static/icon-192.svg" alt="">
+      <span>Mamma <em>Mi</em> Radio</span>
+    </a>
+    <nav>
+      <a href="#stasera" class="active">Stasera</a>
+      <a href="#palinsesto">Palinsesto</a>
+      <a href="#dediche">Dediche</a>
+      <a href="#about">About</a>
+    </nav>
+    <button class="mmr-live-pill" id="nav-cta" type="button" aria-label="Ascolta ora — status: ready">
+      <span class="dot"></span> In Onda · 96.7
+    </button>
   </div>
-  <div class="nav-links">
-    <a href="#" class="active">In Onda</a>
-    <a href="#palinsesto">Palinsesto</a>
-    <a href="#dediche">Dediche</a>
-    <a href="#about">About</a>
-  </div>
-  <button class="nav-cta" id="nav-cta" type="button" aria-label="Ascolta ora">Ascolta Ora</button>
-</nav>
+</header>
 
-<!-- BAND 2 — PERSISTENT NOW-PLAYING STRIP -->
-<div class="np-strip" aria-live="polite">
-  <span class="np-chip">On Air</span>
-  <div class="np-info">
-    <div class="np-track" id="np-track">In arrivo…</div>
-    <div class="np-artist" id="np-artist"></div>
-  </div>
-  <div class="np-prog">
-    <span class="np-time" id="np-time-cur">0:00</span>
-    <div class="np-track-bar"><div class="np-fill" id="np-fill"></div></div>
-    <span class="np-time" id="np-time-tot">—</span>
-  </div>
-  <div class="np-ctrl">
-    <button class="np-play" id="np-play" type="button" aria-label="Play">&#9654;</button>
-  </div>
-</div>
+<!-- HERO STAGE — fuses now-playing + hero copy + radio art -->
+<section class="mmr-stage" id="stasera">
 
-<!-- BAND 3 — HERO -->
-<section class="hero" id="hero">
-  <div class="hero-left">
-    <div class="hero-kicker">In Diretta &middot; 96,7 FM &middot; Milano</div>
-    <h1 class="hero-h1">La notte<br>è <span class="accent">italiana</span></h1>
-    <p class="hero-sub">Radio scritta dall'intelligenza artificiale, voci umane dai conduttori di piazza, musica dal cuore del Bel Paese. Dalle sei del mattino all'una di notte.</p>
-    <div class="hero-actions">
+  <!-- Console header: now playing -->
+  <div class="mmr-stage-header">
+    <span class="mmr-live"><span class="dot"></span> In Onda</span>
+    <div class="mmr-np-meta">
+      <div class="eyebrow">Ora in onda · 96,7 FM</div>
+      <div class="title" id="np-track">In arrivo…</div>
+      <div class="artist" id="np-artist"></div>
+    </div>
+    <!-- Progress bar — JS still drives these IDs -->
+    <div class="mmr-np-progress" aria-hidden="true">
+      <div class="mmr-np-progress-inner">
+        <span id="np-time-cur">0:00</span>
+        <div class="mmr-np-bar"><div class="mmr-np-fill" id="np-fill"></div></div>
+        <span id="np-time-tot">—</span>
+      </div>
+    </div>
+    <div class="mmr-wave" id="mmr-wave-bars">
+      <span></span><span></span><span></span><span></span><span></span>
+      <span></span><span></span><span></span><span></span><span></span>
+      <span></span><span></span><span></span><span></span><span></span>
+    </div>
+    <button class="mmr-play-btn" id="np-play" type="button" aria-label="Play">&#9654;</button>
+  </div>
+
+  <!-- Hairline tricolor seam -->
+  <div class="mmr-stage-seam" aria-hidden="true">
+    <span class="seg g"></span><span class="seg w"></span><span class="seg r"></span>
+  </div>
+
+  <!-- Hero copy (left column) -->
+  <div class="mmr-hero-copy" id="hero">
+    <div class="mmr-eyebrow">In Diretta · 96,7 FM · Milano</div>
+    <h1 class="mmr-h1">La notte è <em>italiana.</em></h1>
+    <!-- Protected: .tricolor below h1 (spirit of tricolor-band requirement) -->
+    <div class="mmr-tricolor" aria-hidden="true"><div class="g"></div><div class="w"></div><div class="r"></div></div>
+    <p class="mmr-lede">Radio scritta dall'intelligenza artificiale, voci umane dai conduttori di piazza, musica dal cuore del Bel Paese. Accendi e resta con noi.</p>
+    <div class="mmr-cta-row">
       <button class="btn-primary" id="hero-play" type="button">Ascolta Ora</button>
       <button class="btn-ghost" id="hero-palinsesto" type="button">Il Palinsesto</button>
     </div>
-    <div class="hero-stats">
-      <div>
-        <div class="stat-num" id="stat-airtime">—</div>
-        <div class="stat-lbl">In onda oggi</div>
-      </div>
-      <div>
-        <div class="stat-num" id="stat-tracks">—</div>
-        <div class="stat-lbl">Tracce in playlist</div>
-      </div>
-      <div>
-        <div class="stat-num" id="stat-hosts">Marco &middot; Giulia</div>
-        <div class="stat-lbl">I conduttori</div>
-      </div>
+    <!-- Stats row -->
+    <div class="mmr-stats">
+      <div class="mmr-stat"><div class="mmr-stat-n" id="stat-airtime">—</div><div class="mmr-stat-l">In onda oggi</div></div>
+      <div class="mmr-stat"><div class="mmr-stat-n" id="stat-tracks">—</div><div class="mmr-stat-l">Tracce in playlist</div></div>
+      <div class="mmr-stat"><div class="mmr-stat-n" id="stat-hosts">Marco · Giulia</div><div class="mmr-stat-l">I conduttori</div></div>
     </div>
-  </div>
-  <div class="hero-right">
-    <div class="hero-img-placeholder" aria-hidden="true">
-      <span>R</span>
-      <span>Hero image · AI-generated scene</span>
-    </div>
-    <aside class="dial-widget" aria-label="FM tuning dial">
-      <div class="dw-top">
-        <div>
-          <div class="dw-label">Frequency</div>
-          <div class="dw-freq">96,7<span class="unit">MHz</span></div>
-        </div>
-        <div class="dw-bars" aria-hidden="true">
-          <span></span><span></span><span></span><span></span><span></span>
-        </div>
-      </div>
-      <div class="dw-band" aria-hidden="true">
-        <div class="dw-scale">
-          <div class="dw-sm"><div class="t"></div><span>88</span></div>
-          <div class="dw-sm"><div class="t"></div><span>92</span></div>
-          <div class="dw-sm active"><div class="t"></div><span>96.7</span></div>
-          <div class="dw-sm"><div class="t"></div><span>101</span></div>
-          <div class="dw-sm"><div class="t"></div><span>107</span></div>
-        </div>
-        <div class="dw-needle"></div>
-      </div>
-    </aside>
-    <aside class="casa-card" id="casa-card" role="status" aria-live="polite" hidden>
-      <div class="casa-eyebrow" id="casa-eyebrow">Casa</div>
-      <div class="casa-mood" id="casa-mood"></div>
-      <div class="casa-weather" id="casa-weather"></div>
-      <div class="casa-event" id="casa-event"></div>
+    <!-- Casa card (HA integration) -->
+    <aside class="mmr-casa" id="casa-card" role="status" aria-live="polite" hidden>
+      <div class="eyebrow" id="casa-eyebrow">Casa · Home Assistant</div>
+      <div id="casa-mood"></div>
+      <div id="casa-weather"></div>
+      <div id="casa-event"></div>
     </aside>
   </div>
+
+  <!-- Radio art (right column) — terracotta CSS radio illustration -->
+  <div class="mmr-hero-art">
+    <div class="mmr-radio" id="mmr-radio">
+      <!-- Tricolor top strip -->
+      <div class="mmr-radio-strip">
+        <span class="cap cap-l"></span>
+        <span class="band band-g"></span>
+        <span class="band band-w"></span>
+        <span class="band band-r"></span>
+        <span class="cap cap-r"></span>
+      </div>
+      <!-- Antenna -->
+      <div class="mmr-radio-antenna" aria-hidden="true">
+        <span class="stem"></span><span class="tip"></span>
+      </div>
+      <!-- Face -->
+      <div class="mmr-radio-face">
+        <!-- Speaker -->
+        <div class="mmr-speaker">
+          <span class="ring r1"></span><span class="ring r2"></span>
+          <span class="ring r3"></span><span class="ring r4"></span>
+          <span class="ring r5"></span><span class="dot"></span>
+        </div>
+        <!-- Display -->
+        <div class="mmr-display">
+          <div class="mmr-display-inner">
+            <div class="mmr-display-line">
+              <span class="mmr-display-lede">Stazione</span>
+              <span class="mmr-display-mhz">96,7</span>
+              <span class="mmr-display-unit">FM</span>
+            </div>
+            <span class="mmr-display-strip strip-sage"></span>
+            <span class="mmr-display-strip strip-coral"></span>
+          </div>
+        </div>
+        <!-- Big tuning knob -->
+        <div class="mmr-knob mmr-knob-big" aria-hidden="true">
+          <span class="mmr-knob-face"></span>
+          <span class="mmr-knob-pip"></span>
+          <span class="mmr-knob-cap">Sintonia</span>
+        </div>
+        <!-- Small volume knob -->
+        <div class="mmr-knob mmr-knob-small" aria-hidden="true">
+          <span class="mmr-knob-face"></span>
+          <span class="mmr-knob-pip"></span>
+          <span class="mmr-knob-cap">Volume</span>
+        </div>
+        <!-- Sound waves -->
+        <svg class="mmr-waves" viewBox="0 0 120 160" aria-hidden="true">
+          <path d="M 28 40 A 22 46 0 0 1 28 120"/>
+          <path d="M 50 28 A 32 58 0 0 1 50 132"/>
+          <path d="M 72 16 A 42 72 0 0 1 72 144"/>
+        </svg>
+      </div>
+      <!-- Feet -->
+      <span class="mmr-foot foot-l"></span>
+      <span class="mmr-foot foot-r"></span>
+    </div>
+  </div>
+
 </section>
 
-<!-- BAND 4 — PALINSESTO -->
-<section class="palinsesto" id="palinsesto">
-  <div class="section-head">
-    <h2>Stasera in Onda</h2>
-    <span class="meta" id="palinsesto-date">—</span>
+<!-- PALINSESTO -->
+<section class="mmr-section" id="palinsesto">
+  <div class="mmr-sec-head">
+    <h2>Stasera in <em>onda</em></h2>
+    <span class="mmr-sec-note" id="palinsesto-date">—</span>
   </div>
-  <div class="slots" id="slots" aria-live="polite">
-    <div class="slot"><div class="slot-time">—</div><div class="slot-kind">—</div><div class="slot-title">In attesa…</div><div class="slot-host"></div></div>
-    <div class="slot next"><div class="slot-time">—</div><div class="slot-kind">—</div><div class="slot-title">In attesa…</div><div class="slot-host"></div></div>
-    <div class="slot next"><div class="slot-time">—</div><div class="slot-kind">—</div><div class="slot-title">In attesa…</div><div class="slot-host"></div></div>
-    <div class="slot next"><div class="slot-time">—</div><div class="slot-kind">—</div><div class="slot-title">In attesa…</div><div class="slot-host"></div></div>
-  </div>
+  <ol class="mmr-schedule" id="slots" aria-live="polite">
+    <li><span class="t">—</span><div class="m"><div class="title">In attesa…</div></div></li>
+  </ol>
 </section>
 
-<!-- BAND 5 — DEDICHE -->
-<section class="dediche" id="dediche">
-  <div class="section-head">
-    <h2>Dediche &amp; Saluti</h2>
-    <span class="meta">Dai nostri ascoltatori</span>
+<!-- DEDICHE -->
+<section class="mmr-section" id="dediche">
+  <div class="mmr-sec-head">
+    <h2>Dediche &amp; <em>Saluti</em></h2>
+    <span class="mmr-sec-note">aperte fino all'alba</span>
   </div>
-  <div class="dediche-grid">
-    <div class="quote-stack" id="quote-stack">
-      <div class="quote">
-        <div class="quote-text">La sezione dediche si riempirà non appena i nostri ascoltatori manderanno un saluto. Prova tu.</div>
-        <div class="quote-meta"><strong>Mamma Mi Radio</strong> &middot; in attesa di voci</div>
+  <div class="mmr-dediche-grid">
+    <div class="mmr-dediche-list" id="quote-stack">
+      <div class="mmr-dedica">
+        <div class="eyebrow">Dedica</div>
+        <div class="quote">La sezione dediche si riempirà non appena i nostri ascoltatori manderanno un saluto.</div>
+        <div class="sig">— Mamma Mi Radio</div>
       </div>
     </div>
-    <aside class="form-side" id="form-side">
-      <div class="form-eyebrow">Manda un Saluto</div>
-      <div class="form-title">La tua voce, in diretta.</div>
-      <p class="form-desc">Saluti, dediche, richieste musicali. I conduttori leggono tutto e rispondono sull'onda.</p>
-      <form id="request-form">
-        <label for="req-name" class="sr-only">Nome (opzionale)</label>
-        <input class="form-input" type="text" id="req-name" placeholder="Come ti chiami? (opzionale)" autocomplete="name">
-        <label for="req-msg" class="sr-only">Messaggio o richiesta musicale</label>
-        <textarea class="form-textarea" id="req-msg" placeholder="Il tuo messaggio o la canzone che vuoi ascoltare..." rows="3" autocomplete="off"></textarea>
-        <button class="form-submit" type="submit">Manda al DJ &#9654;</button>
-      </form>
+    <form class="mmr-dedica-form" id="request-form">
+      <div class="mmr-dedica-stamp" aria-hidden="true">
+        <span class="stamp-border">
+          <span class="stamp-inner">
+            <span class="stamp-top">POSTE · RADIOFONICHE</span>
+            <span class="stamp-mid">Lit. 50</span>
+            <span class="stamp-bot">96,7 MHz</span>
+          </span>
+        </span>
+      </div>
+      <div class="eyebrow">Manda al DJ <span class="mmr-dedica-postmark">· cara Radio ·</span></div>
+      <label for="req-name" class="sr-only">Nome (opzionale)</label>
+      <input class="mmr-dedica-form-input" type="text" id="req-name" placeholder="Come ti chiami? (opzionale)" autocomplete="name">
+      <label for="req-msg" class="sr-only">Messaggio o richiesta musicale</label>
+      <textarea id="req-msg" rows="4" placeholder="Cara Radio, vorrei dedicare una canzone a…" autocomplete="off"></textarea>
+      <button type="submit">
+        <span aria-hidden="true" style="margin-right:8px">&#9993;</span>Spedisci con un bacio
+      </button>
+      <div class="hint">Letta stasera da Nonna Giulia · <em>con amore</em></div>
       <div class="form-sent" id="request-sent" style="display:none" role="status" aria-live="polite"></div>
-    </aside>
+    </form>
   </div>
 </section>
 
-<!-- BAND 6 — TICKER -->
-<div class="ticker-wrap" aria-hidden="true">
-  <div class="ticker">
-    Milano 22° soleggiato<span class="ts">·</span>Traffico A4 scorrevole<span class="ts">·</span>Serie A: Napoli 2 – Juventus 1<span class="ts">·</span>Borsa: FTSE MIB +0.8%<span class="ts">·</span>Firenze 20° sereno<span class="ts">·</span>Prossimo treno Roma–Milano 14:35<span class="ts">·</span>Palermo 27° sole splendido<span class="ts">·</span>Torino 18° coperto<span class="ts">·</span>Mare: Liguria calmo, Adriatico mosso<span class="ts">·</span>Milano 22° soleggiato<span class="ts">·</span>Traffico A4 scorrevole<span class="ts">·</span>Serie A: Napoli 2 – Juventus 1<span class="ts">·</span>Borsa: FTSE MIB +0.8%<span class="ts">·</span>Firenze 20° sereno<span class="ts">·</span>Prossimo treno Roma–Milano 14:35<span class="ts">·</span>Palermo 27° sole splendido<span class="ts">·</span>Torino 18° coperto<span class="ts">·</span>Mare: Liguria calmo, Adriatico mosso
+<!-- ABOUT -->
+<section class="mmr-section mmr-about" id="about">
+  <div class="mmr-sec-head">
+    <h2>La <em>stazione</em></h2>
+    <span class="mmr-sec-note">dal 2024 · Napoli</span>
+  </div>
+  <div class="mmr-about-grid">
+    <div class="mmr-about-card"><div class="eyebrow">Palinsesto</div><p>Scritto ogni sera da un modello linguistico addestrato sulla radiofonia italiana, dalle notti di Radio Montecarlo alle trasmissioni di quartiere degli anni '80.</p></div>
+    <div class="mmr-about-card"><div class="eyebrow">Voci</div><p>Conduttori umani — Francesca, Nonna Giulia, Marco del bar — registrati su nastro e rimixati per la notte.</p></div>
+    <div class="mmr-about-card"><div class="eyebrow">Musica</div><p>Catalogo curato: cantautori, melodico leggero, disco italiana, napoletano classico. Niente algoritmi di scoperta.</p></div>
+    <div class="mmr-about-card"><div class="eyebrow">Codice</div><p>Open source su GitHub. PWA installabile. Home Assistant integrato. Stream MP3 · HLS 320 kbps. Made with espresso.</p></div>
+  </div>
+</section>
+
+<!-- TICKER -->
+<div class="mmr-ticker" aria-hidden="true">
+  <div class="track">
+    <span>La notte è italiana</span><span class="dot">&#10022;</span>
+    <span>Stasera · Nonna Giulia</span><span class="dot">&#10022;</span>
+    <span>Dediche aperte</span><span class="dot">&#10022;</span>
+    <span>Manda al DJ</span><span class="dot">&#10022;</span>
+    <span>96.7 FM · 320 kbps</span><span class="dot">&#10022;</span>
+    <span>La notte è italiana</span><span class="dot">&#10022;</span>
+    <span>Stasera · Nonna Giulia</span><span class="dot">&#10022;</span>
+    <span>Dediche aperte</span><span class="dot">&#10022;</span>
+    <span>Manda al DJ</span><span class="dot">&#10022;</span>
+    <span>96.7 FM · 320 kbps</span><span class="dot">&#10022;</span>
+    <span>La notte è italiana</span><span class="dot">&#10022;</span>
+    <span>Stasera · Nonna Giulia</span><span class="dot">&#10022;</span>
+    <span>Dediche aperte</span><span class="dot">&#10022;</span>
+    <span>Manda al DJ</span><span class="dot">&#10022;</span>
+    <span>96.7 FM · 320 kbps</span><span class="dot">&#10022;</span>
   </div>
 </div>
 
-<!-- BAND 7 — FOOTER -->
-<footer class="footer" id="about">
-  <div>Mamma Mi Radio &middot; 96,7 FM Milano &middot; dal 1987</div>
-  <div class="footer-tricolor" aria-hidden="true"></div>
-  <div>Produced by AI · written in Italia</div>
+<!-- FOOTER -->
+<footer class="mmr-footer">
+  <div class="mmr-foot-inner">
+    <div>
+      <img src="/static/icon-192.svg" alt="" class="foot-logo">
+      <div class="wordmark">Mamma <em>Mi</em> Radio</div>
+      <div class="mmr-tricolor thin" aria-hidden="true"><div class="g"></div><div class="w"></div><div class="r"></div></div>
+      <p class="fine">Radio scritta dall'intelligenza artificiale. Musica umana. Made with espresso.</p>
+    </div>
+    <div class="foot-col">
+      <div class="foot-head">Ascolta</div>
+      <a href="/stream">/stream · MP3</a>
+      <a href="/static/manifest.json">PWA install</a>
+      <a href="/admin">Home Assistant</a>
+    </div>
+    <div class="foot-col">
+      <div class="foot-head">Stazione</div>
+      <a href="#palinsesto">Palinsesto</a>
+      <a href="#dediche">Dediche</a>
+      <a href="#about">About</a>
+    </div>
+    <div class="foot-col">
+      <div class="foot-head">Operator</div>
+      <a href="/admin">/admin</a>
+      <a href="https://github.com/mammamiradio/mammamiradio">GitHub</a>
+    </div>
+  </div>
 </footer>
 
 <!-- Audio stream element -->
 <audio id="radio-audio" preload="none" crossorigin="anonymous"></audio>
+
+<!-- Wire mmr-radio is-playing animation to play state -->
+<script>
+  (function () {
+    var radioEl = document.getElementById('mmr-radio');
+    var waveEl = document.getElementById('mmr-wave-bars');
+    var playBtn = document.getElementById('np-play');
+    if (!playBtn || !radioEl) return;
+    var obs = new MutationObserver(function () {
+      var playing = playBtn.classList.contains('playing');
+      radioEl.classList.toggle('is-playing', playing);
+      if (waveEl) waveEl.classList.toggle('paused', !playing);
+    });
+    obs.observe(playBtn, { attributes: true, attributeFilter: ['class'] });
+  }());
+</script>
 
 </body>
 </html>
