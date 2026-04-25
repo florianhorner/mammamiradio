@@ -36,6 +36,8 @@ The current version source of truth is `pyproject.toml`.
 
 - **Conductor setup fails on machines with broken Python 3.13**: `conductor-setup.sh` now prefers `python3.11 → python3.12 → python3.13 → python3` instead of leading with 3.13. On machines where 3.13 is installed but its `ensurepip` is broken, the setup no longer fails — it falls back to the project's target interpreter (3.11) automatically.
 
+**Contributors:** [@ashika-rai-n](https://github.com/ashika-rai-n)
+
 ## [2.10.9] - 2026-04-20
 
 Fixes the admin panel regression introduced in v2.10.8 and adds producer bridge metadata improvements.
@@ -55,6 +57,7 @@ Fixes the admin panel regression introduced in v2.10.8 and adds producer bridge 
 - Added HTTP-level CSP test (`test_admin_csp_header_sent_with_unsafe_inline`): fires a real `GET /admin` via `httpx.ASGITransport` and asserts the header is actually set on the response.
 - Added producer unit tests for sidecar metadata loading on resume and idle bridge paths (`tests/test_producer_unit.py`).
 
+
 ## [2.10.8] - 2026-04-19
 
 Security fix: stored XSS in admin panel Engine Room (HA entity state injection + yt-dlp track title injection).
@@ -68,6 +71,7 @@ Security fix: stored XSS in admin panel Engine Room (HA entity state injection +
 ### Tests
 
 - `tests/test_xss_regression.py` (new): 6 regression guards covering all five HA fields, correct `esc()`-before-`.replace()` ordering, CSP presence, LLM injection phrase filtering, and the intentional raw-storage design contract for `ha_pending_directive`.
+
 
 ## [2.10.7] - 2026-04-18
 
@@ -92,6 +96,7 @@ Operator honesty II — aggregates the WS2/WS3/WS5/WS6 reliability fixes shipped
 
 - `TestBanterTitle` and `TestAdTitle` in `tests/test_producer_unit.py`: 10 cases covering single/multi-host banter, canned-clip fallback, generic fallback, single/multi-brand ad summarization, empty brand list, and whitespace-only brand skipping. Guards the queue-row label contract against future regressions.
 
+
 ## [2.10.6] - 2026-04-17
 
 Operator honesty pass — five UI and log fixes that stop the admin panel from lying to the operator, plus a normalizer safety guard.
@@ -109,6 +114,7 @@ Operator honesty pass — five UI and log fixes that stop the admin panel from l
 - `TestFFprobeDurationSecParser`: exercises the real `_ffprobe_duration_sec` parser (returncode, unparseable, OSError, timeout, empty stdout) so the concat guard's dependency is covered by the per-module ratchet.
 - Rescue-path coverage: sidecar-present, malformed-sidecar, and no-sidecar paths are all asserted at the listener-facing title level.
 
+
 ## [2.10.5] - 2026-04-16
 
 ### Changed
@@ -120,6 +126,7 @@ Operator honesty pass — five UI and log fixes that stop the admin panel from l
 - **Quick Action labels clarified**: Renamed to action-oriented verbs ("trim" / "force") for immediate comprehension.
 - **Dead code removal**: Dropped unused `btn-skip` CSS; replaced hardcoded hover hex with `color-mix` so hover states follow the accent token.
 
+
 ## [2.10.4] - 2026-04-16
 
 ### Security
@@ -127,6 +134,7 @@ Operator honesty pass — five UI and log fixes that stop the admin panel from l
 - **CI action SHA-pinned**: `dependabot/fetch-metadata` is now pinned to commit SHA `ffa630c65fa7e0ecfa0625b5ceda64399aea1b36` (v3). Eliminates supply chain risk from a mutable semver tag running with `contents: write` + `pull-requests: write` in `pull_request_target` context.
 - **Secret scanning**: Added `.gitleaks.toml` with custom rules for Anthropic API keys (`sk-ant-…`) and Home Assistant long-lived access tokens. Extends gitleaks default ruleset with project-specific patterns and an allowlist for `.env.example`.
 - **yt-dlp version floor raised**: Minimum `yt-dlp` version bumped from `>=2024.0` to `>=2026.2.21`, patching GHSA-g3gw-q23r-pgqm (RCE via `--netrc-cmd`, fixed in 2026.2.21).
+
 
 ## [2.10.3] - 2026-04-15
 
@@ -143,6 +151,7 @@ Operator honesty pass — five UI and log fixes that stop the admin panel from l
 - **Broadcast EQ restored to 3-filter chain**: The HF harshness shelf (12kHz, -1.5dB) removed in 2.10.2 due to an ffmpeg 8.x crash concern is restored. The 3-filter chain is the correct broadcast EQ configuration.
 - **Auto-resume on listener connect removed**: `_audio_generator` no longer clears `session_stopped` when a listener connects. A deliberate `/api/stop` now remains paused across restarts until explicit `/api/resume`, keeping stop/resume behavior fully operator-controlled.
 
+
 ## [2.10.2] - 2026-04-15
 
 ### Fixed
@@ -156,6 +165,7 @@ Operator honesty pass — five UI and log fixes that stop the admin panel from l
 
 - **9 regression-prevention tests**: Guards against all four failure modes above — ffmpeg filter chain count, loudnorm presence, resume bridge with canned clip, resume bridge norm-cache fallback, resume bridge no-op on empty cache, idle bridge norm-cache fallback, auto-resume with/without flag file, and auto-resume no-op when session is already running.
 
+
 ## [2.10.1] - 2026-04-15
 
 ### Fixed
@@ -166,6 +176,7 @@ Operator honesty pass — five UI and log fixes that stop the admin panel from l
 ### Added
 
 - **7 regression-prevention tests** in `tests/test_addon_build_workflow.py`: guards against the `cmp -s` pattern returning, CI/Python test drift, build matrix gaps, trigger path gaps, and the radio.toml build-time overwrite. Any single test failure would have caught the 2.10.0 manifest 404 before release.
+
 
 ## [2.10.0] - 2026-04-14
 
@@ -192,6 +203,7 @@ Operator honesty pass — five UI and log fixes that stop the admin panel from l
 - **Admin keyboard shortcuts removed**: Global `keydown` listener (`s`/`b`/`a`/`n`) was firing commands while the user typed in the search box. Removed entirely; regression test added.
 - **Download validation**: Pre-validation floor lowered from 60s to 30s so silence fallbacks (35s) aren't rejected. `ffprobe` timeout added (30s) to prevent executor thread starvation on corrupt files.
 - **Demo asset protection**: Fallback canned clips are now marked non-ephemeral, preventing permanent deletion of bundled demo assets by the LRU eviction pass.
+
 
 ## [2.9.0] - 2026-04-13
 
