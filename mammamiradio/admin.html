@@ -592,31 +592,6 @@ body[data-stopped="true"] .sidebar-live-line { color: var(--cream-dk); }
   *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; }
 }
 
-@media (max-width: 768px) {
-  .admin-layout, .a-app {
-    grid-template-columns: 1fr;
-    grid-template-rows: auto 1fr;
-  }
-  .admin-sidebar, .a-sidebar {
-    position: static;
-    height: auto;
-    border-left: none;
-    border-bottom: 1px solid rgba(245,237,216,0.08);
-    border-top: 3px solid var(--sun2);
-  }
-  .admin-content, .a-content { padding: 16px 16px; }
-  .sidebar-bottom { display: none; }
-  .search-row { flex-direction: column; }
-  .search-row .btn, .transport .btn-skip, .transport .btn-stop, .transport .btn-resume { width: 100%; }
-  .transport .btn-util { flex: 1 1 auto; min-width: 0; font-size: 0.78em; padding: 0.35rem 0.4rem; }
-  .pl-row, .sr-row { flex-wrap: wrap; }
-  .pl-a { width: 100%; padding-left: 30px; opacity: 1; }
-  .force-badge { margin-left: 28px; }
-  .a-triggers { grid-template-columns: 1fr 1fr; }
-  .a-row-2 { grid-template-columns: 1fr; }
-  .a-topbar { flex-wrap: wrap; }
-  .a-sliders label { grid-template-columns: 100px 1fr 80px; }
-}
 
 /* ── FOCUS-VISIBLE (keyboard accessibility ring) ── */
 button:focus-visible,
@@ -990,6 +965,45 @@ body[data-stopped="true"] .a-station-card .dot.on { animation-play-state: paused
   .a-panel header .sub.live .dot,
   .a-host .live-tag .dot,
   .a-eq span { animation: none; }
+}
+
+@media (max-width: 768px) {
+/* Mobile fix: at narrow viewports the 160px label column + 110px value column
+     left no room for the slider (1fr collapsed to 0). Shrink labels to 100px
+     and values to 80px so the slider gets actual width. */
+  .a-sliders label { grid-template-columns: 100px 1fr 80px; }
+  /* Mobile fix: pacing slider tracks were nearly invisible against the dark
+     panel (4px on rgb(54,43,37)). Bump height + brighter base color.
+     Uses background-color (not background shorthand) to preserve the
+     gold linear-gradient fill set by --sun2. */
+  .a-sliders input[type=range] { height: 6px; background-color: rgba(245,237,216,0.14); }
+
+  /* --- everything below was originally in the early @media block, moved here so the cascade wins against base rules at lines 815/646/etc --- */
+/* Mobile fix: panel header stacks vertically so subtitle doesn't collide with wrapped h2 */
+  .a-panel header { flex-direction: column; align-items: flex-start; gap: 8px; }
+  .a-panel header .sub { flex-shrink: 1; }
+  .admin-layout, .a-app {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto 1fr;
+  }
+  .admin-sidebar, .a-sidebar {
+    position: static;
+    height: auto;
+    border-left: none;
+    border-bottom: 1px solid rgba(245,237,216,0.08);
+    border-top: 3px solid var(--sun2);
+  }
+  .admin-content, .a-content { padding: 16px 16px; }
+  .sidebar-bottom { display: none; }
+  .search-row { flex-direction: column; }
+  .search-row .btn, .transport .btn-skip, .transport .btn-stop, .transport .btn-resume { width: 100%; }
+  .transport .btn-util { flex: 1 1 auto; min-width: 0; font-size: 0.78em; padding: 0.35rem 0.4rem; }
+  .pl-row, .sr-row { flex-wrap: wrap; }
+  .pl-a { width: 100%; padding-left: 30px; opacity: 1; }
+  .force-badge { margin-left: 28px; }
+  .a-triggers { grid-template-columns: 1fr 1fr; }
+  .a-row-2 { grid-template-columns: 1fr; }
+  .a-topbar { flex-wrap: wrap; }
 }
 </style>
 </head>
@@ -1532,6 +1546,15 @@ function renderProgramme(st){
     return segmentTypeKey(type)===_programmeFilter;
   }
 
+  // Mobile fix: duration helper for past/now/upcoming Dur column
+  const fmtDur=(it,typeKey)=>{
+    const ms=it?.duration_ms ?? it?.metadata?.duration_ms;
+    let s=ms!=null?Math.round(ms/1000):(typeKey==='music'?240:typeKey==='banter'?30:typeKey==='ad'?60:typeKey==='news_flash'?20:20);
+    if(!s||s<0)return '';
+    const m=Math.floor(s/60),r=s%60;
+    return m+':'+(r<10?'0':'')+r;
+  };
+
   // Past rows (from stream_log, most recent last so we show oldest first)
   const histFiltered=history.filter(e=>matchFilter(e.type));
   histFiltered.reverse().forEach(e=>{
@@ -1540,7 +1563,7 @@ function renderProgramme(st){
     const d=new Date(e.timestamp*1000);
     const t=d.toLocaleTimeString('it-IT',{hour:'2-digit',minute:'2-digit'});
     const parts=splitTrackLabel(e);
-    rows.push(`<tr class="past"><td class="ts">${t}</td><td><span class="seg-pill seg-${typeKey}">${esc(segmentText(typeKey))}</span></td><td class="ti">${esc(parts.title||typeKey)}</td><td class="ho">${esc(parts.artist)}</td><td class="du"></td><td class="ac"></td></tr>`);
+    rows.push(`<tr class="past"><td class="ts">${t}</td><td><span class="seg-pill seg-${typeKey}">${esc(segmentText(typeKey))}</span></td><td class="ti">${esc(parts.title||typeKey)}</td><td class="ho">${esc(parts.artist)}</td><td class="du">${fmtDur(e,typeKey)}</td><td class="ac"></td></tr>`);
   });
 
   // Current row
@@ -1549,7 +1572,7 @@ function renderProgramme(st){
     const typeKey=segmentTypeKey(now.type);
     const parts=splitTrackLabel(now);
     const titleText=parts.title&&parts.title!==now.type?parts.title:'Playing...';
-    rows.push(`<tr class="now"><td class="ts">NOW</td><td><span class="seg-pill seg-${typeKey}">${esc(segmentText(typeKey))}</span></td><td class="ti">${esc(titleText)}</td><td class="ho">${esc(parts.artist)}</td><td class="du"></td><td class="ac"></td></tr>`);
+    rows.push(`<tr class="now"><td class="ts">NOW</td><td><span class="seg-pill seg-${typeKey}">${esc(segmentText(typeKey))}</span></td><td class="ti">${esc(titleText)}</td><td class="ho">${esc(parts.artist)}</td><td class="du">${fmtDur(now,typeKey)}</td><td class="ac"></td></tr>`);
   }
 
   // Upcoming rows
@@ -1564,7 +1587,7 @@ function renderProgramme(st){
     // Hide title when it equals the bare segment type — prevents rows like
     // "BANTER banter" if a producer code path ever forgets to set a title.
     const titleText=(parts.title && parts.title.toLowerCase()!==typeKey)?parts.title:'';
-    rows.push(`<tr ${clickAttrs}><td class="ts"></td><td><span class="seg-pill seg-${typeKey}">${esc(segmentText(typeKey))}</span></td><td class="ti">${esc(titleText)}</td><td class="ho">${esc(parts.artist)}</td><td class="du"></td><td class="ac"></td></tr>`);
+    rows.push(`<tr ${clickAttrs}><td class="ts"></td><td><span class="seg-pill seg-${typeKey}">${esc(segmentText(typeKey))}</span></td><td class="ti">${esc(titleText)}</td><td class="ho">${esc(parts.artist)}</td><td class="du">${fmtDur(it,typeKey)}</td><td class="ac"></td></tr>`);
   });
 
   if(upFiltered.length>10){

@@ -43,8 +43,13 @@ def _decide_with_reason(
         threshold += random.randint(-1, 0)
     threshold = max(1, threshold)
     if songs_since_banter >= threshold:
-        # 30% chance of news flash instead of banter (every ~6-8 songs)
-        if songs_since_news >= 6 and (deterministic or random.random() < 0.3):
+        # News flash fires deterministically once songs_since_news >= 6.
+        # The 30% probability gate (previously here) caused news to fire ~once
+        # per hour with high variance — Florian noted "FFS news section not
+        # played still" after a 1-hour listen; the math says 30% over 25 banter
+        # slots gives ~7 expected hits, but with variance, runs of 0 are real.
+        # Deterministic ensures news lands every ~6-8 songs once cooldown opens.
+        if songs_since_news >= 6:
             return SegmentType.NEWS_FLASH, _reason_for_decision("news_due")
         return SegmentType.BANTER, _reason_for_decision("banter_due", threshold=threshold)
 
