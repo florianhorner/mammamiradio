@@ -792,11 +792,13 @@ async def test_get_root_serves_listener_page():
         resp = await client.get("/")
     assert resp.status_code == 200
     assert "text/html" in resp.headers["content-type"]
-    assert "Mamma Mi Radio" in resp.text
-    # Post site-v1 refactor: the hero tagline + CTA copy lives on the new
-    # radio-station website surface. Asserts on the identity-bearing copy.
-    assert "La notte" in resp.text and "italiana" in resp.text
+    # Brand-engine PR-C: listener is now Jinja-templated. Assert on stable
+    # structural elements (CTA, brand identity) — the tagline is now per-brand
+    # via brand.tagline, so no longer a fixed string.
+    assert "Mamma Mi Radio" in resp.text  # default brand from radio.toml
     assert "Ascolta Ora" in resp.text
+    assert "Manda al DJ" in resp.text  # dediche form section
+    assert 'data-cap="ha"' in resp.text  # capability-conditional rendering hooks present
 
 
 @pytest.mark.asyncio
