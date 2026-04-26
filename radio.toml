@@ -25,6 +25,43 @@ sweeper_voice = "it-IT-GiuseppeMultilingualNeural"
 # Probability of inserting a sweeper after a music segment (0.0–1.0)
 sweeper_probability = 0.25
 
+# ────────────────────────────────────────────────────────────────────────
+# [brand] — what the LISTENER reads on the public page. Separate from
+# [station] (operator config). Each operator's station is a piece of
+# fiction the engine powers. Theme tokens override Volare Refined defaults.
+# ────────────────────────────────────────────────────────────────────────
+[brand]
+station_name = "Mamma Mi Radio"
+frequency = "96,7 FM"
+city = "Napoli"
+founded = 2024
+tagline = "La radio che ascolta la tua casa"
+about = "Conduttori notturni registrati su nastro e rimixati per la sera. Da Windor a Vergen. La voce che non si spegne mai."
+opengraph_subtitle = "AI Italian late-night radio · 96,7 FM"
+
+[brand.theme]
+# Volare Refined defaults — override per station fiction.
+# All values validated at config load: hex contrast >= 4.5:1 vs --cream,
+# background lightness <= 25%, fonts from curated list (see config.py).
+primary_color = "#F4D048"
+accent_color = "#B82C20"
+background_color = "#14110F"
+display_font = "Playfair Display"
+body_font = "Outfit"
+mono_font = "JetBrains Mono"
+
+# Per-host display name (FK to [[hosts]].name). Multiple brand hosts can
+# share one engine_host (different alter egos voiced by the same engine).
+[[brand.hosts]]
+engine_host = "Marco"
+display_name = "Marco del bar"
+description = "Conduttore notturno, nato in periferia. Voce graffiante, sigaretta sempre accesa."
+
+[[brand.hosts]]
+engine_host = "Giulia"
+display_name = "Nonna Giulia"
+description = "Voce della cucina. Legge le dediche con calore e ironia. Ti chiama 'tesoro' anche se ha 80 anni."
+
 [playlist]
 shuffle = true
 allow_explicit = true   # false = skip tracks marked explicit

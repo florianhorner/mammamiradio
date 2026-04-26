@@ -2143,6 +2143,28 @@ async def status(request: Request, _: None = Depends(require_admin_access)):
                 {"title": t.title, "artist": t.artist, "display": t.display, "spotify_id": t.spotify_id}
                 for t in state.playlist[:100]
             ],
+            "brand": {
+                "station_name": config.brand.station_name,
+                "frequency": config.brand.frequency,
+                "city": config.brand.city,
+                "founded": config.brand.founded,
+                "tagline": config.brand.tagline,
+                "about": config.brand.about,
+                "opengraph_subtitle": config.brand.opengraph_subtitle,
+                "hosts": [
+                    {"engine_host": h.engine_host, "display_name": h.display_name, "description": h.description}
+                    for h in config.brand.hosts
+                ],
+                "theme": {
+                    "primary_color": config.brand.theme.primary_color,
+                    "accent_color": config.brand.theme.accent_color,
+                    "background_color": config.brand.theme.background_color,
+                    "display_font": config.brand.theme.display_font,
+                    "body_font": config.brand.theme.body_font,
+                    "mono_font": config.brand.theme.mono_font,
+                },
+            },
+            "brand_warnings": list(config.brand_warnings),
         }
     )
     return payload
