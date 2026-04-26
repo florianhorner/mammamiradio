@@ -47,10 +47,10 @@
   --flag-red:        #CE2B37;
 
   /* ── Vintage radio cabinet — listener hero illustration ── */
-  --terracotta:      #3E2A1F;  /* warm brown cabinet body */
-  --terracotta-lt:   #5A3F30;  /* raised highlights, knobs, antenna */
-  --sage:            #8FA577;  /* vintage display sage strip */
-  --ink:             #231914;  /* dark text on light surfaces */
+  --terracotta:      #6B3E2D;  /* warm copper-brown cabinet body — pops vs --bg */
+  --terracotta-lt:   #B47850;  /* warm tan highlights for knobs/antenna/rings */
+  --sage:            #9CAB7E;  /* vintage display sage strip */
+  --ink:             #1F1610;  /* dark text on light surfaces (display, form) */
 
   /* ── Warm amber accent ── */
   --accent-warm:     #E8A030;
