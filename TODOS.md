@@ -15,6 +15,86 @@
 **Priority:** P2
 **Source:** /research on 2026-04-15
 
+### CI guard for pre-release-check.sh
+**Priority:** P1
+**Source:** /plan-eng-review on 2026-04-25 (florianhorner/fix/radio-plan)
+
+`scripts/pre-release-check.sh` exists and catches the version-sync class of bugs (pyproject.toml, ha-addon/mammamiradio/config.yaml, both CHANGELOGs in lockstep) that caused the stale 2.10.7→2.10.9 ha-addon CHANGELOG drift. Currently NOT wired into CI — relies on operator running it before tagging.
+
+**Why:** the next version drift will happen unobserved until release ceremony, then waste a cycle.
+
+**Why deferred from #8 fix:** running `pre-release-check.sh` on every PR breaks every non-release PR (PRs don't pre-bump versions). Needs design: either run on tag-push only, conditional on config.yaml diff, or split into a `check-version-sync.sh` that no-ops when no version change is staged.
+
+**Pros:** closes the version-drift hole permanently, mechanism that prevents recurrence (per CLAUDE.md "automate recurring problems").
+
+**Cons:** ~30 min CC. Needs care to not break existing PR workflow.
+
+**Context:** v2.10.9 release shipped with ha-addon CHANGELOG still showing 2.10.7 head. The fix branch radio-plan adds 2.10.8 and 2.10.9 entries but stops short of CI integration.
+
+**Depends on / blocked by:** none.
+
+**Affected files:** `.github/workflows/quality.yml`, possibly new `scripts/check-version-sync.sh`.
+
+### Listener public API migration (full)
+**Priority:** P1
+**Source:** /plan-eng-review on 2026-04-25 (florianhorner/fix/radio-plan)
+
+Listener page (`mammamiradio/static/listener.js`) polls three admin-gated endpoints: `/status`, `/api/capabilities`, `/api/listener-requests`. The fix-radio-plan PR ships a one-line stopgap (`/status` → `/public-status`) so the now-playing data works on public deploys. The other two fetches will return 401 silently on non-loopback/non-LAN clients, degrading the dediche feed and capability tier display.
+
+**Why:** the listener page is the listener-facing product surface. Any deploy outside loopback/LAN exposure (PWA, embed, hosted listener) shows a degraded page until this is closed.
+
+**Pros:** unblocks public deployment of the listener page. Aligns with "instant audio" leadership principle (page works immediately for any visitor).
+
+**Cons:** requires backend additions (`/public-listener-requests` or strip-fields shim around `/api/listener-requests`; same for `/api/capabilities`). ~45 min CC. Coordination with the active UI redesign cycle.
+
+**Context:** the UI redesign is the natural home for this — when listener.html is rewritten, the API contract for the public listener can be defined cleanly.
+
+**Depends on / blocked by:** UI redesign cycle currently in progress. Coordinate via the redesign workspace.
+
+**Affected files:** `mammamiradio/streamer.py`, `mammamiradio/static/listener.js` (or its replacement), tests/test_streamer.py.
+
+### Regia.html + admin Flag Track field contract fix
+**Priority:** P1
+**Source:** /plan-eng-review on 2026-04-25 (florianhorner/fix/radio-plan)
+
+Two contract drifts between frontend and backend:
+
+1. `regia.html:909-910` reads `ns.elapsed_seconds` and `ns.duration_seconds` on `now_streaming`. Backend (models.py:498) emits only `{type, label, started, epoch, metadata}` — no flat elapsed/duration fields. Result: progress bar permanently shows 0%.
+
+2. `admin.html:1001` reads `_st?.now?.metadata?.youtube_id` to flag the current track. Backend stores `_st.now_streaming.metadata.youtube_id` (key path is `now_streaming` not `now`). Result: Flag Track button always silently fails ("No track playing" toast).
+
+**Why:** the regia screen is the operator's primary view. Elapsed/duration is the most basic operator information; if it's wrong, every operator interaction starts from a bad mental model. Flag Track is a documented feature in admin.html.
+
+**Why deferred:** the UI redesign cycle will likely rewrite both surfaces with a coherent backend contract. Patching the current state is throwaway work.
+
+**Pros:** correct operator information, working Flag Track.
+
+**Cons:** ~60-90 min CC if done as a patch. ~0 min if absorbed by UI redesign.
+
+**Context:** backend payload shape is the source of truth in models.py:498. Either flatten the fields server-side OR use the `metadata` sub-object client-side. Both work; pick one and lock it.
+
+**Depends on / blocked by:** UI redesign cycle currently in progress.
+
+**Affected files:** `mammamiradio/regia.html`, `mammamiradio/admin.html`, possibly `mammamiradio/models.py`, tests/test_ui_control_contracts.py.
+
+### Host name selector hardening
+**Priority:** P3
+**Source:** /plan-eng-review on 2026-04-25 (florianhorner/fix/radio-plan)
+
+`admin.html:1539-1574` uses `esc()` for HTML escaping before interpolating host names into onclick handlers and data attributes. The CSS attribute selectors at lines 1569, 1574 use template literals with raw (un-escaped) names: `` `[data-h="${n}"]` ``. Names with special CSS characters (quotes, brackets, escaped chars) cause silent no-match — UI fails closed (no XSS, just brittle).
+
+**Why:** rejected as a real bug in the radio-plan review, but the brittleness will surface eventually as someone names a host with a special character.
+
+**Pros:** robustness improvement.
+
+**Cons:** very low priority; no current user impact.
+
+**Context:** wrap the selector access in `CSS.escape()` or normalize host names to alphanumeric IDs internally and only show the display name in UI text.
+
+**Depends on / blocked by:** none.
+
+**Affected files:** `mammamiradio/admin.html` (or its replacement).
+
 ### Docker container smoke test in CI
 After `addon-build.yml` builds the image, run a 30s smoke test:
 - `docker run` → wait 10s → `curl -f /health`
