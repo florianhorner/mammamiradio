@@ -34,6 +34,13 @@ def _strip_comments(text: str) -> str:
     return _COMMENT_RE.sub("", text)
 
 
+# --brand-* tokens are intentionally per-station dynamic (set in listener.html
+# from radio.toml [brand.theme]). They are NOT Volare Refined palette primitives —
+# they are the brand-engine overlay layer (PR-C, 2026-04-26). listener.css references
+# them via fallback: var(--brand-primary, var(--sun)).
+_BRAND_NAMESPACE_RE = re.compile(r"--brand-")
+
+
 def _primitives_in(path: Path) -> list[str]:
     text = _strip_comments(path.read_text(encoding="utf-8"))
     seen: set[str] = set()
@@ -41,6 +48,9 @@ def _primitives_in(path: Path) -> list[str]:
     for block in _ROOT_BLOCK_RE.finditer(text):
         for primitive in _PRIMITIVE_DECL_RE.findall(block.group(1)):
             if primitive in seen:
+                continue
+            if _BRAND_NAMESPACE_RE.match(primitive):
+                # Brand-engine namespace exempt: per-station dynamic tokens.
                 continue
             seen.add(primitive)
             primitives.append(primitive)

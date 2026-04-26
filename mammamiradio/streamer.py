@@ -15,8 +15,9 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
+from fastapi.templating import Jinja2Templates
 
 from mammamiradio.capabilities import capabilities_to_dict, get_capabilities
 from mammamiradio.ha_enrichment import EVENT_RETENTION_SECONDS
@@ -38,7 +39,13 @@ security = HTTPBasic(auto_error=False)
 _PKG_DIR = Path(__file__).parent
 _STATIC_DIR = _PKG_DIR / "static"
 
-_LISTENER_HTML = _PKG_DIR.joinpath("listener.html").read_text()
+# Jinja2 templates for brand-engine listener page (PR-C). Admin/regia/live still use
+# string-replace via _inject_ingress_prefix; only listener migrates to Jinja for now.
+_TEMPLATES = Jinja2Templates(directory=str(_PKG_DIR))
+
+# Admin/regia/live pages still loaded as raw strings + post-render prefix injection.
+# Listener no longer needs _LISTENER_HTML — it's rendered from template per-request.
+_LISTENER_HTML = _PKG_DIR.joinpath("listener.html").read_text()  # kept for tests + fallback
 
 _ADMIN_HTML = _PKG_DIR.joinpath("admin.html").read_text()
 _REGIA_HTML = _PKG_DIR.joinpath("regia.html").read_text()
@@ -971,7 +978,15 @@ async def listener_home(request: Request):
     config = request.app.state.config
     if config.is_addon and prefix and _is_hassio_or_loopback(request):
         return _render_admin_response(request, prefix)
-    return _get_injected_html("listener", _LISTENER_HTML, prefix)
+    return _TEMPLATES.TemplateResponse(
+        request,
+        "listener.html",
+        {
+            "brand": config.brand,
+            "ingress_prefix": _sanitize_ingress_prefix(prefix),
+            "csrf_token": _get_csrf_token(request.app),
+        },
+    )
 
 
 @router.get("/dashboard", response_class=RedirectResponse, dependencies=[Depends(require_admin_access)])
@@ -1012,7 +1027,55 @@ async def regia_prototype(request: Request):
 async def listener(request: Request):
     """Backwards-compatible alias for the listener UI."""
     prefix = request.headers.get("X-Ingress-Path", "")
-    return _get_injected_html("listener", _LISTENER_HTML, prefix)
+    config = request.app.state.config
+    return _TEMPLATES.TemplateResponse(
+        request,
+        "listener.html",
+        {
+            "brand": config.brand,
+            "ingress_prefix": _sanitize_ingress_prefix(prefix),
+            "csrf_token": _get_csrf_token(request.app),
+        },
+    )
+
+
+_og_card_cache: dict[str, bytes] = {}
+_OG_CARD_FALLBACK = b""  # populated lazily on first miss
+
+
+@router.get("/og-card.png")
+async def og_card(request: Request):
+    """Serve the OG social card PNG. Cached by brand+track key.
+
+    Per design D-Design-2: poster-style 1200x630, brand-dominant typography,
+    Italian flag tricolor at top, track info as lower-third band. Falls back
+    to the static logo PNG if generation fails — social previews never 404.
+    """
+    config = request.app.state.config
+    state = request.app.state.station_state
+    track = state.current_track
+    cache_key = f"{config.brand.station_name}:{track.cache_key if track else 'idle'}"
+
+    cached = _og_card_cache.get(cache_key)
+    if cached is None:
+        try:
+            from mammamiradio.og_card import render_og_card_for_brand
+
+            cached = render_og_card_for_brand(config.brand, track)
+            _og_card_cache[cache_key] = cached
+            # Cap cache size (one entry per track + idle is bounded by playlist size)
+            if len(_og_card_cache) > 200:
+                # Evict oldest entry by insertion order
+                _og_card_cache.pop(next(iter(_og_card_cache)))
+        except Exception as exc:
+            logger.warning("OG card render failed: %s; falling back to logo", exc)
+            fallback = _STATIC_DIR / "icon-192.svg"
+            if fallback.exists():
+                return FileResponse(fallback, media_type="image/svg+xml")
+            return Response(status_code=503)
+
+    headers = {"Cache-Control": "public, max-age=60"}
+    return Response(content=cached, media_type="image/png", headers=headers)
 
 
 @router.get("/sw.js")
