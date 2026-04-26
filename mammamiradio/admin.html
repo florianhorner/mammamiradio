@@ -1605,7 +1605,7 @@ function updatePipelineStatus(caps){
     el.innerHTML=html; return;
   }
   if(c.anthropic_key&&c.anthropic_degraded){ html+=chip('degraded','Anthropic'); }
-  else if(c.anthropic_key||c.llm){ html+=chip('ready','Anthropic'); }
+  else if(c.anthropic_key){ html+=chip('ready','Anthropic'); }
   else { html+=chip('blocked','Anthropic'); }
   html+=chip('ready','Stream');
   html+='</div><div class="srow">';

@@ -246,14 +246,13 @@
       cards.push({ when: '—', live: false, type: 'idle', label: 'In costruzione…', host: '' });
     }
 
-    container.innerHTML = cards.slice(0, 4).map((c, i) => `
-      <div class="slot ${i === 0 && c.live ? 'now' : i > 0 ? 'next' : ''}">
-        <div class="slot-time">${escHtml(c.when)} ${c.live ? '<span class="live">On Air</span>' : ''}</div>
-        <div class="slot-kind">${escHtml(segmentKindLabel(c.type))}</div>
-        <div class="slot-title">${escHtml(c.label || 'In onda')}</div>
-        <div class="slot-host">${c.host}</div>
-      </div>
-    `).join('');
+    container.innerHTML = cards.slice(0, 4).map((c, i) => {
+      const liClass = i === 0 && c.live ? 'now' : i > 0 ? 'next' : '';
+      const pillClass = i === 0 && c.live ? 'pill-on' : i > 0 ? 'pill-next' : '';
+      const subHtml = c.host ? `<div class="sub">${c.host}</div>` : '';
+      const pillHtml = pillClass ? `<span class="pill ${pillClass}">${escHtml(segmentKindLabel(c.type))}</span>` : '';
+      return `<li class="${liClass}"><span class="t">${escHtml(c.when)}</span><div class="m"><div class="title">${escHtml(c.label || 'In onda')}</div>${subHtml}</div>${pillHtml}</li>`;
+    }).join('');
   }
 
   function hostLine(seg) {
@@ -286,9 +285,10 @@
     const read = (requests || []).filter(r => r && r.aired_at);
     if (read.length === 0) {
       stack.innerHTML = `
-        <div class="quote">
-          <div class="quote-text">La sezione dediche si riempirà non appena i nostri ascoltatori manderanno un saluto. Prova tu!</div>
-          <div class="quote-meta"><strong>Mamma Mi Radio</strong> &middot; in attesa di voci</div>
+        <div class="mmr-dedica">
+          <div class="eyebrow">Dedica</div>
+          <div class="quote">La sezione dediche si riempirà non appena i nostri ascoltatori manderanno un saluto. Prova tu!</div>
+          <div class="sig">— Mamma Mi Radio</div>
         </div>
       `;
       return;
@@ -296,17 +296,15 @@
     stack.innerHTML = read.slice(0, 3).map(r => {
       const name = r.name || 'Un ascoltatore';
       const msg = r.message || '';
-      const when = r.aired_at ? new Date(r.aired_at * 1000).toISOString().slice(0, 10).replace(/-/g, '·') : '';
       const airTime = r.aired_at ? new Date(r.aired_at * 1000).toTimeString().slice(0, 5) : '';
+      const eyebrowParts = [escHtml(name)];
+      if (r.city) eyebrowParts.push(escHtml(r.city));
+      const sig = airTime ? '— letta in onda alle ' + escHtml(airTime) : '—';
       return `
-        <div class="quote">
-          <div class="quote-text">${escHtml(msg)}</div>
-          <div class="quote-meta">
-            <strong>${escHtml(name)}</strong>
-            ${r.city ? '&middot; ' + escHtml(r.city) : ''}
-            ${airTime ? '&middot; letta in onda alle ' + escHtml(airTime) : ''}
-            <span class="when">${escHtml(when)}</span>
-          </div>
+        <div class="mmr-dedica">
+          <div class="eyebrow">${eyebrowParts.join(' · ')}</div>
+          <div class="quote">${escHtml(msg)}</div>
+          <div class="sig">${sig}</div>
         </div>
       `;
     }).join('');
