@@ -828,7 +828,7 @@ body::before {
 .mmr-dedica-form textarea { width: 100%; background: rgba(26,20,16,0.05); border: 1px solid rgba(26,20,16,0.1); border-radius: 8px; padding: 10px 12px; font-family: var(--font-body); font-size: 14px; color: #1A1410; resize: vertical; outline: none; margin-bottom: 10px; box-sizing: border-box; }
 .mmr-dedica-form textarea::placeholder { color: #5A4A3D; }
 .mmr-dedica-form textarea:focus { border-color: var(--brand-primary, var(--sun2)); box-shadow: 0 0 0 3px rgba(236,204,48,0.18); }
-.mmr-dedica-form button { width: 100%; background: #1A1410; color: var(--cream); border: none; padding: 13px 14px; border-radius: 8px; font-family: var(--font-body); font-size: 13px; font-weight: 600; cursor: pointer; position: relative; z-index: 2; }
+.mmr-dedica-form button { width: 100%; background: #1A1410; color: var(--cream); border: none; padding: 13px 14px; min-height: 44px; border-radius: 8px; font-family: var(--font-body); font-size: 13px; font-weight: 600; cursor: pointer; position: relative; z-index: 2; }
 .mmr-dedica-form .hint { font-size: 11px; color: #5A4A3D; margin-top: 10px; line-height: 1.4; font-style: italic; position: relative; z-index: 2; }
 .mmr-dedica-form .hint em { color: var(--lancia); font-style: italic; }
 .form-sent { margin-top: 10px; font-size: 12px; color: var(--ok); font-weight: 600; position: relative; z-index: 2; }
