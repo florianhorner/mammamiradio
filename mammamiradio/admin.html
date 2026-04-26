@@ -1044,7 +1044,7 @@ body[data-stopped="true"] .a-station-card .dot.on { animation-play-state: paused
     </div>
 
     <div class="a-station-card">
-      <div class="eyebrow">Station</div>
+      <div class="eyebrow">Stazione</div>
       <div class="row">
         <span class="dot on" id="onAirDot"></span>
         <span class="label on" id="onAirBadge">On Air</span>
@@ -1070,19 +1070,19 @@ body[data-stopped="true"] .a-station-card .dot.on { animation-play-state: paused
     </div>
 
     <nav class="a-nav">
-      <div class="a-nav-head">Operator</div>
-      <a class="active" href="#programme" onclick="scrollToSection('programme');return false">Programme</a>
-      <a href="#triggers" onclick="scrollToSection('triggers');return false">Broadcast triggers</a>
-      <a href="#pacing" onclick="scrollToSection('pacing');return false">Pacing</a>
-      <a href="#music" onclick="scrollToSection('music');return false">Playlist</a>
-      <div class="a-nav-head">Engine</div>
-      <a href="#hosts" onclick="scrollToSection('hosts');return false">Host personalities</a>
-      <a href="#engine" onclick="scrollToSection('engine');return false">Engine room</a>
+      <div class="a-nav-head">Conduttore</div>
+      <a class="active" href="#programme" onclick="scrollToSection('programme');return false">Palinsesto</a>
+      <a href="#triggers" onclick="scrollToSection('triggers');return false">In Onda</a>
+      <a href="#pacing" onclick="scrollToSection('pacing');return false">Cadenza</a>
+      <a href="#music" onclick="scrollToSection('music');return false">Coda</a>
+      <div class="a-nav-head">Motore</div>
+      <a href="#hosts" onclick="scrollToSection('hosts');return false">Conduttori</a>
+      <a href="#engine" onclick="scrollToSection('engine');return false">Motore</a>
       <a href="#log" onclick="scrollToSection('log');return false">Logs</a>
     </nav>
 
     <div class="a-engine-status">
-      <div class="eyebrow">Engine room</div>
+      <div class="eyebrow">Motore</div>
       <div id="pipelineStatus"></div>
       <div class="cost">
         <span class="lbl">AI cost · 24h</span><b id="sidebarCost">—</b>
@@ -1102,7 +1102,7 @@ body[data-stopped="true"] .a-station-card .dot.on { animation-play-state: paused
         <span></span><span></span><span></span><span></span>
       </div>
       <div class="meta">
-        <div class="eyebrow">Now on air</div>
+        <div class="eyebrow">In Onda Ora</div>
         <div class="np-title" id="topBarTitle">Waiting for signal… <span class="by" id="topBarArtist"></span></div>
       </div>
       <div class="a-topbar-tools">
@@ -1123,8 +1123,8 @@ body[data-stopped="true"] .a-station-card .dot.on { animation-play-state: paused
     <section class="a-panel" id="programme">
       <header>
         <div class="ttl-wrap">
-          <div class="ttl-eyebrow">Operator</div>
-          <h2>Programme</h2>
+          <div class="ttl-eyebrow">Conduttore</div>
+          <h2>Palinsesto</h2>
         </div>
         <div style="display:flex;align-items:center;gap:10px;">
           <span class="filter-count" id="programmeCount" style="font-size:11px;color:var(--muted);font-family:var(--font-mono)"></span>
@@ -1145,10 +1145,10 @@ body[data-stopped="true"] .a-station-card .dot.on { animation-play-state: paused
     <section class="a-panel" id="triggers">
       <header>
         <div class="ttl-wrap">
-          <div class="ttl-eyebrow">Operator</div>
-          <h2>Broadcast <em>triggers</em></h2>
+          <div class="ttl-eyebrow">Conduttore</div>
+          <h2>In <em>Onda</em></h2>
         </div>
-        <div class="sub">Queue a segment without editing the programme</div>
+        <div class="sub">Manda in onda un segmento senza modificare il palinsesto</div>
       </header>
       <div class="a-triggers">
         <button type="button" class="a-trigger" onclick="doTrigger('banter',this)">
@@ -1174,7 +1174,7 @@ body[data-stopped="true"] .a-station-card .dot.on { animation-play-state: paused
       </div>
       <!-- Quick actions -->
       <div style="margin-top:16px;padding-top:14px;border-top:1px solid var(--line)">
-        <div class="card-label" style="margin-bottom:10px">Quick actions</div>
+        <div class="card-label" style="margin-bottom:10px">Azioni Rapide</div>
         <div class="quick-actions">
           <button type="button" class="btn btn-chip" onclick="doQuickAction('less_banter',this)"><svg class="ic" aria-hidden="true"><use href="#ic-mic-off"/></svg> Trim banter</button>
           <button type="button" class="btn btn-chip" onclick="doQuickAction('too_many_ads',this)"><svg class="ic" aria-hidden="true"><use href="#ic-ban"/></svg> Trim ads</button>
@@ -1183,7 +1183,7 @@ body[data-stopped="true"] .a-station-card .dot.on { animation-play-state: paused
           <button type="button" class="btn btn-chip" onclick="flagCurrentTrack(this)"><svg class="ic" aria-hidden="true"><use href="#ic-flag"/></svg> Flag track</button>
         </div>
         <div style="margin-top:10px">
-          <div class="card-label">Last Break</div>
+          <div class="card-label">Ultima Pausa</div>
           <div class="script-box" id="recentBody"><div class="empty">Nothing aired yet</div></div>
         </div>
       </div>
@@ -1198,8 +1198,8 @@ body[data-stopped="true"] .a-station-card .dot.on { animation-play-state: paused
       <section class="a-panel" id="pacing">
         <header>
           <div class="ttl-wrap">
-            <div class="ttl-eyebrow">Engine</div>
-            <h2>Pacing</h2>
+            <div class="ttl-eyebrow">Motore</div>
+            <h2>Cadenza</h2>
           </div>
           <div class="sub" id="pacingMeta">4 music · 1 banter</div>
         </header>
@@ -1228,8 +1228,8 @@ body[data-stopped="true"] .a-station-card .dot.on { animation-play-state: paused
       <section class="a-panel" id="hosts">
         <header>
           <div class="ttl-wrap">
-            <div class="ttl-eyebrow">Engine</div>
-            <h2>Host <em>personalities</em></h2>
+            <div class="ttl-eyebrow">Motore</div>
+            <h2>Conduttori</h2>
           </div>
           <div class="sub" id="hostsMeta">Loading...</div>
         </header>
@@ -1241,8 +1241,8 @@ body[data-stopped="true"] .a-station-card .dot.on { animation-play-state: paused
     <section class="a-panel" id="log">
       <header>
         <div class="ttl-wrap">
-          <div class="ttl-eyebrow">Operator</div>
-          <h2>Segment <em>log</em></h2>
+          <div class="ttl-eyebrow">Conduttore</div>
+          <h2>Archivio</h2>
         </div>
         <div class="sub live"><span class="dot"></span> Live</div>
       </header>
@@ -1253,14 +1253,14 @@ body[data-stopped="true"] .a-station-card .dot.on { animation-play-state: paused
     <section class="a-panel" id="music">
       <header>
         <div class="ttl-wrap">
-          <div class="ttl-eyebrow">Operator</div>
-          <h2>Music &amp; <em>playlist</em></h2>
+          <div class="ttl-eyebrow">Conduttore</div>
+          <h2>Musica &amp; <em>Coda</em></h2>
         </div>
         <div class="sub" id="plMeta"></div>
       </header>
-      <div class="card-label">Listener Requests <span id="lrMeta" style="float:right;font-weight:400;color:var(--muted)"></span></div>
+      <div class="card-label">Richieste <span id="lrMeta" style="float:right;font-weight:400;color:var(--muted)"></span></div>
       <div id="lrBody" style="margin-bottom:14px"><div class="empty">No requests yet</div></div>
-      <div class="card-label">Playlist</div>
+      <div class="card-label">Coda</div>
       <div class="search-row">
         <input type="text" class="search-input" id="searchInput" placeholder="Search music (playlist + web)..." autocomplete="off" aria-label="Search music">
         <button type="button" class="btn btn-util" onclick="doSearch()">Search</button>
@@ -1273,8 +1273,8 @@ body[data-stopped="true"] .a-station-card .dot.on { animation-play-state: paused
     <section class="a-panel" id="engine">
       <header>
         <div class="ttl-wrap">
-          <div class="ttl-eyebrow">Engine</div>
-          <h2>Engine <em>room</em></h2>
+          <div class="ttl-eyebrow">Motore</div>
+          <h2>Motore</h2>
         </div>
         <span class="tab-alert" aria-hidden="true" id="engineAlertDot" style="display:none;width:6px;height:6px;border-radius:50%;background:var(--warning);vertical-align:middle"></span>
       </header>
