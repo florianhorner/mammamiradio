@@ -614,7 +614,7 @@ body::before {
 .mmr-nav nav a { font-size: 13px; font-weight: 500; color: rgba(245,237,216,0.7); text-decoration: none; letter-spacing: 0.01em; transition: color 180ms; padding: 12px 4px; }
 .mmr-nav nav a:hover { color: var(--cream); }
 .mmr-nav nav a.active { color: var(--brand-primary, var(--sun)); }
-.mmr-live-pill { margin-left: auto; display: inline-flex; align-items: center; gap: 7px; padding: 6px 12px; border: 1px solid rgba(184,44,32,0.4); background: rgba(160,32,24,0.15); color: var(--cream); border-radius: 999px; font-size: 10px; font-weight: 700; letter-spacing: 0.18em; text-transform: uppercase; font-family: var(--font-body); cursor: pointer; text-decoration: none; }
+.mmr-live-pill { margin-left: auto; display: inline-flex; align-items: center; gap: 7px; padding: 10px 14px; min-height: 44px; border: 1px solid rgba(184,44,32,0.4); background: rgba(160,32,24,0.15); color: var(--cream); border-radius: 999px; font-size: 10px; font-weight: 700; letter-spacing: 0.18em; text-transform: uppercase; font-family: var(--font-body); cursor: pointer; text-decoration: none; }
 .mmr-live-pill .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--brand-accent, var(--lancia2)); box-shadow: 0 0 8px var(--brand-accent, var(--lancia2)); animation: live-pulse 1.4s ease-in-out infinite; }
 @keyframes live-pulse { 0%,100% { opacity: 1 } 50% { opacity: 0.5 } }
 
