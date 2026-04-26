@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from io import BytesIO
 
+import pytest
 from PIL import Image
 
 from mammamiradio.og_card import OGCardInputs, render_og_card
@@ -119,3 +120,67 @@ def test_render_og_card_for_brand_helper():
     png = render_og_card_for_brand(brand, current_track=None)
     img = _open_png(png)
     assert img.size == (1200, 630)
+
+
+# ─── /og-card.png route tests (streamer integration) ───────────
+
+
+@pytest.mark.asyncio
+async def test_og_card_route_returns_png():
+    """GET /og-card.png returns a valid 1200x630 PNG with proper headers."""
+    import httpx
+
+    from tests.test_streamer_routes import _make_test_app
+
+    app = _make_test_app()
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.get("/og-card.png")
+    assert resp.status_code == 200
+    assert resp.headers["content-type"] == "image/png"
+    assert "max-age" in resp.headers.get("cache-control", "")
+    img = _open_png(resp.content)
+    assert img.size == (1200, 630)
+
+
+@pytest.mark.asyncio
+async def test_og_card_route_caches_response():
+    """Second request hits cache (same response bytes as first)."""
+    import httpx
+
+    from tests.test_streamer_routes import _make_test_app
+
+    app = _make_test_app()
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        first = await client.get("/og-card.png")
+        second = await client.get("/og-card.png")
+    assert first.status_code == 200
+    assert second.status_code == 200
+    # Cache hit: bytes should be identical
+    assert first.content == second.content
+
+
+@pytest.mark.asyncio
+async def test_og_card_route_fallback_on_render_failure(monkeypatch):
+    """If the renderer crashes, route falls back to logo SVG (never 404s)."""
+    import httpx
+
+    from mammamiradio import streamer as streamer_mod
+    from tests.test_streamer_routes import _make_test_app
+
+    app = _make_test_app()
+    # Clear any cached response from prior tests
+    streamer_mod._og_card_cache.clear()
+
+    def boom(brand, current_track):
+        raise RuntimeError("simulated render failure")
+
+    monkeypatch.setattr("mammamiradio.og_card.render_og_card_for_brand", boom)
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.get("/og-card.png")
+    # Either logo SVG fallback (200 + svg) or 503 if logo also missing
+    assert resp.status_code in (200, 503)
+    if resp.status_code == 200:
+        assert "image/" in resp.headers["content-type"]
