@@ -838,7 +838,7 @@ body::before {
 .mmr-about-card { background: var(--surface-strong); border: 1px solid var(--line-strong); border-radius: 12px; padding: 20px 22px; transition: border-color 180ms, transform 180ms; }
 .mmr-about-card:hover { border-color: rgba(244,208,72,0.3); transform: translateY(-2px); }
 .mmr-about-card .eyebrow { font-family: var(--font-body); font-size: 10px; font-weight: 700; letter-spacing: 0.22em; text-transform: uppercase; color: var(--brand-primary, var(--sun2)); margin-bottom: 12px; display: block; }
-.mmr-about-card p { font-size: 13px; line-height: 1.6; color: var(--cream-dk); margin: 0; }
+.mmr-about-card p { font-size: 14px; line-height: 1.6; color: var(--cream-dk); margin: 0; }
 
 /* Ticker */
 .mmr-ticker { background: var(--cream); border-top: 1px solid rgba(26,20,16,0.08); padding: 18px 0; overflow: hidden; position: relative; margin: 48px 0 0; mask-image: linear-gradient(90deg, transparent, black 6%, black 94%, transparent); }
