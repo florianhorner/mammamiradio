@@ -4,19 +4,6 @@ All notable changes to `mammamiradio` are documented here.
 
 The current version source of truth is `pyproject.toml`.
 
-## [2.10.10] - 2026-04-27
-
-### Changed
-
-- **Admin vocabulary italianized**: all operator-facing labels in `admin.html` now use Italian — Station→Stazione, Operator→Conduttore, Programme→Palinsesto, Broadcast triggers→In Onda, Pacing→Cadenza, Playlist→Coda, Engine→Motore, Host personalities→Conduttori, Engine room→Motore, Logs→Archivio, Now on air→In Onda Ora, Quick actions→Azioni Rapide. Brings the admin surface in line with the listener page's Italian brand voice.
-- **Listener footer label italianized**: "Operator" → "Operatore" in `listener.html`.
-
-### Fixed
-
-- **Touch targets on listener page guaranteed 44px** (WCAG 2.1 AA): nav links (`.mmr-nav nav a`), Live pill (`.mmr-live-pill`), CTA buttons (`.btn-primary`, `.btn-ghost`), and dedica form submit now use `min-height: 44px` + `display: inline-flex; align-items: center` so the target height is immune to UA `line-height: normal` variation across browsers.
-- **Lede text size** (`listener.css`): `.mmr-lede` bumped from 15px to 16px (WCAG 1.4.4 minimum for body copy).
-- **About card body text** (`listener.css`): `.mmr-about-card p` bumped from 13px to 14px for improved readability at conversational copy lengths.
-
 ## [Unreleased]
 
 ### Fixed
