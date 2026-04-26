@@ -1,0 +1,966 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>mammamiradio — Live</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,700;1,700&family=Outfit:wght@400;500;700;900&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+*, *::before, *::after {
+  margin: 0; padding: 0; box-sizing: border-box;
+  -webkit-font-smoothing: antialiased;
+  user-select: none; -webkit-user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+html {
+  height: 100%;
+  background: #14110F;
+}
+
+body {
+  height: 100%;
+  min-height: -webkit-fill-available;
+  background: #14110F;
+  font-family: 'Outfit', sans-serif;
+  color: #F5EDD8;
+  overflow: hidden;
+}
+
+.phone {
+  height: 100vh;
+  height: 100dvh;
+  max-width: 430px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  overflow: hidden;
+}
+
+/* ── HERO (flex: 1 — takes all available space) ── */
+.hero {
+  position: relative;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  min-height: 0;
+}
+
+.hero-bg {
+  position: absolute; inset: 0;
+  background: radial-gradient(ellipse 70% 80% at 50% 40%,
+    #3D1F00 0%, #2A1500 35%, #1A0D00 60%, #14110F 100%);
+}
+
+.hero-glow {
+  position: absolute; inset: 0;
+  background: radial-gradient(ellipse 50% 50% at 50% 30%,
+    rgba(244,208,72,0.06) 0%, transparent 70%);
+}
+
+.hero-vignette {
+  position: absolute; inset: 0;
+  background: linear-gradient(180deg,
+    rgba(0,0,0,0.2) 0%, transparent 25%, transparent 65%, rgba(0,0,0,0.5) 100%);
+}
+
+/* ── iOS status bar ── */
+.ios-bar {
+  position: relative; z-index: 20;
+  display: flex; align-items: flex-end; justify-content: space-between;
+  padding: env(safe-area-inset-top, 44px) 28px 8px;
+  min-height: calc(env(safe-area-inset-top, 44px) + 28px);
+  pointer-events: none;
+}
+
+.ios-time {
+  font-family: 'Outfit', sans-serif; font-weight: 700; font-size: 15px;
+  color: #F5EDD8; letter-spacing: -0.01em;
+}
+
+.ios-icons { display: flex; align-items: center; gap: 6px; }
+
+/* ── Top bar ── */
+.top-bar {
+  position: relative; z-index: 10;
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 4px 24px 0;
+}
+
+.station-name {
+  font-family: 'Playfair Display', Georgia, serif;
+  font-style: italic; font-weight: 700; font-size: 18px;
+  color: #F5EDD8; letter-spacing: -0.01em; position: relative;
+}
+
+.station-name::after {
+  content: '';
+  position: absolute; bottom: -3px; left: 0; right: 0; height: 1px;
+  background: linear-gradient(90deg, #F4D048 0%, rgba(244,208,72,0.3) 100%);
+}
+
+.on-air-badge {
+  display: flex; align-items: center; gap: 7px;
+  background: rgba(37,99,235,0.15);
+  border: 1px solid rgba(37,99,235,0.4);
+  border-radius: 20px;
+  padding: 5px 12px 5px 9px;
+  transition: background 0.3s, border-color 0.3s;
+}
+
+.on-air-badge.amber {
+  background: rgba(217,119,6,0.15);
+  border-color: rgba(217,119,6,0.4);
+}
+
+.on-air-badge.red {
+  background: rgba(184,44,32,0.15);
+  border-color: rgba(184,44,32,0.4);
+}
+
+.on-air-dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: #2563EB;
+  box-shadow: 0 0 8px rgba(37,99,235,0.8), 0 0 16px rgba(37,99,235,0.4);
+  animation: blink-blue 2s ease-in-out infinite;
+}
+
+.on-air-badge.amber .on-air-dot {
+  background: #D97706;
+  box-shadow: 0 0 8px rgba(217,119,6,0.8);
+  animation: blink-fast 1s ease-in-out infinite;
+}
+
+.on-air-badge.red .on-air-dot {
+  background: #B82C20;
+  box-shadow: 0 0 8px rgba(184,44,32,0.8);
+  animation: blink-fast 0.6s ease-in-out infinite;
+}
+
+@keyframes blink-blue { 0%,100% { opacity:1; } 50% { opacity:0.5; } }
+@keyframes blink-fast { 0%,100% { opacity:1; } 50% { opacity:0.2; } }
+
+.on-air-text {
+  font-family: 'Outfit', sans-serif; font-weight: 700;
+  font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase;
+  color: #2563EB; transition: color 0.3s;
+}
+
+.on-air-badge.amber .on-air-text { color: #D97706; }
+.on-air-badge.red   .on-air-text { color: #B82C20; }
+
+/* ── Track center ── */
+.track-center {
+  position: relative; z-index: 10;
+  flex: 1;
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  padding: 0 28px;
+  text-align: center;
+}
+
+.track-eyebrow {
+  font-family: 'Outfit', sans-serif; font-weight: 500;
+  font-size: 10px; letter-spacing: 0.2em; text-transform: uppercase;
+  color: rgba(244,208,72,0.6); margin-bottom: 14px;
+  transition: opacity 0.3s;
+}
+
+.track-title {
+  font-family: 'Playfair Display', Georgia, serif;
+  font-style: italic; font-weight: 700;
+  font-size: 52px; line-height: 1.0;
+  color: #F5EDD8; letter-spacing: -0.02em;
+  margin-bottom: 12px;
+  text-shadow: 0 2px 40px rgba(61,31,0,0.8);
+  max-width: 100%;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  transition: font-size 0.2s;
+}
+
+.track-title.long     { font-size: 36px; }
+.track-title.vlong    { font-size: 26px; white-space: normal; line-height: 1.1; }
+
+.track-artist {
+  font-family: 'Outfit', sans-serif; font-weight: 400;
+  font-size: 20px; color: #CBB9A6; letter-spacing: 0.01em;
+  max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
+/* ── Progress zone ── */
+.progress-zone {
+  position: relative; z-index: 10;
+  padding: 0 24px 20px;
+}
+
+.show-clock {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 13px; letter-spacing: 0.05em;
+  color: rgba(245,237,216,0.45);
+  text-align: center; margin-bottom: 14px;
+}
+
+.progress-row {
+  display: flex; align-items: center; gap: 10px;
+}
+
+.progress-bg {
+  flex: 1; height: 3px;
+  background: rgba(245,237,216,0.12);
+  border-radius: 2px; overflow: hidden;
+}
+
+.progress-fill {
+  height: 100%; width: 0%;
+  background: linear-gradient(90deg, #F4D048 0%, #ECCC30 100%);
+  box-shadow: 0 0 8px rgba(244,208,72,0.5);
+  border-radius: 2px;
+  transition: width 1s linear;
+}
+
+.progress-time {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px; color: rgba(244,208,72,0.7);
+  letter-spacing: 0.03em; white-space: nowrap;
+  flex-shrink: 0; min-width: 44px; text-align: right;
+}
+
+/* ── Stopped overlay (inside hero) ── */
+.stopped-overlay {
+  position: absolute; inset: 0; z-index: 25;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(20,17,15,0.55);
+  opacity: 0; pointer-events: none;
+  transition: opacity 0.3s;
+}
+
+.stopped-overlay.show { opacity: 1; }
+
+.stopped-label {
+  font-family: 'Outfit', sans-serif; font-weight: 900;
+  font-size: 13px; letter-spacing: 0.3em; text-transform: uppercase;
+  color: rgba(245,237,216,0.4);
+}
+
+/* ── Connection banner ── */
+.conn-banner {
+  flex-shrink: 0;
+  display: none;
+  align-items: center; justify-content: center; gap: 8px;
+  padding: 8px 20px;
+  font-family: 'Outfit', sans-serif; font-size: 11px;
+  font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase;
+}
+
+.conn-banner.amber {
+  display: flex;
+  background: rgba(217,119,6,0.12);
+  color: #D97706;
+  border-top: 1px solid rgba(217,119,6,0.25);
+  border-bottom: 1px solid rgba(217,119,6,0.25);
+}
+
+.conn-banner.red {
+  display: flex;
+  background: rgba(184,44,32,0.18);
+  color: #B82C20;
+  border-top: 1px solid rgba(184,44,32,0.35);
+  border-bottom: 1px solid rgba(184,44,32,0.35);
+}
+
+/* ── Up next strip ── */
+.up-next-strip {
+  flex-shrink: 0;
+  height: 62px;
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center; gap: 5px;
+  position: relative; padding: 0 28px;
+  background: linear-gradient(180deg, rgba(20,17,15,0) 0%, rgba(20,17,15,0.95) 100%);
+}
+
+.up-next-strip::before {
+  content: '';
+  position: absolute; top: 0; left: 24px; right: 24px; height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(244,208,72,0.15), transparent);
+}
+
+.up-next-label {
+  font-family: 'Outfit', sans-serif; font-weight: 700;
+  font-size: 9px; letter-spacing: 0.18em; text-transform: uppercase;
+  color: #F4D048;
+}
+
+.up-next-track {
+  font-family: 'Outfit', sans-serif; font-weight: 400;
+  font-size: 14px; color: #F5EDD8;
+  max-width: 100%; white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis; text-align: center;
+}
+
+/* ── Action bar ── */
+.action-bar {
+  flex-shrink: 0;
+  background: rgba(37,30,25,0.92);
+  backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
+  border-top: 1px solid #F4D048;
+  display: flex; align-items: center; justify-content: center;
+  padding: 16px 16px calc(16px + env(safe-area-inset-bottom, 16px));
+  position: relative;
+}
+
+.action-bar::before {
+  content: '';
+  position: absolute; top: 0; left: 0; right: 0; height: 60px;
+  background: linear-gradient(180deg, rgba(244,208,72,0.04) 0%, transparent 100%);
+  pointer-events: none;
+}
+
+.buttons-row {
+  display: flex; align-items: center;
+  gap: 10px; width: 100%; justify-content: center;
+}
+
+.ctrl-btn {
+  display: flex; flex-direction: column;
+  align-items: center; gap: 8px; cursor: pointer;
+}
+
+.btn-face {
+  width: 72px; height: 72px; border-radius: 20px;
+  display: flex; align-items: center; justify-content: center;
+  position: relative;
+  transition: transform 0.1s ease, opacity 0.12s ease;
+}
+
+.ctrl-btn:active .btn-face { transform: scale(0.92); opacity: 0.75; }
+
+.btn-label {
+  font-family: 'Outfit', sans-serif; font-weight: 500;
+  font-size: 10px; letter-spacing: 0.06em; text-transform: uppercase;
+  color: rgba(245,237,216,0.5); text-align: center; white-space: nowrap;
+}
+
+/* MIC */
+.btn-mic .btn-face {
+  background: rgba(37,30,25,0.6);
+  border: 1.5px solid rgba(245,237,216,0.12);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.04);
+}
+.btn-mic .mic-svg { color: rgba(245,237,216,0.35); }
+.btn-mic .btn-label { color: rgba(245,237,216,0.35); }
+
+.btn-mic.hot .btn-face {
+  background: rgba(184,44,32,0.18);
+  border-color: rgba(184,44,32,0.5);
+  box-shadow: 0 0 20px rgba(184,44,32,0.35), 0 0 40px rgba(184,44,32,0.15),
+    inset 0 1px 0 rgba(255,255,255,0.05);
+}
+.btn-mic.hot .mic-svg { color: #B82C20; }
+.btn-mic.hot .btn-label { color: #B82C20; font-weight: 700; }
+
+/* SKIP */
+.btn-skip .btn-face {
+  background: rgba(245,237,216,0.06);
+  border: 1.5px solid rgba(245,237,216,0.12);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.04);
+}
+
+/* SOS */
+.btn-sos .btn-face {
+  width: 80px; height: 80px;
+  background: rgba(184,44,32,0.12);
+  border: 1.5px solid rgba(184,44,32,0.35);
+  box-shadow: 0 0 24px rgba(184,44,32,0.3), 0 0 48px rgba(184,44,32,0.12),
+    inset 0 1px 0 rgba(255,255,255,0.04);
+}
+
+/* PLAY/PAUSE */
+.btn-play .btn-face {
+  background: rgba(37,99,235,0.15);
+  border: 1.5px solid rgba(37,99,235,0.4);
+  box-shadow: 0 0 20px rgba(37,99,235,0.3), 0 0 40px rgba(37,99,235,0.1),
+    inset 0 1px 0 rgba(255,255,255,0.05);
+}
+.btn-play .btn-label { color: #2563EB; font-weight: 600; }
+
+/* CLIP */
+.btn-clip .btn-face {
+  background: rgba(245,237,216,0.06);
+  border: 1.5px solid rgba(245,237,216,0.12);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.04);
+}
+
+/* Hold-to-stop ring (overlaid on the play btn face) */
+#holdRing {
+  position: absolute; inset: -4px;
+  pointer-events: none;
+  opacity: 0; transition: opacity 0.15s;
+}
+
+/* ── Offline overlay ── */
+.offline-overlay {
+  position: absolute; inset: 0; z-index: 60;
+  display: none;
+  flex-direction: column; align-items: center; justify-content: center;
+  gap: 16px; padding: 40px; text-align: center;
+  background: rgba(20,17,15,0.88);
+}
+.offline-overlay.show { display: flex; }
+
+.offline-title {
+  font-family: 'Outfit', sans-serif; font-weight: 900;
+  font-size: 26px; letter-spacing: 0.08em; text-transform: uppercase;
+  color: #B82C20;
+}
+
+.offline-sub {
+  font-family: 'Outfit', sans-serif; font-size: 14px;
+  color: rgba(245,237,216,0.55); line-height: 1.6;
+}
+
+.go-live-btn {
+  display: none; margin-top: 8px;
+  background: #2563EB; border: none; border-radius: 16px;
+  padding: 15px 36px;
+  font-family: 'Outfit', sans-serif; font-weight: 700;
+  font-size: 14px; letter-spacing: 0.1em; text-transform: uppercase;
+  color: #fff; cursor: pointer;
+}
+.go-live-btn.show { display: block; }
+
+/* ── Toast ── */
+.toast {
+  position: fixed; bottom: 120px; left: 50%;
+  transform: translateX(-50%) translateY(14px);
+  background: #251E19;
+  border: 1px solid rgba(244,208,72,0.25);
+  border-radius: 12px; padding: 10px 18px;
+  font-family: 'Outfit', sans-serif; font-size: 13px; color: #F5EDD8;
+  white-space: nowrap;
+  opacity: 0; pointer-events: none;
+  transition: opacity 0.2s ease, transform 0.2s ease;
+  z-index: 200;
+}
+.toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+</style>
+</head>
+<body>
+<div class="phone">
+
+  <!-- HERO -->
+  <div class="hero">
+    <div class="hero-bg"></div>
+    <div class="hero-glow"></div>
+    <div class="hero-vignette"></div>
+
+    <!-- iOS status bar -->
+    <div class="ios-bar">
+      <span class="ios-time" id="wallClock">9:41</span>
+      <div class="ios-icons">
+        <svg width="17" height="12" viewBox="0 0 17 12" fill="none">
+          <rect x="0" y="7" width="3" height="5" rx="1" fill="#F5EDD8"/>
+          <rect x="4.5" y="4.5" width="3" height="7.5" rx="1" fill="#F5EDD8"/>
+          <rect x="9" y="2" width="3" height="10" rx="1" fill="#F5EDD8"/>
+          <rect x="13.5" y="0" width="3" height="12" rx="1" fill="#F5EDD8"/>
+        </svg>
+        <svg width="16" height="12" viewBox="0 0 16 12" fill="none">
+          <circle cx="8" cy="11" r="1.5" fill="#F5EDD8"/>
+          <path d="M5 8.5C5.9 7.6 6.9 7 8 7s2.1.6 3 1.5" stroke="#F5EDD8" stroke-width="1.3" stroke-linecap="round" fill="none"/>
+          <path d="M2.5 6C4 4.5 5.9 3.5 8 3.5s4 1 5.5 2.5" stroke="#F5EDD8" stroke-width="1.3" stroke-linecap="round" fill="none"/>
+        </svg>
+        <svg width="27" height="13" viewBox="0 0 27 13" fill="none">
+          <rect x="0.5" y="0.5" width="22" height="12" rx="3.5" stroke="#F5EDD8" stroke-opacity="0.35"/>
+          <rect x="2" y="2" width="17" height="9" rx="2" fill="#F5EDD8"/>
+          <path d="M23.5 4.5V8.5C24.6 8 24.6 5 23.5 4.5Z" fill="#F5EDD8" fill-opacity="0.4"/>
+        </svg>
+      </div>
+    </div>
+
+    <!-- Top bar -->
+    <div class="top-bar">
+      <span class="station-name">mammamiradio</span>
+      <div class="on-air-badge" id="onAirBadge">
+        <div class="on-air-dot"></div>
+        <span class="on-air-text" id="onAirText">On Air</span>
+      </div>
+    </div>
+
+    <!-- Track info -->
+    <div class="track-center">
+      <div class="track-eyebrow" id="trackEyebrow">Now Playing</div>
+      <div class="track-title" id="trackTitle">—</div>
+      <div class="track-artist" id="trackArtist">Loading…</div>
+    </div>
+
+    <!-- Progress -->
+    <div class="progress-zone">
+      <div class="show-clock" id="showClock">00:00:00</div>
+      <div class="progress-row">
+        <div class="progress-bg"><div class="progress-fill" id="progressFill"></div></div>
+        <div class="progress-time" id="progressTime"></div>
+      </div>
+    </div>
+
+    <!-- Stopped overlay -->
+    <div class="stopped-overlay" id="stoppedOverlay">
+      <span class="stopped-label">PAUSED</span>
+    </div>
+
+    <!-- Offline overlay -->
+    <div class="offline-overlay" id="offlineOverlay">
+      <div class="offline-title">OFFLINE</div>
+      <div class="offline-sub">Automation is live.<br>The station keeps playing.</div>
+      <button class="go-live-btn" id="goLiveBtn" onclick="doResume()">Go Live</button>
+    </div>
+  </div>
+
+  <!-- Connection banner -->
+  <div class="conn-banner" id="connBanner"></div>
+
+  <!-- Up next strip -->
+  <div class="up-next-strip">
+    <div class="up-next-label">Up Next</div>
+    <div class="up-next-track" id="upNextTrack">—</div>
+  </div>
+
+  <!-- Action bar -->
+  <div class="action-bar">
+    <div class="buttons-row">
+
+      <!-- MIC -->
+      <div class="ctrl-btn btn-mic" id="micBtn" onclick="toggleMic()">
+        <div class="btn-face">
+          <svg class="mic-svg" width="32" height="32" viewBox="0 0 32 32" fill="none">
+            <rect x="11" y="4" width="10" height="16" rx="5" fill="currentColor"/>
+            <path d="M8 16C8 20.4 11.6 24 16 24C20.4 24 24 20.4 24 16"
+              stroke="currentColor" stroke-width="2" stroke-linecap="round" fill="none"/>
+            <line x1="16" y1="24" x2="16" y2="28" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+            <line x1="12" y1="28" x2="20" y2="28" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+          </svg>
+        </div>
+        <span class="btn-label" id="micLabel">Mic Off</span>
+      </div>
+
+      <!-- SKIP -->
+      <div class="ctrl-btn btn-skip" onclick="doSkip()">
+        <div class="btn-face">
+          <svg width="32" height="32" viewBox="0 0 32 32" fill="none">
+            <path d="M8 8L18 16L8 24V8Z" fill="#F5EDD8"/>
+            <rect x="20" y="8" width="4" height="16" rx="1.5" fill="#F5EDD8"/>
+          </svg>
+        </div>
+        <span class="btn-label">Skip</span>
+      </div>
+
+      <!-- SOS -->
+      <div class="ctrl-btn btn-sos" onclick="doSOS()">
+        <div class="btn-face">
+          <svg width="36" height="36" viewBox="0 0 36 36" fill="none">
+            <path d="M21 4L10 20H18L15 32L27 16H19L21 4Z" fill="#B82C20"/>
+          </svg>
+        </div>
+        <span class="btn-label">SOS</span>
+      </div>
+
+      <!-- PAUSE / RESUME -->
+      <div class="ctrl-btn btn-play" id="playBtn">
+        <div class="btn-face" id="playFace">
+          <!-- hold-to-stop ring -->
+          <svg id="holdRing" viewBox="0 0 80 80" style="position:absolute;inset:-4px;width:calc(100% + 8px);height:calc(100% + 8px);">
+            <rect x="2" y="2" width="76" height="76" rx="20" fill="none"
+              stroke="#2563EB" stroke-width="3"
+              stroke-dasharray="280" stroke-dashoffset="280"
+              id="holdArc" stroke-linecap="round"/>
+          </svg>
+          <svg width="32" height="32" viewBox="0 0 32 32" fill="none" id="playIcon">
+            <rect x="9" y="8" width="5" height="16" rx="2" fill="#2563EB"/>
+            <rect x="18" y="8" width="5" height="16" rx="2" fill="#2563EB"/>
+          </svg>
+        </div>
+        <span class="btn-label" id="playLabel">Pause</span>
+      </div>
+
+      <!-- CLIP -->
+      <div class="ctrl-btn btn-clip" onclick="doClip()">
+        <div class="btn-face">
+          <svg width="32" height="32" viewBox="0 0 32 32" fill="none">
+            <rect x="7"  y="13" width="3" height="6"  rx="1.5" fill="rgba(245,237,216,0.6)"/>
+            <rect x="12" y="9"  width="3" height="14" rx="1.5" fill="rgba(245,237,216,0.6)"/>
+            <rect x="17" y="11" width="3" height="10" rx="1.5" fill="rgba(245,237,216,0.6)"/>
+            <rect x="22" y="13" width="3" height="6"  rx="1.5" fill="rgba(245,237,216,0.6)"/>
+            <line x1="7" y1="25" x2="25" y2="25"
+              stroke="rgba(245,237,216,0.3)" stroke-width="1" stroke-dasharray="2 2"/>
+          </svg>
+        </div>
+        <span class="btn-label">Clip</span>
+      </div>
+
+    </div>
+  </div>
+
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+'use strict';
+
+// ── Base URL (HA Ingress prefix detection) ──
+const _base = (function () {
+  const path = window.location.pathname;
+  const idx  = path.lastIndexOf('/live');
+  return idx > 0 ? path.slice(0, idx) : '';
+}());
+
+// ── CSRF token (injected by server) ──
+const _csrf = '__MAMMAMIRADIO_CSRF_TOKEN__';
+
+function _hdrs(extra) {
+  return Object.assign({ 'Content-Type': 'application/json', 'X-Radio-CSRF-Token': _csrf }, extra || {});
+}
+
+// ── Show clock (client-side, resets on page refresh) ──
+const _showStart = Date.now();
+
+function _pad(n) { return String(Math.floor(Math.abs(n))).padStart(2, '0'); }
+
+function _fmtHMS(sec) {
+  sec = Math.max(0, sec);
+  return _pad(sec / 3600) + ':' + _pad((sec % 3600) / 60) + ':' + _pad(sec % 60);
+}
+
+function _fmtRemain(sec) {
+  const neg = sec < 0;
+  const abs = Math.abs(sec);
+  return (neg ? '−' : '') + Math.floor(abs / 60) + ':' + _pad(abs % 60);
+}
+
+// ── Wall clock (status bar) ──
+function _wallClock() {
+  const d = new Date();
+  const h = d.getHours() % 12 || 12;
+  const m = String(d.getMinutes()).padStart(2, '0');
+  document.getElementById('wallClock').textContent = h + ':' + m;
+}
+_wallClock();
+
+// ── Progress interpolation ──
+let _segStart  = null; // unix ms when segment started
+let _segDurMs  = null; // segment duration ms (null = unknown)
+
+function _tickProgress() {
+  const fill   = document.getElementById('progressFill');
+  const timeEl = document.getElementById('progressTime');
+  if (!_segStart) { fill.style.width = '0%'; timeEl.textContent = ''; return; }
+
+  const elapsedS = (Date.now() - _segStart) / 1000;
+  if (_segDurMs) {
+    const durS = _segDurMs / 1000;
+    const pct  = Math.min(100, (elapsedS / durS) * 100);
+    const rem  = Math.max(0, durS - elapsedS);
+    fill.style.width  = pct + '%';
+    timeEl.textContent = '−' + _fmtRemain(rem);
+  } else {
+    // Indeterminate: cycle over 60s period
+    const pct = ((elapsedS % 60) / 60) * 100;
+    fill.style.width  = pct + '%';
+    timeEl.textContent = '+' + _fmtRemain(elapsedS);
+  }
+}
+
+setInterval(() => {
+  const elapsed = Math.floor((Date.now() - _showStart) / 1000);
+  document.getElementById('showClock').textContent = _fmtHMS(elapsed);
+  _wallClock();
+  _tickProgress();
+}, 1000);
+
+// ── Mic toggle (localStorage, visual only) ──
+let _micHot = localStorage.getItem('mmr_mic_hot') === 'true';
+
+function _renderMic() {
+  document.getElementById('micBtn').classList.toggle('hot', _micHot);
+  document.getElementById('micLabel').textContent = _micHot ? 'Mic Hot' : 'Mic Off';
+}
+
+function toggleMic() {
+  _micHot = !_micHot;
+  localStorage.setItem('mmr_mic_hot', _micHot);
+  _renderMic();
+  _toast(_micHot ? 'Mic Hot — you\'re live' : 'Mic Off');
+}
+_renderMic();
+
+// ── Toast ──
+let _toastTmr = null;
+function _toast(msg, ms) {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.classList.add('show');
+  clearTimeout(_toastTmr);
+  _toastTmr = setTimeout(() => el.classList.remove('show'), ms || 3000);
+}
+
+// ── Generic POST helper ──
+async function _post(path) {
+  try {
+    const r = await fetch(_base + path, { method: 'POST', headers: _hdrs() });
+    return r.ok ? r.json() : null;
+  } catch { return null; }
+}
+
+// ── Skip ──
+let _lastLabel = '';
+async function doSkip() {
+  const res = await _post('/api/skip');
+  _toast(res && res.ok
+    ? 'Skipped' + (_lastLabel ? ': ' + _lastLabel : '')
+    : 'Nothing to skip');
+}
+
+// ── SOS (skip = graceful AI takeover) ──
+async function doSOS() {
+  const res = await _post('/api/skip');
+  if (res && res.ok) _toast('SOS — AI taking over');
+}
+
+// ── Clip ──
+async function doClip() {
+  _toast('Saving clip…', 5000);
+  const res = await _post('/api/clip');
+  _toast(res && res.ok ? 'Clip saved!' : 'No audio buffered yet');
+}
+
+// ── Play / Pause state ──
+let _isStopped = false;
+
+function _applyPlayState(stopped) {
+  _isStopped = stopped;
+  const icon  = document.getElementById('playIcon');
+  const label = document.getElementById('playLabel');
+  const ovl   = document.getElementById('stoppedOverlay');
+  if (stopped) {
+    icon.innerHTML = '<path d="M10 8L24 16L10 24V8Z" fill="#2563EB"/>';
+    label.textContent = 'Resume';
+    ovl.classList.add('show');
+  } else {
+    icon.innerHTML = '<rect x="9" y="8" width="5" height="16" rx="2" fill="#2563EB"/>'
+                   + '<rect x="18" y="8" width="5" height="16" rx="2" fill="#2563EB"/>';
+    label.textContent = 'Pause';
+    ovl.classList.remove('show');
+  }
+}
+
+// ── Hold-to-stop (2 s press to call /api/stop) ──
+const HOLD_MS = 2000;
+let _holdTmr      = null;
+let _holdActive   = false;  // iOS touchstart→mousedown double-fire guard (pre-ship P0)
+let _stopInFlight = false;  // prevent duplicate POST /api/stop if a second gesture sneaks past
+
+const _playFace = document.getElementById('playFace');
+const _holdRing = document.getElementById('holdRing');
+const _holdArc  = document.getElementById('holdArc');
+
+function _beginHold(e) {
+  if (_isStopped) { doResume(); return; }
+  if (_holdActive) { e.preventDefault(); return; }  // touchstart fired first; ignore the synthesized mousedown
+  _holdActive = true;
+  e.preventDefault();
+  _holdRing.style.opacity = '1';
+  _holdArc.style.transition = `stroke-dashoffset ${HOLD_MS / 1000}s linear`;
+  _holdArc.style.strokeDashoffset = '0';
+  _holdTmr = setTimeout(_commitStop, HOLD_MS);
+}
+
+function _cancelHold() {
+  clearTimeout(_holdTmr); _holdTmr = null;
+  _holdActive = false;
+  _holdRing.style.opacity = '0';
+  _holdArc.style.transition = 'stroke-dashoffset 0.2s ease';
+  _holdArc.style.strokeDashoffset = '280';
+}
+
+async function _commitStop() {
+  _cancelHold();
+  if (_stopInFlight) return;
+  _stopInFlight = true;
+  try {
+    const res = await _post('/api/stop');
+    if (res && res.ok) {
+      _applyPlayState(true);
+      _toast('Paused — automation live');
+    }
+  } finally {
+    _stopInFlight = false;
+  }
+}
+
+async function doResume() {
+  const res = await _post('/api/resume');
+  if (res && res.ok) {
+    _applyPlayState(false);
+    _toast('Resumed — you\'re live');
+    document.getElementById('offlineOverlay').classList.remove('show');
+    document.getElementById('goLiveBtn').classList.remove('show');
+    // If we were holding 'recovered' waiting for user confirmation, release it now.
+    if (_connState === 'recovered') _applyConn('ok');
+  }
+}
+
+_playFace.addEventListener('touchstart',  _beginHold, { passive: false });
+_playFace.addEventListener('touchend',    _cancelHold);
+_playFace.addEventListener('touchcancel', _cancelHold);
+_playFace.addEventListener('mousedown',   _beginHold);
+_playFace.addEventListener('mouseup',     _cancelHold);
+_playFace.addEventListener('mouseleave',  _cancelHold);
+
+// ── Connection state machine ──
+let _fails        = 0;
+let _connState    = 'ok';
+let _pollMs       = 2000;
+let _wasOffline   = false;
+
+const AMBER_AT = 2;
+const RED_AT   = 3;
+
+function _applyConn(state) {
+  if (_connState === state) return;
+  _connState = state;
+
+  const badge  = document.getElementById('onAirBadge');
+  const text   = document.getElementById('onAirText');
+  const banner = document.getElementById('connBanner');
+  const ovl    = document.getElementById('offlineOverlay');
+  const goBtn  = document.getElementById('goLiveBtn');
+
+  badge.className = 'on-air-badge' + (state !== 'ok' ? ' ' + state : '');
+
+  if (state === 'ok') {
+    text.textContent    = 'On Air';
+    banner.className    = 'conn-banner';
+    banner.textContent  = '';
+    if (_wasOffline) {
+      ovl.classList.remove('show');
+      goBtn.classList.remove('show');
+      _toast('Back online');
+      _wasOffline = false;
+    }
+  } else if (state === 'amber') {
+    text.textContent   = 'Unstable';
+    banner.className   = 'conn-banner amber';
+    banner.textContent = '⚠ Connection unstable';
+  } else if (state === 'red') {
+    text.textContent   = 'Offline';
+    banner.className   = 'conn-banner red';
+    banner.textContent = 'OFFLINE — Automation is live';
+    _wasOffline = true;
+    ovl.classList.add('show');
+  } else if (state === 'recovered') {
+    text.textContent = 'Reconnected';
+    goBtn.classList.add('show');
+    ovl.classList.add('show');
+  }
+}
+
+function _onSuccess(data) {
+  _fails   = 0;
+  _pollMs  = 2000;
+  // After a `red` disconnect, hold the `recovered` state until the user
+  // explicitly taps Go Live (handled by the goLiveBtn onclick → doResume).
+  // Previously every subsequent success flipped `recovered` → `ok` on the
+  // next poll (~2s), making the Go Live CTA flash for one cycle and vanish.
+  if (_connState === 'red') _applyConn('recovered');
+  else if (_connState === 'amber' || _connState === 'ok') _applyConn('ok');
+  // _connState === 'recovered' stays recovered until doResume clears it.
+  _render(data);
+}
+
+function _onFail() {
+  _fails++;
+  // Exponential backoff: 2 → 4 → 8 → 16 → cap 30 s
+  _pollMs = Math.min(30000, 2000 * Math.pow(2, _fails - 1));
+  if      (_fails >= RED_AT)   _applyConn('red');
+  else if (_fails >= AMBER_AT) _applyConn('amber');
+}
+
+// ── Render from /status payload ──
+function _render(data) {
+  const now       = data.now_streaming || {};
+  const meta      = now.metadata || {};
+  const type      = now.type || '';
+  const upcoming  = data.upcoming || [];
+
+  // Session stopped?
+  const stopped = data.session_stopped || type === 'stopped';
+  if (stopped !== _isStopped) _applyPlayState(stopped);
+
+  // Eyebrow label
+  const eyebrow = document.getElementById('trackEyebrow');
+  const eyebrows = { banter: 'On Air — Banter', ad: 'On Air — Promo',
+    stopped: 'Station Paused', skipping: 'Skipping…' };
+  eyebrow.textContent = eyebrows[type] || 'Now Playing';
+
+  // Track title + artist
+  const titleEl  = document.getElementById('trackTitle');
+  const artistEl = document.getElementById('trackArtist');
+  const rawLabel = now.label || '';
+  const title    = meta.title_only || meta.title || rawLabel || '';
+  const artist   = meta.artist || '';
+
+  if (title) {
+    _lastLabel = rawLabel || title;
+    titleEl.textContent  = title;
+    titleEl.className    = 'track-title' + (title.length > 24 ? ' long' : '') + (title.length > 38 ? ' vlong' : '');
+    artistEl.textContent = artist;
+  } else {
+    titleEl.textContent  = '—';
+    titleEl.className    = 'track-title';
+    artistEl.textContent = '';
+  }
+
+  // Progress
+  if (now.started) {
+    _segStart = now.started * 1000;
+    _segDurMs = (meta.duration_ms || (meta.duration_s && meta.duration_s * 1000)) || null;
+  } else {
+    _segStart = _segDurMs = null;
+  }
+  _tickProgress();
+
+  // Up next — prefer a music entry, fall back to first upcoming
+  const upEl = document.getElementById('upNextTrack');
+  const next  = upcoming.find(u => u.type === 'music') || upcoming[0];
+  if (next) {
+    const nLabel  = next.label || next.title || '';
+    const nArtist = (next.metadata || {}).artist || '';
+    upEl.textContent = nArtist && !nLabel.includes(nArtist)
+      ? nLabel + ' — ' + nArtist
+      : nLabel || '—';
+  } else {
+    upEl.textContent = '—';
+  }
+}
+
+// ── Poll loop ──
+async function _poll() {
+  try {
+    const r = await fetch(_base + '/status', {
+      headers: { 'X-Radio-CSRF-Token': _csrf }
+    });
+    if (r.ok) _onSuccess(await r.json());
+    else       _onFail();
+  } catch {
+    _onFail();
+  }
+  setTimeout(_poll, _pollMs);
+}
+
+_poll();
+</script>
+</body>
+</html>
