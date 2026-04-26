@@ -126,6 +126,20 @@ Once Screens 1+2 are solid, move the current 1744-line `admin.html` behind `/adm
 ### P3 — Italianize remaining UI copy
 The prototype uses Italian labels (CODA, REVISIONE, PALINSESTO, MOTORE, PANICO). Once Screens 2–5 are built, audit all existing admin.html strings and normalize to the same voice.
 
+### P2 — Italianize admin.html panel contents (Approach B)
+PR #248 (Approach A) italianized the admin shell: sidebar nav, h2 titles, eyebrows, top status panel. Panel **contents** are still English — visible to the operator and creating mixed-language whiplash. Scope:
+- Top-bar `Queue banter` CTA (`admin.html:1118`)
+- Trigger card titles + descriptions: `Queue banter / Force ad break / News flash / Chaos incoming` (`admin.html:1156-1172`)
+- Quick-action chips: `Trim banter / Trim ads / Hot reload / Purge queue / Flag track` (`admin.html:1179-1183`)
+- Conduttori host UI: preset names `BALANCED / CALM / HYPE`, slider labels `ENERGY / CHAOS / WARMTH / VERBOSITY / NOSTALGIA`, axis arrays `AX_LOW`/`AX_HIGH` (`admin.html:1944-1951`), host-block template (`admin.html:2013`)
+- Search placeholder + button (`admin.html:1265`)
+- Engine room status table (`admin.html:2172-2175`) and onboarding step checklist (`admin.html:1310, 1335`)
+- Filter chips + table column headers (JS-rendered — find the renderer)
+- Toast strings (`admin.html:1405`)
+- `75 tracks` → `75 tracce` next to `Musica & Coda`
+- `ON AIR` pill → `IN ONDA` to match listener
+**Effort:** ~30-40 string changes, half in JS template strings. **Risk:** low (label-only). **Source:** /qa report `.gstack/qa-reports/qa-report-admin-2026-04-27.md`.
+
 ## Completed
 
 ### Mark addon as experimental in HACS
