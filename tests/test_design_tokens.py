@@ -87,9 +87,46 @@ def test_tokens_css_has_core_primitives() -> None:
         "--ok",
         "--error",
         "--warning",
+        "--flag-green",
+        "--flag-white",
+        "--flag-red",
         "--font-display",
         "--font-body",
         "--font-mono",
     }
     missing = sorted(required - defined)
     assert not missing, f"mammamiradio/static/tokens.css is missing required primitives: {missing}"
+
+
+_VAR_REF_NO_FALLBACK_RE = re.compile(r"var\(\s*(--[a-z0-9-]+)\s*\)")
+
+
+def test_every_var_ref_resolves_to_a_defined_token() -> None:
+    """Every var(--foo) used outside tokens.css with no fallback must resolve to a defined token.
+
+    Catches the class of bug where a CSS author writes `background: var(--flag-green)`
+    but never declares `--flag-green` in tokens.css. The browser silently renders
+    transparent and the visual breaks (PR #235 shipped this regression for both
+    --flag-* and --terracotta/--sage/--ink).
+
+    Exempt:
+    - --brand-* (per-station dynamic, injected at request time from [brand.theme]).
+    - var(--foo, fallback) — any fallback (literal or nested var) is safe because
+      the browser falls through cleanly when the token is missing.
+    """
+    defined = set(_primitives_in(TOKENS_CSS))
+    missing: dict[str, set[str]] = {}
+    for path in GUARDED_FILES:
+        if path.suffix != ".css":
+            continue
+        text = _strip_comments(path.read_text(encoding="utf-8"))
+        for ref in _VAR_REF_NO_FALLBACK_RE.findall(text):
+            if ref in defined:
+                continue
+            if _BRAND_NAMESPACE_RE.match(ref):
+                continue
+            missing.setdefault(path.name, set()).add(ref)
+    assert not missing, (
+        "CSS files reference undefined tokens with no fallback. Add them to tokens.css or use var(--foo, fallback):\n"
+        + "\n".join(f"  {f}: {sorted(refs)}" for f, refs in sorted(missing.items()))
+    )
