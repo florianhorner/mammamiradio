@@ -879,4 +879,5 @@ body::before {
 @media (prefers-reduced-motion: reduce) {
   .mmr-live-pill .dot, .mmr-live .dot { animation: none; }
   .mmr-wave span { animation: none; }
+  .mmr-ticker .track { animation: none; transform: none; }
 }

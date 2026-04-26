@@ -1022,7 +1022,8 @@ body[data-stopped="true"] .a-station-card .dot.on { animation-play-state: paused
     <div class="a-brand">
       <img src="/static/icon-192.svg" alt="" width="34" height="34">
       <div>
-        <div class="wm">Mamma <em>Mi</em> Radio</div>
+        <div class="wm">Mamma <span class="mi">Mi</span> Radio</div>
+        <div class="tricolor-stripe" aria-hidden="true"></div>
         <div class="sub">Regia · Admin</div>
       </div>
       <span class="sr-only">Regia — Control Room</span>
@@ -1056,14 +1057,14 @@ body[data-stopped="true"] .a-station-card .dot.on { animation-play-state: paused
 
     <nav class="a-nav">
       <div class="a-nav-head">Operator</div>
-      <a class="active" onclick="scrollToSection('programme')">Programme</a>
-      <a onclick="scrollToSection('triggers')">Broadcast triggers</a>
-      <a onclick="scrollToSection('pacing')">Pacing</a>
-      <a onclick="scrollToSection('music')">Playlist</a>
+      <a class="active" href="#programme" onclick="scrollToSection('programme');return false">Programme</a>
+      <a href="#triggers" onclick="scrollToSection('triggers');return false">Broadcast triggers</a>
+      <a href="#pacing" onclick="scrollToSection('pacing');return false">Pacing</a>
+      <a href="#music" onclick="scrollToSection('music');return false">Playlist</a>
       <div class="a-nav-head">Engine</div>
-      <a onclick="scrollToSection('hosts')">Host personalities</a>
-      <a onclick="scrollToSection('engine')">Engine room</a>
-      <a onclick="scrollToSection('log')">Logs</a>
+      <a href="#hosts" onclick="scrollToSection('hosts');return false">Host personalities</a>
+      <a href="#engine" onclick="scrollToSection('engine');return false">Engine room</a>
+      <a href="#log" onclick="scrollToSection('log');return false">Logs</a>
     </nav>
 
     <div class="a-engine-status">
@@ -1091,16 +1092,16 @@ body[data-stopped="true"] .a-station-card .dot.on { animation-play-state: paused
         <div class="np-title" id="topBarTitle">Waiting for signal… <span class="by" id="topBarArtist"></span></div>
       </div>
       <div class="a-topbar-tools">
-        <button class="btn-icon" title="Next song" onclick="doSkip(this)">
+        <button type="button" class="btn-icon" title="Next song" onclick="doSkip(this)">
           <svg viewBox="0 0 16 16" fill="currentColor"><path d="M3 3v10l7-5zM11 3h2v10h-2z"/></svg>
         </button>
-        <button class="btn-icon" title="Pause" id="topBarPause" onclick="doStop(this)">
+        <button type="button" class="btn-icon" title="Pause" id="topBarPause" onclick="doStop(this)">
           <svg viewBox="0 0 16 16" fill="currentColor"><rect x="3.5" y="3" width="3" height="10" rx="0.5"/><rect x="9.5" y="3" width="3" height="10" rx="0.5"/></svg>
         </button>
-        <button class="btn-icon" title="Shuffle" onclick="doShuffle(this)">
+        <button type="button" class="btn-icon" title="Shuffle" onclick="doShuffle(this)">
           <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 4h2.5l5 8H12"/><path d="M2 12h2.5l1.8-2.9"/><path d="M9.7 6.4 12 4"/><path d="M10 2l2 2-2 2"/><path d="M10 10l2 2-2 2"/></svg>
         </button>
-        <button class="btn-primary-sm" onclick="doTrigger('banter',this)">Queue banter</button>
+        <button type="button" class="btn-primary-sm" onclick="doTrigger('banter',this)">Queue banter</button>
       </div>
     </div>
 
@@ -1114,10 +1115,10 @@ body[data-stopped="true"] .a-station-card .dot.on { animation-play-state: paused
         <div style="display:flex;align-items:center;gap:10px;">
           <span class="filter-count" id="programmeCount" style="font-size:11px;color:var(--muted);font-family:var(--font-mono)"></span>
           <div class="filter-pills" style="margin:0">
-            <button class="filter-pill active" data-filter="all" onclick="setProgrammeFilter('all',this)">All</button>
-            <button class="filter-pill" data-filter="music" onclick="setProgrammeFilter('music',this)">Music</button>
-            <button class="filter-pill" data-filter="banter" onclick="setProgrammeFilter('banter',this)">Banter</button>
-            <button class="filter-pill" data-filter="ad" onclick="setProgrammeFilter('ad',this)">Ads</button>
+            <button type="button" class="filter-pill active" data-filter="all" onclick="setProgrammeFilter('all',this)">All</button>
+            <button type="button" class="filter-pill" data-filter="music" onclick="setProgrammeFilter('music',this)">Music</button>
+            <button type="button" class="filter-pill" data-filter="banter" onclick="setProgrammeFilter('banter',this)">Banter</button>
+            <button type="button" class="filter-pill" data-filter="ad" onclick="setProgrammeFilter('ad',this)">Ads</button>
           </div>
         </div>
       </header>
@@ -1136,22 +1137,22 @@ body[data-stopped="true"] .a-station-card .dot.on { animation-play-state: paused
         <div class="sub">Queue a segment without editing the programme</div>
       </header>
       <div class="a-triggers">
-        <button class="a-trigger" onclick="doTrigger('banter',this)">
+        <button type="button" class="a-trigger" onclick="doTrigger('banter',this)">
           <span class="ico-wrap"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="2" width="4" height="7" rx="2"/><path d="M3.5 7.5a4.5 4.5 0 0 0 9 0"/><path d="M8 12v2"/><path d="M5.5 14h5"/></svg></span>
           <span class="lb">Queue banter</span>
           <span class="hi">Plays after current song</span>
         </button>
-        <button class="a-trigger" onclick="doTrigger('ad',this)">
+        <button type="button" class="a-trigger" onclick="doTrigger('ad',this)">
           <span class="ico-wrap"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="6" width="12" height="8" rx="1.2"/><path d="M5 4l8-2"/><circle cx="11" cy="10" r="1.6"/><path d="M4.5 9h2M4.5 11h3"/></svg></span>
           <span class="lb">Force ad break</span>
           <span class="hi">Next break — absurd Italian</span>
         </button>
-        <button class="a-trigger" onclick="doTrigger('news_flash',this)">
+        <button type="button" class="a-trigger" onclick="doTrigger('news_flash',this)">
           <span class="ico-wrap"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8 1.8 14.5 13H1.5z"/><path d="M8 6v3.5"/><circle cx="8" cy="11.6" r="0.6" fill="currentColor"/></svg></span>
           <span class="lb">News flash</span>
           <span class="hi">Claude writes from today's feed</span>
         </button>
-        <button class="a-trigger chaos" onclick="doQuickAction('more_chaos',this)">
+        <button type="button" class="a-trigger chaos" onclick="doQuickAction('more_chaos',this)">
           <span class="ico-wrap"><svg viewBox="0 0 16 16" fill="currentColor"><path d="M8.7 1L3 9h4l-1 6 6-8H8z"/></svg></span>
           <span class="lb">Chaos incoming</span>
           <span class="hi">Unscheduled — anything goes</span>
@@ -1161,11 +1162,11 @@ body[data-stopped="true"] .a-station-card .dot.on { animation-play-state: paused
       <div style="margin-top:16px;padding-top:14px;border-top:1px solid var(--line)">
         <div class="card-label" style="margin-bottom:10px">Quick actions</div>
         <div class="quick-actions">
-          <button class="btn btn-chip" onclick="doQuickAction('less_banter',this)"><svg class="ic" aria-hidden="true"><use href="#ic-mic-off"/></svg> Trim banter</button>
-          <button class="btn btn-chip" onclick="doQuickAction('too_many_ads',this)"><svg class="ic" aria-hidden="true"><use href="#ic-ban"/></svg> Trim ads</button>
-          <button class="btn btn-chip" onclick="doQuickAction('hot_reload',this)"><svg class="ic" aria-hidden="true"><use href="#ic-rotate-cw"/></svg> Hot reload</button>
-          <button class="btn btn-chip" onclick="doPurge(this)"><svg class="ic" aria-hidden="true"><use href="#ic-trash"/></svg> Purge queue</button>
-          <button class="btn btn-chip" onclick="flagCurrentTrack(this)"><svg class="ic" aria-hidden="true"><use href="#ic-flag"/></svg> Flag track</button>
+          <button type="button" class="btn btn-chip" onclick="doQuickAction('less_banter',this)"><svg class="ic" aria-hidden="true"><use href="#ic-mic-off"/></svg> Trim banter</button>
+          <button type="button" class="btn btn-chip" onclick="doQuickAction('too_many_ads',this)"><svg class="ic" aria-hidden="true"><use href="#ic-ban"/></svg> Trim ads</button>
+          <button type="button" class="btn btn-chip" onclick="doQuickAction('hot_reload',this)"><svg class="ic" aria-hidden="true"><use href="#ic-rotate-cw"/></svg> Hot reload</button>
+          <button type="button" class="btn btn-chip" onclick="doPurge(this)"><svg class="ic" aria-hidden="true"><use href="#ic-trash"/></svg> Purge queue</button>
+          <button type="button" class="btn btn-chip" onclick="flagCurrentTrack(this)"><svg class="ic" aria-hidden="true"><use href="#ic-flag"/></svg> Flag track</button>
         </div>
         <div style="margin-top:10px">
           <div class="card-label">Last Break</div>
@@ -1248,7 +1249,7 @@ body[data-stopped="true"] .a-station-card .dot.on { animation-play-state: paused
       <div class="card-label">Playlist</div>
       <div class="search-row">
         <input type="text" class="search-input" id="searchInput" placeholder="Search music (playlist + web)..." autocomplete="off" aria-label="Search music">
-        <button class="btn btn-util" onclick="doSearch()">Search</button>
+        <button type="button" class="btn btn-util" onclick="doSearch()">Search</button>
       </div>
       <div id="searchResults"></div>
       <div id="plBody" style="max-height:400px;overflow-y:auto;overflow-x:hidden"></div>
@@ -1301,7 +1302,7 @@ body[data-stopped="true"] .a-station-card .dot.on { animation-play-state: paused
         <div id="setupKeysConfigured" style="display:none;padding:0.75rem 1rem;background:rgba(37,99,235,0.1);border:1px solid rgba(37,99,235,0.3);border-radius:8px;margin-bottom:0.75rem">
           <span style="color:var(--ok);font-weight:600" id="setupKeysLabel">&#10003; AI keys configured</span>
           <span style="opacity:0.7;margin-left:0.5rem;font-size:0.85em" id="setupKeysDetail"></span>
-          <button class="btn btn-util" style="margin-left:0.75rem;font-size:0.8em;padding:0.2rem 0.6rem" onclick="_keysEditMode=true;document.getElementById('setupKeysForm').style.display='block'">Replace</button>
+          <button type="button" class="btn btn-util" style="margin-left:0.75rem;font-size:0.8em;padding:0.2rem 0.6rem" onclick="_keysEditMode=true;document.getElementById('setupKeysForm').style.display='block'">Replace</button>
         </div>
         <div id="setupKeysForm">
           <div class="setup-subhead">Save Keys</div>
@@ -1310,15 +1311,15 @@ body[data-stopped="true"] .a-station-card .dot.on { animation-play-state: paused
             <input class="input" id="setupOpenaiKey" type="password" placeholder="OPENAI_API_KEY (optional)" autocomplete="off" aria-label="OpenAI API key">
           </div>
           <div class="setup-actions" style="margin-top:10px">
-            <button class="btn btn-trigger" id="setupSaveBtn" onclick="setupSaveKeys(this)">Save Keys</button>
+            <button type="button" class="btn btn-trigger" id="setupSaveBtn" onclick="setupSaveKeys(this)">Save Keys</button>
           </div>
         </div>
         <div class="setup-actions">
-          <button class="btn btn-util" onclick="setupRecheck(this)">Re-check</button>
+          <button type="button" class="btn btn-util" onclick="setupRecheck(this)">Re-check</button>
         </div>
         <div class="setup-snippet" id="setupSnippetWrap">
           <div class="setup-subhead" style="margin-top:0">Home Assistant Add-on Snippet</div>
-          <button class="btn btn-util" onclick="copySetupSnippet()">Copy Snippet</button>
+          <button type="button" class="btn btn-util" onclick="copySetupSnippet()">Copy Snippet</button>
           <pre class="setup-pre" id="setupSnippet"></pre>
         </div>
 
@@ -2085,8 +2086,7 @@ function updateLog(log){
     const d=new Date(e.timestamp*1000);
     const t=d.toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
     const typeKey=segmentTypeKey(e.type);
-    const isNow=(i===0)?'now':'';
-    return`<div class="lg-row ${isNow}"><span class="ts">${t}</span><span class="seg-pill seg-${typeKey}">${esc(typeKey.replace('_',' '))}</span><span class="tx">${esc(e.label)}</span></div>`;
+    return`<div class="lg-row"><span class="ts">${t}</span><span class="seg-pill seg-${typeKey}">${esc(typeKey.replace('_',' '))}</span><span class="tx">${esc(e.label)}</span></div>`;
   }).join('');
 }
 
