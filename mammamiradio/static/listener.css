@@ -611,10 +611,10 @@ body::before {
 .mmr-brand span { font-family: var(--font-display); font-style: italic; font-weight: 700; font-size: 20px; color: var(--cream); letter-spacing: -0.01em; white-space: nowrap; }
 .mmr-brand em { color: var(--brand-primary, var(--sun)); font-style: italic; }
 .mmr-nav nav { display: flex; gap: 22px; margin-left: 10px; }
-.mmr-nav nav a { font-size: 13px; font-weight: 500; color: rgba(245,237,216,0.7); text-decoration: none; letter-spacing: 0.01em; transition: color 180ms; }
+.mmr-nav nav a { font-size: 13px; font-weight: 500; color: rgba(245,237,216,0.7); text-decoration: none; letter-spacing: 0.01em; transition: color 180ms; padding: 12px 8px; min-height: 44px; display: inline-flex; align-items: center; }
 .mmr-nav nav a:hover { color: var(--cream); }
 .mmr-nav nav a.active { color: var(--brand-primary, var(--sun)); }
-.mmr-live-pill { margin-left: auto; display: inline-flex; align-items: center; gap: 7px; padding: 6px 12px; border: 1px solid rgba(184,44,32,0.4); background: rgba(160,32,24,0.15); color: var(--cream); border-radius: 999px; font-size: 10px; font-weight: 700; letter-spacing: 0.18em; text-transform: uppercase; font-family: var(--font-body); cursor: pointer; text-decoration: none; }
+.mmr-live-pill { margin-left: auto; display: inline-flex; align-items: center; gap: 7px; padding: 10px 14px; min-height: 44px; border: 1px solid rgba(184,44,32,0.4); background: rgba(160,32,24,0.15); color: var(--cream); border-radius: 999px; font-size: 10px; font-weight: 700; letter-spacing: 0.18em; text-transform: uppercase; font-family: var(--font-body); cursor: pointer; text-decoration: none; }
 .mmr-live-pill .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--brand-accent, var(--lancia2)); box-shadow: 0 0 8px var(--brand-accent, var(--lancia2)); animation: live-pulse 1.4s ease-in-out infinite; }
 @keyframes live-pulse { 0%,100% { opacity: 1 } 50% { opacity: 0.5 } }
 
@@ -694,11 +694,11 @@ body::before {
 .mmr-eyebrow { font-size: 10px; font-weight: 700; letter-spacing: 0.22em; text-transform: uppercase; color: var(--brand-primary, var(--sun2)); margin-bottom: 16px; display: inline-block; font-family: var(--font-body); }
 .mmr-h1 { font-family: var(--font-display); font-style: italic; font-weight: 700; font-size: clamp(44px, 5.5vw, 72px); line-height: 1.02; letter-spacing: -0.02em; color: var(--cream); margin: 0 0 6px; }
 .mmr-h1 em { color: var(--brand-primary, var(--sun)); }
-.mmr-lede { font-size: 15px; line-height: 1.65; color: var(--cream-dk); max-width: 460px; margin: 0 0 22px; }
+.mmr-lede { font-size: 16px; line-height: 1.65; color: var(--cream-dk); max-width: 460px; margin: 0 0 22px; }
 .mmr-cta-row { display: flex; gap: 10px; }
-.btn-primary { font-family: var(--font-body); font-size: 13px; font-weight: 600; letter-spacing: 0.02em; padding: 11px 20px; border-radius: var(--radius-md); border: none; background: var(--brand-primary, var(--sun2)); color: var(--ink); cursor: pointer; box-shadow: 0 4px 20px rgba(236,204,48,0.35); transition: transform 180ms, background 180ms; }
+.btn-primary { font-family: var(--font-body); font-size: 13px; font-weight: 600; letter-spacing: 0.02em; padding: 13px 20px; min-height: 44px; display: inline-flex; align-items: center; justify-content: center; border-radius: var(--radius-md); border: none; background: var(--brand-primary, var(--sun2)); color: var(--ink); cursor: pointer; box-shadow: 0 4px 20px rgba(236,204,48,0.35); transition: transform 180ms, background 180ms; }
 .btn-primary:hover { background: var(--brand-primary, var(--sun)); transform: translateY(-1px); }
-.btn-ghost { font-family: var(--font-body); font-size: 13px; font-weight: 600; padding: 11px 20px; border-radius: var(--radius-md); background: transparent; color: var(--cream); border: 1px solid var(--line-strong); cursor: pointer; transition: border-color 180ms, color 180ms; }
+.btn-ghost { font-family: var(--font-body); font-size: 13px; font-weight: 600; padding: 13px 20px; min-height: 44px; display: inline-flex; align-items: center; justify-content: center; border-radius: var(--radius-md); background: transparent; color: var(--cream); border: 1px solid var(--line-strong); cursor: pointer; transition: border-color 180ms, color 180ms; }
 .btn-ghost:hover { border-color: var(--cream); }
 
 /* Stats */
@@ -828,7 +828,7 @@ body::before {
 .mmr-dedica-form textarea { width: 100%; background: rgba(26,20,16,0.05); border: 1px solid rgba(26,20,16,0.1); border-radius: 8px; padding: 10px 12px; font-family: var(--font-body); font-size: 14px; color: #1A1410; resize: vertical; outline: none; margin-bottom: 10px; box-sizing: border-box; }
 .mmr-dedica-form textarea::placeholder { color: #5A4A3D; }
 .mmr-dedica-form textarea:focus { border-color: var(--brand-primary, var(--sun2)); box-shadow: 0 0 0 3px rgba(236,204,48,0.18); }
-.mmr-dedica-form button { width: 100%; background: #1A1410; color: var(--cream); border: none; padding: 10px 14px; border-radius: 8px; font-family: var(--font-body); font-size: 13px; font-weight: 600; cursor: pointer; position: relative; z-index: 2; }
+.mmr-dedica-form button { width: 100%; background: #1A1410; color: var(--cream); border: none; padding: 13px 14px; min-height: 44px; border-radius: 8px; font-family: var(--font-body); font-size: 13px; font-weight: 600; cursor: pointer; position: relative; z-index: 2; }
 .mmr-dedica-form .hint { font-size: 11px; color: #5A4A3D; margin-top: 10px; line-height: 1.4; font-style: italic; position: relative; z-index: 2; }
 .mmr-dedica-form .hint em { color: var(--lancia); font-style: italic; }
 .form-sent { margin-top: 10px; font-size: 12px; color: var(--ok); font-weight: 600; position: relative; z-index: 2; }
@@ -838,7 +838,7 @@ body::before {
 .mmr-about-card { background: var(--surface-strong); border: 1px solid var(--line-strong); border-radius: 12px; padding: 20px 22px; transition: border-color 180ms, transform 180ms; }
 .mmr-about-card:hover { border-color: rgba(244,208,72,0.3); transform: translateY(-2px); }
 .mmr-about-card .eyebrow { font-family: var(--font-body); font-size: 10px; font-weight: 700; letter-spacing: 0.22em; text-transform: uppercase; color: var(--brand-primary, var(--sun2)); margin-bottom: 12px; display: block; }
-.mmr-about-card p { font-size: 13px; line-height: 1.6; color: var(--cream-dk); margin: 0; }
+.mmr-about-card p { font-size: 14px; line-height: 1.6; color: var(--cream-dk); margin: 0; }
 
 /* Ticker */
 .mmr-ticker { background: var(--cream); border-top: 1px solid rgba(26,20,16,0.08); padding: 18px 0; overflow: hidden; position: relative; margin: 48px 0 0; mask-image: linear-gradient(90deg, transparent, black 6%, black 94%, transparent); }
