@@ -204,15 +204,21 @@
   }
 
   function renderHeroStats(status, caps) {
-    const elapsedSec = (Date.now() - state.sessionStart) / 1000;
-    const h = Math.floor(elapsedSec / 3600);
-    const m = Math.floor((elapsedSec % 3600) / 60);
+    const uptimeSec = (status && typeof status.uptime_sec === 'number')
+      ? status.uptime_sec
+      : (Date.now() - state.sessionStart) / 1000;
+    const h = Math.floor(uptimeSec / 3600);
+    const m = Math.floor((uptimeSec % 3600) / 60);
     const stat1 = $('stat-airtime');
-    if (stat1) stat1.textContent = h + 'h ' + m + 'm';
+    if (stat1) {
+      stat1.textContent = (h === 0 && m === 0) ? 'In diretta' : (h + 'h ' + m + 'm');
+    }
     const stat2 = $('stat-tracks');
     if (stat2) {
-      const tracks = status && status.playlist_size ? status.playlist_size : (status && status.upcoming ? status.upcoming.length : 0);
-      stat2.textContent = tracks || '—';
+      const played = status && typeof status.tracks_played === 'number' ? status.tracks_played : null;
+      const queued = status && status.upcoming ? status.upcoming.length : 0;
+      const value = played !== null ? played : queued;
+      stat2.textContent = value > 0 ? value : '—';
     }
     const stat3 = $('stat-hosts');
     if (stat3 && caps && caps.hosts && caps.hosts.length) {
