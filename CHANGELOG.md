@@ -22,6 +22,7 @@ The current version source of truth is `pyproject.toml`.
 
 ### Added
 
+- **`/live` mobile host control room** (admin-gated): phone-optimised operator surface at the new `/live` route. 966-line standalone HTML using the Volare Refined design tokens, viewport-fit cover for notch handling, and direct-touch buttons wired to `/api/skip`, `/api/clip`, `/api/stop`, `/api/resume`. Same auth contract as `/admin` (loopback-bypass when no password is set, basic-auth elsewhere). Three regression tests in `tests/test_streamer_routes.py` cover loopback, public-without-auth, and authenticated cases.
 - **Accessibility (WCAG 2.1 AA)**: `<html lang="it">` on `admin.html`; sr-only labels on song-request form inputs in `listener.html`; `aria-hidden` on decorative tricolor band; `.sr-only` and `:focus-visible` CSS utilities in `base.css`; `outline: none` removed from form inputs in `listener.css`; `aria-pressed` synced to play button in `listener.js`.
 - **Regression test suite** (`tests/test_qa_regression_guards.py`): 14 automated guards covering LRU eviction protection, prompt sanitization (quotes, role markers, control chars, truncation), ICY header injection, youtube\_id regex, HA addon version sync, `resume_event` presence, and the `_get_last_music_file` three-tier fallback chain.
 

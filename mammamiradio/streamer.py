@@ -42,6 +42,7 @@ _LISTENER_HTML = _PKG_DIR.joinpath("listener.html").read_text()
 
 _ADMIN_HTML = _PKG_DIR.joinpath("admin.html").read_text()
 _REGIA_HTML = _PKG_DIR.joinpath("regia.html").read_text()
+_LIVE_HTML = _PKG_DIR.joinpath("live.html").read_text()
 
 _INGRESS_PREFIX_RE = _re.compile(r"^/[a-zA-Z0-9/_-]+$")
 
@@ -333,6 +334,7 @@ def _inject_ingress_prefix(html: str, prefix: str) -> str:
     html = html.replace('href="/listen"', f'href="{prefix}/listen"')
     html = html.replace('href="/dashboard"', f'href="{prefix}/dashboard"')
     html = html.replace('href="/admin"', f'href="{prefix}/admin"')
+    html = html.replace('href="/live"', f'href="{prefix}/live"')
     html = html.replace('src="/stream"', f'src="{prefix}/stream"')
     # Service worker registration is standalone (no _base), needs rewriting
     html = html.replace("'/sw.js'", f"'{prefix}/sw.js'")
@@ -984,6 +986,16 @@ async def admin_panel(request: Request):
     """Serve the admin control room panel."""
     prefix = request.headers.get("X-Ingress-Path", "")
     return _render_admin_response(request, prefix)
+
+
+@router.get("/live", response_class=HTMLResponse, dependencies=[Depends(require_admin_access)])
+async def live_panel(request: Request):
+    """Serve the mobile live control room — phone-optimised operator surface."""
+    prefix = request.headers.get("X-Ingress-Path", "")
+    html = _get_injected_html("live", _LIVE_HTML, prefix)
+    html = _inject_csrf_token(html, _get_csrf_token(request.app))
+    csp = "script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com"
+    return HTMLResponse(content=html, headers={"Content-Security-Policy": csp})
 
 
 @router.get("/regia", response_class=HTMLResponse, dependencies=[Depends(require_admin_access)])
