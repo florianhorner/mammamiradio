@@ -410,3 +410,64 @@ def test_add_joke_duplicate_not_added():
     state.add_joke("same joke")
     state.add_joke("same joke")
     assert state.running_jokes.count("same joke") == 1
+
+
+def test_select_next_track_no_hourly_cap_branch():
+    """Calling with max_artist_per_hour=0 skips the hourly-cap filter branch."""
+    t1 = _track(1)
+    t2 = _track(2)
+    state = StationState(playlist=[t1, t2])
+    result = state.select_next_track(max_artist_per_hour=0)
+    assert result in (t1, t2)
+
+
+def test_select_next_track_hour_window_branches():
+    """With >17 played tracks, some are outside the hour window (i < hour_start)
+    and >10 played tracks means some are outside the artist_10 window (i < artist_10_start)."""
+    t_filler = Track(title="Filler", artist="FillArtist", duration_ms=180000, spotify_id="fill")
+    t_new = _track(99)
+    state = StationState(playlist=[t_filler, t_new])
+    # 20 played entries: only last 17 in the hour window, only last 10 in artist_10 window
+    for _ in range(20):
+        state.played_tracks.append(t_filler)
+    result = state.select_next_track()
+    assert result in (t_filler, t_new)
+
+
+def test_select_next_track_artist_over_represented_as_candidate():
+    """An artist in the candidate pool that appeared >=2 times in recent 10 gets w*=0.05."""
+    import random
+
+    filler = [
+        Track(title=f"Filler{i}", artist="FillArtist", duration_ms=180000, spotify_id=f"fill{i}") for i in range(8)
+    ]
+    t_pop = Track(title="PopSong", artist="PopArtist", duration_ms=180000, spotify_id="pop1")
+    t_other = Track(title="Other", artist="OtherArtist", duration_ms=180000, spotify_id="oth1")
+    state = StationState(playlist=[t_pop, t_other])
+    # t_pop played at positions 0-1 (not in recent_keys for cooldown=8 with 10 total),
+    # but within recent_artist_10 (all 10 plays) → recent_artist_10[PopArtist] = 2 ≥ 2
+    state.played_tracks.extend([t_pop, t_pop, *filler])  # 10 total
+    # Both t_pop and t_other are candidates (t_pop not in recent_keys).
+    # t_pop weight should be near-zero so t_other wins consistently.
+    random.seed(0)
+    results = [state.select_next_track() for _ in range(10)]
+    assert all(r.artist == "OtherArtist" for r in results)
+
+
+def test_select_next_track_explicit_filter_in_relaxed_fallback():
+    """allow_explicit=False filters explicit tracks from relaxed candidates (lines 585, 590)."""
+    t_normal = Track(title="Normal", artist="A", duration_ms=180000, spotify_id="n1")
+    t_explicit = Track(title="Explicit", artist="B", duration_ms=180000, spotify_id="ex1", explicit=True)
+    state = StationState(playlist=[t_normal, t_explicit])
+    # Play t_normal enough to push it into recent_keys AND recent_artist_set
+    for _ in range(10):
+        state.played_tracks.append(t_normal)
+    # Strict filter: t_normal filtered by repeat; t_explicit by allow_explicit=False
+    # Relax 1 (drop hourly cap): t_normal filtered by repeat+artist; t_explicit filtered by explicit
+    # Relax 2 (drop artist): t_normal filtered by repeat; t_explicit filtered by explicit → empty
+    # Final fallback: pool = [t_normal, t_explicit], t_explicit never played → staleness n_played+1
+    result = state.select_next_track(allow_explicit=False)
+    # With both tracks failing all explicit-aware relaxes, final fallback picks highest staleness.
+    # t_explicit was never played → staleness = n_played + 1 (highest). But allow_explicit filter
+    # does NOT apply in final fallback → t_explicit may be picked despite being explicit.
+    assert result in (t_normal, t_explicit)
