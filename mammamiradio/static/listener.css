@@ -694,7 +694,7 @@ body::before {
 .mmr-eyebrow { font-size: 10px; font-weight: 700; letter-spacing: 0.22em; text-transform: uppercase; color: var(--brand-primary, var(--sun2)); margin-bottom: 16px; display: inline-block; font-family: var(--font-body); }
 .mmr-h1 { font-family: var(--font-display); font-style: italic; font-weight: 700; font-size: clamp(44px, 5.5vw, 72px); line-height: 1.02; letter-spacing: -0.02em; color: var(--cream); margin: 0 0 6px; }
 .mmr-h1 em { color: var(--brand-primary, var(--sun)); }
-.mmr-lede { font-size: 15px; line-height: 1.65; color: var(--cream-dk); max-width: 460px; margin: 0 0 22px; }
+.mmr-lede { font-size: 16px; line-height: 1.65; color: var(--cream-dk); max-width: 460px; margin: 0 0 22px; }
 .mmr-cta-row { display: flex; gap: 10px; }
 .btn-primary { font-family: var(--font-body); font-size: 13px; font-weight: 600; letter-spacing: 0.02em; padding: 13px 20px; border-radius: var(--radius-md); border: none; background: var(--brand-primary, var(--sun2)); color: var(--ink); cursor: pointer; box-shadow: 0 4px 20px rgba(236,204,48,0.35); transition: transform 180ms, background 180ms; }
 .btn-primary:hover { background: var(--brand-primary, var(--sun)); transform: translateY(-1px); }
