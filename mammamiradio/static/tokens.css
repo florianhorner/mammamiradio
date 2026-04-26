@@ -41,6 +41,17 @@
   --lancia:          #A02018;
   --lancia2:         #B82C20;
 
+  /* ── Italian flag — tricolor accents on listener page ── */
+  --flag-green:      #009246;
+  --flag-white:      #F5EFE6;
+  --flag-red:        #CE2B37;
+
+  /* ── Vintage radio cabinet — listener hero illustration ── */
+  --terracotta:      #6B3E2D;  /* warm copper-brown cabinet body — pops vs --bg */
+  --terracotta-lt:   #B47850;  /* warm tan highlights for knobs/antenna/rings */
+  --sage:            #9CAB7E;  /* vintage display sage strip */
+  --ink:             #1F1610;  /* dark text on light surfaces (display, form) */
+
   /* ── Warm amber accent ── */
   --accent-warm:     #E8A030;
 
