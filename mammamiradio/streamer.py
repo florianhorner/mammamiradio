@@ -1613,6 +1613,30 @@ async def get_listener_requests(request: Request, _: None = Depends(require_admi
     }
 
 
+@router.get("/public-listener-requests")
+async def get_public_listener_requests(request: Request):
+    """Listener-safe view of recent dediche / requests.
+
+    Filtered for public consumption: drops internal IDs, error fields, and
+    raw timestamps. Listener page renders this as the Dediche feed. No auth
+    (public endpoint). Sensitive fields (song_error, ts as ID) stay admin-only.
+    """
+    state = request.app.state.station_state
+    now = time.time()
+    return {
+        "requests": [
+            {
+                "name": r.get("name", ""),
+                "message": r.get("message", ""),
+                "type": r.get("type", "dedica"),
+                "song_track": r.get("song_track") if r.get("song_found") else None,
+                "age_s": int(now - r.get("ts", now)),
+            }
+            for r in state.pending_requests
+        ]
+    }
+
+
 @router.post("/api/listener-requests/dismiss")
 async def dismiss_listener_request(request: Request, _: None = Depends(require_admin_access)):
     """Remove a specific listener request from the queue by id (admin only)."""
@@ -1884,11 +1908,20 @@ async def reset_host_personality(host_name: str, request: Request, _: None = Dep
 
 
 def _public_status_payload(request: Request) -> dict:
-    """Build the read-only status payload shared by public and admin APIs."""
+    """Build the read-only status payload shared by public and admin APIs.
+
+    The listener page polls this endpoint every ~3s. The admin /status route
+    extends this payload with operator-only fields (queue depth, segment log,
+    api costs, etc). The CROSS-PAGE INVARIANT is that any field present in
+    both payloads must hold the same value at the same time — enforced by
+    tests/test_public_status_contract.py.
+    """
     _sync_runtime_state(request)
     state = request.app.state.station_state
     config = request.app.state.config
     runtime_health = _runtime_health_snapshot(request)
+    start_time = getattr(request.app.state, "start_time", None) or 0
+    uptime_sec = round(time.time() - start_time) if start_time else 0
     if state.queued_segments:
         upcoming = [{**item, "source": "rendered_queue"} for item in state.queued_segments[:5]]
     else:
@@ -1929,6 +1962,41 @@ def _public_status_payload(request: Request) -> dict:
         "upcoming": upcoming,
         "upcoming_mode": "queued" if upcoming else "building",
         "ha_moments": ha_moments,
+        # Brand-fiction layer (PR-A schema). Listener renders against this.
+        "brand": {
+            "station_name": config.brand.station_name,
+            "frequency": config.brand.frequency,
+            "city": config.brand.city,
+            "founded": config.brand.founded,
+            "tagline": config.brand.tagline,
+            "about": config.brand.about,
+            "opengraph_subtitle": config.brand.opengraph_subtitle,
+            "hosts": [
+                {"engine_host": h.engine_host, "display_name": h.display_name, "description": h.description}
+                for h in config.brand.hosts
+            ],
+            "theme": {
+                "primary_color": config.brand.theme.primary_color,
+                "accent_color": config.brand.theme.accent_color,
+                "background_color": config.brand.theme.background_color,
+                "display_font": config.brand.theme.display_font,
+                "body_font": config.brand.theme.body_font,
+                "mono_font": config.brand.theme.mono_font,
+            },
+        },
+        # Capability flags (listener-safe subset). Listener JS reads these every
+        # poll and toggles [data-cap=KEY] elements (per design D2: client-side
+        # capability-conditional rendering reacts to runtime cap drift).
+        "capabilities": {
+            "llm": bool(config.anthropic_api_key or config.openai_api_key),
+            "anthropic_key": bool(config.anthropic_api_key),
+            "openai": bool(config.openai_api_key),
+            "ha": bool(config.ha_token and config.homeassistant.enabled),
+            "anthropic_degraded": _provider_health_snapshot(config, state)["anthropic"]["degraded"],
+        },
+        # Cross-page invariant facts (must match admin /status exactly).
+        "uptime_sec": uptime_sec,
+        "tracks_played": len(state.played_tracks),
     }
 
 
