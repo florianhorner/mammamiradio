@@ -61,7 +61,7 @@ def _hex_to_rgb(hex_color: str) -> tuple[int, int, int]:
         return _DEFAULT_BG
 
 
-def _load_font(size: int, italic: bool = False) -> "ImageFont.FreeTypeFont | ImageFont.ImageFont":
+def _load_font(size: int, italic: bool = False) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
     """Best-effort font loader.
 
     Tries bundled fonts/Playfair-*.ttf first (cathedral path), falls back to
