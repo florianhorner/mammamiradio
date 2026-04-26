@@ -1262,7 +1262,7 @@ async def test_listener_page_includes_casa_card_and_public_status_binding():
     assert js_resp.status_code == 200
     assert 'id="casa-card"' in resp.text
     assert 'id="casa-mood"' in resp.text
-    assert "updateCasa(data.ha_moments);" in js_resp.text
+    assert "updateCasa(status.ha_moments);" in js_resp.text  # PR-F: ha_moments now part of /public-status payload
     assert "fetch(_base + '/public-status')" in js_resp.text
 
 
