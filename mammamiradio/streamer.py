@@ -15,7 +15,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.templating import Jinja2Templates
 
@@ -1037,6 +1037,45 @@ async def listener(request: Request):
             "csrf_token": _get_csrf_token(request.app),
         },
     )
+
+
+_og_card_cache: dict[str, bytes] = {}
+_OG_CARD_FALLBACK = b""  # populated lazily on first miss
+
+
+@router.get("/og-card.png")
+async def og_card(request: Request):
+    """Serve the OG social card PNG. Cached by brand+track key.
+
+    Per design D-Design-2: poster-style 1200x630, brand-dominant typography,
+    Italian flag tricolor at top, track info as lower-third band. Falls back
+    to the static logo PNG if generation fails — social previews never 404.
+    """
+    config = request.app.state.config
+    state = request.app.state.station_state
+    track = state.current_track
+    cache_key = f"{config.brand.station_name}:{track.cache_key if track else 'idle'}"
+
+    cached = _og_card_cache.get(cache_key)
+    if cached is None:
+        try:
+            from mammamiradio.og_card import render_og_card_for_brand
+
+            cached = render_og_card_for_brand(config.brand, track)
+            _og_card_cache[cache_key] = cached
+            # Cap cache size (one entry per track + idle is bounded by playlist size)
+            if len(_og_card_cache) > 200:
+                # Evict oldest entry by insertion order
+                _og_card_cache.pop(next(iter(_og_card_cache)))
+        except Exception as exc:
+            logger.warning("OG card render failed: %s; falling back to logo", exc)
+            fallback = _STATIC_DIR / "icon-192.svg"
+            if fallback.exists():
+                return FileResponse(fallback, media_type="image/svg+xml")
+            return Response(status_code=503)
+
+    headers = {"Cache-Control": "public, max-age=60"}
+    return Response(content=cached, media_type="image/png", headers=headers)
 
 
 @router.get("/sw.js")
