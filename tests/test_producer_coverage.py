@@ -1104,6 +1104,7 @@ async def test_drain_guard_inserts_canned_clip_on_queue_drain(tmp_path):
         patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
         patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=canned_clip),
         patch(f"{PRODUCER_MODULE}._prefetch_next", new_callable=AsyncMock),
+        patch(f"{PRODUCER_MODULE}._ffprobe_duration_sec", return_value=180.0),
         patch.dict("os.environ", {"MAMMAMIRADIO_SKIP_QUALITY_GATE": "1"}),
     ):
         # Set lookahead to 1 so after 1 real segment fills the queue, production pauses.

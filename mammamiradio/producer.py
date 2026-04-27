@@ -39,6 +39,7 @@ from mammamiradio.models import (
     StationState,
 )
 from mammamiradio.normalizer import (
+    _ffprobe_duration_sec,
     concat_files,
     crossfade_voice_over_music,
     generate_bumper_jingle,
@@ -412,6 +413,7 @@ async def prewarm_first_segment(
             },
             ephemeral=(norm_path != norm_cached),
         )
+        segment.duration_sec = _ffprobe_duration_sec(norm_path) or 0.0
         await queue.put(segment)
         state.after_music(track)
         _set_last_music_file(norm_path)
@@ -1543,6 +1545,7 @@ async def run_producer(
             # Do NOT advance state counters — failed segment doesn't count
 
         if segment:
+            segment.duration_sec = _ffprobe_duration_sec(segment.path) or 0.0
             if generation_revision != state.playlist_revision:
                 logger.info("Discarding stale %s segment after playlist source switch", seg_type.value)
                 segment.path.unlink(missing_ok=True)
