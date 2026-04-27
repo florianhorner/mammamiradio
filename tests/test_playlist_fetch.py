@@ -810,6 +810,35 @@ def test_download_sync_jamendo_cache_hit_skips_direct_url_fetch(tmp_path):
     mock_direct.assert_not_called()
 
 
+def test_download_sync_direct_url_failure_falls_back_to_silence(tmp_path):
+    from mammamiradio.downloader import _download_sync
+
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+    music_dir = tmp_path / "music"
+    music_dir.mkdir()
+    track = Track(
+        title="Fallback Test",
+        artist="Jamendo Artist",
+        duration_ms=180000,
+        spotify_id="jamendo_fail",
+        youtube_id="",
+        direct_url="https://storage.jamendo.com/fail.mp3",
+    )
+
+    with (
+        patch(
+            "mammamiradio.downloader._download_direct_url",
+            side_effect=RuntimeError("network error"),
+        ),
+        patch("mammamiradio.downloader._ytdlp_enabled", return_value=False),
+    ):
+        result = _download_sync(track, cache_dir, music_dir)
+
+    assert result.name.startswith("_silence_")
+    assert result.exists()
+
+
 def test_playlist_is_demo_false_for_jamendo_tracks():
     from mammamiradio.setup_status import _playlist_is_demo
 
