@@ -311,6 +311,7 @@ def _download_ytdlp(track: Track, cache_dir: Path) -> Path:
 
 _ALLOWED_DIRECT_URL_HOST_SUFFIX = ".jamendo.com"
 
+
 # Opener that refuses HTTP redirects — prevents a compromised CDN from redirecting
 # a validated jamendo.com URL to an internal host (HA supervisor, AWS metadata, etc.)
 class _BlockRedirectHandler(HTTPRedirectHandler):
