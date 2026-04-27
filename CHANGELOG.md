@@ -6,6 +6,13 @@ The current version source of truth is `pyproject.toml`.
 
 ## [Unreleased]
 
+## [2.10.10] - 2026-04-28
+
+### Added
+
+- **Song-to-host "exclaim" transition style**: `write_transition()` now gains an `"exclaim"` style (10% probability when song cues are present) where the host opens with a short Italian musical exclamation — *Bravo!*, *Magnifico!*, *Che canzone!* — before pivoting to speech. Fires only when per-track cue data is available; degrades gracefully to `"react"` otherwise. Probabilities with cues: exclaim 10% / echo 10% / react 80%. Without cues: unchanged at echo 20% / react 80%.
+- **Shared song cue loader**: `_load_song_cues_for_current_track()` async helper consolidates the per-track SQLite cue fetch previously duplicated between `write_banter()` and `write_transition()`. Both functions now call the shared helper; the `song_cues` parameter uses `None` to trigger auto-load and `[]` to suppress it, eliminating the module-reload sentinel hazard.
+
 ### Fixed
 
 - **Regia progress bar always showed 0%**: `Segment.duration_sec` was never populated in `producer.py` — the field stayed at `0.0` for every segment type. Fixed by calling `_ffprobe_duration_sec` (via `_probe_segment_duration` wrapper) at two points: the prewarm path (before `queue.put`) and the main convergence point (before `_queue_segment`). Both calls run off the event loop via `loop.run_in_executor` / `asyncio.to_thread` so the 5-second ffprobe timeout can never freeze the streamer's audio delivery. `normalizer.py` now logs a warning on ffprobe timeout rather than swallowing it silently.
