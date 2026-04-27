@@ -1808,7 +1808,8 @@ function jamendoSourceAvailable(st,caps){
     try{localStorage.setItem('jamendoSourceAvailable','true')}catch(_){}
     return true;
   }
-  if((caps?.startup_source_error||'').toLowerCase().includes('jamendo')) return true;
+  const startupError=(caps?.startup_source_error||'').toLowerCase();
+  if(startupError.includes('jamendo')&&!startupError.includes('not configured')) return true;
   try{return localStorage.getItem('jamendoSourceAvailable')==='true'}catch(_){return false}
 }
 function updateSourceControls(st,caps){

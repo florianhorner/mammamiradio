@@ -195,7 +195,7 @@ def test_fetch_jamendo_playlist_success(config):
     assert tracks[0].title == "Canzone Libera"
     assert tracks[0].artist == "Artista Aperto"
     assert tracks[0].spotify_id == "jamendo_42"
-    assert tracks[0].youtube_id == "jamendo_42"
+    assert tracks[0].youtube_id == ""
     assert tracks[0].direct_url == "https://cdn.example.test/jamendo-42.mp3"
 
 
@@ -415,7 +415,7 @@ def test_load_explicit_jamendo_source_success(config):
             artist="CC Band",
             duration_ms=180000,
             spotify_id="jamendo_7",
-            youtube_id="jamendo_7",
+            youtube_id="",
             direct_url="https://cdn.example.test/jamendo-7.mp3",
         )
     ]
@@ -741,7 +741,7 @@ def test_fetch_startup_restores_persisted_jamendo_source(config):
             artist="Licenza Aperta",
             duration_ms=190000,
             spotify_id="jamendo_11",
-            youtube_id="jamendo_11",
+            youtube_id="",
             direct_url="https://storage.jamendo.com/tracks/jamendo-11.mp3",
         )
     ]
@@ -770,7 +770,7 @@ def test_download_sync_uses_direct_url_for_jamendo_track(tmp_path):
         artist="Jamendo Artist",
         duration_ms=180000,
         spotify_id="jamendo_3",
-        youtube_id="jamendo_3",
+        youtube_id="",
         direct_url="https://storage.jamendo.com/tracks/jamendo-3.mp3",
     )
 
@@ -797,7 +797,7 @@ def test_download_sync_jamendo_cache_hit_skips_direct_url_fetch(tmp_path):
         artist="Jamendo Artist",
         duration_ms=180000,
         spotify_id="jamendo_9",
-        youtube_id="jamendo_9",
+        youtube_id="",
         direct_url="https://cdn.example.test/jamendo-9.mp3",
     )
     cached = cache_dir / f"{track.cache_key}.mp3"
@@ -820,7 +820,7 @@ def test_playlist_is_demo_false_for_jamendo_tracks():
                 artist="Jamendo Artist",
                 duration_ms=180000,
                 spotify_id="jamendo_77",
-                youtube_id="jamendo_77",
+                youtube_id="",
                 direct_url="https://cdn.example.test/jamendo-77.mp3",
             )
         ]
