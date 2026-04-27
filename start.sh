@@ -34,13 +34,14 @@ source .venv/bin/activate
 
 if command -v caddy > /dev/null 2>&1; then
     INTERNAL_PORT=$((PORT + 1))
+    INTERNAL_HOST="127.0.0.1"
     CADDYFILE=$(mktemp /tmp/mammamiradio-Caddyfile-XXXXXX)
     cat > "$CADDYFILE" <<EOF
 {
     admin off
 }
-:$PORT {
-    reverse_proxy localhost:$INTERNAL_PORT {
+$HOST:$PORT {
+    reverse_proxy $INTERNAL_HOST:$INTERNAL_PORT {
         flush_interval -1
         transport http {
             read_body_timeout 0
@@ -64,6 +65,11 @@ EOF
     if command -v lsof > /dev/null 2>&1; then
         STALE_INTERNAL="$(lsof -ti :"$INTERNAL_PORT" 2>/dev/null | head -1 || true)"
         if [ -n "$STALE_INTERNAL" ]; then
+            STALE_CMD="$(ps -p "$STALE_INTERNAL" -o command= 2>/dev/null || true)"
+            if ! echo "$STALE_CMD" | grep -q 'mammamiradio.main:app'; then
+                echo "ERROR: Port $INTERNAL_PORT is used by non-mammamiradio PID $STALE_INTERNAL; refusing to kill." >&2
+                exit 1
+            fi
             echo "WARNING: Port $INTERNAL_PORT held by PID $STALE_INTERNAL — reclaiming..." >&2
             kill -TERM "$STALE_INTERNAL" 2>/dev/null || true
             sleep 1
@@ -76,7 +82,7 @@ EOF
     echo "  uvicorn → :$INTERNAL_PORT  (hot-reload backend)"
 
     python -m uvicorn mammamiradio.main:app \
-        --host "$HOST" --port "$INTERNAL_PORT" \
+        --host "$INTERNAL_HOST" --port "$INTERNAL_PORT" \
         --reload --reload-dir mammamiradio \
         --reload-include "*.toml" --reload-include "*.html" &
     UVICORN_PID=$!
@@ -97,6 +103,15 @@ EOF
             --reload-include "*.toml" --reload-include "*.html"
     fi
 
+    while kill -0 "$UVICORN_PID" 2>/dev/null && kill -0 "$CADDY_PID" 2>/dev/null; do
+        sleep 1
+    done
+    if ! kill -0 "$CADDY_PID" 2>/dev/null; then
+        echo "[mammamiradio] ERROR: caddy exited unexpectedly; stopping uvicorn." >&2
+        kill "$UVICORN_PID" 2>/dev/null || true
+        wait "$UVICORN_PID" 2>/dev/null || true
+        exit 1
+    fi
     wait "$UVICORN_PID"
 else
     echo "" >&2

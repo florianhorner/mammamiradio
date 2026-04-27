@@ -80,3 +80,30 @@ def test_start_sh_no_caddy_warning_message():
     """No-caddy fallback must print an actionable install hint."""
     content = (REPO_ROOT / "start.sh").read_text()
     assert "brew install caddy" in content
+
+
+def test_start_sh_caddy_internal_host_127():
+    """Backend uvicorn must bind to 127.0.0.1, not the public $HOST."""
+    content = (REPO_ROOT / "start.sh").read_text()
+    assert "INTERNAL_HOST" in content
+    assert '127.0.0.1' in content
+    # Uvicorn uses INTERNAL_HOST, not HOST, for the backend bind
+    assert '--host "$INTERNAL_HOST"' in content
+
+
+def test_start_sh_caddy_identity_check_before_kill():
+    """INTERNAL_PORT reclaim must verify process identity before killing."""
+    content = (REPO_ROOT / "start.sh").read_text()
+    assert "mammamiradio.main:app" in content
+    # Must refuse to kill unrecognised processes
+    assert "refusing to kill" in content
+
+
+def test_start_sh_caddy_supervises_both_pids():
+    """Supervision loop must exit if caddy dies, not just wait on uvicorn."""
+    content = (REPO_ROOT / "start.sh").read_text()
+    # Poll loop checks both PIDs
+    assert 'kill -0 "$CADDY_PID"' in content
+    assert 'kill -0 "$UVICORN_PID"' in content
+    # Explicit error message when caddy exits
+    assert "caddy exited unexpectedly" in content
