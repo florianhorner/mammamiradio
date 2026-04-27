@@ -1230,7 +1230,6 @@ async def test_write_transition_loads_song_cues_from_current_track(config, state
     assert "Musical exclamation FIRST" in captured_prompts[0]
 
 
-
 @pytest.mark.asyncio
 async def test_write_transition_style_boundaries(config, state):
     """Deterministic style selection at RNG boundaries."""

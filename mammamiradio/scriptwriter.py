@@ -1211,8 +1211,7 @@ async def write_transition(
     cues_block = ""
     if song_cues:
         cue_lines = [
-            f"- [{_sanitize_prompt_data(str(c.get('type', 'note')))}] "
-            f"{_sanitize_prompt_data(str(c.get('text', '')))}"
+            f"- [{_sanitize_prompt_data(str(c.get('type', 'note')))}] {_sanitize_prompt_data(str(c.get('text', '')))}"
             for c in song_cues[:3]
             if c.get("text")
         ]
