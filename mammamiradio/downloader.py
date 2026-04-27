@@ -8,7 +8,11 @@ import logging
 import os
 import shutil
 import subprocess
+import uuid
 from pathlib import Path
+from urllib.error import URLError
+from urllib.parse import urlparse
+from urllib.request import HTTPRedirectHandler, build_opener, urlopen
 
 from mammamiradio.models import Track
 from mammamiradio.normalizer import _run_ffmpeg
@@ -305,6 +309,49 @@ def _download_ytdlp(track: Track, cache_dir: Path) -> Path:
     return out_path
 
 
+_ALLOWED_DIRECT_URL_HOST_SUFFIX = ".jamendo.com"
+
+# Opener that refuses HTTP redirects — prevents a compromised CDN from redirecting
+# a validated jamendo.com URL to an internal host (HA supervisor, AWS metadata, etc.)
+class _BlockRedirectHandler(HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # type: ignore[override]
+        raise URLError(f"redirect to {newurl!r} blocked (SSRF guard)")
+
+
+_NO_REDIRECT_OPENER = build_opener(_BlockRedirectHandler)
+
+
+def _validate_direct_url(url: str) -> None:
+    """Raise ValueError if url is not a safe https://*.jamendo.com URL (SSRF guard)."""
+    parsed = urlparse(url)
+    if parsed.scheme != "https":
+        raise ValueError(f"direct_url must use https, got scheme={parsed.scheme!r}")
+    host = parsed.netloc.split(":")[0].lower()
+    if host != "jamendo.com" and not host.endswith(_ALLOWED_DIRECT_URL_HOST_SUFFIX):
+        raise ValueError(f"direct_url host {host!r} is not *.jamendo.com")
+
+
+def _download_direct_url(url: str, out_path: Path, timeout: int = 10) -> Path:
+    """Download a direct MP3 URL into the cache atomically, with SSRF guard."""
+    _validate_direct_url(url)
+    tmp_path = out_path.parent / f"{out_path.stem}.{uuid.uuid4().hex}.tmp"
+    try:
+        with _NO_REDIRECT_OPENER.open(url, timeout=timeout) as resp:  # noqa: S310 — host validated above
+            with tmp_path.open("wb") as f:
+                shutil.copyfileobj(resp, f)
+        tmp_path.replace(out_path)
+    except (URLError, OSError, TimeoutError) as exc:
+        tmp_path.unlink(missing_ok=True)
+        raise RuntimeError(f"direct-url fetch failed: {exc}") from exc
+
+    ok, reason = validate_download(out_path)
+    if not ok:
+        logger.warning("Direct URL download failed validation for %s: %s", out_path.name, reason)
+        out_path.unlink(missing_ok=True)
+        raise RuntimeError(f"direct-url validation failed: {reason}")
+    return out_path
+
+
 def _ytdlp_enabled() -> bool:
     """Return whether yt-dlp downloads are enabled for this runtime."""
     return os.getenv("MAMMAMIRADIO_ALLOW_YTDLP", "false").lower() in _TRUTHY
@@ -335,6 +382,15 @@ def _download_sync(track: Track, cache_dir: Path, music_dir: Path) -> Path:
     existing = _resolve_cached_or_local(track, cache_dir, music_dir)
     if existing is not None:
         return existing
+
+    # Order invariant: honor cache/local/demo hits first, then direct URLs,
+    # and only fall back to yt-dlp discovery when nothing concrete exists.
+    if track.direct_url:
+        out_path = cache_dir / f"{track.cache_key}.mp3"
+        try:
+            return _download_direct_url(track.direct_url, out_path)
+        except Exception as e:
+            logger.warning("Direct URL download failed for %s: %s", track.display, e)
 
     # 3. Try yt-dlp (opt-in only, disabled by default for copyright safety)
     if _ytdlp_enabled():

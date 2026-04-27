@@ -8,12 +8,20 @@ import random
 import time
 from pathlib import Path
 from urllib.error import URLError
+from urllib.parse import parse_qs, urlencode, urlparse
 from urllib.request import urlopen
 
 from mammamiradio.config import StationConfig
 from mammamiradio.models import PlaylistSource, Track
 
 _DEMO_ASSETS_MUSIC_DIR = Path(__file__).parent / "demo_assets" / "music"
+_JAMENDO_API_BASE_URL = "https://api.jamendo.com/v3.0/tracks/"
+_JAMENDO_REQUIRED_PARAMS = {
+    "cc_commercial": "1",
+    "cc_sharealike": "0",
+    "audioformat": "mp32",
+    "include": "musicinfo",
+}
 
 logger = logging.getLogger(__name__)
 
@@ -89,6 +97,21 @@ def _charts_source(track_count: int) -> PlaylistSource:
         track_count=track_count,
         selected_at=time.time(),
         url=_APPLE_MUSIC_IT_CHARTS_URL,
+    )
+
+
+def _jamendo_request_url(tags: str) -> str:
+    return f"jamendo://playlist?{urlencode({'tags': tags})}"
+
+
+def _jamendo_source(track_count: int, *, tags: str) -> PlaylistSource:
+    return PlaylistSource(
+        kind="jamendo",
+        source_id=tags,
+        label=f"Jamendo CC Music ({tags})",
+        track_count=track_count,
+        selected_at=time.time(),
+        url=_jamendo_request_url(tags),
     )
 
 
@@ -248,6 +271,82 @@ def _fetch_current_italy_charts(limit: int = 100, max_per_artist: int = 2) -> li
     return tracks
 
 
+def _jamendo_tags(config: StationConfig, source: PlaylistSource | None = None) -> str:
+    if source is not None:
+        persisted_tags = source.source_id.strip()
+        if persisted_tags:
+            return persisted_tags
+        parsed = urlparse(source.url or "")
+        if parsed.scheme == "jamendo":
+            tags = parse_qs(parsed.query).get("tags", [""])[0].strip()
+            if tags:
+                return tags
+    return (config.playlist.jamendo_tags or "pop").strip() or "pop"
+
+
+def _build_jamendo_url(client_id: str, tags: str, limit: int = 50) -> str:
+    params = {
+        "client_id": client_id,
+        "format": "json",
+        "limit": str(limit),
+        "tags": tags,
+        **_JAMENDO_REQUIRED_PARAMS,
+    }
+    return f"{_JAMENDO_API_BASE_URL}?{urlencode(params)}"
+
+
+def _fetch_jamendo_playlist(config: StationConfig, *, tags: str | None = None, limit: int = 50) -> list[Track]:
+    """Fetch a Creative Commons playlist from Jamendo."""
+    client_id = (config.playlist.jamendo_client_id or "").strip()
+    if not client_id:
+        return []
+
+    requested_tags = (tags or config.playlist.jamendo_tags or "pop").strip() or "pop"
+    url = _build_jamendo_url(client_id, requested_tags, limit)
+    try:
+        with urlopen(url, timeout=4.0) as resp:
+            payload = json.loads(resp.read().decode("utf-8"))
+    except (URLError, TimeoutError, OSError, json.JSONDecodeError) as exc:
+        logger.warning("Jamendo playlist fetch failed: %s", exc)
+        return []
+
+    results = payload.get("results", [])
+    tracks: list[Track] = []
+    for item in results:
+        track_id = str(item.get("id", "")).strip()
+        title = str(item.get("name", "")).strip()
+        artist = str(item.get("artist_name", "")).strip()
+        # Use audiodownload only — this is the CC-licensed download URL.
+        # The `audio` field is a streaming-only URL without download rights.
+        direct_url = str(item.get("audiodownload") or "").strip()
+        if not track_id or not title or not artist or not direct_url:
+            continue
+        if not direct_url.startswith("https://"):
+            logger.warning("Jamendo track %s has non-https direct_url, skipping", track_id)
+            continue
+        try:
+            duration_ms = int(float(item.get("duration", 0) or 0) * 1000)
+        except (TypeError, ValueError):
+            duration_ms = 0
+        jamendo_id = f"jamendo_{track_id}"
+        tracks.append(
+            Track(
+                title=title,
+                artist=artist,
+                duration_ms=duration_ms or 210000,
+                spotify_id=jamendo_id,
+                youtube_id=jamendo_id,
+                direct_url=direct_url,
+                album_art=str(item.get("image", "") or ""),
+                album=str(item.get("album_name", "") or ""),
+            )
+        )
+
+    if not tracks:
+        logger.info("Jamendo returned zero playable tracks for tags '%s'", requested_tags)
+    return tracks
+
+
 def read_persisted_source(cache_dir: Path) -> PlaylistSource | None:
     """Read the last selected playlist source from cache, if present."""
     path = cache_dir / PERSISTED_SOURCE_FILENAME
@@ -304,6 +403,20 @@ def load_explicit_source(config: StationConfig, source: PlaylistSource) -> tuple
         resolved.track_count = len(tracks)
         return tracks, resolved
 
+    is_jamendo_request = source.kind == "jamendo" or (
+        source.kind == "url" and urlparse(source.url or "").scheme == "jamendo"
+    )
+    if is_jamendo_request:
+        client_id = (config.playlist.jamendo_client_id or "").strip()
+        if not client_id:
+            raise ExplicitSourceError("Jamendo source is not configured")
+        tags = _jamendo_tags(config, source)
+        tracks = _shuffle_if_needed(config, _fetch_jamendo_playlist(config, tags=tags))
+        if not tracks:
+            raise ExplicitSourceError("Jamendo playlist is temporarily unavailable")
+        resolved = _jamendo_source(len(tracks), tags=tags)
+        return tracks, resolved
+
     if source.kind in ("charts", "url"):
         # "url" kind comes from /api/playlist/load — treat as charts reload
         tracks = _load_chart_source_tracks(config)
@@ -336,6 +449,14 @@ def fetch_startup_playlist(
         if chart_tracks:
             logger.info("Using live Italian charts (%d tracks total)", len(chart_tracks))
             return chart_tracks, _charts_source(len(chart_tracks)), error
+
+    jamendo_client_id = (config.playlist.jamendo_client_id or "").strip()
+    if jamendo_client_id:
+        tags = _jamendo_tags(config)
+        jamendo_tracks = _shuffle_if_needed(config, _fetch_jamendo_playlist(config, tags=tags))
+        if jamendo_tracks:
+            logger.info("Using Jamendo CC playlist (%d tracks, tags=%s)", len(jamendo_tracks), tags)
+            return jamendo_tracks, _jamendo_source(len(jamendo_tracks), tags=tags), error
 
     local_present = any(Path("music").glob("*.mp3"))
     if local_present:
