@@ -62,6 +62,11 @@ from mammamiradio.tts import synthesize, synthesize_ad, synthesize_dialogue
 logger = logging.getLogger(__name__)
 
 
+def _probe_segment_duration(path: Path) -> float:
+    """Run ffprobe on path and return duration in seconds; 0.0 if probe fails."""
+    return _ffprobe_duration_sec(path) or 0.0
+
+
 def _banter_title(script: list[dict] | None, *, canned: bool) -> str:
     """Produce a user-facing label for a BANTER segment.
 
@@ -413,7 +418,7 @@ async def prewarm_first_segment(
             },
             ephemeral=(norm_path != norm_cached),
         )
-        segment.duration_sec = _ffprobe_duration_sec(norm_path) or 0.0
+        segment.duration_sec = await loop.run_in_executor(None, _probe_segment_duration, norm_path)
         await queue.put(segment)
         state.after_music(track)
         _set_last_music_file(norm_path)
@@ -1545,7 +1550,7 @@ async def run_producer(
             # Do NOT advance state counters — failed segment doesn't count
 
         if segment:
-            segment.duration_sec = _ffprobe_duration_sec(segment.path) or 0.0
+            segment.duration_sec = await asyncio.to_thread(_probe_segment_duration, segment.path)
             if generation_revision != state.playlist_revision:
                 logger.info("Discarding stale %s segment after playlist source switch", seg_type.value)
                 segment.path.unlink(missing_ok=True)
