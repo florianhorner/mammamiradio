@@ -1143,6 +1143,217 @@ async def test_write_transition_strips_markdown_fences(config, state):
     assert text == "Che bel pezzo..."
 
 
+@pytest.mark.asyncio
+async def test_write_transition_exclaim_style_selected_when_cues_present(config, state):
+    """Exclaim style fires when r < 0.10 AND song_cues is non-empty."""
+    state.played_tracks = [Track(title="Volare", artist="Modugno", duration_ms=180000, spotify_id="v1")]
+    cues = [{"type": "anthem", "text": "starts slow then builds to a crescendo"}]
+    captured_prompts = []
+
+    async def capture_prompt(*args, **kwargs):
+        captured_prompts.append(kwargs.get("prompt", args[0] if args else ""))
+        return {"text": "—e dai, basta così— e adesso parliamo."}
+
+    with (
+        patch("mammamiradio.scriptwriter.random.random", return_value=0.05),
+        patch("mammamiradio.scriptwriter._generate_json_response", capture_prompt),
+    ):
+        host, text = await write_transition(state, config, song_cues=cues)
+
+    assert isinstance(host, HostPersonality)
+    assert text == "—e dai, basta così— e adesso parliamo."
+    assert captured_prompts and "Musical exclamation FIRST" in captured_prompts[0]
+
+
+@pytest.mark.asyncio
+async def test_write_transition_exclaim_suppressed_when_no_cues(config, state):
+    """Empty list suppresses cue loading; exclaim style never fires without cues."""
+    state.played_tracks = [
+        Track(
+            title="Volare",
+            artist="Modugno",
+            duration_ms=180000,
+            spotify_id="v1",
+            youtube_id="yt-volare",
+        )
+    ]
+    captured_prompts = []
+
+    async def capture_prompt(*args, **kwargs):
+        captured_prompts.append(kwargs.get("prompt", args[0] if args else ""))
+        return {"text": "Bellissima, e adesso..."}
+
+    with (
+        patch("mammamiradio.scriptwriter.random.random", return_value=0.05),
+        patch("mammamiradio.scriptwriter._generate_json_response", capture_prompt),
+    ):
+        host, text = await write_transition(state, config, song_cues=[])
+
+    assert isinstance(host, HostPersonality)
+    assert text == "Bellissima, e adesso..."
+    assert captured_prompts, "_generate_json_response was never called — patch path may be wrong"
+    assert "Musical exclamation FIRST" not in captured_prompts[0]
+
+
+@pytest.mark.asyncio
+async def test_write_transition_loads_song_cues_from_current_track(config, state):
+    """Default transition path should auto-load per-track cues for live callers."""
+    state.played_tracks = [
+        Track(
+            title="Volare",
+            artist="Modugno",
+            duration_ms=180000,
+            spotify_id="v1",
+            youtube_id="yt-volare",
+        )
+    ]
+    captured_prompts = []
+    fake_cues = [{"type": "anthem", "text": "crowd favourite, all-hands sing-along"}]
+
+    async def capture_prompt(*args, **kwargs):
+        captured_prompts.append(kwargs.get("prompt", args[0] if args else ""))
+        return {"text": "—e dai, basta così— e adesso parliamo."}
+
+    with (
+        patch("mammamiradio.scriptwriter.random.random", return_value=0.05),
+        patch("mammamiradio.song_cues.get_cues", new=AsyncMock(return_value=fake_cues)) as mock_get_cues,
+        patch("mammamiradio.scriptwriter._generate_json_response", capture_prompt),
+    ):
+        host, text = await write_transition(state, config)
+
+    assert isinstance(host, HostPersonality)
+    assert text == "—e dai, basta così— e adesso parliamo."
+    mock_get_cues.assert_awaited_once()
+    assert captured_prompts
+    assert "SONG CHARACTER:" in captured_prompts[0]
+    assert "crowd favourite" in captured_prompts[0]
+    assert "Musical exclamation FIRST" in captured_prompts[0]
+
+
+
+@pytest.mark.asyncio
+async def test_write_transition_style_boundaries(config, state):
+    """Deterministic style selection at RNG boundaries."""
+    state.played_tracks = [Track(title="L'Estate", artist="Vivaldi", duration_ms=180000, spotify_id="v1")]
+    cues = [{"type": "reaction", "text": "always energetic"}]
+    captured_prompts = []
+
+    async def capture_prompt(*args, **kwargs):
+        captured_prompts.append(kwargs.get("prompt", args[0] if args else ""))
+        return {"text": "Allora..."}
+
+    captured_prompts.clear()
+    with (
+        patch("mammamiradio.scriptwriter.random.random", return_value=0.05),
+        patch("mammamiradio.scriptwriter._generate_json_response", capture_prompt),
+    ):
+        await write_transition(state, config, song_cues=cues)
+    assert captured_prompts and "Musical exclamation FIRST" in captured_prompts[0]
+
+    captured_prompts.clear()
+    with (
+        patch("mammamiradio.scriptwriter.random.random", return_value=0.15),
+        patch("mammamiradio.scriptwriter._generate_json_response", capture_prompt),
+    ):
+        await write_transition(state, config, song_cues=cues)
+    assert captured_prompts
+    assert "Musical exclamation FIRST" not in captured_prompts[0]
+    assert "still INSIDE the song's feeling" in captured_prompts[0]
+
+    captured_prompts.clear()
+    with (
+        patch("mammamiradio.scriptwriter.random.random", return_value=0.50),
+        patch("mammamiradio.scriptwriter._generate_json_response", capture_prompt),
+    ):
+        await write_transition(state, config, song_cues=cues)
+    assert captured_prompts
+    assert "React to the song naturally" in captured_prompts[0]
+    assert "Musical exclamation FIRST" not in captured_prompts[0]
+    assert "still INSIDE the song's feeling" not in captured_prompts[0]
+
+
+@pytest.mark.asyncio
+async def test_write_transition_exclaim_echo_boundary(config, state):
+    """At exactly r=0.10 with cues present, style must be echo (not exclaim)."""
+    state.played_tracks = [Track(title="L'Estate", artist="Vivaldi", duration_ms=180000, spotify_id="v1")]
+    cues = [{"type": "reaction", "text": "boundary test cue"}]
+    captured_prompts = []
+
+    async def capture_prompt(*args, **kwargs):
+        captured_prompts.append(kwargs.get("prompt", args[0] if args else ""))
+        return {"text": "Allora..."}
+
+    with (
+        patch("mammamiradio.scriptwriter.random.random", return_value=0.10),
+        patch("mammamiradio.scriptwriter._generate_json_response", capture_prompt),
+    ):
+        await write_transition(state, config, song_cues=cues)
+
+    assert captured_prompts, "_generate_json_response was never called — patch path may be wrong"
+    # r=0.10 is NOT < 0.10, so exclaim must not fire; r < 0.30 → echo
+    assert "Musical exclamation FIRST" not in captured_prompts[0]
+    assert "still INSIDE the song's feeling" in captured_prompts[0]
+
+
+@pytest.mark.asyncio
+async def test_write_transition_cues_in_prompt(config, state):
+    """SONG CHARACTER block appears in LLM prompt when song_cues is non-empty."""
+    state.played_tracks = [Track(title="Azzurro", artist="Celentano", duration_ms=200000, spotify_id="a1")]
+    cues = [{"type": "reaction", "text": "crowd favourite, sing-along moment"}]
+    captured_prompts = []
+
+    async def capture_prompt(*args, **kwargs):
+        captured_prompts.append(kwargs.get("prompt", args[0] if args else ""))
+        return {"text": "—e dai— e adesso!"}
+
+    with patch("mammamiradio.scriptwriter._generate_json_response", capture_prompt):
+        await write_transition(state, config, song_cues=cues)
+
+    assert captured_prompts
+    assert "SONG CHARACTER:" in captured_prompts[0]
+    assert "crowd favourite" in captured_prompts[0]
+
+
+@pytest.mark.asyncio
+async def test_write_transition_cues_sanitized(config, state):
+    """Cue text is passed through _sanitize_prompt_data (max_len=80) before prompt injection."""
+    state.played_tracks = [Track(title="Test", artist="Artist", duration_ms=120000, spotify_id="t1")]
+    # Cue text > 80 chars should be truncated; <>{} chars should be stripped
+    long_cue = [{"type": "opera<tor>", "text": "x" * 100 + "{injected}"}]
+    captured_prompts = []
+
+    async def capture_prompt(*args, **kwargs):
+        captured_prompts.append(kwargs.get("prompt", args[0] if args else ""))
+        return {"text": "Allora..."}
+
+    with patch("mammamiradio.scriptwriter._generate_json_response", capture_prompt):
+        await write_transition(state, config, song_cues=long_cue)
+
+    assert captured_prompts
+    assert "SONG CHARACTER:" in captured_prompts[0]
+    # _sanitize_prompt_data strips <>{} and truncates to 80 chars + "..."
+    assert "{injected}" not in captured_prompts[0]  # {} stripped
+    assert "x" * 101 not in captured_prompts[0]  # truncated to ≤ 83 chars (80 + "...")
+    assert "x" * 80 in captured_prompts[0]  # truncated form still present
+
+
+@pytest.mark.asyncio
+async def test_write_transition_default_song_cues_is_none(config, state):
+    """write_transition() called without song_cues kwarg works without error."""
+    state.played_tracks = [Track(title="Sole", artist="Artist", duration_ms=120000, spotify_id="s1")]
+    response_json = json.dumps({"text": "E adesso..."})
+    mock_cls = _mock_anthropic_response(response_json)
+
+    with (
+        patch("mammamiradio.scriptwriter._anthropic_client", None),
+        patch("mammamiradio.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
+    ):
+        host, text = await write_transition(state, config)
+
+    assert isinstance(host, HostPersonality)
+    assert isinstance(text, str)
+
+
 # --- _personality_modifier contrast tests ---
 
 

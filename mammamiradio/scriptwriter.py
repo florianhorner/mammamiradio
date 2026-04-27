@@ -86,6 +86,21 @@ _REACT_STYLE_INSTRUCTION = (
     "STYLE: React to the song naturally — love it, hate it, or have a conspiracy theory about it. "
     "Then pivot to what's next. Generic 'bella canzone' is banned."
 )
+_EXCLAIM_STYLE_INSTRUCTION = (
+    "STYLE: You are still INSIDE the song as it fades. Open with a short Italian musical "
+    "exclamation that mirrors the track's energy — something spoken-natural like "
+    "'—e dai, basta così—', '—ale ale—', or '—eh, bellissima—'. "
+    "Then pivot to what's next. Musical exclamation FIRST (max 4 words), spoken pivot SECOND. "
+    "Do NOT hum, sing phonemes, or use non-word sounds — this is spoken radio, not singing. "
+    "Example upbeat: '—e dai, basta così— e adesso parliamo!' "
+    "Example melancholic: '—eh, bellissima— adesso vi racconto.' "
+    "Example energetic: '—ale ale— e una pausa, dai.'"
+)
+_STYLE_INSTRUCTIONS: dict[str, str] = {
+    "exclaim": _EXCLAIM_STYLE_INSTRUCTION,
+    "echo": _ECHO_STYLE_INSTRUCTION,
+    "react": _REACT_STYLE_INSTRUCTION,
+}
 
 
 @dataclass
@@ -383,6 +398,30 @@ def _sanitize_prompt_data(text: str, max_len: int = 80) -> str:
     if len(text) > max_len:
         text = text[:max_len] + "..."
     return text
+
+
+async def _load_song_cues_for_current_track(
+    state: StationState,
+    config: StationConfig,
+    *,
+    limit: int,
+) -> list[dict]:
+    """Load structured cues for the most recently played track, if any."""
+    if not state.played_tracks:
+        return []
+
+    last_track = list(state.played_tracks)[-1]
+    if not last_track.youtube_id:
+        return []
+
+    try:
+        from mammamiradio.song_cues import get_cues
+
+        db_path = config.cache_dir / "mammamiradio.db"
+        return await get_cues(db_path, last_track.youtube_id, limit=limit)
+    except Exception:
+        logger.warning("Failed to load song cues for %s", last_track.youtube_id, exc_info=True)
+        return []
 
 
 _WRONG_STATION_PATTERN = re.compile(
@@ -703,39 +742,31 @@ async def write_banter(
 
     # Track memory — per-track song cues + legacy operator rules
     track_rules_block = ""
-    if state.played_tracks:
+    cues = await _load_song_cues_for_current_track(state, config, limit=5)
+    if cues and state.played_tracks:
         last_track = list(state.played_tracks)[-1]
-        yt_id = last_track.youtube_id
-        if yt_id:
-            try:
-                from mammamiradio.song_cues import get_cues
+        cue_lines = []
+        for c in cues:
+            label = c["type"]
+            text = _sanitize_prompt_data(c["text"])
+            session = c.get("session")
+            session_note = f" (session {session})" if session else ""
+            cue_lines.append(f"- [{label}] {text}{session_note}")
+        cues_text = "\n".join(cue_lines)
+        track_rules_block = (
+            f"\nTRACK MEMORY for {_sanitize_prompt_data(last_track.display)}:\n"
+            f"{cues_text}\n"
+            "Weave at least one of these into the banter naturally.\n"
+        )
+        # Bump usage so last_used_at advances and ordering stays meaningful
+        try:
+            from mammamiradio.song_cues import bump_usage
 
-                db_path = config.cache_dir / "mammamiradio.db"
-                cues = await get_cues(db_path, yt_id, limit=5)
-                if cues:
-                    cue_lines = []
-                    for c in cues:
-                        label = c["type"]
-                        text = _sanitize_prompt_data(c["text"])
-                        session = c.get("session")
-                        session_note = f" (session {session})" if session else ""
-                        cue_lines.append(f"- [{label}] {text}{session_note}")
-                    cues_text = "\n".join(cue_lines)
-                    track_rules_block = (
-                        f"\nTRACK MEMORY for {_sanitize_prompt_data(last_track.display)}:\n"
-                        f"{cues_text}\n"
-                        "Weave at least one of these into the banter naturally.\n"
-                    )
-                    # Bump usage so last_used_at advances and ordering stays meaningful
-                    try:
-                        from mammamiradio.song_cues import bump_usage
-
-                        for c in cues:
-                            await bump_usage(db_path, yt_id, c["type"])
-                    except Exception:
-                        logger.warning("Failed to bump song cue usage", exc_info=True)
-            except Exception:
-                logger.warning("Failed to load song cues for banter", exc_info=True)
+            db_path = config.cache_dir / "mammamiradio.db"
+            for c in cues:
+                await bump_usage(db_path, last_track.youtube_id, c["type"])
+        except Exception:
+            logger.warning("Failed to bump song cue usage", exc_info=True)
 
     host_names = {h.name: h for h in config.hosts}
     host_names_ci = {h.name.lower(): h for h in config.hosts}
@@ -1137,30 +1168,60 @@ async def write_transition(
     config: StationConfig,
     next_segment: str = "banter",
     style: str | None = None,
+    song_cues: list[dict] | None = None,
 ) -> tuple[HostPersonality, str]:
     """Generate a short host transition line to talk over the end of a song.
 
     Returns (host, text). The text is meant to be overlaid on the fading music.
 
     ``style`` can be:
-    - ``None``  — auto-select: ~20% chance of "echo" style, otherwise standard react
+    - ``None``  — auto-select: exclaim 10% / echo 10% / react 80% (when song_cues non-empty);
+      when song_cues is absent the effective split is echo 20% / react 80%
+    - ``"exclaim"`` — open with a short Italian musical exclamation matching the song energy, then pivot
+      (only when ``song_cues`` are available)
     - ``"echo"`` — finish a phrase as if still inside the song's feeling, then pivot naturally
     - ``"react"`` — explicitly use the default react-to-the-song style
+
+    Omit ``song_cues`` or pass ``None`` to auto-load cues for the current track.
+    Pass ``[]`` explicitly to suppress cue loading.
     """
     if not has_script_llm(config):
         host = random.choice(config.hosts)
         fallback = {"banter": "Allora...", "ad": "E adesso...", "news_flash": "Attenzione..."}
         return (host, fallback.get(next_segment, "Allora..."))
 
-    # Auto-select echo style ~20% of the time when caller doesn't specify
+    if song_cues is None:
+        song_cues = await _load_song_cues_for_current_track(state, config, limit=3)
+
+    # Auto-select style: exclaim 10% / echo 10% / react 80% (cues); echo 20% / react 80% (no cues)
     if style is None:
-        style = "echo" if random.random() < 0.2 else "react"
+        r = random.random()
+        if song_cues and r < 0.10:
+            style = "exclaim"
+        elif r < 0.20:
+            style = "echo"
+        else:
+            style = "react"
 
     current = _sanitize_prompt_data(state.played_tracks[-1].display) if state.played_tracks else "the opening"
     host = random.choice(config.hosts)
     recent_texts = list(state.recent_transition_texts)[-4:]
     recent_openers = [_transition_stem(text) for text in recent_texts if text]
     banned_openers = ", ".join(dict.fromkeys(recent_openers)) if recent_openers else "none"
+    cues_block = ""
+    if song_cues:
+        cue_lines = [
+            f"- [{_sanitize_prompt_data(str(c.get('type', 'note')))}] "
+            f"{_sanitize_prompt_data(str(c.get('text', '')))}"
+            for c in song_cues[:3]
+            if c.get("text")
+        ]
+        if cue_lines:
+            cues_block = "\nSONG CHARACTER:\n" + "\n".join(cue_lines) + "\n"
+
+    # If exclaim was selected (auto or explicit) but no text cues survived the filter, fall back to react.
+    if style == "exclaim" and not cues_block:
+        style = "react"
 
     segment_hints = {
         "banter": "You're about to chat with your co-host. Tease what's coming or react to the song.",
@@ -1172,7 +1233,7 @@ async def write_transition(
     now = datetime.datetime.now()
     time_hint = f"It's {now.strftime('%H:%M')}, {'weekend' if now.weekday() >= 5 else 'weekday'}."
 
-    style_instruction = _ECHO_STYLE_INSTRUCTION if style == "echo" else _REACT_STYLE_INSTRUCTION
+    style_instruction = _STYLE_INSTRUCTIONS.get(style, _REACT_STYLE_INSTRUCTION)
 
     prompt = f"""Write a SHORT transition line for {host.name} to say OVER the end of the current song.
 This plays while the music is fading out — the classic radio DJ move.
@@ -1180,6 +1241,7 @@ This plays while the music is fading out — the classic radio DJ move.
 Just finished playing: {current}
 What's next: {hint}
 Time context: {time_hint}
+{cues_block}
 
 RULES:
 - ONE sentence only. Max 15 words. This is a VOICEOVER, not a monologue.
