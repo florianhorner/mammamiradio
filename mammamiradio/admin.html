@@ -1447,7 +1447,7 @@ function updateStopState(stopped){
 
 // ── Flag Track — operator-only action, prompt() dialog is acceptable here ──
 async function flagCurrentTrack(el) {
-  const ytId = _st?.now?.metadata?.youtube_id;
+  const ytId = _st?.now_streaming?.metadata?.youtube_id;
   if (!ytId) { toast('No track playing'); return; }
   const rule = prompt('Describe this track reaction (e.g. "cringe pop classic, Aggu vibes"):');
   if (!rule) return;
