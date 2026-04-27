@@ -38,18 +38,25 @@ security = HTTPBasic(auto_error=False)
 
 _PKG_DIR = Path(__file__).parent
 _STATIC_DIR = _PKG_DIR / "static"
+_ASSET_VERSION = importlib.metadata.version("mammamiradio")
 
 # Jinja2 templates for brand-engine listener page (PR-C). Admin/regia/live still use
 # string-replace via _inject_ingress_prefix; only listener migrates to Jinja for now.
 _TEMPLATES = Jinja2Templates(directory=str(_PKG_DIR))
 
+
+def _bust_static_cache(html: str) -> str:
+    """Append ?v=VERSION to /static/*.css and /static/*.js URLs to bust browser cache on upgrade."""
+    return _re.sub(r'(/static/[^"?]+\.(css|js))"', rf'\1?v={_ASSET_VERSION}"', html)
+
+
 # Admin/regia/live pages still loaded as raw strings + post-render prefix injection.
 # Listener no longer needs _LISTENER_HTML — it's rendered from template per-request.
-_LISTENER_HTML = _PKG_DIR.joinpath("listener.html").read_text()  # kept for tests + fallback
+_LISTENER_HTML = _bust_static_cache(_PKG_DIR.joinpath("listener.html").read_text())  # kept for tests + fallback
 
-_ADMIN_HTML = _PKG_DIR.joinpath("admin.html").read_text()
-_REGIA_HTML = _PKG_DIR.joinpath("regia.html").read_text()
-_LIVE_HTML = _PKG_DIR.joinpath("live.html").read_text()
+_ADMIN_HTML = _bust_static_cache(_PKG_DIR.joinpath("admin.html").read_text())
+_REGIA_HTML = _bust_static_cache(_PKG_DIR.joinpath("regia.html").read_text())
+_LIVE_HTML = _bust_static_cache(_PKG_DIR.joinpath("live.html").read_text())
 
 _INGRESS_PREFIX_RE = _re.compile(r"^/[a-zA-Z0-9/_-]+$")
 
@@ -985,6 +992,7 @@ async def listener_home(request: Request):
             "brand": config.brand,
             "ingress_prefix": _sanitize_ingress_prefix(prefix),
             "csrf_token": _get_csrf_token(request.app),
+            "asset_version": _ASSET_VERSION,
         },
     )
 
@@ -1035,6 +1043,7 @@ async def listener(request: Request):
             "brand": config.brand,
             "ingress_prefix": _sanitize_ingress_prefix(prefix),
             "csrf_token": _get_csrf_token(request.app),
+            "asset_version": _ASSET_VERSION,
         },
     )
 

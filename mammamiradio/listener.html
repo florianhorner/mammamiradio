@@ -18,9 +18,9 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,600;0,700;1,400;1,600;1,700&family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="{{ ingress_prefix }}/static/tokens.css">
-<link rel="stylesheet" href="{{ ingress_prefix }}/static/base.css">
-<link rel="stylesheet" href="{{ ingress_prefix }}/static/listener.css">
+<link rel="stylesheet" href="{{ ingress_prefix }}/static/tokens.css?v={{ asset_version }}">
+<link rel="stylesheet" href="{{ ingress_prefix }}/static/base.css?v={{ asset_version }}">
+<link rel="stylesheet" href="{{ ingress_prefix }}/static/listener.css?v={{ asset_version }}">
 <style>
   /* Brand theme tokens override Volare Refined defaults per [brand.theme] (PR-A guardrails). */
   :root {
@@ -32,8 +32,8 @@
     --brand-mono-font: '{{ brand.theme.mono_font }}', ui-monospace, monospace;
   }
 </style>
-<script src="{{ ingress_prefix }}/static/waveform.js" defer></script>
-<script src="{{ ingress_prefix }}/static/listener.js" defer></script>
+<script src="{{ ingress_prefix }}/static/waveform.js?v={{ asset_version }}" defer></script>
+<script src="{{ ingress_prefix }}/static/listener.js?v={{ asset_version }}" defer></script>
 </head>
 <body data-state="warming">
 
