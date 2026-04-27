@@ -48,6 +48,27 @@ Or use Docker (no Python/FFmpeg setup needed):
 docker compose up
 ```
 
+### Stream-alive reload (optional)
+
+By default, `./start.sh` runs uvicorn with `--reload`. Every file save restarts the
+process and drops active stream connections.
+
+Install [caddy](https://caddyserver.com/docs/install) to keep streams alive across
+reloads — caddy holds the client connection and reconnects to uvicorn transparently:
+
+```bash
+brew install caddy   # macOS
+# or: apt install caddy   # Ubuntu/Debian
+```
+
+With caddy installed, `./start.sh` automatically uses it:
+- caddy listens on `$PORT` (the address you connect to, default `:8000`)
+- uvicorn listens on `$PORT+1` (internal only, proxied by caddy)
+- Active `/stream` connections survive `--reload` restarts of up to ~30 seconds
+
+**Caddy is optional.** Without it, `./start.sh` falls back to bare uvicorn with a
+warning. The audio stream will still work — it just drops on every file save.
+
 If you only need the web app and background tasks:
 
 ```bash
