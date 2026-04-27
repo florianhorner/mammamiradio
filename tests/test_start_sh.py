@@ -86,7 +86,7 @@ def test_start_sh_caddy_internal_host_127():
     """Backend uvicorn must bind to 127.0.0.1, not the public $HOST."""
     content = (REPO_ROOT / "start.sh").read_text()
     assert "INTERNAL_HOST" in content
-    assert '127.0.0.1' in content
+    assert "127.0.0.1" in content
     # Uvicorn uses INTERNAL_HOST, not HOST, for the backend bind
     assert '--host "$INTERNAL_HOST"' in content
 
