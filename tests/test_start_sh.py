@@ -39,3 +39,44 @@ def test_start_sh_launches_uvicorn():
     assert "uvicorn" in content
     assert "--reload" in content
     assert "mammamiradio.main:app" in content
+
+
+def test_start_sh_caddy_detection():
+    """start.sh checks for caddy on PATH."""
+    content = (REPO_ROOT / "start.sh").read_text()
+    assert "command -v caddy" in content
+
+
+def test_start_sh_caddy_uses_internal_port():
+    """In caddy mode, uvicorn binds to PORT+1."""
+    content = (REPO_ROOT / "start.sh").read_text()
+    assert "INTERNAL_PORT" in content
+    # Arithmetic expansion for PORT+1
+    assert "PORT + 1" in content or "PORT+1" in content
+
+
+def test_start_sh_caddy_has_flush_interval():
+    """Caddyfile template must include flush_interval -1 for audio streaming."""
+    content = (REPO_ROOT / "start.sh").read_text()
+    assert "flush_interval -1" in content
+
+
+def test_start_sh_caddy_no_health_uri():
+    """Caddyfile must NOT include health_uri (healthz/readyz return 503 in normal operation)."""
+    content = (REPO_ROOT / "start.sh").read_text()
+    assert "health_uri" not in content
+    assert "health_path" not in content
+
+
+def test_start_sh_caddy_trap_cleanup():
+    """Caddy mode must define a cleanup trap and null-guard the PIDs."""
+    content = (REPO_ROOT / "start.sh").read_text()
+    assert "trap cleanup" in content or 'trap "cleanup"' in content or "trap 'cleanup'" in content
+    assert "CADDY_PID" in content
+    assert "UVICORN_PID" in content
+
+
+def test_start_sh_no_caddy_warning_message():
+    """No-caddy fallback must print an actionable install hint."""
+    content = (REPO_ROOT / "start.sh").read_text()
+    assert "brew install caddy" in content
