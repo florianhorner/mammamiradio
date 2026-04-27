@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+from io import BytesIO
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -16,6 +18,14 @@ from mammamiradio.playlist import (
     load_explicit_source,
     read_persisted_source,
 )
+
+
+class _BytesResponse(BytesIO):
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
 
 
 @pytest.fixture()
@@ -151,6 +161,61 @@ def test_fetch_current_italy_charts_invalid_json():
         tracks = _fetch_current_italy_charts()
 
     assert tracks == []
+
+
+def test_fetch_jamendo_playlist_success(config):
+    from mammamiradio.playlist import _fetch_jamendo_playlist
+
+    config.playlist.jamendo_client_id = "Jamendo123"
+    config.playlist.jamendo_tags = "pop"
+    payload = {
+        "results": [
+            {
+                "id": "42",
+                "name": "Canzone Libera",
+                "artist_name": "Artista Aperto",
+                "duration": 183,
+                "audiodownload": "https://cdn.example.test/jamendo-42.mp3",
+                "album_name": "Estate",
+                "image": "https://cdn.example.test/jamendo-42.jpg",
+            }
+        ]
+    }
+
+    with patch("mammamiradio.playlist.urlopen") as mock_urlopen:
+        mock_response = MagicMock()
+        mock_response.read.return_value = json.dumps(payload).encode("utf-8")
+        mock_response.__enter__ = lambda s: s
+        mock_response.__exit__ = MagicMock(return_value=False)
+        mock_urlopen.return_value = mock_response
+
+        tracks = _fetch_jamendo_playlist(config)
+
+    assert len(tracks) == 1
+    assert tracks[0].title == "Canzone Libera"
+    assert tracks[0].artist == "Artista Aperto"
+    assert tracks[0].spotify_id == "jamendo_42"
+    assert tracks[0].youtube_id == ""
+    assert tracks[0].direct_url == "https://cdn.example.test/jamendo-42.mp3"
+
+
+def test_fetch_jamendo_playlist_url_includes_required_cc_params(config):
+    from mammamiradio.playlist import _fetch_jamendo_playlist
+
+    config.playlist.jamendo_client_id = "Jamendo123"
+    config.playlist.jamendo_tags = "indie pop"
+    with patch("mammamiradio.playlist.urlopen") as mock_urlopen:
+        mock_response = MagicMock()
+        mock_response.read.return_value = json.dumps({"results": []}).encode("utf-8")
+        mock_response.__enter__ = lambda s: s
+        mock_response.__exit__ = MagicMock(return_value=False)
+        mock_urlopen.return_value = mock_response
+
+        _fetch_jamendo_playlist(config)
+
+    called_url = mock_urlopen.call_args.args[0]
+    assert "cc_commercial=1" in called_url
+    assert "cc_sharealike=0" in called_url
 
 
 def test_fetch_current_italy_charts_filters_non_music_entries():
@@ -339,6 +404,32 @@ def test_load_explicit_charts_source_success(config):
     assert tracks[0].title == "Chart Three"
     assert source.kind == "charts"
     assert source.label == "Current Italian charts"
+
+
+def test_load_explicit_jamendo_source_success(config):
+    config.playlist.jamendo_client_id = "Jamendo123"
+    config.playlist.shuffle = False
+    jamendo_tracks = [
+        Track(
+            title="Libera",
+            artist="CC Band",
+            duration_ms=180000,
+            spotify_id="jamendo_7",
+            youtube_id="",
+            direct_url="https://cdn.example.test/jamendo-7.mp3",
+        )
+    ]
+
+    with patch("mammamiradio.playlist._fetch_jamendo_playlist", return_value=jamendo_tracks):
+        tracks, source = load_explicit_source(
+            config,
+            PlaylistSource(kind="jamendo", source_id="pop", label="Jamendo CC Music"),
+        )
+
+    assert tracks == jamendo_tracks
+    assert source.kind == "jamendo"
+    assert source.source_id == "pop"
+    assert source.url == "jamendo://playlist?tags=pop"
 
 
 def test_load_explicit_charts_source_raises_when_unavailable(config):
@@ -611,3 +702,157 @@ def test_fetch_startup_falls_back_to_demo_tracks_when_demo_assets_empty(config, 
     for t in tracks:
         assert t.title in demo_titles
     assert source.kind == "demo"
+
+
+def test_fetch_startup_without_jamendo_client_id_skips_jamendo_and_returns_demo(config):
+    config.allow_ytdlp = False
+    config.playlist.jamendo_client_id = ""
+
+    with (
+        patch("mammamiradio.playlist._fetch_jamendo_playlist", side_effect=AssertionError("jamendo should not run")),
+        patch("mammamiradio.playlist._load_demo_asset_tracks", return_value=[]),
+    ):
+        tracks, source, _err = fetch_startup_playlist(config)
+
+    assert len(tracks) == len(DEMO_TRACKS)
+    assert source.kind == "demo"
+
+
+def test_fetch_startup_jamendo_zero_tracks_falls_back_to_demo(config):
+    config.allow_ytdlp = False
+    config.playlist.jamendo_client_id = "Jamendo123"
+
+    with (
+        patch("mammamiradio.playlist._fetch_jamendo_playlist", return_value=[]),
+        patch("mammamiradio.playlist._load_demo_asset_tracks", return_value=[]),
+    ):
+        tracks, source, _err = fetch_startup_playlist(config)
+
+    assert len(tracks) == len(DEMO_TRACKS)
+    assert source.kind == "demo"
+
+
+def test_fetch_startup_restores_persisted_jamendo_source(config):
+    config.playlist.jamendo_client_id = "Jamendo123"
+    config.playlist.shuffle = False
+    jamendo_tracks = [
+        Track(
+            title="Riparte",
+            artist="Licenza Aperta",
+            duration_ms=190000,
+            spotify_id="jamendo_11",
+            youtube_id="",
+            direct_url="https://storage.jamendo.com/tracks/jamendo-11.mp3",
+        )
+    ]
+
+    with patch("mammamiradio.playlist._fetch_jamendo_playlist", return_value=jamendo_tracks):
+        tracks, source, error = fetch_startup_playlist(
+            config,
+            PlaylistSource(kind="jamendo", source_id="italian pop", label="Jamendo CC Music"),
+        )
+
+    assert error == ""
+    assert tracks == jamendo_tracks
+    assert source.kind == "jamendo"
+    assert source.source_id == "italian pop"
+
+
+def test_download_sync_uses_direct_url_for_jamendo_track(tmp_path):
+    from mammamiradio.downloader import _download_sync
+
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+    music_dir = tmp_path / "music"
+    music_dir.mkdir()
+    track = Track(
+        title="Diretta",
+        artist="Jamendo Artist",
+        duration_ms=180000,
+        spotify_id="jamendo_3",
+        youtube_id="",
+        direct_url="https://storage.jamendo.com/tracks/jamendo-3.mp3",
+    )
+
+    with (
+        patch("mammamiradio.downloader._NO_REDIRECT_OPENER") as mock_opener,
+        patch("mammamiradio.downloader.validate_download", return_value=(True, "ok")),
+    ):
+        mock_opener.open.return_value = _BytesResponse(b"jamendo mp3 bytes")
+        result = _download_sync(track, cache_dir, music_dir)
+
+    assert result == cache_dir / f"{track.cache_key}.mp3"
+    assert result.read_bytes() == b"jamendo mp3 bytes"
+
+
+def test_download_sync_jamendo_cache_hit_skips_direct_url_fetch(tmp_path):
+    from mammamiradio.downloader import _download_sync
+
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+    music_dir = tmp_path / "music"
+    music_dir.mkdir()
+    track = Track(
+        title="Gia Scaricata",
+        artist="Jamendo Artist",
+        duration_ms=180000,
+        spotify_id="jamendo_9",
+        youtube_id="",
+        direct_url="https://cdn.example.test/jamendo-9.mp3",
+    )
+    cached = cache_dir / f"{track.cache_key}.mp3"
+    cached.write_text("cached audio")
+
+    with patch("mammamiradio.downloader._download_direct_url") as mock_direct:
+        result = _download_sync(track, cache_dir, music_dir)
+
+    assert result == cached
+    mock_direct.assert_not_called()
+
+
+def test_download_sync_direct_url_failure_falls_back_to_silence(tmp_path):
+    from mammamiradio.downloader import _download_sync
+
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+    music_dir = tmp_path / "music"
+    music_dir.mkdir()
+    track = Track(
+        title="Fallback Test",
+        artist="Jamendo Artist",
+        duration_ms=180000,
+        spotify_id="jamendo_fail",
+        youtube_id="",
+        direct_url="https://storage.jamendo.com/fail.mp3",
+    )
+
+    with (
+        patch(
+            "mammamiradio.downloader._download_direct_url",
+            side_effect=RuntimeError("network error"),
+        ),
+        patch("mammamiradio.downloader._ytdlp_enabled", return_value=False),
+    ):
+        result = _download_sync(track, cache_dir, music_dir)
+
+    assert result.name.startswith("_silence_")
+    assert result.exists()
+
+
+def test_playlist_is_demo_false_for_jamendo_tracks():
+    from mammamiradio.setup_status import _playlist_is_demo
+
+    state = SimpleNamespace(
+        playlist=[
+            Track(
+                title="Creative Commons Hit",
+                artist="Jamendo Artist",
+                duration_ms=180000,
+                spotify_id="jamendo_77",
+                youtube_id="",
+                direct_url="https://cdn.example.test/jamendo-77.mp3",
+            )
+        ]
+    )
+
+    assert _playlist_is_demo(state) is False

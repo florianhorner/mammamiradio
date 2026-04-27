@@ -1261,6 +1261,10 @@ body[data-stopped="true"] .a-station-card .dot.on { animation-play-state: paused
       <div class="card-label">Richieste <span id="lrMeta" style="float:right;font-weight:400;color:var(--muted)"></span></div>
       <div id="lrBody" style="margin-bottom:14px"><div class="empty">No requests yet</div></div>
       <div class="card-label">Coda</div>
+      <div class="quick-actions" id="playlistSourceControls" style="margin:10px 0 14px">
+        <button type="button" class="btn btn-chip" id="sourceChartsBtn" onclick="loadPlaylistSource('charts',this)">Reload charts</button>
+        <button type="button" class="btn btn-chip" id="sourceJamendoBtn" style="display:none" onclick="loadPlaylistSource('jamendo',this)">Jamendo CC Music</button>
+      </div>
       <div class="search-row">
         <input type="text" class="search-input" id="searchInput" placeholder="Search music (playlist + web)..." autocomplete="off" aria-label="Search music">
         <button type="button" class="btn btn-util" onclick="doSearch()">Search</button>
@@ -1354,6 +1358,8 @@ let _nowStart=0, _nowDur=0, _tick=null, _prevLabel='';
 let _programmeFilter='all', _lastProgrammeHash='';
 const SHAPE={ok:'✓',warn:'△',error:'✕',info:'·'};
 const SEGMENT_GLYPH={music:'♪',banter:'🎙',ad:'[Ad]',news_flash:'[!]'};
+const CHARTS_SENTINEL_URL='https://rss.applemarketingtools.com/api/v2/it/music/most-played/100/songs.json';
+const JAMENDO_SENTINEL_URL='jamendo://default';
 let _lastSetupJson=null;
 
 function toast(m){const e=document.getElementById('toast');e.textContent=m;e.classList.add('show');setTimeout(()=>e.classList.remove('show'),1600)}
@@ -1796,6 +1802,40 @@ function updateRecent(st){
 
 // ── Playlist ──
 let _plFilter='';
+function jamendoSourceAvailable(st,caps){
+  const active=st?.current_source?.kind==='jamendo'||st?.playlist_source?.kind==='jamendo';
+  if(active){
+    try{localStorage.setItem('jamendoSourceAvailable','true')}catch(_){}
+    return true;
+  }
+  const startupError=(caps?.startup_source_error||'').toLowerCase();
+  if(startupError.includes('jamendo')&&!startupError.includes('not configured')) return true;
+  try{return localStorage.getItem('jamendoSourceAvailable')==='true'}catch(_){return false}
+}
+function updateSourceControls(st,caps){
+  const jamBtn=document.getElementById('sourceJamendoBtn');
+  if(!jamBtn)return;
+  jamBtn.style.display=jamendoSourceAvailable(st,caps)?'':'none';
+}
+async function loadPlaylistSource(kind,el){
+  flash(el);
+  const url=kind==='jamendo'?JAMENDO_SENTINEL_URL:CHARTS_SENTINEL_URL;
+  const r=await api('POST','/api/playlist/load',{url});
+  if(!r.ok){
+    if(kind==='jamendo'&&/not configured/i.test(r.error||'')){
+      try{localStorage.removeItem('jamendoSourceAvailable')}catch(_){}
+      updateSourceControls(_st,_caps);
+    }
+    toast('Failed: '+(r.error||'unknown'));
+    return;
+  }
+  if(kind==='jamendo'){
+    try{localStorage.setItem('jamendoSourceAvailable','true')}catch(_){}
+  }
+  toast(kind==='jamendo'?'Loaded Jamendo CC Music':'Reloaded charts');
+  await refreshFast();
+  updateSourceControls(_st,_caps);
+}
 function updatePl(tracks){
   const el=document.getElementById('plBody');const meta=document.getElementById('plMeta');
   if(!tracks?.length){el.innerHTML='<div class="empty">No tracks</div>';meta.textContent='';return}
@@ -2211,6 +2251,7 @@ async function refreshFast(){
     updateListenerRequests(lrData.requests||[]);
     updatePaceCounters(_st.pacing);
     updateEngineRoom(_st,_caps);
+    updateSourceControls(_st,_caps);
     if(_st.session_stopped!==undefined)updateStopState(_st.session_stopped);
     if(!_paceOk&&_st.pacing){_paceOk=true;
       document.getElementById('pBanter').value=_st.pacing.songs_between_banter;updatePaceVal('pBanter','pvBanter',_st.pacing.songs_between_banter);
@@ -2226,6 +2267,7 @@ async function refreshSlow(){
     _caps=await cr.json();
     const setup=await or.json();
     updateSystems(_caps,_st);
+    updateSourceControls(_st,_caps);
     renderSetup(setup);
   }catch(e){console.error('refreshSlow',e)}
 }

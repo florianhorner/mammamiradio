@@ -13,6 +13,7 @@ except ModuleNotFoundError:
     import tomli as tomllib  # type: ignore[no-redef]
 import ipaddress
 import os
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -47,6 +48,8 @@ class PlaylistSection:
     repeat_cooldown: int = 5
     artist_cooldown: int = 3
     max_artist_per_hour: int = 3
+    jamendo_client_id: str = ""
+    jamendo_tags: str = "pop"
 
 
 @dataclass
@@ -532,6 +535,8 @@ def _validate(config: StationConfig) -> None:
         errors.append("persona.anthem_threshold must be >= 1")
     if not isinstance(config.persona.skip_bit_threshold, int) or config.persona.skip_bit_threshold < 1:
         errors.append("persona.skip_bit_threshold must be >= 1")
+    if config.playlist.jamendo_client_id and not re.match(r"^[A-Za-z0-9_-]+$", config.playlist.jamendo_client_id):
+        errors.append("playlist.jamendo_client_id must contain only letters, digits, hyphens, or underscores")
 
     if not (config.anthropic_api_key or config.openai_api_key):
         log.warning("No ANTHROPIC_API_KEY or OPENAI_API_KEY — banter/ads will use fallback text")
@@ -649,6 +654,9 @@ def load_config(path: str = "radio.toml") -> StationConfig:
         audio_raw["claude_model"] = os.getenv("CLAUDE_MODEL")
     if os.getenv("CLAUDE_CREATIVE_MODEL"):
         audio_raw["claude_creative_model"] = os.getenv("CLAUDE_CREATIVE_MODEL")
+    playlist_raw = dict(raw.get("playlist", {}))
+    if os.getenv("JAMENDO_CLIENT_ID") is not None:
+        playlist_raw["jamendo_client_id"] = os.getenv("JAMENDO_CLIENT_ID", "").strip()
 
     # Env-var overrides for cache/tmp directories (for Docker volume mounts)
     cache_dir = Path(os.getenv("MAMMAMIRADIO_CACHE_DIR", "cache"))
@@ -677,7 +685,7 @@ def load_config(path: str = "radio.toml") -> StationConfig:
 
     config = StationConfig(
         station=StationSection(**station_raw),
-        playlist=PlaylistSection(**raw.get("playlist", {})),
+        playlist=PlaylistSection(**playlist_raw),
         pacing=PacingSection(**raw.get("pacing", {})),
         hosts=hosts,
         ads=AdsSection(brands=brands, voices=voices, sfx_dir=sfx_dir),

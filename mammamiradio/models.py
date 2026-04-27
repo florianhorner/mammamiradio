@@ -38,6 +38,7 @@ class Track:
     duration_ms: int
     spotify_id: str = ""
     youtube_id: str = ""
+    direct_url: str = ""
     local_path: Path | None = None
     position_ms: int = 0
     album_art: str = ""
