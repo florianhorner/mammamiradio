@@ -201,6 +201,8 @@ Why: the scriptwriter generates fake ads in the brand's voice, makes false produ
 - **Local check**: `make coverage-check` to verify locally. `make coverage-ratchet` to preview what CI would commit.
 - **Adding tests**: Write tests, push. CI will auto-raise the floors on merge. The next PR that drops any module will fail.
 - **Release cooldown gate**: `.github/workflows/release-cooldown.yml` blocks any `v*` tag push if the prior published release is <24h old. Bypass by adding the `hotfix` label to the PR that introduced the tagged commit. Self-test: `bash tests/workflows/test_cooldown_gate.sh` (9 cases; also runs in `quality.yml` on every PR). See `HA_ADDON_RUNBOOK.md` and `STABILIZATION_LOG.md` for the measurement plan.
+- **Release invariants** (`scripts/check-release-invariants.sh`): runs on every PR. Catches (1) FFmpeg `music_eq_chain` equalizer count ≠ 2 (Pi aarch64 SIGABRT risk), (2) missing `_pick_canned_clip=None` test mock (empty-container silence untested), (3) missing `session_stopped` test (post-restart silence untested). Local: `bash scripts/check-release-invariants.sh`.
+- **Version sync check** (inline in `quality.yml`): runs on PRs that touch `pyproject.toml` or `ha-addon/mammamiradio/config.yaml`. Runs the full `scripts/pre-release-check.sh` (version consistency + CHANGELOG head + all invariants). No-ops on unrelated PRs. Local: `make pre-release`.
 
 ## Protected UI elements
 
