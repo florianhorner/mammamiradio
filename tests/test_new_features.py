@@ -583,7 +583,7 @@ def _make_app_with_queue(items: list[str]):
     app.include_router(router)
     config = load_config(TOML_PATH)
     state = _make_state()
-    q = asyncio.Queue()
+    q: asyncio.Queue = asyncio.Queue()
 
     for label in items:
         seg = MagicMock(spec=Segment)
