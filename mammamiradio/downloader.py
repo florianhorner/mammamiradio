@@ -12,7 +12,7 @@ import uuid
 from pathlib import Path
 from urllib.error import URLError
 from urllib.parse import urlparse
-from urllib.request import HTTPRedirectHandler, build_opener, urlopen
+from urllib.request import HTTPRedirectHandler, build_opener
 
 from mammamiradio.models import Track
 from mammamiradio.normalizer import _run_ffmpeg
@@ -336,9 +336,8 @@ def _download_direct_url(url: str, out_path: Path, timeout: int = 10) -> Path:
     _validate_direct_url(url)
     tmp_path = out_path.parent / f"{out_path.stem}.{uuid.uuid4().hex}.tmp"
     try:
-        with _NO_REDIRECT_OPENER.open(url, timeout=timeout) as resp:  # noqa: S310 — host validated above
-            with tmp_path.open("wb") as f:
-                shutil.copyfileobj(resp, f)
+        with _NO_REDIRECT_OPENER.open(url, timeout=timeout) as resp, tmp_path.open("wb") as f:
+            shutil.copyfileobj(resp, f)
         tmp_path.replace(out_path)
     except (URLError, OSError, TimeoutError) as exc:
         tmp_path.unlink(missing_ok=True)
