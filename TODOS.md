@@ -38,6 +38,16 @@ Listener page (`mammamiradio/static/listener.js`) polls three admin-gated endpoi
 **Completed:** 2026-04-27 (florianhorner/list-p1s)
 Added `duration_sec` to `now_streaming` payload (models.py). Regia elapsed computed client-side from `ns.started`; duration reads `ns.duration_sec`. Flag Track key path fixed: `_st?.now?.metadata` → `_st?.now_streaming?.metadata`.
 
+### Populate `Segment.duration_sec` from normalizer output
+**Priority:** P2
+**Source:** /qa on 2026-04-27 (florianhorner/list-p1s)
+
+`producer.py` creates `Segment` objects but never calls `normalizer._ffprobe_duration_sec()` after normalization, so `Segment.duration_sec` stays at the default `0.0`. The `now_streaming` payload includes `duration_sec` (added in PR #257) and `regia.html` reads it, but the progress bar stays at 0% because the value is always zero.
+
+**Fix:** In `producer.py`, after calling `normalize()` to get `norm_path`, call `_ffprobe_duration_sec(norm_path)` and assign the result to `segment.duration_sec`. ~3 lines.
+
+**Affected files:** `mammamiradio/producer.py` (all `Segment(...)` creation sites for music/banter/ad types), `mammamiradio/normalizer.py` (export `_ffprobe_duration_sec` or add a public wrapper).
+
 ### Host name selector hardening
 **Priority:** P3
 **Source:** /plan-eng-review on 2026-04-25 (florianhorner/fix/radio-plan)
