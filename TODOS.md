@@ -17,22 +17,8 @@
 
 
 ### Listener public API migration (full)
-**Priority:** P1
-**Source:** /plan-eng-review on 2026-04-25 (florianhorner/fix/radio-plan)
-
-Listener page (`mammamiradio/static/listener.js`) polls three admin-gated endpoints: `/status`, `/api/capabilities`, `/api/listener-requests`. The fix-radio-plan PR ships a one-line stopgap (`/status` → `/public-status`) so the now-playing data works on public deploys. The other two fetches will return 401 silently on non-loopback/non-LAN clients, degrading the dediche feed and capability tier display.
-
-**Why:** the listener page is the listener-facing product surface. Any deploy outside loopback/LAN exposure (PWA, embed, hosted listener) shows a degraded page until this is closed.
-
-**Pros:** unblocks public deployment of the listener page. Aligns with "instant audio" leadership principle (page works immediately for any visitor).
-
-**Cons:** requires backend additions (`/public-listener-requests` or strip-fields shim around `/api/listener-requests`; same for `/api/capabilities`). ~45 min CC. Coordination with the active UI redesign cycle.
-
-**Context:** the UI redesign is the natural home for this — when listener.html is rewritten, the API contract for the public listener can be defined cleanly.
-
-**Depends on / blocked by:** UI redesign cycle currently in progress. Coordinate via the redesign workspace.
-
-**Affected files:** `mammamiradio/streamer.py`, `mammamiradio/static/listener.js` (or its replacement), tests/test_streamer.py.
+**Completed:** 2026-04-28 (florianhorner/show-p1-tasks)
+`listener.js` already uses `/public-status` + `/public-listener-requests` exclusively. Capabilities are embedded in the `/public-status` response under `status.capabilities`. No admin-gated endpoints remain in listener.js. Migration was done as part of the fix-radio-plan / PR-F listener rewrite.
 
 ### Regia.html + admin Flag Track field contract fix
 **Completed:** 2026-04-27 (florianhorner/list-p1s)
@@ -74,13 +60,18 @@ Catches "server starts but can't produce audio" — the exact production failure
 **Design reference:** `~/.gstack/projects/florianhorner-mammamiradio/designs/admin-regia-concepts-20260421/variant-E2.png` + `approved.json`
 **Prototype shipped (this branch):** `mammamiradio/regia.html` served at `/regia` (admin-gated). Screen 1 ON AIR + 260px read-only Peek Panel + persistent status strip + tab bar (tabs 2–5 are inert placeholders).
 
-### P1 — Wire Screen 1 ON AIR to real behavior
-- **Pause button** — no backend endpoint today. Either add `/api/pause` (session-level pause distinct from `/api/session/stop`) or remove the button until a pause semantic is agreed. Today it logs `[regia] pause not yet wired`.
-- **Panic Overlay** — full-screen SILENCE NOW + FORCE FALLBACK modal per IA doc. Needs a backend trigger (likely `force_next = SILENCE` segment type + emergency fallback push). Currently the Panico button only logs a warning.
-- **AI Approval badge** — surface needs a backend concept. Today `/status` exposes `last_banter_script` (already generated, already approved). For the approval workflow we need a pending-segment queue with APPROVE/REJECT state. Placeholder card hidden in prototype.
+### P1 — Wire Screen 1 ON AIR + Build Screen 2 QUEUE
+**Completed:** 2026-04-28 (florianhorner/show-p1-tasks)
+- Panic overlay: replaced browser `confirm()` with in-page CSS modal (no `alert` API, Esc to dismiss, Annulla/Taglia Ora buttons). Calls existing `/api/panic`. Stream stays live.
+- Pause button: dropped. ICY stream can't pause without dropping listeners — pause = stop from the listener's perspective. Removed from scope permanently.
+- AI Approval badge: deferred to P2. Requires pending-segment queue with APPROVE/REJECT state in backend — separate PR scope.
+- Screen 2 QUEUE: tab switching wired (all 5 tabs, JS `switchTab(n)`). Full queue list rendered from `queued_segments` (reusing `.peek-item` CSS). Break-structure card (next non-music in `upcoming[]`). Skip current + Purge all controls. Inline search against `/api/search`. Remove-from-queue via new `POST /api/queue/remove` endpoint (drain+rebuild asyncio.Queue). Drag-to-reorder deferred to P2 (asyncio.Queue is not random-access).
 
-### P1 — Build Screen 2 QUEUE
-Phase 1 MVP per IA doc. Reuse the color-coded item pattern from the peek panel. Drag-to-reorder, break-structure card (next break slot with segment-type mini-timeline), inline search against existing `/api/search` endpoint, skip/remove controls.
+### P2 — AI Approval badge (Regia Screen 1)
+Requires a pending-segment queue in `StationState` with APPROVE/REJECT state. Producer writes to pending queue before approved segments reach the asyncio.Queue. New endpoints: `GET /api/pending-segments`, `POST /api/approve-segment`, `POST /api/reject-segment`. The placeholder card in `regia.html` is already hidden — unhide when backend is built.
+
+### P2 — Drag-to-reorder (Regia Screen 2)
+`asyncio.Queue` is not random-access. To support reorder: drain + rebuild under concurrency, or replace with a custom queue structure that supports `insert`. Deferred because the drain+rebuild approach has a contention window and needs careful testing.
 
 ### P2 — Build Screen 3 REVIEW, Screen 4 PROGRAMME, Screen 5 MOTORE
 Phase 2 per IA doc. Screen 3 is AI content approval (banter + ad preview with audio + APPROVE/REJECT/EDIT). Screen 4 is format-clock + pacing. Screen 5 is the current admin Engine Room — API cost counter, capability flags, model info, logs.

@@ -562,3 +562,96 @@ def test_get_system_prompt_rebuilds_when_hosts_change():
 
         # Restore
         config.hosts[0].name = original_name
+
+
+# ---------------------------------------------------------------------------
+# POST /api/queue/remove
+# ---------------------------------------------------------------------------
+
+
+def _make_app_with_queue(items: list[str]):
+    """Build a test app with pre-seeded asyncio.Queue and queued_segments shadow."""
+    import asyncio
+    from unittest.mock import MagicMock
+
+    from fastapi import FastAPI
+
+    from mammamiradio.models import Segment
+    from mammamiradio.streamer import LiveStreamHub, router
+
+    app = FastAPI()
+    app.include_router(router)
+    config = load_config(TOML_PATH)
+    state = _make_state()
+    q = asyncio.Queue()
+
+    for label in items:
+        seg = MagicMock(spec=Segment)
+        seg.path = MagicMock()
+        seg.path.read_bytes = MagicMock(return_value=b"")
+        q.put_nowait(seg)
+        state.queued_segments.append({"type": "music", "label": label})
+
+    app.state.queue = q
+    app.state.skip_event = asyncio.Event()
+    app.state.stream_hub = LiveStreamHub()
+    app.state.station_state = state
+    app.state.config = config
+    app.state.start_time = 0.0
+    return app
+
+
+@pytest.mark.asyncio
+async def test_queue_remove_happy_path():
+    """POST /api/queue/remove index=1 removes the middle item."""
+    app = _make_app_with_queue(["Alpha", "Beta", "Gamma"])
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.post("/api/queue/remove", json={"index": 1})
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ok"] is True
+    assert body["removed"] == "Beta"
+    labels = [s["label"] for s in app.state.station_state.queued_segments]
+    assert labels == ["Alpha", "Gamma"]
+    assert app.state.queue.qsize() == 2
+
+
+@pytest.mark.asyncio
+async def test_queue_remove_index_zero():
+    """POST /api/queue/remove index=0 removes the first item."""
+    app = _make_app_with_queue(["First", "Second"])
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.post("/api/queue/remove", json={"index": 0})
+
+    assert resp.status_code == 200
+    assert resp.json()["removed"] == "First"
+    assert len(app.state.station_state.queued_segments) == 1
+    assert app.state.station_state.queued_segments[0]["label"] == "Second"
+
+
+@pytest.mark.asyncio
+async def test_queue_remove_out_of_bounds():
+    """POST /api/queue/remove with index beyond queue length returns 422."""
+    app = _make_app_with_queue(["Only"])
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.post("/api/queue/remove", json={"index": 99})
+
+    assert resp.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_queue_remove_empty_queue():
+    """POST /api/queue/remove on empty queue returns ok with removed=null."""
+    app = _make_app_with_queue([])
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.post("/api/queue/remove", json={"index": 0})
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ok"] is True
+    assert body["removed"] is None

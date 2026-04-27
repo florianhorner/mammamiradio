@@ -1348,6 +1348,53 @@ async def panic_cut(request: Request, _: None = Depends(require_admin_access)):
     return {"ok": True, "purged": purged}
 
 
+@router.post("/api/queue/remove")
+async def queue_remove_item(request: Request, _: None = Depends(require_admin_access)):
+    """Remove a single pre-produced segment from the queue by shadow-list index.
+
+    Drains the asyncio.Queue, removes the item at the given index, then re-pushes
+    the remaining segments. The queue is empty for ~1ms during the operation; the
+    streamer's 30-second empty-queue countdown resets as soon as items land back.
+    """
+    body = await request.json()
+    index = body.get("index")
+    if not isinstance(index, int):
+        raise HTTPException(status_code=422, detail="index must be an integer")
+
+    state = request.app.state.station_state
+    q = request.app.state.queue
+
+    if not state.queued_segments:
+        return {"ok": True, "removed": None}
+
+    if index < 0 or index >= len(state.queued_segments):
+        raise HTTPException(
+            status_code=422,
+            detail=f"index {index} out of range (queue has {len(state.queued_segments)} items)",
+        )
+
+    removed_label = state.queued_segments[index].get("label", "unknown")
+
+    # Drain the asyncio.Queue into a list, remove item N, re-push rest.
+    items: list = []
+    while not q.empty():
+        try:
+            items.append(q.get_nowait())
+        except asyncio.QueueEmpty:
+            break
+
+    if index < len(items):
+        items.pop(index)
+
+    for item in items:
+        await q.put(item)
+
+    state.queued_segments.pop(index)
+
+    logger.info("Queue item %d removed by admin: %s", index, removed_label)
+    return {"ok": True, "removed": removed_label}
+
+
 @router.post("/api/stop")
 async def stop_session(request: Request, _: None = Depends(require_admin_access)):
     """Gracefully stop the station: skip current, purge queue, cancel producer."""
