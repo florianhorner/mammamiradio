@@ -905,9 +905,9 @@ body::before {
 
     document.getElementById('station-name').textContent = s.station || 'Mamma Mi Radio';
 
-    // Progress
-    const elapsed = ns.elapsed_seconds || 0;
-    const total = ns.duration_seconds || 0;
+    // Progress — elapsed computed client-side from started timestamp; duration from payload
+    const elapsed = ns.started ? Math.max(0, Date.now() / 1000 - ns.started) : 0;
+    const total = ns.duration_sec || 0;
     const pct = total > 0 ? Math.min(100, (elapsed / total) * 100) : 0;
     document.getElementById('progress-fill').style.width = pct + '%';
     document.getElementById('track-time').textContent = formatDuration(elapsed) + ' · ' + formatDuration(total);

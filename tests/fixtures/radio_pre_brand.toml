@@ -1,0 +1,29 @@
+# Backward-compat fixture: production radio.toml shape WITHOUT the [brand] block.
+# Test asserts that brand defaults derive from existing config gracefully —
+# operators upgrading to brand-engine schema must not need to edit radio.toml.
+
+[station]
+name = "Mamma Mi Radio"
+language = "it"
+theme = "Italian late-night radio"
+
+[playlist]
+shuffle = true
+allow_explicit = true
+
+[pacing]
+songs_between_banter = 2
+songs_between_ads = 4
+ad_spots_per_break = 2
+
+[[hosts]]
+name = "Marco"
+voice = "onyx"
+engine = "openai"
+style = "manic energy"
+
+[[hosts]]
+name = "Giulia"
+voice = "it-IT-IsabellaNeural"
+engine = "edge"
+style = "razor-sharp sarcasm"

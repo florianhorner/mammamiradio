@@ -2,8 +2,8 @@
  * Mamma Mi Radio — Listener Client
  *
  * Drives the five-band listener site (nav, persistent now-playing strip,
- * hero, palinsesto, dediche) against /status + /api/capabilities +
- * /api/listener-requests.
+ * hero, palinsesto, dediche) against /public-status + /public-listener-requests
+ * (brand-engine PR-F: no admin endpoints — works on any public deploy).
  *
  * See DESIGN.md §§ "Listener site composition" for the canonical layout.
  * Loads AFTER tokens.css + base.css + listener.css + waveform.js.
@@ -204,15 +204,21 @@
   }
 
   function renderHeroStats(status, caps) {
-    const elapsedSec = (Date.now() - state.sessionStart) / 1000;
-    const h = Math.floor(elapsedSec / 3600);
-    const m = Math.floor((elapsedSec % 3600) / 60);
+    const uptimeSec = (status && typeof status.uptime_sec === 'number')
+      ? status.uptime_sec
+      : (Date.now() - state.sessionStart) / 1000;
+    const h = Math.floor(uptimeSec / 3600);
+    const m = Math.floor((uptimeSec % 3600) / 60);
     const stat1 = $('stat-airtime');
-    if (stat1) stat1.textContent = h + 'h ' + m + 'm';
+    if (stat1) {
+      stat1.textContent = (h === 0 && m === 0) ? 'In diretta' : (h + 'h ' + m + 'm');
+    }
     const stat2 = $('stat-tracks');
     if (stat2) {
-      const tracks = status && status.playlist_size ? status.playlist_size : (status && status.upcoming ? status.upcoming.length : 0);
-      stat2.textContent = tracks || '—';
+      const played = status && typeof status.tracks_played === 'number' ? status.tracks_played : null;
+      const queued = status && status.upcoming ? status.upcoming.length : 0;
+      const value = played !== null ? played : queued;
+      stat2.textContent = value > 0 ? value : '—';
     }
     const stat3 = $('stat-hosts');
     if (stat3 && caps && caps.hosts && caps.hosts.length) {
@@ -284,13 +290,8 @@
     if (!stack) return;
     const read = (requests || []).filter(r => r && r.aired_at);
     if (read.length === 0) {
-      stack.innerHTML = `
-        <div class="mmr-dedica">
-          <div class="eyebrow">Dedica</div>
-          <div class="quote">La sezione dediche si riempirà non appena i nostri ascoltatori manderanno un saluto. Prova tu!</div>
-          <div class="sig">— Mamma Mi Radio</div>
-        </div>
-      `;
+      // Empty-state placeholder is set by the server-side Jinja template
+      // (brand-engine PR-C). Don't overwrite — preserves brand voice + station name.
       return;
     }
     stack.innerHTML = read.slice(0, 3).map(r => {
@@ -334,15 +335,8 @@
     }
   }
 
-  /* Fetch /public-status for HA moments (no auth, listener-safe). */
-  async function fetchPublicStatus() {
-    try {
-      const r = await fetch(_base + '/public-status');
-      if (!r.ok) return;
-      const data = await r.json();
-      updateCasa(data.ha_moments);
-    } catch (e) { /* swallow; public-status is best-effort */ }
-  }
+  /* fetchPublicStatus removed (PR-F): /public-status is now the primary fetch
+   * in fetchStatus(). HA moments are updated there directly. */
 
   function renderPalinsestoDate() {
     const el = $('palinsesto-date');
@@ -364,23 +358,37 @@
     state.wasStopped = stopped;
   }
 
-  /* ── Polling ── */
+  /* ── Polling ──
+   * Brand-engine PR-F: listener uses /public-status exclusively (no admin endpoints).
+   * /public-status returns brand + capabilities + facts in one shape — single fetch
+   * replaces the old /status + /api/capabilities pair. Works on any deploy (loopback,
+   * LAN, public) without the 401 risk of admin-only routes. */
   async function fetchStatus() {
     try {
-      const [statusResp, capsResp] = await Promise.all([
-        fetch(_base + '/status'),
-        fetch(_base + '/api/capabilities'),
-      ]);
-      if (!statusResp.ok || !capsResp.ok) return;
-      const status = await statusResp.json();
-      const caps = await capsResp.json();
+      const r = await fetch(_base + '/public-status');
+      if (!r.ok) return;
+      const status = await r.json();
+      // Capabilities live inside the public payload (PR-B). Wrap to match the
+      // legacy { capabilities: {...} } shape the rest of listener.js expects.
+      const caps = { capabilities: status.capabilities || {} };
       state.status = status;
       state.caps = caps;
       state.firstDataReceived = true;
-      if (status.now_streaming) renderNowPlayingStrip(status.now_streaming);
+      // Toggle [data-cap] elements based on capabilities (design D2: client-side
+      // capability-conditional rendering).
+      if (typeof window.mmrApplyCaps === 'function') {
+        window.mmrApplyCaps(status.capabilities || {});
+      }
+      // First-impression brand-first hero (design D-Design-3): once data arrives,
+      // flip warming -> live state.
+      if (status.now_streaming) {
+        document.body.setAttribute('data-state', 'live');
+        renderNowPlayingStrip(status.now_streaming);
+      }
       renderHeroStats(status, caps);
       renderPalinsesto(status);
       renderStoppedState(status);
+      updateCasa(status.ha_moments);
       if (status.current_progress_sec !== undefined && status.current_duration_sec !== undefined) {
         state.currentProgressMs = status.current_progress_sec * 1000;
         state.segmentDurationMs = status.current_duration_sec * 1000;
@@ -393,7 +401,8 @@
 
   async function fetchRequests() {
     try {
-      const r = await fetch(_base + '/api/listener-requests');
+      // Brand-engine PR-F: public listener-requests endpoint (no admin auth).
+      const r = await fetch(_base + '/public-listener-requests');
       if (!r.ok) return;
       const d = await r.json();
       state.requests = d.requests || [];
@@ -505,9 +514,8 @@
     renderPalinsestoDate();
     fetchStatus();
     fetchRequests();
-    fetchPublicStatus();
+    /* fetchPublicStatus removed in PR-F */
     setInterval(fetchStatus, 3000);
     setInterval(fetchRequests, 60000);
-    setInterval(fetchPublicStatus, 15000);
   });
 })();

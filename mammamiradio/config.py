@@ -111,6 +111,119 @@ class PersonaSection:
     skip_bit_threshold: int = 2
 
 
+# Volare Refined defaults — fall-back values when [brand] is missing or invalid.
+# These match listener.css token defaults and DESIGN.md.
+_BRAND_DEFAULT_PRIMARY = "#F4D048"  # --sun
+_BRAND_DEFAULT_ACCENT = "#B82C20"  # --lancia
+_BRAND_DEFAULT_BG = "#14110F"  # --shadow
+_BRAND_DEFAULT_TEXT = "#F5EDD8"  # --cream (used for contrast checks)
+_BRAND_DEFAULT_DISPLAY_FONT = "Playfair Display"
+_BRAND_DEFAULT_BODY_FONT = "Outfit"
+_BRAND_DEFAULT_MONO_FONT = "JetBrains Mono"
+
+# Curated font list per design D1 — operators may pick from these only.
+_BRAND_DISPLAY_FONTS = frozenset(
+    {
+        "Playfair Display",
+        "Cormorant Garamond",
+        "Bodoni Moda",
+        "Lora",
+        "Outfit",
+        "JetBrains Mono",
+    }
+)
+_BRAND_BODY_FONTS = frozenset(
+    {
+        "Outfit",
+        "Inter",
+        "Source Sans 3",
+        "IBM Plex Sans",
+    }
+)
+_BRAND_MONO_FONTS = frozenset({"JetBrains Mono", "IBM Plex Mono"})
+
+
+def _hex_to_rgb(hex_color: str) -> tuple[int, int, int] | None:
+    """Parse a #RRGGBB hex color into an (r, g, b) tuple. Returns None on invalid input."""
+    s = (hex_color or "").strip().lstrip("#")
+    if len(s) != 6 or not all(c in "0123456789abcdefABCDEF" for c in s):
+        return None
+    try:
+        return int(s[0:2], 16), int(s[2:4], 16), int(s[4:6], 16)
+    except ValueError:
+        return None
+
+
+def _hex_lightness(hex_color: str) -> float | None:
+    """Return HSL lightness in 0-100 range, or None if hex is invalid."""
+    rgb = _hex_to_rgb(hex_color)
+    if rgb is None:
+        return None
+    r, g, b = (c / 255.0 for c in rgb)
+    cmax, cmin = max(r, g, b), min(r, g, b)
+    return (cmax + cmin) / 2.0 * 100.0
+
+
+def _relative_luminance(rgb: tuple[int, int, int]) -> float:
+    """WCAG 2.1 relative luminance from sRGB triplet."""
+
+    def channel(c: int) -> float:
+        v = c / 255.0
+        return v / 12.92 if v <= 0.03928 else ((v + 0.055) / 1.055) ** 2.4
+
+    r, g, b = (channel(x) for x in rgb)
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b
+
+
+def _contrast_ratio(fg_hex: str, bg_hex: str) -> float | None:
+    """WCAG contrast ratio between two hex colors. Returns None if either is invalid."""
+    fg = _hex_to_rgb(fg_hex)
+    bg = _hex_to_rgb(bg_hex)
+    if fg is None or bg is None:
+        return None
+    l1 = _relative_luminance(fg)
+    l2 = _relative_luminance(bg)
+    lighter = max(l1, l2)
+    darker = min(l1, l2)
+    return (lighter + 0.05) / (darker + 0.05)
+
+
+@dataclass
+class BrandHost:
+    """Per-host brand identity layer — what the LISTENER reads."""
+
+    engine_host: str  # FK to HostPersonality.name
+    display_name: str
+    description: str = ""
+
+
+@dataclass
+class BrandTheme:
+    """Per-station visual identity tokens. All optional — fall back to Volare Refined."""
+
+    primary_color: str = _BRAND_DEFAULT_PRIMARY
+    accent_color: str = _BRAND_DEFAULT_ACCENT
+    background_color: str = _BRAND_DEFAULT_BG
+    display_font: str = _BRAND_DEFAULT_DISPLAY_FONT
+    body_font: str = _BRAND_DEFAULT_BODY_FONT
+    mono_font: str = _BRAND_DEFAULT_MONO_FONT
+
+
+@dataclass
+class BrandSection:
+    """The brand-fiction layer: what listeners see, separate from the engine config."""
+
+    station_name: str = "mammamiradio"
+    frequency: str = ""
+    city: str = ""
+    founded: int = 0
+    tagline: str = ""
+    about: str = ""
+    opengraph_subtitle: str = ""
+    hosts: list[BrandHost] = field(default_factory=list)
+    theme: BrandTheme = field(default_factory=BrandTheme)
+
+
 @dataclass
 class StationConfig:
     """Fully resolved application configuration used at runtime."""
@@ -124,6 +237,8 @@ class StationConfig:
     audio: AudioSection = field(default_factory=AudioSection)
     homeassistant: HomeAssistantSection = field(default_factory=HomeAssistantSection)
     persona: PersonaSection = field(default_factory=PersonaSection)
+    brand: BrandSection = field(default_factory=BrandSection)
+    brand_warnings: list[str] = field(default_factory=list)
     cache_dir: Path = Path("cache")
     tmp_dir: Path = Path("tmp")
     max_cache_size_mb: int = 500
@@ -269,6 +384,133 @@ def _apply_addon_options() -> None:
         val = options.get(opt_key, "")
         if val and not os.getenv(env_key):
             os.environ[env_key] = val
+
+
+def _parse_brand(raw: dict, hosts: list[HostPersonality]) -> tuple[BrandSection, list[str]]:
+    """Parse [brand] from radio.toml; apply guardrails per design D1.
+
+    Returns (BrandSection, warnings_list). Never raises — degrades gracefully so
+    INSTANT AUDIO leadership principle holds even when [brand] config is bad.
+    """
+    warnings: list[str] = []
+    brand_raw = dict(raw.get("brand", {}))
+
+    # If [brand] is missing entirely, derive defaults from existing config
+    if not brand_raw:
+        return (
+            BrandSection(
+                station_name=raw.get("station", {}).get("name", "mammamiradio"),
+                hosts=[
+                    BrandHost(engine_host=h.name, display_name=h.name, description=(h.style or "")[:160]) for h in hosts
+                ],
+            ),
+            warnings,
+        )
+
+    # Pull nested blocks out before constructing the dataclass
+    theme_raw = dict(brand_raw.pop("theme", {}))
+    brand_hosts_raw = brand_raw.pop("hosts", [])
+
+    # Theme guardrails per design D1
+    theme = BrandTheme()
+    for field_name in ("primary_color", "accent_color", "background_color"):
+        if field_name in theme_raw:
+            value = theme_raw[field_name]
+            rgb = _hex_to_rgb(value)
+            if rgb is None:
+                warnings.append(f"brand.theme.{field_name}={value!r} is not a valid hex color; using Volare default")
+                continue
+            # Background-specific guardrails (Volare Refined invariants):
+            # 1. Must be dark (lightness <= 25) — dark-canvas theme
+            # 2. Body text (--cream) must achieve 4.5:1 contrast against this bg
+            # primary_color and accent_color are decorative (not body text), so
+            # they only need hex validity — no contrast check.
+            if field_name == "background_color":
+                lightness = _hex_lightness(value)
+                if lightness is not None and lightness > 25:
+                    warnings.append(
+                        f"brand.theme.background_color={value!r} is too light "
+                        f"(L={lightness:.0f} > 25); Volare Refined requires a dark canvas. Using default."
+                    )
+                    continue
+                ratio = _contrast_ratio(_BRAND_DEFAULT_TEXT, value)
+                if ratio is not None and ratio < 4.5:
+                    warnings.append(
+                        f"brand.theme.background_color={value!r} fails 4.5:1 contrast against "
+                        f"--cream body text (got {ratio:.2f}:1); using Volare default for accessibility"
+                    )
+                    continue
+            setattr(theme, field_name, value)
+    # Font guardrails — must be from curated lists
+    for font_field, allowed in (
+        ("display_font", _BRAND_DISPLAY_FONTS),
+        ("body_font", _BRAND_BODY_FONTS),
+        ("mono_font", _BRAND_MONO_FONTS),
+    ):
+        if font_field in theme_raw:
+            value = theme_raw[font_field]
+            if value not in allowed:
+                warnings.append(
+                    f"brand.theme.{font_field}={value!r} is not in the approved list. "
+                    f"Pick one of: {', '.join(sorted(allowed))}. Using default."
+                )
+                continue
+            setattr(theme, font_field, value)
+
+    # Brand hosts — every brand_host.engine_host must reference an existing [[hosts]].name
+    valid_host_names = {h.name for h in hosts}
+    brand_hosts: list[BrandHost] = []
+    for bh in brand_hosts_raw:
+        engine_host = bh.get("engine_host", "")
+        if engine_host not in valid_host_names:
+            warnings.append(
+                f"brand.host.engine_host={engine_host!r} does not match any [[hosts]] "
+                f"entry; dropping this brand host. Valid: {sorted(valid_host_names)}"
+            )
+            continue
+        brand_hosts.append(
+            BrandHost(
+                engine_host=engine_host,
+                display_name=bh.get("display_name", engine_host),
+                description=bh.get("description", ""),
+            )
+        )
+    # Auto-fill: every engine host SHOULD have a brand host
+    covered = {bh.engine_host for bh in brand_hosts}
+    for h in hosts:
+        if h.name not in covered:
+            brand_hosts.append(BrandHost(engine_host=h.name, display_name=h.name, description=(h.style or "")[:160]))
+
+    # Validate founded year
+    founded = brand_raw.get("founded", 0)
+    if founded:
+        try:
+            year = int(founded)
+        except (TypeError, ValueError):
+            warnings.append(f"brand.founded={founded!r} is not a valid year; dropping field")
+            brand_raw.pop("founded", None)
+        else:
+            from datetime import datetime as _dt
+
+            current_year = _dt.now().year
+            if year < 1900 or year > current_year + 1:
+                warnings.append(f"brand.founded={year} is outside 1900..{current_year + 1}; dropping field")
+                brand_raw.pop("founded", None)
+            else:
+                brand_raw["founded"] = year
+
+    brand = BrandSection(
+        station_name=brand_raw.get("station_name", raw.get("station", {}).get("name", "mammamiradio")),
+        frequency=brand_raw.get("frequency", ""),
+        city=brand_raw.get("city", ""),
+        founded=int(brand_raw.get("founded", 0)),
+        tagline=brand_raw.get("tagline", ""),
+        about=brand_raw.get("about", ""),
+        opengraph_subtitle=brand_raw.get("opengraph_subtitle", ""),
+        hosts=brand_hosts,
+        theme=theme,
+    )
+    return brand, warnings
 
 
 def _validate(config: StationConfig) -> None:
@@ -422,6 +664,17 @@ def load_config(path: str = "radio.toml") -> StationConfig:
         motif_notes=sonic_brand_motif,
     )
 
+    # Parse brand-fiction layer (separate from operator-truth engine config).
+    # Validation is graceful — invalid values fall back to Volare Refined defaults
+    # and surface as brand_warnings for the operator (Engine Room panel).
+    brand, brand_warnings = _parse_brand(raw, hosts)
+    if brand_warnings:
+        import logging as _log
+
+        log = _log.getLogger(__name__)
+        for w in brand_warnings:
+            log.warning("brand: %s", w)
+
     config = StationConfig(
         station=StationSection(**station_raw),
         playlist=PlaylistSection(**raw.get("playlist", {})),
@@ -432,6 +685,8 @@ def load_config(path: str = "radio.toml") -> StationConfig:
         audio=AudioSection(**audio_raw),
         homeassistant=ha_section,
         persona=PersonaSection(**raw.get("persona", {})),
+        brand=brand,
+        brand_warnings=brand_warnings,
         cache_dir=cache_dir,
         tmp_dir=tmp_dir,
         max_cache_size_mb=int(os.getenv("MAMMAMIRADIO_MAX_CACHE_MB", "500")),

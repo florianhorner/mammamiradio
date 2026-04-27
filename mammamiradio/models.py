@@ -416,6 +416,7 @@ class StationState:
             "label": label,
             "started": now,
             "epoch": self.playback_epoch,
+            "duration_sec": segment.duration_sec,
             "metadata": segment.metadata,
         }
         self.stream_log.append(

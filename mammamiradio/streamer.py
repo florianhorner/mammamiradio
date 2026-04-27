@@ -15,8 +15,9 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
+from fastapi.templating import Jinja2Templates
 
 from mammamiradio.capabilities import capabilities_to_dict, get_capabilities
 from mammamiradio.ha_enrichment import EVENT_RETENTION_SECONDS
@@ -37,12 +38,25 @@ security = HTTPBasic(auto_error=False)
 
 _PKG_DIR = Path(__file__).parent
 _STATIC_DIR = _PKG_DIR / "static"
+_ASSET_VERSION = importlib.metadata.version("mammamiradio")
 
-_LISTENER_HTML = _PKG_DIR.joinpath("listener.html").read_text()
+# Jinja2 templates for brand-engine listener page (PR-C). Admin/regia/live still use
+# string-replace via _inject_ingress_prefix; only listener migrates to Jinja for now.
+_TEMPLATES = Jinja2Templates(directory=str(_PKG_DIR))
 
-_ADMIN_HTML = _PKG_DIR.joinpath("admin.html").read_text()
-_REGIA_HTML = _PKG_DIR.joinpath("regia.html").read_text()
-_LIVE_HTML = _PKG_DIR.joinpath("live.html").read_text()
+
+def _bust_static_cache(html: str) -> str:
+    """Append ?v=VERSION to /static/*.css and /static/*.js URLs to bust browser cache on upgrade."""
+    return _re.sub(r'(/static/[^"?]+\.(css|js))"', rf'\1?v={_ASSET_VERSION}"', html)
+
+
+# Admin/regia/live pages still loaded as raw strings + post-render prefix injection.
+# Listener no longer needs _LISTENER_HTML — it's rendered from template per-request.
+_LISTENER_HTML = _bust_static_cache(_PKG_DIR.joinpath("listener.html").read_text())  # kept for tests + fallback
+
+_ADMIN_HTML = _bust_static_cache(_PKG_DIR.joinpath("admin.html").read_text())
+_REGIA_HTML = _bust_static_cache(_PKG_DIR.joinpath("regia.html").read_text())
+_LIVE_HTML = _bust_static_cache(_PKG_DIR.joinpath("live.html").read_text())
 
 _INGRESS_PREFIX_RE = _re.compile(r"^/[a-zA-Z0-9/_-]+$")
 
@@ -971,7 +985,16 @@ async def listener_home(request: Request):
     config = request.app.state.config
     if config.is_addon and prefix and _is_hassio_or_loopback(request):
         return _render_admin_response(request, prefix)
-    return _get_injected_html("listener", _LISTENER_HTML, prefix)
+    return _TEMPLATES.TemplateResponse(
+        request,
+        "listener.html",
+        {
+            "brand": config.brand,
+            "ingress_prefix": _sanitize_ingress_prefix(prefix),
+            "csrf_token": _get_csrf_token(request.app),
+            "asset_version": _ASSET_VERSION,
+        },
+    )
 
 
 @router.get("/dashboard", response_class=RedirectResponse, dependencies=[Depends(require_admin_access)])
@@ -1012,7 +1035,56 @@ async def regia_prototype(request: Request):
 async def listener(request: Request):
     """Backwards-compatible alias for the listener UI."""
     prefix = request.headers.get("X-Ingress-Path", "")
-    return _get_injected_html("listener", _LISTENER_HTML, prefix)
+    config = request.app.state.config
+    return _TEMPLATES.TemplateResponse(
+        request,
+        "listener.html",
+        {
+            "brand": config.brand,
+            "ingress_prefix": _sanitize_ingress_prefix(prefix),
+            "csrf_token": _get_csrf_token(request.app),
+            "asset_version": _ASSET_VERSION,
+        },
+    )
+
+
+_og_card_cache: dict[str, bytes] = {}
+_OG_CARD_FALLBACK = b""  # populated lazily on first miss
+
+
+@router.get("/og-card.png")
+async def og_card(request: Request):
+    """Serve the OG social card PNG. Cached by brand+track key.
+
+    Per design D-Design-2: poster-style 1200x630, brand-dominant typography,
+    Italian flag tricolor at top, track info as lower-third band. Falls back
+    to the static logo PNG if generation fails — social previews never 404.
+    """
+    config = request.app.state.config
+    state = request.app.state.station_state
+    track = state.current_track
+    cache_key = f"{config.brand.station_name}:{track.cache_key if track else 'idle'}"
+
+    cached = _og_card_cache.get(cache_key)
+    if cached is None:
+        try:
+            from mammamiradio.og_card import render_og_card_for_brand
+
+            cached = render_og_card_for_brand(config.brand, track)
+            _og_card_cache[cache_key] = cached
+            # Cap cache size (one entry per track + idle is bounded by playlist size)
+            if len(_og_card_cache) > 200:
+                # Evict oldest entry by insertion order
+                _og_card_cache.pop(next(iter(_og_card_cache)))
+        except Exception as exc:
+            logger.warning("OG card render failed: %s; falling back to logo", exc)
+            fallback = _STATIC_DIR / "icon-192.svg"
+            if fallback.exists():
+                return FileResponse(fallback, media_type="image/svg+xml")
+            return Response(status_code=503)
+
+    headers = {"Cache-Control": "public, max-age=60"}
+    return Response(content=cached, media_type="image/png", headers=headers)
 
 
 @router.get("/sw.js")
@@ -1613,6 +1685,30 @@ async def get_listener_requests(request: Request, _: None = Depends(require_admi
     }
 
 
+@router.get("/public-listener-requests")
+async def get_public_listener_requests(request: Request):
+    """Listener-safe view of recent dediche / requests.
+
+    Filtered for public consumption: drops internal IDs, error fields, and
+    raw timestamps. Listener page renders this as the Dediche feed. No auth
+    (public endpoint). Sensitive fields (song_error, ts as ID) stay admin-only.
+    """
+    state = request.app.state.station_state
+    now = time.time()
+    return {
+        "requests": [
+            {
+                "name": r.get("name", ""),
+                "message": r.get("message", ""),
+                "type": r.get("type", "dedica"),
+                "song_track": r.get("song_track") if r.get("song_found") else None,
+                "age_s": int(now - r.get("ts", now)),
+            }
+            for r in state.pending_requests
+        ]
+    }
+
+
 @router.post("/api/listener-requests/dismiss")
 async def dismiss_listener_request(request: Request, _: None = Depends(require_admin_access)):
     """Remove a specific listener request from the queue by id (admin only)."""
@@ -1884,11 +1980,20 @@ async def reset_host_personality(host_name: str, request: Request, _: None = Dep
 
 
 def _public_status_payload(request: Request) -> dict:
-    """Build the read-only status payload shared by public and admin APIs."""
+    """Build the read-only status payload shared by public and admin APIs.
+
+    The listener page polls this endpoint every ~3s. The admin /status route
+    extends this payload with operator-only fields (queue depth, segment log,
+    api costs, etc). The CROSS-PAGE INVARIANT is that any field present in
+    both payloads must hold the same value at the same time — enforced by
+    tests/test_public_status_contract.py.
+    """
     _sync_runtime_state(request)
     state = request.app.state.station_state
     config = request.app.state.config
     runtime_health = _runtime_health_snapshot(request)
+    start_time = getattr(request.app.state, "start_time", None) or 0
+    uptime_sec = round(time.time() - start_time) if start_time else 0
     if state.queued_segments:
         upcoming = [{**item, "source": "rendered_queue"} for item in state.queued_segments[:5]]
     else:
@@ -1929,6 +2034,41 @@ def _public_status_payload(request: Request) -> dict:
         "upcoming": upcoming,
         "upcoming_mode": "queued" if upcoming else "building",
         "ha_moments": ha_moments,
+        # Brand-fiction layer (PR-A schema). Listener renders against this.
+        "brand": {
+            "station_name": config.brand.station_name,
+            "frequency": config.brand.frequency,
+            "city": config.brand.city,
+            "founded": config.brand.founded,
+            "tagline": config.brand.tagline,
+            "about": config.brand.about,
+            "opengraph_subtitle": config.brand.opengraph_subtitle,
+            "hosts": [
+                {"engine_host": h.engine_host, "display_name": h.display_name, "description": h.description}
+                for h in config.brand.hosts
+            ],
+            "theme": {
+                "primary_color": config.brand.theme.primary_color,
+                "accent_color": config.brand.theme.accent_color,
+                "background_color": config.brand.theme.background_color,
+                "display_font": config.brand.theme.display_font,
+                "body_font": config.brand.theme.body_font,
+                "mono_font": config.brand.theme.mono_font,
+            },
+        },
+        # Capability flags (listener-safe subset). Listener JS reads these every
+        # poll and toggles [data-cap=KEY] elements (per design D2: client-side
+        # capability-conditional rendering reacts to runtime cap drift).
+        "capabilities": {
+            "llm": bool(config.anthropic_api_key or config.openai_api_key),
+            "anthropic_key": bool(config.anthropic_api_key),
+            "openai": bool(config.openai_api_key),
+            "ha": bool(config.ha_token and config.homeassistant.enabled),
+            "anthropic_degraded": _provider_health_snapshot(config, state)["anthropic"]["degraded"],
+        },
+        # Cross-page invariant facts (must match admin /status exactly).
+        "uptime_sec": uptime_sec,
+        "tracks_played": len(state.played_tracks),
     }
 
 
@@ -2143,6 +2283,28 @@ async def status(request: Request, _: None = Depends(require_admin_access)):
                 {"title": t.title, "artist": t.artist, "display": t.display, "spotify_id": t.spotify_id}
                 for t in state.playlist[:100]
             ],
+            "brand": {
+                "station_name": config.brand.station_name,
+                "frequency": config.brand.frequency,
+                "city": config.brand.city,
+                "founded": config.brand.founded,
+                "tagline": config.brand.tagline,
+                "about": config.brand.about,
+                "opengraph_subtitle": config.brand.opengraph_subtitle,
+                "hosts": [
+                    {"engine_host": h.engine_host, "display_name": h.display_name, "description": h.description}
+                    for h in config.brand.hosts
+                ],
+                "theme": {
+                    "primary_color": config.brand.theme.primary_color,
+                    "accent_color": config.brand.theme.accent_color,
+                    "background_color": config.brand.theme.background_color,
+                    "display_font": config.brand.theme.display_font,
+                    "body_font": config.brand.theme.body_font,
+                    "mono_font": config.brand.theme.mono_font,
+                },
+            },
+            "brand_warnings": list(config.brand_warnings),
         }
     )
     return payload

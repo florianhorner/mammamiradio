@@ -3,27 +3,39 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Mamma Mi Radio — 96,7 FM Milano</title>
-<meta name="theme-color" content="#14110F">
-<meta property="og:title" content="Mamma Mi Radio">
-<meta property="og:description" content="AI-powered Italian radio station. La notte è italiana.">
+<title>{{ brand.station_name }}{% if brand.frequency %} — {{ brand.frequency }}{% if brand.city %} {{ brand.city }}{% endif %}{% endif %}</title>
+<meta name="theme-color" content="{{ brand.theme.background_color }}">
+<meta property="og:title" content="{{ brand.station_name }}">
+<meta property="og:description" content="{{ brand.opengraph_subtitle or brand.tagline or brand.about }}">
 <meta property="og:type" content="website">
+<meta property="og:image" content="{{ ingress_prefix }}/og-card.png">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<meta name="mammamiradio-csrf-token" content="__MAMMAMIRADIO_CSRF_TOKEN__">
-<link rel="manifest" href="/static/manifest.json">
-<link rel="icon" href="/static/icon-192.svg" type="image/svg+xml">
-<link rel="apple-touch-icon" href="/static/icon-192.svg">
+<meta name="mammamiradio-csrf-token" content="{{ csrf_token }}">
+<link rel="manifest" href="{{ ingress_prefix }}/static/manifest.json">
+<link rel="icon" href="{{ ingress_prefix }}/static/icon-192.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="{{ ingress_prefix }}/static/icon-192.svg">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,600;0,700;1,400;1,600;1,700&family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/static/tokens.css">
-<link rel="stylesheet" href="/static/base.css">
-<link rel="stylesheet" href="/static/listener.css">
-<script src="/static/waveform.js" defer></script>
-<script src="/static/listener.js" defer></script>
+<link rel="stylesheet" href="{{ ingress_prefix }}/static/tokens.css?v={{ asset_version }}">
+<link rel="stylesheet" href="{{ ingress_prefix }}/static/base.css?v={{ asset_version }}">
+<link rel="stylesheet" href="{{ ingress_prefix }}/static/listener.css?v={{ asset_version }}">
+<style>
+  /* Brand theme tokens override Volare Refined defaults per [brand.theme] (PR-A guardrails). */
+  :root {
+    --brand-primary: {{ brand.theme.primary_color }};
+    --brand-accent: {{ brand.theme.accent_color }};
+    --brand-bg: {{ brand.theme.background_color }};
+    --brand-display-font: '{{ brand.theme.display_font }}', Georgia, serif;
+    --brand-body-font: '{{ brand.theme.body_font }}', sans-serif;
+    --brand-mono-font: '{{ brand.theme.mono_font }}', ui-monospace, monospace;
+  }
+</style>
+<script src="{{ ingress_prefix }}/static/waveform.js?v={{ asset_version }}" defer></script>
+<script src="{{ ingress_prefix }}/static/listener.js?v={{ asset_version }}" defer></script>
 </head>
-<body>
+<body data-state="warming">
 
 <!-- Protected: tricolor-band — kept in DOM for invariant (see CLAUDE.md) -->
 <div class="tricolor-band" aria-hidden="true"><div></div><div></div><div></div></div>
@@ -32,8 +44,12 @@
 <header class="mmr-nav">
   <div class="mmr-nav-inner">
     <a class="mmr-brand" href="#">
-      <img src="/static/icon-192.svg" alt="">
-      <span>Mamma <span class="mi">Mi</span> Radio</span>
+      <img src="{{ ingress_prefix }}/static/icon-192.svg" alt="">
+      {% if brand.station_name == "Mamma Mi Radio" %}
+        <span>Mamma <span class="mi">Mi</span> Radio</span>
+      {% else %}
+        <span>{{ brand.station_name }}</span>
+      {% endif %}
     </a>
     <nav>
       <a href="#stasera" class="active">Stasera</a>
@@ -41,24 +57,21 @@
       <a href="#dediche">Dediche</a>
       <a href="#about">About</a>
     </nav>
-    <button class="mmr-live-pill" id="nav-cta" type="button" aria-label="Ascolta ora — status: ready">
-      <span class="dot"></span> In Onda · 96.7
+    <button class="mmr-live-pill" id="nav-cta" type="button" aria-label="Ascolta ora">
+      <span class="dot"></span> In Onda{% if brand.frequency %} · {{ brand.frequency }}{% endif %}
     </button>
   </div>
 </header>
 
-<!-- HERO STAGE — fuses now-playing + hero copy + radio art -->
+<!-- HERO STAGE -->
 <section class="mmr-stage" id="stasera">
-
-  <!-- Console header: now playing -->
   <div class="mmr-stage-header">
     <span class="mmr-live"><span class="dot"></span> In Onda</span>
     <div class="mmr-np-meta">
-      <div class="eyebrow">Ora in onda · 96,7 FM</div>
-      <div class="title" id="np-track">In arrivo…</div>
+      <div class="eyebrow">Ora in onda{% if brand.frequency %} · {{ brand.frequency }}{% endif %}</div>
+      <div class="title" id="np-track">Stiamo accendendo la radio…</div>
       <div class="artist" id="np-artist"></div>
     </div>
-    <!-- Progress bar — JS still drives these IDs -->
     <div class="mmr-np-progress" aria-hidden="true">
       <div class="mmr-np-progress-inner">
         <span id="np-time-cur">0:00</span>
@@ -74,30 +87,25 @@
     <button class="mmr-play-btn" id="np-play" type="button" aria-label="Play">&#9654;</button>
   </div>
 
-  <!-- Hairline tricolor seam -->
   <div class="mmr-stage-seam" aria-hidden="true">
     <span class="seg g"></span><span class="seg w"></span><span class="seg r"></span>
   </div>
 
-  <!-- Hero copy (left column) -->
   <div class="mmr-hero-copy" id="hero">
-    <div class="mmr-eyebrow">In Diretta · 96,7 FM · Milano</div>
-    <h1 class="mmr-h1">La notte è <em>italiana.</em></h1>
-    <!-- Protected: .tricolor below h1 (spirit of tricolor-band requirement) -->
+    <div class="mmr-eyebrow">In Diretta{% if brand.frequency %} · {{ brand.frequency }}{% endif %}{% if brand.city %} · {{ brand.city }}{% endif %}</div>
+    <h1 class="mmr-h1">{{ brand.tagline or "La notte è italiana." }}</h1>
     <div class="mmr-tricolor" aria-hidden="true"><div class="g"></div><div class="w"></div><div class="r"></div></div>
-    <p class="mmr-lede">Radio scritta dall'intelligenza artificiale, voci umane dai conduttori di piazza, musica dal cuore del Bel Paese. Accendi e resta con noi.</p>
+    <p class="mmr-lede">{{ brand.about or "Radio scritta dall'intelligenza artificiale, voci umane dai conduttori di piazza, musica dal cuore del Bel Paese. Accendi e resta con noi." }}</p>
     <div class="mmr-cta-row">
       <button class="btn-primary" id="hero-play" type="button">Ascolta Ora</button>
       <button class="btn-ghost" id="hero-palinsesto" type="button">Il Palinsesto</button>
     </div>
-    <!-- Stats row -->
     <div class="mmr-stats">
       <div class="mmr-stat"><div class="mmr-stat-n" id="stat-airtime">—</div><div class="mmr-stat-l">In onda oggi</div></div>
       <div class="mmr-stat"><div class="mmr-stat-n" id="stat-tracks">—</div><div class="mmr-stat-l">Tracce in playlist</div></div>
-      <div class="mmr-stat"><div class="mmr-stat-n" id="stat-hosts">Marco · Giulia</div><div class="mmr-stat-l">I conduttori</div></div>
+      <div class="mmr-stat"><div class="mmr-stat-n" id="stat-hosts">{% for h in brand.hosts %}{{ h.display_name }}{% if not loop.last %} · {% endif %}{% endfor %}</div><div class="mmr-stat-l">I conduttori</div></div>
     </div>
-    <!-- Casa card (HA integration) -->
-    <aside class="mmr-casa" id="casa-card" role="status" aria-live="polite" hidden>
+    <aside class="mmr-casa" id="casa-card" role="status" aria-live="polite" data-cap="ha" hidden>
       <div class="eyebrow" id="casa-eyebrow">Casa · Home Assistant</div>
       <div id="casa-mood"></div>
       <div id="casa-weather"></div>
@@ -105,10 +113,8 @@
     </aside>
   </div>
 
-  <!-- Radio art (right column) — terracotta CSS radio illustration -->
   <div class="mmr-hero-art">
     <div class="mmr-radio" id="mmr-radio">
-      <!-- Tricolor top strip -->
       <div class="mmr-radio-strip">
         <span class="cap cap-l"></span>
         <span class="band band-g"></span>
@@ -116,55 +122,50 @@
         <span class="band band-r"></span>
         <span class="cap cap-r"></span>
       </div>
-      <!-- Antenna -->
       <div class="mmr-radio-antenna" aria-hidden="true">
         <span class="stem"></span><span class="tip"></span>
       </div>
-      <!-- Face -->
       <div class="mmr-radio-face">
-        <!-- Speaker -->
         <div class="mmr-speaker">
           <span class="ring r1"></span><span class="ring r2"></span>
           <span class="ring r3"></span><span class="ring r4"></span>
           <span class="ring r5"></span><span class="dot"></span>
         </div>
-        <!-- Display -->
         <div class="mmr-display">
           <div class="mmr-display-inner">
             <div class="mmr-display-line">
               <span class="mmr-display-lede">Stazione</span>
-              <span class="mmr-display-mhz">96,7</span>
-              <span class="mmr-display-unit">FM</span>
+              {% if brand.frequency %}
+                <span class="mmr-display-mhz">{{ brand.frequency.split(" ")[0] }}</span>
+                <span class="mmr-display-unit">FM</span>
+              {% else %}
+                <span class="mmr-display-mhz">—</span>
+              {% endif %}
             </div>
             <span class="mmr-display-strip strip-sage"></span>
             <span class="mmr-display-strip strip-coral"></span>
           </div>
         </div>
-        <!-- Big tuning knob -->
         <div class="mmr-knob mmr-knob-big" aria-hidden="true">
           <span class="mmr-knob-face"></span>
           <span class="mmr-knob-pip"></span>
           <span class="mmr-knob-cap">Sintonia</span>
         </div>
-        <!-- Small volume knob -->
         <div class="mmr-knob mmr-knob-small" aria-hidden="true">
           <span class="mmr-knob-face"></span>
           <span class="mmr-knob-pip"></span>
           <span class="mmr-knob-cap">Volume</span>
         </div>
-        <!-- Sound waves -->
         <svg class="mmr-waves" viewBox="0 0 120 160" aria-hidden="true">
           <path d="M 28 40 A 22 46 0 0 1 28 120"/>
           <path d="M 50 28 A 32 58 0 0 1 50 132"/>
           <path d="M 72 16 A 42 72 0 0 1 72 144"/>
         </svg>
       </div>
-      <!-- Feet -->
       <span class="mmr-foot foot-l"></span>
       <span class="mmr-foot foot-r"></span>
     </div>
   </div>
-
 </section>
 
 <!-- PALINSESTO -->
@@ -174,7 +175,7 @@
     <span class="mmr-sec-note" id="palinsesto-date">—</span>
   </div>
   <ol class="mmr-schedule" id="slots" aria-live="polite">
-    <li><span class="t">—</span><div class="m"><div class="title">In attesa…</div></div></li>
+    <li><span class="t">—</span><div class="m"><div class="title">Il palinsesto sta arrivando…</div></div></li>
   </ol>
 </section>
 
@@ -188,8 +189,8 @@
     <div class="mmr-dediche-list" id="quote-stack">
       <div class="mmr-dedica">
         <div class="eyebrow">Dedica</div>
-        <div class="quote">La sezione dediche si riempirà non appena i nostri ascoltatori manderanno un saluto.</div>
-        <div class="sig">— Mamma Mi Radio</div>
+        <div class="quote">Aspettiamo la prima dedica della sera…</div>
+        <div class="sig">— {{ brand.station_name }}</div>
       </div>
     </div>
     <form class="mmr-dedica-form" id="request-form">
@@ -198,7 +199,7 @@
           <span class="stamp-inner">
             <span class="stamp-top">POSTE · RADIOFONICHE</span>
             <span class="stamp-mid">Lit. 50</span>
-            <span class="stamp-bot">96,7 MHz</span>
+            <span class="stamp-bot">{% if brand.frequency %}{{ brand.frequency }}{% else %}—{% endif %}</span>
           </span>
         </span>
       </div>
@@ -210,7 +211,7 @@
       <button type="submit">
         <span aria-hidden="true" style="margin-right:8px">&#9993;</span>Spedisci con un bacio
       </button>
-      <div class="hint">Letta stasera da Nonna Giulia · <em>con amore</em></div>
+      <div class="hint">{% if brand.hosts %}Letta stasera da {{ brand.hosts[-1].display_name }} · <em>con amore</em>{% else %}<em>con amore</em>{% endif %}</div>
       <div class="form-sent" id="request-sent" style="display:none" role="status" aria-live="polite"></div>
     </form>
   </div>
@@ -220,34 +221,34 @@
 <section class="mmr-section mmr-about" id="about">
   <div class="mmr-sec-head">
     <h2>La <em>stazione</em></h2>
-    <span class="mmr-sec-note">dal 2024 · Napoli</span>
+    <span class="mmr-sec-note">{% if brand.founded %}dal {{ brand.founded }}{% endif %}{% if brand.city %} · {{ brand.city }}{% endif %}</span>
   </div>
   <div class="mmr-about-grid">
     <div class="mmr-about-card"><div class="eyebrow">Palinsesto</div><p>Scritto ogni sera da un modello linguistico addestrato sulla radiofonia italiana, dalle notti di Radio Montecarlo alle trasmissioni di quartiere degli anni '80.</p></div>
-    <div class="mmr-about-card"><div class="eyebrow">Voci</div><p>Conduttori umani — Francesca, Nonna Giulia, Marco del bar — registrati su nastro e rimixati per la notte.</p></div>
+    <div class="mmr-about-card"><div class="eyebrow">Voci</div><p>Conduttori — {% for h in brand.hosts %}{{ h.display_name }}{% if not loop.last %}, {% endif %}{% endfor %} — registrati su nastro e rimixati per la sera.</p></div>
     <div class="mmr-about-card"><div class="eyebrow">Musica</div><p>Catalogo curato: cantautori, melodico leggero, disco italiana, napoletano classico. Niente algoritmi di scoperta.</p></div>
-    <div class="mmr-about-card"><div class="eyebrow">Codice</div><p>Open source su GitHub. PWA installabile. Home Assistant integrato. Stream MP3 · HLS 320 kbps. Made with espresso.</p></div>
+    <div class="mmr-about-card"><div class="eyebrow">Codice</div><p>Open source su GitHub. <span data-cap="pwa" hidden>PWA installabile.</span> <span data-cap="ha" hidden>Home Assistant integrato.</span> <span data-cap="llm" hidden>AI scriptwriter.</span> Stream MP3 · 320 kbps. Made with espresso.</p></div>
   </div>
 </section>
 
 <!-- TICKER -->
 <div class="mmr-ticker" aria-hidden="true">
   <div class="track">
-    <span>La notte è italiana</span><span class="dot">&#10022;</span>
-    <span>Stasera · Nonna Giulia</span><span class="dot">&#10022;</span>
+    <span>{{ brand.tagline or "La notte è italiana" }}</span><span class="dot">&#10022;</span>
+    {% if brand.hosts %}<span>Stasera · {{ brand.hosts[-1].display_name }}</span><span class="dot">&#10022;</span>{% endif %}
     <span>Dediche aperte</span><span class="dot">&#10022;</span>
     <span>Manda al DJ</span><span class="dot">&#10022;</span>
-    <span>96.7 FM · 320 kbps</span><span class="dot">&#10022;</span>
-    <span>La notte è italiana</span><span class="dot">&#10022;</span>
-    <span>Stasera · Nonna Giulia</span><span class="dot">&#10022;</span>
+    {% if brand.frequency %}<span>{{ brand.frequency }} · 320 kbps</span><span class="dot">&#10022;</span>{% endif %}
+    <span>{{ brand.tagline or "La notte è italiana" }}</span><span class="dot">&#10022;</span>
+    {% if brand.hosts %}<span>Stasera · {{ brand.hosts[-1].display_name }}</span><span class="dot">&#10022;</span>{% endif %}
     <span>Dediche aperte</span><span class="dot">&#10022;</span>
     <span>Manda al DJ</span><span class="dot">&#10022;</span>
-    <span>96.7 FM · 320 kbps</span><span class="dot">&#10022;</span>
-    <span>La notte è italiana</span><span class="dot">&#10022;</span>
-    <span>Stasera · Nonna Giulia</span><span class="dot">&#10022;</span>
+    {% if brand.frequency %}<span>{{ brand.frequency }} · 320 kbps</span><span class="dot">&#10022;</span>{% endif %}
+    <span>{{ brand.tagline or "La notte è italiana" }}</span><span class="dot">&#10022;</span>
+    {% if brand.hosts %}<span>Stasera · {{ brand.hosts[-1].display_name }}</span><span class="dot">&#10022;</span>{% endif %}
     <span>Dediche aperte</span><span class="dot">&#10022;</span>
     <span>Manda al DJ</span><span class="dot">&#10022;</span>
-    <span>96.7 FM · 320 kbps</span><span class="dot">&#10022;</span>
+    {% if brand.frequency %}<span>{{ brand.frequency }} · 320 kbps</span><span class="dot">&#10022;</span>{% endif %}
   </div>
 </div>
 
@@ -255,16 +256,21 @@
 <footer class="mmr-footer">
   <div class="mmr-foot-inner">
     <div>
-      <img src="/static/icon-192.svg" alt="" class="foot-logo">
-      <div class="wordmark">Mamma <em>Mi</em> Radio</div>
+      <img src="{{ ingress_prefix }}/static/icon-192.svg" alt="" class="foot-logo">
+      <div class="wordmark">
+        {% if brand.station_name == "Mamma Mi Radio" %}
+          Mamma <em>Mi</em> Radio
+        {% else %}
+          {{ brand.station_name }}
+        {% endif %}
+      </div>
       <div class="mmr-tricolor thin" aria-hidden="true"><div class="g"></div><div class="w"></div><div class="r"></div></div>
       <p class="fine">Radio scritta dall'intelligenza artificiale. Musica umana. Made with espresso.</p>
     </div>
     <div class="foot-col">
       <div class="foot-head">Ascolta</div>
-      <a href="/stream">/stream · MP3</a>
-      <a href="/static/manifest.json">PWA install</a>
-      <a href="/admin">Home Assistant</a>
+      <a href="{{ ingress_prefix }}/stream">/stream · MP3</a>
+      <button id="pwa-install-btn" type="button" class="foot-link-btn" hidden>Installa app</button>
     </div>
     <div class="foot-col">
       <div class="foot-head">Stazione</div>
@@ -273,29 +279,59 @@
       <a href="#about">About</a>
     </div>
     <div class="foot-col">
-      <div class="foot-head">Operator</div>
-      <a href="/admin">/admin</a>
+      <div class="foot-head">Operatore</div>
+      <a href="{{ ingress_prefix }}/admin">/admin</a>
       <a href="https://github.com/florianhorner/mammamiradio">GitHub</a>
     </div>
   </div>
 </footer>
 
-<!-- Audio stream element -->
 <audio id="radio-audio" preload="none" crossorigin="anonymous"></audio>
 
-<!-- Wire mmr-radio is-playing animation to play state -->
 <script>
   (function () {
     var radioEl = document.getElementById('mmr-radio');
     var waveEl = document.getElementById('mmr-wave-bars');
     var playBtn = document.getElementById('np-play');
-    if (!playBtn || !radioEl) return;
-    var obs = new MutationObserver(function () {
-      var playing = playBtn.classList.contains('playing');
-      radioEl.classList.toggle('is-playing', playing);
-      if (waveEl) waveEl.classList.toggle('paused', !playing);
+    if (playBtn && radioEl) {
+      var obs = new MutationObserver(function () {
+        var playing = playBtn.classList.contains('playing');
+        radioEl.classList.toggle('is-playing', playing);
+        if (waveEl) waveEl.classList.toggle('paused', !playing);
+      });
+      obs.observe(playBtn, { attributes: true, attributeFilter: ['class'] });
+    }
+    // PWA install — proper beforeinstallprompt flow (replaces direct manifest.json link)
+    var deferredPrompt = null;
+    var installBtn = document.getElementById('pwa-install-btn');
+    var pwaCapEls = document.querySelectorAll('[data-cap="pwa"]');
+    window.addEventListener('beforeinstallprompt', function (e) {
+      e.preventDefault();
+      deferredPrompt = e;
+      if (installBtn) installBtn.hidden = false;
+      pwaCapEls.forEach(function (el) { el.hidden = false; });
     });
-    obs.observe(playBtn, { attributes: true, attributeFilter: ['class'] });
+    if (installBtn) {
+      installBtn.addEventListener('click', async function () {
+        if (!deferredPrompt) return;
+        deferredPrompt.prompt();
+        await deferredPrompt.userChoice;
+        deferredPrompt = null;
+        installBtn.hidden = true;
+      });
+    }
+    // Capability-conditional rendering (per design D2): toggle [data-cap] elements based on
+    // /public-status capabilities. listener.js calls window.mmrApplyCaps(caps) on each poll.
+    function applyCaps(caps) {
+      window.mmrLastCaps = caps;
+      document.querySelectorAll('[data-cap]').forEach(function (el) {
+        var key = el.dataset.cap;
+        if (key === 'pwa') return; // handled by beforeinstallprompt above
+        var on = !!(caps && caps[key]);
+        el.hidden = !on;
+      });
+    }
+    window.mmrApplyCaps = applyCaps;
   }());
 </script>
 
