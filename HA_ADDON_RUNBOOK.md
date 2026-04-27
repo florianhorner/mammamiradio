@@ -121,6 +121,18 @@ Before merging ANY change that touches addon files:
 - [ ] If path changed: grep all files for the old path
 - [ ] If renamed anything: `grep -r "old_name" .` returns zero hits
 
+## Release invariants gate (2026-04-27 onward)
+
+`scripts/check-release-invariants.sh` runs on every PR via `quality.yml`. It catches three audio delivery invariants that have caused production silence incidents:
+
+1. **FFmpeg `music_eq_chain` eq count**: must be exactly 2. A 3rd `equalizer=` filter in `mammamiradio/normalizer.py` triggers FFmpeg 8.x SIGABRT on Pi aarch64. Local: `bash scripts/check-release-invariants.sh`.
+2. **`_pick_canned_clip=None` test mock**: at least one test file must mock this to `None`. Tests that return a real file hide the empty-container silence scenario that happens in production (Pi container ships only README stubs in `demo_assets/banter/`).
+3. **`session_stopped` test**: at least one test file must reference `session_stopped`. Covers the post-restart scenario where the HA watchdog restarts the addon with the flag still set.
+
+**Version sync check**: also wired into every PR. If `pyproject.toml` or `ha-addon/mammamiradio/config.yaml` appears in the PR diff, CI runs the full `scripts/pre-release-check.sh` (version consistency + CHANGELOG head + all invariants). No-ops on non-version PRs. This closes the version-drift class of bug that caused the stale 2.10.7→2.10.9 CHANGELOG incident.
+
+Local pre-release: `make pre-release` (runs full `pre-release-check.sh`, all 5 checks).
+
 ## Release cooldown (stabilization run, 2026-04-17 onward)
 
 A 24-hour minimum gap is enforced between consecutive published releases. The gate is `.github/workflows/release-cooldown.yml`; it runs on every `v*` tag push and queries GitHub Releases for the prior published (non-draft, non-prerelease) release's `publishedAt`.

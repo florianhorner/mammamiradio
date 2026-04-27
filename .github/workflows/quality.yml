@@ -41,6 +41,22 @@ jobs:
       - name: Mypy
         run: mypy mammamiradio/ tests/
 
+      # On every PR: audio delivery invariants (FFmpeg eq count, empty-fallback test, post-restart test)
+      - name: Release invariants
+        if: github.event_name == 'pull_request'
+        run: bash scripts/check-release-invariants.sh
+
+      # On PRs that touch version files: full version-sync check (pyproject.toml ↔ config.yaml ↔ CHANGELOG)
+      - name: Version sync check
+        if: github.event_name == 'pull_request'
+        run: |
+          if git diff --name-only origin/main...HEAD | grep -qE 'pyproject\.toml|ha-addon/mammamiradio/config\.yaml'; then
+            echo "Version file changed — running full pre-release check..."
+            bash scripts/pre-release-check.sh
+          else
+            echo "No version files changed — skipping version sync check."
+          fi
+
       # On PRs: enforce admin panel standards when HTML files changed
       - name: Admin panel standards check
         if: github.event_name == 'pull_request'
