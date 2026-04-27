@@ -247,7 +247,10 @@ def _ffprobe_duration_sec(path: Path) -> float | None:
             check=False,
             timeout=5,
         )
-    except (OSError, subprocess.TimeoutExpired):
+    except subprocess.TimeoutExpired:
+        logger.warning("ffprobe timed out probing %s", path.name)
+        return None
+    except OSError:
         return None
     if result.returncode != 0:
         return None
