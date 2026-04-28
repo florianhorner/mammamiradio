@@ -4,7 +4,7 @@ Demo asset tree for the station. Only `sfx/studio/` is currently populated — t
 
 ## Structure
 
-- `sfx/studio/` — committed MP3 SFX used by the producer's "humanity events" (cough, paper rustle, chair creak, pen tap). These must live inside the package tree so `mammamiradio/producer.py` and packaging find them together.
+- `sfx/studio/` — committed MP3 SFX used by the producer's "humanity events" (cough, paper rustle, chair creak, pen tap). These must live inside the package tree so `mammamiradio/scheduling/producer.py` and packaging find them together.
 - `welcome/` — placeholder for onboarding clips (currently a README stub).
 - `banter/`, `ads/`, `music/`, `jingles/` — not committed yet. The runtime tolerates absence: banter falls back to stock copy, ads get skipped, music falls through local files and then silence.
 

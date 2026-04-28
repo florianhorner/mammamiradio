@@ -10,7 +10,7 @@
  *   - Play button canonical variants
  *   - Shared reset + reduced-motion
  *
- * Spec: DESIGN.md §§ "Waveform — canonical", "Status system — canonical"
+ * Spec: docs/design/system.md §§ "Waveform — canonical", "Status system — canonical"
  */
 
 /* ── Reset (matches pattern from inline styles we're replacing) ── */

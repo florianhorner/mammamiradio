@@ -34,7 +34,7 @@ The station uses live Italian charts when `MAMMAMIRADIO_ALLOW_YTDLP=true`, other
 - Check that `MAMMAMIRADIO_ALLOW_YTDLP=true` is set (it is by default in HA addon and Conductor)
 - A quality gate circuit breaker lets tracks through after 3 consecutive rejections to prevent stream starvation
 
-When listeners are connected, `/readyz` now also flips back to `503 starting` if playback has been silent for more than 30 seconds. The playback loop first tries a canned clip, then the oldest `cache/norm_*.mp3`, then, if `mammamiradio/demo_assets/music/` has any bundled MP3s, a random pick from that directory (the **WS2 demo-asset rescue** — prevents dead air on fresh installs and empty-cache container starts, a no-op when the directory is empty), and after 60 seconds without any bridge asset it requests a forced banter segment from the producer so the queue can recover without a restart. If the station has been explicitly stopped (Stop button on the admin panel), `/readyz` returns `503 stopped` regardless of queue depth so Home Assistant Supervisor and external load balancers do not route fresh listeners to a deliberately paused station. Reconnecting a listener auto-resumes the session and clears `session_stopped` before audio begins.
+When listeners are connected, `/readyz` now also flips back to `503 starting` if playback has been silent for more than 30 seconds. The playback loop first tries a canned clip, then the oldest `cache/norm_*.mp3`, then, if `mammamiradio/assets/demo/music/` has any bundled MP3s, a random pick from that directory (the **WS2 demo-asset rescue** — prevents dead air on fresh installs and empty-cache container starts, a no-op when the directory is empty), and after 60 seconds without any bridge asset it requests a forced banter segment from the producer so the queue can recover without a restart. If the station has been explicitly stopped (Stop button on the admin panel), `/readyz` returns `503 stopped` regardless of queue depth so Home Assistant Supervisor and external load balancers do not route fresh listeners to a deliberately paused station. Reconnecting a listener auto-resumes the session and clears `session_stopped` before audio begins.
 
 The app persists the last selected source to `cache/playlist_source.json` and restores it on restart. If a persisted source fails to load, startup falls back to charts then demo tracks.
 
@@ -49,7 +49,7 @@ INFO Rejecting non-music chart entry: BBC Studios - Do You Speak English? - Big 
 INFO Chart ingest: filtered 3 non-music entries
 ```
 
-If a legitimate song is being rejected, check `mammamiradio/playlist.py::_NON_MUSIC_MARKERS`. The list is deliberately narrow (podcast, bbc comedy, audiobook, news briefing, asmr, …) so real titles almost never trip it. If a real Italian song title legitimately contains one of these markers, remove the marker from the list rather than loosening the check.
+If a legitimate song is being rejected, check `mammamiradio/playlist/playlist.py::_NON_MUSIC_MARKERS`. The list is deliberately narrow (podcast, bbc comedy, audiobook, news briefing, asmr, …) so real titles almost never trip it. If a real Italian song title legitimately contains one of these markers, remove the marker from the list rather than loosening the check.
 
 ## The station keeps rejecting the same track
 

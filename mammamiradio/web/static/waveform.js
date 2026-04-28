@@ -9,7 +9,7 @@
  * Auto-initializes on DOMContentLoaded for any empty .waveform element.
  * Exposes globals: initWaveform, setWaveformPaused, setWaveformVariant.
  *
- * Spec: DESIGN.md § "Waveform — canonical, two variants, four states"
+ * Spec: docs/design/system.md § "Waveform — canonical, two variants, four states"
  */
 
 (function () {

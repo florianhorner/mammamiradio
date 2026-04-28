@@ -5,7 +5,7 @@
  * hero, palinsesto, dediche) against /public-status + /public-listener-requests
  * (brand-engine PR-F: no admin endpoints — works on any public deploy).
  *
- * See DESIGN.md §§ "Listener site composition" for the canonical layout.
+ * See docs/design/system.md §§ "Listener site composition" for the canonical layout.
  * Loads AFTER tokens.css + base.css + listener.css + waveform.js.
  */
 

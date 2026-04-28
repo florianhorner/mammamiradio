@@ -50,5 +50,5 @@ if echo "$PR_BODY" | grep -qF -- "- [x]"; then
 fi
 
 echo "::error::Admin panel files changed but the PR body has no checked items in the Admin Panel Standards section."
-echo "::error::Copy the checklist from ADMIN_PANEL_STANDARDS.md and check the applicable items before merging."
+echo "::error::Copy the checklist from docs/design/admin-panel.md and check the applicable items before merging."
 exit 1

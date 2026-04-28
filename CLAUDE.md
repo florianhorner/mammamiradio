@@ -113,9 +113,9 @@ Everything else lives under `docs/`:
 
 - Startup loads `radio.toml`, validates config, purges suspect cache files (< 10KB), restores persisted source selection from `cache/playlist_source.json`, fetches the playlist, initializes the clip ring buffer, then launches producer and playback tasks. Logs a one-line boot summary at the end.
 - **Capability flags** (`anthropic`, `ha`) drive a three-tier system. The dashboard derives a tier label from them: Demo Radio, Full AI Radio, Connected Home. `GET /api/capabilities` returns flags, tier, and a `next_step` hint guiding the user toward the next setup action.
-- Demo-first: the app boots immediately with whatever music source is available (yt-dlp charts, local `music/`, or bundled demo assets under `mammamiradio/demo_assets/music/`). The playback loop rescues from the norm cache, then bundled demo assets, then forces a banter segment after 60s of silence — silence is never the terminal state. No wizard, no gates.
-- If no LLM key is configured (neither Anthropic nor OpenAI), banter falls back to stock copy. `mammamiradio/demo_assets/banter/` is currently empty — the bundled-clip inventory is a TODO; until it is populated, missing-LLM banter is text-to-speech over stock copy rather than pre-recorded clips.
-- Music comes from live Italian charts (via yt-dlp), local `music/` files, or bundled demo assets under `mammamiradio/demo_assets/music/`. Queue starvation triggers a norm-cache rescue, then a demo-asset rescue, then forced banter — silence is never the terminal fallback.
+- Demo-first: the app boots immediately with whatever music source is available (yt-dlp charts, local `music/`, or bundled demo assets under `mammamiradio/assets/demo/music/`). The playback loop rescues from the norm cache, then bundled demo assets, then forces a banter segment after 60s of silence — silence is never the terminal state. No wizard, no gates.
+- If no LLM key is configured (neither Anthropic nor OpenAI), banter falls back to stock copy. `mammamiradio/assets/demo/banter/` is currently empty — the bundled-clip inventory is a TODO; until it is populated, missing-LLM banter is text-to-speech over stock copy rather than pre-recorded clips.
+- Music comes from live Italian charts (via yt-dlp), local `music/` files, or bundled demo assets under `mammamiradio/assets/demo/music/`. Queue starvation triggers a norm-cache rescue, then a demo-asset rescue, then forced banter — silence is never the terminal fallback.
 - If Anthropic fails mid-session, script generation falls back to OpenAI `gpt-4o-mini` when `OPENAI_API_KEY` is set, then to short stock copy.
 - If Home Assistant is enabled and `HA_TOKEN` is present, banter and ads may reference current home state.
 - `audio.bitrate` is the single source of truth for encoding, ICY headers, and playback throttling.
@@ -153,7 +153,7 @@ Do not deviate without explicit user approval. In QA mode, flag any code that do
 ## Brand assets
 
 - **Hero banner**: `docs/banner.png` — 1280×640 README hero. DALL-E background composited with Playfair italic typography. Source template: `docs/hero-composite.html` (contains regeneration instructions in comment header). The background image (`radio-hero-bg.png`) is generated via ChatGPT Images and not committed to git.
-- **Logo SVG**: `mammamiradio/logo.svg` — canonical vector source (variant G: classic radio with Italian flag stripe and sound waves)
+- **Logo SVG**: `mammamiradio/assets/logo.svg` — canonical vector source (variant G: classic radio with Italian flag stripe and sound waves)
 - **Palette**: Volare Refined — espresso dark with Italian warmth in accents. See `docs/design/system.md` for the full design system.
   - Background: espresso dark (`#14110F`) with subtle warm gradient at top
   - Cards: warm brown surfaces (`#251E19`) — unified across listener and admin
@@ -164,7 +164,7 @@ Do not deviate without explicit user approval. In QA mode, flag any code that do
 - **Typography**: Playfair Display italic (station name, display text) + Outfit (body) + JetBrains Mono (technical)
 - **Favicon**: inline SVG data URI in `admin.html` and `listener.html` (simplified version of logo)
 - **HA add-on icon**: `ha-addon/mammamiradio/icon.png` (256px) and `logo.png` (512px), rasterized from the SVG
-- To regenerate PNGs from SVG: `cairosvg mammamiradio/logo.svg -o icon.png -W 256 -H 256`
+- To regenerate PNGs from SVG: `cairosvg mammamiradio/assets/logo.svg -o icon.png -W 256 -H 256`
 - **Full design system**: `docs/design/system.md` — colors, typography, components, motion, anti-patterns
 
 ## Brand safety — hard rule
@@ -245,7 +245,7 @@ Every PR touching audio delivery (producer, streamer, normalizer, any bridge/fal
 
 **Scenario 1 — Normal:** feature works as designed.
 
-**Scenario 2 — Empty fallback:** canned clips absent, norm cache empty, no assets in container. The real container ships only README stubs in `demo_assets/banter/`. Tests that mock `_pick_canned_clip` to return a real file are hiding this class of bug.
+**Scenario 2 — Empty fallback:** canned clips absent, norm cache empty, no assets in container. The real container ships only README stubs in `mammamiradio/assets/demo/banter/`. Tests that mock `_pick_canned_clip` to return a real file are hiding this class of bug.
 
 **Scenario 3 — Post-restart:** flag files persisted from a prior run, `session_stopped` still set, HA watchdog has restarted. Test that a listener connecting AFTER a restart + stopped state still gets audio.
 

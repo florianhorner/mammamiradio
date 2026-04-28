@@ -2,7 +2,7 @@
  * Mamma Mi Radio — Listener Stylesheet
  * The listener surface is a radio station website, not a player widget.
  * Five-band vertical composition matching the site-v1 approved direction.
- * See DESIGN.md §§ "Listener site composition" for the canonical spec.
+ * See docs/design/system.md §§ "Listener site composition" for the canonical spec.
  *
  * Loads AFTER tokens.css + base.css. All palette, typography, spacing,
  * radii, motion, waveform, status-chip/dot, tricolor-band, play-btn

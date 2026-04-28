@@ -10,7 +10,7 @@ Run from the project root with the venv active:
 ```bash
 python -c "
 import asyncio
-from mammamiradio.tts import synthesize
+from mammamiradio.audio.tts import synthesize
 from pathlib import Path
 
 clips = [
@@ -21,7 +21,7 @@ clips = [
 ]
 
 async def gen():
-    out = Path('mammamiradio/demo_assets/welcome')
+    out = Path('mammamiradio/assets/demo/welcome')
     for name, voice, text in clips:
         await synthesize(text, voice, out / name)
         print(f'Generated: {name}')

@@ -581,17 +581,17 @@ All semantic states must pair a color with a **shape**: checkmark (✓), triangl
 
 | Asset | Path |
 |-------|------|
-| Admin | `mammamiradio/admin.html` |
-| Listener | `mammamiradio/listener.html` |
-| Logo SVG | `mammamiradio/logo.svg` |
+| Admin | `mammamiradio/web/templates/admin.html` |
+| Listener | `mammamiradio/web/templates/listener.html` |
+| Logo SVG | `mammamiradio/assets/logo.svg` |
 | HA add-on icon | `ha-addon/mammamiradio/icon.png` (256px) |
 | HA logo | `ha-addon/mammamiradio/logo.png` (512px) |
 | Design preview | `/tmp/design-preview-volare-refined.html` (local only, not committed) |
 
 To regenerate HA add-on PNGs from SVG:
 ```bash
-cairosvg mammamiradio/logo.svg -o ha-addon/mammamiradio/icon.png -W 256 -H 256
-cairosvg mammamiradio/logo.svg -o ha-addon/mammamiradio/logo.png -W 512 -H 512
+cairosvg mammamiradio/assets/logo.svg -o ha-addon/mammamiradio/icon.png -W 256 -H 256
+cairosvg mammamiradio/assets/logo.svg -o ha-addon/mammamiradio/logo.png -W 512 -H 512
 ```
 
 ## Decisions Log

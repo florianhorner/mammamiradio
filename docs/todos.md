@@ -44,7 +44,7 @@ Imported `_ffprobe_duration_sec` in producer.py. Added probe in prewarm path (be
 
 **Depends on / blocked by:** none.
 
-**Affected files:** `mammamiradio/admin.html` (or its replacement).
+**Affected files:** `mammamiradio/web/templates/admin.html` (or its replacement).
 
 ### Docker container smoke test in CI
 After `addon-build.yml` builds the image, run a 30s smoke test:

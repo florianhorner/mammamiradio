@@ -3,6 +3,7 @@
   "mammamiradio.audio.audio_quality": 100,
   "mammamiradio.audio.normalizer": 96,
   "mammamiradio.audio.tts": 90,
+  "mammamiradio.audio.voice_catalog": 100,
   "mammamiradio.core.capabilities": 100,
   "mammamiradio.core.config": 90,
   "mammamiradio.core.models": 98,
@@ -23,5 +24,6 @@
   "mammamiradio.scheduling.clip": 96,
   "mammamiradio.scheduling.producer": 83,
   "mammamiradio.scheduling.scheduler": 100,
-  "mammamiradio.web.streamer": 91
+  "mammamiradio.web.streamer": 91,
+  "mammamiradio.web.og_card": 96
 }

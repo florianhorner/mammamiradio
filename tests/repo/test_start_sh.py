@@ -37,9 +37,9 @@ def _caddy_env(tmp_path):
     venv_bin.mkdir(parents=True)
 
     # Python shim: handles the three call shapes start.sh makes
-    #   1. -m mammamiradio.config runtime-json  → fake JSON
-    #   2. -c '...json.load...'                 → delegate to real python3
-    #   3. -m uvicorn ...                       → sleep (long-lived server)
+    #   1. -m mammamiradio.core.config runtime-json  → fake JSON
+    #   2. -c '...json.load...'                      → delegate to real python3
+    #   3. -m uvicorn ...                            → sleep (long-lived server)
     _write_shim(
         venv_bin / "python",
         textwrap.dedent(
@@ -104,10 +104,17 @@ def test_start_sh_sources_dotenv():
 
 
 def test_start_sh_uses_runtime_json():
-    """start.sh should call mammamiradio.config runtime-json to get host/port."""
+    """start.sh should call mammamiradio.core.config runtime-json to get host/port."""
     content = (REPO_ROOT / "start.sh").read_text()
     assert "runtime-json" in content
     assert "bind_host" in content
+    # Guard the cathedral move: ensure the module path is the new nave-prefixed one.
+    # If anyone reverts to `mammamiradio.config`, start.sh fails at runtime but tests
+    # were silent — this assertion closes that gap.
+    assert "mammamiradio.core.config" in content, (
+        "start.sh must invoke `python -m mammamiradio.core.config runtime-json`. "
+        "The flat `mammamiradio.config` module no longer exists post-cathedral."
+    )
     assert "port" in content
 
 
