@@ -649,9 +649,7 @@ def _is_mpeg1_l3_header(frame_header: bytes, *, allow_free_bitrate: bool) -> boo
 
     if version != 3 or layer != 1 or sample_rate_idx == 3 or bitrate_idx == 0x0F:
         return False
-    if not allow_free_bitrate and bitrate_idx == 0:
-        return False
-    return True
+    return not (not allow_free_bitrate and bitrate_idx == 0)
 
 
 def _skip_id3_and_xing_header(f) -> None:
