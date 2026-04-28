@@ -115,7 +115,7 @@ class PersonaSection:
 
 
 # Volare Refined defaults — fall-back values when [brand] is missing or invalid.
-# These match listener.css token defaults and DESIGN.md.
+# These match listener.css token defaults and docs/design/system.md.
 _BRAND_DEFAULT_PRIMARY = "#F4D048"  # --sun
 _BRAND_DEFAULT_ACCENT = "#B82C20"  # --lancia
 _BRAND_DEFAULT_BG = "#14110F"  # --shadow

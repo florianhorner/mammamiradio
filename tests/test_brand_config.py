@@ -63,7 +63,7 @@ def test_hex_lightness_light_color():
 
 
 def test_contrast_ratio_cream_on_espresso():
-    # WCAG AAA tier; matches DESIGN.md claim of 12.4:1
+    # WCAG AAA tier; matches docs/design/system.md claim of 12.4:1
     ratio = _contrast_ratio("#F5EDD8", "#14110F")
     assert ratio is not None
     assert ratio > 12.0

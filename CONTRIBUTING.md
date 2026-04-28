@@ -21,7 +21,7 @@ pip install -e .
 cp .env.example .env
 ```
 
-If you use Conductor, see [CONDUCTOR.md](CONDUCTOR.md) for workspace lifecycle details.
+If you use Conductor, see [docs/conductor.md](docs/conductor.md) for workspace lifecycle details.
 
 Then fill in whatever `.env` values you need:
 
@@ -147,10 +147,10 @@ If you are binding to `0.0.0.0`, set `ADMIN_PASSWORD` or `ADMIN_TOKEN` first or 
 When behavior changes, update the matching docs in the same change:
 
 - `README.md` for user-facing setup and route changes
-- `ARCHITECTURE.md` for runtime flow and system design changes
+- `docs/architecture.md` for runtime flow and system design changes
 - `CLAUDE.md` for the codebase map used by coding agents
-- `TROUBLESHOOTING.md` for failure modes users will actually hit
-- `OPERATIONS.md` for runtime and deployment assumptions
+- `docs/troubleshooting.md` for failure modes users will actually hit
+- `docs/operations.md` for runtime and deployment assumptions
 - `CHANGELOG.md` for shipped behavior worth calling out
 
 If you add a new config key, env var, route, auth rule, or fallback path and do not document it, the docs are wrong. Fix them in the same change.

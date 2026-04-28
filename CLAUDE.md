@@ -44,13 +44,25 @@ The restart happens once, planned, when the addon updates. Not during the day. N
 
 ## Docs
 
-- `README.md` - product overview and operator quick start
-- `ARCHITECTURE.md` - runtime flow, queue model, and audio pipeline
+Sacred files at the repo root (one viewport, one job each):
+
+- `README.md` - product pitch and operator quick start
 - `CONTRIBUTING.md` - local setup, tests, and smoke checks
-- `TROUBLESHOOTING.md` - common failures and recovery paths
-- `HA_ADDON_RUNBOOK.md` - addon release process, config contract, pre-merge checklist
-- `OPERATIONS.md` - runtime assumptions and deploy reality
+- `CLAUDE.md` - agent rules and leadership principles (this file)
 - `CHANGELOG.md` - release notes
+
+Everything else lives under `docs/`:
+
+- `docs/architecture.md` - runtime flow, queue model, and audio pipeline
+- `docs/operations.md` - runtime assumptions and deploy reality
+- `docs/troubleshooting.md` - common failures and recovery paths
+- `docs/runbooks/ha-addon.md` - addon release process, config contract, pre-merge checklist
+- `docs/design/system.md` - Volare design system: colors, typography, components, motion
+- `docs/design/admin-panel.md` - admin control-room layout, info architecture, motion rules
+- `docs/conductor.md` - Conductor workspace lifecycle and `.env` discovery
+- `docs/agents.md` - agent-specific notes and integration points
+- `docs/stabilization-log.md` - weekly fix-hours and emergency-patch counts (release cooldown gate)
+- `docs/todos.md` - deferred work items (operator-honesty pivot, etc.)
 
 ## Commands
 
@@ -147,15 +159,15 @@ tests/                pytest coverage
 
 ## Design System
 
-Always read `DESIGN.md` before making any visual or UI decisions.
+Always read `docs/design/system.md` before making any visual or UI decisions.
 All font choices, colors, spacing, and aesthetic direction are defined there.
-Do not deviate without explicit user approval. In QA mode, flag any code that doesn't match `DESIGN.md`.
+Do not deviate without explicit user approval. In QA mode, flag any code that doesn't match `docs/design/system.md`.
 
 ## Brand assets
 
 - **Hero banner**: `docs/banner.png` — 1280×640 README hero. DALL-E background composited with Playfair italic typography. Source template: `docs/hero-composite.html` (contains regeneration instructions in comment header). The background image (`radio-hero-bg.png`) is generated via ChatGPT Images and not committed to git.
 - **Logo SVG**: `mammamiradio/logo.svg` — canonical vector source (variant G: classic radio with Italian flag stripe and sound waves)
-- **Palette**: Volare Refined — espresso dark with Italian warmth in accents. See `DESIGN.md` for the full design system.
+- **Palette**: Volare Refined — espresso dark with Italian warmth in accents. See `docs/design/system.md` for the full design system.
   - Background: espresso dark (`#14110F`) with subtle warm gradient at top
   - Cards: warm brown surfaces (`#251E19`) — unified across listener and admin
   - Accent: golden sun (`#F4D048`, `#ECCC30`) — play button, active borders
@@ -166,7 +178,7 @@ Do not deviate without explicit user approval. In QA mode, flag any code that do
 - **Favicon**: inline SVG data URI in `admin.html` and `listener.html` (simplified version of logo)
 - **HA add-on icon**: `ha-addon/mammamiradio/icon.png` (256px) and `logo.png` (512px), rasterized from the SVG
 - To regenerate PNGs from SVG: `cairosvg mammamiradio/logo.svg -o icon.png -W 256 -H 256`
-- **Full design system**: `DESIGN.md` — colors, typography, components, motion, anti-patterns
+- **Full design system**: `docs/design/system.md` — colors, typography, components, motion, anti-patterns
 
 ## Brand safety — hard rule
 
@@ -203,7 +215,7 @@ Why: the scriptwriter generates fake ads in the brand's voice, makes false produ
   - On main merge: `update` mode — auto-ratchets all floors up and commits the new values. Zero human intervention.
 - **Local check**: `make coverage-check` to verify locally. `make coverage-ratchet` to preview what CI would commit.
 - **Adding tests**: Write tests, push. CI will auto-raise the floors on merge. The next PR that drops any module will fail.
-- **Release cooldown gate**: `.github/workflows/release-cooldown.yml` blocks any `v*` tag push if the prior published release is <24h old. Bypass by adding the `hotfix` label to the PR that introduced the tagged commit. Self-test: `bash tests/workflows/test_cooldown_gate.sh` (9 cases; also runs in `quality.yml` on every PR). See `HA_ADDON_RUNBOOK.md` and `STABILIZATION_LOG.md` for the measurement plan.
+- **Release cooldown gate**: `.github/workflows/release-cooldown.yml` blocks any `v*` tag push if the prior published release is <24h old. Bypass by adding the `hotfix` label to the PR that introduced the tagged commit. Self-test: `bash tests/workflows/test_cooldown_gate.sh` (9 cases; also runs in `quality.yml` on every PR). See `docs/runbooks/ha-addon.md` and `docs/stabilization-log.md` for the measurement plan.
 - **Release invariants** (`scripts/check-release-invariants.sh`): runs on every PR. Catches (1) FFmpeg `music_eq_chain` equalizer count ≠ 2 (Pi aarch64 SIGABRT risk), (2) missing `_pick_canned_clip=None` test mock (empty-container silence untested), (3) missing `session_stopped` test (post-restart silence untested). Local: `bash scripts/check-release-invariants.sh`.
 - **Version sync check** (inline in `quality.yml`): runs on PRs that touch `pyproject.toml` or `ha-addon/mammamiradio/config.yaml`. Runs the full `scripts/pre-release-check.sh` (version consistency + CHANGELOG head + all invariants). No-ops on unrelated PRs. Local: `make pre-release`.
 
@@ -223,7 +235,7 @@ When editing any HTML file, grep for these elements before committing.
 
 **Any change to a route, config key, env var, auth rule, or fallback path must update at least one of the following docs in the same commit:**
 
-`README.md`, `ARCHITECTURE.md`, `TROUBLESHOOTING.md`, `OPERATIONS.md`, `CLAUDE.md`, `CHANGELOG.md`
+`README.md`, `docs/architecture.md`, `docs/troubleshooting.md`, `docs/operations.md`, `CLAUDE.md`, `CHANGELOG.md`
 
 If the behavior changed and the docs didn't, the docs are wrong. Fix them in the same change, not a follow-up.
 

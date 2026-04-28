@@ -8,7 +8,7 @@ Phase A consolidation closed.
 Non-`:root` custom-property scopes (component-scoped vars inside a class)
 are allowed and ignored.
 
-See DESIGN.md § "Listener site composition — canonical" and the
+See docs/design/system.md § "Listener site composition — canonical" and the
 Decisions Log entry dated 2026-04-21.
 """
 
@@ -68,7 +68,7 @@ def test_no_palette_primitives_outside_tokens_css(path: Path) -> None:
     assert not primitives, (
         f"{rel} re-introduces :root primitives: {preview}\n"
         f"Palette / typography / spacing tokens must ONLY be defined in "
-        f"mammamiradio/static/tokens.css. See DESIGN.md § "
+        f"mammamiradio/static/tokens.css. See docs/design/system.md § "
         f"'Listener site composition — canonical' and the Decisions Log "
         f"entry dated 2026-04-21."
     )

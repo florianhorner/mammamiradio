@@ -26,7 +26,7 @@ Florian is red-green colorblind. This is non-negotiable.
 
 ## Design system
 
-See `DESIGN.md` for the full system. Admin panel must use:
+See `system.md` (sibling) for the full system. Admin panel must use:
 
 - **Background:** espresso dark `#14110F` with warm gradient
 - **Cards:** warm brown `#251E19`
