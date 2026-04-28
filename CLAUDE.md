@@ -12,7 +12,10 @@ The listener must always believe they are hearing a real radio station. Dead air
 **2. INSTANT AUDIO**
 A listener who connects must hear sound within 1–2 seconds, every time. No exceptions for cold starts, session resumes, idle wakeups, or addon restarts. Every connect path needs an immediate audio source — pre-normalized track, canned clip, anything. Build the bridge first, fix root causes second.
 
-**3. THE README IS THE PITCH**
+**3. NO LIVE SURGERY ON PRODUCTION SYSTEMS**
+The only legitimate code-change path for the addon is `branch → PR → merge → CI builds image → addon updates`. No `docker cp`, no `pkill`, no live config edits, no addon restarts without explicit confirmation in the current message. Sleeping humans depend on the system. See **Production Systems Discipline — HARD STOP** below for the full rule.
+
+**4. THE README IS THE PITCH**
 A new reader must get it in 30 seconds or less. That is a KPI, not an aspiration. If the README needs scrolling, paragraphs of context, or a glossary before the product clicks, we failed. The first viewport carries the entire pitch: what it is, what makes it different, and what the reader does next. Same standard applies to the repo at large — when a new contributor opens the source tree, the folder hierarchy IS the mental model. If they can't find where a feature lives in 30 seconds, the structure failed.
 
 ## Production Systems Discipline — HARD STOP
@@ -164,7 +167,7 @@ Do not deviate without explicit user approval. In QA mode, flag any code that do
 - **Typography**: Playfair Display italic (station name, display text) + Outfit (body) + JetBrains Mono (technical)
 - **Favicon**: inline SVG data URI in `admin.html` and `listener.html` (simplified version of logo)
 - **HA add-on icon**: `ha-addon/mammamiradio/icon.png` (256px) and `logo.png` (512px), rasterized from the SVG
-- To regenerate PNGs from SVG: `cairosvg mammamiradio/assets/logo.svg -o icon.png -W 256 -H 256`
+- To regenerate PNGs from SVG: `cairosvg mammamiradio/assets/logo.svg -o ha-addon/mammamiradio/icon.png -W 256 -H 256 && cairosvg mammamiradio/assets/logo.svg -o ha-addon/mammamiradio/logo.png -W 512 -H 512`
 - **Full design system**: `docs/design/system.md` — colors, typography, components, motion, anti-patterns
 
 ## Brand safety — hard rule

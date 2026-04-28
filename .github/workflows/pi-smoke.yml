@@ -44,7 +44,7 @@ jobs:
           pip install -r requirements-dev.txt
 
       - name: Run normalizer smoke tests (mocked)
-        run: pytest tests/test_normalizer_unit.py tests/test_normalizer_extended.py -v
+        run: pytest tests/audio/test_normalizer_unit.py tests/audio/test_normalizer_extended.py -v
 
       - name: Run normalizer real-ffmpeg integration tests
-        run: pytest tests/test_normalizer_real_ffmpeg.py -v
+        run: pytest tests/audio/test_normalizer_real_ffmpeg.py -v

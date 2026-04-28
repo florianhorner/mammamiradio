@@ -115,6 +115,10 @@ def test_start_sh_uses_runtime_json():
         "start.sh must invoke `python -m mammamiradio.core.config runtime-json`. "
         "The flat `mammamiradio.config` module no longer exists post-cathedral."
     )
+    assert "-m mammamiradio.config runtime-json" not in content, (
+        "Legacy `python -m mammamiradio.config runtime-json` invocation must not be "
+        "present in start.sh — it fails with `No module named mammamiradio.config`."
+    )
     assert "port" in content
 
 

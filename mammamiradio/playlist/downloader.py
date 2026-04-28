@@ -209,7 +209,7 @@ _LOCAL_FILES_TTL = 60.0  # seconds
 
 
 def _find_demo_asset(track: Track) -> Path | None:
-    """Check bundled demo_assets/music/ for a matching MP3."""
+    """Check bundled assets/demo/music/ for a matching MP3."""
     global _demo_files_cache
     cache_key = str(_DEMO_ASSETS_DIR)
     if _demo_files_cache is None or _demo_files_cache[0] != cache_key:

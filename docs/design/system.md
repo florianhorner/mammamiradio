@@ -589,10 +589,12 @@ All semantic states must pair a color with a **shape**: checkmark (✓), triangl
 | Design preview | `/tmp/design-preview-volare-refined.html` (local only, not committed) |
 
 To regenerate HA add-on PNGs from SVG:
+
 ```bash
 cairosvg mammamiradio/assets/logo.svg -o ha-addon/mammamiradio/icon.png -W 256 -H 256
 cairosvg mammamiradio/assets/logo.svg -o ha-addon/mammamiradio/logo.png -W 512 -H 512
 ```
+
 
 ## Decisions Log
 | Date | Decision | Rationale |

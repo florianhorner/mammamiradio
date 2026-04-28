@@ -1502,7 +1502,7 @@ async def hot_reload_modules(request: Request, _: None = Depends(require_admin_a
         importlib.reload(_scriptwriter_mod)
         duration_ms = int((time.monotonic() - t0) * 1000)
         request.app.state._last_hot_reload_ts = now
-        logger.info("hot-reload: reloaded mammamiradio.scriptwriter in %dms", duration_ms)
+        logger.info("hot-reload: reloaded mammamiradio.hosts.scriptwriter in %dms", duration_ms)
         return {
             "ok": True,
             "reloaded_modules": ["mammamiradio.hosts.scriptwriter"],
