@@ -1266,3 +1266,92 @@ def test_jamendo_lookup_does_not_reuse_legacy_unsourced_cache(tmp_path):
     legacy_path.write_text("legacy youtube audio")
 
     assert _resolve_cached_or_local(track, cache_dir, music_dir) is None
+
+
+def test_legacy_youtube_cache_hit_returns_old_path(tmp_path):
+    from mammamiradio.downloader import _resolve_cached_or_local
+
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+    music_dir = tmp_path / "music"
+    music_dir.mkdir()
+    track = Track(
+        title="Legacy Hit",
+        artist="Old Artist",
+        duration_ms=180000,
+        youtube_id="abc123",
+        source="youtube",
+    )
+    legacy_path = cache_dir / f"{track.legacy_cache_key}.mp3"
+    legacy_path.write_bytes(b"x" * 600_000)
+
+    result = _resolve_cached_or_local(track, cache_dir, music_dir)
+    assert result == legacy_path
+
+
+def test_jamendo_without_direct_url_blocks_ytdlp(tmp_path):
+    from mammamiradio.downloader import _download_sync
+
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+    music_dir = tmp_path / "music"
+    music_dir.mkdir()
+    track = Track(
+        title="No URL",
+        artist="Jamendo Artist",
+        duration_ms=180000,
+        spotify_id="jamendo_no_url",
+        source="jamendo",
+    )
+
+    with (
+        patch("mammamiradio.downloader._ytdlp_enabled", return_value=True),
+        patch("mammamiradio.downloader._download_ytdlp") as mock_ytdlp,
+    ):
+        result = _download_sync(track, cache_dir, music_dir)
+
+    assert result.name == f"_failed_{track.cache_key}.mp3"
+    assert result.read_text() == "jamendo fallback blocked"
+    mock_ytdlp.assert_not_called()
+
+
+def test_failed_download_marker_short_circuits_resolve(tmp_path):
+    from mammamiradio.downloader import _resolve_cached_or_local
+
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+    music_dir = tmp_path / "music"
+    music_dir.mkdir()
+    track = Track(
+        title="Failed Marker",
+        artist="Skip Artist",
+        duration_ms=180000,
+        spotify_id="jamendo_failed",
+        source="jamendo",
+    )
+    marker = cache_dir / f"_failed_{track.cache_key}.mp3"
+    marker.write_text("prior failure")
+
+    result = _resolve_cached_or_local(track, cache_dir, music_dir)
+    assert result == marker
+
+
+def test_resolve_uses_track_local_path_when_set(tmp_path):
+    from mammamiradio.downloader import _resolve_cached_or_local
+
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+    music_dir = tmp_path / "music"
+    music_dir.mkdir()
+    local_file = tmp_path / "local.mp3"
+    local_file.write_bytes(b"x" * 600_000)
+    track = Track(
+        title="Local Track",
+        artist="Local Artist",
+        duration_ms=180000,
+        local_path=local_file,
+        source="local",
+    )
+
+    result = _resolve_cached_or_local(track, cache_dir, music_dir)
+    assert result == local_file

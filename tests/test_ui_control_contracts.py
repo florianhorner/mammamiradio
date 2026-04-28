@@ -26,6 +26,7 @@ Disconnects targeted (findings from UI audit):
 from __future__ import annotations
 
 import asyncio
+import re
 import time
 from pathlib import Path
 
@@ -472,8 +473,8 @@ class TestSourceControlVisibilityContract:
             resp = await c.get("/admin", headers=AUTH)
 
         html = resp.text
-        assert 'id="sourceJamendoBtn" data-capability="jamendo"' in html
-        assert 'id="sourceChartsBtn" data-capability="charts_reload"' in html
+        assert re.search(r'id="sourceJamendoBtn"[^>]*\bdata-capability="jamendo"', html)
+        assert re.search(r'id="sourceChartsBtn"[^>]*\bdata-capability="charts_reload"', html)
         assert "function sourceControlVisibility(caps)" in html
         assert "Boolean(capabilities.jamendo)" in html
         assert "Boolean(capabilities.charts_reload)" in html

@@ -11,7 +11,7 @@ from collections import deque
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import TYPE_CHECKING, ClassVar
+from typing import TYPE_CHECKING, ClassVar, Literal
 from urllib.parse import urlsplit, urlunsplit
 
 if TYPE_CHECKING:
@@ -46,7 +46,7 @@ class Track:
     album: str = ""
     explicit: bool = False
     popularity: int = 0
-    source: str = "youtube"
+    source: Literal["youtube", "jamendo", "local", "demo"] = "youtube"
 
     @staticmethod
     def _slugify_cache_value(raw: str, *, max_length: int = 160) -> str:

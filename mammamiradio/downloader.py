@@ -374,6 +374,10 @@ def _resolve_cached_or_local(track: Track, cache_dir: Path, music_dir: Path) -> 
     if out_path.exists():
         logger.info("Cache hit: %s", track.display)
         return out_path
+    failed_path = cache_dir / f"_failed_{track.cache_key}.mp3"
+    if failed_path.exists():
+        logger.info("Failed-download marker hit, skipping: %s", track.display)
+        return failed_path
     if track.source == "youtube":
         legacy_path = cache_dir / f"{track.legacy_cache_key}.mp3"
         if legacy_path.exists():

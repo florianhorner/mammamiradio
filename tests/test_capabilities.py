@@ -116,6 +116,11 @@ def test_get_capabilities_sets_jamendo_flag():
     assert caps.jamendo is True
 
 
+def test_get_capabilities_jamendo_flag_false_for_whitespace_client_id():
+    caps = get_capabilities(_config(jamendo_client_id="   "), _state())
+    assert caps.jamendo is False
+
+
 def test_get_capabilities_sets_charts_reload_only_when_ytdlp_enabled():
     assert get_capabilities(_config(allow_ytdlp=False), _state()).charts_reload is False
     assert get_capabilities(_config(allow_ytdlp=True), _state()).charts_reload is True
