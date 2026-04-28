@@ -6,8 +6,8 @@
 set -euo pipefail
 
 ADMIN_FILES=(
-  "mammamiradio/admin.html"
-  "mammamiradio/listener.html"
+  "mammamiradio/web/templates/admin.html"
+  "mammamiradio/web/templates/listener.html"
 )
 
 # Determine changed files relative to base (PR context) or HEAD~1 (push context)

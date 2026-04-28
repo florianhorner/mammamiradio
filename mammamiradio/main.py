@@ -13,14 +13,14 @@ from pathlib import Path
 
 from fastapi import FastAPI
 
-from mammamiradio.config import load_config
-from mammamiradio.downloader import evict_cache_lru, purge_suspect_cache_files
-from mammamiradio.models import StationState
-from mammamiradio.persona import PersonaStore
-from mammamiradio.playlist import DEMO_TRACKS, fetch_startup_playlist, read_persisted_source
-from mammamiradio.producer import prewarm_first_segment, run_producer
-from mammamiradio.streamer import LiveStreamHub, router, run_playback_loop
-from mammamiradio.sync import init_db
+from mammamiradio.core.config import load_config
+from mammamiradio.core.models import StationState
+from mammamiradio.core.sync import init_db
+from mammamiradio.hosts.persona import PersonaStore
+from mammamiradio.playlist.downloader import evict_cache_lru, purge_suspect_cache_files
+from mammamiradio.playlist.playlist import DEMO_TRACKS, fetch_startup_playlist, read_persisted_source
+from mammamiradio.scheduling.producer import prewarm_first_segment, run_producer
+from mammamiradio.web.streamer import LiveStreamHub, router, run_playback_loop
 
 logging.basicConfig(
     level=getattr(logging, os.getenv("LOG_LEVEL", "INFO").upper(), logging.INFO),
@@ -101,7 +101,7 @@ async def startup():
     except Exception as e:
         logger.error("Playlist fetch crashed: %s — using demo playlist", e)
         tracks = list(DEMO_TRACKS)
-        from mammamiradio.models import PlaylistSource
+        from mammamiradio.core.models import PlaylistSource
 
         playlist_source = PlaylistSource(
             kind="demo",

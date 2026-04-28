@@ -45,7 +45,7 @@ echo ""
 echo "3. FFmpeg music_eq filter chain (normalizer.py)"
 # Count equalizer= lines inside the music_eq_chain assignment block.
 # MUST stay at 2: adding a 3rd triggers FFmpeg 8.x SIGABRT (psymodel.c:576) on Pi aarch64.
-EQ_COUNT=$(awk '/music_eq_chain = \(/,/^\s*\)/' mammamiradio/normalizer.py | grep -c 'equalizer=' || true)
+EQ_COUNT=$(awk '/music_eq_chain = \(/,/^\s*\)/' mammamiradio/audio/normalizer.py | grep -c 'equalizer=' || true)
 
 if [ "$EQ_COUNT" -eq 2 ]; then
     ok "music_eq_chain has $EQ_COUNT equalizer filters (de-mud 200Hz + presence 3kHz)"

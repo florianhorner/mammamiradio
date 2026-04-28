@@ -124,38 +124,25 @@ Everything else lives under `docs/`:
 
 ## Project structure
 
+The folder hierarchy IS the mental model (leadership principle #4). For a single-page "where does X live" map see `docs/REPO_MAP.md`.
+
 ```text
 mammamiradio/
-  main.py             FastAPI app startup/shutdown lifecycle
-  config.py           radio.toml + .env parsing, validation, runtime-json helper
-  models.py           shared data models and station state
-  producer.py         async segment production loop
-  streamer.py         playback loop, routes, auth checks, public/admin status
-  scheduler.py        segment scheduling and upcoming preview
-  scriptwriter.py     Anthropic/OpenAI API calls for banter and ad JSON (with automatic fallback)
-  playlist.py         charts, local, and demo playlist loading
-  downloader.py       local file, yt-dlp, and placeholder audio fallback
-  normalizer.py       FFmpeg helpers for normalize, mix, concat, generated SFX, studio bleed, and oneshot mixing
-  tts.py              Edge TTS synthesis for hosts and ads (with +90% rate for pharma disclaimers)
-  clip.py             WTF clip extraction from ring buffer, save, and cleanup
-  ha_context.py       Home Assistant polling, Italian state formatting, mood classification, reactive triggers
-  ha_enrichment.py    Pure HA event derivation (diff_states, event pruning, numeric passthrough)
-  capabilities.py     Capability flags (anthropic, ha), tier derivation, and next_step hints
-  persona.py          Compounding listener memory: persona, motifs, session tracking, arc phases, prompt injection filtering
-  song_cues.py        Per-track machine-derived memory: anthems, skip bits, LLM reactions
-  sync.py             SQLite database initialization and schema migration
-  context_cues.py     Time-of-day and cultural context for banter/ad prompts
-  track_rationale.py  "Why this track?" rationale generation for listener UI
-  track_rules.py      Per-track personality rules flagged via /api/track-rules
-  audio_quality.py    Audio quality gate: duration and silence checks before segments reach the queue
-  setup_status.py     Legacy setup status classification (kept for /status endpoint compat)
-  admin.html          Admin control room panel served at /admin (and at / over HA ingress)
-  listener.html       Listener page served at / and /listen
-  demo_assets/        Demo asset tree: sfx/studio/ SFX are committed; banter/ads/music/jingles/welcome are empty placeholders pending the demo-asset contract
-radio.toml            station config
-start.sh              dev entrypoint with uvicorn and reload
-tests/                pytest coverage
+  main.py                   FastAPI app startup/shutdown lifecycle (kept at top — public entry)
+  core/                     config, models, capabilities, setup_status, sync (SQLite schema)
+  audio/                    normalizer (FFmpeg), audio_quality gate, tts, voice_catalog
+  playlist/                 playlist source selection, downloader, song_cues, track_rationale, track_rules
+  hosts/                    scriptwriter (LLM banter+ads — TODO: split), persona, context_cues, ad_creative
+  home/                     ha_context (HA polling, mood), ha_enrichment (event diff/prune)
+  scheduling/               producer (async loop), scheduler (segment-type picker), clip (WTF ring buffer)
+  web/                      streamer (TODO: split — routes/auth/playback loop), og_card, templates/, static/
+  assets/                   demo/ MP3s + SFX, logo.svg
+radio.toml                  station config
+start.sh                    dev entrypoint with uvicorn and reload
+tests/                      mirrors mammamiradio/ — tests/<nave>/test_*.py
 ```
+
+Two god modules carry a `# TODO: split` marker: `web/streamer.py` (~2,400 LOC) and `hosts/scriptwriter.py` (~1,500 LOC). They have postal addresses now; the actual splits land in PRs 5 and 6 of the cathedral plan (`docs/2026-04-28-cathedral-restructure.md`).
 
 ## Design System
 
@@ -190,7 +177,7 @@ Why: the scriptwriter generates fake ads in the brand's voice, makes false produ
 
 ## Notes for future edits
 
-- `dashboard.html` and `listener.html` are loaded as static file contents by `streamer.py`.
+- `admin.html`, `listener.html`, `live.html`, and `regia.html` live in `mammamiradio/web/templates/` and are loaded by `mammamiradio/web/streamer.py`.
 - `start.sh` is part of the runtime contract, not just a convenience script.
 - `radio.toml` is the source of truth for hosts, pacing, ad brands, audio settings, and Home Assistant enablement. Secrets stay in `.env`.
 - If you change routes, config keys, auth rules, or fallback behavior, update the matching docs in the same change. (See **Doc sync** rule below.)
@@ -199,7 +186,7 @@ Why: the scriptwriter generates fake ads in the brand's voice, makes false produ
 - Treat 60 minutes of uninterrupted runtime per live station object as the default minimum when tinkering around an active stream.
 - Built-in demo music should favor current modern tracks, not nostalgic or older fallback selections.
 - Advertisements need a convincing underlying sound bed. Prefer CC-free music or sound design beds under ad voiceovers instead of dry voice-only spots.
-- To tune scriptwriter behavior without a stream gap: edit `mammamiradio/scriptwriter.py`, run `make check`, then `POST /api/hot-reload` (admin auth, empty body), then `POST /api/trigger {"type": "banter"}` to generate a segment with the new code. The stream stays live throughout. If reload fails (syntax error), the endpoint returns 500 and the stream keeps running with the old code.
+- To tune scriptwriter behavior without a stream gap: edit `mammamiradio/hosts/scriptwriter.py`, run `make check`, then `POST /api/hot-reload` (admin auth, empty body), then `POST /api/trigger {"type": "banter"}` to generate a segment with the new code. The stream stays live throughout. If reload fails (syntax error), the endpoint returns 500 and the stream keeps running with the old code.
 
 ## Quality gates
 
@@ -224,8 +211,8 @@ Why: the scriptwriter generates fake ads in the brand's voice, makes false produ
 These UI elements have regressed in past refactors. Always verify they survive after any HTML edit:
 
 - **Token cost counter** (`admin.html` Engine Room) — backend computes `api_cost_estimate_usd` on every `/status` call. UI must display it. Has disappeared twice in refactors.
-- **Play button blue state** (`mammamiradio/static/base.css`) — `.play-btn.playing` must use `var(--ok)` (blue), never `var(--sun2)` (golden). Colorblind safety.
-- **Station name localStorage** (`mammamiradio/static/listener.js`) — reads `stationName` from localStorage. Admin writes it. Broken when dashboard.html was rewritten.
+- **Play button blue state** (`mammamiradio/web/static/base.css`) — `.play-btn.playing` must use `var(--ok)` (blue), never `var(--sun2)` (golden). Colorblind safety.
+- **Station name localStorage** (`mammamiradio/web/static/listener.js`) — reads `stationName` from localStorage. Admin writes it. Broken when dashboard.html was rewritten.
 - **Gold "Mi" accent** (`listener.html`, `admin.html`) — `<span class="mi">` in h1, styled `color: var(--sun)`. Brand signature from hero banner.
 - **Italian tricolor stripe** (`admin.html` uses `.tricolor-stripe`; `listener.html` uses `.tricolor-band`) — present below h1. Must match hero banner.
 
