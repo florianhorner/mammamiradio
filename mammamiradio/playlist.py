@@ -8,6 +8,7 @@ import random
 import time
 from dataclasses import replace
 from pathlib import Path
+from typing import Literal
 from urllib.error import URLError
 from urllib.parse import parse_qs, urlencode, urlparse
 from urllib.request import urlopen
@@ -47,7 +48,9 @@ class ExplicitSourceError(RuntimeError):
     """Raised when an explicit user-selected source cannot be loaded."""
 
 
-def _copy_tracks_with_source(tracks: list[Track], source: str) -> list[Track]:
+def _copy_tracks_with_source(
+    tracks: list[Track], source: Literal["youtube", "jamendo", "local", "demo"]
+) -> list[Track]:
     """Return copies with a consistent source label for playlist-loaded tracks."""
     return [replace(track, source=source) for track in tracks]
 
