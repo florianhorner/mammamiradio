@@ -338,16 +338,62 @@ def test_skip_xing_present_advances_by_frame_length():
     assert buf.tell() == _L3_FRAME_LEN, f"expected pointer at {_L3_FRAME_LEN} after Xing skip; got {buf.tell()}"
 
 
-def test_skip_free_bitrate_rewinds_safely():
-    """Bitrate index 0 (free-bitrate) → rewind without crash.
+def test_skip_free_bitrate_no_xing_rewinds_safely():
+    """Bitrate index 0 (free-bitrate) with no Xing magic → rewind without crash.
 
-    Hits: line 658 `bitrate_idx in (0, 0x0F)` → lines 659-660 rewind.
     byte2 = 0x04 → bitrate_idx=0, sample_rate_idx=1, no padding.
+    Magic check at offset 36 reads zeros, not Xing/Info → rewind to frame_start.
     """
     free_bitrate_header = bytes([0xFF, 0xFB, 0x04, 0x00])  # bitrate_idx = 0
     buf = io.BytesIO(free_bitrate_header + b"\x00" * 572)
     _skip_id3_and_xing_header(buf)
-    assert buf.tell() == 0, f"free-bitrate should rewind to 0; got {buf.tell()}"
+    assert buf.tell() == 0, f"free-bitrate without Xing should rewind to 0; got {buf.tell()}"
+
+
+def test_skip_vbr_info_frame_via_sync_scan():
+    """VBR info frame (bitrate_idx=0) with realistic Xing payload → lands at next audio frame.
+
+    Root-cause scenario for the Safari banter cutoff bug: ffmpeg loudnorm produces
+    a VBR Xing/LAME info frame with bitrate_idx=0. The stripper must skip past the
+    entire Xing payload (including TOC bytes that can contain 0xFF values) before
+    sync-scanning, to avoid false-positive matches inside the metadata.
+    """
+    # VBR free-format header: MPEG-1, Layer-III, bitrate_idx=0, 48kHz, stereo
+    vbr_header = bytes([0xFF, 0xFB, 0x04, 0x00])
+    # Realistic Xing payload: side info (32) + "Xing" magic (4) + standard Xing fields:
+    #   4 flags + 4 frame-count + 4 byte-count + 100 TOC (all 0xFF = worst-case sync-like)
+    #   + 4 quality + filler zeros to end of frame.
+    # TOC entries of 0xFF followed by 0xFF would look like sync words to a naive scan.
+    xing_payload = (
+        b"\x00" * 32  # side info (stereo = 32 bytes)
+        + b"Xing"  # magic
+        + b"\x00\x00\x00\x0f"  # flags (all fields present)
+        + b"\x00\x00\x00\x64"  # total frames
+        + b"\x00\x00\x3a\x98"  # total bytes
+        + b"\xff" * 100  # TOC — all 0xFF, creates dense false sync candidates
+        + b"\x00\x00\x00\x00"  # quality
+        + b"\x00" * 60  # filler to pad out the frame
+    )
+    vbr_frame = vbr_header + xing_payload
+    audio = _audio_frame()
+    buf = io.BytesIO(vbr_frame + audio)
+    _skip_id3_and_xing_header(buf)
+    tail = buf.read()
+    assert tail[:4] == _L3_HEADER, f"expected audio sync word after VBR skip, got {tail[:4]!r}"
+    assert b"DATA" in tail, "audio frame content should be preserved after VBR Xing strip"
+
+
+def test_skip_vbr_sync_scan_ignores_false_sync_inside_metadata():
+    """VBR scan must reject sync-like bytes inside Xing payload metadata."""
+    vbr_header = bytes([0xFF, 0xFB, 0x04, 0x00])
+    false_sync = bytes([0xFF, 0xE3]) + b"BADMETA"
+    vbr_body = b"\x00" * 32 + b"Xing" + false_sync + b"\x00" * 40
+    vbr_frame = vbr_header + vbr_body
+    buf = io.BytesIO(vbr_frame + _audio_frame())
+    _skip_id3_and_xing_header(buf)
+    tail = buf.read()
+    assert tail[:4] == _L3_HEADER, f"expected real audio frame after metadata skip, got {tail[:4]!r}"
+    assert b"BADMETA" not in tail[:16], "scanner should not stop inside Xing metadata"
 
 
 def test_skip_id3v2_max_syncsafe_size_seeks_past_eof():

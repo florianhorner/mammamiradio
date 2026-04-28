@@ -89,7 +89,7 @@ def measure_lufs(input_path: Path) -> float | None:
 
 
 # Shared FFmpeg output arguments for consistent MP3 encoding across all generators.
-_MP3_OUTPUT_ARGS: list[str] = ["-ar", "48000", "-ac", "2", "-b:a", "192k", "-f", "mp3"]
+_MP3_OUTPUT_ARGS: list[str] = ["-ar", "48000", "-ac", "2", "-b:a", "192k", "-write_xing", "0", "-f", "mp3"]
 
 # Canonical list of supported SFX types (synthetic fallbacks).
 # Pre-recorded files in sfx_dir can extend this, but this list is what the
@@ -317,6 +317,8 @@ def concat_files(
         "2",
         "-b:a",
         "192k",
+        "-write_xing",
+        "0",
         "-f",
         "mp3",
         str(output_path),
