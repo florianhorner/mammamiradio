@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <a href="ARCHITECTURE.md">Architecture</a> &middot;
+  <a href="docs/architecture.md">Architecture</a> &middot;
   <a href="ha-addon/README.md">Home Assistant Add-on</a> &middot;
   <a href="CONTRIBUTING.md">Contributing</a> &middot;
   <a href="CHANGELOG.md">Changelog</a>
@@ -183,7 +183,7 @@ make test          # run tests with coverage
 make check         # lint + typecheck + coverage gate
 ```
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for full local setup, [ARCHITECTURE.md](ARCHITECTURE.md) for runtime flow and API routes, [TROUBLESHOOTING.md](TROUBLESHOOTING.md) for common failures, and [OPERATIONS.md](OPERATIONS.md) for deploy reality.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for full local setup, [docs/architecture.md](docs/architecture.md) for runtime flow and API routes, [docs/troubleshooting.md](docs/troubleshooting.md) for common failures, and [docs/operations.md](docs/operations.md) for deploy reality.
 
 ## Contributors
 

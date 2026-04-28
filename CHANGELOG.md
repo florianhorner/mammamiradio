@@ -6,6 +6,10 @@ The current version source of truth is `pyproject.toml`.
 
 ## [Unreleased]
 
+### Changed
+
+- **Repo root collapsed to four sacred files; everything else moved under `docs/`**: `README.md`, `CONTRIBUTING.md`, `CLAUDE.md`, `CHANGELOG.md` stay at the root. Moved (with `git mv` to preserve history): `ARCHITECTURE.md` → `docs/architecture.md`, `OPERATIONS.md` → `docs/operations.md`, `TROUBLESHOOTING.md` → `docs/troubleshooting.md`, `HA_ADDON_RUNBOOK.md` → `docs/runbooks/ha-addon.md`, `DESIGN.md` → `docs/design/system.md`, `ADMIN_PANEL_STANDARDS.md` → `docs/design/admin-panel.md`, `CONDUCTOR.md` → `docs/conductor.md`, `AGENTS.md` → `docs/agents.md`, `STABILIZATION_LOG.md` → `docs/stabilization-log.md`, `TODOS.md` → `docs/todos.md`. Updated all internal cross-references in `README.md`, `CLAUDE.md`, `CONTRIBUTING.md`, the moved docs themselves, and four source/test files that mentioned `DESIGN.md` in comments. Historical audit notes under `docs/2026-04-13-...` and `docs/2026-04-16-...` are dated snapshots and were left untouched. Phase 1 of the cathedral restructure plan; see `docs/2026-04-28-cathedral-restructure.md` for the full sequence.
+
 ### Removed
 
 - **567 lines of dead pre-Volare CSS from `mammamiradio/static/listener.css`**: PR #235 (Volare Refined) renamed every listener class from `.nav`/`.np-strip`/`.hero`/`.dial-widget`/`.palinsesto`/`.slot`/`.dediche`/`.quote`/`.form-side`/`.casa-card`/`.ticker`/`.footer` etc. to the `.mmr-*` namespace, but left the entire pre-Volare stylesheet (~64 % of the file) sitting alongside the new one. Every removed selector was confirmed to have zero matches in the rendered HTML — the file dropped from 883 lines to 316 with no intended visual change (every var(--*) token still resolves; awaiting visual sign-off). Removed the orphan `.mmr-root` rule (defined but never applied to any element). This is the same migration gap that caused the listener mobile header overflow regression (#269) — without the dead-code cleanup the same risk persists for any future class rename.

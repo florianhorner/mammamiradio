@@ -63,7 +63,7 @@ Shared Conductor scripts live in [`conductor.json`](conductor.json):
 
 ## HTTP surface
 
-`mammamiradio/streamer.py` is the single source of truth. `ARCHITECTURE.md` has the full route table with methods. Summary grouped by access level:
+`mammamiradio/streamer.py` is the single source of truth. `architecture.md` (sibling) has the full route table with methods. Summary grouped by access level:
 
 Public:
 
