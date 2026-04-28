@@ -9,7 +9,7 @@ This repo supports three deployment models: Docker container, Home Assistant add
 - writable `tmp/` and `cache/` directories
 - outbound network access for Apple Music charts API, Anthropic/OpenAI, and optional Home Assistant
 
-Music comes from live Italian charts (via yt-dlp) when `MAMMAMIRADIO_ALLOW_YTDLP=true`, otherwise from local `music/` files. If neither is available the playback loop rescues from the norm cache, then from bundled demo assets under `mammamiradio/demo_assets/music/` when present, and as a final fallback requests forced banter from the producer so the queue recovers without crashing or stalling on silence. Chart entries pass through a narrow content-hygiene filter at ingest that drops obvious non-music (podcasts, BBC comedy, audiobooks, news briefings) before they enter the candidate pool — see `mammamiradio/playlist.py::_NON_MUSIC_MARKERS`.
+Music comes from live Italian charts (via yt-dlp) when `MAMMAMIRADIO_ALLOW_YTDLP=true`, otherwise from local `music/` files. If neither is available the playback loop rescues from the norm cache, then from bundled demo assets under `mammamiradio/assets/demo/music/` when present, and as a final fallback requests forced banter from the producer so the queue recovers without crashing or stalling on silence. Chart entries pass through a narrow content-hygiene filter at ingest that drops obvious non-music (podcasts, BBC comedy, audiobooks, news briefings) before they enter the candidate pool — see `mammamiradio/playlist/playlist.py::_NON_MUSIC_MARKERS`.
 
 Downloads that fail `validate_download` (missing file, too-short duration, corrupt) are purged from the cache directory and added to a process-local denylist so the same track is not re-selected endlessly. The main producer loop, prefetch, and prewarm all short-circuit on denylisted keys via a bounded retry around `select_next_track`. The denylist clears on restart. Music quality-gate rejections (silence, post-normalization artifacts) do NOT denylist the source track — they drop the cached normalization only and rely on the 3-consecutive-rejection circuit breaker to recover. Log signatures:
 
@@ -63,7 +63,7 @@ Shared Conductor scripts live in [`conductor.json`](conductor.json):
 
 ## HTTP surface
 
-`mammamiradio/streamer.py` is the single source of truth. `architecture.md` (sibling) has the full route table with methods. Summary grouped by access level:
+`mammamiradio/web/streamer.py` is the single source of truth. `architecture.md` (sibling) has the full route table with methods. Summary grouped by access level:
 
 Public:
 

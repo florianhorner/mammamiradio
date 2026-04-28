@@ -9,7 +9,7 @@
 ---
 
 ## Admin Panel Standards
-<!-- Required when `mammamiradio/admin.html` or `mammamiradio/listener.html` changed. -->
+<!-- Required when `mammamiradio/web/templates/admin.html` or `mammamiradio/web/templates/listener.html` changed. -->
 <!-- CI will fail on admin panel PRs that omit this section. Skip if no HTML files changed. -->
 
 - [ ] Token cost counter (`api_cost_estimate_usd`) still visible in Engine Room

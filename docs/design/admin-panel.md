@@ -1,7 +1,7 @@
 # Admin Panel Standards
 <!-- version: 1 | owner: @florianhorner -->
 
-Every PR that modifies `mammamiradio/admin.html` or `mammamiradio/listener.html` must pass this checklist before merge. CI enforces acknowledgment of this section in the PR body.
+Every PR that modifies `mammamiradio/web/templates/admin.html` or `mammamiradio/web/templates/listener.html` must pass this checklist before merge. CI enforces acknowledgment of this section in the PR body.
 
 ## Protected UI elements
 

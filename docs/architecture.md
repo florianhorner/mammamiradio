@@ -76,7 +76,7 @@ Bounded state lists (`played_tracks`, `running_jokes`, `segment_log`, `stream_lo
 Two features create the illusion of a live radio studio:
 
 - **Studio bleed**: After producing a music segment, the producer mixes a faint (-22dB) snippet of a previously-played banter clip under ~35% of music segments. This creates the "someone left a mic on" feeling.
-- **Humanity events**: A one-shot event system (cough, paper rustle, chair creak, pen tap) fires exactly once per session after 15+ segments have been produced. SFX files live in `mammamiradio/demo_assets/sfx/studio/` (inside the package so `producer.py` and packaging find them together).
+- **Humanity events**: A one-shot event system (cough, paper rustle, chair creak, pen tap) fires exactly once per session after 15+ segments have been produced. SFX files live in `mammamiradio/assets/demo/sfx/studio/` (inside the package so `mammamiradio/scheduling/producer.py` and packaging find them together).
 
 ### Clip sharing
 
@@ -100,7 +100,7 @@ Important design choice: there is one shared timeline. Listeners tune into the c
 
 ## Capability flags
 
-The system uses two independent boolean flags in a frozen `Capabilities` dataclass (`mammamiradio/models.py`, with detection and serialization in `mammamiradio/capabilities.py`):
+The system uses two independent boolean flags in a frozen `Capabilities` dataclass (`mammamiradio/core/models.py`, with detection and serialization in `mammamiradio/core/capabilities.py`):
 
 | Flag | Source | What it enables |
 | --- | --- | --- |
@@ -259,27 +259,34 @@ The rich path is richer, but the failure path still produces a stream.
 | Path | Responsibility |
 | --- | --- |
 | `mammamiradio/main.py` | app startup/shutdown and background task wiring |
-| `mammamiradio/config.py` | `radio.toml` and `.env` loading plus validation |
-| `mammamiradio/models.py` | shared dataclasses for tracks, segments, ads, and station state |
-| `mammamiradio/playlist.py` | Charts, local, and demo playlist loading |
-| `mammamiradio/scheduler.py` | pacing rules and upcoming preview |
-| `mammamiradio/producer.py` | segment generation pipeline |
-| `mammamiradio/downloader.py` | local-file, yt-dlp, and placeholder music fallback |
-| `mammamiradio/scriptwriter.py` | Anthropic/OpenAI prompts for banter and ad copy |
-| `mammamiradio/tts.py` | TTS synthesis (Edge TTS + OpenAI gpt-4o-mini-tts) |
-| `mammamiradio/capabilities.py` | Capability flags, tier derivation, and next-step hints |
-| `mammamiradio/persona.py` | Listener persona: compounding memory, arc phases, motif tracking, session counting |
-| `mammamiradio/song_cues.py` | Machine-derived per-track memory: anthem detection, skip-bit detection, LLM reaction cues |
-| `mammamiradio/sync.py` | SQLite database initialization and schema migration |
-| `mammamiradio/context_cues.py` | Time-of-day and cultural context for prompts |
-| `mammamiradio/normalizer.py` | ffmpeg helpers for normalization, mixing, tones, bumpers, bleed, and SFX |
-| `mammamiradio/clip.py` | WTF clip extraction from ring buffer, save, cleanup |
-| `mammamiradio/track_rationale.py` | "Why this track?" rationale generation for listener UI |
-| `mammamiradio/track_rules.py` | Per-track personality rules flagged by admin via `/api/track-rules` |
-| `mammamiradio/ha_enrichment.py` | Pure HA event derivation: state diffing, event pruning, numeric passthrough |
-| `mammamiradio/audio_quality.py` | Audio quality gate: duration and silence checks before segments reach the queue |
-| `mammamiradio/setup_status.py` | First-run setup status classification (legacy; retained for `/api/setup/status` compat) |
-| `mammamiradio/streamer.py` | HTTP routes, auth gating, playback loop, clip endpoints, listener fanout |
+| `mammamiradio/core/config.py` | `radio.toml` and `.env` loading plus validation |
+| `mammamiradio/core/models.py` | shared dataclasses for tracks, segments, ads, and station state |
+| `mammamiradio/core/capabilities.py` | Capability flags, tier derivation, and next-step hints |
+| `mammamiradio/core/setup_status.py` | First-run setup status classification (legacy; retained for `/api/setup/status` compat) |
+| `mammamiradio/core/sync.py` | SQLite database initialization and schema migration |
+| `mammamiradio/playlist/playlist.py` | Charts, local, and demo playlist loading |
+| `mammamiradio/playlist/downloader.py` | local-file, yt-dlp, and placeholder music fallback |
+| `mammamiradio/playlist/song_cues.py` | Machine-derived per-track memory: anthem detection, skip-bit detection, LLM reaction cues |
+| `mammamiradio/playlist/track_rationale.py` | "Why this track?" rationale generation for listener UI |
+| `mammamiradio/playlist/track_rules.py` | Per-track personality rules flagged by admin via `/api/track-rules` |
+| `mammamiradio/scheduling/scheduler.py` | pacing rules and upcoming preview |
+| `mammamiradio/scheduling/producer.py` | segment generation pipeline |
+| `mammamiradio/scheduling/clip.py` | WTF clip extraction from ring buffer, save, cleanup |
+| `mammamiradio/hosts/scriptwriter.py` | Anthropic/OpenAI prompts for banter and ad copy (TODO: split — see cathedral plan PR 6) |
+| `mammamiradio/hosts/persona.py` | Listener persona: compounding memory, arc phases, motif tracking, session counting |
+| `mammamiradio/hosts/context_cues.py` | Time-of-day and cultural context for prompts |
+| `mammamiradio/hosts/ad_creative.py` | Brand and voice selection, campaign-spine sampling for ad breaks |
+| `mammamiradio/audio/normalizer.py` | ffmpeg helpers for normalization, mixing, tones, bumpers, bleed, and SFX |
+| `mammamiradio/audio/audio_quality.py` | Audio quality gate: duration and silence checks before segments reach the queue |
+| `mammamiradio/audio/tts.py` | TTS synthesis (Edge TTS + OpenAI gpt-4o-mini-tts) |
+| `mammamiradio/audio/voice_catalog.py` | Edge voice IDs and metadata catalog |
+| `mammamiradio/home/ha_context.py` | Home Assistant polling, mood classification, reactive triggers |
+| `mammamiradio/home/ha_enrichment.py` | Pure HA event derivation: state diffing, event pruning, numeric passthrough |
+| `mammamiradio/web/streamer.py` | HTTP routes, auth gating, playback loop, clip endpoints, listener fanout (TODO: split — see cathedral plan PR 5) |
+| `mammamiradio/web/og_card.py` | Open Graph share-card PNG renderer |
+| `mammamiradio/web/templates/` | `admin.html`, `listener.html`, `regia.html`, `live.html` |
+| `mammamiradio/web/static/` | CSS, JS, icons, manifest, service worker |
+| `mammamiradio/assets/` | `logo.svg`, `demo/` (bundled MP3s + SFX) |
 | `start.sh` | local dev entry point with uvicorn and reload |
 
 ## Deployment models

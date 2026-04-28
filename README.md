@@ -2,18 +2,21 @@
   <img src="docs/banner.png" width="1280" alt="Mamma Mi Radio">
 </p>
 
-<p align="center">
-  <a href="docs/architecture.md">Architecture</a> &middot;
-  <a href="ha-addon/README.md">Home Assistant Add-on</a> &middot;
-  <a href="CONTRIBUTING.md">Contributing</a> &middot;
-  <a href="CHANGELOG.md">Changelog</a>
-</p>
+# Mamma Mi Radio
+
+An AI-powered Italian radio station that nobody questions is real. Two hosts banter between live Italian charts. Optional Home Assistant context lets them reference your actual home — lights, temperature, who's at the door. The format absorbs AI imperfection as authenticity.
+
+```bash
+git clone https://github.com/florianhorner/mammamiradio.git && cd mammamiradio
+cp .env.example .env && docker compose up
+```
+
+→ **[Read the code](docs/REPO_MAP.md)** · **[Ship to your home](ha-addon/README.md)** · **[Contribute](CONTRIBUTING.md)** · **[Changelog](CHANGELOG.md)**
 
 <p align="center">
   <img src="https://img.shields.io/github/stars/florianhorner/mammamiradio?style=flat" alt="GitHub stars">
   <img src="https://img.shields.io/github/actions/workflow/status/florianhorner/mammamiradio/quality.yml?branch=main&label=CI&style=flat" alt="CI">
   <img src="https://img.shields.io/badge/python-3.11%2B-blue?style=flat" alt="Python 3.11+">
-  <img src="https://img.shields.io/github/last-commit/florianhorner/mammamiradio?style=flat" alt="Last commit">
 </p>
 
 ---

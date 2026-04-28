@@ -14,7 +14,7 @@ if [ ! -x "$PYTHON_BIN" ]; then
 fi
 
 # Resolve runtime settings
-RT_JSON="$("$PYTHON_BIN" -m mammamiradio.config runtime-json)"
+RT_JSON="$("$PYTHON_BIN" -m mammamiradio.core.config runtime-json)"
 HOST="$(echo "$RT_JSON" | "$PYTHON_BIN" -c 'import json,sys; print(json.load(sys.stdin)["bind_host"])')"
 PORT="$(echo "$RT_JSON" | "$PYTHON_BIN" -c 'import json,sys; print(json.load(sys.stdin)["port"])')"
 
