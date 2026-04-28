@@ -6,6 +6,8 @@ Branch: florianhorner/feat-10x-vision
 Last session: 2026-04-04
 Author: Wellington workspace
 
+> **Path note (2026-04-28):** This vision doc was authored before the cathedral restructure (#275). Module paths below have been updated to the new nave-prefixed locations where the file still exists. Two earlier-deleted files are still mentioned for historical context: `mammamiradio/spotify_player.py` (removed in v2.3.0, PR #115 — "remove Spotify integration") and `mammamiradio/dashboard.html` (removed in `598f96b` — "delete orphan /dashboard surface"). Treat references to those two as design-history breadcrumbs, not live targets.
+
 ## Context
 
 The 10x vision prototype is working. Autoplay + personalized banter delivered goosebumps
@@ -54,7 +56,7 @@ which PID holds it and exit with a clear error instead of silently failing. Opti
 **Problem:** `GianniNeural` (Marco's voice) fails in bursts on edge-tts. When it fails,
 `synthesize()` falls back to generating silence, which produces dead air in the stream.
 
-**File:** `mammamiradio/tts.py`, `synthesize()` function.
+**File:** `mammamiradio/audio/tts.py`, `synthesize()` function.
 
 **Fix:** On TTS failure, try a fallback voice (DiegoNeural) before resorting to silence.
 Add a `fallback_voice` parameter or a hardcoded retry with the alternate voice.
@@ -70,7 +72,7 @@ Add a `fallback_voice` parameter or a hardcoded retry with the alternate voice.
 **Problem:** Demo tracks are downloaded via yt-dlp from YouTube. Copyright violation.
 Cannot ship this as the default path.
 
-**Current state:** `mammamiradio/downloader.py` falls through to yt-dlp for demo tracks
+**Current state:** `mammamiradio/playlist/downloader.py` falls through to yt-dlp for demo tracks
 (spotify_id starts with "demo"). The `demo_assets/music/` directory exists but is empty.
 
 **Options:**
@@ -210,10 +212,10 @@ P2 (next session):
 ```
 mammamiradio/spotify_player.py    — #1 FIFO backoff
 start.sh                          — #2 port check
-mammamiradio/tts.py               — #3 TTS fallback voice
-mammamiradio/downloader.py        — #4 yt-dlp opt-in flag
+mammamiradio/audio/tts.py               — #3 TTS fallback voice
+mammamiradio/playlist/downloader.py        — #4 yt-dlp opt-in flag
 mammamiradio/dashboard.html       — #6 dial, #7 marquee
-mammamiradio/producer.py          — #8 welcome clip, #10 shareware counter
-mammamiradio/models.py            — #10 canned_clips_played counter
+mammamiradio/scheduling/producer.py          — #8 welcome clip, #10 shareware counter
+mammamiradio/core/models.py            — #10 canned_clips_played counter
 demo_assets/welcome/              — #8 welcome clips (new directory)
 ```
