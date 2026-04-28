@@ -44,8 +44,10 @@ body::before {
 .mmr-brand { display: flex; align-items: center; gap: 10px; text-decoration: none; }
 .mmr-brand img { width: 30px; height: 30px; }
 .mmr-brand span { font-family: var(--font-display); font-style: italic; font-weight: 700; font-size: 20px; color: var(--cream); letter-spacing: -0.01em; white-space: nowrap; }
-.mmr-brand em,
-.mmr-brand .mi { color: var(--brand-primary, var(--sun)); font-style: italic; }
+.mmr-brand em { color: var(--brand-primary, var(--sun)); font-style: italic; }
+/* Mi accent is the brand signature (per CLAUDE.md "Protected UI elements") —
+   pinned to the gold sun token, NOT theme-overridable via --brand-primary. */
+.mmr-brand .mi { color: var(--sun); font-style: italic; }
 .mmr-nav nav { display: flex; gap: 22px; margin-left: 10px; }
 .mmr-nav nav a { font-size: 13px; font-weight: 500; color: rgba(245,237,216,0.7); text-decoration: none; letter-spacing: 0.01em; transition: color 180ms; padding: 12px 8px; min-height: 44px; display: inline-flex; align-items: center; }
 .mmr-nav nav a:hover { color: var(--cream); }

@@ -8,7 +8,7 @@ The current version source of truth is `pyproject.toml`.
 
 ### Removed
 
-- **567 lines of dead pre-Volare CSS from `mammamiradio/static/listener.css`**: PR #235 (Volare Refined) renamed every listener class from `.nav`/`.np-strip`/`.hero`/`.dial-widget`/`.palinsesto`/`.slot`/`.dediche`/`.quote`/`.form-side`/`.casa-card`/`.ticker`/`.footer` etc. to the `.mmr-*` namespace, but left the entire pre-Volare stylesheet (~64 % of the file) sitting alongside the new one. Every removed selector was confirmed to have zero matches in the rendered HTML — the file dropped from 883 lines to 316 with no visual change. Removed the orphan `.mmr-root` rule (defined but never applied to any element). This is the same migration gap that caused the listener mobile header overflow regression (#269) — without the dead-code cleanup the same risk persists for any future class rename.
+- **567 lines of dead pre-Volare CSS from `mammamiradio/static/listener.css`**: PR #235 (Volare Refined) renamed every listener class from `.nav`/`.np-strip`/`.hero`/`.dial-widget`/`.palinsesto`/`.slot`/`.dediche`/`.quote`/`.form-side`/`.casa-card`/`.ticker`/`.footer` etc. to the `.mmr-*` namespace, but left the entire pre-Volare stylesheet (~64 % of the file) sitting alongside the new one. Every removed selector was confirmed to have zero matches in the rendered HTML — the file dropped from 883 lines to 316 with no intended visual change (every var(--*) token still resolves; awaiting visual sign-off). Removed the orphan `.mmr-root` rule (defined but never applied to any element). This is the same migration gap that caused the listener mobile header overflow regression (#269) — without the dead-code cleanup the same risk persists for any future class rename.
 
 ### Added
 
