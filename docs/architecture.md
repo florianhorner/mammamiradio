@@ -76,7 +76,7 @@ Bounded state lists (`played_tracks`, `running_jokes`, `segment_log`, `stream_lo
 Two features create the illusion of a live radio studio:
 
 - **Studio bleed**: After producing a music segment, the producer mixes a faint (-22dB) snippet of a previously-played banter clip under ~35% of music segments. This creates the "someone left a mic on" feeling.
-- **Humanity events**: A one-shot event system (cough, paper rustle, chair creak, pen tap) fires exactly once per session after 15+ segments have been produced. SFX files live in `mammamiradio/demo_assets/sfx/studio/` (inside the package so `producer.py` and packaging find them together).
+- **Humanity events**: A one-shot event system (cough, paper rustle, chair creak, pen tap) fires exactly once per session after 15+ segments have been produced. SFX files live in `mammamiradio/assets/demo/sfx/studio/` (inside the package so `mammamiradio/scheduling/producer.py` and packaging find them together).
 
 ### Clip sharing
 
@@ -100,7 +100,7 @@ Important design choice: there is one shared timeline. Listeners tune into the c
 
 ## Capability flags
 
-The system uses two independent boolean flags in a frozen `Capabilities` dataclass (`mammamiradio/models.py`, with detection and serialization in `mammamiradio/capabilities.py`):
+The system uses two independent boolean flags in a frozen `Capabilities` dataclass (`mammamiradio/core/models.py`, with detection and serialization in `mammamiradio/core/capabilities.py`):
 
 | Flag | Source | What it enables |
 | --- | --- | --- |
