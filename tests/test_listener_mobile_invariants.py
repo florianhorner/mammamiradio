@@ -61,26 +61,39 @@ def test_phone_breakpoint_collapses_or_hides_nav_anchor_links() -> None:
 
 
 def test_form_inputs_avoid_ios_auto_zoom() -> None:
-    """All <input>/<textarea> rules in listener.css must declare font-size >= 16px.
+    """All Volare-namespace input/textarea rules in listener.css must declare
+    font-size >= 16px.
 
     iOS Safari auto-zooms any focused form field below 16 px. The dedica
     form lives on the listener page and shipped at 14 px, which broke the
     mobile UX on every iPhone tap.
+
+    Scoped to the `.mmr-*` namespace (Volare Refined). Pre-Volare class
+    selectors like `.form-input` are dead code — none of them appear in the
+    rendered HTML — and are removed in #270. Catching them here would
+    create a false-positive on this branch.
     """
     text = _read_listener_css()
-    rule_re = re.compile(
-        r"(\.mmr-dedica-form[^{]*\b(?:input|textarea)[^{]*|\.mmr-dedica-form-input[^{]*)\{([^}]*)\}",
-        re.DOTALL,
-    )
+    rule_re = re.compile(r"([^{}]+)\{([^}]*)\}", re.DOTALL)
     font_size_re = re.compile(r"font-size\s*:\s*(\d+(?:\.\d+)?)px")
     offenders: list[tuple[str, float]] = []
-    for selector, body in rule_re.findall(text):
-        match = font_size_re.search(body)
-        if not match:
+    for selector_block, body in rule_re.findall(text):
+        selectors = [s.strip() for s in selector_block.split(",")]
+        # Targets a form field iff at least one selector in the group is in
+        # the live Volare namespace AND mentions input or textarea (either
+        # as an element selector or as a class-name suffix like
+        # `.mmr-dedica-form-input`).
+        targets_form = any(".mmr-" in s and ("input" in s or "textarea" in s) for s in selectors)
+        if not targets_form:
             continue
-        size_px = float(match.group(1))
+        # Last font-size declaration wins inside a single rule block.
+        sizes = font_size_re.findall(body)
+        if not sizes:
+            continue
+        size_px = float(sizes[-1])
         if size_px < 16:
-            offenders.append((selector.strip().splitlines()[0], size_px))
+            first_selector = selectors[0].splitlines()[0][:80]
+            offenders.append((first_selector, size_px))
     assert not offenders, (
         "Listener form fields below 16 px font-size will trigger iOS auto-zoom "
         "on focus and break the mobile layout. Bump to 16 px:\n"
