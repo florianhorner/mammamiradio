@@ -404,6 +404,8 @@ def test_generate_silence_calls_ffmpeg(track, tmp_path):
     duration_index = cmd.index("-t") + 1
     assert cmd[duration_index] == "210"
     assert str(out_path) in cmd
+    assert "-write_xing" in cmd
+    assert cmd[cmd.index("-write_xing") + 1] == "0"
 
 
 def test_silence_placeholder_uses_prefixed_path(track, cache_dir, music_dir):
