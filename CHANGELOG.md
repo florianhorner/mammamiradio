@@ -12,6 +12,8 @@ The current version source of truth is `pyproject.toml`.
 
 ### Added
 
+- **Leadership principle #4 — THE README IS THE PITCH**: `CLAUDE.md` now lists four leadership principles every proposal must pass (was: two). New principle: a new reader gets the product in 30 seconds or less, KPI not aspiration; same standard applies to the source tree (folder hierarchy IS the mental model). Added 2026-04-28 after the cathedral DX review found 27 flat python files, 61 flat tests, 14 root markdown docs.
+- **Cathedral restructure plan** (`docs/2026-04-28-cathedral-restructure.md`): full file-by-file plan for moving `mammamiradio/` from 27 flat files to 7 domain naves (`core`, `audio`, `playlist`, `hosts`, `home`, `scheduling`, `web`), mirroring the test tree, collapsing 14 root docs to 4 sacred + `docs/`, rewriting README to a 30-second pitch. Phased PR sequence with Phase 0 (clearing #269/#270/#271) → docs collapse → subpackage move → deferred god-module splits. No code moves yet — this commit ships the plan only.
 - **Regia Screen 2 — live queue view** (`/regia`): The QUEUE tab now shows the full segment queue rendered from `queued_segments`, a break-structure card, skip-current and purge-all controls, inline search against `/api/search`, and per-item removal via the new `POST /api/queue/remove` endpoint. Replaces the browser `confirm()` panic dialog with an in-page CSS overlay that doesn't drop the stream. Drag-to-reorder is deferred (asyncio.Queue is not random-access).
 
 ### Fixed

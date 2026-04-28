@@ -4,13 +4,16 @@ AI-powered Italian radio station engine. Python 3.11+, FastAPI, FFmpeg, optional
 
 ## Leadership Principles
 
-Every proposal — architecture, feature, fix, deployment plan — must pass both of these in order:
+Every proposal — architecture, feature, fix, deployment plan — must pass all of these in order:
 
 **1. NEVER BREAK THE ILLUSION**
 The listener must always believe they are hearing a real radio station. Dead air, abrupt cuts, silence gaps, or anything that exposes the machine behind the curtain is a product failure. If a change risks breaking the illusion for a live listener, it needs a mitigation before shipping.
 
 **2. INSTANT AUDIO**
 A listener who connects must hear sound within 1–2 seconds, every time. No exceptions for cold starts, session resumes, idle wakeups, or addon restarts. Every connect path needs an immediate audio source — pre-normalized track, canned clip, anything. Build the bridge first, fix root causes second.
+
+**3. THE README IS THE PITCH**
+A new reader must get it in 30 seconds or less. That is a KPI, not an aspiration. If the README needs scrolling, paragraphs of context, or a glossary before the product clicks, we failed. The first viewport carries the entire pitch: what it is, what makes it different, and what the reader does next. Same standard applies to the repo at large — when a new contributor opens the source tree, the folder hierarchy IS the mental model. If they can't find where a feature lives in 30 seconds, the structure failed.
 
 ## Production Systems Discipline — HARD STOP
 
