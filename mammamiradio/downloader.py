@@ -240,6 +240,8 @@ def _generate_silence(track: Track, out_path: Path) -> Path:
         str(duration_s),
         "-b:a",
         "192k",
+        "-write_xing",
+        "0",
         "-f",
         "mp3",
         str(out_path),

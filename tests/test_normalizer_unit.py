@@ -13,10 +13,12 @@ from mammamiradio.normalizer import (
     concat_files,
     generate_silence,
     generate_sweep,
+    generate_tone,
     humanize_norm_filename,
     load_track_metadata,
     mix_oneshot_sfx,
     mix_quiet_bleed,
+    mix_with_bed,
     normalize,
     save_track_metadata,
 )
@@ -107,6 +109,8 @@ def test_normalize_builds_correct_default_command(mock_subprocess):
     assert "2" in cmd  # channels
     assert "192k" in cmd  # bitrate
     assert any("loudnorm=I=-16:LRA=11:TP=-1.5" in arg for arg in cmd)
+    assert "-write_xing" in cmd
+    assert cmd[cmd.index("-write_xing") + 1] == "0"
 
 
 def test_normalize_uses_config_params(mock_subprocess):
@@ -273,6 +277,8 @@ def test_generate_silence_correct_duration(mock_subprocess):
     assert "anullsrc" in " ".join(cmd)
     t_idx = cmd.index("-t")
     assert cmd[t_idx + 1] == "5.0"
+    assert "-write_xing" in cmd
+    assert cmd[cmd.index("-write_xing") + 1] == "0"
 
 
 def test_generate_silence_default_duration(mock_subprocess):
@@ -303,6 +309,32 @@ def test_generate_sweep_builds_command(mock_subprocess):
     assert "aevalsrc=" in joined
     assert "0.2*sin(2*PI*200*0.8/log(10)*((10)^(t/0.8)-1))" in joined
     assert ":c=stereo" in joined
+    assert "-write_xing" in cmd
+    assert cmd[cmd.index("-write_xing") + 1] == "0"
+
+
+def test_generate_tone_includes_write_xing_0(mock_subprocess):
+    mock_run, _ = mock_subprocess
+    out = Path("/tmp/tone.mp3")
+
+    generate_tone(out)
+
+    cmd = mock_run.call_args[0][0]
+    assert "-write_xing" in cmd
+    assert cmd[cmd.index("-write_xing") + 1] == "0"
+
+
+def test_mix_with_bed_includes_write_xing_0(mock_subprocess):
+    mock_run, _ = mock_subprocess
+    voice = Path("/tmp/voice.mp3")
+    bed = Path("/tmp/bed.mp3")
+    out = Path("/tmp/mixed.mp3")
+
+    mix_with_bed(voice, bed, out)
+
+    cmd = mock_run.call_args[0][0]
+    assert "-write_xing" in cmd
+    assert cmd[cmd.index("-write_xing") + 1] == "0"
 
 
 def test_generate_sweep_same_frequency_uses_tone(mock_subprocess):
@@ -863,3 +895,20 @@ class TestFFprobeDurationSecParser:
             lambda *a, **kw: self._fake_completed(returncode=0, stdout=""),
         )
         assert _ffprobe_duration_sec(p) is None
+
+
+def test_normalize_real_encode_has_no_xing_header(tmp_path):
+    """Encode a real MP3 via normalize() and confirm no Xing/Info header is present.
+
+    Safari fires ended at the Xing/Info declared duration, cutting segments short.
+    This test verifies the -write_xing 0 flag actually suppresses the header in
+    the encoded output — not just that the flag is present in the ffmpeg command.
+    """
+    src = generate_tone(tmp_path / "tone.mp3", freq_hz=440, duration_sec=0.5)
+    out = tmp_path / "normed.mp3"
+    normalize(src, out, loudnorm=False)
+
+    assert out.exists()
+    raw = out.read_bytes()[:2048]
+    assert b"Xing" not in raw, "Xing VBR header found — -write_xing 0 did not suppress it"
+    assert b"Info" not in raw, "Info CBR header found — -write_xing 0 did not suppress it"
