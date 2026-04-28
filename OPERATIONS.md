@@ -124,4 +124,4 @@ The dashboard is accessible via HA ingress (sidebar). The first-run flow exposes
 - no systemd unit
 - no launchd plist
 - no nginx or Caddy config
-- no Fly/Render/Vercel/Netlify config
+- no Fly/Render/Netlify config (public preview deployment is a future idea — blocked on cost and music copyright)
