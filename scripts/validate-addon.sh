@@ -162,12 +162,14 @@ fi
 
 # ---- 10. No JS string rewriting in ingress prefix injection ----
 echo "10. Ingress safety"
-if grep -q "_inject_ingress_prefix" mammamiradio/streamer.py; then
+if [ ! -f mammamiradio/web/streamer.py ]; then
+    fail "Missing mammamiradio/web/streamer.py (cannot run ingress safety check)"
+elif grep -q "_inject_ingress_prefix" mammamiradio/web/streamer.py; then
     if CHECK_OUTPUT=$($PY -c "
 import ast
 from pathlib import Path
 
-src = Path('mammamiradio/streamer.py').read_text()
+src = Path('mammamiradio/web/streamer.py').read_text()
 tree = ast.parse(src)
 target = None
 for node in tree.body:

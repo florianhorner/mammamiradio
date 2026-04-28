@@ -44,7 +44,7 @@ Imported `_ffprobe_duration_sec` in producer.py. Added probe in prewarm path (be
 
 **Depends on / blocked by:** none.
 
-**Affected files:** `mammamiradio/admin.html` (or its replacement).
+**Affected files:** `mammamiradio/web/templates/admin.html` (or its replacement).
 
 ### Docker container smoke test in CI
 After `addon-build.yml` builds the image, run a 30s smoke test:
@@ -58,7 +58,7 @@ Catches "server starts but can't produce audio" — the exact production failure
 **Source:** `/research` + `/design-shotgun` on 2026-04-21 → approved direction is Concept A modified (Variant E2 warmth iteration).
 **IA reference:** `.context/attachments/Radio Control-Room IA  Architecture Comparison, Recommendation & MVP Build Order.md`
 **Design reference:** `~/.gstack/projects/florianhorner-mammamiradio/designs/admin-regia-concepts-20260421/variant-E2.png` + `approved.json`
-**Prototype shipped (this branch):** `mammamiradio/regia.html` served at `/regia` (admin-gated). Screen 1 ON AIR + 260px read-only Peek Panel + persistent status strip + tab bar (tabs 2–5 are inert placeholders).
+**Prototype shipped (this branch):** `mammamiradio/web/templates/regia.html` served at `/regia` (admin-gated). Screen 1 ON AIR + 260px read-only Peek Panel + persistent status strip + tab bar (tabs 2–5 are inert placeholders).
 
 ### P1 — Wire Screen 1 ON AIR + Build Screen 2 QUEUE
 **Completed:** 2026-04-28 (florianhorner/show-p1-tasks)
