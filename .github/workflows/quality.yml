@@ -81,5 +81,5 @@ jobs:
             git commit -m "ci: auto-ratchet coverage floors
 
           Co-Authored-By: github-actions[bot] <github-actions[bot]@users.noreply.github.com>"
-            git push
+            git push || echo "⚠️  Push blocked by branch protection — coverage floor update skipped. Run 'make coverage-ratchet' and open a PR to apply manually."
           fi
