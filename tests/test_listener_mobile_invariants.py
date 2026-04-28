@@ -103,11 +103,16 @@ def test_form_inputs_avoid_ios_auto_zoom() -> None:
 
 def test_body_uses_modern_viewport_units_for_ios() -> None:
     """html/body must declare a `100svh`/`100dvh` min-height to avoid iOS
-    address-bar cutoff. Falling back to `100vh` is fine, but the dynamic
-    unit must be present too.
+    address-bar cutoff (falling back to `100vh` is fine, but the dynamic unit
+    must be present), AND must keep `overscroll-behavior-x: contain` to
+    prevent horizontal rubber-band snap when content overflows.
     """
     text = _read_listener_css()
-    html_body_re = re.compile(r"html\s*,\s*body\s*\{([^}]*)\}", re.DOTALL)
+    # Order-insensitive: accept both `html, body` and `body, html`.
+    html_body_re = re.compile(
+        r"(?:html\s*,\s*body|body\s*,\s*html)\s*\{([^}]*)\}",
+        re.DOTALL,
+    )
     block = html_body_re.search(text)
     assert block, "listener.css must declare an `html, body { … }` block."
     body = block.group(1)
@@ -116,4 +121,10 @@ def test_body_uses_modern_viewport_units_for_ios() -> None:
         "html/body must declare `min-height: 100svh` (or 100dvh) in addition "
         "to `100vh`. Without it iOS Safari hides ~100 px of content under "
         "the collapsing address bar."
+    )
+    has_overscroll_guard = re.search(r"overscroll-behavior-x\s*:\s*contain", body)
+    assert has_overscroll_guard, (
+        "html/body must keep `overscroll-behavior-x: contain` to prevent the "
+        "horizontal rubber-band snap that triggered the original `In Onda` "
+        "tap regression on phones."
     )
