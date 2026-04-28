@@ -111,10 +111,9 @@ def purge_suspect_cache_files(cache_dir: Path, min_size_bytes: int = 10240) -> i
     Subsequent boots serve silence from cache without re-downloading.  Purging
     these on startup forces a fresh download.
 
-    Also purges ``_silence_*.mp3`` files unconditionally — these are silence
-    placeholders generated when yt-dlp is disabled or fails.  They must not
-    persist across restarts or they will be re-queued by the producer and trigger
-    an endless quality-gate rejection loop.
+    Also purges ``_silence_*.mp3`` and ``_failed_*.mp3`` files unconditionally.
+    These placeholders must not persist across restarts or they will be re-queued
+    by the producer and trigger an endless quality-gate rejection loop.
     """
     if not cache_dir.is_dir():
         return 0
@@ -125,6 +124,11 @@ def purge_suspect_cache_files(cache_dir: Path, min_size_bytes: int = 10240) -> i
         # Silence placeholders always get purged regardless of size.
         if f.name.startswith("_silence_"):
             logger.info("Purging silence placeholder: %s", f.name)
+            f.unlink(missing_ok=True)
+            purged += 1
+            continue
+        if f.name.startswith("_failed_"):
+            logger.info("Purging failed-download marker: %s", f.name)
             f.unlink(missing_ok=True)
             purged += 1
             continue
@@ -357,12 +361,31 @@ def _ytdlp_enabled() -> bool:
     return os.getenv("MAMMAMIRADIO_ALLOW_YTDLP", "false").lower() in _TRUTHY
 
 
+def _failed_download_path(track: Track, cache_dir: Path, reason: str) -> Path:
+    """Return a tiny failure marker that makes the producer skip this track."""
+    failure_path = cache_dir / f"_failed_{track.cache_key}.mp3"
+    failure_path.write_text(reason)
+    return failure_path
+
+
 def _resolve_cached_or_local(track: Track, cache_dir: Path, music_dir: Path) -> Path | None:
     """Return an existing cache/local/demo asset path when one is already available."""
     out_path = cache_dir / f"{track.cache_key}.mp3"
     if out_path.exists():
         logger.info("Cache hit: %s", track.display)
         return out_path
+    failed_path = cache_dir / f"_failed_{track.cache_key}.mp3"
+    if failed_path.exists():
+        logger.info("Failed-download marker hit, skipping: %s", track.display)
+        return failed_path
+    if track.source == "youtube":
+        legacy_path = cache_dir / f"{track.legacy_cache_key}.mp3"
+        if legacy_path.exists():
+            logger.info("Legacy YouTube cache hit: %s", track.display)
+            return legacy_path
+    if track.local_path is not None and track.local_path.exists():
+        logger.info("Track file: %s -> %s", track.display, track.local_path)
+        return track.local_path
 
     demo = _find_demo_asset(track)
     if demo:
@@ -391,8 +414,13 @@ def _download_sync(track: Track, cache_dir: Path, music_dir: Path) -> Path:
             return _download_direct_url(track.direct_url, out_path)
         except Exception as e:
             logger.warning("Direct URL download failed for %s: %s", track.display, e)
+            if track.source == "jamendo":
+                return _failed_download_path(track, cache_dir, f"jamendo direct-url failed: {e}")
 
     # 3. Try yt-dlp (opt-in only, disabled by default for copyright safety)
+    if track.source == "jamendo":
+        logger.warning("Skipping yt-dlp fallback for Jamendo track: %s", track.display)
+        return _failed_download_path(track, cache_dir, "jamendo fallback blocked")
     if _ytdlp_enabled():
         try:
             return _download_ytdlp(track, cache_dir)

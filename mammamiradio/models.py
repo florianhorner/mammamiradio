@@ -11,7 +11,8 @@ from collections import deque
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import TYPE_CHECKING, ClassVar
+from typing import TYPE_CHECKING, ClassVar, Literal
+from urllib.parse import urlsplit, urlunsplit
 
 if TYPE_CHECKING:
     from mammamiradio.persona import PersonaStore
@@ -45,12 +46,43 @@ class Track:
     album: str = ""
     explicit: bool = False
     popularity: int = 0
+    source: Literal["youtube", "jamendo", "local", "demo"] = "youtube"
+
+    @staticmethod
+    def _slugify_cache_value(raw: str, *, max_length: int = 160) -> str:
+        return re.sub(r"[^a-z0-9]+", "_", raw.lower()).strip("_")[:max_length]
+
+    @staticmethod
+    def _normalize_cache_url(url: str) -> str:
+        parsed = urlsplit((url or "").strip())
+        host = (parsed.hostname or "").lower()
+        netloc = host
+        if parsed.port:
+            netloc = f"{host}:{parsed.port}"
+        path = parsed.path.rstrip("/")
+        if not path and parsed.path:
+            path = "/"
+        return urlunsplit((parsed.scheme.lower(), netloc, path, "", ""))
+
+    @property
+    def legacy_cache_key(self) -> str:
+        """Pre-source cache key kept for backwards-compatible cache lookups."""
+        return self._slugify_cache_value(f"{self.artist} {self.title}", max_length=80)
 
     @property
     def cache_key(self) -> str:
-        """Stable filesystem-friendly key used for caching fallback audio."""
-        raw = f"{self.artist} {self.title}".lower()
-        return re.sub(r"[^a-z0-9]+", "_", raw).strip("_")[:80]
+        """Stable filesystem-friendly key used for caching source-specific audio."""
+        if self.youtube_id:
+            return self._slugify_cache_value(f"youtube|{self.youtube_id}")
+        if self.source == "jamendo":
+            jamendo_id = self.spotify_id.strip()
+            if jamendo_id:
+                return self._slugify_cache_value(f"jamendo|{jamendo_id}")
+            if self.direct_url:
+                return self._slugify_cache_value(f"jamendo|{self._normalize_cache_url(self.direct_url)}")
+        if self.local_path is not None:
+            return self._slugify_cache_value(f"{self.source or 'local'}|{self.local_path.as_posix()}")
+        return self._slugify_cache_value(f"{self.artist}|{self.title}|{self.source or 'youtube'}")
 
     @property
     def display(self) -> str:
@@ -643,6 +675,12 @@ class Capabilities:
 
     ha: bool = False
     """Home Assistant token present and integration enabled."""
+
+    jamendo: bool = False
+    """Jamendo source is configured with a client ID."""
+
+    charts_reload: bool = False
+    """Chart reloads are available because yt-dlp is enabled and charts are configured."""
 
     tts_degraded: bool = False
     """True when one or more configured TTS voices were replaced with a fallback at config load."""

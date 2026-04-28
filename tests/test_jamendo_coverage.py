@@ -173,8 +173,8 @@ def test_download_direct_url_rejects_non_jamendo_before_fetching(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_download_sync_direct_url_fails_falls_through_to_silence(tmp_path):
-    """Empty fallback: when direct_url fetch fails and yt-dlp is disabled, produce silence."""
+def test_download_sync_jamendo_direct_url_failure_returns_skip_marker(tmp_path):
+    """Empty fallback: Jamendo direct_url failure returns a skip marker, never substitute audio."""
     from mammamiradio.downloader import _download_sync
 
     cache_dir = tmp_path / "cache"
@@ -188,22 +188,20 @@ def test_download_sync_direct_url_fails_falls_through_to_silence(tmp_path):
         spotify_id="jamendo_fail_1",
         youtube_id="",
         direct_url="https://storage.jamendo.com/tracks/broken.mp3",
+        source="jamendo",
     )
 
     with (
         patch("mammamiradio.downloader._download_direct_url", side_effect=RuntimeError("fetch failed")),
         patch("mammamiradio.downloader._ytdlp_enabled", return_value=False),
-        patch("mammamiradio.downloader._run_ffmpeg"),
     ):
         result = _download_sync(track, cache_dir, music_dir)
 
-    assert result.name.startswith("_silence_")
+    assert result.name == f"_failed_{track.cache_key}.mp3"
 
 
-def test_download_sync_direct_url_fails_ytdlp_enabled_tries_ytdlp(tmp_path):
-    """Normal: when direct_url fails and yt-dlp is enabled, yt-dlp is tried (line 392-393)."""
-    import sys
-
+def test_download_sync_jamendo_direct_url_failure_with_ytdlp_enabled_skips_ytdlp(tmp_path):
+    """Post-restart: persisted Jamendo tracks still block yt-dlp fallback after direct_url failure."""
     from mammamiradio.downloader import _download_sync
 
     cache_dir = tmp_path / "cache"
@@ -217,34 +215,18 @@ def test_download_sync_direct_url_fails_ytdlp_enabled_tries_ytdlp(tmp_path):
         spotify_id="jamendo_fail_2",
         youtube_id="",
         direct_url="https://storage.jamendo.com/tracks/broken2.mp3",
+        source="jamendo",
     )
-    expected_out = cache_dir / f"{track.cache_key}.mp3"
-
-    class _FakeYoutubeDL:
-        def __init__(self, _opts):
-            pass
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc, tb):
-            return False
-
-        def download(self, _queries):
-            expected_out.write_text("ytdlp audio")
-
-    mock_yt_dlp = MagicMock()
-    mock_yt_dlp.YoutubeDL = _FakeYoutubeDL
 
     with (
         patch("mammamiradio.downloader._download_direct_url", side_effect=RuntimeError("fetch failed")),
         patch("mammamiradio.downloader._ytdlp_enabled", return_value=True),
-        patch.dict(sys.modules, {"yt_dlp": mock_yt_dlp}),
+        patch("mammamiradio.downloader._download_ytdlp") as mock_ytdlp,
     ):
         result = _download_sync(track, cache_dir, music_dir)
 
-    assert result == expected_out
-    assert result.exists()
+    assert result.name == f"_failed_{track.cache_key}.mp3"
+    mock_ytdlp.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -637,7 +619,10 @@ def test_load_explicit_source_jamendo_url_kind_resolves(config):
             PlaylistSource(kind="url", source_id="", label="Jamendo", url="jamendo://playlist?tags=pop"),
         )
 
-    assert tracks == jamendo_tracks
+    assert len(tracks) == 1
+    assert tracks[0].title == jamendo_tracks[0].title
+    assert tracks[0].artist == jamendo_tracks[0].artist
+    assert tracks[0].source == "jamendo"
     assert source.kind == "jamendo"
 
 
@@ -674,12 +659,14 @@ def test_fetch_startup_playlist_persisted_jamendo_fails_falls_back_to_demo(confi
         ),
         patch("mammamiradio.playlist._load_demo_asset_tracks", return_value=[]),
     ):
-        _tracks, source, error = fetch_startup_playlist(
+        tracks, source, error = fetch_startup_playlist(
             config,
             PlaylistSource(kind="jamendo", source_id="pop", label="Jamendo CC Music"),
         )
 
     assert source.kind == "demo"
+    assert tracks
+    assert all(track.source == "demo" for track in tracks)
     assert "temporarily unavailable" in error
 
 
@@ -708,9 +695,12 @@ def test_fetch_startup_playlist_jamendo_used_as_startup_source(config):
     ]
 
     with patch("mammamiradio.playlist._fetch_jamendo_playlist", return_value=jamendo_tracks):
-        _tracks, source, _error = fetch_startup_playlist(config)
+        tracks, source, _error = fetch_startup_playlist(config)
 
-    assert _tracks == jamendo_tracks
+    assert len(tracks) == 1
+    assert tracks[0].title == jamendo_tracks[0].title
+    assert tracks[0].artist == jamendo_tracks[0].artist
+    assert tracks[0].source == "jamendo"
     assert source.kind == "jamendo"
     assert _error == ""
 

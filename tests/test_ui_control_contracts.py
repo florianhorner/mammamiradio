@@ -26,6 +26,7 @@ Disconnects targeted (findings from UI audit):
 from __future__ import annotations
 
 import asyncio
+import re
 import time
 from pathlib import Path
 
@@ -440,6 +441,44 @@ class TestCapabilitiesEndpoint:
         assert data["capabilities"]["openai"] is True
         assert data["capabilities"]["anthropic_key"] is False
         assert data["capabilities"]["script_llm"] is True
+
+
+class TestSourceControlVisibilityContract:
+    @pytest.mark.asyncio
+    async def test_capabilities_expose_admin_source_control_flags(self):
+        app = _make_app()
+        app.state.config.playlist.jamendo_client_id = "jamendo-client"
+        app.state.config.allow_ytdlp = False
+
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            resp = await c.get("/api/capabilities", headers=AUTH)
+
+        data = resp.json()["capabilities"]
+        assert data["jamendo"] is True
+        assert data["charts_reload"] is False
+
+        app.state.config.allow_ytdlp = True
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            resp = await c.get("/api/capabilities", headers=AUTH)
+
+        data = resp.json()["capabilities"]
+        assert data["jamendo"] is True
+        assert data["charts_reload"] is True
+
+    @pytest.mark.asyncio
+    async def test_admin_html_binds_source_buttons_to_capability_flags_only(self):
+        app = _make_app()
+
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            resp = await c.get("/admin", headers=AUTH)
+
+        html = resp.text
+        assert re.search(r'id="sourceJamendoBtn"[^>]*\bdata-capability="jamendo"', html)
+        assert re.search(r'id="sourceChartsBtn"[^>]*\bdata-capability="charts_reload"', html)
+        assert "function sourceControlVisibility(caps)" in html
+        assert "Boolean(capabilities.jamendo)" in html
+        assert "Boolean(capabilities.charts_reload)" in html
+        assert "jamendoSourceAvailable" not in html
 
 
 # ---------------------------------------------------------------------------

@@ -1262,8 +1262,8 @@ body[data-stopped="true"] .a-station-card .dot.on { animation-play-state: paused
       <div id="lrBody" style="margin-bottom:14px"><div class="empty">No requests yet</div></div>
       <div class="card-label">Coda</div>
       <div class="quick-actions" id="playlistSourceControls" style="margin:10px 0 14px">
-        <button type="button" class="btn btn-chip" id="sourceChartsBtn" onclick="loadPlaylistSource('charts',this)">Reload charts</button>
-        <button type="button" class="btn btn-chip" id="sourceJamendoBtn" style="display:none" onclick="loadPlaylistSource('jamendo',this)">Jamendo CC Music</button>
+        <button type="button" class="btn btn-chip" id="sourceChartsBtn" data-capability="charts_reload" style="display:none" onclick="loadPlaylistSource('charts',this)">Reload charts</button>
+        <button type="button" class="btn btn-chip" id="sourceJamendoBtn" data-capability="jamendo" style="display:none" onclick="loadPlaylistSource('jamendo',this)">Jamendo CC Music</button>
       </div>
       <div class="search-row">
         <input type="text" class="search-input" id="searchInput" placeholder="Search music (playlist + web)..." autocomplete="off" aria-label="Search music">
@@ -1802,35 +1802,27 @@ function updateRecent(st){
 
 // ── Playlist ──
 let _plFilter='';
-function jamendoSourceAvailable(st,caps){
-  const active=st?.current_source?.kind==='jamendo'||st?.playlist_source?.kind==='jamendo';
-  if(active){
-    try{localStorage.setItem('jamendoSourceAvailable','true')}catch(_){}
-    return true;
-  }
-  const startupError=(caps?.startup_source_error||'').toLowerCase();
-  if(startupError.includes('jamendo')&&!startupError.includes('not configured')) return true;
-  try{return localStorage.getItem('jamendoSourceAvailable')==='true'}catch(_){return false}
+function sourceControlVisibility(caps){
+  const capabilities=caps?.capabilities||{};
+  return {
+    jamendo:Boolean(capabilities.jamendo),
+    charts_reload:Boolean(capabilities.charts_reload),
+  };
 }
 function updateSourceControls(st,caps){
   const jamBtn=document.getElementById('sourceJamendoBtn');
-  if(!jamBtn)return;
-  jamBtn.style.display=jamendoSourceAvailable(st,caps)?'':'none';
+  const chartsBtn=document.getElementById('sourceChartsBtn');
+  const visibility=sourceControlVisibility(caps);
+  if(jamBtn)jamBtn.style.display=visibility.jamendo?'':'none';
+  if(chartsBtn)chartsBtn.style.display=visibility.charts_reload?'':'none';
 }
 async function loadPlaylistSource(kind,el){
   flash(el);
   const url=kind==='jamendo'?JAMENDO_SENTINEL_URL:CHARTS_SENTINEL_URL;
   const r=await api('POST','/api/playlist/load',{url});
   if(!r.ok){
-    if(kind==='jamendo'&&/not configured/i.test(r.error||'')){
-      try{localStorage.removeItem('jamendoSourceAvailable')}catch(_){}
-      updateSourceControls(_st,_caps);
-    }
     toast('Failed: '+(r.error||'unknown'));
     return;
-  }
-  if(kind==='jamendo'){
-    try{localStorage.setItem('jamendoSourceAvailable','true')}catch(_){}
   }
   toast(kind==='jamendo'?'Loaded Jamendo CC Music':'Reloaded charts');
   await refreshFast();
