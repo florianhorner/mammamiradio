@@ -6,6 +6,7 @@ import json
 import logging
 import random
 import time
+from dataclasses import replace
 from pathlib import Path
 from urllib.error import URLError
 from urllib.parse import parse_qs, urlencode, urlparse
@@ -46,6 +47,11 @@ class ExplicitSourceError(RuntimeError):
     """Raised when an explicit user-selected source cannot be loaded."""
 
 
+def _copy_tracks_with_source(tracks: list[Track], source: str) -> list[Track]:
+    """Return copies with a consistent source label for playlist-loaded tracks."""
+    return [replace(track, source=source) for track in tracks]
+
+
 def _load_demo_asset_tracks() -> list[Track]:
     """Return Track objects for MP3s bundled in demo_assets/music/.
 
@@ -67,6 +73,8 @@ def _load_demo_asset_tracks() -> list[Track]:
                 artist=artist_part.strip(),
                 duration_ms=210000,
                 spotify_id=f"demo_asset_{mp3.stem.lower().replace(' ', '_')}",
+                local_path=mp3,
+                source="demo",
             )
         )
     return tracks
@@ -147,6 +155,8 @@ def _load_local_music_tracks(music_dir: Path) -> list[Track]:
                 artist=artist_part.strip(),
                 duration_ms=210000,
                 spotify_id=track_id,
+                local_path=mp3,
+                source="local",
             )
         )
     return tracks
@@ -173,7 +183,7 @@ def _merge_local_music_tracks(chart_tracks: list[Track], local_tracks: list[Trac
 def _load_chart_source_tracks(config: StationConfig) -> list[Track]:
     """Load chart tracks and blend local music/ tracks, then shuffle if configured."""
     chart_tracks = list(_fetch_current_italy_charts())
-    local_tracks = _load_local_music_tracks(Path("music"))
+    local_tracks = _copy_tracks_with_source(_load_local_music_tracks(Path("music")), "local")
     if local_tracks:
         merged_count = _merge_local_music_tracks(chart_tracks, local_tracks)
         logger.info(
@@ -264,6 +274,7 @@ def _fetch_current_italy_charts(limit: int = 100, max_per_artist: int = 2) -> li
                 artist=artist,
                 duration_ms=210000,
                 spotify_id=f"chart_{item_id or len(tracks) + 1}",
+                source="youtube",
             )
         )
     if rejected:
@@ -339,6 +350,7 @@ def _fetch_jamendo_playlist(config: StationConfig, *, tags: str | None = None, l
                 direct_url=direct_url,
                 album_art=str(item.get("image", "") or ""),
                 album=str(item.get("album_name", "") or ""),
+                source="jamendo",
             )
         )
 
@@ -394,11 +406,11 @@ def write_persisted_source(cache_dir: Path, source: PlaylistSource) -> None:
 def load_explicit_source(config: StationConfig, source: PlaylistSource) -> tuple[list[Track], PlaylistSource]:
     """Load a user-chosen source without any silent fallback."""
     if source.kind == "demo":
-        demo_asset_tracks = _load_demo_asset_tracks()
+        demo_asset_tracks = _copy_tracks_with_source(_load_demo_asset_tracks(), "demo")
         if demo_asset_tracks:
             tracks = _shuffle_if_needed(config, demo_asset_tracks)
         else:
-            tracks = _shuffle_if_needed(config, list(DEMO_TRACKS))
+            tracks = _shuffle_if_needed(config, _copy_tracks_with_source(list(DEMO_TRACKS), "demo"))
         resolved = _demo_source()
         resolved.track_count = len(tracks)
         return tracks, resolved
@@ -411,7 +423,10 @@ def load_explicit_source(config: StationConfig, source: PlaylistSource) -> tuple
         if not client_id:
             raise ExplicitSourceError("Jamendo source is not configured")
         tags = _jamendo_tags(config, source)
-        tracks = _shuffle_if_needed(config, _fetch_jamendo_playlist(config, tags=tags))
+        tracks = _shuffle_if_needed(
+            config,
+            _copy_tracks_with_source(_fetch_jamendo_playlist(config, tags=tags), "jamendo"),
+        )
         if not tracks:
             raise ExplicitSourceError("Jamendo playlist is temporarily unavailable")
         resolved = _jamendo_source(len(tracks), tags=tags)
@@ -453,7 +468,10 @@ def fetch_startup_playlist(
     jamendo_client_id = (config.playlist.jamendo_client_id or "").strip()
     if jamendo_client_id:
         tags = _jamendo_tags(config)
-        jamendo_tracks = _shuffle_if_needed(config, _fetch_jamendo_playlist(config, tags=tags))
+        jamendo_tracks = _shuffle_if_needed(
+            config,
+            _copy_tracks_with_source(_fetch_jamendo_playlist(config, tags=tags), "jamendo"),
+        )
         if jamendo_tracks:
             logger.info("Using Jamendo CC playlist (%d tracks, tags=%s)", len(jamendo_tracks), tags)
             return jamendo_tracks, _jamendo_source(len(jamendo_tracks), tags=tags), error
@@ -468,7 +486,7 @@ def fetch_startup_playlist(
     # Prefer real bundled MP3s over metadata-only demo placeholders.
     # When demo_assets/music/ contains actual files, the queue fills with
     # real audio instead of generated silence.
-    demo_asset_tracks = _load_demo_asset_tracks()
+    demo_asset_tracks = _copy_tracks_with_source(_load_demo_asset_tracks(), "demo")
     if demo_asset_tracks:
         logger.info("Using bundled demo assets (%d tracks)", len(demo_asset_tracks))
         tracks = _shuffle_if_needed(config, demo_asset_tracks)
@@ -477,7 +495,7 @@ def fetch_startup_playlist(
         return tracks, src, error
 
     logger.info("Using built-in modern Italian demo mix")
-    tracks = _shuffle_if_needed(config, list(DEMO_TRACKS))
+    tracks = _shuffle_if_needed(config, _copy_tracks_with_source(list(DEMO_TRACKS), "demo"))
     return tracks, _demo_source(), error
 
 

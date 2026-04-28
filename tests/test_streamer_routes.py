@@ -1277,9 +1277,26 @@ async def test_capabilities_loopback_returns_flags():
     # Flags are nested under "capabilities"; top-level has tier, trial, etc.
     caps = body.get("capabilities", body)
     assert "llm" in caps
+    assert "jamendo" in caps
+    assert "charts_reload" in caps
     assert "tier" in body
     assert "trial" in body
     assert "canned_clips_streamed" in body["trial"]
+
+
+@pytest.mark.asyncio
+async def test_capabilities_exposes_jamendo_and_charts_reload_flags():
+    app = _make_test_app()
+    app.state.config.playlist.jamendo_client_id = "jamendo-client"
+    app.state.config.allow_ytdlp = True
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.get("/api/capabilities")
+
+    assert resp.status_code == 200
+    caps = resp.json()["capabilities"]
+    assert caps["jamendo"] is True
+    assert caps["charts_reload"] is True
 
 
 @pytest.mark.asyncio

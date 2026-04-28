@@ -1181,3 +1181,88 @@ async def test_download_external_track_returns_path(tmp_path):
 
     result = await download_external_track(track, cache_dir, music_dir=tmp_path / "music")
     assert result == expected
+
+
+def test_jamendo_direct_url_failure_does_not_fall_back_to_ytdlp(tmp_path):
+    from mammamiradio.downloader import _download_sync
+
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+    music_dir = tmp_path / "music"
+    music_dir.mkdir()
+    track = Track(
+        title="Solo CC",
+        artist="Jamendo Artist",
+        duration_ms=180000,
+        spotify_id="jamendo_123",
+        direct_url="https://storage.jamendo.com/tracks/123.mp3",
+        source="jamendo",
+    )
+
+    with (
+        patch("mammamiradio.downloader._download_direct_url", side_effect=RuntimeError("fetch failed")),
+        patch("mammamiradio.downloader._ytdlp_enabled", return_value=True),
+        patch("mammamiradio.downloader._download_ytdlp") as mock_ytdlp,
+    ):
+        result = _download_sync(track, cache_dir, music_dir)
+
+    assert result.name == f"_failed_{track.cache_key}.mp3"
+    assert result.read_text() == "jamendo direct-url failed: fetch failed"
+    mock_ytdlp.assert_not_called()
+
+
+def test_cache_key_separates_same_song_across_sources():
+    jamendo_track = Track(
+        title="Same Song",
+        artist="Same Artist",
+        duration_ms=180000,
+        spotify_id="jamendo_42",
+        source="jamendo",
+    )
+    youtube_track = Track(
+        title="Same Song",
+        artist="Same Artist",
+        duration_ms=180000,
+        source="youtube",
+    )
+
+    assert jamendo_track.cache_key != youtube_track.cache_key
+
+
+def test_jamendo_cache_key_normalizes_direct_url():
+    base = Track(
+        title="Normalized",
+        artist="URL Artist",
+        duration_ms=180000,
+        direct_url="https://STORAGE.JAMENDO.com/tracks/song.mp3?token=abc",
+        source="jamendo",
+    )
+    variant = Track(
+        title="Normalized",
+        artist="URL Artist",
+        duration_ms=180000,
+        direct_url="https://storage.jamendo.com/tracks/song.mp3/",
+        source="jamendo",
+    )
+
+    assert base.cache_key == variant.cache_key
+
+
+def test_jamendo_lookup_does_not_reuse_legacy_unsourced_cache(tmp_path):
+    from mammamiradio.downloader import _resolve_cached_or_local
+
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+    music_dir = tmp_path / "music"
+    music_dir.mkdir()
+    track = Track(
+        title="Legacy Clash",
+        artist="Artist",
+        duration_ms=180000,
+        spotify_id="jamendo_legacy",
+        source="jamendo",
+    )
+    legacy_path = cache_dir / f"{track.legacy_cache_key}.mp3"
+    legacy_path.write_text("legacy youtube audio")
+
+    assert _resolve_cached_or_local(track, cache_dir, music_dir) is None

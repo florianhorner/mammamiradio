@@ -108,7 +108,7 @@ def test_on_stream_segment_records_previous_music_as_completed():
 def test_track_cache_key():
     t = Track(title="Con te partirò!", artist="Andrea Bocelli", duration_ms=250000, spotify_id="x")
     key = t.cache_key
-    assert key == "andrea_bocelli_con_te_partir"
+    assert key == "andrea_bocelli_con_te_partir_youtube"
     assert len(key) <= 80
 
 

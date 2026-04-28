@@ -15,7 +15,9 @@ def _config(**overrides):
     cfg.openai_api_key = overrides.get("openai_api_key", "")
     cfg.ha_token = overrides.get("ha_token", "")
     cfg.homeassistant.enabled = overrides.get("ha_enabled", False)
+    cfg.playlist.jamendo_client_id = overrides.get("jamendo_client_id", "")
     cfg.tts_degraded_voices = overrides.get("tts_degraded_voices", [])
+    cfg.allow_ytdlp = overrides.get("allow_ytdlp", False)
     return cfg
 
 
@@ -109,17 +111,29 @@ def test_get_capabilities_all_on():
     assert caps == Capabilities(llm=True, ha=True)
 
 
+def test_get_capabilities_sets_jamendo_flag():
+    caps = get_capabilities(_config(jamendo_client_id="jamendo-client"), _state())
+    assert caps.jamendo is True
+
+
+def test_get_capabilities_sets_charts_reload_only_when_ytdlp_enabled():
+    assert get_capabilities(_config(allow_ytdlp=False), _state()).charts_reload is False
+    assert get_capabilities(_config(allow_ytdlp=True), _state()).charts_reload is True
+
+
 # --- capabilities_to_dict() ---
 
 
 def test_capabilities_to_dict_shape():
-    caps = Capabilities(llm=True)
+    caps = Capabilities(llm=True, jamendo=True, charts_reload=True)
     d = capabilities_to_dict(caps)
     assert "capabilities" in d
     assert "tier" in d
     assert "tier_label" in d
     assert d["capabilities"]["llm"] is True
     assert d["capabilities"]["ha"] is False
+    assert d["capabilities"]["jamendo"] is True
+    assert d["capabilities"]["charts_reload"] is True
     assert d["tier"] == "full_ai"
     assert d["tier_label"] == "Full AI Radio"
 

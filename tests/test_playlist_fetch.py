@@ -417,6 +417,7 @@ def test_load_explicit_jamendo_source_success(config):
             spotify_id="jamendo_7",
             youtube_id="",
             direct_url="https://cdn.example.test/jamendo-7.mp3",
+            source="jamendo",
         )
     ]
 
@@ -743,6 +744,7 @@ def test_fetch_startup_restores_persisted_jamendo_source(config):
             spotify_id="jamendo_11",
             youtube_id="",
             direct_url="https://storage.jamendo.com/tracks/jamendo-11.mp3",
+            source="jamendo",
         )
     ]
 

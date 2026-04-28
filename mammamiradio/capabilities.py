@@ -15,6 +15,8 @@ def get_capabilities(config: StationConfig, state: StationState) -> Capabilities
     return Capabilities(
         llm=bool(config.anthropic_api_key or config.openai_api_key),
         ha=bool(config.homeassistant.enabled and config.ha_token),
+        jamendo=bool((config.playlist.jamendo_client_id or "").strip()),
+        charts_reload=bool(config.allow_ytdlp),
         tts_degraded=bool(getattr(config, "tts_degraded_voices", [])),
     )
 
@@ -49,6 +51,8 @@ def capabilities_to_dict(caps: Capabilities) -> dict:
         "capabilities": {
             "llm": caps.llm,
             "ha": caps.ha,
+            "jamendo": caps.jamendo,
+            "charts_reload": caps.charts_reload,
         },
         "tier": caps.tier,
         "tier_label": caps.tier_label,
