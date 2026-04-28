@@ -18,6 +18,14 @@
   margin: 0;
   padding: 0;
   box-sizing: border-box;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* iOS double-tap-to-zoom adds a 300 ms latency on every tap of a button or
+   link and makes our In Onda pill feel laggy. `manipulation` keeps pinch-zoom
+   on the page itself but disables the double-tap zoom shortcut on controls. */
+button, a, [role="button"], summary, label, select, input[type="range"] {
+  touch-action: manipulation;
 }
 
 /* ── Waveform — one component, two variants, four states ── */

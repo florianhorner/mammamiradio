@@ -51,12 +51,6 @@ body { font-family: var(--font-body); color: var(--cream); line-height: 1.5; }
   flex-direction: column;
 }
 
-.sidebar-station h1 {
-  font-family: var(--font-display);
-  font-size: 20px; font-weight: 700; font-style: italic;
-  color: var(--cream); line-height: 1.1;
-}
-.sidebar-station h1 .mi { color: var(--sun); }
 .tricolor-stripe {
   height: 2px; width: 140px; margin-top: 6px; border-radius: 1px;
   background: linear-gradient(90deg, #009246 33%, rgba(255,255,255,0.85) 33%, rgba(255,255,255,0.85) 66%, #CE2B37 66%);
@@ -519,7 +513,7 @@ body[data-stopped="true"] .sidebar-live-line { color: var(--cream-dk); }
 /* ── PLAYLIST / SEARCH ── */
 .search-row { display: flex; gap: 8px; margin-bottom: 12px; }
 .search-input, .input {
-  flex: 1; font-family: var(--font-body); font-size: 13px;
+  flex: 1; font-family: var(--font-body); font-size: 16px;
   padding: 10px 14px; border-radius: 8px;
   background: rgba(20,17,15,0.5); color: var(--cream);
   border: 1px solid rgba(245,237,216,0.12); outline: none;
@@ -646,7 +640,8 @@ body::before {
 .a-brand { display: flex; align-items: flex-start; gap: 10px; padding: 4px 0 14px; border-bottom: 1px solid var(--line); }
 .a-brand img { width: 34px; height: 34px; }
 .a-brand .wm { font-family: var(--font-display); font-style: italic; font-weight: 700; font-size: 18px; color: var(--cream); line-height: 1; letter-spacing: -0.01em; }
-.a-brand .wm em { color: var(--sun); font-style: italic; }
+.a-brand .wm em,
+.a-brand .wm .mi { color: var(--sun); font-style: italic; }
 .a-brand .sub { font-family: var(--font-body); font-size: 9px; color: var(--sun2); letter-spacing: 0.22em; text-transform: uppercase; margin-top: 5px; font-weight: 700; }
 
 /* Station card */
