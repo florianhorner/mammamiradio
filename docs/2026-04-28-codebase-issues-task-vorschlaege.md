@@ -13,7 +13,9 @@
 
 **Vorschlag für Ticket**
 - `source_id` auf `apple_music_it_top_100` umstellen.
-- Optional: Migrations-/Kompatibilitätslogik ergänzen, falls persistierte Quellen (`playlist_source.json`) noch `..._top_50` enthalten.
+- Migrations-/Kompatibilitätslogik in `read_persisted_source()` ergänzen: Beim Laden der `playlist_source.json` jeden Eintrag mit `source_id == "apple_music_it_top_50"` automatisch auf `"apple_music_it_top_100"` remappen (kein Fehler, transparente Migration). **Beide IDs sollen nicht als separate Legacy-Einträge koexistieren.** Akzeptanzkriterien:
+  - Ein persistiertes `playlist_source.json` mit `"apple_music_it_top_50"` wird beim nächsten Start ohne Warnung als `"apple_music_it_top_100"` geladen.
+  - Einheit-Test: `read_persisted_source()` mit `source_id = "apple_music_it_top_50"` gibt `source_id == "apple_music_it_top_100"` zurück.
 
 ---
 
@@ -28,9 +30,16 @@
 - `mammamiradio/playlist.py` (`charts_allowed = config.allow_ytdlp` + Charts-Pfad nur bei `True`).
 - `mammamiradio/playlist.py` (`local_present` prüft nur auf Warnung, lädt aber keine lokale Playlist als Fallback).
 
+**Semantische Entscheidung (Akzeptanzkriterium)**
+`allow_ytdlp=False` bedeutet **„kein yt-dlp-Download"**, nicht „keine lokalen Dateien". Lokale MP3s in `music/` sind bereits vorhanden und brauchen kein yt-dlp. Daher gilt: **Option 1 — lokale Dateien als Startup-Fallback sind auch bei `allow_ytdlp=False` erlaubt.**
+
 **Vorschlag für Ticket**
-- Eigenen Fallback-Pfad implementieren: Wenn Charts aus sind oder fehlschlagen und lokale MP3s vorhanden sind, lokale Playlist direkt als Startup-Quelle nutzen (`source.kind="local"` oder konsistente Kennung).
-- Nebenbei die Warning-Message aktualisieren, damit Verhalten und Text übereinstimmen.
+- Eigenen Fallback-Pfad in `fetch_startup_playlist()` einbauen: Direkt nach dem Jamendo-Block, wenn `local_present` gilt, lokale Playlist laden und zurückgeben (`source.kind="local"`). Demo-Assets werden nur noch genutzt, wenn auch lokal nichts vorhanden ist.
+- Die bestehende Warning-Message von „set it to 'true' to blend local tracks" auf „set it to 'true' to also enable live chart blending" korrigieren — lokale Dateien funktionieren ohne das Flag.
+- Akzeptanzkriterien:
+  - `allow_ytdlp=False` + `music/*.mp3` vorhanden ⇒ Startup nutzt lokale Tracks (kein Demo).
+  - `allow_ytdlp=False` + kein `music/*.mp3` ⇒ Startup nutzt Demo (unverändertes Verhalten).
+  - `allow_ytdlp=True` + `music/*.mp3` vorhanden ⇒ Charts werden genutzt (unverändertes Verhalten).
 
 ---
 
@@ -45,9 +54,21 @@
 - `README.md` (Tabelle „Never Crashes, Always Plays“, Zeile `jamendo_client_id`-Fallback).
 - `mammamiradio/playlist.py` (`fetch_startup_playlist()`-Ablauf).
 
+**Tatsächliche Prioritätsreihenfolge von `fetch_startup_playlist()` (Stand 2026-04-28)**
+
+```
+1. Persistierte Quelle (playlist_source.json) — falls vorhanden und ladbar
+2. Charts via yt-dlp — nur wenn allow_ytdlp=True
+3. Jamendo — nur wenn jamendo_client_id konfiguriert
+4. ← LÜCKE: lokale MP3s (music/*.mp3) werden nur gewarnt, nicht geladen
+5. Bundled Demo-Assets (assets/demo/music/)
+6. DEMO_TRACKS-Konstante (Built-in-Fallback)
+```
+
 **Vorschlag für Ticket**
-- README-Fallbackmatrix mit tatsächlicher Logik synchronisieren **oder** Logik wie dokumentiert implementieren (bevorzugt: Logik fixen, dann Doku bestätigen).
-- Ergänzend in `docs/architecture.md` den Startup-Fallback-Pfad explizit ausformulieren.
+- README-Fallbackmatrix mit tatsächlicher Logik synchronisieren **oder** Logik wie dokumentiert implementieren (bevorzugt: nach Task 2-Fix Logik bestätigen, dann Doku aktualisieren).
+- In `docs/architecture.md` die obige Prioritätsreihenfolge explizit tabellarisch ausformulieren, inklusive der Bedingungen (`allow_ytdlp`, `jamendo_client_id`).
+- Die README-Zeile für `jamendo_client_id` in der „Never Crashes, Always Plays"-Matrix korrigieren: aktueller Text suggeriert Fallback auf lokale Dateien, der tatsächlich nicht stattfindet (bis Task 2 umgesetzt ist).
 
 ---
 
