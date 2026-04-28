@@ -6,6 +6,15 @@ The current version source of truth is `pyproject.toml`.
 
 ## [Unreleased]
 
+### Added
+
+- **Regia Screen 2 — live queue view** (`/regia`): The QUEUE tab now shows the full segment queue rendered from `queued_segments`, a break-structure card, skip-current and purge-all controls, inline search against `/api/search`, and per-item removal via the new `POST /api/queue/remove` endpoint. Replaces the browser `confirm()` panic dialog with an in-page CSS overlay that doesn't drop the stream. Drag-to-reorder is deferred (asyncio.Queue is not random-access).
+
+### Fixed
+
+- **Safari banter and news segments cut off after 6–9 seconds**: Safari honours the Xing/Info VBR duration header embedded by ffmpeg's loudnorm filter and fires `ended` at the declared duration, cutting every banter and news clip short. Two-layer fix: `‑write_xing 0` added to ffmpeg output args (suppresses the header at encode time); stream-time stripper hardened to handle `bitrate_idx=0` ("free format") frames and correctly reject Xing TOC bytes (`0xFF×100`) whose MPEG layer field is Layer I, not Layer III.
+- **Jamendo source-strict downloads**: Jamendo tracks now use a dedicated download path (`source="jamendo"`) that fetches from `direct_url` only — avoids deterministic failures where yt-dlp treated the Jamendo track ID as a YouTube video ID. Cache keys are now source-aware so Jamendo and YouTube tracks with the same slug never collide. `jamendo_client_id` whitespace is stripped before use so accidental trailing spaces don't silently disable the source.
+
 ## [2.10.10] - 2026-04-28
 
 ### Added

@@ -33,7 +33,7 @@ cd mammamiradio && cp .env.example .env
 docker compose up
 ```
 
-Open `http://localhost:8000` for the listener page (`/admin` for the control room). Music plays from live Italian charts when `MAMMAMIRADIO_ALLOW_YTDLP=true` (enabled in `docker-compose.yml`), otherwise from local files or silence while you add `music/` MP3s.
+Open `http://localhost:8000` for the listener page (`/admin` for the control room). Music plays from live Italian charts when `MAMMAMIRADIO_ALLOW_YTDLP=true` (enabled in `docker-compose.yml`), from CC-licensed tracks via Jamendo (set `jamendo_client_id` in `radio.toml`), or from local files dropped into `music/`.
 
 ### Home Assistant Add-on
 
@@ -72,7 +72,7 @@ This repo ships a [`conductor.json`](conductor.json) that handles `.venv` creati
 
 ## What You'll Experience
 
-**It just plays.** `docker compose up` and you have a working radio station. Music from live Italian charts (yt-dlp enabled in `docker-compose.yml`) or local files dropped into `music/`. No setup wizard, no API keys needed to hear sound.
+**It just plays.** `docker compose up` and you have a working radio station. Music from live Italian charts (yt-dlp), CC-licensed tracks via Jamendo, or local files dropped into `music/`. No setup wizard, no API keys needed to hear sound.
 
 **Nobody notices it's AI.** Two Italian hosts banter between tracks, roast each other, react to the music. The format absorbs AI imperfection... timing gaps and rough edges read as radio character, not failure. There is no uncanny valley in radio.
 
@@ -99,12 +99,12 @@ This repo ships a [`conductor.json`](conductor.json) that handles `.venv` creati
 ## How It Works
 
 ```text
-Charts / local files / demo playlist -> Producer -> asyncio.Queue -> Playback loop -> /stream
-                                     |                                  |
-Claude -> banter/ad scripts ---------+                                  +-> /public-status, /status
-Edge TTS -> dialogue + ads ----------+
-FFmpeg -> normalize / mix / concat --+
-Home Assistant -> optional context --+
+Charts / Jamendo CC / local files / demo -> Producer -> asyncio.Queue -> Playback loop -> /stream
+                                         |                                  |
+Claude/OpenAI -> banter/ad scripts ------+                                  +-> /public-status, /status
+Edge TTS -> dialogue + ads --------------+
+FFmpeg -> normalize / mix / concat ------+
+Home Assistant -> optional context ------+
 ```
 
 - `producer.py` keeps a few segments queued ahead of playback.
@@ -127,7 +127,8 @@ The station degrades gracefully instead of failing:
 
 | What's missing | What happens |
 |----------------|-------------|
-| `MAMMAMIRADIO_ALLOW_YTDLP` not set | Falls back to local `music/` files, then silence |
+| `MAMMAMIRADIO_ALLOW_YTDLP` not set | Falls back to Jamendo CC music, then local `music/` files, then silence |
+| `jamendo_client_id` not set | Skips Jamendo, falls back to local files or charts |
 | Anthropic API key | Falls back to OpenAI `gpt-4o-mini`, then stock copy |
 | OpenAI API key | Falls back to Edge TTS voices |
 | Home Assistant token | Continues without home context |
@@ -142,7 +143,7 @@ Most station behavior lives in `radio.toml`:
 | Section | What it controls |
 |---------|-----------------|
 | `[station]` | Station name, language, theme |
-| `[playlist]` | Shuffle behavior, repeat/artist cooldowns |
+| `[playlist]` | Shuffle behavior, repeat/artist cooldowns, Jamendo CC music (`jamendo_client_id`, `jamendo_tags`) |
 | `[pacing]` | Songs between banter, songs between ads, spots per break |
 | `[[hosts]]` | Host names, TTS engine (`edge`/`openai`), voices, personality |
 | `[audio]` | Sample rate, channels, bitrate, Claude model |
