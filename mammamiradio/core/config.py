@@ -753,5 +753,5 @@ if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "runtime-json":
         print(json.dumps(runtime_json()))
     else:
-        print("Usage: python -m mammamiradio.config runtime-json", file=sys.stderr)
+        print("Usage: python -m mammamiradio.core.config runtime-json", file=sys.stderr)
         sys.exit(1)
