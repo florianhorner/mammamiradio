@@ -365,14 +365,14 @@ def test_skip_vbr_info_frame_via_sync_scan():
     #   + 4 quality + filler zeros to end of frame.
     # TOC entries of 0xFF followed by 0xFF would look like sync words to a naive scan.
     xing_payload = (
-        b"\x00" * 32       # side info (stereo = 32 bytes)
-        + b"Xing"          # magic
+        b"\x00" * 32  # side info (stereo = 32 bytes)
+        + b"Xing"  # magic
         + b"\x00\x00\x00\x0f"  # flags (all fields present)
         + b"\x00\x00\x00\x64"  # total frames
         + b"\x00\x00\x3a\x98"  # total bytes
-        + b"\xff" * 100    # TOC — all 0xFF, creates dense false sync candidates
+        + b"\xff" * 100  # TOC — all 0xFF, creates dense false sync candidates
         + b"\x00\x00\x00\x00"  # quality
-        + b"\x00" * 60     # filler to pad out the frame
+        + b"\x00" * 60  # filler to pad out the frame
     )
     vbr_frame = vbr_header + xing_payload
     audio = _audio_frame()
