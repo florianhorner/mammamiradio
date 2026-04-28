@@ -12,7 +12,10 @@ The listener must always believe they are hearing a real radio station. Dead air
 **2. INSTANT AUDIO**
 A listener who connects must hear sound within 1–2 seconds, every time. No exceptions for cold starts, session resumes, idle wakeups, or addon restarts. Every connect path needs an immediate audio source — pre-normalized track, canned clip, anything. Build the bridge first, fix root causes second.
 
-**3. THE README IS THE PITCH**
+**3. NO LIVE SURGERY ON PRODUCTION SYSTEMS**
+The only legitimate code-change path for the addon is `branch → PR → merge → CI builds image → addon updates`. No `docker cp`, no `pkill`, no live config edits, no addon restarts without explicit confirmation in the current message. Sleeping humans depend on the system. See **Production Systems Discipline — HARD STOP** below for the full rule.
+
+**4. THE README IS THE PITCH**
 A new reader must get it in 30 seconds or less. That is a KPI, not an aspiration. If the README needs scrolling, paragraphs of context, or a glossary before the product clicks, we failed. The first viewport carries the entire pitch: what it is, what makes it different, and what the reader does next. Same standard applies to the repo at large — when a new contributor opens the source tree, the folder hierarchy IS the mental model. If they can't find where a feature lives in 30 seconds, the structure failed.
 
 ## Production Systems Discipline — HARD STOP
@@ -113,9 +116,9 @@ Everything else lives under `docs/`:
 
 - Startup loads `radio.toml`, validates config, purges suspect cache files (< 10KB), restores persisted source selection from `cache/playlist_source.json`, fetches the playlist, initializes the clip ring buffer, then launches producer and playback tasks. Logs a one-line boot summary at the end.
 - **Capability flags** (`anthropic`, `ha`) drive a three-tier system. The dashboard derives a tier label from them: Demo Radio, Full AI Radio, Connected Home. `GET /api/capabilities` returns flags, tier, and a `next_step` hint guiding the user toward the next setup action.
-- Demo-first: the app boots immediately with whatever music source is available (yt-dlp charts, local `music/`, or bundled demo assets under `mammamiradio/demo_assets/music/`). The playback loop rescues from the norm cache, then bundled demo assets, then forces a banter segment after 60s of silence — silence is never the terminal state. No wizard, no gates.
-- If no LLM key is configured (neither Anthropic nor OpenAI), banter falls back to stock copy. `mammamiradio/demo_assets/banter/` is currently empty — the bundled-clip inventory is a TODO; until it is populated, missing-LLM banter is text-to-speech over stock copy rather than pre-recorded clips.
-- Music comes from live Italian charts (via yt-dlp), local `music/` files, or bundled demo assets under `mammamiradio/demo_assets/music/`. Queue starvation triggers a norm-cache rescue, then a demo-asset rescue, then forced banter — silence is never the terminal fallback.
+- Demo-first: the app boots immediately with whatever music source is available (yt-dlp charts, local `music/`, or bundled demo assets under `mammamiradio/assets/demo/music/`). The playback loop rescues from the norm cache, then bundled demo assets, then forces a banter segment after 60s of silence — silence is never the terminal state. No wizard, no gates.
+- If no LLM key is configured (neither Anthropic nor OpenAI), banter falls back to stock copy. `mammamiradio/assets/demo/banter/` is currently empty — the bundled-clip inventory is a TODO; until it is populated, missing-LLM banter is text-to-speech over stock copy rather than pre-recorded clips.
+- Music comes from live Italian charts (via yt-dlp), local `music/` files, or bundled demo assets under `mammamiradio/assets/demo/music/`. Queue starvation triggers a norm-cache rescue, then a demo-asset rescue, then forced banter — silence is never the terminal fallback.
 - If Anthropic fails mid-session, script generation falls back to OpenAI `gpt-4o-mini` when `OPENAI_API_KEY` is set, then to short stock copy.
 - If Home Assistant is enabled and `HA_TOKEN` is present, banter and ads may reference current home state.
 - `audio.bitrate` is the single source of truth for encoding, ICY headers, and playback throttling.
@@ -124,38 +127,25 @@ Everything else lives under `docs/`:
 
 ## Project structure
 
+The folder hierarchy IS the mental model (leadership principle #4). For a single-page "where does X live" map see `docs/REPO_MAP.md`.
+
 ```text
 mammamiradio/
-  main.py             FastAPI app startup/shutdown lifecycle
-  config.py           radio.toml + .env parsing, validation, runtime-json helper
-  models.py           shared data models and station state
-  producer.py         async segment production loop
-  streamer.py         playback loop, routes, auth checks, public/admin status
-  scheduler.py        segment scheduling and upcoming preview
-  scriptwriter.py     Anthropic/OpenAI API calls for banter and ad JSON (with automatic fallback)
-  playlist.py         charts, local, and demo playlist loading
-  downloader.py       local file, yt-dlp, and placeholder audio fallback
-  normalizer.py       FFmpeg helpers for normalize, mix, concat, generated SFX, studio bleed, and oneshot mixing
-  tts.py              Edge TTS synthesis for hosts and ads (with +90% rate for pharma disclaimers)
-  clip.py             WTF clip extraction from ring buffer, save, and cleanup
-  ha_context.py       Home Assistant polling, Italian state formatting, mood classification, reactive triggers
-  ha_enrichment.py    Pure HA event derivation (diff_states, event pruning, numeric passthrough)
-  capabilities.py     Capability flags (anthropic, ha), tier derivation, and next_step hints
-  persona.py          Compounding listener memory: persona, motifs, session tracking, arc phases, prompt injection filtering
-  song_cues.py        Per-track machine-derived memory: anthems, skip bits, LLM reactions
-  sync.py             SQLite database initialization and schema migration
-  context_cues.py     Time-of-day and cultural context for banter/ad prompts
-  track_rationale.py  "Why this track?" rationale generation for listener UI
-  track_rules.py      Per-track personality rules flagged via /api/track-rules
-  audio_quality.py    Audio quality gate: duration and silence checks before segments reach the queue
-  setup_status.py     Legacy setup status classification (kept for /status endpoint compat)
-  admin.html          Admin control room panel served at /admin (and at / over HA ingress)
-  listener.html       Listener page served at / and /listen
-  demo_assets/        Demo asset tree: sfx/studio/ SFX are committed; banter/ads/music/jingles/welcome are empty placeholders pending the demo-asset contract
-radio.toml            station config
-start.sh              dev entrypoint with uvicorn and reload
-tests/                pytest coverage
+  main.py                   FastAPI app startup/shutdown lifecycle (kept at top — public entry)
+  core/                     config, models, capabilities, setup_status, sync (SQLite schema)
+  audio/                    normalizer (FFmpeg), audio_quality gate, tts, voice_catalog
+  playlist/                 playlist source selection, downloader, song_cues, track_rationale, track_rules
+  hosts/                    scriptwriter (LLM banter+ads — TODO: split), persona, context_cues, ad_creative
+  home/                     ha_context (HA polling, mood), ha_enrichment (event diff/prune)
+  scheduling/               producer (async loop), scheduler (segment-type picker), clip (WTF ring buffer)
+  web/                      streamer (TODO: split — routes/auth/playback loop), og_card, templates/, static/
+  assets/                   demo/ MP3s + SFX, logo.svg
+radio.toml                  station config
+start.sh                    dev entrypoint with uvicorn and reload
+tests/                      mirrors mammamiradio/ — tests/<nave>/test_*.py
 ```
+
+Two god modules carry a `# TODO: split` marker: `web/streamer.py` (~2,400 LOC) and `hosts/scriptwriter.py` (~1,500 LOC). They have postal addresses now; the actual splits land in PRs 5 and 6 of the cathedral plan (`docs/2026-04-28-cathedral-restructure.md`).
 
 ## Design System
 
@@ -166,7 +156,7 @@ Do not deviate without explicit user approval. In QA mode, flag any code that do
 ## Brand assets
 
 - **Hero banner**: `docs/banner.png` — 1280×640 README hero. DALL-E background composited with Playfair italic typography. Source template: `docs/hero-composite.html` (contains regeneration instructions in comment header). The background image (`radio-hero-bg.png`) is generated via ChatGPT Images and not committed to git.
-- **Logo SVG**: `mammamiradio/logo.svg` — canonical vector source (variant G: classic radio with Italian flag stripe and sound waves)
+- **Logo SVG**: `mammamiradio/assets/logo.svg` — canonical vector source (variant G: classic radio with Italian flag stripe and sound waves)
 - **Palette**: Volare Refined — espresso dark with Italian warmth in accents. See `docs/design/system.md` for the full design system.
   - Background: espresso dark (`#14110F`) with subtle warm gradient at top
   - Cards: warm brown surfaces (`#251E19`) — unified across listener and admin
@@ -177,7 +167,7 @@ Do not deviate without explicit user approval. In QA mode, flag any code that do
 - **Typography**: Playfair Display italic (station name, display text) + Outfit (body) + JetBrains Mono (technical)
 - **Favicon**: inline SVG data URI in `admin.html` and `listener.html` (simplified version of logo)
 - **HA add-on icon**: `ha-addon/mammamiradio/icon.png` (256px) and `logo.png` (512px), rasterized from the SVG
-- To regenerate PNGs from SVG: `cairosvg mammamiradio/logo.svg -o icon.png -W 256 -H 256`
+- To regenerate PNGs from SVG: `cairosvg mammamiradio/assets/logo.svg -o ha-addon/mammamiradio/icon.png -W 256 -H 256 && cairosvg mammamiradio/assets/logo.svg -o ha-addon/mammamiradio/logo.png -W 512 -H 512`
 - **Full design system**: `docs/design/system.md` — colors, typography, components, motion, anti-patterns
 
 ## Brand safety — hard rule
@@ -190,7 +180,7 @@ Why: the scriptwriter generates fake ads in the brand's voice, makes false produ
 
 ## Notes for future edits
 
-- `dashboard.html` and `listener.html` are loaded as static file contents by `streamer.py`.
+- `admin.html`, `listener.html`, `live.html`, and `regia.html` live in `mammamiradio/web/templates/` and are loaded by `mammamiradio/web/streamer.py`.
 - `start.sh` is part of the runtime contract, not just a convenience script.
 - `radio.toml` is the source of truth for hosts, pacing, ad brands, audio settings, and Home Assistant enablement. Secrets stay in `.env`.
 - If you change routes, config keys, auth rules, or fallback behavior, update the matching docs in the same change. (See **Doc sync** rule below.)
@@ -199,7 +189,7 @@ Why: the scriptwriter generates fake ads in the brand's voice, makes false produ
 - Treat 60 minutes of uninterrupted runtime per live station object as the default minimum when tinkering around an active stream.
 - Built-in demo music should favor current modern tracks, not nostalgic or older fallback selections.
 - Advertisements need a convincing underlying sound bed. Prefer CC-free music or sound design beds under ad voiceovers instead of dry voice-only spots.
-- To tune scriptwriter behavior without a stream gap: edit `mammamiradio/scriptwriter.py`, run `make check`, then `POST /api/hot-reload` (admin auth, empty body), then `POST /api/trigger {"type": "banter"}` to generate a segment with the new code. The stream stays live throughout. If reload fails (syntax error), the endpoint returns 500 and the stream keeps running with the old code.
+- To tune scriptwriter behavior without a stream gap: edit `mammamiradio/hosts/scriptwriter.py`, run `make check`, then `POST /api/hot-reload` (admin auth, empty body), then `POST /api/trigger {"type": "banter"}` to generate a segment with the new code. The stream stays live throughout. If reload fails (syntax error), the endpoint returns 500 and the stream keeps running with the old code.
 
 ## Quality gates
 
@@ -224,8 +214,8 @@ Why: the scriptwriter generates fake ads in the brand's voice, makes false produ
 These UI elements have regressed in past refactors. Always verify they survive after any HTML edit:
 
 - **Token cost counter** (`admin.html` Engine Room) — backend computes `api_cost_estimate_usd` on every `/status` call. UI must display it. Has disappeared twice in refactors.
-- **Play button blue state** (`mammamiradio/static/base.css`) — `.play-btn.playing` must use `var(--ok)` (blue), never `var(--sun2)` (golden). Colorblind safety.
-- **Station name localStorage** (`mammamiradio/static/listener.js`) — reads `stationName` from localStorage. Admin writes it. Broken when dashboard.html was rewritten.
+- **Play button blue state** (`mammamiradio/web/static/base.css`) — `.play-btn.playing` must use `var(--ok)` (blue), never `var(--sun2)` (golden). Colorblind safety.
+- **Station name localStorage** (`mammamiradio/web/static/listener.js`) — reads `stationName` from localStorage. Admin writes it. Broken when dashboard.html was rewritten.
 - **Gold "Mi" accent** (`listener.html`, `admin.html`) — `<span class="mi">` in h1, styled `color: var(--sun)`. Brand signature from hero banner.
 - **Italian tricolor stripe** (`admin.html` uses `.tricolor-stripe`; `listener.html` uses `.tricolor-band`) — present below h1. Must match hero banner.
 
@@ -258,7 +248,7 @@ Every PR touching audio delivery (producer, streamer, normalizer, any bridge/fal
 
 **Scenario 1 — Normal:** feature works as designed.
 
-**Scenario 2 — Empty fallback:** canned clips absent, norm cache empty, no assets in container. The real container ships only README stubs in `demo_assets/banter/`. Tests that mock `_pick_canned_clip` to return a real file are hiding this class of bug.
+**Scenario 2 — Empty fallback:** canned clips absent, norm cache empty, no assets in container. The real container ships only README stubs in `mammamiradio/assets/demo/banter/`. Tests that mock `_pick_canned_clip` to return a real file are hiding this class of bug.
 
 **Scenario 3 — Post-restart:** flag files persisted from a prior run, `session_stopped` still set, HA watchdog has restarted. Test that a listener connecting AFTER a restart + stopped state still gets audio.
 

@@ -5,6 +5,7 @@ cache/
 tmp/
 .venv/
 *.egg-info/
+build/
 dist/
 music/
 go-librespot/credentials.json

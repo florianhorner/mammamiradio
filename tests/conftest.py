@@ -26,7 +26,7 @@ def _isolate_env():
 def _reset_tts_voice_memoization():
     """Clear runtime voice-failure memoization between tests to prevent
     state leaking across tests that share the same edge voice IDs."""
-    from mammamiradio.tts import reset_voice_failures
+    from mammamiradio.audio.tts import reset_voice_failures
 
     reset_voice_failures()
     yield
@@ -37,7 +37,7 @@ def _reset_tts_voice_memoization():
 def _reset_rejected_cache_denylist():
     """Clear the session-scoped rejected-download denylist between tests so
     that a track rejected by one test does not poison selection in the next."""
-    from mammamiradio.downloader import clear_rejected_cache_keys
+    from mammamiradio.playlist.downloader import clear_rejected_cache_keys
 
     clear_rejected_cache_keys()
     yield
