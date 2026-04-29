@@ -727,7 +727,7 @@ def test_get_openai_client_singleton(monkeypatch):
     mock_instance = MagicMock()
     mock_cls.return_value = mock_instance
 
-    with patch("mammamiradio.audio.tts.OpenAI", mock_cls, create=True):
+    with patch("openai.OpenAI", mock_cls):
         # First call creates the client
         c1 = tts_mod._get_openai_client("sk-test")
         # Second call with same key returns cached

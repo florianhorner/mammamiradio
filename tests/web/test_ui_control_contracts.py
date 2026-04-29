@@ -39,6 +39,9 @@ from mammamiradio.core.models import Segment, SegmentType, StationState, Track
 from mammamiradio.web.streamer import LiveStreamHub, router
 
 TOML_PATH = str(Path(__file__).resolve().parents[2] / "radio.toml")
+WEB_ROOT = Path(__file__).resolve().parents[2] / "mammamiradio" / "web"
+ADMIN_HTML = WEB_ROOT / "templates" / "admin.html"
+LISTENER_HTML = WEB_ROOT / "templates" / "listener.html"
 TOKEN = "test-admin-token"
 AUTH = {"X-Radio-Admin-Token": TOKEN}
 
@@ -633,8 +636,7 @@ class TestSchedulerReasonsDoNotLeakToUI:
         # Regression guard: the admin queue render path stripped out `it.reason`
         # on 2026-04-17. Re-adding it would re-introduce "pacing threshold reached"
         # and "No pacing trigger active" rows in the up-next queue.
-        html_path = Path(__file__).resolve().parents[2] / "mammamiradio" / "web" / "templates" / "admin.html"
-        html = html_path.read_text()
+        html = ADMIN_HTML.read_text()
 
         # Find the upcoming-rows render section (starts at `upFiltered.slice(0,10).forEach`).
         start = html.find("upFiltered.slice(0,10).forEach")
@@ -668,8 +670,7 @@ class TestCapabilitiesStatusIsHonest:
         # Regression guard: the render for the Anthropic line must consult
         # `anthropic_degraded`, not just key presence. Re-introducing a
         # presence-only render would be Item 11 regression.
-        html_path = Path(__file__).resolve().parents[2] / "mammamiradio" / "web" / "templates" / "admin.html"
-        html = html_path.read_text()
+        html = ADMIN_HTML.read_text()
         assert "anthropic_degraded" in html, (
             "admin.html engine-room capabilities render must consult "
             "`c.anthropic_degraded` so the dot can't lie about a 401'd key "
@@ -680,8 +681,7 @@ class TestCapabilitiesStatusIsHonest:
     def test_admin_html_renders_suspended_state_label(self):
         # Anchor the copy so a future refactor can't silently collapse the
         # three-state render back into connected/not-set.
-        html_path = Path(__file__).resolve().parents[2] / "mammamiradio" / "web" / "templates" / "admin.html"
-        html = html_path.read_text()
+        html = ADMIN_HTML.read_text()
         assert "suspended" in html, (
             "admin.html should render a 'suspended' label when Anthropic "
             "auth failed and we're falling back to OpenAI (Item 11)."
@@ -702,8 +702,7 @@ class TestStoppedStateQuietsTheUI:
     """
 
     def test_admin_html_toggles_data_stopped_on_body(self):
-        html_path = Path(__file__).resolve().parents[2] / "mammamiradio" / "web" / "templates" / "admin.html"
-        html = html_path.read_text()
+        html = ADMIN_HTML.read_text()
         assert "setAttribute('data-stopped'" in html, (
             "admin.html updateStopState() must flip a global `data-stopped` "
             "attribute on <body> so CSS can freeze animations + dim producer "
@@ -711,8 +710,7 @@ class TestStoppedStateQuietsTheUI:
         )
 
     def test_admin_html_has_css_rules_for_stopped_animations_and_buttons(self):
-        html_path = Path(__file__).resolve().parents[2] / "mammamiradio" / "web" / "templates" / "admin.html"
-        html = html_path.read_text()
+        html = ADMIN_HTML.read_text()
         # Animations pause
         assert 'body[data-stopped="true"]' in html and "animation-play-state: paused" in html, (
             "admin.html must pause animations under the stopped state (Item 19)."
@@ -724,8 +722,7 @@ class TestStoppedStateQuietsTheUI:
         assert "pointer-events: none" in html, "admin.html must disable producer buttons under stopped state (Item 19)."
 
     def test_admin_html_clears_tick_interval_on_stop(self):
-        html_path = Path(__file__).resolve().parents[2] / "mammamiradio" / "web" / "templates" / "admin.html"
-        html = html_path.read_text()
+        html = ADMIN_HTML.read_text()
         assert "clearInterval(_tick)" in html, (
             "admin.html updateStopState() must clearInterval the elapsed-timer "
             "tick so the top-left counter freezes instead of counting past a "
@@ -737,9 +734,9 @@ class TestStoppedStateQuietsTheUI:
         # the data-stopped invariant is still required but the markers now
         # live across html + css + js. Read all three so this test still
         # fires if the stopped-state feature gets stripped silently.
-        base = Path(__file__).resolve().parents[2] / "mammamiradio" / "web"
+        base = WEB_ROOT
         blob = (
-            (base / "templates" / "listener.html").read_text()
+            LISTENER_HTML.read_text()
             + (base / "static" / "listener.css").read_text()
             + (base / "static" / "listener.js").read_text()
             # Also consult base.css — the unified waveform pause rule lives there.
@@ -759,8 +756,7 @@ class TestStoppedStateQuietsTheUI:
     def test_admin_banner_copy_does_not_use_harsh_error_tone(self):
         # "Session stopped — hit Resume to continue" read as an error.
         # New copy is calmer — "Station paused · hit Resume when you're ready."
-        html_path = Path(__file__).resolve().parents[2] / "mammamiradio" / "web" / "templates" / "admin.html"
-        html = html_path.read_text()
+        html = ADMIN_HTML.read_text()
         assert "Station paused" in html, "admin.html stopped banner should read 'Station paused' (Item 19)."
         # Only check the banner element's text, not toast strings in JS callbacks.
         banner_start = html.find('id="stoppedBanner"')

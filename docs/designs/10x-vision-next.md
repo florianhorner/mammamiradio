@@ -73,11 +73,11 @@ Add a `fallback_voice` parameter or a hardcoded retry with the alternate voice.
 Cannot ship this as the default path.
 
 **Current state:** `mammamiradio/playlist/downloader.py` falls through to yt-dlp for demo tracks
-(spotify_id starts with "demo"). The `demo_assets/music/` directory exists but is empty.
+(spotify_id starts with "demo"). The `mammamiradio/assets/demo/music/` directory exists but is empty.
 
 **Options:**
 - A) Source 5-7 CC0/CC-BY Italian-flavored tracks (mandolin, accordion, Italian vocals).
-  Bundle as MP3s in `demo_assets/music/`. The downloader already checks this directory
+  Bundle as MP3s in `mammamiradio/assets/demo/music/`. The downloader already checks this directory
   first via `_find_demo_asset()`.
 - B) Generate synthetic Italian music beds using the FFmpeg pipeline in `normalizer.py`.
   Lower quality but zero licensing risk.
@@ -143,7 +143,7 @@ transition is visual only (dial shift + "Benvenuto" overlay). The golden path sa
 **Implementation:**
 - Pre-generate 3-4 welcome clips via edge-tts: Marco says "Eyyy, qualcuno si e
   collegato!" / Giulia says "Benvenuto, vediamo cosa ci hai portato..."
-- Store in `demo_assets/welcome/`
+- Store in `mammamiradio/assets/demo/welcome/`
 - In the autoplay block in `producer.py`, queue a welcome clip BEFORE the captured
   song (currently it goes: [captured song] -> [banter about song])
 - New order: [welcome clip] -> [captured song] -> [banter about song]
@@ -217,5 +217,5 @@ mammamiradio/playlist/downloader.py        — #4 yt-dlp opt-in flag
 mammamiradio/dashboard.html       — #6 dial, #7 marquee
 mammamiradio/scheduling/producer.py          — #8 welcome clip, #10 shareware counter
 mammamiradio/core/models.py            — #10 canned_clips_played counter
-demo_assets/welcome/              — #8 welcome clips (new directory)
+mammamiradio/assets/demo/welcome/ — #8 welcome clips (new directory)
 ```

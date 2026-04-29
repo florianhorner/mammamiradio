@@ -8,7 +8,9 @@ An AI-powered Italian radio station that nobody questions is real. Two hosts ban
 
 ```bash
 git clone https://github.com/florianhorner/mammamiradio.git && cd mammamiradio
-cp .env.example .env && docker compose up
+cp .env.example .env
+# Set ADMIN_TOKEN in .env, then:
+docker compose up
 ```
 
 → **[Read the code](docs/REPO_MAP.md)** · **[Ship to your home](ha-addon/README.md)** · **[Contribute](CONTRIBUTING.md)** · **[Changelog](CHANGELOG.md)**

@@ -25,11 +25,13 @@ def test_demo_tracks_match_bundled_assets():
 
     assets_dir = Path(__file__).resolve().parents[2] / "mammamiradio" / "assets" / "demo" / "music"
     if not assets_dir.exists():
-        pytest.skip("demo_assets/music/ not found")
+        pytest.skip("mammamiradio/assets/demo/music/ not found")
 
     for track in DEMO_TRACKS:
         result = _find_demo_asset(track)
-        assert result is not None, f"Demo track '{track.display}' has no matching asset in demo_assets/music/"
+        assert result is not None, (
+            f"Demo track '{track.display}' has no matching asset in mammamiradio/assets/demo/music/"
+        )
 
 
 @pytest.fixture()
