@@ -21,7 +21,7 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 TOKENS_CSS = REPO_ROOT / "mammamiradio" / "web" / "static" / "tokens.css"
-_HTML_FILES = sorted((REPO_ROOT / "mammamiradio").glob("*.html"))
+_HTML_FILES = sorted((REPO_ROOT / "mammamiradio" / "web" / "templates").rglob("*.html"))
 _CSS_FILES = sorted((REPO_ROOT / "mammamiradio" / "web" / "static").glob("*.css"))
 GUARDED_FILES = [path for path in (_HTML_FILES + _CSS_FILES) if path != TOKENS_CSS]
 

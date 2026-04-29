@@ -241,7 +241,7 @@ SHAREWARE_CANNED_LIMIT = 3
 
 
 def _pick_canned_clip(subdir: str, *, state: StationState | None = None) -> Path | None:
-    """Pick a pre-bundled clip from demo_assets/{subdir}/, avoiding recent repeats.
+    """Pick a pre-bundled clip from assets/demo/{subdir}/, avoiding recent repeats.
 
     For banter clips, respects the shareware trial limit: after SHAREWARE_CANNED_LIMIT
     clips have been streamed to the listener, returns None to force TTS fallback.
@@ -1533,7 +1533,7 @@ async def run_producer(
                     },
                 )
             else:
-                logger.warning("No canned clips available — inserting silence (check demo_assets/banter/)")
+                logger.warning("No canned clips available — inserting silence (check assets/demo/banter/)")
                 silence_path = config.tmp_dir / f"silence_{uuid4().hex[:8]}.mp3"
                 try:
                     loop = asyncio.get_running_loop()

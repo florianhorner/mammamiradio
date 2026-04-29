@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import importlib
+import importlib.metadata
 import ipaddress
 import logging
 import os

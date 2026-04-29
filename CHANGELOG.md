@@ -31,7 +31,7 @@ The current version source of truth is `pyproject.toml`.
   - `ADMIN_PANEL_STANDARDS.md` → `docs/design/admin-panel.md`
   - `HA_ADDON_RUNBOOK.md` → `docs/runbooks/ha-addon.md`
 
-  **Cross-references updated** in `README.md`, `CLAUDE.md`, `CONTRIBUTING.md`, the moved docs themselves, and four source/test files that referenced `DESIGN.md` in comments (`mammamiradio/config.py`, `mammamiradio/admin.html`, `tests/test_brand_config.py`, `tests/test_design_tokens.py`). Historical audit notes (`docs/2026-04-13-log-resolution-plan.md`, `docs/2026-04-16-documentation-structure-audit.md`) are dated snapshots and were left untouched.
+  **Cross-references updated** in `README.md`, `CLAUDE.md`, `CONTRIBUTING.md`, the moved docs themselves, and four source/test files that referenced `DESIGN.md` in comments (`mammamiradio/core/config.py`, `mammamiradio/web/templates/admin.html`, `tests/hosts/test_brand_config.py`, `tests/web/test_design_tokens.py`). Historical audit notes (`docs/2026-04-13-log-resolution-plan.md`, `docs/2026-04-16-documentation-structure-audit.md`) are dated snapshots and were left untouched.
 
 ### Removed
 
