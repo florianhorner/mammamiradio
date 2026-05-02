@@ -725,12 +725,14 @@ def test_fetch_startup_playlist_uses_local_music_when_ytdlp_disabled_and_no_jame
     config.allow_ytdlp = False
     config.playlist.jamendo_client_id = ""
 
+    # source="" so the assertion `t.source == "local"` proves the production
+    # _copy_tracks_with_source(..., "local") wrap actually fired.
     fake_local_track = Track(
         title="Emozioni",
         artist="Lucio Battisti",
         duration_ms=210000,
         spotify_id="local_lucio_battisti_-_emozioni",
-        source="local",
+        source="",
     )
 
     with (

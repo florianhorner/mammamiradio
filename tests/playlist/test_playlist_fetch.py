@@ -804,6 +804,82 @@ def test_fetch_startup_uses_local_music_when_ytdlp_off_and_no_jamendo(config):
         assert t.source == "local"
 
 
+def test_charts_empty_but_local_present_does_not_lie_about_source_kind(config):
+    """Operator-honesty regression: when charts API returns 0 tracks but
+    music/ has MP3s, the function must NOT silently substitute local tracks
+    under the "charts" label and persist source_id="apple_music_it_top_100".
+    Local enriches charts; it doesn't impersonate them.
+
+    Before the fix, _load_chart_source_tracks() mutated an empty chart_tracks
+    list by appending local files via _merge_local_music_tracks, so callers
+    saw a non-empty result and labeled it as charts. Found by codex
+    independent review on PR #281.
+    """
+    from mammamiradio.playlist.playlist import _load_chart_source_tracks
+
+    fake_local = [
+        Track(
+            title="Emozioni",
+            artist="Lucio Battisti",
+            duration_ms=210000,
+            spotify_id="local_lucio_battisti_-_emozioni",
+            source="local",
+        ),
+    ]
+
+    with (
+        patch("mammamiradio.playlist.playlist._fetch_current_italy_charts", return_value=[]),
+        patch(
+            "mammamiradio.playlist.playlist._load_local_music_tracks",
+            return_value=fake_local,
+        ),
+    ):
+        result = _load_chart_source_tracks(config)
+
+    # Empty charts result MUST be empty even when local files would have merged.
+    # The caller (fetch_startup_playlist or load_explicit_source) is responsible
+    # for falling through to the proper local source tier with kind="local".
+    assert result == [], (
+        "Charts source must return empty when the charts API yields zero tracks. "
+        "Callers correctly label local files as kind='local' via the auto-degrade "
+        "chain — they should not see local files masquerading as charts."
+    )
+
+
+def test_fetch_startup_falls_through_to_local_when_charts_empty_and_ytdlp_on(config):
+    """End-to-end follow-up to the regression test above: with allow_ytdlp=True
+    but the charts API returning empty, startup must fall through to the local
+    music/ tier and label the source kind="local"."""
+    fake_local = [
+        Track(
+            title="Napule E",
+            artist="Pino Daniele",
+            duration_ms=210000,
+            spotify_id="local_pino_daniele_-_napule_e",
+            source="",
+        ),
+    ]
+    config.allow_ytdlp = True
+    config.playlist.jamendo_client_id = ""
+
+    with (
+        patch("mammamiradio.playlist.playlist._fetch_current_italy_charts", return_value=[]),
+        patch(
+            "mammamiradio.playlist.playlist._load_local_music_tracks",
+            return_value=fake_local,
+        ),
+        patch(
+            "mammamiradio.playlist.playlist._load_demo_asset_tracks",
+            side_effect=AssertionError("demo asset loader should not run when local music is present"),
+        ),
+    ):
+        tracks, source, _err = fetch_startup_playlist(config)
+
+    assert source.kind == "local"
+    assert source.source_id == "local_music_dir"
+    assert tracks[0].source == "local"
+
+
 def test_read_persisted_source_migrates_apple_music_top_50_to_top_100(tmp_path):
     """Backwards-compat migration: a persisted charts source written before the
     apple_music_it_top_50 → top_100 rename is transparently remapped on load.

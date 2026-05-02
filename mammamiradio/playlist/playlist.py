@@ -195,8 +195,20 @@ def _merge_local_music_tracks(chart_tracks: list[Track], local_tracks: list[Trac
 
 
 def _load_chart_source_tracks(config: StationConfig) -> list[Track]:
-    """Load chart tracks and blend local music/ tracks, then shuffle if configured."""
+    """Load chart tracks and blend local music/ tracks, then shuffle if configured.
+
+    Local MP3s are an enrichment of the charts source, not a fallback. If the
+    charts API returns zero tracks (outage, blocked region, scheme mismatch),
+    return an empty list — do NOT silently substitute local files under the
+    "charts" label. Callers handle the empty result:
+      - load_explicit_source() raises ExplicitSourceError (honoring its
+        "no silent fallback" contract)
+      - fetch_startup_playlist() falls through to Jamendo / local / demo
+        tiers, which correctly label the source.
+    """
     chart_tracks = list(_fetch_current_italy_charts())
+    if not chart_tracks:
+        return []
     local_tracks = _copy_tracks_with_source(_load_local_music_tracks(Path("music")), "local")
     if local_tracks:
         merged_count = _merge_local_music_tracks(chart_tracks, local_tracks)
