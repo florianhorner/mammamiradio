@@ -37,10 +37,14 @@ def config():
 
 
 def test_no_credentials_returns_demo_tracks(config, monkeypatch):
-    # Ensure yt-dlp is disabled and demo_assets/music/ is empty so we get DEMO_TRACKS
+    # Ensure yt-dlp is disabled, music/ is empty, demo_assets/music/ is empty
+    # so we get DEMO_TRACKS
     monkeypatch.delenv("MAMMAMIRADIO_ALLOW_YTDLP", raising=False)
     config.allow_ytdlp = False
-    with patch("mammamiradio.playlist.playlist._load_demo_asset_tracks", return_value=[]):
+    with (
+        patch("mammamiradio.playlist.playlist._load_local_music_tracks", return_value=[]),
+        patch("mammamiradio.playlist.playlist._load_demo_asset_tracks", return_value=[]),
+    ):
         tracks, _, _ = fetch_startup_playlist(config)
     assert len(tracks) == len(DEMO_TRACKS)
     demo_titles = {t.title for t in DEMO_TRACKS}
@@ -675,12 +679,16 @@ def test_load_demo_asset_tracks_empty_dir(tmp_path):
 
 
 def test_fetch_startup_prefers_demo_assets_over_demo_tracks_list(config, tmp_path):
-    """When demo_assets/music/ has MP3s, use them instead of metadata-only DEMO_TRACKS."""
+    """When demo_assets/music/ has MP3s and local music/ is empty, use the
+    bundled demo assets instead of metadata-only DEMO_TRACKS."""
     (tmp_path / "Pino Daniele - Napule E.mp3").write_bytes(b"")
     (tmp_path / "Lucio Battisti - Emozioni.mp3").write_bytes(b"")
     config.allow_ytdlp = False
 
-    with patch("mammamiradio.playlist.playlist._DEMO_ASSETS_MUSIC_DIR", tmp_path):
+    with (
+        patch("mammamiradio.playlist.playlist._load_local_music_tracks", return_value=[]),
+        patch("mammamiradio.playlist.playlist._DEMO_ASSETS_MUSIC_DIR", tmp_path),
+    ):
         tracks, source, _err = fetch_startup_playlist(config)
 
     assert len(tracks) == 2
@@ -694,10 +702,14 @@ def test_fetch_startup_prefers_demo_assets_over_demo_tracks_list(config, tmp_pat
 
 
 def test_fetch_startup_falls_back_to_demo_tracks_when_demo_assets_empty(config, tmp_path):
-    """When demo_assets/music/ exists but is empty, fall back to DEMO_TRACKS."""
+    """When local music/ is empty and demo_assets/music/ exists but is empty,
+    fall back to DEMO_TRACKS."""
     config.allow_ytdlp = False
 
-    with patch("mammamiradio.playlist.playlist._DEMO_ASSETS_MUSIC_DIR", tmp_path):
+    with (
+        patch("mammamiradio.playlist.playlist._load_local_music_tracks", return_value=[]),
+        patch("mammamiradio.playlist.playlist._DEMO_ASSETS_MUSIC_DIR", tmp_path),
+    ):
         tracks, source, _err = fetch_startup_playlist(config)
 
     assert len(tracks) == len(DEMO_TRACKS)
@@ -716,6 +728,7 @@ def test_fetch_startup_without_jamendo_client_id_skips_jamendo_and_returns_demo(
             "mammamiradio.playlist.playlist._fetch_jamendo_playlist",
             side_effect=AssertionError("jamendo should not run"),
         ),
+        patch("mammamiradio.playlist.playlist._load_local_music_tracks", return_value=[]),
         patch("mammamiradio.playlist.playlist._load_demo_asset_tracks", return_value=[]),
     ):
         tracks, source, _err = fetch_startup_playlist(config)
@@ -730,12 +743,86 @@ def test_fetch_startup_jamendo_zero_tracks_falls_back_to_demo(config):
 
     with (
         patch("mammamiradio.playlist.playlist._fetch_jamendo_playlist", return_value=[]),
+        patch("mammamiradio.playlist.playlist._load_local_music_tracks", return_value=[]),
         patch("mammamiradio.playlist.playlist._load_demo_asset_tracks", return_value=[]),
     ):
         tracks, source, _err = fetch_startup_playlist(config)
 
     assert len(tracks) == len(DEMO_TRACKS)
     assert source.kind == "demo"
+
+
+def test_fetch_startup_uses_local_music_when_ytdlp_off_and_no_jamendo(config):
+    """Operator-honesty: local music/ MP3s are loaded as the startup source when
+    yt-dlp is disabled and Jamendo isn't configured. Local files don't need
+    yt-dlp; the previous behavior warn-and-skipped them in this configuration,
+    silently ignoring the operator's actual MP3s."""
+    config.allow_ytdlp = False
+    config.playlist.jamendo_client_id = ""
+
+    fake_local = [
+        Track(
+            title="Emozioni",
+            artist="Lucio Battisti",
+            duration_ms=210000,
+            spotify_id="local_lucio_battisti_-_emozioni",
+            source="local",
+        ),
+        Track(
+            title="Napule E",
+            artist="Pino Daniele",
+            duration_ms=210000,
+            spotify_id="local_pino_daniele_-_napule_e",
+            source="local",
+        ),
+    ]
+
+    with (
+        patch("mammamiradio.playlist.playlist._load_local_music_tracks", return_value=fake_local),
+        # Demo asset loader and DEMO_TRACKS path must not run — local has priority now.
+        patch(
+            "mammamiradio.playlist.playlist._load_demo_asset_tracks",
+            side_effect=AssertionError("demo asset loader should not run when local music is present"),
+        ),
+    ):
+        tracks, source, _err = fetch_startup_playlist(config)
+
+    assert source.kind == "local"
+    assert source.source_id == "local_music_dir"
+    assert source.track_count == 2
+    assert len(tracks) == 2
+    assert {t.title for t in tracks} == {"Emozioni", "Napule E"}
+    for t in tracks:
+        assert t.source == "local"
+
+
+def test_read_persisted_source_migrates_apple_music_top_50_to_top_100(tmp_path):
+    """Backwards-compat migration: a persisted charts source written before the
+    apple_music_it_top_50 → top_100 rename is transparently remapped on load.
+    No warning, no fall-through to demo, no error to the operator."""
+    from mammamiradio.playlist.playlist import (
+        PERSISTED_SOURCE_FILENAME,
+        read_persisted_source,
+    )
+
+    legacy_payload = {
+        "kind": "charts",
+        "source_id": "apple_music_it_top_50",
+        "url": "https://example.invalid/charts.json",
+        "label": "Current Italian charts",
+        "track_count": 100,
+        "selected_at": 1700000000.0,
+    }
+    (tmp_path / PERSISTED_SOURCE_FILENAME).write_text(json.dumps(legacy_payload))
+
+    restored = read_persisted_source(tmp_path)
+
+    assert restored is not None
+    assert restored.kind == "charts"
+    assert restored.source_id == "apple_music_it_top_100"
+    # Other fields preserved
+    assert restored.track_count == 100
+    assert restored.label == "Current Italian charts"
 
 
 def test_fetch_startup_restores_persisted_jamendo_source(config):

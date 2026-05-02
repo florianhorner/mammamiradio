@@ -132,8 +132,8 @@ The station degrades gracefully instead of failing:
 
 | What's missing | What happens |
 |----------------|-------------|
-| `MAMMAMIRADIO_ALLOW_YTDLP` not set | Falls back to Jamendo CC music, then local `music/` files, then silence |
-| `jamendo_client_id` not set | Skips Jamendo, falls back to local files or charts |
+| `MAMMAMIRADIO_ALLOW_YTDLP` not set | Skips chart downloads; falls back to Jamendo CC music, then local `music/` files, then bundled demo assets |
+| `jamendo_client_id` not set | Skips Jamendo; falls back to local `music/` files, then bundled demo assets |
 | Anthropic API key | Falls back to OpenAI `gpt-4o-mini`, then stock copy |
 | OpenAI API key | Falls back to Edge TTS voices |
 | Home Assistant token | Continues without home context |

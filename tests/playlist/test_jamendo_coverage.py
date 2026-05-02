@@ -710,21 +710,41 @@ def test_fetch_startup_playlist_jamendo_used_as_startup_source(config):
 # ---------------------------------------------------------------------------
 
 
-def test_fetch_startup_playlist_local_music_warning_when_ytdlp_disabled(config, tmp_path):
-    """Normal: when music/ has MP3s but yt-dlp is disabled, warning logged, demo returned (line 463)."""
+def test_fetch_startup_playlist_uses_local_music_when_ytdlp_disabled_and_no_jamendo(config, tmp_path):
+    """Operator-honesty: when music/ has MP3s, yt-dlp is off, and Jamendo isn't
+    configured, the startup must use the operator's local files — NOT silently
+    fall through to bundled demo assets.
+
+    yt-dlp is only needed for downloading chart tracks; local MP3s already exist
+    on disk and don't need it. The previous behavior warn-and-skipped, which
+    contradicted the operator's stated intent (they put MP3s in music/).
+    """
+    from mammamiradio.core.models import Track
     from mammamiradio.playlist.playlist import fetch_startup_playlist
 
     config.allow_ytdlp = False
     config.playlist.jamendo_client_id = ""
 
+    fake_local_track = Track(
+        title="Emozioni",
+        artist="Lucio Battisti",
+        duration_ms=210000,
+        spotify_id="local_lucio_battisti_-_emozioni",
+        source="local",
+    )
+
     with (
         patch("mammamiradio.playlist.playlist._load_demo_asset_tracks", return_value=[]),
-        patch("mammamiradio.playlist.playlist.Path") as mock_path_cls,
+        patch(
+            "mammamiradio.playlist.playlist._load_local_music_tracks",
+            return_value=[fake_local_track],
+        ),
     ):
-        mock_music = MagicMock()
-        mock_music.glob.return_value = [tmp_path / "track.mp3"]
-        mock_path_cls.return_value = mock_music
+        tracks, source, _error = fetch_startup_playlist(config)
 
-        _tracks, source, _error = fetch_startup_playlist(config)
-
-    assert source.kind == "demo"
+    assert source.kind == "local"
+    assert source.source_id == "local_music_dir"
+    assert source.track_count == 1
+    assert len(tracks) == 1
+    assert tracks[0].artist == "Lucio Battisti"
+    assert tracks[0].source == "local"
