@@ -760,20 +760,23 @@ def test_fetch_startup_uses_local_music_when_ytdlp_off_and_no_jamendo(config):
     config.allow_ytdlp = False
     config.playlist.jamendo_client_id = ""
 
+    # Construct fakes with empty `source=""` so the assertion `t.source == "local"`
+    # below proves the production wrapper `_copy_tracks_with_source(..., "local")`
+    # actually fired — not just that the fixture happened to have the right value.
     fake_local = [
         Track(
             title="Emozioni",
             artist="Lucio Battisti",
             duration_ms=210000,
             spotify_id="local_lucio_battisti_-_emozioni",
-            source="local",
+            source="",
         ),
         Track(
             title="Napule E",
             artist="Pino Daniele",
             duration_ms=210000,
             spotify_id="local_pino_daniele_-_napule_e",
-            source="local",
+            source="",
         ),
     ]
 
@@ -787,12 +790,17 @@ def test_fetch_startup_uses_local_music_when_ytdlp_off_and_no_jamendo(config):
     ):
         tracks, source, _err = fetch_startup_playlist(config)
 
+    # All five PlaylistSource fields covered so a future refactor that silently
+    # changes label/url/source_id can't slip through.
     assert source.kind == "local"
     assert source.source_id == "local_music_dir"
+    assert source.label == "Local music/ files"
+    assert source.url == ""
     assert source.track_count == 2
     assert len(tracks) == 2
     assert {t.title for t in tracks} == {"Emozioni", "Napule E"}
     for t in tracks:
+        # Proves _copy_tracks_with_source(..., "local") wrap fired in production code.
         assert t.source == "local"
 
 

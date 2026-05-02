@@ -462,6 +462,18 @@ def load_explicit_source(config: StationConfig, source: PlaylistSource) -> tuple
         resolved = _charts_source(len(tracks))
         return tracks, resolved
 
+    if source.kind == "local":
+        # Symmetry: matches the auto-degrade `local` source kind in
+        # fetch_startup_playlist. Currently no write path persists a local
+        # source, so this branch is defensive — it ensures a future cache
+        # file or admin-API change can restore the user's `music/` selection
+        # explicitly without falling through to ExplicitSourceError.
+        local_tracks = _copy_tracks_with_source(_load_local_music_tracks(Path("music")), "local")
+        if not local_tracks:
+            raise ExplicitSourceError("No MP3 files found in the music/ directory")
+        tracks = _shuffle_if_needed(config, local_tracks)
+        return tracks, _local_source(len(tracks))
+
     raise ExplicitSourceError(f"Unsupported source kind: {source.kind}")
 
 
