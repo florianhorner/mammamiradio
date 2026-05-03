@@ -34,7 +34,7 @@ Live Italian charts / local files / demo tracks
 1. Loads `radio.toml` and `.env` through `config.py`.
 2. Validates the config and applies legacy migration like `station.bitrate -> audio.bitrate`.
 3. Purges suspect cache files (< 10KB, likely failed downloads) and evicts old cache entries.
-4. Restores persisted source selection from `cache/playlist_source.json`, then fetches the playlist (charts or demo) with fallback to live Italian charts when `MAMMAMIRADIO_ALLOW_YTDLP=true`, otherwise demo tracks.
+4. Restores persisted source selection from `cache/playlist_source.json`, then fetches the playlist by walking the priority chain (charts → Jamendo → local `music/` → bundled demo assets → built-in `DEMO_TRACKS`) and falling through to the next source whenever a tier is gated off, unconfigured, or empty.
 5. Initializes the clip ring buffer for WTF clip sharing.
 6. Creates shared app state, then launches:
    - `run_producer()` to fill the lookahead queue
@@ -111,13 +111,16 @@ The dashboard derives a tier label from these flags: Demo Radio, Full AI Radio, 
 
 ## Music sources
 
-Music comes from the first available source in this order:
+`fetch_startup_playlist()` (in `mammamiradio/playlist/playlist.py`) walks this priority chain at boot and returns the first source that yields tracks. Each tier is independently gated; falling through to the next is silent (logged at INFO, not a warning).
 
-1. **Charts + local blend** (when `MAMMAMIRADIO_ALLOW_YTDLP=true`): Up to 100 tracks fetched from Apple Music Italy RSS. MP3s in `music/` are merged in automatically — deduplicated by `spotify_id`. Total catalog typically 100-300 tracks, covering 7h+ of unique content.
-2. **Local `music/` files only** (when `MAMMAMIRADIO_ALLOW_YTDLP` is not set or yt-dlp fails): whatever MP3s the operator has dropped into the `music/` directory.
-3. **Last-known-good recycle**: when no local music is present and yt-dlp is disabled or unreachable, the producer recycles the last successfully-normalized music file rather than queueing silence. If no prior good file exists the track is dropped and the streamer's rescue path fills the gap. Silent audio is never queued intentionally.
+1. **Persisted source** (any prior `cache/playlist_source.json` selection). Restored verbatim if loadable.
+2. **Charts + local blend** (when `MAMMAMIRADIO_ALLOW_YTDLP=true`): up to 100 tracks fetched from Apple Music Italy RSS. MP3s in `music/` are merged in and deduplicated by `spotify_id`. Total catalog typically 100-300 tracks. `source_id="apple_music_it_top_100"`.
+3. **Jamendo CC** (when `radio.toml` `[playlist].jamendo_client_id` is set): CC-licensed Italian-tagged tracks via the Jamendo API. `source_id` is the tag string.
+4. **Local `music/` files** (always available when MP3s exist on disk): operator-supplied MP3s in `music/`. Loaded as a first-class source — yt-dlp is not required, and this branch fires whether or not Jamendo is configured. `source_id="local_music_dir"`.
+5. **Bundled demo assets**: pre-shipped MP3s in `mammamiradio/assets/demo/music/`. Empty by default; populated optionally per the demo-asset contract.
+6. **Built-in `DEMO_TRACKS`**: metadata-only Italian-flavored placeholder list. Last-resort fallback so the station always boots with something.
 
-The station always produces a stream regardless of which source is active.
+Once playback is running, the producer's recovery layers (last-known-good music recycle, demo-asset rescue, forced banter) keep the queue from starvation if a source disappears mid-session. Silent audio is never queued intentionally.
 
 ## TTS architecture
 

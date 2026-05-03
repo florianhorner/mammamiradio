@@ -1,5 +1,7 @@
 # Codebase-Review: konkrete Aufgabenvorschläge (2026-04-28)
 
+> **Status (2026-04-29):** Findings 1, 2, 3, and 4 all resolved in PR #281 (`fix(playlist): operator-honesty — load local music/ when yt-dlp off and no jamendo`). The four bullets below remain as the original snapshot for traceability per the doc-sweep recipe. See `CHANGELOG.md` `[Unreleased] / Fixed` for the closure narrative.
+
 ## 1) Aufgabe: Tippfehler in Quell-ID der Charts korrigieren
 
 **Problem**

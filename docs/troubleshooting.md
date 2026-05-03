@@ -28,7 +28,7 @@ curl http://127.0.0.1:8000/readyz
 
 ## The app starts but there is no real music
 
-The station uses live Italian charts when `MAMMAMIRADIO_ALLOW_YTDLP=true`, otherwise the built-in demo playlist. If you hear silence or placeholder tones:
+The station walks a fallback chain at boot: charts (when `MAMMAMIRADIO_ALLOW_YTDLP=true`) → Jamendo (when `jamendo_client_id` is set) → local `music/` MP3s → bundled demo assets → built-in `DEMO_TRACKS`. The first tier that yields tracks wins. If you hear silence or placeholder tones:
 
 - Check that `ffmpeg` is installed
 - Check that `MAMMAMIRADIO_ALLOW_YTDLP=true` is set (it is by default in HA addon and Conductor)
@@ -36,7 +36,7 @@ The station uses live Italian charts when `MAMMAMIRADIO_ALLOW_YTDLP=true`, other
 
 When listeners are connected, `/readyz` now also flips back to `503 starting` if playback has been silent for more than 30 seconds. The playback loop first tries a canned clip, then the oldest `cache/norm_*.mp3`, then, if `mammamiradio/assets/demo/music/` has any bundled MP3s, a random pick from that directory (the **WS2 demo-asset rescue** — prevents dead air on fresh installs and empty-cache container starts, a no-op when the directory is empty), and after 60 seconds without any bridge asset it requests a forced banter segment from the producer so the queue can recover without a restart. If the station has been explicitly stopped (Stop button on the admin panel), `/readyz` returns `503 stopped` regardless of queue depth so Home Assistant Supervisor and external load balancers do not route fresh listeners to a deliberately paused station. Reconnecting a listener auto-resumes the session and clears `session_stopped` before audio begins.
 
-The app persists the last selected source to `cache/playlist_source.json` and restores it on restart. If a persisted source fails to load, startup falls back to charts then demo tracks.
+The app persists the last selected source to `cache/playlist_source.json` and restores it on restart. If a persisted source fails to load, startup walks the standard fallback chain (charts → Jamendo → local `music/` → bundled demo → `DEMO_TRACKS`). Operators with MP3s in `music/` will hit tier 4 even when yt-dlp is off and Jamendo isn't configured — yt-dlp is only required to download charts, not to play files already on disk.
 
 ## A chart entry sounded like a podcast or audiobook
 

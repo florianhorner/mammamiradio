@@ -100,10 +100,21 @@ def _demo_source() -> PlaylistSource:
     )
 
 
+def _local_source(track_count: int) -> PlaylistSource:
+    return PlaylistSource(
+        kind="local",
+        source_id="local_music_dir",
+        label="Local music/ files",
+        track_count=track_count,
+        selected_at=time.time(),
+        url="",
+    )
+
+
 def _charts_source(track_count: int) -> PlaylistSource:
     return PlaylistSource(
         kind="charts",
-        source_id="apple_music_it_top_50",
+        source_id="apple_music_it_top_100",
         label="Current Italian charts",
         track_count=track_count,
         selected_at=time.time(),
@@ -184,8 +195,20 @@ def _merge_local_music_tracks(chart_tracks: list[Track], local_tracks: list[Trac
 
 
 def _load_chart_source_tracks(config: StationConfig) -> list[Track]:
-    """Load chart tracks and blend local music/ tracks, then shuffle if configured."""
+    """Load chart tracks and blend local music/ tracks, then shuffle if configured.
+
+    Local MP3s are an enrichment of the charts source, not a fallback. If the
+    charts API returns zero tracks (outage, blocked region, scheme mismatch),
+    return an empty list — do NOT silently substitute local files under the
+    "charts" label. Callers handle the empty result:
+      - load_explicit_source() raises ExplicitSourceError (honoring its
+        "no silent fallback" contract)
+      - fetch_startup_playlist() falls through to Jamendo / local / demo
+        tiers, which correctly label the source.
+    """
     chart_tracks = list(_fetch_current_italy_charts())
+    if not chart_tracks:
+        return []
     local_tracks = _copy_tracks_with_source(_load_local_music_tracks(Path("music")), "local")
     if local_tracks:
         merged_count = _merge_local_music_tracks(chart_tracks, local_tracks)
@@ -377,9 +400,17 @@ def read_persisted_source(cache_dir: Path) -> PlaylistSource | None:
         return None
 
     try:
+        kind = str(payload.get("kind", ""))
+        source_id = str(payload.get("source_id", ""))
+        # Transparent migration: the charts source_id had a numerically wrong
+        # suffix ("_top_50") even though the URL fetches up to 100 tracks.
+        # Old caches from before the rename are remapped on load so operators
+        # never see a Jamendo/charts mismatch warning.
+        if kind == "charts" and source_id == "apple_music_it_top_50":
+            source_id = "apple_music_it_top_100"
         return PlaylistSource(
-            kind=str(payload.get("kind", "")),
-            source_id=str(payload.get("source_id", "")),
+            kind=kind,
+            source_id=source_id,
             url=str(payload.get("url", "")),
             label=str(payload.get("label", "")),
             track_count=int(payload.get("track_count", 0) or 0),
@@ -443,6 +474,18 @@ def load_explicit_source(config: StationConfig, source: PlaylistSource) -> tuple
         resolved = _charts_source(len(tracks))
         return tracks, resolved
 
+    if source.kind == "local":
+        # Symmetry: matches the auto-degrade `local` source kind in
+        # fetch_startup_playlist. Currently no write path persists a local
+        # source, so this branch is defensive — it ensures a future cache
+        # file or admin-API change can restore the user's `music/` selection
+        # explicitly without falling through to ExplicitSourceError.
+        local_tracks = _copy_tracks_with_source(_load_local_music_tracks(Path("music")), "local")
+        if not local_tracks:
+            raise ExplicitSourceError("No MP3 files found in the music/ directory")
+        tracks = _shuffle_if_needed(config, local_tracks)
+        return tracks, _local_source(len(tracks))
+
     raise ExplicitSourceError(f"Unsupported source kind: {source.kind}")
 
 
@@ -479,12 +522,17 @@ def fetch_startup_playlist(
             logger.info("Using Jamendo CC playlist (%d tracks, tags=%s)", len(jamendo_tracks), tags)
             return jamendo_tracks, _jamendo_source(len(jamendo_tracks), tags=tags), error
 
-    local_present = any(Path("music").glob("*.mp3"))
-    if local_present:
-        logger.warning(
-            "Local music/ files found but MAMMAMIRADIO_ALLOW_YTDLP is not set — "
-            "set it to 'true' to blend local tracks into the playlist"
-        )
+    # Local music/ files are a real source on their own — they don't need yt-dlp
+    # (yt-dlp only matters for downloading chart tracks). When the operator has
+    # dropped MP3s into music/, honor that intent even if MAMMAMIRADIO_ALLOW_YTDLP
+    # is off and Jamendo isn't configured. This used to be a warn-and-skip,
+    # which silently fell through to bundled demo assets and ignored the
+    # operator's actual files.
+    local_tracks = _copy_tracks_with_source(_load_local_music_tracks(Path("music")), "local")
+    if local_tracks:
+        logger.info("Using local music/ files (%d tracks)", len(local_tracks))
+        shuffled = _shuffle_if_needed(config, local_tracks)
+        return shuffled, _local_source(len(shuffled)), error
 
     # Prefer real bundled MP3s over metadata-only demo placeholders.
     # When demo_assets/music/ contains actual files, the queue fills with
