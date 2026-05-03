@@ -122,18 +122,29 @@ def _charts_source(track_count: int) -> PlaylistSource:
     )
 
 
-def _jamendo_request_url(tags: str) -> str:
-    return f"jamendo://playlist?{urlencode({'tags': tags})}"
+def _jamendo_request_url(*, tags: str, country: str = "", order: str = "") -> str:
+    params: dict[str, str] = {"tags": tags}
+    if country:
+        params["country"] = country
+    if order:
+        params["order"] = order
+    return f"jamendo://playlist?{urlencode(params)}"
 
 
-def _jamendo_source(track_count: int, *, tags: str) -> PlaylistSource:
+def _jamendo_source(track_count: int, *, tags: str, country: str = "", order: str = "") -> PlaylistSource:
+    label_parts: list[str] = ["Jamendo CC Music"]
+    if country:
+        label_parts.append(country)
+    label_parts.append(f"({tags})")
+    if order:
+        label_parts.append(f"[{order}]")
     return PlaylistSource(
         kind="jamendo",
         source_id=tags,
-        label=f"Jamendo CC Music ({tags})",
+        label=" ".join(label_parts),
         track_count=track_count,
         selected_at=time.time(),
-        url=_jamendo_request_url(tags),
+        url=_jamendo_request_url(tags=tags, country=country, order=order),
     )
 
 
@@ -321,25 +332,71 @@ def _jamendo_tags(config: StationConfig, source: PlaylistSource | None = None) -
     return (config.playlist.jamendo_tags or "pop").strip() or "pop"
 
 
-def _build_jamendo_url(client_id: str, tags: str, limit: int = 50) -> str:
-    params = {
+def _jamendo_country(config: StationConfig, source: PlaylistSource | None = None) -> str:
+    if source is not None:
+        parsed = urlparse(source.url or "")
+        if parsed.scheme == "jamendo":
+            country = parse_qs(parsed.query).get("country", [""])[0].strip()
+            if country:
+                return country
+    return (config.playlist.jamendo_country or "").strip()
+
+
+def _jamendo_order(config: StationConfig, source: PlaylistSource | None = None) -> str:
+    if source is not None:
+        parsed = urlparse(source.url or "")
+        if parsed.scheme == "jamendo":
+            order = parse_qs(parsed.query).get("order", [""])[0].strip()
+            if order:
+                return order
+    return (config.playlist.jamendo_order or "").strip()
+
+
+def _build_jamendo_url(
+    client_id: str,
+    *,
+    tags: str,
+    country: str = "",
+    order: str = "",
+    limit: int = 50,
+) -> str:
+    params: dict[str, str] = {
         "client_id": client_id,
         "format": "json",
         "limit": str(limit),
         "tags": tags,
         **_JAMENDO_REQUIRED_PARAMS,
     }
+    if country:
+        params["country"] = country
+    if order:
+        params["order"] = order
     return f"{_JAMENDO_API_BASE_URL}?{urlencode(params)}"
 
 
-def _fetch_jamendo_playlist(config: StationConfig, *, tags: str | None = None, limit: int = 50) -> list[Track]:
+def _fetch_jamendo_playlist(
+    config: StationConfig,
+    *,
+    tags: str | None = None,
+    country: str | None = None,
+    order: str | None = None,
+    limit: int = 50,
+) -> list[Track]:
     """Fetch a Creative Commons playlist from Jamendo."""
     client_id = (config.playlist.jamendo_client_id or "").strip()
     if not client_id:
         return []
 
     requested_tags = (tags or config.playlist.jamendo_tags or "pop").strip() or "pop"
-    url = _build_jamendo_url(client_id, requested_tags, limit)
+    requested_country = (country if country is not None else config.playlist.jamendo_country or "").strip()
+    requested_order = (order if order is not None else config.playlist.jamendo_order or "").strip()
+    url = _build_jamendo_url(
+        client_id,
+        tags=requested_tags,
+        country=requested_country,
+        order=requested_order,
+        limit=limit,
+    )
     try:
         with urlopen(url, timeout=4.0) as resp:
             payload = json.loads(resp.read().decode("utf-8"))
@@ -457,13 +514,18 @@ def load_explicit_source(config: StationConfig, source: PlaylistSource) -> tuple
         if not client_id:
             raise ExplicitSourceError("Jamendo source is not configured")
         tags = _jamendo_tags(config, source)
+        country = _jamendo_country(config, source)
+        order = _jamendo_order(config, source)
         tracks = _shuffle_if_needed(
             config,
-            _copy_tracks_with_source(_fetch_jamendo_playlist(config, tags=tags), "jamendo"),
+            _copy_tracks_with_source(
+                _fetch_jamendo_playlist(config, tags=tags, country=country, order=order),
+                "jamendo",
+            ),
         )
         if not tracks:
             raise ExplicitSourceError("Jamendo playlist is temporarily unavailable")
-        resolved = _jamendo_source(len(tracks), tags=tags)
+        resolved = _jamendo_source(len(tracks), tags=tags, country=country, order=order)
         return tracks, resolved
 
     if source.kind in ("charts", "url"):
@@ -514,13 +576,28 @@ def fetch_startup_playlist(
     jamendo_client_id = (config.playlist.jamendo_client_id or "").strip()
     if jamendo_client_id:
         tags = _jamendo_tags(config)
+        country = _jamendo_country(config)
+        order = _jamendo_order(config)
         jamendo_tracks = _shuffle_if_needed(
             config,
-            _copy_tracks_with_source(_fetch_jamendo_playlist(config, tags=tags), "jamendo"),
+            _copy_tracks_with_source(
+                _fetch_jamendo_playlist(config, tags=tags, country=country, order=order),
+                "jamendo",
+            ),
         )
         if jamendo_tracks:
-            logger.info("Using Jamendo CC playlist (%d tracks, tags=%s)", len(jamendo_tracks), tags)
-            return jamendo_tracks, _jamendo_source(len(jamendo_tracks), tags=tags), error
+            logger.info(
+                "Using Jamendo CC playlist (%d tracks, tags=%s, country=%s, order=%s)",
+                len(jamendo_tracks),
+                tags,
+                country or "any",
+                order or "default",
+            )
+            return (
+                jamendo_tracks,
+                _jamendo_source(len(jamendo_tracks), tags=tags, country=country, order=order),
+                error,
+            )
 
     # Local music/ files are a real source on their own — they don't need yt-dlp
     # (yt-dlp only matters for downloading chart tracks). When the operator has

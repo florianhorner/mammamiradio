@@ -50,6 +50,8 @@ class PlaylistSection:
     max_artist_per_hour: int = 3
     jamendo_client_id: str = ""
     jamendo_tags: str = "pop"
+    jamendo_country: str = ""
+    jamendo_order: str = ""
 
 
 @dataclass
@@ -537,6 +539,19 @@ def _validate(config: StationConfig) -> None:
         errors.append("persona.skip_bit_threshold must be >= 1")
     if config.playlist.jamendo_client_id and not re.match(r"^[A-Za-z0-9_-]+$", config.playlist.jamendo_client_id):
         errors.append("playlist.jamendo_client_id must contain only letters, digits, hyphens, or underscores")
+    if config.playlist.jamendo_country and not re.match(r"^[A-Z]{3}$", config.playlist.jamendo_country):
+        errors.append(
+            "playlist.jamendo_country must be a 3-letter uppercase ISO 3166-1 alpha-3 code "
+            "(e.g. 'ITA', 'DEU', 'FRA') or empty"
+        )
+    _valid_jamendo_orders = {
+        "popularity_total",
+        "popularity_month",
+        "popularity_week",
+        "releasedate_desc",
+    }
+    if config.playlist.jamendo_order and config.playlist.jamendo_order not in _valid_jamendo_orders:
+        errors.append(f"playlist.jamendo_order must be one of {sorted(_valid_jamendo_orders)} or empty")
 
     if not (config.anthropic_api_key or config.openai_api_key):
         log.warning("No ANTHROPIC_API_KEY or OPENAI_API_KEY — banter/ads will use fallback text")
@@ -657,6 +672,10 @@ def load_config(path: str = "radio.toml") -> StationConfig:
     playlist_raw = dict(raw.get("playlist", {}))
     if os.getenv("JAMENDO_CLIENT_ID") is not None:
         playlist_raw["jamendo_client_id"] = os.getenv("JAMENDO_CLIENT_ID", "").strip()
+    if os.getenv("JAMENDO_COUNTRY") is not None:
+        playlist_raw["jamendo_country"] = os.getenv("JAMENDO_COUNTRY", "").strip()
+    if os.getenv("JAMENDO_ORDER") is not None:
+        playlist_raw["jamendo_order"] = os.getenv("JAMENDO_ORDER", "").strip()
 
     # Env-var overrides for cache/tmp directories (for Docker volume mounts)
     cache_dir = Path(os.getenv("MAMMAMIRADIO_CACHE_DIR", "cache"))
