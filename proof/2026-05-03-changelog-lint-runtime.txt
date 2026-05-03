@@ -1,0 +1,49 @@
+Runtime proof for PR #290 — changelog lint script behavior
+
+Captured: 2026-05-03
+Branch: docs/changelog-remediation
+Commit: 7806c07
+
+=== Test 1: lint passes on real changelogs ===
+$ bash scripts/check-changelog-lint.sh
+Changelog lint clean.
+$ echo "Exit: $?"
+Exit: 0
+
+=== Test 2: lint fails on tests/fixtures/changelog-with-violations.md ===
+21 violations counted across the documented patterns:
+- Sprint labels: PR-A, WS3-A, P0-1, M1, H2/H3, P1-2
+- Planning archaeology: leadership principle #4, soak window, 2026-04-17 live session
+- Tool provenance: /autoplan, codex independent review
+- Architectural metaphors: cathedral, sacred files, domain naves, nave, god-module
+- Contributor archaeology: First outside contribution, work was subsequently superseded
+- Item / finding / phase: Item 21, finding #8, Phase A, Phase B1
+- Approach labels: Approach A, Approach B
+- Concept names: Concept A Time-Horizon Stack
+- Operator-honesty label
+
+=== Test 3: lint passes on tests/fixtures/changelog-clean.md ===
+$ count=$(grep -cE '<one-of-the-21-patterns>' tests/fixtures/changelog-clean.md)
+0 violations.
+
+=== shellcheck on lint script ===
+$ shellcheck scripts/check-changelog-lint.sh
+(no output — clean)
+
+=== ruff project-wide ===
+$ ruff check .
+All checks passed!
+
+=== quality.yml YAML validity ===
+$ python3 -c "import yaml; yaml.safe_load(open('.github/workflows/quality.yml'))"
+(no output — valid)
+
+=== @ashika-rai-n credit verification ===
+$ grep -n "ashika" CHANGELOG.md ha-addon/mammamiradio/CHANGELOG.md README.md
+CHANGELOG.md:143: ...by [@ashika-rai-n]...
+CHANGELOG.md:149: **Contributors:** [@ashika-rai-n]...
+ha-addon/mammamiradio/CHANGELOG.md:45: ...by [@ashika-rai-n]...
+ha-addon/mammamiradio/CHANGELOG.md:47: **Contributors:** [@ashika-rai-n]...
+README.md:198: - [@ashika-rai-n] — dashboard CSS/JS extraction...
+
+Credit preserved in all five locations.
