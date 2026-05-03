@@ -338,3 +338,10 @@ Discovered 2026-04-23 when PR #203 (Ashika Rai N's dashboard extraction) landed 
 2. Do not push maintainer commits that touch the same files while that PR is open.
 3. If a rebase is needed, rebase their work onto current `main` with `Co-authored-by` preserved, then merge via "rebase and merge" or "create merge commit" (NOT squash) to keep the head SHA reachable and the "Merged" badge earned.
 4. Batch your planned refactors into a branch that depends on their merge landing first.
+
+## Health Stack
+
+- typecheck: mypy mammamiradio/ tests/
+- lint: ruff check .
+- test: pytest
+- shell: shellcheck $(find . -name "*.sh" -not -path "./.venv/*" -not -path "./.git/*" -not -path "./.claude/skills/*")
