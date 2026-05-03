@@ -242,13 +242,18 @@ audit found exactly one major creep instance in 10 PRs — a CI fix bundled with
 a 443-line strategic planning doc — and it is the dominant catchable pattern
 in this repo.
 
-**2. When you stumble on an adjacent issue not in scope:** append one line to
-`TODOS.md` and continue. Do NOT fix inline. Do NOT mention in the current PR.
+**2. When you stumble on an adjacent issue not in scope:** append one entry to
+`docs/todos.md` (the canonical project backlog) and continue. Do NOT fix inline.
+Do NOT mention in the current PR.
 
-Format:
+Format — append under a section heading that matches the area, as a brief
+`### <Title>` block in the same shape as the rest of `docs/todos.md`:
 
-```
-- [scope-parked] file.py:42 — one-sentence description (from <branch-name>)
+```text
+### <one-line title>
+**Priority:** P2
+**Source:** scope-parked from <branch-name> on YYYY-MM-DD
+<file:line> — one-sentence description of what was noticed.
 ```
 
 This is positive action — the rule has something concrete for you to *do*
