@@ -881,3 +881,52 @@ def test_validate_config_accepts_valid_jamendo_order(config):
     for order in ("popularity_total", "popularity_month", "popularity_week", "releasedate_desc", ""):
         config.playlist.jamendo_order = order
         validate_config(config)  # no raise
+
+
+def test_load_config_jamendo_env_vars_override_radio_toml(monkeypatch):
+    """JAMENDO_COUNTRY / JAMENDO_ORDER env vars override the radio.toml values.
+
+    Closes the env-override coverage gap surfaced by /plan-eng-review on PR #283.
+    Pattern mirrors the existing JAMENDO_CLIENT_ID env override at the same site.
+    """
+    from mammamiradio.core.config import load_config
+
+    monkeypatch.setenv("JAMENDO_COUNTRY", "DEU")
+    monkeypatch.setenv("JAMENDO_ORDER", "popularity_month")
+    config = load_config()
+    assert config.playlist.jamendo_country == "DEU"
+    assert config.playlist.jamendo_order == "popularity_month"
+
+
+def test_jamendo_country_and_order_fall_back_to_config_when_url_silent(config):
+    """Soft-migration: a pre-PR-#283 persisted Jamendo URL has no country / no order
+    query params. When the upgraded code loads it, the helpers must fall through to
+    the current radio.toml defaults — not silently return an empty string and lose
+    the configured filter on next persist.
+
+    Regression guard against a future refactor that drops the config-fallback path.
+    """
+    from urllib.parse import urlparse
+
+    from mammamiradio.playlist.playlist import _jamendo_country, _jamendo_order
+
+    # Operator's persisted source from before the country/order feature shipped.
+    legacy_source = PlaylistSource(
+        kind="jamendo",
+        source_id="pop",
+        label="Jamendo CC Music (pop)",
+        track_count=50,
+        selected_at=0.0,
+        url="jamendo://playlist?tags=pop",
+    )
+    parsed = urlparse(legacy_source.url)
+    assert "country=" not in parsed.query
+    assert "order=" not in parsed.query
+
+    # Operator's current radio.toml has the new defaults.
+    config.playlist.jamendo_country = "ITA"
+    config.playlist.jamendo_order = "popularity_week"
+
+    # Helpers fall through to config when the URL is silent.
+    assert _jamendo_country(config, legacy_source) == "ITA"
+    assert _jamendo_order(config, legacy_source) == "popularity_week"
