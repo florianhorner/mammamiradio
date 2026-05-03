@@ -1,5 +1,25 @@
 # Changelog
 
+## 2.10.11
+
+### Added
+
+- **Jamendo `country` and `order` filters — Italian-trending music as the default Jamendo source.** Two new fields in `[playlist]` (`jamendo_country`, `jamendo_order`) plus matching `JAMENDO_COUNTRY` / `JAMENDO_ORDER` env-var overrides, validated at config load. The addon's default radio.toml now ships `country = "ITA"` + `order = "popularity_week"`, so the Jamendo source surfaces Italian-trending tracks instead of any-country pop. Same engine + different `country=` is the foundation for future country-specific radio "skins".
+
+### Fixed
+
+- **CI no longer silently swallows pytest failures.** The coverage ratchet previously only failed when both `returncode != 0` AND no module rows were parsed, which let red tests ride green CI since PR #279. Hard-exit on any non-zero pytest returncode + a dedicated `pytest tests/` step before the coverage ratchet on every PR.
+- **Charts source no longer impersonates local files when the charts API returns empty.** When charts returns zero, the chart loader returns empty too instead of mutating in local MP3s under a `kind="charts"` label. Operator dashboard and persisted source kind now tell the truth.
+- **Local `music/` is a real startup source.** When `yt-dlp` is disabled and Jamendo isn't configured but MP3s exist in `music/`, they load as a first-class source instead of falling through to demo assets with a misleading warning.
+- **Charts `source_id` numerical drift** (`apple_music_it_top_50` → `apple_music_it_top_100`): the URL fetches up to 100 tracks; the persisted label now matches. Transparent migration on read.
+- Stale post-cathedral test-assertion path in `tests/scheduling/test_producer_unit.py:573`. The CI swallow had been hiding this failure.
+
+### Changed
+
+- **`mammamiradio/` subpackaged into seven domain naves** (`core`, `audio`, `playlist`, `hosts`, `home`, `scheduling`, `web`). Public addon entrypoint `mammamiradio.main:app` unchanged.
+- **Repo root collapsed to four sacred files; everything else moved under `docs/`.** Cleaner top-level navigation for operators reading the source.
+- **`docs/architecture.md`** updated to describe Jamendo's new country+order filter behavior and the soft-migration path.
+
 ## Unreleased
 
 ### Added

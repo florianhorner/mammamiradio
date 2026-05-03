@@ -6,6 +6,8 @@ The current version source of truth is `pyproject.toml`.
 
 ## [Unreleased]
 
+## [2.10.11] - 2026-05-03
+
 ### Fixed
 
 - **Local `music/` files are now used as a startup source when yt-dlp is disabled and Jamendo isn't configured** (operator-honesty fix): `fetch_startup_playlist()` previously logged a warning and silently fell through to bundled demo assets / `DEMO_TRACKS` when `allow_ytdlp=False` + no `jamendo_client_id` + local MP3s in `music/`. The warning even told operators to "set `MAMMAMIRADIO_ALLOW_YTDLP=true` to blend local tracks" — but yt-dlp is only needed to download charts, not to play files that already exist on disk. Now: local MP3s in `music/` are loaded as a real source (`source.kind="local"`, `source_id="local_music_dir"`) right after the Jamendo branch, before any demo fallback. The previous behavior contradicted the operator's stated intent (they put MP3s in `music/`, expecting them to play) and was the gap behind the 2026-04-28 codebase-issues task list (`docs/2026-04-28-codebase-issues-task-vorschlaege.md`, finding 2). Test `test_fetch_startup_playlist_local_music_warning_when_ytdlp_disabled` was inverted (it pinned the buggy behavior) and renamed to `test_fetch_startup_playlist_uses_local_music_when_ytdlp_disabled_and_no_jamendo`. New positive-case test `test_fetch_startup_uses_local_music_when_ytdlp_off_and_no_jamendo` added.
