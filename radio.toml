@@ -70,6 +70,8 @@ artist_cooldown = 3     # Min songs before the same artist replays
 max_artist_per_hour = 3 # Hard cap on same artist within ~60 min window
 jamendo_client_id = ""
 jamendo_tags = "pop"
+jamendo_country = "ITA"          # ISO 3166-1 alpha-3; "" disables country filter. Other "skins": DEU, FRA, BRA, ...
+jamendo_order = "popularity_week" # popularity_week|popularity_month|popularity_total|releasedate_desc|"" (default)
 
 [pacing]
 songs_between_banter = 2

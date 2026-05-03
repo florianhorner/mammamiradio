@@ -1,5 +1,17 @@
 # TODOS
 
+## Architecture
+
+### "Skins" — country as multi-tenancy axis
+
+- **Source:** /office-hours seed conversation 2026-05-03 + PR #283 (Jamendo country/order filters)
+- **Frame:** mammamiradio engine is country-agnostic; the brand is country-specific. Same engine + different `country=` + different brand assets (logo, hosts' accent, ad brands, station name, ad voiceovers, sweepers) = `mammamiradio`/ITA, `fakefranziradio`/DEU, `radio-saudade`/BRA, etc. PR #283 made `country=` a real filter; the full skins layer makes the rest of the brand swap with it.
+- **Scope:** per-skin radio.toml overlays (or a `[skins.de]` table), per-skin host personas keyed by language, per-skin `[[ads.brands]]` lists, per-skin sonic_brand sweepers, a `STATION_SKIN=de` env var that loads the right overlay at boot. Probably a deployment-mode rather than runtime swap.
+- **Open questions:** does each skin run as a separate addon/Docker image, or one image with a runtime skin selector? How does the `fakeitaliradio` MemPalace wing relate (existing thinking?)? What happens to listener-saved preferences across skins? Does the addon name change per skin, or just the `STATION_NAME`?
+- **Effort estimate:** weeks if done right, since it touches brand, hosts, ads, sweepers, identity. Worth a real /office-hours pass before any code lands.
+- **Gate:** /office-hours on the skins architecture before any implementation. PR #283's CHANGELOG flagged country as the foundation; implementation waits.
+- **Trigger phrase:** "design the skins layer" / "country as multi-tenancy" / "spawn fakefranziradio"
+
 ## Listener UX
 
 ### Dialer revival (listener.js first-class port)
