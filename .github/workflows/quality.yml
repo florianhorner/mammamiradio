@@ -62,6 +62,11 @@ jobs:
         if: github.event_name == 'pull_request'
         run: bash scripts/check-admin-standards.sh
 
+      # Public changelogs must not contain internal sprint labels, AI tool provenance,
+      # or planning vocabulary. See scripts/check-changelog-lint.sh for the pattern set.
+      - name: Changelog content lint
+        run: bash scripts/check-changelog-lint.sh
+
       # On PRs: run the test suite as a dedicated step BEFORE the coverage ratchet.
       # Without this, pytest failures inside coverage-ratchet.py were silently swallowed
       # whenever coverage parsing populated module rows — every PR since #279 was green

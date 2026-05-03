@@ -232,6 +232,23 @@ When editing any HTML file, grep for these elements before committing.
 
 If the behavior changed and the docs didn't, the docs are wrong. Fix them in the same change, not a follow-up.
 
+## Changelog editorial boundary
+
+`CHANGELOG.md` and `ha-addon/mammamiradio/CHANGELOG.md` are PUBLIC release notes for users, operators, and contributors. They describe what changed and why it matters. They are NOT internal sprint logs.
+
+**Never write into the public changelogs:**
+
+- Sprint / workstream labels: `WS2`, `WS3-A`, `PR-A`, `PR-B/5`, `Phase A`, `Phase 1`, `Approach B`
+- Finding numbers: `finding #8`, `Item 19`, `(P0-1)`, `(M1)`, `(H2/H3)`
+- AI tool provenance: `/autoplan`, `codex review`, `Claude review`, `Conductor session`, `codex independent review`
+- Planning archaeology: `soak window`, `live session`, `2026-04-17 live session`, references to `docs/YYYY-MM-DD-*.md` planning files
+- Architectural metaphors as labels: `cathedral`, `domain naves`, `sacred files`, `god-module`, `leadership principle`, `operator-honesty`
+- Contributor archaeology: `first outside contribution`, `work was superseded`
+
+**Where this content belongs instead:** PR bodies, runbooks (`docs/runbooks/`), stabilization log (`docs/stabilization-log.md`), strategic planning docs (`docs/YYYY-MM-DD-*.md`).
+
+**Enforcement:** `scripts/check-changelog-lint.sh` runs in CI on every PR. To extend, add a regex pattern to the `PATTERNS` array in that file.
+
 ## Scope discipline
 
 Two rules, both narrow, both targeted at patterns observed in the audit of the
