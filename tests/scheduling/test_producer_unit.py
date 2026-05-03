@@ -570,7 +570,7 @@ async def test_error_recovery_logs_demo_assets_banter_hint_and_uses_silence(capl
         await _run_until_queued(queue, state, config)
 
     assert picked_subdirs[:2] == ["banter", "welcome"]
-    assert any("check demo_assets/banter/" in record.message for record in caplog.records)
+    assert any("check assets/demo/banter/" in record.message for record in caplog.records)
     assert mock_silence.call_count == 1
     assert mock_silence.call_args.args[1] == 5.0
 
