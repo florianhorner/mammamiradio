@@ -12,19 +12,19 @@
 - **Charts source no longer impersonates local files when the charts API returns empty.** When charts returns zero, the chart loader returns empty too instead of mutating in local MP3s under a `kind="charts"` label. Operator dashboard and persisted source kind now tell the truth.
 - **Local `music/` is a real startup source.** When `yt-dlp` is disabled and Jamendo isn't configured but MP3s exist in `music/`, they load as a first-class source instead of falling through to demo assets with a misleading warning.
 - **Charts `source_id` numerical drift** (`apple_music_it_top_50` → `apple_music_it_top_100`): the URL fetches up to 100 tracks; the persisted label now matches. Transparent migration on read.
-- Stale post-cathedral test-assertion path in `tests/scheduling/test_producer_unit.py:573`. The CI swallow had been hiding this failure.
+- Stale test-assertion path in `tests/scheduling/test_producer_unit.py:573`. The CI swallow had been hiding this failure.
 
 ### Changed
 
-- **`mammamiradio/` subpackaged into seven domain naves** (`core`, `audio`, `playlist`, `hosts`, `home`, `scheduling`, `web`). Public addon entrypoint `mammamiradio.main:app` unchanged.
-- **Repo root collapsed to four sacred files; everything else moved under `docs/`.** Cleaner top-level navigation for operators reading the source.
+- **`mammamiradio/` subpackaged into seven subpackages** (`core`, `audio`, `playlist`, `hosts`, `home`, `scheduling`, `web`). Public addon entrypoint `mammamiradio.main:app` unchanged.
+- **Repo root reduced to four top-level files; everything else moved under `docs/`.** Cleaner top-level navigation for operators reading the source.
 - **`docs/architecture.md`** updated to describe Jamendo's new country+order filter behavior and the soft-migration path.
 
 ## Unreleased
 
 ### Added
 
-- **Regia admin prototype at `/regia`** (dev preview, admin-gated): Screen 1 ON AIR of the new Concept A Time-Horizon Stack admin UI. Persistent status strip, 5-tab bar, Playfair italic Now Playing, Italian prose countdown, banter as editorial pull-quote, 4-button trigger row (AVANTI / PAUSA / VOCE AI / SPOT). PAUSA and PANICO log warnings; all other triggers wired to existing endpoints. Polls `/status` every 3s. `admin.html` untouched — prototype at a new route only.
+- **Regia admin prototype at `/regia`** (dev preview, admin-gated): Screen 1 ON AIR of the new admin UI. Persistent status strip, 5-tab bar, Playfair italic Now Playing, Italian prose countdown, banter as editorial pull-quote, 4-button trigger row (AVANTI / PAUSA / VOCE AI / SPOT). PAUSA and PANICO log warnings; all other triggers wired to existing endpoints. Polls `/status` every 3s. `admin.html` untouched — prototype at a new route only.
 - **`--ai-purple` semantic token** in `tokens.css`: `#A855F7` reserved for AI-generated segments, used in Regia banter cards and peek-panel type dots.
 - **Accessibility (WCAG 2.1 AA)**: `<html lang="it">` on `admin.html`; sr-only labels on song-request inputs in `listener.html`; `aria-hidden` on decorative tricolor; `.sr-only` and `:focus-visible` utilities in `base.css`; `aria-pressed` synced to play button.
 
@@ -40,9 +40,9 @@
 
 ### Refactored
 
-- **Design system Phase A**: `tokens.css` / `base.css` / `waveform.js` extracted; `admin.html` migrated to canonical base.css components; `listener.html` rewritten to site-v1 five-band radio-station composition; `/dashboard` surface deleted, redirects to `/admin`.
+- **Design system refresh**: `tokens.css` / `base.css` / `waveform.js` extracted; `admin.html` migrated to canonical base.css components; `listener.html` rewritten to site-v1 five-band radio-station composition; `/dashboard` surface deleted, redirects to `/admin`.
 - **Ad creative system extracted** into `ad_creative.py` (closes #161).
-- **Dashboard CSS/JS extraction** (PR #203) — first outside contribution by [@ashika-rai-n](https://github.com/ashika-rai-n).
+- **Dashboard CSS/JS extraction** (PR #203) by [@ashika-rai-n](https://github.com/ashika-rai-n).
 
 **Contributors:** [@ashika-rai-n](https://github.com/ashika-rai-n)
 
@@ -73,31 +73,31 @@ Security fix: stored XSS in admin panel Engine Room via HA entity state injectio
 
 ## 2.10.7
 
-Operator honesty II — aggregates the WS2/WS3/WS5/WS6 reliability fixes shipped on main since 2.10.6, plus two UI-truth fixes from the 2026-04-17 live session.
+Reliability and UI-truth fixes across playback fallback, AI fallback, queue labeling, and content hygiene.
 
 ### Fixed
 
-- Anthropic auth flood no longer fires under concurrent load (WS3-A): attempt lock serializes the 401 cooldown check across sibling banter/ad/transition calls. First 401 trips the 10-minute backoff; concurrent callers see the block and use the OpenAI fallback.
-- TTS voice validation at config load (WS3-B): invalid voice IDs (e.g. `onyx` on an edge-tts host, typos in edge voice IDs) are now logged once and replaced with `it-IT-DiegoNeural` before any synthesis attempt. Runtime TTS failures are memoized per-session so a flaky voice doesn't re-attempt per segment. `/api/capabilities` gains a `tts_degraded` flag when any voice was substituted.
-- Queue starvation rescue (WS2): when the queue is empty for 30s and no canned clip or norm-cache is available, playback falls back to a random MP3 from `demo_assets/music/` instead of looping silently. Bundled demo tracks in `demo_assets/music/` (named `Artist - Title.mp3`) are preferred over placeholder tones at startup and when demo source is explicitly selected.
-- `/readyz` honors stopped state (WS2): a stopped session now returns `503 stopped` even when the queue is populated, so HA Supervisor no longer routes listeners to a deliberately paused station.
-- Chart ingest filters non-music entries (WS5): Apple Music's Italian chart occasionally surfaces podcasts, BBC comedy, and audiobooks that played as dead-eye audio and broke the radio illusion. Narrow content filter drops obvious non-music before it reaches the queue.
-- Rejected downloads purge + denylist (WS5): `validate_download` failures now purge the cache file and add the cache key to a per-session denylist. Producer, prefetch, and prewarm short-circuit on denylisted keys so the same broken track cannot loop forever.
-- Queue rows no longer render bare segment types for BANTER, AD, STATION ID, SWEEPER, or TIME CHECK (finding #8, 2026-04-17 live session). BANTER rows now show the participating hosts (`Marco & Luca`), canned clips show `Pre-recorded banter`, AD breaks show `Ad: Barella Pasta +2 more`, station IDs show `Station ID`, sweepers show `Station sweeper`, and time checks show the spoken time. News-flash and error-recovery segments pick up their own labels. Admin queue render also hardened to hide a label that equals the bare type, so a future producer path that forgets to set a title can't re-introduce the `BANTER banter` row.
-- Dashboard "AI" pipeline pill no longer lies when Anthropic is auth-suspended (finding #11, 2026-04-17 live session). Dashboard now mirrors the three-state logic admin.html already had: a configured-but-suspended Anthropic shows `AI Fallback` instead of `AI`.
+- Anthropic auth flood no longer fires under concurrent load: attempt lock serializes the 401 cooldown check across sibling banter/ad/transition calls. First 401 trips the 10-minute backoff; concurrent callers see the block and use the OpenAI fallback.
+- TTS voice validation at config load: invalid voice IDs (e.g. `onyx` on an edge-tts host, typos in edge voice IDs) are now logged once and replaced with `it-IT-DiegoNeural` before any synthesis attempt. Runtime TTS failures are memoized per-session so a flaky voice doesn't re-attempt per segment. `/api/capabilities` gains a `tts_degraded` flag when any voice was substituted.
+- Queue starvation rescue: when the queue is empty for 30s and no canned clip or norm-cache is available, playback falls back to a random MP3 from `demo_assets/music/` instead of looping silently. Bundled demo tracks in `demo_assets/music/` (named `Artist - Title.mp3`) are preferred over placeholder tones at startup and when demo source is explicitly selected.
+- `/readyz` honors stopped state: a stopped session now returns `503 stopped` even when the queue is populated, so HA Supervisor no longer routes listeners to a deliberately paused station.
+- Chart ingest filters non-music entries: Apple Music's Italian chart occasionally surfaces podcasts, BBC comedy, and audiobooks that played as dead-eye audio and broke the radio illusion. Narrow content filter drops obvious non-music before it reaches the queue.
+- Rejected downloads purge + denylist: `validate_download` failures now purge the cache file and add the cache key to a per-session denylist. Producer, prefetch, and prewarm short-circuit on denylisted keys so the same broken track cannot loop forever.
+- Queue rows no longer render bare segment types for BANTER, AD, STATION ID, SWEEPER, or TIME CHECK. BANTER rows now show the participating hosts (`Marco & Luca`), canned clips show `Pre-recorded banter`, AD breaks show `Ad: Barella Pasta +2 more`, station IDs show `Station ID`, sweepers show `Station sweeper`, and time checks show the spoken time. News-flash and error-recovery segments pick up their own labels. Admin queue render also hardened to hide a label that equals the bare type, so a future producer path that forgets to set a title can't re-introduce the `BANTER banter` row.
+- Dashboard "AI" pipeline pill no longer lies when Anthropic is auth-suspended. Dashboard now mirrors the three-state logic `admin.html` already had: a configured-but-suspended Anthropic shows `AI Fallback` instead of `AI`.
 
 
 ## 2.10.6
 
-Operator honesty pass — five UI and log fixes, plus a normalizer concat duration guard.
+UI truth and playback safety fixes, plus a normalizer concat duration guard.
 
 ### Fixed
 
-- Normalizer `concat_files` now probes input durations with `ffprobe` and logs a WARNING when the concatenated output is shorter than expected (Item 1, phase 1). Fail-open when ffprobe is unavailable.
-- Stopped state actually stops: Stop freezes dashboard animations, pauses the elapsed-time counter, and disables producer buttons (Item 19).
-- Admin panel distinguishes *connected*, *not configured*, and *suspended* Anthropic states instead of flashing "connected" while 401s are failing every call (Item 11).
-- Scheduler reason strings (`cooldown: 45s`, `banter_due_in=3`) no longer leak to listener-facing up-next rows (Item 21).
-- Norm-cache rescue path no longer shows raw filenames as titles (Item 20). Sidecar metadata used when present; otherwise humanized (`norm_busted.mp3` → `Busted`).
+- Normalizer `concat_files` now probes input durations with `ffprobe` and logs a WARNING when the concatenated output is shorter than expected. Fail-open when ffprobe is unavailable.
+- Stopped state actually stops: Stop freezes dashboard animations, pauses the elapsed-time counter, and disables producer buttons.
+- Admin panel distinguishes *connected*, *not configured*, and *suspended* Anthropic states instead of flashing "connected" while 401s are failing every call.
+- Scheduler reason strings (`cooldown: 45s`, `banter_due_in=3`) no longer leak to listener-facing up-next rows.
+- Norm-cache rescue path no longer shows raw filenames as titles. Sidecar metadata used when present; otherwise humanized (`norm_busted.mp3` → `Busted`).
 
 
 ## 2.10.5
@@ -149,4 +149,3 @@ Operator honesty pass — five UI and log fixes, plus a normalizer concat durati
 ### Fixed
 - **Critical**: Docker images for 2.10.0 were never built. The CI validate job used a strict byte-comparison of `radio.toml` files, but the HA add-on intentionally carries Pi/HA Green pacing overrides. Validate always failed, blocking image builds — HA Supervisor got `[404] manifest unknown` on every update attempt.
 - **Pi pacing tuning discarded**: The build step was copying the root `radio.toml` (higher CPU load defaults) over the HA-specific one, shipping the wrong pacing values baked into the image.
-
