@@ -62,6 +62,14 @@ jobs:
         if: github.event_name == 'pull_request'
         run: bash scripts/check-admin-standards.sh
 
+      # On PRs: run the test suite as a dedicated step BEFORE the coverage ratchet.
+      # Without this, pytest failures inside coverage-ratchet.py were silently swallowed
+      # whenever coverage parsing populated module rows — every PR since #279 was green
+      # under red tests until this gate landed.
+      - name: Pytest (test gate, runs before coverage ratchet)
+        if: github.event_name == 'pull_request'
+        run: pytest tests/ -q
+
       # On PRs: enforce per-module coverage floors (no regressions allowed)
       - name: Coverage gate (per-module floors)
         if: github.event_name == 'pull_request'

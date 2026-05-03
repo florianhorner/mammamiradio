@@ -69,8 +69,12 @@ def run_coverage() -> tuple[dict[str, int], int]:
         if total_match:
             total_pct = int(total_match.group(1))
 
-    if result.returncode != 0 and not modules:
-        print("ERROR: pytest failed", file=sys.stderr)
+    if result.returncode != 0:
+        print(
+            f"ERROR: pytest failed (returncode={result.returncode}). "
+            "Coverage parsing is not a pass signal — fix tests before re-running.",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     return modules, total_pct
