@@ -68,6 +68,35 @@ markers = [
     "requires_ffmpeg: marks tests that need ffmpeg installed (run with '-m requires_ffmpeg')",
 ]
 
+[tool.vulture]
+min_confidence = 80
+paths = ["mammamiradio"]
+ignore_decorators = [
+    "@router.*",
+    "@app.*",
+    "@asynccontextmanager",
+    "@property",
+    "@staticmethod",
+    "@classmethod",
+]
+ignore_names = [
+    # Pydantic
+    "model_config",
+    "model_validator",
+    "field_validator",
+    # FastAPI lifespan / startup / shutdown
+    "_lifespan",
+    "startup",
+    "shutdown",
+    # dataclass fields accessed via serialization
+    "*_schema",
+    "*_response",
+    # HTTPRedirectHandler override — base class requires these params
+    "redirect_request",
+    "code",
+    "fp",
+]
+
 [tool.coverage.run]
 branch = true
 source = ["mammamiradio"]

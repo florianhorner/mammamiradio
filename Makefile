@@ -1,4 +1,4 @@
-.PHONY: dev test test-watch lint format typecheck check validate coverage-check coverage-ratchet pre-release
+.PHONY: dev test test-watch lint format typecheck check deadcode validate coverage-check coverage-ratchet pre-release
 
 PYTHON := .venv/bin/python
 PYTEST := $(PYTHON) -m pytest
@@ -23,7 +23,10 @@ format:
 typecheck:
 	$(MYPY) mammamiradio/ tests/
 
-check: lint typecheck coverage-check
+deadcode:
+	.venv/bin/vulture mammamiradio/
+
+check: lint typecheck deadcode coverage-check
 	@echo "All checks passed"
 
 validate:

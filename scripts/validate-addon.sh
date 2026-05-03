@@ -234,7 +234,7 @@ if [ "${1:-}" = "--build" ]; then
 
     # Simulate CI: copy source into build context
     TMPCTX=$(mktemp -d)
-    trap "rm -rf $TMPCTX" EXIT
+    trap 'rm -rf $TMPCTX' EXIT
     cp -r ha-addon/mammamiradio/* "$TMPCTX/"
     cp -r mammamiradio/ "$TMPCTX/mammamiradio/"
     cp pyproject.toml "$TMPCTX/"
