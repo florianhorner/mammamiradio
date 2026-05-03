@@ -4,6 +4,18 @@ All notable changes to `mammamiradio` are documented here.
 
 The current version source of truth is `pyproject.toml`.
 
+## [2.10.11] - 2026-05-03
+
+### Added
+
+- **Dead-code detection via vulture** — `vulture mammamiradio/` is now part of `make check` and runs on every CI pass. Config in `[tool.vulture]` (pyproject.toml) whitelists FastAPI route decorators, Pydantic validators, and lifespan hooks to keep signal-to-noise clean. Install: `vulture==2.16` in `requirements-dev.txt`.
+- **`## Health Stack` in CLAUDE.md** — `make check` and the `/health` skill now share the same authoritative tool list (mypy, ruff, pytest, vulture, shellcheck), so the dashboard never prompts for tool detection again.
+
+### Fixed
+
+- **Dead `probe` parameter removed from `build_setup_status`** (`mammamiradio/core/setup_status.py`) — `probe: bool = False` was a Spotify-era keyword argument (introduced in #64, orphaned in #115 when Spotify integration was removed). It was never read inside the function and no caller ever passed it. Removed cleanly; all 4 call sites required no changes.
+- **Shellcheck warnings resolved** in `ha-addon/mammamiradio/rootfs/run.sh` and `scripts/validate-addon.sh`: `# shellcheck shell=sh` directive added for the `with-contenv` shebang; `ADMIN_TOKEN` split into declare + assign (SC2155); trap string single-quoted (SC2064).
+
 ## [Unreleased]
 
 ### Added
