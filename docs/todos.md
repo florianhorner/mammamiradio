@@ -108,6 +108,22 @@ PR #248 (Approach A) italianized the admin shell: sidebar nav, h2 titles, eyebro
 - `ON AIR` pill → `IN ONDA` to match listener
 **Effort:** ~30-40 string changes, half in JS template strings. **Risk:** low (label-only). **Source:** /qa report `.gstack/qa-reports/qa-report-admin-2026-04-27.md`.
 
+## Process & Discipline
+
+**Source:** /office-hours + /plan-eng-review on 2026-05-03 — CICD freeze reflection.
+
+### P1 — Resume stabilization-log measurement protocol
+`docs/stabilization-log.md` row for 2026-W16 still says `_tbd Sun 2026-04-19_`. Day 8 Go/No-Go decision was due 2026-04-24 and has not been written. The cooldown-alone experiment has been operating unmeasured for ~17 days. Qualitative read says cooldown is working (no v-tag panic-cycle in commits since 2026-04-17) but cannot be claimed without filling in the log. **Source:** research surfaced during 2026-05-03 /office-hours.
+
+### P2 — Watch for scope-creep pattern recurrence
+Re-audit creep frequency at PR #292 (10 PRs after the 2026-05-03 audit which measured 2/10). If the rate rises >4/10, reactivate the scope-guard mechanism path; design preserved at `~/.gstack/projects/florianhorner-mammamiradio/florianhorner-cicd-freeze-reflection-design-20260503.md`. **Source:** scope-discipline rule landed 2026-05-03; audit revisit gate.
+
+### P3 — Generalize "designated observer role" pattern
+Release-manager (lyon) is one instance; document the meta-rule for when to designate a new role across parallel Conductor worktrees. Already partially captured in agent memory at `feedback_designated_observer_pattern.md`. **Source:** /office-hours session insight 2026-05-03.
+
+### P3 — Codify "audit-before-build" as a pre-build gate
+The 3-agent PR audit on 2026-05-03 took ~45s and flipped a 2-3 day build into a 5-line CLAUDE.md rule. Worth codifying as a standard step when a proposed mechanism's frequency justification is unmeasured. **Source:** /plan-eng-review reversed the /office-hours recommendation based on agent-swarm data.
+
 ## Completed
 
 ### Mark addon as experimental in HACS
