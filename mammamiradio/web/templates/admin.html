@@ -1124,7 +1124,7 @@ body[data-stopped="true"] .a-station-card .dot.on { animation-play-state: paused
         <div style="display:flex;align-items:center;gap:10px;">
           <span class="filter-count" id="programmeCount" style="font-size:11px;color:var(--muted);font-family:var(--font-mono)"></span>
           <div class="filter-pills" style="margin:0">
-            <button type="button" class="filter-pill active" data-filter="all" onclick="setProgrammeFilter('all',this)">All</button>
+            <button type="button" class="filter-pill active" data-filter="all" onclick="setProgrammeFilter('all',this)">Tutto</button>
             <button type="button" class="filter-pill" data-filter="music" onclick="setProgrammeFilter('music',this)">Musica</button>
             <button type="button" class="filter-pill" data-filter="banter" onclick="setProgrammeFilter('banter',this)">Banter</button>
             <button type="button" class="filter-pill" data-filter="ad" onclick="setProgrammeFilter('ad',this)">Pubblicità</button>
@@ -1600,7 +1600,7 @@ function renderProgramme(st){
   if(countEl)countEl.textContent=totalCount+' entries';
 
   if(rows.length){
-    el.innerHTML=`<table class="a-programme"><thead><tr><th>Ora</th><th>Tipo</th><th>Titolo</th><th>Host/src</th><th>Dur</th><th></th></tr></thead><tbody>${rows.join('')}</tbody></table>`;
+    el.innerHTML=`<table class="a-programme"><thead><tr><th>Ora</th><th>Tipo</th><th>Titolo</th><th>Host/Fonte</th><th>Durata</th><th></th></tr></thead><tbody>${rows.join('')}</tbody></table>`;
   }else{
     el.innerHTML='<div class="prog-empty">Waiting for signal...</div>';
   }
@@ -2058,7 +2058,16 @@ function onSliderInput(sl,n){
   }
 }
 
-async function updHost(n,vals=null){const b=vals||{};if(!vals){document.querySelector(`[data-h="${CSS.escape(n)}"]`).querySelectorAll('input[type="range"]').forEach(e=>{b[e.dataset.a]=+e.value});}await api('PATCH',`/api/hosts/${encodeURIComponent(n)}/personality`,b);toast(n+' aggiornato')}
+async function updHost(n,vals=null){
+  const b=vals||{};
+  if(!vals){
+    const block=document.querySelector(`[data-h="${CSS.escape(n)}"]`);
+    if(!block)return;
+    block.querySelectorAll('input[type="range"]').forEach(e=>{b[e.dataset.a]=+e.value});
+  }
+  await api('PATCH',`/api/hosts/${encodeURIComponent(n)}/personality`,b);
+  toast(n+' aggiornato');
+}
 async function rstHost(n){await api('POST',`/api/hosts/${encodeURIComponent(n)}/personality/reset`);toast(n+' ripristinato');const r=await fetch('/api/hosts',{headers:H()});renderHosts((await r.json()).hosts||[])}
 async function applyHostPreset(n,presetName){
   const preset=HOST_PRESETS[presetName];
