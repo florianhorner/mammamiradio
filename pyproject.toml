@@ -91,6 +91,10 @@ ignore_names = [
     # dataclass fields accessed via serialization
     "*_schema",
     "*_response",
+    # HTTPRedirectHandler override — base class requires these params
+    "redirect_request",
+    "code",
+    "fp",
 ]
 
 [tool.coverage.run]
