@@ -229,6 +229,52 @@ When editing any HTML file, grep for these elements before committing.
 
 If the behavior changed and the docs didn't, the docs are wrong. Fix them in the same change, not a follow-up.
 
+## Scope discipline
+
+Two rules, both narrow, both targeted at patterns observed in the audit of the
+last 10 merged PRs (2026-05-03):
+
+**1. Planning docs ship in their own PR.** Strategic planning documents
+(multi-week plans, design proposals, retrospectives, files matching
+`docs/YYYY-MM-DD-*.md` or `docs/2026-*-plan.md`, post-mortems) must NOT be
+bundled into fix/feat PRs. They get their own PR with their own scope. The
+audit found exactly one major creep instance in 10 PRs — a CI fix bundled with
+a 443-line strategic planning doc — and it is the dominant catchable pattern
+in this repo.
+
+**2. When you stumble on an adjacent issue not in scope:** append one line to
+`TODOS.md` and continue. Do NOT fix inline. Do NOT mention in the current PR.
+
+Format:
+
+```
+- [scope-parked] file.py:42 — one-sentence description (from <branch-name>)
+```
+
+This is positive action — the rule has something concrete for you to *do*
+with the finding, instead of just "don't fix it." The cost of one
+TODOS.md line is near zero; the cost of a 200-line adjacent fix bundled into
+a fix PR is hours of review and reshaping.
+
+**Exemptions** (not scope creep):
+- Doc updates required by the **Doc sync** rule above (same-commit doc-sync
+  is mandatory, not optional)
+- Test files mirroring source changes (`tests/X/**` alongside
+  `mammamiradio/X/**`)
+- Mechanical fallout from renames (path-string updates, import
+  fixups) within the same PR as the rename
+- Sibling caller updates when a public function signature changes (≤3 files
+  in other naves; beyond that, the change is legitimately cross-cutting and
+  needs its own scope statement)
+
+**Why no automated gate.** A scope-guard mechanism was designed and rejected
+on 2026-05-03 after a 10-PR audit measured creep frequency at 2/10 (boundary
+case) and found that the dominant creep pattern (planning-doc hitchhiking)
+isn't catchable by file-pattern globs. See
+`~/.gstack/projects/florianhorner-mammamiradio/florianhorner-cicd-freeze-reflection-design-20260503.md`
+for the full reasoning. If creep frequency rises (>4/10 in a future audit),
+revisit the mechanism path.
+
 ## Review discipline
 
 For every bug fix or behavior change, do not stop at the first broken instance.
