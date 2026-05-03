@@ -149,15 +149,14 @@ jobs:
           sleep 40
           HEALTH=$(curl -sS --retry 8 --retry-delay 3 --retry-connrefused http://localhost:8765/healthz)
           echo "$HEALTH"
-          echo "$HEALTH" | python3 -c "
-import json, sys
-d = json.load(sys.stdin)
-status = d.get('status')
-queue_empty = float(d.get('queue_empty_elapsed_s', 0) or 0)
-if status == 'failing' or queue_empty > 30:
-    raise SystemExit('::error::Smoke failed: unhealthy runtime or queue stayed empty too long')
-print(f'Smoke OK: status={status}, queue_empty_elapsed_s={queue_empty}')
-"
+          STATUS=$(echo "$HEALTH" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("status",""))')
+          QE=$(echo "$HEALTH" | python3 -c 'import json,sys; print(float(json.load(sys.stdin).get("queue_empty_elapsed_s",0) or 0))')
+          if [ "$STATUS" = "failing" ] || awk "BEGIN{exit !($QE > 30)}"; then
+            echo "::error::Smoke failed: status=$STATUS queue_empty_elapsed_s=$QE"
+            docker logs mamma-smoke 2>&1 | tail -50
+            exit 1
+          fi
+          echo "Smoke OK: status=$STATUS queue_empty_elapsed_s=$QE"
           docker logs mamma-smoke 2>&1 | tail -50
 
       - name: Cleanup

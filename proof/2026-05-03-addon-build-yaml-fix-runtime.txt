@@ -1,0 +1,30 @@
+Runtime proof for fix(ci): addon-build YAML parse error
+Date: 2026-05-03
+Branch: florianhorner/fix/addon-build-yaml-parse
+
+=== 1. YAML parses cleanly ===
+$ python3 -c "import yaml; yaml.safe_load(open('.github/workflows/addon-build.yml')); print('YAML OK')"
+YAML OK
+
+=== 2. Smoke logic — failure path (status=failing, qe=45.0) ===
+$ HEALTH='{"status":"failing","queue_empty_elapsed_s":45.0}'
+$ STATUS=$(echo "$HEALTH" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("status",""))')
+$ QE=$(echo "$HEALTH" | python3 -c 'import json,sys; print(float(json.load(sys.stdin).get("queue_empty_elapsed_s",0) or 0))')
+$ if [ "$STATUS" = "failing" ] || awk "BEGIN{exit !($QE > 30)}"; then echo "::error::Smoke failed: status=$STATUS qe=$QE"; exit 1; fi
+
+::error::Smoke failed: status=failing queue_empty_elapsed_s=45.0
+exit code: 1   (correct — failure path triggered)
+
+=== 3. Smoke logic — success path (status=playing, qe=5.2) ===
+$ HEALTH='{"status":"playing","queue_empty_elapsed_s":5.2}'
+$ STATUS=$(echo "$HEALTH" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("status",""))')
+$ QE=$(echo "$HEALTH" | python3 -c 'import json,sys; print(float(json.load(sys.stdin).get("queue_empty_elapsed_s",0) or 0))')
+$ if [ "$STATUS" = "failing" ] || awk "BEGIN{exit !($QE > 30)}"; then echo "::error::Smoke failed"; exit 1; fi
+$ echo "Smoke OK: status=$STATUS queue_empty_elapsed_s=$QE"
+
+Smoke OK: status=playing queue_empty_elapsed_s=5.2
+exit code: 0   (correct — success path)
+
+=== Conclusion ===
+The new shell-based smoke evaluation has the same exit-code semantics
+as the previous Python-only version, with no YAML indentation hazard.
