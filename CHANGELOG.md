@@ -6,6 +6,22 @@ The current version source of truth is `pyproject.toml`.
 
 ## [Unreleased]
 
+### Added
+
+- **Docker CI smoke test** in `addon-build.yml`: after both amd64 and aarch64 images build, a new `smoke` job pulls the amd64 image and runs a 40-second live test — hits `/healthz`, asserts `status != 'failing'` and `queue_empty_elapsed_s <= 30`. Catches "server starts but can't produce audio" without a Pi runner, which is the exact failure class seen in multiple production incidents.
+
+### Changed
+
+- **Admin panel fully Italianized** (Approach B): all operator-facing label strings in `admin.html` — trigger card titles (`Aggiungi banter`, `Forza pubblicità`, `Notizia flash`, `Caos in arrivo`), quick-action chips (`Taglia banter/pubblicità`, `Ricarica live`, `Svuota coda`, `Segnala traccia`), filter pills (`Tutto`, `Musica`, `Pubblicità`), preset names (`EQUILIBRATO`, `CALMO`), slider axis labels (`Energia`, `Caos`, `Calore`, `Verbosità`), search placeholder and button (`Cerca musica`, `Cerca`), engine room section headings, setup subheadings, toast strings, and the `ON AIR` → `IN ONDA` pill — are now in Italian. API endpoint strings, JS variable names, CSS class names, and `data-` identifiers are unchanged. Eliminates the mixed-language whiplash visible to operators after PR #248 (Approach A) italianized the panel shell but left content in English.
+
+- **`CSS.escape()` hardens host-name CSS attribute selectors** in `admin.html`: two `\`[data-h="${n}"]\`` template literals in `updHost()` and `applyHostPreset()` now wrap `n` with `CSS.escape()`. Host names containing CSS special characters (quotes, brackets, dots) previously caused silent no-match — the host block was never found and the UI failed closed. No XSS risk existed, but operators with unconventional host names saw broken personality sliders.
+
+- **Host preset active-state comparison uses `data-preset` attribute** instead of visible button text, so preset highlight survives localized display labels (previously broke when `BALANCED` → `EQUILIBRATO`).
+
+- **Null guard in `updHost()`** prevents NPE when the host block isn't yet in the DOM during refresh/re-render races (issue surfaced by CodeRabbit review).
+
+- **`<label for="searchInput" class="sr-only">Cerca musica</label>`** added to satisfy HTMLHint `input-requires-label`; `aria-label` kept for parity.
+
 ## [2.10.11] - 2026-05-03
 
 ### Fixed

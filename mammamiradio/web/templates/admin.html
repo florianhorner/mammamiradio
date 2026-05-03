@@ -1110,7 +1110,7 @@ body[data-stopped="true"] .a-station-card .dot.on { animation-play-state: paused
         <button type="button" class="btn-icon" title="Shuffle" onclick="doShuffle(this)">
           <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 4h2.5l5 8H12"/><path d="M2 12h2.5l1.8-2.9"/><path d="M9.7 6.4 12 4"/><path d="M10 2l2 2-2 2"/><path d="M10 10l2 2-2 2"/></svg>
         </button>
-        <button type="button" class="btn-primary-sm" onclick="doTrigger('banter',this)">Queue banter</button>
+        <button type="button" class="btn-primary-sm" onclick="doTrigger('banter',this)">Aggiungi banter</button>
       </div>
     </div>
 
@@ -1124,10 +1124,10 @@ body[data-stopped="true"] .a-station-card .dot.on { animation-play-state: paused
         <div style="display:flex;align-items:center;gap:10px;">
           <span class="filter-count" id="programmeCount" style="font-size:11px;color:var(--muted);font-family:var(--font-mono)"></span>
           <div class="filter-pills" style="margin:0">
-            <button type="button" class="filter-pill active" data-filter="all" onclick="setProgrammeFilter('all',this)">All</button>
-            <button type="button" class="filter-pill" data-filter="music" onclick="setProgrammeFilter('music',this)">Music</button>
+            <button type="button" class="filter-pill active" data-filter="all" onclick="setProgrammeFilter('all',this)">Tutto</button>
+            <button type="button" class="filter-pill" data-filter="music" onclick="setProgrammeFilter('music',this)">Musica</button>
             <button type="button" class="filter-pill" data-filter="banter" onclick="setProgrammeFilter('banter',this)">Banter</button>
-            <button type="button" class="filter-pill" data-filter="ad" onclick="setProgrammeFilter('ad',this)">Ads</button>
+            <button type="button" class="filter-pill" data-filter="ad" onclick="setProgrammeFilter('ad',this)">Pubblicità</button>
           </div>
         </div>
       </header>
@@ -1148,22 +1148,22 @@ body[data-stopped="true"] .a-station-card .dot.on { animation-play-state: paused
       <div class="a-triggers">
         <button type="button" class="a-trigger" onclick="doTrigger('banter',this)">
           <span class="ico-wrap"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="2" width="4" height="7" rx="2"/><path d="M3.5 7.5a4.5 4.5 0 0 0 9 0"/><path d="M8 12v2"/><path d="M5.5 14h5"/></svg></span>
-          <span class="lb">Queue banter</span>
+          <span class="lb">Aggiungi banter</span>
           <span class="hi">Plays after current song</span>
         </button>
         <button type="button" class="a-trigger" onclick="doTrigger('ad',this)">
           <span class="ico-wrap"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="6" width="12" height="8" rx="1.2"/><path d="M5 4l8-2"/><circle cx="11" cy="10" r="1.6"/><path d="M4.5 9h2M4.5 11h3"/></svg></span>
-          <span class="lb">Force ad break</span>
+          <span class="lb">Forza pubblicità</span>
           <span class="hi">Next break — absurd Italian</span>
         </button>
         <button type="button" class="a-trigger" onclick="doTrigger('news_flash',this)">
           <span class="ico-wrap"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8 1.8 14.5 13H1.5z"/><path d="M8 6v3.5"/><circle cx="8" cy="11.6" r="0.6" fill="currentColor"/></svg></span>
-          <span class="lb">News flash</span>
+          <span class="lb">Notizia flash</span>
           <span class="hi">Claude writes from today's feed</span>
         </button>
         <button type="button" class="a-trigger chaos" onclick="doQuickAction('more_chaos',this)">
           <span class="ico-wrap"><svg viewBox="0 0 16 16" fill="currentColor"><path d="M8.7 1L3 9h4l-1 6 6-8H8z"/></svg></span>
-          <span class="lb">Chaos incoming</span>
+          <span class="lb">Caos in arrivo</span>
           <span class="hi">Unscheduled — anything goes</span>
         </button>
       </div>
@@ -1171,11 +1171,11 @@ body[data-stopped="true"] .a-station-card .dot.on { animation-play-state: paused
       <div style="margin-top:16px;padding-top:14px;border-top:1px solid var(--line)">
         <div class="card-label" style="margin-bottom:10px">Azioni Rapide</div>
         <div class="quick-actions">
-          <button type="button" class="btn btn-chip" onclick="doQuickAction('less_banter',this)"><svg class="ic" aria-hidden="true"><use href="#ic-mic-off"/></svg> Trim banter</button>
-          <button type="button" class="btn btn-chip" onclick="doQuickAction('too_many_ads',this)"><svg class="ic" aria-hidden="true"><use href="#ic-ban"/></svg> Trim ads</button>
-          <button type="button" class="btn btn-chip" onclick="doQuickAction('hot_reload',this)"><svg class="ic" aria-hidden="true"><use href="#ic-rotate-cw"/></svg> Hot reload</button>
-          <button type="button" class="btn btn-chip" onclick="doPurge(this)"><svg class="ic" aria-hidden="true"><use href="#ic-trash"/></svg> Purge queue</button>
-          <button type="button" class="btn btn-chip" onclick="flagCurrentTrack(this)"><svg class="ic" aria-hidden="true"><use href="#ic-flag"/></svg> Flag track</button>
+          <button type="button" class="btn btn-chip" onclick="doQuickAction('less_banter',this)"><svg class="ic" aria-hidden="true"><use href="#ic-mic-off"/></svg> Taglia banter</button>
+          <button type="button" class="btn btn-chip" onclick="doQuickAction('too_many_ads',this)"><svg class="ic" aria-hidden="true"><use href="#ic-ban"/></svg> Taglia pubblicità</button>
+          <button type="button" class="btn btn-chip" onclick="doQuickAction('hot_reload',this)"><svg class="ic" aria-hidden="true"><use href="#ic-rotate-cw"/></svg> Ricarica live</button>
+          <button type="button" class="btn btn-chip" onclick="doPurge(this)"><svg class="ic" aria-hidden="true"><use href="#ic-trash"/></svg> Svuota coda</button>
+          <button type="button" class="btn btn-chip" onclick="flagCurrentTrack(this)"><svg class="ic" aria-hidden="true"><use href="#ic-flag"/></svg> Segnala traccia</button>
         </div>
         <div style="margin-top:10px">
           <div class="card-label">Ultima Pausa</div>
@@ -1261,8 +1261,9 @@ body[data-stopped="true"] .a-station-card .dot.on { animation-play-state: paused
         <button type="button" class="btn btn-chip" id="sourceJamendoBtn" data-capability="jamendo" style="display:none" onclick="loadPlaylistSource('jamendo',this)">Jamendo CC Music</button>
       </div>
       <div class="search-row">
-        <input type="text" class="search-input" id="searchInput" placeholder="Search music (playlist + web)..." autocomplete="off" aria-label="Search music">
-        <button type="button" class="btn btn-util" onclick="doSearch()">Search</button>
+        <label for="searchInput" class="sr-only">Cerca musica</label>
+        <input type="text" class="search-input" id="searchInput" placeholder="Cerca musica (coda + web)..." autocomplete="off" aria-label="Cerca musica">
+        <button type="button" class="btn btn-util" onclick="doSearch()">Cerca</button>
       </div>
       <div id="searchResults"></div>
       <div id="plBody" style="max-height:400px;overflow-y:auto;overflow-x:hidden"></div>
@@ -1280,7 +1281,7 @@ body[data-stopped="true"] .a-station-card .dot.on { animation-play-state: paused
       <div>
 
         <!-- Systems -->
-        <div class="card-label">Systems</div>
+        <div class="card-label">Sistemi</div>
         <div class="status-stack" id="systemsBody" style="margin-bottom:14px"><div class="empty">Checking AI and music systems...</div></div>
 
         <!-- Runtime — token cost counter lives here -->
@@ -1288,29 +1289,29 @@ body[data-stopped="true"] .a-station-card .dot.on { animation-play-state: paused
         <div id="engineRuntime" style="font-family:var(--font-mono);font-size:12px;line-height:1.8;color:var(--text-secondary);margin-bottom:14px">Loading...</div>
 
         <!-- Segment counts -->
-        <div class="card-label">Segment Counts</div>
+        <div class="card-label">Conteggio Segmenti</div>
         <div id="engineSegments" style="font-family:var(--font-mono);font-size:12px;line-height:1.8;color:var(--text-secondary);margin-bottom:14px"></div>
 
         <!-- Capabilities -->
-        <div class="card-label">Capabilities</div>
+        <div class="card-label">Capacità</div>
         <div id="engineCaps" style="font-family:var(--font-mono);font-size:12px;line-height:1.8;color:var(--text-secondary);margin-bottom:14px"></div>
 
         <!-- HA Context -->
         <div id="ha-details-card" style="display:none">
-          <div class="card-label">HA Context</div>
+          <div class="card-label">Contesto HA</div>
           <div id="haDetails" style="font-family:var(--font-mono);font-size:12px;line-height:1.8;color:var(--text-secondary);margin-bottom:14px"></div>
         </div>
 
         <!-- Installation onboarding -->
-        <div class="card-label">Installation Onboarding</div>
+        <div class="card-label">Configurazione</div>
         <div class="setup-headline" id="setupHeadline">Checking setup status...</div>
         <div class="setup-meta" id="setupMeta"></div>
         <div class="setup-next" id="setupNext">Collecting first-run diagnostics.</div>
-        <div class="setup-subhead">Step Checklist</div>
+        <div class="setup-subhead">Lista Passi</div>
         <ul class="setup-steps" id="setupSteps"></ul>
-        <div class="setup-subhead">Essentials</div>
+        <div class="setup-subhead">Essenziali</div>
         <div class="setup-list" id="setupEssentials"></div>
-        <div class="setup-subhead">Preflight Checks</div>
+        <div class="setup-subhead">Controlli Iniziali</div>
         <div class="setup-list" id="setupChecks"></div>
         <div id="setupKeysConfigured" style="display:none;padding:0.75rem 1rem;background:rgba(37,99,235,0.1);border:1px solid rgba(37,99,235,0.3);border-radius:8px;margin-bottom:0.75rem">
           <span style="color:var(--ok);font-weight:600" id="setupKeysLabel">&#10003; AI keys configured</span>
@@ -1392,7 +1393,7 @@ function toggleAccordion(head){
 function toggleSection(head){head.classList.toggle('open');head.nextElementSibling.classList.toggle('open')}
 
 // ── Transport ──
-async function doSkip(el){flash(el);await api('POST','/api/skip');toast('Skipped — advancing to next segment')}
+async function doSkip(el){flash(el);await api('POST','/api/skip');toast('Saltato — passaggio al segmento successivo')}
 async function doTrigger(t,el){flash(el);const r=await api('POST','/api/trigger',{type:t});if(r.ok)toast('Queued: '+t.replace('_',' ')+' (plays after current song)');else toast('Failed: '+(r.error||'unknown'))}
 async function doQuickAction(action,el){
   flash(el);
@@ -1400,26 +1401,26 @@ async function doQuickAction(action,el){
     const v=Math.min(6,parseInt(document.getElementById('pBanter').value||'2')+1);
     document.getElementById('pBanter').value=v;document.getElementById('pvBanter').textContent=v;
     await api('PATCH','/api/pacing',{songs_between_banter:v,songs_between_ads:parseInt(document.getElementById('pAds').value||'4'),ad_spots_per_break:parseInt(document.getElementById('pSpots').value||'2')});
-    toast('Less banter: every '+v+' songs');
+    toast('Meno banter: ogni '+v+' canzoni');
   }else if(action==='more_chaos'){
     const r=await api('POST','/api/trigger',{type:'banter'});
-    toast(r.ok?'Chaos incoming — unscheduled banter queued':'Failed: '+(r.error||'unknown'));
+    toast(r.ok?'Caos in arrivo — banter in coda':'Failed: '+(r.error||'unknown'));
   }else if(action==='too_many_ads'){
     const v=Math.min(10,parseInt(document.getElementById('pAds').value||'4')+2);
     document.getElementById('pAds').value=v;document.getElementById('pvAds').textContent=v;
     await api('PATCH','/api/pacing',{songs_between_banter:parseInt(document.getElementById('pBanter').value||'2'),songs_between_ads:v,ad_spots_per_break:parseInt(document.getElementById('pSpots').value||'2')});
-    toast('Fewer ads: every '+v+' songs');
+    toast('Meno pubblicità: ogni '+v+' canzoni');
   }else if(action==='hot_reload'){
     const r=await api('POST','/api/hot-reload',{});
-    if(r.ok)toast('Scriptwriter reloaded in '+r.duration_ms+'ms — next banter uses new code');
-    else if(r.error_code==='debounced')toast('Reload skipped — retry in '+r.retry_after_s+'s');
-    else toast('Reload failed: '+(r.exception||r.error_code||r.error||'unknown'));
+    if(r.ok)toast('Scriptwriter ricaricato in '+r.duration_ms+'ms — prossimo banter usa il nuovo codice');
+    else if(r.error_code==='debounced')toast('Ricarica saltata — riprova tra '+r.retry_after_s+'s');
+    else toast('Ricarica fallita: '+(r.exception||r.error_code||r.error||'unknown'));
   }
 }
-async function doShuffle(el){flash(el);await api('POST','/api/shuffle');toast('Playlist shuffled')}
-async function doPurge(el){flash(el);const r=await api('POST','/api/purge');toast('Purged '+r.purged+' segments from queue')}
-async function doStop(el){flash(el);await api('POST','/api/stop');toast('Session stopped');updateStopState(true)}
-async function doResume(el){flash(el);await api('POST','/api/resume');toast('Session resumed');updateStopState(false)}
+async function doShuffle(el){flash(el);await api('POST','/api/shuffle');toast('Playlist mischiata')}
+async function doPurge(el){flash(el);const r=await api('POST','/api/purge');toast('Eliminati '+r.purged+' segmenti dalla coda')}
+async function doStop(el){flash(el);await api('POST','/api/stop');toast('Sessione fermata');updateStopState(true)}
+async function doResume(el){flash(el);await api('POST','/api/resume');toast('Sessione ripresa');updateStopState(false)}
 function updateStopState(stopped){
   // Global toggle so CSS can dim animations, producer buttons, etc.
   document.body.setAttribute('data-stopped',stopped?'true':'false');
@@ -1449,7 +1450,7 @@ function updateStopState(stopped){
 // ── Flag Track — operator-only action, prompt() dialog is acceptable here ──
 async function flagCurrentTrack(el) {
   const ytId = _st?.now_streaming?.metadata?.youtube_id;
-  if (!ytId) { toast('No track playing'); return; }
+  if (!ytId) { toast('Nessuna traccia in riproduzione'); return; }
   const rule = prompt('Describe this track reaction (e.g. "cringe pop classic, Aggu vibes"):');
   if (!rule) return;
   flash(el);
@@ -1599,7 +1600,7 @@ function renderProgramme(st){
   if(countEl)countEl.textContent=totalCount+' entries';
 
   if(rows.length){
-    el.innerHTML=`<table class="a-programme"><thead><tr><th>Time</th><th>Type</th><th>Title</th><th>Host/src</th><th>Dur</th><th></th></tr></thead><tbody>${rows.join('')}</tbody></table>`;
+    el.innerHTML=`<table class="a-programme"><thead><tr><th>Ora</th><th>Tipo</th><th>Titolo</th><th>Host/Fonte</th><th>Durata</th><th></th></tr></thead><tbody>${rows.join('')}</tbody></table>`;
   }else{
     el.innerHTML='<div class="prog-empty">Waiting for signal...</div>';
   }
@@ -1645,7 +1646,7 @@ function setupPill(status){
   if(status==='configured'||status==='ok'||status==='done') return {state:'ready',label:'Ready'};
   if(status==='warn'||status==='missing'||status==='todo') return {state:'degraded',label:'Needs action'};
   if(status==='fail'||status==='blocked') return {state:'blocked',label:'Blocked'};
-  if(status==='skipped') return {state:'idle',label:'Skipped'};
+  if(status==='skipped') return {state:'idle',label:'Saltato'};
   return {state:'idle',label:'Info'};
 }
 function setupRow(label, detail, status){
@@ -1710,7 +1711,7 @@ async function setupRecheck(el){
   flash(el);
   const data=await api('POST','/api/setup/recheck');
   renderSetup(data);
-  toast('Setup re-check complete');
+  toast('Controllo setup completato');
 }
 async function setupSaveKeys(el){
   flash(el);
@@ -1719,7 +1720,7 @@ async function setupSaveKeys(el){
   const payload={};
   if(anthropic) payload.ANTHROPIC_API_KEY=anthropic;
   if(openai) payload.OPENAI_API_KEY=openai;
-  if(!Object.keys(payload).length){toast('Enter at least one key');return}
+  if(!Object.keys(payload).length){toast('Inserisci almeno una chiave');return}
   const resp=await api('POST','/api/setup/save-keys',payload);
   if(!resp.ok){toast(resp.error||'Failed to save keys');return}
   document.getElementById('setupAnthropicKey').value='';
@@ -1727,16 +1728,16 @@ async function setupSaveKeys(el){
   _keysEditMode=false;
   const updated=await api('POST','/api/setup/recheck');
   renderSetup(updated);
-  toast('Keys saved');
+  toast('Chiavi salvate');
 }
 async function copySetupSnippet(){
   const txt=document.getElementById('setupSnippet')?.textContent||'';
-  if(!txt){toast('No snippet available');return}
+  if(!txt){toast('Nessuno snippet disponibile');return}
   try{
     await navigator.clipboard.writeText(txt);
-    toast('Snippet copied');
+    toast('Snippet copiato');
   }catch(_){
-    toast('Clipboard unavailable');
+    toast('Clipboard non disponibile');
   }
 }
 
@@ -1819,14 +1820,14 @@ async function loadPlaylistSource(kind,el){
     toast('Failed: '+(r.error||'unknown'));
     return;
   }
-  toast(kind==='jamendo'?'Loaded Jamendo CC Music':'Reloaded charts');
+  toast(kind==='jamendo'?'Caricata musica Jamendo CC':'Grafiche ricaricate');
   await refreshFast();
   updateSourceControls(_st,_caps);
 }
 function updatePl(tracks){
   const el=document.getElementById('plBody');const meta=document.getElementById('plMeta');
   if(!tracks?.length){el.innerHTML='<div class="empty">No tracks</div>';meta.textContent='';return}
-  meta.textContent=tracks.length+' tracks';
+  meta.textContent=tracks.length+' tracce';
   const s=tracks.slice(0,80);
   const filter=_plFilter.toLowerCase();
   const filtered=filter?s.filter(t=>`${t.title} ${t.artist}`.toLowerCase().includes(filter)):s;
@@ -1856,7 +1857,7 @@ async function moveNext(i){
   const r=await api('POST','/api/playlist/move_to_next',{index:i});
   if(r.ok)toast('Playing next: '+r.moved);else toast('Failed to move track');
 }
-async function removeTr(i){await api('POST','/api/playlist/remove',{index:i});toast('Removed')}
+async function removeTr(i){await api('POST','/api/playlist/remove',{index:i});toast('Rimossa')}
 
 // ── Search ──
 const si=document.getElementById('searchInput');
@@ -1889,7 +1890,7 @@ async function doSearch(){
     el.innerHTML=html;
   }catch(e){console.warn('Search error:',e);el.innerHTML='';}
 }
-async function addTr(i){const t=_sR[i];if(!t)return;await api('POST','/api/playlist/move_to_next',{index:t.index});toast('Playing next: '+t.display);document.getElementById('searchResults').innerHTML='';si.value='';_plFilter=''}
+async function addTr(i){const t=_sR[i];if(!t)return;await api('POST','/api/playlist/move_to_next',{index:t.index});toast('In riproduzione: '+t.display);document.getElementById('searchResults').innerHTML='';si.value='';_plFilter=''}
 async function addExternal(i){
   const t=_sExt[i];if(!t)return;
   const btn=document.getElementById('ext-btn-'+i);
@@ -1897,7 +1898,7 @@ async function addExternal(i){
   try{
     const r=await api('POST','/api/playlist/add-external',{youtube_id:t.youtube_id,title:t.title,artist:t.artist,duration_ms:t.duration_ms});
     if(r.ok){
-      toast('Queued: '+t.display);
+      toast('In coda: '+t.display);
       document.getElementById('searchResults').innerHTML='';
       si.value='';_plFilter='';
     }else{
@@ -1929,7 +1930,7 @@ function initDragDrop(){
       const dst=parseInt(row.dataset.i);
       if(_dragSrc===null||_dragSrc===dst)return;
       const r=await api('POST','/api/playlist/move',{from:_dragSrc,to:dst});
-      if(r.ok)toast('Moved: '+r.moved);else toast('Move failed');
+      if(r.ok)toast('Spostato: '+r.moved);else toast('Spostamento fallito');
       _dragSrc=null;
     });
   });
@@ -1953,7 +1954,7 @@ function updatePaceVal(inputId,valId,v){
     const max=+el.max||100;const min=+el.min||0;
     el.style.backgroundSize=`${((+el.value-min)/(max-min))*100}% 100%`;
   });
-  el.addEventListener('change',()=>{api('PATCH','/api/pacing',{songs_between_banter:+document.getElementById('pBanter').value,songs_between_ads:+document.getElementById('pAds').value,ad_spots_per_break:+document.getElementById('pSpots').value});toast('Pacing saved')});
+  el.addEventListener('change',()=>{api('PATCH','/api/pacing',{songs_between_banter:+document.getElementById('pBanter').value,songs_between_ads:+document.getElementById('pAds').value,ad_spots_per_break:+document.getElementById('pSpots').value});toast('Cadenza salvata')});
 });
 function updatePaceCounters(pacing){
   if(!pacing)return;
@@ -1967,7 +1968,7 @@ function updatePaceCounters(pacing){
 
 // ── Hosts ──
 const AX=['energy','chaos','warmth','verbosity','nostalgia'];
-const AX_LABEL={'energy':'Energy','chaos':'Chaos','warmth':'Warmth','verbosity':'Verbosity','nostalgia':'Nostalgia'};
+const AX_LABEL={'energy':'Energia','chaos':'Caos','warmth':'Calore','verbosity':'Verbosità','nostalgia':'Nostalgia'};
 const AX_LOW ={'energy':'Mellow','chaos':'Orderly','warmth':'Distant','verbosity':'Concise','nostalgia':'Present-day'};
 const AX_HIGH={'energy':'Fired Up','chaos':'Anarchic','warmth':'Intimate','verbosity':'Non-stop','nostalgia':'Time Traveler'};
 const AX_WORDS={
@@ -1983,6 +1984,7 @@ const HOST_PRESETS={
   Hype:{energy:85,chaos:70,warmth:55,verbosity:65,nostalgia:45},
 };
 const AX_SHORT=['E','C','W','V','N'];
+const PRESET_LABEL={Balanced:'EQUILIBRATO',Calm:'CALMO',Hype:'HYPE'};
 const PRESET_BARS=Object.fromEntries(Object.entries(HOST_PRESETS).map(([p,v])=>[p,AX.map(a=>v[a])]));
 
 function axWord(ax,val){return AX_WORDS[ax][Math.min(3,Math.floor(val/26))];}
@@ -2031,13 +2033,13 @@ function renderHosts(hosts){
     const presetBtns=Object.keys(HOST_PRESETS).map(p=>{
       const bars=PRESET_BARS[p].map((b,i)=>`<div class="preset-bar" style="height:${b}%"></div>`).join('');
       const axLabels=AX_SHORT.map(s=>`<span class="preset-axis-lbl">${s}</span>`).join('');
-      return `<button class="host-preset" onclick="applyHostPreset('${nm}','${p}')"><span class="host-preset-name">${p}</span><div class="preset-bars">${bars}</div><div class="preset-axis-labels">${axLabels}</div></button>`;
+      return `<button class="host-preset" data-preset="${p}" onclick="applyHostPreset('${nm}','${p}')"><span class="host-preset-name">${PRESET_LABEL[p]||p}</span><div class="preset-bars">${bars}</div><div class="preset-axis-labels">${axLabels}</div></button>`;
     }).join('');
     const sliders=AX.map(a=>{
       const val=h.personality[a];
       return `<div class="ha"><div class="ha-top"><span class="ha-axis">${AX_LABEL[a]}</span><span class="ha-word" id="hw-${nm}-${a}">${axWord(a,val)}</span></div><input type="range" min="0" max="100" value="${val}" data-a="${a}" style="background:${sliderBg(val)}" oninput="onSliderInput(this,'${nm}')" onchange="updHost('${nm}')"><div class="ha-labels"><span>${AX_LOW[a]}</span><span>${AX_HIGH[a]}</span></div></div>`;
     }).join('');
-    return `<div class="host-block" data-h="${nm}"><div class="host-name">${nm}</div><div class="host-style">${esc(h.style)}</div><div class="host-presets-label">Character preset — moves all sliders</div><div class="host-presets">${presetBtns}</div>${sliders}<div class="host-preview"><div class="host-preview-label">What you'll hear</div><div class="host-preview-text"></div></div><button class="host-reset" onclick="rstHost('${nm}')">Reset to defaults</button></div>`;
+    return `<div class="host-block" data-h="${nm}"><div class="host-name">${nm}</div><div class="host-style">${esc(h.style)}</div><div class="host-presets-label">Carattere — muove tutti i cursori</div><div class="host-presets">${presetBtns}</div>${sliders}<div class="host-preview"><div class="host-preview-label">What you'll hear</div><div class="host-preview-text"></div></div><button class="host-reset" onclick="rstHost('${nm}')">Reset to defaults</button></div>`;
   }).join('');
   document.querySelectorAll('.host-block').forEach(block=>{
     refreshHostPreview(block);
@@ -2056,12 +2058,21 @@ function onSliderInput(sl,n){
   }
 }
 
-async function updHost(n,vals=null){const b=vals||{};if(!vals){document.querySelector(`[data-h="${n}"]`).querySelectorAll('input[type="range"]').forEach(e=>{b[e.dataset.a]=+e.value});}await api('PATCH',`/api/hosts/${encodeURIComponent(n)}/personality`,b);toast(n+' updated')}
-async function rstHost(n){await api('POST',`/api/hosts/${encodeURIComponent(n)}/personality/reset`);toast(n+' reset');const r=await fetch('/api/hosts',{headers:H()});renderHosts((await r.json()).hosts||[])}
+async function updHost(n,vals=null){
+  const b=vals||{};
+  if(!vals){
+    const block=document.querySelector(`[data-h="${CSS.escape(n)}"]`);
+    if(!block)return;
+    block.querySelectorAll('input[type="range"]').forEach(e=>{b[e.dataset.a]=+e.value});
+  }
+  await api('PATCH',`/api/hosts/${encodeURIComponent(n)}/personality`,b);
+  toast(n+' aggiornato');
+}
+async function rstHost(n){await api('POST',`/api/hosts/${encodeURIComponent(n)}/personality/reset`);toast(n+' ripristinato');const r=await fetch('/api/hosts',{headers:H()});renderHosts((await r.json()).hosts||[])}
 async function applyHostPreset(n,presetName){
   const preset=HOST_PRESETS[presetName];
   if(!preset)return;
-  const block=document.querySelector(`[data-h="${n}"]`);
+  const block=document.querySelector(`[data-h="${CSS.escape(n)}"]`);
   if(!block)return;
   block.querySelectorAll('input[type="range"]').forEach(sl=>{
     const ax=sl.dataset.a;
@@ -2072,10 +2083,10 @@ async function applyHostPreset(n,presetName){
       if(wordEl)wordEl.textContent=axWord(ax,preset[ax]);
     }
   });
-  block.querySelectorAll('.host-preset').forEach(b=>b.classList.toggle('active',b.querySelector('.host-preset-name').textContent===presetName));
+  block.querySelectorAll('.host-preset').forEach(b=>b.classList.toggle('active',b.dataset.preset===presetName));
   refreshHostPreview(block);
   await updHost(n,preset);
-  toast(`${n}: ${presetName} preset applied`);
+  toast(`${n}: preset ${PRESET_LABEL[presetName]||presetName} applicato`);
 }
 
 // ── Listener Requests ──
@@ -2113,14 +2124,14 @@ let _lrReqs=[];
 async function lrDismiss(id){
   if(!id)return;
   const r=await api('POST','/api/listener-requests/dismiss',{id});
-  if(r.removed>0)toast('Request dismissed');
-  else toast('Already gone');
+  if(r.removed>0)toast('Richiesta rimossa');
+  else toast('Già rimossa');
 }
 async function lrQueueNext(i){
   const req=_lrReqs[i];if(!req)return;
   if(req.type==='song_request'&&req.song_found){
     const r=await api('POST','/api/listener-requests/dismiss',{id:req.id});
-    toast(r.removed>0?'Request handled: '+esc(req.song_track||req.name):'Already consumed');
+    toast(r.removed>0?'Richiesta gestita: '+esc(req.song_track||req.name):'Già consumata');
   }
 }
 
