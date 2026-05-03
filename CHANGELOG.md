@@ -6,29 +6,6 @@ The current version source of truth is `pyproject.toml`.
 
 ## [Unreleased]
 
-### Added
-
-- **Dead-code detection via vulture** — `vulture mammamiradio/` is now part of `make check` and runs on every CI pass. Config in `[tool.vulture]` (pyproject.toml) whitelists FastAPI route decorators, Pydantic validators, and lifespan hooks to keep signal-to-noise clean. Install: `vulture==2.16` in `requirements-dev.txt`.
-- **`## Health Stack` in CLAUDE.md** — `make check` and the `/health` skill now share the same authoritative tool list (mypy, ruff, pytest, vulture, shellcheck), so the dashboard never prompts for tool detection again.
-- **Docker CI smoke test** in `addon-build.yml`: after both amd64 and aarch64 images build, a new `smoke` job pulls the amd64 image and runs a 40-second live test — hits `/healthz`, asserts `status != 'failing'` and `queue_empty_elapsed_s <= 30`. Catches "server starts but can't produce audio" without a Pi runner, which is the exact failure class seen in multiple production incidents.
-
-### Fixed
-
-- **Dead `probe` parameter removed from `build_setup_status`** (`mammamiradio/core/setup_status.py`) — `probe: bool = False` was a Spotify-era keyword argument (introduced in #64, orphaned in #115 when Spotify integration was removed). It was never read inside the function and no caller ever passed it. Removed cleanly; all 4 call sites required no changes.
-- **Shellcheck warnings resolved** in `ha-addon/mammamiradio/rootfs/run.sh` and `scripts/validate-addon.sh`: `# shellcheck shell=sh` directive added for the `with-contenv` shebang; `ADMIN_TOKEN` split into declare + assign (SC2155); trap string single-quoted (SC2064).
-
-### Changed
-
-- **Admin panel fully Italianized** (Approach B): all operator-facing label strings in `admin.html` — trigger card titles (`Aggiungi banter`, `Forza pubblicità`, `Notizia flash`, `Caos in arrivo`), quick-action chips (`Taglia banter/pubblicità`, `Ricarica live`, `Svuota coda`, `Segnala traccia`), filter pills (`Tutto`, `Musica`, `Pubblicità`), preset names (`EQUILIBRATO`, `CALMO`), slider axis labels (`Energia`, `Caos`, `Calore`, `Verbosità`), search placeholder and button (`Cerca musica`, `Cerca`), engine room section headings, setup subheadings, toast strings, and the `ON AIR` → `IN ONDA` pill — are now in Italian. API endpoint strings, JS variable names, CSS class names, and `data-` identifiers are unchanged. Eliminates the mixed-language whiplash visible to operators after PR #248 (Approach A) italianized the panel shell but left content in English.
-
-- **`CSS.escape()` hardens host-name CSS attribute selectors** in `admin.html`: two `\`[data-h="${n}"]\`` template literals in `updHost()` and `applyHostPreset()` now wrap `n` with `CSS.escape()`. Host names containing CSS special characters (quotes, brackets, dots) previously caused silent no-match — the host block was never found and the UI failed closed. No XSS risk existed, but operators with unconventional host names saw broken personality sliders.
-
-- **Host preset active-state comparison uses `data-preset` attribute** instead of visible button text, so preset highlight survives localized display labels (previously broke when `BALANCED` → `EQUILIBRATO`).
-
-- **Null guard in `updHost()`** prevents NPE when the host block isn't yet in the DOM during refresh/re-render races (issue surfaced by CodeRabbit review).
-
-- **`<label for="searchInput" class="sr-only">Cerca musica</label>`** added to satisfy HTMLHint `input-requires-label`; `aria-label` kept for parity.
-
 ## [2.10.11] - 2026-05-03
 
 ### Fixed
@@ -44,6 +21,12 @@ The current version source of truth is `pyproject.toml`.
 - **`tests/scheduling/test_producer_unit.py:573`** — fix stale assertion that pinned the pre-cathedral demo-assets path. The test asserted `"check demo_assets/banter/"` but `producer.py:1536` now logs `"check assets/demo/banter/"` (post-cathedral). PR #279 updated the producer message but missed the test; this restores the assertion. The followup question this raised — "why was every CI run since #279 silently passing despite `1 failed`?" — was answered and fixed by PR #282 (CI swallow fix, see entry below).
 
 - **CI no longer silently swallows pytest failures.** `scripts/coverage-ratchet.py:run_coverage()` previously only failed when `result.returncode != 0 AND not modules` — pytest could fail tests, but as long as coverage parsing populated module rows the ratchet exited 0 and the workflow stayed green. Active since PR #279. Two-line patch hardens the gate to fail on any non-zero pytest returncode. `.github/workflows/quality.yml` also gains a dedicated `pytest tests/` step that runs *before* the coverage ratchet on every PR, so test-suite failures fail CI independently of coverage parsing. Manual verification: intentionally break a test on a throwaway branch; CI must go red. The structural source-truthfulness work that surfaced this swallow (operator-honesty bug class) is parked in `docs/2026-05-02-source-truthfulness-plan.md`; the minimal monitoring-first fix (Approach B-with-modifications) ships in a follow-up PR after a 14-day soak window. Discovered during /autoplan review on PR #281. (PR #282)
+
+- **Dead `probe` parameter removed from `build_setup_status`** (`mammamiradio/core/setup_status.py`) — `probe: bool = False` was a Spotify-era keyword argument (introduced in #64, orphaned in #115 when Spotify integration was removed). It was never read inside the function and no caller ever passed it. Removed cleanly; all 4 call sites required no changes. (PR #286)
+
+- **Shellcheck warnings resolved** in `ha-addon/mammamiradio/rootfs/run.sh` and `scripts/validate-addon.sh`: `# shellcheck shell=sh` directive added for the `with-contenv` shebang; `ADMIN_TOKEN` split into declare + assign (SC2155); trap string single-quoted (SC2064). (PR #286)
+
+- **Null guard in `updHost()`** prevents NPE when the host block isn't yet in the DOM during refresh/re-render races (issue surfaced by CodeRabbit review). (PR #284)
 
 ### Changed
 
@@ -72,6 +55,16 @@ The current version source of truth is `pyproject.toml`.
 
   **Cross-references updated** in `README.md`, `CLAUDE.md`, `CONTRIBUTING.md`, the moved docs themselves, and four source/test files that referenced `DESIGN.md` in comments (`mammamiradio/core/config.py`, `mammamiradio/web/templates/admin.html`, `tests/hosts/test_brand_config.py`, `tests/web/test_design_tokens.py`). Historical audit notes (`docs/2026-04-13-log-resolution-plan.md`, `docs/2026-04-16-documentation-structure-audit.md`) are dated snapshots and were left untouched.
 
+- **Admin panel fully Italianized** (Approach B): all operator-facing label strings in `admin.html` — trigger card titles (`Aggiungi banter`, `Forza pubblicità`, `Notizia flash`, `Caos in arrivo`), quick-action chips (`Taglia banter/pubblicità`, `Ricarica live`, `Svuota coda`, `Segnala traccia`), filter pills (`Tutto`, `Musica`, `Pubblicità`), preset names (`EQUILIBRATO`, `CALMO`), slider axis labels (`Energia`, `Caos`, `Calore`, `Verbosità`), search placeholder and button (`Cerca musica`, `Cerca`), engine room section headings, setup subheadings, toast strings, and the `ON AIR` → `IN ONDA` pill — are now in Italian. API endpoint strings, JS variable names, CSS class names, and `data-` identifiers are unchanged. Eliminates the mixed-language whiplash visible to operators after PR #248 (Approach A) italianized the panel shell but left content in English. (PR #284)
+
+- **`CSS.escape()` hardens host-name CSS attribute selectors** in `admin.html`: two `\`[data-h="${n}"]\`` template literals in `updHost()` and `applyHostPreset()` now wrap `n` with `CSS.escape()`. Host names containing CSS special characters (quotes, brackets, dots) previously caused silent no-match — the host block was never found and the UI failed closed. No XSS risk existed, but operators with unconventional host names saw broken personality sliders. (PR #284)
+
+- **Host preset active-state comparison uses `data-preset` attribute** instead of visible button text, so preset highlight survives localized display labels (previously broke when `BALANCED` → `EQUILIBRATO`). (PR #284)
+
+- **`<label for="searchInput" class="sr-only">Cerca musica</label>`** added to satisfy HTMLHint `input-requires-label`; `aria-label` kept for parity. (PR #284)
+
+- **Scope discipline rules** added to `CLAUDE.md`: planning docs ship in their own PR; adjacent finds get parked as one-line entries in `docs/todos.md` instead of fixed inline. Born from a 10-PR audit (2026-05-03) that measured creep frequency at 2/10 (boundary case) and showed the dominant pattern (planning-doc hitchhiking) isn't catchable by file-pattern globs. Mechanism design preserved as the reactivation plan if creep frequency rises >4/10 in a future audit. (PR #285)
+
 ### Removed
 
 - **567 lines of dead pre-Volare CSS from `mammamiradio/static/listener.css`**: PR #235 (Volare Refined) renamed every listener class from `.nav`/`.np-strip`/`.hero`/`.dial-widget`/`.palinsesto`/`.slot`/`.dediche`/`.quote`/`.form-side`/`.casa-card`/`.ticker`/`.footer` etc. to the `.mmr-*` namespace, but left the entire pre-Volare stylesheet (~64 % of the file) sitting alongside the new one. Every removed selector was confirmed to have zero matches in the rendered HTML — the file dropped from 883 lines to 316 with no intended visual change (every var(--*) token still resolves; awaiting visual sign-off). Removed the orphan `.mmr-root` rule (defined but never applied to any element). This is the same migration gap that caused the listener mobile header overflow regression (#269) — without the dead-code cleanup the same risk persists for any future class rename.
@@ -82,6 +75,9 @@ The current version source of truth is `pyproject.toml`.
 - **Leadership principle #4 — THE README IS THE PITCH**: `CLAUDE.md` now lists four leadership principles every proposal must pass (was: two). New principle: a new reader gets the product in 30 seconds or less, KPI not aspiration; same standard applies to the source tree (folder hierarchy IS the mental model). Added 2026-04-28 after the cathedral DX review found 27 flat python files, 61 flat tests, 14 root markdown docs.
 - **Cathedral restructure plan** (`docs/2026-04-28-cathedral-restructure.md`): full file-by-file plan for moving `mammamiradio/` from 27 flat files to 7 domain naves (`core`, `audio`, `playlist`, `hosts`, `home`, `scheduling`, `web`), mirroring the test tree, collapsing 14 root docs to 4 sacred + `docs/`, rewriting README to a 30-second pitch. Phased PR sequence with Phase 0 (clearing #269/#270/#271) → docs collapse → subpackage move → deferred god-module splits. No code moves yet — this commit ships the plan only.
 - **Regia Screen 2 — live queue view** (`/regia`): The QUEUE tab now shows the full segment queue rendered from `queued_segments`, a break-structure card, skip-current and purge-all controls, inline search against `/api/search`, and per-item removal via the new `POST /api/queue/remove` endpoint. Replaces the browser `confirm()` panic dialog with an in-page CSS overlay that doesn't drop the stream. Drag-to-reorder is deferred (asyncio.Queue is not random-access).
+- **Docker CI smoke test** in `addon-build.yml`: after both amd64 and aarch64 images build, a new `smoke` job pulls the amd64 image and runs a 40-second live test — hits `/healthz`, asserts `status != 'failing'` and `queue_empty_elapsed_s <= 30`. Catches "server starts but can't produce audio" without a Pi runner, which is the exact failure class seen in multiple production incidents. (PR #284)
+- **Dead-code detection via vulture** — `vulture mammamiradio/` is now part of `make check` and runs on every CI pass. Config in `[tool.vulture]` (pyproject.toml) whitelists FastAPI route decorators, Pydantic validators, and lifespan hooks to keep signal-to-noise clean. Install: `vulture==2.16` in `requirements-dev.txt`. (PR #286)
+- **`## Health Stack` in CLAUDE.md** — `make check` and the `/health` skill now share the same authoritative tool list (mypy, ruff, pytest, vulture, shellcheck), so the dashboard never prompts for tool detection again. (PR #286)
 
 ### Fixed
 

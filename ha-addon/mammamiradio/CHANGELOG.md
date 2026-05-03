@@ -19,6 +19,14 @@
 - **`mammamiradio/` subpackaged into seven domain naves** (`core`, `audio`, `playlist`, `hosts`, `home`, `scheduling`, `web`). Public addon entrypoint `mammamiradio.main:app` unchanged.
 - **Repo root collapsed to four sacred files; everything else moved under `docs/`.** Cleaner top-level navigation for operators reading the source.
 - **`docs/architecture.md`** updated to describe Jamendo's new country+order filter behavior and the soft-migration path.
+- **Admin panel fully Italianized** — operator-facing labels (trigger cards, quick actions, sliders, presets, toasts, `ON AIR` → `IN ONDA`) now match the listener language. Eliminates the mixed-language whiplash from the partial Italianization in v2.10.10.
+- **`CSS.escape()` on host-name selectors** in `admin.html` — host names with quotes/brackets/dots no longer cause silent no-match in the personality slider UI.
+- **Scope discipline rules** added to `CLAUDE.md`: planning docs ship in their own PR; adjacent finds park as one-line entries in `docs/todos.md`. Born from a 10-PR audit (audit-before-build pattern).
+
+### Maintainer
+
+- **Docker CI smoke test** in `addon-build.yml` — after both amd64 and aarch64 images build, a 40-second live test hits `/healthz` and asserts the queue is producing audio. Catches "server starts but can't play" without a Pi runner.
+- **Dead-code detection via vulture** wired into `make check`; shellcheck warnings cleaned in `run.sh` and `validate-addon.sh`; dead `probe` parameter removed from `build_setup_status` (Spotify-era leftover).
 
 ## Unreleased
 
