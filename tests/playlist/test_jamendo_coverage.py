@@ -750,3 +750,134 @@ def test_fetch_startup_playlist_uses_local_music_when_ytdlp_disabled_and_no_jame
     assert len(tracks) == 1
     assert tracks[0].artist == "Lucio Battisti"
     assert tracks[0].source == "local"
+
+
+# ---------------------------------------------------------------------------
+# playlist: jamendo country + order filters (Italian-trending feature)
+# ---------------------------------------------------------------------------
+
+
+def test_build_jamendo_url_includes_country_and_order_when_set(config):
+    """Country and order params land in the API URL when configured."""
+    from mammamiradio.playlist.playlist import _build_jamendo_url
+
+    url = _build_jamendo_url("cid123", tags="pop", country="ITA", order="popularity_week", limit=50)
+    assert "country=ITA" in url
+    assert "order=popularity_week" in url
+    assert "tags=pop" in url
+
+
+def test_build_jamendo_url_omits_country_and_order_when_empty(config):
+    """When country and order are empty strings, they are omitted from the URL."""
+    from mammamiradio.playlist.playlist import _build_jamendo_url
+
+    url = _build_jamendo_url("cid123", tags="pop", country="", order="", limit=50)
+    assert "country=" not in url
+    assert "order=" not in url
+    assert "tags=pop" in url
+
+
+def test_fetch_jamendo_playlist_uses_config_country_and_order(config):
+    """fetch reads country + order from config when not overridden."""
+    from mammamiradio.playlist.playlist import _fetch_jamendo_playlist
+
+    config.playlist.jamendo_client_id = "cid123"
+    config.playlist.jamendo_tags = "pop"
+    config.playlist.jamendo_country = "ITA"
+    config.playlist.jamendo_order = "popularity_week"
+
+    payload = {"results": []}
+    with patch("mammamiradio.playlist.playlist.urlopen") as mock_urlopen:
+        mock_response = MagicMock()
+        mock_response.read.return_value = json.dumps(payload).encode("utf-8")
+        mock_response.__enter__ = lambda s: s
+        mock_response.__exit__ = MagicMock(return_value=False)
+        mock_urlopen.return_value = mock_response
+
+        _fetch_jamendo_playlist(config)
+
+    called_url = mock_urlopen.call_args.args[0]
+    assert "country=ITA" in called_url
+    assert "order=popularity_week" in called_url
+
+
+def test_jamendo_source_round_trip_preserves_country_and_order(config):
+    """`/api/playlist/load` round-trip: persisted Jamendo URL must encode country and order
+    so reload reproduces the same fetch."""
+    from urllib.parse import parse_qs, urlparse
+
+    from mammamiradio.playlist.playlist import (
+        _jamendo_country,
+        _jamendo_order,
+        _jamendo_request_url,
+        _jamendo_source,
+    )
+
+    src = _jamendo_source(50, tags="pop", country="ITA", order="popularity_week")
+    parsed = urlparse(src.url)
+    qs = parse_qs(parsed.query)
+    assert qs["country"] == ["ITA"]
+    assert qs["order"] == ["popularity_week"]
+    assert qs["tags"] == ["pop"]
+
+    # Round-trip via parsers — caller-side reload picks up persisted values
+    # (config defaults can be empty; URL is the source of truth on read).
+    config.playlist.jamendo_country = ""
+    config.playlist.jamendo_order = ""
+    assert _jamendo_country(config, src) == "ITA"
+    assert _jamendo_order(config, src) == "popularity_week"
+
+    # Empty country/order produce a clean URL
+    src_empty = _jamendo_source(50, tags="pop")
+    parsed_empty = urlparse(src_empty.url)
+    qs_empty = parse_qs(parsed_empty.query)
+    assert "country" not in qs_empty
+    assert "order" not in qs_empty
+    # And the helper returns the empty string (no fallback to a hardcoded default)
+    assert _jamendo_country(config, src_empty) == ""
+    assert _jamendo_order(config, src_empty) == ""
+
+    # request URL helper agrees
+    assert _jamendo_request_url(tags="pop", country="ITA", order="popularity_week") == src.url
+
+
+def test_validate_config_rejects_bad_jamendo_country(config):
+    """validate_config rejects non-3-letter country codes."""
+    from mammamiradio.core.config import _validate as validate_config
+
+    config.playlist.jamendo_country = "Italian"  # not a 3-letter ISO code
+    with pytest.raises(ValueError, match="jamendo_country"):
+        validate_config(config)
+
+    config.playlist.jamendo_country = "DE"  # only 2 letters
+    with pytest.raises(ValueError, match="jamendo_country"):
+        validate_config(config)
+
+
+def test_validate_config_accepts_valid_jamendo_country(config):
+    """validate_config accepts 3-letter uppercase ISO codes and empty."""
+    from mammamiradio.core.config import _validate as validate_config
+
+    config.playlist.jamendo_country = "ITA"
+    validate_config(config)  # no raise
+
+    config.playlist.jamendo_country = ""
+    validate_config(config)  # no raise
+
+
+def test_validate_config_rejects_bad_jamendo_order(config):
+    """validate_config rejects unknown order values."""
+    from mammamiradio.core.config import _validate as validate_config
+
+    config.playlist.jamendo_order = "random"  # not in the allowed set
+    with pytest.raises(ValueError, match="jamendo_order"):
+        validate_config(config)
+
+
+def test_validate_config_accepts_valid_jamendo_order(config):
+    """validate_config accepts known order values and empty."""
+    from mammamiradio.core.config import _validate as validate_config
+
+    for order in ("popularity_total", "popularity_month", "popularity_week", "releasedate_desc", ""):
+        config.playlist.jamendo_order = order
+        validate_config(config)  # no raise

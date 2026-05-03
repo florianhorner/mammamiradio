@@ -110,6 +110,9 @@ Everything else lives under `docs/`:
 - `STATION_NAME`, `STATION_THEME`: override station identity from `radio.toml`
 - `CLAUDE_MODEL`: override Claude model from `radio.toml`
 - `MAMMAMIRADIO_ALLOW_YTDLP`: enable yt-dlp for chart music (`true`/`1`/`yes`; default: disabled for copyright safety, but enabled by default in HA addon and Conductor)
+- `JAMENDO_CLIENT_ID`: Jamendo API client id (empty = Jamendo source disabled)
+- `JAMENDO_COUNTRY`: 3-letter uppercase ISO 3166-1 alpha-3 (e.g. `ITA`, `DEU`); empty disables the country filter. radio.toml default is `ITA` for Italian-trending music.
+- `JAMENDO_ORDER`: Jamendo sort order (`popularity_week` | `popularity_month` | `popularity_total` | `releasedate_desc` | empty). radio.toml default is `popularity_week`.
 - `MIN_COOLDOWN_HOURS`: override the release-cooldown window (default `24`, read by `scripts/check-release-cooldown.sh`)
 
 ## Runtime behavior

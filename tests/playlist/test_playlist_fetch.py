@@ -434,7 +434,10 @@ def test_load_explicit_jamendo_source_success(config):
     assert tracks == jamendo_tracks
     assert source.kind == "jamendo"
     assert source.source_id == "pop"
-    assert source.url == "jamendo://playlist?tags=pop"
+    # The persisted URL reflects the loaded config (radio.toml ships ITA + popularity_week
+    # by default). With those defaults, the request URL round-trips them so reload via
+    # /api/playlist/load reproduces the same fetch shape.
+    assert source.url == "jamendo://playlist?tags=pop&country=ITA&order=popularity_week"
 
 
 def test_load_explicit_charts_source_raises_when_unavailable(config):
