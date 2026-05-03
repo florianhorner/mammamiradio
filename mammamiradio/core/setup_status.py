@@ -115,7 +115,7 @@ def addon_options_snippet(config: StationConfig) -> str:
     return json.dumps(values, indent=2)
 
 
-def build_setup_status(config: StationConfig, state: StationState, *, probe: bool = False) -> dict:
+def build_setup_status(config: StationConfig, state: StationState) -> dict:
     """Produce the full onboarding payload used by the dashboard gate."""
     mode = detect_run_mode(config)
     ffmpeg_bin = shutil.which("ffmpeg")
