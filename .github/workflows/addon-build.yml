@@ -146,18 +146,19 @@ jobs:
             -e MAMMAMIRADIO_PORT=8099 \
             -e LOG_LEVEL=WARNING \
             ${{ env.REGISTRY }}/${{ env.IMAGE_BASE }}-amd64:${{ github.sha }}
-          sleep 15
-          curl --retry 5 --retry-delay 3 --retry-connrefused -f http://localhost:8765/healthz
+          sleep 40
+          HEALTH=$(curl -sS --retry 8 --retry-delay 3 --retry-connrefused http://localhost:8765/healthz)
+          echo "$HEALTH"
+          python3 - <<'PY' <<<"$HEALTH"
+import json, sys
+d = json.load(sys.stdin)
+status = d.get("status")
+queue_empty = float(d.get("queue_empty_elapsed_s", 0) or 0)
+if status == "failing" or queue_empty > 30:
+    raise SystemExit("::error::Smoke failed: unhealthy runtime or queue stayed empty too long")
+print(f"Smoke OK: status={status}, queue_empty_elapsed_s={queue_empty}")
+PY
           docker logs mamma-smoke 2>&1 | tail -50
-
-      - name: Check no silent queue-empty with listeners
-        run: |
-          STATUS=$(curl -sf http://localhost:8765/healthz | python3 -c "import json,sys; d=json.load(sys.stdin); print(d['status'])")
-          echo "Health status: $STATUS"
-          if [ "$STATUS" = "failing" ]; then
-            echo "::error::Container reports silent failure — queue empty with active listeners"
-            exit 1
-          fi
 
       - name: Cleanup
         if: always()

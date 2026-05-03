@@ -1261,6 +1261,7 @@ body[data-stopped="true"] .a-station-card .dot.on { animation-play-state: paused
         <button type="button" class="btn btn-chip" id="sourceJamendoBtn" data-capability="jamendo" style="display:none" onclick="loadPlaylistSource('jamendo',this)">Jamendo CC Music</button>
       </div>
       <div class="search-row">
+        <label for="searchInput" class="sr-only">Cerca musica</label>
         <input type="text" class="search-input" id="searchInput" placeholder="Cerca musica (coda + web)..." autocomplete="off" aria-label="Cerca musica">
         <button type="button" class="btn btn-util" onclick="doSearch()">Cerca</button>
       </div>
@@ -2032,7 +2033,7 @@ function renderHosts(hosts){
     const presetBtns=Object.keys(HOST_PRESETS).map(p=>{
       const bars=PRESET_BARS[p].map((b,i)=>`<div class="preset-bar" style="height:${b}%"></div>`).join('');
       const axLabels=AX_SHORT.map(s=>`<span class="preset-axis-lbl">${s}</span>`).join('');
-      return `<button class="host-preset" onclick="applyHostPreset('${nm}','${p}')"><span class="host-preset-name">${PRESET_LABEL[p]||p}</span><div class="preset-bars">${bars}</div><div class="preset-axis-labels">${axLabels}</div></button>`;
+      return `<button class="host-preset" data-preset="${p}" onclick="applyHostPreset('${nm}','${p}')"><span class="host-preset-name">${PRESET_LABEL[p]||p}</span><div class="preset-bars">${bars}</div><div class="preset-axis-labels">${axLabels}</div></button>`;
     }).join('');
     const sliders=AX.map(a=>{
       const val=h.personality[a];
@@ -2073,7 +2074,7 @@ async function applyHostPreset(n,presetName){
       if(wordEl)wordEl.textContent=axWord(ax,preset[ax]);
     }
   });
-  block.querySelectorAll('.host-preset').forEach(b=>b.classList.toggle('active',b.querySelector('.host-preset-name').textContent===presetName));
+  block.querySelectorAll('.host-preset').forEach(b=>b.classList.toggle('active',b.dataset.preset===presetName));
   refreshHostPreview(block);
   await updHost(n,preset);
   toast(`${n}: preset ${PRESET_LABEL[presetName]||presetName} applicato`);
