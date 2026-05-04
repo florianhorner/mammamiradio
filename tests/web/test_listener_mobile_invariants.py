@@ -167,6 +167,5 @@ def test_listener_anchor_targets_clear_sticky_nav() -> None:
     ]
     assert not missing, (
         "Listener anchor targets need non-zero `scroll-margin-top` so sticky "
-        "navigation does not hide the section when users jump or scroll to it: "
-        + ", ".join(missing)
+        "navigation does not hide the section when users jump or scroll to it: " + ", ".join(missing)
     )
