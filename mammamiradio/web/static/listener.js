@@ -185,6 +185,10 @@
     } else if (np.type === 'welcome') {
       trackEl.textContent = 'Ben arrivato';
       artistEl.textContent = 'Mamma Mi Radio';
+    } else if (np.type === 'stopped') {
+      // Idle state — never leak the internal "Session stopped" / "STOPPED" labels to the listener.
+      trackEl.textContent = 'In pausa';
+      artistEl.textContent = '';
     } else {
       trackEl.textContent = label || 'In onda';
       artistEl.textContent = segmentKindLabel(np.type);
