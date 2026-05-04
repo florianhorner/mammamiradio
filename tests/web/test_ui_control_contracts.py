@@ -766,3 +766,43 @@ class TestStoppedStateQuietsTheUI:
             "admin.html stopped banner element should not use the harsh "
             "'Session stopped — hit Resume' phrasing (Item 19)."
         )
+
+    def test_listener_stopped_state_never_leaks_internal_label(self):
+        # The now-playing strip and the Media Session metadata (lock screen /
+        # Bluetooth / CarPlay) must both sanitize the stopped state. If a
+        # future refactor drops either branch, the internal "Session stopped"
+        # label flows back through `np.label` and lands in front of listeners.
+        js = (WEB_ROOT / "static" / "listener.js").read_text()
+
+        # Both surfaces must explicitly handle np.type === 'stopped' and
+        # render the brand-voice copy "In pausa" — not fall through to a
+        # default branch that re-emits np.label.
+        assert js.count("np.type === 'stopped'") >= 2, (
+            "listener.js must handle the stopped type in BOTH renderNowPlayingStrip "
+            "and updateMediaSession; a single branch leaks the raw label to whichever "
+            "surface lacks the guard."
+        )
+        assert "'In pausa'" in js, "listener.js stopped branches must render 'In pausa' as the user-facing copy."
+
+        # The Media Session album field is broadcast to lock screen / Bluetooth
+        # / CarPlay. Hardcoding any city or frequency here re-leaks brand state
+        # that should come from radio.toml [brand] (and the public-status feed).
+        # Guard the boundary lookups so a future rename can't make this assertion
+        # pass vacuously against an empty slice.
+        ms_start = js.find("function updateMediaSession")
+        assert ms_start != -1, (
+            "could not locate function updateMediaSession() in listener.js — "
+            "rename or refactor likely; update this guard."
+        )
+        ms_end = js.find("\n  }\n", ms_start)
+        assert ms_end != -1, (
+            "could not locate the closing brace of updateMediaSession() — "
+            "indentation/formatting changed; update this guard."
+        )
+        ms_block = js[ms_start:ms_end]
+        for leaked in ("Milano", "Napoli", "96,7 FM", "Session stopped", "STOPPED"):
+            assert leaked not in ms_block, (
+                f"updateMediaSession() must not hardcode {leaked!r} — Media Session "
+                "metadata is broadcast to OS-level surfaces and brand state belongs in "
+                "radio.toml / /public-status."
+            )
