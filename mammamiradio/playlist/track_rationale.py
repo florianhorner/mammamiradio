@@ -11,8 +11,12 @@ Editorial guardrails baked into the copy in this module:
 4. All fake stats stay obviously absurd — 98.3%, not 60% (plausible is creepy)
 5. Plausible deniability — "probably" and "we think" over certainty
 
-`_GUARDRAIL_BANNED_PATTERNS` below codifies (1) and (2) as a compile-time
-sanity check on the copy itself.
+`_GUARDRAIL_BANNED_PATTERNS` below codifies rules 1 and 2 plus the
+surveillance-time slice of rule 3 (e.g. "at 3:14 am") as regexes.
+`tests/playlist/test_track_rationale_coverage.py::test_guardrail_patterns_pass_on_current_copy`
+scans `_REAL_REASONS`, `_FAKE_REASONS`, and listener-pattern lines against
+those patterns — any future copy edit that introduces a banned phrase fails
+the test before it ships. Rules 4 and 5 are stylistic and not regex-checkable.
 """
 
 from __future__ import annotations

@@ -110,14 +110,40 @@ def test_rationale_without_album():
 # ---------------------------------------------------------------------------
 
 
-def test_guardrail_patterns_compile():
-    """All guardrail banned patterns should compile as valid regex."""
+def test_guardrail_patterns_pass_on_current_copy():
+    """No banned pattern matches any production rationale string.
+
+    The docstring claim is that `_GUARDRAIL_BANNED_PATTERNS` enforces editorial
+    rules 1-3 (no precise dates, no specific locations, no surveillance times).
+    This test makes that claim true: it scans the actual `_REAL_REASONS`,
+    `_FAKE_REASONS`, and listener-pattern lines for any banned pattern.
+
+    If a future copy edit introduces a banned phrase, this test fails before
+    the offending string ships. If a banned pattern is too broad and false-
+    positives on legitimate copy, fix the pattern (or this test's exception list).
+    """
     import re
 
-    from mammamiradio.playlist.track_rationale import _GUARDRAIL_BANNED_PATTERNS
+    from mammamiradio.playlist.track_rationale import (
+        _FAKE_REASONS,
+        _GUARDRAIL_BANNED_PATTERNS,
+        _REAL_REASONS,
+    )
 
-    for pattern in _GUARDRAIL_BANNED_PATTERNS:
-        re.compile(pattern, re.IGNORECASE)  # Should not raise
+    # Listener-pattern reasons are appended inline in generate_track_rationale().
+    # Mirror them here so the scan covers every string the listener can see.
+    listener_pattern_lines = [
+        "We picked this one knowing you'd skip it. Prove us wrong.",
+        "We detected a romantic streak. This one's for the feelings.",
+        "High BPM detected in your preferences. This should keep you moving.",
+        "This one gets to the point fast. We learned from your impatience.",
+    ]
+
+    all_copy = list(_REAL_REASONS) + list(_FAKE_REASONS) + listener_pattern_lines
+    compiled = [re.compile(p, re.IGNORECASE) for p in _GUARDRAIL_BANNED_PATTERNS]
+
+    violations = [(string, pat.pattern) for string in all_copy for pat in compiled if pat.search(string)]
+    assert not violations, f"banned pattern matches in rationale copy: {violations}"
 
 
 def test_rationale_with_ballad_lover_pattern():
