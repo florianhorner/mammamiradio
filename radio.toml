@@ -29,7 +29,7 @@ sweeper_voice = "it-IT-GiuseppeMultilingualNeural"
 [brand]
 station_name = "Mamma Mi Radio"
 frequency = "96,7 FM"
-city = "Napoli"
+city = ""
 founded = 2024
 tagline = "La radio che ascolta la tua casa"
 about = "Conduttori notturni registrati su nastro e rimixati per la sera. Da Windor a Vergen. La voce che non si spegne mai."

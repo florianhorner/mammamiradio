@@ -117,7 +117,10 @@
   function updateMediaSession(np) {
     if (!('mediaSession' in navigator) || !np) return;
     const stationName = localStorage.getItem('stationName') || 'Mamma Mi Radio';
-    const album = stationName + ' \u2014 96,7 FM Milano';
+    // Album shows on lock screen / CarPlay alongside title+artist. Station
+    // identity only \u2014 no city/frequency hardcoded here (those belong in
+    // radio.toml; hardcoding leaked stale "Milano" through this surface).
+    const album = stationName;
     let title, artist;
     const label = np.label || '';
     if (np.type === 'music') {
@@ -134,6 +137,11 @@
       artist = stationName; title = 'The station has noticed you';
     } else if (np.type === 'news_flash' || np.type === 'news') {
       artist = stationName; title = label || 'News flash';
+    } else if (np.type === 'stopped') {
+      // Idle state — never leak the internal "Session stopped" label to the
+      // OS-level media surface (lock screen, Bluetooth, CarPlay, AirPlay).
+      // Mirrors the DOM-side sanitization in renderNowPlayingStrip().
+      artist = stationName; title = 'In pausa';
     } else {
       artist = stationName; title = label || 'In onda';
     }
@@ -185,6 +193,10 @@
     } else if (np.type === 'welcome') {
       trackEl.textContent = 'Ben arrivato';
       artistEl.textContent = 'Mamma Mi Radio';
+    } else if (np.type === 'stopped') {
+      // Idle state — never leak the internal "Session stopped" / "STOPPED" labels to the listener.
+      trackEl.textContent = 'In pausa';
+      artistEl.textContent = '';
     } else {
       trackEl.textContent = label || 'In onda';
       artistEl.textContent = segmentKindLabel(np.type);
