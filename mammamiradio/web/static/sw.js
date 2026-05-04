@@ -1,8 +1,7 @@
 // Service Worker for Mamma Mi Radio PWA
 // Bump CACHE_NAME on any visual/asset change. Old cache is purged on activate.
-const CACHE_NAME = 'radio-itali-v4';
+const CACHE_NAME = 'radio-itali-v5';
 const PRECACHE_URLS = [
-  '/listen',
   '/static/manifest.json',
   '/static/icon-192.svg',
   '/static/icon-512.svg',
@@ -26,29 +25,43 @@ self.addEventListener('activate', (event) => {
   self.clients.claim();
 });
 
-// Fetch: network-first for API/stream, cache-first for static assets
+function fetchAndCache(request) {
+  return fetch(request).then((response) => {
+    if (response && response.status === 200 && response.type === 'basic') {
+      const clone = response.clone();
+      caches.open(CACHE_NAME).then((cache) => cache.put(request, clone));
+    }
+    return response;
+  });
+}
+
+// Fetch: network-first for app shell/CSS/JS, cache-first only for stable install assets.
 self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
+  const path = url.pathname;
 
   // Never cache the audio stream or API calls
   // Use endsWith/includes to handle HA Ingress prefixed paths
-  if (url.pathname.endsWith('/stream') || url.pathname.includes('/api/') ||
-      url.pathname.endsWith('/status') || url.pathname.endsWith('/public-status')) {
+  if (path.endsWith('/stream') || path.includes('/api/') ||
+      path.endsWith('/status') || path.endsWith('/public-status')) {
     return;
   }
 
-  // Cache-first for static assets and app shell
-  event.respondWith(
-    caches.match(event.request).then((cached) => {
-      const fetchPromise = fetch(event.request).then((response) => {
-        if (response && response.status === 200 && response.type === 'basic') {
-          const clone = response.clone();
-          caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
-        }
-        return response;
-      }).catch(() => cached);
+  const isFreshAsset =
+    path.endsWith('/listen') ||
+    path.endsWith('.css') ||
+    path.endsWith('.js') ||
+    path.endsWith('/sw.js');
+  if (isFreshAsset) {
+    event.respondWith(fetchAndCache(event.request).catch(() => caches.match(event.request)));
+    return;
+  }
 
-      return cached || fetchPromise;
-    })
-  );
+  const isStableInstallAsset =
+    path.endsWith('/static/manifest.json') ||
+    path.endsWith('/static/icon-192.svg') ||
+    path.endsWith('/static/icon-512.svg');
+  if (isStableInstallAsset) {
+    event.respondWith(caches.match(event.request).then((cached) => cached || fetchAndCache(event.request)));
+  }
 });

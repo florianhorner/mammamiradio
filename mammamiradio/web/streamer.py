@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import importlib
 import importlib.metadata
 import ipaddress
@@ -44,7 +45,21 @@ _PKG_ROOT = _THIS_DIR.parent  # mammamiradio/
 _TEMPLATES_DIR = _THIS_DIR / "templates"
 _STATIC_DIR = _THIS_DIR / "static"
 _ASSETS_DIR = _PKG_ROOT / "assets"
-_ASSET_VERSION = importlib.metadata.version("mammamiradio")
+
+
+def _static_asset_digest() -> str:
+    """Return a short content hash for browser-visible CSS/JS assets."""
+    digest = hashlib.sha256()
+    for name in ("tokens.css", "base.css", "listener.css", "waveform.js", "listener.js", "sw.js"):
+        path = _STATIC_DIR / name
+        if path.exists():
+            digest.update(name.encode("utf-8"))
+            digest.update(b"\0")
+            digest.update(path.read_bytes())
+    return digest.hexdigest()[:8]
+
+
+_ASSET_VERSION = f"{importlib.metadata.version('mammamiradio')}-{_static_asset_digest()}"
 
 # Jinja2 templates for brand-engine listener page (PR-C). Admin/live still use
 # string-replace via _inject_ingress_prefix; only listener migrates to Jinja for now.
@@ -52,7 +67,7 @@ _TEMPLATES = Jinja2Templates(directory=str(_TEMPLATES_DIR))
 
 
 def _bust_static_cache(html: str) -> str:
-    """Append ?v=VERSION to /static/*.css and /static/*.js URLs to bust browser cache on upgrade."""
+    """Append a content-based version to /static/*.css and /static/*.js URLs."""
     return _re.sub(r'(/static/[^"?]+\.(css|js))"', rf'\1?v={_ASSET_VERSION}"', html)
 
 
