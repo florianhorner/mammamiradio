@@ -337,9 +337,14 @@ body[data-stopped="true"] .sidebar-live-line { color: var(--cream-dk); }
 .accordion-body.open { display: block; }
 
 /* ── CARDS (for accordion content) ── */
+/* Section divider label — used inside .a-panel to divide a card into subsections.
+   Golden eyebrow + thin gold underline rule. See docs/design/system.md
+   §§ "Section divider labels". Pair with .setup-subhead. */
 .card-label {
-  font-size: 9px; font-weight: 600; letter-spacing: 0.18em; text-transform: uppercase;
-  color: rgba(245,237,216,0.45); margin-bottom: 10px;
+  font-size: 9px; font-weight: 700; letter-spacing: 0.22em; text-transform: uppercase;
+  color: var(--sun2); margin: 0 0 12px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid rgba(236, 204, 48, 0.22);
 }
 
 /* ── TRANSPORT BUTTONS (full size, for Broadcast Triggers etc.) ── */
@@ -488,7 +493,7 @@ body[data-stopped="true"] .sidebar-live-line { color: var(--cream-dk); }
 .setup-headline { font-family: var(--font-display); font-size: 18px; font-style: italic; margin-bottom: 4px; }
 .setup-meta { font-size: 12px; color: rgba(245,237,216,0.72); margin-bottom: 10px; }
 .setup-next { font-size: 12px; color: rgba(245,237,216,0.85); background: rgba(20,17,15,0.35); border: 1px solid rgba(245,237,216,0.1); border-radius: 8px; padding: 8px 10px; margin-bottom: 10px; }
-.setup-subhead { font-size: 10px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; color: rgba(245,237,216,0.45); margin: 10px 0 6px; }
+.setup-subhead { font-size: 10px; font-weight: 700; letter-spacing: 0.18em; text-transform: uppercase; color: var(--sun2); margin: 14px 0 8px; padding-bottom: 6px; border-bottom: 1px solid rgba(236, 204, 48, 0.22); }
 .setup-list { display: flex; flex-direction: column; gap: 6px; }
 .setup-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; background: rgba(20,17,15,0.2); border: 1px solid rgba(245,237,216,0.08); border-radius: 8px; padding: 8px 10px; }
 .setup-title { font-size: 12px; font-weight: 700; color: var(--cream); }
@@ -602,15 +607,27 @@ input[type="range"]:focus-visible {
 
 /* ══ VOLARE REFINED — Admin Kit (from design kit) ══ */
 
-/* Espresso glow body treatment */
+/* Espresso glow body treatment — opacity + position match listener.css for
+   cross-surface consistency (see docs/design/system.md "Background gradient"). */
 body::before {
   content: "";
   position: fixed; inset: 0;
   background:
-    radial-gradient(400px 400px at 90% 10%, rgba(244,208,72,0.08), transparent 70%),
-    linear-gradient(180deg, #1E1610 0%, #14110F 14%);
+    radial-gradient(400px 400px at 88% 14%, rgba(244,208,72,0.10), transparent 70%),
+    linear-gradient(180deg, #1E1610 0%, #14110F 12%, var(--bg) 100%);
   pointer-events: none; z-index: 0;
 }
+
+/* Full-bleed tricolor at the very top of /admin — same brand signature as
+   listener (see docs/design/system.md). Lives above .a-app so it sits at the
+   absolute top of the viewport. */
+.a-toptricolor {
+  position: relative; z-index: 3;
+  display: flex; width: 100%; height: 3px;
+}
+.a-toptricolor .g { flex: 1; background: var(--flag-green); }
+.a-toptricolor .w { flex: 1; background: var(--flag-white); }
+.a-toptricolor .r { flex: 1; background: var(--flag-red); }
 
 .a-app { position: relative; z-index: 2; display: grid; grid-template-columns: 280px 1fr; min-height: 100vh; }
 
@@ -781,7 +798,7 @@ body::before {
 .btn-primary-sm:focus-visible { outline: none; box-shadow: 0 0 0 2px rgba(245,237,216,0.85); }
 
 /* Panels */
-.a-panel { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 18px 20px; }
+.a-panel { background: var(--surface); border: 1px solid var(--line-strong); border-radius: 12px; padding: 18px 20px; box-shadow: inset 0 1px 0 rgba(245,237,216,0.06), 0 8px 24px -12px rgba(0,0,0,0.55); }
 .a-panel header { display: flex; align-items: flex-end; justify-content: space-between; margin-bottom: 14px; padding-bottom: 12px; border-bottom: 1px solid var(--line); gap: 16px; }
 .a-panel header .ttl-wrap { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
 .a-panel header .ttl-eyebrow { font-size: 9px; font-weight: 700; letter-spacing: 0.22em; text-transform: uppercase; color: var(--sun2); }
@@ -1021,6 +1038,8 @@ body[data-stopped="true"] .a-station-card .dot.on { animation-play-state: paused
     <symbol id="ic-flag" viewBox="0 0 24 24"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><line x1="4" y1="22" x2="4" y2="15"/></symbol>
   </defs>
 </svg>
+
+<div class="a-toptricolor" aria-hidden="true"><span class="g"></span><span class="w"></span><span class="r"></span></div>
 
 <div class="a-app">
 
@@ -1286,20 +1305,20 @@ body[data-stopped="true"] .a-station-card .dot.on { animation-play-state: paused
 
         <!-- Runtime — token cost counter lives here -->
         <div class="card-label">Runtime</div>
-        <div id="engineRuntime" style="font-family:var(--font-mono);font-size:12px;line-height:1.8;color:var(--text-secondary);margin-bottom:14px">Loading...</div>
+        <div id="engineRuntime" style="font-family:var(--font-mono);font-size:12px;line-height:1.8;color:var(--cream-dk);margin-bottom:14px">Loading...</div>
 
         <!-- Segment counts -->
         <div class="card-label">Conteggio Segmenti</div>
-        <div id="engineSegments" style="font-family:var(--font-mono);font-size:12px;line-height:1.8;color:var(--text-secondary);margin-bottom:14px"></div>
+        <div id="engineSegments" style="font-family:var(--font-mono);font-size:12px;line-height:1.8;color:var(--cream-dk);margin-bottom:14px"></div>
 
         <!-- Capabilities -->
         <div class="card-label">Capacità</div>
-        <div id="engineCaps" style="font-family:var(--font-mono);font-size:12px;line-height:1.8;color:var(--text-secondary);margin-bottom:14px"></div>
+        <div id="engineCaps" style="font-family:var(--font-mono);font-size:12px;line-height:1.8;color:var(--cream-dk);margin-bottom:14px"></div>
 
         <!-- HA Context -->
         <div id="ha-details-card" style="display:none">
           <div class="card-label">Contesto HA</div>
-          <div id="haDetails" style="font-family:var(--font-mono);font-size:12px;line-height:1.8;color:var(--text-secondary);margin-bottom:14px"></div>
+          <div id="haDetails" style="font-family:var(--font-mono);font-size:12px;line-height:1.8;color:var(--cream-dk);margin-bottom:14px"></div>
         </div>
 
         <!-- Installation onboarding -->
