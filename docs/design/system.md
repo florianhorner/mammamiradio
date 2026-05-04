@@ -511,6 +511,10 @@ one label.
   underline, it's part of the title block, not a divider).
 - Status pill, badge, or inline tag (those are unrelated patterns).
 - Sidebar nav heading (`.a-nav-head` — uses `--muted`, not gold).
+- **Listener cards** (`.mmr-schedule`, `.mmr-dedica`, `.mmr-about-card`).
+  Each listener card is a single-purpose composition — there are no named
+  sub-sections to divide. Adding the gold rule there would introduce
+  ornament without structural cause. The pattern is admin-only by design.
 
 **Rationale:** body text inside admin cards (`--cream-dk` mono) and the
 warm-brown surface (`--surface`) sit close in luminance. Without the gold

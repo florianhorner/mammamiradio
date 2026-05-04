@@ -607,15 +607,27 @@ input[type="range"]:focus-visible {
 
 /* ══ VOLARE REFINED — Admin Kit (from design kit) ══ */
 
-/* Espresso glow body treatment */
+/* Espresso glow body treatment — opacity + position match listener.css for
+   cross-surface consistency (see docs/design/system.md "Background gradient"). */
 body::before {
   content: "";
   position: fixed; inset: 0;
   background:
-    radial-gradient(400px 400px at 90% 10%, rgba(244,208,72,0.08), transparent 70%),
-    linear-gradient(180deg, #1E1610 0%, #14110F 14%);
+    radial-gradient(400px 400px at 88% 14%, rgba(244,208,72,0.10), transparent 70%),
+    linear-gradient(180deg, #1E1610 0%, #14110F 12%, var(--bg) 100%);
   pointer-events: none; z-index: 0;
 }
+
+/* Full-bleed tricolor at the very top of /admin — same brand signature as
+   listener (see docs/design/system.md). Lives above .a-app so it sits at the
+   absolute top of the viewport. */
+.a-toptricolor {
+  position: relative; z-index: 3;
+  display: flex; width: 100%; height: 3px;
+}
+.a-toptricolor .g { flex: 1; background: var(--flag-green); }
+.a-toptricolor .w { flex: 1; background: var(--flag-white); }
+.a-toptricolor .r { flex: 1; background: var(--flag-red); }
 
 .a-app { position: relative; z-index: 2; display: grid; grid-template-columns: 280px 1fr; min-height: 100vh; }
 
@@ -1026,6 +1038,8 @@ body[data-stopped="true"] .a-station-card .dot.on { animation-play-state: paused
     <symbol id="ic-flag" viewBox="0 0 24 24"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><line x1="4" y1="22" x2="4" y2="15"/></symbol>
   </defs>
 </svg>
+
+<div class="a-toptricolor" aria-hidden="true"><span class="g"></span><span class="w"></span><span class="r"></span></div>
 
 <div class="a-app">
 
