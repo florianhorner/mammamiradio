@@ -1,7 +1,8 @@
 // Service Worker for Mamma Mi Radio PWA
 // Bump CACHE_NAME on any visual/asset change. Old cache is purged on activate.
-const CACHE_NAME = 'radio-itali-v5';
+const CACHE_NAME = 'radio-itali-v6';
 const PRECACHE_URLS = [
+  '/listen',
   '/static/manifest.json',
   '/static/icon-192.svg',
   '/static/icon-512.svg',
@@ -63,5 +64,14 @@ self.addEventListener('fetch', (event) => {
     path.endsWith('/static/icon-512.svg');
   if (isStableInstallAsset) {
     event.respondWith(caches.match(event.request).then((cached) => cached || fetchAndCache(event.request)));
+    return;
+  }
+
+  // Catch-all for any other same-origin GET (logo, fonts, future static images):
+  // network-with-cache-fallback so offline visits still render brand assets.
+  if (event.request.method === 'GET' && url.origin === self.location.origin) {
+    event.respondWith(
+      fetchAndCache(event.request).catch(() => caches.match(event.request))
+    );
   }
 });
