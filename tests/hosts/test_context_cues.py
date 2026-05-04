@@ -212,3 +212,42 @@ class TestGenerateImpossibleLine:
             mock_dt.datetime.now.return_value = _freeze_time(10, weekday=4)  # Friday
             lines = [generate_impossible_line() for _ in range(30)]
         assert all(isinstance(line, str) and len(line) > 0 for line in lines)
+
+
+class TestUncoveredBranches:
+    """Cover the three branches that vulture/coverage previously missed."""
+
+    def test_current_segment_key_defaults_to_now_when_hour_omitted(self):
+        """Calling without an hour falls through to datetime.now().hour (line 330)."""
+        from mammamiradio.hosts.context_cues import _current_segment_key
+
+        result = _current_segment_key()
+        valid_keys = {
+            "early_morning",
+            "morning",
+            "lunch",
+            "afternoon",
+            "evening",
+            "late_evening",
+            "deep_night",
+        }
+        assert result in valid_keys
+
+    def test_current_segment_key_unknown_hour_falls_back_to_deep_night(self):
+        """Hour outside any segment range returns the deep_night fallback (line 334)."""
+        from mammamiradio.hosts.context_cues import _current_segment_key
+
+        # 99 is not in any segment range (0-5, 5-8, 8-12, 12-14, 14-18, 18-21, 21-24).
+        assert _current_segment_key(99) == "deep_night"
+
+    def test_generate_impossible_line_falls_back_to_new_listener_lines(self):
+        """When all candidate sources are empty, fall through to _NEW_LISTENER_LINES (line 375)."""
+        from mammamiradio.hosts import context_cues
+
+        # Force no listener patterns + empty segment lines + skip day lines (random >= 0.3).
+        with (
+            patch.object(context_cues, "_IMPOSSIBLE_LINES", {}),
+            patch("random.random", return_value=0.5),
+        ):
+            result = context_cues.generate_impossible_line(listener_patterns=None)
+        assert result in context_cues._NEW_LISTENER_LINES
