@@ -46,7 +46,7 @@ _STATIC_DIR = _THIS_DIR / "static"
 _ASSETS_DIR = _PKG_ROOT / "assets"
 _ASSET_VERSION = importlib.metadata.version("mammamiradio")
 
-# Jinja2 templates for brand-engine listener page (PR-C). Admin/regia/live still use
+# Jinja2 templates for brand-engine listener page (PR-C). Admin/live still use
 # string-replace via _inject_ingress_prefix; only listener migrates to Jinja for now.
 _TEMPLATES = Jinja2Templates(directory=str(_TEMPLATES_DIR))
 
@@ -56,12 +56,11 @@ def _bust_static_cache(html: str) -> str:
     return _re.sub(r'(/static/[^"?]+\.(css|js))"', rf'\1?v={_ASSET_VERSION}"', html)
 
 
-# Admin/regia/live pages still loaded as raw strings + post-render prefix injection.
+# Admin/live pages still loaded as raw strings + post-render prefix injection.
 # Listener no longer needs _LISTENER_HTML — it's rendered from template per-request.
 _LISTENER_HTML = _bust_static_cache((_TEMPLATES_DIR / "listener.html").read_text())  # kept for tests + fallback
 
 _ADMIN_HTML = _bust_static_cache((_TEMPLATES_DIR / "admin.html").read_text())
-_REGIA_HTML = _bust_static_cache((_TEMPLATES_DIR / "regia.html").read_text())
 _LIVE_HTML = _bust_static_cache((_TEMPLATES_DIR / "live.html").read_text())
 
 _INGRESS_PREFIX_RE = _re.compile(r"^/[a-zA-Z0-9/_-]+$")
@@ -1048,16 +1047,6 @@ async def live_panel(request: Request):
     """Serve the mobile live control room — phone-optimised operator surface."""
     prefix = request.headers.get("X-Ingress-Path", "")
     html = _get_injected_html("live", _LIVE_HTML, prefix)
-    html = _inject_csrf_token(html, _get_csrf_token(request.app))
-    csp = "script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com"
-    return HTMLResponse(content=html, headers={"Content-Security-Policy": csp})
-
-
-@router.get("/regia", response_class=HTMLResponse, dependencies=[Depends(require_admin_access)])
-async def regia_prototype(request: Request):
-    """Serve the Regia Screen 1 (ON AIR) prototype — Concept A Time-Horizon Stack MVP."""
-    prefix = request.headers.get("X-Ingress-Path", "")
-    html = _get_injected_html("regia", _REGIA_HTML, prefix)
     html = _inject_csrf_token(html, _get_csrf_token(request.app))
     csp = "script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com"
     return HTMLResponse(content=html, headers={"Content-Security-Policy": csp})

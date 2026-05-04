@@ -26,7 +26,7 @@ If you want to fix or extend X, look in Y. The folder hierarchy IS the mental mo
 | WTF clip extraction + ring buffer                  | `mammamiradio/scheduling/clip.py`            |
 | HTTP routes / playback loop / auth                 | `mammamiradio/web/streamer.py`               |
 | Open Graph share card                              | `mammamiradio/web/og_card.py`                |
-| Listener / admin / regia / live HTML               | `mammamiradio/web/templates/`                |
+| Listener / admin / live HTML                       | `mammamiradio/web/templates/`                |
 | CSS / JS / icons / service worker                  | `mammamiradio/web/static/`                   |
 | `radio.toml` parsing + `.env`                      | `mammamiradio/core/config.py`                |
 | Shared data models (Track, Segment, etc.)          | `mammamiradio/core/models.py`                |

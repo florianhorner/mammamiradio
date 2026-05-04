@@ -8,9 +8,6 @@ from unittest.mock import patch
 from mammamiradio.hosts.context_cues import (
     compute_context_block,
     generate_impossible_line,
-    pick_psychic_prediction,
-    pick_taste_line,
-    pick_taste_mirror_intro,
 )
 
 
@@ -164,67 +161,6 @@ class TestListenerBehavior:
             mock_dt.datetime.now.return_value = _freeze_time(10)
             block = compute_context_block(listener_paused=True)
         assert "pausa" in block or "aspettato" in block
-
-
-class TestPickTasteLine:
-    """Tests for pick_taste_line helper."""
-
-    def test_known_pattern_returns_string(self):
-        result = pick_taste_line(["energy_seeker"])
-        assert isinstance(result, str)
-        assert len(result) > 0
-
-    def test_multiple_patterns_returns_first_match(self):
-        result = pick_taste_line(["unknown_pattern", "ballad_lover"])
-        assert isinstance(result, str)
-        assert len(result) > 0
-
-    def test_unknown_pattern_returns_empty(self):
-        result = pick_taste_line(["completely_unknown_pattern"])
-        assert result == ""
-
-    def test_empty_list_returns_empty(self):
-        result = pick_taste_line([])
-        assert result == ""
-
-    def test_bails_on_intros_pattern(self):
-        result = pick_taste_line(["bails_on_intros"])
-        assert isinstance(result, str)
-        assert len(result) > 0
-
-
-class TestPickPsychicPrediction:
-    """Tests for pick_psychic_prediction helper."""
-
-    def test_returns_dict_with_text(self):
-        result = pick_psychic_prediction(["energy_seeker"])
-        assert result is not None
-        assert "text" in result
-        assert isinstance(result["text"], str)
-
-    def test_empty_patterns_still_returns_generic(self):
-        # Generic predictions (pattern="") should still be picked
-        result = pick_psychic_prediction([])
-        assert result is not None
-
-    def test_unknown_pattern_falls_back_to_generic(self):
-        result = pick_psychic_prediction(["no_such_pattern"])
-        # Generic predictions have pattern="" so they always match
-        assert result is not None
-
-
-class TestPickTasteMirrorIntro:
-    """Tests for pick_taste_mirror_intro helper."""
-
-    def test_returns_nonempty_string(self):
-        result = pick_taste_mirror_intro()
-        assert isinstance(result, str)
-        assert len(result) > 0
-
-    def test_returns_italian_text(self):
-        result = pick_taste_mirror_intro()
-        # All intros are in Italian
-        assert any(word in result for word in ["set", "canzoni", "blocco", "sappiamo", "sezione"])
 
 
 class TestGenerateImpossibleLine:

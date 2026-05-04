@@ -91,11 +91,9 @@ class SonicBrandSection:
     tagline: str = ""
     geography: str = ""
     full_ident: str = ""
-    short_sting: str = ""
     sweepers: list[str] = field(default_factory=list)
     motif_notes: list[int] = field(default_factory=lambda: [523, 659, 784, 1047])
     sweeper_voice: str = ""
-    sweeper_probability: float = 0.25
 
 
 @dataclass
@@ -685,6 +683,9 @@ def load_config(path: str = "radio.toml") -> StationConfig:
     sonic_brand_raw = raw.get("sonic_brand", {})
     sonic_brand_sweepers = sonic_brand_raw.pop("sweepers", [])
     sonic_brand_motif = sonic_brand_raw.pop("motif_notes", [523, 659, 784, 1047])
+    # Tolerate legacy keys from older operator radio.toml files.
+    sonic_brand_raw.pop("short_sting", None)
+    sonic_brand_raw.pop("sweeper_probability", None)
     sonic_brand = SonicBrandSection(
         **sonic_brand_raw,
         sweepers=sonic_brand_sweepers,

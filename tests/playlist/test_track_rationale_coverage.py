@@ -6,9 +6,6 @@ import random
 
 from mammamiradio.core.models import ListenerProfile, PlaylistSource, Track
 from mammamiradio.playlist.track_rationale import (
-    GUARDRAIL_RULES,
-    TASTE_CRATES,
-    TasteCrate,
     classify_track_crate,
     generate_track_rationale,
 )
@@ -106,39 +103,6 @@ def test_rationale_without_album():
 
     found = any("can't pronounce" in r for r in rationales)
     assert found, "Should use placeholder album name"
-
-
-# ---------------------------------------------------------------------------
-# TasteCrate data structure
-# ---------------------------------------------------------------------------
-
-
-def test_taste_crates_complete():
-    """All taste crates have required fields."""
-    assert len(TASTE_CRATES) == 5
-    for crate in TASTE_CRATES:
-        assert isinstance(crate, TasteCrate)
-        assert crate.key
-        assert crate.label_it
-        assert crate.label_en
-        assert crate.description
-        assert crate.icon
-
-
-# ---------------------------------------------------------------------------
-# Guardrail rules
-# ---------------------------------------------------------------------------
-
-
-def test_guardrail_rules_defined():
-    """Guardrail rules exist and cover key areas."""
-    assert len(GUARDRAIL_RULES) >= 5
-    joined = " ".join(GUARDRAIL_RULES).lower()
-    assert "date" in joined
-    assert "location" in joined
-    assert "sensitive" in joined
-    assert "statistic" in joined or "stat" in joined
-    assert "deniability" in joined
 
 
 # ---------------------------------------------------------------------------
