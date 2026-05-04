@@ -90,6 +90,8 @@ body[data-stopped="true"] .waveform {
   padding: 4px 10px;
   border-radius: var(--radius-full);
   border: 1px solid currentColor;
+  /* Safari < 16.2 lacks color-mix() — fall back to a neutral tint that reads on warm-dark surfaces. */
+  background: rgba(245, 237, 216, 0.08);
   background: color-mix(in srgb, currentColor 8%, transparent);
 }
 .status-chip { font-size: 10px; }
