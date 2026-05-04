@@ -482,6 +482,43 @@ Dark interior, cream text, golden focus ring.
 }
 ```
 
+### Section divider labels — canonical
+
+When dividing a single card (`.a-panel`, `.mmr-about-card`, etc.) into multiple
+subsections, use a **golden eyebrow with a thin gold underline rule**. Pure
+unstyled eyebrows wash into warm-brown surfaces; the underline gives the label
+a structural anchor that separates one subsection from the next without
+introducing a second card border.
+
+```css
+.card-label,            /* admin: subsection inside .a-panel */
+.setup-subhead {        /* admin: subsection inside the setup card */
+  font-size: 9px; font-weight: 700;
+  letter-spacing: 0.22em; text-transform: uppercase;
+  color: var(--sun2);
+  margin: 0 0 12px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid rgba(236, 204, 48, 0.22);  /* gold @ 22% */
+}
+```
+
+**When to use:** dividing a single card into ≥2 named subsections (e.g. Motore
+panel → Sistemi / Runtime / Capacità / Configurazione). Each subsection gets
+one label.
+
+**When NOT to use:**
+- Card-level eyebrow above the card's `<h2>` (use `.ttl-eyebrow` — no
+  underline, it's part of the title block, not a divider).
+- Status pill, badge, or inline tag (those are unrelated patterns).
+- Sidebar nav heading (`.a-nav-head` — uses `--muted`, not gold).
+
+**Rationale:** body text inside admin cards (`--cream-dk` mono) and the
+warm-brown surface (`--surface`) sit close in luminance. Without the gold
+underline, the eye reads the card as one undifferentiated wash — the "brown
+mud" failure mode (observed 2026-05-04, Motore panel). The 22%-opacity gold
+rule is just enough to register as a divider without competing with the body
+text or the panel border.
+
 ## Listener site composition — canonical
 
 The listener surface (served at `/` and `/listen`) is a radio station website, not a player widget. Five-band vertical composition, designed for desktop first (1440px), scales down gracefully. Reference wireframe: `.context/designs/unified-player-20260421/site-v1.html` (approved 2026-04-21).
