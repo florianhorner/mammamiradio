@@ -218,20 +218,21 @@ class TestUncoveredBranches:
     """Cover the three branches that vulture/coverage previously missed."""
 
     def test_current_segment_key_defaults_to_now_when_hour_omitted(self):
-        """Calling without an hour falls through to datetime.now().hour (line 330)."""
+        """Calling without an hour falls through to datetime.now().hour (line 330).
+
+        Patch datetime.now() to a known hour so this asserts a specific segment
+        rather than membership — a regression that returned a constant would
+        otherwise pass the looser `result in valid_keys` check.
+        """
         from mammamiradio.hosts.context_cues import _current_segment_key
 
-        result = _current_segment_key()
-        valid_keys = {
-            "early_morning",
-            "morning",
-            "lunch",
-            "afternoon",
-            "evening",
-            "late_evening",
-            "deep_night",
-        }
-        assert result in valid_keys
+        with patch("mammamiradio.hosts.context_cues.datetime") as mock_dt:
+            mock_dt.datetime.now.return_value = _freeze_time(13)  # lunch (12-14)
+            assert _current_segment_key() == "lunch"
+
+        with patch("mammamiradio.hosts.context_cues.datetime") as mock_dt:
+            mock_dt.datetime.now.return_value = _freeze_time(3)  # deep_night (0-5)
+            assert _current_segment_key() == "deep_night"
 
     def test_current_segment_key_unknown_hour_falls_back_to_deep_night(self):
         """Hour outside any segment range returns the deep_night fallback (line 334)."""

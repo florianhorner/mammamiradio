@@ -127,19 +127,13 @@ def test_guardrail_patterns_pass_on_current_copy():
     from mammamiradio.playlist.track_rationale import (
         _FAKE_REASONS,
         _GUARDRAIL_BANNED_PATTERNS,
+        _LISTENER_PATTERN_REASONS,
         _REAL_REASONS,
     )
 
-    # Listener-pattern reasons are appended inline in generate_track_rationale().
-    # Mirror them here so the scan covers every string the listener can see.
-    listener_pattern_lines = [
-        "We picked this one knowing you'd skip it. Prove us wrong.",
-        "We detected a romantic streak. This one's for the feelings.",
-        "High BPM detected in your preferences. This should keep you moving.",
-        "This one gets to the point fast. We learned from your impatience.",
-    ]
-
-    all_copy = list(_REAL_REASONS) + list(_FAKE_REASONS) + listener_pattern_lines
+    # Pull listener-pattern reasons from the production dict, not duplicated
+    # literals — drift between test and production is impossible by construction.
+    all_copy = list(_REAL_REASONS) + list(_FAKE_REASONS) + list(_LISTENER_PATTERN_REASONS.values())
     compiled = [re.compile(p, re.IGNORECASE) for p in _GUARDRAIL_BANNED_PATTERNS]
 
     violations = [(string, pat.pattern) for string in all_copy for pat in compiled if pat.search(string)]

@@ -432,10 +432,16 @@ def test_load_config_tolerates_legacy_sonic_brand_keys(tmp_path):
         SonicBrandSection(short_sting="legacy")  # type: ignore[call-arg]
 
     source = Path(__file__).resolve().parents[2] / "radio.toml"
-    custom = source.read_text().replace(
-        'sweeper_voice = "it-IT-GiuseppeMultilingualNeural"',
-        'sweeper_voice = "it-IT-GiuseppeMultilingualNeural"\nshort_sting = "Malamie..."\nsweeper_probability = 0.25',
+    raw = source.read_text()
+    anchor = 'sweeper_voice = "it-IT-GiuseppeMultilingualNeural"'
+    assert anchor in raw, "anchor line drifted; update this test's injection point"
+    custom = raw.replace(
+        anchor,
+        f'{anchor}\nshort_sting = "Malamie..."\nsweeper_probability = 0.25',
     )
+    # Guard the str.replace from silently no-op'ing if radio.toml ever drifts.
+    assert 'short_sting = "Malamie..."' in custom
+    assert "sweeper_probability = 0.25" in custom
     custom_path = tmp_path / "radio.toml"
     custom_path.write_text(custom)
 

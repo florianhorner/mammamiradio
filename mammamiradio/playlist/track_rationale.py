@@ -75,6 +75,14 @@ _FAKE_REASONS = [
     "Statistically, you'll hum this for the next 48 hours. Sorry in advance.",
 ]
 
+# Listener-pattern-aware reasons. Single source of truth; tests assert against this dict.
+_LISTENER_PATTERN_REASONS: dict[str, str] = {
+    "restless_skipper": "We picked this one knowing you'd skip it. Prove us wrong.",
+    "ballad_lover": "We detected a romantic streak. This one's for the feelings.",
+    "energy_seeker": "High BPM detected in your preferences. This should keep you moving.",
+    "bails_on_intros": "This one gets to the point fast. We learned from your impatience.",
+}
+
 
 def generate_track_rationale(
     track: Track,
@@ -99,15 +107,7 @@ def generate_track_rationale(
 
     # Listener-pattern-aware reasons
     if listener and listener.patterns:
-        pats = listener.patterns
-        if "restless_skipper" in pats:
-            pool.append("We picked this one knowing you'd skip it. Prove us wrong.")
-        if "ballad_lover" in pats:
-            pool.append("We detected a romantic streak. This one's for the feelings.")
-        if "energy_seeker" in pats:
-            pool.append("High BPM detected in your preferences. This should keep you moving.")
-        if "bails_on_intros" in pats:
-            pool.append("This one gets to the point fast. We learned from your impatience.")
+        pool.extend(_LISTENER_PATTERN_REASONS[p] for p in listener.patterns if p in _LISTENER_PATTERN_REASONS)
 
     return random.choice(pool)
 
