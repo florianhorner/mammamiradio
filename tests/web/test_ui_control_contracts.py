@@ -787,8 +787,18 @@ class TestStoppedStateQuietsTheUI:
         # The Media Session album field is broadcast to lock screen / Bluetooth
         # / CarPlay. Hardcoding any city or frequency here re-leaks brand state
         # that should come from radio.toml [brand] (and the public-status feed).
+        # Guard the boundary lookups so a future rename can't make this assertion
+        # pass vacuously against an empty slice.
         ms_start = js.find("function updateMediaSession")
+        assert ms_start != -1, (
+            "could not locate function updateMediaSession() in listener.js — "
+            "rename or refactor likely; update this guard."
+        )
         ms_end = js.find("\n  }\n", ms_start)
+        assert ms_end != -1, (
+            "could not locate the closing brace of updateMediaSession() — "
+            "indentation/formatting changed; update this guard."
+        )
         ms_block = js[ms_start:ms_end]
         for leaked in ("Milano", "Napoli", "96,7 FM", "Session stopped", "STOPPED"):
             assert leaked not in ms_block, (
