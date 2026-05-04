@@ -21,6 +21,12 @@ The current version source of truth is `pyproject.toml`.
 
 ### Fixed
 
+- **Listener cards visible at rest**: per-token bump (`--line` 10→18%, `--line-strong` 16→32% opacity) plus a subtle box-shadow on `.mmr-about-card`. Cards were technically rendering but the cream-on-dark borders were below the perception threshold for many users, so the about-grid, schedule rows, and dediche card looked like empty voids until hovered.
+- **Listener now-playing strip never shows "Session stopped"**: the idle state used to leak the internal segment label and uppercased type ("Session stopped" / "STOPPED") into the title and artist slots. Now renders "In pausa" with no artist sub-line. Leadership principle #1 — idle state must read as paused-radio, not machine status.
+- **Listener page on Safari < 16.2**: `.status-chip` and `.status-dot` use `color-mix()` for their tinted background; older Safari can't parse it and was silently rendering with no chip background. Added a literal-rgba fallback line above the `color-mix()` declaration.
+- **Browser tab title**: shortened from `"{name} — {frequency} {city}"` (36 chars, truncated to "Mi Radio — 96,7 FM Napol" in narrow Chrome tabs) to just the station name. Frequency and city remain in `og:description` for share previews and search.
+- **Listener brand cleanup**: removed `Napoli` from the hero eyebrow and about-section note. The station fiction is "from Windor to Vergen" via `[sonic_brand].geography`; `Napoli` was leftover seed config.
+- **Host stat typography**: the "I conduttori" stat was rendering "Marco del bar · Nonna Giulia" at 24px Playfair italic — visually indistinguishable from a track title. Now scales the host stat down to 14px Outfit so it reads as a labeled stat, not a hero number.
 - **Dead `probe` parameter removed from `build_setup_status`** (`mammamiradio/core/setup_status.py`) — `probe: bool = False` was a Spotify-era keyword argument (introduced in #64, orphaned in #115 when Spotify integration was removed). It was never read inside the function and no caller ever passed it. Removed cleanly; all 4 call sites required no changes.
 - **Shellcheck warnings resolved** in `ha-addon/mammamiradio/rootfs/run.sh` and `scripts/validate-addon.sh`: `# shellcheck shell=sh` directive added for the `with-contenv` shebang; `ADMIN_TOKEN` split into declare + assign (SC2155); trap string single-quoted (SC2064).
 
