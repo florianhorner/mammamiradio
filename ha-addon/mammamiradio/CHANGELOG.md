@@ -22,10 +22,15 @@
 
 ## Unreleased
 
+### Removed
+
+- **`/regia` route + `regia.html` template** — the "Regia" *design language* shipped on `/admin` (admin panel title is "Mamma Mi Radio — Regia"); the standalone `/regia` URL served an obsolete prototype dummy and is gone. Operators land on `/admin` for the control room.
+- **Dead `[sonic_brand]` config keys** `short_sting` and `sweeper_probability` — defined in `radio.toml` and `SonicBrandSection` but never read by production code. Removed atomically across both `radio.toml` files (byte-for-byte sync preserved) and the dataclass; `load_config()` tolerates the legacy keys via `pop()` so older operator configs still load cleanly.
+- **Dead onboarding/taste-crate copy** in `mammamiradio/playlist/track_rationale.py` (`TASTE_CRATES`, `ONBOARDING_NARRATIVE`, `STATION_BIRTH_SCRIPT`, `GUARDRAIL_RULES`, `TasteCrate`) and matching dead pickers in `mammamiradio/hosts/context_cues.py` (`pick_taste_line`, `pick_psychic_prediction`, `pick_taste_mirror_intro` plus their data tables).
+
 ### Added
 
-- **Regia admin prototype at `/regia`** (dev preview, admin-gated): Screen 1 ON AIR of the new admin UI. Persistent status strip, 5-tab bar, Playfair italic Now Playing, Italian prose countdown, banter as editorial pull-quote, 4-button trigger row (AVANTI / PAUSA / VOCE AI / SPOT). PAUSA and PANICO log warnings; all other triggers wired to existing endpoints. Polls `/status` every 3s. `admin.html` untouched — prototype at a new route only.
-- **`--ai-purple` semantic token** in `tokens.css`: `#A855F7` reserved for AI-generated segments, used in Regia banter cards and peek-panel type dots.
+- **`--ai-purple` semantic token** in `tokens.css`: `#A855F7` reserved for AI-generated segments.
 - **Accessibility (WCAG 2.1 AA)**: `<html lang="it">` on `admin.html`; sr-only labels on song-request inputs in `listener.html`; `aria-hidden` on decorative tricolor; `.sr-only` and `:focus-visible` utilities in `base.css`; `aria-pressed` synced to play button.
 
 ### Fixed

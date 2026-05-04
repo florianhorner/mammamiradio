@@ -6,6 +6,13 @@ The current version source of truth is `pyproject.toml`.
 
 ## [Unreleased]
 
+### Removed
+
+- **`/regia` route + `regia.html` template** — the "Regia" *design language* already shipped on `/admin` (admin panel title is "Mamma Mi Radio — Regia"), but the `/regia` URL still served an obsolete prototype dummy. Route handler in `mammamiradio/web/streamer.py`, the `_REGIA_HTML` constant, and the 1,499-line `mammamiradio/web/templates/regia.html` template are gone. Operators land on `/admin` for the control room.
+- **Dead `[sonic_brand]` config keys** `short_sting` and `sweeper_probability` — defined in `radio.toml` and `SonicBrandSection` but never read by production code. Removed from both `radio.toml` and `ha-addon/mammamiradio/radio.toml` (byte-for-byte sync preserved) and from the dataclass in `mammamiradio/core/config.py`. `load_config()` now `pop()`s these keys before constructing `SonicBrandSection`, so older operator `radio.toml` files carrying the legacy keys still load without raising `TypeError`. New regression test in `tests/core/test_config.py`.
+- **Dead onboarding/taste-crate copy in `mammamiradio/playlist/track_rationale.py`** — `TASTE_CRATES`, `ONBOARDING_NARRATIVE`, `STATION_BIRTH_SCRIPT`, `GUARDRAIL_RULES`, and the `TasteCrate` dataclass were defined but had no production consumers. Active functions (`generate_track_rationale`, `classify_track_crate`, `_REAL_REASONS`, `_FAKE_REASONS`) untouched.
+- **Dead taste-mirror helpers in `mammamiradio/hosts/context_cues.py`** — `pick_taste_line()`, `pick_psychic_prediction()`, `pick_taste_mirror_intro()` and their backing data tables (`_TASTE_LINES`, `_PSYCHIC_PREDICTIONS`, `_TASTE_MIRROR_INTROS`) had no callers outside their own tests.
+
 ### Added
 
 - **Dead-code detection via vulture** — `vulture mammamiradio/` is now part of `make check` and runs on every CI pass. Config in `[tool.vulture]` (pyproject.toml) whitelists FastAPI route decorators, Pydantic validators, and lifespan hooks to keep signal-to-noise clean. Install: `vulture==2.16` in `requirements-dev.txt`.

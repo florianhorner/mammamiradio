@@ -408,3 +408,44 @@ def test_load_config_rejects_nonpositive_pacing_values(tmp_path):
 
     with pytest.raises(ValueError, match="pacing\\.songs_between_ads must be >= 1"):
         load_config(str(custom_path))
+
+
+def test_load_config_tolerates_legacy_sonic_brand_keys(tmp_path):
+    """load_config must not crash on legacy [sonic_brand] keys from older operator configs.
+
+    Without the pop() shim in load_config(), SonicBrandSection(**raw) would raise
+    TypeError on the unknown kwargs — Python @dataclass __init__ rejects extras.
+    This guards both the shim and the deletion of the dataclass fields.
+    """
+    from dataclasses import fields as _dc_fields
+
+    from mammamiradio.core.config import SonicBrandSection
+
+    # Sanity: the dataclass must NOT carry the legacy fields (proves they were deleted).
+    field_names = {f.name for f in _dc_fields(SonicBrandSection)}
+    assert "short_sting" not in field_names
+    assert "sweeper_probability" not in field_names
+
+    # Without the shim, SonicBrandSection(**{"short_sting": ...}) raises TypeError.
+    # Confirm the failure mode the shim defends against actually exists.
+    with pytest.raises(TypeError):
+        SonicBrandSection(short_sting="legacy")  # type: ignore[call-arg]
+
+    source = Path(__file__).resolve().parents[2] / "radio.toml"
+    raw = source.read_text()
+    anchor = 'sweeper_voice = "it-IT-GiuseppeMultilingualNeural"'
+    assert anchor in raw, "anchor line drifted; update this test's injection point"
+    custom = raw.replace(
+        anchor,
+        f'{anchor}\nshort_sting = "Malamie..."\nsweeper_probability = 0.25',
+    )
+    # Guard the str.replace from silently no-op'ing if radio.toml ever drifts.
+    assert 'short_sting = "Malamie..."' in custom
+    assert "sweeper_probability = 0.25" in custom
+    custom_path = tmp_path / "radio.toml"
+    custom_path.write_text(custom)
+
+    config = load_config(str(custom_path))  # must not raise — shim swallows legacy keys
+
+    assert not hasattr(config.sonic_brand, "short_sting")
+    assert not hasattr(config.sonic_brand, "sweeper_probability")

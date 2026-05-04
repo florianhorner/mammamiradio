@@ -8,8 +8,6 @@ tagline = "Da Windor a Vergen, la voce che non si spegne mai!"
 geography = "Windor, Vergen"
 # Full station ident — plays at top of hour and after ad breaks
 full_ident = "Mamma Mi Radio... da Windor a Vergen, la voce che non si spegne mai!"
-# Short sung jingle — plays before banter segments
-short_sting = "Malamie..."
 # Sweeper lines — short voice drops between songs
 sweepers = [
     "Mamma Mi Radio.",
@@ -22,8 +20,6 @@ sweepers = [
 motif_notes = [523, 659, 784, 1047]
 # Sweeper voice — uses a host voice for station idents
 sweeper_voice = "it-IT-GiuseppeMultilingualNeural"
-# Probability of inserting a sweeper after a music segment (0.0–1.0)
-sweeper_probability = 0.25
 
 # ────────────────────────────────────────────────────────────────────────
 # [brand] — what the LISTENER reads on the public page. Separate from

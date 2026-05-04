@@ -70,7 +70,7 @@ Catches "server starts but can't produce audio" — the exact production failure
 **Source:** `/research` + `/design-shotgun` on 2026-04-21 → approved direction is Concept A modified (Variant E2 warmth iteration).
 **IA reference:** `.context/attachments/Radio Control-Room IA  Architecture Comparison, Recommendation & MVP Build Order.md`
 **Design reference:** `~/.gstack/projects/florianhorner-mammamiradio/designs/admin-regia-concepts-20260421/variant-E2.png` + `approved.json`
-**Prototype shipped (this branch):** `mammamiradio/web/templates/regia.html` served at `/regia` (admin-gated). Screen 1 ON AIR + 260px read-only Peek Panel + persistent status strip + tab bar (tabs 2–5 are inert placeholders).
+**Status (2026-05-03):** the Regia *design language* landed on `/admin` directly — admin panel title is "Mamma Mi Radio — Regia". The standalone `/regia` route + `regia.html` prototype was removed; the IA work now drives admin.html iteratively.
 
 ### P1 — Wire Screen 1 ON AIR + Build Screen 2 QUEUE
 **Completed:** 2026-04-28 (florianhorner/show-p1-tasks)
@@ -80,16 +80,13 @@ Catches "server starts but can't produce audio" — the exact production failure
 - Screen 2 QUEUE: tab switching wired (all 5 tabs, JS `switchTab(n)`). Full queue list rendered from `queued_segments` (reusing `.peek-item` CSS). Break-structure card (next non-music in `upcoming[]`). Skip current + Purge all controls. Inline search against `/api/search`. Remove-from-queue via new `POST /api/queue/remove` endpoint (drain+rebuild asyncio.Queue). Drag-to-reorder deferred to P2 (asyncio.Queue is not random-access).
 
 ### P2 — AI Approval badge (Regia Screen 1)
-Requires a pending-segment queue in `StationState` with APPROVE/REJECT state. Producer writes to pending queue before approved segments reach the asyncio.Queue. New endpoints: `GET /api/pending-segments`, `POST /api/approve-segment`, `POST /api/reject-segment`. The placeholder card in `regia.html` is already hidden — unhide when backend is built.
+Requires a pending-segment queue in `StationState` with APPROVE/REJECT state. Producer writes to pending queue before approved segments reach the asyncio.Queue. New endpoints: `GET /api/pending-segments`, `POST /api/approve-segment`, `POST /api/reject-segment`. Wire the badge into `admin.html` when the backend is built.
 
 ### P2 — Drag-to-reorder (Regia Screen 2)
 `asyncio.Queue` is not random-access. To support reorder: drain + rebuild under concurrency, or replace with a custom queue structure that supports `insert`. Deferred because the drain+rebuild approach has a contention window and needs careful testing.
 
 ### P2 — Build Screen 3 REVIEW, Screen 4 PROGRAMME, Screen 5 MOTORE
 Phase 2 per IA doc. Screen 3 is AI content approval (banter + ad preview with audio + APPROVE/REJECT/EDIT). Screen 4 is format-clock + pacing. Screen 5 is the current admin Engine Room — API cost counter, capability flags, model info, logs.
-
-### P2 — Swap `/admin` to point at the new stack
-Once Screens 1+2 are solid, move the current 1744-line `admin.html` behind `/admin/legacy` and make `/admin` land on `/regia`. Do not touch `admin.html` until the new architecture covers all the current admin features (hosts config, pacing sliders, listener requests, playlist management).
 
 ### P3 — Italianize remaining UI copy
 The prototype uses Italian labels (CODA, REVISIONE, PALINSESTO, MOTORE, PANICO). Once Screens 2–5 are built, audit all existing admin.html strings and normalize to the same voice.

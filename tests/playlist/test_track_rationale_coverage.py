@@ -6,9 +6,6 @@ import random
 
 from mammamiradio.core.models import ListenerProfile, PlaylistSource, Track
 from mammamiradio.playlist.track_rationale import (
-    GUARDRAIL_RULES,
-    TASTE_CRATES,
-    TasteCrate,
     classify_track_crate,
     generate_track_rationale,
 )
@@ -109,51 +106,38 @@ def test_rationale_without_album():
 
 
 # ---------------------------------------------------------------------------
-# TasteCrate data structure
-# ---------------------------------------------------------------------------
-
-
-def test_taste_crates_complete():
-    """All taste crates have required fields."""
-    assert len(TASTE_CRATES) == 5
-    for crate in TASTE_CRATES:
-        assert isinstance(crate, TasteCrate)
-        assert crate.key
-        assert crate.label_it
-        assert crate.label_en
-        assert crate.description
-        assert crate.icon
-
-
-# ---------------------------------------------------------------------------
-# Guardrail rules
-# ---------------------------------------------------------------------------
-
-
-def test_guardrail_rules_defined():
-    """Guardrail rules exist and cover key areas."""
-    assert len(GUARDRAIL_RULES) >= 5
-    joined = " ".join(GUARDRAIL_RULES).lower()
-    assert "date" in joined
-    assert "location" in joined
-    assert "sensitive" in joined
-    assert "statistic" in joined or "stat" in joined
-    assert "deniability" in joined
-
-
-# ---------------------------------------------------------------------------
 # _GUARDRAIL_BANNED_PATTERNS (import and verify)
 # ---------------------------------------------------------------------------
 
 
-def test_guardrail_patterns_compile():
-    """All guardrail banned patterns should compile as valid regex."""
+def test_guardrail_patterns_pass_on_current_copy():
+    """No banned pattern matches any production rationale string.
+
+    The docstring claim is that `_GUARDRAIL_BANNED_PATTERNS` enforces editorial
+    rules 1-3 (no precise dates, no specific locations, no surveillance times).
+    This test makes that claim true: it scans the actual `_REAL_REASONS`,
+    `_FAKE_REASONS`, and listener-pattern lines for any banned pattern.
+
+    If a future copy edit introduces a banned phrase, this test fails before
+    the offending string ships. If a banned pattern is too broad and false-
+    positives on legitimate copy, fix the pattern (or this test's exception list).
+    """
     import re
 
-    from mammamiradio.playlist.track_rationale import _GUARDRAIL_BANNED_PATTERNS
+    from mammamiradio.playlist.track_rationale import (
+        _FAKE_REASONS,
+        _GUARDRAIL_BANNED_PATTERNS,
+        _LISTENER_PATTERN_REASONS,
+        _REAL_REASONS,
+    )
 
-    for pattern in _GUARDRAIL_BANNED_PATTERNS:
-        re.compile(pattern, re.IGNORECASE)  # Should not raise
+    # Pull listener-pattern reasons from the production dict, not duplicated
+    # literals — drift between test and production is impossible by construction.
+    all_copy = list(_REAL_REASONS) + list(_FAKE_REASONS) + list(_LISTENER_PATTERN_REASONS.values())
+    compiled = [re.compile(p, re.IGNORECASE) for p in _GUARDRAIL_BANNED_PATTERNS]
+
+    violations = [(string, pat.pattern) for string in all_copy for pat in compiled if pat.search(string)]
+    assert not violations, f"banned pattern matches in rationale copy: {violations}"
 
 
 def test_rationale_with_ballad_lover_pattern():

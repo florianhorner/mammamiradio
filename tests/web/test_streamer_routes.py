@@ -1167,6 +1167,16 @@ async def test_static_path_traversal_blocked():
     assert resp.status_code == 404
 
 
+@pytest.mark.asyncio
+async def test_regia_route_removed():
+    """GET /regia must return 404 — the obsolete prototype was removed; admin lives at /admin."""
+    app = _make_test_app()
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.get("/regia")
+    assert resp.status_code == 404
+
+
 # ---------------------------------------------------------------------------
 # /admin route tests
 # ---------------------------------------------------------------------------

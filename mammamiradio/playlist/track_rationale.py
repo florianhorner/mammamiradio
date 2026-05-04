@@ -1,86 +1,29 @@
 """Track rationale and source narrative system.
 
 Generates playful "Why this track?" explanations that mix plausible reasons
-with obviously fake statistics. Powers the onboarding narrative, taste crate
-labels, and per-track attribution in the listener UI.
+with obviously fake statistics. Used for per-track attribution in the listener
+UI and metadata sent through the producer.
 
-Guardrail rules (enforced in all output):
-1. NEVER reference precise dates — say "last winter" not "January 14th"
-2. NEVER reference specific locations — say "your commute" not "the A4 motorway"
-3. NEVER reference sensitive behavior — no "3am listening", no health/mood inference
-4. ALL fake stats must be obviously absurd — 98.3%, not 60% (plausible is creepy)
-5. ALWAYS maintain plausible deniability — "probably" and "we think" over certainty
+Editorial guardrails baked into the copy in this module:
+1. No precise dates — say "last winter" not "January 14th"
+2. No specific locations — say "your commute" not "the A4 motorway"
+3. No sensitive behavior — no "3am listening", no health/mood inference
+4. All fake stats stay obviously absurd — 98.3%, not 60% (plausible is creepy)
+5. Plausible deniability — "probably" and "we think" over certainty
+
+`_GUARDRAIL_BANNED_PATTERNS` below codifies rules 1 and 2 plus the
+surveillance-time slice of rule 3 (e.g. "at 3:14 am") as regexes.
+`tests/playlist/test_track_rationale_coverage.py::test_guardrail_patterns_pass_on_current_copy`
+scans `_REAL_REASONS`, `_FAKE_REASONS`, and listener-pattern lines against
+those patterns — any future copy edit that introduces a banned phrase fails
+the test before it ships. Rules 4 and 5 are stylistic and not regex-checkable.
 """
 
 from __future__ import annotations
 
 import random
-from dataclasses import dataclass
 
 from mammamiradio.core.models import ListenerProfile, PlaylistSource, Track
-
-# ---------------------------------------------------------------------------
-# Taste crate categories (the "loot screen" metaphor)
-# ---------------------------------------------------------------------------
-
-
-@dataclass
-class TasteCrate:
-    """A labeled bucket of tracks in the onboarding crate-dig metaphor."""
-
-    key: str
-    label_it: str
-    label_en: str
-    description: str
-    icon: str
-
-
-TASTE_CRATES = [
-    TasteCrate(
-        key="classics",
-        label_it="I Tuoi Classici",
-        label_en="Your Classics",
-        description="The songs you'd rescue from a burning building. "
-        "We found them in your most-played, your oldest playlists, "
-        "and the ones you never removed from Liked Songs.",
-        icon="vinyl",
-    ),
-    TasteCrate(
-        key="guilty_pleasures",
-        label_it="I Piaceri Proibiti",
-        label_en="Your Guilty Pleasures",
-        description="The songs you skip when someone's watching. "
-        "We found them buried three playlists deep where nobody looks. "
-        "Your secret is safe. Probably.",
-        icon="mask",
-    ),
-    TasteCrate(
-        key="discoveries",
-        label_it="Le Nostre Scoperte",
-        label_en="Our Discoveries",
-        description="Songs you haven't heard yet but statistically should love. "
-        "We cross-referenced your taste with 47 imaginary algorithms "
-        "and a coin flip. You're welcome.",
-        icon="compass",
-    ),
-    TasteCrate(
-        key="deep_cuts",
-        label_it="Gli Scavi Profondi",
-        label_en="The Deep Cuts",
-        description="Album tracks, B-sides, and songs you saved once "
-        "and forgot about. We remembered. We always remember.",
-        icon="shovel",
-    ),
-    TasteCrate(
-        key="wildcards",
-        label_it="Le Carte Pazze",
-        label_en="The Wildcards",
-        description="Songs that have absolutely no business being here. "
-        "But the algorithm had a feeling. "
-        "If you skip these, we learn. If you don't, we were right all along.",
-        icon="dice",
-    ),
-]
 
 
 def classify_track_crate(track: Track, source: PlaylistSource | None) -> str:
@@ -132,6 +75,14 @@ _FAKE_REASONS = [
     "Statistically, you'll hum this for the next 48 hours. Sorry in advance.",
 ]
 
+# Listener-pattern-aware reasons. Single source of truth; tests assert against this dict.
+_LISTENER_PATTERN_REASONS: dict[str, str] = {
+    "restless_skipper": "We picked this one knowing you'd skip it. Prove us wrong.",
+    "ballad_lover": "We detected a romantic streak. This one's for the feelings.",
+    "energy_seeker": "High BPM detected in your preferences. This should keep you moving.",
+    "bails_on_intros": "This one gets to the point fast. We learned from your impatience.",
+}
+
 
 def generate_track_rationale(
     track: Track,
@@ -156,114 +107,9 @@ def generate_track_rationale(
 
     # Listener-pattern-aware reasons
     if listener and listener.patterns:
-        pats = listener.patterns
-        if "restless_skipper" in pats:
-            pool.append("We picked this one knowing you'd skip it. Prove us wrong.")
-        if "ballad_lover" in pats:
-            pool.append("We detected a romantic streak. This one's for the feelings.")
-        if "energy_seeker" in pats:
-            pool.append("High BPM detected in your preferences. This should keep you moving.")
-        if "bails_on_intros" in pats:
-            pool.append("This one gets to the point fast. We learned from your impatience.")
+        pool.extend(_LISTENER_PATTERN_REASONS[p] for p in listener.patterns if p in _LISTENER_PATTERN_REASONS)
 
     return random.choice(pool)
-
-
-# ---------------------------------------------------------------------------
-# Onboarding narrative copy
-# ---------------------------------------------------------------------------
-
-ONBOARDING_NARRATIVE = {
-    "headline": "Stiamo saccheggiando la tua musica.",
-    "headline_en": "We're raiding your music.",
-    "steps": [
-        {
-            "label_it": "Collegamento in corso...",
-            "label_en": "Connecting...",
-            "copy": "We're tuning into the Italian charts. Don't worry — "
-            "we have impeccable taste. Well, mostly. "
-            "Actually, we judge a little.",
-        },
-        {
-            "label_it": "Analisi dei gusti...",
-            "label_en": "Analyzing taste...",
-            "copy": "Scanning the charts, trending tracks, and probably that one genre "
-            "you secretly love but won't admit to. We think we see a pattern. "
-            "We have questions.",
-        },
-        {
-            "label_it": "Classificazione...",
-            "label_en": "Sorting the crates...",
-            "copy": "Sorting your music into categories: "
-            "Undeniable Bangers, Guilty Pleasures You'll Deny, "
-            "and Songs You Saved Once And Forgot About. "
-            "The last category is surprisingly large.",
-        },
-        {
-            "label_it": "Costruzione della stazione...",
-            "label_en": "Building your station...",
-            "copy": "We've seen enough. Your station is taking shape. "
-            "Two hosts are warming up, the jingle is tuning itself, "
-            "and we're making some extremely specific bad decisions together.",
-        },
-    ],
-}
-
-
-# ---------------------------------------------------------------------------
-# Station birth sequence script (20-30s audio)
-# ---------------------------------------------------------------------------
-
-STATION_BIRTH_SCRIPT = {
-    "duration_target_sec": 25,
-    "sequence": [
-        {
-            "type": "sfx",
-            "description": "Static crackle, radio dial scanning through frequencies",
-            "duration_sec": 3,
-        },
-        {
-            "type": "sfx",
-            "description": "The station jingle motif assembles note by note "
-            "(C5... E5... G5... C6 — the Rhodes arpeggio locks in)",
-            "duration_sec": 4,
-        },
-        {
-            "type": "voice",
-            "host": "Marco",
-            "text": "Ah... eccoci. Mamma Mi Radio. Da Windor a Vergen.",
-            "note": "Delivered like waking up — groggy, then snapping to life",
-            "duration_sec": 4,
-        },
-        {
-            "type": "voice",
-            "host": "Giulia",
-            "text": "Abbiamo dato un'occhiata alla tua musica. Abbiamo delle domande.",
-            "note": "Deadpan. Zero warmth. Maximum intrigue.",
-            "duration_sec": 4,
-        },
-        {
-            "type": "voice",
-            "host": "Marco",
-            "text": "Ma prima — abbiamo visto abbastanza. "
-            "Facciamo insieme delle pessime decisioni incredibilmente specifiche.",
-            "note": "Building energy. The 'let's go' moment.",
-            "duration_sec": 5,
-        },
-        {
-            "type": "sfx",
-            "description": "Full jingle sting plays — the station is alive",
-            "duration_sec": 3,
-        },
-        {
-            "type": "voice",
-            "host": "Giulia",
-            "text": "Primo pezzo. Non dirci se ci abbiamo preso. Lo sappiamo già.",
-            "note": "Smug confidence. Immediate cut to first track.",
-            "duration_sec": 3,
-        },
-    ],
-}
 
 
 # ---------------------------------------------------------------------------
@@ -278,19 +124,4 @@ _GUARDRAIL_BANNED_PATTERNS = [
     r"\bat\s+\d{1,2}:\d{2}\s*(am|pm)?\b",
     # No location specifics
     r"\b(via |strada |piazza |address|GPS|coordinates)\b",
-]
-
-GUARDRAIL_RULES = [
-    "NEVER reference precise dates — say 'last winter' not 'January 14th'. "
-    "Vague temporal anchors only: 'a while back', 'that summer', 'recently'.",
-    "NEVER reference specific locations — say 'your commute' not 'the A4'. "
-    "Geographic vagueness is funny; geographic precision is surveillance.",
-    "NEVER reference sensitive behavior — no '3am listening sessions', "
-    "no health/mood inference, no 'you were sad when you played this'. "
-    "Stick to music taste, never emotional state.",
-    "ALL fake statistics must be obviously absurd — use 98.3%, 107%, 11.7/10. "
-    "Plausible numbers (like 62%) feel like real tracking. Absurd numbers feel like a joke.",
-    "ALWAYS maintain plausible deniability — 'probably', 'we think', 'our algorithm suggests'. "
-    "Never state knowledge as fact. The humor comes from the gap between "
-    "'we definitely know' energy and 'we're totally guessing' language.",
 ]

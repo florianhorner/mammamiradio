@@ -287,7 +287,7 @@ The rich path is richer, but the failure path still produces a stream.
 | `mammamiradio/home/ha_enrichment.py` | Pure HA event derivation: state diffing, event pruning, numeric passthrough |
 | `mammamiradio/web/streamer.py` | HTTP routes, auth gating, playback loop, clip endpoints, listener fanout (TODO: split — see cathedral plan PR 5) |
 | `mammamiradio/web/og_card.py` | Open Graph share-card PNG renderer |
-| `mammamiradio/web/templates/` | `admin.html`, `listener.html`, `regia.html`, `live.html` |
+| `mammamiradio/web/templates/` | `admin.html`, `listener.html`, `live.html` |
 | `mammamiradio/web/static/` | CSS, JS, icons, manifest, service worker |
 | `mammamiradio/assets/` | `logo.svg`, `demo/` (bundled MP3s + SFX) |
 | `start.sh` | local dev entry point with uvicorn and reload |

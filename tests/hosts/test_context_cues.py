@@ -8,9 +8,6 @@ from unittest.mock import patch
 from mammamiradio.hosts.context_cues import (
     compute_context_block,
     generate_impossible_line,
-    pick_psychic_prediction,
-    pick_taste_line,
-    pick_taste_mirror_intro,
 )
 
 
@@ -166,67 +163,6 @@ class TestListenerBehavior:
         assert "pausa" in block or "aspettato" in block
 
 
-class TestPickTasteLine:
-    """Tests for pick_taste_line helper."""
-
-    def test_known_pattern_returns_string(self):
-        result = pick_taste_line(["energy_seeker"])
-        assert isinstance(result, str)
-        assert len(result) > 0
-
-    def test_multiple_patterns_returns_first_match(self):
-        result = pick_taste_line(["unknown_pattern", "ballad_lover"])
-        assert isinstance(result, str)
-        assert len(result) > 0
-
-    def test_unknown_pattern_returns_empty(self):
-        result = pick_taste_line(["completely_unknown_pattern"])
-        assert result == ""
-
-    def test_empty_list_returns_empty(self):
-        result = pick_taste_line([])
-        assert result == ""
-
-    def test_bails_on_intros_pattern(self):
-        result = pick_taste_line(["bails_on_intros"])
-        assert isinstance(result, str)
-        assert len(result) > 0
-
-
-class TestPickPsychicPrediction:
-    """Tests for pick_psychic_prediction helper."""
-
-    def test_returns_dict_with_text(self):
-        result = pick_psychic_prediction(["energy_seeker"])
-        assert result is not None
-        assert "text" in result
-        assert isinstance(result["text"], str)
-
-    def test_empty_patterns_still_returns_generic(self):
-        # Generic predictions (pattern="") should still be picked
-        result = pick_psychic_prediction([])
-        assert result is not None
-
-    def test_unknown_pattern_falls_back_to_generic(self):
-        result = pick_psychic_prediction(["no_such_pattern"])
-        # Generic predictions have pattern="" so they always match
-        assert result is not None
-
-
-class TestPickTasteMirrorIntro:
-    """Tests for pick_taste_mirror_intro helper."""
-
-    def test_returns_nonempty_string(self):
-        result = pick_taste_mirror_intro()
-        assert isinstance(result, str)
-        assert len(result) > 0
-
-    def test_returns_italian_text(self):
-        result = pick_taste_mirror_intro()
-        # All intros are in Italian
-        assert any(word in result for word in ["set", "canzoni", "blocco", "sappiamo", "sezione"])
-
-
 class TestGenerateImpossibleLine:
     """Tests for generate_impossible_line — zero-config uncanny DJ lines."""
 
@@ -276,3 +212,43 @@ class TestGenerateImpossibleLine:
             mock_dt.datetime.now.return_value = _freeze_time(10, weekday=4)  # Friday
             lines = [generate_impossible_line() for _ in range(30)]
         assert all(isinstance(line, str) and len(line) > 0 for line in lines)
+
+
+class TestUncoveredBranches:
+    """Cover the three branches that vulture/coverage previously missed."""
+
+    def test_current_segment_key_defaults_to_now_when_hour_omitted(self):
+        """Calling without an hour falls through to datetime.now().hour (line 330).
+
+        Patch datetime.now() to a known hour so this asserts a specific segment
+        rather than membership — a regression that returned a constant would
+        otherwise pass the looser `result in valid_keys` check.
+        """
+        from mammamiradio.hosts.context_cues import _current_segment_key
+
+        with patch("mammamiradio.hosts.context_cues.datetime") as mock_dt:
+            mock_dt.datetime.now.return_value = _freeze_time(13)  # lunch (12-14)
+            assert _current_segment_key() == "lunch"
+
+        with patch("mammamiradio.hosts.context_cues.datetime") as mock_dt:
+            mock_dt.datetime.now.return_value = _freeze_time(3)  # deep_night (0-5)
+            assert _current_segment_key() == "deep_night"
+
+    def test_current_segment_key_unknown_hour_falls_back_to_deep_night(self):
+        """Hour outside any segment range returns the deep_night fallback (line 334)."""
+        from mammamiradio.hosts.context_cues import _current_segment_key
+
+        # 99 is not in any segment range (0-5, 5-8, 8-12, 12-14, 14-18, 18-21, 21-24).
+        assert _current_segment_key(99) == "deep_night"
+
+    def test_generate_impossible_line_falls_back_to_new_listener_lines(self):
+        """When all candidate sources are empty, fall through to _NEW_LISTENER_LINES (line 375)."""
+        from mammamiradio.hosts import context_cues
+
+        # Force no listener patterns + empty segment lines + skip day lines (random >= 0.3).
+        with (
+            patch.object(context_cues, "_IMPOSSIBLE_LINES", {}),
+            patch("random.random", return_value=0.5),
+        ):
+            result = context_cues.generate_impossible_line(listener_patterns=None)
+        assert result in context_cues._NEW_LISTENER_LINES
