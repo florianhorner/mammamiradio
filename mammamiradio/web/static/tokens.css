@@ -16,9 +16,15 @@
   --bg:              #14110F;
   --bg-elevated:     #1C1714;
   --bg2:             #1C1714;  /* legacy alias for --bg-elevated — used by listener.html pre-migration */
-  --surface:         #251E19;
-  --surface-hover:   #2E2520;
-  --surface-strong:  #362B25;
+  /* Surface fills lifted hard against body bg. Earlier passes (#251E19 →
+   * #2E2620 / #362B25 → #40342C) sat at 1.25:1 / 1.56:1 — at or below the
+   * ~1.5:1 perceptual threshold, which left listener cards reading as void
+   * on real displays even when DOM rendering was correct. Current values
+   * land surface at ~2.07:1 and surface-strong at ~2.96:1 vs body bg, so
+   * schedule / dedica / about cards register as panels at a glance. */
+  --surface:         #54453A;  /* was #2E2620 — ~2.07:1 vs --bg */
+  --surface-hover:   #5E4D40;
+  --surface-strong:  #6E5B49;  /* was #40342C — ~2.96:1 vs --bg */
 
   /* ── Sun — golden highlight (brand anchor) ── */
   --sun:             #F4D048;
@@ -55,8 +61,13 @@
   /* ── Warm amber accent ── */
   --accent-warm:     #E8A030;
 
-  /* ── Structural lines ── */
-  --line:            rgba(245, 237, 216, 0.18);
+  /* ── Structural lines ──
+   * --line is repo-wide (admin sidebar dividers, panel borders, log panel etc.)
+   * — kept subtle at 10% so the admin operator surface stays calm and dense.
+   * --line-strong is the listener-card border (about-grid, hero-stage, dediche,
+   * ghost button) — bumped from 16% to 32% so cards are visible at rest on the
+   * warm-dark page background. */
+  --line:            rgba(245, 237, 216, 0.10);
   --line-strong:     rgba(245, 237, 216, 0.32);
 
   /* ── Semantic (blue for success — red-green colorblind safe) ── */

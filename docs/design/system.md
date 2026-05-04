@@ -51,9 +51,9 @@ Restrained — golden accent + warm neutrals. Color is rare and meaningful. The 
   /* Espresso foundation — warm dark, not cold charcoal */
   --bg:            #14110F;   /* page background */
   --bg-elevated:   #1C1714;   /* raised surfaces, ticker bg */
-  --surface:       #251E19;   /* card backgrounds */
-  --surface-hover: #2E2520;   /* interactive hover */
-  --surface-strong:#362B25;   /* emphasized surfaces */
+  --surface:       #54453A;   /* card backgrounds — ~2.07:1 vs --bg, schedule + hero stage */
+  --surface-hover: #5E4D40;   /* interactive hover */
+  --surface-strong:#6E5B49;   /* emphasized — ~2.96:1 vs --bg, about-card, dedica, ghost button */
 
   /* Text hierarchy */
   --cream:         #F5EDD8;   /* primary text */
@@ -77,8 +77,8 @@ Restrained — golden accent + warm neutrals. Color is rare and meaningful. The 
   --news:          #e07038;   /* news_flash segment type — warm orange, distinct from warning amber */
 
   /* Structural */
-  --line:          rgba(245,237,216,0.10);  /* borders, dividers */
-  --line-strong:   rgba(245,237,216,0.16);  /* focused input borders */
+  --line:          rgba(245,237,216,0.10);  /* admin dividers, panel borders — kept subtle */
+  --line-strong:   rgba(245,237,216,0.32);  /* listener cards, hero stage, ghost button — visible at rest */
   --shadow:        rgba(0,0,0,0.35);
 }
 ```
@@ -256,7 +256,7 @@ Organic momentum-based drift with overshoot-and-settle locking. Keep the wobble.
 ## Components
 
 ### Cards
-Every card surface is **opaque** `--surface` (#251E19). Never semi-transparent.
+Every card surface is **opaque** `--surface` (#54453A). Never semi-transparent.
 ```css
 .card {
   background: var(--surface);

@@ -1,5 +1,6 @@
 // Service Worker for Mamma Mi Radio PWA
-const CACHE_NAME = 'radio-itali-v2';
+// Bump CACHE_NAME on any visual/asset change. Old cache is purged on activate.
+const CACHE_NAME = 'radio-itali-v4';
 const PRECACHE_URLS = [
   '/listen',
   '/static/manifest.json',
