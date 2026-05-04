@@ -47,4 +47,4 @@ jobs:
         run: pytest tests/audio/test_normalizer_unit.py tests/audio/test_normalizer_extended.py -v
 
       - name: Run normalizer real-ffmpeg integration tests
-        run: pytest tests/audio/test_normalizer_real_ffmpeg.py -v
+        run: pytest tests/audio/test_normalizer_real_ffmpeg.py -m requires_ffmpeg -v

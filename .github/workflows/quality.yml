@@ -67,16 +67,11 @@ jobs:
       - name: Changelog content lint
         run: bash scripts/check-changelog-lint.sh
 
-      # On PRs: run the test suite as a dedicated step BEFORE the coverage ratchet.
-      # Without this, pytest failures inside coverage-ratchet.py were silently swallowed
-      # whenever coverage parsing populated module rows — every PR since #279 was green
-      # under red tests until this gate landed.
-      - name: Pytest (test gate, runs before coverage ratchet)
-        if: github.event_name == 'pull_request'
-        run: pytest tests/ -q
-
-      # On PRs: enforce per-module coverage floors (no regressions allowed)
-      - name: Coverage gate (per-module floors)
+      # On PRs: enforce per-module coverage floors (no regressions allowed).
+      # `coverage-ratchet.py check` runs pytest internally with coverage flags
+      # and hard-exits on returncode != 0 (scripts/coverage-ratchet.py:72-78),
+      # so it doubles as the test gate — no separate `pytest tests/` step needed.
+      - name: Coverage gate (runs pytest + per-module floors)
         if: github.event_name == 'pull_request'
         run: python scripts/coverage-ratchet.py check
 

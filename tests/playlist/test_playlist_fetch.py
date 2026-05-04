@@ -52,10 +52,18 @@ def test_no_credentials_returns_demo_tracks(config, monkeypatch):
         assert t.title in demo_titles
 
 
-def test_no_credentials_shuffles_when_configured(config):
+def test_no_credentials_shuffles_when_configured(config, monkeypatch):
+    # Force the DEMO_TRACKS path (matches the sibling test above) so this runs
+    # in milliseconds instead of falling through to real charts I/O 10 times.
+    monkeypatch.delenv("MAMMAMIRADIO_ALLOW_YTDLP", raising=False)
+    config.allow_ytdlp = False
     config.playlist.shuffle = True
-    # Run multiple times -- at least one ordering should differ (probabilistic but near-certain)
-    results = [tuple(t.title for t in fetch_startup_playlist(config)[0]) for _ in range(10)]
+    with (
+        patch("mammamiradio.playlist.playlist._load_local_music_tracks", return_value=[]),
+        patch("mammamiradio.playlist.playlist._load_demo_asset_tracks", return_value=[]),
+    ):
+        # Run multiple times — at least one ordering should differ (probabilistic but near-certain)
+        results = [tuple(t.title for t in fetch_startup_playlist(config)[0]) for _ in range(10)]
     # With 10 tracks shuffled 10 times, extremely unlikely all orderings are identical
     assert len(set(results)) > 1
 

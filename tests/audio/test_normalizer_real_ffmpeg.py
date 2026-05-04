@@ -13,17 +13,17 @@ Skipped automatically when ffmpeg is not in PATH.
 
 from __future__ import annotations
 
-import shutil
 import subprocess
 
 import pytest
 
 from mammamiradio.audio.normalizer import normalize
 
-pytestmark = pytest.mark.skipif(
-    shutil.which("ffmpeg") is None,
-    reason="ffmpeg not in PATH — skipping real-ffmpeg integration tests",
-)
+# Use the project-wide `requires_ffmpeg` marker (registered in pyproject.toml)
+# instead of skipif. The default `addopts = "-m 'not requires_ffmpeg'"` means
+# these tests aren't even collected on default runs — no skip overhead. The
+# pi-smoke.yml workflow opts back in with `-m requires_ffmpeg`.
+pytestmark = pytest.mark.requires_ffmpeg
 
 
 def _make_silent_mp3(path) -> None:

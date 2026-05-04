@@ -142,6 +142,9 @@ def test_guardrail_patterns_pass_on_current_copy():
 
 def test_rationale_with_ballad_lover_pattern():
     """Includes ballad-specific reason when listener is a ballad_lover."""
+    # Deterministic seed — pytest-randomly reseeds per test, so an unlucky seed
+    # could miss the 1-in-24 pattern line across all 200 picks (CI flake observed).
+    random.seed(0)
     track = Track(title="Test", artist="Artist", duration_ms=200000)
     listener = ListenerProfile()
     # 3+ slow songs, none skipped → ballad_lover
@@ -161,6 +164,7 @@ def test_rationale_with_ballad_lover_pattern():
 
 def test_rationale_with_energy_seeker_pattern():
     """Includes energy-specific reason when listener is an energy_seeker."""
+    random.seed(0)  # see test_rationale_with_ballad_lover_pattern for rationale
     track = Track(title="Test", artist="Artist", duration_ms=200000)
     listener = ListenerProfile()
     # 3+ high-energy completions → energy_seeker
@@ -180,6 +184,7 @@ def test_rationale_with_energy_seeker_pattern():
 
 def test_rationale_with_bails_on_intros_pattern():
     """Includes intro-specific reason when listener bails on intros."""
+    random.seed(0)  # see test_rationale_with_ballad_lover_pattern for rationale
     track = Track(title="Test", artist="Artist", duration_ms=200000)
     listener = ListenerProfile()
     # 2+ intro bails (skipped in < 30s) → bails_on_intros
