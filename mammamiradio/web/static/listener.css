@@ -142,6 +142,8 @@ body::before {
 /* Stats */
 .mmr-stats { display: flex; gap: 28px; margin-top: 22px; }
 .mmr-stat-n { font-family: var(--font-display); font-style: italic; font-weight: 700; font-size: 24px; color: var(--brand-primary, var(--sun)); }
+/* Host stat is a name string, not a hero number — scale + font reset so it doesn't read as a track title. */
+.mmr-stat-n#stat-hosts { font-family: var(--font-body); font-style: normal; font-weight: 600; font-size: 14px; line-height: 1.4; color: var(--cream); }
 .mmr-stat-l { font-size: 11px; color: var(--muted); margin-top: 2px; }
 
 /* Casa card */
@@ -273,8 +275,8 @@ body::before {
 
 /* About */
 .mmr-about-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; }
-.mmr-about-card { background: var(--surface-strong); border: 1px solid var(--line-strong); border-radius: 12px; padding: 20px 22px; transition: border-color 180ms, transform 180ms; }
-.mmr-about-card:hover { border-color: rgba(244,208,72,0.3); transform: translateY(-2px); }
+.mmr-about-card { background: var(--surface-strong); border: 1px solid var(--line-strong); border-radius: 12px; padding: 20px 22px; box-shadow: 0 2px 10px rgba(0, 0, 0, 0.3); transition: border-color 180ms, transform 180ms, box-shadow 180ms; }
+.mmr-about-card:hover { border-color: rgba(244, 208, 72, 0.4); transform: translateY(-2px); box-shadow: 0 6px 18px rgba(0, 0, 0, 0.5); }
 .mmr-about-card .eyebrow { font-family: var(--font-body); font-size: 10px; font-weight: 700; letter-spacing: 0.22em; text-transform: uppercase; color: var(--brand-primary, var(--sun2)); margin-bottom: 12px; display: block; }
 .mmr-about-card p { font-size: 14px; line-height: 1.6; color: var(--cream-dk); margin: 0; }
 
