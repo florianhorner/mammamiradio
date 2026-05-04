@@ -14,24 +14,20 @@ html, body {
   min-height: 100vh;
   min-height: 100svh;
   overscroll-behavior-x: contain;
+  /* Keep the listener atmosphere in the normal page background. A fixed
+     body::before overlay can become its own Safari compositor layer and hide
+     scrolled content in the live viewport while full-page screenshots look OK. */
   background:
+    radial-gradient(400px 400px at 88% 14%, rgba(244,208,72,0.10), transparent 70%),
     url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='200' height='200' filter='url(%23n)' opacity='0.035'/%3E%3C/svg%3E") repeat,
-    linear-gradient(180deg, #1A120C 0%, var(--bg) 10%, var(--bg) 100%);
+    linear-gradient(180deg, #1E1610 0%, #14110F 12%, var(--bg) 100%);
   font-family: var(--font-body);
   color: var(--cream);
   line-height: 1.55;
 }
-/* Body background: espresso glow + grain */
-body::before {
-  content: "";
-  position: fixed; inset: 0;
-  background:
-    radial-gradient(400px 400px at 88% 14%, rgba(244,208,72,0.10), transparent 70%),
-    linear-gradient(180deg, #1E1610 0%, #14110F 12%, #14110F 100%);
-  pointer-events: none; z-index: 0;
-}
 
 /* Tricolor */
+.tricolor-band { position: relative; z-index: 1; }
 .mmr-tricolor { display: flex; width: 140px; height: 3px; border-radius: 1.5px; overflow: hidden; margin: 10px 0 18px; }
 .mmr-tricolor.thin { width: 110px; height: 2px; }
 .mmr-tricolor .g { flex: 1; background: var(--flag-green); }
@@ -101,6 +97,11 @@ body::before {
   grid-template-columns: 1fr 1fr;
   grid-template-rows: auto auto 1fr;
   column-gap: 40px;
+}
+
+.mmr-stage,
+.mmr-section {
+  scroll-margin-top: 96px;
 }
 .mmr-stage-header {
   display: flex; align-items: center; gap: 16px;

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import time
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -15,6 +16,7 @@ from fastapi import FastAPI
 from mammamiradio.core.config import load_config
 from mammamiradio.core.models import Segment, SegmentType, StationState, Track
 from mammamiradio.web.streamer import (
+    _ASSET_VERSION,
     LiveStreamHub,
     _persist_completed_music,
     router,
@@ -799,6 +801,8 @@ async def test_get_root_serves_listener_page():
     assert "Ascolta Ora" in resp.text
     assert "Manda al DJ" in resp.text  # dediche form section
     assert 'data-cap="ha"' in resp.text  # capability-conditional rendering hooks present
+    assert re.fullmatch(r"\d+\.\d+\.\d+-[a-f0-9]{8}", _ASSET_VERSION)
+    assert f"/static/listener.css?v={_ASSET_VERSION}" in resp.text
 
 
 @pytest.mark.asyncio
@@ -1134,6 +1138,27 @@ async def test_sw_js_returns_javascript():
     assert resp.status_code == 200
     assert "javascript" in resp.headers["content-type"]
     assert "CACHE_NAME" in resp.text
+
+
+@pytest.mark.asyncio
+async def test_sw_js_keeps_css_and_js_network_first():
+    """Visual assets must not stay cache-first after a UI bug ships."""
+    app = _make_test_app()
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.get("/sw.js")
+
+    assert resp.status_code == 200
+    text = resp.text
+    assert "radio-itali-v5" in text
+    assert "const isFreshAsset" in text
+    assert "path.endsWith('.css')" in text
+    assert "path.endsWith('.js')" in text
+    assert "const isStableInstallAsset" in text
+
+    stable_cache_block = text.split("const isStableInstallAsset", maxsplit=1)[1]
+    assert "path.endsWith('.css')" not in stable_cache_block
+    assert "path.endsWith('.js')" not in stable_cache_block
 
 
 @pytest.mark.asyncio

@@ -38,6 +38,16 @@ def _read_listener_css() -> str:
     return _COMMENT_RE.sub("", LISTENER_CSS.read_text(encoding="utf-8"))
 
 
+def _rule_bodies_for_selector(text: str, selector: str) -> list[str]:
+    rule_re = re.compile(r"([^{}]+)\{([^}]*)\}", re.DOTALL)
+    bodies: list[str] = []
+    for selector_block, body in rule_re.findall(text):
+        selectors = [s.strip() for s in selector_block.split(",")]
+        if selector in selectors:
+            bodies.append(body)
+    return bodies
+
+
 def test_phone_breakpoint_collapses_or_hides_nav_anchor_links() -> None:
     """The <=600px @media block must hide or wrap the listener nav anchor links.
 
@@ -127,4 +137,35 @@ def test_body_uses_modern_viewport_units_for_ios() -> None:
         "html/body must keep `overscroll-behavior-x: contain` to prevent the "
         "horizontal rubber-band snap that triggered the original `In Onda` "
         "tap regression on phones."
+    )
+
+
+def test_listener_uses_no_fixed_body_overlay() -> None:
+    """The listener background must not be a fixed body pseudo-element.
+
+    Real Safari viewport compositing can keep fixed pseudo-elements in a
+    separate layer that hides scrolled content. Full-page screenshots flatten
+    the document and miss this class of bug, so pin the CSS shape directly.
+    """
+    text = _read_listener_css()
+    fixed_overlay = re.search(r"body::before\s*\{[^}]*position\s*:\s*fixed", text, re.DOTALL)
+    assert not fixed_overlay, (
+        "listener.css must not use `body::before { position: fixed; ... }` "
+        "for page atmosphere. Put the glow/grain on `html, body` instead so "
+        "real viewport compositing cannot cover scrolled elements."
+    )
+
+
+def test_listener_anchor_targets_clear_sticky_nav() -> None:
+    """Listener anchors must land below the sticky nav in real viewports."""
+    text = _read_listener_css()
+    scroll_margin_re = re.compile(r"scroll-margin-top\s*:\s*(?!0(?:px|rem|em|%)?\s*;)[^;]+;")
+    missing = [
+        selector
+        for selector in (".mmr-stage", ".mmr-section")
+        if not any(scroll_margin_re.search(body) for body in _rule_bodies_for_selector(text, selector))
+    ]
+    assert not missing, (
+        "Listener anchor targets need non-zero `scroll-margin-top` so sticky "
+        "navigation does not hide the section when users jump or scroll to it: " + ", ".join(missing)
     )

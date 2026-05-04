@@ -65,6 +65,19 @@ After `addon-build.yml` builds the image, run a 30s smoke test:
 Catches "server starts but can't produce audio" — the exact production failure class.
 **Files:** `.github/workflows/addon-build.yml`
 
+### Add-on/upstream release consolidation
+**Priority:** P2
+**Source:** 2026-05-04 listener viewport debugging
+
+Static/listener fixes can land in upstream `main` and `CHANGELOG.md [Unreleased]`
+while HA Green users still run the previous add-on version until
+`ha-addon/mammamiradio/config.yaml` is bumped and GHCR images are rebuilt.
+Consolidate the release flow so user-visible HA fixes cannot remain upstream-only
+without an explicit add-on delivery decision.
+
+**Affected files:** release scripts, `addon-build.yml`, `pyproject.toml`,
+`ha-addon/mammamiradio/config.yaml`, both changelogs.
+
 ## Admin UI — Regia (Time-Horizon Stack)
 
 **Source:** `/research` + `/design-shotgun` on 2026-04-21 → approved direction is Concept A modified (Variant E2 warmth iteration).
