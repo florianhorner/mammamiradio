@@ -119,7 +119,8 @@
     const stationName = localStorage.getItem('stationName') || 'Mamma Mi Radio';
     // Album shows on lock screen / CarPlay alongside title+artist. Station
     // identity only \u2014 no city/frequency hardcoded here (those belong in
-    // radio.toml; hardcoding leaked stale "Milano" through this surface).
+    // radio.toml [brand]; previously leaked stale city values through this
+    // surface even after the visible templates were updated).
     const album = stationName;
     let title, artist;
     const label = np.label || '';
@@ -138,7 +139,7 @@
     } else if (np.type === 'news_flash' || np.type === 'news') {
       artist = stationName; title = label || 'News flash';
     } else if (np.type === 'stopped') {
-      // Idle state — never leak the internal "Session stopped" label to the
+      // Idle state — never leak the internal stopped-segment label to the
       // OS-level media surface (lock screen, Bluetooth, CarPlay, AirPlay).
       // Mirrors the DOM-side sanitization in renderNowPlayingStrip().
       artist = stationName; title = 'In pausa';
@@ -194,7 +195,7 @@
       trackEl.textContent = 'Ben arrivato';
       artistEl.textContent = 'Mamma Mi Radio';
     } else if (np.type === 'stopped') {
-      // Idle state — never leak the internal "Session stopped" / "STOPPED" labels to the listener.
+      // Idle state — never leak internal stopped-segment labels to the listener.
       trackEl.textContent = 'In pausa';
       artistEl.textContent = '';
     } else {
