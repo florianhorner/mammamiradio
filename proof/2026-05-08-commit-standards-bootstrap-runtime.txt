@@ -1,0 +1,90 @@
+commit-standards-bootstrap — runtime proof
+============================================
+
+Date: 2026-05-08 (UTC)
+PR: #302
+Branch: florianhorner/commit-standards-bootstrap
+Engineering-standards SHA pin: d2824d4cc7630a80efae3fc273b273f124a5e19a
+Bootstrap script: florianhorner/engineering-standards/bootstrap-repo.sh
+
+----------------------------------------------------------------
+1. bootstrap-repo.sh execution (idempotent, second run)
+----------------------------------------------------------------
+
+-- Pre-flight --
+    git repo detected: florianhorner/commit-standards-bootstrap
+    gh CLI authenticated as florianhorner
+    python3: Python 3.9.6
+
+-- Steps --
+[1/12] vendor commit-rules.json @ d2824d4 ... PASS
+[2/12] install .commitlintrc.json ... PASS
+[3/12] install .github/workflows/commit-lint.yml pinned to d2824d4 ... PASS
+[4/12] patch .github/dependabot.yml (commit-message.prefix = chore) ... PASS
+[5/12] update CLAUDE.md ... PASS
+[6/12] update CONTRIBUTING.md ... PASS
+[7/12] drop AUTHOR-NOTES.md if fork ... not a fork — AUTHOR-NOTES.md skipped (correct behavior) PASS
+[8/12] generate .git/hooks/commit-msg ... PASS
+[9/12] validator dry-run vs last 3 commits ... WARN 1/3 existing commits would fail (informational, not blocking)
+[10/12] verify GitHub Actions enabled ... PASS
+[11/12] compile remaining manual checklist ... PASS
+[12/12] compute TTHW ... PASS
+
+== Summary ==
+Files touched (7):
+  .config/commit-rules.json
+  .config/commit-rules.meta.json
+  .commitlintrc.json
+  .github/workflows/commit-lint.yml
+  CLAUDE.md
+  CONTRIBUTING.md
+  .git/hooks/commit-msg
+
+Checks: 11 pass, 1 warn, 0 fail
+Bootstrapped in 3s. Target: <5min for first compliant commit + green CI.
+
+----------------------------------------------------------------
+2. Local commit-msg hook acceptance
+----------------------------------------------------------------
+
+The PR's own commit (37495eb9) was accepted by the freshly installed
+.git/hooks/commit-msg validator on first try. Subject:
+
+    chore(ci): adopt engineering-standards commit-message system
+
+Why-line, Tool/Skill-Run trailers, Co-Authored-By all present and parsed
+correctly. No --no-verify bypass used.
+
+----------------------------------------------------------------
+3. CI evidence (PR #302, head 37495eb9)
+----------------------------------------------------------------
+
+commit-lint / validate commit messages   PASS   13s
+  https://github.com/florianhorner/mammamiradio/actions/runs/25527207615/job/74925422564
+
+Analyze (javascript-typescript)          PASS   1m1s
+Analyze (python)                         PASS   55s
+Analyze (actions)                        PASS   42s
+CodeQL                                   PASS   2s
+pi-smoke                                 PASS   36s
+quality                                  PASS   2m12s
+submit-pypi                              PASS   38s
+CodeRabbit                               PASS   review completed
+
+verify / Verify PR proof block           FAIL   (this file fixes it — initial PR body lacked ## Proof block)
+
+----------------------------------------------------------------
+4. What this proves
+----------------------------------------------------------------
+
+- Bootstrap script is idempotent (second run produced identical output minus
+  a fetched_at timestamp; trivially reverted to keep the diff clean).
+- The vendored commit-lint workflow runs on PR open and validated this PR's
+  own commit subject + body against the d2824d4 spec. Forward-only
+  enforcement begins on this branch's merge to main.
+- Local hook + CI watchdog are now layered: the same rules trigger at
+  commit-msg time (developer machine) and PR open time (GitHub Actions).
+- mammamiradio is correctly identified as own-repo (not fork) — bootstrap
+  skipped AUTHOR-NOTES.md as designed.
+
+End of file.
