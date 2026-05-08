@@ -41,29 +41,12 @@ Added `duration_sec` to `now_streaming` payload (models.py). Regia elapsed compu
 Imported `_ffprobe_duration_sec` in producer.py. Added probe in prewarm path (before `queue.put`) and at the main convergence point (`if segment:` block before `_queue_segment`). Covers all segment types in one place. Test timing mock added to `test_drain_guard_inserts_canned_clip_on_queue_drain`.
 
 ### Host name selector hardening
-**Priority:** P3
-**Source:** /plan-eng-review on 2026-04-25 (florianhorner/fix/radio-plan)
-
-`admin.html:1539-1574` uses `esc()` for HTML escaping before interpolating host names into onclick handlers and data attributes. The CSS attribute selectors at lines 1569, 1574 use template literals with raw (un-escaped) names: `` `[data-h="${n}"]` ``. Names with special CSS characters (quotes, brackets, escaped chars) cause silent no-match — UI fails closed (no XSS, just brittle).
-
-**Why:** rejected as a real bug in the radio-plan review, but the brittleness will surface eventually as someone names a host with a special character.
-
-**Pros:** robustness improvement.
-
-**Cons:** very low priority; no current user impact.
-
-**Context:** wrap the selector access in `CSS.escape()` or normalize host names to alphanumeric IDs internally and only show the display name in UI text.
-
-**Depends on / blocked by:** none.
-
-**Affected files:** `mammamiradio/web/templates/admin.html` (or its replacement).
+**Completed:** 2026-05-08 (v2.11.0 — #284)
+The two `` `[data-h="${n}"]` `` template literals in `updHost()` and `applyHostPreset()` now wrap `n` with `CSS.escape()`. Host names containing CSS special characters (quotes, brackets, dots) no longer cause silent no-match — the host block is found and the personality sliders work for operators with unconventional host names. **Affected files:** `mammamiradio/web/templates/admin.html`.
 
 ### Docker container smoke test in CI
-After `addon-build.yml` builds the image, run a 30s smoke test:
-- `docker run` → wait 10s → `curl -f /health`
-- Check logs contain no `Queue empty` warning in first 20s
-Catches "server starts but can't produce audio" — the exact production failure class.
-**Files:** `.github/workflows/addon-build.yml`
+**Completed:** 2026-05-08 (v2.11.0 — #284)
+After both amd64 and aarch64 images build, the new `smoke` job in `addon-build.yml` pulls the amd64 image and runs a 40-second live test: hits `/healthz`, asserts `status != 'failing'` and `queue_empty_elapsed_s <= 30`. Catches "server starts but can't produce audio" — the exact production failure class — without needing a Pi runner. **Files:** `.github/workflows/addon-build.yml`.
 
 ### Add-on/upstream release consolidation
 **Priority:** P2
@@ -105,18 +88,8 @@ Phase 2 per IA doc. Screen 3 is AI content approval (banter + ad preview with au
 The prototype uses Italian labels (CODA, REVISIONE, PALINSESTO, MOTORE, PANICO). Once Screens 2–5 are built, audit all existing admin.html strings and normalize to the same voice.
 
 ### P2 — Italianize admin.html panel contents (Approach B)
-PR #248 (Approach A) italianized the admin shell: sidebar nav, h2 titles, eyebrows, top status panel. Panel **contents** are still English — visible to the operator and creating mixed-language whiplash. Scope:
-- Top-bar `Queue banter` CTA (`admin.html:1118`)
-- Trigger card titles + descriptions: `Queue banter / Force ad break / News flash / Chaos incoming` (`admin.html:1156-1172`)
-- Quick-action chips: `Trim banter / Trim ads / Hot reload / Purge queue / Flag track` (`admin.html:1179-1183`)
-- Conduttori host UI: preset names `BALANCED / CALM / HYPE`, slider labels `ENERGY / CHAOS / WARMTH / VERBOSITY / NOSTALGIA`, axis arrays `AX_LOW`/`AX_HIGH` (`admin.html:1944-1951`), host-block template (`admin.html:2013`)
-- Search placeholder + button (`admin.html:1265`)
-- Engine room status table (`admin.html:2172-2175`) and onboarding step checklist (`admin.html:1310, 1335`)
-- Filter chips + table column headers (JS-rendered — find the renderer)
-- Toast strings (`admin.html:1405`)
-- `75 tracks` → `75 tracce` next to `Musica & Coda`
-- `ON AIR` pill → `IN ONDA` to match listener
-**Effort:** ~30-40 string changes, half in JS template strings. **Risk:** low (label-only). **Source:** /qa report `.gstack/qa-reports/qa-report-admin-2026-04-27.md`.
+**Completed:** 2026-05-08 (v2.11.0 — #284)
+All admin panel contents now read in Italian: trigger card titles (`Aggiungi banter / Forza pubblicità / Notizia flash / Caos in arrivo`), quick-action chips (`Taglia banter / Taglia pubblicità / Ricarica live / Svuota coda / Segnala traccia`), filter pills (`Tutto / Musica / Pubblicità`), Conduttori preset names (`EQUILIBRATO / CALMO`) and slider axis labels (`Energia / Caos / Calore / Verbosità`), search placeholder + button (`Cerca musica / Cerca`), engine room headings, onboarding subheadings, toast strings, and the `ON AIR → IN ONDA` pill. API endpoint strings, JS variable names, CSS class names, and `data-` identifiers are unchanged. Eliminates the mixed-language whiplash that remained after PR #248 (Approach A) italianized only the panel shell.
 
 ## Process & Discipline
 

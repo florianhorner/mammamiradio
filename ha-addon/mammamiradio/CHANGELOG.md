@@ -1,10 +1,27 @@
 # Changelog
 
-## 2.10.11
+## 2.11.0
+
+The big one for the addon: Italian-trending music as the default Jamendo source, the listener page reads correctly at rest on every viewport we test on, the admin panel is fully in Italian, and the source tree is reshaped around seven subpackages.
 
 ### Added
 
 - **Jamendo `country` and `order` filters — Italian-trending music as the default Jamendo source.** Two new fields in `[playlist]` (`jamendo_country`, `jamendo_order`) plus matching `JAMENDO_COUNTRY` / `JAMENDO_ORDER` env-var overrides, validated at config load. The addon's default radio.toml now ships `country = "ITA"` + `order = "popularity_week"`, so the Jamendo source surfaces Italian-trending tracks instead of any-country pop. Same engine + different `country=` is the foundation for future country-specific radio "skins".
+- **`--ai-purple` semantic token** in `tokens.css`: `#A855F7` reserved for AI-generated segments so operators can distinguish AI content from human/music at a glance.
+- **Accessibility (WCAG 2.1 AA)**: `<html lang="it">` on `admin.html`; sr-only labels on song-request inputs in `listener.html`; `aria-hidden` on decorative tricolor; `.sr-only` and `:focus-visible` utilities in `base.css`; `aria-pressed` synced to play button.
+- **Content-based asset fingerprinting** for `/static/*.css` and `/static/*.js`: visual fixes invalidate stale browser URLs even without an addon-version bump.
+- **Docker CI smoke test** in `addon-build.yml`: a 40-second live test runs against the freshly built amd64 image — hits `/healthz`, asserts `status != 'failing'` and `queue_empty_elapsed_s <= 30`. Catches "server starts but can't produce audio" without a Pi runner.
+
+### Changed
+
+- **`mammamiradio/` subpackaged into seven subpackages** (`core`, `audio`, `playlist`, `hosts`, `home`, `scheduling`, `web`). Public addon entrypoint `mammamiradio.main:app` unchanged. **Migration note** for any out-of-tree script that imports modules directly: flat paths like `mammamiradio.config`, `mammamiradio.streamer`, `mammamiradio.playlist`, etc. no longer resolve; rewrite to subpackage paths (`mammamiradio.core.config`, `mammamiradio.web.streamer`, …).
+- **Repo root reduced to four top-level files; everything else moved under `docs/`.** Cleaner top-level navigation for operators reading the source.
+- **Admin panel fully Italianized**: trigger card titles, quick-action chips, filter pills, preset names, slider axis labels, search placeholder/button, engine room headings, setup subheadings, toast strings, and `ON AIR` → `IN ONDA` are now Italian. Eliminates the mixed-language whiplash that remained after the panel shell was italianized but content strings stayed in English.
+- **Service worker switched to network-first** for `/listen`, CSS, JS, and `sw.js` itself. Was cache-first; UI fixes were getting stuck behind stale caches and the only escape was a hard-refresh + version bump. Now visual fixes reach a returning listener on the next request.
+- **Design system refresh**: `tokens.css` / `base.css` / `waveform.js` extracted; `admin.html` migrated to canonical base.css components; `listener.html` rewritten to a five-band radio-station composition; `/dashboard` surface deleted, redirects to `/admin`.
+- **Ad creative system extracted** into `ad_creative.py` (closes #161).
+- **Dashboard CSS/JS extraction** (PR #203) by [@ashika-rai-n](https://github.com/ashika-rai-n).
+- **`docs/architecture.md`** updated to describe Jamendo's new country+order filter behavior and the soft-migration path.
 
 ### Fixed
 
@@ -13,41 +30,77 @@
 - **Local `music/` is a real startup source.** When `yt-dlp` is disabled and Jamendo isn't configured but MP3s exist in `music/`, they load as a first-class source instead of falling through to demo assets with a misleading warning.
 - **Charts `source_id` numerical drift** (`apple_music_it_top_50` → `apple_music_it_top_100`): the URL fetches up to 100 tracks; the persisted label now matches. Transparent migration on read.
 - Stale test-assertion path in `tests/scheduling/test_producer_unit.py:573`. The CI swallow had been hiding this failure.
-
-### Changed
-
-- **`mammamiradio/` subpackaged into seven subpackages** (`core`, `audio`, `playlist`, `hosts`, `home`, `scheduling`, `web`). Public addon entrypoint `mammamiradio.main:app` unchanged.
-- **Repo root reduced to four top-level files; everything else moved under `docs/`.** Cleaner top-level navigation for operators reading the source.
-- **`docs/architecture.md`** updated to describe Jamendo's new country+order filter behavior and the soft-migration path.
-
-## Unreleased
-
-### Removed
-
-- **`/regia` route + `regia.html` template** — the "Regia" *design language* shipped on `/admin` (admin panel title is "Mamma Mi Radio — Regia"); the standalone `/regia` URL served an obsolete prototype dummy and is gone. Operators land on `/admin` for the control room.
-- **Dead `[sonic_brand]` config keys** `short_sting` and `sweeper_probability` — defined in `radio.toml` and `SonicBrandSection` but never read by production code. Removed atomically across both `radio.toml` files (byte-for-byte sync preserved) and the dataclass; `load_config()` tolerates the legacy keys via `pop()` so older operator configs still load cleanly.
-- **Dead onboarding/taste-crate copy** in `mammamiradio/playlist/track_rationale.py` (`TASTE_CRATES`, `ONBOARDING_NARRATIVE`, `STATION_BIRTH_SCRIPT`, `GUARDRAIL_RULES`, `TasteCrate`) and matching dead pickers in `mammamiradio/hosts/context_cues.py` (`pick_taste_line`, `pick_psychic_prediction`, `pick_taste_mirror_intro` plus their data tables).
-
-### Added
-
-- **`--ai-purple` semantic token** in `tokens.css`: `#A855F7` reserved for AI-generated segments.
-- **Accessibility (WCAG 2.1 AA)**: `<html lang="it">` on `admin.html`; sr-only labels on song-request inputs in `listener.html`; `aria-hidden` on decorative tricolor; `.sr-only` and `:focus-visible` utilities in `base.css`; `aria-pressed` synced to play button.
-
-### Fixed
-
-- **Producer wakes immediately on session resume**: replaced 1-second `asyncio.sleep` poll with `asyncio.wait_for(resume_event.wait(), timeout=1.0)`. Resume lag drops from worst-case 1s to milliseconds.
-- **Silence fallback never queues a silent track**: audio quality circuit breaker now recycles the last-known-good music file or drops the segment rather than letting silent audio reach the queue.
-- **LRU cache eviction respects playback queue**: `evict_cache_lru` accepts `protected_paths: set[Path]` — currently-queued norm paths are never deleted mid-stream.
+- **Listener cards visible at rest**: surface tokens lifted hard against the espresso body bg so the Schedule, Dedica, and About cards register as panels at a glance, not page bg with a hairline border.
+- **Listener page sections silently hidden on Safari and Chrome**: the fixed-position `body::before` glow overlay could be promoted into a compositor layer that occluded scrolled real-viewport content. Removed the fixed overlay; the glow and grain stay in the normal page background. Anchor scroll margins added so sticky navigation cannot hide a target section after a hash jump.
+- **Listener now-playing strip never shows "Session stopped"**: idle state used to leak the internal segment label into title and artist slots and broadcast it to the lock screen / Bluetooth / CarPlay via Media Session metadata. Now renders "In pausa" everywhere, with no artist sub-line.
+- **Listener page on Safari < 16.2**: `.status-chip` and `.status-dot` use `color-mix()` for their tinted background; older Safari can't parse it and was rendering with no chip background. Added a literal-rgba fallback line above the `color-mix()` declaration.
+- **Service worker `/listen` precache restored**: a freshly-installed PWA can now open `/listen` cold-cache offline.
+- **Service worker catch-all branch for same-origin GETs**: brand assets (`logo.svg`, future webfonts, future static images) get network-with-cache-fallback handling instead of silently bypassing the cache.
+- **Listener mobile** — header overflowed phone viewport, broke vertical scroll, snapped on `In Onda` tap. The pre-Volare phone breakpoint targeted a class name that PR #235 had renamed; never ported. Three layered fixes: phone-breakpoint nav hide, `100svh` for iOS Safari address-bar collapse, `overscroll-behavior-x: contain` to disable horizontal rubber-band. Form inputs bumped to 16 px so iOS Safari stops auto-zooming on focus.
+- **Listener brand wordmark — golden "Mi" accent restored** (regression from the Volare class rename).
+- **Mobile tap latency and tap-highlight flash on every interactive control**: `-webkit-tap-highlight-color: transparent` on the universal reset and `touch-action: manipulation` on interactive elements. Removes the iOS Safari grey/blue tap-highlight rectangle and the 300 ms double-tap-to-zoom delay. Pinch-zoom on the page itself preserved.
+- **Admin brand wordmark — golden "Mi" accent restored.**
+- **Admin form fields** no longer trigger iOS Safari auto-zoom on focus (search box and key fields bumped from 13 px to 16 px).
+- **Safari banter and news segments cut off after 6–9 seconds**: Safari honoured the Xing/Info VBR duration header embedded by ffmpeg's loudnorm filter and fired `ended` at the declared duration. Two-layer fix: `‑write_xing 0` added to ffmpeg output args; stream-time stripper hardened to handle "free format" frames.
+- **Jamendo source-strict downloads**: Jamendo tracks fetch from `direct_url` only — avoids deterministic failures where yt-dlp treated the Jamendo track ID as a YouTube video ID. Cache keys are source-aware so Jamendo and YouTube tracks with the same slug never collide.
+- **Producer wakes immediately on session resume**: 1-second `asyncio.sleep` poll replaced with `asyncio.wait_for(resume_event.wait(), timeout=1.0)`. Resume lag drops from worst-case 1s to milliseconds.
+- **Silence fallback never queues a silent track**: audio quality circuit breaker recycles the last-known-good music file or drops the segment rather than letting silent audio reach the queue.
+- **LRU cache eviction respects the playback queue**: currently-queued norm paths are never deleted mid-stream.
 - **LLM prompt injection hardening**: `_sanitize_prompt_data` strips six quote variants and fake role markers (`System:`, `Assistant:`, `Human:`, `User:`, case-insensitive).
 - **ICY header injection guard**: station name and genre are CRLF-scrubbed before writing to ICY response headers.
 - **`youtube_id` format validation**: `/api/playlist/add-external` validates against `[A-Za-z0-9_-]{11}` before passing to yt-dlp.
 - **HA addon version sync**: `ha-addon/mammamiradio/config.yaml` version kept in sync with `pyproject.toml`.
+- **Listener brand cleanup**: removed `Napoli` from the hero eyebrow and about-section note. The station fiction is "from Windor to Vergen" via `[sonic_brand].geography`; `Napoli` was leftover seed config.
+- **Browser tab title** shortened to just the station name (frequency and city remain in `og:description` for share previews).
+- **Host stat typography**: the "I conduttori" stat scaled down so it reads as a labeled stat, not a hero number.
+- **Shellcheck warnings resolved** in `ha-addon/mammamiradio/rootfs/run.sh` and `scripts/validate-addon.sh`.
+
+### Removed
+
+- **`/regia` route + `regia.html` template** — the Regia design language already shipped on `/admin` (admin panel title is "Mamma Mi Radio — Regia"); the standalone `/regia` URL served an obsolete prototype duplicate and is gone. Operators land on `/admin` for the control room.
+- **Dead `[sonic_brand]` config keys** `short_sting` and `sweeper_probability` — never read by production code. Older operator `radio.toml` files carrying the legacy keys still load cleanly (graceful `pop()`).
+- **Dead onboarding/taste-crate copy** in `mammamiradio/playlist/track_rationale.py` and dead taste-mirror helpers in `mammamiradio/hosts/context_cues.py`.
+- **567 lines of dead pre-Volare CSS from `listener.css`** — selectors confirmed to have zero matches in the rendered HTML before removal.
+- **Dead `probe` parameter from `build_setup_status`** — Spotify-era keyword argument never read or passed.
+
+### Dependencies
+
+- `openai` 2.32.0 → 2.36.0 (script generation; includes `prompt_cache_retention` enum value fix).
+- `pydantic-settings` 2.13.1 → 2.14.1.
+- Routine: `certifi` 2026.2.25 → 2026.4.22, `click` 8.3.2 → 8.3.3, `idna` 3.11 → 3.13.
+
+**Contributors:** [@ashika-rai-n](https://github.com/ashika-rai-n)
+
+## 2.10.10
+
+Brand engine, listener redesign, mobile host control room, and security hardening.
+
+### Added
+
+- **Brand engine (`[brand]` block in `radio.toml`)**: per-station identity layer (name, frequency, city, hosts, theme tokens — colors and curated fonts) separated from operator engine config. Theme overrides Volare Refined defaults with contrast and font-allowlist guards; bad brand config never blocks station boot.
+- **Public listener API** (`/public-status` + `/public-listener-requests`): listener page works on any deploy without 401 risk. `listener.js` no longer polls admin-gated `/status`.
+- **OpenGraph social cards** (`/og-card.png`) rendered via Pillow with brand colors, station identity, and current track. Falls back to logo SVG on render failure.
+- **Listener template migrated to Jinja2** with capability-conditional rendering: PWA, HA, and AI copy toggle based on `[data-cap=KEY]` attributes reading actual capability flags. PWA install replaced with proper `beforeinstallprompt` flow.
+- **`/live` mobile host control room** (admin-gated): phone-optimised operator surface for skip / clip / stop / resume.
+- **Accessibility (WCAG 2.1 AA)**: `<html lang="it">` on admin; sr-only labels on song-request inputs; aria-hidden on decorative tricolor; focus-visible utilities; aria-pressed sync on play button.
+- **Regression test suite** (`tests/test_qa_regression_guards.py`): 14 automated guards covering LRU eviction protection, prompt sanitization, ICY header injection, youtube_id regex, addon version sync, resume_event presence, and the three-tier last-music-file fallback chain.
+- **`--ai-purple` semantic token** for AI-generated segments (used in Regia banter cards and peek-panel type dots).
+- **Song-to-host "exclaim" transition style**: hosts open with a short Italian musical exclamation — *Bravo!*, *Magnifico!*, *Che canzone!* — before pivoting to speech (10% probability when song cues are present).
+
+### Fixed
+
+- **Listener tricolor + radio cabinet rendered transparent**: a CSS refactor referenced color tokens (`--flag-green`, `--flag-red`, `--flag-white`, `--terracotta`, `--sage`, `--ink`) that were never declared, so Italian flag elements and the vintage radio illustration silently rendered with `rgba(0,0,0,0)`. Tokens now declared in `tokens.css` with warm copper-brown cabinet (`#6B3E2D`) and tan highlights (`#B47850`); a new test guards every `var(--*)` reference resolves to a defined token.
+- **Programme Dur. column always empty**: `<td class="du"></td>` rendered blank for every row. New `fmtDur(item, typeKey)` helper reads `duration_ms` (top-level or under metadata) with sensible per-type fallbacks (music 4:00, banter 0:30, ad 1:00, news 0:20).
+- **News flash auto-fires reliably**: removed the `random.random() < 0.3` gate; news now fires deterministically once `songs_since_news >= 6` (over hour-long sessions, the random gate sometimes never fired).
+- **Listener cards visible at rest**: bumped `.mmr-about-card` from `--surface` to `--surface-strong`; the four About cards now register against the page bg.
+- **Regia progress bar always showed 0%**: `Segment.duration_sec` was never populated in `producer.py`. Now probed via `_ffprobe_duration_sec` at the prewarm path and main convergence point.
+- **Listener now-playing strip falls through "0h 0m"**: now reads `status.uptime_sec` from `/public-status` (station-wide on-air time) and shows "In diretta" for the first minute.
+- **Admin mobile layout — panel header overlap**: title and subtitle stacked vertically below 768px so they don't collide.
+- **Conductor setup fails on machines with broken Python 3.13**: `conductor-setup.sh` prefers `python3.11 → 3.12 → 3.13 → python3` instead of leading with 3.13.
 
 ### Refactored
 
-- **Design system refresh**: `tokens.css` / `base.css` / `waveform.js` extracted; `admin.html` migrated to canonical base.css components; `listener.html` rewritten to site-v1 five-band radio-station composition; `/dashboard` surface deleted, redirects to `/admin`.
-- **Ad creative system extracted** into `ad_creative.py` (closes #161).
-- **Dashboard CSS/JS extraction** (PR #203) by [@ashika-rai-n](https://github.com/ashika-rai-n).
+- **Dashboard inline CSS/JS extracted into `/static/`** by [@ashika-rai-n](https://github.com/ashika-rai-n).
 
 **Contributors:** [@ashika-rai-n](https://github.com/ashika-rai-n)
 
