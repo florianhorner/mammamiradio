@@ -1,4 +1,4 @@
-FROM python:3.11-slim
+FROM python:3.14-slim
 
 # Install FFmpeg for audio processing
 RUN apt-get update \
