@@ -134,6 +134,11 @@ Release-manager (lyon) is one instance; document the meta-rule for when to desig
 ### P3 — Codify "audit-before-build" as a pre-build gate
 The 3-agent PR audit on 2026-05-03 took ~45s and flipped a 2-3 day build into a 5-line CLAUDE.md rule. Worth codifying as a standard step when a proposed mechanism's frequency justification is unmeasured. **Source:** /plan-eng-review reversed the /office-hours recommendation based on agent-swarm data.
 
+### P3 — Bump verify-claims pin once `gh-workflows` v1.2 ships
+**Priority:** P3
+**Source:** scope-parked from `florianhorner/commit-standards-bootstrap` on 2026-05-08
+`.github/workflows/verify-claims-call.yml` pins `florianhorner/gh-workflows/.github/workflows/verify-claims.yml@v1.1`. Upstream PR `florianhorner/gh-workflows#3` fixes the `parseProofLines` self-reference-tag bug that caused PR #302's `runtime: proof/...txt` line to fail validation; once the fix lands and is tagged `v1.2`, bump the pin here so future PRs can use file-path and gist-URL artifacts directly instead of routing every artifact through a CI run URL.
+
 ## Completed
 
 ### Mark addon as experimental in HACS
