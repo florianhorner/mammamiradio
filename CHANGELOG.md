@@ -91,7 +91,7 @@ entrypoint `mammamiradio.main:app` and Docker invocations are unaffected.
 - **Jamendo source-strict downloads**: Jamendo tracks now use a dedicated download path (`source="jamendo"`) that fetches from `direct_url` only — avoids deterministic failures where yt-dlp treated the Jamendo track ID as a YouTube video ID. Cache keys are now source-aware so Jamendo and YouTube tracks with the same slug never collide. `jamendo_client_id` whitespace is stripped before use so accidental trailing spaces don't silently disable the source.
 - **Null guard in `updHost()`** prevents NPE when the host block isn't yet in the DOM during refresh/re-render races.
 - **`<label for="searchInput" class="sr-only">Cerca musica</label>`** added to satisfy HTMLHint `input-requires-label`; `aria-label` kept for parity.
-- **Dead `probe` parameter removed from `build_setup_status`** (`mammamiradio/core/setup_status.py`) — `probe: bool = False` was a Spotify-era keyword argument (introduced in #64, orphaned in #115 when Spotify integration was removed). It was never read inside the function and no caller ever passed it. Removed cleanly; all 4 call sites required no changes.
+- **Dead `probe` parameter removed from `build_setup_status`** (`mammamiradio/core/setup_status.py`) — `probe: bool = False` was a Spotify-era keyword argument that was never read inside the function and no caller ever passed it. Removed cleanly; all 4 call sites required no changes.
 - **Shellcheck warnings resolved** in `ha-addon/mammamiradio/rootfs/run.sh` and `scripts/validate-addon.sh`: `# shellcheck shell=sh` directive added for the `with-contenv` shebang; `ADMIN_TOKEN` split into declare + assign (SC2155); trap string single-quoted (SC2064).
 
 ### Removed
