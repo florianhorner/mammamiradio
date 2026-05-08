@@ -41,6 +41,7 @@ Added `duration_sec` to `now_streaming` payload (models.py). Regia elapsed compu
 Imported `_ffprobe_duration_sec` in producer.py. Added probe in prewarm path (before `queue.put`) and at the main convergence point (`if segment:` block before `_queue_segment`). Covers all segment types in one place. Test timing mock added to `test_drain_guard_inserts_canned_clip_on_queue_drain`.
 
 ### Host name selector hardening
+**Completed:** 2026-05-08 (v2.10.11 — #284)
 **Priority:** P3
 **Source:** /plan-eng-review on 2026-04-25 (florianhorner/fix/radio-plan)
 
@@ -59,6 +60,7 @@ Imported `_ffprobe_duration_sec` in producer.py. Added probe in prewarm path (be
 **Affected files:** `mammamiradio/web/templates/admin.html` (or its replacement).
 
 ### Docker container smoke test in CI
+**Completed:** 2026-05-08 (v2.10.11 — #284)
 After `addon-build.yml` builds the image, run a 30s smoke test:
 - `docker run` → wait 10s → `curl -f /health`
 - Check logs contain no `Queue empty` warning in first 20s
@@ -105,6 +107,7 @@ Phase 2 per IA doc. Screen 3 is AI content approval (banter + ad preview with au
 The prototype uses Italian labels (CODA, REVISIONE, PALINSESTO, MOTORE, PANICO). Once Screens 2–5 are built, audit all existing admin.html strings and normalize to the same voice.
 
 ### P2 — Italianize admin.html panel contents (Approach B)
+**Completed:** 2026-05-08 (v2.10.11 — #284)
 PR #248 (Approach A) italianized the admin shell: sidebar nav, h2 titles, eyebrows, top status panel. Panel **contents** are still English — visible to the operator and creating mixed-language whiplash. Scope:
 - Top-bar `Queue banter` CTA (`admin.html:1118`)
 - Trigger card titles + descriptions: `Queue banter / Force ad break / News flash / Chaos incoming` (`admin.html:1156-1172`)
