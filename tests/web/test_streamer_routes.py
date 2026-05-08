@@ -801,7 +801,8 @@ async def test_get_root_serves_listener_page():
     assert "Ascolta Ora" in resp.text
     assert "Manda al DJ" in resp.text  # dediche form section
     assert 'data-cap="ha"' in resp.text  # capability-conditional rendering hooks present
-    assert re.fullmatch(r"\d+\.\d+\.\d+-[a-f0-9]{8}", _ASSET_VERSION)
+    # Tail-anchored: tolerate non-strict-semver pyproject versions (rc/post/dev).
+    assert re.search(r"-[a-f0-9]{8}$", _ASSET_VERSION)
     assert f"/static/listener.css?v={_ASSET_VERSION}" in resp.text
 
 
@@ -1150,7 +1151,7 @@ async def test_sw_js_keeps_css_and_js_network_first():
 
     assert resp.status_code == 200
     text = resp.text
-    assert "radio-itali-v5" in text
+    assert "radio-itali-v6" in text
     assert "const isFreshAsset" in text
     assert "path.endsWith('.css')" in text
     assert "path.endsWith('.js')" in text

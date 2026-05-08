@@ -35,7 +35,10 @@ html, body {
 .mmr-tricolor .r { flex: 1; background: var(--flag-red); }
 
 /* Nav */
-.mmr-nav { position: sticky; top: 0; z-index: 20; background: rgba(20,17,15,0.85); backdrop-filter: blur(12px); border-bottom: 1px solid var(--line); }
+/* Force the sticky nav onto its own compositor layer up-front so the first
+   scroll frame doesn't repaint as the browser promotes the layer mid-scroll
+   (Safari/Chrome flicker with sticky + backdrop-filter). */
+.mmr-nav { position: sticky; top: 0; z-index: 20; background: rgba(20,17,15,0.85); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); border-bottom: 1px solid var(--line); transform: translateZ(0); will-change: transform; isolation: isolate; }
 .mmr-nav-inner { max-width: 1280px; margin: 0 auto; padding: 14px 32px; display: flex; align-items: center; gap: 26px; }
 .mmr-brand { display: flex; align-items: center; gap: 10px; text-decoration: none; }
 .mmr-brand img { width: 30px; height: 30px; }
