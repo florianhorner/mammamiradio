@@ -6,7 +6,7 @@ The current version source of truth is `pyproject.toml`.
 
 ## [Unreleased]
 
-## [2.10.11] - 2026-05-08
+## [2.11.0] - 2026-05-08
 
 The big one: the source tree is reshaped around seven subpackages, the music
 sources finally tell the truth about what they are, the listener page reads
@@ -14,6 +14,13 @@ correctly at rest on every viewport we test on, the admin panel is fully in
 Italian, and Italian-trending music is now the default Jamendo result. Five
 weeks of work that re-shapes the project around the four leadership rules in
 `CLAUDE.md`.
+
+**Note for direct package consumers:** the subpackage restructure means flat
+import paths like `mammamiradio.config`, `mammamiradio.streamer`,
+`mammamiradio.playlist` no longer resolve. Rewrite to subpackage paths
+(`mammamiradio.core.config`, `mammamiradio.web.streamer`,
+`mammamiradio.playlist.playlist`, …) per `docs/REPO_MAP.md`. The HA addon
+entrypoint `mammamiradio.main:app` and Docker invocations are unaffected.
 
 ### Added
 

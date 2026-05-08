@@ -1,6 +1,6 @@
 # Changelog
 
-## 2.10.11
+## 2.11.0
 
 The big one for the addon: Italian-trending music as the default Jamendo source, the listener page reads correctly at rest on every viewport we test on, the admin panel is fully in Italian, and the source tree is reshaped around seven subpackages.
 
@@ -68,6 +68,39 @@ The big one for the addon: Italian-trending music as the default Jamendo source,
 - `openai` 2.32.0 → 2.36.0 (script generation; includes `prompt_cache_retention` enum value fix).
 - `pydantic-settings` 2.13.1 → 2.14.1.
 - Routine: `certifi` 2026.2.25 → 2026.4.22, `click` 8.3.2 → 8.3.3, `idna` 3.11 → 3.13.
+
+**Contributors:** [@ashika-rai-n](https://github.com/ashika-rai-n)
+
+## 2.10.10
+
+Brand engine, listener redesign, mobile host control room, and security hardening.
+
+### Added
+
+- **Brand engine (`[brand]` block in `radio.toml`)**: per-station identity layer (name, frequency, city, hosts, theme tokens — colors and curated fonts) separated from operator engine config. Theme overrides Volare Refined defaults with contrast and font-allowlist guards; bad brand config never blocks station boot.
+- **Public listener API** (`/public-status` + `/public-listener-requests`): listener page works on any deploy without 401 risk. `listener.js` no longer polls admin-gated `/status`.
+- **OpenGraph social cards** (`/og-card.png`) rendered via Pillow with brand colors, station identity, and current track. Falls back to logo SVG on render failure.
+- **Listener template migrated to Jinja2** with capability-conditional rendering: PWA, HA, and AI copy toggle based on `[data-cap=KEY]` attributes reading actual capability flags. PWA install replaced with proper `beforeinstallprompt` flow.
+- **`/live` mobile host control room** (admin-gated): phone-optimised operator surface for skip / clip / stop / resume.
+- **Accessibility (WCAG 2.1 AA)**: `<html lang="it">` on admin; sr-only labels on song-request inputs; aria-hidden on decorative tricolor; focus-visible utilities; aria-pressed sync on play button.
+- **Regression test suite** (`tests/test_qa_regression_guards.py`): 14 automated guards covering LRU eviction protection, prompt sanitization, ICY header injection, youtube_id regex, addon version sync, resume_event presence, and the three-tier last-music-file fallback chain.
+- **`--ai-purple` semantic token** for AI-generated segments (used in Regia banter cards and peek-panel type dots).
+- **Song-to-host "exclaim" transition style**: hosts open with a short Italian musical exclamation — *Bravo!*, *Magnifico!*, *Che canzone!* — before pivoting to speech (10% probability when song cues are present).
+
+### Fixed
+
+- **Listener tricolor + radio cabinet rendered transparent**: a CSS refactor referenced color tokens (`--flag-green`, `--flag-red`, `--flag-white`, `--terracotta`, `--sage`, `--ink`) that were never declared, so Italian flag elements and the vintage radio illustration silently rendered with `rgba(0,0,0,0)`. Tokens now declared in `tokens.css` with warm copper-brown cabinet (`#6B3E2D`) and tan highlights (`#B47850`); a new test guards every `var(--*)` reference resolves to a defined token.
+- **Programme Dur. column always empty**: `<td class="du"></td>` rendered blank for every row. New `fmtDur(item, typeKey)` helper reads `duration_ms` (top-level or under metadata) with sensible per-type fallbacks (music 4:00, banter 0:30, ad 1:00, news 0:20).
+- **News flash auto-fires reliably**: removed the `random.random() < 0.3` gate; news now fires deterministically once `songs_since_news >= 6` (over hour-long sessions, the random gate sometimes never fired).
+- **Listener cards visible at rest**: bumped `.mmr-about-card` from `--surface` to `--surface-strong`; the four About cards now register against the page bg.
+- **Regia progress bar always showed 0%**: `Segment.duration_sec` was never populated in `producer.py`. Now probed via `_ffprobe_duration_sec` at the prewarm path and main convergence point.
+- **Listener now-playing strip falls through "0h 0m"**: now reads `status.uptime_sec` from `/public-status` (station-wide on-air time) and shows "In diretta" for the first minute.
+- **Admin mobile layout — panel header overlap**: title and subtitle stacked vertically below 768px so they don't collide.
+- **Conductor setup fails on machines with broken Python 3.13**: `conductor-setup.sh` prefers `python3.11 → 3.12 → 3.13 → python3` instead of leading with 3.13.
+
+### Refactored
+
+- **Dashboard inline CSS/JS extracted into `/static/`** by [@ashika-rai-n](https://github.com/ashika-rai-n).
 
 **Contributors:** [@ashika-rai-n](https://github.com/ashika-rai-n)
 
