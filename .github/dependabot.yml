@@ -25,6 +25,7 @@ updates:
       prefix: "ci"
 
 # BEGIN: commit-message-standards
+
 # Dependabot config fragment. bootstrap-repo.sh patches these entries into
 # .github/dependabot.yml so Dependabot's commits pass the conventional-commits
 # check (Dependabot's default subject "Bump foo from 1 to 2" fails the format
