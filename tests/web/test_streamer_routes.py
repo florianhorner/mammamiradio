@@ -808,6 +808,20 @@ async def test_get_root_serves_listener_page():
 
 
 @pytest.mark.asyncio
+async def test_get_root_renders_italian_when_super_italian_on():
+    """Super Italian Mode ON: CTA + form button render in Italian."""
+    app = _make_test_app()
+    app.state.config.super_italian_mode = True
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.get("/")
+    assert resp.status_code == 200
+    assert "Ascolta Ora" in resp.text  # CTA in Italian
+    assert "Spedisci con un bacio" in resp.text  # form submit in Italian
+    assert "Listen Now" not in resp.text  # English CTA must be absent
+
+
+@pytest.mark.asyncio
 async def test_public_status_returns_json():
     app = _make_test_app()
     transport = httpx.ASGITransport(app=app)
