@@ -20,7 +20,7 @@ from mammamiradio.hosts.persona import PersonaStore
 from mammamiradio.playlist.downloader import evict_cache_lru, purge_suspect_cache_files
 from mammamiradio.playlist.playlist import DEMO_TRACKS, fetch_startup_playlist, read_persisted_source
 from mammamiradio.scheduling.producer import prewarm_first_segment, run_producer
-from mammamiradio.web.streamer import LiveStreamHub, router, run_playback_loop
+from mammamiradio.web.streamer import LiveStreamHub, _session_stopped_flag, router, run_playback_loop
 
 logging.basicConfig(
     level=getattr(logging, os.getenv("LOG_LEVEL", "INFO").upper(), logging.INFO),
@@ -87,7 +87,7 @@ async def startup():
     # Restore stop state so a reload/restart honours an operator-issued stop.
     # The operator's /api/resume is the correct way to clear this — a crash or
     # watchdog restart should not silently undo a deliberate stop.
-    _stopped_flag = config.cache_dir / "session_stopped.flag"
+    _stopped_flag = _session_stopped_flag(config)
     _session_stopped = _stopped_flag.exists()
     if _session_stopped:
         logger.info(

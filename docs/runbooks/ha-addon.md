@@ -94,10 +94,10 @@ The checked-in `ha-addon/mammamiradio/radio.toml` must remain byte-for-byte iden
 Before every commit or push that touches addon packaging, run:
 
 ```bash
-scripts/test-addon-local.sh
+scripts/validate-addon.sh
 ```
 
-That command stages the same local-source build context as CI and runs the add-on image build locally. If this command fails, do not push.
+That command checks the same add-on invariants CI validates. Add `--build` when you also want the slower local-source image build. If this command fails, do not push.
 
 ## Image path
 
@@ -114,7 +114,7 @@ The standalone Docker image (for non-HA users) is separate: `ghcr.io/florianhorn
 
 Before merging ANY change that touches addon files:
 
-- [ ] `scripts/test-addon-local.sh` passes locally
+- [ ] `scripts/validate-addon.sh` passes locally
 - [ ] Version bumped in both files (if this is a release)
 - [ ] `ruff check . && ruff format --check .` passes
 - [ ] `pytest tests/` passes (200+ tests)

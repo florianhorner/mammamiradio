@@ -10,6 +10,7 @@ import random
 import shutil
 from collections import deque
 from collections.abc import Callable
+from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
 from uuid import uuid4
@@ -39,6 +40,7 @@ from mammamiradio.core.models import (
     Segment,
     SegmentType,
     StationState,
+    Track,
 )
 from mammamiradio.home.ha_context import (
     GOLD_ENTITIES,
@@ -61,10 +63,71 @@ from mammamiradio.scheduling.scheduler import next_segment_type
 
 logger = logging.getLogger(__name__)
 
+MUSIC_SELECTION_RETRIES = 20
+MUSIC_QUALITY_GATE_REJECTION_LIMIT = 3
+CACHE_EVICTION_INTERVAL_SECONDS = 3600
+PLAYLIST_REFRESH_INTERVAL_SECONDS = 5400.0
+
+
+@dataclass(frozen=True)
+class RenderedMusicTrack:
+    track: Track
+    path: Path
+    cache_path: Path
+    cache_hit: bool
+
 
 def _probe_segment_duration(path: Path) -> float:
     """Run ffprobe on path and return duration in seconds; 0.0 if probe fails."""
     return _ffprobe_duration_sec(path) or 0.0
+
+
+def _normalized_cache_path(track: Track, config: StationConfig) -> Path:
+    return config.cache_dir / f"norm_{track.cache_key}_{config.audio.bitrate}k.mp3"
+
+
+async def _render_music_track(
+    track: Track,
+    config: StationConfig,
+    *,
+    temp_prefix: str,
+    context: str,
+    cache_write_required: bool = False,
+) -> RenderedMusicTrack | None:
+    """Download, validate, normalize, and cache one music track."""
+    audio_path = await download_track(track, config.cache_dir, music_dir=Path("music"))
+    loop = asyncio.get_running_loop()
+    ok, reason = await loop.run_in_executor(None, validate_download, audio_path)
+    if not ok:
+        reject_cached_download(config.cache_dir, track.cache_key, reason)
+        logger.warning("Skipping %s track due to invalid download (%s): %s", context, track.display, reason)
+        return None
+
+    norm_cached = _normalized_cache_path(track, config)
+    if norm_cached.exists():
+        logger.debug("Normalization cache hit%s: %s", f" ({context})" if context else "", norm_cached.name)
+        return RenderedMusicTrack(track=track, path=norm_cached, cache_path=norm_cached, cache_hit=True)
+
+    norm_path = config.tmp_dir / f"{temp_prefix}_{uuid4().hex[:8]}.mp3"
+    _norm_fn = partial(normalize, audio_path, norm_path, config, loudnorm=True, music_eq=True)
+    await loop.run_in_executor(None, _norm_fn)
+    try:
+        await loop.run_in_executor(None, shutil.copy2, str(norm_path), str(norm_cached))
+    except OSError as exc:
+        logger.warning(
+            "Normalization cache write failed%s %s -> %s: %s",
+            f" ({context})" if context else "",
+            norm_path,
+            norm_cached,
+            exc,
+        )
+        if cache_write_required:
+            norm_cached.unlink(missing_ok=True)
+            norm_path.unlink(missing_ok=True)
+            raise
+    else:
+        save_track_metadata(norm_cached, track.title, track.artist)
+    return RenderedMusicTrack(track=track, path=norm_path, cache_path=norm_cached, cache_hit=False)
 
 
 def _banter_title(script: list[dict] | None, *, canned: bool) -> str:
@@ -305,7 +368,7 @@ async def _prefetch_next(
         candidate_key = candidate.cache_key
         if _failed_keys is not None and candidate_key in _failed_keys:
             return  # all candidates have failed — nothing useful to prefetch
-        norm_cached = config.cache_dir / f"norm_{candidate.cache_key}_{config.audio.bitrate}k.mp3"
+        norm_cached = _normalized_cache_path(candidate, config)
         if norm_cached.exists():
             logger.debug("Prefetch: norm already cached for %s", candidate.display)
             return
@@ -313,25 +376,18 @@ async def _prefetch_next(
             logger.debug("Prefetch: skipping denylisted candidate %s", candidate.display)
             return
         logger.info("Prefetch: pre-normalizing %s in background", candidate.display)
-        audio_path = await download_track(candidate, config.cache_dir, music_dir=Path("music"))
-        loop = asyncio.get_running_loop()
-        ok, reason = await loop.run_in_executor(None, validate_download, audio_path)
-        if not ok:
-            reject_cached_download(config.cache_dir, candidate.cache_key, reason)
+        rendered = await _render_music_track(
+            candidate,
+            config,
+            temp_prefix="prefetch",
+            context="prefetch",
+            cache_write_required=True,
+        )
+        if rendered is None:
             logger.debug("Prefetch: skipping invalid download for %s", candidate.display)
             return
-        norm_path = config.tmp_dir / f"prefetch_{uuid4().hex[:8]}.mp3"
-        _norm_fn = partial(normalize, audio_path, norm_path, config, loudnorm=True, music_eq=True)
-        await loop.run_in_executor(None, _norm_fn)
-        try:
-            await loop.run_in_executor(None, shutil.copy2, str(norm_path), str(norm_cached))
-            logger.info("Prefetch: cached norm for %s", candidate.display)
-        except Exception:
-            # Partial write: remove incomplete cache file so the main producer
-            # doesn't mistake it for a valid cached segment on the next cycle.
-            norm_cached.unlink(missing_ok=True)
-            raise
-        save_track_metadata(norm_cached, candidate.title, candidate.artist)
+        norm_path = None if rendered.cache_hit else rendered.path
+        logger.info("Prefetch: cached norm for %s", candidate.display)
     except asyncio.CancelledError:
         logger.debug("Prefetch task cancelled")
         raise
@@ -364,32 +420,11 @@ async def prewarm_first_segment(
             artist_cooldown=config.playlist.artist_cooldown,
         )
         logger.info("Pre-warming first track: %s", track.display)
-        audio_path = await download_track(track, config.cache_dir, music_dir=Path("music"))
-        loop = asyncio.get_running_loop()
-        ok, reason = await loop.run_in_executor(None, validate_download, audio_path)
-        if not ok:
-            reject_cached_download(config.cache_dir, track.cache_key, reason)
-            logger.warning("Skipping prewarm track due to invalid download (%s): %s", track.display, reason)
+        rendered = await _render_music_track(track, config, temp_prefix="music", context="prewarm")
+        if rendered is None:
             return False
-        norm_cached = config.cache_dir / f"norm_{track.cache_key}_{config.audio.bitrate}k.mp3"
-        if norm_cached.exists():
-            norm_path = norm_cached
-            logger.info("Normalization cache hit (prewarm): %s", norm_cached.name)
-        else:
-            norm_path = config.tmp_dir / f"music_{uuid4().hex[:8]}.mp3"
-            _norm_fn = partial(normalize, audio_path, norm_path, config, loudnorm=True, music_eq=True)
-            await loop.run_in_executor(None, _norm_fn)
-            try:
-                await loop.run_in_executor(None, shutil.copy2, str(norm_path), str(norm_cached))
-            except OSError as exc:
-                logger.warning(
-                    "Normalization cache write failed (prewarm) %s -> %s: %s",
-                    norm_path,
-                    norm_cached,
-                    exc,
-                )
-            else:
-                save_track_metadata(norm_cached, track.title, track.artist)
+        loop = asyncio.get_running_loop()
+        norm_path = rendered.path
         if not os.environ.get("MAMMAMIRADIO_SKIP_QUALITY_GATE"):
             try:
                 await loop.run_in_executor(None, validate_segment_audio, norm_path, SegmentType.MUSIC)
@@ -397,7 +432,7 @@ async def prewarm_first_segment(
                 logger.warning("Audio tool unavailable, skipping prewarm quality check: %s", exc)
             except AudioQualityError as exc:
                 logger.warning("Prewarm quality gate rejected track (%s): %s", norm_path.name, exc)
-                if norm_path != norm_cached:
+                if not rendered.cache_hit:
                     norm_path.unlink(missing_ok=True)
                 return False
         rationale = generate_track_rationale(track, source=state.playlist_source, listener=state.listener)
@@ -416,7 +451,7 @@ async def prewarm_first_segment(
                 "crate": crate,
                 "audio_source": "prewarm",
             },
-            ephemeral=(norm_path != norm_cached),
+            ephemeral=not rendered.cache_hit,
         )
         segment.duration_sec = await loop.run_in_executor(None, _probe_segment_duration, norm_path)
         await queue.put(segment)
@@ -455,9 +490,9 @@ async def run_producer(
     _music_qg_rejections = 0  # consecutive music quality gate rejections (circuit breaker)
     _loop = asyncio.get_running_loop()
     _last_cache_eviction = 0.0  # epoch time of last eviction check
-    _cache_eviction_interval = 3600  # run eviction at most once per hour
+    _cache_eviction_interval = CACHE_EVICTION_INTERVAL_SECONDS  # run eviction at most once per hour
     _last_playlist_refresh = _loop.time()  # monotonic time of last chart refresh
-    _playlist_refresh_interval = 5400.0  # refresh charts every 90 minutes
+    _playlist_refresh_interval = PLAYLIST_REFRESH_INTERVAL_SECONDS  # refresh charts every 90 minutes
     _humanity_event_fired = False  # one-shot studio humanity event per session
     _segments_produced = 0  # count for humanity event gating
     _producer_idle_logged = False
@@ -689,7 +724,7 @@ async def run_producer(
         try:
             if seg_type == SegmentType.MUSIC:
                 track = None
-                for _ in range(20):
+                for _ in range(MUSIC_SELECTION_RETRIES):
                     candidate = state.select_next_track(
                         repeat_cooldown=config.playlist.repeat_cooldown,
                         artist_cooldown=config.playlist.artist_cooldown,
@@ -707,42 +742,17 @@ async def run_producer(
                     continue
                 logger.info("Producing MUSIC: %s", track.display)
 
-                audio_path = await download_track(track, config.cache_dir, music_dir=Path("music"))
                 loop = asyncio.get_running_loop()
-                ok, reason = await loop.run_in_executor(None, validate_download, audio_path)
-                if not ok:
-                    reject_cached_download(config.cache_dir, track.cache_key, reason)
-                    logger.warning("Skipping track due to invalid download (%s): %s", track.display, reason)
+                rendered = await _render_music_track(track, config, temp_prefix="music", context="music")
+                if rendered is None:
                     continue
-
-                # Normalization cache: skip FFmpeg re-encode if we already have a
-                # normalized copy in cache_dir from a previous run. Named by track +
-                # bitrate so a config change busts the cache automatically.
-                norm_cached = config.cache_dir / f"norm_{track.cache_key}_{config.audio.bitrate}k.mp3"
-                if norm_cached.exists():
-                    norm_path = norm_cached
-                    norm_is_cached = True
-                    logger.debug("Normalization cache hit: %s", norm_cached.name)
-                else:
-                    norm_path = config.tmp_dir / f"music_{uuid4().hex[:8]}.mp3"
-                    norm_is_cached = False
-                    _norm_fn = partial(normalize, audio_path, norm_path, config, loudnorm=True, music_eq=True)
-                    await loop.run_in_executor(None, _norm_fn)
-                    try:
-                        await loop.run_in_executor(None, shutil.copy2, str(norm_path), str(norm_cached))
-                    except OSError as exc:
-                        logger.warning(
-                            "Normalization cache write failed %s -> %s: %s",
-                            norm_path,
-                            norm_cached,
-                            exc,
-                        )
-                    else:
-                        save_track_metadata(norm_cached, track.title, track.artist)
+                norm_path = rendered.path
+                norm_cached = rendered.cache_path
+                norm_is_cached = rendered.cache_hit
                 audio_source = "download"
 
                 # Quality gate: reject truncated/silent downloads before queueing.
-                # Circuit breaker: after 3 consecutive rejections, either serve a
+                # Circuit breaker: after MUSIC_QUALITY_GATE_REJECTION_LIMIT consecutive rejections, either serve a
                 # pre-bundled banter clip (when the rejection is due to silence — i.e. all
                 # tracks are silence placeholders and playing them would cause dead air) or
                 # let the track through as-is (when rejected for other reasons such as being
@@ -756,7 +766,7 @@ async def run_producer(
                         logger.warning("Audio tool unavailable, skipping music quality check: %s", exc)
                     except AudioQualityError as exc:
                         _music_qg_rejections += 1
-                        if _music_qg_rejections >= 3:
+                        if _music_qg_rejections >= MUSIC_QUALITY_GATE_REJECTION_LIMIT:
                             _music_qg_rejections = 0
                             if "silence" in str(exc).lower():
                                 # All available tracks are silence placeholders.  Playing
@@ -767,7 +777,7 @@ async def run_producer(
                                     logger.warning(
                                         "Quality gate circuit breaker: %d consecutive silence rejections — "
                                         "inserting fallback banter to prevent dead air (%s: %s)",
-                                        3,
+                                        MUSIC_QUALITY_GATE_REJECTION_LIMIT,
                                         norm_path.name,
                                         exc,
                                     )
@@ -831,7 +841,7 @@ async def run_producer(
                                 logger.warning(
                                     "Quality gate circuit breaker: %d consecutive rejections, "
                                     "allowing track through to prevent stream starvation (%s: %s)",
-                                    3,
+                                    MUSIC_QUALITY_GATE_REJECTION_LIMIT,
                                     norm_path.name,
                                     exc,
                                 )
@@ -840,7 +850,7 @@ async def run_producer(
                             # doesn't get re-served.  We intentionally do NOT
                             # session-denylist the source cache_key here: quality-gate
                             # rejections are normalization artifacts, and the
-                            # circuit breaker (3 consecutive rejections) is the
+                            # circuit breaker is the
                             # right escape valve, not a per-track block.
                             norm_cached.unlink(missing_ok=True)
                             logger.warning("Quality gate rejected music track (%s): %s", norm_path.name, exc)

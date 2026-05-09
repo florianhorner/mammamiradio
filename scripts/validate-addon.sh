@@ -114,6 +114,13 @@ else
     fail "radio.toml parse error"
 fi
 
+echo "6b. radio.toml sync"
+if cmp -s radio.toml ha-addon/mammamiradio/radio.toml; then
+    pass "ha-addon/mammamiradio/radio.toml matches root radio.toml"
+else
+    fail "ha-addon/mammamiradio/radio.toml drifted from root radio.toml"
+fi
+
 # ---- 7. run.sh syntax check ----
 echo "7. Shell syntax"
 if bash -n ha-addon/mammamiradio/rootfs/run.sh 2>/dev/null; then
@@ -136,12 +143,12 @@ fi
 
 # host_network required for stream access
 if grep -q 'host_network: true' ha-addon/mammamiradio/config.yaml; then
-    pass "host_network: true (required for stream access)"
+    pass "host_network: true (required for local network stream access)"
 else
-    fail "host_network must be true for stream access"
+    fail "host_network must be true for local network stream access"
 fi
 
-# timeout >= 120 (addon needs time to install Python deps and start)
+# timeout >= 120 (addon needs time to install Python deps)
 TIMEOUT=$(grep '^timeout:' ha-addon/mammamiradio/config.yaml | awk '{print $2}')
 if [ "${TIMEOUT:-0}" -ge 120 ] 2>/dev/null; then
     pass "timeout: $TIMEOUT (>= 120)"
@@ -151,12 +158,14 @@ fi
 
 # ---- 9. Translations cover all options ----
 echo "9. Translations"
+trans_errors=0
 for key in $SCHEMA_KEYS; do
     if ! grep -q "$key" ha-addon/mammamiradio/translations/en.yaml 2>/dev/null; then
         fail "Translation missing for option: $key"
+        trans_errors=$((trans_errors + 1))
     fi
 done
-if [ $errors -eq 0 ]; then
+if [ $trans_errors -eq 0 ]; then
     pass "All options have translations"
 fi
 
@@ -212,11 +221,14 @@ else
     pass "No COPY to /data/ (persistent volume safe)"
 fi
 
-# No eval 2>&1 in run.sh
-if grep -q '2>&1' ha-addon/mammamiradio/rootfs/run.sh; then
-    fail "run.sh uses 2>&1 — stderr injection risk when eval'd"
+# No bare eval 2>&1 in run.sh (subshell captures like SYNC_MSG="$(...2>&1)" are safe)
+# Collapse continuation lines, then reject 2>&1 that is NOT inside a $() capture.
+UNSAFE_2_1=$(awk '/\\$/{buf=buf $0; next} {if(buf){print buf $0; buf=""} else print}' \
+    ha-addon/mammamiradio/rootfs/run.sh | grep '2>&1' | grep -v '"\$(' | grep -v "'\$(" || true)
+if [ -n "$UNSAFE_2_1" ]; then
+    fail "run.sh uses bare 2>&1 outside subshell capture — stderr injection risk"
 else
-    pass "No 2>&1 in eval context"
+    pass "No unsafe 2>&1 in eval context"
 fi
 
 # ---- 12. repository.yaml on main ----
@@ -234,7 +246,7 @@ if [ "${1:-}" = "--build" ]; then
 
     # Simulate CI: copy source into build context
     TMPCTX=$(mktemp -d)
-    trap 'rm -rf $TMPCTX' EXIT
+    trap 'rm -rf "$TMPCTX"' EXIT
     cp -r ha-addon/mammamiradio/* "$TMPCTX/"
     cp -r mammamiradio/ "$TMPCTX/mammamiradio/"
     cp pyproject.toml "$TMPCTX/"

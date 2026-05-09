@@ -1525,15 +1525,23 @@ async def test_credentials_no_recognised_fields():
 async def test_credentials_saves_valid_key(tmp_path):
     """Valid anthropic_api_key updates config and triggers file write."""
     app = _make_test_app()
-    # Patch run_in_executor so no actual .env write happens
-    with patch("asyncio.AbstractEventLoop.run_in_executor", return_value=None):
+    previous = os.environ.get("ANTHROPIC_API_KEY")
+    try:
         transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
-        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
-            resp = await client.post("/api/credentials", json={"anthropic_api_key": "sk-test-key"})
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["ok"] is True
-    assert "ANTHROPIC_API_KEY" in body["saved"]
+        with patch("mammamiradio.web.streamer._save_dotenv") as save_dotenv:
+            async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+                resp = await client.post("/api/credentials", json={"anthropic_api_key": "sk-test\nKEY"})
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["ok"] is True
+        assert "ANTHROPIC_API_KEY" in body["saved"]
+        assert app.state.config.anthropic_api_key == "sk-testKEY"
+        save_dotenv.assert_called_once_with({"ANTHROPIC_API_KEY": "sk-testKEY"})
+    finally:
+        if previous is None:
+            os.environ.pop("ANTHROPIC_API_KEY", None)
+        else:
+            os.environ["ANTHROPIC_API_KEY"] = previous
 
 
 # ---------------------------------------------------------------------------
