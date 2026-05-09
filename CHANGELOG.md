@@ -6,6 +6,10 @@ The current version source of truth is `pyproject.toml`.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Admin control room reads as espresso warm-brown again.** PR #298 raised four shared `tokens.css` values (`--surface`, `--surface-hover`, `--surface-strong`, `--line-strong`) to make listener cards visible — but admin consumes the same tokens, and v2.11.0 shipped with admin washed out to taupe. Tokens reverted to Pi-baseline values; listener cards keep PR #298's brighter values via inline overrides on `.mmr-stage`, `.mmr-np-bar`, `.btn-ghost`, `.mmr-schedule`, `.mmr-dedica`, `.mmr-about-card`. CLAUDE.md "Protected UI elements" extended to guard against re-regression.
+
 ## [2.11.0] - 2026-05-08
 
 The big one: the source tree is reshaped around seven subpackages, the music
