@@ -1578,8 +1578,13 @@ _super_italian_lock = asyncio.Lock()
 
 
 def _save_super_italian_addon_options(value: bool) -> None:
-    """Persist super_italian_mode into /data/options.json for HA addons."""
+    """Persist super_italian_mode into /data/options.json for HA addons.
+
+    Atomic: writes to a sibling temp file, then os.replace() — survives an
+    HA-watchdog restart mid-write without leaving a torn options.json.
+    """
     import json as _json
+    import os as _os
 
     options_path = Path("/data/options.json")
     options: dict = {}
@@ -1589,7 +1594,9 @@ def _save_super_italian_addon_options(value: bool) -> None:
         except (ValueError, OSError):
             options = {}
     options["super_italian_mode"] = value
-    options_path.write_text(_json.dumps(options, indent=2))
+    tmp_path = options_path.with_suffix(options_path.suffix + ".tmp")
+    tmp_path.write_text(_json.dumps(options, indent=2))
+    _os.replace(tmp_path, options_path)
 
 
 @router.post("/api/super-italian")
@@ -1615,9 +1622,10 @@ async def set_super_italian(request: Request, _: None = Depends(require_admin_ac
     async with _super_italian_lock:
         config.super_italian_mode = value
         os.environ["MAMMAMIRADIO_SUPER_ITALIAN"] = env_value
-        await loop.run_in_executor(None, _save_dotenv, {"MAMMAMIRADIO_SUPER_ITALIAN": env_value})
         if config.is_addon:
             await loop.run_in_executor(None, _save_super_italian_addon_options, value)
+        else:
+            await loop.run_in_executor(None, _save_dotenv, {"MAMMAMIRADIO_SUPER_ITALIAN": env_value})
     return {"ok": True, "super_italian_mode": value}
 
 

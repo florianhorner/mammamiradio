@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **Super Italian Mode toggle** — new `super_italian_mode` addon option (default `false`). Off: listener UI in English with Italian station-feel words intact (`Stasera in onda`, `Palinsesto`, `Mi`, tricolor); AI hosts code-switch with Italian sprinkles. On: listener UI flips to full Italian; hosts lean fully into Italian idioms and address listeners as `amici miei`. Admin UI stays English regardless. Toggle is also exposed in the admin Engine Room and persists via `/data/options.json` so it survives addon container updates.
+
+### Fixed
+
+- **Admin control room reads as espresso warm-brown again.** v2.11.0 shipped with the admin Engine Room washed out to taupe after PR #298 raised four shared `tokens.css` values to make listener cards visible. Tokens reverted to Pi-baseline; listener cards keep the brighter values via inline overrides on `.mmr-stage`, `.mmr-np-bar`, `.btn-ghost`, `.mmr-schedule`, `.mmr-dedica`, `.mmr-about-card`.
+
 ## 2.11.0
 
 The big one for the addon: Italian-trending music as the default Jamendo source, the listener page reads correctly at rest on every viewport we test on, the admin panel is fully in Italian, and the source tree is reshaped around seven subpackages.
