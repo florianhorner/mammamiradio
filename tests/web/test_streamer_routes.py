@@ -798,8 +798,9 @@ async def test_get_root_serves_listener_page():
     # structural elements (CTA, brand identity) — the tagline is now per-brand
     # via brand.tagline, so no longer a fixed string.
     assert "Mamma Mi Radio" in resp.text  # default brand from radio.toml
-    assert "Ascolta Ora" in resp.text
-    assert "Manda al DJ" in resp.text  # dediche form section
+    # CTA copy is now Super-Italian-Mode-aware. Default OFF renders English.
+    assert "Listen Now" in resp.text
+    assert "Manda al DJ" in resp.text  # dediche eyebrow stays Italian (decorative)
     assert 'data-cap="ha"' in resp.text  # capability-conditional rendering hooks present
     # Tail-anchored: tolerate non-strict-semver pyproject versions (rc/post/dev).
     assert re.search(r"-[a-f0-9]{8}$", _ASSET_VERSION)

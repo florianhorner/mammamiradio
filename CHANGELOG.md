@@ -6,6 +6,10 @@ The current version source of truth is `pyproject.toml`.
 
 ## [Unreleased]
 
+### Added
+
+- **Super Italian Mode toggle** — station personality dial in admin Engine Room and via `MAMMAMIRADIO_SUPER_ITALIAN` env var or HA addon `super_italian_mode` option. Default OFF: listener UI defaults to English with Italian headlines and station-feel words intact (`Stasera in onda`, `Palinsesto`, `Mi`, tricolor); AI hosts code-switch charmingly (English narrative + Italian flavor like `ciao`, `dai`, `mamma mia`). Default ON: listener UI flips to full Italian; hosts lean fully into Italian idioms and address listeners as `amici miei`. Toggle is station-wide. Connected listeners pick up the new copy on next page reload (copy is baked into listener.html via Jinja). The scriptwriter system-prompt cache invalidates on the mode key so banter generation picks up the new directive without a restart. Persistence: standalone deploys write `.env`; HA addons write `/data/options.json` (survives container updates). Admin UI is always English regardless of toggle. New module `mammamiradio/web/ui_copy.py` holds swappable strings. Endpoints: `GET/POST /api/super-italian`.
+
 ### Fixed
 
 - **Admin control room reads as espresso warm-brown again.** PR #298 raised four shared `tokens.css` values (`--surface`, `--surface-hover`, `--surface-strong`, `--line-strong`) to make listener cards visible — but admin consumes the same tokens, and v2.11.0 shipped with admin washed out to taupe. Tokens reverted to Pi-baseline values; listener cards keep PR #298's brighter values via inline overrides on `.mmr-stage`, `.mmr-np-bar`, `.btn-ghost`, `.mmr-schedule`, `.mmr-dedica`, `.mmr-about-card`. CLAUDE.md "Protected UI elements" extended to guard against re-regression.

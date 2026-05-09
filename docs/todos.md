@@ -137,3 +137,16 @@ Added "Audio delivery test coverage rule" section to CLAUDE.md under Review Disc
 ### CI guard for pre-release-check.sh
 **Completed:** 2026-04-27 (#256)
 Version sync check conditional on `pyproject.toml`/`ha-addon/config.yaml` diff; release invariants (FFmpeg eq count, canned-clip mock, session_stopped test) run unconditionally on every PR. Both wired into `quality.yml`.
+
+
+## Admin endpoints — config-write race protection
+
+### Apply `_super_italian_lock` pattern to `/api/credentials`
+**Priority:** P3
+**Source:** scope-parked from florianhorner/feat/translation-immersion on 2026-05-08
+`mammamiradio/web/streamer.py` — `/api/super-italian` serializes config-attr + `os.environ` + `.env` + `/data/options.json` writes under `_super_italian_lock` to avoid same-process race during the `await executor` window. `/api/credentials` and `/api/setup/save-keys` do the same read-modify-write of `.env` without serialization. Low blast radius (admin-only, single operator), but the pattern should be unified once a third caller appears.
+
+### Unify `_save_addon_options` + `_save_super_italian_addon_options`
+**Priority:** P3
+**Source:** scope-parked from florianhorner/feat/translation-immersion on 2026-05-08
+`mammamiradio/web/streamer.py:1260` and `:1580` — two helpers share the read-modify-write skeleton for `/data/options.json`. They differ in value type (str vs bool) and key handling (key_map vs direct). Acceptable as-is at 2 callers; refactor to a single `_save_addon_options(updates: dict[str, Any])` accepting a typed patch when a third caller lands.

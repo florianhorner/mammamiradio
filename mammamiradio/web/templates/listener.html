@@ -32,6 +32,7 @@
     --brand-mono-font: '{{ brand.theme.mono_font }}', ui-monospace, monospace;
   }
 </style>
+<script id="mmr-copy-bootstrap" type="application/json">{{ copy | tojson }}</script>
 <script src="{{ ingress_prefix }}/static/waveform.js?v={{ asset_version }}" defer></script>
 <script src="{{ ingress_prefix }}/static/listener.js?v={{ asset_version }}" defer></script>
 </head>
@@ -57,7 +58,7 @@
       <a href="#dediche">Dediche</a>
       <a href="#about">About</a>
     </nav>
-    <button class="mmr-live-pill" id="nav-cta" type="button" aria-label="Ascolta ora">
+    <button class="mmr-live-pill" id="nav-cta" type="button" aria-label="{{ copy.get('listen_now_aria', 'Listen now') }}">
       <span class="dot"></span> In Onda{% if brand.frequency %} · {{ brand.frequency }}{% endif %}
     </button>
   </div>
@@ -69,7 +70,7 @@
     <span class="mmr-live"><span class="dot"></span> In Onda</span>
     <div class="mmr-np-meta">
       <div class="eyebrow">Ora in onda{% if brand.frequency %} · {{ brand.frequency }}{% endif %}</div>
-      <div class="title" id="np-track">Stiamo accendendo la radio…</div>
+      <div class="title" id="np-track">{{ copy.get('tuning_in', 'Tuning in…') }}</div>
       <div class="artist" id="np-artist"></div>
     </div>
     <div class="mmr-np-progress" aria-hidden="true">
@@ -97,13 +98,13 @@
     <div class="mmr-tricolor" aria-hidden="true"><div class="g"></div><div class="w"></div><div class="r"></div></div>
     <p class="mmr-lede">{{ brand.about or "Radio scritta dall'intelligenza artificiale, voci umane dai conduttori di piazza, musica dal cuore del Bel Paese. Accendi e resta con noi." }}</p>
     <div class="mmr-cta-row">
-      <button class="btn-primary" id="hero-play" type="button">Ascolta Ora</button>
-      <button class="btn-ghost" id="hero-palinsesto" type="button">Il Palinsesto</button>
+      <button class="btn-primary" id="hero-play" type="button">{{ copy.get('listen_now', 'Listen Now') }}</button>
+      <button class="btn-ghost" id="hero-palinsesto" type="button">{{ copy.get('schedule_button', 'Schedule') }}</button>
     </div>
     <div class="mmr-stats">
-      <div class="mmr-stat"><div class="mmr-stat-n" id="stat-airtime">—</div><div class="mmr-stat-l">In onda oggi</div></div>
-      <div class="mmr-stat"><div class="mmr-stat-n" id="stat-tracks">—</div><div class="mmr-stat-l">Tracce in playlist</div></div>
-      <div class="mmr-stat"><div class="mmr-stat-n" id="stat-hosts">{% for h in brand.hosts %}{{ h.display_name }}{% if not loop.last %} · {% endif %}{% endfor %}</div><div class="mmr-stat-l">I conduttori</div></div>
+      <div class="mmr-stat"><div class="mmr-stat-n" id="stat-airtime">—</div><div class="mmr-stat-l">{{ copy.get('stat_airtime', 'On Air Today') }}</div></div>
+      <div class="mmr-stat"><div class="mmr-stat-n" id="stat-tracks">—</div><div class="mmr-stat-l">{{ copy.get('stat_tracks', 'Tracks in Rotation') }}</div></div>
+      <div class="mmr-stat"><div class="mmr-stat-n" id="stat-hosts">{% for h in brand.hosts %}{{ h.display_name }}{% if not loop.last %} · {% endif %}{% endfor %}</div><div class="mmr-stat-l">{{ copy.get('stat_hosts', 'Hosts') }}</div></div>
     </div>
     <aside class="mmr-casa" id="casa-card" role="status" aria-live="polite" data-cap="ha" hidden>
       <div class="eyebrow" id="casa-eyebrow">Casa · Home Assistant</div>
@@ -175,7 +176,7 @@
     <span class="mmr-sec-note" id="palinsesto-date">—</span>
   </div>
   <ol class="mmr-schedule" id="slots" aria-live="polite">
-    <li><span class="t">—</span><div class="m"><div class="title">Il palinsesto sta arrivando…</div></div></li>
+    <li><span class="t">—</span><div class="m"><div class="title">{{ copy.get('schedule_loading', 'Schedule loading…') }}</div></div></li>
   </ol>
 </section>
 
@@ -189,7 +190,7 @@
     <div class="mmr-dediche-list" id="quote-stack">
       <div class="mmr-dedica">
         <div class="eyebrow">Dedica</div>
-        <div class="quote">Aspettiamo la prima dedica della sera…</div>
+        <div class="quote">{{ copy.get('waiting_dedication', 'Waiting for the first dedication tonight…') }}</div>
         <div class="sig">— {{ brand.station_name }}</div>
       </div>
     </div>
@@ -204,10 +205,10 @@
         </span>
       </div>
       <div class="eyebrow">Manda al DJ <span class="mmr-dedica-postmark">· cara Radio ·</span></div>
-      <label for="req-name" class="sr-only">Nome (opzionale)</label>
-      <input class="mmr-dedica-form-input" type="text" id="req-name" placeholder="Come ti chiami? (opzionale)" autocomplete="name">
-      <label for="req-msg" class="sr-only">Messaggio o richiesta musicale</label>
-      <textarea id="req-msg" rows="4" placeholder="Cara Radio, vorrei dedicare una canzone a…" autocomplete="off"></textarea>
+      <label for="req-name" class="sr-only">{{ copy.get('form_name_label', 'Name (optional)') }}</label>
+      <input class="mmr-dedica-form-input" type="text" id="req-name" placeholder="{{ copy.get('form_name_placeholder', 'Your name (optional)') }}" autocomplete="name">
+      <label for="req-msg" class="sr-only">{{ copy.get('form_message_label', 'Message or song request') }}</label>
+      <textarea id="req-msg" rows="4" placeholder="{{ copy.get('form_message_placeholder', 'Dear Radio, I’d like to dedicate a song to…') }}" autocomplete="off"></textarea>
       <button type="submit">
         <span aria-hidden="true" style="margin-right:8px">&#9993;</span>Spedisci con un bacio
       </button>
@@ -268,9 +269,9 @@
       <p class="fine">Radio scritta dall'intelligenza artificiale. Musica umana. Made with espresso.</p>
     </div>
     <div class="foot-col">
-      <div class="foot-head">Ascolta</div>
+      <div class="foot-head">{{ copy.get('footer_listen', 'Listen') }}</div>
       <a href="{{ ingress_prefix }}/stream">/stream · MP3</a>
-      <button id="pwa-install-btn" type="button" class="foot-link-btn" hidden>Installa app</button>
+      <button id="pwa-install-btn" type="button" class="foot-link-btn" hidden>{{ copy.get('install_app', 'Install app') }}</button>
     </div>
     <div class="foot-col">
       <div class="foot-head">Stazione</div>

@@ -775,14 +775,21 @@ class TestStoppedStateQuietsTheUI:
         js = (WEB_ROOT / "static" / "listener.js").read_text()
 
         # Both surfaces must explicitly handle np.type === 'stopped' and
-        # render the brand-voice copy "In pausa" — not fall through to a
-        # default branch that re-emits np.label.
+        # render the brand-voice paused copy — not fall through to a
+        # default branch that re-emits np.label. The actual displayed string
+        # comes from the Super-Italian-Mode copy bag (np_paused), which renders
+        # "Paused" by default and "In pausa" when the toggle is on. Both modes
+        # share the same key, so we assert the lookup, not the literal.
         assert js.count("np.type === 'stopped'") >= 2, (
             "listener.js must handle the stopped type in BOTH renderNowPlayingStrip "
             "and updateMediaSession; a single branch leaks the raw label to whichever "
             "surface lacks the guard."
         )
-        assert "'In pausa'" in js, "listener.js stopped branches must render 'In pausa' as the user-facing copy."
+        assert "_t('np_paused'" in js, (
+            "listener.js stopped branches must render the np_paused copy key — "
+            "either branch falling back to np.label would leak the internal "
+            "'Session stopped' label."
+        )
 
         # The Media Session album field is broadcast to lock screen / Bluetooth
         # / CarPlay. Hardcoding any city or frequency here re-leaks brand state

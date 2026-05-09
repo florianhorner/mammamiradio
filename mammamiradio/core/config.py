@@ -257,6 +257,7 @@ class StationConfig:
     ha_token: str = ""
     is_addon: bool = False
     allow_ytdlp: bool = False
+    super_italian_mode: bool = False
     # Names of hosts or ad voices that had their configured voice replaced
     # during config load because the configured ID wasn't valid for the chosen
     # backend. Empty when all voices passed validation.
@@ -387,6 +388,10 @@ def _apply_addon_options() -> None:
         val = options.get(opt_key, "")
         if val and not os.getenv(env_key):
             os.environ[env_key] = val
+
+    si = options.get("super_italian_mode")
+    if isinstance(si, bool) and not os.getenv("MAMMAMIRADIO_SUPER_ITALIAN"):
+        os.environ["MAMMAMIRADIO_SUPER_ITALIAN"] = "true" if si else "false"
 
 
 def _parse_brand(raw: dict, hosts: list[HostPersonality]) -> tuple[BrandSection, list[str]]:
@@ -728,7 +733,14 @@ def load_config(path: str = "radio.toml") -> StationConfig:
         ha_token=ha_token,
         is_addon=addon_mode,
         allow_ytdlp=os.getenv("MAMMAMIRADIO_ALLOW_YTDLP", "false").lower() in ("true", "1", "yes"),
+        super_italian_mode=bool(raw.get("super_italian_mode", False)),
     )
+
+    _super_italian_env = os.getenv("MAMMAMIRADIO_SUPER_ITALIAN", "").strip().lower()
+    if _super_italian_env in _TRUTHY:
+        config.super_italian_mode = True
+    elif _super_italian_env in _FALSY:
+        config.super_italian_mode = False
 
     # Addon overrides: persistent paths, auto-enable HA
     if addon_mode:
