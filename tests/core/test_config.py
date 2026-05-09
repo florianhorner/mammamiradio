@@ -247,6 +247,23 @@ def test_apply_addon_options(monkeypatch, tmp_path):
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
 
 
+@pytest.mark.parametrize(("value", "expected_env"), [(True, "true"), (False, "false")])
+def test_apply_addon_options_super_italian_round_trips(monkeypatch, tmp_path, value, expected_env):
+    """Addon options.json super_italian_mode bool should populate the env var."""
+    import os
+
+    options_file = tmp_path / "options.json"
+    options_file.write_text(json.dumps({"super_italian_mode": value}))
+    monkeypatch.delenv("MAMMAMIRADIO_SUPER_ITALIAN", raising=False)
+    try:
+        with patch("mammamiradio.core.config.Path") as mock_path_cls:
+            mock_path_cls.return_value = options_file
+            _apply_addon_options()
+        assert os.environ.get("MAMMAMIRADIO_SUPER_ITALIAN") == expected_env
+    finally:
+        os.environ.pop("MAMMAMIRADIO_SUPER_ITALIAN", None)
+
+
 def test_apply_addon_options_no_override(monkeypatch, tmp_path):
     """Existing env vars should not be overridden by options.json."""
     options = {"anthropic_api_key": "from_options"}

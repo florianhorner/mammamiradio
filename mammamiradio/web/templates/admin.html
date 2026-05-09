@@ -1129,7 +1129,7 @@ body[data-stopped="true"] .a-station-card .dot.on { animation-play-state: paused
         <button type="button" class="btn-icon" title="Shuffle" onclick="doShuffle(this)">
           <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 4h2.5l5 8H12"/><path d="M2 12h2.5l1.8-2.9"/><path d="M9.7 6.4 12 4"/><path d="M10 2l2 2-2 2"/><path d="M10 10l2 2-2 2"/></svg>
         </button>
-        <button type="button" class="btn-primary-sm" onclick="doTrigger('banter',this)">Aggiungi banter</button>
+        <button type="button" class="btn-primary-sm" onclick="doTrigger('banter',this)">Add banter</button>
       </div>
     </div>
 
@@ -1167,37 +1167,37 @@ body[data-stopped="true"] .a-station-card .dot.on { animation-play-state: paused
       <div class="a-triggers">
         <button type="button" class="a-trigger" onclick="doTrigger('banter',this)">
           <span class="ico-wrap"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="2" width="4" height="7" rx="2"/><path d="M3.5 7.5a4.5 4.5 0 0 0 9 0"/><path d="M8 12v2"/><path d="M5.5 14h5"/></svg></span>
-          <span class="lb">Aggiungi banter</span>
+          <span class="lb">Add banter</span>
           <span class="hi">Plays after current song</span>
         </button>
         <button type="button" class="a-trigger" onclick="doTrigger('ad',this)">
           <span class="ico-wrap"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="6" width="12" height="8" rx="1.2"/><path d="M5 4l8-2"/><circle cx="11" cy="10" r="1.6"/><path d="M4.5 9h2M4.5 11h3"/></svg></span>
-          <span class="lb">Forza pubblicità</span>
+          <span class="lb">Force ad break</span>
           <span class="hi">Next break — absurd Italian</span>
         </button>
         <button type="button" class="a-trigger" onclick="doTrigger('news_flash',this)">
           <span class="ico-wrap"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8 1.8 14.5 13H1.5z"/><path d="M8 6v3.5"/><circle cx="8" cy="11.6" r="0.6" fill="currentColor"/></svg></span>
-          <span class="lb">Notizia flash</span>
+          <span class="lb">News flash</span>
           <span class="hi">Claude writes from today's feed</span>
         </button>
         <button type="button" class="a-trigger chaos" onclick="doQuickAction('more_chaos',this)">
           <span class="ico-wrap"><svg viewBox="0 0 16 16" fill="currentColor"><path d="M8.7 1L3 9h4l-1 6 6-8H8z"/></svg></span>
-          <span class="lb">Caos in arrivo</span>
+          <span class="lb">Bring the chaos</span>
           <span class="hi">Unscheduled — anything goes</span>
         </button>
       </div>
       <!-- Azioni Rapide -->
       <div style="margin-top:16px;padding-top:14px;border-top:1px solid var(--line)">
-        <div class="card-label" style="margin-bottom:10px">Azioni Rapide</div>
+        <div class="card-label" style="margin-bottom:10px">Quick Actions</div>
         <div class="quick-actions">
-          <button type="button" class="btn btn-chip" onclick="doQuickAction('less_banter',this)"><svg class="ic" aria-hidden="true"><use href="#ic-mic-off"/></svg> Taglia banter</button>
-          <button type="button" class="btn btn-chip" onclick="doQuickAction('too_many_ads',this)"><svg class="ic" aria-hidden="true"><use href="#ic-ban"/></svg> Taglia pubblicità</button>
-          <button type="button" class="btn btn-chip" onclick="doQuickAction('hot_reload',this)"><svg class="ic" aria-hidden="true"><use href="#ic-rotate-cw"/></svg> Ricarica live</button>
-          <button type="button" class="btn btn-chip" onclick="doPurge(this)"><svg class="ic" aria-hidden="true"><use href="#ic-trash"/></svg> Svuota coda</button>
-          <button type="button" class="btn btn-chip" onclick="flagCurrentTrack(this)"><svg class="ic" aria-hidden="true"><use href="#ic-flag"/></svg> Segnala traccia</button>
+          <button type="button" class="btn btn-chip" onclick="doQuickAction('less_banter',this)"><svg class="ic" aria-hidden="true"><use href="#ic-mic-off"/></svg> Cut banter</button>
+          <button type="button" class="btn btn-chip" onclick="doQuickAction('too_many_ads',this)"><svg class="ic" aria-hidden="true"><use href="#ic-ban"/></svg> Cut ads</button>
+          <button type="button" class="btn btn-chip" onclick="doQuickAction('hot_reload',this)"><svg class="ic" aria-hidden="true"><use href="#ic-rotate-cw"/></svg> Hot reload</button>
+          <button type="button" class="btn btn-chip" onclick="doPurge(this)"><svg class="ic" aria-hidden="true"><use href="#ic-trash"/></svg> Clear queue</button>
+          <button type="button" class="btn btn-chip" onclick="flagCurrentTrack(this)"><svg class="ic" aria-hidden="true"><use href="#ic-flag"/></svg> Flag track</button>
         </div>
         <div style="margin-top:10px">
-          <div class="card-label">Ultima Pausa</div>
+          <div class="card-label">Last break</div>
           <div class="script-box" id="recentBody"><div class="empty">Nothing aired yet</div></div>
         </div>
       </div>
@@ -1298,6 +1298,18 @@ body[data-stopped="true"] .a-station-card .dot.on { animation-play-state: paused
         <span class="tab-alert" aria-hidden="true" id="engineAlertDot" style="display:none;width:6px;height:6px;border-radius:50%;background:var(--warning);vertical-align:middle"></span>
       </header>
       <div>
+
+        <!-- Super Italian Mode toggle (station personality dial) -->
+        <div class="card-label">Super Italian Mode</div>
+        <div style="margin-bottom:14px">
+          <label style="display:flex;align-items:center;gap:10px;cursor:pointer;font-size:13px">
+            <input type="checkbox" id="superItalianToggle" onchange="toggleSuperItalian(this)" style="width:16px;height:16px;cursor:pointer">
+            <span><strong>Super Italian Mode</strong></span>
+          </label>
+          <div style="margin-top:6px;font-size:12px;line-height:1.8;color:var(--cream-dk)">
+            Lean fully into Italian — hosts speak <em>amici miei</em>, the listener page goes full Italian. Default mixes Italian flavor with English clarity.
+          </div>
+        </div>
 
         <!-- Systems -->
         <div class="card-label">Sistemi</div>
@@ -1412,7 +1424,7 @@ function toggleAccordion(head){
 function toggleSection(head){head.classList.toggle('open');head.nextElementSibling.classList.toggle('open')}
 
 // ── Transport ──
-async function doSkip(el){flash(el);await api('POST','/api/skip');toast('Saltato — passaggio al segmento successivo')}
+async function doSkip(el){flash(el);await api('POST','/api/skip');toast('Skipped — moving to next segment')}
 async function doTrigger(t,el){flash(el);const r=await api('POST','/api/trigger',{type:t});if(r.ok)toast('Queued: '+t.replace('_',' ')+' (plays after current song)');else toast('Failed: '+(r.error||'unknown'))}
 async function doQuickAction(action,el){
   flash(el);
@@ -1420,26 +1432,26 @@ async function doQuickAction(action,el){
     const v=Math.min(6,parseInt(document.getElementById('pBanter').value||'2')+1);
     document.getElementById('pBanter').value=v;document.getElementById('pvBanter').textContent=v;
     await api('PATCH','/api/pacing',{songs_between_banter:v,songs_between_ads:parseInt(document.getElementById('pAds').value||'4'),ad_spots_per_break:parseInt(document.getElementById('pSpots').value||'2')});
-    toast('Meno banter: ogni '+v+' canzoni');
+    toast('Less banter: every '+v+' songs');
   }else if(action==='more_chaos'){
     const r=await api('POST','/api/trigger',{type:'banter'});
-    toast(r.ok?'Caos in arrivo — banter in coda':'Failed: '+(r.error||'unknown'));
+    toast(r.ok?'Chaos incoming — banter queued':'Failed: '+(r.error||'unknown'));
   }else if(action==='too_many_ads'){
     const v=Math.min(10,parseInt(document.getElementById('pAds').value||'4')+2);
     document.getElementById('pAds').value=v;document.getElementById('pvAds').textContent=v;
     await api('PATCH','/api/pacing',{songs_between_banter:parseInt(document.getElementById('pBanter').value||'2'),songs_between_ads:v,ad_spots_per_break:parseInt(document.getElementById('pSpots').value||'2')});
-    toast('Meno pubblicità: ogni '+v+' canzoni');
+    toast('Fewer ads: every '+v+' songs');
   }else if(action==='hot_reload'){
     const r=await api('POST','/api/hot-reload',{});
-    if(r.ok)toast('Scriptwriter ricaricato in '+r.duration_ms+'ms — prossimo banter usa il nuovo codice');
-    else if(r.error_code==='debounced')toast('Ricarica saltata — riprova tra '+r.retry_after_s+'s');
-    else toast('Ricarica fallita: '+(r.exception||r.error_code||r.error||'unknown'));
+    if(r.ok)toast('Scriptwriter reloaded in '+r.duration_ms+'ms — next banter uses new code');
+    else if(r.error_code==='debounced')toast('Reload skipped — retry in '+r.retry_after_s+'s');
+    else toast('Reload failed: '+(r.exception||r.error_code||r.error||'unknown'));
   }
 }
-async function doShuffle(el){flash(el);await api('POST','/api/shuffle');toast('Playlist mischiata')}
-async function doPurge(el){flash(el);const r=await api('POST','/api/purge');toast('Eliminati '+r.purged+' segmenti dalla coda')}
-async function doStop(el){flash(el);await api('POST','/api/stop');toast('Sessione fermata');updateStopState(true)}
-async function doResume(el){flash(el);await api('POST','/api/resume');toast('Sessione ripresa');updateStopState(false)}
+async function doShuffle(el){flash(el);await api('POST','/api/shuffle');toast('Playlist shuffled')}
+async function doPurge(el){flash(el);const r=await api('POST','/api/purge');toast('Cleared '+r.purged+' segments from queue')}
+async function doStop(el){flash(el);await api('POST','/api/stop');toast('Session stopped');updateStopState(true)}
+async function doResume(el){flash(el);await api('POST','/api/resume');toast('Session resumed');updateStopState(false)}
 function updateStopState(stopped){
   // Global toggle so CSS can dim animations, producer buttons, etc.
   document.body.setAttribute('data-stopped',stopped?'true':'false');
@@ -1469,7 +1481,7 @@ function updateStopState(stopped){
 // ── Flag Track — operator-only action, prompt() dialog is acceptable here ──
 async function flagCurrentTrack(el) {
   const ytId = _st?.now_streaming?.metadata?.youtube_id;
-  if (!ytId) { toast('Nessuna traccia in riproduzione'); return; }
+  if (!ytId) { toast('No track playing'); return; }
   const rule = prompt('Describe this track reaction (e.g. "cringe pop classic, Aggu vibes"):');
   if (!rule) return;
   flash(el);
@@ -1730,7 +1742,7 @@ async function setupRecheck(el){
   flash(el);
   const data=await api('POST','/api/setup/recheck');
   renderSetup(data);
-  toast('Controllo setup completato');
+  toast('Setup check complete');
 }
 async function setupSaveKeys(el){
   flash(el);
@@ -1739,7 +1751,7 @@ async function setupSaveKeys(el){
   const payload={};
   if(anthropic) payload.ANTHROPIC_API_KEY=anthropic;
   if(openai) payload.OPENAI_API_KEY=openai;
-  if(!Object.keys(payload).length){toast('Inserisci almeno una chiave');return}
+  if(!Object.keys(payload).length){toast('Enter at least one key');return}
   const resp=await api('POST','/api/setup/save-keys',payload);
   if(!resp.ok){toast(resp.error||'Failed to save keys');return}
   document.getElementById('setupAnthropicKey').value='';
@@ -1747,16 +1759,16 @@ async function setupSaveKeys(el){
   _keysEditMode=false;
   const updated=await api('POST','/api/setup/recheck');
   renderSetup(updated);
-  toast('Chiavi salvate');
+  toast('Keys saved');
 }
 async function copySetupSnippet(){
   const txt=document.getElementById('setupSnippet')?.textContent||'';
-  if(!txt){toast('Nessuno snippet disponibile');return}
+  if(!txt){toast('No snippet available');return}
   try{
     await navigator.clipboard.writeText(txt);
-    toast('Snippet copiato');
+    toast('Snippet copied');
   }catch(_){
-    toast('Clipboard non disponibile');
+    toast('Clipboard unavailable');
   }
 }
 
@@ -1839,7 +1851,7 @@ async function loadPlaylistSource(kind,el){
     toast('Failed: '+(r.error||'unknown'));
     return;
   }
-  toast(kind==='jamendo'?'Caricata musica Jamendo CC':'Grafiche ricaricate');
+  toast(kind==='jamendo'?'Jamendo CC music loaded':'Charts reloaded');
   await refreshFast();
   updateSourceControls(_st,_caps);
 }
@@ -1876,7 +1888,7 @@ async function moveNext(i){
   const r=await api('POST','/api/playlist/move_to_next',{index:i});
   if(r.ok)toast('Playing next: '+r.moved);else toast('Failed to move track');
 }
-async function removeTr(i){await api('POST','/api/playlist/remove',{index:i});toast('Rimossa')}
+async function removeTr(i){await api('POST','/api/playlist/remove',{index:i});toast('Removed')}
 
 // ── Search ──
 const si=document.getElementById('searchInput');
@@ -1909,7 +1921,7 @@ async function doSearch(){
     el.innerHTML=html;
   }catch(e){console.warn('Search error:',e);el.innerHTML='';}
 }
-async function addTr(i){const t=_sR[i];if(!t)return;await api('POST','/api/playlist/move_to_next',{index:t.index});toast('In riproduzione: '+t.display);document.getElementById('searchResults').innerHTML='';si.value='';_plFilter=''}
+async function addTr(i){const t=_sR[i];if(!t)return;await api('POST','/api/playlist/move_to_next',{index:t.index});toast('Now playing: '+t.display);document.getElementById('searchResults').innerHTML='';si.value='';_plFilter=''}
 async function addExternal(i){
   const t=_sExt[i];if(!t)return;
   const btn=document.getElementById('ext-btn-'+i);
@@ -1917,7 +1929,7 @@ async function addExternal(i){
   try{
     const r=await api('POST','/api/playlist/add-external',{youtube_id:t.youtube_id,title:t.title,artist:t.artist,duration_ms:t.duration_ms});
     if(r.ok){
-      toast('In coda: '+t.display);
+      toast('Queued: '+t.display);
       document.getElementById('searchResults').innerHTML='';
       si.value='';_plFilter='';
     }else{
@@ -1973,7 +1985,7 @@ function updatePaceVal(inputId,valId,v){
     const max=+el.max||100;const min=+el.min||0;
     el.style.backgroundSize=`${((+el.value-min)/(max-min))*100}% 100%`;
   });
-  el.addEventListener('change',()=>{api('PATCH','/api/pacing',{songs_between_banter:+document.getElementById('pBanter').value,songs_between_ads:+document.getElementById('pAds').value,ad_spots_per_break:+document.getElementById('pSpots').value});toast('Cadenza salvata')});
+  el.addEventListener('change',()=>{api('PATCH','/api/pacing',{songs_between_banter:+document.getElementById('pBanter').value,songs_between_ads:+document.getElementById('pAds').value,ad_spots_per_break:+document.getElementById('pSpots').value});toast('Pacing saved')});
 });
 function updatePaceCounters(pacing){
   if(!pacing)return;
@@ -2170,6 +2182,24 @@ function updateLog(log){
   }).join('');
 }
 
+// ── Super Italian Mode toggle ──
+async function loadSuperItalianToggle(){
+  try{
+    const r=await api('GET','/api/super-italian');
+    const cb=document.getElementById('superItalianToggle');
+    if(cb&&r&&typeof r.super_italian_mode==='boolean')cb.checked=r.super_italian_mode;
+  }catch(e){/* ignore — toggle defaults to off */}
+}
+async function toggleSuperItalian(el){
+  const value=!!el.checked;
+  const r=await api('POST','/api/super-italian',{super_italian_mode:value});
+  if(r.ok)toast(value?'Super Italian Mode: ON':'Super Italian Mode: OFF');
+  else{
+    el.checked=!value;
+    toast('Failed: '+(r.error||'unknown'));
+  }
+}
+
 // ── Engine Room ──
 function updateEngineRoom(st,caps){
   const rt=document.getElementById('engineRuntime');
@@ -2291,6 +2321,7 @@ async function refreshSlow(){
 async function refresh(){await Promise.all([refreshFast(),refreshSlow()])}
 
 refresh();
+loadSuperItalianToggle();
 setInterval(refreshFast,3000);
 setInterval(refreshSlow,30000);
 </script>

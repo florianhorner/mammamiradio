@@ -372,8 +372,8 @@ async def _generate_json_response(
 def _get_system_prompt(config: StationConfig) -> str:
     """Return cached system prompt, rebuilding only when hosts change."""
     global _cached_system_prompt, _cached_prompt_key
-    # Key on host names + styles + personality axes to detect config changes
     key = "|".join(f"{h.name}:{h.style}:{h.personality.to_dict()}" for h in config.hosts)
+    key += f"|super_italian={int(config.super_italian_mode)}"
     if key != _cached_prompt_key:
         _cached_system_prompt = _build_system_prompt(config)
         _cached_prompt_key = key
@@ -659,8 +659,26 @@ Use these sparingly (1-2 references per script at most). They should feel like i
 jokes between the hosts, not exposition. The listener should feel like they're
 overhearing a world that exists with or without them."""
 
+    if config.super_italian_mode:
+        mode_directive = (
+            f"The station language is {config.station.language}. ALL dialogue must be in "
+            f"{config.station.language}. Lean fully into Italian idioms — address listeners "
+            "as 'amici miei', 'cari ascoltatori', drop English crutches. Italian phrases "
+            "land without translation. English is rare and intentional."
+        )
+    else:
+        mode_directive = (
+            "You broadcast to a mixed international audience. Code-switch charmingly: "
+            "English carries the narrative — the heart of each segment is English the "
+            "audience can follow. Italian phrases sprinkle in for color (ciao, amore, "
+            "che bello, ecco, dai, mamma mia, allora, basta). Open and close with "
+            "Italian flair. Think 'Italian DJ on tour speaking to the world,' not "
+            "'RAI domestic broadcast.' The natural Italian fillers below still apply "
+            "as sprinkles, never as full sentences."
+        )
+
     return f"""You write scripts for a fake AI radio station called "{config.station.name}".
-The station language is {config.station.language}. ALL dialogue must be in {config.station.language}.
+{mode_directive}
 Theme: {config.station.theme}{geography}
 {station_world}
 Hosts:

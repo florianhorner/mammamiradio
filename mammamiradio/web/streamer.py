@@ -32,6 +32,7 @@ from mammamiradio.playlist.playlist import (
     write_persisted_source,
 )
 from mammamiradio.scheduling.scheduler import preview_upcoming
+from mammamiradio.web.ui_copy import copy_strings
 
 logger = logging.getLogger(__name__)
 
@@ -1024,6 +1025,23 @@ def _render_admin_response(request: Request, prefix: str) -> HTMLResponse:
     return HTMLResponse(content=html, headers={"Content-Security-Policy": csp})
 
 
+def _listener_context(request: Request, config, prefix: str) -> dict:
+    """Build the Jinja2 context for the listener page.
+
+    `copy` is a frozen dict in the active super_italian_mode; templates use
+    `{{ copy.get('key', 'fallback') }}`. The same dict serializes into the
+    listener.html `<script type="application/json">` bootstrap so JS reads it
+    once at page load instead of refetching on every /public-status poll.
+    """
+    return {
+        "brand": config.brand,
+        "ingress_prefix": _sanitize_ingress_prefix(prefix),
+        "csrf_token": _get_csrf_token(request.app),
+        "asset_version": _ASSET_VERSION,
+        "copy": copy_strings(bool(config.super_italian_mode)),
+    }
+
+
 @router.get("/", response_class=HTMLResponse)
 async def listener_home(request: Request):
     """Serve the public listener UI, except trusted HA ingress opens the control room."""
@@ -1034,12 +1052,7 @@ async def listener_home(request: Request):
     return _TEMPLATES.TemplateResponse(
         request,
         "listener.html",
-        {
-            "brand": config.brand,
-            "ingress_prefix": _sanitize_ingress_prefix(prefix),
-            "csrf_token": _get_csrf_token(request.app),
-            "asset_version": _ASSET_VERSION,
-        },
+        _listener_context(request, config, prefix),
     )
 
 
@@ -1075,12 +1088,7 @@ async def listener(request: Request):
     return _TEMPLATES.TemplateResponse(
         request,
         "listener.html",
-        {
-            "brand": config.brand,
-            "ingress_prefix": _sanitize_ingress_prefix(prefix),
-            "csrf_token": _get_csrf_token(request.app),
-            "asset_version": _ASSET_VERSION,
-        },
+        _listener_context(request, config, prefix),
     )
 
 
@@ -1557,6 +1565,60 @@ async def update_pacing(request: Request, _: None = Depends(require_admin_access
         "songs_between_ads": config.pacing.songs_between_ads,
         "ad_spots_per_break": config.pacing.ad_spots_per_break,
     }
+
+
+@router.get("/api/super-italian")
+async def get_super_italian(request: Request, _: None = Depends(require_admin_access)):
+    """Return the current Super Italian Mode flag."""
+    config = request.app.state.config
+    return {"super_italian_mode": bool(config.super_italian_mode)}
+
+
+_super_italian_lock = asyncio.Lock()
+
+
+def _save_super_italian_addon_options(value: bool) -> None:
+    """Persist super_italian_mode into /data/options.json for HA addons."""
+    import json as _json
+
+    options_path = Path("/data/options.json")
+    options: dict = {}
+    if options_path.exists():
+        try:
+            options = _json.loads(options_path.read_text())
+        except (ValueError, OSError):
+            options = {}
+    options["super_italian_mode"] = value
+    options_path.write_text(_json.dumps(options, indent=2))
+
+
+@router.post("/api/super-italian")
+async def set_super_italian(request: Request, _: None = Depends(require_admin_access)):
+    """Toggle Super Italian Mode live and persist it.
+
+    Connected listeners pick up the new copy on the next page reload (it's baked
+    into listener.html via Jinja, not refetched on /public-status polls). The
+    scriptwriter system-prompt cache invalidates on the mode key so the next
+    banter generation uses the new directive without a restart.
+
+    Persistence: writes `MAMMAMIRADIO_SUPER_ITALIAN` to `.env` on standalone
+    deploys, and `super_italian_mode` to `/data/options.json` on HA addons —
+    so the value survives container restarts in both modes.
+    """
+    config = request.app.state.config
+    body = await request.json()
+    if not isinstance(body, dict) or "super_italian_mode" not in body:
+        return {"ok": False, "error": "expected JSON object with super_italian_mode"}
+    value = bool(body["super_italian_mode"])
+    env_value = "true" if value else "false"
+    loop = asyncio.get_running_loop()
+    async with _super_italian_lock:
+        config.super_italian_mode = value
+        os.environ["MAMMAMIRADIO_SUPER_ITALIAN"] = env_value
+        await loop.run_in_executor(None, _save_dotenv, {"MAMMAMIRADIO_SUPER_ITALIAN": env_value})
+        if config.is_addon:
+            await loop.run_in_executor(None, _save_super_italian_addon_options, value)
+    return {"ok": True, "super_italian_mode": value}
 
 
 @router.post("/api/credentials")
