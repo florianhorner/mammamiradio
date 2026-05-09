@@ -86,13 +86,18 @@ html, body {
 .mmr-play-btn.playing { background: var(--ok); color: var(--cream); padding-left: 0; box-shadow: 0 4px 20px rgba(37,99,235,0.45), 0 0 0 5px rgba(37,99,235,0.08), 0 0 28px rgba(37,99,235,0.2); }
 
 /* Stage */
+/* Inlined surface/border values below (#54453A, #6E5B49, rgba(...0.32))
+ * are intentional listener-only overrides for card visibility on the dark
+ * page bg. Do NOT refactor back into --surface / --line-strong tokens —
+ * those are kept calm for admin's espresso surface. See CLAUDE.md
+ * "Protected UI elements / Admin espresso surface". */
 .mmr-stage {
   margin: 20px 32px 32px;
   position: relative;
   background:
     radial-gradient(600px 300px at 85% 35%, rgba(236,204,48,0.07), transparent 60%),
     linear-gradient(180deg, rgba(26,22,18,0.88) 0%, rgba(20,17,15,0.92) 100%);
-  border: 1px solid var(--line-strong);
+  border: 1px solid rgba(245, 237, 216, 0.32);
   border-radius: 20px;
   box-shadow: inset 0 1px 0 rgba(245,237,216,0.05), 0 24px 60px -30px rgba(0,0,0,0.7);
   overflow: hidden;
@@ -124,7 +129,7 @@ html, body {
 .mmr-stage-header .mmr-np-meta .artist { font-family: var(--font-mono); font-size: 12px; color: var(--text-secondary); margin-top: 2px; }
 .mmr-np-progress { display: flex; align-items: center; gap: 8px; font-family: var(--font-mono); font-size: 10px; color: var(--muted); flex-shrink: 0; }
 .mmr-np-progress-inner { display: flex; align-items: center; gap: 6px; }
-.mmr-np-bar { width: 80px; height: 2px; background: var(--surface-strong); border-radius: 1px; overflow: hidden; }
+.mmr-np-bar { width: 80px; height: 2px; background: #6E5B49; border-radius: 1px; overflow: hidden; }
 .mmr-np-fill { height: 100%; background: var(--ok); border-radius: 1px; transition: width 1s linear; width: 0; }
 .mmr-stage-seam { display: flex; height: 2px; grid-column: 1 / -1; grid-row: 2; }
 .mmr-stage-seam .seg { flex: 1; opacity: 0.7; }
@@ -140,7 +145,7 @@ html, body {
 .mmr-cta-row { display: flex; gap: 10px; }
 .btn-primary { font-family: var(--font-body); font-size: 13px; font-weight: 600; letter-spacing: 0.02em; padding: 13px 20px; min-height: 44px; display: inline-flex; align-items: center; justify-content: center; border-radius: var(--radius-md); border: none; background: var(--brand-primary, var(--sun2)); color: var(--ink); cursor: pointer; box-shadow: 0 4px 20px rgba(236,204,48,0.35); transition: transform 180ms, background 180ms; }
 .btn-primary:hover { background: var(--brand-primary, var(--sun)); transform: translateY(-1px); }
-.btn-ghost { font-family: var(--font-body); font-size: 13px; font-weight: 600; padding: 13px 20px; min-height: 44px; display: inline-flex; align-items: center; justify-content: center; border-radius: var(--radius-md); background: transparent; color: var(--cream); border: 1px solid var(--line-strong); cursor: pointer; transition: border-color 180ms, color 180ms; }
+.btn-ghost { font-family: var(--font-body); font-size: 13px; font-weight: 600; padding: 13px 20px; min-height: 44px; display: inline-flex; align-items: center; justify-content: center; border-radius: var(--radius-md); background: transparent; color: var(--cream); border: 1px solid rgba(245, 237, 216, 0.32); cursor: pointer; transition: border-color 180ms, color 180ms; }
 .btn-ghost:hover { border-color: var(--cream); }
 
 /* Stats */
@@ -231,7 +236,7 @@ html, body {
  * inset top-edge highlight + drop-shadow. Without this, dark surfaces blend
  * into the body bg mid-scroll and the eye registers them as page bg, not
  * panels. See .context/listener-contrast/ANALYSIS.md for the contrast math. */
-.mmr-schedule { list-style: none; padding: 0; margin: 0; background: var(--surface); border: 1px solid var(--line-strong); border-radius: var(--radius-lg); overflow: hidden; scroll-margin-top: 90px; box-shadow: inset 0 1px 0 rgba(245,237,216,0.04), 0 2px 10px rgba(0,0,0,0.3); }
+.mmr-schedule { list-style: none; padding: 0; margin: 0; background: #54453A; border: 1px solid rgba(245, 237, 216, 0.32); border-radius: var(--radius-lg); overflow: hidden; scroll-margin-top: 90px; box-shadow: inset 0 1px 0 rgba(245,237,216,0.04), 0 2px 10px rgba(0,0,0,0.3); }
 .mmr-schedule li { display: grid; grid-template-columns: 80px 1fr auto; gap: 16px; align-items: center; padding: 14px 18px; border-bottom: 1px solid rgba(245,237,216,0.05); transition: background 180ms; }
 .mmr-schedule li:last-child { border-bottom: none; }
 .mmr-schedule li:hover { background: rgba(245,237,216,0.03); }
@@ -247,7 +252,7 @@ html, body {
 /* Dediche */
 .mmr-dediche-grid { display: grid; grid-template-columns: 1.3fr 1fr; gap: 22px; align-items: stretch; }
 .mmr-dediche-list { display: flex; flex-direction: column; gap: 10px; min-height: 100%; }
-.mmr-dedica { background: var(--surface-strong); border: 1px solid var(--line-strong); border-radius: 12px; padding: 14px 16px; flex: 1 1 auto; display: flex; flex-direction: column; justify-content: center; box-shadow: inset 0 1px 0 rgba(245,237,216,0.04), 0 2px 10px rgba(0,0,0,0.3); }
+.mmr-dedica { background: #6E5B49; border: 1px solid rgba(245, 237, 216, 0.32); border-radius: 12px; padding: 14px 16px; flex: 1 1 auto; display: flex; flex-direction: column; justify-content: center; box-shadow: inset 0 1px 0 rgba(245,237,216,0.04), 0 2px 10px rgba(0,0,0,0.3); }
 .mmr-dedica .eyebrow { font-size: 9px; font-weight: 700; letter-spacing: 0.2em; text-transform: uppercase; color: var(--brand-primary, var(--sun2)); margin-bottom: 8px; display: block; font-family: var(--font-body); }
 .mmr-dedica .quote { font-family: var(--font-display); font-style: italic; font-weight: 500; font-size: 17px; color: var(--cream); line-height: 1.3; }
 .mmr-dedica .sig { font-size: 12px; color: var(--text-secondary); margin-top: 6px; }
@@ -283,7 +288,7 @@ html, body {
 
 /* About */
 .mmr-about-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; }
-.mmr-about-card { background: var(--surface-strong); border: 1px solid var(--line-strong); border-radius: 12px; padding: 20px 22px; box-shadow: inset 0 1px 0 rgba(245,237,216,0.04), 0 2px 10px rgba(0, 0, 0, 0.3); transition: border-color 180ms, transform 180ms, box-shadow 180ms; }
+.mmr-about-card { background: #6E5B49; border: 1px solid rgba(245, 237, 216, 0.32); border-radius: 12px; padding: 20px 22px; box-shadow: inset 0 1px 0 rgba(245,237,216,0.04), 0 2px 10px rgba(0, 0, 0, 0.3); transition: border-color 180ms, transform 180ms, box-shadow 180ms; }
 .mmr-about-card:hover { border-color: rgba(244, 208, 72, 0.4); transform: translateY(-2px); box-shadow: inset 0 1px 0 rgba(245,237,216,0.04), 0 6px 18px rgba(0, 0, 0, 0.5); }
 .mmr-about-card .eyebrow { font-family: var(--font-body); font-size: 10px; font-weight: 700; letter-spacing: 0.22em; text-transform: uppercase; color: var(--brand-primary, var(--sun2)); margin-bottom: 12px; display: block; }
 .mmr-about-card p { font-size: 14px; line-height: 1.6; color: var(--cream-dk); margin: 0; }
