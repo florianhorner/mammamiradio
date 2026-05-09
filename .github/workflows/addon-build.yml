@@ -141,9 +141,12 @@ jobs:
 
       - name: Run container smoke test
         run: |
+          # The addon entrypoint (rootfs/run.sh) hardcodes uvicorn to bind
+          # 0.0.0.0:8000 — the HA Supervisor ingress contract requires it.
+          # The MAMMAMIRADIO_PORT env var is overwritten inside the container,
+          # so the host-side port mapping must target the container's real port (8000).
           docker run -d --name mamma-smoke \
-            -p 8765:8099 \
-            -e MAMMAMIRADIO_PORT=8099 \
+            -p 8765:8000 \
             -e LOG_LEVEL=WARNING \
             ${{ env.REGISTRY }}/${{ env.IMAGE_BASE }}-amd64:${{ github.sha }}
           sleep 40
