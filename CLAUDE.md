@@ -222,6 +222,7 @@ These UI elements have regressed in past refactors. Always verify they survive a
 - **Station name localStorage** (`mammamiradio/web/static/listener.js`) — reads `stationName` from localStorage. Admin writes it. Broken when dashboard.html was rewritten.
 - **Gold "Mi" accent** (`listener.html`, `admin.html`) — `<span class="mi">` in h1, styled `color: var(--sun)`. Brand signature from hero banner.
 - **Italian tricolor stripe** (`admin.html` uses `.tricolor-stripe`; `listener.html` uses `.tricolor-band`) — present below h1. Must match hero banner.
+- **Admin espresso surface** (`mammamiradio/web/static/tokens.css`) — `--surface` / `--surface-strong` / `--line-strong` must remain at Pi-baseline values (`#251E19` / `#362B25` / `0.16`) so admin reads as espresso warm-brown, not washed-out taupe. Listener-card visibility fixes belong inline on `.mmr-*` classes in `listener.css` (schedule / dedica / about-card / hero-stage), never on shared tokens. Regressed once in PR #298.
 
 When editing any HTML file, grep for these elements before committing.
 
