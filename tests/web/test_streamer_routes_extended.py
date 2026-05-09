@@ -1537,6 +1537,103 @@ async def test_credentials_saves_valid_key(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# Super Italian Mode endpoints
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_super_italian_returns_current_flag():
+    app = _make_test_app()
+    app.state.config.super_italian_mode = False
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.get("/api/super-italian")
+    assert resp.status_code == 200
+    assert resp.json() == {"super_italian_mode": False}
+
+
+@pytest.mark.asyncio
+async def test_post_super_italian_flips_flag():
+    app = _make_test_app()
+    app.state.config.super_italian_mode = False
+    with patch("mammamiradio.web.streamer._save_dotenv"):
+        transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            resp = await client.post("/api/super-italian", json={"super_italian_mode": True})
+    assert resp.status_code == 200
+    assert resp.json() == {"ok": True, "super_italian_mode": True}
+    assert app.state.config.super_italian_mode is True
+    assert os.environ.get("MAMMAMIRADIO_SUPER_ITALIAN") == "true"
+    os.environ.pop("MAMMAMIRADIO_SUPER_ITALIAN", None)
+
+
+@pytest.mark.asyncio
+async def test_post_super_italian_rejects_missing_field():
+    app = _make_test_app()
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.post("/api/super-italian", json={"other": "value"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ok"] is False
+    assert "expected JSON object" in body["error"]
+
+
+@pytest.mark.asyncio
+async def test_post_super_italian_rejects_non_dict_body():
+    app = _make_test_app()
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.post("/api/super-italian", json=["not", "a", "dict"])
+    assert resp.status_code == 200
+    assert resp.json()["ok"] is False
+
+
+@pytest.mark.asyncio
+async def test_post_super_italian_addon_mode_writes_options(tmp_path):
+    """In addon mode, the toggle additionally writes to /data/options.json."""
+    app = _make_test_app(is_addon=True)
+    app.state.config.super_italian_mode = False
+    options_file = tmp_path / "options.json"
+    options_file.write_text('{"existing": "value"}')
+
+    with (
+        patch("mammamiradio.web.streamer._save_dotenv"),
+        patch("mammamiradio.web.streamer.Path") as mock_path,
+    ):
+        mock_path.return_value = options_file
+        transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            resp = await client.post("/api/super-italian", json={"super_italian_mode": True})
+
+    assert resp.status_code == 200
+    assert resp.json()["ok"] is True
+    import json as _json
+
+    options = _json.loads(options_file.read_text())
+    assert options["super_italian_mode"] is True
+    assert options["existing"] == "value"  # preserved
+    os.environ.pop("MAMMAMIRADIO_SUPER_ITALIAN", None)
+
+
+def test_save_super_italian_addon_options_handles_corrupt_file(tmp_path):
+    """Corrupt /data/options.json is treated as empty — write proceeds."""
+    from mammamiradio.web.streamer import _save_super_italian_addon_options
+
+    options_file = tmp_path / "options.json"
+    options_file.write_text("not valid json {{{")
+
+    with patch("mammamiradio.web.streamer.Path") as mock_path:
+        mock_path.return_value = options_file
+        _save_super_italian_addon_options(True)
+
+    import json as _json
+
+    options = _json.loads(options_file.read_text())
+    assert options == {"super_italian_mode": True}
+
+
+# ---------------------------------------------------------------------------
 # Clip sharing endpoints
 # ---------------------------------------------------------------------------
 
