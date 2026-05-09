@@ -10,6 +10,7 @@ CHECK_COMMIT_MSG = ROOT / "scripts" / "check-commit-msg.sh"
 CHECK_VERSION_SYNC = ROOT / "scripts" / "check-version-sync.sh"
 CHECK_CHANGELOG_SYNC = ROOT / "scripts" / "check-changelog-sync.sh"
 VALIDATE_ADDON = ROOT / "scripts" / "validate-addon.sh"
+TEST_ADDON_LOCAL = ROOT / "scripts" / "test-addon-local.sh"
 
 
 def _run(cmd: list[str], cwd: Path, *, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
@@ -21,6 +22,7 @@ def _init_git_repo(path: Path) -> None:
     _run(["git", "config", "user.email", "tests@example.com"], cwd=path)
     _run(["git", "config", "user.name", "Test User"], cwd=path)
     _run(["git", "config", "commit.gpgsign", "false"], cwd=path)
+    _run(["git", "config", "core.hooksPath", "/dev/null"], cwd=path)
 
 
 def _write(path: Path, content: str) -> None:
@@ -189,6 +191,7 @@ def _create_validate_addon_repo(
     _write(tmp_path / "mammamiradio/__init__.py", "")
     _write(tmp_path / "mammamiradio/web/streamer.py", streamer_body)
     _write(tmp_path / "radio.toml", "[station]\nname = 'Test'\n")
+    _write(tmp_path / "ha-addon/mammamiradio/radio.toml", "[station]\nname = 'Test'\n")
     _write(tmp_path / "pyproject.toml", '[project]\nname = "mammamiradio"\nversion = "1.1.0"\n')
     _write(tmp_path / "repository.yaml", "name: test\n")
 
@@ -256,6 +259,13 @@ def _inject_ingress_prefix(html: str, prefix: str) -> str:
 
     assert result.returncode == 0
     assert "radio.toml is valid TOML" in result.stdout
+
+
+def test_test_addon_local_delegates_to_validate_addon() -> None:
+    wrapper = TEST_ADDON_LOCAL.read_text()
+
+    assert "Compatibility wrapper" in wrapper
+    assert 'exec "$ROOT/scripts/validate-addon.sh" "$@"' in wrapper
 
 
 def test_addon_dockerfile_does_not_drop_root_before_supervisor_mounts() -> None:

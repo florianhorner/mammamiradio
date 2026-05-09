@@ -931,7 +931,7 @@ async def test_setup_save_keys_updates_live_config_without_disk_write():
             async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
                 resp = await client.post(
                     "/api/setup/save-keys",
-                    json={"ANTHROPIC_API_KEY": "ant-test", "OPENAI_API_KEY": "openai-test"},
+                    json={"ANTHROPIC_API_KEY": "ant-test\nEVIL=1", "OPENAI_API_KEY": "openai-test\rEVIL=1"},
                 )
 
         assert resp.status_code == 200
@@ -939,9 +939,13 @@ async def test_setup_save_keys_updates_live_config_without_disk_write():
         assert body["ok"] is True
         assert "ANTHROPIC_API_KEY" in body["saved"]
         assert "OPENAI_API_KEY" in body["saved"]
-        assert app.state.config.anthropic_api_key == "ant-test"
-        assert app.state.config.openai_api_key == "openai-test"
+        assert app.state.config.anthropic_api_key == "ant-testEVIL=1"
+        assert app.state.config.openai_api_key == "openai-testEVIL=1"
         save_dotenv.assert_called_once()
+        assert save_dotenv.call_args.args[0] == {
+            "ANTHROPIC_API_KEY": "ant-testEVIL=1",
+            "OPENAI_API_KEY": "openai-testEVIL=1",
+        }
     finally:
         # Restore env to avoid polluting subsequent tests
         if _prev_anthropic is None:

@@ -75,7 +75,7 @@ Everything else lives under `docs/`:
 - Run app only: `source .venv/bin/activate && python -m uvicorn mammamiradio.main:app --reload --reload-dir mammamiradio`
 - Test: `pytest tests/` or `make test` (with coverage)
 - Test watch: `make test-watch` (re-runs on file save)
-- Test HA add-on build locally: `scripts/test-addon-local.sh`
+- Test HA add-on build locally: `scripts/validate-addon.sh --build`
 - Lint: `ruff check .` (fix: `ruff check --fix .`)
 - Format: `ruff format .` (check: `ruff format --check .`)
 - Type check: `mypy mammamiradio/ tests/`

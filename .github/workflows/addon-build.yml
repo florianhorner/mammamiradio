@@ -20,53 +20,8 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
-      - name: Validate version consistency
-        run: |
-          ADDON_VER=$(grep '^version:' ha-addon/mammamiradio/config.yaml | awk '{print $2}' | tr -d '"')
-          PYPROJECT_VER=$(grep '^version' pyproject.toml | head -1 | sed 's/.*= *"//;s/".*//')
-          echo "Addon version: $ADDON_VER"
-          echo "pyproject.toml version: $PYPROJECT_VER"
-          if [ "$ADDON_VER" != "$PYPROJECT_VER" ]; then
-            echo "::error::Version mismatch: config.yaml=$ADDON_VER pyproject.toml=$PYPROJECT_VER"
-            exit 1
-          fi
-
-      - name: Validate config.yaml image path matches CI tags
-        run: |
-          IMAGE=$(grep '^image:' ha-addon/mammamiradio/config.yaml | awk '{print $2}')
-          EXPECTED="ghcr.io/${{ github.repository_owner }}/mammamiradio-addon-{arch}"
-          echo "Image in config.yaml: $IMAGE"
-          echo "Expected: $EXPECTED"
-          if [ "$IMAGE" != "$EXPECTED" ]; then
-            echo "::error::Image path mismatch: config.yaml has '$IMAGE', CI pushes to '$EXPECTED'"
-            exit 1
-          fi
-
-      - name: Validate addon options are mapped in run.sh
-        run: |
-          # Extract option keys from config.yaml schema section
-          SCHEMA_KEYS=$(sed -n '/^schema:/,/^[^ ]/p' ha-addon/mammamiradio/config.yaml | grep -E '^\s+\w+:' | awk -F: '{print $1}' | tr -d ' ')
-          # Check each key is referenced in run.sh
-          MISSING=""
-          for key in $SCHEMA_KEYS; do
-            if ! grep -q "$key" ha-addon/mammamiradio/rootfs/run.sh; then
-              MISSING="$MISSING $key"
-            fi
-          done
-          if [ -n "$MISSING" ]; then
-            echo "::error::Config keys not mapped in run.sh:$MISSING"
-            exit 1
-          fi
-
-      - name: Validate addon radio.toml matches root radio.toml
-        run: |
-          # Contract since 2.10.3: ha-addon/mammamiradio/radio.toml is byte-for-byte identical to root radio.toml.
-          # scripts/test-addon-local.sh and tests/test_addon_radio_sync.py enforce the same invariant.
-          if ! cmp -s radio.toml ha-addon/mammamiradio/radio.toml; then
-            echo "::error::ha-addon/mammamiradio/radio.toml drifted from root radio.toml — keep them byte-identical"
-            diff radio.toml ha-addon/mammamiradio/radio.toml || true
-            exit 1
-          fi
+      - name: Validate add-on invariants
+        run: bash scripts/validate-addon.sh
 
   build:
     runs-on: ubuntu-latest

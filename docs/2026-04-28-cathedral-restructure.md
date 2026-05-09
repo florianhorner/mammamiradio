@@ -427,7 +427,7 @@ PRs 5 and 6 are explicitly deferred; they are not part of "the cathedral has wal
 | Risk | Mitigation |
 |------|-----------|
 | Open PRs in flight rebase-conflict on import paths | Phase 0 clears #269/#270/#271 first. Audit open PRs again immediately before starting PR 3; if any new PR has opened against the relocation set, decide before moving. |
-| HA addon entrypoint `mammamiradio.main:app` breaks | `main.py` stays at top of package. Smoke-test via `scripts/test-addon-local.sh` in PR 3. |
+| HA addon entrypoint `mammamiradio.main:app` breaks | `main.py` stays at top of package. Smoke-test via `scripts/validate-addon.sh` in PR 3. |
 | Coverage floors miss the rename and CI fails | `.coverage-floors.json` rewrite is part of PR 3 acceptance criteria. Run `make coverage-check` locally before push. |
 | Template-loading path breaks (Jinja2 / StaticFiles) | Add an explicit smoke test in PR 3: hit `/`, `/admin`, `/static/listener.css`, `/static/listener.js`. Already covered by `test_streamer_routes.py` — verify those tests pass post-move. |
 | PyPI / wheel packaging excludes new template/static paths | Update `pyproject.toml` `package-data` section in PR 3. Test with `pip install -e .` and `python -c "from mammamiradio.web import streamer"`. |
@@ -450,7 +450,7 @@ After PR 3 merges:
 - [ ] README's first 25 lines fit one viewport and contain: pitch, install command, three navigation links
 - [ ] `make check` passes (lint + typecheck + coverage gate)
 - [ ] `pytest tests/` passes
-- [ ] `scripts/test-addon-local.sh` passes
+- [ ] `scripts/validate-addon.sh` passes
 - [ ] `docker compose up` produces audio within 5 seconds of stream connect
 
 ---

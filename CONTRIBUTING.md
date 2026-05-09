@@ -105,10 +105,10 @@ Notes:
 - Home Assistant add-on changes must also pass the local add-on build check:
 
 ```bash
-scripts/test-addon-local.sh
+scripts/validate-addon.sh
 ```
 
-That command stages the add-on build context exactly like CI, then runs a local container build. If it fails locally, do not commit or push.
+That command checks the same add-on invariants CI validates. Add `--build` when you also want the slower local container build. If it fails locally, do not commit or push.
 
 ## Lint, format, and type check
 
@@ -127,7 +127,7 @@ pip install pre-commit
 pre-commit install --hook-type pre-commit --hook-type pre-push
 ```
 
-The repo wires `scripts/test-addon-local.sh` into both `pre-commit` and `pre-push` for files that can break the Home Assistant add-on build. Docker Desktop or Podman must be installed or those hooks will fail.
+The repo wires `scripts/validate-addon.sh` into both `pre-commit` and `pre-push` for files that can break the Home Assistant add-on build. Docker Desktop or Podman must be installed for `--build` checks.
 
 ## Manual smoke test
 
