@@ -36,7 +36,7 @@
      by the Jinja template (see #mmr-copy-bootstrap), not refetched on poll. */
   const COPY = (() => {
     const el = document.getElementById('mmr-copy-bootstrap');
-    try { return el ? JSON.parse(el.textContent) : {}; } catch { return {}; }
+    try { return (el && JSON.parse(el.textContent)) || {}; } catch { return {}; }
   })();
   function _t(key, fallback) { return COPY[key] || fallback || ''; }
 
