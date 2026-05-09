@@ -507,6 +507,9 @@ def test_load_config_tolerates_legacy_sonic_brand_keys(tmp_path):
         ("0", False),
         (1, True),
         (0, False),
+        (2, False),  # ints other than 0/1 fall back to default — no silent enable
+        (-1, False),
+        (42, False),
         ("garbage", False),  # falls back to default
         (None, False),
         ([], False),
@@ -519,3 +522,6 @@ def test_coerce_bool(value, expected):
 def test_coerce_bool_default():
     assert coerce_bool("garbage", default=True) is True
     assert coerce_bool(None, default=True) is True
+    # Out-of-range ints honour the caller-provided default
+    assert coerce_bool(2, default=True) is True
+    assert coerce_bool(-1, default=True) is True

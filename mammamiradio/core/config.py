@@ -41,7 +41,9 @@ def coerce_bool(value: object, default: bool = False) -> bool:
     if isinstance(value, bool):
         return value
     if isinstance(value, int):
-        return value != 0
+        if value in (0, 1):
+            return bool(value)
+        return default
     if isinstance(value, str):
         v = value.strip().lower()
         if v in _TRUTHY:
