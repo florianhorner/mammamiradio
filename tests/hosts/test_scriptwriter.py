@@ -311,6 +311,35 @@ async def test_auth_failure_is_memoized_and_skips_repeated_anthropic_calls(confi
 
 
 @pytest.mark.asyncio
+async def test_model_not_found_is_memoized_and_skips_repeated_anthropic_calls(config, state):
+    class NotFoundError(Exception):
+        pass
+
+    config.openai_api_key = "openai-key"
+    host_name = config.hosts[0].name
+    openai_client = _mock_openai_response(json.dumps({"lines": [{"host": host_name, "text": "Fallback."}]}))
+
+    mock_client = MagicMock()
+    mock_client.messages = MagicMock()
+    mock_client.messages.create = AsyncMock(side_effect=NotFoundError("404 model not found"))
+    mock_cls = MagicMock(return_value=mock_client)
+
+    with (
+        patch("mammamiradio.hosts.scriptwriter._anthropic_client", None),
+        patch("mammamiradio.hosts.scriptwriter._openai_client", None),
+        patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
+        patch("mammamiradio.hosts.scriptwriter._get_openai_client", return_value=openai_client),
+    ):
+        await write_banter(state, config)
+        await write_banter(state, config)
+
+    assert mock_client.messages.create.await_count == 1
+    assert state.anthropic_disabled_until > 0
+    assert state.anthropic_auth_failures == 0
+    assert "NotFoundError" in state.anthropic_last_error
+
+
+@pytest.mark.asyncio
 async def test_blocked_anthropic_no_openai_raises(config, state):
     """_generate_json_response raises when Anthropic is auth-blocked and no OpenAI key (line 229)."""
     import mammamiradio.hosts.scriptwriter as sw

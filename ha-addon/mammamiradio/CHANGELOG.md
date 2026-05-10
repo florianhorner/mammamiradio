@@ -8,6 +8,7 @@
 
 ### Fixed
 
+- **Anthropic model and audio-FX guardrails**: add-on model choices no longer offer retired/invalid Claude 4.5 dated IDs; `claude_model` now offers the existing Haiku default plus current Sonnet/Opus options. Anthropic 404/model-not-found errors now trip a 10-minute provider backoff and fall through to OpenAI once instead of spamming each generation. Synthetic ad beds/foley now clamp generated ffmpeg filter parameters into valid ranges (`aphaser.delay <= 5`, `tremolo.f >= 0.1`), fixing the previously failing `luxury_spa`, `mysterious`, and `cafe` paths.
 - **Admin control room reads as espresso warm-brown again.** v2.11.0 shipped with the admin Engine Room washed out to taupe after PR #298 raised four shared `tokens.css` values to make listener cards visible. Tokens reverted to Pi-baseline; listener cards keep the brighter values via inline overrides on `.mmr-stage`, `.mmr-np-bar`, `.btn-ghost`, `.mmr-schedule`, `.mmr-dedica`, `.mmr-about-card`.
 
 ## 2.11.0

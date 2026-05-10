@@ -12,6 +12,7 @@ The current version source of truth is `pyproject.toml`.
 
 ### Fixed
 
+- **Anthropic model and audio-FX guardrails**: HA add-on model choices no longer offer retired/invalid Claude 4.5 dated IDs; `claude_model` now offers the existing Haiku default plus current Sonnet/Opus options. Anthropic 404/model-not-found errors now trip the same 10-minute provider backoff used by auth failures, so a bad model name falls through to OpenAI once instead of spamming every generation. Synthetic ad beds/foley now clamp generated ffmpeg filter parameters into valid ranges (`aphaser.delay <= 5`, `tremolo.f >= 0.1`) with regression tests covering the previously failing `luxury_spa`, `mysterious`, and `cafe` paths.
 - **Admin control room reads as espresso warm-brown again.** PR #298 raised four shared `tokens.css` values (`--surface`, `--surface-hover`, `--surface-strong`, `--line-strong`) to make listener cards visible — but admin consumes the same tokens, and v2.11.0 shipped with admin washed out to taupe. Tokens reverted to Pi-baseline values; listener cards keep PR #298's brighter values via inline overrides on `.mmr-stage`, `.mmr-np-bar`, `.btn-ghost`, `.mmr-schedule`, `.mmr-dedica`, `.mmr-about-card`. CLAUDE.md "Protected UI elements" extended to guard against re-regression.
 
 ## [2.11.0] - 2026-05-08
