@@ -2097,7 +2097,7 @@ function onSliderInput(sl,n){
 async function updHost(n,vals=null){
   const b=vals||{};
   if(!vals){
-    const block=document.querySelector(`[data-h="${CSS.escape(n)}"]`);
+    const block=document.querySelector(`.host-block[data-h="${CSS.escape(n)}"]`);
     if(!block)return;
     block.querySelectorAll('input[type="range"]').forEach(e=>{b[e.dataset.a]=+e.value});
   }
@@ -2108,7 +2108,7 @@ async function rstHost(n){await api('POST',`/api/hosts/${encodeURIComponent(n)}/
 async function applyHostPreset(n,presetName){
   const preset=HOST_PRESETS[presetName];
   if(!preset)return;
-  const block=document.querySelector(`[data-h="${CSS.escape(n)}"]`);
+  const block=document.querySelector(`.host-block[data-h="${CSS.escape(n)}"]`);
   if(!block)return;
   block.querySelectorAll('input[type="range"]').forEach(sl=>{
     const ax=sl.dataset.a;
