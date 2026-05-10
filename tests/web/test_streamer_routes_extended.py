@@ -16,7 +16,9 @@ from fastapi import FastAPI
 from mammamiradio.core.config import load_config
 from mammamiradio.core.models import PlaylistSource, Segment, SegmentType, StationState, Track
 from mammamiradio.playlist.playlist import ExplicitSourceError
-from mammamiradio.web.streamer import LiveStreamHub, _download_listener_song, router
+from mammamiradio.web.listener_requests import _download_listener_song
+from mammamiradio.web.listener_requests import router as listener_requests_router
+from mammamiradio.web.streamer import LiveStreamHub, router
 
 TOML_PATH = str(Path(__file__).resolve().parents[2] / "radio.toml")
 
@@ -29,6 +31,7 @@ def _basic_auth_header(username: str = "admin", password: str = "secret") -> dic
 def _make_test_app(*, admin_password: str = "", admin_token: str = "", is_addon: bool = False) -> FastAPI:
     app = FastAPI()
     app.include_router(router)
+    app.include_router(listener_requests_router)
 
     config = load_config(TOML_PATH)
     config.admin_password = admin_password
@@ -598,7 +601,7 @@ async def test_search_external_failure_returns_playlist_results():
 async def test_listener_request_valid_shoutout():
     app = _make_test_app()
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
-    with patch("mammamiradio.web.streamer._download_listener_song", new_callable=AsyncMock) as dl_mock:
+    with patch("mammamiradio.web.listener_requests._download_listener_song", new_callable=AsyncMock) as dl_mock:
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
             resp = await client.post("/api/listener-request", json={"name": "Luca", "message": "Ciao a tutti!"})
         await asyncio.sleep(0)
@@ -613,7 +616,7 @@ async def test_listener_request_valid_song_starts_background_download():
     app = _make_test_app()
     app.state.config.allow_ytdlp = True  # song_request classification requires ytdlp enabled
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
-    with patch("mammamiradio.web.streamer._download_listener_song", new_callable=AsyncMock) as dl_mock:
+    with patch("mammamiradio.web.listener_requests._download_listener_song", new_callable=AsyncMock) as dl_mock:
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
             resp = await client.post(
                 "/api/listener-request", json={"name": "Luca", "message": "puoi mettere Albachiara?"}
@@ -666,7 +669,7 @@ async def test_listener_request_song_keyword_treated_as_shoutout_when_ytdlp_disa
     app = _make_test_app()
     app.state.config.allow_ytdlp = False
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
-    with patch("mammamiradio.web.streamer._download_listener_song", new_callable=AsyncMock) as dl_mock:
+    with patch("mammamiradio.web.listener_requests._download_listener_song", new_callable=AsyncMock) as dl_mock:
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
             resp = await client.post(
                 "/api/listener-request", json={"name": "Luca", "message": "puoi mettere Albachiara?"}

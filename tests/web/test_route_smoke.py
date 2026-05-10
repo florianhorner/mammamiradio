@@ -22,6 +22,7 @@ from httpx import ASGITransport, AsyncClient
 
 from mammamiradio.core.config import load_config
 from mammamiradio.core.models import StationState, Track
+from mammamiradio.web.listener_requests import router as listener_requests_router
 from mammamiradio.web.streamer import LiveStreamHub, router
 
 TOML_PATH = str(Path(__file__).resolve().parents[2] / "radio.toml")
@@ -35,6 +36,7 @@ def _make_app() -> FastAPI:
     """
     app = FastAPI()
     app.include_router(router)
+    app.include_router(listener_requests_router)
     config = load_config(TOML_PATH)
     config.admin_token = "test-admin-token"
     config.admin_password = ""
