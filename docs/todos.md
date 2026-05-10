@@ -23,6 +23,7 @@
 - **Trigger phrase:** "bring the dial alive" / "implement the dialer"
 
 ### P2 — Super-italian-aware listener stopped-state regression guard
+
 **Priority:** P2
 **Source:** scope-parked from triage of stale branch `fix/listener-polish` on 2026-05-10
 `tests/web/test_ui_control_contracts.py` (`TestStoppedStateQuietsTheUI`) — write a fresh regression test asserting the stopped-state surfaces (`renderNowPlayingStrip` + `updateMediaSession` in `mammamiradio/web/static/listener.js`) route through the super-italian copy bag (`_t('np_paused', ...)`) and never leak `Session stopped` / `STOPPED` / hardcoded city/frequency values to lock-screen / Bluetooth / CarPlay. The original guard on `fix/listener-polish` predates super-italian (PR #310) and asserts the literal `'In pausa'`, which would silently break the i18n toggle if cherry-picked as-is. Write against current code, do not resurrect the stale branch's version.
