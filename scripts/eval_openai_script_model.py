@@ -4,7 +4,7 @@
 Forces the OpenAI branch in scriptwriter._generate_json_response by leaving
 config.anthropic_api_key empty, then runs a fixed prompt corpus through each
 model in MODELS. Captures latency, token usage, JSON validity, and output text
-per call. Writes a JSONL log to .context/ and prints a summary table.
+per call. Writes a JSONL log to tmp/evals/ and prints a summary table.
 
 Usage:
     OPENAI_API_KEY=sk-... python scripts/eval_openai_script_model.py
@@ -44,6 +44,7 @@ COST_PER_1M_TOKENS = {
 
 DEFAULT_MODELS = ["gpt-4o-mini", "gpt-5-mini"]
 DEFAULT_FIXTURES = REPO_ROOT / "scripts" / "eval_fixtures" / "openai_script_prompts.json"
+DEFAULT_OUTPUT_DIR = REPO_ROOT / "tmp" / "evals"
 
 
 def estimate_cost_usd(model: str, prompt_tokens: int, completion_tokens: int) -> float:
@@ -187,24 +188,27 @@ def summarize(records: list[dict]) -> str:
     return "\n".join(lines)
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--models", nargs="+", default=DEFAULT_MODELS, help="OpenAI model IDs to evaluate")
     ap.add_argument("--fixtures", type=Path, default=DEFAULT_FIXTURES, help="Prompt corpus JSON path")
-    ap.add_argument("--output-dir", type=Path, default=REPO_ROOT / ".context", help="Where to write the JSONL log")
-    args = ap.parse_args()
+    ap.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR, help="Where to write the JSONL log")
+    args = ap.parse_args(argv)
 
     fixtures = json.loads(args.fixtures.read_text())
     if not isinstance(fixtures, list) or not fixtures:
         print(f"ERROR: {args.fixtures} must contain a non-empty list of fixtures.", file=sys.stderr)
         return 2
+    if not os.getenv("OPENAI_API_KEY"):
+        print("ERROR: OPENAI_API_KEY must be set in the environment.", file=sys.stderr)
+        return 2
 
-    args.output_dir.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     out_path = args.output_dir / f"eval-openai-script-model-{timestamp}.jsonl"
 
     records = asyncio.run(run_all(args.models, fixtures))
 
+    args.output_dir.mkdir(parents=True, exist_ok=True)
     with out_path.open("w") as f:
         for r in records:
             f.write(json.dumps(r, ensure_ascii=False) + "\n")
