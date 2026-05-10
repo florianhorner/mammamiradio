@@ -283,6 +283,125 @@ async def test_write_banter_falls_back_to_openai_when_anthropic_fails(config, st
 
 
 @pytest.mark.asyncio
+async def test_openai_fallback_default_model_is_gpt_4o_mini(config, state):
+    """Lock the production default: when no override is set, OpenAI is called with gpt-4o-mini."""
+    config.openai_api_key = "openai-key"
+    host_name = config.hosts[0].name
+    openai_client = _mock_openai_response(json.dumps({"lines": [{"host": host_name, "text": "hi"}], "new_joke": None}))
+    mock_client = MagicMock()
+    mock_client.messages = MagicMock()
+    mock_client.messages.create = AsyncMock(side_effect=Exception("anthropic invalid"))
+    mock_cls = MagicMock(return_value=mock_client)
+
+    with (
+        patch("mammamiradio.hosts.scriptwriter._anthropic_client", None),
+        patch("mammamiradio.hosts.scriptwriter._openai_client", None),
+        patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
+        patch("mammamiradio.hosts.scriptwriter._get_openai_client", return_value=openai_client),
+    ):
+        await write_banter(state, config)
+
+    call_kwargs = openai_client.chat.completions.create.call_args.kwargs
+    assert call_kwargs["model"] == "gpt-4o-mini"
+
+
+@pytest.mark.asyncio
+async def test_openai_fallback_uses_configured_model(config, state):
+    """When audio.openai_script_model is overridden, OpenAI is called with that model."""
+    config.openai_api_key = "openai-key"
+    config.audio.openai_script_model = "gpt-5-mini"
+    host_name = config.hosts[0].name
+    openai_client = _mock_openai_response(json.dumps({"lines": [{"host": host_name, "text": "hi"}], "new_joke": None}))
+    mock_client = MagicMock()
+    mock_client.messages = MagicMock()
+    mock_client.messages.create = AsyncMock(side_effect=Exception("anthropic invalid"))
+    mock_cls = MagicMock(return_value=mock_client)
+
+    with (
+        patch("mammamiradio.hosts.scriptwriter._anthropic_client", None),
+        patch("mammamiradio.hosts.scriptwriter._openai_client", None),
+        patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
+        patch("mammamiradio.hosts.scriptwriter._get_openai_client", return_value=openai_client),
+    ):
+        await write_banter(state, config)
+
+    call_kwargs = openai_client.chat.completions.create.call_args.kwargs
+    assert call_kwargs["model"] == "gpt-5-mini"
+
+
+@pytest.mark.asyncio
+async def test_openai_fallback_logs_structured_event(config, state, caplog):
+    """OpenAI fallback emits a structured 'openai_script_fallback' log event with eval-ready fields."""
+    import logging
+
+    config.openai_api_key = "openai-key"
+    host_name = config.hosts[0].name
+    openai_client = _mock_openai_response(json.dumps({"lines": [{"host": host_name, "text": "hi"}], "new_joke": None}))
+    mock_client = MagicMock()
+    mock_client.messages = MagicMock()
+    mock_client.messages.create = AsyncMock(side_effect=Exception("anthropic 500"))
+    mock_cls = MagicMock(return_value=mock_client)
+
+    with (
+        caplog.at_level(logging.INFO, logger="mammamiradio.hosts.scriptwriter"),
+        patch("mammamiradio.hosts.scriptwriter._anthropic_client", None),
+        patch("mammamiradio.hosts.scriptwriter._openai_client", None),
+        patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
+        patch("mammamiradio.hosts.scriptwriter._get_openai_client", return_value=openai_client),
+    ):
+        await write_banter(state, config)
+
+    fallback_records = [r for r in caplog.records if getattr(r, "event", None) == "openai_script_call"]
+    assert fallback_records, "expected at least one openai_script_call log record"
+    record = fallback_records[-1]
+    assert record.model == "gpt-4o-mini"
+    assert record.caller == "banter"
+    assert record.fallback_reason == "anthropic_exception"
+    assert record.json_ok is True
+    assert isinstance(record.latency_ms, int)
+    assert record.prompt_tokens == 11
+    assert record.completion_tokens == 7
+
+
+@pytest.mark.asyncio
+async def test_openai_call_logs_json_parse_failure_and_reraises(config, state, caplog):
+    """When OpenAI returns malformed JSON, log fires with json_ok=False and JSONDecodeError propagates."""
+    import logging
+
+    from mammamiradio.hosts.scriptwriter import _generate_json_response
+
+    config.anthropic_api_key = ""
+    config.openai_api_key = "openai-key"
+    openai_client = _mock_openai_response("not valid json {{{")
+
+    with (
+        caplog.at_level(logging.INFO, logger="mammamiradio.hosts.scriptwriter"),
+        patch("mammamiradio.hosts.scriptwriter._openai_client", None),
+        patch("mammamiradio.hosts.scriptwriter._get_openai_client", return_value=openai_client),
+        pytest.raises(json.JSONDecodeError),
+    ):
+        await _generate_json_response(
+            prompt="test prompt",
+            config=config,
+            state=state,
+            model="unused",
+            max_tokens=100,
+            caller="ad",
+        )
+
+    fail_records = [
+        r
+        for r in caplog.records
+        if getattr(r, "event", None) == "openai_script_call" and getattr(r, "json_ok", None) is False
+    ]
+    assert fail_records, "expected an openai_script_call log record with json_ok=False"
+    record = fail_records[-1]
+    assert record.caller == "ad"
+    assert record.fallback_reason == "anthropic_absent"
+    assert record.raw_preview.startswith("not valid json")
+
+
+@pytest.mark.asyncio
 async def test_auth_failure_is_memoized_and_skips_repeated_anthropic_calls(config, state):
     class AuthenticationError(Exception):
         pass

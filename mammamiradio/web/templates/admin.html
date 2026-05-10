@@ -1380,6 +1380,11 @@ body[data-stopped="true"] .a-station-card .dot.on { animation-play-state: paused
 <script>
 const _csrf = document.querySelector('meta[name="mammamiradio-csrf-token"]')?.content || '';
 const H = () => ({'Content-Type':'application/json','X-Radio-CSRF-Token':_csrf});
+const _base = (() => {
+  const p = window.location.pathname.replace(/\/+$/, '');
+  if (p.endsWith('/admin')) return p.slice(0, -6);
+  return p === '' ? '' : p;
+})();
 let _st={}, _caps={}, _hostsOk=false, _paceOk=false, _searchTo=null, _keysEditMode=false;
 let _nowStart=0, _nowDur=0, _tick=null, _prevLabel='';
 let _programmeFilter='all', _lastProgrammeHash='';
@@ -1398,7 +1403,7 @@ function segmentText(type){return segmentTypeKey(type).replace('_',' ')}
 function segmentGlyph(type){return SEGMENT_GLYPH[segmentTypeKey(type)]||'•'}
 function segmentBadge(type){return `${segmentGlyph(type)} ${segmentText(type)}`}
 
-async function api(m,p,b){const o={method:m,headers:H()};if(b)o.body=JSON.stringify(b);return(await fetch(p,o)).json()}
+async function api(m,p,b){const o={method:m,headers:H()};if(b)o.body=JSON.stringify(b);return(await fetch(_base+p,o)).json()}
 
 // ── Clock ──
 function updateClock(){
@@ -1906,7 +1911,7 @@ async function doSearch(){
   const el=document.getElementById('searchResults');
   el.innerHTML='<div class="sr-label" style="color:rgba(245,237,216,0.25)">Searching…</div>';
   try{
-    const resp=await fetch('/api/search?q='+encodeURIComponent(q),{headers:H()});
+    const resp=await fetch(_base+'/api/search?q='+encodeURIComponent(q),{headers:H()});
     if(!resp.ok){console.warn('Search failed:',resp.status);el.innerHTML='';return}
     const d=await resp.json();
     _sR=d.results||[];_sExt=d.external||[];
@@ -2092,18 +2097,18 @@ function onSliderInput(sl,n){
 async function updHost(n,vals=null){
   const b=vals||{};
   if(!vals){
-    const block=document.querySelector(`[data-h="${CSS.escape(n)}"]`);
+    const block=document.querySelector(`.host-block[data-h="${CSS.escape(n)}"]`);
     if(!block)return;
     block.querySelectorAll('input[type="range"]').forEach(e=>{b[e.dataset.a]=+e.value});
   }
   await api('PATCH',`/api/hosts/${encodeURIComponent(n)}/personality`,b);
   toast(n+' aggiornato');
 }
-async function rstHost(n){await api('POST',`/api/hosts/${encodeURIComponent(n)}/personality/reset`);toast(n+' ripristinato');const r=await fetch('/api/hosts',{headers:H()});renderHosts((await r.json()).hosts||[])}
+async function rstHost(n){await api('POST',`/api/hosts/${encodeURIComponent(n)}/personality/reset`);toast(n+' ripristinato');const r=await fetch(_base+'/api/hosts',{headers:H()});renderHosts((await r.json()).hosts||[])}
 async function applyHostPreset(n,presetName){
   const preset=HOST_PRESETS[presetName];
   if(!preset)return;
-  const block=document.querySelector(`[data-h="${CSS.escape(n)}"]`);
+  const block=document.querySelector(`.host-block[data-h="${CSS.escape(n)}"]`);
   if(!block)return;
   block.querySelectorAll('input[type="range"]').forEach(sl=>{
     const ax=sl.dataset.a;
@@ -2292,7 +2297,7 @@ function updateEngineRoom(st,caps){
 // ── Polling ──
 async function refreshFast(){
   try{
-    const [sr,lrr]=await Promise.all([fetch('/status',{headers:H()}),fetch('/api/listener-requests',{headers:H()})]);
+    const [sr,lrr]=await Promise.all([fetch(_base+'/status',{headers:H()}),fetch(_base+'/api/listener-requests',{headers:H()})]);
     _st=await sr.json();
     if (_st.station) {
       try { localStorage.setItem('stationName', _st.station); } catch (_) {}
@@ -2313,12 +2318,12 @@ async function refreshFast(){
       document.getElementById('pAds').value=_st.pacing.songs_between_ads;updatePaceVal('pAds','pvAds',_st.pacing.songs_between_ads);
       document.getElementById('pSpots').value=_st.pacing.ad_spots_per_break;updatePaceVal('pSpots','pvSpots',_st.pacing.ad_spots_per_break);
     }
-    if(!_hostsOk){_hostsOk=true;const r=await fetch('/api/hosts',{headers:H()});renderHosts((await r.json()).hosts||[])}
+    if(!_hostsOk){_hostsOk=true;const r=await fetch(_base+'/api/hosts',{headers:H()});renderHosts((await r.json()).hosts||[])}
   }catch(e){console.error('refreshFast',e)}
 }
 async function refreshSlow(){
   try{
-    const [cr,or]=await Promise.all([fetch('/api/capabilities',{headers:H()}),fetch('/api/setup/status',{headers:H()})]);
+    const [cr,or]=await Promise.all([fetch(_base+'/api/capabilities',{headers:H()}),fetch(_base+'/api/setup/status',{headers:H()})]);
     _caps=await cr.json();
     const setup=await or.json();
     updateSystems(_caps,_st);
