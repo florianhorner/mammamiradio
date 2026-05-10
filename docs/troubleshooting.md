@@ -95,6 +95,8 @@ Check:
 
 Each OpenAI host can define `edge_fallback_voice` in `radio.toml` so they fall back to their own Edge voice rather than a stranger's.
 
+To inspect script-side OpenAI behavior (banter/ads/news/transitions), grep logs for `openai_script_call` — every OpenAI script call emits a structured record with `model`, `caller`, `latency_ms`, `prompt_tokens`, `completion_tokens`, `json_ok`, and `fallback_reason` (one of `anthropic_absent`, `anthropic_auth_blocked`, `anthropic_auth_failed`, `anthropic_exception`). Useful for comparing models via `OPENAI_SCRIPT_MODEL` or debugging fallback latency.
+
 Voice validation now runs at config load, not at synthesis time:
 
 - Every configured voice is checked against `mammamiradio/audio/voice_catalog.py` (OpenAI catalog for `engine = "openai"` hosts, Italian edge-tts catalog for `engine = "edge"` hosts and all ad voices).

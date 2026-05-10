@@ -351,8 +351,8 @@ async def test_openai_fallback_logs_structured_event(config, state, caplog):
     ):
         await write_banter(state, config)
 
-    fallback_records = [r for r in caplog.records if getattr(r, "event", None) == "openai_script_fallback"]
-    assert fallback_records, "expected at least one openai_script_fallback log record"
+    fallback_records = [r for r in caplog.records if getattr(r, "event", None) == "openai_script_call"]
+    assert fallback_records, "expected at least one openai_script_call log record"
     record = fallback_records[-1]
     assert record.model == "gpt-4o-mini"
     assert record.caller == "banter"
@@ -361,6 +361,44 @@ async def test_openai_fallback_logs_structured_event(config, state, caplog):
     assert isinstance(record.latency_ms, int)
     assert record.prompt_tokens == 11
     assert record.completion_tokens == 7
+
+
+@pytest.mark.asyncio
+async def test_openai_call_logs_json_parse_failure_and_reraises(config, state, caplog):
+    """When OpenAI returns malformed JSON, log fires with json_ok=False and JSONDecodeError propagates."""
+    import logging
+
+    from mammamiradio.hosts.scriptwriter import _generate_json_response
+
+    config.anthropic_api_key = ""
+    config.openai_api_key = "openai-key"
+    openai_client = _mock_openai_response("not valid json {{{")
+
+    with (
+        caplog.at_level(logging.INFO, logger="mammamiradio.hosts.scriptwriter"),
+        patch("mammamiradio.hosts.scriptwriter._openai_client", None),
+        patch("mammamiradio.hosts.scriptwriter._get_openai_client", return_value=openai_client),
+        pytest.raises(json.JSONDecodeError),
+    ):
+        await _generate_json_response(
+            prompt="test prompt",
+            config=config,
+            state=state,
+            model="unused",
+            max_tokens=100,
+            caller="ad",
+        )
+
+    fail_records = [
+        r
+        for r in caplog.records
+        if getattr(r, "event", None) == "openai_script_call" and getattr(r, "json_ok", None) is False
+    ]
+    assert fail_records, "expected an openai_script_call log record with json_ok=False"
+    record = fail_records[-1]
+    assert record.caller == "ad"
+    assert record.fallback_reason == "anthropic_absent"
+    assert record.raw_preview.startswith("not valid json")
 
 
 @pytest.mark.asyncio

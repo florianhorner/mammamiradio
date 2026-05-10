@@ -383,9 +383,9 @@ async def _generate_json_response(
         parsed = json.loads(_strip_fences(raw))
     except json.JSONDecodeError:
         logger.info(
-            "openai_script_fallback",
+            "openai_script_call",
             extra={
-                "event": "openai_script_fallback",
+                "event": "openai_script_call",
                 "model": openai_model,
                 "caller": caller,
                 "fallback_reason": fallback_reason,
@@ -398,9 +398,9 @@ async def _generate_json_response(
         )
         raise
     logger.info(
-        "openai_script_fallback",
+        "openai_script_call",
         extra={
-            "event": "openai_script_fallback",
+            "event": "openai_script_call",
             "model": openai_model,
             "caller": caller,
             "fallback_reason": fallback_reason,
