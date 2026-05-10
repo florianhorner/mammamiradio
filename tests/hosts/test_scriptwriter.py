@@ -473,6 +473,49 @@ def test_nonretryable_classifier_yields_to_auth_precedence():
 
 
 @pytest.mark.asyncio
+async def test_model_not_found_backoff_is_scoped_to_model(config, state):
+    import mammamiradio.hosts.scriptwriter as sw
+    from mammamiradio.hosts.scriptwriter import _generate_json_response
+
+    class NotFoundError(Exception):
+        pass
+
+    config.openai_api_key = "openai-key"
+    openai_client = _mock_openai_response(json.dumps({"ok": "fallback"}))
+    ok_response = MagicMock()
+    ok_content = MagicMock()
+    ok_content.text = json.dumps({"ok": "anthropic"})
+    ok_response.content = [ok_content]
+
+    async def _create(**kwargs):
+        if kwargs["model"] == "bad-model":
+            raise NotFoundError("404 model not found")
+        return ok_response
+
+    mock_client = MagicMock()
+    mock_client.messages = MagicMock()
+    mock_client.messages.create = AsyncMock(side_effect=_create)
+
+    with (
+        patch("mammamiradio.hosts.scriptwriter._anthropic_client", None),
+        patch("mammamiradio.hosts.scriptwriter._openai_client", None),
+        patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", MagicMock(return_value=mock_client)),
+        patch("mammamiradio.hosts.scriptwriter._get_openai_client", return_value=openai_client),
+    ):
+        first = await _generate_json_response(prompt="p", config=config, state=state, model="bad-model", max_tokens=100)
+        second = await _generate_json_response(
+            prompt="p", config=config, state=state, model="good-model", max_tokens=100
+        )
+        third = await _generate_json_response(prompt="p", config=config, state=state, model="bad-model", max_tokens=100)
+
+    assert first == {"ok": "fallback"}
+    assert second == {"ok": "anthropic"}
+    assert third == {"ok": "fallback"}
+    assert mock_client.messages.create.await_count == 2
+    assert sw._anthropic_blocked_model == "bad-model"
+
+
+@pytest.mark.asyncio
 async def test_blocked_anthropic_no_openai_raises(config, state):
     """_generate_json_response raises when Anthropic is auth-blocked and no OpenAI key (line 229)."""
     import mammamiradio.hosts.scriptwriter as sw
