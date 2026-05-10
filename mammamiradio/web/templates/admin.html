@@ -2192,11 +2192,19 @@ async function loadSuperItalianToggle(){
 }
 async function toggleSuperItalian(el){
   const value=!!el.checked;
-  const r=await api('POST','/api/super-italian',{super_italian_mode:value});
-  if(r.ok)toast(value?'Super Italian Mode: ON':'Super Italian Mode: OFF');
-  else{
+  el.disabled=true;
+  try{
+    const r=await api('POST','/api/super-italian',{super_italian_mode:value});
+    if(r&&r.ok)toast(value?'Super Italian Mode: ON':'Super Italian Mode: OFF');
+    else{
+      el.checked=!value;
+      toast('Failed: '+((r&&r.error)||'unknown'));
+    }
+  }catch(_){
     el.checked=!value;
-    toast('Failed: '+(r.error||'unknown'));
+    toast('Failed: network error');
+  }finally{
+    el.disabled=false;
   }
 }
 

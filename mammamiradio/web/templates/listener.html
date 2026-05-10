@@ -210,7 +210,7 @@
       <label for="req-msg" class="sr-only">{{ copy.get('form_message_label', 'Message or song request') }}</label>
       <textarea id="req-msg" rows="4" placeholder="{{ copy.get('form_message_placeholder', 'Dear Radio, I’d like to dedicate a song to…') }}" autocomplete="off"></textarea>
       <button type="submit">
-        <span aria-hidden="true" style="margin-right:8px">&#9993;</span>Spedisci con un bacio
+        <span aria-hidden="true" style="margin-right:8px">&#9993;</span>{{ copy.get('form_submit', 'Send with a kiss') }}
       </button>
       <div class="hint">{% if brand.hosts %}Letta stasera da {{ brand.hosts[-1].display_name }} · <em>con amore</em>{% else %}<em>con amore</em>{% endif %}</div>
       <div class="form-sent" id="request-sent" style="display:none" role="status" aria-live="polite"></div>

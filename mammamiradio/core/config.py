@@ -30,6 +30,29 @@ _TRUTHY = {"true", "1", "yes"}
 _FALSY = {"false", "0", "no"}
 
 
+def coerce_bool(value: object, default: bool = False) -> bool:
+    """Type-safe bool coercion that rejects truthy-string-of-falsy-word.
+
+    `bool("false")` is `True` in Python; that's the bug this guards against.
+    Accepts: real bool, int (0/1), or str matching _TRUTHY/_FALSY (case-insensitive).
+    Anything else (including "false"-as-truthy-string in plain bool() context)
+    falls back to ``default``.
+    """
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int):
+        if value in (0, 1):
+            return bool(value)
+        return default
+    if isinstance(value, str):
+        v = value.strip().lower()
+        if v in _TRUTHY:
+            return True
+        if v in _FALSY:
+            return False
+    return default
+
+
 @dataclass
 class StationSection:
     """Station identity and public stream metadata."""
@@ -733,7 +756,7 @@ def load_config(path: str = "radio.toml") -> StationConfig:
         ha_token=ha_token,
         is_addon=addon_mode,
         allow_ytdlp=os.getenv("MAMMAMIRADIO_ALLOW_YTDLP", "false").lower() in ("true", "1", "yes"),
-        super_italian_mode=bool(raw.get("super_italian_mode", False)),
+        super_italian_mode=coerce_bool(raw.get("super_italian_mode", False)),
     )
 
     _super_italian_env = os.getenv("MAMMAMIRADIO_SUPER_ITALIAN", "").strip().lower()
