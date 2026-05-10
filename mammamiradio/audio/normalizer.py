@@ -90,6 +90,8 @@ def measure_lufs(input_path: Path) -> float | None:
 
 # Shared FFmpeg output arguments for consistent MP3 encoding across all generators.
 _MP3_OUTPUT_ARGS: list[str] = ["-ar", "48000", "-ac", "2", "-b:a", "192k", "-write_xing", "0", "-f", "mp3"]
+_FFMPEG_APHASER_MAX_DELAY_MS = 5.0
+_FFMPEG_TREMOLO_MIN_FREQ_HZ = 0.1
 
 # Canonical list of supported SFX types (synthetic fallbacks).
 # Pre-recorded files in sfx_dir can extend this, but this list is what the
@@ -122,6 +124,28 @@ def _run_ffmpeg(cmd: list[str], description: str) -> subprocess.CompletedProcess
 def _fmt_num(value: float) -> str:
     """Format floats for FFmpeg expressions with bounded precision."""
     return f"{value:.6f}".rstrip("0").rstrip(".")
+
+
+def _aphaser(
+    *,
+    in_gain: float,
+    out_gain: float,
+    delay: float,
+    decay: float,
+    speed: float,
+    phaser_type: str = "t",
+) -> str:
+    safe_delay = min(max(delay, 0.0), _FFMPEG_APHASER_MAX_DELAY_MS)
+    return (
+        f"aphaser=in_gain={_fmt_num(in_gain)}:out_gain={_fmt_num(out_gain)}:"
+        f"delay={_fmt_num(safe_delay)}:decay={_fmt_num(decay)}:"
+        f"speed={_fmt_num(speed)}:type={phaser_type}"
+    )
+
+
+def _tremolo(*, freq: float, depth: float) -> str:
+    safe_freq = max(freq, _FFMPEG_TREMOLO_MIN_FREQ_HZ)
+    return f"tremolo=f={_fmt_num(safe_freq)}:d={_fmt_num(depth)}"
 
 
 def _gate_after(onset_sec: float) -> str:
@@ -710,7 +734,7 @@ def generate_music_bed(output_path: Path, mood: str, duration_sec: float) -> Pat
         root, third, fifth = 110.0, 165.0, 220.0
         expr = _pad_expr(root, third, fifth, _saw)
         af = (
-            f"tremolo=f=8:d=0.55,"  # fast tremolo → rhythmic pulse, not drone
+            f"{_tremolo(freq=8, depth=0.55)},"  # fast tremolo -> rhythmic pulse, not drone
             f"highpass=f=180,"  # cut muddy bass
             f"equalizer=f=3000:t=o:w=800:g=3,"  # presence boost
             f"{_fades(d, fade_out)},"
@@ -723,7 +747,7 @@ def generate_music_bed(output_path: Path, mood: str, duration_sec: float) -> Pat
         root, third, fifth = 523.0, 659.0, 784.0
         expr = _pad_expr(root, third, fifth, _saw)
         af = (
-            f"aphaser=in_gain=0.4:out_gain=0.74:delay=3.0:decay=0.4:speed=0.5:type=t,"
+            f"{_aphaser(in_gain=0.4, out_gain=0.74, delay=3.0, decay=0.4, speed=0.5)},"
             f"highpass=f=250,"
             f"{_fades(d, fade_out)},"
             f"volume=0.13"
@@ -735,7 +759,7 @@ def generate_music_bed(output_path: Path, mood: str, duration_sec: float) -> Pat
         root, third, fifth = 330.0, 440.0, 523.0
         expr = _pad_expr(root, third, fifth, _piano)
         af = (
-            f"aphaser=in_gain=0.4:out_gain=0.74:delay=2.0:decay=0.3:speed=0.8:type=t,"
+            f"{_aphaser(in_gain=0.4, out_gain=0.74, delay=2.0, decay=0.3, speed=0.8)},"
             f"highpass=f=200,"
             f"{_fades(d, fade_out)},"
             f"volume=0.13"
@@ -746,7 +770,7 @@ def generate_music_bed(output_path: Path, mood: str, duration_sec: float) -> Pat
     if mood == "shopping_channel":
         root, third, fifth = 400.0, 600.0, 800.0
         expr = _pad_expr(root, third, fifth, _hollow)
-        af = f"tremolo=f=5:d=0.3,highpass=f=200,{_fades(d, fade_out)},volume=0.13"
+        af = f"{_tremolo(freq=5, depth=0.3)},highpass=f=200,{_fades(d, fade_out)},volume=0.13"
         return _run(expr, af, "shopping_channel")
 
     # ── lounge: warm piano pad, gentle slow phaser ───────────────────────────
@@ -754,7 +778,7 @@ def generate_music_bed(output_path: Path, mood: str, duration_sec: float) -> Pat
         root, third, fifth = 220.0, 330.0, 440.0
         expr = _pad_expr(root, third, fifth, _piano)
         af = (
-            f"aphaser=in_gain=0.4:out_gain=0.74:delay=4.0:decay=0.5:speed=0.25:type=t,"
+            f"{_aphaser(in_gain=0.4, out_gain=0.74, delay=4.0, decay=0.5, speed=0.25)},"
             f"lowpass=f=1800,"
             f"{_fades(d, fade_out)},"
             f"volume=0.14"
@@ -766,7 +790,7 @@ def generate_music_bed(output_path: Path, mood: str, duration_sec: float) -> Pat
         root, third, fifth = 293.0, 370.0, 440.0
         expr = _pad_expr(root, third, fifth, _hollow)
         af = (
-            f"aphaser=in_gain=0.5:out_gain=0.74:delay=5.0:decay=0.6:speed=0.2:type=t,"
+            f"{_aphaser(in_gain=0.5, out_gain=0.74, delay=5.0, decay=0.6, speed=0.2)},"
             f"lowpass=f=1400,"
             f"{_fades(d, fade_out)},"
             f"volume=0.14"
@@ -778,7 +802,7 @@ def generate_music_bed(output_path: Path, mood: str, duration_sec: float) -> Pat
         root, third, fifth = 250.0, 315.0, 375.0
         expr = _pad_expr(root, third, fifth, _hollow)
         af = (
-            f"aphaser=in_gain=0.3:out_gain=0.6:delay=6.0:decay=0.5:speed=0.15:type=t,"
+            f"{_aphaser(in_gain=0.3, out_gain=0.6, delay=5.0, decay=0.5, speed=0.15)},"
             f"lowpass=f=900,"
             f"{_fades(d, fade_out)},"
             f"volume=0.12"
@@ -790,7 +814,7 @@ def generate_music_bed(output_path: Path, mood: str, duration_sec: float) -> Pat
         root, third, fifth = 100.0, 126.0, 150.0
         expr = _pad_expr(root, third, fifth, _hollow)
         af = (
-            f"aphaser=in_gain=0.4:out_gain=0.6:delay=8.0:decay=0.6:speed=0.1:type=t,"
+            f"{_aphaser(in_gain=0.4, out_gain=0.6, delay=5.0, decay=0.6, speed=0.1)},"
             f"lowpass=f=700,"
             f"{_fades(d, fade_out)},"
             f"volume=0.13"
@@ -801,7 +825,7 @@ def generate_music_bed(output_path: Path, mood: str, duration_sec: float) -> Pat
     if mood == "dramatic":
         root, third, fifth = 80.0, 100.0, 120.0
         expr = _pad_expr(root, third, fifth, _piano)
-        af = f"tremolo=f=0.8:d=0.35,lowpass=f=600,{_fades(d, fade_out)},volume=0.14"
+        af = f"{_tremolo(freq=0.8, depth=0.35)},lowpass=f=600,{_fades(d, fade_out)},volume=0.14"
         return _run(expr, af, "dramatic")
 
     # ── epic / overblown_epic: very low, rich harmonics, slow swell ──────────
@@ -809,7 +833,7 @@ def generate_music_bed(output_path: Path, mood: str, duration_sec: float) -> Pat
         root = 55.0 if mood == "overblown_epic" else 65.0
         third, fifth = root * 1.25, root * 1.5
         expr = _pad_expr(root, third, fifth, _saw)
-        af = f"tremolo=f=0.5:d=0.3,lowpass=f=500,{_fades(d, fade_out)},volume=0.14"
+        af = f"{_tremolo(freq=0.5, depth=0.3)},lowpass=f=500,{_fades(d, fade_out)},volume=0.14"
         return _run(expr, af, mood)
 
     # ── showroom: mid piano, slight phaser for polish ────────────────────────
@@ -817,7 +841,8 @@ def generate_music_bed(output_path: Path, mood: str, duration_sec: float) -> Pat
         root, third, fifth = 300.0, 375.0, 450.0
         expr = _pad_expr(root, third, fifth, _piano)
         af = (
-            f"aphaser=in_gain=0.35:out_gain=0.7:delay=3.0:decay=0.4:speed=0.35:type=t,{_fades(d, fade_out)},volume=0.13"
+            f"{_aphaser(in_gain=0.35, out_gain=0.7, delay=3.0, decay=0.4, speed=0.35)},"
+            f"{_fades(d, fade_out)},volume=0.13"
         )
         return _run(expr, af, "showroom")
 
@@ -825,14 +850,14 @@ def generate_music_bed(output_path: Path, mood: str, duration_sec: float) -> Pat
     if mood == "stadium":
         root, third, fifth = 100.0, 150.0, 200.0
         expr = _pad_expr(root, third, fifth, _hollow)
-        af = f"tremolo=f=1.2:d=0.4,lowpass=f=800,{_fades(d, fade_out)},volume=0.14"
+        af = f"{_tremolo(freq=1.2, depth=0.4)},lowpass=f=800,{_fades(d, fade_out)},volume=0.14"
         return _run(expr, af, "stadium")
 
     # ── motorway: low rumble + sawtooth texture ───────────────────────────────
     if mood == "motorway":
         root, third, fifth = 55.0, 82.0, 110.0
         expr = _pad_expr(root, third, fifth, _saw)
-        af = f"tremolo=f=1.5:d=0.2,lowpass=f=400,{_fades(d, fade_out)},volume=0.13"
+        af = f"{_tremolo(freq=1.5, depth=0.2)},lowpass=f=400,{_fades(d, fade_out)},volume=0.13"
         return _run(expr, af, "motorway")
 
     # ── beach / cafe: light piano at mid frequencies ──────────────────────────
@@ -841,7 +866,7 @@ def generate_music_bed(output_path: Path, mood: str, duration_sec: float) -> Pat
         third, fifth = root * 1.25, root * 1.5
         expr = _pad_expr(root, third, fifth, _piano)
         af = (
-            f"aphaser=in_gain=0.35:out_gain=0.7:delay=3.5:decay=0.4:speed=0.3:type=t,"
+            f"{_aphaser(in_gain=0.35, out_gain=0.7, delay=3.5, decay=0.4, speed=0.3)},"
             f"highpass=f=120,"
             f"{_fades(d, fade_out)},"
             f"volume=0.13"
@@ -852,14 +877,14 @@ def generate_music_bed(output_path: Path, mood: str, duration_sec: float) -> Pat
     if mood == "occult_basement":
         root, third, fifth = 50.0, 63.0, 75.0
         expr = _pad_expr(root, third, fifth, _hollow)
-        af = f"tremolo=f=0.4:d=0.45,lowpass=f=350,{_fades(d, fade_out)},volume=0.13"
+        af = f"{_tremolo(freq=0.4, depth=0.45)},lowpass=f=350,{_fades(d, fade_out)},volume=0.13"
         return _run(expr, af, "occult_basement")
 
     # ── default fallback: warm lounge pad ────────────────────────────────────
     root, third, fifth = 220.0, 330.0, 440.0
     expr = _pad_expr(root, third, fifth, _piano)
     af = (
-        f"aphaser=in_gain=0.4:out_gain=0.74:delay=4.0:decay=0.5:speed=0.25:type=t,"
+        f"{_aphaser(in_gain=0.4, out_gain=0.74, delay=4.0, decay=0.5, speed=0.25)},"
         f"lowpass=f=1800,"
         f"{_fades(d, fade_out)},"
         f"volume=0.14"
@@ -920,7 +945,7 @@ def generate_foley_loop(output_path: Path, environment: str, duration_sec: float
             # Very slow tremolo → natural energy ebb in a busy room.
             _noise(
                 "pink",
-                f"bandpass=f=1100:w=900,tremolo=f=0.07:d=0.12,volume=0.055,{fades}",
+                f"bandpass=f=1100:w=900,{_tremolo(freq=0.07, depth=0.12)},volume=0.055,{fades}",
             )
 
         elif environment == "motorway":
@@ -928,14 +953,14 @@ def generate_foley_loop(output_path: Path, environment: str, duration_sec: float
             engine = "0.28*sin(2*PI*82*t)+0.18*sin(2*PI*164*t)+0.10*sin(2*PI*246*t)+0.06*sin(2*PI*328*t)"
             _expr(
                 engine,
-                f"tremolo=f=13:d=0.28,lowpass=f=380,volume=0.11,{fades}",
+                f"{_tremolo(freq=13, depth=0.28)},lowpass=f=380,volume=0.11,{fades}",
             )
 
         elif environment == "beach":
             # Ocean wash: pink noise lowpass + very slow tremolo (wave rhythm ~6 s/cycle).
             _noise(
                 "pink",
-                f"lowpass=f=650,highpass=f=55,tremolo=f=0.16:d=0.62,volume=0.08,{fades}",
+                f"lowpass=f=650,highpass=f=55,{_tremolo(freq=0.16, depth=0.62)},volume=0.08,{fades}",
             )
 
         elif environment == "stadium":
@@ -949,7 +974,7 @@ def generate_foley_loop(output_path: Path, environment: str, duration_sec: float
             # Water trickle: highpass pink noise + slow tremolo.
             _noise(
                 "pink",
-                f"highpass=f=1400,lowpass=f=6500,tremolo=f=0.32:d=0.48,volume=0.05,{fades}",
+                f"highpass=f=1400,lowpass=f=6500,{_tremolo(freq=0.32, depth=0.48)},volume=0.05,{fades}",
             )
 
         elif environment == "showroom":

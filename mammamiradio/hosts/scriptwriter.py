@@ -50,6 +50,7 @@ _openai_client = None
 _openai_key: str = ""
 _anthropic_auth_blocked_key: str = ""
 _anthropic_auth_blocked_until: float = 0.0
+_anthropic_blocked_reason: str = "provider error"
 _ANTHROPIC_AUTH_BACKOFF_SECONDS = 600
 # Serializes Anthropic attempts so concurrent async tasks can't all race past
 # the block check and issue parallel 401 floods before the first failure trips
@@ -220,9 +221,11 @@ def reset_provider_backoff() -> None:
         _anthropic_auth_blocked_key, \
         _anthropic_auth_blocked_until, \
         _anthropic_block_expired_logged, \
-        _anthropic_attempt_lock
+        _anthropic_attempt_lock, \
+        _anthropic_blocked_reason
     _anthropic_auth_blocked_key = ""
     _anthropic_auth_blocked_until = 0.0
+    _anthropic_blocked_reason = "provider error"
     _anthropic_block_expired_logged = False
     _anthropic_attempt_lock = None
 
@@ -234,6 +237,45 @@ def _is_anthropic_auth_error(exc: Exception) -> bool:
     if "auth" in exc_type:
         return True
     return "invalid x-api-key" in text or "authentication_error" in text or "unauthorized" in text or "401" in text
+
+
+def _is_anthropic_nonretryable_provider_error(exc: Exception) -> bool:
+    """Return True for provider errors that require config changes, not retries."""
+    exc_type = type(exc).__name__.lower()
+    text = str(exc).lower()
+    if _is_anthropic_auth_error(exc):
+        return False
+    if "notfound" in exc_type or "not_found" in exc_type:
+        return True
+    if "404" in text and ("model" in text or "not_found" in text or "not found" in text):
+        return True
+    return "model" in text and ("not_found_error" in text or "not found" in text)
+
+
+def _trip_anthropic_circuit_and_fallback(
+    exc: Exception,
+    *,
+    config,
+    state,
+    reason: str,
+    log_message: str,
+    count_auth_failure: bool,
+) -> None:
+    """Set Anthropic block globals + session state, then log fallback or re-raise."""
+    global _anthropic_auth_blocked_key, _anthropic_auth_blocked_until
+    global _anthropic_blocked_reason, _anthropic_block_expired_logged
+    _anthropic_auth_blocked_key = config.anthropic_api_key
+    _anthropic_auth_blocked_until = time.time() + _ANTHROPIC_AUTH_BACKOFF_SECONDS
+    _anthropic_blocked_reason = reason
+    _anthropic_block_expired_logged = False
+    state.anthropic_disabled_until = _anthropic_auth_blocked_until
+    state.anthropic_last_error_at = time.time()
+    state.anthropic_last_error = f"{type(exc).__name__}: {exc}"
+    if count_auth_failure:
+        state.anthropic_auth_failures += 1
+    if not config.openai_api_key:
+        raise exc
+    logger.warning(log_message, _ANTHROPIC_AUTH_BACKOFF_SECONDS, exc)
 
 
 def _get_anthropic_attempt_lock() -> asyncio.Lock:
@@ -259,6 +301,7 @@ async def _generate_json_response(
 ) -> dict:
     """Generate JSON via Anthropic, falling back to OpenAI when needed."""
     global _anthropic_auth_blocked_key, _anthropic_auth_blocked_until, _anthropic_block_expired_logged
+    global _anthropic_blocked_reason
 
     system_prompt = _get_system_prompt(config)
     fallback_reason = "anthropic_absent"
@@ -276,10 +319,13 @@ async def _generate_json_response(
         if blocked:
             state.anthropic_disabled_until = _anthropic_auth_blocked_until
             if not config.openai_api_key:
-                raise RuntimeError("Anthropic authentication previously failed; provider is temporarily disabled")
+                raise RuntimeError(
+                    f"Anthropic {_anthropic_blocked_reason} previously failed; provider is temporarily disabled"
+                )
             fallback_reason = "anthropic_auth_blocked"
             logger.debug(
-                "Anthropic temporarily disabled after auth failure (retry in %ds); using OpenAI fallback",
+                "Anthropic temporarily disabled after %s (retry in %ds); using OpenAI fallback",
+                _anthropic_blocked_reason,
                 max(1, int(_anthropic_auth_blocked_until - now)),
             )
         else:
@@ -294,13 +340,14 @@ async def _generate_json_response(
                     state.anthropic_disabled_until = _anthropic_auth_blocked_until
                     if not config.openai_api_key:
                         raise RuntimeError(
-                            "Anthropic authentication previously failed; provider is temporarily disabled"
+                            f"Anthropic {_anthropic_blocked_reason} previously failed; provider is temporarily disabled"
                         )
                     fallback_reason = "anthropic_auth_blocked"
                 else:
                     if _anthropic_auth_blocked_key and not _anthropic_block_expired_logged:
                         logger.info(
-                            "Anthropic auth backoff expired; retrying Anthropic after cooldown",
+                            "Anthropic %s backoff expired; retrying Anthropic after cooldown",
+                            _anthropic_blocked_reason,
                         )
                         _anthropic_block_expired_logged = True
                     try:
@@ -323,25 +370,35 @@ async def _generate_json_response(
                         state.anthropic_last_error = ""
                         _anthropic_auth_blocked_key = ""
                         _anthropic_auth_blocked_until = 0.0
+                        _anthropic_blocked_reason = "provider error"
                         _anthropic_block_expired_logged = False
                         return json.loads(_strip_fences(raw))
                     except Exception as exc:
                         if _is_anthropic_auth_error(exc):
-                            _anthropic_auth_blocked_key = config.anthropic_api_key
-                            _anthropic_auth_blocked_until = time.time() + _ANTHROPIC_AUTH_BACKOFF_SECONDS
-                            _anthropic_block_expired_logged = False
-                            state.anthropic_disabled_until = _anthropic_auth_blocked_until
-                            state.anthropic_last_error_at = time.time()
-                            state.anthropic_last_error = f"{type(exc).__name__}: {exc}"
-                            state.anthropic_auth_failures += 1
-                            if not config.openai_api_key:
-                                raise
-                            fallback_reason = "anthropic_auth_failed"
-                            logger.warning(
-                                "Anthropic auth failed; suspending Anthropic for %ds and falling back to OpenAI: %s",
-                                _ANTHROPIC_AUTH_BACKOFF_SECONDS,
+                            _trip_anthropic_circuit_and_fallback(
                                 exc,
+                                config=config,
+                                state=state,
+                                reason="authentication failure",
+                                log_message=(
+                                    "Anthropic auth failed; suspending Anthropic for %ds and falling back to OpenAI: %s"
+                                ),
+                                count_auth_failure=True,
                             )
+                            fallback_reason = "anthropic_auth_failed"
+                        elif _is_anthropic_nonretryable_provider_error(exc):
+                            _trip_anthropic_circuit_and_fallback(
+                                exc,
+                                config=config,
+                                state=state,
+                                reason="non-retryable provider error",
+                                log_message=(
+                                    "Anthropic non-retryable provider error; "
+                                    "suspending Anthropic for %ds and falling back to OpenAI: %s"
+                                ),
+                                count_auth_failure=False,
+                            )
+                            fallback_reason = "anthropic_nonretryable"
                         else:
                             if not config.openai_api_key:
                                 raise
