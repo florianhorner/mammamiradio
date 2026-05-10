@@ -255,11 +255,13 @@ async def _generate_json_response(
     state: StationState,
     model: str,
     max_tokens: int,
+    caller: str | None = None,
 ) -> dict:
     """Generate JSON via Anthropic, falling back to OpenAI when needed."""
     global _anthropic_auth_blocked_key, _anthropic_auth_blocked_until, _anthropic_block_expired_logged
 
     system_prompt = _get_system_prompt(config)
+    fallback_reason = "anthropic_absent"
 
     if config.anthropic_api_key:
         now = time.time()
@@ -275,6 +277,7 @@ async def _generate_json_response(
             state.anthropic_disabled_until = _anthropic_auth_blocked_until
             if not config.openai_api_key:
                 raise RuntimeError("Anthropic authentication previously failed; provider is temporarily disabled")
+            fallback_reason = "anthropic_auth_blocked"
             logger.debug(
                 "Anthropic temporarily disabled after auth failure (retry in %ds); using OpenAI fallback",
                 max(1, int(_anthropic_auth_blocked_until - now)),
@@ -293,6 +296,7 @@ async def _generate_json_response(
                         raise RuntimeError(
                             "Anthropic authentication previously failed; provider is temporarily disabled"
                         )
+                    fallback_reason = "anthropic_auth_blocked"
                 else:
                     if _anthropic_auth_blocked_key and not _anthropic_block_expired_logged:
                         logger.info(
@@ -332,6 +336,7 @@ async def _generate_json_response(
                             state.anthropic_auth_failures += 1
                             if not config.openai_api_key:
                                 raise
+                            fallback_reason = "anthropic_auth_failed"
                             logger.warning(
                                 "Anthropic auth failed; suspending Anthropic for %ds and falling back to OpenAI: %s",
                                 _ANTHROPIC_AUTH_BACKOFF_SECONDS,
@@ -340,6 +345,7 @@ async def _generate_json_response(
                         else:
                             if not config.openai_api_key:
                                 raise
+                            fallback_reason = "anthropic_exception"
                             logger.warning("Anthropic %s, falling back to OpenAI: %s", type(exc).__name__, exc)
 
     openai_key = config.openai_api_key or os.getenv("OPENAI_API_KEY", "")
@@ -348,10 +354,11 @@ async def _generate_json_response(
 
     client = _get_openai_client(openai_key)
     loop = asyncio.get_running_loop()
+    openai_model = config.audio.openai_script_model
 
     def _call_openai():
         return client.chat.completions.create(
-            model="gpt-4o-mini",
+            model=openai_model,
             max_tokens=max_tokens,
             response_format={"type": "json_object"},
             messages=[
@@ -360,13 +367,50 @@ async def _generate_json_response(
             ],
         )
 
+    t_start = time.perf_counter()
     resp = await asyncio.wait_for(loop.run_in_executor(None, _call_openai), timeout=45.0)
+    latency_ms = int((time.perf_counter() - t_start) * 1000)
+    prompt_tokens = 0
+    completion_tokens = 0
     if getattr(resp, "usage", None):
         state.api_calls += 1
-        state.api_input_tokens += getattr(resp.usage, "prompt_tokens", 0)
-        state.api_output_tokens += getattr(resp.usage, "completion_tokens", 0)
+        prompt_tokens = getattr(resp.usage, "prompt_tokens", 0)
+        completion_tokens = getattr(resp.usage, "completion_tokens", 0)
+        state.api_input_tokens += prompt_tokens
+        state.api_output_tokens += completion_tokens
     raw = (resp.choices[0].message.content or "").strip()  # type: ignore[attr-defined]
-    return json.loads(_strip_fences(raw))
+    try:
+        parsed = json.loads(_strip_fences(raw))
+    except json.JSONDecodeError:
+        logger.info(
+            "openai_script_fallback",
+            extra={
+                "event": "openai_script_fallback",
+                "model": openai_model,
+                "caller": caller,
+                "fallback_reason": fallback_reason,
+                "latency_ms": latency_ms,
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+                "json_ok": False,
+                "raw_preview": raw[:500],
+            },
+        )
+        raise
+    logger.info(
+        "openai_script_fallback",
+        extra={
+            "event": "openai_script_fallback",
+            "model": openai_model,
+            "caller": caller,
+            "fallback_reason": fallback_reason,
+            "latency_ms": latency_ms,
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "json_ok": True,
+        },
+    )
+    return parsed
 
 
 def _get_system_prompt(config: StationConfig) -> str:
@@ -982,6 +1026,7 @@ Return JSON:
             state=state,
             model=config.audio.claude_creative_model,
             max_tokens=1200,
+            caller="banter",
         )
 
         result = []
@@ -1175,6 +1220,7 @@ Return JSON:
             state=state,
             model=config.audio.claude_creative_model,
             max_tokens=300,
+            caller="news_flash",
         )
 
         text = data.get("text", "Notizia dell'ultima ora!")
@@ -1286,6 +1332,7 @@ Return JSON:
             state=state,
             model=config.audio.claude_model,
             max_tokens=100,
+            caller="transition",
         )
         text = _massage_transition_text(data.get("text", "Allora..."), next_segment, recent_texts)
         logger.info("Generated transition: %s", text[:50])
@@ -1434,6 +1481,7 @@ Return JSON:
             state=state,
             model=config.audio.claude_creative_model,
             max_tokens=800,
+            caller="ad",
         )
 
         parts = []

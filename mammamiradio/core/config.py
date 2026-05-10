@@ -96,6 +96,7 @@ class AudioSection:
     bitrate: int = 192
     claude_model: str = "claude-haiku-4-5-20251001"
     claude_creative_model: str = "claude-opus-4-6"
+    openai_script_model: str = "gpt-4o-mini"
 
 
 @dataclass
@@ -695,6 +696,8 @@ def load_config(path: str = "radio.toml") -> StationConfig:
         audio_raw["claude_model"] = os.getenv("CLAUDE_MODEL")
     if os.getenv("CLAUDE_CREATIVE_MODEL"):
         audio_raw["claude_creative_model"] = os.getenv("CLAUDE_CREATIVE_MODEL")
+    if os.getenv("OPENAI_SCRIPT_MODEL"):
+        audio_raw["openai_script_model"] = os.getenv("OPENAI_SCRIPT_MODEL")
     playlist_raw = dict(raw.get("playlist", {}))
     if os.getenv("JAMENDO_CLIENT_ID") is not None:
         playlist_raw["jamendo_client_id"] = os.getenv("JAMENDO_CLIENT_ID", "").strip()
