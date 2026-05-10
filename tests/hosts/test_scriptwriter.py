@@ -339,6 +339,20 @@ async def test_model_not_found_is_memoized_and_skips_repeated_anthropic_calls(co
     assert "NotFoundError" in state.anthropic_last_error
 
 
+def test_nonretryable_classifier_yields_to_auth_precedence():
+    from mammamiradio.hosts.scriptwriter import (
+        _is_anthropic_auth_error,
+        _is_anthropic_nonretryable_provider_error,
+    )
+
+    class NotFoundError(Exception):
+        pass
+
+    exc = NotFoundError("invalid x-api-key")
+    assert _is_anthropic_auth_error(exc) is True
+    assert _is_anthropic_nonretryable_provider_error(exc) is False
+
+
 @pytest.mark.asyncio
 async def test_blocked_anthropic_no_openai_raises(config, state):
     """_generate_json_response raises when Anthropic is auth-blocked and no OpenAI key (line 229)."""
