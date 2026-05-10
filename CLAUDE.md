@@ -109,6 +109,7 @@ Everything else lives under `docs/`:
 - `HA_ENABLED`: force-enable HA integration (`true`/`1`/`yes`)
 - `STATION_NAME`, `STATION_THEME`: override station identity from `radio.toml`
 - `CLAUDE_MODEL`: override Claude model from `radio.toml`
+- `OPENAI_SCRIPT_MODEL`: override the OpenAI model used for script-generation fallback (banter/ads/news/transitions) when Anthropic is unavailable. Default `gpt-4o-mini`. Evaluation toggle only — does NOT affect TTS (`gpt-4o-mini-tts` stays fixed). Promotion to addon UI is a separate decision once an evaluation winner is chosen.
 - `MAMMAMIRADIO_ALLOW_YTDLP`: enable yt-dlp for chart music (`true`/`1`/`yes`; default: disabled for copyright safety, but enabled by default in HA addon and Conductor)
 - `JAMENDO_CLIENT_ID`: Jamendo API client id (empty = Jamendo source disabled)
 - `JAMENDO_COUNTRY`: 3-letter uppercase ISO 3166-1 alpha-3 (e.g. `ITA`, `DEU`); empty disables the country filter. radio.toml default is `ITA` for Italian-trending music.
