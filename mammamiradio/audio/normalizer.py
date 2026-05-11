@@ -295,7 +295,7 @@ def concat_files(
     """Concatenate rendered parts into a single MP3 segment.
 
     When silence_ms > 0, short silence gaps are inserted between each part
-    using the FFmpeg anullsrc filter for a more produced feel.
+    using the FFmpeg aevalsrc filter for a more produced feel.
 
     Set loudnorm=False when all inputs are already normalized to skip the
     expensive EBU R128 loudness pass (~1-3s saved per concat).
@@ -316,7 +316,7 @@ def concat_files(
             filter_parts.append(f"[{stream_idx}:a]")
             stream_idx += 1
             if i < len(paths) - 1:
-                inputs.extend(["-f", "lavfi", "-i", f"anullsrc=r=48000:cl=stereo,atrim=duration={silence_dur}"])
+                inputs.extend(["-f", "lavfi", "-i", f"aevalsrc=0|0:d={silence_dur}:s=48000:c=stereo"])
                 filter_parts.append(f"[{stream_idx}:a]")
                 stream_idx += 1
         total_streams = len(paths) + len(paths) - 1

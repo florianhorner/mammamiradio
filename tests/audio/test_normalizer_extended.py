@@ -6,6 +6,7 @@ and generate_bumper_jingle.
 
 from __future__ import annotations
 
+import importlib
 import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -670,6 +671,63 @@ def test_concat_files_no_silence(mock_subprocess):
     cmd = mock_run.call_args[0][0]
     joined = " ".join(cmd)
     assert "anullsrc" not in joined
+    assert "concat=n=3" in joined
+
+
+def test_concat_files_with_silence_uses_aevalsrc(mock_subprocess):
+    """concat_files with silence_ms>0 uses aevalsrc (not anullsrc+atrim).
+
+    aevalsrc with d= terminates reliably on Pi aarch64; anullsrc+atrim was
+    silently truncating banter/ad segments mid-sentence on HA Green.
+    """
+    from mammamiradio.audio.normalizer import concat_files
+
+    mock_run, _ = mock_subprocess
+    paths = [Path("/tmp/a.mp3"), Path("/tmp/b.mp3")]
+    out = Path("/tmp/out.mp3")
+    concat_files(paths, out, silence_ms=300)
+    cmd = mock_run.call_args[0][0]
+    joined = " ".join(cmd)
+    assert "aevalsrc=0|0" in joined
+    assert "anullsrc" not in joined
+    assert "atrim" not in joined
+    assert "d=0.3" in joined
+    assert "concat=n=3" in joined  # 2 voice inputs + 1 silence = 3 streams
+
+
+def test_concat_files_empty_input_rejects_without_ffmpeg(mock_subprocess):
+    """Empty input is a caller error; fallback audio is owned upstream."""
+    from mammamiradio.audio.normalizer import concat_files
+
+    mock_run, _ = mock_subprocess
+    with pytest.raises(ValueError, match="paths list must not be empty"):
+        concat_files([], Path("/tmp/out.mp3"), silence_ms=300)
+
+    mock_run.assert_not_called()
+
+
+def test_concat_files_with_silence_after_module_reload_still_uses_aevalsrc():
+    """Post-restart/reload keeps the same terminating silence source."""
+    import mammamiradio.audio.normalizer as normalizer
+
+    reloaded = importlib.reload(normalizer)
+    completed = MagicMock(spec=subprocess.CompletedProcess)
+    completed.returncode = 0
+    completed.stderr = b""
+    completed.stdout = b""
+
+    with (
+        patch("mammamiradio.audio.normalizer.subprocess.run", return_value=completed) as mock_run,
+        patch("mammamiradio.audio.normalizer._ffprobe_duration_sec", return_value=None),
+    ):
+        reloaded.concat_files([Path("/tmp/a.mp3"), Path("/tmp/b.mp3")], Path("/tmp/out.mp3"), silence_ms=300)
+
+    cmd = mock_run.call_args[0][0]
+    joined = " ".join(cmd)
+    assert "aevalsrc=0|0" in joined
+    assert "anullsrc" not in joined
+    assert "atrim" not in joined
+    assert "d=0.3" in joined
     assert "concat=n=3" in joined
 
 
