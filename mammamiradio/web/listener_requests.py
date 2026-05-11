@@ -31,8 +31,11 @@ never exposed to listener responses.
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import hmac
 import logging
 import time
+import uuid
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, Request
@@ -44,6 +47,20 @@ from mammamiradio.web.streamer import require_admin_access
 logger = logging.getLogger("mammamiradio.listener_requests")
 
 router = APIRouter()
+
+
+def _hash_submitter_ip(ip: str, config) -> str:
+    """HMAC-SHA256(IP, ADMIN_TOKEN) — Eng-Review decision #7.
+
+    Returns hex digest. Falls back to a stable placeholder key if ADMIN_TOKEN is
+    empty (dev/local), so per-IP grouping still works deterministically without
+    leaking that the operator hasn't set ADMIN_TOKEN. The hash is a server-side
+    rate-limit key and never exposed in listener-facing responses.
+    """
+    secret = (getattr(config, "admin_token", "") or "").encode("utf-8")
+    if not secret:
+        secret = b"mmr-dev-local-no-admin-token"
+    return hmac.new(secret, ip.encode("utf-8"), hashlib.sha256).hexdigest()
 
 
 @router.get("/api/listener-requests")
@@ -62,6 +79,10 @@ async def get_listener_requests(request: Request, _: None = Depends(require_admi
                 "song_error": r.get("song_error"),
                 "song_track": r.get("song_track"),
                 "age_s": int(now - r.get("ts", now)),
+                # Track B v2.11.0 (admin-only fields):
+                "request_id": r.get("request_id"),
+                "status": r.get("status", "queued"),
+                "evict_after": r.get("evict_after"),
             }
             for r in state.pending_requests
         ]
@@ -86,6 +107,11 @@ async def get_public_listener_requests(request: Request):
                 "type": r.get("type", "dedica"),
                 "song_track": r.get("song_track") if r.get("song_found") else None,
                 "age_s": int(now - r.get("ts", now)),
+                # Track B v2.11.0: listener-side sidebar uses request_id to
+                # identify its own card and status to render the on-air state.
+                # submitter_ip_hash and evict_after stay internal.
+                "request_id": r.get("request_id"),
+                "status": r.get("status", "queued"),
             }
             for r in state.pending_requests
         ]
@@ -126,11 +152,13 @@ async def listener_request(request: Request):
     # IP rate limit: 1 request per 30s per IP
     ip = request.client.host if request.client else "unknown"
     state = request.app.state.station_state
+    config = request.app.state.config
+    submitter_ip_hash = _hash_submitter_ip(ip, config)
     now = time.time()
-    last = state._listener_request_rl.get(ip, 0)
+    last = state._listener_request_rl.get(submitter_ip_hash, 0)
     if now - last < 30:
         return JSONResponse({"ok": False, "retry_after": int(30 - (now - last))}, status_code=429)
-    state._listener_request_rl[ip] = now
+    state._listener_request_rl[submitter_ip_hash] = now
     # Prune stale entries to avoid unbounded growth
     state._listener_request_rl = {k: v for k, v in state._listener_request_rl.items() if now - v < 300}
 
@@ -141,7 +169,6 @@ async def listener_request(request: Request):
     # Detect song request by keyword
     msg_lower = message.lower()
     song_keywords = ["metti", "suona", "play", "voglio sentire", "puoi mettere", "can you play", "mettete"]
-    config = request.app.state.config
     allow_ytdlp = getattr(config, "allow_ytdlp", False)
     is_song_request = allow_ytdlp and any(kw in msg_lower for kw in song_keywords)
     req: dict = {
@@ -154,6 +181,15 @@ async def listener_request(request: Request):
         "song_track": None,
         "banter_cycles_missed": 0,
         "ts": now,
+        # Track B v2.11.0 (Phase 2 — additive, state machine inert).
+        # request_id is the canonical id (replaces ts in v2.12). status moves
+        # through queued → scheduled → on_air → aired (or rejected/expired)
+        # in Phase 3. evict_after is set on terminal transition. submitter_ip_hash
+        # is HMAC-SHA256(IP, ADMIN_TOKEN) — never exposed in public responses.
+        "request_id": str(uuid.uuid4()),
+        "status": "queued",
+        "evict_after": None,
+        "submitter_ip_hash": submitter_ip_hash,
     }
     state.pending_requests.append(req)
 

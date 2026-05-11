@@ -704,6 +704,125 @@ async def test_get_listener_requests_returns_age():
     assert body["requests"][0]["age_s"] >= 8
 
 
+# ---------------------------------------------------------------------------
+# Track B v2.11.0 — Phase 2: pending_requests record shape extensions
+# (request_id, status, evict_after, submitter_ip_hash). Additive only — state
+# machine activation lands in Phase 3.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_listener_request_record_has_phase2_fields():
+    """POST creates a record carrying request_id, status='queued', evict_after=None, submitter_ip_hash."""
+    import uuid as _uuid
+
+    app = _make_test_app(admin_token="phase2-token")
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    with patch("mammamiradio.web.listener_requests._download_listener_song", new_callable=AsyncMock):
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            resp = await client.post("/api/listener-request", json={"name": "Luca", "message": "Ciao!"})
+    assert resp.status_code == 200
+    rec = app.state.station_state.pending_requests[0]
+    # request_id is a valid uuid4 string
+    assert isinstance(rec["request_id"], str)
+    parsed = _uuid.UUID(rec["request_id"])
+    assert parsed.version == 4
+    # status starts at queued
+    assert rec["status"] == "queued"
+    # evict_after is None until terminal transition (Phase 3 sets it)
+    assert rec["evict_after"] is None
+    # submitter_ip_hash is a 64-char hex digest (SHA256)
+    assert isinstance(rec["submitter_ip_hash"], str)
+    assert len(rec["submitter_ip_hash"]) == 64
+    int(rec["submitter_ip_hash"], 16)  # parses as hex
+
+
+@pytest.mark.asyncio
+async def test_listener_request_request_id_unique_per_submission():
+    """Two valid submissions from different IPs produce different request_ids."""
+    app = _make_test_app()
+    t1 = httpx.ASGITransport(app=app, client=("127.0.0.1", 11111))
+    t2 = httpx.ASGITransport(app=app, client=("10.0.0.5", 22222))
+    async with httpx.AsyncClient(transport=t1, base_url="http://testserver") as c1:
+        r1 = await c1.post("/api/listener-request", json={"name": "A", "message": "ciao"})
+    async with httpx.AsyncClient(transport=t2, base_url="http://testserver") as c2:
+        r2 = await c2.post("/api/listener-request", json={"name": "B", "message": "ciao"})
+    assert r1.status_code == 200
+    assert r2.status_code == 200
+    pending = app.state.station_state.pending_requests
+    assert len(pending) == 2
+    assert pending[0]["request_id"] != pending[1]["request_id"]
+
+
+@pytest.mark.asyncio
+async def test_submitter_ip_hash_stable_across_submissions():
+    """Same IP → same hash; different IPs → different hashes (HMAC determinism)."""
+    from mammamiradio.web.listener_requests import _hash_submitter_ip
+
+    config = MagicMock()
+    config.admin_token = "admin-token-xyz"
+    h1 = _hash_submitter_ip("192.168.1.10", config)
+    h2 = _hash_submitter_ip("192.168.1.10", config)
+    h3 = _hash_submitter_ip("192.168.1.11", config)
+    assert h1 == h2
+    assert h1 != h3
+    # Different secret → different hash for same IP
+    config2 = MagicMock()
+    config2.admin_token = "different-token"
+    h4 = _hash_submitter_ip("192.168.1.10", config2)
+    assert h4 != h1
+    # Empty admin_token still produces a stable hash (dev/local fallback)
+    config3 = MagicMock()
+    config3.admin_token = ""
+    h5 = _hash_submitter_ip("192.168.1.10", config3)
+    h6 = _hash_submitter_ip("192.168.1.10", config3)
+    assert h5 == h6
+    assert len(h5) == 64
+
+
+@pytest.mark.asyncio
+async def test_listener_request_rate_limit_uses_hashed_ip_key():
+    """Rate limiting must not retain raw client IPs in station state."""
+    from mammamiradio.web.listener_requests import _hash_submitter_ip
+
+    client_ip = "192.0.2.44"
+    app = _make_test_app(admin_token="phase2-token")
+    expected_key = _hash_submitter_ip(client_ip, app.state.config)
+    transport = httpx.ASGITransport(app=app, client=(client_ip, 12345))
+    with patch("mammamiradio.web.listener_requests._download_listener_song", new_callable=AsyncMock):
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            first = await client.post("/api/listener-request", json={"name": "Luca", "message": "Ciao!"})
+            second = await client.post("/api/listener-request", json={"name": "Luca", "message": "Ancora!"})
+
+    assert first.status_code == 200
+    assert second.status_code == 429
+    assert client_ip not in app.state.station_state._listener_request_rl
+    assert expected_key in app.state.station_state._listener_request_rl
+    assert app.state.station_state.pending_requests[0]["submitter_ip_hash"] == expected_key
+
+
+@pytest.mark.asyncio
+async def test_phase2_internal_fields_not_in_public_response():
+    """submitter_ip_hash and evict_after must never leak via /public-listener-requests."""
+    app = _make_test_app()
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    with patch("mammamiradio.web.listener_requests._download_listener_song", new_callable=AsyncMock):
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            post = await client.post("/api/listener-request", json={"name": "Marta", "message": "saluti"})
+            assert post.status_code == 200
+            pub = await client.get("/public-listener-requests")
+    assert pub.status_code == 200
+    body = pub.json()
+    assert body["requests"], "expected at least one public request"
+    public_record = body["requests"][0]
+    # Public-safe fields the listener sidebar needs (Phase 2 additions)
+    assert "request_id" in public_record
+    assert public_record["status"] == "queued"
+    # Internal fields stay server-side
+    assert "submitter_ip_hash" not in public_record
+    assert "evict_after" not in public_record
+
+
 @pytest.mark.asyncio
 async def test_add_external_track_success(tmp_path):
     app = _make_test_app()
