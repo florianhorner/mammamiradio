@@ -46,7 +46,8 @@ class Track:
     album: str = ""
     explicit: bool = False
     popularity: int = 0
-    source: Literal["youtube", "jamendo", "local", "demo"] = "youtube"
+    year: int = 0
+    source: Literal["youtube", "jamendo", "local", "demo", "classic"] = "youtube"
 
     @staticmethod
     def _slugify_cache_value(raw: str, *, max_length: int = 160) -> str:

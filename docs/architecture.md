@@ -7,7 +7,7 @@ One background task stays ahead and produces segments. Another reads the next re
 ## Runtime overview
 
 ```text
-Live Italian charts / local files / demo tracks
+Charts / Jamendo / classic eras / local files / demo tracks
                 |
                 v
            playlist.py
@@ -116,9 +116,12 @@ The dashboard derives a tier label from these flags: Demo Radio, Full AI Radio, 
 1. **Persisted source** (any prior `cache/playlist_source.json` selection). Restored verbatim if loadable.
 2. **Charts + local blend** (when `MAMMAMIRADIO_ALLOW_YTDLP=true`): up to 100 tracks fetched from Apple Music Italy RSS. MP3s in `music/` are merged in and deduplicated by `spotify_id`. Total catalog typically 100-300 tracks. `source_id="apple_music_it_top_100"`.
 3. **Jamendo CC** (when `radio.toml` `[playlist].jamendo_client_id` is set): CC-licensed tracks via the Jamendo API. Default radio.toml ships `jamendo_country = "ITA"` + `jamendo_order = "popularity_week"`, so the resulting fetch is "Italian-trending" (artist nationality = ITA, sorted by current week popularity). Both fields are optional — empty country = no nationality filter; empty order = Jamendo's default sort. Fields also overridable via `JAMENDO_COUNTRY` / `JAMENDO_ORDER` env vars. `source_id` is the tag string; the persisted source URL `jamendo://playlist?tags=…&country=…&order=…` round-trips all three so reload via `/api/playlist/load` reproduces the exact same fetch.
-4. **Local `music/` files** (always available when MP3s exist on disk): operator-supplied MP3s in `music/`. Loaded as a first-class source — yt-dlp is not required, and this branch fires whether or not Jamendo is configured. `source_id="local_music_dir"`.
-5. **Bundled demo assets**: pre-shipped MP3s in `mammamiradio/assets/demo/music/`. Empty by default; populated optionally per the demo-asset contract.
-6. **Built-in `DEMO_TRACKS`**: metadata-only Italian-flavored placeholder list. Last-resort fallback so the station always boots with something.
+4. **Classic Italian eras** (explicit admin selection only): `classic://italian/70s`, `classic://italian/80s`, and `classic://italian/90s` resolve through yt-dlp search queries for cantautori/classic-pop eras. Each era stamps fetched tracks with a `year` hint (`1975`, `1985`, `1995`) so the admin playlist can render decade badges. Because this is an operator-selected source, failure raises an explicit toast instead of silently falling through.
+5. **Local `music/` files** (always available when MP3s exist on disk): operator-supplied MP3s in `music/`. Loaded as a first-class source — yt-dlp is not required, and this branch fires whether or not Jamendo is configured. `source_id="local_music_dir"`.
+6. **Bundled demo assets**: pre-shipped MP3s in `mammamiradio/assets/demo/music/`. Empty by default; populated optionally per the demo-asset contract.
+7. **Built-in `DEMO_TRACKS`**: metadata-only Italian-flavored placeholder list. Last-resort fallback so the station always boots with something.
+
+The admin Music & Coda controls expose reload buttons for charts/Jamendo when their capabilities are available and unconditional decade buttons for Anni '70, Anni '80, and Anni '90. `/status` serializes playlist `album_art`, `source`, `year`, and `youtube_id` so the browser can render thumbnails, source chips, and era pills without another round trip.
 
 Once playback is running, the producer's recovery layers (last-known-good music recycle, demo-asset rescue, forced banter) keep the queue from starvation if a source disappears mid-session. Silent audio is never queued intentionally.
 

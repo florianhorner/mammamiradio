@@ -2286,7 +2286,16 @@ async def status(request: Request, _: None = Depends(require_admin_access)):
             "force_pending": state.force_next.value if state.force_next else None,
             "session_stopped": state.session_stopped,
             "playlist": [
-                {"title": t.title, "artist": t.artist, "display": t.display, "spotify_id": t.spotify_id}
+                {
+                    "title": t.title,
+                    "artist": t.artist,
+                    "display": t.display,
+                    "spotify_id": t.spotify_id,
+                    "album_art": t.album_art,
+                    "source": t.source,
+                    "year": t.year,
+                    "youtube_id": t.youtube_id,
+                }
                 for t in state.playlist[:100]
             ],
             "brand": _serialize_brand(config.brand),
