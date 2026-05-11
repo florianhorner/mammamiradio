@@ -73,9 +73,11 @@ def test_rationale_with_listener_patterns():
 
     assert "restless_skipper" in listener.patterns
 
-    # Run multiple times to verify pattern-aware reasons are in the pool
+    # Run multiple times to verify pattern-aware reasons are in the pool.
+    # Pool is ~24 entries with 1 pattern-specific reason; (23/24)^500 ≈ 6.8e-10
+    # — matches the iteration count of the sibling test_rationale_with_album test.
     rationales = set()
-    for _ in range(100):
+    for _ in range(500):
         rationales.add(generate_track_rationale(track, listener=listener))
 
     # At least one of the pattern-specific rationales should appear

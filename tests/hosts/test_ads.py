@@ -112,7 +112,7 @@ def test_music_bed_generation():
 
     tmp = Path(tempfile.mkdtemp())
     try:
-        for mood in ("dramatic", "lounge", "upbeat", "mysterious", "epic"):
+        for mood in ("dramatic", "lounge", "upbeat", "mysterious", "luxury_spa", "epic"):
             out = generate_music_bed(tmp / f"bed_{mood}.mp3", mood, 3.0)
             assert out.exists()
             assert out.stat().st_size > 1000

@@ -22,6 +22,12 @@
 - **Gate:** design sprint (`/office-hours` on dial UX first) — do not build speculatively
 - **Trigger phrase:** "bring the dial alive" / "implement the dialer"
 
+### P2 — Super-italian-aware listener stopped-state regression guard
+
+**Priority:** P2
+**Source:** scope-parked from triage of stale branch `fix/listener-polish` on 2026-05-10
+`tests/web/test_ui_control_contracts.py` (`TestStoppedStateQuietsTheUI`) — write a fresh regression test asserting the stopped-state surfaces (`renderNowPlayingStrip` + `updateMediaSession` in `mammamiradio/web/static/listener.js`) route through the super-italian copy bag (`_t('np_paused', ...)`) and never leak `Session stopped` / `STOPPED` / hardcoded city/frequency values to lock-screen / Bluetooth / CarPlay. The original guard on `fix/listener-polish` predates super-italian (PR #310) and asserts the literal `'In pausa'`, which would silently break the i18n toggle if cherry-picked as-is. Write against current code, do not resurrect the stale branch's version.
+
 ## Infrastructure
 
 **Priority:** P2
@@ -112,6 +118,16 @@ The 3-agent PR audit on 2026-05-03 took ~45s and flipped a 2-3 day build into a 
 **Source:** scope-parked from `florianhorner/commit-standards-bootstrap` on 2026-05-08
 `.github/workflows/verify-claims-call.yml` pins `florianhorner/gh-workflows/.github/workflows/verify-claims.yml@v1.1`. Upstream PR `florianhorner/gh-workflows#3` fixes the `parseProofLines` self-reference-tag bug that caused PR #302's `runtime: proof/...txt` line to fail validation; once the fix lands and is tagged `v1.2`, bump the pin here so future PRs can use file-path and gist-URL artifacts directly instead of routing every artifact through a CI run URL.
 
+## Scriptwriter Anthropic state
+
+**Source:** /simplify scope-park on `fix/anthropic-model-and-audio-fx-guardrails` 2026-05-10.
+
+### P2 — Collapse Anthropic block state into a typed value object
+`mammamiradio/hosts/scriptwriter.py:51` — `_anthropic_auth_blocked_key`, `_anthropic_auth_blocked_until`, and `_anthropic_blocked_reason` are three module-globals that must always reset together. A small dataclass with a `.clear()` method would prevent future drift across the four reset/write sites (module init, `reset_provider_backoff`, success-path clear, `_trip_anthropic_circuit_and_fallback`).
+
+### P2 — Use SDK-typed exceptions in Anthropic error classification
+`mammamiradio/hosts/scriptwriter.py:233,242` — `_is_anthropic_auth_error` and `_is_anthropic_nonretryable_provider_error` sniff `type(exc).__name__` and `str(exc)` substrings. The Anthropic SDK exposes typed exceptions (`anthropic.AuthenticationError`, `anthropic.NotFoundError`). Switch to `isinstance` checks (with `hasattr` guard for SDK-version safety) and keep string match as a fallback.
+
 ## Completed
 
 ### Mark addon as experimental in HACS
@@ -142,11 +158,13 @@ Version sync check conditional on `pyproject.toml`/`ha-addon/config.yaml` diff; 
 ## Admin endpoints — config-write race protection
 
 ### Apply `_super_italian_lock` pattern to `/api/credentials`
+
 **Priority:** P3
 **Source:** scope-parked from florianhorner/feat/translation-immersion on 2026-05-08
 `mammamiradio/web/streamer.py` — `/api/super-italian` serializes config-attr + `os.environ` + `.env` + `/data/options.json` writes under `_super_italian_lock` to avoid same-process race during the `await executor` window. `/api/credentials` and `/api/setup/save-keys` do the same read-modify-write of `.env` without serialization. Low blast radius (admin-only, single operator), but the pattern should be unified once a third caller appears.
 
 ### Unify `_save_addon_options` + `_save_super_italian_addon_options`
+
 **Priority:** P3
 **Source:** scope-parked from florianhorner/feat/translation-immersion on 2026-05-08
 `mammamiradio/web/streamer.py:1260` and `:1580` — two helpers share the read-modify-write skeleton for `/data/options.json`. They differ in value type (str vs bool) and key handling (key_map vs direct). Acceptable as-is at 2 callers; refactor to a single `_save_addon_options(updates: dict[str, Any])` accepting a typed patch when a third caller lands.

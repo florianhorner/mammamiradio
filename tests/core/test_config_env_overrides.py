@@ -60,9 +60,9 @@ def test_station_theme_override(monkeypatch):
 
 
 def test_claude_model_override(monkeypatch):
-    monkeypatch.setenv("CLAUDE_MODEL", "claude-sonnet-4-5-20250514")
+    monkeypatch.setenv("CLAUDE_MODEL", "claude-sonnet-4-6")
     config = load_config(TOML_PATH)
-    assert config.audio.claude_model == "claude-sonnet-4-5-20250514"
+    assert config.audio.claude_model == "claude-sonnet-4-6"
 
 
 def test_cache_dir_override(monkeypatch):

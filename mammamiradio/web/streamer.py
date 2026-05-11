@@ -1705,7 +1705,10 @@ async def set_super_italian(request: Request, _: None = Depends(require_admin_ac
     body = await request.json()
     if not isinstance(body, dict) or "super_italian_mode" not in body:
         return {"ok": False, "error": "expected JSON object with super_italian_mode"}
-    value = bool(body["super_italian_mode"])
+    raw_value = body["super_italian_mode"]
+    if not isinstance(raw_value, bool):
+        return {"ok": False, "error": "super_italian_mode must be a JSON boolean (true/false)"}
+    value = raw_value
     env_value = "true" if value else "false"
     loop = asyncio.get_running_loop()
     async with _super_italian_lock:

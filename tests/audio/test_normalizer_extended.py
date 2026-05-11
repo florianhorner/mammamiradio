@@ -13,10 +13,12 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from mammamiradio.audio.normalizer import (
+    _aphaser,
     _generate_cash_register,
     _generate_ice_clink,
     _generate_mandolin_sting,
     _generate_whoosh,
+    _tremolo,
     generate_brand_motif,
     generate_bumper_jingle,
     generate_music_bed,
@@ -273,6 +275,11 @@ def test_generate_music_bed_fade_out_capped(mock_subprocess):
     cmd = mock_run.call_args[0][0]
     joined = " ".join(cmd)
     assert "afade=t=out" in joined
+
+
+def test_ffmpeg_filter_helpers_clamp_known_ranges():
+    assert "delay=5" in _aphaser(in_gain=0.4, out_gain=0.6, delay=8.0, decay=0.6, speed=0.1)
+    assert "tremolo=f=0.1" in _tremolo(freq=0.07, depth=0.12)
 
 
 # ---------------------------------------------------------------------------
@@ -807,6 +814,7 @@ def test_generate_music_bed_luxury_spa(mock_subprocess):
     assert "aevalsrc=" in joined
     assert "250" in joined
     assert "aphaser" in joined
+    assert "delay=5" in joined
 
 
 def test_generate_music_bed_showroom(mock_subprocess):
@@ -910,6 +918,8 @@ def test_generate_foley_loop_cafe(mock_subprocess):
     joined = " ".join(cmd)
     assert "anoisesrc=color=pink" in joined
     assert "bandpass" in joined
+    assert "tremolo=f=0.1" in joined
+    assert "tremolo=f=0.07" not in joined
 
 
 def test_generate_foley_loop_motorway(mock_subprocess):

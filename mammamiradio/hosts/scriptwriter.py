@@ -50,6 +50,8 @@ _openai_client = None
 _openai_key: str = ""
 _anthropic_auth_blocked_key: str = ""
 _anthropic_auth_blocked_until: float = 0.0
+_anthropic_blocked_reason: str = "provider error"
+_anthropic_blocked_model: str = ""
 _ANTHROPIC_AUTH_BACKOFF_SECONDS = 600
 # Serializes Anthropic attempts so concurrent async tasks can't all race past
 # the block check and issue parallel 401 floods before the first failure trips
@@ -220,9 +222,13 @@ def reset_provider_backoff() -> None:
         _anthropic_auth_blocked_key, \
         _anthropic_auth_blocked_until, \
         _anthropic_block_expired_logged, \
-        _anthropic_attempt_lock
+        _anthropic_attempt_lock, \
+        _anthropic_blocked_reason, \
+        _anthropic_blocked_model
     _anthropic_auth_blocked_key = ""
     _anthropic_auth_blocked_until = 0.0
+    _anthropic_blocked_reason = "provider error"
+    _anthropic_blocked_model = ""
     _anthropic_block_expired_logged = False
     _anthropic_attempt_lock = None
 
@@ -234,6 +240,47 @@ def _is_anthropic_auth_error(exc: Exception) -> bool:
     if "auth" in exc_type:
         return True
     return "invalid x-api-key" in text or "authentication_error" in text or "unauthorized" in text or "401" in text
+
+
+def _is_anthropic_nonretryable_provider_error(exc: Exception) -> bool:
+    """Return True for provider errors that require config changes, not retries."""
+    exc_type = type(exc).__name__.lower()
+    text = str(exc).lower()
+    if _is_anthropic_auth_error(exc):
+        return False
+    if "notfound" in exc_type or "not_found" in exc_type:
+        return True
+    if "404" in text and ("model" in text or "not_found" in text or "not found" in text):
+        return True
+    return "model" in text and ("not_found_error" in text or "not found" in text)
+
+
+def _trip_anthropic_circuit_and_fallback(
+    exc: Exception,
+    *,
+    config,
+    state,
+    model_scope: str,
+    reason: str,
+    log_message: str,
+    count_auth_failure: bool,
+) -> None:
+    """Set Anthropic block globals + session state, then log fallback or re-raise."""
+    global _anthropic_auth_blocked_key, _anthropic_auth_blocked_until
+    global _anthropic_blocked_reason, _anthropic_blocked_model, _anthropic_block_expired_logged
+    _anthropic_auth_blocked_key = config.anthropic_api_key
+    _anthropic_auth_blocked_until = time.time() + _ANTHROPIC_AUTH_BACKOFF_SECONDS
+    _anthropic_blocked_reason = reason
+    _anthropic_blocked_model = model_scope
+    _anthropic_block_expired_logged = False
+    state.anthropic_disabled_until = _anthropic_auth_blocked_until
+    state.anthropic_last_error_at = time.time()
+    state.anthropic_last_error = f"{type(exc).__name__}: {exc}"
+    if count_auth_failure:
+        state.anthropic_auth_failures += 1
+    if not config.openai_api_key:
+        raise exc
+    logger.warning(log_message, _ANTHROPIC_AUTH_BACKOFF_SECONDS, exc)
 
 
 def _get_anthropic_attempt_lock() -> asyncio.Lock:
@@ -255,11 +302,14 @@ async def _generate_json_response(
     state: StationState,
     model: str,
     max_tokens: int,
+    caller: str | None = None,
 ) -> dict:
     """Generate JSON via Anthropic, falling back to OpenAI when needed."""
     global _anthropic_auth_blocked_key, _anthropic_auth_blocked_until, _anthropic_block_expired_logged
+    global _anthropic_blocked_reason, _anthropic_blocked_model
 
     system_prompt = _get_system_prompt(config)
+    fallback_reason = "anthropic_absent"
 
     if config.anthropic_api_key:
         now = time.time()
@@ -269,14 +319,23 @@ async def _generate_json_response(
             state.anthropic_disabled_until = 0.0
             state.anthropic_last_error = ""
 
-        blocked = _anthropic_auth_blocked_key == config.anthropic_api_key and now < _anthropic_auth_blocked_until
+        block_applies_to_model = not _anthropic_blocked_model or _anthropic_blocked_model == model
+        blocked = (
+            _anthropic_auth_blocked_key == config.anthropic_api_key
+            and now < _anthropic_auth_blocked_until
+            and block_applies_to_model
+        )
 
         if blocked:
             state.anthropic_disabled_until = _anthropic_auth_blocked_until
             if not config.openai_api_key:
-                raise RuntimeError("Anthropic authentication previously failed; provider is temporarily disabled")
+                raise RuntimeError(
+                    f"Anthropic {_anthropic_blocked_reason} previously failed; provider is temporarily disabled"
+                )
+            fallback_reason = "anthropic_auth_blocked"
             logger.debug(
-                "Anthropic temporarily disabled after auth failure (retry in %ds); using OpenAI fallback",
+                "Anthropic temporarily disabled after %s (retry in %ds); using OpenAI fallback",
+                _anthropic_blocked_reason,
                 max(1, int(_anthropic_auth_blocked_until - now)),
             )
         else:
@@ -284,19 +343,27 @@ async def _generate_json_response(
                 # Re-check inside the lock: a sibling task may have just 401'd and
                 # set the block while we were waiting to acquire.
                 now = time.time()
+                block_applies_to_model = not _anthropic_blocked_model or _anthropic_blocked_model == model
                 blocked_now = (
-                    _anthropic_auth_blocked_key == config.anthropic_api_key and now < _anthropic_auth_blocked_until
+                    _anthropic_auth_blocked_key == config.anthropic_api_key
+                    and now < _anthropic_auth_blocked_until
+                    and block_applies_to_model
                 )
                 if blocked_now:
                     state.anthropic_disabled_until = _anthropic_auth_blocked_until
                     if not config.openai_api_key:
                         raise RuntimeError(
-                            "Anthropic authentication previously failed; provider is temporarily disabled"
+                            f"Anthropic {_anthropic_blocked_reason} previously failed; provider is temporarily disabled"
                         )
+                    fallback_reason = "anthropic_auth_blocked"
                 else:
-                    if _anthropic_auth_blocked_key and not _anthropic_block_expired_logged:
+                    block_expired = (
+                        _anthropic_auth_blocked_key == config.anthropic_api_key and now >= _anthropic_auth_blocked_until
+                    )
+                    if block_expired and not _anthropic_block_expired_logged:
                         logger.info(
-                            "Anthropic auth backoff expired; retrying Anthropic after cooldown",
+                            "Anthropic %s backoff expired; retrying Anthropic after cooldown",
+                            _anthropic_blocked_reason,
                         )
                         _anthropic_block_expired_logged = True
                     try:
@@ -317,29 +384,49 @@ async def _generate_json_response(
                         raw = resp.content[0].text.strip()  # type: ignore[union-attr]
                         state.anthropic_disabled_until = 0.0
                         state.anthropic_last_error = ""
-                        _anthropic_auth_blocked_key = ""
-                        _anthropic_auth_blocked_until = 0.0
-                        _anthropic_block_expired_logged = False
+                        clears_current_block = not _anthropic_auth_blocked_key or (
+                            _anthropic_auth_blocked_key == config.anthropic_api_key
+                            and (not _anthropic_blocked_model or _anthropic_blocked_model == model or block_expired)
+                        )
+                        if clears_current_block:
+                            _anthropic_auth_blocked_key = ""
+                            _anthropic_auth_blocked_until = 0.0
+                            _anthropic_blocked_reason = "provider error"
+                            _anthropic_blocked_model = ""
+                            _anthropic_block_expired_logged = False
                         return json.loads(_strip_fences(raw))
                     except Exception as exc:
                         if _is_anthropic_auth_error(exc):
-                            _anthropic_auth_blocked_key = config.anthropic_api_key
-                            _anthropic_auth_blocked_until = time.time() + _ANTHROPIC_AUTH_BACKOFF_SECONDS
-                            _anthropic_block_expired_logged = False
-                            state.anthropic_disabled_until = _anthropic_auth_blocked_until
-                            state.anthropic_last_error_at = time.time()
-                            state.anthropic_last_error = f"{type(exc).__name__}: {exc}"
-                            state.anthropic_auth_failures += 1
-                            if not config.openai_api_key:
-                                raise
-                            logger.warning(
-                                "Anthropic auth failed; suspending Anthropic for %ds and falling back to OpenAI: %s",
-                                _ANTHROPIC_AUTH_BACKOFF_SECONDS,
+                            _trip_anthropic_circuit_and_fallback(
                                 exc,
+                                config=config,
+                                state=state,
+                                model_scope="",
+                                reason="authentication failure",
+                                log_message=(
+                                    "Anthropic auth failed; suspending Anthropic for %ds and falling back to OpenAI: %s"
+                                ),
+                                count_auth_failure=True,
                             )
+                            fallback_reason = "anthropic_auth_failed"
+                        elif _is_anthropic_nonretryable_provider_error(exc):
+                            _trip_anthropic_circuit_and_fallback(
+                                exc,
+                                config=config,
+                                state=state,
+                                model_scope=model,
+                                reason="non-retryable provider error",
+                                log_message=(
+                                    "Anthropic non-retryable provider error; "
+                                    "suspending Anthropic for %ds and falling back to OpenAI: %s"
+                                ),
+                                count_auth_failure=False,
+                            )
+                            fallback_reason = "anthropic_nonretryable"
                         else:
                             if not config.openai_api_key:
                                 raise
+                            fallback_reason = "anthropic_exception"
                             logger.warning("Anthropic %s, falling back to OpenAI: %s", type(exc).__name__, exc)
 
     openai_key = config.openai_api_key or os.getenv("OPENAI_API_KEY", "")
@@ -348,10 +435,11 @@ async def _generate_json_response(
 
     client = _get_openai_client(openai_key)
     loop = asyncio.get_running_loop()
+    openai_model = config.audio.openai_script_model
 
     def _call_openai():
         return client.chat.completions.create(
-            model="gpt-4o-mini",
+            model=openai_model,
             max_tokens=max_tokens,
             response_format={"type": "json_object"},
             messages=[
@@ -360,13 +448,50 @@ async def _generate_json_response(
             ],
         )
 
+    t_start = time.perf_counter()
     resp = await asyncio.wait_for(loop.run_in_executor(None, _call_openai), timeout=45.0)
+    latency_ms = int((time.perf_counter() - t_start) * 1000)
+    prompt_tokens = 0
+    completion_tokens = 0
     if getattr(resp, "usage", None):
         state.api_calls += 1
-        state.api_input_tokens += getattr(resp.usage, "prompt_tokens", 0)
-        state.api_output_tokens += getattr(resp.usage, "completion_tokens", 0)
+        prompt_tokens = getattr(resp.usage, "prompt_tokens", 0)
+        completion_tokens = getattr(resp.usage, "completion_tokens", 0)
+        state.api_input_tokens += prompt_tokens
+        state.api_output_tokens += completion_tokens
     raw = (resp.choices[0].message.content or "").strip()  # type: ignore[attr-defined]
-    return json.loads(_strip_fences(raw))
+    try:
+        parsed = json.loads(_strip_fences(raw))
+    except json.JSONDecodeError:
+        logger.info(
+            "openai_script_call",
+            extra={
+                "event": "openai_script_call",
+                "model": openai_model,
+                "caller": caller,
+                "fallback_reason": fallback_reason,
+                "latency_ms": latency_ms,
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+                "json_ok": False,
+                "raw_preview": raw[:500],
+            },
+        )
+        raise
+    logger.info(
+        "openai_script_call",
+        extra={
+            "event": "openai_script_call",
+            "model": openai_model,
+            "caller": caller,
+            "fallback_reason": fallback_reason,
+            "latency_ms": latency_ms,
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "json_ok": True,
+        },
+    )
+    return parsed
 
 
 def _get_system_prompt(config: StationConfig) -> str:
@@ -982,6 +1107,7 @@ Return JSON:
             state=state,
             model=config.audio.claude_creative_model,
             max_tokens=1200,
+            caller="banter",
         )
 
         result = []
@@ -1175,6 +1301,7 @@ Return JSON:
             state=state,
             model=config.audio.claude_creative_model,
             max_tokens=300,
+            caller="news_flash",
         )
 
         text = data.get("text", "Notizia dell'ultima ora!")
@@ -1286,6 +1413,7 @@ Return JSON:
             state=state,
             model=config.audio.claude_model,
             max_tokens=100,
+            caller="transition",
         )
         text = _massage_transition_text(data.get("text", "Allora..."), next_segment, recent_texts)
         logger.info("Generated transition: %s", text[:50])
@@ -1434,6 +1562,7 @@ Return JSON:
             state=state,
             model=config.audio.claude_creative_model,
             max_tokens=800,
+            caller="ad",
         )
 
         parts = []

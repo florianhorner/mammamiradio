@@ -813,3 +813,26 @@ class TestStoppedStateQuietsTheUI:
                 "metadata is broadcast to OS-level surfaces and brand state belongs in "
                 "radio.toml / /public-status."
             )
+
+
+class TestHostBlockSelectorScoping:
+    """Two elements share `data-h="<host>"`: the script preview's
+    `<span class="script-host">` (renders inside #recentBody, higher in the DOM)
+    and the Hosts card's `<div class="host-block">` (lower in the DOM). A bare
+    `[data-h="..."]` selector resolves to the script-host span first, so preset
+    buttons, slider commits, and reset all silently target an element with no
+    range inputs and no `.host-preset` children. Scope the selectors to
+    `.host-block[data-h=...]` to keep them pointing at the Hosts card.
+    """
+
+    def test_host_block_selectors_are_scoped(self):
+        html = ADMIN_HTML.read_text()
+        for line in html.splitlines():
+            stripped = line.strip()
+            if "data-h=" not in stripped or "querySelector" not in stripped:
+                continue
+            assert ".host-block[data-h=" in stripped, (
+                "querySelector lookups by data-h must be scoped to .host-block — "
+                "otherwise they collide with <span class='script-host' "
+                f"data-h='...'> in the recent-script preview. Offending line:\n  {stripped}"
+            )

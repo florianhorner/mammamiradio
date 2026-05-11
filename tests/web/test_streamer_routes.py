@@ -810,6 +810,20 @@ async def test_get_root_serves_listener_page():
 
 
 @pytest.mark.asyncio
+async def test_get_root_renders_italian_when_super_italian_on():
+    """Super Italian Mode ON: CTA + form button render in Italian."""
+    app = _make_test_app()
+    app.state.config.super_italian_mode = True
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.get("/")
+    assert resp.status_code == 200
+    assert "Ascolta Ora" in resp.text  # CTA in Italian
+    assert "Spedisci con un bacio" in resp.text  # form submit in Italian
+    assert "Listen Now" not in resp.text  # English CTA must be absent
+
+
+@pytest.mark.asyncio
 async def test_public_status_returns_json():
     app = _make_test_app()
     transport = httpx.ASGITransport(app=app)
@@ -1300,6 +1314,44 @@ async def test_admin_panel_csp_allows_inline_handlers():
     csp = resp.headers.get("Content-Security-Policy", "")
     assert "script-src" in csp, f"Admin response must set script-src CSP: {csp!r}"
     assert "'unsafe-inline'" in csp, f"Admin CSP must include 'unsafe-inline' to allow inline event handlers: {csp!r}"
+
+
+@pytest.mark.asyncio
+async def test_admin_panel_data_fetches_use_ingress_base():
+    """admin.html must derive `_base` from window.location.pathname and prefix every
+    data fetch with it, so HA Ingress-served pages reach the addon's API.
+
+    Regression guard: prior to this fix, admin.html issued bare `fetch('/status')` and
+    `fetch('/api/...')` calls. Under HA Ingress those resolved against the HA host root
+    (not the addon's ingress prefix), returned non-JSON, were swallowed by the catch
+    handler, and the panel hung at "Waiting for signal…". The server-side rewriter
+    intentionally does NOT rewrite JS string literals (see _inject_ingress_prefix
+    docstring) — adopting the `_base` contract is the admin page's responsibility,
+    matching listener.js.
+    """
+    app = _make_test_app()
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.get("/admin")
+
+    assert resp.status_code == 200
+    body = resp.text
+
+    assert "const _base = (() =>" in body, (
+        "admin.html must declare a `_base` constant derived from window.location.pathname "
+        "so HA Ingress data fetches resolve to the addon, not the HA host root."
+    )
+
+    bare_offenders = re.findall(r"fetch\((['\"`])/(?:api/|status|public-)", body)
+    assert not bare_offenders, (
+        "admin.html must not issue bare path-absolute fetches like `fetch('/status')` or "
+        f"`fetch('/api/...')`; every call must compose against `_base`. Found: {bare_offenders!r}"
+    )
+
+    assert "fetch(_base+p," in body or "fetch(_base + p," in body, (
+        "The `api(m, p, b)` helper in admin.html must call `fetch(_base+p, ...)` so every "
+        "method/state/save call routed through it honors the HA Ingress prefix."
+    )
     assert "__MAMMAMIRADIO_SCRIPT_NONCE__" not in resp.text, "Stale nonce placeholder found in rendered HTML."
 
 
