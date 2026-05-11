@@ -295,7 +295,7 @@ def concat_files(
     """Concatenate rendered parts into a single MP3 segment.
 
     When silence_ms > 0, short silence gaps are inserted between each part
-    using the FFmpeg anullsrc filter for a more produced feel.
+    using the FFmpeg aevalsrc filter for a more produced feel.
 
     Set loudnorm=False when all inputs are already normalized to skip the
     expensive EBU R128 loudness pass (~1-3s saved per concat).
