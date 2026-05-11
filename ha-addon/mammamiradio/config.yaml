@@ -1,7 +1,7 @@
 name: Mamma Mi Radio
 description: AI-powered Italian radio station — two AI hosts banter, react to your home, and play CC-licensed music (Jamendo), live charts, or local files. Real radio feel, no subscriptions.
 slug: mammamiradio
-version: 2.10.11
+version: 2.11.0
 stage: experimental
 url: https://github.com/florianhorner/mammamiradio
 image: ghcr.io/florianhorner/mammamiradio-addon-{arch}
@@ -31,10 +31,12 @@ options:
   claude_model: "claude-haiku-4-5-20251001"
   admin_token: ""
   enable_home_assistant: true
+  super_italian_mode: false
 schema:
   anthropic_api_key: password?
   openai_api_key: password?
   station_name: str?
-  claude_model: list(claude-haiku-4-5-20251001|claude-sonnet-4-5-20250514|claude-opus-4-5-20250514)?
+  claude_model: list(claude-haiku-4-5-20251001|claude-sonnet-4-6|claude-opus-4-7)?
   admin_token: password?
   enable_home_assistant: bool?
+  super_italian_mode: bool?

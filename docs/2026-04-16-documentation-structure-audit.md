@@ -169,7 +169,7 @@ Evidence:
 
 - `HA_ADDON_RUNBOOK.md:84-85` says add-on `radio.toml` must remain byte-for-byte identical to root
 - `tests/test_addon_radio_sync.py:4-7` enforces exact equality
-- `scripts/test-addon-local.sh:117-122` enforces exact equality
+- `scripts/validate-addon.sh` enforces exact equality
 - `CHANGELOG.md:19-22` says 2.10.3 removed the Pi-specific overrides and CI now validates strict `cmp -s`
 - `.github/workflows/addon-build.yml:61-73` still applies a sed transform that expects the old Pi-specific overrides
 - `ha-addon/mammamiradio/CHANGELOG.md:11-15` still says the add-on intentionally carries those overrides

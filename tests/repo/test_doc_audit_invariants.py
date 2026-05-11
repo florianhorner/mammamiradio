@@ -12,8 +12,8 @@ because they are easy to regress during refactors and the docs alone will not ca
 
   * Finding #13 — `repository.yaml` duplication.
     Only the repo-root `repository.yaml` is wired into HA addon discovery; all install
-    docs tell users to add the repo root URL, and `scripts/test-addon-local.sh`
-    /`scripts/validate-addon.sh` only check the root file. The nested
+    docs tell users to add the repo root URL, and `scripts/validate-addon.sh`
+    only checks the root file. The nested
     `ha-addon/repository.yaml` previously shipped with identical contents but had no
     consumer — it was removed to eliminate the silent sync boundary. This test
     guarantees the duplicate does not come back.

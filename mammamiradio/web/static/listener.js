@@ -32,6 +32,14 @@
     return _nativeFetch(input, init);
   };
 
+  /* Listener-UI copy in the active super_italian_mode. Baked into the page
+     by the Jinja template (see #mmr-copy-bootstrap), not refetched on poll. */
+  const COPY = (() => {
+    const el = document.getElementById('mmr-copy-bootstrap');
+    try { return (el && JSON.parse(el.textContent)) || {}; } catch { return {}; }
+  })();
+  function _t(key, fallback) { return COPY[key] || fallback || ''; }
+
   /* ── State ── */
   const state = {
     caps: null,
@@ -65,20 +73,20 @@
   function relativeMinutes(ts) {
     if (!ts) return '';
     const diff = (Date.now() - ts * 1000) / 60000;
-    if (diff < 1) return 'adesso';
-    if (diff < 60) return Math.round(diff) + ' min fa';
-    return Math.round(diff / 60) + ' h fa';
+    if (diff < 1) return _t('now', 'now');
+    if (diff < 60) return Math.round(diff) + ' ' + _t('minutes_ago', 'min ago');
+    return Math.round(diff / 60) + ' ' + _t('hours_ago', 'hr ago');
   }
   function segmentKindLabel(type) {
     switch ((type || '').toLowerCase()) {
-      case 'music': return 'Musica';
-      case 'banter': return 'Banter';
-      case 'ad': return 'Sponsored';
+      case 'music': return _t('seg_music', 'Music');
+      case 'banter': return _t('seg_banter', 'Banter');
+      case 'ad': return _t('seg_ad', 'Sponsored');
       case 'news':
-      case 'news_flash': return 'News';
-      case 'jingle': return 'Jingle';
-      case 'welcome': return 'Benvenuto';
-      default: return (type || 'In onda').toUpperCase();
+      case 'news_flash': return _t('seg_news', 'News');
+      case 'jingle': return _t('seg_jingle', 'Jingle');
+      case 'welcome': return _t('seg_welcome', 'Welcome');
+      default: return (type || _t('seg_default', 'On Air')).toUpperCase();
     }
   }
 
@@ -127,10 +135,10 @@
     if (np.type === 'music') {
       const parts = label.split(' \u2014 ');
       if (parts.length === 2) { artist = parts[0]; title = parts[1]; }
-      else { artist = stationName; title = label || 'In onda'; }
+      else { artist = stationName; title = label || _t('np_on_air', 'On Air'); }
     } else if (np.type === 'banter') {
       artist = label || 'Marco & Giulia';
-      title = 'In diretta \u2014 banter';
+      title = _t('np_live', 'Live') + ' \u2014 ' + _t('seg_banter', 'Banter');
     } else if (np.type === 'ad') {
       artist = (np.metadata && np.metadata.brand) ? np.metadata.brand : 'Sponsored';
       title = 'A word from our sponsors';
@@ -142,9 +150,9 @@
       // Idle state — never leak the internal stopped-segment label to the
       // OS-level media surface (lock screen, Bluetooth, CarPlay, AirPlay).
       // Mirrors the DOM-side sanitization in renderNowPlayingStrip().
-      artist = stationName; title = 'In pausa';
+      artist = stationName; title = _t('np_paused', 'Paused');
     } else {
-      artist = stationName; title = label || 'In onda';
+      artist = stationName; title = label || _t('np_on_air', 'On Air');
     }
     const artUrl = np.metadata && np.metadata.album_art;
     const artwork = artUrl
@@ -182,24 +190,24 @@
         trackEl.textContent = parts[1];
         artistEl.textContent = parts[0];
       } else {
-        trackEl.textContent = label || 'In onda';
+        trackEl.textContent = label || _t('np_on_air', 'On Air');
         artistEl.textContent = '';
       }
     } else if (np.type === 'banter') {
-      trackEl.textContent = label ? label + ' in diretta' : 'I conduttori sono in onda';
-      artistEl.textContent = 'Banter';
+      trackEl.textContent = label ? label + ' ' + _t('np_banter_strip', 'in conversation') : _t('np_banter_idle', 'The hosts are on air');
+      artistEl.textContent = _t('seg_banter', 'Banter');
     } else if (np.type === 'ad') {
-      trackEl.textContent = 'Messaggio pubblicitario';
-      artistEl.textContent = (np.metadata && np.metadata.brand) ? np.metadata.brand : 'Sponsored';
+      trackEl.textContent = _t('np_ad_message', 'Sponsored message');
+      artistEl.textContent = (np.metadata && np.metadata.brand) ? np.metadata.brand : _t('seg_ad', 'Sponsored');
     } else if (np.type === 'welcome') {
-      trackEl.textContent = 'Ben arrivato';
+      trackEl.textContent = _t('np_welcome', 'Welcome aboard');
       artistEl.textContent = 'Mamma Mi Radio';
     } else if (np.type === 'stopped') {
       // Idle state — never leak internal stopped-segment labels to the listener.
-      trackEl.textContent = 'In pausa';
+      trackEl.textContent = _t('np_paused', 'Paused');
       artistEl.textContent = '';
     } else {
-      trackEl.textContent = label || 'In onda';
+      trackEl.textContent = label || _t('np_on_air', 'On Air');
       artistEl.textContent = segmentKindLabel(np.type);
     }
     updateMediaSession(np);
@@ -224,7 +232,7 @@
     const m = Math.floor((uptimeSec % 3600) / 60);
     const stat1 = $('stat-airtime');
     if (stat1) {
-      stat1.textContent = (h === 0 && m === 0) ? 'In diretta' : (h + 'h ' + m + 'm');
+      stat1.textContent = (h === 0 && m === 0) ? _t('np_live', 'Live') : (h + 'h ' + m + 'm');
     }
     const stat2 = $('stat-tracks');
     if (stat2) {
@@ -248,12 +256,12 @@
 
     if (now) {
       const p = splitMusicLabel(now);
-      cards.push({ when: 'Ora in onda', live: true, type: now.type, label: p.title, host: p.host });
+      cards.push({ when: _t('np_now', 'On now'), live: true, type: now.type, label: p.title, host: p.host });
     }
     upcoming.slice(0, cards.length ? 3 : 4).forEach((seg, i) => {
       const p = splitMusicLabel(seg);
       cards.push({
-        when: 'Prossimo \u00b7 ' + (i + 1),
+        when: _t('np_next', 'Next') + ' \u00b7 ' + (i + 1),
         live: false,
         type: seg.type,
         label: p.title || segmentKindLabel(seg.type),
@@ -262,7 +270,7 @@
     });
 
     while (cards.length < 4) {
-      cards.push({ when: '—', live: false, type: 'idle', label: 'In costruzione…', host: '' });
+      cards.push({ when: '—', live: false, type: 'idle', label: _t('np_building', 'Building schedule…'), host: '' });
     }
 
     container.innerHTML = cards.slice(0, 4).map((c, i) => {
@@ -270,7 +278,7 @@
       const pillClass = i === 0 && c.live ? 'pill-on' : i > 0 ? 'pill-next' : '';
       const subHtml = c.host ? `<div class="sub">${c.host}</div>` : '';
       const pillHtml = pillClass ? `<span class="pill ${pillClass}">${escHtml(segmentKindLabel(c.type))}</span>` : '';
-      return `<li class="${liClass}"><span class="t">${escHtml(c.when)}</span><div class="m"><div class="title">${escHtml(c.label || 'In onda')}</div>${subHtml}</div>${pillHtml}</li>`;
+      return `<li class="${liClass}"><span class="t">${escHtml(c.when)}</span><div class="m"><div class="title">${escHtml(c.label || _t('np_on_air', 'On Air'))}</div>${subHtml}</div>${pillHtml}</li>`;
     }).join('');
   }
 

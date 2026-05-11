@@ -22,6 +22,12 @@
 - **Gate:** design sprint (`/office-hours` on dial UX first) — do not build speculatively
 - **Trigger phrase:** "bring the dial alive" / "implement the dialer"
 
+### P2 — Super-italian-aware listener stopped-state regression guard
+
+**Priority:** P2
+**Source:** scope-parked from triage of stale branch `fix/listener-polish` on 2026-05-10
+`tests/web/test_ui_control_contracts.py` (`TestStoppedStateQuietsTheUI`) — write a fresh regression test asserting the stopped-state surfaces (`renderNowPlayingStrip` + `updateMediaSession` in `mammamiradio/web/static/listener.js`) route through the super-italian copy bag (`_t('np_paused', ...)`) and never leak `Session stopped` / `STOPPED` / hardcoded city/frequency values to lock-screen / Bluetooth / CarPlay. The original guard on `fix/listener-polish` predates super-italian (PR #310) and asserts the literal `'In pausa'`, which would silently break the i18n toggle if cherry-picked as-is. Write against current code, do not resurrect the stale branch's version.
+
 ## Infrastructure
 
 **Priority:** P2
@@ -41,29 +47,12 @@ Added `duration_sec` to `now_streaming` payload (models.py). Regia elapsed compu
 Imported `_ffprobe_duration_sec` in producer.py. Added probe in prewarm path (before `queue.put`) and at the main convergence point (`if segment:` block before `_queue_segment`). Covers all segment types in one place. Test timing mock added to `test_drain_guard_inserts_canned_clip_on_queue_drain`.
 
 ### Host name selector hardening
-**Priority:** P3
-**Source:** /plan-eng-review on 2026-04-25 (florianhorner/fix/radio-plan)
-
-`admin.html:1539-1574` uses `esc()` for HTML escaping before interpolating host names into onclick handlers and data attributes. The CSS attribute selectors at lines 1569, 1574 use template literals with raw (un-escaped) names: `` `[data-h="${n}"]` ``. Names with special CSS characters (quotes, brackets, escaped chars) cause silent no-match — UI fails closed (no XSS, just brittle).
-
-**Why:** rejected as a real bug in the radio-plan review, but the brittleness will surface eventually as someone names a host with a special character.
-
-**Pros:** robustness improvement.
-
-**Cons:** very low priority; no current user impact.
-
-**Context:** wrap the selector access in `CSS.escape()` or normalize host names to alphanumeric IDs internally and only show the display name in UI text.
-
-**Depends on / blocked by:** none.
-
-**Affected files:** `mammamiradio/web/templates/admin.html` (or its replacement).
+**Completed:** 2026-05-08 (v2.11.0 — #284)
+The two `` `[data-h="${n}"]` `` template literals in `updHost()` and `applyHostPreset()` now wrap `n` with `CSS.escape()`. Host names containing CSS special characters (quotes, brackets, dots) no longer cause silent no-match — the host block is found and the personality sliders work for operators with unconventional host names. **Affected files:** `mammamiradio/web/templates/admin.html`.
 
 ### Docker container smoke test in CI
-After `addon-build.yml` builds the image, run a 30s smoke test:
-- `docker run` → wait 10s → `curl -f /health`
-- Check logs contain no `Queue empty` warning in first 20s
-Catches "server starts but can't produce audio" — the exact production failure class.
-**Files:** `.github/workflows/addon-build.yml`
+**Completed:** 2026-05-08 (v2.11.0 — #284)
+After both amd64 and aarch64 images build, the new `smoke` job in `addon-build.yml` pulls the amd64 image and runs a 40-second live test: hits `/healthz`, asserts `status != 'failing'` and `queue_empty_elapsed_s <= 30`. Catches "server starts but can't produce audio" — the exact production failure class — without needing a Pi runner. **Files:** `.github/workflows/addon-build.yml`.
 
 ### Add-on/upstream release consolidation
 **Priority:** P2
@@ -105,18 +94,8 @@ Phase 2 per IA doc. Screen 3 is AI content approval (banter + ad preview with au
 The prototype uses Italian labels (CODA, REVISIONE, PALINSESTO, MOTORE, PANICO). Once Screens 2–5 are built, audit all existing admin.html strings and normalize to the same voice.
 
 ### P2 — Italianize admin.html panel contents (Approach B)
-PR #248 (Approach A) italianized the admin shell: sidebar nav, h2 titles, eyebrows, top status panel. Panel **contents** are still English — visible to the operator and creating mixed-language whiplash. Scope:
-- Top-bar `Queue banter` CTA (`admin.html:1118`)
-- Trigger card titles + descriptions: `Queue banter / Force ad break / News flash / Chaos incoming` (`admin.html:1156-1172`)
-- Quick-action chips: `Trim banter / Trim ads / Hot reload / Purge queue / Flag track` (`admin.html:1179-1183`)
-- Conduttori host UI: preset names `BALANCED / CALM / HYPE`, slider labels `ENERGY / CHAOS / WARMTH / VERBOSITY / NOSTALGIA`, axis arrays `AX_LOW`/`AX_HIGH` (`admin.html:1944-1951`), host-block template (`admin.html:2013`)
-- Search placeholder + button (`admin.html:1265`)
-- Engine room status table (`admin.html:2172-2175`) and onboarding step checklist (`admin.html:1310, 1335`)
-- Filter chips + table column headers (JS-rendered — find the renderer)
-- Toast strings (`admin.html:1405`)
-- `75 tracks` → `75 tracce` next to `Musica & Coda`
-- `ON AIR` pill → `IN ONDA` to match listener
-**Effort:** ~30-40 string changes, half in JS template strings. **Risk:** low (label-only). **Source:** /qa report `.gstack/qa-reports/qa-report-admin-2026-04-27.md`.
+**Completed:** 2026-05-08 (v2.11.0 — #284)
+All admin panel contents now read in Italian: trigger card titles (`Aggiungi banter / Forza pubblicità / Notizia flash / Caos in arrivo`), quick-action chips (`Taglia banter / Taglia pubblicità / Ricarica live / Svuota coda / Segnala traccia`), filter pills (`Tutto / Musica / Pubblicità`), Conduttori preset names (`EQUILIBRATO / CALMO`) and slider axis labels (`Energia / Caos / Calore / Verbosità`), search placeholder + button (`Cerca musica / Cerca`), engine room headings, onboarding subheadings, toast strings, and the `ON AIR → IN ONDA` pill. API endpoint strings, JS variable names, CSS class names, and `data-` identifiers are unchanged. Eliminates the mixed-language whiplash that remained after PR #248 (Approach A) italianized only the panel shell.
 
 ## Process & Discipline
 
@@ -133,6 +112,21 @@ Release-manager (lyon) is one instance; document the meta-rule for when to desig
 
 ### P3 — Codify "audit-before-build" as a pre-build gate
 The 3-agent PR audit on 2026-05-03 took ~45s and flipped a 2-3 day build into a 5-line CLAUDE.md rule. Worth codifying as a standard step when a proposed mechanism's frequency justification is unmeasured. **Source:** /plan-eng-review reversed the /office-hours recommendation based on agent-swarm data.
+
+### P3 — Bump verify-claims pin once `gh-workflows` v1.2 ships
+**Priority:** P3
+**Source:** scope-parked from `florianhorner/commit-standards-bootstrap` on 2026-05-08
+`.github/workflows/verify-claims-call.yml` pins `florianhorner/gh-workflows/.github/workflows/verify-claims.yml@v1.1`. Upstream PR `florianhorner/gh-workflows#3` fixes the `parseProofLines` self-reference-tag bug that caused PR #302's `runtime: proof/...txt` line to fail validation; once the fix lands and is tagged `v1.2`, bump the pin here so future PRs can use file-path and gist-URL artifacts directly instead of routing every artifact through a CI run URL.
+
+## Scriptwriter Anthropic state
+
+**Source:** /simplify scope-park on `fix/anthropic-model-and-audio-fx-guardrails` 2026-05-10.
+
+### P2 — Collapse Anthropic block state into a typed value object
+`mammamiradio/hosts/scriptwriter.py:51` — `_anthropic_auth_blocked_key`, `_anthropic_auth_blocked_until`, and `_anthropic_blocked_reason` are three module-globals that must always reset together. A small dataclass with a `.clear()` method would prevent future drift across the four reset/write sites (module init, `reset_provider_backoff`, success-path clear, `_trip_anthropic_circuit_and_fallback`).
+
+### P2 — Use SDK-typed exceptions in Anthropic error classification
+`mammamiradio/hosts/scriptwriter.py:233,242` — `_is_anthropic_auth_error` and `_is_anthropic_nonretryable_provider_error` sniff `type(exc).__name__` and `str(exc)` substrings. The Anthropic SDK exposes typed exceptions (`anthropic.AuthenticationError`, `anthropic.NotFoundError`). Switch to `isinstance` checks (with `hasattr` guard for SDK-version safety) and keep string match as a fallback.
 
 ## Completed
 
@@ -159,3 +153,18 @@ Added "Audio delivery test coverage rule" section to CLAUDE.md under Review Disc
 ### CI guard for pre-release-check.sh
 **Completed:** 2026-04-27 (#256)
 Version sync check conditional on `pyproject.toml`/`ha-addon/config.yaml` diff; release invariants (FFmpeg eq count, canned-clip mock, session_stopped test) run unconditionally on every PR. Both wired into `quality.yml`.
+
+
+## Admin endpoints — config-write race protection
+
+### Apply `_super_italian_lock` pattern to `/api/credentials`
+
+**Priority:** P3
+**Source:** scope-parked from florianhorner/feat/translation-immersion on 2026-05-08
+`mammamiradio/web/streamer.py` — `/api/super-italian` serializes config-attr + `os.environ` + `.env` + `/data/options.json` writes under `_super_italian_lock` to avoid same-process race during the `await executor` window. `/api/credentials` and `/api/setup/save-keys` do the same read-modify-write of `.env` without serialization. Low blast radius (admin-only, single operator), but the pattern should be unified once a third caller appears.
+
+### Unify `_save_addon_options` + `_save_super_italian_addon_options`
+
+**Priority:** P3
+**Source:** scope-parked from florianhorner/feat/translation-immersion on 2026-05-08
+`mammamiradio/web/streamer.py:1260` and `:1580` — two helpers share the read-modify-write skeleton for `/data/options.json`. They differ in value type (str vs bool) and key handling (key_map vs direct). Acceptable as-is at 2 callers; refactor to a single `_save_addon_options(updates: dict[str, Any])` accepting a typed patch when a third caller lands.

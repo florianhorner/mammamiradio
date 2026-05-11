@@ -30,6 +30,29 @@ _TRUTHY = {"true", "1", "yes"}
 _FALSY = {"false", "0", "no"}
 
 
+def coerce_bool(value: object, default: bool = False) -> bool:
+    """Type-safe bool coercion that rejects truthy-string-of-falsy-word.
+
+    `bool("false")` is `True` in Python; that's the bug this guards against.
+    Accepts: real bool, int (0/1), or str matching _TRUTHY/_FALSY (case-insensitive).
+    Anything else (including "false"-as-truthy-string in plain bool() context)
+    falls back to ``default``.
+    """
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int):
+        if value in (0, 1):
+            return bool(value)
+        return default
+    if isinstance(value, str):
+        v = value.strip().lower()
+        if v in _TRUTHY:
+            return True
+        if v in _FALSY:
+            return False
+    return default
+
+
 @dataclass
 class StationSection:
     """Station identity and public stream metadata."""
@@ -73,6 +96,7 @@ class AudioSection:
     bitrate: int = 192
     claude_model: str = "claude-haiku-4-5-20251001"
     claude_creative_model: str = "claude-opus-4-6"
+    openai_script_model: str = "gpt-4o-mini"
 
 
 @dataclass
@@ -257,6 +281,7 @@ class StationConfig:
     ha_token: str = ""
     is_addon: bool = False
     allow_ytdlp: bool = False
+    super_italian_mode: bool = False
     # Names of hosts or ad voices that had their configured voice replaced
     # during config load because the configured ID wasn't valid for the chosen
     # backend. Empty when all voices passed validation.
@@ -387,6 +412,10 @@ def _apply_addon_options() -> None:
         val = options.get(opt_key, "")
         if val and not os.getenv(env_key):
             os.environ[env_key] = val
+
+    si = options.get("super_italian_mode")
+    if isinstance(si, bool) and not os.getenv("MAMMAMIRADIO_SUPER_ITALIAN"):
+        os.environ["MAMMAMIRADIO_SUPER_ITALIAN"] = "true" if si else "false"
 
 
 def _parse_brand(raw: dict, hosts: list[HostPersonality]) -> tuple[BrandSection, list[str]]:
@@ -667,6 +696,8 @@ def load_config(path: str = "radio.toml") -> StationConfig:
         audio_raw["claude_model"] = os.getenv("CLAUDE_MODEL")
     if os.getenv("CLAUDE_CREATIVE_MODEL"):
         audio_raw["claude_creative_model"] = os.getenv("CLAUDE_CREATIVE_MODEL")
+    if os.getenv("OPENAI_SCRIPT_MODEL"):
+        audio_raw["openai_script_model"] = os.getenv("OPENAI_SCRIPT_MODEL")
     playlist_raw = dict(raw.get("playlist", {}))
     if os.getenv("JAMENDO_CLIENT_ID") is not None:
         playlist_raw["jamendo_client_id"] = os.getenv("JAMENDO_CLIENT_ID", "").strip()
@@ -728,7 +759,14 @@ def load_config(path: str = "radio.toml") -> StationConfig:
         ha_token=ha_token,
         is_addon=addon_mode,
         allow_ytdlp=os.getenv("MAMMAMIRADIO_ALLOW_YTDLP", "false").lower() in ("true", "1", "yes"),
+        super_italian_mode=coerce_bool(raw.get("super_italian_mode", False)),
     )
+
+    _super_italian_env = os.getenv("MAMMAMIRADIO_SUPER_ITALIAN", "").strip().lower()
+    if _super_italian_env in _TRUTHY:
+        config.super_italian_mode = True
+    elif _super_italian_env in _FALSY:
+        config.super_italian_mode = False
 
     # Addon overrides: persistent paths, auto-enable HA
     if addon_mode:

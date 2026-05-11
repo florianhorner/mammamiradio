@@ -75,7 +75,7 @@ Everything else lives under `docs/`:
 - Run app only: `source .venv/bin/activate && python -m uvicorn mammamiradio.main:app --reload --reload-dir mammamiradio`
 - Test: `pytest tests/` or `make test` (with coverage)
 - Test watch: `make test-watch` (re-runs on file save)
-- Test HA add-on build locally: `scripts/test-addon-local.sh`
+- Test HA add-on build locally: `scripts/validate-addon.sh --build`
 - Lint: `ruff check .` (fix: `ruff check --fix .`)
 - Format: `ruff format .` (check: `ruff format --check .`)
 - Type check: `mypy mammamiradio/ tests/`
@@ -109,11 +109,13 @@ Everything else lives under `docs/`:
 - `HA_ENABLED`: force-enable HA integration (`true`/`1`/`yes`)
 - `STATION_NAME`, `STATION_THEME`: override station identity from `radio.toml`
 - `CLAUDE_MODEL`: override Claude model from `radio.toml`
+- `OPENAI_SCRIPT_MODEL`: override the OpenAI model used for script-generation fallback (banter/ads/news/transitions) when Anthropic is unavailable. Default `gpt-4o-mini`. Evaluation toggle only — does NOT affect TTS (`gpt-4o-mini-tts` stays fixed). Promotion to addon UI is a separate decision once an evaluation winner is chosen.
 - `MAMMAMIRADIO_ALLOW_YTDLP`: enable yt-dlp for chart music (`true`/`1`/`yes`; default: disabled for copyright safety, but enabled by default in HA addon and Conductor)
 - `JAMENDO_CLIENT_ID`: Jamendo API client id (empty = Jamendo source disabled)
 - `JAMENDO_COUNTRY`: 3-letter uppercase ISO 3166-1 alpha-3 (e.g. `ITA`, `DEU`); empty disables the country filter. radio.toml default is `ITA` for Italian-trending music.
 - `JAMENDO_ORDER`: Jamendo sort order (`popularity_week` | `popularity_month` | `popularity_total` | `releasedate_desc` | empty). radio.toml default is `popularity_week`.
 - `MIN_COOLDOWN_HOURS`: override the release-cooldown window (default `24`, read by `scripts/check-release-cooldown.sh`)
+- `MAMMAMIRADIO_SUPER_ITALIAN`: station personality dial (`true`/`1`/`yes` to enable; default off). When OFF, listener UI defaults to English with Italian headlines and station-feel words; AI hosts code-switch (English narrative + Italian flavor). When ON, listener UI flips to full Italian and hosts lean fully into Italian idioms. Operator-toggleable from admin Engine Room (hot-reloadable; persisted to `.env` in standalone mode and `/data/options.json` in HA addon mode).
 
 ## Runtime behavior
 
@@ -221,6 +223,7 @@ These UI elements have regressed in past refactors. Always verify they survive a
 - **Station name localStorage** (`mammamiradio/web/static/listener.js`) — reads `stationName` from localStorage. Admin writes it. Broken when dashboard.html was rewritten.
 - **Gold "Mi" accent** (`listener.html`, `admin.html`) — `<span class="mi">` in h1, styled `color: var(--sun)`. Brand signature from hero banner.
 - **Italian tricolor stripe** (`admin.html` uses `.tricolor-stripe`; `listener.html` uses `.tricolor-band`) — present below h1. Must match hero banner.
+- **Admin espresso surface** (`mammamiradio/web/static/tokens.css`) — `--surface` / `--surface-strong` / `--line-strong` must remain at Pi-baseline values (`#251E19` / `#362B25` / `0.16`) so admin reads as espresso warm-brown, not washed-out taupe. Listener-card visibility fixes belong inline on `.mmr-*` classes in `listener.css` (schedule / dedica / about-card / hero-stage), never on shared tokens. Regressed once in PR #298.
 
 When editing any HTML file, grep for these elements before committing.
 
@@ -363,3 +366,20 @@ Discovered 2026-04-23 when PR #203 (Ashika Rai N's dashboard extraction) landed 
 - test: pytest
 - deadcode: vulture mammamiradio/
 - shell: shellcheck $(find . -name "*.sh" -not -path "./.venv/*" -not -path "./.git/*" -not -path "./.claude/skills/*")
+
+
+<!-- BEGIN: commit-message-standards (managed by bootstrap-repo.sh — do not hand-edit) -->
+## Commit message standards
+
+This repo follows the [engineering-standards commit-message spec](https://github.com/florianhorner/engineering-standards/blob/main/specs/commit-message-spec.md).
+
+**Quick rule:** Conventional Commits (`type(scope): subject`, ≤72 chars). A `Why:` body line is REQUIRED when type is `feat` AND >50 lines changed; otherwise optional.
+
+**Local invocation:** Use the `/commit` skill in Claude Code / Conductor. Default behavior is dry-run (drafts a message and shows the validator output without committing); pass `--commit` to actually create the commit. Manual `git commit` works too — the local `commit-msg` hook validates either path.
+
+**Per-repo cheat sheet:** [`./CONTRIBUTING.md`](./CONTRIBUTING.md) carries the 30-second cheat sheet, good/bad examples, banned patterns, exempt subjects, bot allowlist, and bypass policy. It is self-sufficient for cloud agents (Claude Code Cloud, Codex web) that only see repo-local files.
+
+**Machine-readable rules:** [`.config/commit-rules.json`](.config/commit-rules.json) is a SHA-pinned vendored copy of the upstream `commit-rules.json`. The validator binary, commit-msg hook, and CI workflow all read this file. Do not hand-edit — re-run `bootstrap-repo.sh` to refresh.
+
+**Bypass:** `git commit --no-verify` requires a `Policy-Override: <reason>` trailer to pass CI. Logged to `~/.commit-bypass.log` by the pre-push hook.
+<!-- END: commit-message-standards -->

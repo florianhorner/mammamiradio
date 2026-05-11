@@ -74,7 +74,7 @@ The denylist is process-local — it clears on restart so a track that was trans
 That usually means script generation failed and the app fell back to stock copy.
 
 The app tries Anthropic first, then falls back to OpenAI `gpt-4o-mini` if `OPENAI_API_KEY` is set, then to stock lines.
-When Anthropic returns an authentication failure (for example `invalid x-api-key`), the app suspends Anthropic for 10 minutes in-process and routes script generation to OpenAI immediately to avoid repeated 401 spam. Concurrent banter, ad, and transition generations share a single attempt lock: the first call trips the circuit; sibling calls queued on the lock see the block and fall straight to OpenAI instead of each racing through their own 401. After the 10-minute cooldown the next call logs `Anthropic auth backoff expired; retrying Anthropic after cooldown` and makes exactly one retry; a successful retry clears the block, a fresh 401 re-arms it for another 10 minutes.
+When Anthropic returns an authentication failure (for example `invalid x-api-key`) or a non-retryable provider configuration error (for example a 404/model-not-found from an invalid Claude model ID), the app suspends Anthropic for 10 minutes in-process and routes script generation to OpenAI immediately to avoid repeated provider spam. Concurrent banter, ad, and transition generations share a single attempt lock: the first call trips the circuit; sibling calls queued on the lock see the block and fall straight to OpenAI instead of each racing through their own failed request. After the 10-minute cooldown the next call logs a provider backoff expiry and makes exactly one retry; a successful retry clears the block, a fresh failure re-arms it for another 10 minutes.
 
 Check:
 
@@ -94,6 +94,8 @@ Check:
 - `/status` may show TTS errors in the producer log
 
 Each OpenAI host can define `edge_fallback_voice` in `radio.toml` so they fall back to their own Edge voice rather than a stranger's.
+
+To inspect script-side OpenAI behavior (banter/ads/news/transitions), grep logs for `openai_script_call` — every OpenAI script call emits a structured record with `model`, `caller`, `latency_ms`, `prompt_tokens`, `completion_tokens`, `json_ok`, and `fallback_reason` (one of `anthropic_absent`, `anthropic_auth_blocked`, `anthropic_auth_failed`, `anthropic_exception`). Useful for comparing models via `OPENAI_SCRIPT_MODEL` or debugging fallback latency.
 
 Voice validation now runs at config load, not at synthesis time:
 

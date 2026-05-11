@@ -6,7 +6,14 @@ from unittest.mock import patch
 
 import pytest
 
-from mammamiradio.core.config import AudioSection, _apply_addon_options, _is_addon, load_config, runtime_json
+from mammamiradio.core.config import (
+    AudioSection,
+    _apply_addon_options,
+    _is_addon,
+    coerce_bool,
+    load_config,
+    runtime_json,
+)
 
 
 def test_load_config_from_radio_toml(monkeypatch):
@@ -247,6 +254,40 @@ def test_apply_addon_options(monkeypatch, tmp_path):
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
 
 
+@pytest.mark.parametrize(("value", "expected_env"), [(True, "true"), (False, "false")])
+def test_apply_addon_options_super_italian_round_trips(monkeypatch, tmp_path, value, expected_env):
+    """Addon options.json super_italian_mode bool should populate the env var."""
+    import os
+
+    options_file = tmp_path / "options.json"
+    options_file.write_text(json.dumps({"super_italian_mode": value}))
+    monkeypatch.delenv("MAMMAMIRADIO_SUPER_ITALIAN", raising=False)
+    try:
+        with patch("mammamiradio.core.config.Path") as mock_path_cls:
+            mock_path_cls.return_value = options_file
+            _apply_addon_options()
+        assert os.environ.get("MAMMAMIRADIO_SUPER_ITALIAN") == expected_env
+    finally:
+        os.environ.pop("MAMMAMIRADIO_SUPER_ITALIAN", None)
+
+
+def test_apply_addon_options_super_italian_preset_env_wins(monkeypatch, tmp_path):
+    """If MAMMAMIRADIO_SUPER_ITALIAN is already set, options.json must NOT override."""
+    import os
+
+    options_file = tmp_path / "options.json"
+    options_file.write_text(json.dumps({"super_italian_mode": True}))
+    monkeypatch.setenv("MAMMAMIRADIO_SUPER_ITALIAN", "false")
+    try:
+        with patch("mammamiradio.core.config.Path") as mock_path_cls:
+            mock_path_cls.return_value = options_file
+            _apply_addon_options()
+        # Pre-set env var preserved despite options.json saying True
+        assert os.environ["MAMMAMIRADIO_SUPER_ITALIAN"] == "false"
+    finally:
+        os.environ.pop("MAMMAMIRADIO_SUPER_ITALIAN", None)
+
+
 def test_apply_addon_options_no_override(monkeypatch, tmp_path):
     """Existing env vars should not be overridden by options.json."""
     options = {"anthropic_api_key": "from_options"}
@@ -449,3 +490,38 @@ def test_load_config_tolerates_legacy_sonic_brand_keys(tmp_path):
 
     assert not hasattr(config.sonic_brand, "short_sting")
     assert not hasattr(config.sonic_brand, "sweeper_probability")
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        (True, True),
+        (False, False),
+        ("true", True),
+        ("True", True),
+        ("YES", True),
+        ("1", True),
+        ("false", False),  # the load-bearing case: bool("false") would be True
+        ("False", False),
+        ("no", False),
+        ("0", False),
+        (1, True),
+        (0, False),
+        (2, False),  # ints other than 0/1 fall back to default — no silent enable
+        (-1, False),
+        (42, False),
+        ("garbage", False),  # falls back to default
+        (None, False),
+        ([], False),
+    ],
+)
+def test_coerce_bool(value, expected):
+    assert coerce_bool(value) is expected
+
+
+def test_coerce_bool_default():
+    assert coerce_bool("garbage", default=True) is True
+    assert coerce_bool(None, default=True) is True
+    # Out-of-range ints honour the caller-provided default
+    assert coerce_bool(2, default=True) is True
+    assert coerce_bool(-1, default=True) is True

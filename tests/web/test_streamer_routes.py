@@ -798,11 +798,27 @@ async def test_get_root_serves_listener_page():
     # structural elements (CTA, brand identity) — the tagline is now per-brand
     # via brand.tagline, so no longer a fixed string.
     assert "Mamma Mi Radio" in resp.text  # default brand from radio.toml
-    assert "Ascolta Ora" in resp.text
-    assert "Manda al DJ" in resp.text  # dediche form section
+    # CTA copy is now Super-Italian-Mode-aware. Default OFF renders English.
+    assert "Listen Now" in resp.text
+    assert "Manda al DJ" in resp.text  # dediche eyebrow stays Italian (decorative)
     assert 'data-cap="ha"' in resp.text  # capability-conditional rendering hooks present
-    assert re.fullmatch(r"\d+\.\d+\.\d+-[a-f0-9]{8}", _ASSET_VERSION)
+    # Tail-anchored: tolerate non-strict-semver pyproject versions (rc/post/dev).
+    assert re.search(r"-[a-f0-9]{8}$", _ASSET_VERSION)
     assert f"/static/listener.css?v={_ASSET_VERSION}" in resp.text
+
+
+@pytest.mark.asyncio
+async def test_get_root_renders_italian_when_super_italian_on():
+    """Super Italian Mode ON: CTA + form button render in Italian."""
+    app = _make_test_app()
+    app.state.config.super_italian_mode = True
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.get("/")
+    assert resp.status_code == 200
+    assert "Ascolta Ora" in resp.text  # CTA in Italian
+    assert "Spedisci con un bacio" in resp.text  # form submit in Italian
+    assert "Listen Now" not in resp.text  # English CTA must be absent
 
 
 @pytest.mark.asyncio
@@ -929,7 +945,7 @@ async def test_setup_save_keys_updates_live_config_without_disk_write():
             async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
                 resp = await client.post(
                     "/api/setup/save-keys",
-                    json={"ANTHROPIC_API_KEY": "ant-test", "OPENAI_API_KEY": "openai-test"},
+                    json={"ANTHROPIC_API_KEY": "ant-test\nEVIL=1", "OPENAI_API_KEY": "openai-test\rEVIL=1"},
                 )
 
         assert resp.status_code == 200
@@ -937,9 +953,13 @@ async def test_setup_save_keys_updates_live_config_without_disk_write():
         assert body["ok"] is True
         assert "ANTHROPIC_API_KEY" in body["saved"]
         assert "OPENAI_API_KEY" in body["saved"]
-        assert app.state.config.anthropic_api_key == "ant-test"
-        assert app.state.config.openai_api_key == "openai-test"
+        assert app.state.config.anthropic_api_key == "ant-testEVIL=1"
+        assert app.state.config.openai_api_key == "openai-testEVIL=1"
         save_dotenv.assert_called_once()
+        assert save_dotenv.call_args.args[0] == {
+            "ANTHROPIC_API_KEY": "ant-testEVIL=1",
+            "OPENAI_API_KEY": "openai-testEVIL=1",
+        }
     finally:
         # Restore env to avoid polluting subsequent tests
         if _prev_anthropic is None:
@@ -1150,7 +1170,7 @@ async def test_sw_js_keeps_css_and_js_network_first():
 
     assert resp.status_code == 200
     text = resp.text
-    assert "radio-itali-v5" in text
+    assert "radio-itali-v6" in text
     assert "const isFreshAsset" in text
     assert "path.endsWith('.css')" in text
     assert "path.endsWith('.js')" in text
@@ -1292,6 +1312,44 @@ async def test_admin_panel_csp_allows_inline_handlers():
     csp = resp.headers.get("Content-Security-Policy", "")
     assert "script-src" in csp, f"Admin response must set script-src CSP: {csp!r}"
     assert "'unsafe-inline'" in csp, f"Admin CSP must include 'unsafe-inline' to allow inline event handlers: {csp!r}"
+
+
+@pytest.mark.asyncio
+async def test_admin_panel_data_fetches_use_ingress_base():
+    """admin.html must derive `_base` from window.location.pathname and prefix every
+    data fetch with it, so HA Ingress-served pages reach the addon's API.
+
+    Regression guard: prior to this fix, admin.html issued bare `fetch('/status')` and
+    `fetch('/api/...')` calls. Under HA Ingress those resolved against the HA host root
+    (not the addon's ingress prefix), returned non-JSON, were swallowed by the catch
+    handler, and the panel hung at "Waiting for signal…". The server-side rewriter
+    intentionally does NOT rewrite JS string literals (see _inject_ingress_prefix
+    docstring) — adopting the `_base` contract is the admin page's responsibility,
+    matching listener.js.
+    """
+    app = _make_test_app()
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.get("/admin")
+
+    assert resp.status_code == 200
+    body = resp.text
+
+    assert "const _base = (() =>" in body, (
+        "admin.html must declare a `_base` constant derived from window.location.pathname "
+        "so HA Ingress data fetches resolve to the addon, not the HA host root."
+    )
+
+    bare_offenders = re.findall(r"fetch\((['\"`])/(?:api/|status|public-)", body)
+    assert not bare_offenders, (
+        "admin.html must not issue bare path-absolute fetches like `fetch('/status')` or "
+        f"`fetch('/api/...')`; every call must compose against `_base`. Found: {bare_offenders!r}"
+    )
+
+    assert "fetch(_base+p," in body or "fetch(_base + p," in body, (
+        "The `api(m, p, b)` helper in admin.html must call `fetch(_base+p, ...)` so every "
+        "method/state/save call routed through it honors the HA Ingress prefix."
+    )
     assert "__MAMMAMIRADIO_SCRIPT_NONCE__" not in resp.text, "Stale nonce placeholder found in rendered HTML."
 
 

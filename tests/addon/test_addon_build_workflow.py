@@ -3,11 +3,12 @@
 Contract (from 2.10.3 onward): `ha-addon/mammamiradio/radio.toml` is byte-for-byte
 identical to root `radio.toml`. The Pi-specific pacing overrides
 (`songs_between_banter=3`, `ad_spots_per_break=1`, `lookahead_segments=2`) that lived
-in the add-on copy before 2.10.3 are gone. Three places must agree on this:
+in the add-on copy before 2.10.3 are gone. CI must call the same canonical
+validator as local development so this contract has one implementation:
 
   * `tests/test_addon_radio_sync.py` (Python: addon == root)
-  * `scripts/test-addon-local.sh` (shell: `cmp -s`)
-  * `.github/workflows/addon-build.yml` (CI: `cmp -s`)
+  * `scripts/validate-addon.sh` (shell: `cmp -s`)
+  * `.github/workflows/addon-build.yml` (CI: calls `scripts/validate-addon.sh`)
 
 Before 2.10.3 the CI workflow applied a sed transform to pre-add the Pi overrides
 before comparing.  If that pattern comes back, CI will silently pass while the other
@@ -16,7 +17,7 @@ in the opposite direction.
 
 These tests lock down the structural invariants:
 
-  1. The CI check uses `cmp -s` (matches shell validator + Python test).
+  1. The CI validate job calls the canonical shell validator.
   2. No sed substitution that re-introduces the Pi overrides.
   3. The build job cannot run if validate fails (`needs: validate`).
   4. Both target architectures are in the build matrix.
@@ -41,17 +42,16 @@ def _workflow_text() -> str:
 
 
 # ---------------------------------------------------------------------------
-# 1. CI must use `cmp -s` (strict byte equality) for the radio.toml check
+# 1. CI must call the canonical validator
 # ---------------------------------------------------------------------------
 
 
-def test_ci_radio_toml_uses_strict_cmp():
-    """CI must enforce byte-for-byte identity, matching the Python test and the shell validator."""
+def test_ci_validate_job_calls_canonical_validator():
+    """CI must share local validation instead of reimplementing shell fragments."""
     text = _workflow_text()
-    assert "cmp -s radio.toml ha-addon/mammamiradio/radio.toml" in text, (
-        "addon-build.yml must run `cmp -s radio.toml ha-addon/mammamiradio/radio.toml` in the validate job.\n"
-        "This mirrors tests/test_addon_radio_sync.py and scripts/test-addon-local.sh. If you "
-        "change the contract, update all three locations together."
+    assert "bash scripts/validate-addon.sh" in text, (
+        "addon-build.yml must call `bash scripts/validate-addon.sh` in the validate job.\n"
+        "Do not duplicate version, image, options, or radio.toml checks in CI."
     )
 
 

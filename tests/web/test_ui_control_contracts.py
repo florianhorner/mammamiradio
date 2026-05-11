@@ -775,14 +775,21 @@ class TestStoppedStateQuietsTheUI:
         js = (WEB_ROOT / "static" / "listener.js").read_text()
 
         # Both surfaces must explicitly handle np.type === 'stopped' and
-        # render the brand-voice copy "In pausa" — not fall through to a
-        # default branch that re-emits np.label.
+        # render the brand-voice paused copy — not fall through to a
+        # default branch that re-emits np.label. The actual displayed string
+        # comes from the Super-Italian-Mode copy bag (np_paused), which renders
+        # "Paused" by default and "In pausa" when the toggle is on. Both modes
+        # share the same key, so we assert the lookup, not the literal.
         assert js.count("np.type === 'stopped'") >= 2, (
             "listener.js must handle the stopped type in BOTH renderNowPlayingStrip "
             "and updateMediaSession; a single branch leaks the raw label to whichever "
             "surface lacks the guard."
         )
-        assert "'In pausa'" in js, "listener.js stopped branches must render 'In pausa' as the user-facing copy."
+        assert "_t('np_paused'" in js, (
+            "listener.js stopped branches must render the np_paused copy key — "
+            "either branch falling back to np.label would leak the internal "
+            "'Session stopped' label."
+        )
 
         # The Media Session album field is broadcast to lock screen / Bluetooth
         # / CarPlay. Hardcoding any city or frequency here re-leaks brand state
@@ -805,4 +812,27 @@ class TestStoppedStateQuietsTheUI:
                 f"updateMediaSession() must not hardcode {leaked!r} — Media Session "
                 "metadata is broadcast to OS-level surfaces and brand state belongs in "
                 "radio.toml / /public-status."
+            )
+
+
+class TestHostBlockSelectorScoping:
+    """Two elements share `data-h="<host>"`: the script preview's
+    `<span class="script-host">` (renders inside #recentBody, higher in the DOM)
+    and the Hosts card's `<div class="host-block">` (lower in the DOM). A bare
+    `[data-h="..."]` selector resolves to the script-host span first, so preset
+    buttons, slider commits, and reset all silently target an element with no
+    range inputs and no `.host-preset` children. Scope the selectors to
+    `.host-block[data-h=...]` to keep them pointing at the Hosts card.
+    """
+
+    def test_host_block_selectors_are_scoped(self):
+        html = ADMIN_HTML.read_text()
+        for line in html.splitlines():
+            stripped = line.strip()
+            if "data-h=" not in stripped or "querySelector" not in stripped:
+                continue
+            assert ".host-block[data-h=" in stripped, (
+                "querySelector lookups by data-h must be scoped to .host-block — "
+                "otherwise they collide with <span class='script-host' "
+                f"data-h='...'> in the recent-script preview. Offending line:\n  {stripped}"
             )

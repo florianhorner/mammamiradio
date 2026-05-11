@@ -32,6 +32,7 @@ from mammamiradio.playlist.playlist import (
     write_persisted_source,
 )
 from mammamiradio.scheduling.scheduler import preview_upcoming
+from mammamiradio.web.ui_copy import copy_strings
 
 logger = logging.getLogger(__name__)
 
@@ -103,6 +104,19 @@ def _as_int_index(value, default: int = -1) -> int:
 
 _MUTATING_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 _CSRF_TOKEN_PLACEHOLDER = "__MAMMAMIRADIO_CSRF_TOKEN__"
+SESSION_STOPPED_FLAG = "session_stopped.flag"
+SILENCE_FAILURE_SECONDS = 30.0
+STARTUP_GRACE_SECONDS = 30.0
+CLIP_RATE_LIMIT_SECONDS = 10.0
+CLIP_RATE_PRUNE_SECONDS = 300.0
+CLIP_DURATION_SECONDS = 30
+CLIP_MAX_SAVED = 50
+DEFAULT_CLIP_BITRATE_KBPS = 192
+_CREDENTIAL_FIELDS: dict[str, tuple[str, str]] = {
+    "anthropic_api_key": ("ANTHROPIC_API_KEY", "anthropic_api_key"),
+    "openai_api_key": ("OPENAI_API_KEY", "openai_api_key"),
+}
+_CREDENTIAL_ENV_TO_FIELD = {env_key: field for field, (env_key, _config_attr) in _CREDENTIAL_FIELDS.items()}
 
 
 def _purge_segment_queue(q) -> int:
@@ -118,6 +132,28 @@ def _purge_segment_queue(q) -> int:
         except Exception:
             break
     return purged
+
+
+def _session_stopped_flag(config) -> Path:
+    """Return the persisted operator-stop marker path."""
+    return config.cache_dir / SESSION_STOPPED_FLAG
+
+
+def _persist_session_stopped(config, stopped: bool) -> None:
+    """Persist or clear the stopped-session marker."""
+    flag = _session_stopped_flag(config)
+    if stopped:
+        config.cache_dir.mkdir(parents=True, exist_ok=True)
+        flag.touch()
+    else:
+        flag.unlink(missing_ok=True)
+
+
+def _clear_session_stopped(state: StationState, config) -> None:
+    """Resume playback state and clear the persisted stop marker."""
+    state.session_stopped = False
+    state.resume_event.set()
+    _persist_session_stopped(config, False)
 
 
 def _has_any_mp3(path: Path) -> bool:
@@ -264,6 +300,14 @@ def _runtime_monotonic() -> float:
     return time.monotonic()
 
 
+def _queue_empty_elapsed(state: StationState) -> float:
+    return _runtime_monotonic() - state.queue_empty_since if state.queue_empty_since is not None else 0.0
+
+
+def _silence_with_listeners(state: StationState, queue_empty_elapsed: float) -> bool:
+    return queue_empty_elapsed > SILENCE_FAILURE_SECONDS and state.listeners_active > 0
+
+
 def _provider_health_snapshot(config, state: StationState) -> dict:
     """Return current provider degradation state for admin diagnostics."""
     now = time.time()
@@ -328,6 +372,31 @@ def _serialize_source(source: PlaylistSource | None) -> dict | None:
         "label": source.label,
         "track_count": source.track_count,
         "selected_at": source.selected_at,
+    }
+
+
+def _serialize_brand(brand) -> dict:
+    """Serialize listener/admin brand config through one shared shape."""
+    return {
+        "station_name": brand.station_name,
+        "frequency": brand.frequency,
+        "city": brand.city,
+        "founded": brand.founded,
+        "tagline": brand.tagline,
+        "about": brand.about,
+        "opengraph_subtitle": brand.opengraph_subtitle,
+        "hosts": [
+            {"engine_host": h.engine_host, "display_name": h.display_name, "description": h.description}
+            for h in brand.hosts
+        ],
+        "theme": {
+            "primary_color": brand.theme.primary_color,
+            "accent_color": brand.theme.accent_color,
+            "background_color": brand.theme.background_color,
+            "display_font": brand.theme.display_font,
+            "body_font": brand.theme.body_font,
+            "mono_font": brand.theme.mono_font,
+        },
     }
 
 
@@ -987,9 +1056,7 @@ async def _audio_generator(request: Request):
     state = request.app.state.station_state
     config = request.app.state.config
     if state.session_stopped:
-        state.session_stopped = False
-        state.resume_event.set()
-        (config.cache_dir / "session_stopped.flag").unlink(missing_ok=True)
+        _clear_session_stopped(state, config)
 
     hub = request.app.state.stream_hub
     listener_id, listener_queue = hub.subscribe()
@@ -1024,6 +1091,23 @@ def _render_admin_response(request: Request, prefix: str) -> HTMLResponse:
     return HTMLResponse(content=html, headers={"Content-Security-Policy": csp})
 
 
+def _listener_context(request: Request, config, prefix: str) -> dict:
+    """Build the Jinja2 context for the listener page.
+
+    `copy` is a frozen dict in the active super_italian_mode; templates use
+    `{{ copy.get('key', 'fallback') }}`. The same dict serializes into the
+    listener.html `<script type="application/json">` bootstrap so JS reads it
+    once at page load instead of refetching on every /public-status poll.
+    """
+    return {
+        "brand": config.brand,
+        "ingress_prefix": _sanitize_ingress_prefix(prefix),
+        "csrf_token": _get_csrf_token(request.app),
+        "asset_version": _ASSET_VERSION,
+        "copy": copy_strings(bool(config.super_italian_mode)),
+    }
+
+
 @router.get("/", response_class=HTMLResponse)
 async def listener_home(request: Request):
     """Serve the public listener UI, except trusted HA ingress opens the control room."""
@@ -1034,12 +1118,7 @@ async def listener_home(request: Request):
     return _TEMPLATES.TemplateResponse(
         request,
         "listener.html",
-        {
-            "brand": config.brand,
-            "ingress_prefix": _sanitize_ingress_prefix(prefix),
-            "csrf_token": _get_csrf_token(request.app),
-            "asset_version": _ASSET_VERSION,
-        },
+        _listener_context(request, config, prefix),
     )
 
 
@@ -1075,12 +1154,7 @@ async def listener(request: Request):
     return _TEMPLATES.TemplateResponse(
         request,
         "listener.html",
-        {
-            "brand": config.brand,
-            "ingress_prefix": _sanitize_ingress_prefix(prefix),
-            "csrf_token": _get_csrf_token(request.app),
-            "asset_version": _ASSET_VERSION,
-        },
+        _listener_context(request, config, prefix),
     )
 
 
@@ -1187,28 +1261,59 @@ async def setup_recheck(request: Request, _: None = Depends(require_admin_access
 async def save_keys(request: Request):
     """Save API credentials to .env (or addon options.json) and update the live config."""
     body = await request.json()
-    config = request.app.state.config
-
-    allowed = {
-        "ANTHROPIC_API_KEY",
-        "OPENAI_API_KEY",
-    }
-    updates = {k: v.strip() for k, v in body.items() if k in allowed and isinstance(v, str) and v.strip()}
+    updates = _credential_updates_from_env_payload(body, require_nonempty=True)
 
     if not updates:
         return {"ok": False, "error": "No keys provided"}
 
-    # Persist to disk (async-wrapped to avoid blocking the event loop)
+    await _persist_and_apply_credentials(request, updates, use_addon_options=True)
+
+    return {"ok": True, "saved": list(updates.keys())}
+
+
+def _sanitize_credential_value(value: str) -> str:
+    """Strip env-breaking characters before persistence or live application."""
+    return value.replace("\n", "").replace("\r", "")
+
+
+def _credential_updates_from_env_payload(body: dict, *, require_nonempty: bool) -> dict[str, str]:
+    updates: dict[str, str] = {}
+    for env_key in _CREDENTIAL_ENV_TO_FIELD:
+        value = body.get(env_key)
+        if not isinstance(value, str):
+            continue
+        clean = _sanitize_credential_value(value.strip())
+        if require_nonempty and not clean:
+            continue
+        updates[env_key] = clean
+    return updates
+
+
+def _credential_updates_from_field_payload(body: dict) -> dict[str, str]:
+    updates: dict[str, str] = {}
+    for field, (env_key, _config_attr) in _CREDENTIAL_FIELDS.items():
+        if field not in body:
+            continue
+        updates[env_key] = _sanitize_credential_value(str(body[field]).strip())
+    return updates
+
+
+async def _persist_and_apply_credentials(request: Request, updates: dict[str, str], *, use_addon_options: bool) -> None:
+    """Persist credential updates and apply them to env/live config."""
+    config = request.app.state.config
     loop = asyncio.get_running_loop()
-    if config.is_addon:
+    if use_addon_options and config.is_addon:
         await loop.run_in_executor(None, _save_addon_options, updates)
     else:
         await loop.run_in_executor(None, _save_dotenv, updates)
 
-    # Update env + live config so re-check sees the values immediately
-    state = request.app.state.station_state
-    for k, v in updates.items():
-        os.environ[k] = v
+    _apply_live_credentials(request.app.state.station_state, config, updates)
+
+
+def _apply_live_credentials(state: StationState, config, updates: dict[str, str]) -> None:
+    for env_key, value in updates.items():
+        os.environ[env_key] = value
+
     if "ANTHROPIC_API_KEY" in updates:
         config.anthropic_api_key = updates["ANTHROPIC_API_KEY"]
         from mammamiradio.hosts.scriptwriter import reset_provider_backoff
@@ -1219,16 +1324,13 @@ async def save_keys(request: Request):
     if "OPENAI_API_KEY" in updates:
         config.openai_api_key = updates["OPENAI_API_KEY"]
 
-    return {"ok": True, "saved": list(updates.keys())}
-
 
 def _save_dotenv(updates: dict[str, str]) -> None:
     """Write key=value pairs to .env, updating existing keys or appending new ones."""
     env_path = Path(".env")
     lines = env_path.read_text().splitlines() if env_path.exists() else []
 
-    # Sanitize values: strip newlines to prevent env injection
-    safe_updates = {k: v.replace("\n", "").replace("\r", "") for k, v in updates.items()}
+    safe_updates = {k: _sanitize_credential_value(v) for k, v in updates.items()}
 
     written = set()
     new_lines = []
@@ -1246,7 +1348,9 @@ def _save_dotenv(updates: dict[str, str]) -> None:
         if key not in written:
             new_lines.append(f'{key}="{value}"')
 
-    env_path.write_text("\n".join(new_lines) + "\n")
+    tmp = env_path.with_suffix(".env.tmp")
+    tmp.write_text("\n".join(new_lines) + "\n")
+    tmp.replace(env_path)
 
 
 def _save_addon_options(updates: dict[str, str]) -> None:
@@ -1261,14 +1365,10 @@ def _save_addon_options(updates: dict[str, str]) -> None:
         except (ValueError, OSError):
             pass
 
-    key_map = {
-        "ANTHROPIC_API_KEY": "anthropic_api_key",
-        "OPENAI_API_KEY": "openai_api_key",
-    }
     for env_key, value in updates.items():
-        opt_key = key_map.get(env_key)
+        opt_key = _CREDENTIAL_ENV_TO_FIELD.get(env_key)
         if opt_key:
-            options[opt_key] = value
+            options[opt_key] = _sanitize_credential_value(value)
 
     options_path.write_text(_json.dumps(options, indent=2))
 
@@ -1444,8 +1544,7 @@ async def stop_session(request: Request, _: None = Depends(require_admin_access)
     # Signal producer to pause and persist across reloads
     state.session_stopped = True
     config = request.app.state.config
-    config.cache_dir.mkdir(parents=True, exist_ok=True)
-    (config.cache_dir / "session_stopped.flag").touch()
+    _persist_session_stopped(config, True)
     state.now_streaming = {"type": "stopped", "label": "Session stopped", "started": time.time(), "metadata": {}}
     logger.info("Session stopped by admin (purged %d segments)", purged)
     return {"ok": True, "purged": purged}
@@ -1455,10 +1554,8 @@ async def stop_session(request: Request, _: None = Depends(require_admin_access)
 async def resume_session(request: Request, _: None = Depends(require_admin_access)):
     """Resume a stopped session."""
     state = request.app.state.station_state
-    state.session_stopped = False
-    state.resume_event.set()
     config = request.app.state.config
-    (config.cache_dir / "session_stopped.flag").unlink(missing_ok=True)
+    _clear_session_stopped(state, config)
     logger.info("Session resumed by admin")
     return {"ok": True}
 
@@ -1559,66 +1656,81 @@ async def update_pacing(request: Request, _: None = Depends(require_admin_access
     }
 
 
+@router.get("/api/super-italian")
+async def get_super_italian(request: Request, _: None = Depends(require_admin_access)):
+    """Return the current Super Italian Mode flag."""
+    config = request.app.state.config
+    return {"super_italian_mode": bool(config.super_italian_mode)}
+
+
+_super_italian_lock = asyncio.Lock()
+
+
+def _save_super_italian_addon_options(value: bool) -> None:
+    """Persist super_italian_mode into /data/options.json for HA addons.
+
+    Atomic: writes to a sibling temp file, then os.replace() — survives an
+    HA-watchdog restart mid-write without leaving a torn options.json.
+    """
+    import json as _json
+    import os as _os
+
+    options_path = Path("/data/options.json")
+    options: dict = {}
+    if options_path.exists():
+        try:
+            options = _json.loads(options_path.read_text())
+        except (ValueError, OSError):
+            options = {}
+    options["super_italian_mode"] = value
+    tmp_path = options_path.with_suffix(options_path.suffix + ".tmp")
+    tmp_path.write_text(_json.dumps(options, indent=2))
+    _os.replace(tmp_path, options_path)
+
+
+@router.post("/api/super-italian")
+async def set_super_italian(request: Request, _: None = Depends(require_admin_access)):
+    """Toggle Super Italian Mode live and persist it.
+
+    Connected listeners pick up the new copy on the next page reload (it's baked
+    into listener.html via Jinja, not refetched on /public-status polls). The
+    scriptwriter system-prompt cache invalidates on the mode key so the next
+    banter generation uses the new directive without a restart.
+
+    Persistence: writes `MAMMAMIRADIO_SUPER_ITALIAN` to `.env` on standalone
+    deploys, and `super_italian_mode` to `/data/options.json` on HA addons —
+    so the value survives container restarts in both modes.
+    """
+    config = request.app.state.config
+    body = await request.json()
+    if not isinstance(body, dict) or "super_italian_mode" not in body:
+        return {"ok": False, "error": "expected JSON object with super_italian_mode"}
+    raw_value = body["super_italian_mode"]
+    if not isinstance(raw_value, bool):
+        return {"ok": False, "error": "super_italian_mode must be a JSON boolean (true/false)"}
+    value = raw_value
+    env_value = "true" if value else "false"
+    loop = asyncio.get_running_loop()
+    async with _super_italian_lock:
+        config.super_italian_mode = value
+        os.environ["MAMMAMIRADIO_SUPER_ITALIAN"] = env_value
+        if config.is_addon:
+            await loop.run_in_executor(None, _save_super_italian_addon_options, value)
+        else:
+            await loop.run_in_executor(None, _save_dotenv, {"MAMMAMIRADIO_SUPER_ITALIAN": env_value})
+    return {"ok": True, "super_italian_mode": value}
+
+
 @router.post("/api/credentials")
 async def save_credentials(request: Request, _: None = Depends(require_admin_access)):
     """Write credentials to .env and apply them live without a restart."""
     body = await request.json()
-    config = request.app.state.config
-
-    # Allowed keys and their mapping to env var name and live config attribute
-    allowed: dict[str, tuple[str, str | None]] = {
-        "anthropic_api_key": ("ANTHROPIC_API_KEY", "anthropic_api_key"),
-        "openai_api_key": ("OPENAI_API_KEY", "openai_api_key"),
-    }
-
-    updates: dict[str, str] = {}
-    for field, (env_key, config_attr) in allowed.items():
-        if field not in body:
-            continue
-        value = str(body[field]).strip()
-        updates[env_key] = value
-        os.environ[env_key] = value
-        if config_attr:
-            setattr(config, config_attr, value)
+    updates = _credential_updates_from_field_payload(body)
 
     if not updates:
         return {"ok": False, "error": "No recognised credential fields in request"}
 
-    # Atomically update .env file (async-wrapped to avoid blocking event loop)
-    def _write_env_atomic() -> None:
-        # Sanitize values: strip newlines to prevent env injection (same as _save_dotenv)
-        safe = {k: v.replace("\n", "").replace("\r", "") for k, v in updates.items()}
-        env_path = Path(".env")
-        try:
-            existing = env_path.read_text() if env_path.exists() else ""
-        except OSError:
-            existing = ""
-
-        lines = existing.splitlines()
-        written: set[str] = set()
-        new_lines: list[str] = []
-        for line in lines:
-            stripped = line.strip()
-            if stripped.startswith("#") or "=" not in stripped:
-                new_lines.append(line)
-                continue
-            key = stripped.split("=", 1)[0].strip()
-            if key in safe:
-                new_lines.append(f'{key}="{safe[key]}"')
-                written.add(key)
-            else:
-                new_lines.append(line)
-
-        for key, value in safe.items():
-            if key not in written:
-                new_lines.append(f'{key}="{value}"')
-
-        tmp = env_path.with_suffix(".env.tmp")
-        tmp.write_text("\n".join(new_lines) + "\n")
-        tmp.replace(env_path)
-
-    loop = asyncio.get_running_loop()
-    await loop.run_in_executor(None, _write_env_atomic)
+    await _persist_and_apply_credentials(request, updates, use_addon_options=False)
 
     logger.info("Credentials saved to .env: %s", ", ".join(updates.keys()))
     return {"ok": True, "saved": list(updates.keys())}
@@ -2118,27 +2230,7 @@ def _public_status_payload(request: Request) -> dict:
         "upcoming_mode": "queued" if upcoming else "building",
         "ha_moments": ha_moments,
         # Brand-fiction layer (PR-A schema). Listener renders against this.
-        "brand": {
-            "station_name": config.brand.station_name,
-            "frequency": config.brand.frequency,
-            "city": config.brand.city,
-            "founded": config.brand.founded,
-            "tagline": config.brand.tagline,
-            "about": config.brand.about,
-            "opengraph_subtitle": config.brand.opengraph_subtitle,
-            "hosts": [
-                {"engine_host": h.engine_host, "display_name": h.display_name, "description": h.description}
-                for h in config.brand.hosts
-            ],
-            "theme": {
-                "primary_color": config.brand.theme.primary_color,
-                "accent_color": config.brand.theme.accent_color,
-                "background_color": config.brand.theme.background_color,
-                "display_font": config.brand.theme.display_font,
-                "body_font": config.brand.theme.body_font,
-                "mono_font": config.brand.theme.mono_font,
-            },
-        },
+        "brand": _serialize_brand(config.brand),
         # Capability flags (listener-safe subset). Listener JS reads these every
         # poll and toggles [data-cap=KEY] elements (per design D2: client-side
         # capability-conditional rendering reacts to runtime cap drift).
@@ -2173,13 +2265,13 @@ async def create_clip(request: Request):
     client_ip = request.client.host if request.client else "unknown"
     now = time.time()
     async with _clip_rate_lock:
-        if now - _clip_rate.get(client_ip, 0) < 10:
+        if now - _clip_rate.get(client_ip, 0) < CLIP_RATE_LIMIT_SECONDS:
             from fastapi.responses import JSONResponse
 
             return JSONResponse({"ok": False, "error": "Rate limited — try again in a few seconds"}, status_code=429)
         _clip_rate[client_ip] = now
         # Prune stale entries to avoid unbounded growth.
-        stale_keys = [k for k, v in _clip_rate.items() if now - v >= 300]
+        stale_keys = [k for k, v in _clip_rate.items() if now - v >= CLIP_RATE_PRUNE_SECONDS]
         for key in stale_keys:
             _clip_rate.pop(key, None)
 
@@ -2188,8 +2280,8 @@ async def create_clip(request: Request):
         return {"ok": False, "error": "No audio buffered yet"}
 
     config = request.app.state.config
-    bitrate = config.audio.bitrate if hasattr(config, "audio") else 192
-    clip_data = extract_clip(ring_buffer, duration_seconds=30, bitrate_kbps=bitrate)
+    bitrate = config.audio.bitrate if hasattr(config, "audio") else DEFAULT_CLIP_BITRATE_KBPS
+    clip_data = extract_clip(ring_buffer, duration_seconds=CLIP_DURATION_SECONDS, bitrate_kbps=bitrate)
     if not clip_data:
         return {"ok": False, "error": "Buffer empty"}
 
@@ -2197,8 +2289,8 @@ async def create_clip(request: Request):
 
     # Cap total clips on disk to prevent unbounded writes
     existing = sorted(clips_dir.glob("*.mp3"), key=lambda f: f.stat().st_mtime) if clips_dir.is_dir() else []
-    if len(existing) >= 50:
-        for old in existing[: len(existing) - 49]:
+    if len(existing) >= CLIP_MAX_SAVED:
+        for old in existing[: len(existing) - (CLIP_MAX_SAVED - 1)]:
             old.unlink(missing_ok=True)
 
     clip_id = save_clip(clip_data, clips_dir)
@@ -2242,8 +2334,8 @@ async def healthz(request: Request):
     _sync_runtime_state(request)
     runtime = _runtime_health_snapshot(request)
     state = request.app.state.station_state
-    queue_empty_elapsed = _runtime_monotonic() - state.queue_empty_since if state.queue_empty_since is not None else 0.0
-    silence_with_listeners = queue_empty_elapsed > 30.0 and state.listeners_active > 0
+    queue_empty_elapsed = _queue_empty_elapsed(state)
+    silence_with_listeners = _silence_with_listeners(state, queue_empty_elapsed)
     body = {
         "status": "failing" if silence_with_listeners else "ok",
         "uptime_s": uptime,
@@ -2262,10 +2354,10 @@ async def readyz(request: Request):
     start_time = getattr(request.app.state, "start_time", None)
     queue_depth = runtime["queue_depth"]
     tasks_alive = runtime["producer_task_alive"] and runtime["playback_task_alive"]
-    startup_complete = start_time is not None and (time.time() - start_time) > 30
+    startup_complete = start_time is not None and (time.time() - start_time) > STARTUP_GRACE_SECONDS
     state = request.app.state.station_state
-    queue_empty_elapsed = _runtime_monotonic() - state.queue_empty_since if state.queue_empty_since is not None else 0.0
-    silence_with_listeners = queue_empty_elapsed > 30.0 and state.listeners_active > 0
+    queue_empty_elapsed = _queue_empty_elapsed(state)
+    silence_with_listeners = _silence_with_listeners(state, queue_empty_elapsed)
     ready = (
         tasks_alive
         and (queue_depth > 0 or startup_complete)
@@ -2366,27 +2458,7 @@ async def status(request: Request, _: None = Depends(require_admin_access)):
                 {"title": t.title, "artist": t.artist, "display": t.display, "spotify_id": t.spotify_id}
                 for t in state.playlist[:100]
             ],
-            "brand": {
-                "station_name": config.brand.station_name,
-                "frequency": config.brand.frequency,
-                "city": config.brand.city,
-                "founded": config.brand.founded,
-                "tagline": config.brand.tagline,
-                "about": config.brand.about,
-                "opengraph_subtitle": config.brand.opengraph_subtitle,
-                "hosts": [
-                    {"engine_host": h.engine_host, "display_name": h.display_name, "description": h.description}
-                    for h in config.brand.hosts
-                ],
-                "theme": {
-                    "primary_color": config.brand.theme.primary_color,
-                    "accent_color": config.brand.theme.accent_color,
-                    "background_color": config.brand.theme.background_color,
-                    "display_font": config.brand.theme.display_font,
-                    "body_font": config.brand.theme.body_font,
-                    "mono_font": config.brand.theme.mono_font,
-                },
-            },
+            "brand": _serialize_brand(config.brand),
             "brand_warnings": list(config.brand_warnings),
         }
     )

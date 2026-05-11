@@ -17,3 +17,6 @@ configuration:
   enable_home_assistant:
     name: Enable Home Assistant Integration
     description: "Let hosts reference your home state (lights, presence, climate) in banter and ads. Requires the add-on to have API access — enable this if the boot log shows ha=disabled."
+  super_italian_mode:
+    name: Super Italian Mode
+    description: "Off (default): listener UI in English with Italian station-feel words intact; AI hosts code-switch with Italian sprinkles. On: listener UI flips to full Italian and hosts lean fully into Italian idioms. Admin UI stays English regardless."

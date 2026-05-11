@@ -1525,15 +1525,189 @@ async def test_credentials_no_recognised_fields():
 async def test_credentials_saves_valid_key(tmp_path):
     """Valid anthropic_api_key updates config and triggers file write."""
     app = _make_test_app()
-    # Patch run_in_executor so no actual .env write happens
-    with patch("asyncio.AbstractEventLoop.run_in_executor", return_value=None):
+    previous = os.environ.get("ANTHROPIC_API_KEY")
+    try:
         transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
-        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
-            resp = await client.post("/api/credentials", json={"anthropic_api_key": "sk-test-key"})
+        with patch("mammamiradio.web.streamer._save_dotenv") as save_dotenv:
+            async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+                resp = await client.post("/api/credentials", json={"anthropic_api_key": "sk-test\nKEY"})
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["ok"] is True
+        assert "ANTHROPIC_API_KEY" in body["saved"]
+        assert app.state.config.anthropic_api_key == "sk-testKEY"
+        save_dotenv.assert_called_once_with({"ANTHROPIC_API_KEY": "sk-testKEY"})
+    finally:
+        if previous is None:
+            os.environ.pop("ANTHROPIC_API_KEY", None)
+        else:
+            os.environ["ANTHROPIC_API_KEY"] = previous
+
+
+# ---------------------------------------------------------------------------
+# Super Italian Mode endpoints
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_super_italian_returns_current_flag():
+    app = _make_test_app()
+    app.state.config.super_italian_mode = False
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.get("/api/super-italian")
+    assert resp.status_code == 200
+    assert resp.json() == {"super_italian_mode": False}
+
+
+@pytest.mark.asyncio
+async def test_post_super_italian_flips_flag(monkeypatch):
+    app = _make_test_app()
+    app.state.config.super_italian_mode = False
+    monkeypatch.delenv("MAMMAMIRADIO_SUPER_ITALIAN", raising=False)
+    try:
+        with patch("mammamiradio.web.streamer._save_dotenv"):
+            transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+            async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+                resp = await client.post("/api/super-italian", json={"super_italian_mode": True})
+        assert resp.status_code == 200
+        assert resp.json() == {"ok": True, "super_italian_mode": True}
+        assert app.state.config.super_italian_mode is True
+        assert os.environ.get("MAMMAMIRADIO_SUPER_ITALIAN") == "true"
+    finally:
+        os.environ.pop("MAMMAMIRADIO_SUPER_ITALIAN", None)
+
+
+@pytest.mark.asyncio
+async def test_post_super_italian_rejects_string_falsy():
+    """`{"super_italian_mode": "false"}` must NOT flip the flag to True via bool() coercion."""
+    app = _make_test_app()
+    app.state.config.super_italian_mode = False
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.post("/api/super-italian", json={"super_italian_mode": "false"})
     assert resp.status_code == 200
     body = resp.json()
-    assert body["ok"] is True
-    assert "ANTHROPIC_API_KEY" in body["saved"]
+    assert body["ok"] is False
+    assert "JSON boolean" in body["error"]
+    assert app.state.config.super_italian_mode is False
+
+
+@pytest.mark.asyncio
+async def test_post_super_italian_rejects_int():
+    """Ints must also be rejected — only true/false JSON booleans accepted."""
+    app = _make_test_app()
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.post("/api/super-italian", json={"super_italian_mode": 1})
+    assert resp.json()["ok"] is False
+
+
+@pytest.mark.asyncio
+async def test_post_super_italian_concurrent_writes_stay_consistent(monkeypatch):
+    """Concurrent toggles never produce inconsistent (config, env) state — lock holds."""
+    app = _make_test_app()
+    app.state.config.super_italian_mode = False
+    monkeypatch.delenv("MAMMAMIRADIO_SUPER_ITALIAN", raising=False)
+    try:
+        with patch("mammamiradio.web.streamer._save_dotenv"):
+            transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+            async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+                results = await asyncio.gather(
+                    *[
+                        client.post("/api/super-italian", json={"super_italian_mode": v})
+                        for v in (True, False, True, False, True)
+                    ]
+                )
+        # All requests succeeded; final state is internally consistent
+        for r in results:
+            assert r.status_code == 200
+            assert r.json()["ok"] is True
+        final_config = app.state.config.super_italian_mode
+        final_env = os.environ.get("MAMMAMIRADIO_SUPER_ITALIAN")
+        assert final_env == ("true" if final_config else "false")
+    finally:
+        os.environ.pop("MAMMAMIRADIO_SUPER_ITALIAN", None)
+
+
+@pytest.mark.asyncio
+async def test_super_italian_endpoints_require_admin_for_public_ip():
+    """Non-loopback clients must not bypass admin auth on either GET or POST."""
+    app = _make_test_app(admin_password="secret")
+    transport = httpx.ASGITransport(app=app, client=("203.0.113.50", 9999))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        get_resp = await client.get("/api/super-italian")
+        post_resp = await client.post("/api/super-italian", json={"super_italian_mode": True})
+    assert get_resp.status_code == 401
+    assert post_resp.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_post_super_italian_rejects_missing_field():
+    app = _make_test_app()
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.post("/api/super-italian", json={"other": "value"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ok"] is False
+    assert "expected JSON object" in body["error"]
+
+
+@pytest.mark.asyncio
+async def test_post_super_italian_rejects_non_dict_body():
+    app = _make_test_app()
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.post("/api/super-italian", json=["not", "a", "dict"])
+    assert resp.status_code == 200
+    assert resp.json()["ok"] is False
+
+
+@pytest.mark.asyncio
+async def test_post_super_italian_addon_mode_writes_options(tmp_path, monkeypatch):
+    """In addon mode, the toggle additionally writes to /data/options.json."""
+    app = _make_test_app(is_addon=True)
+    app.state.config.super_italian_mode = False
+    monkeypatch.delenv("MAMMAMIRADIO_SUPER_ITALIAN", raising=False)
+    options_file = tmp_path / "options.json"
+    options_file.write_text('{"existing": "value"}')
+    try:
+        with (
+            patch("mammamiradio.web.streamer._save_dotenv"),
+            patch("mammamiradio.web.streamer.Path") as mock_path,
+        ):
+            mock_path.return_value = options_file
+            transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+            async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+                resp = await client.post("/api/super-italian", json={"super_italian_mode": True})
+
+        assert resp.status_code == 200
+        assert resp.json()["ok"] is True
+        import json as _json
+
+        options = _json.loads(options_file.read_text())
+        assert options["super_italian_mode"] is True
+        assert options["existing"] == "value"  # preserved
+    finally:
+        os.environ.pop("MAMMAMIRADIO_SUPER_ITALIAN", None)
+
+
+def test_save_super_italian_addon_options_handles_corrupt_file(tmp_path):
+    """Corrupt /data/options.json is treated as empty — write proceeds."""
+    from mammamiradio.web.streamer import _save_super_italian_addon_options
+
+    options_file = tmp_path / "options.json"
+    options_file.write_text("not valid json {{{")
+
+    with patch("mammamiradio.web.streamer.Path") as mock_path:
+        mock_path.return_value = options_file
+        _save_super_italian_addon_options(True)
+
+    import json as _json
+
+    options = _json.loads(options_file.read_text())
+    assert options == {"super_italian_mode": True}
 
 
 # ---------------------------------------------------------------------------
