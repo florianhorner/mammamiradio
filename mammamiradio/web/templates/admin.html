@@ -544,6 +544,15 @@ body[data-stopped="true"] .sidebar-live-line { color: var(--cream-dk); }
 .pl-grip:active { cursor: grabbing; }
 .pl-n { font-size: 10px; color: rgba(245,237,216,0.3); width: 22px; text-align: right; }
 .pl-t { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pl-art { width: 36px; height: 36px; border-radius: 3px; object-fit: cover; flex-shrink: 0; border: 1px solid rgba(244,208,72,0.2); }
+.pl-art-empty { width: 36px; height: 36px; border-radius: 3px; background: rgba(245,237,216,0.04); border: 1px solid rgba(245,237,216,0.08); flex-shrink: 0; }
+.pl-chips { display: flex; gap: 4px; align-items: center; margin-left: auto; }
+.pl-era { font-size: 9px; font-weight: 700; font-family: var(--font-mono); color: var(--sun); background: rgba(244,208,72,0.12); border: 1px solid rgba(244,208,72,0.25); border-radius: 3px; padding: 1px 4px; white-space: nowrap; }
+.pl-src { font-size: 9px; padding: 1px 5px; border-radius: 3px; font-weight: 600; white-space: nowrap; }
+.pl-src.classic { color: var(--sun); background: rgba(244,208,72,0.10); border: 1px solid rgba(244,208,72,0.20); }
+.pl-src.charts  { color: var(--ok);  background: rgba(37,99,235,0.10);  border: 1px solid rgba(37,99,235,0.20); }
+.pl-src.jamendo { color: var(--cream-dk); background: rgba(245,237,216,0.06); border: 1px solid rgba(245,237,216,0.12); }
+.pl-src.local   { color: var(--muted); background: transparent; border: 1px solid rgba(245,237,216,0.10); }
 .pl-a { display: flex; gap: 4px; opacity: 0; transition: opacity 0.15s; }
 .pl-row:hover .pl-a { opacity: 1; }
 .pl-btn { font-size: 10px; font-weight: 600; padding: 3px 8px; border-radius: 4px; background: rgba(20,17,15,0.5); color: rgba(245,237,216,0.6); border: 1px solid rgba(245,237,216,0.12); cursor: pointer; }
@@ -1278,6 +1287,9 @@ body[data-stopped="true"] .a-station-card .dot.on { animation-play-state: paused
       <div class="quick-actions" id="playlistSourceControls" style="margin:10px 0 14px">
         <button type="button" class="btn btn-chip" id="sourceChartsBtn" data-capability="charts_reload" style="display:none" onclick="loadPlaylistSource('charts',this)">Reload charts</button>
         <button type="button" class="btn btn-chip" id="sourceJamendoBtn" data-capability="jamendo" style="display:none" onclick="loadPlaylistSource('jamendo',this)">Jamendo CC Music</button>
+        <button type="button" class="btn btn-chip" onclick="loadPlaylistSource('classic_70s',this)">Anni '70</button>
+        <button type="button" class="btn btn-chip" onclick="loadPlaylistSource('classic_80s',this)">Anni '80</button>
+        <button type="button" class="btn btn-chip" onclick="loadPlaylistSource('classic_90s',this)">Anni '90</button>
       </div>
       <div class="search-row">
         <label for="searchInput" class="sr-only">Cerca musica</label>
@@ -1392,6 +1404,21 @@ const SHAPE={ok:'✓',warn:'△',error:'✕',info:'·'};
 const SEGMENT_GLYPH={music:'♪',banter:'🎙',ad:'[Ad]',news_flash:'[!]'};
 const CHARTS_SENTINEL_URL='https://rss.applemarketingtools.com/api/v2/it/music/most-played/100/songs.json';
 const JAMENDO_SENTINEL_URL='jamendo://default';
+const _SOURCE_DISPATCH={
+  charts:{url:CHARTS_SENTINEL_URL,toast:'Charts reloaded'},
+  jamendo:{url:JAMENDO_SENTINEL_URL,toast:'Jamendo CC music loaded'},
+  classic_70s:{url:'classic://italian/70s',toast:"Anni '70 loaded"},
+  classic_80s:{url:'classic://italian/80s',toast:"Anni '80 loaded"},
+  classic_90s:{url:'classic://italian/90s',toast:"Anni '90 loaded"},
+};
+const SOURCE_CHIPS={
+  classic:{label:'classici',cls:'classic'},
+  youtube:{label:'charts',cls:'charts'},
+  charts:{label:'charts',cls:'charts'},
+  jamendo:{label:'jamendo',cls:'jamendo'},
+  local:{label:'locali',cls:'local'},
+  demo:{label:'demo',cls:'local'},
+};
 let _lastSetupJson=null;
 
 function toast(m){const e=document.getElementById('toast');e.textContent=m;e.classList.add('show');setTimeout(()=>e.classList.remove('show'),1600)}
@@ -1850,15 +1877,32 @@ function updateSourceControls(st,caps){
 }
 async function loadPlaylistSource(kind,el){
   flash(el);
-  const url=kind==='jamendo'?JAMENDO_SENTINEL_URL:CHARTS_SENTINEL_URL;
+  const dispatch=_SOURCE_DISPATCH[kind]||_SOURCE_DISPATCH.charts;
+  const url=dispatch.url;
   const r=await api('POST','/api/playlist/load',{url});
   if(!r.ok){
     toast('Failed: '+(r.error||'unknown'));
     return;
   }
-  toast(kind==='jamendo'?'Jamendo CC music loaded':'Charts reloaded');
+  toast(dispatch.toast);
   await refreshFast();
   updateSourceControls(_st,_caps);
+}
+function trackThumb(t){
+  if(!t?.album_art)return '<span class="pl-art-empty" aria-hidden="true"></span>';
+  return `<img class="pl-art" src="${esc(t.album_art)}" alt="" loading="lazy" referrerpolicy="no-referrer">`;
+}
+function eraLabel(year){
+  const y=Number(year||0);
+  if(y>=1970&&y<1980)return "'70";
+  if(y>=1980&&y<1990)return "'80";
+  if(y>=1990&&y<2000)return "'90";
+  if(y>=2000)return String(y).slice(2);
+  return '';
+}
+function sourceChip(source){
+  const chip=SOURCE_CHIPS[source]||SOURCE_CHIPS.local;
+  return `<span class="pl-src ${chip.cls}">${esc(chip.label)}</span>`;
 }
 function updatePl(tracks){
   const el=document.getElementById('plBody');const meta=document.getElementById('plMeta');
@@ -1869,7 +1913,9 @@ function updatePl(tracks){
   const filtered=filter?s.filter(t=>`${t.title} ${t.artist}`.toLowerCase().includes(filter)):s;
   el.innerHTML=filtered.map((t,i)=>{
     const idx=filter?tracks.indexOf(t):i;
-    return `<div class="pl-row" draggable="true" data-i="${idx}" data-id="${esc(t.spotify_id||t.id||'')}"><span class="pl-grip" title="Drag to reorder">&#10783;</span><span class="pl-n">${idx+1}</span><span class="pl-t">${esc(t.display||t.title||'?')}</span><div class="pl-a"><button class="pl-btn" onclick="moveNext(${idx})">&#9654; Next</button><button class="pl-btn" onclick="removeTr(${idx})">&#10005;</button></div></div>`;
+    const era=eraLabel(t.year);
+    const eraPill=era?`<span class="pl-era">${era}</span>`:'';
+    return `<div class="pl-row" draggable="true" data-i="${idx}" data-id="${esc(t.spotify_id||t.id||'')}"><span class="pl-grip" title="Drag to reorder">&#10783;</span><span class="pl-n">${idx+1}</span>${trackThumb(t)}<span class="pl-t">${esc(t.display||t.title||'?')}</span><div class="pl-chips">${eraPill}${sourceChip(t.source)}</div><div class="pl-a"><button class="pl-btn" onclick="moveNext(${idx})">&#9654; Next</button><button class="pl-btn" onclick="removeTr(${idx})">&#10005;</button></div></div>`;
   }).join('')+(tracks.length>80?`<div class="empty">+ ${tracks.length-80} more</div>`:'');
   initDragDrop();
 }
