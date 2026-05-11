@@ -195,13 +195,14 @@ async def listener_request(request: Request):
     last = state._listener_request_rl.get(submitter_ip_hash, 0)
     if now - last < 30:
         return JSONResponse({"ok": False, "retry_after": int(30 - (now - last))}, status_code=429)
-    state._listener_request_rl[submitter_ip_hash] = now
-    # Prune stale entries to avoid unbounded growth
-    state._listener_request_rl = {k: v for k, v in state._listener_request_rl.items() if now - v < 300}
 
-    # Cap queue
+    # Cap queue. Limiter window is reserved for accepted requests only, so a
+    # caller bounced by queue_full can retry immediately when capacity frees up.
     if len(state.pending_requests) >= 10:
         return JSONResponse({"ok": False, "error": "queue_full"}, status_code=429)
+
+    state._listener_request_rl[submitter_ip_hash] = now
+    state._listener_request_rl = {k: v for k, v in state._listener_request_rl.items() if now - v < 300}
 
     # Detect song request by keyword
     msg_lower = message.lower()
@@ -237,7 +238,7 @@ async def listener_request(request: Request):
         request.app.state.background_tasks.add(_dl_task)
         _dl_task.add_done_callback(request.app.state.background_tasks.discard)
 
-    logger.info("Listener request queued from %s: %s (%s)", name, message[:40], req["type"])
+    logger.info("Listener request queued: request_id=%s type=%s", req["request_id"], req["type"])
     return {"ok": True, "queued": True, "type": req["type"]}
 
 
@@ -261,7 +262,7 @@ async def _download_listener_song(req: dict, app_state, originating_revision: in
         results = await loop.run_in_executor(None, search_ytdlp_metadata, query, 1)
         if not results:
             req["song_error"] = True
-            logger.info("Listener song request: no yt-dlp results for %r", query)
+            logger.info("Listener song request returned no results: request_id=%s", req.get("request_id"))
             return
         meta = results[0]
         track = Track(
@@ -290,4 +291,4 @@ async def _download_listener_song(req: dict, app_state, originating_revision: in
         logger.info("Listener song request ready: %s", track.display)
     except Exception:
         req["song_error"] = True
-        logger.warning("Listener song download failed for %r", query, exc_info=True)
+        logger.warning("Listener song download failed: request_id=%s", req.get("request_id"), exc_info=True)

@@ -179,13 +179,13 @@ Version sync check conditional on `pyproject.toml`/`ha-addon/config.yaml` diff; 
 
 **Priority:** P2
 **Source:** scope-parked from florianhorner/feat/track-b-sidebar on 2026-05-10
-`mammamiradio/hosts/moderation.py` — Add a config-driven static blocked-name list in `radio.toml` `[moderation.blocked_names]` as a second-line safeguard against LLM false-positive approvals involving real people.
+`mammamiradio/web/listener_requests.py:184` — Add a config-driven static blocked-name list in `radio.toml` `[moderation.blocked_names]` (likely a new `mammamiradio/hosts/moderation.py`) as a second-line safeguard at the listener-request validation gate against LLM false-positive approvals involving real people.
 
 ### Dedication metrics admin dashboard surface
 
 **Priority:** P3
 **Source:** scope-parked from florianhorner/feat/track-b-sidebar on 2026-05-10
-`cache_dir/dedication_events.jsonl` — Surface dedication KPIs such as acceptance rate, median time-to-air, and miss rate in Engine Room using the existing metrics log and `scripts/dedication-metrics.sh` reader pipeline.
+`mammamiradio/web/templates/admin.html:2216` — Surface dedication KPIs such as acceptance rate, median time-to-air, and miss rate in the Engine Room admin block, sourced from the planned `cache/dedication_events.jsonl` metrics log via `scripts/dedication-metrics.sh` (both also pending).
 
 ### Changelog lint: add digit-phase and Track-letter patterns
 

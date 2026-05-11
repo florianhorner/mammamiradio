@@ -1681,6 +1681,33 @@ async def test_listener_request_queue_full():
 
 
 @pytest.mark.asyncio
+async def test_listener_request_queue_full_does_not_consume_limiter():
+    """A queue_full rejection must NOT burn the 30s per-IP rate-limit window.
+
+    Regression for CodeRabbit review on PR #325: if the limiter write ran before
+    the queue-cap check, a caller bounced by queue_full would be blocked for 30s
+    even when capacity frees up immediately. Limiter writes now run only after
+    a request is accepted.
+    """
+    app = _make_test_app()
+    state = app.state.station_state
+    for i in range(10):
+        state.pending_requests.append({"name": f"U{i}", "message": f"msg{i}", "ts": 0})
+    transport = httpx.ASGITransport(app=app, client=("99.0.0.2", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        first = await client.post("/api/listener-request", json={"name": "Late", "message": "ciao"})
+        assert first.status_code == 429
+        assert first.json()["error"] == "queue_full"
+        # Limiter dict must NOT have recorded this rejected attempt
+        assert state._listener_request_rl == {}
+        # Drain the queue and immediately retry from the same client
+        state.pending_requests.clear()
+        second = await client.post("/api/listener-request", json={"name": "Late", "message": "ciao"})
+    assert second.status_code == 200
+    assert second.json()["ok"] is True
+
+
+@pytest.mark.asyncio
 async def test_get_listener_requests_returns_queue():
     app = _make_test_app()
     import time as _time

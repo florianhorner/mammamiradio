@@ -221,8 +221,9 @@ This is opportunistic context, not a hard dependency. Failures there should not 
 | `/clips/{id}.mp3` | GET | Public | Serve a saved clip (no auth, for sharing) |
 | `/api/track-rules` | POST | Admin | Flag a reaction rule for the current track |
 | `/api/listener-request` | POST | Public | Submit a song request or shoutout |
-| `/api/listener-requests` | GET | Admin | List pending listener requests |
-| `/api/listener-requests/dismiss` | POST | Admin | Dismiss a pending listener request |
+| `/public-listener-requests` | GET | Public | Sanitized listener-request feed for the on-page sidebar (`request_id`, `status`, name, message, type) — `submitter_ip_hash` and `evict_after` stay server-side |
+| `/api/listener-requests` | GET | Admin | List pending listener requests (full record including `request_id`, `status`, `evict_after`) |
+| `/api/listener-requests/dismiss` | POST | Admin | Dismiss a pending listener request by `ts` (legacy) or `request_id` (canonical) |
 | `/api/search` | GET | Admin | Search playlist and external sources |
 | `/api/playlist/add-external` | POST | Admin | Add external track from search results |
 | `/api/hot-reload` | POST | Admin | Reload `scriptwriter.py` in-place via `importlib.reload()` — stream continues uninterrupted, next banter uses new code. Requires `--workers 1`. |
