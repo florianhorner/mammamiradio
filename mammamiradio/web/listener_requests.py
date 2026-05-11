@@ -149,7 +149,6 @@ async def dismiss_listener_request(request: Request, _: None = Depends(require_a
     req_id = str(body.get("id", ""))
     if not req_id:
         return JSONResponse({"ok": False, "error": "id required"}, status_code=400)
-    before = len(state.pending_requests)
     removed_requests = []
     kept_requests = []
     for r in state.pending_requests:
@@ -160,14 +159,14 @@ async def dismiss_listener_request(request: Request, _: None = Depends(require_a
     state.pending_requests = kept_requests
     for r in removed_requests:
         track = r.get("song_track_obj")
-        if track is not None:
-            state.playlist = [t for t in state.playlist if t is not track]
+        if track is None:
+            continue
+        state.playlist = [t for t in state.playlist if t is not track]
         if state.pinned_track is track:
             state.pinned_track = None
             if state.force_next == SegmentType.MUSIC:
                 state.force_next = None
-    removed = before - len(state.pending_requests)
-    return {"ok": True, "removed": removed}
+    return {"ok": True, "removed": len(removed_requests)}
 
 
 @router.post("/api/listener-request")

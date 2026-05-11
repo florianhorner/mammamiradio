@@ -957,6 +957,33 @@ async def test_dismiss_listener_request_removes_downloaded_track(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_dismiss_listener_request_without_track_keeps_unrelated_force_next():
+    """Dismissing a shoutout must not clear a pending music trigger owned by other state."""
+    app = _make_test_app()
+    state = app.state.station_state
+    state.force_next = SegmentType.MUSIC
+    state.pinned_track = None
+    req = {
+        "name": "Luca",
+        "message": "ciao",
+        "type": "shoutout",
+        "request_id": "44444444-4444-4444-8444-444444444444",
+        "ts": time.time(),
+    }
+    state.pending_requests.append(req)
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.post("/api/listener-requests/dismiss", json={"id": req["request_id"]})
+
+    assert resp.status_code == 200
+    assert resp.json() == {"ok": True, "removed": 1}
+    assert state.pending_requests == []
+    assert state.force_next == SegmentType.MUSIC
+    assert state.pinned_track is None
+
+
+@pytest.mark.asyncio
 async def test_add_external_track_success(tmp_path):
     app = _make_test_app()
     app.state.config.cache_dir = tmp_path
