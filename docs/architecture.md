@@ -286,6 +286,7 @@ The rich path is richer, but the failure path still produces a stream.
 | `mammamiradio/home/ha_context.py` | Home Assistant polling, mood classification, reactive triggers |
 | `mammamiradio/home/ha_enrichment.py` | Pure HA event derivation: state diffing, event pruning, numeric passthrough |
 | `mammamiradio/web/streamer.py` | HTTP routes, auth gating, playback loop, clip endpoints, listener fanout (TODO: split — see cathedral plan PR 5) |
+| `mammamiradio/web/listener_requests.py` | Listener-request endpoints (submit, public feed, admin queue, dismiss) and the song-wish download background task |
 | `mammamiradio/web/og_card.py` | Open Graph share-card PNG renderer |
 | `mammamiradio/web/templates/` | `admin.html`, `listener.html`, `live.html` |
 | `mammamiradio/web/static/` | CSS, JS, icons, manifest, service worker |
