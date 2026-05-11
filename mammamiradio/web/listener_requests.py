@@ -31,6 +31,7 @@ never exposed to listener responses.
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import hashlib
 import hmac
 import logging
@@ -45,6 +46,11 @@ from mammamiradio.core.models import SegmentType
 from mammamiradio.web.streamer import require_admin_access
 
 logger = logging.getLogger("mammamiradio.listener_requests")
+
+# Bounded executor for listener song searches. Caps concurrency at 2 so
+# listener yt-dlp tasks cannot exhaust the default ThreadPoolExecutor and
+# starve the producer's audio prefetch work on Pi-class hardware.
+_listener_dl_executor = concurrent.futures.ThreadPoolExecutor(max_workers=2, thread_name_prefix="listener-dl")
 
 router = APIRouter()
 
@@ -196,13 +202,18 @@ async def listener_request(request: Request):
     if now - last < 30:
         return JSONResponse({"ok": False, "retry_after": int(30 - (now - last))}, status_code=429)
 
+    # Prune stale entries on every non-rate-limited request so a sustained
+    # queue_full rejection wave can't grow the dict without bound.  Note:
+    # rate-limit rejections return before this line, so they don't trigger the
+    # prune; their entries expire naturally after 300 s.
+    state._listener_request_rl = {k: v for k, v in state._listener_request_rl.items() if now - v < 300}
+
     # Cap queue. Limiter window is reserved for accepted requests only, so a
     # caller bounced by queue_full can retry immediately when capacity frees up.
     if len(state.pending_requests) >= 10:
         return JSONResponse({"ok": False, "error": "queue_full"}, status_code=429)
 
     state._listener_request_rl[submitter_ip_hash] = now
-    state._listener_request_rl = {k: v for k, v in state._listener_request_rl.items() if now - v < 300}
 
     # Detect song request by keyword
     msg_lower = message.lower()
@@ -217,7 +228,7 @@ async def listener_request(request: Request):
         "song_found": False,
         "song_error": False,
         "song_track": None,
-        "banter_cycles_missed": 0,
+        "banter_cycles_missed": 0,  # initialized here; incremented by ListenerRequestCommit in scriptwriter.py
         "ts": now,
         # Track B v2.11.0 (Phase 2 — additive, state machine inert).
         # request_id is the canonical id (replaces ts in v2.12). status moves
@@ -259,7 +270,7 @@ async def _download_listener_song(req: dict, app_state, originating_revision: in
     query = req.get("song_query") or req.get("message") or ""
     try:
         loop = asyncio.get_running_loop()
-        results = await loop.run_in_executor(None, search_ytdlp_metadata, query, 1)
+        results = await loop.run_in_executor(_listener_dl_executor, search_ytdlp_metadata, query, 1)
         if not results:
             req["song_error"] = True
             logger.info("Listener song request returned no results: request_id=%s", req.get("request_id"))
