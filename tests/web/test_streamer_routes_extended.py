@@ -885,6 +885,30 @@ async def test_dismiss_listener_request_invalid_payload_returns_400():
 
 
 @pytest.mark.asyncio
+async def test_dismiss_listener_request_null_id_returns_400():
+    """POST /api/listener-requests/dismiss rejects JSON-null id rather than treating str(None) as valid."""
+    app = _make_test_app()
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.post("/api/listener-requests/dismiss", json={"id": None})
+    assert resp.status_code == 400
+    assert resp.json()["error"] == "id required"
+
+
+@pytest.mark.asyncio
+async def test_dismiss_listener_request_unknown_id_is_noop():
+    """Dismissing a non-existent id returns ok=True with removed=0 (idempotent)."""
+    app = _make_test_app()
+    app.state.station_state.pending_requests = [{"name": "A", "request_id": "aaaa-1111", "ts": 1.0, "status": "queued"}]
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.post("/api/listener-requests/dismiss", json={"id": "nonexistent-uuid"})
+    assert resp.status_code == 200
+    assert resp.json() == {"ok": True, "removed": 0}
+    assert len(app.state.station_state.pending_requests) == 1
+
+
+@pytest.mark.asyncio
 async def test_dismiss_listener_request_by_request_id_removes_record():
     """Dismiss accepts the canonical request_id (Phase 3 split-brain prevention)."""
     app = _make_test_app()

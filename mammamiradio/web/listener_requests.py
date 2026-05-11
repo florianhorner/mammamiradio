@@ -146,7 +146,7 @@ async def dismiss_listener_request(request: Request, _: None = Depends(require_a
     body, error = await _read_json_object(request)
     if error is not None:
         return error
-    req_id = str(body.get("id", ""))
+    req_id = str(body.get("id") or "")
     if not req_id:
         return JSONResponse({"ok": False, "error": "id required"}, status_code=400)
     removed_requests = []

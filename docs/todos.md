@@ -186,3 +186,9 @@ Version sync check conditional on `pyproject.toml`/`ha-addon/config.yaml` diff; 
 **Priority:** P3
 **Source:** scope-parked from florianhorner/feat/track-b-sidebar on 2026-05-10
 `cache_dir/dedication_events.jsonl` — Surface dedication KPIs such as acceptance rate, median time-to-air, and miss rate in Engine Room using the existing metrics log and `scripts/dedication-metrics.sh` reader pipeline.
+
+### Changelog lint: add digit-phase and Track-letter patterns
+
+**Priority:** P3
+**Source:** scope-parked from florianhorner/feat/track-b-sidebar on 2026-05-11
+`scripts/check-changelog-lint.sh` — Current `PATTERNS` array catches `Phase A` (letter-suffix) but not `Phase 1` (digit-suffix) or `Track B` (workstream labels). Add `\bPhase [0-9]+\b` and `\bTrack [A-Z]\b` so the CI gate enforces the full policy from CLAUDE.md's Changelog editorial boundary section.
