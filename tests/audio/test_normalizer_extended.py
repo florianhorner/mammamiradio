@@ -673,6 +673,26 @@ def test_concat_files_no_silence(mock_subprocess):
     assert "concat=n=3" in joined
 
 
+def test_concat_files_with_silence_uses_aevalsrc(mock_subprocess):
+    """concat_files with silence_ms>0 uses aevalsrc (not anullsrc+atrim).
+
+    aevalsrc with d= terminates reliably on Pi aarch64; anullsrc+atrim was
+    silently truncating banter/ad segments mid-sentence on HA Green.
+    """
+    from mammamiradio.audio.normalizer import concat_files
+
+    mock_run, _ = mock_subprocess
+    paths = [Path("/tmp/a.mp3"), Path("/tmp/b.mp3")]
+    out = Path("/tmp/out.mp3")
+    concat_files(paths, out, silence_ms=300)
+    cmd = mock_run.call_args[0][0]
+    joined = " ".join(cmd)
+    assert "aevalsrc=0|0" in joined
+    assert "atrim" not in joined
+    assert "d=0.3" in joined
+    assert "concat=n=3" in joined  # 2 voice inputs + 1 silence = 3 streams
+
+
 # ---------------------------------------------------------------------------
 # generate_sweep validation (invalid params)
 # ---------------------------------------------------------------------------
