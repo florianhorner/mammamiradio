@@ -1008,6 +1008,62 @@ async def test_dismiss_listener_request_without_track_keeps_unrelated_force_next
 
 
 @pytest.mark.asyncio
+async def test_dismiss_trackless_request_preserves_sibling_pinned_track():
+    """Dismissing a trackless shoutout must not touch another request's pinned track.
+
+    Stronger invariant than test_dismiss_..._keeps_unrelated_force_next:
+    here a real pinned_track exists from a sibling song_request. The
+    trackless-dismiss early-continue must skip the cleanup block so the
+    sibling's pin and force_next remain intact.
+    """
+    from mammamiradio.core.models import Track
+
+    app = _make_test_app()
+    state = app.state.station_state
+    sibling_track = Track(title="Volare", artist="Modugno", duration_ms=180000, youtube_id="yt-sibling")
+    state.playlist.append(sibling_track)
+    state.pinned_track = sibling_track
+    state.force_next = SegmentType.MUSIC
+    shoutout = {
+        "name": "Anna",
+        "message": "ciao a tutti",
+        "type": "shoutout",
+        "song_track_obj": None,
+        "request_id": "55555555-5555-4555-8555-555555555555",
+        "ts": time.time(),
+    }
+    state.pending_requests.append(shoutout)
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.post("/api/listener-requests/dismiss", json={"id": shoutout["request_id"]})
+
+    assert resp.status_code == 200
+    assert state.pinned_track is sibling_track
+    assert state.force_next == SegmentType.MUSIC
+    assert sibling_track in state.playlist
+
+
+@pytest.mark.asyncio
+async def test_listener_request_rate_limit_prunes_on_rejection():
+    """The 30s rate-limit dict must prune stale entries even when the next
+    request is rejected (queue_full or rate_limited), so a sustained wave
+    of rejections doesn't grow the dict without bound."""
+    app = _make_test_app()
+    state = app.state.station_state
+    state._listener_request_rl = {"stale-hash-1": 0.0, "stale-hash-2": 0.0}
+    for i in range(10):
+        state.pending_requests.append({"name": f"U{i}", "message": f"msg{i}", "ts": 0})
+    transport = httpx.ASGITransport(app=app, client=("99.0.0.3", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.post("/api/listener-request", json={"name": "X", "message": "ciao"})
+    assert resp.status_code == 429
+    assert resp.json()["error"] == "queue_full"
+    assert "stale-hash-1" not in state._listener_request_rl
+    assert "stale-hash-2" not in state._listener_request_rl
+
+
+@pytest.mark.asyncio
 async def test_add_external_track_success(tmp_path):
     app = _make_test_app()
     app.state.config.cache_dir = tmp_path
