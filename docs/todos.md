@@ -181,6 +181,42 @@ Version sync check conditional on `pyproject.toml`/`ha-addon/config.yaml` diff; 
 **Source:** scope-parked from florianhorner/feat/track-b-sidebar on 2026-05-10
 `mammamiradio/web/listener_requests.py:184` — Add a config-driven static blocked-name list in `radio.toml` `[moderation.blocked_names]` (likely a new `mammamiradio/hosts/moderation.py`) as a second-line safeguard at the listener-request validation gate against LLM false-positive approvals involving real people.
 
+### Listener-request rate limiter buckets all `request.client is None` traffic into one slot
+
+**Priority:** P2
+**Source:** scope-parked from florianhorner/feat/track-b-sidebar on 2026-05-11 (pre-existing, flagged by pre-ship adversarial review on PR #325)
+`mammamiradio/web/listener_requests.py:190` — `ip = request.client.host if request.client else "unknown"` means every caller without a `request.client` (and every caller through HA Supervisor ingress, where `request.client` is the loopback) shares one rate-limit bucket. Real listener IPs need to be read from `X-Forwarded-For` / `X-Real-IP` behind a trusted proxy boundary. Trust-boundary decision required — not a one-line patch.
+
+### Listener-request `request_id` doubles as both public sidebar token and admin dismiss key
+
+**Priority:** P3
+**Source:** scope-parked from florianhorner/feat/track-b-sidebar on 2026-05-11 (flagged by pre-ship adversarial review on PR #325)
+`mammamiradio/web/listener_requests.py:129` — the public `/public-listener-requests` feed exposes `request_id`, which is also the canonical id `/api/listener-requests/dismiss` accepts. Dismiss is admin-auth gated, so this only matters under stolen admin credentials, but the design conflates the listener's "track my own card" token with the admin mutation handle. Phase 3 should consider splitting into `public_token` + `request_id`.
+
+### Coverage gaps in `_download_listener_song` failure paths
+
+**Priority:** P3
+**Source:** scope-parked from florianhorner/feat/track-b-sidebar on 2026-05-11 (flagged by pre-ship coverage audit on PR #325)
+`mammamiradio/web/listener_requests.py:281-282` and `:271-274` — no tests cover (a) `search_ytdlp_metadata` raising an exception (should set `song_error=True`, not silently drop) or (b) the `playlist_revision` mismatch guard that drops a downloaded track when the source switched mid-download. Add `test_download_listener_song_search_exception_marks_error` and `test_download_listener_song_revision_mismatch_drops_track` in `tests/web/test_streamer_routes_extended.py`.
+
+### Listener song downloads share the default ThreadPoolExecutor with producer
+
+**Priority:** P2
+**Source:** scope-parked from florianhorner/feat/track-b-sidebar on 2026-05-11 (flagged by pre-ship adversarial review on PR #325)
+`mammamiradio/web/listener_requests.py:266` — `loop.run_in_executor(None, search_ytdlp_metadata, ...)` uses the default executor (min(32, cpu+4) threads on Pi 4 = 8). Multiple concurrent listener song downloads can exhaust the executor and starve the producer's audio prefetch tasks, causing a buffer underrun and breaking the illusion. Fix: use a separate bounded executor (`max_workers=2`) for listener downloads so producer tasks are never blocked.
+
+### `_download_listener_song` leaves request stuck on `asyncio.CancelledError`
+
+**Priority:** P3
+**Source:** scope-parked from florianhorner/feat/track-b-sidebar on 2026-05-11 (flagged by pre-ship adversarial review on PR #325)
+`mammamiradio/web/listener_requests.py:296` — the `except Exception` handler does not catch `asyncio.CancelledError` (BaseException subclass in Python 3.8+). On app shutdown mid-download, the request stays stuck as `song_found=False, song_error=False` ("still downloading") for ~2 banter cycles until scriptwriter.py's `banter_cycles_missed` counter expires it. Explicit: re-raise `CancelledError` after setting `song_error=True` and removing from `pending_requests`.
+
+### Pinned-track assignment fires only when request is still queue head at download completion
+
+**Priority:** P2
+**Source:** scope-parked from florianhorner/feat/track-b-sidebar on 2026-05-11 (flagged by pre-ship adversarial review on PR #325)
+`mammamiradio/web/listener_requests.py:292` — `if state.pending_requests[0] is req` means the pin only fires if no newer request arrived during the yt-dlp download. If a second shoutout is submitted while a song is downloading, the song-request sinks to position 1, the pin is skipped, and the downloaded track plays at an unannounced time without a dedica. Phase 3 design: producer should look up the request by `request_id` and schedule accordingly rather than relying on position.
+
 ### Dedication metrics admin dashboard surface
 
 **Priority:** P3

@@ -8,7 +8,6 @@ The current version source of truth is `pyproject.toml`.
 
 ### Added
 
-- **Listener request tracking fields** — Every pending request now carries a canonical `request_id` (uuid4), a `status` field (initial value `queued`), and a reserved `evict_after` slot for TTL cleanup. The per-IP rate-limit key migrated to an HMAC-SHA256 hash so no raw IP is stored in request records. `GET /public-listener-requests` now exposes `request_id` and `status` for upcoming listener UIs; admin-only fields (`submitter_ip_hash`, `evict_after`) stay server-side. `POST /api/listener-requests/dismiss` accepts both the legacy timestamp-based `id` and the new canonical `request_id`, allowing admin and listener UIs to migrate without a coordinated cutover.
 - **`OPENAI_SCRIPT_MODEL` env-var operator toggle** — switches the OpenAI model used for script generation (banter/ads/news/transitions). Default `gpt-4o-mini`; production behavior unchanged. Adds structured `openai_script_call` log events (model, caller, latency_ms, prompt/completion tokens, fallback_reason, json_ok) so model comparison and fallback debugging are possible from logs alone. Ships with an offline harness at `scripts/eval_openai_script_model.py` + prompt corpus at `scripts/eval_fixtures/openai_script_prompts.json` for side-by-side comparison. Does NOT touch TTS — `gpt-4o-mini-tts` is unchanged.
 - **Super Italian Mode toggle** — station personality dial in admin Engine Room and via `MAMMAMIRADIO_SUPER_ITALIAN` env var or HA addon `super_italian_mode` option. Default OFF: listener UI defaults to English with Italian headlines and station-feel words intact (`Stasera in onda`, `Palinsesto`, `Mi`, tricolor); AI hosts code-switch charmingly (English narrative + Italian flavor like `ciao`, `dai`, `mamma mia`). When ON: listener UI flips to full Italian; hosts lean fully into Italian idioms and address listeners as `amici miei`. Toggle is station-wide. Connected listeners pick up the new copy on next page reload (copy is baked into listener.html via Jinja). The scriptwriter system-prompt cache invalidates on the mode key so banter generation picks up the new directive without a restart. Persistence: standalone deploys write `.env`; HA addons write `/data/options.json` (survives container updates). Admin UI is always English regardless of toggle. New module `mammamiradio/web/ui_copy.py` holds swappable strings. Endpoints: `GET/POST /api/super-italian`.
 
@@ -21,6 +20,25 @@ The current version source of truth is `pyproject.toml`.
 - **Anthropic model and audio-FX guardrails**: HA add-on model choices no longer offer retired/invalid Claude 4.5 dated IDs; `claude_model` now offers the existing Haiku default plus current Sonnet/Opus options. Anthropic 404/model-not-found errors now trip the same 10-minute provider backoff used by auth failures, so a bad model name falls through to OpenAI once instead of spamming every generation. Synthetic ad beds/foley now clamp generated ffmpeg filter parameters into valid ranges (`aphaser.delay <= 5`, `tremolo.f >= 0.1`) with regression tests covering the previously failing `luxury_spa`, `mysterious`, and `cafe` paths.
 - **Admin panel under Home Assistant ingress now shows live data.** The admin control room had been stuck at "Waiting for signal…" whenever opened from the HA sidebar, while the same page on direct `http://<ha-ip>:8000/admin` populated normally. Cause: `admin.html` issued bare path-absolute fetches like `fetch('/status')` and `fetch('/api/...')`, which under ingress resolve against the HA host root instead of the addon's ingress prefix; requests landed on Home Assistant's frontend, returned non-JSON, and were silently swallowed. The admin page now derives `_base` from `window.location.pathname` (matching the listener page contract) and prefixes every data fetch with it. Server-side rewriting is unchanged — JS string literals stay the client's responsibility, as documented on `_inject_ingress_prefix`. Regression test in `tests/web/test_streamer_routes.py` asserts every fetch goes through `_base`.
 - **Admin control room reads as espresso warm-brown again.** PR #298 raised four shared `tokens.css` values (`--surface`, `--surface-hover`, `--surface-strong`, `--line-strong`) to make listener cards visible — but admin consumes the same tokens, and v2.11.0 shipped with admin washed out to taupe. Tokens reverted to Pi-baseline values; listener cards keep PR #298's brighter values via inline overrides on `.mmr-stage`, `.mmr-np-bar`, `.btn-ghost`, `.mmr-schedule`, `.mmr-dedica`, `.mmr-about-card`. CLAUDE.md "Protected UI elements" extended to guard against re-regression.
+
+## [2.11.1] - 2026-05-11
+
+Track B groundwork (Phases 1 + 2): the listener-request surface gets a new
+home, identity fields, and a production safety fix.
+
+### Added
+
+- **Listener-request identity fields** — Every pending request now carries a canonical `request_id` (uuid4), a `status` field (initial value `queued`), and a reserved `evict_after` slot for Phase 3 TTL cleanup. The per-IP rate-limit key migrated to an HMAC-SHA256 hash of the caller IP so no raw address is stored in request records. `GET /public-listener-requests` exposes `request_id` and `status` for upcoming listener UIs; admin-only fields (`submitter_ip_hash`, `evict_after`) stay server-side. `POST /api/listener-requests/dismiss` now accepts both the legacy timestamp-based `id` and the new canonical `request_id`, allowing admin and listener UIs to migrate without a coordinated cutover.
+
+### Changed
+
+- **`listener_requests` extracted into its own module** — `mammamiradio/web/listener_requests.py` (previously embedded in `streamer.py`). Public routes (`/api/listener-request`, `/api/listener-requests`, `/public-listener-requests`, `/api/listener-requests/dismiss`) and the background download task are now self-contained. No external API change.
+- **Listener song downloads use a bounded executor** — `search_ytdlp_metadata` calls from the listener-request handler now run in a dedicated 2-thread pool (`listener-dl`), keeping the producer's audio-prefetch tasks safe from contention on Pi-class hardware.
+
+### Fixed
+
+- **Rate-limit dict pruned before queue-cap check** — previously, a sustained wave of `queue_full` rejections could grow the in-memory rate-limit dict without bound (the limiter write only fires on accepted requests). The prune now runs unconditionally on every non-rate-limited request so the dict stays bounded under load.
+- **Dismiss with no song skips playlist cleanup** — trackless shoutout dismissals no longer touch unrelated pinned tracks or `force_next` state set by a sibling song request in the queue.
 
 ## [2.11.0] - 2026-05-08
 
