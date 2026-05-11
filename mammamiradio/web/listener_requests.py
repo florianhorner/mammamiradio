@@ -64,6 +64,21 @@ def _hash_submitter_ip(ip: str, config) -> str:
     return hmac.new(secret, ip.encode("utf-8"), hashlib.sha256).hexdigest()
 
 
+async def _read_json_object(request: Request) -> tuple[dict, JSONResponse | None]:
+    """Parse the request body as a JSON object.
+
+    Returns `(body, None)` on success or `({}, JSONResponse)` on failure so
+    callers can use simple narrowing: `if error is not None: return error`.
+    """
+    try:
+        body = await request.json()
+    except ValueError:
+        return {}, JSONResponse({"ok": False, "error": "invalid JSON"}, status_code=400)
+    if not isinstance(body, dict):
+        return {}, JSONResponse({"ok": False, "error": "invalid payload"}, status_code=400)
+    return body, None
+
+
 @router.get("/api/listener-requests")
 async def get_listener_requests(request: Request, _: None = Depends(require_admin_access)):
     """Return current pending listener request queue (admin only)."""
@@ -128,14 +143,29 @@ async def dismiss_listener_request(request: Request, _: None = Depends(require_a
     sidebars migrating to `request_id` keep working without coordinated cutover.
     """
     state = request.app.state.station_state
-    body = await request.json()
+    body, error = await _read_json_object(request)
+    if error is not None:
+        return error
     req_id = str(body.get("id", ""))
     if not req_id:
         return JSONResponse({"ok": False, "error": "id required"}, status_code=400)
     before = len(state.pending_requests)
-    state.pending_requests = [
-        r for r in state.pending_requests if str(r.get("ts", "")) != req_id and str(r.get("request_id", "")) != req_id
-    ]
+    removed_requests = []
+    kept_requests = []
+    for r in state.pending_requests:
+        if str(r.get("ts", "")) == req_id or str(r.get("request_id", "")) == req_id:
+            removed_requests.append(r)
+        else:
+            kept_requests.append(r)
+    state.pending_requests = kept_requests
+    for r in removed_requests:
+        track = r.get("song_track_obj")
+        if track is not None:
+            state.playlist = [t for t in state.playlist if t is not track]
+        if state.pinned_track is track:
+            state.pinned_track = None
+            if state.force_next == SegmentType.MUSIC:
+                state.force_next = None
     removed = before - len(state.pending_requests)
     return {"ok": True, "removed": removed}
 
@@ -143,9 +173,9 @@ async def dismiss_listener_request(request: Request, _: None = Depends(require_a
 @router.post("/api/listener-request")
 async def listener_request(request: Request):
     """Accept a listener shoutout or song wish. Public endpoint, IP rate-limited."""
-    body = await request.json()
-    if not isinstance(body, dict):
-        return JSONResponse({"ok": False, "error": "invalid payload"}, status_code=400)
+    body, error = await _read_json_object(request)
+    if error is not None:
+        return error
     raw_name = body.get("name")
     raw_message = body.get("message")
     if raw_name is not None and not isinstance(raw_name, str):

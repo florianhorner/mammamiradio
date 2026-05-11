@@ -656,10 +656,13 @@ async def test_listener_request_invalid_payload_types():
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
         bad_payload = await client.post("/api/listener-request", json=["not", "an", "object"])
+        bad_json = await client.post("/api/listener-request", content="{", headers={"Content-Type": "application/json"})
         bad_name = await client.post("/api/listener-request", json={"name": 123, "message": "ciao"})
         bad_message = await client.post("/api/listener-request", json={"name": "Luca", "message": 456})
     assert bad_payload.status_code == 400
     assert bad_payload.json()["error"] == "invalid payload"
+    assert bad_json.status_code == 400
+    assert bad_json.json()["error"] == "invalid JSON"
     assert bad_name.status_code == 400
     assert bad_message.status_code == 400
 
@@ -866,25 +869,91 @@ async def test_dismiss_listener_request_missing_id_returns_400():
 
 
 @pytest.mark.asyncio
+async def test_dismiss_listener_request_invalid_payload_returns_400():
+    """POST /api/listener-requests/dismiss rejects malformed and non-object JSON."""
+    app = _make_test_app()
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        bad_json = await client.post(
+            "/api/listener-requests/dismiss", content="{", headers={"Content-Type": "application/json"}
+        )
+        bad_payload = await client.post("/api/listener-requests/dismiss", json=["not", "an", "object"])
+    assert bad_json.status_code == 400
+    assert bad_json.json()["error"] == "invalid JSON"
+    assert bad_payload.status_code == 400
+    assert bad_payload.json()["error"] == "invalid payload"
+
+
+@pytest.mark.asyncio
 async def test_dismiss_listener_request_by_request_id_removes_record():
     """Dismiss accepts the canonical request_id (Phase 3 split-brain prevention)."""
     app = _make_test_app()
     now = time.time()
+    rid_a = "11111111-1111-4111-8111-111111111111"
+    rid_b = "22222222-2222-4222-8222-222222222222"
     app.state.station_state.pending_requests = [
-        {"name": "A", "message": "first", "ts": now - 5, "request_id": "aaaa-1111", "status": "queued"},
-        {"name": "B", "message": "second", "ts": now - 3, "request_id": "bbbb-2222", "status": "queued"},
+        {"name": "A", "message": "first", "ts": now - 5, "request_id": rid_a, "status": "queued"},
+        {"name": "B", "message": "second", "ts": now - 3, "request_id": rid_b, "status": "queued"},
     ]
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
         # Legacy ts-based dismiss still works
         resp_ts = await client.post("/api/listener-requests/dismiss", json={"id": str(now - 5)})
         # Canonical request_id-based dismiss works
-        resp_rid = await client.post("/api/listener-requests/dismiss", json={"id": "bbbb-2222"})
+        resp_rid = await client.post("/api/listener-requests/dismiss", json={"id": rid_b})
     assert resp_ts.status_code == 200
     assert resp_ts.json() == {"ok": True, "removed": 1}
     assert resp_rid.status_code == 200
     assert resp_rid.json() == {"ok": True, "removed": 1}
     assert app.state.station_state.pending_requests == []
+
+
+@pytest.mark.asyncio
+async def test_dismiss_listener_request_removes_downloaded_track(tmp_path):
+    """Dismiss after download removes the queued track and clears pinning."""
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path
+    state = app.state.station_state
+    original_playlist = list(state.playlist)
+    req = {
+        "name": "Luca",
+        "message": "metti albachiara",
+        "type": "song_request",
+        "song_query": "albachiara",
+        "song_found": False,
+        "song_error": False,
+        "request_id": "33333333-3333-4333-8333-333333333333",
+        "ts": time.time(),
+    }
+    state.pending_requests.append(req)
+    with (
+        patch(
+            "mammamiradio.playlist.downloader.search_ytdlp_metadata",
+            return_value=[
+                {"title": "Albachiara", "artist": "Vasco Rossi", "duration_ms": 120000, "youtube_id": "yt123"}
+            ],
+        ),
+        patch(
+            "mammamiradio.playlist.downloader.download_external_track",
+            new_callable=AsyncMock,
+            return_value=tmp_path / "song.mp3",
+        ),
+    ):
+        await _download_listener_song(req, app.state, state.playlist_revision)
+    assert req["song_track_obj"] in state.playlist
+    assert state.pinned_track is req["song_track_obj"]
+    assert state.force_next == SegmentType.MUSIC
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.post("/api/listener-requests/dismiss", json={"id": req["request_id"]})
+
+    assert resp.status_code == 200
+    assert resp.json() == {"ok": True, "removed": 1}
+    assert req not in state.pending_requests
+    assert state.playlist == original_playlist
+    assert state.pinned_track is None
+    assert state.force_next is None
 
 
 @pytest.mark.asyncio

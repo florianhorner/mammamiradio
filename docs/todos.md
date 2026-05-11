@@ -170,16 +170,19 @@ Version sync check conditional on `pyproject.toml`/`ha-addon/config.yaml` diff; 
 `mammamiradio/web/streamer.py:1260` and `:1580` — two helpers share the read-modify-write skeleton for `/data/options.json`. They differ in value type (str vs bool) and key handling (key_map vs direct). Acceptable as-is at 2 callers; refactor to a single `_save_addon_options(updates: dict[str, Any])` accepting a typed patch when a third caller lands.
 
 ### Time-aware scheduler refactor (gates ETA buckets)
+
 **Priority:** P2
 **Source:** scope-parked from florianhorner/feat/track-b-sidebar on 2026-05-10
-`mammamiradio/scheduling/scheduler.py:42` — banter triggers on `pacing.songs_between_banter` count, not time. Track B v2.11 dropped ETA buckets because of this. A time-aware scheduler would unlock honest ETA display, "preempt next break" for hot dedications, and the v2.12 `dedication-becomes-track` feature. Multi-week scope; deserves its own /office-hours.
+`mammamiradio/scheduling/scheduler.py:42` — Refactor banter triggering from `pacing.songs_between_banter` counts to time-aware scheduling so honest ETA display, urgent dedication preemption, and future `dedication-becomes-track` behavior can be implemented coherently.
 
 ### Moderation static-name blocklist (v2.11.1 hardening)
+
 **Priority:** P2
 **Source:** scope-parked from florianhorner/feat/track-b-sidebar on 2026-05-10
-`mammamiradio/hosts/moderation.py` — current LLM-only moderation has no second-line defense for real-person false-positives. Static blocklist of political figures, brand owners, and a few high-profile celebrities catches the LLM mishaps. Pulls from a config-driven list in `radio.toml` `[moderation.blocked_names]`. ~50 LOC. Should land in v2.11.1 or earlier if any false-positive observed during the v2.11.0 baseline window.
+`mammamiradio/hosts/moderation.py` — Add a config-driven static blocked-name list in `radio.toml` `[moderation.blocked_names]` as a second-line safeguard against LLM false-positive approvals involving real people.
 
 ### Dedication metrics admin dashboard surface
+
 **Priority:** P3
 **Source:** scope-parked from florianhorner/feat/track-b-sidebar on 2026-05-10
-v2.11.0 lands with `cache_dir/dedication_events.jsonl` and a `scripts/dedication-metrics.sh` reader. Long-term the admin Engine Room should surface live counters (acceptance rate, median time-to-air, miss rate). Bundles with the existing token-cost-counter UI surface.
+`cache_dir/dedication_events.jsonl` — Surface dedication KPIs such as acceptance rate, median time-to-air, and miss rate in Engine Room using the existing metrics log and `scripts/dedication-metrics.sh` reader pipeline.
