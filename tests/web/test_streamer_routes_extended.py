@@ -824,6 +824,70 @@ async def test_phase2_internal_fields_not_in_public_response():
 
 
 @pytest.mark.asyncio
+async def test_admin_listener_requests_surfaces_phase2_fields():
+    """Admin GET exposes request_id, status, evict_after; never submitter_ip_hash."""
+    app = _make_test_app()
+    now = time.time()
+    app.state.station_state.pending_requests = [
+        {
+            "name": "Lia",
+            "message": "ciao",
+            "type": "shoutout",
+            "song_found": False,
+            "song_error": False,
+            "song_track": None,
+            "ts": now,
+            "request_id": "11111111-1111-4111-8111-111111111111",
+            "status": "queued",
+            "evict_after": None,
+            "submitter_ip_hash": "a" * 64,
+        }
+    ]
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.get("/api/listener-requests")
+    assert resp.status_code == 200
+    rec = resp.json()["requests"][0]
+    assert rec["request_id"] == "11111111-1111-4111-8111-111111111111"
+    assert rec["status"] == "queued"
+    assert rec["evict_after"] is None
+    assert "submitter_ip_hash" not in rec
+
+
+@pytest.mark.asyncio
+async def test_dismiss_listener_request_missing_id_returns_400():
+    """POST /api/listener-requests/dismiss with no id rejects with 400."""
+    app = _make_test_app()
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.post("/api/listener-requests/dismiss", json={})
+    assert resp.status_code == 400
+    assert resp.json()["error"] == "id required"
+
+
+@pytest.mark.asyncio
+async def test_dismiss_listener_request_by_request_id_removes_record():
+    """Dismiss accepts the canonical request_id (Phase 3 split-brain prevention)."""
+    app = _make_test_app()
+    now = time.time()
+    app.state.station_state.pending_requests = [
+        {"name": "A", "message": "first", "ts": now - 5, "request_id": "aaaa-1111", "status": "queued"},
+        {"name": "B", "message": "second", "ts": now - 3, "request_id": "bbbb-2222", "status": "queued"},
+    ]
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        # Legacy ts-based dismiss still works
+        resp_ts = await client.post("/api/listener-requests/dismiss", json={"id": str(now - 5)})
+        # Canonical request_id-based dismiss works
+        resp_rid = await client.post("/api/listener-requests/dismiss", json={"id": "bbbb-2222"})
+    assert resp_ts.status_code == 200
+    assert resp_ts.json() == {"ok": True, "removed": 1}
+    assert resp_rid.status_code == 200
+    assert resp_rid.json() == {"ok": True, "removed": 1}
+    assert app.state.station_state.pending_requests == []
+
+
+@pytest.mark.asyncio
 async def test_add_external_track_success(tmp_path):
     app = _make_test_app()
     app.state.config.cache_dir = tmp_path

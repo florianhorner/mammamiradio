@@ -52,10 +52,11 @@ router = APIRouter()
 def _hash_submitter_ip(ip: str, config) -> str:
     """HMAC-SHA256(IP, ADMIN_TOKEN) — Eng-Review decision #7.
 
-    Returns hex digest. Falls back to a stable placeholder key if ADMIN_TOKEN is
-    empty (dev/local), so per-IP grouping still works deterministically without
-    leaking that the operator hasn't set ADMIN_TOKEN. The hash is a server-side
-    rate-limit key and never exposed in listener-facing responses.
+    Returns hex digest. The hash is a server-side rate-limit key; never returned
+    in listener-facing responses. When ADMIN_TOKEN is empty (dev/local), falls
+    back to a deterministic placeholder so per-IP grouping still works in tests
+    and unauthenticated local runs. The fallback is for function determinism,
+    not secrecy.
     """
     secret = (getattr(config, "admin_token", "") or "").encode("utf-8")
     if not secret:
@@ -120,14 +121,21 @@ async def get_public_listener_requests(request: Request):
 
 @router.post("/api/listener-requests/dismiss")
 async def dismiss_listener_request(request: Request, _: None = Depends(require_admin_access)):
-    """Remove a specific listener request from the queue by id (admin only)."""
+    """Remove a specific listener request from the queue (admin only).
+
+    Accepts either the legacy `ts`-based id or the v2.11.0 canonical `request_id`
+    (uuid4). Both match against the same record set so admin UIs and listener
+    sidebars migrating to `request_id` keep working without coordinated cutover.
+    """
     state = request.app.state.station_state
     body = await request.json()
     req_id = str(body.get("id", ""))
     if not req_id:
         return JSONResponse({"ok": False, "error": "id required"}, status_code=400)
     before = len(state.pending_requests)
-    state.pending_requests = [r for r in state.pending_requests if str(r.get("ts", "")) != req_id]
+    state.pending_requests = [
+        r for r in state.pending_requests if str(r.get("ts", "")) != req_id and str(r.get("request_id", "")) != req_id
+    ]
     removed = before - len(state.pending_requests)
     return {"ok": True, "removed": removed}
 
