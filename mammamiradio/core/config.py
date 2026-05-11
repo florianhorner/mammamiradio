@@ -407,6 +407,7 @@ def _apply_addon_options() -> None:
         "anthropic_api_key": "ANTHROPIC_API_KEY",
         "openai_api_key": "OPENAI_API_KEY",
         "admin_password": "ADMIN_PASSWORD",
+        "jamendo_client_id": "JAMENDO_CLIENT_ID",
     }
     for opt_key, env_key in env_map.items():
         val = options.get(opt_key, "")
@@ -564,8 +565,11 @@ def _validate(config: StationConfig) -> None:
         errors.append("persona.anthem_threshold must be >= 1")
     if not isinstance(config.persona.skip_bit_threshold, int) or config.persona.skip_bit_threshold < 1:
         errors.append("persona.skip_bit_threshold must be >= 1")
+    if config.playlist.jamendo_client_id:
+        config.playlist.jamendo_client_id = config.playlist.jamendo_client_id.strip()
     if config.playlist.jamendo_client_id and not re.match(r"^[A-Za-z0-9_-]+$", config.playlist.jamendo_client_id):
-        errors.append("playlist.jamendo_client_id must contain only letters, digits, hyphens, or underscores")
+        log.warning("Invalid jamendo_client_id format — Jamendo source disabled")
+        config.playlist.jamendo_client_id = ""
     if config.playlist.jamendo_country and not re.match(r"^[A-Z]{3}$", config.playlist.jamendo_country):
         errors.append(
             "playlist.jamendo_country must be a 3-letter uppercase ISO 3166-1 alpha-3 code "
