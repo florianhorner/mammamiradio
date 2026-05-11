@@ -15,6 +15,7 @@ from fastapi import FastAPI
 
 from mammamiradio.core.config import load_config
 from mammamiradio.core.models import Segment, SegmentType, StationState, Track
+from mammamiradio.web.listener_requests import router as listener_requests_router
 from mammamiradio.web.streamer import (
     _ASSET_VERSION,
     LiveStreamHub,
@@ -35,6 +36,7 @@ def _make_test_app(*, admin_password: str = "", admin_token: str = "") -> FastAP
     """Build a minimal FastAPI app with the streamer router and populated state."""
     app = FastAPI()
     app.include_router(router)
+    app.include_router(listener_requests_router)
 
     config = load_config(TOML_PATH)
     # Override auth settings for test isolation

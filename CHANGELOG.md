@@ -21,6 +21,25 @@ The current version source of truth is `pyproject.toml`.
 - **Admin panel under Home Assistant ingress now shows live data.** The admin control room had been stuck at "Waiting for signal…" whenever opened from the HA sidebar, while the same page on direct `http://<ha-ip>:8000/admin` populated normally. Cause: `admin.html` issued bare path-absolute fetches like `fetch('/status')` and `fetch('/api/...')`, which under ingress resolve against the HA host root instead of the addon's ingress prefix; requests landed on Home Assistant's frontend, returned non-JSON, and were silently swallowed. The admin page now derives `_base` from `window.location.pathname` (matching the listener page contract) and prefixes every data fetch with it. Server-side rewriting is unchanged — JS string literals stay the client's responsibility, as documented on `_inject_ingress_prefix`. Regression test in `tests/web/test_streamer_routes.py` asserts every fetch goes through `_base`.
 - **Admin control room reads as espresso warm-brown again.** PR #298 raised four shared `tokens.css` values (`--surface`, `--surface-hover`, `--surface-strong`, `--line-strong`) to make listener cards visible — but admin consumes the same tokens, and v2.11.0 shipped with admin washed out to taupe. Tokens reverted to Pi-baseline values; listener cards keep PR #298's brighter values via inline overrides on `.mmr-stage`, `.mmr-np-bar`, `.btn-ghost`, `.mmr-schedule`, `.mmr-dedica`, `.mmr-about-card`. CLAUDE.md "Protected UI elements" extended to guard against re-regression.
 
+## [2.11.1] - 2026-05-11
+
+Track B groundwork (Phases 1 + 2): the listener-request surface gets a new
+home, identity fields, and a production safety fix.
+
+### Added
+
+- **Listener-request identity fields** — Every pending request now carries a canonical `request_id` (uuid4), a `status` field (initial value `queued`), and a reserved `evict_after` slot for Phase 3 TTL cleanup. The per-IP rate-limit key migrated to an HMAC-SHA256 hash of the caller IP so no raw address is stored in request records. `GET /public-listener-requests` exposes `request_id` and `status` for upcoming listener UIs; admin-only fields (`submitter_ip_hash`, `evict_after`) stay server-side. `POST /api/listener-requests/dismiss` now accepts both the legacy timestamp-based `id` and the new canonical `request_id`, allowing admin and listener UIs to migrate without a coordinated cutover.
+
+### Changed
+
+- **`listener_requests` extracted into its own module** — `mammamiradio/web/listener_requests.py` (previously embedded in `streamer.py`). Public routes (`/api/listener-request`, `/api/listener-requests`, `/public-listener-requests`, `/api/listener-requests/dismiss`) and the background download task are now self-contained. No external API change.
+- **Listener song downloads use a bounded executor** — `search_ytdlp_metadata` calls from the listener-request handler now run in a dedicated 2-thread pool (`listener-dl`), keeping the producer's audio-prefetch tasks safe from contention on Pi-class hardware.
+
+### Fixed
+
+- **Rate-limit dict pruned before queue-cap check** — previously, a sustained wave of `queue_full` rejections could grow the in-memory rate-limit dict without bound (the limiter write only fires on accepted requests). The prune now runs unconditionally on every non-rate-limited request so the dict stays bounded under load.
+- **Dismiss with no song skips playlist cleanup** — trackless shoutout dismissals no longer touch unrelated pinned tracks or `force_next` state set by a sibling song request in the queue.
+
 ## [2.11.0] - 2026-05-08
 
 The big one: the source tree is reshaped around seven subpackages, the music

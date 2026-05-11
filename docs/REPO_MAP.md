@@ -25,6 +25,7 @@ If you want to fix or extend X, look in Y. The folder hierarchy IS the mental mo
 | Producer loop (queue ahead of playback)            | `mammamiradio/scheduling/producer.py`        |
 | WTF clip extraction + ring buffer                  | `mammamiradio/scheduling/clip.py`            |
 | HTTP routes / playback loop / auth                 | `mammamiradio/web/streamer.py`               |
+| Listener-request endpoints (dedica, song wish)     | `mammamiradio/web/listener_requests.py`      |
 | Open Graph share card                              | `mammamiradio/web/og_card.py`                |
 | Listener / admin / live HTML                       | `mammamiradio/web/templates/`                |
 | CSS / JS / icons / service worker                  | `mammamiradio/web/static/`                   |
@@ -74,7 +75,7 @@ The `tests/` tree mirrors the source tree exactly. To find the test for `mammami
 
 Two modules carry a `# TODO: split` marker referencing the cathedral plan:
 
-- `mammamiradio/web/streamer.py` (~2,400 LOC) — splits in PR 5 of the cathedral plan into `routes_listener.py`, `routes_admin.py`, `auth.py`, `playback_loop.py`, `public_status.py`
+- `mammamiradio/web/streamer.py` (~2,300 LOC) — splits in PR 5 of the cathedral plan into `routes_listener.py`, `routes_admin.py`, `auth.py`, `playback_loop.py`, `public_status.py`
 - `mammamiradio/hosts/scriptwriter.py` (~1,500 LOC) — splits in PR 6 into `banter.py`, `ads.py`, `llm_client.py`, `fallbacks.py`
 
 Until those PRs land, these modules are postal addresses, not destinations. Ride the structure that exists today; do not pre-split.
