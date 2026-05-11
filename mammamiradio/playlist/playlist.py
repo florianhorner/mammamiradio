@@ -179,8 +179,12 @@ def _parse_classic_artist_title(video_title: str) -> tuple[str, str] | None:
 
 
 def _classic_era_from_source(source: PlaylistSource) -> str:
-    parsed = urlparse(source.url or "classic://italian/80s")
-    era = (parsed.path.strip("/").split("/")[-1] or source.source_id or "80s").strip()
+    source_id = (source.source_id or "").strip()
+    url_era = ""
+    if source.url:
+        parsed = urlparse(source.url)
+        url_era = parsed.path.strip("/").split("/")[-1].strip()
+    era = url_era or source_id or "80s"
     if era not in _CLASSIC_ERA_QUERIES:
         raise ExplicitSourceError(f"Unsupported classic Italian era: {era}")
     return era

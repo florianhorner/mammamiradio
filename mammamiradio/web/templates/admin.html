@@ -1897,7 +1897,7 @@ function eraLabel(year){
   if(y>=1970&&y<1980)return "'70";
   if(y>=1980&&y<1990)return "'80";
   if(y>=1990&&y<2000)return "'90";
-  if(y>=2000)return String(y).slice(2);
+  if(y>=2000)return "'"+String(y).slice(2);
   return '';
 }
 function sourceChip(source){

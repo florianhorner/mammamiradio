@@ -127,6 +127,14 @@ def test_parse_classic_artist_title_no_separator():
     assert _parse_classic_artist_title("RomaRecordsVEVO") is None
 
 
+def test_classic_source_empty_url_preserves_source_id():
+    from mammamiradio.playlist.playlist import _classic_era_from_source
+
+    source = PlaylistSource(kind="classic", source_id="70s", url="")
+
+    assert _classic_era_from_source(source) == "70s"
+
+
 def test_classic_source_year_stamp(config, monkeypatch):
     from mammamiradio.playlist.playlist import _load_classic_italian_tracks
 
