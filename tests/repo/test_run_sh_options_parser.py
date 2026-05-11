@@ -150,6 +150,7 @@ def test_parser_exports_all_supported_keys():
         "claude_model": "claude-sonnet-4-6",
         "admin_token": "tok123",
         "enable_home_assistant": True,
+        "jamendo_client_id": "abc123",
     }
     rc, stdout, _ = _run_parser(options)
     assert rc == 0
@@ -160,6 +161,7 @@ def test_parser_exports_all_supported_keys():
     assert exports["CLAUDE_MODEL"] == "claude-sonnet-4-6"
     assert exports["ADMIN_TOKEN"] == "tok123"
     assert exports["HA_ENABLED"] == "true"
+    assert exports["JAMENDO_CLIENT_ID"] == "abc123"
 
 
 def test_parser_fails_on_corrupt_json():

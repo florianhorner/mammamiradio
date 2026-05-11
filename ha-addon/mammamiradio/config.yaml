@@ -41,4 +41,4 @@ schema:
   admin_token: password?
   enable_home_assistant: bool?
   super_italian_mode: bool?
-  jamendo_client_id: str?
+  jamendo_client_id: password?
