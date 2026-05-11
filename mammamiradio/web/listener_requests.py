@@ -31,6 +31,7 @@ never exposed to listener responses.
 from __future__ import annotations
 
 import asyncio
+import atexit
 import concurrent.futures
 import hashlib
 import hmac
@@ -38,6 +39,7 @@ import logging
 import time
 import uuid
 from pathlib import Path
+from typing import Any
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
@@ -51,11 +53,12 @@ logger = logging.getLogger("mammamiradio.listener_requests")
 # listener yt-dlp tasks cannot exhaust the default ThreadPoolExecutor and
 # starve the producer's audio prefetch work on Pi-class hardware.
 _listener_dl_executor = concurrent.futures.ThreadPoolExecutor(max_workers=2, thread_name_prefix="listener-dl")
+atexit.register(_listener_dl_executor.shutdown, wait=False, cancel_futures=True)
 
 router = APIRouter()
 
 
-def _hash_submitter_ip(ip: str, config) -> str:
+def _hash_submitter_ip(ip: str, config: Any) -> str:
     """HMAC-SHA256(IP, ADMIN_TOKEN) — Eng-Review decision #7.
 
     Returns hex digest. The hash is a server-side rate-limit key; never returned
@@ -187,8 +190,10 @@ async def listener_request(request: Request):
         return JSONResponse({"ok": False, "error": "name must be a string"}, status_code=400)
     if raw_message is not None and not isinstance(raw_message, str):
         return JSONResponse({"ok": False, "error": "message must be a string"}, status_code=400)
-    name = (raw_name or "Un ascoltatore").strip()[:60]
-    message = (raw_message or "").strip()[:200]
+    from mammamiradio.hosts.scriptwriter import _sanitize_prompt_data
+
+    name = _sanitize_prompt_data((raw_name or "Un ascoltatore").strip(), max_len=60)
+    message = _sanitize_prompt_data((raw_message or "").strip(), max_len=200)
     if not message:
         return JSONResponse({"ok": False, "error": "message required"}, status_code=400)
 
