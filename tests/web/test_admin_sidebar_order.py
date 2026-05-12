@@ -35,8 +35,9 @@ class _AdminOrderParser(HTMLParser):
         if self._in_admin_content:
             if tag == "main":
                 self._main_depth += 1
-            if tag == "section" and "a-panel" in classes and attr.get("id"):
-                self.content_sections.append(attr["id"])
+            section_id = attr.get("id")
+            if tag == "section" and "a-panel" in classes and section_id:
+                self.content_sections.append(section_id)
 
         if self._in_admin_nav:
             if tag == "nav":
