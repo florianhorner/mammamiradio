@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import datetime
 import logging
 import os
@@ -47,6 +48,7 @@ from mammamiradio.home.ha_context import (
     HomeContext,
     check_reactive_triggers,
     fetch_home_context,
+    push_state_to_ha,
 )
 from mammamiradio.hosts.ad_creative import _cast_voices, _pick_brand, _select_ad_creative
 from mammamiradio.hosts.context_cues import generate_impossible_line
@@ -501,8 +503,53 @@ async def run_producer(
     _prefetch_task: asyncio.Task[None] | None = None  # background norm prefetch for next track
     _drain_guard_queued = False  # True after a drain-recovery clip is inserted, until a real segment lands
     _prefetch_failed_keys: set[str] = set()  # tracks whose prefetch failed — skip until playlist rotates
+    _ha_tasks: set[asyncio.Task[None]] = set()
+
+    def _track_ha_task(task: asyncio.Task[None]) -> None:
+        _ha_tasks.add(task)
+        task.add_done_callback(_ha_tasks.discard)
+
+    if config.homeassistant.enabled and config.ha_token and config.homeassistant.url:
+
+        async def _ha_heartbeat() -> None:
+            interval = 30.0
+            while True:
+                await asyncio.sleep(interval)
+                if config.homeassistant.enabled and config.ha_token and config.homeassistant.url:
+                    try:
+                        await push_state_to_ha(
+                            ha_url=config.homeassistant.url,
+                            ha_token=config.ha_token,
+                            now_streaming=copy.deepcopy(state.now_streaming),
+                            current_track=state.current_track,
+                            listeners_active=state.listeners_active,
+                            session_stopped=state.session_stopped,
+                        )
+                        interval = 30.0
+                    except Exception:
+                        interval = min(interval * 2, 300.0)
+
+        _ha_heartbeat_task = asyncio.create_task(_ha_heartbeat())
+        _track_ha_task(_ha_heartbeat_task)
+        producer_task = asyncio.current_task()
+        if producer_task is not None:
+            producer_task.add_done_callback(lambda _task: _ha_heartbeat_task.cancel())
+
     while True:
         if state.session_stopped:
+            if not _was_stopped and config.homeassistant.enabled and config.ha_token and config.homeassistant.url:
+                _track_ha_task(
+                    asyncio.create_task(
+                        push_state_to_ha(
+                            ha_url=config.homeassistant.url,
+                            ha_token=config.ha_token,
+                            now_streaming={},
+                            current_track=None,
+                            listeners_active=state.listeners_active,
+                            session_stopped=True,
+                        )
+                    )
+                )
             if _prefetch_task is not None and not _prefetch_task.done():
                 _prefetch_task.cancel()
             _was_stopped = True

@@ -187,6 +187,43 @@ async def test_post_restart_resume_keeps_music_attribution(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_ha_stop_transition_pushes_idle_state(tmp_path):
+    """When a running session stops, producer publishes an idle HA state."""
+    state = StationState(listeners_active=0, session_stopped=False)
+    config = _make_config(tmp_path)
+    config.homeassistant.enabled = True
+    config.homeassistant.url = "http://ha.local:8123"
+    config.ha_token = "test-token"
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+
+    with patch(f"{PRODUCER_MODULE}.push_state_to_ha", new_callable=AsyncMock) as push_state:
+        task = asyncio.create_task(run_producer(queue, state, config))
+        try:
+            await asyncio.sleep(0.05)
+            state.session_stopped = True
+            deadline = asyncio.get_event_loop().time() + 2.0
+            while not push_state.await_args_list:
+                if asyncio.get_event_loop().time() > deadline:
+                    raise TimeoutError("Producer did not publish HA stop transition")
+                await asyncio.sleep(0.05)
+        finally:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+    push_state.assert_awaited()
+    stop_call = push_state.await_args
+    assert stop_call.kwargs["ha_url"] == "http://ha.local:8123"
+    assert stop_call.kwargs["ha_token"] == "test-token"
+    assert stop_call.kwargs["now_streaming"] == {}
+    assert stop_call.kwargs["current_track"] is None
+    assert stop_call.kwargs["listeners_active"] == 0
+    assert stop_call.kwargs["session_stopped"] is True
+
+
+@pytest.mark.asyncio
 async def test_queued_segment_playlist_index_minus_one_for_nonmusic(tmp_path):
     """Non-music segments must have playlist_index == -1."""
     state = StationState(
