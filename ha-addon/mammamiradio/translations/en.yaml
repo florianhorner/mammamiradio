@@ -20,3 +20,6 @@ configuration:
   super_italian_mode:
     name: Super Italian Mode
     description: "Off (default): listener UI in English with Italian station-feel words intact; AI hosts code-switch with Italian sprinkles. On: listener UI flips to full Italian and hosts lean fully into Italian idioms. Admin UI stays English regardless."
+  jamendo_client_id:
+    name: Jamendo Client ID
+    description: "Enables CC-licensed music from Jamendo. Get a free client ID at developer.jamendo.com. Leave empty to disable the Jamendo source."

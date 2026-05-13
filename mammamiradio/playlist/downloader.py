@@ -487,6 +487,9 @@ def search_ytdlp_metadata(query: str, max_results: int = 5) -> list[dict]:
             title = e.get("title") or ""
             artist = e.get("uploader") or e.get("channel") or ""
             duration_s = e.get("duration") or 0
+            thumbnail = e.get("thumbnail") or ""
+            if not thumbnail and e.get("thumbnails"):
+                thumbnail = (e.get("thumbnails") or [{}])[-1].get("url") or ""
             display = f"{artist} \u2013 {title}" if artist else title
             results.append(
                 {
@@ -494,6 +497,7 @@ def search_ytdlp_metadata(query: str, max_results: int = 5) -> list[dict]:
                     "title": title,
                     "artist": artist,
                     "duration_ms": int(duration_s * 1000),
+                    "album_art": thumbnail,
                     "display": display,
                 }
             )

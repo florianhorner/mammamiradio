@@ -7,7 +7,7 @@ One background task stays ahead and produces segments. Another reads the next re
 ## Runtime overview
 
 ```text
-Live Italian charts / local files / demo tracks
+Charts / Jamendo / classic eras / local files / demo tracks
                 |
                 v
            playlist.py
@@ -116,9 +116,12 @@ The dashboard derives a tier label from these flags: Demo Radio, Full AI Radio, 
 1. **Persisted source** (any prior `cache/playlist_source.json` selection). Restored verbatim if loadable.
 2. **Charts + local blend** (when `MAMMAMIRADIO_ALLOW_YTDLP=true`): up to 100 tracks fetched from Apple Music Italy RSS. MP3s in `music/` are merged in and deduplicated by `spotify_id`. Total catalog typically 100-300 tracks. `source_id="apple_music_it_top_100"`.
 3. **Jamendo CC** (when `radio.toml` `[playlist].jamendo_client_id` is set): CC-licensed tracks via the Jamendo API. Default radio.toml ships `jamendo_country = "ITA"` + `jamendo_order = "popularity_week"`, so the resulting fetch is "Italian-trending" (artist nationality = ITA, sorted by current week popularity). Both fields are optional — empty country = no nationality filter; empty order = Jamendo's default sort. Fields also overridable via `JAMENDO_COUNTRY` / `JAMENDO_ORDER` env vars. `source_id` is the tag string; the persisted source URL `jamendo://playlist?tags=…&country=…&order=…` round-trips all three so reload via `/api/playlist/load` reproduces the exact same fetch.
-4. **Local `music/` files** (always available when MP3s exist on disk): operator-supplied MP3s in `music/`. Loaded as a first-class source — yt-dlp is not required, and this branch fires whether or not Jamendo is configured. `source_id="local_music_dir"`.
-5. **Bundled demo assets**: pre-shipped MP3s in `mammamiradio/assets/demo/music/`. Empty by default; populated optionally per the demo-asset contract.
-6. **Built-in `DEMO_TRACKS`**: metadata-only Italian-flavored placeholder list. Last-resort fallback so the station always boots with something.
+4. **Classic Italian eras** (explicit admin selection only): `classic://italian/70s`, `classic://italian/80s`, and `classic://italian/90s` resolve through yt-dlp search queries for cantautori/classic-pop eras. Each era stamps fetched tracks with a `year` hint (`1975`, `1985`, `1995`) so the admin playlist can render decade badges. Because this is an operator-selected source, failure raises an explicit toast instead of silently falling through.
+5. **Local `music/` files** (always available when MP3s exist on disk): operator-supplied MP3s in `music/`. Loaded as a first-class source — yt-dlp is not required, and this branch fires whether or not Jamendo is configured. `source_id="local_music_dir"`.
+6. **Bundled demo assets**: pre-shipped MP3s in `mammamiradio/assets/demo/music/`. Empty by default; populated optionally per the demo-asset contract.
+7. **Built-in `DEMO_TRACKS`**: metadata-only Italian-flavored placeholder list. Last-resort fallback so the station always boots with something.
+
+The admin Music & Coda controls expose reload buttons for charts/Jamendo when their capabilities are available and unconditional decade buttons for Anni '70, Anni '80, and Anni '90. `/status` serializes playlist `album_art`, `source`, `year`, and `youtube_id` so the browser can render thumbnails, source chips, and era pills without another round trip.
 
 Once playback is running, the producer's recovery layers (last-known-good music recycle, demo-asset rescue, forced banter) keep the queue from starvation if a source disappears mid-session. Silent audio is never queued intentionally.
 
@@ -197,6 +200,7 @@ This is opportunistic context, not a hard dependency. Failures there should not 
 | `/status` | GET | Admin | Full admin JSON: queue depth, uptime, scripts, HA context, errors, and `provider_health` |
 | `/api/setup/status` | GET | Admin | First-run setup status, detected run mode, and station mode |
 | `/api/setup/recheck` | POST | Admin | Re-run setup probes |
+| `/api/setup/provider-check` | POST | Admin | Active, secret-safe Anthropic/OpenAI connectivity check |
 | `/api/setup/addon-snippet` | GET | Admin | Copy-friendly Home Assistant add-on config snippet |
 | `/api/shuffle` | POST | Admin | Shuffle playlist |
 | `/api/skip` | POST | Admin | Skip current segment |
@@ -221,8 +225,9 @@ This is opportunistic context, not a hard dependency. Failures there should not 
 | `/clips/{id}.mp3` | GET | Public | Serve a saved clip (no auth, for sharing) |
 | `/api/track-rules` | POST | Admin | Flag a reaction rule for the current track |
 | `/api/listener-request` | POST | Public | Submit a song request or shoutout |
-| `/api/listener-requests` | GET | Admin | List pending listener requests |
-| `/api/listener-requests/dismiss` | POST | Admin | Dismiss a pending listener request |
+| `/public-listener-requests` | GET | Public | Sanitized listener-request feed for the on-page sidebar (`request_id`, `status`, name, message, type) — `submitter_ip_hash` and `evict_after` stay server-side |
+| `/api/listener-requests` | GET | Admin | List pending listener requests (full record including `request_id`, `status`, `evict_after`) |
+| `/api/listener-requests/dismiss` | POST | Admin | Dismiss a pending listener request by `ts` (legacy) or `request_id` (canonical) |
 | `/api/search` | GET | Admin | Search playlist and external sources |
 | `/api/playlist/add-external` | POST | Admin | Add external track from search results |
 | `/api/hot-reload` | POST | Admin | Reload `scriptwriter.py` in-place via `importlib.reload()` — stream continues uninterrupted, next banter uses new code. Requires `--workers 1`. |
@@ -286,6 +291,7 @@ The rich path is richer, but the failure path still produces a stream.
 | `mammamiradio/home/ha_context.py` | Home Assistant polling, mood classification, reactive triggers |
 | `mammamiradio/home/ha_enrichment.py` | Pure HA event derivation: state diffing, event pruning, numeric passthrough |
 | `mammamiradio/web/streamer.py` | HTTP routes, auth gating, playback loop, clip endpoints, listener fanout (TODO: split — see cathedral plan PR 5) |
+| `mammamiradio/web/listener_requests.py` | Listener-request endpoints (submit, public feed, admin queue, dismiss) and the song-wish download background task |
 | `mammamiradio/web/og_card.py` | Open Graph share-card PNG renderer |
 | `mammamiradio/web/templates/` | `admin.html`, `listener.html`, `live.html` |
 | `mammamiradio/web/static/` | CSS, JS, icons, manifest, service worker |

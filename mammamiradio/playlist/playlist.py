@@ -24,6 +24,11 @@ _JAMENDO_REQUIRED_PARAMS = {
     "audioformat": "mp32",
     "include": "musicinfo",
 }
+_CLASSIC_ERA_QUERIES: dict[str, tuple[str, int]] = {
+    "70s": ("cantautori italiani anni 70 lucio battisti fabrizio de andre", 1975),
+    "80s": ("canzoni italiane anni 80 vasco rossi eros ramazzotti celentano", 1985),
+    "90s": ("canzoni italiane anni 90 laura pausini ligabue zucchero", 1995),
+}
 
 logger = logging.getLogger(__name__)
 
@@ -49,7 +54,7 @@ class ExplicitSourceError(RuntimeError):
 
 
 def _copy_tracks_with_source(
-    tracks: list[Track], source: Literal["youtube", "jamendo", "local", "demo"]
+    tracks: list[Track], source: Literal["youtube", "jamendo", "local", "demo", "classic"]
 ) -> list[Track]:
     """Return copies with a consistent source label for playlist-loaded tracks."""
     return [replace(track, source=source) for track in tracks]
@@ -146,6 +151,76 @@ def _jamendo_source(track_count: int, *, tags: str, country: str = "", order: st
         selected_at=time.time(),
         url=_jamendo_request_url(tags=tags, country=country, order=order),
     )
+
+
+def _classic_italian_source(era: str, track_count: int) -> PlaylistSource:
+    return PlaylistSource(
+        kind="classic",
+        source_id=era,
+        label=f"Classici italiani anni '{era[:2]}",
+        track_count=track_count,
+        selected_at=time.time(),
+        url=f"classic://italian/{era}",
+    )
+
+
+def _parse_classic_artist_title(video_title: str) -> tuple[str, str] | None:
+    """Parse common `Artist - Title` YouTube titles for classic-era searches."""
+    title = video_title.strip()
+    for separator in (" - ", " – "):
+        if separator not in title:
+            continue
+        artist, song_title = title.split(separator, 1)
+        artist = artist.strip()
+        song_title = song_title.strip()
+        if artist and song_title:
+            return artist, song_title
+    return None
+
+
+def _classic_era_from_source(source: PlaylistSource) -> str:
+    source_id = (source.source_id or "").strip()
+    url_era = ""
+    if source.url:
+        parsed = urlparse(source.url)
+        url_era = parsed.path.strip("/").split("/")[-1].strip()
+    era = url_era or source_id or "80s"
+    if era not in _CLASSIC_ERA_QUERIES:
+        raise ExplicitSourceError(f"Unsupported classic Italian era: {era}")
+    return era
+
+
+def _load_classic_italian_tracks(era: str) -> list[Track]:
+    """Load an era-themed Italian playlist through lightweight yt-dlp search."""
+    from mammamiradio.playlist.downloader import _ytdlp_enabled, search_ytdlp_metadata
+
+    if not _ytdlp_enabled():
+        return []
+    query, year_hint = _CLASSIC_ERA_QUERIES[era]
+    results = search_ytdlp_metadata(query, max_results=20)
+    tracks: list[Track] = []
+    for item in results:
+        video_title = str(item.get("title") or "").strip()
+        parsed_title = _parse_classic_artist_title(video_title)
+        artist = str(item.get("artist") or "").strip()
+        title = video_title
+        if parsed_title:
+            artist, title = parsed_title
+        if not title:
+            continue
+        tracks.append(
+            Track(
+                title=title,
+                artist=artist or "Artista italiano",
+                duration_ms=int(item.get("duration_ms") or 210000),
+                spotify_id=f"classic_{era}_{item.get('youtube_id') or len(tracks) + 1}",
+                youtube_id=str(item.get("youtube_id") or ""),
+                album_art=str(item.get("album_art") or ""),
+                year=year_hint,
+                source="classic",
+            )
+        )
+    return tracks
 
 
 def _load_local_music_tracks(music_dir: Path) -> list[Track]:
@@ -526,6 +601,20 @@ def load_explicit_source(config: StationConfig, source: PlaylistSource) -> tuple
         if not tracks:
             raise ExplicitSourceError("Jamendo playlist is temporarily unavailable")
         resolved = _jamendo_source(len(tracks), tags=tags, country=country, order=order)
+        return tracks, resolved
+
+    is_classic_request = source.kind == "classic" or (
+        source.kind == "url" and urlparse(source.url or "").scheme == "classic"
+    )
+    if is_classic_request:
+        era = _classic_era_from_source(source)
+        tracks = _shuffle_if_needed(
+            config,
+            _copy_tracks_with_source(_load_classic_italian_tracks(era), "classic"),
+        )
+        if not tracks:
+            raise ExplicitSourceError("Classic Italian playlist temporarily unavailable (yt-dlp disabled?)")
+        resolved = _classic_italian_source(era, len(tracks))
         return tracks, resolved
 
     if source.kind in ("charts", "url"):
