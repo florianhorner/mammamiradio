@@ -724,6 +724,7 @@ async def run_producer(
         try:
             if seg_type == SegmentType.MUSIC:
                 track = None
+                playlist_idx: int = -1
                 for _ in range(MUSIC_SELECTION_RETRIES):
                     candidate = state.select_next_track(
                         repeat_cooldown=config.playlist.repeat_cooldown,
@@ -741,6 +742,10 @@ async def run_producer(
                     await asyncio.sleep(0.1)
                     continue
                 logger.info("Producing MUSIC: %s", track.display)
+                playlist_idx = next(
+                    (i for i, t in enumerate(state.playlist) if t.cache_key == track.cache_key),
+                    -1,
+                )
 
                 loop = asyncio.get_running_loop()
                 rendered = await _render_music_track(track, config, temp_prefix="music", context="music")
@@ -896,6 +901,8 @@ async def run_producer(
                         "rationale": rationale,
                         "crate": crate,
                         "audio_source": audio_source,
+                        "playlist_index": playlist_idx,
+                        "source_kind": getattr(track, "source", ""),
                     },
                     ephemeral=not norm_is_cached,
                 )
@@ -1574,6 +1581,8 @@ async def run_producer(
                     "label": segment.metadata.get("title", seg_type.value),
                     "spotify_id": segment.metadata.get("spotify_id", ""),
                     "reason": segment.metadata.get("queue_reason", "Rendered and queued for playback."),
+                    "playlist_index": segment.metadata.get("playlist_index", -1),
+                    "source_kind": segment.metadata.get("source_kind", ""),
                 }
             )
             if "error" not in segment.metadata:
