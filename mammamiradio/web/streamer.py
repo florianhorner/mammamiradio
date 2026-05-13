@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import hashlib
 import importlib
 import importlib.metadata
@@ -24,7 +25,9 @@ from fastapi.templating import Jinja2Templates
 from mammamiradio.audio.normalizer import humanize_norm_filename, load_track_metadata
 from mammamiradio.core.capabilities import capabilities_to_dict, get_capabilities
 from mammamiradio.core.models import PersonalityAxes, PlaylistSource, Segment, SegmentType, StationState, Track
+from mammamiradio.core.provider_checks import check_provider_keys
 from mammamiradio.core.setup_status import addon_options_snippet, build_setup_status, classify_station_mode
+from mammamiradio.home.ha_context import push_state_to_ha
 from mammamiradio.home.ha_enrichment import EVENT_RETENTION_SECONDS
 from mammamiradio.playlist.playlist import (
     ExplicitSourceError,
@@ -813,6 +816,7 @@ async def run_playback_loop(app) -> None:
     hub = app.state.stream_hub
     bytes_per_sec = (config.audio.bitrate * 1000) / 8  # bitrate is in kbps; convert to bytes/sec
     _persist_tasks: set[asyncio.Task] = set()  # prevent GC of fire-and-forget tasks
+    _ha_push_tasks: set[asyncio.Task] = set()  # prevent GC of HA push tasks
 
     while True:
         # Pause when nobody is listening — don't burn API tokens or disk on an empty room.
@@ -950,6 +954,20 @@ async def run_playback_loop(app) -> None:
             segment.type.value,
             segment.metadata.get("title", segment.metadata),
         )
+
+        if config.homeassistant.enabled and config.ha_token and config.homeassistant.url:
+            _ha_task = asyncio.create_task(
+                push_state_to_ha(
+                    ha_url=config.homeassistant.url,
+                    ha_token=config.ha_token,
+                    now_streaming=copy.deepcopy(state.now_streaming),
+                    current_track=state.current_track,
+                    listeners_active=state.listeners_active,
+                    session_stopped=state.session_stopped,
+                )
+            )
+            _ha_push_tasks.add(_ha_task)
+            _ha_task.add_done_callback(_ha_push_tasks.discard)
 
         try:
             send_start = time.monotonic()
@@ -1255,6 +1273,13 @@ async def setup_recheck(request: Request, _: None = Depends(require_admin_access
     config = request.app.state.config
     state = request.app.state.station_state
     return build_setup_status(config, state)
+
+
+@router.post("/api/setup/provider-check")
+async def setup_provider_check(request: Request, _: None = Depends(require_admin_access)):
+    """Run active, secret-safe Anthropic/OpenAI connectivity checks."""
+    config = request.app.state.config
+    return await check_provider_keys(config)
 
 
 @router.post("/api/setup/save-keys", dependencies=[Depends(require_admin_access)])

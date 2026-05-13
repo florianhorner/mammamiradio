@@ -177,6 +177,58 @@ def test_preview_upcoming_uses_current_playlist_order():
     ]
 
 
+def test_preview_upcoming_predicted_flag():
+    """All items from preview_upcoming must carry predicted=True."""
+    from mammamiradio.scheduling.scheduler import preview_upcoming
+
+    tracks = [
+        Track(title="One", artist="A", duration_ms=1, spotify_id="1", source="classic"),
+        Track(title="Two", artist="B", duration_ms=1, spotify_id="2", source="jamendo"),
+    ]
+    state = StationState(
+        playlist=tracks,
+        segments_produced=3,
+        songs_since_banter=1,
+        songs_since_ad=0,
+    )
+    pacing = PacingSection(songs_between_banter=1, songs_between_ads=99)
+
+    preview = preview_upcoming(state, pacing, tracks, count=4)
+
+    assert preview
+    assert all(item["predicted"] is True for item in preview)
+    music_items = [item for item in preview if item["type"] == "music"]
+    assert music_items
+    assert all("source_kind" in item for item in music_items)
+    assert all(item["playlist_index"] >= 0 for item in music_items)
+
+
+def test_preview_upcoming_wrap_around():
+    """Wrap-around: 3-track playlist, request 10 upcoming, all music playlist_index in [0,2]."""
+    from mammamiradio.scheduling.scheduler import preview_upcoming
+
+    tracks = [
+        Track(title="One", artist="A", duration_ms=1, spotify_id="1"),
+        Track(title="Two", artist="B", duration_ms=1, spotify_id="2"),
+        Track(title="Three", artist="C", duration_ms=1, spotify_id="3"),
+    ]
+    state = StationState(
+        playlist=tracks,
+        segments_produced=1,
+        songs_since_banter=0,
+        songs_since_ad=0,
+    )
+    pacing = PacingSection(songs_between_banter=99, songs_between_ads=99)
+
+    preview = preview_upcoming(state, pacing, tracks, count=10)
+    indexes = [item["playlist_index"] for item in preview if item["type"] == "music"]
+
+    # The preview may include non-music slots (banter/ad) so we don't assert a fixed count.
+    # What matters: every music item has a valid wrap-around index in [0, 2].
+    assert len(indexes) > 0
+    assert all(0 <= idx <= 2 for idx in indexes)
+
+
 def test_select_next_track_uses_cache_key_not_spotify_id():
     """Two tracks with same spotify_id='' but different titles have distinct cache_keys."""
     tracks = [

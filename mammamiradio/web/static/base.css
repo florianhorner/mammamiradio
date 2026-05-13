@@ -276,3 +276,24 @@ body[data-stopped="true"] .waveform {
     height: 12px !important;
   }
 }
+
+/* Playlist pool attribution in programme list */
+.pool-badge {
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  color: color-mix(in srgb, var(--cream) 50%, transparent);
+  background: color-mix(in srgb, var(--cream) 6%, transparent);
+  border-radius: var(--radius-sm);
+  padding: calc(var(--space-1) / 2) var(--space-1);
+  margin-left: var(--space-1);
+  vertical-align: middle;
+}
+.pool-badge.pool-classic { color: var(--sun); }
+.pool-badge.pool-jamendo { color: var(--ok); }
+
+tr.pool-pass td.pool-pass-cell {
+  font-size: 0.625rem;
+  color: color-mix(in srgb, var(--cream) 30%, transparent);
+  padding: calc(var(--space-1) / 2) var(--space-2);
+  font-style: italic;
+}

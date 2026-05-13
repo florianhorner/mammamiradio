@@ -923,6 +923,53 @@ async def test_setup_recheck_returns_onboarding_payload():
 
 
 @pytest.mark.asyncio
+async def test_setup_provider_check_returns_secret_safe_probe_payload():
+    app = _make_test_app()
+    app.state.config.anthropic_api_key = "anthropic-secret"
+    app.state.config.openai_api_key = "openai-secret"
+    probe_payload = {
+        "ok": True,
+        "providers": {
+            "anthropic": {
+                "provider": "anthropic",
+                "configured": True,
+                "ok": False,
+                "status_code": 401,
+                "error_type": "authentication_error",
+                "detail": "authentication_error invalid x-api-key",
+            },
+            "openai_chat": {
+                "provider": "openai_chat",
+                "configured": True,
+                "ok": True,
+                "status_code": 200,
+                "error_type": "",
+                "detail": "",
+            },
+            "openai_tts": {
+                "provider": "openai_tts",
+                "configured": True,
+                "ok": True,
+                "status_code": 200,
+                "error_type": "",
+                "detail": "",
+            },
+        },
+    }
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    with patch("mammamiradio.web.streamer.check_provider_keys", new=AsyncMock(return_value=probe_payload)) as probe:
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            resp = await client.post("/api/setup/provider-check")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body == probe_payload
+    assert "anthropic-secret" not in resp.text
+    assert "openai-secret" not in resp.text
+    probe.assert_awaited_once_with(app.state.config)
+
+
+@pytest.mark.asyncio
 async def test_addon_snippet_returns_snippet():
     app = _make_test_app()
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))

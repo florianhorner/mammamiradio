@@ -1595,7 +1595,7 @@ function splitTrackLabel(seg){
   return {title:label,artist:(seg&&seg.metadata&&seg.metadata.artist)||''};
 }
 function renderProgramme(st){
-  const hash=JSON.stringify([st?.now_streaming?.label,st?.upcoming?.map(u=>u.label),(st?.stream_log||[]).slice(0,5).map(e=>e.label),_programmeFilter]);
+  const hash=JSON.stringify([st?.now_streaming?.label,st?.now_streaming?.type,st?.upcoming?.map(u=>[u.label,u.type,u.segment_type,u.playlist_index,u.source_kind,u.predicted]),(st?.stream_log||[]).slice(0,5).map(e=>[e.label,e.type,e.segment_type]),_programmeFilter]);
   if(hash===_lastProgrammeHash)return;
   _lastProgrammeHash=hash;
   const el=document.getElementById('programmeList');
@@ -1642,8 +1642,10 @@ function renderProgramme(st){
 
   // Upcoming rows
   const upFiltered=upcoming.filter(it=>matchFilter(it.type));
+  // Seed from now_streaming so pass-over annotations are relative to the playing track
+  let _prevMusicPlaylistIdx=(now&&segmentTypeKey(now.type)==='music'&&Number.isInteger(now?.metadata?.playlist_index))?now.metadata.playlist_index:-1;
 
-  upFiltered.slice(0,10).forEach(it=>{
+  upFiltered.slice(0,10).forEach((it,idx)=>{
     totalCount++;
     const typeKey=segmentTypeKey(it.type);
     const linked=Number.isInteger(it.playlist_index)||!!it.spotify_id;
@@ -1652,7 +1654,29 @@ function renderProgramme(st){
     // Hide title when it equals the bare segment type — prevents rows like
     // "BANTER banter" if a producer code path ever forgets to set a title.
     const titleText=(parts.title && parts.title.toLowerCase()!==typeKey)?parts.title:'';
-    rows.push(`<tr ${clickAttrs}><td class="ts"></td><td><span class="seg-pill seg-${typeKey}">${esc(segmentText(typeKey))}</span></td><td class="ti">${esc(titleText)}</td><td class="ho">${esc(parts.artist)}</td><td class="du">${fmtDur(it,typeKey)}</td><td class="ac"></td></tr>`);
+    let titleHtml=esc(titleText);
+    if(typeKey==='music'&&Number.isInteger(it.playlist_index)&&it.playlist_index>=0){
+      const sourceKind=String(it.source_kind||'');
+      const poolClass=sourceKind.toLowerCase().replace(/[^a-z0-9_-]/g,'');
+      titleHtml+=`<span class="pool-badge pool-${esc(poolClass)}">pool[${it.playlist_index}]</span>`;
+    }
+    rows.push(`<tr ${clickAttrs}><td class="ts"></td><td><span class="seg-pill seg-${typeKey}">${esc(segmentText(typeKey))}</span></td><td class="ti">${titleHtml}</td><td class="ho">${esc(parts.artist)}</td><td class="du">${fmtDur(it,typeKey)}</td><td class="ac"></td></tr>`);
+    if(typeKey!=='music'&&it.predicted===true){
+      const nextMusicItem=upFiltered.slice(idx+1).find(n=>segmentTypeKey(n.type)==='music'&&n.predicted===true&&Number.isInteger(n.playlist_index));
+      if(nextMusicItem){
+        const nextIdx=nextMusicItem.playlist_index;
+        if(nextIdx>_prevMusicPlaylistIdx+1){
+          const start=_prevMusicPlaylistIdx+1;
+          const end=nextIdx-1;
+          const pool=((window._lastStatus&&window._lastStatus.playlist)||(_st&&_st.playlist)||[]).slice(start,end+1);
+          const labels=pool.slice(0,2).map(t=>t.display||[t.artist,t.title].filter(Boolean).join(' – ')||t.title||'?').map(esc).join(' • ');
+          rows.push(`<tr class="pool-pass"><td colspan="6" class="pool-pass-cell">↩ pool[${start}–${end}] not selected this pass: ${labels}</td></tr>`);
+        }else if(nextIdx<_prevMusicPlaylistIdx){
+          rows.push(`<tr class="pool-pass"><td colspan="6" class="pool-pass-cell">↩ pool wrapped around — new cycle from [${nextIdx}]</td></tr>`);
+        }
+      }
+    }
+    if(typeKey==='music'&&Number.isInteger(it.playlist_index)&&it.playlist_index>=0)_prevMusicPlaylistIdx=it.playlist_index;
   });
 
   if(upFiltered.length>10){
