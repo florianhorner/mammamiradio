@@ -1,0 +1,9 @@
+make check
+
+- ruff check: passed
+- mypy: passed
+- vulture: passed
+- coverage-ratchet.py check: passed
+- pytest coverage run: 1727 passed, 2 skipped, 7 deselected
+- total coverage: 93.74%; all module coverage floors held
+EXITCODE=0

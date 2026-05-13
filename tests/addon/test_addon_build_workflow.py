@@ -22,6 +22,7 @@ These tests lock down the structural invariants:
   3. The build job cannot run if validate fails (`needs: validate`).
   4. Both target architectures are in the build matrix.
   5. The workflow triggers cover every file touched by a version-bump commit.
+  6. The workflow publishes the versioned per-arch image tags that HA installs.
 """
 
 from __future__ import annotations
@@ -154,4 +155,35 @@ def test_ci_trigger_paths_cover_version_bump_files():
         f"Trigger paths missing from addon-build.yml `on:` block: {missing}\n"
         "These files are touched on every version bump. Without matching trigger "
         "paths, the workflow won't run and images won't be built."
+    )
+
+
+# ---------------------------------------------------------------------------
+# 6. Published image tags must match the Home Assistant add-on image contract
+# ---------------------------------------------------------------------------
+
+
+def test_ci_publishes_versioned_per_arch_addon_images():
+    """HA Green updates resolve config.yaml's image template plus the add-on version."""
+    workflow_text = _workflow_text()
+    config_text = (REPO_ROOT / "ha-addon" / "mammamiradio" / "config.yaml").read_text(encoding="utf-8")
+
+    image_match = re.search(r"^image:\s*(\S+)\s*$", config_text, re.MULTILINE)
+    assert image_match, "config.yaml must define the add-on image template."
+    assert image_match.group(1) == "ghcr.io/florianhorner/mammamiradio-addon-{arch}"
+
+    assert "IMAGE_BASE: ${{ github.repository_owner }}/mammamiradio-addon" in workflow_text
+    assert "id: version" in workflow_text
+    assert "grep '^version:' ha-addon/mammamiradio/config.yaml" in workflow_text
+
+    required_tags = [
+        "${{ env.REGISTRY }}/${{ env.IMAGE_BASE }}-${{ matrix.arch }}:${{ steps.version.outputs.version }}",
+        "${{ env.REGISTRY }}/${{ env.IMAGE_BASE }}-${{ matrix.arch }}:latest",
+        "${{ env.REGISTRY }}/${{ env.IMAGE_BASE }}-${{ matrix.arch }}:${{ github.sha }}",
+    ]
+    missing_tags = [tag for tag in required_tags if tag not in workflow_text]
+    assert not missing_tags, (
+        f"addon-build.yml is missing image tags: {missing_tags}\n"
+        "The version tag is what makes an HA add-on install running config.yaml "
+        "version 2.11.1 resolve to the matching GHCR image."
     )

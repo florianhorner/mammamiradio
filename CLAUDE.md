@@ -143,14 +143,14 @@ mammamiradio/
   hosts/                    scriptwriter (LLM banter+ads — TODO: split), persona, context_cues, ad_creative
   home/                     ha_context (HA polling, mood), ha_enrichment (event diff/prune)
   scheduling/               producer (async loop), scheduler (segment-type picker), clip (WTF ring buffer)
-  web/                      streamer (TODO: split — routes/auth/playback loop), og_card, templates/, static/
+  web/                      streamer (TODO: split — routes/auth/playback loop), listener_requests, og_card, templates/, static/
   assets/                   demo/ MP3s + SFX, logo.svg
 radio.toml                  station config
 start.sh                    dev entrypoint with uvicorn and reload
 tests/                      mirrors mammamiradio/ — tests/<nave>/test_*.py
 ```
 
-Two god modules carry a `# TODO: split` marker: `web/streamer.py` (~2,400 LOC) and `hosts/scriptwriter.py` (~1,500 LOC). They have postal addresses now; the actual splits land in PRs 5 and 6 of the cathedral plan (`docs/2026-04-28-cathedral-restructure.md`).
+Two god modules carry a `# TODO: split` marker: `web/streamer.py` (~2,300 LOC) and `hosts/scriptwriter.py` (~1,500 LOC). They have postal addresses now; the actual splits land in PRs 5 and 6 of the cathedral plan (`docs/2026-04-28-cathedral-restructure.md`).
 
 ## Design System
 

@@ -74,7 +74,7 @@ Public:
 - `GET /sw.js`, `GET /static/{filename:path}` (PWA assets)
 - `POST /api/clip` (rate-limited, 1 per 10s per IP)
 - `GET /clips/{id}.mp3` (no auth, for sharing)
-- `POST /api/listener-request`
+- `POST /api/listener-request`, `GET /public-listener-requests` (sanitized feed for the on-page sidebar)
 
 The read-only sidecar monitor in `scripts/stream_watch_server.py` is intentionally limited to `/public-status`, `/healthz`, and `/readyz` so it still works when admin auth is enabled.
 
@@ -82,7 +82,7 @@ Admin (require `ADMIN_PASSWORD` or `ADMIN_TOKEN` unless on loopback):
 
 - `GET /admin`, `GET /dashboard`
 - `GET /status`, `GET /api/capabilities`
-- `GET /api/setup/status`, `POST /api/setup/recheck`, `POST /api/setup/save-keys`, `GET /api/setup/addon-snippet`
+- `GET /api/setup/status`, `POST /api/setup/recheck`, `POST /api/setup/provider-check`, `POST /api/setup/save-keys`, `GET /api/setup/addon-snippet`
 - `POST /api/shuffle`, `POST /api/skip`, `POST /api/purge`, `POST /api/stop`, `POST /api/resume`, `POST /api/trigger`
 - `GET /api/pacing`, `PATCH /api/pacing`
 - `GET /api/hosts`, `PATCH /api/hosts/{host_name}/personality`, `POST /api/hosts/{host_name}/personality/reset`
@@ -118,6 +118,41 @@ The `ha-addon/` directory contains a complete HA add-on scaffold. Users add the 
 The add-on entrypoint (`ha-addon/mammamiradio/rootfs/run.sh`) maps Supervisor-injected `$SUPERVISOR_TOKEN` to `HA_TOKEN`, auto-generates an `ADMIN_TOKEN`, reads add-on options from `/data/options.json`, and starts uvicorn.
 
 The dashboard is accessible via HA ingress (sidebar). The first-run flow exposes the same setup checks there as every other run mode, and the stream URL can be played on any HA media player.
+
+## Home Assistant pushed entities
+
+When the HA integration is enabled (`ha_enabled: true` in `radio.toml` or the HA add-on), mammamiradio automatically pushes its playback state to HA after each segment transition and every 30 seconds. No operator configuration required — entities appear in **Developer Tools → States** within 30 seconds of startup.
+
+| Entity ID | Type | State values | Key attributes |
+|---|---|---|---|
+| `media_player.mammamiradio` | media_player | `playing` / `idle` | `media_title`, `media_artist`, `media_content_type`, `mammamiradio_segment_type`, `mammamiradio_listeners` |
+| `sensor.mammamiradio_segment_type` | sensor | `music` / `banter` / `ad` / `off` | — |
+| `sensor.mammamiradio_listeners` | sensor | integer | `unit_of_measurement: listeners` |
+| `binary_sensor.mammamiradio_on_air` | binary_sensor | `on` / `off` | — |
+
+**30-second cold-start note:** after a HA or addon restart, pushed entities reappear within 30 seconds via the heartbeat. Automations triggering on `state_changed` may miss the first segment after restart — add an `initial_state: playing` guard if needed.
+
+**Lovelace media card:**
+
+```yaml
+type: media-control
+entity: media_player.mammamiradio
+```
+
+**Automation example** (turn lights down when banter starts):
+
+```yaml
+trigger:
+  - platform: state
+    entity_id: sensor.mammamiradio_segment_type
+    to: "banter"
+action:
+  - service: light.turn_on
+    data:
+      brightness_pct: 30
+```
+
+**Note:** pushed entities appear in Developer Tools → States but not in the HA entity registry (Integrations page). HA Assist requires a HACS integration for registry visibility.
 
 ## What is still not documented because it does not exist yet
 
