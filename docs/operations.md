@@ -82,7 +82,7 @@ Admin (require `ADMIN_PASSWORD` or `ADMIN_TOKEN` unless on loopback):
 
 - `GET /admin`, `GET /dashboard`
 - `GET /status`, `GET /api/capabilities`
-- `GET /api/setup/status`, `POST /api/setup/recheck`, `POST /api/setup/save-keys`, `GET /api/setup/addon-snippet`
+- `GET /api/setup/status`, `POST /api/setup/recheck`, `POST /api/setup/provider-check`, `POST /api/setup/save-keys`, `GET /api/setup/addon-snippet`
 - `POST /api/shuffle`, `POST /api/skip`, `POST /api/purge`, `POST /api/stop`, `POST /api/resume`, `POST /api/trigger`
 - `GET /api/pacing`, `PATCH /api/pacing`
 - `GET /api/hosts`, `PATCH /api/hosts/{host_name}/personality`, `POST /api/hosts/{host_name}/personality/reset`

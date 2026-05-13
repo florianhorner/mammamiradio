@@ -24,6 +24,7 @@ from fastapi.templating import Jinja2Templates
 from mammamiradio.audio.normalizer import humanize_norm_filename, load_track_metadata
 from mammamiradio.core.capabilities import capabilities_to_dict, get_capabilities
 from mammamiradio.core.models import PersonalityAxes, PlaylistSource, Segment, SegmentType, StationState, Track
+from mammamiradio.core.provider_checks import check_provider_keys
 from mammamiradio.core.setup_status import addon_options_snippet, build_setup_status, classify_station_mode
 from mammamiradio.home.ha_enrichment import EVENT_RETENTION_SECONDS
 from mammamiradio.playlist.playlist import (
@@ -1255,6 +1256,13 @@ async def setup_recheck(request: Request, _: None = Depends(require_admin_access
     config = request.app.state.config
     state = request.app.state.station_state
     return build_setup_status(config, state)
+
+
+@router.post("/api/setup/provider-check")
+async def setup_provider_check(request: Request, _: None = Depends(require_admin_access)):
+    """Run active, secret-safe Anthropic/OpenAI connectivity checks."""
+    config = request.app.state.config
+    return await check_provider_keys(config)
 
 
 @router.post("/api/setup/save-keys", dependencies=[Depends(require_admin_access)])

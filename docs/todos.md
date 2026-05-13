@@ -157,6 +157,14 @@ Version sync check conditional on `pyproject.toml`/`ha-addon/config.yaml` diff; 
 
 ## Admin endpoints — config-write race protection
 
+### Debounce or throttle `POST /api/setup/provider-check`
+
+**Priority:** P2
+**Source:** scope-parked from florianhorner/chore/check-hist-pause-live on 2026-05-13
+`mammamiradio/core/provider_checks.py` — each call fires up to three live HTTP probes (Anthropic + OpenAI chat + OpenAI TTS) with a 12 s timeout each. The endpoint has admin auth but no rate limiting; a rapid-click operator could launch overlapping probe sets. Add a short debounce or a per-server in-flight lock before the next caller triggers a second outbound probe while the first is still awaiting a timeout.
+
+
+
 ### Apply `_super_italian_lock` pattern to `/api/credentials`
 
 **Priority:** P3
