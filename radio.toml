@@ -125,6 +125,10 @@ skip_bit_threshold = 2          # skips to declare skip-bit
 [ads]
 sfx_dir = "sfx"
 
+[imaging]
+bed_volume_db = -18.0
+use_music_queue_for_beds = true
+
 # ── Supermarkets ──
 [[ads.brands]]
 name = "Prezzoforte"

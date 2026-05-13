@@ -57,6 +57,7 @@ Charts / Jamendo / classic eras / local files / demo tracks
 - `BANTER`
   - asks Claude (or OpenAI as fallback) for structured dialogue JSON
   - synthesizes one line per host via the configured TTS engine (see [TTS architecture](#tts-architecture) below)
+  - passes generated host speech through the imaging layer so banter and news can sit over a quiet music bed, falling back to a synthetic pad on cold starts
   - preserves running jokes in `StationState`
 - `AD`
   - picks brands with recurrence weighting and recent-brand avoidance
@@ -68,6 +69,7 @@ Charts / Jamendo / classic eras / local files / demo tracks
   - records per-spot campaign history (format, sonic signature, summary) for format rotation and campaign arc continuity
 
 Every produced segment becomes a temporary MP3 on disk and is pushed into `asyncio.Queue[Segment]`.
+Before queueing, `mammamiradio/audio/imaging.py` may prepend transition stings at music/speech boundaries and mix motif stings under sweepers. Optional operator assets live under `mammamiradio/assets/imaging/`; otherwise FFmpeg-generated stings and beds are used.
 
 Bounded state lists (`played_tracks`, `running_jokes`, `segment_log`, `stream_log`, `ad_history`, `recent_outcomes`) use `deque(maxlen=N)` for automatic memory management — no manual truncation needed.
 
@@ -283,6 +285,7 @@ The rich path is richer, but the failure path still produces a stream.
 | `mammamiradio/hosts/persona.py` | Listener persona: compounding memory, arc phases, motif tracking, session counting |
 | `mammamiradio/hosts/context_cues.py` | Time-of-day and cultural context for prompts |
 | `mammamiradio/hosts/ad_creative.py` | Brand and voice selection, campaign-spine sampling for ad breaks |
+| `mammamiradio/audio/imaging.py` | station imaging selector for transition stings, sweeper stings, and talk beds |
 | `mammamiradio/audio/normalizer.py` | ffmpeg helpers for normalization, mixing, tones, bumpers, bleed, and SFX |
 | `mammamiradio/audio/audio_quality.py` | Audio quality gate: duration and silence checks before segments reach the queue |
 | `mammamiradio/audio/tts.py` | TTS synthesis (Edge TTS + OpenAI gpt-4o-mini-tts) |

@@ -1034,6 +1034,72 @@ def mix_with_bed(voice_path: Path, bed_path: Path, output_path: Path, volume_sca
     return output_path
 
 
+def generate_transition_sting(
+    from_type_name: str,
+    to_type_name: str,
+    output_path: Path,
+    motif_notes: list[int] | None = None,
+) -> Path:
+    """Generate a station-branded transition sting for music/speech boundaries."""
+    from_name = from_type_name.strip().lower()
+    to_name = to_type_name.strip().lower()
+    speech_types = {"banter", "news_flash", "ad"}
+    notes = motif_notes or [523, 659, 784, 1047]
+
+    tmp = Path(tempfile.mkdtemp())
+    parts: list[Path] = []
+    try:
+        if from_name == "music" and to_name in speech_types:
+            sweep_path = tmp / "transition_sweep.mp3"
+            motif_path = tmp / "transition_motif.mp3"
+            generate_sweep(sweep_path, duration_sec=0.8)
+            generate_station_id_bed(motif_path, 1.2, notes)
+            parts = [sweep_path, motif_path]
+        elif from_name in speech_types and to_name == "music":
+            motif_path = tmp / "transition_motif.mp3"
+            bumper_path = tmp / "transition_bumper.mp3"
+            generate_station_id_bed(motif_path, 0.5, list(reversed(notes)))
+            generate_bumper_jingle(bumper_path, 0.5)
+            parts = [motif_path, bumper_path]
+        else:
+            logger.warning(
+                "generate_transition_sting: unsupported pair %s->%s, using sweep fallback",
+                from_type_name,
+                to_type_name,
+            )
+            generate_sweep(output_path, duration_sec=1.0)
+            return output_path
+
+        concat_files(parts, output_path, silence_ms=0, loudnorm=False)
+        return output_path
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def mix_voice_with_bed(voice_path: Path, bed_path: Path, output_path: Path, bed_db: float = -18.0) -> Path:
+    """Mix a voice segment over a quiet music bed, clipping output to voice length."""
+    scale = 10 ** (bed_db / 20)
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-i",
+        str(voice_path),
+        "-i",
+        str(bed_path),
+        "-filter_complex",
+        f"[1:a]volume={_fmt_num(scale)}[bed];"
+        "[0:a][bed]amix=inputs=2:duration=first:dropout_transition=2,"
+        "loudnorm=I=-16:LRA=11:TP=-1.5[out]",
+        "-map",
+        "[out]",
+        *_MP3_OUTPUT_ARGS,
+        str(output_path),
+    ]
+    _run_ffmpeg(cmd, "mix voice with talk bed")
+    logger.info("Mixed voice + talk bed -> %s", output_path.name)
+    return output_path
+
+
 def generate_bumper_jingle(output_path: Path, duration_sec: float = 1.5) -> Path:
     """Generate a short radio bumper jingle with pad, velocity variation, and reverb.
 
