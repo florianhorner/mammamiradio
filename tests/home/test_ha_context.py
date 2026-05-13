@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import time
 from collections import deque
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -1200,9 +1201,12 @@ def reset_ha_push_debounce():
     import mammamiradio.home.ha_context as _hc
 
     original = _hc._last_ha_push
+    original_lock = _hc._ha_push_lock
     _hc._last_ha_push = 0.0
+    _hc._ha_push_lock = None
     yield
     _hc._last_ha_push = original
+    _hc._ha_push_lock = original_lock
 
 
 @pytest.mark.asyncio
@@ -1233,10 +1237,8 @@ async def test_push_state_to_ha_normal(reset_ha_push_debounce):
     assert any("sensor.mammamiradio_segment_type" in u for u in urls)
     assert any("sensor.mammamiradio_listeners" in u for u in urls)
     assert any("binary_sensor.mammamiradio_on_air" in u for u in urls)
-    # media_player state must be "playing"
     mp_call = next(c for c in mock_client.post.call_args_list if "media_player" in c.args[0])
     assert mp_call.kwargs["json"]["state"] == "playing"
-    # binary_sensor must be "on"
     bs_call = next(c for c in mock_client.post.call_args_list if "binary_sensor" in c.args[0])
     assert bs_call.kwargs["json"]["state"] == "on"
 
@@ -1355,6 +1357,59 @@ async def test_push_state_to_ha_debounce(reset_ha_push_debounce):
         )
 
     assert mock_client.post.call_count == 4  # only first call's 4 POSTs
+
+
+@pytest.mark.asyncio
+async def test_push_state_to_ha_serializes_stop_after_slow_transition(reset_ha_push_debounce):
+    """A stopped push must not be overwritten by an older slow transition push."""
+    music_first_post_started = asyncio.Event()
+    release_music_first_post = asyncio.Event()
+    calls = []
+
+    async def _post_side_effect(*args, **kwargs):
+        payload = kwargs["json"]
+        if "media_player" in args[0] and payload["state"] == "playing":
+            music_first_post_started.set()
+            await release_music_first_post.wait()
+        calls.append((args[0], payload))
+        return MagicMock(status_code=200)
+
+    mock_client = AsyncMock()
+    mock_client.post.side_effect = _post_side_effect
+
+    with patch("mammamiradio.home.ha_context._get_ha_client", return_value=mock_client):
+        transition_task = asyncio.create_task(
+            push_state_to_ha(
+                ha_url="http://ha.local:8123",
+                ha_token="test-token",
+                now_streaming={
+                    "type": "music",
+                    "label": "Current Song",
+                    "started": time.time(),
+                    "metadata": {"title_only": "Current Song", "artist": "Current Artist"},
+                },
+                current_track=None,
+                listeners_active=1,
+                session_stopped=False,
+            )
+        )
+        await music_first_post_started.wait()
+        stopped_task = asyncio.create_task(
+            push_state_to_ha(
+                ha_url="http://ha.local:8123",
+                ha_token="test-token",
+                now_streaming={},
+                current_track=None,
+                listeners_active=0,
+                session_stopped=True,
+            )
+        )
+        await asyncio.sleep(0)
+        release_music_first_post.set()
+        await asyncio.gather(transition_task, stopped_task)
+
+    binary_sensor_states = [payload["state"] for url, payload in calls if "binary_sensor" in url]
+    assert binary_sensor_states == ["on", "off"]
 
 
 @pytest.mark.asyncio
