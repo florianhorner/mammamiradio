@@ -890,3 +890,97 @@ async def fetch_home_context(
             effective_cache.events_summary = build_events_summary(effective_cache.events, now=timestamp)
             return effective_cache
         return HomeContext()
+
+
+_last_ha_push: float = 0.0  # debounce: skip if last push was < 2s ago
+
+
+async def push_state_to_ha(
+    ha_url: str,
+    ha_token: str,
+    now_streaming: dict,
+    current_track: object | None,
+    listeners_active: int,
+    session_stopped: bool,
+) -> None:
+    """Push radio state to HA as media_player + sensor entities. Fire-and-forget."""
+    global _last_ha_push
+    now = time.time()
+    if not session_stopped and now - _last_ha_push < 2.0:
+        return
+    _last_ha_push = now
+
+    headers = {"Authorization": f"Bearer {ha_token}", "Content-Type": "application/json"}
+    base_url = ha_url.rstrip("/")
+    client = _get_ha_client()
+
+    segment_type = "off" if session_stopped else (now_streaming.get("type", "off") if now_streaming else "off")
+    metadata = now_streaming.get("metadata", {}) if now_streaming else {}
+    is_playing = not session_stopped and bool(now_streaming)
+    mp_state = "playing" if is_playing else "idle"
+
+    if segment_type == "music" and current_track is not None:
+        media_title = getattr(current_track, "title", None) or now_streaming.get("label", "")
+        media_artist = getattr(current_track, "artist", None) or "Radio MammaMia"
+    else:
+        media_title = metadata.get("title") or (now_streaming.get("label", "") if now_streaming else "")
+        media_artist = "Radio MammaMia"
+
+    started = (now_streaming.get("started", now) if now_streaming else now) or now
+    media_position = now - started
+
+    entities: list[tuple[str, dict]] = [
+        (
+            "media_player.mammamiradio",
+            {
+                "state": mp_state,
+                "attributes": {
+                    "friendly_name": "Radio MammaMia",
+                    "media_title": media_title,
+                    "media_artist": media_artist,
+                    "media_content_type": "music" if segment_type == "music" else "channel",
+                    "media_position": media_position,
+                    "mammamiradio_segment_type": segment_type,
+                    "mammamiradio_queue_depth": 0,
+                    "mammamiradio_listeners": listeners_active,
+                },
+            },
+        ),
+        (
+            "sensor.mammamiradio_segment_type",
+            {
+                "state": segment_type,
+                "attributes": {"friendly_name": "MammaMia Segment Type"},
+            },
+        ),
+        (
+            "sensor.mammamiradio_listeners",
+            {
+                "state": listeners_active,
+                "attributes": {
+                    "friendly_name": "MammaMia Listeners",
+                    "unit_of_measurement": "listeners",
+                },
+            },
+        ),
+        (
+            "binary_sensor.mammamiradio_on_air",
+            {
+                "state": "off" if session_stopped else "on",
+                "attributes": {"friendly_name": "MammaMia On Air"},
+            },
+        ),
+    ]
+
+    for entity_id, payload in entities:
+        try:
+            resp = await client.post(
+                f"{base_url}/api/states/{entity_id}",
+                headers=headers,
+                json=payload,
+                timeout=5.0,
+            )
+            if resp.status_code >= 400:
+                logger.warning("HA push failed for %s: HTTP %d", entity_id, resp.status_code)
+        except Exception as e:
+            logger.warning("HA push failed for %s: %s", entity_id, e)

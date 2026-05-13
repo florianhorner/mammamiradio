@@ -6,6 +6,7 @@ import time
 from collections import deque
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 
 from mammamiradio.home.ha_context import (
@@ -21,6 +22,7 @@ from mammamiradio.home.ha_context import (
     classify_home_mood_en,
     fetch_home_context,
     fetch_weather_forecast,
+    push_state_to_ha,
 )
 
 # ---------------------------------------------------------------------------
@@ -940,8 +942,6 @@ def test_get_ha_client_recreates_closed_client():
     """_get_ha_client must replace a closed client with a fresh one."""
     import asyncio
 
-    import httpx
-
     import mammamiradio.home.ha_context as _hc
     from mammamiradio.home.ha_context import _get_ha_client
 
@@ -1187,3 +1187,190 @@ def test_weather_arc_en_simple_sunny():
 
 def test_weather_arc_en_empty():
     assert _build_weather_arc_en([]) == ""
+
+
+# ---------------------------------------------------------------------------
+# push_state_to_ha
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=False)
+def reset_ha_push_debounce():
+    """Reset module-level debounce so tests don't interfere with each other."""
+    import mammamiradio.home.ha_context as _hc
+
+    original = _hc._last_ha_push
+    _hc._last_ha_push = 0.0
+    yield
+    _hc._last_ha_push = original
+
+
+@pytest.mark.asyncio
+async def test_push_state_to_ha_normal(reset_ha_push_debounce):
+    """Normal push fires all 4 POST calls with correct entity payloads."""
+    mock_resp = MagicMock(status_code=200)
+    mock_client = AsyncMock()
+    mock_client.post.return_value = mock_resp
+
+    with patch("mammamiradio.home.ha_context._get_ha_client", return_value=mock_client):
+        await push_state_to_ha(
+            ha_url="http://ha.local:8123",
+            ha_token="test-token",
+            now_streaming={"type": "music", "label": "Volare", "started": time.time() - 10, "metadata": {"title": "Volare"}},
+            current_track=None,
+            listeners_active=3,
+            session_stopped=False,
+        )
+
+    assert mock_client.post.call_count == 4
+    urls = [call.args[0] for call in mock_client.post.call_args_list]
+    assert any("media_player.mammamiradio" in u for u in urls)
+    assert any("sensor.mammamiradio_segment_type" in u for u in urls)
+    assert any("sensor.mammamiradio_listeners" in u for u in urls)
+    assert any("binary_sensor.mammamiradio_on_air" in u for u in urls)
+    # media_player state must be "playing"
+    mp_call = next(c for c in mock_client.post.call_args_list if "media_player" in c.args[0])
+    assert mp_call.kwargs["json"]["state"] == "playing"
+    # binary_sensor must be "on"
+    bs_call = next(c for c in mock_client.post.call_args_list if "binary_sensor" in c.args[0])
+    assert bs_call.kwargs["json"]["state"] == "on"
+
+
+@pytest.mark.asyncio
+async def test_push_state_to_ha_ha_unreachable_continues(reset_ha_push_debounce):
+    """If first POST raises ConnectError, warning is logged and remaining 3 POSTs still fire."""
+    call_count = 0
+
+    async def _post_side_effect(*args, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            raise httpx.ConnectError("unreachable")
+        return MagicMock(status_code=200)
+
+    mock_client = AsyncMock()
+    mock_client.post.side_effect = _post_side_effect
+
+    with (
+        patch("mammamiradio.home.ha_context._get_ha_client", return_value=mock_client),
+        patch("mammamiradio.home.ha_context.logger") as mock_logger,
+    ):
+        await push_state_to_ha(
+            ha_url="http://ha.local:8123",
+            ha_token="test-token",
+            now_streaming={"type": "banter", "label": "Chat", "started": time.time(), "metadata": {}},
+            current_track=None,
+            listeners_active=1,
+            session_stopped=False,
+        )
+
+    assert call_count == 4
+    mock_logger.warning.assert_called_once()
+    assert "media_player.mammamiradio" in mock_logger.warning.call_args.args[1]
+
+
+@pytest.mark.asyncio
+async def test_push_state_to_ha_session_stopped(reset_ha_push_debounce):
+    """When session_stopped=True, media_player state is 'idle' and binary_sensor is 'off'."""
+    mock_client = AsyncMock()
+    mock_client.post.return_value = MagicMock(status_code=200)
+
+    with patch("mammamiradio.home.ha_context._get_ha_client", return_value=mock_client):
+        await push_state_to_ha(
+            ha_url="http://ha.local:8123",
+            ha_token="test-token",
+            now_streaming={},
+            current_track=None,
+            listeners_active=0,
+            session_stopped=True,
+        )
+
+    mp_call = next(c for c in mock_client.post.call_args_list if "media_player" in c.args[0])
+    assert mp_call.kwargs["json"]["state"] == "idle"
+    bs_call = next(c for c in mock_client.post.call_args_list if "binary_sensor" in c.args[0])
+    assert bs_call.kwargs["json"]["state"] == "off"
+    seg_call = next(c for c in mock_client.post.call_args_list if "segment_type" in c.args[0])
+    assert seg_call.kwargs["json"]["state"] == "off"
+
+
+@pytest.mark.asyncio
+async def test_push_state_to_ha_debounce(reset_ha_push_debounce):
+    """Second call within 2s is skipped (debounce)."""
+    mock_client = AsyncMock()
+    mock_client.post.return_value = MagicMock(status_code=200)
+
+    with patch("mammamiradio.home.ha_context._get_ha_client", return_value=mock_client):
+        await push_state_to_ha(
+            ha_url="http://ha.local:8123",
+            ha_token="test-token",
+            now_streaming={"type": "music", "label": "Song", "started": time.time(), "metadata": {}},
+            current_track=None,
+            listeners_active=1,
+            session_stopped=False,
+        )
+        # Second call immediately after — should be debounced
+        await push_state_to_ha(
+            ha_url="http://ha.local:8123",
+            ha_token="test-token",
+            now_streaming={"type": "music", "label": "Song", "started": time.time(), "metadata": {}},
+            current_track=None,
+            listeners_active=1,
+            session_stopped=False,
+        )
+
+    assert mock_client.post.call_count == 4  # only first call's 4 POSTs
+
+
+@pytest.mark.asyncio
+async def test_push_state_to_ha_trailing_slash(reset_ha_push_debounce):
+    """ha_url with trailing slash produces clean URLs (no double slash)."""
+    mock_client = AsyncMock()
+    mock_client.post.return_value = MagicMock(status_code=200)
+
+    with patch("mammamiradio.home.ha_context._get_ha_client", return_value=mock_client):
+        await push_state_to_ha(
+            ha_url="http://ha.local/",
+            ha_token="test-token",
+            now_streaming={"type": "music", "label": "Song", "started": time.time(), "metadata": {}},
+            current_track=None,
+            listeners_active=1,
+            session_stopped=False,
+        )
+
+    for call in mock_client.post.call_args_list:
+        url = call.args[0]
+        assert "//" not in url.replace("http://", "").replace("https://", "")
+
+
+@pytest.mark.asyncio
+async def test_push_state_to_ha_partial_failure_continues(reset_ha_push_debounce):
+    """If second POST times out, entities 3 and 4 still POST successfully."""
+    call_count = 0
+
+    async def _post_side_effect(*args, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 2:
+            raise httpx.TimeoutException("timeout")
+        return MagicMock(status_code=200)
+
+    mock_client = AsyncMock()
+    mock_client.post.side_effect = _post_side_effect
+
+    with (
+        patch("mammamiradio.home.ha_context._get_ha_client", return_value=mock_client),
+        patch("mammamiradio.home.ha_context.logger") as mock_logger,
+    ):
+        await push_state_to_ha(
+            ha_url="http://ha.local:8123",
+            ha_token="test-token",
+            now_streaming={"type": "music", "label": "Song", "started": time.time(), "metadata": {}},
+            current_track=None,
+            listeners_active=2,
+            session_stopped=False,
+        )
+
+    assert call_count == 4  # all 4 attempted despite POST 2 failing
+    mock_logger.warning.assert_called_once()
+    # The entity that failed (index 1 = sensor.mammamiradio_segment_type) is named in the warning
+    assert "sensor.mammamiradio_segment_type" in mock_logger.warning.call_args.args[1]
