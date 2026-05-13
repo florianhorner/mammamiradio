@@ -248,6 +248,16 @@ def _get_last_music_file(state: StationState) -> Path | None:
     return None
 
 
+def _make_imaging_lib(config: StationConfig) -> ImagingLibrary:
+    """Construct a station ImagingLibrary from config."""
+    return ImagingLibrary(
+        config.sonic_brand.motif_notes,
+        config.tmp_dir,
+        bed_volume_db=config.imaging.bed_volume_db,
+        assets_dir=Path(config.imaging.assets_dir) if config.imaging.assets_dir else None,
+    )
+
+
 def _crosses_music_speech_boundary(prev_type: SegmentType, next_type: SegmentType) -> bool:
     return (prev_type in _MUSIC_TYPES and next_type in _SPEECH_TYPES) or (
         prev_type in _SPEECH_TYPES and next_type in _MUSIC_TYPES
@@ -266,12 +276,7 @@ async def _apply_talk_bed(
     last_track = _get_last_music_file(state) if config.imaging.use_music_queue_for_beds else None
     bed_path = config.tmp_dir / f"{prefix}_bed_{uuid4().hex[:8]}.mp3"
     duration = await loop.run_in_executor(None, _probe_segment_duration, audio_path)
-    imaging_lib = ImagingLibrary(
-        config.sonic_brand.motif_notes,
-        config.tmp_dir,
-        bed_volume_db=config.imaging.bed_volume_db,
-        assets_dir=Path(config.imaging.assets_dir) if config.imaging.assets_dir else None,
-    )
+    imaging_lib = _make_imaging_lib(config)
     await loop.run_in_executor(None, imaging_lib.pick_talk_bed, duration, bed_path, last_track)
     bedded_path = config.tmp_dir / f"{prefix}_bedded_{uuid4().hex[:8]}.mp3"
     try:
@@ -1297,11 +1302,7 @@ async def run_producer(
                     )
                     loop = asyncio.get_running_loop()
                     sting_path = config.tmp_dir / f"sweeper_sting_{uuid4().hex[:8]}.mp3"
-                    imaging_lib = ImagingLibrary(
-                        config.sonic_brand.motif_notes,
-                        config.tmp_dir,
-                        assets_dir=Path(config.imaging.assets_dir) if config.imaging.assets_dir else None,
-                    )
+                    imaging_lib = _make_imaging_lib(config)
                     await loop.run_in_executor(None, imaging_lib.pick_sweeper_sting, sting_path)
                     mixed_path = config.tmp_dir / f"sweeper_mixed_{uuid4().hex[:8]}.mp3"
                     dry_sweeper_path = audio_path
@@ -1645,11 +1646,7 @@ async def run_producer(
                 try:
                     loop = asyncio.get_running_loop()
                     sting_path = config.tmp_dir / f"transition_{uuid4().hex[:8]}.mp3"
-                    imaging_lib = ImagingLibrary(
-                        config.sonic_brand.motif_notes,
-                        config.tmp_dir,
-                        assets_dir=Path(config.imaging.assets_dir) if config.imaging.assets_dir else None,
-                    )
+                    imaging_lib = _make_imaging_lib(config)
                     await loop.run_in_executor(
                         None,
                         imaging_lib.pick_stinger,
