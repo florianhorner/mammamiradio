@@ -24,15 +24,13 @@ def _error_payload(body: str) -> dict[str, Any]:
 
 def _classify_error(status_code: int | None, body: str) -> tuple[str, str]:
     payload = _error_payload(body)
-    raw = " ".join(
-        str(payload.get(key, ""))
-        for key in ("type", "code", "message")
-        if payload.get(key)
-    )
+    raw = " ".join(str(payload.get(key, "")) for key in ("type", "code", "message") if payload.get(key))
     text = raw.lower()
 
     if status_code == 401 or "authentication" in text or "invalid_api_key" in text or "invalid x-api-key" in text:
         return "authentication_error", raw[:240]
+    if status_code == 403 or "permission_error" in text or "credit balance" in text:
+        return "insufficient_quota", raw[:240]
     if "insufficient_quota" in text:
         return "insufficient_quota", raw[:240]
     if status_code == 429 or "rate_limit" in text or "too many requests" in text:

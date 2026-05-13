@@ -71,3 +71,63 @@ async def test_provider_check_classifies_anthropic_auth_and_openai_success(monke
     assert "anthropic-secret" not in str(result)
     assert "openai-secret" not in str(result)
     assert seen_auth_headers == ["Bearer openai-secret", "Bearer openai-secret"]
+
+
+@pytest.mark.asyncio
+async def test_provider_check_classifies_network_error(monkeypatch):
+    config = load_config(TOML_PATH)
+    config.anthropic_api_key = "anthropic-secret"
+    config.openai_api_key = ""
+
+    async_client = httpx.AsyncClient
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("DNS resolution failed")
+
+    transport = httpx.MockTransport(handler)
+
+    def client_factory(*args, **kwargs):
+        kwargs["transport"] = transport
+        return async_client(*args, **kwargs)
+
+    monkeypatch.setattr(httpx, "AsyncClient", client_factory)
+
+    result = await check_provider_keys(config)
+
+    assert result["ok"] is False
+    assert result["providers"]["anthropic"]["ok"] is False
+    assert result["providers"]["anthropic"]["error_type"] == "network_error"
+    assert "anthropic-secret" not in str(result)
+
+
+@pytest.mark.asyncio
+async def test_provider_check_classifies_anthropic_credit_exhausted(monkeypatch):
+    config = load_config(TOML_PATH)
+    config.anthropic_api_key = "anthropic-secret"
+    config.openai_api_key = ""
+
+    async_client = httpx.AsyncClient
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            403,
+            json={
+                "type": "error",
+                "error": {"type": "permission_error", "message": "Your credit balance is too low to access this API"},
+            },
+        )
+
+    transport = httpx.MockTransport(handler)
+
+    def client_factory(*args, **kwargs):
+        kwargs["transport"] = transport
+        return async_client(*args, **kwargs)
+
+    monkeypatch.setattr(httpx, "AsyncClient", client_factory)
+
+    result = await check_provider_keys(config)
+
+    assert result["ok"] is False
+    assert result["providers"]["anthropic"]["ok"] is False
+    assert result["providers"]["anthropic"]["error_type"] == "insufficient_quota"
+    assert "anthropic-secret" not in str(result)
