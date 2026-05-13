@@ -2,19 +2,19 @@
   "findings": [
     {
       "severity": "P2",
-      "message": "push_state_to_ha never calls raise_for_status(); HA 401/403/500 responses silently accepted, entities stay missing/stale.",
+      "message": "push_state_to_ha logs HA 4xx/5xx responses per entity and continues the batch; covered by test_push_state_to_ha_http_error_warns_and_continues.",
       "file": "mammamiradio/home/ha_context.py",
       "line": 977
     },
     {
       "severity": "P2",
-      "message": "segment_type not forced to 'off' when session_stopped=True; heartbeat can push stale segment type inconsistent with idle media_player state.",
+      "message": "session_stopped=True forces segment_type off and idle media_player state; covered by test_push_state_to_ha_session_stopped.",
       "file": "mammamiradio/home/ha_context.py",
       "line": 917
     },
     {
       "severity": "P2",
-      "message": "No serialization between concurrent push tasks; slow transition push can overwrite stop push. Acceptable for v1 — heartbeat corrects within 30s.",
+      "message": "push_state_to_ha serializes concurrent pushes with a process-local asyncio lock; stop-after-slow-transition ordering is covered.",
       "file": "mammamiradio/web/streamer.py",
       "line": 958
     },

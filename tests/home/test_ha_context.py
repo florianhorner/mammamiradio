@@ -1275,6 +1275,60 @@ async def test_push_state_to_ha_prefers_now_streaming_metadata(reset_ha_push_deb
 
 
 @pytest.mark.asyncio
+async def test_push_state_to_ha_uses_track_fallback_for_music(reset_ha_push_debounce):
+    """Music payloads fall back to current_track when metadata is sparse."""
+    mock_client = AsyncMock()
+    mock_client.post.return_value = MagicMock(status_code=200)
+    current_track = MagicMock(title="Track Title", artist="Track Artist")
+
+    with patch("mammamiradio.home.ha_context._get_ha_client", return_value=mock_client):
+        await push_state_to_ha(
+            ha_url="http://ha.local:8123",
+            ha_token="test-token",
+            now_streaming={"type": "music", "label": "Fallback Label", "started": time.time(), "metadata": {}},
+            current_track=current_track,
+            listeners_active=2,
+            session_stopped=False,
+        )
+
+    mp_call = next(c for c in mock_client.post.call_args_list if "media_player" in c.args[0])
+    attributes = mp_call.kwargs["json"]["attributes"]
+    assert attributes["media_title"] == "Track Title"
+    assert attributes["media_artist"] == "Track Artist"
+    assert attributes["media_content_type"] == "music"
+    assert attributes["mammamiradio_listeners"] == 2
+
+
+@pytest.mark.asyncio
+async def test_push_state_to_ha_nonmusic_uses_channel_payload(reset_ha_push_debounce):
+    """Non-music segments publish channel content with station artist."""
+    mock_client = AsyncMock()
+    mock_client.post.return_value = MagicMock(status_code=200)
+
+    with patch("mammamiradio.home.ha_context._get_ha_client", return_value=mock_client):
+        await push_state_to_ha(
+            ha_url="http://ha.local:8123",
+            ha_token="test-token",
+            now_streaming={
+                "type": "banter",
+                "label": "Studio chat",
+                "started": time.time() - 4,
+                "metadata": {"title": "Morning handoff"},
+            },
+            current_track=None,
+            listeners_active=1,
+            session_stopped=False,
+        )
+
+    mp_call = next(c for c in mock_client.post.call_args_list if "media_player" in c.args[0])
+    attributes = mp_call.kwargs["json"]["attributes"]
+    assert attributes["media_title"] == "Morning handoff"
+    assert attributes["media_artist"] == "Radio MammaMia"
+    assert attributes["media_content_type"] == "channel"
+    assert attributes["mammamiradio_segment_type"] == "banter"
+
+
+@pytest.mark.asyncio
 async def test_push_state_to_ha_ha_unreachable_continues(reset_ha_push_debounce):
     """If first POST raises ConnectError, warning is logged and remaining 3 POSTs still fire."""
     call_count = 0
@@ -1305,6 +1359,38 @@ async def test_push_state_to_ha_ha_unreachable_continues(reset_ha_push_debounce)
     assert call_count == 4
     mock_logger.warning.assert_called_once()
     assert "media_player.mammamiradio" in mock_logger.warning.call_args.args[1]
+
+
+@pytest.mark.asyncio
+async def test_push_state_to_ha_http_error_warns_and_continues(reset_ha_push_debounce):
+    """HTTP 4xx/5xx responses are logged per entity without aborting the batch."""
+    mock_client = AsyncMock()
+    mock_client.post.side_effect = [
+        MagicMock(status_code=200),
+        MagicMock(status_code=503),
+        MagicMock(status_code=200),
+        MagicMock(status_code=200),
+    ]
+
+    with (
+        patch("mammamiradio.home.ha_context._get_ha_client", return_value=mock_client),
+        patch("mammamiradio.home.ha_context.logger") as mock_logger,
+    ):
+        await push_state_to_ha(
+            ha_url="http://ha.local:8123",
+            ha_token="test-token",
+            now_streaming={"type": "music", "label": "Song", "started": time.time(), "metadata": {}},
+            current_track=None,
+            listeners_active=1,
+            session_stopped=False,
+        )
+
+    assert mock_client.post.call_count == 4
+    mock_logger.warning.assert_called_once_with(
+        "HA push failed for %s: HTTP %d",
+        "sensor.mammamiradio_segment_type",
+        503,
+    )
 
 
 @pytest.mark.asyncio
