@@ -670,6 +670,7 @@ async def run_producer(
         else:
             seg_type = next_segment_type(state, config.pacing)
         segment: Segment | None = None
+        track: Track | None = None
         generation_revision = state.playlist_revision
         success_callback: Callable[[], None] | None = None
 
@@ -723,7 +724,6 @@ async def run_producer(
 
         try:
             if seg_type == SegmentType.MUSIC:
-                track = None
                 for _ in range(MUSIC_SELECTION_RETRIES):
                     candidate = state.select_next_track(
                         repeat_cooldown=config.playlist.repeat_cooldown,
@@ -1568,12 +1568,20 @@ async def run_producer(
             if not await _queue_segment(segment):
                 continue
             _segments_produced += 1
+            _pl_idx = -1
+            if seg_type == SegmentType.MUSIC and track is not None:
+                _pl_idx = next(
+                    (i for i, t in enumerate(state.playlist) if t.cache_key == track.cache_key),
+                    -1,
+                )
             state.queued_segments.append(
                 {
                     "type": seg_type.value,
                     "label": segment.metadata.get("title", seg_type.value),
                     "spotify_id": segment.metadata.get("spotify_id", ""),
                     "reason": segment.metadata.get("queue_reason", "Rendered and queued for playback."),
+                    "playlist_index": _pl_idx,
+                    "source_kind": getattr(track, "source", "") if track else "",
                 }
             )
             if "error" not in segment.metadata:

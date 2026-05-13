@@ -1595,7 +1595,7 @@ function splitTrackLabel(seg){
   return {title:label,artist:(seg&&seg.metadata&&seg.metadata.artist)||''};
 }
 function renderProgramme(st){
-  const hash=JSON.stringify([st?.now_streaming?.label,st?.upcoming?.map(u=>u.label),(st?.stream_log||[]).slice(0,5).map(e=>e.label),_programmeFilter]);
+  const hash=JSON.stringify([st?.now_streaming?.label,st?.upcoming?.map(u=>[u.label,u.playlist_index,u.source_kind,u.predicted]),(st?.stream_log||[]).slice(0,5).map(e=>e.label),st?.playlist?.map(t=>t.display||t.title),_programmeFilter]);
   if(hash===_lastProgrammeHash)return;
   _lastProgrammeHash=hash;
   const el=document.getElementById('programmeList');
@@ -1642,8 +1642,11 @@ function renderProgramme(st){
 
   // Upcoming rows
   const upFiltered=upcoming.filter(it=>matchFilter(it.type));
+  const visibleUpcoming=upFiltered.slice(0,10);
+  let _prevMusicPlaylistIdx=-1;
+  let _poolPassRenderedForGap=false;
 
-  upFiltered.slice(0,10).forEach(it=>{
+  visibleUpcoming.forEach((it,idx)=>{
     totalCount++;
     const typeKey=segmentTypeKey(it.type);
     const linked=Number.isInteger(it.playlist_index)||!!it.spotify_id;
@@ -1652,7 +1655,39 @@ function renderProgramme(st){
     // Hide title when it equals the bare segment type — prevents rows like
     // "BANTER banter" if a producer code path ever forgets to set a title.
     const titleText=(parts.title && parts.title.toLowerCase()!==typeKey)?parts.title:'';
-    rows.push(`<tr ${clickAttrs}><td class="ts"></td><td><span class="seg-pill seg-${typeKey}">${esc(segmentText(typeKey))}</span></td><td class="ti">${esc(titleText)}</td><td class="ho">${esc(parts.artist)}</td><td class="du">${fmtDur(it,typeKey)}</td><td class="ac"></td></tr>`);
+    const titleCell=(typeKey==='music'&&it.predicted&&Number.isInteger(it.playlist_index)&&it.playlist_index>=0)
+      ? `<td class="ti">${esc(titleText)} <span class="pool-badge pool-${esc(it.source_kind||'')}">pool[${it.playlist_index}]</span></td>`
+      : `<td class="ti">${esc(titleText)}</td>`;
+    rows.push(`<tr ${clickAttrs}><td class="ts"></td><td><span class="seg-pill seg-${typeKey}">${esc(segmentText(typeKey))}</span></td>${titleCell}<td class="ho">${esc(parts.artist)}</td><td class="du">${fmtDur(it,typeKey)}</td><td class="ac"></td></tr>`);
+
+    if(typeKey!=='music'&&it.predicted&&_prevMusicPlaylistIdx>=0&&!_poolPassRenderedForGap){
+      const _itIdx=upFiltered.indexOf(it);
+      const nextMusicItem=upFiltered.slice(_itIdx+1).find(x=>segmentTypeKey(x.type)==='music'&&x.predicted);
+      if(nextMusicItem&&Number.isInteger(nextMusicItem.playlist_index)&&nextMusicItem.playlist_index>=0){
+        const nextIdx=nextMusicItem.playlist_index;
+        const prevIdx=_prevMusicPlaylistIdx;
+        const status=st||_st||{};
+        const playlist=status.playlist||[];
+        if(nextIdx<prevIdx+1){
+          rows.push(`<tr class="pool-pass"><td colspan="6" class="pool-pass-cell">↩ pool wrapped around — new cycle from [${nextIdx}]</td></tr>`);
+          _poolPassRenderedForGap=true;
+        }else if(nextIdx>prevIdx+1){
+          const passedStart=prevIdx+1;
+          const passedEnd=nextIdx-1;
+          const passedSlice=playlist.slice(passedStart,passedEnd+1);
+          const passedLabels=passedSlice.slice(0,2).map(t=>t.display||(t.artist&&t.title?`${t.artist} – ${t.title}`:t.title||t.label||'?')).join(', ')||'?';
+          const moreCount=passedSlice.length-2;
+          const moreSuffix=moreCount>0?`, +${moreCount} more`:'';
+          const range=passedEnd>passedStart?`${passedStart}–${passedEnd}`:`${passedStart}`;
+          rows.push(`<tr class="pool-pass"><td colspan="6" class="pool-pass-cell">↩ pool[${range}] not selected this pass: ${esc(passedLabels)}${esc(moreSuffix)}</td></tr>`);
+          _poolPassRenderedForGap=true;
+        }
+      }
+    }
+    if(it.predicted&&typeKey==='music'){
+      _prevMusicPlaylistIdx=Number.isInteger(it.playlist_index)?it.playlist_index:-1;
+      _poolPassRenderedForGap=false;
+    }
   });
 
   if(upFiltered.length>10){

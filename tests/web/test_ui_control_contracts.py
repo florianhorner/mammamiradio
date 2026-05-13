@@ -638,8 +638,11 @@ class TestSchedulerReasonsDoNotLeakToUI:
         # and "No pacing trigger active" rows in the up-next queue.
         html = ADMIN_HTML.read_text()
 
-        # Find the upcoming-rows render section (starts at `upFiltered.slice(0,10).forEach`).
-        start = html.find("upFiltered.slice(0,10).forEach")
+        # Find the upcoming-rows render section.
+        # The loop variable may be refactored (upFiltered.slice or visibleUpcoming).
+        start = html.find("visibleUpcoming.forEach")
+        if start == -1:
+            start = html.find("upFiltered.slice(0,10).forEach")
         assert start != -1, "could not locate upcoming-rows render section"
         # Scan through to the end of that forEach block.
         end = html.find("});", start) + 3

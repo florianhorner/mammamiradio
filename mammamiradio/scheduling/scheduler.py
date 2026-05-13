@@ -153,6 +153,8 @@ def preview_upcoming(state: StationState, pacing: PacingSection, tracks: list[Tr
                     "label": t.display if t else "?",
                     "playlist_index": real_idx,
                     "reason": reason,
+                    "source_kind": t.source if t else "",
+                    "predicted": True,
                 }
             )
             songs_since_banter += 1
@@ -161,20 +163,20 @@ def preview_upcoming(state: StationState, pacing: PacingSection, tracks: list[Tr
             segments_since_station_id += 1
             segments_since_time_check += 1
         elif seg_type == SegmentType.BANTER:
-            preview.append({"type": "banter", "label": "Host banter", "reason": reason})
+            preview.append({"type": "banter", "label": "Host banter", "reason": reason, "predicted": True})
             songs_since_banter = 0
         elif seg_type == SegmentType.NEWS_FLASH:
-            preview.append({"type": "news_flash", "label": "Notizie Flash", "reason": reason})
+            preview.append({"type": "news_flash", "label": "Notizie Flash", "reason": reason, "predicted": True})
             songs_since_banter = 0
             songs_since_news = 0
         elif seg_type == SegmentType.AD:
-            preview.append({"type": "ad", "label": "Ad break", "reason": reason})
+            preview.append({"type": "ad", "label": "Ad break", "reason": reason, "predicted": True})
             songs_since_ad = 0
         elif seg_type == SegmentType.STATION_ID:
-            preview.append({"type": "station_id", "label": "Station ID", "reason": reason})
+            preview.append({"type": "station_id", "label": "Station ID", "reason": reason, "predicted": True})
             segments_since_station_id = 0
         elif seg_type == SegmentType.TIME_CHECK:
-            preview.append({"type": "time_check", "label": "Ora esatta", "reason": reason})
+            preview.append({"type": "time_check", "label": "Ora esatta", "reason": reason, "predicted": True})
             segments_since_time_check = 0
 
         segments_produced += 1
