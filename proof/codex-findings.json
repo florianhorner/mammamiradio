@@ -1,0 +1,28 @@
+{
+  "findings": [
+    {
+      "severity": "P2",
+      "message": "push_state_to_ha never calls raise_for_status(); HA 401/403/500 responses silently accepted, entities stay missing/stale.",
+      "file": "mammamiradio/home/ha_context.py",
+      "line": 977
+    },
+    {
+      "severity": "P2",
+      "message": "segment_type not forced to 'off' when session_stopped=True; heartbeat can push stale segment type inconsistent with idle media_player state.",
+      "file": "mammamiradio/home/ha_context.py",
+      "line": 917
+    },
+    {
+      "severity": "P2",
+      "message": "No serialization between concurrent push tasks; slow transition push can overwrite stop push. Acceptable for v1 — heartbeat corrects within 30s.",
+      "file": "mammamiradio/web/streamer.py",
+      "line": 958
+    },
+    {
+      "severity": "P3",
+      "message": "Heartbeat task dereferenced — addressed with del pattern and event loop ownership note.",
+      "file": "mammamiradio/scheduling/producer.py",
+      "line": 530
+    }
+  ]
+}

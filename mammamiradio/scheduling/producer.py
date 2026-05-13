@@ -503,6 +503,11 @@ async def run_producer(
     _prefetch_task: asyncio.Task[None] | None = None  # background norm prefetch for next track
     _drain_guard_queued = False  # True after a drain-recovery clip is inserted, until a real segment lands
     _prefetch_failed_keys: set[str] = set()  # tracks whose prefetch failed — skip until playlist rotates
+    _ha_tasks: set[asyncio.Task[None]] = set()
+
+    def _track_ha_task(task: asyncio.Task[None]) -> None:
+        _ha_tasks.add(task)
+        task.add_done_callback(_ha_tasks.discard)
 
     if config.homeassistant.enabled and config.ha_token and config.homeassistant.url:
 
@@ -524,22 +529,25 @@ async def run_producer(
                     except Exception:
                         interval = min(interval * 2, 300.0)
 
-        _ha_heartbeat_task: asyncio.Task | None = asyncio.create_task(_ha_heartbeat())
-    else:
-        _ha_heartbeat_task = None
-    del _ha_heartbeat_task  # event loop owns it; local ref not needed
+        _ha_heartbeat_task = asyncio.create_task(_ha_heartbeat())
+        _track_ha_task(_ha_heartbeat_task)
+        producer_task = asyncio.current_task()
+        if producer_task is not None:
+            producer_task.add_done_callback(lambda _task: _ha_heartbeat_task.cancel())
 
     while True:
         if state.session_stopped:
             if not _was_stopped and config.homeassistant.enabled and config.ha_token and config.homeassistant.url:
-                asyncio.create_task(
-                    push_state_to_ha(
-                        ha_url=config.homeassistant.url,
-                        ha_token=config.ha_token,
-                        now_streaming={},
-                        current_track=None,
-                        listeners_active=state.listeners_active,
-                        session_stopped=True,
+                _track_ha_task(
+                    asyncio.create_task(
+                        push_state_to_ha(
+                            ha_url=config.homeassistant.url,
+                            ha_token=config.ha_token,
+                            now_streaming={},
+                            current_track=None,
+                            listeners_active=state.listeners_active,
+                            session_stopped=True,
+                        )
                     )
                 )
             if _prefetch_task is not None and not _prefetch_task.done():
