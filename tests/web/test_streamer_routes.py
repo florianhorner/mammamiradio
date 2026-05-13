@@ -15,6 +15,7 @@ from fastapi import FastAPI
 
 from mammamiradio.core.config import load_config
 from mammamiradio.core.models import Segment, SegmentType, StationState, Track
+from mammamiradio.web.listener_requests import router as listener_requests_router
 from mammamiradio.web.streamer import (
     _ASSET_VERSION,
     LiveStreamHub,
@@ -35,6 +36,7 @@ def _make_test_app(*, admin_password: str = "", admin_token: str = "") -> FastAP
     """Build a minimal FastAPI app with the streamer router and populated state."""
     app = FastAPI()
     app.include_router(router)
+    app.include_router(listener_requests_router)
 
     config = load_config(TOML_PATH)
     # Override auth settings for test isolation
@@ -918,6 +920,53 @@ async def test_setup_recheck_returns_onboarding_payload():
     assert "detected_mode" in body
     assert "station_mode" in body
     assert "signature" in body
+
+
+@pytest.mark.asyncio
+async def test_setup_provider_check_returns_secret_safe_probe_payload():
+    app = _make_test_app()
+    app.state.config.anthropic_api_key = "anthropic-secret"
+    app.state.config.openai_api_key = "openai-secret"
+    probe_payload = {
+        "ok": True,
+        "providers": {
+            "anthropic": {
+                "provider": "anthropic",
+                "configured": True,
+                "ok": False,
+                "status_code": 401,
+                "error_type": "authentication_error",
+                "detail": "authentication_error invalid x-api-key",
+            },
+            "openai_chat": {
+                "provider": "openai_chat",
+                "configured": True,
+                "ok": True,
+                "status_code": 200,
+                "error_type": "",
+                "detail": "",
+            },
+            "openai_tts": {
+                "provider": "openai_tts",
+                "configured": True,
+                "ok": True,
+                "status_code": 200,
+                "error_type": "",
+                "detail": "",
+            },
+        },
+    }
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    with patch("mammamiradio.web.streamer.check_provider_keys", new=AsyncMock(return_value=probe_payload)) as probe:
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            resp = await client.post("/api/setup/provider-check")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body == probe_payload
+    assert "anthropic-secret" not in resp.text
+    assert "openai-secret" not in resp.text
+    probe.assert_awaited_once_with(app.state.config)
 
 
 @pytest.mark.asyncio

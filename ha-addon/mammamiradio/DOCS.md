@@ -208,78 +208,40 @@ The station name is what the hosts say on air. If you call it "Radio Florian", t
 
 The name appears roughly once every 3–4 banter exchanges, never forced. You can also set it via environment variable: `STATION_NAME=Radio Florian`.
 
-## Home Assistant media_player entity
+## Home Assistant pushed entities
 
-You can expose the station as a `media_player` entity in HA — show the current track on dashboards, control play/pause/skip from automations, or cast the stream to a Sonos, Google, or Alexa speaker.
+The add-on automatically pushes its playback state to HA after each segment transition and every 30 seconds — no `configuration.yaml` changes required. Entities appear in **Developer Tools → States** within 30 seconds of startup.
 
-**Setup (one-time):**
+| Entity ID | Type | State values | Key attributes |
+|---|---|---|---|
+| `media_player.mammamiradio` | media_player | `playing` / `idle` | `media_title`, `media_artist`, `media_content_type`, `mammamiradio_segment_type`, `mammamiradio_listeners` |
+| `sensor.mammamiradio_segment_type` | sensor | `music` / `banter` / `ad` / `off` | — |
+| `sensor.mammamiradio_listeners` | sensor | integer | `unit_of_measurement: listeners` |
+| `binary_sensor.mammamiradio_on_air` | binary_sensor | `on` / `off` | — |
 
-1. In the add-on Configuration tab, set `admin_token` to a stable string (e.g. `my-radio-token`). This avoids log-hunting for the auto-generated token on every restart.
-2. Add that token to `secrets.yaml`:
-   ```yaml
-   mammamiradio_admin_token: my-radio-token
-   ```
-3. Add these three blocks to `configuration.yaml` and reload HA:
+**30-second cold-start note:** after a HA or add-on restart, pushed entities reappear within 30 seconds via the heartbeat. Automations triggering on `state_changed` may miss the first segment after restart — add an `initial_state: playing` guard if needed.
+
+**Lovelace media card** (copy-paste, no YAML required):
 
 ```yaml
-rest:
-  - resource: "http://localhost:8000/public-status"
-    scan_interval: 5
-    sensor:
-      - name: "mammamiradio_now_streaming"
-        value_template: "{{ value_json.now_streaming.type }}"
-        json_attributes:
-          - now_streaming
-
-template:
-  - media_player:
-      - name: "Mamma Mi Radio"
-        unique_id: mammamiradio_player
-        state: >
-          {% set t = state_attr('sensor.mammamiradio_now_streaming', 'now_streaming') %}
-          {% if t and t.type not in ['stopped', 'skipping'] %}playing{% else %}paused{% endif %}
-        media_title: >
-          {% set t = state_attr('sensor.mammamiradio_now_streaming', 'now_streaming') %}
-          {% if t %}{{ t.get('metadata', {}).get('title_only', t.label) }}{% endif %}
-        media_artist: >
-          {% set t = state_attr('sensor.mammamiradio_now_streaming', 'now_streaming') %}
-          {% if t and t.type == 'music' %}{{ t.get('metadata', {}).get('artist', 'Mamma Mi Radio') }}
-          {% else %}Mamma Mi Radio{% endif %}
-        entity_picture: >
-          {% set t = state_attr('sensor.mammamiradio_now_streaming', 'now_streaming') %}
-          {% if t %}{{ t.get('metadata', {}).get('album_art', '') }}{% endif %}
-        media_content_type: "music"
-        media_content_id: "http://localhost:8000/stream"
-        supported_features:
-          - pause
-          - play
-          - next_track
-        play:
-          - action: rest_command.mammamiradio_resume
-        pause:
-          - action: rest_command.mammamiradio_stop
-        media_next_track:
-          - action: rest_command.mammamiradio_skip
-
-rest_command:
-  mammamiradio_resume:
-    url: "http://localhost:8000/api/resume"
-    method: POST
-    headers:
-      X-Radio-Admin-Token: !secret mammamiradio_admin_token
-  mammamiradio_stop:
-    url: "http://localhost:8000/api/stop"
-    method: POST
-    headers:
-      X-Radio-Admin-Token: !secret mammamiradio_admin_token
-  mammamiradio_skip:
-    url: "http://localhost:8000/api/skip"
-    method: POST
-    headers:
-      X-Radio-Admin-Token: !secret mammamiradio_admin_token
+type: media-control
+entity: media_player.mammamiradio
 ```
 
-The entity `media_player.mamma_mi_radio` will appear with the current track title, artist, and album art (from YouTube thumbnails). You can add it to a dashboard card or use it in automations to cast the stream to any HA-connected speaker with `media_player.play_media`.
+**Automation example** (turn lights down when banter starts):
+
+```yaml
+trigger:
+  - platform: state
+    entity_id: sensor.mammamiradio_segment_type
+    to: "banter"
+action:
+  - service: light.turn_on
+    data:
+      brightness_pct: 30
+```
+
+**Note:** pushed entities appear in Developer Tools → States but not in the HA entity registry (Integrations page). HA Assist requires a HACS integration for full registry visibility.
 
 ## Tiers
 

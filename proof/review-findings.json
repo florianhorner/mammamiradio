@@ -1,0 +1,34 @@
+{
+  "findings": [
+    {
+      "severity": "P2",
+      "message": "dict(state.now_streaming) shallow copy race — fixed with copy.deepcopy in streamer.py and producer.py heartbeat.",
+      "file": "mammamiradio/web/streamer.py",
+      "line": 961
+    },
+    {
+      "severity": "P2",
+      "message": "test_push_state_to_ha_session_stopped missing segment_type assertion — fixed.",
+      "file": "tests/home/test_ha_context.py",
+      "line": 1274
+    },
+    {
+      "severity": "P3",
+      "message": "mammamiradio_queue_depth always 0 — documented placeholder, v2 concern.",
+      "file": "mammamiradio/home/ha_context.py",
+      "line": 944
+    },
+    {
+      "severity": "P3",
+      "message": "Debounce bypass for session_stopped=True is intentional — heartbeat has 30s rate limiting. Not a bug.",
+      "file": "mammamiradio/home/ha_context.py",
+      "line": 909
+    },
+    {
+      "severity": "P3",
+      "message": "_ha_heartbeat_task GC risk — mitigated: asyncio event loop holds strong reference to scheduled tasks. del applied to make intent explicit.",
+      "file": "mammamiradio/scheduling/producer.py",
+      "line": 526
+    }
+  ]
+}

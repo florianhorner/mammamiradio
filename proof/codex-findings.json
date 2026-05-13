@@ -1,0 +1,28 @@
+{
+  "findings": [
+    {
+      "severity": "P2",
+      "message": "push_state_to_ha logs HA 4xx/5xx responses per entity and continues the batch; covered by test_push_state_to_ha_http_error_warns_and_continues.",
+      "file": "mammamiradio/home/ha_context.py",
+      "line": 977
+    },
+    {
+      "severity": "P2",
+      "message": "session_stopped=True forces segment_type off and idle media_player state; covered by test_push_state_to_ha_session_stopped.",
+      "file": "mammamiradio/home/ha_context.py",
+      "line": 917
+    },
+    {
+      "severity": "P2",
+      "message": "push_state_to_ha serializes concurrent pushes with a process-local asyncio lock; stop-after-slow-transition ordering is covered.",
+      "file": "mammamiradio/web/streamer.py",
+      "line": 958
+    },
+    {
+      "severity": "P3",
+      "message": "Heartbeat task dereferenced — addressed with del pattern and event loop ownership note.",
+      "file": "mammamiradio/scheduling/producer.py",
+      "line": 530
+    }
+  ]
+}

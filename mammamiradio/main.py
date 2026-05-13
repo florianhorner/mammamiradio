@@ -20,6 +20,7 @@ from mammamiradio.hosts.persona import PersonaStore
 from mammamiradio.playlist.downloader import evict_cache_lru, purge_suspect_cache_files
 from mammamiradio.playlist.playlist import DEMO_TRACKS, fetch_startup_playlist, read_persisted_source
 from mammamiradio.scheduling.producer import prewarm_first_segment, run_producer
+from mammamiradio.web.listener_requests import router as listener_requests_router
 from mammamiradio.web.streamer import LiveStreamHub, _session_stopped_flag, router, run_playback_loop
 
 logging.basicConfig(
@@ -43,6 +44,7 @@ async def _lifespan(app: FastAPI):
 
 app = FastAPI(title="mammamiradio", lifespan=_lifespan)
 app.include_router(router)
+app.include_router(listener_requests_router)
 
 
 async def startup():
