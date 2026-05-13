@@ -1595,7 +1595,7 @@ function splitTrackLabel(seg){
   return {title:label,artist:(seg&&seg.metadata&&seg.metadata.artist)||''};
 }
 function renderProgramme(st){
-  const hash=JSON.stringify([st?.now_streaming?.label,st?.upcoming?.map(u=>[u.label,u.playlist_index,u.source_kind,u.predicted]),(st?.stream_log||[]).slice(0,5).map(e=>e.label),_programmeFilter]);
+  const hash=JSON.stringify([st?.now_streaming?.label,st?.now_streaming?.type,st?.upcoming?.map(u=>[u.label,u.type,u.segment_type,u.playlist_index,u.source_kind,u.predicted]),(st?.stream_log||[]).slice(0,5).map(e=>[e.label,e.type,e.segment_type]),_programmeFilter]);
   if(hash===_lastProgrammeHash)return;
   _lastProgrammeHash=hash;
   const el=document.getElementById('programmeList');

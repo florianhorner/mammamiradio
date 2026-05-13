@@ -88,6 +88,105 @@ async def test_queued_segment_includes_playlist_index_for_music(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_queued_segment_uses_selected_track_identity_for_duplicate_cache_keys(tmp_path):
+    """Duplicate cache keys must still report the exact selected pool index."""
+    tracks = [
+        Track(title="Canzone", artist="Artista", duration_ms=200_000, spotify_id="demo1", source="classic"),
+        Track(title="Canzone", artist="Artista", duration_ms=200_000, spotify_id="demo2", source="classic"),
+    ]
+    state = StationState(playlist=tracks, listeners_active=1, pinned_track=tracks[1])
+    config = _make_config(tmp_path)
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    music_path = tmp_path / "music.mp3"
+    music_path.write_bytes(b"fake audio")
+
+    async def fake_render(track: Track, *_args, **_kwargs) -> RenderedMusicTrack:
+        return RenderedMusicTrack(track=track, path=music_path, cache_path=music_path, cache_hit=True)
+
+    with (
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.MUSIC),
+        patch(f"{PRODUCER_MODULE}._render_music_track", new_callable=AsyncMock, side_effect=fake_render),
+        patch(f"{PRODUCER_MODULE}._prefetch_next", new_callable=AsyncMock),
+        patch(f"{PRODUCER_MODULE}.generate_track_rationale", return_value="Because it fits."),
+        patch(f"{PRODUCER_MODULE}.classify_track_crate", return_value="test"),
+    ):
+        await _run_until_status_queued(queue, state, config)
+
+    queued = state.queued_segments[-1]
+    assert queued["playlist_index"] == 1
+    assert queued["source_kind"] == "classic"
+
+
+@pytest.mark.asyncio
+async def test_empty_fallback_keeps_attribution_defaults(tmp_path):
+    """Empty fallback audio delivery must not leak stale music attribution."""
+    track = Track(title="Canzone Uno", artist="Artista", duration_ms=200_000, spotify_id="demo1", source="classic")
+    state = StationState(playlist=[track], listeners_active=1)
+    config = _make_config(tmp_path)
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+
+    def fake_silence(path: Path, _duration: float) -> None:
+        path.write_bytes(b"silence")
+
+    with (
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.MUSIC),
+        patch(f"{PRODUCER_MODULE}._render_music_track", new_callable=AsyncMock, side_effect=RuntimeError("no audio")),
+        patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=None),
+        patch(f"{PRODUCER_MODULE}.generate_silence", side_effect=fake_silence),
+        patch(f"{PRODUCER_MODULE}._prefetch_next", new_callable=AsyncMock),
+    ):
+        await _run_until_status_queued(queue, state, config)
+
+    queued = state.queued_segments[-1]
+    assert queued["playlist_index"] == -1
+    assert queued["source_kind"] == ""
+
+
+@pytest.mark.asyncio
+async def test_post_restart_resume_keeps_music_attribution(tmp_path):
+    """After a stopped session resumes, produced music keeps source attribution."""
+    track = Track(title="Canzone Uno", artist="Artista", duration_ms=200_000, spotify_id="demo1", source="classic")
+    state = StationState(playlist=[track], listeners_active=1, session_stopped=True)
+    config = _make_config(tmp_path)
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    music_path = tmp_path / "music.mp3"
+    music_path.write_bytes(b"fake audio")
+
+    async def fake_render(track: Track, *_args, **_kwargs) -> RenderedMusicTrack:
+        return RenderedMusicTrack(track=track, path=music_path, cache_path=music_path, cache_hit=True)
+
+    with (
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.MUSIC),
+        patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=None),
+        patch(f"{PRODUCER_MODULE}._render_music_track", new_callable=AsyncMock, side_effect=fake_render),
+        patch(f"{PRODUCER_MODULE}._prefetch_next", new_callable=AsyncMock),
+        patch(f"{PRODUCER_MODULE}.generate_track_rationale", return_value="Because it fits."),
+        patch(f"{PRODUCER_MODULE}.classify_track_crate", return_value="test"),
+    ):
+        task = asyncio.create_task(run_producer(queue, state, config))
+        try:
+            await asyncio.sleep(0.05)
+            assert state.queued_segments == []
+            state.session_stopped = False
+            state.resume_event.set()
+            deadline = asyncio.get_event_loop().time() + 5.0
+            while not state.queued_segments:
+                if asyncio.get_event_loop().time() > deadline:
+                    raise TimeoutError("Producer did not queue after resume")
+                await asyncio.sleep(0.05)
+        finally:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+    queued = state.queued_segments[-1]
+    assert queued["playlist_index"] == 0
+    assert queued["source_kind"] == "classic"
+
+
+@pytest.mark.asyncio
 async def test_queued_segment_playlist_index_minus_one_for_nonmusic(tmp_path):
     """Non-music segments must have playlist_index == -1."""
     state = StationState(

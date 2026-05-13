@@ -743,7 +743,7 @@ async def run_producer(
                     continue
                 logger.info("Producing MUSIC: %s", track.display)
                 playlist_idx = next(
-                    (i for i, t in enumerate(state.playlist) if t.cache_key == track.cache_key),
+                    (i for i, t in enumerate(state.playlist) if t is track),
                     -1,
                 )
 

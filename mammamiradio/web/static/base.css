@@ -279,21 +279,21 @@ body[data-stopped="true"] .waveform {
 
 /* Playlist pool attribution in programme list */
 .pool-badge {
-  font-size: 10px;
-  color: rgba(245, 237, 216, 0.5);
-  background: rgba(245, 237, 216, 0.06);
-  border-radius: 4px;
-  padding: 1px 5px;
-  margin-left: 6px;
-  font-family: var(--font-mono, 'JetBrains Mono', monospace);
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  color: color-mix(in srgb, var(--cream) 50%, transparent);
+  background: color-mix(in srgb, var(--cream) 6%, transparent);
+  border-radius: var(--radius-sm);
+  padding: calc(var(--space-1) / 2) var(--space-1);
+  margin-left: var(--space-1);
   vertical-align: middle;
 }
 .pool-badge.pool-classic { color: var(--sun); }
-.pool-badge.pool-jamendo { color: #5ba4cf; }
+.pool-badge.pool-jamendo { color: var(--ok); }
 
 tr.pool-pass td.pool-pass-cell {
-  font-size: 10px;
-  color: rgba(245, 237, 216, 0.3);
-  padding: 2px 8px;
+  font-size: 0.625rem;
+  color: color-mix(in srgb, var(--cream) 30%, transparent);
+  padding: calc(var(--space-1) / 2) var(--space-2);
   font-style: italic;
 }
