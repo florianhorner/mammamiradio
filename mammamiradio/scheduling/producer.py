@@ -511,8 +511,8 @@ async def prewarm_first_segment(
         segment.duration_sec = await loop.run_in_executor(None, _probe_segment_duration, norm_path)
         await queue.put(segment)
         state.after_music(track)
-        _set_last_music_file(norm_path)
-        state.last_music_file = norm_path
+        _set_last_music_file(rendered.cache_path)
+        state.last_music_file = rendered.cache_path
         logger.info("Pre-warmed first segment: %s (ready for instant playback)", track.display)
         return True
     except Exception:
@@ -958,8 +958,8 @@ async def run_producer(
                     ephemeral=not norm_is_cached,
                 )
                 _bound_track = track
-                _set_last_music_file(norm_path)
-                state.last_music_file = norm_path
+                _set_last_music_file(norm_cached)
+                state.last_music_file = norm_cached
 
                 def _music_callback(_t=_bound_track) -> None:
                     state.after_music(_t)
@@ -1671,9 +1671,6 @@ async def run_producer(
                     if pre_sting_ephemeral:
                         pre_sting_path.unlink(missing_ok=True)
                     segment = replace(segment, path=merged_path, ephemeral=True)
-                    if actual_seg_type == SegmentType.MUSIC:
-                        _set_last_music_file(merged_path)
-                        state.last_music_file = merged_path
                 except Exception as exc:
                     logger.warning("Transition sting generation failed, using clean cut: %s", exc)
             segment.duration_sec = await asyncio.to_thread(_probe_segment_duration, segment.path)

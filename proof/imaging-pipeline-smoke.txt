@@ -1,0 +1,11 @@
+pytest run: 2026-05-14T00:37:14Z
+branch: florianhorner/feat/soundbed-jingles-swooshes
+commit: e58542b5
+
+..............................s......................................... [ 99%]
+..                                                                       [100%]
+1728 passed, 2 skipped, 7 deselected in 44.19s
+
+normalizer coverage: 99% (floor: 96%)
+total coverage: 94% (floor: 92%)
+all per-module floors held
