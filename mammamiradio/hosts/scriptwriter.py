@@ -878,6 +878,19 @@ def _host_expression_block(host_names: list[str]) -> str:
     return "\n".join(lines)
 
 
+def _abbreviated_bank_block() -> str:
+    """Build abbreviated expression bank for the system prompt fallback section.
+
+    Reads from _EXPRESSION_BANK so edits to the bank propagate automatically.
+    Takes first 8 per category to keep the prompt token-efficient.
+    """
+    lines = []
+    for category, exprs in _EXPRESSION_BANK.items():
+        subset = exprs[:8]
+        lines.append(f"    [{category}] {', '.join(subset)}")
+    return "\n".join(lines)
+
+
 def _build_system_prompt(config: StationConfig) -> str:
     """Build the shared station persona prompt used for every script request."""
     host_lines = []
@@ -891,6 +904,7 @@ def _build_system_prompt(config: StationConfig) -> str:
         host_lines.append(line)
     host_descriptions = "\n".join(host_lines)
     host_expr_block = _host_expression_block([h.name for h in config.hosts])
+    abbrev_bank = _abbreviated_bank_block()
     geography = ""
     if config.sonic_brand.geography:
         geography = f"\nThe station broadcasts from the area between {config.sonic_brand.geography}. Occasionally reference these places naturally — local landmarks, weather there, complaints about the commute between them."
@@ -951,15 +965,8 @@ Rules:
 - Sound like REAL Italian radio. Each host has a distinct expression fingerprint — reach
   into YOUR character's vocabulary, not a generic Italian list.
 {host_expr_block}
-  Full expression bank by emotional register (abbreviated — use for variety and fallback):
-    [surprise] Ammazza!, Accidenti!, Caspita!, Azzo!, Mannaggia!, Maddai!, To'!, Embé!
-    [hesitation] Senti un po'..., Mah guarda..., Boh..., Vediamo..., Come dire...,
-                 Stammi a sentire..., Se devo essere onesto..., In qualche modo...
-    [agreement] Esatto., Appunto., Dico io., Hai ragione tu., Figurati., E già.
-    [disagreement] Ma vattene., Nah., Lascia perdere., Macché., Non ci credo., Ma su.,
-                   Però però però...
-    [transition] Comunque., Vabbè., Basta., Il fatto è che..., A proposito,, Tra l'altro,
-    [reaction] Eh niente..., No ma—, Eh già..., Uffa., Beh..., Eh boh..., E vabbè.
+  Full expression bank by emotional register (use for variety and fallback):
+{abbrev_bank}
 - VARIETY RULE: Never use the same expression twice in one exchange. Rotate through your
   character's full list before repeating. If you feel the urge to say "dunque" — stop.
   Reach one level deeper: "Senti un po'...", "Come dire...", "Vediamo..." are all richer.

@@ -165,6 +165,33 @@ def test_system_prompt_contains_giulia_expression(config):
     assert "Ammazza!" in prompt
 
 
+def test_abbreviated_bank_block_covers_all_registers():
+    from mammamiradio.hosts.scriptwriter import _abbreviated_bank_block
+
+    result = _abbreviated_bank_block()
+    for category in ("surprise", "hesitation", "agreement", "disagreement", "transition", "reaction"):
+        assert f"[{category}]" in result
+
+
+def test_abbreviated_bank_block_reads_from_expression_bank():
+    from mammamiradio.hosts.scriptwriter import _EXPRESSION_BANK, _abbreviated_bank_block
+
+    result = _abbreviated_bank_block()
+    # First expression in every category should appear in the output
+    for exprs in _EXPRESSION_BANK.values():
+        assert exprs[0] in result
+
+
+def test_system_prompt_abbreviated_bank_in_sync(config):
+    # The abbreviated bank in the built prompt must contain expressions
+    # from _EXPRESSION_BANK, not a stale hard-coded list
+    from mammamiradio.hosts.scriptwriter import _EXPRESSION_BANK
+
+    prompt = _build_system_prompt(config)
+    first_surprise = _EXPRESSION_BANK["surprise"][0]
+    assert first_surprise in prompt
+
+
 def test_massage_transition_text_rewrites_repeated_che_pezzo():
     text = _massage_transition_text(
         "Che pezzo, mamma mia.",
