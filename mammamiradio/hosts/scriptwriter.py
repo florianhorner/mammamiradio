@@ -83,6 +83,121 @@ _TRANSITION_REWRITE_MAP: dict[str, list[str]] = {
     ],
 }
 _BORING_TRANSITION_STEMS = {"che pezzo", "eh non", "bellissima", "allora", "e adesso"}
+# Expression bank organized by emotional register. LLMs weight early list items heavily —
+# most-distinctive expressions appear near the top of each category.
+_EXPRESSION_BANK: dict[str, list[str]] = {
+    "surprise": [
+        "Ammazza!",
+        "Accidenti!",
+        "Caspita!",
+        "Azzo!",
+        "Mannaggia!",
+        "Diamine!",
+        "Maddai!",
+        "To'!",
+        "Embé!",
+        "Mamma mia!",
+        "Madonna santa!",
+        "Dio mio!",
+        "E dai?!",
+        "Ma dai?!",
+    ],
+    "hesitation": [
+        "Senti un po'...",
+        "Mah, guarda...",
+        "Boh...",
+        "Vediamo...",
+        "Aspetta che ci penso...",
+        "Come dire...",
+        "Ecco, allora...",
+        "Diciamo che...",
+        "In qualche modo...",
+        "Stammi a sentire...",
+        "La questione è...",
+        "Detto questo...",
+        "Se devo essere onesto...",
+        "Beh, insomma...",
+    ],
+    "agreement": [
+        "Esatto.",
+        "Appunto.",
+        "Dico io.",
+        "Hai ragione tu.",
+        "Figurati.",
+        "Che vuoi che ti dica.",
+        "Sì sì sì.",
+        "Bravo.",
+        "Giusto.",
+        "Eccome.",
+        "Certo che sì.",
+        "E già.",
+    ],
+    "disagreement": [
+        "Ma vattene.",
+        "Nah.",
+        "Lascia perdere.",
+        "Macché.",
+        "Non me ne parlare.",
+        "Ma per favore.",
+        "Ma ti pare.",
+        "Non ci credo.",
+        "Ma piantala.",
+        "Ma su.",
+        "E allora?",
+        "Ma che stai dicendo.",
+        "Ma dai su.",
+        "Però però però...",
+    ],
+    "transition": [
+        "Comunque.",
+        "Vabbè.",
+        "Basta.",
+        "Però.",
+        "Il fatto è che...",
+        "A proposito,",
+        "A parte questo,",
+        "In ogni caso,",
+        "Dico solo che...",
+        "E sì.",
+        "Per il resto,",
+        "Detto questo,",
+        "Tra l'altro,",
+    ],
+    "reaction": [
+        "Eh niente...",
+        "No ma—",
+        "Sì ma—",
+        "Eh già...",
+        "Mh.",
+        "Uffa.",
+        "Beh...",
+        "Eh boh...",
+        "E vabbè.",
+        "Eh dai...",
+        "No no no.",
+        "Sì sì.",
+    ],
+}
+# Per-host expression fingerprints. Each host prefers a subset across emotional registers.
+# Custom host names fall back to the full _EXPRESSION_BANK via the system prompt note.
+_HOST_FINGERPRINTS: dict[str, dict[str, list[str]]] = {
+    "Giulia": {
+        "surprise": ["Ammazza!", "Accidenti!", "Azzo!", "Maddai!"],
+        "hesitation": ["Senti un po'...", "Mah, guarda...", "Come dire...", "Boh..."],
+        "agreement": ["Esatto.", "Appunto.", "Dico io.", "E già."],
+        "disagreement": ["Ma vattene.", "Nah.", "Lascia perdere.", "Macché."],
+        "transition": ["Basta.", "Comunque.", "Il fatto è che...", "A parte questo,"],
+        "reaction": ["Eh niente...", "No ma—", "Uffa.", "No no no."],
+    },
+    "Marco": {
+        "surprise": ["Mamma mia!", "Caspita!", "Ma dai?!", "Madonna santa!"],
+        "hesitation": ["Vediamo...", "Diciamo che...", "Ecco, allora...", "Se devo essere onesto..."],
+        "agreement": ["Hai ragione tu.", "Figurati.", "Sì sì sì.", "Bravo."],
+        "disagreement": ["Non me ne parlare.", "Però però però...", "Ma per favore.", "Ma su."],
+        "transition": ["A proposito,", "In ogni caso,", "Dico solo che...", "Tra l'altro,"],
+        "reaction": ["Eh già...", "Sì ma—", "Beh...", "Mh."],
+    },
+}
 _ECHO_STYLE_INSTRUCTION = (
     "STYLE: Echo the song's energy — finish a phrase like you're still INSIDE the song's feeling, "
     "then pivot naturally to what's next. Not literal singing — rhythm and phrasing that mirrors "
@@ -745,6 +860,37 @@ def _personality_modifier(
     return f"\n{name}'s current mood: " + " ".join(parts)
 
 
+def _host_expression_block(host_names: list[str]) -> str:
+    """Build per-host expression injection for the system prompt.
+
+    Returns a multi-line string ready to embed in the system prompt f-string.
+    Each known host gets their fingerprint; unknown host names fall back to full bank.
+    """
+    lines = []
+    for name in host_names:
+        fp = _HOST_FINGERPRINTS.get(name)
+        if fp is None:
+            lines.append(f"  {name}: use the full expression bank below")
+            continue
+        lines.append(f"  {name}'s preferred expressions:")
+        for category, exprs in fp.items():
+            lines.append(f"    [{category}] {', '.join(exprs)}")
+    return "\n".join(lines)
+
+
+def _abbreviated_bank_block() -> str:
+    """Build abbreviated expression bank for the system prompt fallback section.
+
+    Reads from _EXPRESSION_BANK so edits to the bank propagate automatically.
+    Takes first 8 per category to keep the prompt token-efficient.
+    """
+    lines = []
+    for category, exprs in _EXPRESSION_BANK.items():
+        subset = exprs[:8]
+        lines.append(f"    [{category}] {', '.join(subset)}")
+    return "\n".join(lines)
+
+
 def _build_system_prompt(config: StationConfig) -> str:
     """Build the shared station persona prompt used for every script request."""
     host_lines = []
@@ -757,6 +903,8 @@ def _build_system_prompt(config: StationConfig) -> str:
             line += modifier
         host_lines.append(line)
     host_descriptions = "\n".join(host_lines)
+    host_expr_block = _host_expression_block([h.name for h in config.hosts])
+    abbrev_bank = _abbreviated_bank_block()
     geography = ""
     if config.sonic_brand.geography:
         geography = f"\nThe station broadcasts from the area between {config.sonic_brand.geography}. Occasionally reference these places naturally — local landmarks, weather there, complaints about the commute between them."
@@ -814,9 +962,15 @@ Rules:
 - Be EDGY. Over the top. Think Italian shock radio meets GTA radio. Push boundaries.
   Roast listeners, roast each other, roast Italy. Controversial takes on food, fashion,
   politics (fictional), sports. The hosts say things that make the producer nervous.
-- Sound like REAL Italian radio. Use natural Italian exclamations and filler words freely:
-  basta, dai, ma va, figurati, mamma mia, allora, insomma, comunque, senti, guarda,
-  eh niente, vabbè, cioè, tipo, no?, dico io, madonna, oddio, aspetta aspetta.
+- Sound like REAL Italian radio. Each host has a distinct expression fingerprint — reach
+  into YOUR character's vocabulary, not a generic Italian list.
+{host_expr_block}
+  Full expression bank by emotional register (use for variety and fallback):
+{abbrev_bank}
+- VARIETY RULE: Never use the same expression twice in one exchange. Rotate through your
+  character's full list before repeating. If you feel the urge to say "dunque" — stop.
+  Reach one level deeper: "Senti un po'...", "Come dire...", "Vediamo..." are all richer.
+  "oddio" is valid as genuine shock, not as a thinking pause.
 - Hosts interrupt each other, trail off, change topic mid-sentence. Real radio is messy.
 - When chaos is high, make the dialogue feel crowded: cut-offs, corrections, stepping on each
   other's point, and sentences that restart halfway through.
@@ -854,7 +1008,7 @@ Rules:
   business being said on radio. Then continues as if nothing happened. The other host doesn't react.
 - PHYSICAL COMEDY: reference the studio physically. Someone knocks something over.
   Someone's headphone cable gets caught. The mic sounds wrong and they complain about it.
-- REACT BEFORE WORDS: a host reacts first — laughs, "eh", groans, "oddio no" — before forming a sentence. Feelings first, words second.
+- REACT BEFORE WORDS: a host reacts first — laughs, "eh", groans, "Azzo," — before forming a sentence. Feelings first, words second.
 - BANNED PHRASES: never write these — they are overused clichés that make the station sound fake:
   "che bomba", "che ritmo", "che musica", "che canzone", "che pezzo", "ah che",
   "assolutamente", "incredibile", "fantastico", "pazzesco", "spettacolare",
