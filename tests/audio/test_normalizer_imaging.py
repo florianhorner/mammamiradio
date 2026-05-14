@@ -51,7 +51,11 @@ def test_transition_sting_music_to_banter(tmp_path, mock_run):
     mock_sweep.assert_called_once()
     mock_bed.assert_called_once()
     _, kwargs = mock_sweep.call_args
-    assert kwargs.get("duration_sec", mock_sweep.call_args.args[1] if len(mock_sweep.call_args.args) > 1 else 0.8) == pytest.approx(0.8, abs=0.01) or True
+    duration = kwargs.get(
+        "duration_sec",
+        mock_sweep.call_args.args[1] if len(mock_sweep.call_args.args) > 1 else 0.8,
+    )
+    assert duration == pytest.approx(0.8, abs=0.01) or True
 
 
 def test_transition_sting_speech_to_music(tmp_path, mock_run):
