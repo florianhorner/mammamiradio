@@ -22,6 +22,7 @@ The current version source of truth is `pyproject.toml`.
 ### Changed
 
 - **Anthropic provider backoff is now scoped per model.** Previously, a single non-retryable error (e.g. an invalid `claude_model` value returning 404) suspended Anthropic for the entire API key for 10 minutes, including for unrelated models the operator might use elsewhere. The block is now keyed on `(api_key, model)` for non-retryable provider errors: a bad model name only suspends *that* model, while a different model in the same key continues to call Anthropic. Authentication failures still suspend all models on the key (the key itself is the broken thing). Builds on PR #315's circuit-breaker scaffolding.
+- **Up Next pool-pass annotation shows a skip count.** When the producer's predicted line-up passes over more than two playlist tracks between songs, the admin programme list now appends `(+N more)` to the `↩ … not selected this pass` row, so the operator sees how many tracks were skipped — not just the first two.
 
 ### Fixed
 

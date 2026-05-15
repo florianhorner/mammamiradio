@@ -657,6 +657,38 @@ class TestSchedulerReasonsDoNotLeakToUI:
         )
 
 
+class TestPoolPassAnnotationShowsSkipCount:
+    """The Up Next "pool-pass" annotation lists the first two skipped playlist
+    tracks. When the predicted line-up passes over more than two tracks between
+    songs, the row must also show a `(+N more)` count so the operator sees the
+    true size of the skipped run, not just a two-track sample.
+    """
+
+    def test_admin_html_pool_pass_annotation_renders_overflow_count(self):
+        html = ADMIN_HTML.read_text()
+
+        # Scope to the upcoming-rows render block (same anchor the sibling
+        # reason-leak guard uses).
+        start = html.find("upFiltered.slice(0,10).forEach")
+        assert start != -1, "could not locate upcoming-rows render section"
+        end = html.find("});", start) + 3
+        block = html[start:end]
+
+        assert "not selected this pass" in block, (
+            "pool-pass annotation render disappeared from the upcoming-rows block."
+        )
+        # The full skipped slice (`pool`) drives the count; `labels` shows only 2.
+        assert "moreCount" in block and "pool.length" in block, (
+            "pool-pass annotation no longer computes the skipped-track overflow "
+            "count — operators would see only the first two of an N-track run."
+        )
+        # The `(+N more)` suffix must be interpolated into the rendered row.
+        assert "${moreSuffix}" in block, (
+            "pool-pass annotation computes the overflow count but never renders "
+            "it — the `(+N more)` suffix is dropped from the row."
+        )
+
+
 # ── Item 11: capabilities status reflects runtime health, not just key presence ─
 
 

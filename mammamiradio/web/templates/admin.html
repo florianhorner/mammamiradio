@@ -1670,7 +1670,9 @@ function renderProgramme(st){
           const end=nextIdx-1;
           const pool=((window._lastStatus&&window._lastStatus.playlist)||(_st&&_st.playlist)||[]).slice(start,end+1);
           const labels=pool.slice(0,2).map(t=>t.display||[t.artist,t.title].filter(Boolean).join(' – ')||t.title||'?').map(esc).join(' • ');
-          rows.push(`<tr class="pool-pass"><td colspan="6" class="pool-pass-cell">↩ pool[${start}–${end}] not selected this pass: ${labels}</td></tr>`);
+          const moreCount=pool.length-2;
+          const moreSuffix=moreCount>0?` (+${moreCount} more)`:'';
+          rows.push(`<tr class="pool-pass"><td colspan="6" class="pool-pass-cell">↩ pool[${start}–${end}] not selected this pass: ${labels}${moreSuffix}</td></tr>`);
         }else if(nextIdx<_prevMusicPlaylistIdx){
           rows.push(`<tr class="pool-pass"><td colspan="6" class="pool-pass-cell">↩ pool wrapped around — new cycle from [${nextIdx}]</td></tr>`);
         }
