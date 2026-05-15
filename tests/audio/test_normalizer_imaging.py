@@ -281,9 +281,7 @@ def test_mix_ad_with_bed_ffprobe_failure_uses_default_duration(tmp_path, mock_ru
 
     assert result == out
     # Even with ffprobe fail, ffmpeg should still be called with fallback 30s
-    ffmpeg_calls = [
-        c[0][0] for c in mock_run.call_args_list if c[0][0][0] == "ffmpeg"
-    ]
+    ffmpeg_calls = [c[0][0] for c in mock_run.call_args_list if c[0][0][0] == "ffmpeg"]
     assert ffmpeg_calls
     assert "30.000" in " ".join(ffmpeg_calls[-1])
 
