@@ -6,6 +6,8 @@ The current version source of truth is `pyproject.toml`.
 
 ## [Unreleased]
 
+## [2.12.0] - 2026-05-15
+
 ### Added
 
 - **Per-host expression fingerprints** — Giulia and Marco now each have a distinct Italian vocabulary organized by emotional register (surprise, hesitation, agreement, disagreement, transition, reaction). A listener can start to distinguish "that's a very Giulia thing to say." The system prompt now carries a 70+ phrase expression bank with a per-host vocabulary guide and a VARIETY RULE that steers the LLM away from overused fillers like "dunque" as a sentence opener. The old 20-word flat filler list is removed. Effective immediately on hot-reload (`POST /api/hot-reload`) — no stream restart needed.
