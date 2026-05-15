@@ -19,6 +19,7 @@ from mammamiradio.hosts.ad_creative import AD_FORMATS, SPEAKER_ROLES, AdBrand, A
 from mammamiradio.hosts.scriptwriter import (
     ListenerRequestCommit,
     _build_system_prompt,
+    _host_expression_block,
     _massage_transition_text,
     _personality_modifier,
     _plan_listener_request_block,
@@ -110,6 +111,85 @@ def test_system_prompt_includes_theme(config):
 def test_system_prompt_includes_station_name(config):
     prompt = _build_system_prompt(config)
     assert config.station.name in prompt
+
+
+# --- _host_expression_block tests ---
+
+
+def test_host_expression_block_known_hosts():
+    result = _host_expression_block(["Giulia", "Marco"])
+    assert "Giulia's preferred expressions:" in result
+    assert "Marco's preferred expressions:" in result
+
+
+def test_host_expression_block_custom_host():
+    result = _host_expression_block(["CustomDJ"])
+    assert "use the full expression bank below" in result
+
+
+def test_system_prompt_contains_fingerprint(config):
+    prompt = _build_system_prompt(config)
+    assert "preferred expressions:" in prompt
+
+
+def test_system_prompt_no_legacy_fillers(config):
+    prompt = _build_system_prompt(config)
+    # The old encouraged-filler list included "oddio" and "aspetta aspetta".
+    # Confirm neither appears as an encouraged filler (the VARIETY RULE may still
+    # mention oddio in a de-emphasis context, so we check the old encouragement phrase).
+    assert "oddio, aspetta aspetta" not in prompt
+    assert "basta, dai, ma va, figurati" not in prompt
+
+
+def test_host_expression_block_distinct_sections():
+    result = _host_expression_block(["Giulia", "Marco"])
+    giulia_start = result.index("Giulia's preferred expressions:")
+    marco_start = result.index("Marco's preferred expressions:")
+    giulia_section = result[giulia_start:marco_start]
+    marco_section = result[marco_start:]
+    # Confirm the sections have different content — hosts are not interchangeable
+    assert giulia_section != marco_section
+
+
+def test_host_expression_block_case_sensitivity():
+    # Host name matching is case-sensitive; lowercase falls back to full bank
+    result_lower = _host_expression_block(["giulia"])
+    assert "use the full expression bank below" in result_lower
+    result_exact = _host_expression_block(["Giulia"])
+    assert "Giulia's preferred expressions:" in result_exact
+
+
+def test_system_prompt_contains_giulia_expression(config):
+    # Verify a specific Giulia fingerprint expression actually lands in the prompt
+    prompt = _build_system_prompt(config)
+    assert "Ammazza!" in prompt
+
+
+def test_abbreviated_bank_block_covers_all_registers():
+    from mammamiradio.hosts.scriptwriter import _abbreviated_bank_block
+
+    result = _abbreviated_bank_block()
+    for category in ("surprise", "hesitation", "agreement", "disagreement", "transition", "reaction"):
+        assert f"[{category}]" in result
+
+
+def test_abbreviated_bank_block_reads_from_expression_bank():
+    from mammamiradio.hosts.scriptwriter import _EXPRESSION_BANK, _abbreviated_bank_block
+
+    result = _abbreviated_bank_block()
+    # First expression in every category should appear in the output
+    for exprs in _EXPRESSION_BANK.values():
+        assert exprs[0] in result
+
+
+def test_system_prompt_abbreviated_bank_in_sync(config):
+    # The abbreviated bank in the built prompt must contain expressions
+    # from _EXPRESSION_BANK, not a stale hard-coded list
+    from mammamiradio.hosts.scriptwriter import _EXPRESSION_BANK
+
+    prompt = _build_system_prompt(config)
+    first_surprise = _EXPRESSION_BANK["surprise"][0]
+    assert first_surprise in prompt
 
 
 def test_massage_transition_text_rewrites_repeated_che_pezzo():
