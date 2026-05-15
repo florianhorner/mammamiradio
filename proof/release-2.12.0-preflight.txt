@@ -1,0 +1,71 @@
+mammamiradio v2.12.0 release preflight
+captured: 2026-05-15T21:22:44Z
+branch: chore/release-2.12.0  base: origin/main
+
+$ make pre-release
+./scripts/pre-release-check.sh
+
+=== mammamiradio pre-release check ===
+
+1. Version consistency
+  [PASS] config.yaml (2.12.0) matches pyproject.toml (2.12.0)
+
+2. ha-addon CHANGELOG
+  [PASS] CHANGELOG head (## 2.12.0) matches config.yaml (2.12.0)
+
+3. FFmpeg music_eq filter chain (normalizer.py)
+  [PASS] music_eq_chain has 2 equalizer filters (de-mud 200Hz + presence 3kHz)
+
+4. Test coverage — empty fallback scenario
+  [PASS] _pick_canned_clip returning None is tested (4 test file(s))
+
+5. Test coverage — post-restart scenario
+  [PASS] session_stopped scenario is tested (22 test file(s))
+
+=======================================
+  Passed: 5  Failed: 0
+=======================================
+
+All checks passed. Safe to bump the version.
+
+$ bash scripts/validate-addon.sh
+=== HA Addon Pre-Flight Validation ===
+
+1. Version sync
+  PASS  config.yaml (2.12.0) == pyproject.toml (2.12.0)
+2. Image path
+  PASS  Image path: ghcr.io/florianhorner/mammamiradio-addon-{arch}
+3. Options → run.sh mapping
+  PASS  All schema keys mapped in run.sh
+4. Critical files
+  PASS  mammamiradio/__init__.py
+  PASS  radio.toml
+  PASS  ha-addon/mammamiradio/Dockerfile
+  PASS  ha-addon/mammamiradio/rootfs/run.sh
+  PASS  ha-addon/mammamiradio/config.yaml
+  PASS  ha-addon/mammamiradio/build.yaml
+  PASS  ha-addon/mammamiradio/translations/en.yaml
+5. Python import
+  PASS  import mammamiradio
+6. Config parse
+  PASS  radio.toml is valid TOML
+6b. radio.toml sync
+  PASS  ha-addon/mammamiradio/radio.toml matches root radio.toml
+7. Shell syntax
+  PASS  run.sh syntax OK
+8. Hardcoded value sync
+  PASS  Port 8000 consistent (config.yaml, run.sh)
+  PASS  host_network: true (required for local network stream access)
+  PASS  timeout: 240 (>= 120)
+9. Translations
+  PASS  All options have translations
+10. Ingress safety
+  PASS  Ingress prefix injection only rewrites safe patterns
+11. Dockerfile safety
+  PASS  No COPY to /data/ (persistent volume safe)
+  PASS  No unsafe 2>&1 in eval context
+12. Repository discovery
+  PASS  repository.yaml exists
+
+=== Results ===
+All checks passed. Safe to push.
