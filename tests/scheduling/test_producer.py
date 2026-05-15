@@ -47,11 +47,17 @@ async def _run_until_status_queued(
             pass
 
 
+async def _passthrough_talk_bed(audio_path, *_args, **_kwargs):
+    """No-op talk bed: these tests assert segment attribution, not imaging."""
+    return audio_path
+
+
 @pytest.fixture(autouse=True)
 def _mock_audio_validation():
     with (
         patch(f"{PRODUCER_MODULE}.validate_segment_audio", return_value=None),
         patch(f"{PRODUCER_MODULE}._probe_segment_duration", return_value=180.0),
+        patch(f"{PRODUCER_MODULE}._apply_talk_bed", _passthrough_talk_bed),
     ):
         yield
 

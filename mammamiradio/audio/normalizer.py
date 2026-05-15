@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import math
+import os
 import re
 import shutil
 import subprocess
@@ -92,6 +93,7 @@ def measure_lufs(input_path: Path) -> float | None:
 _MP3_OUTPUT_ARGS: list[str] = ["-ar", "48000", "-ac", "2", "-b:a", "192k", "-write_xing", "0", "-f", "mp3"]
 _FFMPEG_APHASER_MAX_DELAY_MS = 5.0
 _FFMPEG_TREMOLO_MIN_FREQ_HZ = 0.1
+_FFMPEG_TIMEOUT_SEC = float(os.getenv("MAMMAMIRADIO_FFMPEG_TIMEOUT_SEC", "180"))
 
 # Canonical list of supported SFX types (synthetic fallbacks).
 # Pre-recorded files in sfx_dir can extend this, but this list is what the
@@ -113,7 +115,11 @@ AVAILABLE_SFX_TYPES: list[str] = [
 
 def _run_ffmpeg(cmd: list[str], description: str) -> subprocess.CompletedProcess:
     """Run an ffmpeg command with stderr capture and logging on failure."""
-    result = subprocess.run(cmd, capture_output=True)
+    try:
+        result = subprocess.run(cmd, capture_output=True, timeout=_FFMPEG_TIMEOUT_SEC)
+    except subprocess.TimeoutExpired:
+        logger.error("ffmpeg timed out after %.0fs (%s)", _FFMPEG_TIMEOUT_SEC, description)
+        raise
     if result.returncode != 0:
         stderr = result.stderr.decode(errors="replace")[-500:]
         logger.error("ffmpeg failed (%s): %s", description, stderr)
@@ -1031,6 +1037,72 @@ def mix_with_bed(voice_path: Path, bed_path: Path, output_path: Path, volume_sca
     ]
     _run_ffmpeg(cmd, "mix voice+bed")
     logger.info("Mixed voice + bed -> %s", output_path.name)
+    return output_path
+
+
+def generate_transition_sting(
+    from_type_name: str,
+    to_type_name: str,
+    output_path: Path,
+    motif_notes: list[int] | None = None,
+) -> Path:
+    """Generate a station-branded transition sting for music/speech boundaries."""
+    from_name = from_type_name.strip().lower()
+    to_name = to_type_name.strip().lower()
+    speech_types = {"banter", "news_flash", "ad"}
+    notes = motif_notes or [523, 659, 784, 1047]
+
+    tmp = Path(tempfile.mkdtemp())
+    parts: list[Path] = []
+    try:
+        if from_name == "music" and to_name in speech_types:
+            sweep_path = tmp / "transition_sweep.mp3"
+            motif_path = tmp / "transition_motif.mp3"
+            generate_sweep(sweep_path, duration_sec=0.8)
+            generate_station_id_bed(motif_path, 1.2, notes)
+            parts = [sweep_path, motif_path]
+        elif from_name in speech_types and to_name == "music":
+            motif_path = tmp / "transition_motif.mp3"
+            bumper_path = tmp / "transition_bumper.mp3"
+            generate_station_id_bed(motif_path, 0.5, list(reversed(notes)))
+            generate_bumper_jingle(bumper_path, 0.5)
+            parts = [motif_path, bumper_path]
+        else:
+            logger.warning(
+                "generate_transition_sting: unsupported pair %s->%s, using sweep fallback",
+                from_type_name,
+                to_type_name,
+            )
+            generate_sweep(output_path, duration_sec=1.0)
+            return output_path
+
+        concat_files(parts, output_path, silence_ms=0, loudnorm=False)
+        return output_path
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def mix_voice_with_bed(voice_path: Path, bed_path: Path, output_path: Path, bed_db: float = -18.0) -> Path:
+    """Mix a voice segment over a quiet music bed, clipping output to voice length."""
+    scale = 10 ** (bed_db / 20)
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-i",
+        str(voice_path),
+        "-i",
+        str(bed_path),
+        "-filter_complex",
+        f"[1:a]volume={_fmt_num(scale)}[bed];"
+        "[0:a][bed]amix=inputs=2:duration=first:dropout_transition=2,"
+        "loudnorm=I=-16:LRA=11:TP=-1.5[out]",
+        "-map",
+        "[out]",
+        *_MP3_OUTPUT_ARGS,
+        str(output_path),
+    ]
+    _run_ffmpeg(cmd, "mix voice with talk bed")
+    logger.info("Mixed voice + talk bed -> %s", output_path.name)
     return output_path
 
 

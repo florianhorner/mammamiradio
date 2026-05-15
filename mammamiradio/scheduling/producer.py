@@ -11,13 +11,14 @@ import random
 import shutil
 from collections import deque
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from functools import partial
 from pathlib import Path
 from uuid import uuid4
 
 import mammamiradio.hosts.scriptwriter as _sw
 from mammamiradio.audio.audio_quality import AudioQualityError, AudioToolError, validate_segment_audio
+from mammamiradio.audio.imaging import ImagingLibrary
 from mammamiradio.audio.normalizer import (
     _ffprobe_duration_sec,
     concat_files,
@@ -30,6 +31,7 @@ from mammamiradio.audio.normalizer import (
     load_track_metadata,
     mix_oneshot_sfx,
     mix_quiet_bleed,
+    mix_voice_with_bed,
     mix_voice_with_sting,
     normalize,
     save_track_metadata,
@@ -212,11 +214,28 @@ _DEMO_ASSETS_DIR = Path(__file__).resolve().parent.parent / "assets" / "demo"
 # Tracks the most recent music file to avoid repeated glob scans on every banter.
 _last_music_file: Path | None = None
 
+_MUSIC_TYPES = {SegmentType.MUSIC}
+_SPEECH_TYPES = {
+    SegmentType.BANTER,
+    SegmentType.NEWS_FLASH,
+    SegmentType.AD,
+    SegmentType.STATION_ID,
+    SegmentType.SWEEPER,
+    SegmentType.TIME_CHECK,
+}
+
 
 def _set_last_music_file(path: Path) -> None:
     """Update the cached last music file (called after each music segment)."""
     global _last_music_file
     _last_music_file = path
+
+
+def _remember_rendered_music(rendered: RenderedMusicTrack, state: StationState) -> None:
+    """Remember a playable music path, even if cache copy failed."""
+    path = rendered.cache_path if rendered.cache_path.exists() else rendered.path
+    _set_last_music_file(path)
+    state.last_music_file = path
 
 
 def _latest_music_file(tmp_dir: Path) -> Path | None:
@@ -242,6 +261,80 @@ def _get_last_music_file(state: StationState) -> Path | None:
     if _last_music_file and _last_music_file.exists():
         return _last_music_file
     return None
+
+
+def _make_imaging_lib(config: StationConfig) -> ImagingLibrary:
+    """Construct a station ImagingLibrary from config."""
+    return ImagingLibrary(
+        config.sonic_brand.motif_notes,
+        config.tmp_dir,
+        bed_volume_db=config.imaging.bed_volume_db,
+        assets_dir=Path(config.imaging.assets_dir) if config.imaging.assets_dir else None,
+    )
+
+
+def _crosses_music_speech_boundary(prev_type: SegmentType, next_type: SegmentType) -> bool:
+    return (prev_type in _MUSIC_TYPES and next_type in _SPEECH_TYPES) or (
+        prev_type in _SPEECH_TYPES and next_type in _MUSIC_TYPES
+    )
+
+
+def _segment_type_from_value(value: object) -> SegmentType | None:
+    if isinstance(value, SegmentType):
+        return value
+    if isinstance(value, str):
+        try:
+            return SegmentType(value)
+        except ValueError:
+            return None
+    return None
+
+
+def _initial_previous_segment_type(queue: asyncio.Queue[Segment], state: StationState) -> SegmentType | None:
+    """Infer the last audible segment when producer starts after prewarm/playback."""
+    queued = list(getattr(queue, "_queue", ()))
+    if queued:
+        return queued[-1].type
+    now_type = _segment_type_from_value(state.now_streaming.get("type"))
+    if now_type is not None:
+        return now_type
+    if state.current_track is not None:
+        return SegmentType.MUSIC
+    return None
+
+
+async def _apply_talk_bed(
+    audio_path: Path,
+    config: StationConfig,
+    state: StationState,
+    *,
+    prefix: str,
+) -> Path:
+    """Mix a quiet music bed under a generated spoken segment."""
+    loop = asyncio.get_running_loop()
+    last_track = _get_last_music_file(state) if config.imaging.use_music_queue_for_beds else None
+    bed_path = config.tmp_dir / f"{prefix}_bed_{uuid4().hex[:8]}.mp3"
+    duration = await loop.run_in_executor(None, _probe_segment_duration, audio_path)
+    imaging_lib = _make_imaging_lib(config)
+    bedded_path = config.tmp_dir / f"{prefix}_bedded_{uuid4().hex[:8]}.mp3"
+    try:
+        await loop.run_in_executor(None, imaging_lib.pick_talk_bed, duration, bed_path, last_track)
+        await loop.run_in_executor(
+            None,
+            mix_voice_with_bed,
+            audio_path,
+            bed_path,
+            bedded_path,
+            config.imaging.bed_volume_db,
+        )
+    except Exception:
+        bedded_path.unlink(missing_ok=True)
+        bed_path.unlink(missing_ok=True)
+        raise
+    finally:
+        bed_path.unlink(missing_ok=True)
+    audio_path.unlink(missing_ok=True)
+    return bedded_path
 
 
 async def _try_crossfade(
@@ -458,8 +551,7 @@ async def prewarm_first_segment(
         segment.duration_sec = await loop.run_in_executor(None, _probe_segment_duration, norm_path)
         await queue.put(segment)
         state.after_music(track)
-        _set_last_music_file(norm_path)
-        state.last_music_file = norm_path
+        _remember_rendered_music(rendered, state)
         logger.info("Pre-warmed first segment: %s (ready for instant playback)", track.display)
         return True
     except Exception:
@@ -474,16 +566,20 @@ async def run_producer(
     skip_event: asyncio.Event | None = None,
 ) -> None:
     """Keep the lookahead queue filled with rendered segments for live playback."""
+    prev_seg_type = _initial_previous_segment_type(queue, state)
     logger.info("Producer started. Playlist: %d tracks", len(state.playlist))
 
     async def _queue_segment(segment: Segment) -> bool:
         """Queue a segment unless the operator stopped the session mid-generation."""
+        nonlocal prev_seg_type
         if state.session_stopped:
             if segment.ephemeral:
                 segment.path.unlink(missing_ok=True)
             logger.info("Discarding %s because the session is stopped", segment.type.value)
             return False
         await queue.put(segment)
+        if "error" not in segment.metadata:
+            prev_seg_type = segment.type
         return True
 
     # Home Assistant context cache
@@ -954,8 +1050,7 @@ async def run_producer(
                     ephemeral=not norm_is_cached,
                 )
                 _bound_track = track
-                _set_last_music_file(norm_path)
-                state.last_music_file = norm_path
+                _remember_rendered_music(rendered, state)
 
                 def _music_callback(_t=_bound_track) -> None:
                     state.after_music(_t)
@@ -1110,6 +1205,12 @@ async def run_producer(
                         else:
                             continue
 
+                if canned is None:
+                    try:
+                        audio_path = await _apply_talk_bed(audio_path, config, state, prefix="banter")
+                    except Exception as exc:
+                        logger.warning("Talk bed generation failed, using dry banter: %s", exc)
+
                 # One-shot studio humanity event: cough, paper rustle, etc.
                 # Only fires once per session, only after 15+ segments produced.
                 if not _humanity_event_fired and _segments_produced >= 15 and canned is None and random.random() < 0.10:
@@ -1188,6 +1289,12 @@ async def run_producer(
                     # Try to overlay on the tail of the last music segment
                     crossfade_out = config.tmp_dir / f"flash_transition_{uuid4().hex[:8]}.mp3"
                     audio_path = await _try_crossfade(flash_path, config, crossfade_out, tail_seconds=6.0)
+                    if audio_path is flash_path:
+                        # Crossfade failed — add a static bed instead
+                        try:
+                            audio_path = await _apply_talk_bed(audio_path, config, state, prefix="news")
+                        except Exception as exc:
+                            logger.warning("Talk bed generation failed, using dry news flash: %s", exc)
 
                     state.last_banter_script = [{"host": host.name, "text": text, "type": "news_flash"}]
                 except Exception as exc:
@@ -1284,6 +1391,22 @@ async def run_producer(
                         engine=sweeper_engine,
                         edge_fallback_voice=sweeper_fallback,
                     )
+                    loop = asyncio.get_running_loop()
+                    sting_path = config.tmp_dir / f"sweeper_sting_{uuid4().hex[:8]}.mp3"
+                    imaging_lib = _make_imaging_lib(config)
+                    mixed_path = config.tmp_dir / f"sweeper_mixed_{uuid4().hex[:8]}.mp3"
+                    dry_sweeper_path = audio_path
+                    try:
+                        await loop.run_in_executor(None, imaging_lib.pick_sweeper_sting, sting_path)
+                        await loop.run_in_executor(None, mix_voice_with_sting, audio_path, sting_path, mixed_path)
+                    except Exception:
+                        mixed_path.unlink(missing_ok=True)
+                        dry_sweeper_path.unlink(missing_ok=True)
+                        raise
+                    finally:
+                        sting_path.unlink(missing_ok=True)
+                    dry_sweeper_path.unlink(missing_ok=True)
+                    audio_path = mixed_path
                 except Exception as exc:
                     logger.warning("Sweeper generation failed: %s", exc)
                     continue
@@ -1595,6 +1718,7 @@ async def run_producer(
                         "error_recovery": True,
                         "title": "Recovery banter",
                     },
+                    ephemeral=False,
                 )
             else:
                 logger.warning("No canned clips available — inserting silence (check assets/demo/banter/)")
@@ -1614,6 +1738,41 @@ async def run_producer(
             # Do NOT advance state counters — failed segment doesn't count
 
         if segment:
+            actual_seg_type = segment.type
+            if prev_seg_type is not None and _crosses_music_speech_boundary(prev_seg_type, actual_seg_type):
+                try:
+                    loop = asyncio.get_running_loop()
+                    sting_path = config.tmp_dir / f"transition_{uuid4().hex[:8]}.mp3"
+                    imaging_lib = _make_imaging_lib(config)
+                    await loop.run_in_executor(
+                        None,
+                        imaging_lib.pick_stinger,
+                        prev_seg_type,
+                        actual_seg_type,
+                        sting_path,
+                    )
+                    merged_path = config.tmp_dir / f"segment_with_sting_{uuid4().hex[:8]}.mp3"
+                    pre_sting_path = segment.path
+                    pre_sting_ephemeral = segment.ephemeral
+                    try:
+                        await loop.run_in_executor(
+                            None,
+                            concat_files,
+                            [sting_path, segment.path],
+                            merged_path,
+                            0,
+                            False,
+                        )
+                    except Exception:
+                        merged_path.unlink(missing_ok=True)
+                        raise
+                    finally:
+                        sting_path.unlink(missing_ok=True)
+                    if pre_sting_ephemeral:
+                        pre_sting_path.unlink(missing_ok=True)
+                    segment = replace(segment, path=merged_path, ephemeral=True)
+                except Exception as exc:
+                    logger.warning("Transition sting generation failed, using clean cut: %s", exc)
             segment.duration_sec = await asyncio.to_thread(_probe_segment_duration, segment.path)
             if generation_revision != state.playlist_revision:
                 logger.info("Discarding stale %s segment after playlist source switch", seg_type.value)
@@ -1624,8 +1783,8 @@ async def run_producer(
             _segments_produced += 1
             state.queued_segments.append(
                 {
-                    "type": seg_type.value,
-                    "label": segment.metadata.get("title", seg_type.value),
+                    "type": segment.type.value,
+                    "label": segment.metadata.get("title", segment.type.value),
                     "spotify_id": segment.metadata.get("spotify_id", ""),
                     "reason": segment.metadata.get("queue_reason", "Rendered and queued for playback."),
                     "playlist_index": segment.metadata.get("playlist_index", -1),
@@ -1640,11 +1799,11 @@ async def run_producer(
                 # #144/#146: Launch background normalization of the predicted next music track.
                 # By the time the current track finishes playing (~3-4 min), the next norm
                 # is already cached — avoids the 75-second Pi stall when the queue drains.
-                if seg_type == SegmentType.MUSIC and state.force_next is None and state.playlist:
+                if segment.type == SegmentType.MUSIC and state.force_next is None and state.playlist:
                     if _prefetch_task and not _prefetch_task.done():
                         _prefetch_task.cancel()
                     _prefetch_task = asyncio.create_task(
                         _prefetch_next(state, config, _prefetch_failed_keys),
                         name="prefetch-norm",
                     )
-            logger.info("Queued %s (queue size: %d)", seg_type.value, queue.qsize())
+            logger.info("Queued %s (queue size: %d)", segment.type.value, queue.qsize())

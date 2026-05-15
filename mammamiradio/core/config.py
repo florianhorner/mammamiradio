@@ -130,6 +130,17 @@ class AdsSection:
 
 
 @dataclass
+class ImagingSection:
+    """Station imaging controls for stingers and spoken-word beds."""
+
+    bed_volume_db: float = -18.0
+    use_music_queue_for_beds: bool = True
+    # Asset directory is resolved from the package at runtime by ImagingLibrary.
+    # Override with assets_dir (absolute path) if you need a custom location.
+    assets_dir: str = ""
+
+
+@dataclass
 class PersonaSection:
     """Cross-session listener memory tuning."""
 
@@ -260,6 +271,7 @@ class StationConfig:
     pacing: PacingSection
     hosts: list[HostPersonality]
     ads: AdsSection
+    imaging: ImagingSection = field(default_factory=ImagingSection)
     sonic_brand: SonicBrandSection = field(default_factory=SonicBrandSection)
     audio: AudioSection = field(default_factory=AudioSection)
     homeassistant: HomeAssistantSection = field(default_factory=HomeAssistantSection)
@@ -744,6 +756,7 @@ def load_config(path: str = "radio.toml") -> StationConfig:
         pacing=PacingSection(**raw.get("pacing", {})),
         hosts=hosts,
         ads=AdsSection(brands=brands, voices=voices, sfx_dir=sfx_dir),
+        imaging=ImagingSection(**raw.get("imaging", {})),
         sonic_brand=sonic_brand,
         audio=AudioSection(**audio_raw),
         homeassistant=ha_section,

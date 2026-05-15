@@ -16,6 +16,7 @@ If you want to fix or extend X, look in Y. The folder hierarchy IS the mental mo
 | Per-track machine-derived song memory              | `mammamiradio/playlist/song_cues.py`         |
 | "Why this track?" rationale generation             | `mammamiradio/playlist/track_rationale.py`   |
 | FFmpeg normalize / mix / concat / SFX              | `mammamiradio/audio/normalizer.py`           |
+| Station imaging stingers and talk beds             | `mammamiradio/audio/imaging.py`              |
 | Edge TTS / OpenAI TTS synthesis                    | `mammamiradio/audio/tts.py`                  |
 | Audio quality gate (duration, silence checks)      | `mammamiradio/audio/audio_quality.py`        |
 | Voice catalog (Edge voice IDs)                     | `mammamiradio/audio/voice_catalog.py`        |

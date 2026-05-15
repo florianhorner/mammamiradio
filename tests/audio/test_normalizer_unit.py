@@ -54,7 +54,7 @@ def test_run_ffmpeg_passes_command(mock_subprocess):
     mock_run, _ = mock_subprocess
     cmd = ["ffmpeg", "-y", "-i", "in.mp3", "out.mp3"]
     _run_ffmpeg(cmd, "test")
-    mock_run.assert_called_once_with(cmd, capture_output=True)
+    mock_run.assert_called_once_with(cmd, capture_output=True, timeout=180.0)
 
 
 def test_run_ffmpeg_raises_on_nonzero_return(mock_subprocess):
