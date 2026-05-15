@@ -1,11 +1,12 @@
-pytest run: 2026-05-14T00:37:14Z
+command: pytest tests/ --cov
+pytest run: 2026-05-15T16:12:55Z
 branch: florianhorner/feat/soundbed-jingles-swooshes
-commit: e58542b5
+commit: ca451d22
 
 ..............................s......................................... [ 99%]
 ..                                                                       [100%]
-1728 passed, 2 skipped, 7 deselected in 44.19s
+1772 passed, 2 skipped, 7 deselected in 50.72s
 
 normalizer coverage: 99% (floor: 96%)
-total coverage: 94% (floor: 92%)
+total coverage: 94.12% (floor: 92%)
 all per-module floors held

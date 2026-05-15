@@ -55,7 +55,7 @@ def test_transition_sting_music_to_banter(tmp_path, mock_run):
         "duration_sec",
         mock_sweep.call_args.args[1] if len(mock_sweep.call_args.args) > 1 else 0.8,
     )
-    assert duration == pytest.approx(0.8, abs=0.01) or True
+    assert duration == pytest.approx(0.8, abs=0.01)
 
 
 def test_transition_sting_speech_to_music(tmp_path, mock_run):
@@ -295,3 +295,19 @@ def test_mix_ad_with_bed_ffprobe_invalid_float_uses_default(tmp_path, mock_run):
     result = mix_ad_with_bed(voiceover, out)
 
     assert result == out
+    ffmpeg_calls = [c[0][0] for c in mock_run.call_args_list if c[0][0][0] == "ffmpeg"]
+    assert ffmpeg_calls
+    assert "30.000" in " ".join(ffmpeg_calls[-1])
+
+
+def test_run_ffmpeg_raises_on_timeout():
+    from mammamiradio.audio.normalizer import _run_ffmpeg
+
+    with (
+        pytest.raises(subprocess.TimeoutExpired),
+        patch(
+            "mammamiradio.audio.normalizer.subprocess.run",
+            side_effect=subprocess.TimeoutExpired(["ffmpeg"], timeout=180),
+        ),
+    ):
+        _run_ffmpeg(["ffmpeg"], "hung command")

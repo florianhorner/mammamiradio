@@ -6,6 +6,7 @@
 
 - **Jamendo client ID option** — `jamendo_client_id` is now a first-class add-on option. Set it in the add-on configuration to enable CC-licensed music from Jamendo. Leave empty to disable.
 - **Secret-safe provider check endpoint** — admin-only `POST /api/setup/provider-check` actively probes the live Anthropic key, OpenAI chat key, and OpenAI TTS key with tiny requests, returning only configured/ok/status/error-category fields. This helps distinguish "the add-on has a bad key" from "local `.env` has a different key" without exposing secrets.
+- **Full imaging architecture** — music-to-voice and voice-to-music boundaries now get short branded transition stings, sweepers pick up motif underlays, and banter/news can sit over ducked talk beds for a more continuous station feel. Enabled by default and configurable through the new `[imaging]` block in the add-on `radio.toml`; FFmpeg-generated stings and beds are used automatically when no bundled imaging assets are present.
 - **Super Italian Mode toggle** — new `super_italian_mode` addon option (default `false`). Off: listener UI in English with Italian station-feel words intact (`Stasera in onda`, `Palinsesto`, `Mi`, tricolor); AI hosts code-switch with Italian sprinkles. On: listener UI flips to full Italian; hosts lean fully into Italian idioms and address listeners as `amici miei`. Admin UI stays English regardless. Toggle is also exposed in the admin Engine Room and persists via `/data/options.json` so it survives addon container updates.
 
 ### Fixed

@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import subprocess
 from unittest.mock import patch
+
+import pytest
 
 from mammamiradio.audio.imaging import ImagingLibrary
 from mammamiradio.core.models import SegmentType
@@ -79,7 +82,8 @@ def test_pick_talk_bed_uses_prerecorded_bed_before_source_track(tmp_path):
     cmd = mock_run.call_args.args[0]
     assert str(asset_bed) in cmd
     assert str(source) not in cmd
-    assert any("aloop=loop=-1" in arg for arg in cmd)
+    assert "-stream_loop" in cmd
+    assert cmd[cmd.index("-stream_loop") + 1] == "-1"
     assert any("loudnorm=I=-18" in arg for arg in cmd)
 
 
@@ -95,7 +99,8 @@ def test_pick_talk_bed_ducks_existing_source_track(tmp_path):
     assert result == out
     cmd = mock_run.call_args.args[0]
     assert str(source) in cmd
-    assert any("aloop=loop=-1" in arg for arg in cmd)
+    assert "-stream_loop" in cmd
+    assert cmd[cmd.index("-stream_loop") + 1] == "-1"
     assert any("loudnorm=I=-20" in arg for arg in cmd)
     assert "-t" in cmd
     assert cmd[cmd.index("-t") + 1] == "3"
@@ -117,3 +122,33 @@ def test_pick_talk_bed_fallback_synthetic_when_source_none(tmp_path):
     assert "sin(2*PI*260*t)" in joined
     assert "loudnorm=I=-18" in joined
     assert str(out) in cmd
+
+
+def test_pick_talk_bed_propagates_loop_bed_ffmpeg_failure(tmp_path):
+    source = tmp_path / "last_music.mp3"
+    source.write_bytes(b"music")
+    out = tmp_path / "bed.mp3"
+    lib = ImagingLibrary([523], tmp_path, assets_dir=tmp_path / "assets")
+
+    with (
+        pytest.raises(subprocess.TimeoutExpired),
+        patch(
+            "mammamiradio.audio.imaging._run_ffmpeg",
+            side_effect=subprocess.TimeoutExpired(["ffmpeg"], timeout=180),
+        ),
+    ):
+        lib.pick_talk_bed(3.0, out, source)
+
+
+def test_pick_talk_bed_propagates_synthetic_drone_ffmpeg_failure(tmp_path):
+    out = tmp_path / "bed.mp3"
+    lib = ImagingLibrary([523], tmp_path, assets_dir=tmp_path / "assets")
+
+    with (
+        pytest.raises(subprocess.TimeoutExpired),
+        patch(
+            "mammamiradio.audio.imaging._run_ffmpeg",
+            side_effect=subprocess.TimeoutExpired(["ffmpeg"], timeout=180),
+        ),
+    ):
+        lib.pick_talk_bed(3.0, out, source_track=None)

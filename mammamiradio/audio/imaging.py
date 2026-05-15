@@ -70,14 +70,13 @@ class ImagingLibrary:
 
     def _loop_bed(self, input_path: Path, duration_sec: float, output_path: Path) -> Path:
         filter_chain = (
-            "aloop=loop=-1:size=2147483647,"
-            f"atrim=0:{_fmt_num(duration_sec)},"
-            "asetpts=N/SR/TB,"
-            f"loudnorm=I={_fmt_num(self.bed_volume_db)}:LRA=11:TP=-1.5"
+            f"atrim=0:{_fmt_num(duration_sec)},asetpts=N/SR/TB,loudnorm=I={_fmt_num(self.bed_volume_db)}:LRA=11:TP=-1.5"
         )
         cmd = [
             "ffmpeg",
             "-y",
+            "-stream_loop",
+            "-1",
             "-i",
             str(input_path),
             "-vn",

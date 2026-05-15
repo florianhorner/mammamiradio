@@ -10,7 +10,7 @@ import pytest
 
 from mammamiradio.core.config import load_config
 from mammamiradio.core.models import HostPersonality, Segment, SegmentType, StationState, Track
-from mammamiradio.scheduling.producer import RenderedMusicTrack, run_producer
+from mammamiradio.scheduling.producer import RenderedMusicTrack, _crosses_music_speech_boundary, run_producer
 
 TOML_PATH = str(Path(__file__).resolve().parents[2] / "radio.toml")
 PRODUCER_MODULE = "mammamiradio.scheduling.producer"
@@ -22,10 +22,8 @@ def _reset_producer_imaging_globals():
     from mammamiradio.scheduling import producer
 
     producer._last_music_file = None
-    producer._prev_seg_type = None
     yield
     producer._last_music_file = None
-    producer._prev_seg_type = None
 
 
 @pytest.fixture(autouse=True)
@@ -53,11 +51,17 @@ def _make_config(tmp_path: Path):
     return config
 
 
-async def _run_until_queued(queue: asyncio.Queue[Segment], state: StationState, config, timeout: float = 5.0) -> None:
+async def _run_until_queued(
+    queue: asyncio.Queue[Segment],
+    state: StationState,
+    config,
+    timeout: float = 5.0,
+    target_qsize: int = 1,
+) -> None:
     task = asyncio.create_task(run_producer(queue, state, config))
     try:
         deadline = asyncio.get_event_loop().time() + timeout
-        while queue.qsize() == 0:
+        while queue.qsize() < target_qsize:
             if asyncio.get_event_loop().time() > deadline:
                 raise TimeoutError("Producer did not queue a segment in time")
             await asyncio.sleep(0.05)
@@ -75,6 +79,23 @@ def _concat_side_effect(_paths, output_path, *_args, **_kwargs):
 
 def _mix_bed_side_effect(_voice_path, _bed_path, output_path, _bed_db=-18.0):
     return output_path
+
+
+async def _write_async_file(_text, _voice, path, **_kwargs):
+    path.write_bytes(b"voice")
+
+
+def test_music_speech_boundary_includes_voice_led_imaging_segments():
+    for speech_type in (
+        SegmentType.BANTER,
+        SegmentType.NEWS_FLASH,
+        SegmentType.AD,
+        SegmentType.STATION_ID,
+        SegmentType.SWEEPER,
+        SegmentType.TIME_CHECK,
+    ):
+        assert _crosses_music_speech_boundary(SegmentType.MUSIC, speech_type)
+        assert _crosses_music_speech_boundary(speech_type, SegmentType.MUSIC)
 
 
 @pytest.mark.asyncio
@@ -95,7 +116,7 @@ async def test_banter_talk_bed_cold_start_no_last_music_file(tmp_path):
         patch(f"{PRODUCER_MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=tmp_path / "dialogue.mp3"),
         patch(f"{PRODUCER_MODULE}.concat_files", side_effect=_concat_side_effect),
         patch(f"{PRODUCER_MODULE}._probe_segment_duration", return_value=3.2),
-        patch(f"{PRODUCER_MODULE}.mix_voice_with_bed", side_effect=_mix_bed_side_effect),
+        patch(f"{PRODUCER_MODULE}.mix_voice_with_bed", side_effect=_mix_bed_side_effect) as mock_mix,
         patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
         patch(f"{PRODUCER_MODULE}.ImagingLibrary") as mock_imaging_cls,
     ):
@@ -110,15 +131,13 @@ async def test_banter_talk_bed_cold_start_no_last_music_file(tmp_path):
     args = imaging.pick_talk_bed.call_args.args
     assert args[0] == 3.2
     assert args[2] is None
+    assert mock_mix.call_args.args[3] == config.imaging.bed_volume_db
     imaging.pick_stinger.assert_not_called()
 
 
 @pytest.mark.asyncio
 async def test_imaging_after_prev_seg_type_reset_skips_spurious_transition(tmp_path):
-    """Scenario 3: process restart resets _prev_seg_type and first segment still beds cleanly."""
-    from mammamiradio.scheduling import producer
-
-    producer._prev_seg_type = None
+    """Scenario 3: process restart with no queued segment still beds cleanly."""
     last_music = tmp_path / "previous_music.mp3"
     last_music.write_bytes(b"music")
     state = _make_state()
@@ -155,23 +174,20 @@ async def test_imaging_after_prev_seg_type_reset_skips_spurious_transition(tmp_p
 
 @pytest.mark.asyncio
 async def test_transition_sting_prepended_at_music_to_banter_boundary(tmp_path):
-    import mammamiradio.scheduling.producer as _prod
-
     state = _make_state()
     state.segments_produced = 1
     config = _make_config(tmp_path)
+    config.pacing.lookahead_segments = 2
     queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    previous_music = tmp_path / "previous_music.mp3"
+    previous_music.write_bytes(b"music")
+    queue.put_nowait(Segment(type=SegmentType.MUSIC, path=previous_music, ephemeral=False))
     host = config.hosts[0]
     banter_lines = [(host, "E adesso parliamo.")]
 
-    def _next_seg_after_music(*_args, **_kwargs):
-        # Set _prev_seg_type inside the loop, after run_producer's own reset.
-        _prod._prev_seg_type = SegmentType.MUSIC
-        return SegmentType.BANTER
-
     with (
         patch(f"{SCRIPTWRITER_MODULE}.has_script_llm", return_value=True),
-        patch(f"{PRODUCER_MODULE}.next_segment_type", side_effect=_next_seg_after_music),
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.BANTER),
         patch(f"{SCRIPTWRITER_MODULE}.write_banter", new_callable=AsyncMock, return_value=(banter_lines, None)),
         patch(
             f"{SCRIPTWRITER_MODULE}.write_transition",
@@ -190,34 +206,36 @@ async def test_transition_sting_prepended_at_music_to_banter_boundary(tmp_path):
         imaging.pick_talk_bed.side_effect = lambda _duration, output_path, _source_track=None: output_path
         imaging.pick_stinger.side_effect = lambda _from_seg, _to_seg, output_path: output_path
 
-        await _run_until_queued(queue, state, config)
+        await _run_until_queued(queue, state, config, target_qsize=2)
 
+    queue.get_nowait()
     seg = queue.get_nowait()
     assert seg.type == SegmentType.BANTER
     assert seg.path.name.startswith("segment_with_sting_")
     imaging.pick_stinger.assert_called_once()
     assert imaging.pick_stinger.call_args.args[:2] == (SegmentType.MUSIC, SegmentType.BANTER)
     assert mock_concat.call_count == 2
+    stinger_path = imaging.pick_stinger.call_args.args[2]
+    final_concat_inputs = mock_concat.call_args_list[-1].args[0]
+    assert final_concat_inputs[0] == stinger_path
 
 
 @pytest.mark.asyncio
 async def test_transition_sting_preserves_cached_music_file(tmp_path):
-    import mammamiradio.scheduling.producer as _prod
-
     state = _make_state()
     state.segments_produced = 1
     config = _make_config(tmp_path)
+    config.pacing.lookahead_segments = 2
     queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    previous_banter = tmp_path / "previous_banter.mp3"
+    previous_banter.write_bytes(b"banter")
+    queue.put_nowait(Segment(type=SegmentType.BANTER, path=previous_banter, ephemeral=False))
     track = state.playlist[0]
     cached_music = tmp_path / "norm_cached_track_192k.mp3"
     cached_music.write_bytes(b"cached music")
 
-    def _next_seg_after_banter(*_args, **_kwargs):
-        _prod._prev_seg_type = SegmentType.BANTER
-        return SegmentType.MUSIC
-
     with (
-        patch(f"{PRODUCER_MODULE}.next_segment_type", side_effect=_next_seg_after_banter),
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.MUSIC),
         patch(
             f"{PRODUCER_MODULE}._render_music_track",
             new_callable=AsyncMock,
@@ -231,12 +249,189 @@ async def test_transition_sting_preserves_cached_music_file(tmp_path):
         imaging = mock_imaging_cls.return_value
         imaging.pick_stinger.side_effect = lambda _from_seg, _to_seg, output_path: output_path
 
-        await _run_until_queued(queue, state, config)
+        await _run_until_queued(queue, state, config, target_qsize=2)
 
+    queue.get_nowait()
     seg = queue.get_nowait()
     assert seg.type == SegmentType.MUSIC
     assert seg.path.name.startswith("segment_with_sting_")
     assert seg.ephemeral is True
     assert cached_music.exists()
+    imaging.pick_stinger.assert_called_once()
+    assert imaging.pick_stinger.call_args.args[:2] == (SegmentType.BANTER, SegmentType.MUSIC)
+
+
+@pytest.mark.asyncio
+async def test_banter_talk_bed_failure_queues_dry_banter(tmp_path):
+    state = _make_state()
+    config = _make_config(tmp_path)
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    host = config.hosts[0]
+    banter_lines = [(host, "Restiamo asciutti.")]
+
+    with (
+        patch(f"{SCRIPTWRITER_MODULE}.has_script_llm", return_value=True),
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.BANTER),
+        patch(f"{SCRIPTWRITER_MODULE}.write_banter", new_callable=AsyncMock, return_value=(banter_lines, None)),
+        patch(f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora.")),
+        patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock),
+        patch(f"{PRODUCER_MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=tmp_path / "dialogue.mp3"),
+        patch(f"{PRODUCER_MODULE}.concat_files", side_effect=_concat_side_effect),
+        patch(f"{PRODUCER_MODULE}._probe_segment_duration", return_value=2.7),
+        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+        patch(f"{PRODUCER_MODULE}.ImagingLibrary") as mock_imaging_cls,
+    ):
+        imaging = mock_imaging_cls.return_value
+        imaging.pick_talk_bed.side_effect = RuntimeError("bed failed")
+
+        await _run_until_queued(queue, state, config)
+
+    seg = queue.get_nowait()
+    assert seg.type == SegmentType.BANTER
+    assert seg.path.name.startswith("banter_full_")
+    imaging.pick_talk_bed.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_news_flash_uses_talk_bed_when_crossfade_unavailable(tmp_path):
+    state = _make_state()
+    config = _make_config(tmp_path)
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    host = config.hosts[0]
+
+    with (
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.NEWS_FLASH),
+        patch(
+            f"{SCRIPTWRITER_MODULE}.write_news_flash",
+            new_callable=AsyncMock,
+            return_value=(host, "Notizia.", "traffic"),
+        ),
+        patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, side_effect=_write_async_file),
+        patch(f"{PRODUCER_MODULE}._probe_segment_duration", return_value=1.8),
+        patch(f"{PRODUCER_MODULE}.mix_voice_with_bed", side_effect=_mix_bed_side_effect) as mock_mix,
+        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+        patch(f"{PRODUCER_MODULE}.ImagingLibrary") as mock_imaging_cls,
+    ):
+        imaging = mock_imaging_cls.return_value
+        imaging.pick_talk_bed.side_effect = lambda _duration, output_path, _source_track=None: output_path
+
+        await _run_until_queued(queue, state, config)
+
+    seg = queue.get_nowait()
+    assert seg.type == SegmentType.NEWS_FLASH
+    assert seg.path.name.startswith("news_bedded_")
+    assert mock_mix.call_args.args[3] == config.imaging.bed_volume_db
+    imaging.pick_talk_bed.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_sweeper_sting_failure_cleans_temp_files_and_skips_segment(tmp_path):
+    state = _make_state()
+    config = _make_config(tmp_path)
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    track = state.playlist[0]
+    cached_music = tmp_path / "norm_after_sweeper_failure_192k.mp3"
+    cached_music.write_bytes(b"cached music")
+
+    with (
+        patch(f"{PRODUCER_MODULE}.next_segment_type", side_effect=[SegmentType.SWEEPER, SegmentType.MUSIC]),
+        patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, side_effect=_write_async_file),
+        patch(
+            f"{PRODUCER_MODULE}._render_music_track",
+            new_callable=AsyncMock,
+            return_value=RenderedMusicTrack(track=track, path=cached_music, cache_path=cached_music, cache_hit=True),
+        ),
+        patch(f"{PRODUCER_MODULE}._probe_segment_duration", return_value=120.0),
+        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+        patch(f"{PRODUCER_MODULE}.ImagingLibrary") as mock_imaging_cls,
+    ):
+        imaging = mock_imaging_cls.return_value
+        imaging.pick_sweeper_sting.side_effect = RuntimeError("sting failed")
+
+        await _run_until_queued(queue, state, config)
+
+    seg = queue.get_nowait()
+    assert seg.type == SegmentType.MUSIC
+    assert not list(tmp_path.glob("sweeper_*.mp3"))
+    assert not list(tmp_path.glob("sweeper_sting_*.mp3"))
+    assert not list(tmp_path.glob("sweeper_mixed_*.mp3"))
+
+
+@pytest.mark.asyncio
+async def test_music_last_file_uses_temp_path_when_cache_write_failed(tmp_path):
+    state = _make_state()
+    config = _make_config(tmp_path)
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    track = state.playlist[0]
+    temp_music = tmp_path / "music_uncached.mp3"
+    temp_music.write_bytes(b"music")
+    missing_cache = tmp_path / "norm_missing_cache_192k.mp3"
+
+    with (
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.MUSIC),
+        patch(
+            f"{PRODUCER_MODULE}._render_music_track",
+            new_callable=AsyncMock,
+            return_value=RenderedMusicTrack(track=track, path=temp_music, cache_path=missing_cache, cache_hit=False),
+        ),
+        patch(f"{PRODUCER_MODULE}._probe_segment_duration", return_value=120.0),
+        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+    ):
+        await _run_until_queued(queue, state, config)
+
+    assert queue.get_nowait().path == temp_music
+    assert state.last_music_file == temp_music
+
+
+@pytest.mark.asyncio
+async def test_idle_bridge_updates_boundary_before_next_music(tmp_path):
+    state = _make_state()
+    state.listeners_active = 0
+    state.segments_produced = 1
+    config = _make_config(tmp_path)
+    config.pacing.lookahead_segments = 2
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    track = state.playlist[0]
+    bridge = tmp_path / "bridge.mp3"
+    bridge.write_bytes(b"bridge")
+    cached_music = tmp_path / "norm_after_bridge_192k.mp3"
+    cached_music.write_bytes(b"cached music")
+
+    async def _activate_listener():
+        await asyncio.sleep(0.15)
+        state.listeners_active = 1
+
+    activation_task = asyncio.create_task(_activate_listener())
+    try:
+        with (
+            patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=bridge),
+            patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.MUSIC),
+            patch(
+                f"{PRODUCER_MODULE}._render_music_track",
+                new_callable=AsyncMock,
+                return_value=RenderedMusicTrack(
+                    track=track,
+                    path=cached_music,
+                    cache_path=cached_music,
+                    cache_hit=True,
+                ),
+            ),
+            patch(f"{PRODUCER_MODULE}.concat_files", side_effect=_concat_side_effect),
+            patch(f"{PRODUCER_MODULE}._probe_segment_duration", return_value=120.0),
+            patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+            patch(f"{PRODUCER_MODULE}.ImagingLibrary") as mock_imaging_cls,
+        ):
+            imaging = mock_imaging_cls.return_value
+            imaging.pick_stinger.side_effect = lambda _from_seg, _to_seg, output_path: output_path
+
+            await _run_until_queued(queue, state, config, target_qsize=2)
+    finally:
+        await activation_task
+
+    bridge_seg = queue.get_nowait()
+    music_seg = queue.get_nowait()
+    assert bridge_seg.type == SegmentType.BANTER
+    assert music_seg.type == SegmentType.MUSIC
+    assert music_seg.path.name.startswith("segment_with_sting_")
     imaging.pick_stinger.assert_called_once()
     assert imaging.pick_stinger.call_args.args[:2] == (SegmentType.BANTER, SegmentType.MUSIC)

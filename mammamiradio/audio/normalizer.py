@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import math
+import os
 import re
 import shutil
 import subprocess
@@ -92,6 +93,7 @@ def measure_lufs(input_path: Path) -> float | None:
 _MP3_OUTPUT_ARGS: list[str] = ["-ar", "48000", "-ac", "2", "-b:a", "192k", "-write_xing", "0", "-f", "mp3"]
 _FFMPEG_APHASER_MAX_DELAY_MS = 5.0
 _FFMPEG_TREMOLO_MIN_FREQ_HZ = 0.1
+_FFMPEG_TIMEOUT_SEC = float(os.getenv("MAMMAMIRADIO_FFMPEG_TIMEOUT_SEC", "180"))
 
 # Canonical list of supported SFX types (synthetic fallbacks).
 # Pre-recorded files in sfx_dir can extend this, but this list is what the
@@ -113,7 +115,11 @@ AVAILABLE_SFX_TYPES: list[str] = [
 
 def _run_ffmpeg(cmd: list[str], description: str) -> subprocess.CompletedProcess:
     """Run an ffmpeg command with stderr capture and logging on failure."""
-    result = subprocess.run(cmd, capture_output=True)
+    try:
+        result = subprocess.run(cmd, capture_output=True, timeout=_FFMPEG_TIMEOUT_SEC)
+    except subprocess.TimeoutExpired:
+        logger.error("ffmpeg timed out after %.0fs (%s)", _FFMPEG_TIMEOUT_SEC, description)
+        raise
     if result.returncode != 0:
         stderr = result.stderr.decode(errors="replace")[-500:]
         logger.error("ffmpeg failed (%s): %s", description, stderr)
