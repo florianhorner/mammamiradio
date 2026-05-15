@@ -155,9 +155,8 @@ async def test_imaging_after_prev_seg_type_reset_skips_spurious_transition(tmp_p
 
 @pytest.mark.asyncio
 async def test_transition_sting_prepended_at_music_to_banter_boundary(tmp_path):
-    from mammamiradio.scheduling import producer
+    import mammamiradio.scheduling.producer as _prod
 
-    producer._prev_seg_type = SegmentType.MUSIC
     state = _make_state()
     state.segments_produced = 1
     config = _make_config(tmp_path)
@@ -165,9 +164,14 @@ async def test_transition_sting_prepended_at_music_to_banter_boundary(tmp_path):
     host = config.hosts[0]
     banter_lines = [(host, "E adesso parliamo.")]
 
+    def _next_seg_after_music(*_args, **_kwargs):
+        # Set _prev_seg_type inside the loop, after run_producer's own reset.
+        _prod._prev_seg_type = SegmentType.MUSIC
+        return SegmentType.BANTER
+
     with (
         patch(f"{SCRIPTWRITER_MODULE}.has_script_llm", return_value=True),
-        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.BANTER),
+        patch(f"{PRODUCER_MODULE}.next_segment_type", side_effect=_next_seg_after_music),
         patch(f"{SCRIPTWRITER_MODULE}.write_banter", new_callable=AsyncMock, return_value=(banter_lines, None)),
         patch(
             f"{SCRIPTWRITER_MODULE}.write_transition",
@@ -198,9 +202,8 @@ async def test_transition_sting_prepended_at_music_to_banter_boundary(tmp_path):
 
 @pytest.mark.asyncio
 async def test_transition_sting_preserves_cached_music_file(tmp_path):
-    from mammamiradio.scheduling import producer
+    import mammamiradio.scheduling.producer as _prod
 
-    producer._prev_seg_type = SegmentType.BANTER
     state = _make_state()
     state.segments_produced = 1
     config = _make_config(tmp_path)
@@ -209,8 +212,12 @@ async def test_transition_sting_preserves_cached_music_file(tmp_path):
     cached_music = tmp_path / "norm_cached_track_192k.mp3"
     cached_music.write_bytes(b"cached music")
 
+    def _next_seg_after_banter(*_args, **_kwargs):
+        _prod._prev_seg_type = SegmentType.BANTER
+        return SegmentType.MUSIC
+
     with (
-        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.MUSIC),
+        patch(f"{PRODUCER_MODULE}.next_segment_type", side_effect=_next_seg_after_banter),
         patch(
             f"{PRODUCER_MODULE}._render_music_track",
             new_callable=AsyncMock,

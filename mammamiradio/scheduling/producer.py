@@ -286,7 +286,7 @@ async def _apply_talk_bed(
             audio_path,
             bed_path,
             bedded_path,
-            config.imaging.bed_volume_db,
+            0.0,  # bed already loudnorm'd by pick_talk_bed; mix at unity
         )
     except Exception:
         bedded_path.unlink(missing_ok=True)
@@ -528,9 +528,8 @@ async def run_producer(
 ) -> None:
     """Keep the lookahead queue filled with rendered segments for live playback."""
     global _prev_seg_type
+    _prev_seg_type = None  # always reset; prewarm races with this and can't be used as a guard
     logger.info("Producer started. Playlist: %d tracks", len(state.playlist))
-    if state.segments_produced == 0 and queue.empty():
-        _prev_seg_type = None
 
     async def _queue_segment(segment: Segment) -> bool:
         """Queue a segment unless the operator stopped the session mid-generation."""
