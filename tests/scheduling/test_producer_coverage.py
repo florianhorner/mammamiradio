@@ -1167,9 +1167,20 @@ async def test_drain_guard_norm_cache_bridge_when_no_canned_clip(tmp_path):
     def _fake_normalize(src, dst, *args, **kwargs):
         dst.write_bytes(b"normed audio")
 
+    # download_track sleeps briefly so that after the test drains the queue,
+    # the drain guard check runs before the next in-flight download completes.
+    _first_download_done = asyncio.Event()
+
+    async def _slow_download(track, cache_dir, music_dir=None):
+        if not _first_download_done.is_set():
+            _first_download_done.set()
+        else:
+            await asyncio.sleep(0.2)  # give drain guard a window on subsequent calls
+        return real_audio
+
     with (
         patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.MUSIC),
-        patch(f"{PRODUCER_MODULE}.download_track", new_callable=AsyncMock, return_value=real_audio),
+        patch(f"{PRODUCER_MODULE}.download_track", side_effect=_slow_download),
         patch(f"{PRODUCER_MODULE}.validate_download", return_value=(True, "ok")),
         patch(f"{PRODUCER_MODULE}.normalize", side_effect=_fake_normalize),
         patch(f"{PRODUCER_MODULE}.shutil.copy2"),
@@ -1179,22 +1190,26 @@ async def test_drain_guard_norm_cache_bridge_when_no_canned_clip(tmp_path):
         patch(f"{PRODUCER_MODULE}._prefetch_next", new_callable=AsyncMock),
         patch(f"{PRODUCER_MODULE}._ffprobe_duration_sec", return_value=180.0),
     ):
+        # lookahead=2: producer throttles after 2 segments. Drain when throttled
+        # so the drain guard sees queue.empty() before any production is in-flight.
         config.pacing.lookahead_segments = 2
 
         from mammamiradio.scheduling.producer import run_producer
 
         task = asyncio.create_task(run_producer(queue, state, config))
         try:
+            # Wait for producer to be fully throttled (queue at lookahead capacity)
             deadline = asyncio.get_event_loop().time() + 5.0
-            while queue.qsize() < 1:
+            while queue.qsize() < 2:
                 if asyncio.get_event_loop().time() > deadline:
-                    raise TimeoutError("No segment produced in time")
+                    raise TimeoutError("Producer did not fill queue in time")
                 await asyncio.sleep(0.01)
 
-            # Drain the queue to trigger the drain guard
+            # Drain the queue; producer is throttled so no production is in-flight
             while not queue.empty():
                 queue.get_nowait()
 
+            # Drain guard fires on next iteration (no in-flight segment to race with)
             deadline = asyncio.get_event_loop().time() + 3.0
             while queue.empty():
                 if asyncio.get_event_loop().time() > deadline:
