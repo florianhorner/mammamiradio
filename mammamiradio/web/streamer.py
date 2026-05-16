@@ -1295,7 +1295,20 @@ async def setup_provider_check(request: Request, _: None = Depends(require_admin
             return cached_result
 
         task = getattr(request.app.state, "_provider_check_task", None)
-        if task is None or task.done():
+        if task is not None and task.done():
+            # Task finished but result wasn't cached yet (done-but-uncached window).
+            # Cache it now to close the race instead of spawning a second probe.
+            try:
+                result = task.result()
+            except BaseException:
+                request.app.state._provider_check_task = None
+            else:
+                request.app.state._provider_check_cached_result = result
+                request.app.state._provider_check_cached_at = time.time()
+                request.app.state._provider_check_task = None
+                return result
+            task = None
+        if task is None:
             task = asyncio.create_task(check_provider_keys(config))
             request.app.state._provider_check_task = task
 

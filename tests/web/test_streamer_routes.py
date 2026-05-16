@@ -1036,6 +1036,36 @@ async def test_setup_provider_check_clears_task_on_exception():
 
 
 @pytest.mark.asyncio
+async def test_setup_provider_check_clears_task_on_cancel():
+    """Cancelling the in-flight provider-check task clears the task reference."""
+    app = _make_test_app()
+    barrier = asyncio.Event()
+
+    async def slow_probe(_config):
+        barrier.set()
+        await asyncio.sleep(10)
+        return {"anthropic": True}
+
+    with patch("mammamiradio.web.streamer.check_provider_keys", new=slow_probe):
+        transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345), raise_app_exceptions=False)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            check_coro = client.post("/api/setup/provider-check")
+            check_task = asyncio.create_task(check_coro)
+            await barrier.wait()
+            # Cancel the in-flight probe at the app-state level, then let the
+            # HTTP task observe the cancellation.
+            probe_task = app.state._provider_check_task
+            assert probe_task is not None
+            probe_task.cancel()
+            try:
+                await check_task
+            except (asyncio.CancelledError, httpx.RemoteProtocolError):
+                pass
+
+    assert getattr(app.state, "_provider_check_task", None) is None
+
+
+@pytest.mark.asyncio
 async def test_addon_snippet_returns_snippet():
     app = _make_test_app()
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
