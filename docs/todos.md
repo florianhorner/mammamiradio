@@ -257,3 +257,35 @@ Version sync check conditional on `pyproject.toml`/`ha-addon/config.yaml` diff; 
 **Priority:** P2
 **Source:** scope-parked from florianhorner/feat/host-intro-variety on 2026-05-14
 `mammamiradio/hosts/scriptwriter.py:615` — `_get_system_prompt()` cache key includes `h.name`, `h.style`, `h.personality.to_dict()`, and `super_italian_mode` but omits `h.voice`, `config.sonic_brand.geography`, `config.station.name`, and `config.station.theme`. If any of those change at runtime without also changing host name/style/personality, the stale system prompt is served silently. In normal operation this is low-risk because config is loaded once at startup and hot-reload calls `importlib.reload()` which clears module globals. Becomes relevant if a settings endpoint ever allows in-memory config mutation.
+
+## Admin UI — Design System
+
+### Touch targets below 44px: icon buttons and programme actions
+
+**Priority:** P2
+**Source:** scope-parked from florianhorner/chore/todos on 2026-05-16
+`admin.html:787, 838, 1318` — `.btn-icon` topbar icon buttons (36px), programme action buttons (26px), and checkbox (16px) miss the 44px touch target minimum; the sidebar nav link was fixed in this branch but these three element types remain.
+
+### Ad-hoc pill systems — migrate to canonical status chips
+
+**Priority:** P2
+**Source:** scope-parked from florianhorner/chore/todos on 2026-05-16
+`admin.html:574, 697, 724, 849` — `.chip`, `.now-type-pill`, `.seg-pill`, `.lr-pill` exist alongside the canonical `.status-chip` / `.status-inline` system in `base.css`; migrate these ad-hoc styles to the canonical classes so colorblind users get shape + color on all status surfaces.
+
+### Status chip label contrast below WCAG AA
+
+**Priority:** P3
+**Source:** scope-parked from florianhorner/chore/todos on 2026-05-16
+`mammamiradio/web/static/base.css` — `.status-chip` label text at 10px achieves ~3.18:1 contrast against `--surface`; WCAG AA requires 4.5:1 for text below 18px normal / 14px bold; fix by increasing chip label font-size to 12px+ or adjusting the token value. Mitigation already present: all states pair color with shape, satisfying non-text contrast (3:1 for UI components).
+
+### Admin spacing magic numbers — tokenize to tokens.css scale
+
+**Priority:** P3
+**Source:** scope-parked from florianhorner/chore/todos on 2026-05-16
+`mammamiradio/web/templates/admin.html` — spacing values `20px 18px`, `22px 28px 40px`, `14px 18px` are hardcoded instead of referencing the 4px/8px base-scale tokens in `tokens.css`; consolidate to canonical spacing variables.
+
+### Hardcoded hex colors in admin.html — migrate to CSS variables
+
+**Priority:** P3
+**Source:** scope-parked from florianhorner/chore/todos on 2026-05-16
+`mammamiradio/web/templates/admin.html` — colors `#14110F`, `#1E1610`, and raw RGB tints appear inline rather than referencing the canonical custom properties from `tokens.css`; migrate to the palette variables defined there.
