@@ -154,7 +154,12 @@ def test_switch_playlist_clears_played_track_log():
         Segment(
             type=SegmentType.MUSIC,
             path=Path("/tmp/fake.mp3"),
-            metadata={"title": "Artist – Old Song", "artist": "Artist", "title_only": "Old Song", "duration_ms": 180_000},
+            metadata={
+                "title": "Artist – Old Song",
+                "artist": "Artist",
+                "title_only": "Old Song",
+                "duration_ms": 180_000,
+            },
         )
     )
     assert state.played_track_log
