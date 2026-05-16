@@ -831,6 +831,38 @@ async def test_phase2_internal_fields_not_in_public_response():
 
 
 @pytest.mark.asyncio
+async def test_listener_request_full_dedica_cycle_submit_admin_public_dismiss():
+    app = _make_test_app()
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    with patch("mammamiradio.web.listener_requests._download_listener_song", new_callable=AsyncMock):
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            submitted = await client.post("/api/listener-request", json={"name": "Marta", "message": "Saluti!"})
+            admin_queue = await client.get("/api/listener-requests")
+            public_queue = await client.get("/public-listener-requests")
+
+            assert submitted.status_code == 200
+            assert admin_queue.status_code == 200
+            assert public_queue.status_code == 200
+            admin_requests = admin_queue.json()["requests"]
+            public_requests = public_queue.json()["requests"]
+            assert len(admin_requests) == 1
+            assert len(public_requests) == 1
+            request_id = admin_requests[0]["request_id"]
+            # Public feed exposes public_token only — request_id and submitter_ip_hash are admin-only
+            assert "public_token" in public_requests[0]
+            assert "request_id" not in public_requests[0]
+            assert "submitter_ip_hash" not in public_requests[0]
+
+            dismissed = await client.post("/api/listener-requests/dismiss", json={"id": request_id})
+            public_after = await client.get("/public-listener-requests")
+
+    assert dismissed.status_code == 200
+    assert dismissed.json() == {"ok": True, "removed": 1}
+    assert public_after.status_code == 200
+    assert public_after.json()["requests"] == []
+
+
+@pytest.mark.asyncio
 async def test_listener_request_rate_limit_uses_forwarded_ip_from_trusted_proxy():
     """HA ingress / trusted proxy traffic should bucket by real listener IP."""
     from mammamiradio.web.listener_requests import _hash_submitter_ip
