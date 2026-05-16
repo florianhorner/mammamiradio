@@ -115,6 +115,18 @@ def test_action_column_hidden_on_phone() -> None:
     ), "Phone CSS must hide td:nth-child(6) (skip action) which has no slot in the card grid."
 
 
+def test_more_upcoming_row_not_card_styled_on_phone() -> None:
+    """The '+ N more upcoming' summary row must render flat, not as a tappable card."""
+    text = _read_admin_html()
+    assert 'class="prog-more"' in text, 'renderProgramme() must emit <tr class="prog-more"> for the truncation row.'
+    css = _phone_css()
+    assert re.search(
+        r"\.a-programme\s+tr\.prog-more\s*\{[^}]*display\s*:\s*block",
+        css,
+        re.DOTALL,
+    ), "Phone CSS must render tr.prog-more flat (display: block, no card chrome)."
+
+
 def test_programme_table_desktop_colgroup_has_all_columns() -> None:
     """renderProgramme() must emit all six column classes so fixed-layout widths apply."""
     text = _read_admin_html()

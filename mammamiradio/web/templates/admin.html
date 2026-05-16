@@ -1086,16 +1086,17 @@ body[data-stopped="true"] .a-station-card .dot.on { animation-play-state: paused
   .a-programme td:nth-child(4) { grid-column: 1 / -1; grid-row: 3; }
   .a-programme td:nth-child(5) { grid-column: 3; grid-row: 1; align-self: center; text-align: right; }
   .a-programme td:nth-child(6) { display: none; }
-  .a-programme .ti {
-    line-height: 1.25;
-    overflow-wrap: anywhere;
-  }
-  .a-programme .ho {
-    line-height: 1.3;
-    overflow-wrap: anywhere;
-  }
+  .a-programme .ti { line-height: 1.25; }
+  .a-programme .ho { line-height: 1.3; }
   .a-programme .du { white-space: nowrap; }
   .a-programme td.prog-empty { grid-column: 1 / -1; text-align: center; }
+  .a-programme tr.prog-more {
+    display: block;
+    padding: 6px 12px;
+    background: none;
+    border: none;
+    border-radius: 0;
+  }
   .a-programme tr.pool-pass {
     display: block;
     padding: 9px 10px;
@@ -1764,7 +1765,7 @@ function renderProgramme(st){
   });
 
   if(upFiltered.length>10){
-    rows.push(`<tr><td colspan="6" class="prog-empty">+ ${upFiltered.length-10} more upcoming</td></tr>`);
+    rows.push(`<tr class="prog-more"><td colspan="6" class="prog-empty">+ ${upFiltered.length-10} more upcoming</td></tr>`);
   }
 
   const countEl=document.getElementById('programmeCount');
