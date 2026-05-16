@@ -68,6 +68,7 @@ from mammamiradio.scheduling.scheduler import next_segment_type
 
 logger = logging.getLogger(__name__)
 CHAOS_AUDIO_FAILURE_BACKOFF_SECONDS = 0.5
+CHAOS_AUDIO_FAILURE_LIMIT = 5
 
 MUSIC_SELECTION_RETRIES = 20
 MUSIC_QUALITY_GATE_REJECTION_LIMIT = 3
@@ -830,6 +831,11 @@ async def run_producer(
         # /api/chaos -> purge prebuffer + bump epoch
         # producer sees chaos_pending -> queues BANTER
         # stale in-flight segments fail the epoch check below.
+        #
+        # Epoch is captured BEFORE reading chaos_pending so that a disable call
+        # between the two reads increments the epoch and causes the epoch check
+        # to discard the in-flight chaos segment correctly.
+        generation_chaos_epoch = state.chaos_cutover_epoch
         chaos_subtype: ChaosSubtype | None = None
         if state.chaos_pending is not None:
             chaos_subtype = state.chaos_pending
@@ -844,7 +850,6 @@ async def run_producer(
             seg_type = next_segment_type(state, config.pacing)
         segment: Segment | None = None
         generation_revision = state.playlist_revision
-        generation_chaos_epoch = state.chaos_cutover_epoch
         success_callback: Callable[[], None] | None = None
 
         # Refresh Home Assistant context for banter/ad segments
@@ -1234,7 +1239,15 @@ async def run_producer(
                                     }
                                 ]
                             else:
-                                await asyncio.sleep(CHAOS_AUDIO_FAILURE_BACKOFF_SECONDS)
+                                if state.chaos_audio_failures >= CHAOS_AUDIO_FAILURE_LIMIT:
+                                    state.chaos_pending = None
+                                    state.chaos_last_degraded_reason = "strike_abandoned"
+                                    logger.error(
+                                        "Chaos first-strike abandoned after %d failures",
+                                        state.chaos_audio_failures,
+                                    )
+                                else:
+                                    await asyncio.sleep(CHAOS_AUDIO_FAILURE_BACKOFF_SECONDS)
                                 continue
                         else:
                             logger.warning("Banter TTS failed, skipping segment: %s", exc)
@@ -1287,11 +1300,27 @@ async def run_producer(
                                     fallback_exc,
                                 )
                                 if chaos_subtype is not None:
-                                    await asyncio.sleep(CHAOS_AUDIO_FAILURE_BACKOFF_SECONDS)
+                                    if state.chaos_audio_failures >= CHAOS_AUDIO_FAILURE_LIMIT:
+                                        state.chaos_pending = None
+                                        state.chaos_last_degraded_reason = "strike_abandoned"
+                                        logger.error(
+                                            "Chaos first-strike abandoned after %d failures",
+                                            state.chaos_audio_failures,
+                                        )
+                                    else:
+                                        await asyncio.sleep(CHAOS_AUDIO_FAILURE_BACKOFF_SECONDS)
                                 continue
                         else:
                             if chaos_subtype is not None:
-                                await asyncio.sleep(CHAOS_AUDIO_FAILURE_BACKOFF_SECONDS)
+                                if state.chaos_audio_failures >= CHAOS_AUDIO_FAILURE_LIMIT:
+                                    state.chaos_pending = None
+                                    state.chaos_last_degraded_reason = "strike_abandoned"
+                                    logger.error(
+                                        "Chaos first-strike abandoned after %d failures",
+                                        state.chaos_audio_failures,
+                                    )
+                                else:
+                                    await asyncio.sleep(CHAOS_AUDIO_FAILURE_BACKOFF_SECONDS)
                             continue
 
                 if canned is None:

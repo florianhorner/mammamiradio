@@ -1835,6 +1835,8 @@ async def set_chaos(request: Request, _: None = Depends(require_admin_access)):
             state.chaos_mode_active = True
             state.chaos_pending = first_strike
             state.chaos_cutover_epoch += 1
+            state.chaos_audio_failures = 0
+            state.chaos_last_degraded_reason = ""
             purged = _purge_segment_queue(queue)
             state.queued_segments.clear()
         else:

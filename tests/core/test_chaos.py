@@ -10,7 +10,7 @@ import pytest
 
 from mammamiradio.core.config import load_config
 from mammamiradio.core.models import ChaosSubtype, HostPersonality, Segment, SegmentType, StationState, Track
-from mammamiradio.scheduling.producer import RenderedMusicTrack, run_producer
+from mammamiradio.scheduling.producer import CHAOS_AUDIO_FAILURE_LIMIT, RenderedMusicTrack, run_producer
 
 PRODUCER_MODULE = "mammamiradio.scheduling.producer"
 SCRIPTWRITER_MODULE = "mammamiradio.hosts.scriptwriter"
@@ -309,3 +309,45 @@ async def test_chaos_pending_survives_generation_failure_without_fallback(tmp_pa
     assert queue.empty()
     assert state.chaos_pending == ChaosSubtype.ICON_MOMENT
     assert state.chaos_audio_failures >= 1
+
+
+@pytest.mark.asyncio
+async def test_chaos_pending_abandoned_after_failure_limit(tmp_path):
+    """chaos_pending is auto-cleared after CHAOS_AUDIO_FAILURE_LIMIT consecutive failures
+    to prevent the queue from starving indefinitely."""
+    state = _state()
+    state.chaos_mode_active = True
+    state.chaos_pending = ChaosSubtype.ICON_MOMENT
+    state.chaos_audio_failures = CHAOS_AUDIO_FAILURE_LIMIT - 1  # one more failure triggers abandon
+    config = _config(tmp_path)
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    host: HostPersonality = config.hosts[0]
+
+    with (
+        patch(
+            f"{SCRIPTWRITER_MODULE}.write_banter",
+            new_callable=AsyncMock,
+            return_value=([(host, "Linea caos.")], None),
+        ),
+        patch(
+            f"{PRODUCER_MODULE}.synthesize_dialogue",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("tts"),
+        ),
+        patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=None),
+    ):
+        task = asyncio.create_task(run_producer(queue, state, config))
+        try:
+            deadline = asyncio.get_event_loop().time() + 3.0
+            while state.chaos_pending is not None:
+                if asyncio.get_event_loop().time() > deadline:
+                    raise TimeoutError("chaos_pending was not cleared after failure limit")
+                await asyncio.sleep(0.05)
+        finally:
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+
+    assert state.chaos_pending is None
+    assert state.chaos_last_degraded_reason == "strike_abandoned"
+    assert state.chaos_audio_failures >= CHAOS_AUDIO_FAILURE_LIMIT
