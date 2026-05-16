@@ -2790,6 +2790,25 @@ async def test_admin_status_ha_details_present_with_full_context():
     assert hd["last_event_label"] == "Lavatrice (consumo)"
 
 
+@pytest.mark.asyncio
+async def test_admin_status_ha_details_absent_when_only_pending_actions():
+    """ha_details must stay None when only pending_actions exist (no HA context).
+    Non-HA actions like skip_bridge must not cause ha_details to appear and
+    render synthetic HA fields that misrepresent HA availability."""
+    app = _make_test_app(admin_token="secret-tok")
+    state = app.state.station_state
+    state.ha_context = ""
+    state.ha_pending_directive = None
+    state.pending_actions = [{"type": "skip_bridge", "source": "admin_skip"}]
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.get("/status", headers={"Authorization": "Bearer secret-tok"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ha_details"] is None, "ha_details must not appear when HA is not active"
+    assert body["pending_actions"] == [{"type": "skip_bridge", "source": "admin_skip"}]
+
+
 # ---------------------------------------------------------------------------
 # Skip track bridge (empty queue)
 # ---------------------------------------------------------------------------

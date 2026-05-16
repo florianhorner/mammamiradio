@@ -2497,7 +2497,6 @@ async def status(request: Request, _: None = Depends(require_admin_access)):
                 "weather_arc": state.ha_weather_arc or None,
                 "events_summary": state.ha_events_summary or None,
                 "pending_directive": state.ha_pending_directive or None,
-                "pending_actions": list(state.pending_actions[-10:]),
                 "recent_event_count": state.ha_recent_event_count,
                 "last_event_label": state.ha_last_event_label or None,
                 "mood_en": state.ha_home_mood_en or None,
@@ -2505,8 +2504,9 @@ async def status(request: Request, _: None = Depends(require_admin_access)):
                 "events_summary_en": state.ha_events_summary_en or None,
                 "last_event_label_en": state.ha_last_event_label_en or None,
             }
-            if (state.ha_context or state.ha_pending_directive or state.pending_actions)
+            if (state.ha_context or state.ha_pending_directive)
             else None,
+            "pending_actions": list(state.pending_actions[-10:]) or None,
             "station_mode": station_mode,
             "producer_errors": [
                 {"type": e.type, "label": e.label, "metadata": e.metadata}
