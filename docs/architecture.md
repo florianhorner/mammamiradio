@@ -36,10 +36,11 @@ Charts / Jamendo / classic eras / local files / demo tracks
 3. Purges suspect cache files (< 10KB, likely failed downloads) and evicts old cache entries.
 4. Restores persisted source selection from `cache/playlist_source.json`, then fetches the playlist by walking the priority chain (charts → Jamendo → local `music/` → bundled demo assets → built-in `DEMO_TRACKS`) and falling through to the next source whenever a tier is gated off, unconfigured, or empty.
 5. Initializes the clip ring buffer for WTF clip sharing.
-6. Creates shared app state, then launches:
+6. Restores persisted `chaos_mode_active` from `MAMMAMIRADIO_CHAOS_MODE` or HA add-on `/data/options.json` without arming a first strike.
+7. Creates shared app state, then launches:
    - `run_producer()` to fill the lookahead queue
    - `run_playback_loop()` to stream queued audio
-7. Logs a one-line boot summary with resolved config dir, audio source, API key presence, HA status, and track count.
+8. Logs a one-line boot summary with resolved config dir, audio source, API key presence, HA status, and track count.
 
 ## Segment production
 
@@ -59,6 +60,7 @@ Charts / Jamendo / classic eras / local files / demo tracks
   - synthesizes one line per host via the configured TTS engine (see [TTS architecture](#tts-architecture) below)
   - passes generated host speech through the imaging layer so banter and news can sit over a quiet music bed, falling back to a synthetic pad on cold starts
   - preserves running jokes in `StationState`
+  - when Chaos Mode is active, applies the per-call `CHAOS_MODE_BLOCK` and one `ChaosSubtype` prompt fragment while keeping the segment type as `BANTER`
 - `AD`
   - picks brands with recurrence weighting and recent-brand avoidance
   - selects one of 6 ad formats: classic pitch, testimonial, duo scene, live remote, late-night whisper, or institutional PSA
@@ -72,6 +74,8 @@ Every produced segment becomes a temporary MP3 on disk and is pushed into `async
 Before queueing, `mammamiradio/audio/imaging.py` may prepend transition stings at music/speech boundaries and mix motif stings under sweepers. Optional operator assets live under `mammamiradio/assets/imaging/`; otherwise FFmpeg-generated stings and beds are used.
 
 Bounded state lists (`played_tracks`, `running_jokes`, `segment_log`, `stream_log`, `ad_history`, `recent_outcomes`) use `deque(maxlen=N)` for automatic memory management — no manual truncation needed.
+
+Chaos Mode adds three state fields around the existing queue model: `chaos_mode_active`, a typed `chaos_pending` first-strike slot, and `chaos_cutover_epoch`. Enabling the mode purges pre-produced lookahead segments, bumps the epoch so any in-flight pre-chaos segment is discarded at commit, and queues a chaos-flavored `BANTER` next. Disabling clears `chaos_pending` and bumps the epoch without purging already queued audio. `played_track_log` is a separate play-time history used by impossible-recall chaos prompts; it is populated in `on_stream_segment()` for music, not when music is merely queued.
 
 ### Studio atmosphere
 
@@ -219,6 +223,8 @@ This is opportunistic context, not a hard dependency. Failures there should not 
 | `/api/pacing` | PATCH | Admin | Patch pacing fields (songs between banter, ad spots per break, etc.) |
 | `/api/setup/save-keys` | POST | Admin | Save API keys via dashboard |
 | `/api/capabilities` | GET | Admin | Capability flags, tier, next-step hint, connect status, and provider degradation telemetry |
+| `/api/chaos` | GET | Admin | Return `{"enabled": bool}` for Chaos Mode |
+| `/api/chaos` | POST | Admin | Toggle Chaos Mode with `{"enabled": bool}`; persists `chaos_mode_active` to `.env` or HA add-on options |
 | `/api/trigger` | POST | Admin | Trigger segment production |
 | `/api/stop` | POST | Admin | Gracefully stop the session (skip + purge + pause producer until `/api/resume`) |
 | `/api/resume` | POST | Admin | Resume a stopped session |
@@ -258,6 +264,7 @@ This repo is biased toward "keep the station on air."
 
 - producer exceptions insert a short silence segment instead of crashing the app
 - script generation failures fall back to OpenAI when configured, then to stock copy
+- chaos first-strike script failures use subtype-specific stock lines and report `provider_health.chaos.last_degraded_reason = "script_fallback"`; chaos audio failures are counted separately as `audio_failure`
 - missing yt-dlp falls back to local files or demo tracks
 - missing Home Assistant context is ignored
 - missing ad brands disables ads rather than killing startup

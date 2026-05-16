@@ -6,6 +6,15 @@ The current version source of truth is `pyproject.toml`.
 
 ## [Unreleased]
 
+### Added
+
+- **Chaos Mode for host banter** — The admin Radio tab now has a persistent `CHAOS MODE` toggle. Enabling it purges prebuffered lookahead audio, arms a guaranteed chaos-flavored banter as the next post-current segment, and keeps the current song uninterrupted. The four host-chaos behaviors ship as `BANTER` subtypes, not new segment types, so queue and playback dispatch stay unchanged.
+- **Chaos Mode API and persistence** — New admin endpoints `GET /api/chaos` and `POST /api/chaos {"enabled": bool}` expose the toggle. Standalone runs persist `MAMMAMIRADIO_CHAOS_MODE` to `.env`; HA add-ons persist `chaos_mode_active` in `/data/options.json` and expose it in add-on options.
+
+### Changed
+
+- **Banter history now separates queued tracks from heard tracks** — `played_track_log` records music when it actually starts streaming, letting impossible-recall chaos prompts reference songs listeners really heard instead of tracks only pre-produced in the lookahead queue.
+
 ## [2.12.0] - 2026-05-15
 
 ### Added

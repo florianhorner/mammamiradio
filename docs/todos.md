@@ -14,6 +14,18 @@
 
 ## Listener UX
 
+### Listener-visible Chaos Mode signal
+
+**Priority:** P3
+**Source:** scope-parked from florianhorner/feat/full-chaos-mode-spec on 2026-05-16
+`mammamiradio/web/templates/listener.html` — Explore a listener-facing chaos-live signal and dramatic visual treatment for chaos mode (melt / flames / glitch) in a separate design pass. The operator panel keeps the readable `CHAOS LIVE` state only.
+
+### Document MAMMAMIRADIO_CHAOS_MODE env var
+
+**Priority:** P3
+**Source:** scope-parked from florianhorner/feat/full-chaos-mode-spec on 2026-05-16
+`CLAUDE.md` (## Environment) and `README.md` — add `MAMMAMIRADIO_CHAOS_MODE` to the `MAMMAMIRADIO_*` env-var reference lists for consistency with `MAMMAMIRADIO_SUPER_ITALIAN`. Doc-sync rule is already satisfied (architecture.md + CHANGELOG cover it); this is a reference-list consistency fix.
+
 ### Dialer revival (listener.js first-class port)
 
 - **Source:** pre-PR#218 `static/script.js` (see `.context/research/dialer-port-blueprint.md`)
