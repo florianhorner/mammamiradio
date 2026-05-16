@@ -32,7 +32,9 @@ PATTERNS=(
   '\b[Aa]pproach [A-Z]\b'         # Approach A, Approach B
   '\bConcept [A-Z][a-z]'          # Concept A Time-Horizon Stack
   '\bphase [A-Z]\b'               # phase A, phase B (lowercase)
-  '\bPhase [A-Z][0-9]?\b'         # Phase A, Phase 1, Phase B1
+  '\bPhase [A-Z][0-9]?\b'         # Phase A, Phase B1
+  '\bPhase [0-9]+\b'              # Phase 1, Phase 2
+  '\bTrack [A-Z]\b'               # Track A, Track B
   '\bleadership principle\b'
 
   # Agent / tool provenance
