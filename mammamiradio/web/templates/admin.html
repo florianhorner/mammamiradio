@@ -818,9 +818,20 @@ body::before {
 .a-panel header .sub.live .dot { width: 5px; height: 5px; border-radius: 50%; background: var(--lancia2); box-shadow: 0 0 6px var(--lancia2); animation: a-live-pulse 1.4s ease-in-out infinite; }
 
 /* Programme table */
-.a-programme { width: 100%; border-collapse: collapse; font-size: 13px; }
+.programme-toolbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; justify-content: flex-end; min-width: 0; }
+.programme-toolbar .filter-count { font-size: 11px; color: var(--muted); font-family: var(--font-mono); white-space: nowrap; }
+.programme-toolbar .filter-pills { margin: 0; min-width: 0; }
+#programmeList { max-width: 100%; min-width: 0; overflow-x: hidden; }
+.a-programme { width: 100%; table-layout: fixed; border-collapse: collapse; font-size: 13px; }
+.a-programme .col-time { width: 54px; }
+.a-programme .col-type { width: 82px; }
+.a-programme .col-title { width: auto; }
+.a-programme .col-host { width: 120px; }
+.a-programme .col-duration { width: 58px; }
+.a-programme .col-action { width: 30px; }
 .a-programme th { text-align: left; font-size: 9px; font-weight: 700; letter-spacing: 0.18em; text-transform: uppercase; color: var(--muted); padding: 6px 8px; border-bottom: 1px solid var(--line); }
 .a-programme td { padding: 10px 8px; border-bottom: 1px solid rgba(245,237,216,0.04); vertical-align: middle; }
+.a-programme th, .a-programme td { overflow-wrap: anywhere; }
 .a-programme tr { transition: background 150ms; }
 .a-programme tr:hover { background: rgba(245,237,216,0.03); }
 .a-programme tr.past td { opacity: 0.5; }
@@ -835,6 +846,7 @@ body::before {
 .a-programme .ti { color: var(--cream); font-weight: 500; }
 .a-programme .ho { color: var(--text-secondary); font-size: 12px; }
 .a-programme .du { font-family: var(--font-mono); color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+.a-programme .ac { text-align: right; }
 .a-programme .ac button {
   background: transparent; border: 1px solid var(--line); color: var(--cream-dk);
   width: 26px; height: 26px; border-radius: 6px; cursor: pointer;
@@ -1026,6 +1038,77 @@ body[data-stopped="true"] .a-station-card .dot.on { animation-play-state: paused
   .a-row-2 { grid-template-columns: 1fr; }
   .a-topbar { flex-wrap: wrap; }
 }
+
+@media (max-width: 640px) {
+  .programme-toolbar { width: 100%; justify-content: flex-start; }
+  .programme-toolbar .filter-pills { display: flex; flex-wrap: wrap; gap: 8px; }
+  .programme-toolbar .filter-pill { flex: 0 1 auto; }
+  #programmeList { overflow-x: hidden; }
+  .a-programme {
+    display: block;
+  }
+  .a-programme colgroup,
+  .a-programme thead {
+    display: none;
+  }
+  .a-programme tbody {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .a-programme tr {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    gap: 6px 10px;
+    padding: 10px 12px;
+    border: 1px solid rgba(245,237,216,0.08);
+    border-radius: 8px;
+    background: rgba(20,17,15,0.18);
+  }
+  .a-programme tr:hover { background: rgba(245,237,216,0.04); }
+  .a-programme tr.now {
+    background: rgba(236,204,48,0.08);
+    box-shadow: inset 2px 0 0 var(--sun2);
+  }
+  .a-programme tr.next { background: rgba(37,99,235,0.05); }
+  .a-programme tr.past { opacity: 0.66; }
+  .a-programme tr.past td { opacity: 1; }
+  .a-programme td {
+    display: block;
+    min-width: 0;
+    padding: 0;
+    border-bottom: none;
+    overflow-wrap: anywhere;
+  }
+  .a-programme td:nth-child(1) { grid-column: 1; grid-row: 1; align-self: center; }
+  .a-programme td:nth-child(2) { grid-column: 2; grid-row: 1; align-self: center; }
+  .a-programme td:nth-child(3) { grid-column: 1 / -1; grid-row: 2; }
+  .a-programme td:nth-child(4) { grid-column: 1 / -1; grid-row: 3; }
+  .a-programme td:nth-child(5) { grid-column: 3; grid-row: 1; align-self: center; text-align: right; }
+  .a-programme td:nth-child(6) { display: none; }
+  .a-programme .ti { line-height: 1.25; }
+  .a-programme .ho { line-height: 1.3; }
+  .a-programme .du { white-space: nowrap; }
+  .a-programme td.prog-empty { grid-column: 1 / -1; text-align: center; }
+  .a-programme tr.prog-more {
+    display: block;
+    padding: 6px 12px;
+    background: none;
+    border: none;
+    border-radius: 0;
+  }
+  .a-programme tr.pool-pass {
+    display: block;
+    padding: 9px 10px;
+    background: rgba(245,237,216,0.03);
+  }
+  .a-programme tr.pool-pass td.pool-pass-cell {
+    display: block;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+  }
+}
 </style>
 </head>
 <body>
@@ -1149,9 +1232,9 @@ body[data-stopped="true"] .a-station-card .dot.on { animation-play-state: paused
           <div class="ttl-eyebrow">Conduttore</div>
           <h2>Palinsesto</h2>
         </div>
-        <div style="display:flex;align-items:center;gap:10px;">
-          <span class="filter-count" id="programmeCount" style="font-size:11px;color:var(--muted);font-family:var(--font-mono)"></span>
-          <div class="filter-pills" style="margin:0">
+        <div class="programme-toolbar">
+          <span class="filter-count" id="programmeCount"></span>
+          <div class="filter-pills">
             <button type="button" class="filter-pill active" data-filter="all" onclick="setProgrammeFilter('all',this)">Tutto</button>
             <button type="button" class="filter-pill" data-filter="music" onclick="setProgrammeFilter('music',this)">Musica</button>
             <button type="button" class="filter-pill" data-filter="banter" onclick="setProgrammeFilter('banter',this)">Banter</button>
@@ -1682,14 +1765,14 @@ function renderProgramme(st){
   });
 
   if(upFiltered.length>10){
-    rows.push(`<tr><td colspan="6" class="prog-empty">+ ${upFiltered.length-10} more upcoming</td></tr>`);
+    rows.push(`<tr class="prog-more"><td colspan="6" class="prog-empty">+ ${upFiltered.length-10} more upcoming</td></tr>`);
   }
 
   const countEl=document.getElementById('programmeCount');
   if(countEl)countEl.textContent=totalCount+' entries';
 
   if(rows.length){
-    el.innerHTML=`<table class="a-programme"><thead><tr><th>Ora</th><th>Tipo</th><th>Titolo</th><th>Host/Fonte</th><th>Durata</th><th></th></tr></thead><tbody>${rows.join('')}</tbody></table>`;
+    el.innerHTML=`<table class="a-programme"><colgroup><col class="col-time"><col class="col-type"><col class="col-title"><col class="col-host"><col class="col-duration"><col class="col-action"></colgroup><thead><tr><th>Ora</th><th>Tipo</th><th>Titolo</th><th>Host/Fonte</th><th>Durata</th><th></th></tr></thead><tbody>${rows.join('')}</tbody></table>`;
   }else{
     el.innerHTML='<div class="prog-empty">Waiting for signal...</div>';
   }

@@ -4,6 +4,12 @@ All notable changes to `mammamiradio` are documented here.
 
 The current version source of truth is `pyproject.toml`.
 
+## [2.12.2] - 2026-05-16
+
+### Fixed
+
+- **Palinsesto table no longer causes horizontal overflow on phone widths.** The six-column programme table now collapses into compact grid cards at ≤640 px; column widths are locked with `table-layout: fixed` and a `<colgroup>` on desktop so the table stays inside the panel at all screen sizes.
+
 ## [2.12.1] - 2026-05-16
 
 ### Changed
