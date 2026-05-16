@@ -118,6 +118,16 @@ The 3-agent PR audit on 2026-05-03 took ~45s and flipped a 2-3 day build into a 
 **Source:** scope-parked from `florianhorner/commit-standards-bootstrap` on 2026-05-08
 `.github/workflows/verify-claims-call.yml` pins `florianhorner/gh-workflows/.github/workflows/verify-claims.yml@v1.1`. Upstream PR `florianhorner/gh-workflows#3` fixes the `parseProofLines` self-reference-tag bug that caused PR #302's `runtime: proof/...txt` line to fail validation; once the fix lands and is tagged `v1.2`, bump the pin here so future PRs can use file-path and gist-URL artifacts directly instead of routing every artifact through a CI run URL.
 
+### P2 — Group pydantic + pydantic-core in dependabot config
+**Priority:** P2
+**Source:** release-manager session 2026-05-13 — `main` broke when a PR bumping pydantic to 2.13.4 merged without a companion pydantic-core 2.46.4 bump. `submit-pypi` (pip-compile) failed on every subsequent deps PR (#320, #322) until #321 manually unblocked the cascade.
+Add a `groups` block to `.github/dependabot.yml` so pydantic + pydantic-core ship in a single PR going forward. Same grouping logic applies to any other tightly-coupled pair (e.g. anthropic + httpx, fastapi + starlette). Prevents the "main has a broken pip-compile resolution between dependabot PRs" failure mode.
+
+### P2 — Resolve `enable-automerge` workflow gap
+**Priority:** P2
+**Source:** release-manager session 2026-05-13 — every Dependabot PR (#320, #321, #322) fails its `enable-automerge` check with `GitHub Actions is not permitted to approve pull requests` (org policy). Forces a human approve + manual merge on every routine deps bump.
+Two paths: (a) flip the org setting to allow GH Actions to approve PRs (security tradeoff worth weighing — if a malicious PR slips through, automerge would land it), or (b) drop the auto-approve step from `dependabot-automerge.yml` entirely and accept that humans approve all deps PRs. Path (b) is the safer default given this is a single-author repo with hands-on release management. Either decision unblocks the perma-failing check.
+
 ## Scriptwriter Anthropic state
 
 **Source:** /simplify scope-park on `fix/anthropic-model-and-audio-fx-guardrails` 2026-05-10.
