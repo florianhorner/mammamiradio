@@ -10,6 +10,7 @@ import pytest
 import mammamiradio.hosts.scriptwriter as scriptwriter_module
 from mammamiradio.core.config import load_config
 from mammamiradio.core.models import (
+    ChaosSubtype,
     HostPersonality,
     SegmentType,
     StationState,
@@ -17,8 +18,10 @@ from mammamiradio.core.models import (
 )
 from mammamiradio.hosts.ad_creative import AD_FORMATS, SPEAKER_ROLES, AdBrand, AdFormat, AdScript, AdVoice
 from mammamiradio.hosts.scriptwriter import (
+    CHAOS_MODE_BLOCK,
     ListenerRequestCommit,
     _build_system_prompt,
+    _chaos_prompt_block,
     _host_expression_block,
     _massage_transition_text,
     _personality_modifier,
@@ -190,6 +193,13 @@ def test_system_prompt_abbreviated_bank_in_sync(config):
     prompt = _build_system_prompt(config)
     first_surprise = _EXPRESSION_BANK["surprise"][0]
     assert first_surprise in prompt
+
+
+def test_chaos_mode_block_is_not_in_cached_system_prompt(config, state):
+    state.chaos_mode_active = True
+
+    assert CHAOS_MODE_BLOCK.strip() not in _build_system_prompt(config)
+    assert "CHAOS_FOURTH_WALL" in _chaos_prompt_block(state, ChaosSubtype.FOURTH_WALL)
 
 
 def test_massage_transition_text_rewrites_repeated_che_pezzo():

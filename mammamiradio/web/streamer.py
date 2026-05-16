@@ -13,6 +13,7 @@ import os
 import random as _random
 import re as _re
 import secrets
+import threading
 import time
 from pathlib import Path
 from urllib.parse import urlparse
@@ -24,7 +25,15 @@ from fastapi.templating import Jinja2Templates
 
 from mammamiradio.audio.normalizer import humanize_norm_filename, load_track_metadata
 from mammamiradio.core.capabilities import capabilities_to_dict, get_capabilities
-from mammamiradio.core.models import PersonalityAxes, PlaylistSource, Segment, SegmentType, StationState, Track
+from mammamiradio.core.models import (
+    ChaosSubtype,
+    PersonalityAxes,
+    PlaylistSource,
+    Segment,
+    SegmentType,
+    StationState,
+    Track,
+)
 from mammamiradio.core.provider_checks import check_provider_keys
 from mammamiradio.core.setup_status import addon_options_snippet, build_setup_status, classify_station_mode
 from mammamiradio.home.ha_context import push_state_to_ha
@@ -120,6 +129,7 @@ _CREDENTIAL_FIELDS: dict[str, tuple[str, str]] = {
     "openai_api_key": ("OPENAI_API_KEY", "openai_api_key"),
 }
 _CREDENTIAL_ENV_TO_FIELD = {env_key: field for field, (env_key, _config_attr) in _CREDENTIAL_FIELDS.items()}
+_ADDON_OPTIONS_LOCK = threading.Lock()
 
 
 def _purge_segment_queue(q) -> int:
@@ -327,6 +337,13 @@ def _provider_health_snapshot(config, state: StationState) -> dict:
         },
         "openai": {
             "configured": bool(config.openai_api_key),
+        },
+        "chaos": {
+            "enabled": state.chaos_mode_active,
+            "pending": state.chaos_pending.value if state.chaos_pending else "",
+            "script_fallbacks": state.chaos_script_fallbacks,
+            "audio_failures": state.chaos_audio_failures,
+            "last_degraded_reason": state.chaos_last_degraded_reason,
         },
     }
 
@@ -1424,24 +1441,47 @@ def _save_dotenv(updates: dict[str, str]) -> None:
     tmp.replace(env_path)
 
 
+def _save_addon_option(key: str, value) -> None:
+    """Persist a single option into /data/options.json atomically."""
+    import json as _json
+    import os as _os
+
+    with _ADDON_OPTIONS_LOCK:
+        options_path = Path("/data/options.json")
+        options: dict = {}
+        if options_path.exists():
+            try:
+                options = _json.loads(options_path.read_text())
+            except (ValueError, OSError):
+                options = {}
+        options[key] = value
+        tmp_path = options_path.with_suffix(options_path.suffix + ".tmp")
+        tmp_path.write_text(_json.dumps(options, indent=2))
+        _os.replace(tmp_path, options_path)
+
+
 def _save_addon_options(updates: dict[str, str]) -> None:
     """Update /data/options.json with new credential values."""
     import json as _json
+    import os as _os
 
-    options_path = Path("/data/options.json")
-    options = {}
-    if options_path.exists():
-        try:
-            options = _json.loads(options_path.read_text())
-        except (ValueError, OSError):
-            pass
+    with _ADDON_OPTIONS_LOCK:
+        options_path = Path("/data/options.json")
+        options = {}
+        if options_path.exists():
+            try:
+                options = _json.loads(options_path.read_text())
+            except (ValueError, OSError):
+                pass
 
-    for env_key, value in updates.items():
-        opt_key = _CREDENTIAL_ENV_TO_FIELD.get(env_key)
-        if opt_key:
-            options[opt_key] = _sanitize_credential_value(value)
+        for env_key, value in updates.items():
+            opt_key = _CREDENTIAL_ENV_TO_FIELD.get(env_key)
+            if opt_key:
+                options[opt_key] = _sanitize_credential_value(value)
 
-    options_path.write_text(_json.dumps(options, indent=2))
+        tmp_path = options_path.with_suffix(options_path.suffix + ".tmp")
+        tmp_path.write_text(_json.dumps(options, indent=2))
+        _os.replace(tmp_path, options_path)
 
 
 @router.get("/api/setup/addon-snippet")
@@ -1735,28 +1775,83 @@ async def get_super_italian(request: Request, _: None = Depends(require_admin_ac
 
 
 _super_italian_lock = asyncio.Lock()
+_chaos_lock = asyncio.Lock()
 
 
 def _save_super_italian_addon_options(value: bool) -> None:
-    """Persist super_italian_mode into /data/options.json for HA addons.
+    """Persist super_italian_mode into /data/options.json for HA addons."""
+    _save_addon_option("super_italian_mode", value)
 
-    Atomic: writes to a sibling temp file, then os.replace() — survives an
-    HA-watchdog restart mid-write without leaving a torn options.json.
+
+@router.get("/api/chaos")
+async def get_chaos(request: Request, _: None = Depends(require_admin_access)):
+    """Return the current Chaos Mode flag."""
+    state = request.app.state.station_state
+    return {"enabled": bool(state.chaos_mode_active)}
+
+
+@router.post("/api/chaos")
+async def set_chaos(request: Request, _: None = Depends(require_admin_access)):
+    """Toggle Chaos Mode live and persist it.
+
+    Endpoint flow:
+    POST enabled=true -> persist -> set active+pending -> bump epoch -> purge lookahead
+    POST enabled=false -> persist -> clear pending -> bump epoch, without queue purge
     """
-    import json as _json
-    import os as _os
+    try:
+        body = await request.json()
+    except ValueError:
+        return {"ok": False, "error": "invalid JSON body"}
+    if not isinstance(body, dict) or "enabled" not in body:
+        return {"ok": False, "error": "expected JSON object with enabled"}
+    raw_value = body["enabled"]
+    if not isinstance(raw_value, bool):
+        return {"ok": False, "error": "enabled must be a JSON boolean (true/false)"}
 
-    options_path = Path("/data/options.json")
-    options: dict = {}
-    if options_path.exists():
+    state = request.app.state.station_state
+    config = request.app.state.config
+    queue = request.app.state.queue
+    value = raw_value
+    env_value = "true" if value else "false"
+    loop = asyncio.get_running_loop()
+    purged = 0
+
+    async with _chaos_lock:
         try:
-            options = _json.loads(options_path.read_text())
-        except (ValueError, OSError):
-            options = {}
-    options["super_italian_mode"] = value
-    tmp_path = options_path.with_suffix(options_path.suffix + ".tmp")
-    tmp_path.write_text(_json.dumps(options, indent=2))
-    _os.replace(tmp_path, options_path)
+            if config.is_addon:
+                await loop.run_in_executor(None, _save_addon_option, "chaos_mode_active", value)
+            else:
+                await loop.run_in_executor(None, _save_dotenv, {"MAMMAMIRADIO_CHAOS_MODE": env_value})
+        except Exception:
+            logger.error("Failed to persist Chaos Mode toggle", exc_info=True)
+            return JSONResponse(
+                status_code=500,
+                content={"ok": False, "error": "failed to persist chaos mode"},
+            )
+
+        os.environ["MAMMAMIRADIO_CHAOS_MODE"] = env_value
+        if value:
+            first_strike = _random.choice([ChaosSubtype.FOURTH_WALL, ChaosSubtype.ABANDONED_STORM])
+            state.chaos_mode_active = True
+            state.chaos_pending = first_strike
+            state.chaos_cutover_epoch += 1
+            state.chaos_audio_failures = 0
+            state.chaos_last_degraded_reason = ""
+            purged = _purge_segment_queue(queue)
+            state.queued_segments.clear()
+        else:
+            state.chaos_mode_active = False
+            state.chaos_pending = None
+            state.chaos_cutover_epoch += 1
+
+    logger.info(
+        "Chaos Mode %s by admin%s",
+        "enabled" if value else "disabled",
+        f" (purged {purged}, first_strike={state.chaos_pending.value if state.chaos_pending else 'none'})"
+        if value
+        else "",
+    )
+    return {"ok": True, "enabled": value, "purged": purged}
 
 
 @router.post("/api/super-italian")
@@ -1786,7 +1881,7 @@ async def set_super_italian(request: Request, _: None = Depends(require_admin_ac
         config.super_italian_mode = value
         os.environ["MAMMAMIRADIO_SUPER_ITALIAN"] = env_value
         if config.is_addon:
-            await loop.run_in_executor(None, _save_super_italian_addon_options, value)
+            await loop.run_in_executor(None, _save_addon_option, "super_italian_mode", value)
         else:
             await loop.run_in_executor(None, _save_dotenv, {"MAMMAMIRADIO_SUPER_ITALIAN": env_value})
     return {"ok": True, "super_italian_mode": value}
@@ -2354,6 +2449,12 @@ async def status(request: Request, _: None = Depends(require_admin_access)):
             },
             "runtime_health": runtime_health,
             "provider_health": _provider_health_snapshot(config, state),
+            "chaos_mode": {
+                "enabled": state.chaos_mode_active,
+                "pending": state.chaos_pending.value if state.chaos_pending else "",
+                "cutover_epoch": state.chaos_cutover_epoch,
+                "last_degraded_reason": state.chaos_last_degraded_reason,
+            },
             "force_pending": state.force_next.value if state.force_next else None,
             "session_stopped": state.session_stopped,
             "playlist": [

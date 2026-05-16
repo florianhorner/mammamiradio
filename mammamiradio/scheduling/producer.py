@@ -40,6 +40,7 @@ from mammamiradio.audio.tts import synthesize, synthesize_ad, synthesize_dialogu
 from mammamiradio.core.config import StationConfig
 from mammamiradio.core.models import (
     AdHistoryEntry,
+    ChaosSubtype,
     Segment,
     SegmentType,
     StationState,
@@ -66,6 +67,8 @@ from mammamiradio.playlist.track_rationale import classify_track_crate, generate
 from mammamiradio.scheduling.scheduler import next_segment_type
 
 logger = logging.getLogger(__name__)
+CHAOS_AUDIO_FAILURE_BACKOFF_SECONDS = 0.5
+CHAOS_AUDIO_FAILURE_LIMIT = 5
 
 MUSIC_SELECTION_RETRIES = 20
 MUSIC_QUALITY_GATE_REJECTION_LIMIT = 3
@@ -84,6 +87,20 @@ class RenderedMusicTrack:
 def _probe_segment_duration(path: Path) -> float:
     """Run ffprobe on path and return duration in seconds; 0.0 if probe fails."""
     return _ffprobe_duration_sec(path) or 0.0
+
+
+def _is_tmp_render(segment: Segment, tmp_dir: Path) -> bool:
+    if segment.ephemeral:
+        return True
+    try:
+        return segment.path.resolve().is_relative_to(tmp_dir.resolve())
+    except OSError:
+        return False
+
+
+def _unlink_if_tmp_render(segment: Segment, tmp_dir: Path) -> None:
+    if _is_tmp_render(segment, tmp_dir):
+        segment.path.unlink(missing_ok=True)
 
 
 def _normalized_cache_path(track: Track, config: StationConfig) -> Path:
@@ -542,6 +559,7 @@ async def prewarm_first_segment(
                 "youtube_id": track.youtube_id,
                 "spotify_id": track.spotify_id,
                 "album_art": track.album_art,
+                "duration_ms": track.duration_ms,
                 "rationale": rationale,
                 "crate": crate,
                 "audio_source": "prewarm",
@@ -770,7 +788,11 @@ async def run_producer(
                 )
                 _drain_guard_queued = True
 
-        if queue.qsize() >= config.pacing.lookahead_segments and state.force_next is None:
+        if (
+            queue.qsize() >= config.pacing.lookahead_segments
+            and state.force_next is None
+            and state.chaos_pending is None
+        ):
             # Periodically evict stale cache files while the producer is idle
             now = asyncio.get_running_loop().time()
             if now - _last_cache_eviction >= _cache_eviction_interval:
@@ -805,8 +827,22 @@ async def run_producer(
             await asyncio.sleep(0.5)
             continue
 
-        # Check for forced trigger first, otherwise use scheduler
-        if state.force_next is not None:
+        # Chaos enable flow:
+        # /api/chaos -> purge prebuffer + bump epoch
+        # producer sees chaos_pending -> queues BANTER
+        # stale in-flight segments fail the epoch check below.
+        #
+        # Epoch is captured BEFORE reading chaos_pending so that a disable call
+        # between the two reads increments the epoch and causes the epoch check
+        # to discard the in-flight chaos segment correctly.
+        generation_chaos_epoch = state.chaos_cutover_epoch
+        chaos_subtype: ChaosSubtype | None = None
+        if state.chaos_pending is not None:
+            chaos_subtype = state.chaos_pending
+            state.chaos_last_degraded_reason = ""
+            seg_type = SegmentType.BANTER
+            logger.info("Chaos first-strike: %s", chaos_subtype.value)
+        elif state.force_next is not None:
             seg_type = state.force_next
             state.force_next = None
             logger.info("Forced trigger: %s", seg_type.value)
@@ -1041,6 +1077,7 @@ async def run_producer(
                         "youtube_id": track.youtube_id,
                         "spotify_id": track.spotify_id,
                         "album_art": track.album_art,
+                        "duration_ms": track.duration_ms,
                         "rationale": rationale,
                         "crate": crate,
                         "audio_source": audio_source,
@@ -1073,7 +1110,7 @@ async def run_producer(
                 listener_request_commit = None
                 loop = asyncio.get_running_loop()
 
-                if not _sw.has_script_llm(config):
+                if chaos_subtype is None and not _sw.has_script_llm(config):
                     # No LLM — use canned clips + impossible TTS lines
                     if _is_new_listener:
                         line = generate_impossible_line(
@@ -1112,63 +1149,109 @@ async def run_producer(
                     state.last_banter_script = [{"host": "Radio", "text": "(pre-recorded banter)"}]
                 elif not impossible_tts:
                     try:
-                        # Generate transition voice + banter in parallel
-                        transition_task = _sw.write_transition(state, config, next_segment="banter")
-                        banter_task = _sw.write_banter(
-                            state,
-                            config,
-                            is_new_listener=_is_new_listener,
-                            is_first_listener=_is_first_listener,
-                        )
-                        (trans_host, trans_text), (lines, listener_request_commit) = await asyncio.gather(
-                            transition_task, banter_task
-                        )
-
-                        # Synthesize transition + dialogue in parallel
-                        trans_voice_path = config.tmp_dir / f"trans_{uuid4().hex[:8]}.mp3"
-                        prosody: dict[str, str] = {}
-                        if trans_host.personality.energy > 50:
-                            prosody["rate"] = "+5%"
-
-                        async def _do_transition(
-                            _text=trans_text,
-                            _host=trans_host,
-                            _path=trans_voice_path,
-                            _prosody=prosody,
-                        ):
-                            await synthesize(
-                                _text,
-                                _host.voice,
-                                _path,
-                                **_prosody,
-                                engine=_host.engine,
-                                edge_fallback_voice=_host.edge_fallback_voice,
+                        if chaos_subtype is not None:
+                            lines, listener_request_commit = await _sw.write_banter(
+                                state,
+                                config,
+                                is_new_listener=_is_new_listener,
+                                is_first_listener=_is_first_listener,
+                                chaos_subtype=chaos_subtype,
                             )
-                            xfade_out = config.tmp_dir / f"banter_trans_{uuid4().hex[:8]}.mp3"
-                            return await _try_crossfade(_path, config, xfade_out)
+                            audio_path = await synthesize_dialogue(lines, config.tmp_dir)
+                            state.last_banter_script = [
+                                {
+                                    "host": h.name,
+                                    "text": t,
+                                    "type": "chaos_banter",
+                                    "chaos_subtype": chaos_subtype.value,
+                                }
+                                for h, t in lines
+                            ]
+                        else:
+                            # Generate transition voice + banter in parallel
+                            transition_task = _sw.write_transition(state, config, next_segment="banter")
+                            banter_task = _sw.write_banter(
+                                state,
+                                config,
+                                is_new_listener=_is_new_listener,
+                                is_first_listener=_is_first_listener,
+                            )
+                            (trans_host, trans_text), (lines, listener_request_commit) = await asyncio.gather(
+                                transition_task, banter_task
+                            )
 
-                        banter_path: Path
-                        trans_voice_path, banter_path = await asyncio.gather(
-                            _do_transition(),
-                            synthesize_dialogue(lines, config.tmp_dir),
-                        )
+                            # Synthesize transition + dialogue in parallel
+                            trans_voice_path = config.tmp_dir / f"trans_{uuid4().hex[:8]}.mp3"
+                            prosody: dict[str, str] = {}
+                            if trans_host.personality.energy > 50:
+                                prosody["rate"] = "+5%"
 
-                        # Concat: transition + banter (both pre-normalized)
-                        audio_path = config.tmp_dir / f"banter_full_{uuid4().hex[:8]}.mp3"
-                        loop = asyncio.get_running_loop()
-                        await loop.run_in_executor(
-                            None, concat_files, [trans_voice_path, banter_path], audio_path, 200, False
-                        )
-                        trans_voice_path.unlink(missing_ok=True)
-                        banter_path.unlink(missing_ok=True)
+                            async def _do_transition(
+                                _text=trans_text,
+                                _host=trans_host,
+                                _path=trans_voice_path,
+                                _prosody=prosody,
+                            ):
+                                await synthesize(
+                                    _text,
+                                    _host.voice,
+                                    _path,
+                                    **_prosody,
+                                    engine=_host.engine,
+                                    edge_fallback_voice=_host.edge_fallback_voice,
+                                )
+                                xfade_out = config.tmp_dir / f"banter_trans_{uuid4().hex[:8]}.mp3"
+                                return await _try_crossfade(_path, config, xfade_out)
 
-                        state.recent_transition_texts.append(trans_text)
-                        state.last_banter_script = [
-                            {"host": trans_host.name, "text": trans_text, "type": "transition"},
-                        ] + [{"host": h.name, "text": t} for h, t in lines]
+                            banter_path: Path
+                            trans_voice_path, banter_path = await asyncio.gather(
+                                _do_transition(),
+                                synthesize_dialogue(lines, config.tmp_dir),
+                            )
+
+                            # Concat: transition + banter (both pre-normalized)
+                            audio_path = config.tmp_dir / f"banter_full_{uuid4().hex[:8]}.mp3"
+                            loop = asyncio.get_running_loop()
+                            await loop.run_in_executor(
+                                None, concat_files, [trans_voice_path, banter_path], audio_path, 200, False
+                            )
+                            trans_voice_path.unlink(missing_ok=True)
+                            banter_path.unlink(missing_ok=True)
+
+                            state.recent_transition_texts.append(trans_text)
+                            state.last_banter_script = [
+                                {"host": trans_host.name, "text": trans_text, "type": "transition"},
+                            ] + [{"host": h.name, "text": t} for h, t in lines]
                     except Exception as exc:
-                        logger.warning("Banter TTS failed, skipping segment: %s", exc)
-                        continue
+                        if chaos_subtype is not None:
+                            state.chaos_audio_failures += 1
+                            state.chaos_last_degraded_reason = "audio_failure"
+                            logger.warning("Chaos audio generation failed; trying canned fallback: %s", exc)
+                            canned = _pick_canned_clip("banter", state=state)
+                            if canned:
+                                audio_path = canned
+                                state.last_banter_script = [
+                                    {
+                                        "host": "Radio",
+                                        "text": "(pre-recorded chaos fallback)",
+                                        "type": "chaos_audio_fallback",
+                                        "chaos_subtype": chaos_subtype.value,
+                                    }
+                                ]
+                            else:
+                                if state.chaos_audio_failures >= CHAOS_AUDIO_FAILURE_LIMIT:
+                                    state.chaos_pending = None
+                                    state.chaos_last_degraded_reason = "strike_abandoned"
+                                    logger.error(
+                                        "Chaos first-strike abandoned after %d failures",
+                                        state.chaos_audio_failures,
+                                    )
+                                else:
+                                    await asyncio.sleep(CHAOS_AUDIO_FAILURE_BACKOFF_SECONDS)
+                                continue
+                        else:
+                            logger.warning("Banter TTS failed, skipping segment: %s", exc)
+                            continue
 
                 if not os.environ.get("MAMMAMIRADIO_SKIP_QUALITY_GATE"):
                     try:
@@ -1177,6 +1260,9 @@ async def run_producer(
                         logger.warning("Audio tool unavailable, skipping banter quality check: %s", exc)
                     except AudioQualityError as exc:
                         logger.warning("Quality gate rejected banter (%s): %s", audio_path.name, exc)
+                        if chaos_subtype is not None:
+                            state.chaos_audio_failures += 1
+                            state.chaos_last_degraded_reason = "audio_failure"
                         if canned is None:
                             audio_path.unlink(missing_ok=True)
                         fallback_canned = _pick_canned_clip("banter", state=state)
@@ -1190,7 +1276,19 @@ async def run_producer(
                                 )
                                 audio_path = fallback_canned
                                 canned = fallback_canned
-                                state.last_banter_script = [{"host": "Radio", "text": "(pre-recorded banter)"}]
+                                fallback_text = "(pre-recorded banter)"
+                                fallback_type = "banter"
+                                if chaos_subtype is not None:
+                                    fallback_text = "(pre-recorded chaos fallback)"
+                                    fallback_type = "chaos_audio_fallback"
+                                state.last_banter_script = [
+                                    {
+                                        "host": "Radio",
+                                        "text": fallback_text,
+                                        "type": fallback_type,
+                                        "chaos_subtype": chaos_subtype.value if chaos_subtype else "",
+                                    }
+                                ]
                             except AudioToolError as fallback_tool_exc:
                                 logger.warning(
                                     "Audio tool unavailable during fallback quality check: %s", fallback_tool_exc
@@ -1201,8 +1299,28 @@ async def run_producer(
                                     fallback_canned.name,
                                     fallback_exc,
                                 )
+                                if chaos_subtype is not None:
+                                    if state.chaos_audio_failures >= CHAOS_AUDIO_FAILURE_LIMIT:
+                                        state.chaos_pending = None
+                                        state.chaos_last_degraded_reason = "strike_abandoned"
+                                        logger.error(
+                                            "Chaos first-strike abandoned after %d failures",
+                                            state.chaos_audio_failures,
+                                        )
+                                    else:
+                                        await asyncio.sleep(CHAOS_AUDIO_FAILURE_BACKOFF_SECONDS)
                                 continue
                         else:
+                            if chaos_subtype is not None:
+                                if state.chaos_audio_failures >= CHAOS_AUDIO_FAILURE_LIMIT:
+                                    state.chaos_pending = None
+                                    state.chaos_last_degraded_reason = "strike_abandoned"
+                                    logger.error(
+                                        "Chaos first-strike abandoned after %d failures",
+                                        state.chaos_audio_failures,
+                                    )
+                                else:
+                                    await asyncio.sleep(CHAOS_AUDIO_FAILURE_BACKOFF_SECONDS)
                             continue
 
                 if canned is None:
@@ -1241,6 +1359,8 @@ async def run_producer(
                         "lines": state.last_banter_script,
                         "canned": canned is not None,
                         "title": _banter_title(state.last_banter_script, canned=canned is not None),
+                        "chaos_subtype": chaos_subtype.value if chaos_subtype else "",
+                        "chaos_degraded": state.chaos_last_degraded_reason if chaos_subtype else "",
                     },
                     ephemeral=canned is None,
                 )
@@ -1776,10 +1896,16 @@ async def run_producer(
             segment.duration_sec = await asyncio.to_thread(_probe_segment_duration, segment.path)
             if generation_revision != state.playlist_revision:
                 logger.info("Discarding stale %s segment after playlist source switch", seg_type.value)
-                segment.path.unlink(missing_ok=True)
+                _unlink_if_tmp_render(segment, config.tmp_dir)
+                continue
+            if generation_chaos_epoch != state.chaos_cutover_epoch:
+                logger.info("Discarding stale %s segment after chaos cutover", seg_type.value)
+                _unlink_if_tmp_render(segment, config.tmp_dir)
                 continue
             if not await _queue_segment(segment):
                 continue
+            if chaos_subtype is not None and state.chaos_pending == chaos_subtype:
+                state.chaos_pending = None
             _segments_produced += 1
             state.queued_segments.append(
                 {

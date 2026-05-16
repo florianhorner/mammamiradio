@@ -640,6 +640,94 @@ async def test_startup_clip_ring_buffer_invalid_string_bitrate(tmp_path: Path):
     assert app.state.clip_ring_buffer.maxlen == 240
 
 
+def test_read_persisted_chaos_mode_no_env_non_addon(monkeypatch):
+    """No env var, is_addon=False: returns False without touching the filesystem."""
+    from mammamiradio.main import _read_persisted_chaos_mode
+
+    monkeypatch.delenv("MAMMAMIRADIO_CHAOS_MODE", raising=False)
+    config = MagicMock(is_addon=False)
+    assert _read_persisted_chaos_mode(config) is False
+
+
+def test_read_persisted_chaos_mode_env_false(monkeypatch):
+    """MAMMAMIRADIO_CHAOS_MODE=false returns False without reading any files."""
+    from mammamiradio.main import _read_persisted_chaos_mode
+
+    monkeypatch.setenv("MAMMAMIRADIO_CHAOS_MODE", "false")
+    config = MagicMock(is_addon=False)
+    assert _read_persisted_chaos_mode(config) is False
+
+
+def test_read_persisted_chaos_mode_env_true(monkeypatch):
+    """MAMMAMIRADIO_CHAOS_MODE=true returns True without reading any files."""
+    from mammamiradio.main import _read_persisted_chaos_mode
+
+    monkeypatch.setenv("MAMMAMIRADIO_CHAOS_MODE", "true")
+    config = MagicMock(is_addon=False)
+    assert _read_persisted_chaos_mode(config) is True
+
+
+def test_read_persisted_chaos_mode_addon_file_missing(monkeypatch, tmp_path):
+    """Addon mode with no options.json returns False."""
+    from mammamiradio.main import _read_persisted_chaos_mode
+
+    monkeypatch.delenv("MAMMAMIRADIO_CHAOS_MODE", raising=False)
+    config = MagicMock(is_addon=True)
+    with patch("mammamiradio.main.Path") as mock_path_cls:
+        fake_path = MagicMock()
+        fake_path.exists.return_value = False
+        mock_path_cls.return_value = fake_path
+        result = _read_persisted_chaos_mode(config)
+    assert result is False
+
+
+def test_read_persisted_chaos_mode_addon_file_malformed(monkeypatch, tmp_path):
+    """Addon mode with malformed options.json returns False instead of raising."""
+    from mammamiradio.main import _read_persisted_chaos_mode
+
+    monkeypatch.delenv("MAMMAMIRADIO_CHAOS_MODE", raising=False)
+    config = MagicMock(is_addon=True)
+    with patch("mammamiradio.main.Path") as mock_path_cls:
+        fake_path = MagicMock()
+        fake_path.exists.return_value = True
+        fake_path.read_text.return_value = "not-json{"
+        mock_path_cls.return_value = fake_path
+        result = _read_persisted_chaos_mode(config)
+    assert result is False
+
+
+def test_read_persisted_chaos_mode_addon_file_non_object(monkeypatch, tmp_path):
+    """Addon mode with non-object options JSON returns False instead of raising."""
+    from mammamiradio.main import _read_persisted_chaos_mode
+
+    monkeypatch.delenv("MAMMAMIRADIO_CHAOS_MODE", raising=False)
+    config = MagicMock(is_addon=True)
+    with patch("mammamiradio.main.Path") as mock_path_cls:
+        fake_path = MagicMock()
+        fake_path.exists.return_value = True
+        fake_path.read_text.return_value = "[]"
+        mock_path_cls.return_value = fake_path
+        result = _read_persisted_chaos_mode(config)
+    assert result is False
+
+
+def test_read_persisted_chaos_mode_addon_returns_persisted_value(monkeypatch, tmp_path):
+    """Addon mode reads chaos_mode_active from options.json when present."""
+    import json
+
+    from mammamiradio.main import _read_persisted_chaos_mode
+
+    monkeypatch.delenv("MAMMAMIRADIO_CHAOS_MODE", raising=False)
+    config = MagicMock(is_addon=True)
+    with patch("mammamiradio.main.Path") as mock_path_cls:
+        fake_path = MagicMock()
+        fake_path.exists.return_value = True
+        fake_path.read_text.return_value = json.dumps({"chaos_mode_active": False})
+        mock_path_cls.return_value = fake_path
+        result = _read_persisted_chaos_mode(config)
+    assert result is False
+
+
 @pytest.mark.asyncio
 async def test_shutdown_with_no_tasks_set():
     """shutdown() handles the case where all module-level task refs are None."""

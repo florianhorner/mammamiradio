@@ -33,6 +33,15 @@ def test_icy_br_uses_audio_bitrate():
     assert "config.station.bitrate" not in src
 
 
+def test_streamer_exposes_chaos_route_and_purges_on_enable():
+    """Static guard for the PR1 endpoint flow: enable purges, disable does not."""
+    src = (Path(__file__).resolve().parents[2] / "mammamiradio" / "web" / "streamer.py").read_text()
+    assert '@router.post("/api/chaos")' in src
+    assert "state.chaos_pending = first_strike" in src
+    assert "purged = _purge_segment_queue(queue)" in src
+    assert "state.chaos_pending = None" in src
+
+
 def test_runtime_json_output():
     """runtime_json returns expected keys from the loaded config."""
     toml_path = Path(__file__).resolve().parents[2] / "radio.toml"

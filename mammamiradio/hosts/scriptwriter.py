@@ -16,6 +16,7 @@ import random
 import re
 import time
 from dataclasses import dataclass
+from itertools import cycle
 from typing import cast
 
 import anthropic
@@ -23,6 +24,7 @@ import anthropic
 from mammamiradio.audio.normalizer import AVAILABLE_SFX_TYPES
 from mammamiradio.core.config import StationConfig
 from mammamiradio.core.models import (
+    ChaosSubtype,
     HostPersonality,
     PersonalityAxes,
     SegmentType,
@@ -222,6 +224,62 @@ _STYLE_INSTRUCTIONS: dict[str, str] = {
     "exclaim": _EXCLAIM_STYLE_INSTRUCTION,
     "echo": _ECHO_STYLE_INSTRUCTION,
     "react": _REACT_STYLE_INSTRUCTION,
+}
+
+CHAOS_MODE_BLOCK = """
+CHAOS MODE IS LIVE:
+- The hosts may break the shape of normal radio while still sounding like they are truly on air.
+- Make the moment feel impossible on a real station: unstable, self-aware, too specific, or confidently absurd.
+- Keep it listener-safe and plausible as a spoken segment.
+- No real named public figures, no factual claims about real people.
+- Do not explain the bit. Treat it as normal studio reality and keep moving.
+"""
+
+CHAOS_SUBTYPE_BLOCKS: dict[ChaosSubtype, str] = {
+    ChaosSubtype.FOURTH_WALL: """
+CHAOS SUBTYPE: CHAOS_FOURTH_WALL
+- The hosts briefly notice they are an AI radio station or generated voices.
+- Keep it uncanny, not explanatory. One or two lines, then they try to continue like nothing happened.
+""",
+    ChaosSubtype.ABANDONED_STORM: """
+CHAOS SUBTYPE: CHAOS_ABANDONED_STORM
+- No sentence finishes cleanly before another host cuts in.
+- Use interruptions, corrections, and abandoned starts. The energy is a storm of unfinished thoughts.
+""",
+    ChaosSubtype.IMPOSSIBLE_RECALL: """
+CHAOS SUBTYPE: CHAOS_IMPOSSIBLE_RECALL
+- Casually reference a track the listener heard earlier in this session, as if the hosts remember it too well.
+- Make the recall feel specific but not like a database readout.
+""",
+    ChaosSubtype.ICON_MOMENT: """
+CHAOS SUBTYPE: CHAOS_ICON_MOMENT
+- Confidently reference a fictional larger-than-life Italian figure as if everyone knows them.
+- The figure must be invented and absurdist, never a real named person.
+""",
+}
+
+CHAOS_STOCK_LINES: dict[ChaosSubtype, list[str]] = {
+    ChaosSubtype.FOURTH_WALL: [
+        "Aspetta. Hai sentito anche tu il momento in cui siamo diventati una frase dentro una macchina?",
+        "No, no, continua. Se lo dici piano sembra ancora radio.",
+        "Perfetto. Musica prima che qualcuno legga il prompt.",
+    ],
+    ChaosSubtype.ABANDONED_STORM: [
+        "Allora io volevo dire che—",
+        "No, perche il punto vero e— aspetta, non quello, l'altro—",
+        "Musica. Subito. Prima che finiamo una frase.",
+    ],
+    ChaosSubtype.IMPOSSIBLE_RECALL: [
+        "Mi torna in testa quel pezzo di prima, quello sentito earlier, "
+        "come se fosse passato qui con le scarpe bagnate.",
+        "Sì. Non nominarlo troppo forte o rientra dalla finestra.",
+        "Troppo tardi. Andiamo avanti.",
+    ],
+    ChaosSubtype.ICON_MOMENT: [
+        "Questa e esattamente la regola di Zio Bravissimo da Catania Due: mai spiegare, sempre indicare il soffitto.",
+        "Finalmente qualcuno lo dice in radio.",
+        "E adesso musica, per rispetto del soffitto.",
+    ],
 }
 
 
@@ -703,6 +761,36 @@ def _fix_wrong_station_names(text: str, station_name: str) -> str:
     return _WRONG_STATION_PATTERN.sub(_replace, text)
 
 
+def _chaos_stock_exchange(
+    config: StationConfig,
+    subtype: ChaosSubtype,
+) -> list[tuple[HostPersonality, str]]:
+    hosts = config.hosts
+    h0: HostPersonality = hosts[0] if hosts else HostPersonality(name="Host", voice="en-US-GuyNeural", style="")
+    h1: HostPersonality = hosts[1] if len(hosts) > 1 else h0
+    speakers = cycle([h0, h1])
+    return [(next(speakers), line) for line in CHAOS_STOCK_LINES[subtype]]
+
+
+def _impossible_recall_target(state: StationState) -> str:
+    cutoff = time.monotonic() - (30 * 60)
+    eligible = [entry for entry in state.played_track_log if entry.played_at <= cutoff]
+    if not eligible:
+        logger.info("Chaos impossible recall has no 30-minute play-time history; using earlier fallback")
+        return "earlier"
+    return _sanitize_prompt_data(random.choice(eligible).track.display)
+
+
+def _chaos_prompt_block(state: StationState, subtype: ChaosSubtype | None) -> str:
+    if not state.chaos_mode_active and subtype is None:
+        return ""
+    chosen = subtype or random.choice(list(ChaosSubtype))
+    recall_line = ""
+    if chosen == ChaosSubtype.IMPOSSIBLE_RECALL:
+        recall_line = f"\nRECALL TARGET: {_impossible_recall_target(state)}\n"
+    return f"{CHAOS_MODE_BLOCK}{CHAOS_SUBTYPE_BLOCKS[chosen]}{recall_line}"
+
+
 def _strip_fences(raw: str) -> str:
     """Strip markdown code fences that Claude sometimes wraps JSON in."""
     if raw.startswith("```"):
@@ -1025,6 +1113,7 @@ async def write_banter(
     *,
     is_new_listener: bool = False,
     is_first_listener: bool = False,
+    chaos_subtype: ChaosSubtype | None = None,
 ) -> tuple[list[tuple[HostPersonality, str]], ListenerRequestCommit | None]:
     """Generate short host banter with recent tracks, jokes, and home context.
 
@@ -1035,6 +1124,11 @@ async def write_banter(
     returned updates are persisted asynchronously so sessions compound.
     """
     if not has_script_llm(config):
+        if chaos_subtype is not None:
+            state.chaos_script_fallbacks += 1
+            state.chaos_last_degraded_reason = "script_fallback"
+            logger.warning("Chaos script LLM unavailable; using stock chaos line (%s)", chaos_subtype.value)
+            return _chaos_stock_exchange(config, chaos_subtype), None
         host = random.choice(config.hosts)
         fallback = {"it": "E torniamo alla musica!", "en": "And back to the music!"}
         return [(host, fallback.get(config.station.language, fallback["en"]))], None
@@ -1195,8 +1289,8 @@ First-time listeners get curiosity and intrigue. Returning listeners get inside 
             logger.warning("Failed to load persona for banter prompt", exc_info=True)
 
     chaos_hosts = [h.name for h in config.hosts if h.personality.chaos >= 80 or h.personality.energy >= 90]
-    chaos_block = ""
-    if len(config.hosts) >= 2 and chaos_hosts:
+    chaos_block = _chaos_prompt_block(state, chaos_subtype)
+    if not chaos_block and len(config.hosts) >= 2 and chaos_hosts:
         chaos_block = f"""
 CHAOS DIRECTION:
 - This break should feel argumentative and unstable.
@@ -1323,6 +1417,11 @@ Return JSON:
 
     except Exception as e:
         logger.error("Banter generation failed (%s): %s", type(e).__name__, e, exc_info=True)
+        if chaos_subtype is not None:
+            state.chaos_script_fallbacks += 1
+            state.chaos_last_degraded_reason = "script_fallback"
+            logger.warning("Chaos script generation failed; using stock chaos line (%s)", chaos_subtype.value)
+            return _chaos_stock_exchange(config, chaos_subtype), None
         hosts = config.hosts
         h0: HostPersonality = hosts[0] if hosts else HostPersonality(name="Host", voice="en-US-GuyNeural", style="")
         h1: HostPersonality = hosts[1] if len(hosts) > 1 else h0

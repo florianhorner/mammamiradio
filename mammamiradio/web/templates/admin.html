@@ -897,6 +897,48 @@ body::before {
 .a-trigger .hi { font-size: 11px; color: var(--muted); line-height: 1.35; }
 .a-trigger.chaos .ico-wrap { background: rgba(160,32,24,0.15); border-color: rgba(184,44,32,0.35); color: var(--lancia2); }
 .a-trigger.chaos:hover { border-color: rgba(184,44,32,0.55); background: rgba(160,32,24,0.05); }
+.chaos-control {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  margin-bottom: 12px; padding: 8px 12px;
+  border: 1px solid var(--line); border-radius: 8px;
+  background: color-mix(in srgb, var(--bg) 72%, transparent);
+}
+.chaos-control.live {
+  border-color: color-mix(in srgb, var(--lancia2) 55%, var(--line));
+  background: color-mix(in srgb, var(--lancia) 16%, var(--bg) 84%);
+}
+.chaos-label { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.chaos-bolt {
+  width: 24px; height: 24px; border-radius: 6px;
+  display: inline-flex; align-items: center; justify-content: center;
+  color: var(--lancia2); border: 1px solid color-mix(in srgb, var(--lancia2) 35%, var(--line));
+  background: color-mix(in srgb, var(--lancia) 18%, var(--bg) 82%); font-size: 13px; flex: 0 0 auto;
+}
+.chaos-title { font-size: 12px; font-weight: 800; letter-spacing: 0.18em; text-transform: uppercase; color: var(--cream); }
+.chaos-state {
+  font-family: var(--font-mono); font-size: 10px; font-weight: 800; letter-spacing: 0.18em;
+  text-transform: uppercase; color: var(--muted);
+}
+.chaos-control.live .chaos-state { color: var(--lancia2); animation: a-live-pulse 1.4s ease-in-out infinite; }
+.chaos-switch { position: relative; display: inline-flex; align-items: center; width: 48px; height: 26px; flex: 0 0 auto; }
+.chaos-switch input { opacity: 0; width: 0; height: 0; }
+.chaos-slider {
+  position: absolute; inset: 0; cursor: pointer; border-radius: 999px;
+  background: color-mix(in srgb, var(--cream) 12%, transparent); border: 1px solid var(--line);
+  transition: background 150ms, border-color 150ms, box-shadow 150ms;
+}
+.chaos-slider::before {
+  content: ''; position: absolute; width: 18px; height: 18px; left: 3px; top: 3px;
+  border-radius: 50%; background: var(--cream-dk); transition: transform 150ms, background 150ms;
+}
+.chaos-switch input:focus-visible + .chaos-slider {
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--sun2) 70%, transparent);
+}
+.chaos-switch input:checked + .chaos-slider {
+  background: color-mix(in srgb, var(--lancia2) 28%, transparent);
+  border-color: color-mix(in srgb, var(--lancia2) 65%, var(--line));
+}
+.chaos-switch input:checked + .chaos-slider::before { transform: translateX(22px); background: var(--lancia2); }
 
 /* Sliders */
 .a-sliders { display: flex; flex-direction: column; gap: 16px; }
@@ -1256,6 +1298,19 @@ body[data-stopped="true"] .a-station-card .dot.on { animation-play-state: paused
         </div>
         <div class="sub">Manda in onda un segmento senza modificare il palinsesto</div>
       </header>
+      <div class="chaos-control" id="chaosControl">
+        <div class="chaos-label">
+          <span class="chaos-bolt" aria-hidden="true">&#9889;</span>
+          <div>
+            <div class="chaos-title">Chaos Mode</div>
+            <div class="chaos-state" id="chaosState">standby</div>
+          </div>
+        </div>
+        <label class="chaos-switch" for="chaosToggle" title="Toggle Chaos Mode">
+          <input type="checkbox" id="chaosToggle" aria-label="Toggle Chaos Mode" onchange="toggleChaosMode(this)">
+          <span class="chaos-slider"></span>
+        </label>
+      </div>
       <div class="a-triggers">
         <button type="button" class="a-trigger" onclick="doTrigger('banter',this)">
           <span class="ico-wrap"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="2" width="4" height="7" rx="2"/><path d="M3.5 7.5a4.5 4.5 0 0 0 9 0"/><path d="M8 12v2"/><path d="M5.5 14h5"/></svg></span>
@@ -1274,8 +1329,8 @@ body[data-stopped="true"] .a-station-card .dot.on { animation-play-state: paused
         </button>
         <button type="button" class="a-trigger chaos" onclick="doQuickAction('more_chaos',this)">
           <span class="ico-wrap"><svg viewBox="0 0 16 16" fill="currentColor"><path d="M8.7 1L3 9h4l-1 6 6-8H8z"/></svg></span>
-          <span class="lb">Bring the chaos</span>
-          <span class="hi">Unscheduled — anything goes</span>
+          <span class="lb">Unscheduled banter</span>
+          <span class="hi">One extra host break</span>
         </button>
       </div>
       <!-- Azioni Rapide -->
@@ -1550,7 +1605,7 @@ async function doQuickAction(action,el){
     toast('Less banter: every '+v+' songs');
   }else if(action==='more_chaos'){
     const r=await api('POST','/api/trigger',{type:'banter'});
-    toast(r.ok?'Chaos incoming — banter queued':'Failed: '+(r.error||'unknown'));
+    toast(r.ok?'Extra banter queued':'Failed: '+(r.error||'unknown'));
   }else if(action==='too_many_ads'){
     const v=Math.min(10,parseInt(document.getElementById('pAds').value||'4')+2);
     document.getElementById('pAds').value=v;document.getElementById('pvAds').textContent=v;
@@ -1561,6 +1616,42 @@ async function doQuickAction(action,el){
     if(r.ok)toast('Scriptwriter reloaded in '+r.duration_ms+'ms — next banter uses new code');
     else if(r.error_code==='debounced')toast('Reload skipped — retry in '+r.retry_after_s+'s');
     else toast('Reload failed: '+(r.exception||r.error_code||r.error||'unknown'));
+  }
+}
+function updateChaosState(chaos){
+  const enabled=!!(chaos&&chaos.enabled);
+  const box=document.getElementById('chaosControl');
+  const cb=document.getElementById('chaosToggle');
+  const stateEl=document.getElementById('chaosState');
+  if(box)box.classList.toggle('live',enabled);
+  if(cb&&cb.checked!==enabled)cb.checked=enabled;
+  if(stateEl)stateEl.textContent=enabled?'CHAOS LIVE':'standby';
+}
+async function loadChaosToggle(){
+  try{
+    const r=await api('GET','/api/chaos');
+    updateChaosState(r);
+  }catch(e){/* ignore — toggle defaults to off */}
+}
+async function toggleChaosMode(el){
+  const value=!!el.checked;
+  el.disabled=true;
+  try{
+    const r=await api('POST','/api/chaos',{enabled:value});
+    if(r&&r.ok){
+      updateChaosState({enabled:value});
+      toast(value?'Chaos armed — first strike incoming':'Chaos Mode: OFF');
+    }else{
+      el.checked=!value;
+      updateChaosState({enabled:!value});
+      toast('Failed: '+((r&&r.error)||'unknown'));
+    }
+  }catch(_){
+    el.checked=!value;
+    updateChaosState({enabled:!value});
+    toast('Failed: network error');
+  }finally{
+    el.disabled=false;
   }
 }
 async function doShuffle(el){flash(el);await api('POST','/api/shuffle');toast('Playlist shuffled')}
@@ -2467,6 +2558,7 @@ async function refreshFast(){
     updatePaceCounters(_st.pacing);
     updateEngineRoom(_st,_caps);
     updateSourceControls(_st,_caps);
+    updateChaosState(_st.chaos_mode);
     if(_st.session_stopped!==undefined)updateStopState(_st.session_stopped);
     if(!_paceOk&&_st.pacing){_paceOk=true;
       document.getElementById('pBanter').value=_st.pacing.songs_between_banter;updatePaceVal('pBanter','pvBanter',_st.pacing.songs_between_banter);
@@ -2490,6 +2582,7 @@ async function refresh(){await Promise.all([refreshFast(),refreshSlow()])}
 
 refresh();
 loadSuperItalianToggle();
+loadChaosToggle();
 setInterval(refreshFast,3000);
 setInterval(refreshSlow,30000);
 </script>
