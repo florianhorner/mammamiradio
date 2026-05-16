@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 import pytest
 
-from mammamiradio.core.models import ListenerProfile, Segment, SegmentType, StationState, Track
+from mammamiradio.core.models import ChaosSubtype, ListenerProfile, Segment, SegmentType, StationState, Track
 
 
 def _track(n: int = 1) -> Track:
@@ -83,6 +83,57 @@ def test_on_stream_segment_updates_now_streaming():
     assert state.now_streaming["type"] == "music"
     assert state.now_streaming["label"] == "Test Song"
     assert len(state.stream_log) == 1
+
+
+def test_chaos_subtypes_are_not_segment_types():
+    assert {item.value for item in ChaosSubtype} == {
+        "chaos_fourth_wall",
+        "chaos_abandoned_storm",
+        "chaos_impossible_recall",
+        "chaos_icon_moment",
+    }
+    assert not ({item.value for item in ChaosSubtype} & {item.value for item in SegmentType})
+
+
+def test_on_stream_segment_records_played_track_log_at_play_time():
+    state = StationState()
+    queued_track = _track(1)
+    state.after_music(queued_track)
+    assert list(state.played_track_log) == []
+
+    seg = Segment(
+        type=SegmentType.MUSIC,
+        path=Path("/tmp/fake.mp3"),
+        duration_sec=180.0,
+        metadata={
+            "title": queued_track.display,
+            "title_only": queued_track.title,
+            "artist": queued_track.artist,
+            "spotify_id": queued_track.spotify_id,
+            "duration_ms": queued_track.duration_ms,
+        },
+    )
+    state.on_stream_segment(seg)
+
+    assert len(state.played_track_log) == 1
+    assert state.played_track_log[0].track.display == queued_track.display
+    assert state.played_track_log[0].played_at > 0
+
+
+def test_switch_playlist_clears_played_track_log():
+    state = StationState()
+    state.on_stream_segment(
+        Segment(
+            type=SegmentType.MUSIC,
+            path=Path("/tmp/fake.mp3"),
+            metadata={"title": "Artist – Old Song", "artist": "Artist", "title_only": "Old Song"},
+        )
+    )
+    assert state.played_track_log
+
+    state.switch_playlist([_track(2)])
+
+    assert list(state.played_track_log) == []
 
 
 def test_on_stream_segment_records_previous_music_as_completed():

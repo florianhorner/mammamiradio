@@ -30,6 +30,15 @@ class SegmentType(Enum):
     TIME_CHECK = "time_check"
 
 
+class ChaosSubtype(Enum):
+    """Host-chaos flavors carried by BANTER segments."""
+
+    FOURTH_WALL = "chaos_fourth_wall"
+    ABANDONED_STORM = "chaos_abandoned_storm"
+    IMPOSSIBLE_RECALL = "chaos_impossible_recall"
+    ICON_MOMENT = "chaos_icon_moment"
+
+
 @dataclass
 class Track:
     """A playable track sourced from charts, cache, or local files."""
@@ -89,6 +98,14 @@ class Track:
     def display(self) -> str:
         """Human-readable label used in logs and APIs."""
         return f"{self.artist} – {self.title}"
+
+
+@dataclass
+class PlayedEntry:
+    """Track heard by listeners, recorded at stream-start time."""
+
+    track: Track
+    played_at: float
 
 
 @dataclass
@@ -304,6 +321,7 @@ class StationState:
     playlist: list[Track] = field(default_factory=list)
     playlist_revision: int = 0
     played_tracks: deque[Track] = field(default_factory=lambda: deque(maxlen=50))
+    played_track_log: deque[PlayedEntry] = field(default_factory=lambda: deque(maxlen=100))
     songs_since_banter: int = 0
     songs_since_ad: int = 0
     songs_since_news: int = 0
@@ -358,6 +376,13 @@ class StationState:
     ha_last_event_label_en: str = ""
     # Force-trigger: producer will use this type instead of scheduler for the next segment
     force_next: SegmentType | None = None
+    # Chaos Mode: station-wide host-chaos toggle plus first-strike handoff.
+    chaos_mode_active: bool = False
+    chaos_pending: ChaosSubtype | None = None
+    chaos_cutover_epoch: int = 0
+    chaos_script_fallbacks: int = 0
+    chaos_audio_failures: int = 0
+    chaos_last_degraded_reason: str = ""
     # Pinned track: select_next_track returns this immediately then clears it
     pinned_track: Track | None = None
     # Listener requests: shoutouts and song wishes submitted via the dashboard
@@ -405,6 +430,7 @@ class StationState:
         # playlist context.  Without this, a 20-track playlist loops after
         # ~30-40 min because the deque fills and recency weights flatten.
         self.played_tracks.clear()
+        self.played_track_log.clear()
         # Clear listener requests and pinned track so in-flight background
         # download tasks from the old source can't zombie-pin a track into
         # the new playlist context.
@@ -445,6 +471,28 @@ class StationState:
         # Only add to studio-bleed pool once banter truly starts streaming.
         if segment.type == SegmentType.BANTER and not segment.metadata.get("canned"):
             self.recent_banter_paths.append(segment.path)
+        if segment.type == SegmentType.MUSIC:
+            title = str(segment.metadata.get("title_only") or segment.metadata.get("title") or label)
+            artist = str(segment.metadata.get("artist") or "")
+            if " – " in title and not artist:
+                artist, title = title.split(" – ", 1)
+            duration_ms = segment.metadata.get("duration_ms")
+            if not isinstance(duration_ms, int):
+                duration_ms = int(max(segment.duration_sec, 0.0) * 1000)
+            self.played_track_log.append(
+                PlayedEntry(
+                    track=Track(
+                        title=title,
+                        artist=artist,
+                        duration_ms=duration_ms,
+                        spotify_id=str(segment.metadata.get("spotify_id") or ""),
+                        youtube_id=str(segment.metadata.get("youtube_id") or ""),
+                        album_art=str(segment.metadata.get("album_art") or ""),
+                        source=segment.metadata.get("source_kind") or "youtube",
+                    ),
+                    played_at=time.monotonic(),
+                )
+            )
         self.now_streaming = {
             "type": seg_type,
             "label": label,

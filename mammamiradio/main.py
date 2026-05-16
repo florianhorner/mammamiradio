@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import secrets
@@ -33,6 +34,24 @@ logger = logging.getLogger("mammamiradio")
 _producer_task: asyncio.Task | None = None
 _playback_task: asyncio.Task | None = None
 _prewarm_task: asyncio.Task | None = None
+
+
+def _read_persisted_chaos_mode(config) -> bool:
+    """Read persisted Chaos Mode without arming a first-strike."""
+    raw_env = os.getenv("MAMMAMIRADIO_CHAOS_MODE", "").strip().lower()
+    if raw_env in {"true", "1", "yes", "on"}:
+        return True
+    if raw_env in {"false", "0", "no", "off"}:
+        return False
+    if getattr(config, "is_addon", False):
+        options_path = Path("/data/options.json")
+        try:
+            options = json.loads(options_path.read_text()) if options_path.exists() else {}
+        except (OSError, ValueError):
+            options = {}
+        if isinstance(options.get("chaos_mode_active"), bool):
+            return bool(options["chaos_mode_active"])
+    return False
 
 
 @asynccontextmanager
@@ -121,6 +140,7 @@ async def startup():
         startup_source_error=startup_source_error,
         persona_store=persona_store,
         session_stopped=_session_stopped,
+        chaos_mode_active=_read_persisted_chaos_mode(config),
     )
     queue: asyncio.Queue = asyncio.Queue(maxsize=config.pacing.lookahead_segments + 2)
 
