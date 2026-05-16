@@ -26,6 +26,12 @@
 **Source:** scope-parked from florianhorner/feat/full-chaos-mode-spec on 2026-05-16
 `CLAUDE.md` (## Environment) and `README.md` — add `MAMMAMIRADIO_CHAOS_MODE` to the `MAMMAMIRADIO_*` env-var reference lists for consistency with `MAMMAMIRADIO_SUPER_ITALIAN`. Doc-sync rule is already satisfied (architecture.md + CHANGELOG cover it); this is a reference-list consistency fix.
 
+### Chaos control — design-system tokens and keyboard accessibility
+
+**Priority:** P3
+**Source:** scope-parked from florianhorner/feat/full-chaos-mode-spec on 2026-05-16 (CodeRabbit findings)
+`mammamiradio/web/templates/admin.html` (~lines 900-937, 923-929, 1305-1307) — Three issues parked from chaos PR review: (1) `.chaos-control` CSS uses hard-coded rgba()/px literals instead of design-system tokens from `docs/design/system.md`; replace with `--lancia2`, `--cream`, `--muted`, tokenized border-radius, gap/padding. (2) The chaos toggle `input#chaosToggle` lacks an accessible name; add `aria-label="Toggle Chaos Mode"` or associate a visible `<label>`. (3) The custom switch hides the native input and has no `focus-visible` indicator; add `.chaos-switch input:focus-visible + .chaos-slider` outline/box-shadow rule.
+
 ### Dialer revival (listener.js first-class port)
 
 - **Source:** pre-PR#218 `static/script.js` (see `.context/research/dialer-port-blueprint.md`)

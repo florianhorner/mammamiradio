@@ -29,7 +29,7 @@ Charts / Jamendo / classic eras / local files / demo tracks
 
 ## Startup flow
 
-`mammamiradio.main:startup()` does seven things:
+`mammamiradio.main:startup()` does eight things:
 
 1. Loads `radio.toml` and `.env` through `config.py`.
 2. Validates the config and applies legacy migration like `station.bitrate -> audio.bitrate`.
