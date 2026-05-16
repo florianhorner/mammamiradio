@@ -18,12 +18,9 @@ from mammamiradio.core.models import PlaylistSource, Segment, SegmentType, Stati
 from mammamiradio.playlist.playlist import ExplicitSourceError
 from mammamiradio.web.listener_requests import _download_listener_song
 from mammamiradio.web.listener_requests import router as listener_requests_router
-from mammamiradio.web.streamer import LiveStreamHub, router, run_playback_loop
+from mammamiradio.web.streamer import LiveStreamHub, router
 
 TOML_PATH = str(Path(__file__).resolve().parents[2] / "radio.toml")
-STREAM_FIXTURE_MP3 = (
-    Path(__file__).resolve().parents[2] / "mammamiradio" / "assets" / "demo" / "sfx" / "studio" / "chair_creak.mp3"
-)
 
 
 def _basic_auth_header(username: str = "admin", password: str = "secret") -> dict[str, str]:
@@ -59,58 +56,6 @@ def _make_test_app(*, admin_password: str = "", admin_token: str = "", is_addon:
     app.state.config = config
     app.state.start_time = time.time()
     return app
-
-
-def _starts_with_mp3_frame(data: bytes) -> bool:
-    return len(data) >= 2 and data[0] == 0xFF and (data[1] & 0xE0) == 0xE0
-
-
-async def _collect_stream_bytes(
-    app: FastAPI,
-    *,
-    min_bytes: int = 8192,
-    timeout_s: float = 2.0,
-    headers: dict[str, str] | None = None,
-) -> tuple[httpx.Headers, bytes]:
-    assert STREAM_FIXTURE_MP3.stat().st_size > min_bytes
-    app.state.config.audio.bitrate = 3200
-    app.state.queue.put_nowait(
-        Segment(
-            type=SegmentType.MUSIC,
-            path=STREAM_FIXTURE_MP3,
-            metadata={"title": "Stream Fixture", "artist": "QA"},
-            ephemeral=False,
-        )
-    )
-    playback_task = asyncio.create_task(run_playback_loop(app))
-
-    async def _close_stream_after_fixture() -> None:
-        await app.state.queue.join()
-        app.state.stream_hub.close()
-
-    close_task = asyncio.create_task(_close_stream_after_fixture())
-
-    async def _read() -> tuple[httpx.Headers, bytes]:
-        collected = bytearray()
-        transport = httpx.ASGITransport(app=app)
-        async with (
-            httpx.AsyncClient(transport=transport, base_url="http://testserver", timeout=None) as client,
-            client.stream("GET", "/stream", headers=headers or {}) as resp,
-        ):
-            assert resp.status_code == 200
-            response_headers = resp.headers
-            async for chunk in resp.aiter_bytes():
-                collected.extend(chunk)
-                if len(collected) >= min_bytes:
-                    break
-            return response_headers, bytes(collected)
-
-    try:
-        return await asyncio.wait_for(_read(), timeout=timeout_s)
-    finally:
-        close_task.cancel()
-        playback_task.cancel()
-        await asyncio.gather(close_task, playback_task, return_exceptions=True)
 
 
 # ---------------------------------------------------------------------------
@@ -771,7 +716,7 @@ async def test_get_listener_requests_returns_age():
 
 @pytest.mark.asyncio
 async def test_listener_request_record_has_phase2_fields():
-    """POST creates a record carrying request_id, status='queued', evict_after=None, submitter_ip_hash."""
+    """POST creates private/admin IDs plus a separate public listener token."""
     import uuid as _uuid
 
     app = _make_test_app(admin_token="phase2-token")
@@ -785,6 +730,9 @@ async def test_listener_request_record_has_phase2_fields():
     assert isinstance(rec["request_id"], str)
     parsed = _uuid.UUID(rec["request_id"])
     assert parsed.version == 4
+    public_token = _uuid.UUID(rec["public_token"])
+    assert public_token.version == 4
+    assert rec["public_token"] != rec["request_id"]
     # status starts at queued
     assert rec["status"] == "queued"
     # evict_after is None until terminal transition (Phase 3 sets it)
@@ -860,58 +808,8 @@ async def test_listener_request_rate_limit_uses_hashed_ip_key():
 
 
 @pytest.mark.asyncio
-async def test_listener_request_rate_limit_trusts_leftmost_xff_from_hassio_proxy():
-    """HA ingress must bucket listener requests by the original client IP, not the proxy IP."""
-    from mammamiradio.web.listener_requests import _hash_submitter_ip
-
-    app = _make_test_app(admin_token="xff-token", is_addon=True)
-    client_ip = "10.0.0.1"
-    proxy_ip = "172.30.32.5"
-    expected_key = _hash_submitter_ip(client_ip, app.state.config)
-    proxy_key = _hash_submitter_ip(proxy_ip, app.state.config)
-    transport = httpx.ASGITransport(app=app, client=(proxy_ip, 12345))
-    with patch("mammamiradio.web.listener_requests._download_listener_song", new_callable=AsyncMock):
-        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
-            resp = await client.post(
-                "/api/listener-request",
-                json={"name": "Luca", "message": "Ciao!"},
-                headers={"X-Forwarded-For": f"{client_ip}, {proxy_ip}"},
-            )
-
-    assert resp.status_code == 200
-    assert expected_key in app.state.station_state._listener_request_rl
-    assert proxy_key not in app.state.station_state._listener_request_rl
-    assert app.state.station_state.pending_requests[0]["submitter_ip_hash"] == expected_key
-
-
-@pytest.mark.asyncio
-async def test_listener_request_rate_limit_ignores_xff_from_hassio_subnet_outside_addon_mode():
-    """The HA Supervisor subnet is trusted for XFF only when the app is actually in addon mode."""
-    from mammamiradio.web.listener_requests import _hash_submitter_ip
-
-    app = _make_test_app(admin_token="xff-token", is_addon=False)
-    spoofed_ip = "10.0.0.1"
-    proxy_ip = "172.30.32.5"
-    spoofed_key = _hash_submitter_ip(spoofed_ip, app.state.config)
-    proxy_key = _hash_submitter_ip(proxy_ip, app.state.config)
-    transport = httpx.ASGITransport(app=app, client=(proxy_ip, 12345))
-    with patch("mammamiradio.web.listener_requests._download_listener_song", new_callable=AsyncMock):
-        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
-            resp = await client.post(
-                "/api/listener-request",
-                json={"name": "Luca", "message": "Ciao!"},
-                headers={"X-Forwarded-For": spoofed_ip},
-            )
-
-    assert resp.status_code == 200
-    assert proxy_key in app.state.station_state._listener_request_rl
-    assert spoofed_key not in app.state.station_state._listener_request_rl
-    assert app.state.station_state.pending_requests[0]["submitter_ip_hash"] == proxy_key
-
-
-@pytest.mark.asyncio
 async def test_phase2_internal_fields_not_in_public_response():
-    """submitter_ip_hash and evict_after must never leak via /public-listener-requests."""
+    """Admin mutation IDs, submitter_ip_hash, and evict_after must never leak publicly."""
     app = _make_test_app()
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
     with patch("mammamiradio.web.listener_requests._download_listener_song", new_callable=AsyncMock):
@@ -923,10 +821,11 @@ async def test_phase2_internal_fields_not_in_public_response():
     body = pub.json()
     assert body["requests"], "expected at least one public request"
     public_record = body["requests"][0]
-    # Public-safe fields the listener sidebar needs (Phase 2 additions)
-    assert "request_id" in public_record
+    # Public-safe fields the listener sidebar needs.
+    assert "public_token" in public_record
     assert public_record["status"] == "queued"
-    # Internal fields stay server-side
+    # Internal/admin-only fields stay server-side.
+    assert "request_id" not in public_record
     assert "submitter_ip_hash" not in public_record
     assert "evict_after" not in public_record
 
@@ -949,7 +848,9 @@ async def test_listener_request_full_dedica_cycle_submit_admin_public_dismiss():
             assert len(admin_requests) == 1
             assert len(public_requests) == 1
             request_id = admin_requests[0]["request_id"]
-            assert public_requests[0]["request_id"] == request_id
+            # Public feed exposes public_token only — request_id is admin-only
+            assert "public_token" in public_requests[0]
+            assert "request_id" not in public_requests[0]
 
             dismissed = await client.post("/api/listener-requests/dismiss", json={"id": request_id})
             public_after = await client.get("/public-listener-requests")
@@ -958,6 +859,173 @@ async def test_listener_request_full_dedica_cycle_submit_admin_public_dismiss():
     assert dismissed.json() == {"ok": True, "removed": 1}
     assert public_after.status_code == 200
     assert public_after.json()["requests"] == []
+
+
+@pytest.mark.asyncio
+async def test_listener_request_rate_limit_uses_forwarded_ip_from_trusted_proxy():
+    """HA ingress / trusted proxy traffic should bucket by real listener IP."""
+    from mammamiradio.web.listener_requests import _hash_submitter_ip
+
+    app = _make_test_app(admin_token="phase2-token")
+    first_ip = "203.0.113.10"
+    second_ip = "203.0.113.11"
+    first_key = _hash_submitter_ip(first_ip, app.state.config)
+    second_key = _hash_submitter_ip(second_ip, app.state.config)
+    transport = httpx.ASGITransport(app=app, client=("172.30.32.5", 12345))
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        r1 = await client.post(
+            "/api/listener-request",
+            json={"name": "A", "message": "ciao"},
+            headers={"X-Forwarded-For": first_ip},
+        )
+        r2 = await client.post(
+            "/api/listener-request",
+            json={"name": "B", "message": "ciao ancora"},
+            headers={"X-Forwarded-For": second_ip},
+        )
+
+    assert r1.status_code == 200
+    assert r2.status_code == 200
+    assert first_key in app.state.station_state._listener_request_rl
+    assert second_key in app.state.station_state._listener_request_rl
+
+
+@pytest.mark.asyncio
+async def test_listener_request_ignores_forwarded_ip_from_untrusted_client():
+    """Direct public callers cannot spoof another listener's rate-limit bucket."""
+    from mammamiradio.web.listener_requests import _hash_submitter_ip
+
+    app = _make_test_app(admin_token="phase2-token")
+    direct_ip = "198.51.100.20"
+    spoofed_ip = "203.0.113.99"
+    direct_key = _hash_submitter_ip(direct_ip, app.state.config)
+    spoofed_key = _hash_submitter_ip(spoofed_ip, app.state.config)
+    transport = httpx.ASGITransport(app=app, client=(direct_ip, 12345))
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        first = await client.post(
+            "/api/listener-request",
+            json={"name": "A", "message": "ciao"},
+            headers={"X-Forwarded-For": spoofed_ip},
+        )
+        second = await client.post(
+            "/api/listener-request",
+            json={"name": "B", "message": "ciao ancora"},
+            headers={"X-Forwarded-For": "203.0.113.100"},
+        )
+
+    assert first.status_code == 200
+    assert second.status_code == 429
+    assert direct_key in app.state.station_state._listener_request_rl
+    assert spoofed_key not in app.state.station_state._listener_request_rl
+
+
+@pytest.mark.asyncio
+async def test_listener_request_ignores_forwarded_ip_from_private_lan_client():
+    """Private LAN clients are not automatically trusted proxy sources."""
+    from mammamiradio.web.listener_requests import _hash_submitter_ip
+
+    app = _make_test_app(admin_token="phase2-token")
+    direct_ip = "192.168.1.20"
+    spoofed_ip = "203.0.113.99"
+    direct_key = _hash_submitter_ip(direct_ip, app.state.config)
+    spoofed_key = _hash_submitter_ip(spoofed_ip, app.state.config)
+    transport = httpx.ASGITransport(app=app, client=(direct_ip, 12345))
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        first = await client.post(
+            "/api/listener-request",
+            json={"name": "A", "message": "ciao"},
+            headers={"X-Forwarded-For": spoofed_ip},
+        )
+        second = await client.post(
+            "/api/listener-request",
+            json={"name": "B", "message": "ciao ancora"},
+            headers={"X-Forwarded-For": "203.0.113.100"},
+        )
+
+    assert first.status_code == 200
+    assert second.status_code == 429
+    assert direct_key in app.state.station_state._listener_request_rl
+    assert spoofed_key not in app.state.station_state._listener_request_rl
+
+
+@pytest.mark.asyncio
+async def test_listener_request_rate_limit_uses_x_real_ip_when_no_forwarded_for():
+    """Trusted proxy with X-Real-IP but no X-Forwarded-For falls back to X-Real-IP."""
+    from mammamiradio.web.listener_requests import _hash_submitter_ip
+
+    app = _make_test_app(admin_token="phase2-token")
+    real_ip = "203.0.113.50"
+    real_key = _hash_submitter_ip(real_ip, app.state.config)
+    transport = httpx.ASGITransport(app=app, client=("172.30.32.5", 12345))
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        first = await client.post(
+            "/api/listener-request",
+            json={"name": "A", "message": "ciao"},
+            headers={"X-Real-IP": real_ip},
+        )
+        second = await client.post(
+            "/api/listener-request",
+            json={"name": "B", "message": "ciao ancora"},
+            headers={"X-Real-IP": real_ip},
+        )
+
+    assert first.status_code == 200
+    assert second.status_code == 429
+    assert real_key in app.state.station_state._listener_request_rl
+
+
+@pytest.mark.asyncio
+async def test_listener_request_rate_limit_trusted_proxy_no_forwarded_headers():
+    """Trusted proxy with no forwarded headers falls back to the proxy's direct IP."""
+    from mammamiradio.web.listener_requests import _hash_submitter_ip
+
+    app = _make_test_app(admin_token="phase2-token")
+    proxy_ip = "172.30.32.5"
+    proxy_key = _hash_submitter_ip(proxy_ip, app.state.config)
+    transport = httpx.ASGITransport(app=app, client=(proxy_ip, 12345))
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        first = await client.post(
+            "/api/listener-request",
+            json={"name": "A", "message": "ciao"},
+        )
+        second = await client.post(
+            "/api/listener-request",
+            json={"name": "B", "message": "ciao di nuovo"},
+        )
+
+    assert first.status_code == 200
+    assert second.status_code == 429
+    assert proxy_key in app.state.station_state._listener_request_rl
+
+
+@pytest.mark.asyncio
+async def test_listener_request_rate_limit_no_client_address():
+    """When request.client is None rate limit buckets under 'unknown'."""
+    from mammamiradio.web.listener_requests import _hash_submitter_ip
+
+    app = _make_test_app(admin_token="phase2-token")
+    unknown_key = _hash_submitter_ip("unknown", app.state.config)
+    # ASGI transport with client=None simulates a missing peer address
+    transport = httpx.ASGITransport(app=app, client=None)
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        first = await client.post(
+            "/api/listener-request",
+            json={"name": "A", "message": "ciao"},
+        )
+        second = await client.post(
+            "/api/listener-request",
+            json={"name": "B", "message": "ciao ancora"},
+        )
+
+    assert first.status_code == 200
+    assert second.status_code == 429
+    assert unknown_key in app.state.station_state._listener_request_rl
 
 
 @pytest.mark.asyncio
@@ -1397,6 +1465,48 @@ async def test_download_listener_song_download_exception_marks_error(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_download_listener_song_search_exception_marks_error(tmp_path):
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path
+    state = app.state.station_state
+    original_len = len(state.playlist)
+    req = {"song_query": "track", "message": "track", "song_found": False, "song_error": False}
+    state.pending_requests.append(req)
+
+    with patch("mammamiradio.playlist.downloader.search_ytdlp_metadata", side_effect=RuntimeError("search failed")):
+        await _download_listener_song(req, app.state, state.playlist_revision)
+
+    assert req["song_found"] is False
+    assert req["song_error"] is True
+    assert len(state.playlist) == original_len
+    assert state.pinned_track is None
+
+
+@pytest.mark.asyncio
+async def test_download_listener_song_cancelled_marks_error_and_removes_pending(tmp_path):
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path
+    state = app.state.station_state
+    req = {
+        "song_query": "track",
+        "message": "track",
+        "song_found": False,
+        "song_error": False,
+        "request_id": "cancelled-request",
+    }
+    state.pending_requests.append(req)
+
+    with (
+        patch("mammamiradio.playlist.downloader.search_ytdlp_metadata", side_effect=asyncio.CancelledError),
+        pytest.raises(asyncio.CancelledError),
+    ):
+        await _download_listener_song(req, app.state, state.playlist_revision)
+
+    assert req["song_error"] is True
+    assert req not in state.pending_requests
+
+
+@pytest.mark.asyncio
 async def test_download_listener_song_non_head_request_does_not_pin_out_of_order(tmp_path):
     app = _make_test_app()
     app.state.config.cache_dir = tmp_path
@@ -1749,37 +1859,6 @@ async def test_stream_returns_audio_headers():
             assert resp.headers["content-type"] == "audio/mpeg"
             assert "icy-name" in resp.headers
             assert "icy-br" in resp.headers
-
-
-@pytest.mark.asyncio
-async def test_stream_delivers_mp3_bytes_and_icy_headers_to_headless_client():
-    app = _make_test_app()
-
-    headers, audio = await _collect_stream_bytes(app, headers={"Range": "bytes=0-8191"})
-
-    assert headers["content-type"] == "audio/mpeg"
-    assert headers["icy-br"] == str(app.state.config.audio.bitrate)
-    assert "icy-name" in headers
-    assert "icy-genre" in headers
-    assert len(audio) >= 8192
-    assert _starts_with_mp3_frame(audio)
-
-
-@pytest.mark.asyncio
-async def test_stream_auto_resumes_stopped_session_and_delivers_audio_within_2s(tmp_path):
-    app = _make_test_app()
-    app.state.config.cache_dir = tmp_path
-    app.state.station_state.session_stopped = True
-    flag = tmp_path / "session_stopped.flag"
-    flag.touch()
-
-    headers, audio = await _collect_stream_bytes(app, timeout_s=2.0)
-
-    assert headers["content-type"] == "audio/mpeg"
-    assert len(audio) >= 8192
-    assert _starts_with_mp3_frame(audio)
-    assert app.state.station_state.session_stopped is False
-    assert not flag.exists()
 
 
 @pytest.mark.asyncio

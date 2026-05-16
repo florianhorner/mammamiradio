@@ -18,9 +18,9 @@ State machine (extended in v2.11.0 for Track B):
                                                  or evicted past TTL)
 
 `status` lives on each pending_requests record (added v2.11.0). Existing
-admin endpoints continue to use `ts` as id for backward compat; the new
-`request_id` (uuid4) is the canonical id going forward and replaces `ts`
-in v2.12.
+admin endpoints continue to use `ts` as id for backward compat; `request_id`
+(uuid4) is the canonical admin id going forward, while `public_token` is the
+listener-safe tracking token exposed through the public feed.
 
 Identity model: per-session nickname only. No cookies, no login. The
 listener self-reports `name` with each submission. `submitter_ip_hash`
@@ -50,6 +50,13 @@ from mammamiradio.web.streamer import require_admin_access
 
 logger = logging.getLogger("mammamiradio.listener_requests")
 
+_HASSIO_NETWORK = ipaddress.ip_network("172.30.32.0/23")
+_TRUSTED_PROXY_NETWORKS = [
+    ipaddress.ip_network("127.0.0.0/8"),
+    ipaddress.ip_network("::1/128"),
+    _HASSIO_NETWORK,
+]
+
 # Bounded executor for listener song searches. Caps concurrency at 2 so
 # listener yt-dlp tasks cannot exhaust the default ThreadPoolExecutor and
 # starve the producer's audio prefetch work on Pi-class hardware.
@@ -57,7 +64,6 @@ _listener_dl_executor = concurrent.futures.ThreadPoolExecutor(max_workers=2, thr
 atexit.register(_listener_dl_executor.shutdown, wait=False, cancel_futures=True)
 
 router = APIRouter()
-_HASSIO_NETWORK = ipaddress.ip_network("172.30.32.0/23")
 
 
 def _hash_submitter_ip(ip: str, config: Any) -> str:
@@ -75,34 +81,35 @@ def _hash_submitter_ip(ip: str, config: Any) -> str:
     return hmac.new(secret, ip.encode("utf-8"), hashlib.sha256).hexdigest()
 
 
+def _parse_ip(value: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
+    try:
+        return ipaddress.ip_address(value.strip())
+    except ValueError:
+        return None
+
+
+def _is_trusted_proxy_ip(value: str) -> bool:
+    addr = _parse_ip(value)
+    return bool(addr and any(addr in network for network in _TRUSTED_PROXY_NETWORKS))
+
+
 def _client_ip_for_rate_limit(request: Request) -> str:
-    """Resolve the listener IP used for rate limiting.
-
-    HA Supervisor ingress reaches the addon from the Docker-internal
-    172.30.32.0/23 network and carries the original browser IP in
-    X-Forwarded-For. Only trust that header from the Supervisor network.
-    """
+    """Return the best rate-limit identity inside the trusted-proxy boundary."""
     direct_ip = request.client.host if request.client else "unknown"
-    config = getattr(request.app.state, "config", None)
-    if not getattr(config, "is_addon", False):
+    if not _is_trusted_proxy_ip(direct_ip):
         return direct_ip
 
-    try:
-        trusted_proxy = ipaddress.ip_address(direct_ip) in _HASSIO_NETWORK
-    except ValueError:
-        trusted_proxy = False
-    if not trusted_proxy:
-        return direct_ip
+    forwarded_for = request.headers.get("X-Forwarded-For", "")
+    for part in forwarded_for.split(","):
+        forwarded_ip = part.strip()
+        if _parse_ip(forwarded_ip):
+            return forwarded_ip
 
-    xff = request.headers.get("X-Forwarded-For", "")
-    forwarded_ip = xff.split(",", 1)[0].strip()
-    if not forwarded_ip:
-        return direct_ip
-    try:
-        ipaddress.ip_address(forwarded_ip)
-    except ValueError:
-        return direct_ip
-    return forwarded_ip
+    real_ip = request.headers.get("X-Real-IP", "").strip()
+    if _parse_ip(real_ip):
+        return real_ip
+
+    return direct_ip
 
 
 async def _read_json_object(request: Request) -> tuple[dict, JSONResponse | None]:
@@ -164,10 +171,9 @@ async def get_public_listener_requests(request: Request):
                 "type": r.get("type", "dedica"),
                 "song_track": r.get("song_track") if r.get("song_found") else None,
                 "age_s": int(now - r.get("ts", now)),
-                # Track B v2.11.0: listener-side sidebar uses request_id to
-                # identify its own card and status to render the on-air state.
-                # submitter_ip_hash and evict_after stay internal.
-                "request_id": r.get("request_id"),
+                # Listener-side cards use public_token; request_id remains an
+                # admin mutation handle and must not leak through the public feed.
+                "public_token": r.get("public_token"),
                 "status": r.get("status", "queued"),
             }
             for r in state.pending_requests
@@ -180,8 +186,8 @@ async def dismiss_listener_request(request: Request, _: None = Depends(require_a
     """Remove a specific listener request from the queue (admin only).
 
     Accepts either the legacy `ts`-based id or the v2.11.0 canonical `request_id`
-    (uuid4). Both match against the same record set so admin UIs and listener
-    sidebars migrating to `request_id` keep working without coordinated cutover.
+    (uuid4). The listener-facing `public_token` is deliberately not accepted as
+    an admin mutation handle.
     """
     state = request.app.state.station_state
     body, error = await _read_json_object(request)
@@ -229,7 +235,7 @@ async def listener_request(request: Request):
     if not message:
         return JSONResponse({"ok": False, "error": "message required"}, status_code=400)
 
-    # IP rate limit: 1 request per 30s per IP
+    # IP rate limit: 1 request per 30s per listener identity.
     ip = _client_ip_for_rate_limit(request)
     state = request.app.state.station_state
     config = request.app.state.config
@@ -273,6 +279,7 @@ async def listener_request(request: Request):
         # in Phase 3. evict_after is set on terminal transition. submitter_ip_hash
         # is HMAC-SHA256(IP, ADMIN_TOKEN) — never exposed in public responses.
         "request_id": str(uuid.uuid4()),
+        "public_token": str(uuid.uuid4()),
         "status": "queued",
         "evict_after": None,
         "submitter_ip_hash": submitter_ip_hash,
@@ -337,6 +344,12 @@ async def _download_listener_song(req: dict, app_state, originating_revision: in
             state.pinned_track = track
             state.force_next = SegmentType.MUSIC
         logger.info("Listener song request ready: %s", track.display)
+    except asyncio.CancelledError:
+        req["song_error"] = True
+        if req in state.pending_requests:
+            state.pending_requests.remove(req)
+        logger.info("Listener song download cancelled: request_id=%s", req.get("request_id"))
+        raise
     except Exception:
         req["song_error"] = True
         logger.warning("Listener song download failed: request_id=%s", req.get("request_id"), exc_info=True)

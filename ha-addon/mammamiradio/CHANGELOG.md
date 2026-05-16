@@ -4,11 +4,13 @@
 
 ### Changed
 
-- Provider checks coalesce concurrent requests so repeated setup-panel clicks share one in-flight Anthropic/OpenAI probe.
+- **Listener-request public IDs are split from admin mutation IDs.** The public request feed now exposes `public_token` for listener-side tracking and keeps the admin-only `request_id` out of the public payload.
 
 ### Fixed
 
-- Listener-request rate limiting now respects the original browser IP forwarded by trusted Home Assistant ingress instead of grouping listeners under the Supervisor proxy IP.
+- **Provider key checks no longer stack overlapping probes.** Rapid clicks on the setup provider check now share the active result instead of launching duplicate Anthropic/OpenAI probe sets.
+- **Listener-request rate limiting respects HA ingress client headers.** Requests through trusted local proxy paths bucket by the real listener IP while direct callers cannot spoof forwarded headers.
+- **Listener song-request failures leave clear state.** Search failures and shutdown cancellation now mark the request errored instead of leaving it stuck as "still downloading."
 
 ## 2.12.0
 

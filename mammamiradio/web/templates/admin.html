@@ -712,7 +712,7 @@ body::before {
 /* Nav */
 .a-nav { display: flex; flex-direction: column; gap: 2px; }
 .a-nav-head { font-size: 9px; font-weight: 700; letter-spacing: 0.22em; text-transform: uppercase; color: var(--muted); margin: 8px 6px 4px; }
-.a-nav a { display: block; padding: 7px 10px; font-size: 13px; font-weight: 500; color: var(--cream-dk); border-radius: 6px; cursor: pointer; transition: background 150ms, color 150ms; text-decoration: none; }
+.a-nav a { display: block; padding: 13px 10px; font-size: 13px; font-weight: 500; color: var(--cream-dk); border-radius: 6px; cursor: pointer; transition: background 150ms, color 150ms; text-decoration: none; }
 .a-nav a:hover { background: rgba(245,237,216,0.04); color: var(--cream); }
 .a-nav a.active { background: rgba(236,204,48,0.12); color: var(--sun); }
 .a-nav a:focus-visible { outline: none; box-shadow: inset 0 0 0 1px var(--sun2); }
@@ -2332,19 +2332,19 @@ function updateEngineRoom(st,caps){
     // runtime — presence alone can't tell the truth about auth health.
     let anthropicLine;
     if(!c.anthropic_key){
-      anthropicLine='<strong style="color:var(--warning)">✕ not configured</strong>';
+      anthropicLine='<span class="status-inline idle" aria-label="status: idle">not configured</span>';
     }else if(c.anthropic_degraded){
       const secs=Math.max(0,c.anthropic_retry_after_s||0);
       const retry=secs>0?' · retry in '+(secs>=60?Math.ceil(secs/60)+'m':secs+'s'):'';
-      anthropicLine='<strong style="color:var(--warning)" title="Auth failed; falling back to OpenAI">⚠ suspended'+retry+'</strong>';
+      anthropicLine='<span class="status-inline degraded" aria-label="status: degraded" title="Auth failed; falling back to OpenAI">suspended'+retry+'</span>';
     }else{
-      anthropicLine='<strong style="color:var(--ok)">✓ connected</strong>';
+      anthropicLine='<span class="status-inline ready" aria-label="status: ready">connected</span>';
     }
     ce.innerHTML=[
       'Tier: <strong>'+(caps.tier_label||caps.tier||'—')+'</strong>',
       'Anthropic: '+anthropicLine,
-      'OpenAI: '+(c.openai?'<strong style="color:var(--ok)">✓ available</strong>':'—'),
-      'Home Assistant: '+(c.ha?'<strong style="color:var(--ok)">✓ connected</strong>':'disabled'),
+      'OpenAI: '+(c.openai?'<span class="status-inline ready" aria-label="status: ready">available</span>':'<span class="status-inline idle" aria-label="status: idle">not configured</span>'),
+      'Home Assistant: '+(c.ha?'<span class="status-inline ready" aria-label="status: ready">connected</span>':'<span class="status-inline idle" aria-label="status: idle">disabled</span>'),
     ].join('<br>');
   }
 

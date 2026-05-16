@@ -68,8 +68,6 @@ _ASSET_VERSION = f"{importlib.metadata.version('mammamiradio')}-{_static_asset_d
 # Jinja2 templates for brand-engine listener page (PR-C). Admin/live still use
 # string-replace via _inject_ingress_prefix; only listener migrates to Jinja for now.
 _TEMPLATES = Jinja2Templates(directory=str(_TEMPLATES_DIR))
-_provider_check_lock = asyncio.Lock()
-_provider_check_task: asyncio.Task | None = None
 
 
 def _bust_static_cache(html: str) -> str:
@@ -1279,20 +1277,55 @@ async def setup_recheck(request: Request, _: None = Depends(require_admin_access
 
 @router.post("/api/setup/provider-check")
 async def setup_provider_check(request: Request, _: None = Depends(require_admin_access)):
-    """Run active, secret-safe Anthropic/OpenAI connectivity checks."""
+    """Run active, secret-safe Anthropic/OpenAI connectivity checks.
+
+    Multiple rapid clicks should share one in-flight probe set instead of
+    launching overlapping 12-second outbound checks against every provider.
+    """
     config = request.app.state.config
-    global _provider_check_task
-    async with _provider_check_lock:
-        if _provider_check_task is None or _provider_check_task.done():
-            _provider_check_task = asyncio.create_task(check_provider_keys(config))
-        task = _provider_check_task
+    lock = getattr(request.app.state, "_provider_check_lock", None)
+    if lock is None:
+        lock = asyncio.Lock()
+        request.app.state._provider_check_lock = lock
+
+    async with lock:
+        cached_at = getattr(request.app.state, "_provider_check_cached_at", 0.0)
+        cached_result = getattr(request.app.state, "_provider_check_cached_result", None)
+        if cached_result is not None and time.time() - cached_at < 2.0:
+            return cached_result
+
+        task = getattr(request.app.state, "_provider_check_task", None)
+        if task is not None and task.done():
+            # Task finished but result wasn't cached yet (done-but-uncached window).
+            # Cache it now to close the race instead of spawning a second probe.
+            try:
+                result = task.result()
+            except BaseException:
+                request.app.state._provider_check_task = None
+            else:
+                request.app.state._provider_check_cached_result = result
+                request.app.state._provider_check_cached_at = time.time()
+                request.app.state._provider_check_task = None
+                return result
+            task = None
+        if task is None:
+            task = asyncio.create_task(check_provider_keys(config))
+            request.app.state._provider_check_task = task
+
     try:
-        return await asyncio.shield(task)
-    finally:
-        if task.done():
-            async with _provider_check_lock:
-                if _provider_check_task is task:
-                    _provider_check_task = None
+        result = await task
+    except BaseException:
+        async with lock:
+            if getattr(request.app.state, "_provider_check_task", None) is task:
+                request.app.state._provider_check_task = None
+        raise
+
+    async with lock:
+        if getattr(request.app.state, "_provider_check_task", None) is task:
+            request.app.state._provider_check_cached_result = result
+            request.app.state._provider_check_cached_at = time.time()
+            request.app.state._provider_check_task = None
+    return result
 
 
 @router.post("/api/setup/save-keys", dependencies=[Depends(require_admin_access)])
