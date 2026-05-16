@@ -2108,7 +2108,8 @@ async def enrich_playlist(request: Request, _: None = Depends(require_admin_acce
         try:
             tracks, resolved_source = await asyncio.to_thread(load_explicit_source, config, source)
         except ExplicitSourceError as exc:
-            return {"ok": False, "error": str(exc)}
+            _msg = exc.args[0] if exc.args else "Playlist source unavailable"
+            return {"ok": False, "error": _msg}
         except Exception as exc:
             logger.error("Playlist enrich failed: %s", exc)
             return {"ok": False, "error": "Failed to load playlist source"}
@@ -2151,7 +2152,8 @@ async def load_playlist(request: Request, _: None = Depends(require_admin_access
         try:
             tracks, resolved_source = await asyncio.to_thread(load_explicit_source, config, source)
         except ExplicitSourceError as exc:
-            return {"ok": False, "error": str(exc)}
+            _msg = exc.args[0] if exc.args else "Playlist source unavailable"
+            return {"ok": False, "error": _msg}
         except Exception as exc:
             logger.error("Playlist load failed: %s", exc)
             return {"ok": False, "error": "Failed to load playlist"}
