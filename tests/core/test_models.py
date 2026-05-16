@@ -120,13 +120,41 @@ def test_on_stream_segment_records_played_track_log_at_play_time():
     assert state.played_track_log[0].played_at > 0
 
 
+def test_on_stream_segment_skips_degraded_music_in_played_track_log():
+    state = StationState()
+    seg = Segment(
+        type=SegmentType.MUSIC,
+        path=Path("/tmp/silence.mp3"),
+        duration_sec=180.0,
+        metadata={"error": "ffmpeg died with SIGABRT"},
+    )
+
+    state.on_stream_segment(seg)
+
+    assert list(state.played_track_log) == []
+
+
+def test_on_stream_segment_skips_placeholder_music_in_played_track_log():
+    state = StationState()
+    seg = Segment(
+        type=SegmentType.MUSIC,
+        path=Path("/tmp/fake.mp3"),
+        duration_sec=180.0,
+        metadata={"title": "music", "duration_ms": 180_000},
+    )
+
+    state.on_stream_segment(seg)
+
+    assert list(state.played_track_log) == []
+
+
 def test_switch_playlist_clears_played_track_log():
     state = StationState()
     state.on_stream_segment(
         Segment(
             type=SegmentType.MUSIC,
             path=Path("/tmp/fake.mp3"),
-            metadata={"title": "Artist – Old Song", "artist": "Artist", "title_only": "Old Song"},
+            metadata={"title": "Artist – Old Song", "artist": "Artist", "title_only": "Old Song", "duration_ms": 180_000},
         )
     )
     assert state.played_track_log

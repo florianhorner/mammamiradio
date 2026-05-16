@@ -49,6 +49,8 @@ def _read_persisted_chaos_mode(config) -> bool:
             options = json.loads(options_path.read_text()) if options_path.exists() else {}
         except (OSError, ValueError):
             options = {}
+        if not isinstance(options, dict):
+            options = {}
         if isinstance(options.get("chaos_mode_active"), bool):
             return bool(options["chaos_mode_active"])
     return False

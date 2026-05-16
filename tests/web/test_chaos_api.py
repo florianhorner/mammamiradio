@@ -219,7 +219,8 @@ async def test_chaos_persistence_failure_rolls_back_live_state(tmp_path, monkeyp
                 resp = await client.post("/api/chaos", json={"enabled": True})
 
         assert resp.status_code == 500
-        assert resp.json()["ok"] is False
+        body = resp.json()
+        assert body == {"ok": False, "error": "failed to persist chaos mode"}
         assert observed_during_persist == {
             "chaos_mode_active": False,
             "chaos_pending": None,

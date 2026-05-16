@@ -472,27 +472,34 @@ class StationState:
         if segment.type == SegmentType.BANTER and not segment.metadata.get("canned"):
             self.recent_banter_paths.append(segment.path)
         if segment.type == SegmentType.MUSIC:
-            title = str(segment.metadata.get("title_only") or segment.metadata.get("title") or label)
+            title = str(segment.metadata.get("title_only") or segment.metadata.get("title") or "")
             artist = str(segment.metadata.get("artist") or "")
             if " – " in title and not artist:
                 artist, title = title.split(" – ", 1)
             duration_ms = segment.metadata.get("duration_ms")
             if not isinstance(duration_ms, int):
                 duration_ms = int(max(segment.duration_sec, 0.0) * 1000)
-            self.played_track_log.append(
-                PlayedEntry(
-                    track=Track(
-                        title=title,
-                        artist=artist,
-                        duration_ms=duration_ms,
-                        spotify_id=str(segment.metadata.get("spotify_id") or ""),
-                        youtube_id=str(segment.metadata.get("youtube_id") or ""),
-                        album_art=str(segment.metadata.get("album_art") or ""),
-                        source=segment.metadata.get("source_kind") or "youtube",
-                    ),
-                    played_at=time.monotonic(),
-                )
+            title_key = title.strip().lower()
+            label_key = str(label).strip().lower()
+            placeholder_titles = {"", "music", "unknown", "unknown title", "untitled", "none"}
+            has_real_title = title_key not in placeholder_titles and not (
+                title_key == label_key and label_key in placeholder_titles
             )
+            if not segment.metadata.get("error") and duration_ms > 0 and has_real_title:
+                self.played_track_log.append(
+                    PlayedEntry(
+                        track=Track(
+                            title=title,
+                            artist=artist,
+                            duration_ms=duration_ms,
+                            spotify_id=str(segment.metadata.get("spotify_id") or ""),
+                            youtube_id=str(segment.metadata.get("youtube_id") or ""),
+                            album_art=str(segment.metadata.get("album_art") or ""),
+                            source=segment.metadata.get("source_kind") or "youtube",
+                        ),
+                        played_at=time.monotonic(),
+                    )
+                )
         self.now_streaming = {
             "type": seg_type,
             "label": label,

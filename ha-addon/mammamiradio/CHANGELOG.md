@@ -2,9 +2,14 @@
 
 ## 2.12.1
 
+### Added
+
+- **Chaos Mode for host banter** — Adds the `chaos_mode_active` add-on option and admin `/api/chaos` persistence path. The toggle survives add-on restarts through `/data/options.json` and can be controlled from the admin Radio tab.
+
 ### Changed
 
 - **Listener-request public IDs are split from admin mutation IDs.** The public request feed now exposes `public_token` for listener-side tracking and keeps the admin-only `request_id` out of the public payload.
+- **Banter history now separates queued tracks from heard tracks** — `played_track_log` records music when it actually starts streaming, so chaos impossible-recall prompts only reference songs listeners really heard.
 
 ### Fixed
 

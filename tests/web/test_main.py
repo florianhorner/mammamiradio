@@ -658,6 +658,15 @@ def test_read_persisted_chaos_mode_env_false(monkeypatch):
     assert _read_persisted_chaos_mode(config) is False
 
 
+def test_read_persisted_chaos_mode_env_true(monkeypatch):
+    """MAMMAMIRADIO_CHAOS_MODE=true returns True without reading any files."""
+    from mammamiradio.main import _read_persisted_chaos_mode
+
+    monkeypatch.setenv("MAMMAMIRADIO_CHAOS_MODE", "true")
+    config = MagicMock(is_addon=False)
+    assert _read_persisted_chaos_mode(config) is True
+
+
 def test_read_persisted_chaos_mode_addon_file_missing(monkeypatch, tmp_path):
     """Addon mode with no options.json returns False."""
     from mammamiradio.main import _read_persisted_chaos_mode
@@ -682,6 +691,21 @@ def test_read_persisted_chaos_mode_addon_file_malformed(monkeypatch, tmp_path):
         fake_path = MagicMock()
         fake_path.exists.return_value = True
         fake_path.read_text.return_value = "not-json{"
+        mock_path_cls.return_value = fake_path
+        result = _read_persisted_chaos_mode(config)
+    assert result is False
+
+
+def test_read_persisted_chaos_mode_addon_file_non_object(monkeypatch, tmp_path):
+    """Addon mode with non-object options JSON returns False instead of raising."""
+    from mammamiradio.main import _read_persisted_chaos_mode
+
+    monkeypatch.delenv("MAMMAMIRADIO_CHAOS_MODE", raising=False)
+    config = MagicMock(is_addon=True)
+    with patch("mammamiradio.main.Path") as mock_path_cls:
+        fake_path = MagicMock()
+        fake_path.exists.return_value = True
+        fake_path.read_text.return_value = "[]"
         mock_path_cls.return_value = fake_path
         result = _read_persisted_chaos_mode(config)
     assert result is False

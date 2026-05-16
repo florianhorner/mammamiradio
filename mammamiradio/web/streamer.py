@@ -1822,11 +1822,11 @@ async def set_chaos(request: Request, _: None = Depends(require_admin_access)):
                 await loop.run_in_executor(None, _save_addon_option, "chaos_mode_active", value)
             else:
                 await loop.run_in_executor(None, _save_dotenv, {"MAMMAMIRADIO_CHAOS_MODE": env_value})
-        except Exception as exc:
+        except Exception:
             logger.error("Failed to persist Chaos Mode toggle", exc_info=True)
             return JSONResponse(
                 status_code=500,
-                content={"ok": False, "error": "failed to persist chaos mode", "detail": str(exc)},
+                content={"ok": False, "error": "failed to persist chaos mode"},
             )
 
         os.environ["MAMMAMIRADIO_CHAOS_MODE"] = env_value

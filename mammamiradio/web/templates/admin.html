@@ -899,20 +899,20 @@ body::before {
 .a-trigger.chaos:hover { border-color: rgba(184,44,32,0.55); background: rgba(160,32,24,0.05); }
 .chaos-control {
   display: flex; align-items: center; justify-content: space-between; gap: 12px;
-  margin-bottom: 12px; padding: 10px 12px;
-  border: 1px solid rgba(245,237,216,0.10); border-radius: 8px;
-  background: rgba(20,17,15,0.28);
+  margin-bottom: 12px; padding: 8px 12px;
+  border: 1px solid var(--line); border-radius: 8px;
+  background: color-mix(in srgb, var(--bg) 72%, transparent);
 }
 .chaos-control.live {
-  border-color: rgba(184,44,32,0.55);
-  background: rgba(160,32,24,0.12);
+  border-color: color-mix(in srgb, var(--lancia2) 55%, var(--line));
+  background: color-mix(in srgb, var(--lancia) 16%, var(--bg) 84%);
 }
-.chaos-label { display: flex; align-items: center; gap: 9px; min-width: 0; }
+.chaos-label { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .chaos-bolt {
   width: 24px; height: 24px; border-radius: 6px;
   display: inline-flex; align-items: center; justify-content: center;
-  color: var(--lancia2); border: 1px solid rgba(184,44,32,0.35);
-  background: rgba(160,32,24,0.15); font-size: 13px; flex: 0 0 auto;
+  color: var(--lancia2); border: 1px solid color-mix(in srgb, var(--lancia2) 35%, var(--line));
+  background: color-mix(in srgb, var(--lancia) 18%, var(--bg) 82%); font-size: 13px; flex: 0 0 auto;
 }
 .chaos-title { font-size: 12px; font-weight: 800; letter-spacing: 0.18em; text-transform: uppercase; color: var(--cream); }
 .chaos-state {
@@ -924,15 +924,19 @@ body::before {
 .chaos-switch input { opacity: 0; width: 0; height: 0; }
 .chaos-slider {
   position: absolute; inset: 0; cursor: pointer; border-radius: 999px;
-  background: rgba(245,237,216,0.12); border: 1px solid rgba(245,237,216,0.16);
-  transition: background 150ms, border-color 150ms;
+  background: color-mix(in srgb, var(--cream) 12%, transparent); border: 1px solid var(--line);
+  transition: background 150ms, border-color 150ms, box-shadow 150ms;
 }
 .chaos-slider::before {
   content: ''; position: absolute; width: 18px; height: 18px; left: 3px; top: 3px;
   border-radius: 50%; background: var(--cream-dk); transition: transform 150ms, background 150ms;
 }
+.chaos-switch input:focus-visible + .chaos-slider {
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--sun2) 70%, transparent);
+}
 .chaos-switch input:checked + .chaos-slider {
-  background: rgba(184,44,32,0.28); border-color: rgba(184,44,32,0.65);
+  background: color-mix(in srgb, var(--lancia2) 28%, transparent);
+  border-color: color-mix(in srgb, var(--lancia2) 65%, var(--line));
 }
 .chaos-switch input:checked + .chaos-slider::before { transform: translateX(22px); background: var(--lancia2); }
 
@@ -1302,8 +1306,8 @@ body[data-stopped="true"] .a-station-card .dot.on { animation-play-state: paused
             <div class="chaos-state" id="chaosState">standby</div>
           </div>
         </div>
-        <label class="chaos-switch" title="Toggle Chaos Mode">
-          <input type="checkbox" id="chaosToggle" onchange="toggleChaosMode(this)">
+        <label class="chaos-switch" for="chaosToggle" title="Toggle Chaos Mode">
+          <input type="checkbox" id="chaosToggle" aria-label="Toggle Chaos Mode" onchange="toggleChaosMode(this)">
           <span class="chaos-slider"></span>
         </label>
       </div>
