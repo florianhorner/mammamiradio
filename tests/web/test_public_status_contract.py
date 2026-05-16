@@ -175,6 +175,8 @@ async def test_public_listener_requests_filters_sensitive_fields():
             "song_found": True,
             "song_track": "Vasco Rossi - Albachiara",
             "song_error": "INTERNAL_ERROR_DETAILS",  # admin-visible only
+            "request_id": "admin-mutation-id",
+            "public_token": "listener-visible-token",
         }
     )
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
@@ -189,7 +191,9 @@ async def test_public_listener_requests_filters_sensitive_fields():
         assert req.get("message") == "Per Lucia"
         assert "song_track" in req
         assert "age_s" in req
+        assert req.get("public_token") == "listener-visible-token"
         # Sensitive fields absent
         assert "id" not in req, "Internal ID must not leak to public"
+        assert "request_id" not in req, "Admin mutation ID must not leak to public"
         assert "song_error" not in req, "Error details must not leak to public"
         assert "ts" not in req, "Raw timestamp must not leak (use age_s instead)"
