@@ -9,6 +9,7 @@ ROOT = Path(__file__).resolve().parents[2]
 CHECK_COMMIT_MSG = ROOT / "scripts" / "check-commit-msg.sh"
 CHECK_VERSION_SYNC = ROOT / "scripts" / "check-version-sync.sh"
 CHECK_CHANGELOG_SYNC = ROOT / "scripts" / "check-changelog-sync.sh"
+CHECK_CHANGELOG_LINT = ROOT / "scripts" / "check-changelog-lint.sh"
 VALIDATE_ADDON = ROOT / "scripts" / "validate-addon.sh"
 TEST_ADDON_LOCAL = ROOT / "scripts" / "test-addon-local.sh"
 
@@ -133,6 +134,17 @@ def test_check_changelog_sync_passes_when_both_changelogs_staged(tmp_path: Path)
     result = _run(["bash", str(CHECK_CHANGELOG_SYNC)], cwd=tmp_path)
 
     assert result.returncode == 0
+
+
+def test_check_changelog_lint_rejects_digit_phase_and_track_labels(tmp_path: Path) -> None:
+    _write(tmp_path / "CHANGELOG.md", "# Changelog\n\n## [Unreleased]\n\n- Phase 1 shipped.\n")
+    _write(tmp_path / "ha-addon/mammamiradio/CHANGELOG.md", "# Changelog\n\n## Unreleased\n\n- Track B shipped.\n")
+
+    result = _run(["bash", str(CHECK_CHANGELOG_LINT)], cwd=tmp_path)
+
+    assert result.returncode == 1
+    assert r"\bPhase [0-9]+\b" in result.stdout
+    assert r"\bTrack [A-Z]\b" in result.stdout
 
 
 def _create_validate_addon_repo(

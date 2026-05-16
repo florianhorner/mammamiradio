@@ -970,6 +970,102 @@ async def test_setup_provider_check_returns_secret_safe_probe_payload():
 
 
 @pytest.mark.asyncio
+async def test_setup_provider_check_shares_in_flight_probe():
+    app = _make_test_app()
+    probe_payload = {"ok": True, "providers": {}}
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def slow_probe(config):
+        assert config is app.state.config
+        started.set()
+        await release.wait()
+        return probe_payload
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    with patch("mammamiradio.web.streamer.check_provider_keys", new=AsyncMock(side_effect=slow_probe)) as probe:
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            first = asyncio.create_task(client.post("/api/setup/provider-check"))
+            await started.wait()
+            second = asyncio.create_task(client.post("/api/setup/provider-check"))
+            await asyncio.sleep(0)
+            release.set()
+            first_resp, second_resp = await asyncio.gather(first, second)
+
+    assert first_resp.status_code == 200
+    assert second_resp.status_code == 200
+    assert first_resp.json() == probe_payload
+    assert second_resp.json() == probe_payload
+    assert probe.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_setup_provider_check_returns_cached_result_within_debounce_window():
+    """Second call within the 2 s debounce window returns cached result without re-probing."""
+    app = _make_test_app()
+    probe_payload = {"ok": True, "providers": {}}
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    with patch("mammamiradio.web.streamer.check_provider_keys", new=AsyncMock(return_value=probe_payload)) as probe:
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            first = await client.post("/api/setup/provider-check")
+            second = await client.post("/api/setup/provider-check")
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert first.json() == probe_payload
+    assert second.json() == probe_payload
+    assert probe.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_setup_provider_check_clears_task_on_exception():
+    """If check_provider_keys raises, the in-flight task reference is cleared so next call retries."""
+    app = _make_test_app()
+    # raise_app_exceptions=False: converts server errors to 500 responses rather
+    # than propagating them, so we can inspect app state after the failure.
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345), raise_app_exceptions=False)
+    with patch(
+        "mammamiradio.web.streamer.check_provider_keys",
+        new=AsyncMock(side_effect=RuntimeError("probe failed")),
+    ):
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            resp = await client.post("/api/setup/provider-check")
+
+    assert resp.status_code == 500
+    assert app.state._provider_check_task is None
+
+
+@pytest.mark.asyncio
+async def test_setup_provider_check_clears_task_on_cancel():
+    """Cancelling the in-flight provider-check task clears the task reference."""
+    app = _make_test_app()
+    barrier = asyncio.Event()
+
+    async def slow_probe(_config):
+        barrier.set()
+        await asyncio.sleep(10)
+        return {"anthropic": True}
+
+    with patch("mammamiradio.web.streamer.check_provider_keys", new=slow_probe):
+        transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345), raise_app_exceptions=False)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            check_coro = client.post("/api/setup/provider-check")
+            check_task = asyncio.create_task(check_coro)
+            await barrier.wait()
+            # Cancel the in-flight probe at the app-state level, then let the
+            # HTTP task observe the cancellation.
+            probe_task = app.state._provider_check_task
+            assert probe_task is not None
+            probe_task.cancel()
+            try:
+                await check_task
+            except (asyncio.CancelledError, httpx.RemoteProtocolError):
+                pass
+
+    assert getattr(app.state, "_provider_check_task", None) is None
+
+
+@pytest.mark.asyncio
 async def test_addon_snippet_returns_snippet():
     app = _make_test_app()
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
