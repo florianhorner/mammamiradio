@@ -748,6 +748,24 @@ def test_fetch_startup_without_jamendo_client_id_skips_jamendo_and_returns_demo(
     assert source.kind == "demo"
 
 
+def test_fetch_startup_blends_jamendo_into_chart_programme(config):
+    config.allow_ytdlp = True
+    config.playlist.jamendo_client_id = "Jamendo123"
+    chart_track = Track(title="Chart", artist="Artist", duration_ms=180_000, spotify_id="chart1")
+    jamendo_track = Track(title="Jam", artist="CC Artist", duration_ms=180_000, spotify_id="jam1", source="jamendo")
+
+    with (
+        patch("mammamiradio.playlist.playlist._load_chart_source_tracks", return_value=[chart_track]),
+        patch("mammamiradio.playlist.playlist._fetch_jamendo_playlist", return_value=[jamendo_track]),
+    ):
+        tracks, source, _err = fetch_startup_playlist(config)
+
+    assert [t.title for t in tracks] == ["Chart", "Jam"]
+    assert tracks[1].source == "jamendo"
+    assert source.kind == "charts"
+    assert "Jamendo" in source.label
+
+
 def test_fetch_startup_jamendo_zero_tracks_falls_back_to_demo(config):
     config.allow_ytdlp = False
     config.playlist.jamendo_client_id = "Jamendo123"

@@ -408,6 +408,41 @@ async def test_load_playlist_clears_shadow_upcoming_after_purge(tmp_path):
     assert not queued_file.exists()
 
 
+@pytest.mark.asyncio
+async def test_playlist_enrich_adds_source_without_cutover(tmp_path):
+    app = _make_test_app()
+    queued_file = tmp_path / "queued.mp3"
+    queued_file.write_bytes(b"queued")
+    app.state.queue.put_nowait(Segment(type=SegmentType.BANTER, path=queued_file, metadata={"title": "Queued"}))
+    app.state.station_state.queued_segments = [{"type": "banter", "label": "Queued"}]
+    app.state.station_state.now_streaming = {"type": "music", "label": "Playing", "started": time.time()}
+    app.state.station_state.pending_requests.append({"request_id": "req1", "message": "ciao"})
+    starting_revision = app.state.station_state.playlist_revision
+    loaded_tracks = [
+        Track(title="Fresh Song", artist="Fresh Artist", duration_ms=180_000, spotify_id="fresh1"),
+        Track(title="Song A", artist="Artist A", duration_ms=180_000, spotify_id="t1"),
+    ]
+    resolved_source = PlaylistSource(kind="classic", url="classic://italian/80s", label="Anni '80 italiani")
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+
+    with patch("mammamiradio.web.streamer.load_explicit_source", return_value=(loaded_tracks, resolved_source)):
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            resp = await client.post("/api/playlist/enrich", json={"url": resolved_source.url})
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ok"] is True
+    assert body["added"] == 1
+    assert body["skipped_existing"] == 1
+    assert app.state.queue.qsize() == 1
+    assert queued_file.exists()
+    assert app.state.skip_event.is_set() is False
+    assert app.state.station_state.queued_segments == [{"type": "banter", "label": "Queued"}]
+    assert app.state.station_state.pending_requests == [{"request_id": "req1", "message": "ciao"}]
+    assert app.state.station_state.playlist_revision == starting_revision + 1
+    assert app.state.station_state.playlist[-1].spotify_id == "fresh1"
+
+
 # ---------------------------------------------------------------------------
 # Add track
 # ---------------------------------------------------------------------------
@@ -2753,3 +2788,162 @@ async def test_admin_status_ha_details_present_with_full_context():
     assert hd["events_summary"] == "- Lavatrice: inattivo → 450 W"
     assert hd["recent_event_count"] == 3
     assert hd["last_event_label"] == "Lavatrice (consumo)"
+
+
+# ---------------------------------------------------------------------------
+# Skip track bridge (empty queue)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_skip_track_with_empty_queue_returns_bridged_true(tmp_path):
+    """When the queue is empty and a skip is requested, the response must include
+    bridged=True and force_next must be set to MUSIC."""
+    app = _make_test_app(admin_token="tok")
+    app.state.station_state.now_streaming = {
+        "type": "music",
+        "label": "Playing",
+        "started": time.time(),
+        "metadata": {"title": "Song A"},
+    }
+    # Queue is empty — skip should bridge
+    assert app.state.queue.empty()
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.post("/api/skip", headers={"Authorization": "Bearer tok"})
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ok"] is True
+    assert body["bridged"] is True
+    from mammamiradio.core.models import SegmentType
+
+    assert app.state.station_state.force_next == SegmentType.MUSIC
+
+
+@pytest.mark.asyncio
+async def test_skip_track_with_queued_segments_not_bridged(tmp_path):
+    """When the queue is non-empty, skip must return bridged=False."""
+    app = _make_test_app(admin_token="tok")
+    queued_file = tmp_path / "queued.mp3"
+    queued_file.write_bytes(b"audio")
+    app.state.queue.put_nowait(Segment(type=SegmentType.MUSIC, path=queued_file, metadata={"title": "Next"}))
+    app.state.station_state.now_streaming = {
+        "type": "music",
+        "label": "Playing",
+        "started": time.time(),
+        "metadata": {"title": "Current"},
+    }
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.post("/api/skip", headers={"Authorization": "Bearer tok"})
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ok"] is True
+    assert body["bridged"] is False
+
+
+# ---------------------------------------------------------------------------
+# Enrich endpoint error paths
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_playlist_enrich_no_url_returns_error():
+    """Enrich without a URL must return ok=False."""
+    app = _make_test_app(admin_token="tok")
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.post(
+            "/api/playlist/enrich",
+            json={"position": "end"},
+            headers={"Authorization": "Bearer tok"},
+        )
+    assert resp.status_code == 200
+    assert resp.json()["ok"] is False
+    assert "url" in resp.json()["error"].lower()
+
+
+@pytest.mark.asyncio
+async def test_playlist_enrich_invalid_position_returns_422():
+    """Enrich with an invalid position must return 422."""
+    app = _make_test_app(admin_token="tok")
+    loaded_tracks = [Track(title="T", artist="A", duration_ms=180_000, spotify_id="x1")]
+    resolved = PlaylistSource(kind="url", url="https://example.com/playlist")
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    with patch("mammamiradio.web.streamer.load_explicit_source", return_value=(loaded_tracks, resolved)):
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            resp = await client.post(
+                "/api/playlist/enrich",
+                json={"url": "https://example.com/playlist", "position": "middle"},
+                headers={"Authorization": "Bearer tok"},
+            )
+    assert resp.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_playlist_enrich_explicit_source_error_returns_false():
+    """ExplicitSourceError during enrich must return ok=False."""
+    app = _make_test_app(admin_token="tok")
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    with patch(
+        "mammamiradio.web.streamer.load_explicit_source",
+        side_effect=ExplicitSourceError("playlist not found"),
+    ):
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            resp = await client.post(
+                "/api/playlist/enrich",
+                json={"url": "https://example.com/bad-playlist"},
+                headers={"Authorization": "Bearer tok"},
+            )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ok"] is False
+    assert "playlist not found" in body["error"]
+
+
+@pytest.mark.asyncio
+async def test_playlist_enrich_generic_error_returns_false():
+    """Generic exceptions during enrich must return ok=False."""
+    app = _make_test_app(admin_token="tok")
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    with patch(
+        "mammamiradio.web.streamer.load_explicit_source",
+        side_effect=RuntimeError("backend down"),
+    ):
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            resp = await client.post(
+                "/api/playlist/enrich",
+                json={"url": "https://example.com/playlist"},
+                headers={"Authorization": "Bearer tok"},
+            )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ok"] is False
+
+
+@pytest.mark.asyncio
+async def test_playlist_enrich_position_next_inserts_at_front():
+    """Enrich with position=next must prepend new tracks to the front of the playlist."""
+    app = _make_test_app(admin_token="tok")
+    initial_count = len(app.state.station_state.playlist)
+    loaded_tracks = [Track(title="Priority Song", artist="VIP", duration_ms=200_000, spotify_id="priority1")]
+    resolved = PlaylistSource(kind="url", url="https://example.com/playlist")
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    with patch("mammamiradio.web.streamer.load_explicit_source", return_value=(loaded_tracks, resolved)):
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            resp = await client.post(
+                "/api/playlist/enrich",
+                json={"url": "https://example.com/playlist", "position": "next"},
+                headers={"Authorization": "Bearer tok"},
+            )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ok"] is True
+    assert body["added"] == 1
+    # Priority track must be first in the playlist
+    assert app.state.station_state.playlist[0].spotify_id == "priority1"
+    assert len(app.state.station_state.playlist) == initial_count + 1

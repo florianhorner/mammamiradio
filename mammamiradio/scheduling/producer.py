@@ -787,6 +787,29 @@ async def run_producer(
                     )
                 )
                 _drain_guard_queued = True
+            else:
+                norm_files = sorted(config.cache_dir.glob("norm_*.mp3"))
+                if norm_files:
+                    norm_path = norm_files[0]
+                    _meta = load_track_metadata(norm_path) or {}
+                    logger.warning(
+                        "Queue empty during active playback — inserting norm-cache bridge: %s",
+                        norm_path.name,
+                    )
+                    await _queue_segment(
+                        Segment(
+                            type=SegmentType.MUSIC,
+                            path=norm_path,
+                            metadata={
+                                "title": _meta.get("title") or humanize_norm_filename(norm_path.name),
+                                "artist": _meta.get("artist", ""),
+                                "queue_drain_recovery": True,
+                                "audio_source": "norm_cache",
+                            },
+                            ephemeral=False,
+                        )
+                    )
+                    _drain_guard_queued = True
 
         if (
             queue.qsize() >= config.pacing.lookahead_segments
@@ -1108,6 +1131,7 @@ async def run_producer(
                 impossible_tts = False
                 canned = None
                 listener_request_commit = None
+                has_music_tail = False
                 loop = asyncio.get_running_loop()
 
                 if chaos_subtype is None and not _sw.has_script_llm(config):
@@ -1201,10 +1225,11 @@ async def run_producer(
                                     edge_fallback_voice=_host.edge_fallback_voice,
                                 )
                                 xfade_out = config.tmp_dir / f"banter_trans_{uuid4().hex[:8]}.mp3"
-                                return await _try_crossfade(_path, config, xfade_out)
+                                result = await _try_crossfade(_path, config, xfade_out)
+                                return result, result == xfade_out
 
                             banter_path: Path
-                            trans_voice_path, banter_path = await asyncio.gather(
+                            (trans_voice_path, has_music_tail), banter_path = await asyncio.gather(
                                 _do_transition(),
                                 synthesize_dialogue(lines, config.tmp_dir),
                             )
@@ -1361,6 +1386,7 @@ async def run_producer(
                         "title": _banter_title(state.last_banter_script, canned=canned is not None),
                         "chaos_subtype": chaos_subtype.value if chaos_subtype else "",
                         "chaos_degraded": state.chaos_last_degraded_reason if chaos_subtype else "",
+                        "has_music_tail": bool(has_music_tail),
                     },
                     ephemeral=canned is None,
                 )
@@ -1409,6 +1435,7 @@ async def run_producer(
                     # Try to overlay on the tail of the last music segment
                     crossfade_out = config.tmp_dir / f"flash_transition_{uuid4().hex[:8]}.mp3"
                     audio_path = await _try_crossfade(flash_path, config, crossfade_out, tail_seconds=6.0)
+                    has_music_tail = audio_path == crossfade_out
                     if audio_path is flash_path:
                         # Crossfade failed — add a static bed instead
                         try:
@@ -1429,6 +1456,7 @@ async def run_producer(
                         "category": category,
                         "host": host.name,
                         "title": f"News flash: {category}" if category else "News flash",
+                        "has_music_tail": bool(has_music_tail),
                     },
                 )
 
@@ -1645,6 +1673,7 @@ async def run_producer(
                     )
                     xout = config.tmp_dir / f"ad_trans_{uuid4().hex[:8]}.mp3"
                     ipath = await _try_crossfade(ipath, config, xout)
+                    has_music_tail = ipath == xout
                     parts.append(ipath)
                     # Promo compliance tag
                     try:
@@ -1669,7 +1698,7 @@ async def run_producer(
                         parts.append(ppath)
                     except Exception:
                         pass
-                    return parts, itext
+                    return parts, itext, has_music_tail
 
                 async def _build_bumpers(_num_spots=num_spots, _loop=loop):
                     """Opening bumper + sparse mid-spot bumpers.
@@ -1690,7 +1719,11 @@ async def run_producer(
                     return bumper_in, mid_bumpers
 
                 # Fan out: intro + LLM scripts + bumpers all in parallel
-                (intro_parts, intro_text), scripts, (bumper_in, mid_bumpers) = await asyncio.gather(
+                (
+                    (intro_parts, intro_text, intro_has_music_tail),
+                    scripts,
+                    (bumper_in, mid_bumpers),
+                ) = await asyncio.gather(
                     _build_intro(),
                     asyncio.gather(
                         *(
@@ -1806,6 +1839,7 @@ async def run_producer(
                         "sonic_worlds": break_sonic_worlds,
                         "roles_used": break_roles,
                         "title": _ad_title(break_brands),
+                        "has_music_tail": bool(intro_has_music_tail),
                     },
                 )
                 _bound_brands = break_brands
@@ -1859,7 +1893,11 @@ async def run_producer(
 
         if segment:
             actual_seg_type = segment.type
-            if prev_seg_type is not None and _crosses_music_speech_boundary(prev_seg_type, actual_seg_type):
+            if (
+                prev_seg_type is not None
+                and _crosses_music_speech_boundary(prev_seg_type, actual_seg_type)
+                and not segment.metadata.get("has_music_tail")
+            ):
                 try:
                     loop = asyncio.get_running_loop()
                     sting_path = config.tmp_dir / f"transition_{uuid4().hex[:8]}.mp3"

@@ -8,7 +8,17 @@ The current version source of truth is `pyproject.toml`.
 
 ### Fixed
 
-- **Palinsesto table no longer causes horizontal overflow on phone widths.** The six-column programme table now collapses into compact grid cards at ≤640 px; column widths are locked with `table-layout: fixed` and a `<colgroup>` on desktop so the table stays inside the panel at all screen sizes.
+- **Palinsesto table no longer causes horizontal overflow on phone widths.** The six-column programme table now collapses into compact grid cards at ≤768 px; column widths are locked with `table-layout: fixed` and a `<colgroup>` on desktop so the table stays inside the panel at all screen sizes.
+- **Admin source chips now enrich instead of replacing the programme.** Jamendo, chart reload, and decade buttons add fresh tracks into the current rotation without purging the queue, skipping the current segment, or clearing listener requests. The destructive source replacement API remains available for explicit replacement flows.
+- **Scheduler pool internals are hidden from the normal programme view.** `pool[n]` badges and pool wrap diagnostics no longer leak into Palinsesto, and the currently playing item is filtered out of history so it does not appear twice.
+- **Audio transition stacking is reduced.** Speech/ad/news segments that already include a music-tail crossfade no longer receive an additional transition sting before the segment, avoiding the jingle-then-old-song-tail mismatch.
+- **Skip on an empty queue now marks a bridge action and forces next music before cutting.** Status exposes whether skip is immediately ready or would need a bridge, helping HA Green operators see queue risk.
+
+### Changed
+
+- **Italian-first is now the default.** `super_italian_mode` defaults to `true` in root and add-on configs, and admin copy has been tightened toward consistent Italian.
+- **Jamendo can participate in the normal programme.** When charts and Jamendo are both configured at startup, Jamendo tracks are blended into the chart rotation instead of remaining fallback-only.
+- **Ad disclaimer speed is deterministic by ad format.** The old near-2x role spike is replaced with format-scoped pacing so pharma/legal copy no longer speeds up unpredictably.
 
 ## [2.12.1] - 2026-05-16
 

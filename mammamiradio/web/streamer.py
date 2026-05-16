@@ -427,6 +427,20 @@ def _preview_tracks(tracks: list, limit: int = 3) -> dict:
     }
 
 
+def _serialize_track(track: Track) -> dict:
+    return {
+        "title": track.title,
+        "artist": track.artist,
+        "display": track.display,
+        "spotify_id": track.spotify_id,
+        "album_art": track.album_art,
+        "source": track.source,
+        "year": track.year,
+        "youtube_id": track.youtube_id,
+        "duration_ms": track.duration_ms,
+    }
+
+
 def _source_options_reason(config, exc: Exception) -> str:
     return f"Source loading failed: {exc}"
 
@@ -1084,6 +1098,14 @@ async def _persist_skipped_music(state: StationState, config, metadata: dict, *,
             f"L'ascoltatore ha saltato '{track_name}' troppe volte — "
             "reagisci in modo complice, scherzoso. Fai notare che la skippa sempre."
         )
+        state.pending_actions.append(
+            {
+                "type": "ha_directive",
+                "source": "skip_bit",
+                "label": track_name,
+                "created_at": time.time(),
+            }
+        )
 
 
 async def _audio_generator(request: Request):
@@ -1563,9 +1585,23 @@ async def skip_track(request: Request, _: None = Depends(require_admin_access)):
             listen_sec=listen_sec,
         )
 
+    bridged = False
+    if request.app.state.queue.empty() and not state.queued_segments:
+        state.force_next = SegmentType.MUSIC
+        bridged = True
+        state.pending_actions.append(
+            {
+                "type": "skip_bridge",
+                "source": "admin_skip",
+                "label": "force next music",
+                "created_at": time.time(),
+            }
+        )
+        logger.info("Skip requested with empty queue — forcing next music before cut")
+
     request.app.state.skip_event.set()
     state.now_streaming = {"type": "skipping", "label": "Skipping...", "started": time.time(), "metadata": {}}
-    return {"ok": True}
+    return {"ok": True, "bridged": bridged}
 
 
 @router.post("/api/purge")
@@ -2053,6 +2089,54 @@ async def add_track(request: Request, _: None = Depends(require_admin_access)):
     return {"ok": True, "added": track.display, "position": position}
 
 
+@router.post("/api/playlist/enrich")
+async def enrich_playlist(request: Request, _: None = Depends(require_admin_access)):
+    """Add tracks from a source without replacing programme or purging playback."""
+    body = await request.json()
+    url = str(body.get("url", "")).strip()
+    position = str(body.get("position", "end")).strip().lower()
+    if not url:
+        return {"ok": False, "error": "No URL provided"}
+    if position not in {"end", "next"}:
+        return JSONResponse({"ok": False, "error": "position must be 'end' or 'next'"}, status_code=422)
+
+    config = request.app.state.config
+    state = request.app.state.station_state
+    source_switch_lock = request.app.state.source_switch_lock
+    source = PlaylistSource(kind="url", url=url)
+    async with source_switch_lock:
+        try:
+            tracks, resolved_source = await asyncio.to_thread(load_explicit_source, config, source)
+        except ExplicitSourceError as exc:
+            return {"ok": False, "error": str(exc)}
+        except Exception as exc:
+            logger.error("Playlist enrich failed: %s", exc)
+            return {"ok": False, "error": "Failed to load playlist source"}
+
+        existing = {track.cache_key for track in state.playlist}
+        new_tracks = [track for track in tracks if track.cache_key not in existing]
+        if position == "next":
+            state.playlist[0:0] = new_tracks
+        else:
+            state.playlist.extend(new_tracks)
+        if new_tracks:
+            state.playlist_revision += 1
+        logger.info(
+            "Playlist enriched from %s: added %d, skipped %d existing",
+            resolved_source.label or resolved_source.kind,
+            len(new_tracks),
+            len(tracks) - len(new_tracks),
+        )
+        return {
+            "ok": True,
+            "added": len(new_tracks),
+            "skipped_existing": len(tracks) - len(new_tracks),
+            "position": position,
+            "source": _serialize_source(resolved_source),
+            "tracks": [_serialize_track(track) for track in new_tracks[:20]],
+        }
+
+
 @router.post("/api/playlist/load")
 async def load_playlist(request: Request, _: None = Depends(require_admin_access)):
     """Load a new playlist from a URL and replace the current one."""
@@ -2225,6 +2309,10 @@ def _public_status_payload(request: Request) -> dict:
         ],
         "upcoming": upcoming,
         "upcoming_mode": "queued" if upcoming else "building",
+        "playback_actions": {
+            "skip_ready": bool(runtime_health.get("queue_depth", 0) > 0 or state.queued_segments),
+            "skip_would_bridge": bool(runtime_health.get("queue_depth", 0) == 0 and not state.queued_segments),
+        },
         "ha_moments": ha_moments,
         # Brand-fiction layer (PR-A schema). Listener renders against this.
         "brand": _serialize_brand(config.brand),
@@ -2407,6 +2495,7 @@ async def status(request: Request, _: None = Depends(require_admin_access)):
                 "weather_arc": state.ha_weather_arc or None,
                 "events_summary": state.ha_events_summary or None,
                 "pending_directive": state.ha_pending_directive or None,
+                "pending_actions": list(state.pending_actions[-10:]),
                 "recent_event_count": state.ha_recent_event_count,
                 "last_event_label": state.ha_last_event_label or None,
                 "mood_en": state.ha_home_mood_en or None,
@@ -2414,7 +2503,7 @@ async def status(request: Request, _: None = Depends(require_admin_access)):
                 "events_summary_en": state.ha_events_summary_en or None,
                 "last_event_label_en": state.ha_last_event_label_en or None,
             }
-            if state.ha_context
+            if (state.ha_context or state.ha_pending_directive or state.pending_actions)
             else None,
             "station_mode": station_mode,
             "producer_errors": [
@@ -2457,19 +2546,7 @@ async def status(request: Request, _: None = Depends(require_admin_access)):
             },
             "force_pending": state.force_next.value if state.force_next else None,
             "session_stopped": state.session_stopped,
-            "playlist": [
-                {
-                    "title": t.title,
-                    "artist": t.artist,
-                    "display": t.display,
-                    "spotify_id": t.spotify_id,
-                    "album_art": t.album_art,
-                    "source": t.source,
-                    "year": t.year,
-                    "youtube_id": t.youtube_id,
-                }
-                for t in state.playlist[:100]
-            ],
+            "playlist": [_serialize_track(t) for t in state.playlist[:100]],
             "brand": _serialize_brand(config.brand),
             "brand_warnings": list(config.brand_warnings),
         }

@@ -293,7 +293,7 @@ class StationConfig:
     ha_token: str = ""
     is_addon: bool = False
     allow_ytdlp: bool = False
-    super_italian_mode: bool = False
+    super_italian_mode: bool = True
     # Names of hosts or ad voices that had their configured voice replaced
     # during config load because the configured ID wasn't valid for the chosen
     # backend. Empty when all voices passed validation.
@@ -776,7 +776,7 @@ def load_config(path: str = "radio.toml") -> StationConfig:
         ha_token=ha_token,
         is_addon=addon_mode,
         allow_ytdlp=os.getenv("MAMMAMIRADIO_ALLOW_YTDLP", "false").lower() in ("true", "1", "yes"),
-        super_italian_mode=coerce_bool(raw.get("super_italian_mode", False)),
+        super_italian_mode=coerce_bool(raw.get("super_italian_mode", True)),
     )
 
     _super_italian_env = os.getenv("MAMMAMIRADIO_SUPER_ITALIAN", "").strip().lower()
