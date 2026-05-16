@@ -970,6 +970,32 @@ async def test_setup_provider_check_returns_secret_safe_probe_payload():
 
 
 @pytest.mark.asyncio
+async def test_setup_provider_check_single_flight_under_concurrent_http_posts():
+    app = _make_test_app()
+    probe_payload = {
+        "ok": True,
+        "providers": {
+            "anthropic": {"configured": False, "ok": False, "error_type": "not_configured"},
+            "openai_chat": {"configured": False, "ok": False, "error_type": "not_configured"},
+            "openai_tts": {"configured": False, "ok": False, "error_type": "not_configured"},
+        },
+    }
+
+    async def slow_probe(_config):
+        await asyncio.sleep(0.05)
+        return probe_payload
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    with patch("mammamiradio.web.streamer.check_provider_keys", new=AsyncMock(side_effect=slow_probe)) as probe:
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            responses = await asyncio.gather(*[client.post("/api/setup/provider-check") for _ in range(5)])
+
+    assert [r.status_code for r in responses] == [200] * 5
+    assert [r.json() for r in responses] == [probe_payload] * 5
+    assert probe.await_count == 1
+
+
+@pytest.mark.asyncio
 async def test_addon_snippet_returns_snippet():
     app = _make_test_app()
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))

@@ -68,6 +68,8 @@ _ASSET_VERSION = f"{importlib.metadata.version('mammamiradio')}-{_static_asset_d
 # Jinja2 templates for brand-engine listener page (PR-C). Admin/live still use
 # string-replace via _inject_ingress_prefix; only listener migrates to Jinja for now.
 _TEMPLATES = Jinja2Templates(directory=str(_TEMPLATES_DIR))
+_provider_check_lock = asyncio.Lock()
+_provider_check_task: asyncio.Task | None = None
 
 
 def _bust_static_cache(html: str) -> str:
@@ -1279,7 +1281,18 @@ async def setup_recheck(request: Request, _: None = Depends(require_admin_access
 async def setup_provider_check(request: Request, _: None = Depends(require_admin_access)):
     """Run active, secret-safe Anthropic/OpenAI connectivity checks."""
     config = request.app.state.config
-    return await check_provider_keys(config)
+    global _provider_check_task
+    async with _provider_check_lock:
+        if _provider_check_task is None or _provider_check_task.done():
+            _provider_check_task = asyncio.create_task(check_provider_keys(config))
+        task = _provider_check_task
+    try:
+        return await asyncio.shield(task)
+    finally:
+        if task.done():
+            async with _provider_check_lock:
+                if _provider_check_task is task:
+                    _provider_check_task = None
 
 
 @router.post("/api/setup/save-keys", dependencies=[Depends(require_admin_access)])

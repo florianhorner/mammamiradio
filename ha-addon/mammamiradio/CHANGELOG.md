@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- Provider checks coalesce concurrent requests so repeated setup-panel clicks share one in-flight Anthropic/OpenAI probe.
+
+### Fixed
+
+- Listener-request rate limiting now respects the original browser IP forwarded by trusted Home Assistant ingress instead of grouping listeners under the Supervisor proxy IP.
+
 ## 2.12.0
 
 ### Added

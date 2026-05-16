@@ -6,6 +6,14 @@ The current version source of truth is `pyproject.toml`.
 
 ## [Unreleased]
 
+### Changed
+
+- **Provider checks coalesce concurrent clicks** — simultaneous `POST /api/setup/provider-check` calls now share one in-flight probe instead of launching duplicate Anthropic/OpenAI checks.
+
+### Fixed
+
+- **Listener-request rate limiting respects HA ingress client IPs** — requests arriving from the trusted Supervisor network now use the leftmost `X-Forwarded-For` address for the per-listener rate-limit bucket, instead of grouping everyone under the proxy IP.
+
 ## [2.12.0] - 2026-05-15
 
 ### Added

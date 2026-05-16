@@ -35,6 +35,7 @@ import atexit
 import concurrent.futures
 import hashlib
 import hmac
+import ipaddress
 import logging
 import time
 import uuid
@@ -56,6 +57,7 @@ _listener_dl_executor = concurrent.futures.ThreadPoolExecutor(max_workers=2, thr
 atexit.register(_listener_dl_executor.shutdown, wait=False, cancel_futures=True)
 
 router = APIRouter()
+_HASSIO_NETWORK = ipaddress.ip_network("172.30.32.0/23")
 
 
 def _hash_submitter_ip(ip: str, config: Any) -> str:
@@ -71,6 +73,36 @@ def _hash_submitter_ip(ip: str, config: Any) -> str:
     if not secret:
         secret = b"mmr-dev-local-no-admin-token"
     return hmac.new(secret, ip.encode("utf-8"), hashlib.sha256).hexdigest()
+
+
+def _client_ip_for_rate_limit(request: Request) -> str:
+    """Resolve the listener IP used for rate limiting.
+
+    HA Supervisor ingress reaches the addon from the Docker-internal
+    172.30.32.0/23 network and carries the original browser IP in
+    X-Forwarded-For. Only trust that header from the Supervisor network.
+    """
+    direct_ip = request.client.host if request.client else "unknown"
+    config = getattr(request.app.state, "config", None)
+    if not getattr(config, "is_addon", False):
+        return direct_ip
+
+    try:
+        trusted_proxy = ipaddress.ip_address(direct_ip) in _HASSIO_NETWORK
+    except ValueError:
+        trusted_proxy = False
+    if not trusted_proxy:
+        return direct_ip
+
+    xff = request.headers.get("X-Forwarded-For", "")
+    forwarded_ip = xff.split(",", 1)[0].strip()
+    if not forwarded_ip:
+        return direct_ip
+    try:
+        ipaddress.ip_address(forwarded_ip)
+    except ValueError:
+        return direct_ip
+    return forwarded_ip
 
 
 async def _read_json_object(request: Request) -> tuple[dict, JSONResponse | None]:
@@ -198,7 +230,7 @@ async def listener_request(request: Request):
         return JSONResponse({"ok": False, "error": "message required"}, status_code=400)
 
     # IP rate limit: 1 request per 30s per IP
-    ip = request.client.host if request.client else "unknown"
+    ip = _client_ip_for_rate_limit(request)
     state = request.app.state.station_state
     config = request.app.state.config
     submitter_ip_hash = _hash_submitter_ip(ip, config)
