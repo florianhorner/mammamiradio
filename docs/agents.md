@@ -14,3 +14,8 @@ This file supplements the global instructions for the `mammamiradio` repository.
 - If Conductor lifecycle hooks change, update `conductor.json` and the related `scripts/conductor-*.sh` files in the same change
 - On version bumps, keep `CHANGELOG.md` and `ha-addon/mammamiradio/CHANGELOG.md` in sync
 - In engineering reviews, when presenting multiple options, explain the tradeoffs without framing one as the choice the user should automatically take
+
+## Active Feature Train
+
+- The current May Festival integration train is documented in `docs/2026-05-17-may-festival-feature-train.md`
+- Feature worktrees that target May Festival Mode should hand off slices using that train's intake contract
