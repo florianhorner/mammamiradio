@@ -204,6 +204,7 @@ def test_track_display():
 def test_switch_playlist_clears_listener_request_state():
     state = StationState(playlist=[_track(1)])
     state.pending_requests.append({"name": "Luca", "message": "ciao", "type": "shoutout"})
+    state.pending_actions.append({"type": "skip_bridge"})
     state._listener_request_rl = {"127.0.0.1": 123.0}
     state.pinned_track = _track(99)
     state.force_next = SegmentType.BANTER
@@ -211,9 +212,21 @@ def test_switch_playlist_clears_listener_request_state():
     state.switch_playlist([_track(2)])
 
     assert state.pending_requests == []
+    assert list(state.pending_actions) == []
     assert state._listener_request_rl == {}
     assert state.pinned_track is None
     assert state.force_next is None
+
+
+def test_pending_actions_are_bounded():
+    state = StationState()
+
+    for i in range(250):
+        state.pending_actions.append({"n": i})
+
+    assert len(state.pending_actions) == 200
+    assert state.pending_actions[0] == {"n": 50}
+    assert state.pending_actions[-1] == {"n": 249}
 
 
 def test_select_next_track_consumes_pinned_track():

@@ -389,7 +389,7 @@ class StationState:
     pending_requests: list[dict] = field(default_factory=list)
     # Operator-visible pending actions/directives. This mirrors legacy single
     # slots while the producer still consumes those slots for compatibility.
-    pending_actions: list[dict] = field(default_factory=list)
+    pending_actions: deque[dict] = field(default_factory=lambda: deque(maxlen=200))
     # IP-based rate limiting for /api/listener-request {ip: last_ts}
     _listener_request_rl: dict = field(default_factory=dict)
     # Shareware trial: counts canned banter clips actually streamed to listener

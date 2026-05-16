@@ -2093,6 +2093,8 @@ async def add_track(request: Request, _: None = Depends(require_admin_access)):
 async def enrich_playlist(request: Request, _: None = Depends(require_admin_access)):
     """Add tracks from a source without replacing programme or purging playback."""
     body = await request.json()
+    if not isinstance(body, dict):
+        return JSONResponse({"ok": False, "error": "JSON object required"}, status_code=422)
     url = str(body.get("url", "")).strip()
     position = str(body.get("position", "end")).strip().lower()
     if not url:
@@ -2114,8 +2116,13 @@ async def enrich_playlist(request: Request, _: None = Depends(require_admin_acce
             logger.error("Playlist enrich failed: %s", exc)
             return {"ok": False, "error": "Failed to load playlist source"}
 
-        existing = {track.cache_key for track in state.playlist}
-        new_tracks = [track for track in tracks if track.cache_key not in existing]
+        seen = {track.cache_key for track in state.playlist}
+        new_tracks: list[Track] = []
+        for track in tracks:
+            if track.cache_key in seen:
+                continue
+            seen.add(track.cache_key)
+            new_tracks.append(track)
         if position == "next":
             state.playlist[0:0] = new_tracks
         else:
@@ -2311,9 +2318,17 @@ def _public_status_payload(request: Request) -> dict:
         ],
         "upcoming": upcoming,
         "upcoming_mode": "queued" if upcoming else "building",
+        "stream": {
+            "frequency": config.brand.frequency,
+            "bitrate_kbps": config.audio.bitrate,
+        },
         "playback_actions": {
-            "skip_ready": bool(runtime_health.get("queue_depth", 0) > 0 or state.queued_segments),
-            "skip_would_bridge": bool(runtime_health.get("queue_depth", 0) == 0 and not state.queued_segments),
+            "skip_ready": bool(state.now_streaming),
+            "skip_would_bridge": bool(
+                state.now_streaming
+                and runtime_health.get("queue_depth", 0) == 0
+                and not state.queued_segments
+            ),
         },
         "ha_moments": ha_moments,
         # Brand-fiction layer (PR-A schema). Listener renders against this.
@@ -2504,9 +2519,9 @@ async def status(request: Request, _: None = Depends(require_admin_access)):
                 "events_summary_en": state.ha_events_summary_en or None,
                 "last_event_label_en": state.ha_last_event_label_en or None,
             }
-            if (state.ha_context or state.ha_pending_directive)
+            if state.ha_context
             else None,
-            "pending_actions": list(state.pending_actions[-10:]) or None,
+            "pending_actions": list(state.pending_actions)[-10:] or None,
             "station_mode": station_mode,
             "producer_errors": [
                 {"type": e.type, "label": e.label, "metadata": e.metadata}

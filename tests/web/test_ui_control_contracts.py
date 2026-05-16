@@ -830,6 +830,19 @@ class TestStoppedStateQuietsTheUI:
                 "radio.toml / /public-status."
             )
 
+    def test_admin_station_card_uses_status_stream_metadata(self):
+        html = ADMIN_HTML.read_text()
+        assert "96.7" not in html
+        assert "320 kbps" not in html
+        assert 'id="stationSignal"' in html
+        assert "st?.stream?.frequency" in html
+        assert "st?.stream?.bitrate_kbps" in html
+
+    def test_admin_programme_history_drops_only_one_live_duplicate(self):
+        html = ADMIN_HTML.read_text()
+        assert "skippedNowDuplicate" in html
+        assert "&& !(now&&e.type===now.type&&e.label===now.label)" not in html
+
 
 class TestHostBlockSelectorScoping:
     """Two elements share `data-h="<host>"`: the script preview's

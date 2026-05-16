@@ -10,7 +10,7 @@ import os
 import random
 import shutil
 from collections import deque
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, replace
 from functools import partial
 from pathlib import Path
@@ -149,6 +149,68 @@ async def _render_music_track(
     else:
         save_track_metadata(norm_cached, track.title, track.artist)
     return RenderedMusicTrack(track=track, path=norm_path, cache_path=norm_cached, cache_hit=False)
+
+
+async def _queue_drain_recovery_bridge(
+    queue_segment: Callable[[Segment], Awaitable[bool]],
+    state: StationState,
+    config: StationConfig,
+) -> bool:
+    """Queue the best available continuity bridge when active playback drains."""
+    fallback = _pick_canned_clip("banter", state=state) or _pick_canned_clip("welcome")
+    if fallback:
+        logger.warning("Queue empty during active playback — inserting canned clip as bridge")
+        return await queue_segment(
+            Segment(
+                type=SegmentType.BANTER,
+                path=fallback,
+                metadata={
+                    "type": "banter",
+                    "canned": True,
+                    "queue_drain_recovery": True,
+                    "title": "Recovery banter",
+                },
+            )
+        )
+
+    norm_files = sorted(config.cache_dir.glob("norm_*.mp3"))
+    if norm_files:
+        norm_path = norm_files[0]
+        _meta = load_track_metadata(norm_path) or {}
+        logger.warning(
+            "Queue empty during active playback — inserting norm-cache bridge: %s",
+            norm_path.name,
+        )
+        return await queue_segment(
+            Segment(
+                type=SegmentType.MUSIC,
+                path=norm_path,
+                metadata={
+                    "title": _meta.get("title") or humanize_norm_filename(norm_path.name),
+                    "artist": _meta.get("artist", ""),
+                    "queue_drain_recovery": True,
+                    "audio_source": "norm_cache",
+                },
+                ephemeral=False,
+            )
+        )
+
+    tone_path = config.tmp_dir / f"drain_tone_{uuid4().hex[:8]}.mp3"
+    logger.error("No canned clips or norm cache available — inserting emergency tone bridge")
+    await asyncio.to_thread(generate_tone, tone_path, 440, 2.0)
+    return await queue_segment(
+        Segment(
+            type=SegmentType.MUSIC,
+            path=tone_path,
+            metadata={
+                "title": "Station continuity",
+                "artist": "",
+                "queue_drain_recovery": True,
+                "audio_source": "emergency_tone",
+            },
+            ephemeral=True,
+        )
+    )
 
 
 def _banter_title(script: list[dict] | None, *, canned: bool) -> str:
@@ -771,45 +833,8 @@ async def run_producer(
         # to bridge the gap while the producer or prefetch task catches up.
         # _drain_guard_queued prevents re-firing until a real segment lands.
         if queue.empty() and _segments_produced > 0 and not _drain_guard_queued:
-            fallback = _pick_canned_clip("banter", state=state) or _pick_canned_clip("welcome")
-            if fallback:
-                logger.warning("Queue empty during active playback — inserting canned clip as bridge")
-                await _queue_segment(
-                    Segment(
-                        type=SegmentType.BANTER,
-                        path=fallback,
-                        metadata={
-                            "type": "banter",
-                            "canned": True,
-                            "queue_drain_recovery": True,
-                            "title": "Recovery banter",
-                        },
-                    )
-                )
+            if await _queue_drain_recovery_bridge(_queue_segment, state, config):
                 _drain_guard_queued = True
-            else:
-                norm_files = sorted(config.cache_dir.glob("norm_*.mp3"))
-                if norm_files:
-                    norm_path = norm_files[0]
-                    _meta = load_track_metadata(norm_path) or {}
-                    logger.warning(
-                        "Queue empty during active playback — inserting norm-cache bridge: %s",
-                        norm_path.name,
-                    )
-                    await _queue_segment(
-                        Segment(
-                            type=SegmentType.MUSIC,
-                            path=norm_path,
-                            metadata={
-                                "title": _meta.get("title") or humanize_norm_filename(norm_path.name),
-                                "artist": _meta.get("artist", ""),
-                                "queue_drain_recovery": True,
-                                "audio_source": "norm_cache",
-                            },
-                            ephemeral=False,
-                        )
-                    )
-                    _drain_guard_queued = True
 
         if (
             queue.qsize() >= config.pacing.lookahead_segments

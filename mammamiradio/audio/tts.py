@@ -51,6 +51,8 @@ _failed_edge_voices: set[str] = set()
 # (e.g. Home Assistant Green — fanless ARM SoC). Two slots let one TTS+normalize and
 # one SFX/bed generation overlap without saturating all cores.
 _HEAVY_SEM = asyncio.Semaphore(2)
+# Disclaimer voice rate by ad format. Formats not listed use the +35%
+# disclaimer_goblin default shared by the other ad treatments.
 _DISCLAIMER_RATE_BY_FORMAT = {
     "classic_pitch": "+55%",
 }

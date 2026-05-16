@@ -439,8 +439,33 @@ async def test_playlist_enrich_adds_source_without_cutover(tmp_path):
     assert app.state.skip_event.is_set() is False
     assert app.state.station_state.queued_segments == [{"type": "banter", "label": "Queued"}]
     assert app.state.station_state.pending_requests == [{"request_id": "req1", "message": "ciao"}]
+    assert app.state.station_state.now_streaming == {"type": "music", "label": "Playing", "started": app.state.station_state.now_streaming["started"]}
     assert app.state.station_state.playlist_revision == starting_revision + 1
     assert app.state.station_state.playlist[-1].spotify_id == "fresh1"
+
+
+@pytest.mark.asyncio
+async def test_playlist_enrich_deduplicates_incoming_source_tracks():
+    app = _make_test_app(admin_token="tok")
+    duplicate_a = Track(title="Fresh Song", artist="Fresh Artist", duration_ms=180_000, spotify_id="fresh1")
+    duplicate_b = Track(title="Fresh Song", artist="Fresh Artist", duration_ms=180_000, spotify_id="fresh1")
+    resolved_source = PlaylistSource(kind="url", url="https://example.com/playlist")
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+
+    with patch("mammamiradio.web.streamer.load_explicit_source", return_value=([duplicate_a, duplicate_b], resolved_source)):
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            resp = await client.post(
+                "/api/playlist/enrich",
+                json={"url": "https://example.com/playlist"},
+                headers={"Authorization": "Bearer tok"},
+            )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ok"] is True
+    assert body["added"] == 1
+    assert body["skipped_existing"] == 1
+    assert [track.spotify_id for track in app.state.station_state.playlist].count("fresh1") == 1
 
 
 # ---------------------------------------------------------------------------
@@ -2672,6 +2697,25 @@ async def test_public_status_ha_moments_absent_when_no_ha_context():
 
 
 @pytest.mark.asyncio
+async def test_public_status_playback_actions_match_skip_contract():
+    app = _make_test_app()
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        idle_resp = await client.get("/public-status")
+
+    assert idle_resp.status_code == 200
+    assert idle_resp.json()["playback_actions"] == {"skip_ready": False, "skip_would_bridge": False}
+
+    app.state.station_state.now_streaming = {"type": "music", "label": "Playing", "started": time.time()}
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        active_resp = await client.get("/public-status")
+
+    assert active_resp.status_code == 200
+    assert active_resp.json()["playback_actions"] == {"skip_ready": True, "skip_would_bridge": True}
+    assert active_resp.json()["stream"]["bitrate_kbps"] == app.state.config.audio.bitrate
+
+
+@pytest.mark.asyncio
 async def test_public_status_ha_moments_present_with_mood():
     """ha_moments carries mood and weather when HA context is active."""
     app = _make_test_app()
@@ -2798,7 +2842,7 @@ async def test_admin_status_ha_details_absent_when_only_pending_actions():
     app = _make_test_app(admin_token="secret-tok")
     state = app.state.station_state
     state.ha_context = ""
-    state.ha_pending_directive = None
+    state.ha_pending_directive = ""
     state.pending_actions = [{"type": "skip_bridge", "source": "admin_skip"}]
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
@@ -2807,6 +2851,19 @@ async def test_admin_status_ha_details_absent_when_only_pending_actions():
     body = resp.json()
     assert body["ha_details"] is None, "ha_details must not appear when HA is not active"
     assert body["pending_actions"] == [{"type": "skip_bridge", "source": "admin_skip"}]
+
+
+@pytest.mark.asyncio
+async def test_admin_status_ha_details_absent_when_only_skip_directive():
+    app = _make_test_app(admin_token="secret-tok")
+    state = app.state.station_state
+    state.ha_context = ""
+    state.ha_pending_directive = "L'ascoltatore ha saltato una canzone."
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.get("/status", headers={"Authorization": "Bearer secret-tok"})
+    assert resp.status_code == 200
+    assert resp.json()["ha_details"] is None
 
 
 # ---------------------------------------------------------------------------
@@ -2865,6 +2922,32 @@ async def test_skip_track_with_queued_segments_not_bridged(tmp_path):
     assert body["bridged"] is False
 
 
+@pytest.mark.asyncio
+async def test_skip_track_post_restart_empty_queue_returns_bridged_true(tmp_path):
+    """After a fresh runtime restart, an active empty-queue skip still takes the bridge path."""
+    app = _make_test_app(admin_token="tok")
+    app.state.start_time = time.time()
+    app.state.station_state.session_stopped = False
+    app.state.station_state.now_streaming = {
+        "type": "music",
+        "label": "Restored Playing",
+        "started": time.time(),
+        "metadata": {"title": "Song A"},
+    }
+    assert app.state.queue.empty()
+    assert app.state.station_state.queued_segments == []
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.post("/api/skip", headers={"Authorization": "Bearer tok"})
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ok"] is True
+    assert body["bridged"] is True
+    assert app.state.station_state.force_next == SegmentType.MUSIC
+
+
 # ---------------------------------------------------------------------------
 # Enrich endpoint error paths
 # ---------------------------------------------------------------------------
@@ -2890,10 +2973,8 @@ async def test_playlist_enrich_no_url_returns_error():
 async def test_playlist_enrich_invalid_position_returns_422():
     """Enrich with an invalid position must return 422."""
     app = _make_test_app(admin_token="tok")
-    loaded_tracks = [Track(title="T", artist="A", duration_ms=180_000, spotify_id="x1")]
-    resolved = PlaylistSource(kind="url", url="https://example.com/playlist")
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
-    with patch("mammamiradio.web.streamer.load_explicit_source", return_value=(loaded_tracks, resolved)):
+    with patch("mammamiradio.web.streamer.load_explicit_source") as mock_load:
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
             resp = await client.post(
                 "/api/playlist/enrich",
@@ -2901,6 +2982,23 @@ async def test_playlist_enrich_invalid_position_returns_422():
                 headers={"Authorization": "Bearer tok"},
             )
     assert resp.status_code == 422
+    mock_load.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_playlist_enrich_rejects_non_object_payload_before_loading_source():
+    app = _make_test_app(admin_token="tok")
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    with patch("mammamiradio.web.streamer.load_explicit_source") as mock_load:
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            resp = await client.post(
+                "/api/playlist/enrich",
+                json=["https://example.com/playlist"],
+                headers={"Authorization": "Bearer tok"},
+            )
+    assert resp.status_code == 422
+    assert resp.json()["ok"] is False
+    mock_load.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -2942,6 +3040,8 @@ async def test_playlist_enrich_generic_error_returns_false():
     assert resp.status_code == 200
     body = resp.json()
     assert body["ok"] is False
+    assert "backend down" not in str(body.get("error", "")).lower()
+    assert "runtimeerror" not in str(body.get("error", "")).lower()
 
 
 @pytest.mark.asyncio

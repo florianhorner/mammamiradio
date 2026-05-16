@@ -671,8 +671,14 @@ def fetch_startup_playlist(
                         "jamendo",
                     ),
                 )
-                existing_keys = {track.cache_key for track in chart_tracks}
-                blended = [track for track in jamendo_tracks if track.cache_key not in existing_keys]
+                existing_keys = {_normalized_track_key(track) for track in chart_tracks}
+                blended = []
+                for track in jamendo_tracks:
+                    track_key = _normalized_track_key(track)
+                    if track_key in existing_keys:
+                        continue
+                    existing_keys.add(track_key)
+                    blended.append(track)
                 if blended:
                     chart_tracks = chart_tracks + blended
                     logger.info(
@@ -680,8 +686,8 @@ def fetch_startup_playlist(
                         len(chart_tracks) - len(blended),
                         len(blended),
                     )
-                    source = _charts_source(len(chart_tracks))
-                    source.label = f"{source.label} + Jamendo"
+                    base_source = _charts_source(len(chart_tracks))
+                    source = replace(base_source, label=f"{base_source.label} + Jamendo")
                     return chart_tracks, source, error
             logger.info("Using live Italian charts (%d tracks total)", len(chart_tracks))
             return chart_tracks, _charts_source(len(chart_tracks)), error

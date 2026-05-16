@@ -1190,7 +1190,7 @@ body[data-stopped="true"] .a-station-card .dot.on { animation-play-state: paused
         <button type="button" id="resumeBtn" class="toggle-btn start" onclick="doResume(this)" style="display:none">Avvia</button>
       </div>
       <div class="meta">
-        <span><b>96.7</b> FM · 320 kbps</span><span>attivo da <b id="sidebarUptime">—</b></span>
+        <span id="stationSignal">Segnale live</span><span>attivo da <b id="sidebarUptime">—</b></span>
       </div>
     </div>
 
@@ -1759,7 +1759,7 @@ function splitTrackLabel(seg){
   return {title:label,artist:(seg&&seg.metadata&&seg.metadata.artist)||''};
 }
 function renderProgramme(st){
-  const hash=JSON.stringify([st?.now_streaming?.label,st?.now_streaming?.type,st?.upcoming?.map(u=>[u.label,u.type,u.segment_type,u.playlist_index,u.source_kind,u.predicted]),(st?.stream_log||[]).slice(0,5).map(e=>[e.label,e.type,e.segment_type]),_programmeFilter]);
+  const hash=JSON.stringify([st?.now_streaming?.label,st?.now_streaming?.type,st?.upcoming?.map(u=>[u.label,u.type,u.segment_type,u.playlist_index,u.source_kind,u.predicted]),(st?.stream_log||[]).slice(-6).map(e=>[e.label,e.type,e.segment_type,e.epoch]),_programmeFilter]);
   if(hash===_lastProgrammeHash)return;
   _lastProgrammeHash=hash;
   const el=document.getElementById('programmeList');
@@ -1767,9 +1767,15 @@ function renderProgramme(st){
   const now=st.now_streaming;
   const upcoming=st.upcoming||[];
   const nowKey=now&&now.type?`${now.type}|${now.label||''}|${now.epoch||''}`:'';
+  let skippedNowDuplicate=false;
   const history=[...(st.stream_log||[])]
-    .filter(e=>`${e.type}|${e.label||''}|${e.epoch||''}`!==nowKey && !(now&&e.type===now.type&&e.label===now.label))
     .reverse()
+    .filter(e=>{
+      const sameKey=nowKey&&`${e.type}|${e.label||''}|${e.epoch||''}`===nowKey;
+      const sameCurrent=now&&e.type===now.type&&e.label===now.label;
+      if(!skippedNowDuplicate&&(sameKey||sameCurrent)){skippedNowDuplicate=true;return false;}
+      return true;
+    })
     .slice(0,5);
   const rows=[];
   let totalCount=0;
@@ -2449,6 +2455,12 @@ function updateEngineRoom(st,caps){
   // Update sidebar uptime
   const sidebarUptime=document.getElementById('sidebarUptime');
   if(sidebarUptime)sidebarUptime.textContent=uptime;
+  const stationSignal=document.getElementById('stationSignal');
+  if(stationSignal){
+    const freq=st?.stream?.frequency||st?.brand?.frequency||'';
+    const bitrate=Number(st?.stream?.bitrate_kbps||0);
+    stationSignal.textContent=[freq,bitrate?`${bitrate} kbps`:'' ].filter(Boolean).join(' · ')||'Segnale live';
+  }
   // sidebarLiveLine removed in Volare Refined redesign
 
   rt.innerHTML=[

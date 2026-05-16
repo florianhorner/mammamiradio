@@ -766,6 +766,24 @@ def test_fetch_startup_blends_jamendo_into_chart_programme(config):
     assert "Jamendo" in source.label
 
 
+def test_fetch_startup_filters_jamendo_duplicates_from_chart_programme(config):
+    config.allow_ytdlp = True
+    config.playlist.jamendo_client_id = "Jamendo123"
+    chart_track = Track(title="Chart", artist="Artist", duration_ms=180_000, spotify_id="chart1")
+    duplicate = Track(title="Chart", artist="Artist", duration_ms=180_000, spotify_id="chart1", source="jamendo")
+    unique = Track(title="Jam", artist="CC Artist", duration_ms=180_000, spotify_id="jam1", source="jamendo")
+
+    with (
+        patch("mammamiradio.playlist.playlist._load_chart_source_tracks", return_value=[chart_track]),
+        patch("mammamiradio.playlist.playlist._fetch_jamendo_playlist", return_value=[duplicate, unique]),
+    ):
+        tracks, source, _err = fetch_startup_playlist(config)
+
+    assert [t.spotify_id for t in tracks] == ["chart1", "jam1"]
+    assert source.kind == "charts"
+    assert "Jamendo" in source.label
+
+
 def test_fetch_startup_jamendo_zero_tracks_falls_back_to_demo(config):
     config.allow_ytdlp = False
     config.playlist.jamendo_client_id = "Jamendo123"
