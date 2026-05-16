@@ -935,6 +935,7 @@ async def test_news_flash_produced_after_session_resume(tmp_path):
     state = _make_state()
     state.session_stopped = True  # simulate post-restart stopped state
     config = _make_config(tmp_path)
+    config.cache_dir = tmp_path  # isolate from real norm cache so resume bridge is a no-op
     config.anthropic_api_key = "test-key"
     queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
 
