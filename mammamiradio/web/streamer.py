@@ -1277,9 +1277,42 @@ async def setup_recheck(request: Request, _: None = Depends(require_admin_access
 
 @router.post("/api/setup/provider-check")
 async def setup_provider_check(request: Request, _: None = Depends(require_admin_access)):
-    """Run active, secret-safe Anthropic/OpenAI connectivity checks."""
+    """Run active, secret-safe Anthropic/OpenAI connectivity checks.
+
+    Multiple rapid clicks should share one in-flight probe set instead of
+    launching overlapping 12-second outbound checks against every provider.
+    """
     config = request.app.state.config
-    return await check_provider_keys(config)
+    lock = getattr(request.app.state, "_provider_check_lock", None)
+    if lock is None:
+        lock = asyncio.Lock()
+        request.app.state._provider_check_lock = lock
+
+    async with lock:
+        cached_at = getattr(request.app.state, "_provider_check_cached_at", 0.0)
+        cached_result = getattr(request.app.state, "_provider_check_cached_result", None)
+        if cached_result is not None and time.time() - cached_at < 2.0:
+            return cached_result
+
+        task = getattr(request.app.state, "_provider_check_task", None)
+        if task is None or task.done():
+            task = asyncio.create_task(check_provider_keys(config))
+            request.app.state._provider_check_task = task
+
+    try:
+        result = await task
+    except BaseException:
+        async with lock:
+            if getattr(request.app.state, "_provider_check_task", None) is task:
+                request.app.state._provider_check_task = None
+        raise
+
+    async with lock:
+        if getattr(request.app.state, "_provider_check_task", None) is task:
+            request.app.state._provider_check_cached_result = result
+            request.app.state._provider_check_cached_at = time.time()
+            request.app.state._provider_check_task = None
+    return result
 
 
 @router.post("/api/setup/save-keys", dependencies=[Depends(require_admin_access)])
