@@ -848,9 +848,10 @@ async def test_listener_request_full_dedica_cycle_submit_admin_public_dismiss():
             assert len(admin_requests) == 1
             assert len(public_requests) == 1
             request_id = admin_requests[0]["request_id"]
-            # Public feed exposes public_token only — request_id is admin-only
+            # Public feed exposes public_token only — request_id and submitter_ip_hash are admin-only
             assert "public_token" in public_requests[0]
             assert "request_id" not in public_requests[0]
+            assert "submitter_ip_hash" not in public_requests[0]
 
             dismissed = await client.post("/api/listener-requests/dismiss", json={"id": request_id})
             public_after = await client.get("/public-listener-requests")
