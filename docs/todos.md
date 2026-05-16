@@ -36,9 +36,10 @@
 
 ### P2 — Super-italian-aware listener stopped-state regression guard
 
+**Completed:** 2026-05-16 (florianhorner/chore/todos)
 **Priority:** P2
 **Source:** scope-parked from triage of stale branch `fix/listener-polish` on 2026-05-10
-`tests/web/test_ui_control_contracts.py` (`TestStoppedStateQuietsTheUI`) — write a fresh regression test asserting the stopped-state surfaces (`renderNowPlayingStrip` + `updateMediaSession` in `mammamiradio/web/static/listener.js`) route through the super-italian copy bag (`_t('np_paused', ...)`) and never leak `Session stopped` / `STOPPED` / hardcoded city/frequency values to lock-screen / Bluetooth / CarPlay. The original guard on `fix/listener-polish` predates super-italian (PR #310) and asserts the literal `'In pausa'`, which would silently break the i18n toggle if cherry-picked as-is. Write against current code, do not resurrect the stale branch's version.
+`tests/web/test_ui_control_contracts.py` (`TestStoppedStateQuietsTheUI`) now asserts both stopped-state surfaces (`renderNowPlayingStrip` + `updateMediaSession` in `mammamiradio/web/static/listener.js`) route through `_t('np_paused', ...)` and do not leak `Session stopped` / `STOPPED` / hardcoded city/frequency values to lock-screen / Bluetooth / CarPlay.
 
 ## Infrastructure
 
@@ -130,6 +131,16 @@ The 3-agent PR audit on 2026-05-03 took ~45s and flipped a 2-3 day build into a 
 **Source:** scope-parked from `florianhorner/commit-standards-bootstrap` on 2026-05-08
 `.github/workflows/verify-claims-call.yml` pins `florianhorner/gh-workflows/.github/workflows/verify-claims.yml@v1.1`. Upstream PR `florianhorner/gh-workflows#3` fixes the `parseProofLines` self-reference-tag bug that caused PR #302's `runtime: proof/...txt` line to fail validation; once the fix lands and is tagged `v1.2`, bump the pin here so future PRs can use file-path and gist-URL artifacts directly instead of routing every artifact through a CI run URL.
 
+### P2 — Group pydantic + pydantic-core in dependabot config
+**Priority:** P2
+**Source:** release-manager session 2026-05-13 — `main` broke when a PR bumping pydantic to 2.13.4 merged without a companion pydantic-core 2.46.4 bump. `submit-pypi` (pip-compile) failed on every subsequent deps PR (#320, #322) until #321 manually unblocked the cascade.
+Add a `groups` block to `.github/dependabot.yml` so pydantic + pydantic-core ship in a single PR going forward. Same grouping logic applies to any other tightly-coupled pair (e.g. anthropic + httpx, fastapi + starlette). Prevents the "main has a broken pip-compile resolution between dependabot PRs" failure mode.
+
+### P2 — Resolve `enable-automerge` workflow gap
+**Priority:** P2
+**Source:** release-manager session 2026-05-13 — every Dependabot PR (#320, #321, #322) fails its `enable-automerge` check with `GitHub Actions is not permitted to approve pull requests` (org policy). Forces a human approve + manual merge on every routine deps bump.
+Two paths: (a) flip the org setting to allow GH Actions to approve PRs (security tradeoff worth weighing — if a malicious PR slips through, automerge would land it), or (b) drop the auto-approve step from `dependabot-automerge.yml` entirely and accept that humans approve all deps PRs. Path (b) is the safer default given this is a single-author repo with hands-on release management. Either decision unblocks the perma-failing check.
+
 ## Scriptwriter Anthropic state
 
 **Source:** /simplify scope-park on `fix/anthropic-model-and-audio-fx-guardrails` 2026-05-10.
@@ -171,9 +182,10 @@ Version sync check conditional on `pyproject.toml`/`ha-addon/config.yaml` diff; 
 
 ### Debounce or throttle `POST /api/setup/provider-check`
 
+**Completed:** 2026-05-16 (florianhorner/chore/todos)
 **Priority:** P2
 **Source:** scope-parked from florianhorner/chore/check-hist-pause-live on 2026-05-13
-`mammamiradio/core/provider_checks.py` — each call fires up to three live HTTP probes (Anthropic + OpenAI chat + OpenAI TTS) with a 12 s timeout each. The endpoint has admin auth but no rate limiting; a rapid-click operator could launch overlapping probe sets. Add a short debounce or a per-server in-flight lock before the next caller triggers a second outbound probe while the first is still awaiting a timeout.
+`POST /api/setup/provider-check` now shares one in-flight `check_provider_keys()` task across rapid callers and caches the completed result for a short debounce window. Regression: `test_setup_provider_check_shares_in_flight_probe`.
 
 
 
@@ -203,33 +215,38 @@ Version sync check conditional on `pyproject.toml`/`ha-addon/config.yaml` diff; 
 
 ### Listener-request rate limiter buckets all `request.client is None` traffic into one slot
 
+**Completed:** 2026-05-16 (florianhorner/chore/todos)
 **Priority:** P2
 **Source:** scope-parked from florianhorner/feat/track-b-sidebar on 2026-05-11 (pre-existing, flagged by pre-ship adversarial review on PR #325)
-`mammamiradio/web/listener_requests.py:190` — `ip = request.client.host if request.client else "unknown"` means every caller without a `request.client` (and every caller through HA Supervisor ingress, where `request.client` is the loopback) shares one rate-limit bucket. Real listener IPs need to be read from `X-Forwarded-For` / `X-Real-IP` behind a trusted proxy boundary. Trust-boundary decision required — not a one-line patch.
+`mammamiradio/web/listener_requests.py` now resolves the rate-limit identity from `X-Forwarded-For` / `X-Real-IP` only when the direct client is inside the trusted local/HA proxy boundary; direct public callers cannot spoof forwarded headers. Regressions cover trusted HA ingress and untrusted direct clients.
 
 ### Listener-request `request_id` doubles as both public sidebar token and admin dismiss key
 
+**Completed:** 2026-05-16 (florianhorner/chore/todos)
 **Priority:** P3
 **Source:** scope-parked from florianhorner/feat/track-b-sidebar on 2026-05-11 (flagged by pre-ship adversarial review on PR #325)
-`mammamiradio/web/listener_requests.py:129` — the public `/public-listener-requests` feed exposes `request_id`, which is also the canonical id `/api/listener-requests/dismiss` accepts. Dismiss is admin-auth gated, so this only matters under stolen admin credentials, but the design conflates the listener's "track my own card" token with the admin mutation handle. Phase 3 should consider splitting into `public_token` + `request_id`.
+`POST /api/listener-request` now creates both private `request_id` and listener-safe `public_token`; `/public-listener-requests` exposes `public_token` and no longer leaks the admin dismiss handle. Admin dismiss keeps accepting `request_id` and legacy timestamp ids.
 
 ### Coverage gaps in `_download_listener_song` failure paths
 
+**Completed:** 2026-05-16 (florianhorner/chore/todos)
 **Priority:** P3
 **Source:** scope-parked from florianhorner/feat/track-b-sidebar on 2026-05-11 (flagged by pre-ship coverage audit on PR #325)
-`mammamiradio/web/listener_requests.py:281-282` and `:271-274` — no tests cover (a) `search_ytdlp_metadata` raising an exception (should set `song_error=True`, not silently drop) or (b) the `playlist_revision` mismatch guard that drops a downloaded track when the source switched mid-download. Add `test_download_listener_song_search_exception_marks_error` and `test_download_listener_song_revision_mismatch_drops_track` in `tests/web/test_streamer_routes_extended.py`.
+`tests/web/test_streamer_routes_extended.py` now covers `search_ytdlp_metadata` exceptions setting `song_error=True`; the playlist-revision mismatch drop guard was already covered by `test_download_listener_song_drops_track_on_revision_change`.
 
 ### Listener song downloads share the default ThreadPoolExecutor with producer
 
+**Completed:** 2026-05-11 (v2.11.1)
 **Priority:** P2
 **Source:** scope-parked from florianhorner/feat/track-b-sidebar on 2026-05-11 (flagged by pre-ship adversarial review on PR #325)
-`mammamiradio/web/listener_requests.py:266` — `loop.run_in_executor(None, search_ytdlp_metadata, ...)` uses the default executor (min(32, cpu+4) threads on Pi 4 = 8). Multiple concurrent listener song downloads can exhaust the executor and starve the producer's audio prefetch tasks, causing a buffer underrun and breaking the illusion. Fix: use a separate bounded executor (`max_workers=2`) for listener downloads so producer tasks are never blocked.
+`mammamiradio/web/listener_requests.py` uses a dedicated bounded `listener-dl` executor (`max_workers=2`) for `search_ytdlp_metadata`, keeping producer prefetch work off the listener download pool.
 
 ### `_download_listener_song` leaves request stuck on `asyncio.CancelledError`
 
+**Completed:** 2026-05-16 (florianhorner/chore/todos)
 **Priority:** P3
 **Source:** scope-parked from florianhorner/feat/track-b-sidebar on 2026-05-11 (flagged by pre-ship adversarial review on PR #325)
-`mammamiradio/web/listener_requests.py:296` — the `except Exception` handler does not catch `asyncio.CancelledError` (BaseException subclass in Python 3.8+). On app shutdown mid-download, the request stays stuck as `song_found=False, song_error=False` ("still downloading") for ~2 banter cycles until scriptwriter.py's `banter_cycles_missed` counter expires it. Explicit: re-raise `CancelledError` after setting `song_error=True` and removing from `pending_requests`.
+`_download_listener_song()` now catches `asyncio.CancelledError`, marks the request as errored, removes it from `pending_requests`, logs the cancellation, and re-raises. Regression: `test_download_listener_song_cancelled_marks_error_and_removes_pending`.
 
 ### Pinned-track assignment fires only when request is still queue head at download completion
 
@@ -245,9 +262,16 @@ Version sync check conditional on `pyproject.toml`/`ha-addon/config.yaml` diff; 
 
 ### Changelog lint: add digit-phase and Track-letter patterns
 
+**Completed:** 2026-05-16 (florianhorner/chore/todos)
 **Priority:** P3
 **Source:** scope-parked from florianhorner/feat/track-b-sidebar on 2026-05-11
-`scripts/check-changelog-lint.sh` — Current `PATTERNS` array catches `Phase A` (letter-suffix) but not `Phase 1` (digit-suffix) or `Track B` (workstream labels). Add `\bPhase [0-9]+\b` and `\bTrack [A-Z]\b` so the CI gate enforces the full policy from CLAUDE.md's Changelog editorial boundary section.
+`scripts/check-changelog-lint.sh` now rejects `\bPhase [0-9]+\b` and `\bTrack [A-Z]\b`; public changelog entries were cleaned to avoid the newly covered internal wording. Regression: `test_check_changelog_lint_rejects_digit_phase_and_track_labels`.
+
+### Validate HA Supervisor XFF proxy behavior and harden rate-limit identity resolution
+
+**Priority:** P2
+**Source:** scope-parked from florianhorner/chore/todos on 2026-05-16
+`mammamiradio/web/listener_requests.py:103` — `_client_ip_for_rate_limit` reads the leftmost valid IP from `X-Forwarded-For`, which is the client-controlled entry if a trusted-network process injects a spoofed header before the real HA Supervisor proxy appends. Exploiting this requires HA network access and only results in a 30 s rate-limit disruption for the targeted listener. Before switching to rightmost-non-trusted, verify whether HA Supervisor ingress proxy appends or overwrites the header, and add an integration test against a real HA ingress container.
 
 
 ### System prompt cache key — missing geography and voice fields
@@ -255,3 +279,35 @@ Version sync check conditional on `pyproject.toml`/`ha-addon/config.yaml` diff; 
 **Priority:** P2
 **Source:** scope-parked from florianhorner/feat/host-intro-variety on 2026-05-14
 `mammamiradio/hosts/scriptwriter.py:615` — `_get_system_prompt()` cache key includes `h.name`, `h.style`, `h.personality.to_dict()`, and `super_italian_mode` but omits `h.voice`, `config.sonic_brand.geography`, `config.station.name`, and `config.station.theme`. If any of those change at runtime without also changing host name/style/personality, the stale system prompt is served silently. In normal operation this is low-risk because config is loaded once at startup and hot-reload calls `importlib.reload()` which clears module globals. Becomes relevant if a settings endpoint ever allows in-memory config mutation.
+
+## Admin UI — Design System
+
+### Touch targets below 44px: icon buttons and programme actions
+
+**Priority:** P2
+**Source:** scope-parked from florianhorner/chore/todos on 2026-05-16
+`admin.html:787, 838, 1318` — `.btn-icon` topbar icon buttons (36px), programme action buttons (26px), and checkbox (16px) miss the 44px touch target minimum; the sidebar nav link was fixed in this branch but these three element types remain.
+
+### Ad-hoc pill systems — migrate to canonical status chips
+
+**Priority:** P2
+**Source:** scope-parked from florianhorner/chore/todos on 2026-05-16
+`admin.html:574, 697, 724, 849` — `.chip`, `.now-type-pill`, `.seg-pill`, `.lr-pill` exist alongside the canonical `.status-chip` / `.status-inline` system in `base.css`; migrate these ad-hoc styles to the canonical classes so colorblind users get shape + color on all status surfaces.
+
+### Status chip label contrast below WCAG AA
+
+**Priority:** P3
+**Source:** scope-parked from florianhorner/chore/todos on 2026-05-16
+`mammamiradio/web/static/base.css` — `.status-chip` label text at 10px achieves ~3.18:1 contrast against `--surface`; WCAG AA requires 4.5:1 for text below 18px normal / 14px bold; fix by increasing chip label font-size to 12px+ or adjusting the token value. Mitigation already present: all states pair color with shape, satisfying non-text contrast (3:1 for UI components).
+
+### Admin spacing magic numbers — tokenize to tokens.css scale
+
+**Priority:** P3
+**Source:** scope-parked from florianhorner/chore/todos on 2026-05-16
+`mammamiradio/web/templates/admin.html` — spacing values `20px 18px`, `22px 28px 40px`, `14px 18px` are hardcoded instead of referencing the 4px/8px base-scale tokens in `tokens.css`; consolidate to canonical spacing variables.
+
+### Hardcoded hex colors in admin.html — migrate to CSS variables
+
+**Priority:** P3
+**Source:** scope-parked from florianhorner/chore/todos on 2026-05-16
+`mammamiradio/web/templates/admin.html` — colors `#14110F`, `#1E1610`, and raw RGB tints appear inline rather than referencing the canonical custom properties from `tokens.css`; migrate to the palette variables defined there.

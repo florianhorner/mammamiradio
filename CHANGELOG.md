@@ -4,7 +4,24 @@ All notable changes to `mammamiradio` are documented here.
 
 The current version source of truth is `pyproject.toml`.
 
-## [Unreleased]
+## [2.12.2] - 2026-05-16
+
+### Fixed
+
+- **Palinsesto table no longer causes horizontal overflow on phone widths.** The six-column programme table now collapses into compact grid cards at ≤640 px; column widths are locked with `table-layout: fixed` and a `<colgroup>` on desktop so the table stays inside the panel at all screen sizes.
+
+## [2.12.1] - 2026-05-16
+
+### Changed
+
+- **Listener-request public IDs are split from admin mutation IDs.** `GET /public-listener-requests` now exposes `public_token` for listener-side tracking and keeps the admin-only `request_id` out of the public feed. Existing admin dismiss flows continue to use `request_id` or the legacy timestamp id.
+
+### Fixed
+
+- **Provider key checks no longer stack overlapping probes.** Rapid clicks on the setup provider check now share the active result, including a short debounce after completion, so one operator action cannot launch duplicate Anthropic/OpenAI probe sets.
+- **Listener-request rate limiting respects trusted proxy headers.** Requests arriving through HA ingress or another trusted local proxy now bucket by `X-Forwarded-For` / `X-Real-IP`; direct untrusted callers cannot spoof those headers.
+- **Listener song-request failures leave clear state.** yt-dlp search exceptions now mark the request as errored, and cancellation during shutdown marks the request errored and removes it from the pending queue instead of leaving it stuck as "still downloading."
+- **Changelog lint now catches more internal release labels.** Public changelog checks reject numeric step labels and lettered workstream labels.
 
 ### Added
 
@@ -44,12 +61,12 @@ The current version source of truth is `pyproject.toml`.
 
 ## [2.11.1] - 2026-05-11
 
-Track B groundwork (Phases 1 + 2): the listener-request surface gets a new
-home, identity fields, and a production safety fix.
+Listener-request groundwork: the public request surface gets a new home,
+stable identity fields, and a production safety fix.
 
 ### Added
 
-- **Listener-request identity fields** — Every pending request now carries a canonical `request_id` (uuid4), a `status` field (initial value `queued`), and a reserved `evict_after` slot for Phase 3 TTL cleanup. The per-IP rate-limit key migrated to an HMAC-SHA256 hash of the caller IP so no raw address is stored in request records. `GET /public-listener-requests` exposes `request_id` and `status` for upcoming listener UIs; admin-only fields (`submitter_ip_hash`, `evict_after`) stay server-side. `POST /api/listener-requests/dismiss` now accepts both the legacy timestamp-based `id` and the new canonical `request_id`, allowing admin and listener UIs to migrate without a coordinated cutover.
+- **Listener-request identity fields** — Every pending request now carries a canonical `request_id` (uuid4), a `status` field (initial value `queued`), and a reserved `evict_after` slot for future cleanup. The per-IP rate-limit key migrated to an HMAC-SHA256 hash of the caller IP so no raw address is stored in request records. `GET /public-listener-requests` exposes listener-safe identity/status fields for upcoming listener UIs; admin-only fields (`submitter_ip_hash`, `evict_after`) stay server-side. `POST /api/listener-requests/dismiss` now accepts both the legacy timestamp-based `id` and the new canonical `request_id`, allowing admin and listener UIs to migrate without a coordinated cutover.
 
 ### Changed
 
@@ -537,7 +554,7 @@ UI truth and playback safety fixes — five admin and log fixes, plus a normaliz
 - **yt-dlp in health check**: Setup status now includes a yt-dlp binary check (warn if missing, not fail — yt-dlp is preferred but optional).
 - **Onboarding steps payload**: `build_setup_status` now returns an `onboarding_steps` array to drive step-by-step setup UI.
 - **Canned clip on reconnect**: When the producer wakes from idle (0→1 listener), it immediately seeds a canned banter clip into the queue so reconnecting listeners hear audio within seconds instead of waiting 30–60s for generation.
-- **Home context enrichment**: Four-phase HA intelligence upgrade. Phase 1: event diffing detects state changes between polls and surfaces them as temporal events ("coffee machine turned on 3 minutes ago"). Phase 2: mood classification reads aggregate state into Italian scenes (cooking, sleeping, movie night). Phase 3: weather narrative arcs evolve through the day. Phase 4: reactive impossible moments fire high-priority directives when specific events occur (coffee on → hosts smell espresso, door unlocks → "bentornato").
+- **Home context enrichment**: HA intelligence now detects state changes between polls and surfaces them as temporal events ("coffee machine turned on 3 minutes ago"), classifies aggregate state into Italian scenes (cooking, sleeping, movie night), evolves weather narrative arcs through the day, and fires high-priority directives for specific events (coffee on → hosts smell espresso, door unlocks → "bentornato").
 - **Listener launch ceremony**: Pre-launch state with animated radio warming up, welcome segment display in now-playing UI.
 
 ### Fixed

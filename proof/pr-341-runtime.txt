@@ -1,0 +1,26 @@
+PR #341 — listener-request identity hardening — runtime proof
+captured: 2026-05-16 (florianhorner/chore/todos)
+
+Full test suite (clean environment, no local norm-cache pollution):
+
+  $ python -m pytest tests/ -q
+  1786 passed, 2 skipped, 7 deselected in 44.06s
+
+Quality gate:
+
+  $ make check
+  All checks passed
+  (ruff lint + ruff format + mypy + coverage ratchet — every per-module
+   floor met; coverage above the 92% aggregate floor)
+
+CI on this branch (GitHub Actions):
+
+  quality   — success  https://github.com/florianhorner/mammamiradio/actions/runs/25959660448
+  pi-smoke  — success  https://github.com/florianhorner/mammamiradio/actions/runs/25959660439
+  CodeQL    — success
+  submit-pypi — success
+
+Scope of change: proxy-aware listener-request rate-limit identity,
+public_token / request_id split, provider-check debounce, changelog-lint
+pattern extension. Backend + admin CSS touch-target polish. No audio
+pipeline change.
