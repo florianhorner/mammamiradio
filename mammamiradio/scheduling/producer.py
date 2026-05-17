@@ -197,7 +197,11 @@ async def _queue_drain_recovery_bridge(
 
     tone_path = config.tmp_dir / f"drain_tone_{uuid4().hex[:8]}.mp3"
     logger.error("No canned clips or norm cache available — inserting emergency tone bridge")
-    await asyncio.to_thread(generate_tone, tone_path, 440, 2.0)
+    try:
+        await asyncio.to_thread(generate_tone, tone_path, 440, 2.0)
+    except Exception:
+        logger.exception("Emergency tone bridge generation failed")
+        return False
     return await queue_segment(
         Segment(
             type=SegmentType.MUSIC,

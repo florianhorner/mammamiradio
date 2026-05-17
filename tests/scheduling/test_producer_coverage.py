@@ -1217,6 +1217,29 @@ async def test_drain_guard_emergency_tone_when_no_canned_clip_or_norm_cache(tmp_
 
 
 @pytest.mark.asyncio
+async def test_drain_guard_emergency_tone_failure_is_contained(tmp_path):
+    """Emergency tone failures must not escape the drain guard and kill the producer."""
+    state = _make_run_state()
+    config = _make_run_config()
+    config.tmp_dir = tmp_path
+    config.cache_dir = tmp_path
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+
+    async def _queue_segment(segment: Segment) -> bool:
+        await queue.put(segment)
+        return True
+
+    with (
+        patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=None),
+        patch(f"{PRODUCER_MODULE}.generate_tone", side_effect=RuntimeError("ffmpeg unavailable")),
+    ):
+        queued = await _queue_drain_recovery_bridge(_queue_segment, state, config)
+
+    assert queued is False
+    assert queue.empty()
+
+
+@pytest.mark.asyncio
 async def test_banter_metadata_includes_has_music_tail(tmp_path):
     """Banter segments produced after a crossfade transition must carry
     has_music_tail=True so the sting layer does not double-stack."""
