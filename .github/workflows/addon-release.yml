@@ -126,6 +126,7 @@ jobs:
 
       - name: Run SHA image smoke test
         run: |
+          set -euo pipefail
           # Gate stable publishing on the exact image built by addon-build.yml.
           docker run -d --name mamma-smoke \
             -p 8765:8000 \
@@ -160,6 +161,10 @@ jobs:
       matrix:
         arch: [amd64, aarch64]
     steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+
       - uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4.0.0
 
       - uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4.1.0
@@ -188,7 +193,23 @@ jobs:
             echo "Published $VERSION_TAG from $SHA_TAG"
           fi
 
-          if [ "${{ needs.pre-flight.outputs.publish_latest }}" = "true" ]; then
+          # Re-verify this tag is still the newest stable before updating :latest.
+          # Closes the TOCTOU window: a newer tag may have been promoted while this
+          # run was in-progress since publish_latest was computed in pre-flight.
+          PUBLISH_LATEST="${{ needs.pre-flight.outputs.publish_latest }}"
+          if [ "$PUBLISH_LATEST" = "true" ]; then
+            git fetch --force --tags origin 'refs/tags/v*:refs/tags/v*'
+            CURRENT_LATEST="$(git tag -l 'v*' \
+              | sed 's/^v//' \
+              | awk '/^[0-9]+\.[0-9]+\.[0-9]+$/ { print }' \
+              | sort -V \
+              | tail -1)"
+            if [ "$CURRENT_LATEST" != "$VERSION" ]; then
+              echo "Tag $VERSION is no longer the newest stable ($CURRENT_LATEST was published concurrently); skipping :latest update."
+              PUBLISH_LATEST="false"
+            fi
+          fi
+          if [ "$PUBLISH_LATEST" = "true" ]; then
             docker buildx imagetools create --prefer-index=false --tag "$LATEST_TAG" "$SHA_TAG"
             echo "Updated $LATEST_TAG from $SHA_TAG"
           else
@@ -213,6 +234,7 @@ jobs:
 
       - name: Run release image smoke test
         run: |
+          set -euo pipefail
           docker run -d --name mamma-smoke \
             -p 8765:8000 \
             -e LOG_LEVEL=WARNING \

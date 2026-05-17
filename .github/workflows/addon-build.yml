@@ -41,7 +41,12 @@ jobs:
       - name: Read stable add-on version
         id: addon-version
         run: |
+          set -e
           VERSION=$(grep '^version:' ha-addon/mammamiradio/config.yaml | awk '{print $2}' | tr -d '"')
+          if [ -z "$VERSION" ]; then
+            echo "::error::Failed to extract version from ha-addon/mammamiradio/config.yaml — is the version: field present?"
+            exit 1
+          fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "Stable add-on version: $VERSION"
 

@@ -123,17 +123,20 @@ def test_release_workflow_allows_matching_partial_reruns_only():
 def test_release_workflow_promotes_versioned_per_arch_images():
     """:X.Y.Z tag must be created from the prebuilt SHA image."""
     text = _workflow_text()
-    assert "needs.pre-flight.outputs.version" in text, (
+    promote_section = re.search(r"\n  promote:\n((?:    .+\n|\n)*)", text)
+    assert promote_section, "Could not locate `promote:` job in addon-release.yml"
+    promote_block = promote_section.group(1)
+    assert "needs.pre-flight.outputs.version" in promote_block, (
         "promote job must use ${{ needs.pre-flight.outputs.version }} for the :X.Y.Z tag.\n"
         "This ensures the tag is validated by pre-flight before stable promotion."
     )
-    assert "IMAGE_BASE" in text and "matrix.arch" in text, (
+    assert "IMAGE_BASE" in promote_block and "matrix.arch" in promote_block, (
         "promote job must publish per-arch images using IMAGE_BASE and matrix.arch."
     )
-    assert 'docker buildx imagetools create --prefer-index=false --tag "$VERSION_TAG" "$SHA_TAG"' in text, (
+    assert 'docker buildx imagetools create --prefer-index=false --tag "$VERSION_TAG" "$SHA_TAG"' in promote_block, (
         "release workflow must promote the already-built SHA artifact instead of rebuilding."
     )
-    assert 'docker buildx imagetools create --prefer-index=false --tag "$LATEST_TAG" "$SHA_TAG"' in text, (
+    assert 'docker buildx imagetools create --prefer-index=false --tag "$LATEST_TAG" "$SHA_TAG"' in promote_block, (
         "release workflow must preserve the source manifest when updating :latest."
     )
 
@@ -142,8 +145,14 @@ def test_release_workflow_publishes_latest():
     """:latest must be promoted only when this tag is the newest stable semver."""
     text = _workflow_text()
     assert 'LATEST_TAG="${{ env.REGISTRY }}/${{ env.IMAGE_BASE }}-${{ matrix.arch }}:latest"' in text
-    assert '[ "${{ needs.pre-flight.outputs.publish_latest }}" = "true" ]' in text, (
-        "promote job must guard :latest updates with the newest-stable-semver pre-flight output."
+    # The promote step derives a local PUBLISH_LATEST from the pre-flight output and
+    # re-verifies via a fresh tag fetch before committing to the :latest update.
+    assert 'PUBLISH_LATEST="${{ needs.pre-flight.outputs.publish_latest }}"' in text, (
+        "promote job must initialise PUBLISH_LATEST from the pre-flight newest-stable output."
+    )
+    assert '[ "$PUBLISH_LATEST" = "true" ]' in text, (
+        "promote job must guard :latest updates with the local PUBLISH_LATEST variable "
+        "(which has been re-verified against current tags to close the TOCTOU window)."
     )
     assert 'docker buildx imagetools create --prefer-index=false --tag "$LATEST_TAG" "$SHA_TAG"' in text, (
         "promote job must update :latest from the same prebuilt SHA image used for the version tag."
@@ -236,11 +245,33 @@ def test_release_workflow_fork_guard():
 
 
 def test_release_workflow_concurrency_defined():
-    """concurrency: block must reference github.ref to prevent race on rapid re-tags."""
+    """concurrency: block must reference github.ref, and :latest must be guarded by publish_latest."""
     text = _workflow_text()
     assert "concurrency:" in text, "addon-release.yml must define a concurrency block."
     assert "github.ref" in text, (
-        "concurrency group must reference github.ref so rapid re-pushes of the same tag cancel in-progress runs."
+        "concurrency group must reference github.ref so rapid re-pushes of the same tag serialize."
+    )
+    assert "publish_latest" in text, (
+        "release contract must gate :latest promotion on the pre-flight newest-stable check "
+        "(publish_latest output) to prevent :latest regressing to an older version."
+    )
+
+
+def test_release_workflow_latest_toctou_guard():
+    """promote job must re-verify newest stable tag immediately before writing :latest."""
+    text = _workflow_text()
+    promote_section = re.search(r"\n  promote:\n((?:    .+\n|\n)*)", text)
+    assert promote_section, "Could not locate `promote:` job in addon-release.yml"
+    promote_block = promote_section.group(1)
+    assert "PUBLISH_LATEST=" in promote_block, (
+        "promote job must re-derive a local PUBLISH_LATEST variable from a fresh tag fetch "
+        "rather than relying solely on the pre-flight output, which may be stale."
+    )
+    assert "CURRENT_LATEST=" in promote_block, (
+        "promote job must compute CURRENT_LATEST by fetching tags immediately before :latest promotion."
+    )
+    assert "CURRENT_LATEST" in promote_block and "VERSION" in promote_block, (
+        "promote job must compare CURRENT_LATEST against VERSION before updating :latest."
     )
 
 
