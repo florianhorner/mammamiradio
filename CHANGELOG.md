@@ -235,6 +235,7 @@ entrypoint `mammamiradio.main:app` and Docker invocations are unaffected.
 - **ICY header injection guard**: station name and genre are CRLF-scrubbed before writing to ICY response headers, closing an HTTP response-splitting vector for operators who set `STATION_NAME` with embedded newlines.
 - **youtube\_id format validation**: `/api/playlist/add-external` now validates the `youtube_id` parameter against `[A-Za-z0-9_-]{11}` before passing it to yt-dlp, blocking path traversal and injection payloads.
 - **HA addon version sync**: `ha-addon/mammamiradio/config.yaml` version bumped to `2.10.9` to match `pyproject.toml` (was stale at `2.10.8`).
+- **Local setup now avoids broken Python 3.13 installs**: `conductor-setup.sh` now prefers `python3.11 → python3.12 → python3.13 → python3` instead of leading with 3.13. On machines where 3.13 is installed but its `ensurepip` is broken, setup falls back to the project's target interpreter (3.11) automatically.
 
 ### Changed
 
@@ -258,10 +259,6 @@ entrypoint `mammamiradio.main:app` and Docker invocations are unaffected.
 ### Refactored
 
 - **Dashboard inline CSS/JS extracted into `/static/`**: moved dashboard styles and scripts out of the HTML template so static assets can be cached, reviewed, and reused normally.
-
-### Fixed
-
-- **Local setup now avoids broken Python 3.13 installs**: `conductor-setup.sh` now prefers `python3.11 → python3.12 → python3.13 → python3` instead of leading with 3.13. On machines where 3.13 is installed but its `ensurepip` is broken, setup falls back to the project's target interpreter (3.11) automatically.
 
 ## [2.10.9] - 2026-04-20
 
