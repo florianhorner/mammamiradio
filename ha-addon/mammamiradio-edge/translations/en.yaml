@@ -1,22 +1,25 @@
 configuration:
-  anthropic_api_key:
-    name: Anthropic API Key
-    description: Required for AI-generated banter and ads. Get one at console.anthropic.com. Without this, the station uses stock banter.
-  openai_api_key:
-    name: OpenAI API Key
-    description: Enables gpt-4o-mini-tts voice for hosts configured with engine="openai". Get one at platform.openai.com. Without this, all hosts use Edge TTS.
   station_name:
     name: Station Name
-    description: Your radio station's name (shown in the UI and stream metadata).
+    description: Your radio station's name, shown in the UI and stream metadata.
+  jamendo_client_id:
+    name: Jamendo Client ID
+    description: Enables CC-licensed music from Jamendo from the add-on Configuration tab. Get a free client ID at developer.jamendo.com. Leave empty to disable the Jamendo source.
+  anthropic_api_key:
+    name: Anthropic API Key
+    description: Unlocks Claude AI hosts for generated banter and ads. Without this, the station can use OpenAI as a script fallback when configured, then stock banter.
+  openai_api_key:
+    name: OpenAI API Key
+    description: Enables OpenAI host voices and serves as the script-generation fallback when Anthropic is unavailable. Without this, OpenAI hosts use Edge TTS and scripts fall back to stock copy.
   claude_model:
     name: AI Model
     description: "Haiku: fast and cheap. Sonnet: balanced. Opus: highest quality but slower."
-  admin_token:
-    name: Admin Token
-    description: "Set a stable token for the admin API and HA media_player integration. If left empty, one is auto-generated on each restart (check the add-on log to retrieve it)."
   enable_home_assistant:
     name: Enable Home Assistant Integration
-    description: "Let hosts reference your home state (lights, presence, climate) in banter and ads. Requires the add-on to have API access — enable this if the boot log shows ha=disabled."
+    description: "Let hosts use Home Assistant context, such as lights, presence, and climate, in banter and ads. Requires add-on API access; enable this if the boot log shows ha=disabled."
+  admin_token:
+    name: Admin Token
+    description: "Set a stable token for the admin API and HA media_player integration. If left empty, one is auto-generated on each restart; check the add-on log to retrieve it."
   super_italian_mode:
     name: Super Italian Mode
     description: "On (default): listener UI and hosts are Italian-first. Off: listener UI uses English utility copy with Italian station-feel words intact, and AI hosts code-switch with Italian sprinkles."
@@ -26,6 +29,3 @@ configuration:
   festival_mode:
     name: Festival Mode
     description: "Turns your station into a theatrical music competition. Hosts announce songs as fictional Italian regional delegations, assign dramatic points, and call drinking game triggers. Toggleable live from the admin panel without a restart."
-  jamendo_client_id:
-    name: Jamendo Client ID
-    description: "Enables CC-licensed music from Jamendo. Get a free client ID at developer.jamendo.com. Leave empty to disable the Jamendo source."

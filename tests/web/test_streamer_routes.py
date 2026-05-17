@@ -18,8 +18,11 @@ from mammamiradio.core.models import Segment, SegmentType, StationState, Track
 from mammamiradio.web.listener_requests import router as listener_requests_router
 from mammamiradio.web.streamer import (
     _ASSET_VERSION,
+    QUEUE_FALLBACK_WAIT_SECONDS,
+    SILENCE_FAILURE_SECONDS,
     LiveStreamHub,
     _persist_completed_music,
+    _select_norm_cache_rescue,
     router,
     run_playback_loop,
 )
@@ -61,6 +64,36 @@ def _make_test_app(*, admin_password: str = "", admin_token: str = "") -> FastAP
 # ---------------------------------------------------------------------------
 # LiveStreamHub -- pure async unit tests
 # ---------------------------------------------------------------------------
+
+
+def test_ha_green_queue_fallback_budget_is_shorter_than_health_failure():
+    assert QUEUE_FALLBACK_WAIT_SECONDS <= 5.0
+    assert SILENCE_FAILURE_SECONDS >= 30.0
+    assert QUEUE_FALLBACK_WAIT_SECONDS < SILENCE_FAILURE_SECONDS
+
+
+def test_select_norm_cache_rescue_avoids_current_song_when_alternatives_exist(tmp_path):
+    state = StationState()
+    state.now_streaming = {
+        "type": "music",
+        "label": "50 Cent – In Da Club",
+        "metadata": {"title": "50 Cent – In Da Club", "artist": "50 Cent"},
+    }
+
+    current = tmp_path / "norm_youtube_dQw4w9WgXcQ_192k.mp3"
+    current.write_bytes(b"x")
+    (tmp_path / "norm_youtube_dQw4w9WgXcQ_192k.mp3.json").write_text('{"title": "In Da Club", "artist": "50 Cent"}')
+    alternative = tmp_path / "norm_raffaella_carra_a_far_l_amore.mp3"
+    alternative.write_bytes(b"x")
+    (tmp_path / "norm_raffaella_carra_a_far_l_amore.mp3.json").write_text(
+        '{"title": "A far l amore comincia tu", "artist": "Raffaella Carra"}'
+    )
+
+    with patch("mammamiradio.web.streamer._random.choice", side_effect=lambda items: items[0]) as choice:
+        rescue = _select_norm_cache_rescue(tmp_path, state)
+
+    assert rescue == alternative
+    choice.assert_called_once_with([alternative])
 
 
 @pytest.mark.asyncio
@@ -336,12 +369,13 @@ async def test_run_playback_loop_timeout_uses_norm_cache_after_30s(tmp_path, cap
         await asyncio.sleep(0)
         raise TimeoutError
 
+    wait_for = AsyncMock(side_effect=_forced_timeout)
     with (
-        patch("mammamiradio.web.streamer.asyncio.wait_for", new=AsyncMock(side_effect=_forced_timeout)),
+        patch("mammamiradio.web.streamer.asyncio.wait_for", new=wait_for),
         patch("mammamiradio.scheduling.producer._pick_canned_clip", return_value=None),
         patch(
             "mammamiradio.web.streamer._runtime_monotonic",
-            side_effect=[100.0, 130.5, 130.6, 130.7, 130.8, 130.9],
+            side_effect=[100.0, 100.0 + SILENCE_FAILURE_SECONDS + 0.1, 130.5, 130.6, 130.7, 130.8],
         ),
     ):
         task = asyncio.create_task(run_playback_loop(app))
@@ -358,6 +392,8 @@ async def test_run_playback_loop_timeout_uses_norm_cache_after_30s(tmp_path, cap
             await asyncio.gather(task, return_exceptions=True)
 
     assert app.state.station_state.queue_empty_since is None
+    wait_for.assert_called()
+    assert wait_for.call_args.kwargs["timeout"] == SILENCE_FAILURE_SECONDS
     assert any("rescuing with norm cache" in record.message for record in caplog.records)
     # Item 20: title must NEVER be the raw filename ("Recovered: norm_rescue.mp3").
     # Without a sidecar, humanize_norm_filename turns "norm_rescue.mp3" → "Rescue".

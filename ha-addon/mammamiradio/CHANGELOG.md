@@ -4,16 +4,19 @@
 
 ### Added
 
+- **HA Green performance smoke gate** — `make perf-smoke` now checks a live station's health, readiness, public runtime status, and first stream byte against configurable HA Green thresholds.
 - **Festival Mode** — New `festival_mode` add-on option. When enabled, the AI hosts become theatrical music competition MCs: songs are introduced as fictional Italian-regional delegations, dramatic points are assigned, and drinking game triggers are called. Toggleable live from the admin panel without an add-on restart; persisted through `/data/options.json` so it survives restarts.
 
 ### Changed
 
+- **Queue fallback starts before the health-failure window.** Active listeners now get cache rescue attempts after a 5-second bounded queue-empty wait, before the preserved 30-second silence health-failure threshold triggers.
 - **Italian-first is now the default.** New add-on installs default `super_italian_mode` to `true`, while the option remains available for operators who want the older code-switching style.
 - **Jamendo can participate in the normal programme.** When charts and Jamendo are both configured, startup blends Jamendo tracks into the chart rotation instead of keeping Jamendo fallback-only.
 - **Admin source chips enrich instead of replacing the programme.** Jamendo, chart reload, and decade buttons add tracks into the current rotation without purging the queue, skipping current playback, or clearing listener requests.
 
 ### Fixed
 
+- **Cache rescue no longer repeats the first cached song by filename.** Empty-queue fallback avoids the current/recent song when alternatives exist and randomizes the rescue candidate, so skip is less likely to land back on the same cached track.
 - **Palinsesto hides scheduler pool diagnostics and duplicate current rows.** Pool badges/wrap notes no longer appear in the operator programme, and the current segment is filtered out of history.
 - **Speech/ad transition stacking is reduced.** Segments that already carry a music-tail crossfade no longer receive an extra transition sting before them.
 - **Empty-queue skip is safer on HA Green.** Skip records a bridge action and forces next music before cutting when the queue is empty, and status exposes skip readiness.
