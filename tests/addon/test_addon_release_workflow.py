@@ -109,9 +109,7 @@ def test_release_workflow_allows_matching_partial_reruns_only():
     assert "does not match $SHA_TAG" in text or "Refusing to overwrite" in text, (
         "workflow must fail if an existing :X.Y.Z tag points at a different digest."
     )
-    assert "exit 1" in text, (
-        "pre-flight/promote must exit 1 (fail loudly) if an existing stable tag is mismatched."
-    )
+    assert "exit 1" in text, "pre-flight/promote must exit 1 (fail loudly) if an existing stable tag is mismatched."
 
 
 # ---------------------------------------------------------------------------
@@ -129,7 +127,7 @@ def test_release_workflow_promotes_versioned_per_arch_images():
     assert "IMAGE_BASE" in text and "matrix.arch" in text, (
         "promote job must publish per-arch images using IMAGE_BASE and matrix.arch."
     )
-    assert "docker buildx imagetools create --tag \"$VERSION_TAG\" \"$SHA_TAG\"" in text, (
+    assert 'docker buildx imagetools create --tag "$VERSION_TAG" "$SHA_TAG"' in text, (
         "release workflow must promote the already-built SHA artifact instead of rebuilding."
     )
 
@@ -263,9 +261,7 @@ def test_release_workflow_runs_smoke_test():
     smoke_section = re.search(r"\n  smoke:\n((?:    .+\n|\n)*)", text)
     assert smoke_section, "Could not locate `smoke:` job in addon-release.yml"
     smoke_block = smoke_section.group(1)
-    assert "needs: [pre-flight, promote]" in smoke_block, (
-        "final smoke must run after stable promotion."
-    )
+    assert "needs: [pre-flight, promote]" in smoke_block, "final smoke must run after stable promotion."
     assert "needs.pre-flight.outputs.version" in smoke_block, (
         "final smoke must pull the published :X.Y.Z release tag, not only :${{ github.sha }}."
     )
@@ -298,11 +294,7 @@ def test_release_workflow_keeps_common_action_pins_aligned_with_build():
     shared_actions = sorted(set(build_actions) & set(release_actions))
     assert shared_actions, "Expected shared pinned actions between addon-build.yml and addon-release.yml."
 
-    mismatched = [
-        action
-        for action in shared_actions
-        if build_actions[action] != release_actions[action]
-    ]
+    mismatched = [action for action in shared_actions if build_actions[action] != release_actions[action]]
     assert not mismatched, (
         f"Shared actions use different pinned SHAs: {mismatched}\n"
         "Shared workflow actions must stay aligned to prevent supply chain divergence."
