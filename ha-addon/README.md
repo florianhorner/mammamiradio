@@ -14,6 +14,15 @@ Add-on repository for [mammamiradio](https://github.com/florianhorner/mammamirad
 4. Click **Add**, then find "Mamma Mi Radio" in the store
 5. Click **Install**
 
+### Stable vs Edge
+
+The store shows two add-ons from this repository:
+
+- **Mamma Mi Radio** — the stable channel. Updates only on deliberate releases.
+- **Mamma Mi Radio (Edge)** — tracks the latest development build. Updates on every change merged to `main`. For testing only — not meant for daily listening.
+
+Install one or the other; they cannot run at the same time (both use port 8000). See `docs/runbooks/ha-addon.md` → "Edge channel" for details.
+
 ## Configuration
 
 After installing, go to the add-on's **Configuration** tab:

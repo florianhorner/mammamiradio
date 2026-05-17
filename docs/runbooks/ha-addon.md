@@ -110,6 +110,27 @@ This is set in `ha-addon/mammamiradio/config.yaml` (`image:` field) and must mat
 
 The standalone Docker image (for non-HA users) is separate: `ghcr.io/florianhorner/mammamiradio`. Built by `docker.yml` on version tags only.
 
+## Edge channel (dev releases)
+
+`mammamiradio-edge` is a second add-on in this same repo (`ha-addon/mammamiradio-edge/`) for soak-testing `main` on real hardware without disturbing stable users.
+
+| | Stable (`mammamiradio`) | Edge (`mammamiradio-edge`) |
+|--|--|--|
+| `version:` | hand-bumped `X.Y.Z` on deliberate releases | calendar version `YYYY.M.D.<build>`, bumped by CI |
+| Updates when | you bump the version | every `main` merge that changes the add-on or app |
+| Image tag pulled | `:X.Y.Z` | `:YYYY.M.D.<build>` |
+| Audience | everyone | the maintainer's soak Pi |
+
+Both add-ons pull the **same image repo** (`ghcr.io/florianhorner/mammamiradio-addon-{arch}`) — they just resolve to different tags. The edge folder holds only metadata (`config.yaml`, `translations/`, `CHANGELOG.md`, icons); it has no `Dockerfile` because HA pulls the prebuilt image.
+
+**How the calendar version is set.** `addon-build.yml`'s `bump-edge` job runs after `build` + `smoke` pass. It writes `version: YYYY.M.D.<commit-count>` into `ha-addon/mammamiradio-edge/config.yaml` and pushes the commit to `main`. The version is computed by `scripts/edge-calver.sh`: the ordering segment is `git rev-list --count HEAD` (the commit count — timestamp-free, so a skewed committer clock cannot mint a version that freezes the monotonic guard), and the `YYYY.M.D` prefix is the CI runner's UTC date (cosmetic). A monotonic guard (`scripts/edge-version-newer.sh`) skips the write if the new version would not be strictly greater, and the bump job also skips if `main` has advanced beyond the commit that was just built. If the push cannot land after 3 attempts the job **fails loudly** (`exit 1`) rather than going green — a silently-frozen edge channel is the failure mode that gate exists to prevent. The push uses the default `GITHUB_TOKEN`: GitHub does not trigger workflows from `GITHUB_TOKEN` pushes, so the commit cannot re-trigger `addon-build.yml` — no `[skip ci]` needed, no loop.
+
+**Seed version.** The committed seed is `version: 0.0.0`. `addon-build.yml` pushes a permanent `:0.0.0` image tag (always the latest `main` build) so the seed is always pullable in the window before the first `bump-edge` commit lands.
+
+**Switching the soak Pi to edge.** Edge and stable both use `host_network: true` and port 8000 — they cannot run at the same time. Uninstall stable, install "Mamma Mi Radio (Edge)" from the same add-on store entry, re-enter API keys. Reverse it to go back.
+
+**Editing the edge add-on.** Its `options`/`schema` MUST stay identical to stable — edge runs the same image and the same `run.sh` reads the options. `scripts/validate-addon.sh` fails CI on any drift. When you add a config option to stable (the THREE-files contract above), the edge `config.yaml` and `translations/en.yaml` are a fourth and fifth file to update in the same commit. **Do not hand-edit the edge `version:` line** — CI owns it (`bump-edge` rewrites it on every addon-changing merge); a manual bump can conflict with that job or, if set too high, freeze the monotonic guard.
+
 ## Pre-merge checklist
 
 Before merging ANY change that touches addon files:

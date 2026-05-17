@@ -10,6 +10,7 @@ The current version source of truth is `pyproject.toml`.
 
 - **Festival Mode** — The admin Radio tab now has a `FESTIVAL MODE` toggle. When enabled, the AI hosts become theatrical music competition MCs: songs are announced as fictional Italian-regional delegations taking the stage, dramatic fictional points are awarded, and at least one drinking game trigger is called per song intro. Toggleable live without a restart; disabling returns to the normal host voice on the next banter.
 - **Festival Mode API and persistence** — New admin endpoints `GET /api/party` and `POST /api/party {"action": "enable"|"disable", "mode": "festival"}` expose the toggle. Standalone runs persist `MAMMAMIRADIO_FESTIVAL_MODE` to `.env`; HA add-ons persist `festival_mode` in `/data/options.json` and expose it in add-on options. Festival Mode is idempotent, purges the segment queue on enable, and queues a theatrical announcement as the next banter.
+- **Edge add-on (development channel)** — A second Home Assistant add-on, **Mamma Mi Radio (Edge)**, now ships from the same repository. It tracks the latest `main` build: its version is a calendar version bumped automatically by CI on every add-on-changing merge, so Home Assistant shows a normal in-place "Update" each time. The stable **Mamma Mi Radio** add-on is unchanged and still updates only on deliberate releases. Edge and stable share one image and cannot run simultaneously (both bind port 8000) — install one. See `docs/runbooks/ha-addon.md` for switching instructions.
 
 ### Changed
 

@@ -32,6 +32,15 @@ jobs:
       - name: Release cooldown gate self-test
         run: bash tests/workflows/test_cooldown_gate.sh
 
+      - name: Edge bump monotonic guard self-test
+        run: bash tests/workflows/test_edge_bump_monotonic.sh
+
+      - name: Edge calver self-test
+        run: bash tests/workflows/test_edge_calver.sh
+
+      - name: Edge add-on validation self-test
+        run: bash tests/workflows/test_validate_addon_edge.sh
+
       - name: Ruff lint
         run: ruff check .
 

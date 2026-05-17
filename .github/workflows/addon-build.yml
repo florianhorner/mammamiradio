@@ -10,6 +10,12 @@ on:
       - "radio.toml"
   workflow_dispatch:
 
+# Serialize runs on the same ref so two near-simultaneous merges cannot race
+# the edge-version bump (an older run finishing last would write a stale calver).
+concurrency:
+  group: addon-build-${{ github.ref }}
+  cancel-in-progress: false
+
 env:
   REGISTRY: ghcr.io
   IMAGE_BASE: ${{ github.repository_owner }}/mammamiradio-addon
@@ -17,11 +23,25 @@ env:
 jobs:
   validate:
     runs-on: ubuntu-latest
+    outputs:
+      calver: ${{ steps.calver.outputs.calver }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          # edge-calver.sh needs full history for `git rev-list --count`.
+          fetch-depth: 0
 
       - name: Validate add-on invariants
         run: bash scripts/validate-addon.sh
+
+      - name: Compute edge calendar version
+        id: calver
+        run: |
+          # YYYY.M.D.<commit-count> — see scripts/edge-calver.sh. The ordering
+          # segment is the commit count (timestamp-free, cannot be clock-skewed).
+          CALVER="$(bash scripts/edge-calver.sh)"
+          echo "calver=$CALVER" >> "$GITHUB_OUTPUT"
+          echo "Edge calver: $CALVER"
 
   build:
     runs-on: ubuntu-latest
@@ -77,6 +97,8 @@ jobs:
             ${{ env.REGISTRY }}/${{ env.IMAGE_BASE }}-${{ matrix.arch }}:${{ steps.version.outputs.version }}
             ${{ env.REGISTRY }}/${{ env.IMAGE_BASE }}-${{ matrix.arch }}:latest
             ${{ env.REGISTRY }}/${{ env.IMAGE_BASE }}-${{ matrix.arch }}:${{ github.sha }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_BASE }}-${{ matrix.arch }}:0.0.0
+            ${{ env.REGISTRY }}/${{ env.IMAGE_BASE }}-${{ matrix.arch }}:${{ needs.validate.outputs.calver }}
 
   smoke:
     runs-on: ubuntu-latest
@@ -120,3 +142,68 @@ jobs:
       - name: Cleanup
         if: always()
         run: docker stop mamma-smoke && docker rm mamma-smoke || true
+
+  # Advance the edge add-on to the calendar version built by this run, so HA
+  # shows an in-place "Update" on the Edge add-on. Runs only after smoke passes,
+  # so HA is never offered an un-smoke-tested build. The push uses the default
+  # GITHUB_TOKEN — GitHub does not trigger workflows from GITHUB_TOKEN pushes, so
+  # the commit (which touches ha-addon/**) cannot re-trigger this workflow.
+  bump-edge:
+    runs-on: ubuntu-latest
+    needs: [validate, build, smoke]
+    if: github.event_name == 'push'
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Bump edge add-on version
+        env:
+          CALVER: ${{ needs.validate.outputs.calver }}
+        run: |
+          EDGE_CONFIG="ha-addon/mammamiradio-edge/config.yaml"
+          git fetch origin main:refs/remotes/origin/main
+          MAIN_SHA="$(git rev-parse origin/main)"
+          if [ "$MAIN_SHA" != "$GITHUB_SHA" ]; then
+            echo "main advanced from $GITHUB_SHA to $MAIN_SHA — skipping stale edge bump."
+            exit 0
+          fi
+
+          CURRENT=$(grep '^version:' "$EDGE_CONFIG" | awk '{print $2}' | tr -d '"')
+          echo "Current edge version: $CURRENT — proposed: $CALVER"
+
+          # Monotonic guard (scripts/edge-version-newer.sh): skip a stale calver
+          # from a raced or rerun build.
+          if ! bash scripts/edge-version-newer.sh "$CURRENT" "$CALVER"; then
+            echo "Calver $CALVER is not newer than $CURRENT — skipping bump."
+            exit 0
+          fi
+
+          sed -i "s/^version: .*/version: $CALVER/" "$EDGE_CONFIG"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add "$EDGE_CONFIG"
+          git commit -m "chore(edge): bump edge add-on to $CALVER
+
+          Co-Authored-By: github-actions[bot] <github-actions[bot]@users.noreply.github.com>"
+
+          # main may have advanced (e.g. coverage-ratchet) since checkout —
+          # rebase and retry rather than fail the bump. A rebase conflict (a
+          # concurrent edge-config write) is aborted before the next attempt so
+          # the retry is not blocked by an in-progress rebase.
+          for attempt in 1 2 3; do
+            if git pull --rebase origin main && git push; then
+              echo "Edge bump pushed: $CALVER"
+              exit 0
+            fi
+            git rebase --abort 2>/dev/null || true
+            echo "Push attempt $attempt failed — retrying..."
+            sleep 3
+          done
+          # Fail loud: a swallowed push failure would silently freeze the edge
+          # channel while CI stayed green. Surface it so it gets fixed.
+          echo "::error::Edge bump could not be pushed after 3 attempts — the edge add-on will not auto-update until this is resolved (check branch protection / token permissions)."
+          exit 1

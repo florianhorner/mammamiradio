@@ -1,0 +1,32 @@
+Runtime/verification artifact — mammamiradio-edge dev-release channel
+
+Generated: 2026-05-17 (UTC)
+Branch:    florianhorner/chore/dev-release-audit
+Base:      main
+
+== Test suite ==
+pytest tests/                  1892 passed, 2 skipped, 7 deselected
+
+== Workflow self-tests (wired into quality.yml) ==
+tests/workflows/test_edge_calver.sh            PASS (4 scenarios)
+tests/workflows/test_edge_bump_monotonic.sh    PASS (13 scenarios + workflow contract)
+tests/workflows/test_validate_addon_edge.sh    PASS (5 mutation scenarios)
+tests/workflows/test_cooldown_gate.sh          PASS
+
+== Add-on / repo gates ==
+scripts/validate-addon.sh          PASS (incl. section 13 edge-folder block)
+scripts/check-no-backlog-files.sh  PASS
+scripts/check-changelog-lint.sh    PASS
+ruff check .                       PASS
+shellcheck (new/changed scripts)   clean
+addon-build.yml + quality.yml      valid YAML
+
+== Review trail ==
+plan-eng-review  x2  (plan stage + implementation stage)
+codex adversarial    x2  (plan + implemented diff)
+/review army         testing + maintainability specialists + Claude red-team + Codex
+All multi-source findings (calver clock-skew, silent push failure, test gaps)
+hardened before ship; see PR body.
+
+== Edge calver sample ==
+scripts/edge-calver.sh -> 2026.5.17.<commit-count>  (commit-count ordered)

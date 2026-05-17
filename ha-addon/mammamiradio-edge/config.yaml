@@ -1,0 +1,48 @@
+name: Mamma Mi Radio (Edge)
+description: Development channel — always the latest main-branch build. For testing only; use the stable Mamma Mi Radio add-on for daily listening.
+slug: mammamiradio-edge
+version: 0.0.0
+stage: experimental
+url: https://github.com/florianhorner/mammamiradio
+image: ghcr.io/florianhorner/mammamiradio-addon-{arch}
+arch:
+  - amd64
+  - aarch64
+init: false
+timeout: 240
+healthcheck: http://[HOST]:[PORT:8000]/healthz
+host_network: true
+homeassistant_api: true
+hassio_api: true
+ingress: true
+ingress_port: 8000
+panel_icon: mdi:radio
+panel_title: Mamma Mi Radio (Edge)
+ports:
+  8000/tcp: null
+ports_description:
+  8000/tcp: Web UI and stream
+map:
+  - addon_config:rw
+options:
+  anthropic_api_key: ""
+  openai_api_key: ""
+  station_name: "Mamma Mi Radio"
+  claude_model: "claude-haiku-4-5-20251001"
+  admin_token: ""
+  enable_home_assistant: true
+  super_italian_mode: true
+  chaos_mode_active: false
+  festival_mode: false
+  jamendo_client_id: ""
+schema:
+  anthropic_api_key: password?
+  openai_api_key: password?
+  station_name: str?
+  claude_model: list(claude-haiku-4-5-20251001|claude-sonnet-4-6|claude-opus-4-7)?
+  admin_token: password?
+  enable_home_assistant: bool?
+  super_italian_mode: bool?
+  chaos_mode_active: bool?
+  festival_mode: bool?
+  jamendo_client_id: password?

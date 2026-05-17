@@ -99,6 +99,7 @@ private durable system for strategy or relationship context.
   - `ha-addon/mammamiradio/Dockerfile`: HA add-on image (Alpine-based)
   - `ha-addon/mammamiradio/rootfs/run.sh`: entrypoint mapping Supervisor env vars
   - `ha-addon/mammamiradio/translations/en.yaml`: UI labels for add-on options
+  - `ha-addon/mammamiradio-edge/`: dev-release channel add-on (metadata only — pulls the same image as stable; CI auto-bumps its calendar version). See `docs/runbooks/ha-addon.md` → "Edge channel".
 - `.github/workflows/docker.yml`: multi-arch Docker build CI
 
 ## Environment
