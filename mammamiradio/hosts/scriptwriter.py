@@ -428,6 +428,21 @@ def _is_anthropic_nonretryable_provider_error(exc: Exception) -> bool:
     return "model" in text and ("not_found_error" in text or "not found" in text)
 
 
+def _is_anthropic_usage_limit_error(exc: Exception) -> bool:
+    """Return True for account-wide quota/credit exhaustion errors."""
+    if _is_anthropic_auth_error(exc) or _is_anthropic_nonretryable_provider_error(exc):
+        return False
+    text = str(exc).lower()
+    return "usage limit" in text or "usage_limit" in text or "insufficient_quota" in text or "credit balance" in text
+
+
+def _anthropic_blocked_fallback_reason() -> str:
+    """Return the OpenAI fallback reason for the active Anthropic circuit block."""
+    if _anthropic_blocked_reason == "usage limit":
+        return "anthropic_usage_limit_blocked"
+    return "anthropic_auth_blocked"
+
+
 def _trip_anthropic_circuit_and_fallback(
     exc: Exception,
     *,
@@ -505,7 +520,7 @@ async def _generate_json_response(
                 raise RuntimeError(
                     f"Anthropic {_anthropic_blocked_reason} previously failed; provider is temporarily disabled"
                 )
-            fallback_reason = "anthropic_auth_blocked"
+            fallback_reason = _anthropic_blocked_fallback_reason()
             logger.debug(
                 "Anthropic temporarily disabled after %s (retry in %ds); using OpenAI fallback",
                 _anthropic_blocked_reason,
@@ -528,7 +543,7 @@ async def _generate_json_response(
                         raise RuntimeError(
                             f"Anthropic {_anthropic_blocked_reason} previously failed; provider is temporarily disabled"
                         )
-                    fallback_reason = "anthropic_auth_blocked"
+                    fallback_reason = _anthropic_blocked_fallback_reason()
                 else:
                     block_expired = (
                         _anthropic_auth_blocked_key == config.anthropic_api_key and now >= _anthropic_auth_blocked_until
@@ -582,6 +597,20 @@ async def _generate_json_response(
                                 count_auth_failure=True,
                             )
                             fallback_reason = "anthropic_auth_failed"
+                        elif _is_anthropic_usage_limit_error(exc):
+                            _trip_anthropic_circuit_and_fallback(
+                                exc,
+                                config=config,
+                                state=state,
+                                model_scope="",
+                                reason="usage limit",
+                                log_message=(
+                                    "Anthropic quota/usage limit reached; "
+                                    "suspending Anthropic for %ds and falling back to OpenAI: %s"
+                                ),
+                                count_auth_failure=False,
+                            )
+                            fallback_reason = "anthropic_usage_limit"
                         elif _is_anthropic_nonretryable_provider_error(exc):
                             _trip_anthropic_circuit_and_fallback(
                                 exc,

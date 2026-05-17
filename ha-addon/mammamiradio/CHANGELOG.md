@@ -15,6 +15,13 @@
 - **Empty-queue skip is safer on HA Green.** Skip records a bridge action and forces next music before cutting when the queue is empty, and status exposes skip readiness.
 - **Ad disclaimer speed is deterministic by format.** The old near-2x role spike is replaced with format-scoped pacing.
 
+## 2.12.2
+
+### Fixed
+
+- **Palinsesto table no longer causes horizontal overflow on phone widths.** The six-column programme table now collapses into compact cards on phone widths and stays inside its panel on desktop.
+- **Anthropic usage-limit errors now trip the provider circuit breaker.** Account quota/credit exhaustion suspends Anthropic for the existing cooldown and falls through to OpenAI immediately, instead of retrying Anthropic on every host segment while HA Green waits.
+
 ## 2.12.1
 
 ### Added
