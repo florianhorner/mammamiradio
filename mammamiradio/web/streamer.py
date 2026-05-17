@@ -288,8 +288,13 @@ def _runtime_health_snapshot(request: Request) -> dict:
     now_streaming = state.now_streaming or {}
     now_metadata = now_streaming.get("metadata", {}) if isinstance(now_streaming, dict) else {}
     audio_source = now_metadata.get("audio_source", "")
-    fallback_active = bool(now_metadata.get("fallback")) or bool(
-        audio_source and str(audio_source).startswith("fallback")
+    fallback_active = (
+        bool(now_metadata.get("fallback"))
+        or bool(audio_source and str(audio_source).startswith("fallback"))
+        or bool(now_metadata.get("queue_drain_recovery"))
+        or bool(now_metadata.get("resume_bridge"))
+        or bool(now_metadata.get("silence_fallback"))
+        or audio_source in ("norm_cache", "emergency_tone")
     )
     if not audio_source and fallback_active:
         audio_source = "canned"
@@ -494,20 +499,20 @@ def _runtime_status_snapshot(
             },
         )
 
-    recent_events = [event.to_dict() for event in reversed(state.runtime_events)]
-    failover_events = [event for event in recent_events if event.get("fallback_active")]
+    events_desc = list(reversed(state.runtime_events))
+    recent_events = [e.to_dict() for e in events_desc[:10]]
     last_switch = recent_events[0] if recent_events else None
+    failover_events = [e.to_dict() for e in events_desc if e.fallback_active][:10]
     return {
         "health_state": health_state,
         "health_color": health_color,
-        "current_health": health_state,
         "health_explanation": health_explanation,
         "fallback_active": fallback_active,
         "providers": providers,
         "last_switch_timestamp": last_switch.get("timestamp") if last_switch else None,
         "switch_reason": last_switch.get("reason") if last_switch else "",
-        "recent_events": recent_events[:10],
-        "failover_events": failover_events[:10],
+        "recent_events": recent_events,
+        "failover_events": failover_events,
         "no_failover_message": "No failover in current session." if not failover_events else "",
     }
 
@@ -1252,11 +1257,12 @@ async def run_playback_loop(app) -> None:
                     logger.warning("Queue empty for %ds, no fallback clips available", int(elapsed))
                     continue
 
+        prev_last_provider_event = state.runtime_events[-1] if state.runtime_events else None
         state.on_stream_segment(segment)
         if state.runtime_events:
-            recent_provider_event = state.runtime_events[-1]
-            if abs(recent_provider_event.timestamp - time.time()) < 1.0:
-                logger.info("provider_switch_event", extra=recent_provider_event.to_dict())
+            new_last_provider_event = state.runtime_events[-1]
+            if new_last_provider_event is not prev_last_provider_event:
+                logger.info("provider_switch_event", extra=new_last_provider_event.to_dict())
         if pulled_from_queue and state.queued_segments:
             state.queued_segments.pop(0)
         logger.info(

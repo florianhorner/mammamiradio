@@ -291,6 +291,38 @@ class TestRuntimeHealthSnapshot:
         assert snap["audio_source"] == "canned"
         assert snap["failover_active"] is True
 
+    def test_failover_active_true_for_norm_cache_rescue(self):
+        app = _make_app()
+        app.state.station_state.now_streaming = {
+            "metadata": {"audio_source": "norm_cache", "queue_drain_recovery": True}
+        }
+        req = _fake_request(app)
+
+        snap = _runtime_health_snapshot(req)
+
+        assert snap["audio_source"] == "norm_cache"
+        assert snap["failover_active"] is True
+
+    def test_failover_active_true_for_emergency_tone(self):
+        app = _make_app()
+        app.state.station_state.now_streaming = {
+            "metadata": {"audio_source": "emergency_tone", "queue_drain_recovery": True}
+        }
+        req = _fake_request(app)
+
+        snap = _runtime_health_snapshot(req)
+
+        assert snap["failover_active"] is True
+
+    def test_failover_active_true_for_silence_fallback(self):
+        app = _make_app()
+        app.state.station_state.now_streaming = {"metadata": {"silence_fallback": True}}
+        req = _fake_request(app)
+
+        snap = _runtime_health_snapshot(req)
+
+        assert snap["failover_active"] is True
+
     def test_download_audio_source_reports_playlist_source_not_failover(self):
         app = _make_app()
         app.state.station_state.playlist_source = PlaylistSource(kind="charts")
@@ -504,6 +536,40 @@ class TestRuntimeStatusSnapshot:
         assert snap["health_state"] == "ready"
         assert snap["providers"]["script_provider"]["current_provider"] == "anthropic"
         assert snap["providers"]["script_provider"]["fallback_active"] is False
+
+    def test_norm_cache_rescue_is_detected_as_degraded(self):
+        app = _make_app()
+        state = app.state.station_state
+        state.on_stream_segment(
+            Segment(
+                type=SegmentType.MUSIC,
+                path=Path("/tmp/norm.mp3"),
+                metadata={"audio_source": "norm_cache", "queue_drain_recovery": True},
+            )
+        )
+        req = _fake_request(app)
+
+        snap = _runtime_status_snapshot(req)
+
+        assert snap["health_state"] == "degraded"
+        assert snap["providers"]["audio_source"]["fallback_active"] is True
+
+    def test_emergency_tone_is_detected_as_degraded(self):
+        app = _make_app()
+        state = app.state.station_state
+        state.on_stream_segment(
+            Segment(
+                type=SegmentType.MUSIC,
+                path=Path("/tmp/tone.mp3"),
+                metadata={"audio_source": "emergency_tone", "queue_drain_recovery": True},
+            )
+        )
+        req = _fake_request(app)
+
+        snap = _runtime_status_snapshot(req)
+
+        assert snap["health_state"] == "degraded"
+        assert snap["providers"]["audio_source"]["fallback_active"] is True
 
 
 # ---------------------------------------------------------------------------

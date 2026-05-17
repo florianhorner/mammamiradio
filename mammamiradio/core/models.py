@@ -8,7 +8,7 @@ import random
 import re
 import time
 from collections import deque
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from enum import Enum
 from pathlib import Path
 from typing import TYPE_CHECKING, ClassVar, Literal
@@ -124,15 +124,7 @@ class RuntimeProviderEvent:
     timestamp: float = 0.0
 
     def to_dict(self) -> dict:
-        return {
-            "event": self.event,
-            "provider_class": self.provider_class,
-            "from_provider": self.from_provider,
-            "to_provider": self.to_provider,
-            "reason": self.reason,
-            "fallback_active": self.fallback_active,
-            "timestamp": self.timestamp,
-        }
+        return asdict(self)
 
 
 @dataclass
@@ -464,10 +456,9 @@ class StationState:
         previous_provider = str(previous.get("current_provider") or "")
         previous_fallback = bool(previous.get("fallback_active", False))
         previous_switch_timestamp = previous.get("last_switch_timestamp")
-        has_previous = bool(previous)
         changed = (
             previous_provider != current_provider or previous_fallback != fallback_active
-            if has_previous
+            if previous
             else fallback_active or current_provider != primary_provider
         )
 
@@ -551,7 +542,14 @@ class StationState:
             self.canned_clips_streamed += 1
         raw_audio_source = str(segment.metadata.get("audio_source") or "")
         if raw_audio_source or segment.metadata.get("fallback") or segment.type == SegmentType.MUSIC:
-            fallback_active = bool(segment.metadata.get("fallback")) or raw_audio_source.startswith("fallback")
+            fallback_active = (
+                bool(segment.metadata.get("fallback"))
+                or raw_audio_source.startswith("fallback")
+                or bool(segment.metadata.get("queue_drain_recovery"))
+                or bool(segment.metadata.get("resume_bridge"))
+                or bool(segment.metadata.get("silence_fallback"))
+                or raw_audio_source in ("norm_cache", "emergency_tone")
+            )
             audio_source = raw_audio_source
             if not audio_source and fallback_active:
                 audio_source = "canned"
