@@ -165,11 +165,11 @@ jobs:
             fi
             echo "Version tag already matches $SHA_TAG; leaving immutable tag in place"
           else
-            docker buildx imagetools create --tag "$VERSION_TAG" "$SHA_TAG"
+            docker buildx imagetools create --prefer-index=false --tag "$VERSION_TAG" "$SHA_TAG"
             echo "Published $VERSION_TAG from $SHA_TAG"
           fi
 
-          docker buildx imagetools create --tag "$LATEST_TAG" "$SHA_TAG"
+          docker buildx imagetools create --prefer-index=false --tag "$LATEST_TAG" "$SHA_TAG"
           echo "Updated $LATEST_TAG from $SHA_TAG"
 
   smoke:

@@ -149,7 +149,7 @@ The standalone Docker image (for non-HA users) is separate: `ghcr.io/florianhorn
 
 Stable add-on images are published by `addon-release.yml`, triggered by a `v*` tag push to the version-bump commit after it merges to `main`. GitHub Releases are curated standalone announcements; always write release notes rather than copying raw `CHANGELOG.md`. Tag the version-bump commit — not a later one — so the release image matches the commit CI already validated.
 
-`addon-release.yml` does not rebuild the add-on. It verifies that both per-arch `:${git_sha}` images exist, smoke-tests the amd64 SHA image before stable publishing, promotes those exact images to `:X.Y.Z` and `:latest`, and then smoke-tests the published amd64 `:X.Y.Z` image. If a previous run published one architecture and then failed, a rerun is allowed only when the existing `:X.Y.Z` tag digest matches the source `:sha`; mismatched stable tags fail and must be cleaned up manually.
+`addon-release.yml` does not rebuild the add-on. It verifies that both per-arch `:${git_sha}` images exist, smoke-tests the amd64 SHA image before stable publishing, promotes those exact images to `:X.Y.Z` and `:latest` without changing the source manifest shape, and then smoke-tests the published amd64 `:X.Y.Z` image. If a previous run published one architecture and then failed, a rerun is allowed only when the existing `:X.Y.Z` tag digest matches the source `:sha`; mismatched stable tags fail and must be cleaned up manually.
 
 ## Edge channel (dev releases)
 

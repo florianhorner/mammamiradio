@@ -127,8 +127,11 @@ def test_release_workflow_promotes_versioned_per_arch_images():
     assert "IMAGE_BASE" in text and "matrix.arch" in text, (
         "promote job must publish per-arch images using IMAGE_BASE and matrix.arch."
     )
-    assert 'docker buildx imagetools create --tag "$VERSION_TAG" "$SHA_TAG"' in text, (
+    assert 'docker buildx imagetools create --prefer-index=false --tag "$VERSION_TAG" "$SHA_TAG"' in text, (
         "release workflow must promote the already-built SHA artifact instead of rebuilding."
+    )
+    assert 'docker buildx imagetools create --prefer-index=false --tag "$LATEST_TAG" "$SHA_TAG"' in text, (
+        "release workflow must preserve the source manifest when updating :latest."
     )
 
 
