@@ -80,24 +80,22 @@ def test_select_norm_cache_rescue_avoids_current_song_when_alternatives_exist(tm
         "metadata": {"title": "50 Cent – In Da Club", "artist": "50 Cent"},
     }
 
-    current = tmp_path / "norm_50_cent_in_da_club.mp3"
+    current = tmp_path / "norm_youtube_dQw4w9WgXcQ_192k.mp3"
     current.write_bytes(b"x")
-    (tmp_path / "norm_50_cent_in_da_club.mp3.json").write_text('{"title": "In Da Club", "artist": "50 Cent"}')
+    (tmp_path / "norm_youtube_dQw4w9WgXcQ_192k.mp3.json").write_text(
+        '{"title": "In Da Club", "artist": "50 Cent"}'
+    )
     alternative = tmp_path / "norm_raffaella_carra_a_far_l_amore.mp3"
     alternative.write_bytes(b"x")
     (tmp_path / "norm_raffaella_carra_a_far_l_amore.mp3.json").write_text(
         '{"title": "A far l amore comincia tu", "artist": "Raffaella Carra"}'
     )
 
-    with (
-        patch("mammamiradio.web.streamer._random.choice", side_effect=lambda items: items[0]) as choice,
-        patch("mammamiradio.web.streamer.load_track_metadata") as load_metadata,
-    ):
+    with patch("mammamiradio.web.streamer._random.choice", side_effect=lambda items: items[0]) as choice:
         rescue = _select_norm_cache_rescue(tmp_path, state)
 
     assert rescue == alternative
     choice.assert_called_once_with([alternative])
-    load_metadata.assert_not_called()
 
 
 @pytest.mark.asyncio

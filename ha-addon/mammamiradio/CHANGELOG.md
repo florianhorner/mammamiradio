@@ -9,11 +9,11 @@
 
 ### Changed
 
-- **Queue fallback starts before the health-failure window.** Active listeners now get cache/demo rescue attempts after a short bounded queue wait instead of waiting for the 30-second silence health threshold.
+- **Queue fallback starts before the health-failure window.** Active listeners now get cache rescue attempts after a 5-second bounded queue-empty wait, before the preserved 30-second silence health-failure threshold triggers.
 
 ### Fixed
 
-- **Norm-cache rescue no longer repeats the first cached song by filename.** Empty-queue fallback avoids the current/recent song when alternatives exist and randomizes the rescue candidate, so skip is less likely to land back on the same cached track.
+- **Cache rescue no longer repeats the first cached song by filename.** Empty-queue fallback avoids the current/recent song when alternatives exist and randomizes the rescue candidate, so skip is less likely to land back on the same cached track.
 
 ## 2.12.3
 

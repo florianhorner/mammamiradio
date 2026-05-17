@@ -15,12 +15,12 @@ The current version source of truth is `pyproject.toml`.
 
 ### Changed
 
-- **Queue fallback starts before the health-failure window.** Active listeners now get cache/demo rescue attempts after a short bounded queue wait instead of waiting for the 30-second silence health threshold.
+- **Queue fallback starts before the health-failure window.** Active listeners now get cache rescue attempts after a 5-second bounded queue-empty wait, before the preserved 30-second silence health-failure threshold triggers.
 - **Engineering backlog moved to GitHub issues** — `docs/todos.md` was removed. Open engineering work is now tracked as GitHub issues. A new CI guard (`scripts/check-no-backlog-files.sh`, wired into `quality.yml`) fails the build if a catch-all `TODO.md`/`TODOS.md`/`docs/todos.md`/`docs/backlog.md` file is re-added.
 
 ### Fixed
 
-- **Norm-cache rescue no longer repeats the first cached song by filename.** Empty-queue fallback now avoids the current/recent song when alternatives exist and randomizes the rescue candidate, preventing skip from landing back on the same cached track.
+- **Cache rescue no longer repeats the first cached song by filename.** Empty-queue fallback now avoids the current/recent song when alternatives exist and randomizes the rescue candidate, preventing skip from landing back on the same cached track.
 
 ## [2.12.3] - 2026-05-17
 

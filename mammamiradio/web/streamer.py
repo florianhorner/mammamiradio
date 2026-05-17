@@ -360,8 +360,17 @@ def _segment_identity_keys(segment: dict) -> set[str]:
 
 
 def _norm_cache_identity_keys(path: Path) -> set[str]:
-    """Return cheap comparable labels for a normalized cache file."""
+    """Return comparable title/artist labels for a normalized cache file."""
     keys = {_identity_key(humanize_norm_filename(path.name))}
+    sidecar = load_track_metadata(path)
+    if sidecar:
+        title = str(sidecar.get("title") or "").strip()
+        artist = str(sidecar.get("artist") or "").strip()
+        if title:
+            keys.add(_identity_key(title))
+        if title and artist:
+            keys.add(_identity_key(f"{artist} {title}"))
+            keys.add(_identity_key(f"{artist} – {title}"))
     return {key for key in keys if key}
 
 
