@@ -699,6 +699,14 @@ body::before {
   margin-bottom: 4px;
   font-family: var(--font-mono);
 }
+.a-now-compact .segment-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-weight: 700;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
 .a-now-compact .title { font-family: var(--font-display); font-style: italic; font-weight: 600; font-size: 15px; color: var(--cream); line-height: 1.2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .a-now-compact .artist { font-size: 11px; color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .a-now-compact .progress-row { display: flex; align-items: center; gap: 6px; margin-top: 4px; }
@@ -865,6 +873,7 @@ body::before {
   font-family: var(--font-mono);
   white-space: nowrap;
 }
+.segment-inline { color: var(--muted); }
 .segment-inline.segment-music { color: var(--ok); }
 .segment-inline.segment-banter { color: var(--sun2); }
 .segment-inline.segment-ad { color: var(--accent-warm); } /* secondary accent — distinct from --warning (degraded) */
@@ -1608,7 +1617,7 @@ const SOURCE_CHIPS={
 let _lastSetupJson=null;
 
 function toast(m){const e=document.getElementById('toast');e.textContent=m;e.classList.add('show');setTimeout(()=>e.classList.remove('show'),1600)}
-function esc(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}
+function esc(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;')}
 function escJs(s){return String(s||'').replace(/\\/g,'\\\\').replace(/'/g,"\\'");}
 function flash(el){if(!el)return;el.classList.remove('flash');void el.offsetWidth;el.classList.add('flash')}
 function segmentTypeKey(type){const raw=String(type||'music');return raw==='welcome'?'banter':raw}
@@ -1616,9 +1625,12 @@ function segmentText(type){return ({music:'musica',banter:'intervento',ad:'pubbl
 function segmentGlyph(type){return SEGMENT_GLYPH[segmentTypeKey(type)]||'•'}
 function segmentBadge(type){return `${segmentGlyph(type)} ${segmentText(type)}`}
 function segmentClass(type){return String(type||'music').replace(/[^a-z0-9_-]/gi,'_').toLowerCase()}
+const STATUS_STATES=['ready','working','degraded','blocked','idle'];
+function statusState(state){const s=String(state||'idle');return STATUS_STATES.includes(s)?s:'idle'}
 function statusTitle(state,label,title=''){return title||`${label} (${state})`}
 function _statusSpan(cls,state,label,title=''){
-  return `<span class="${cls} ${state}" aria-label="status: ${esc(state)}" title="${esc(statusTitle(state,label,title))}">${esc(label)}</span>`;
+  const safeState=statusState(state);
+  return `<span class="${cls} ${safeState}" aria-label="${esc(label)}: status ${esc(safeState)}" title="${esc(statusTitle(safeState,label,title))}">${esc(label)}</span>`;
 }
 function statusChip(state,label,title=''){return _statusSpan('status-chip',state,label,title)}
 function statusInline(state,label,title=''){return _statusSpan('status-inline',state,label,title)}
@@ -1803,7 +1815,7 @@ async function flagCurrentTrack(el) {
 function updateNow(ns){
   if(!ns||!ns.type){
     const ty=document.getElementById('nowType');
-    if(ty){ty.className='status-chip idle';ty.setAttribute('aria-label','status: idle');ty.title='segment: idle';ty.textContent='—';}
+    if(ty){ty.className='status-chip idle';ty.setAttribute('aria-label','In attesa: status idle');ty.title='In attesa del segnale';ty.textContent='—';}
     document.getElementById('nowTitle').textContent='In attesa del segnale...';
     document.getElementById('nowArtist').textContent='';
     document.getElementById('nowElapsed').textContent='—';

@@ -8,6 +8,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 ADMIN_HTML = REPO_ROOT / "mammamiradio" / "web" / "templates" / "admin.html"
 _ADMIN_HTML_TEXT = ADMIN_HTML.read_text(encoding="utf-8")
+CANONICAL_STATUS_STATES = {"ready", "working", "degraded", "blocked", "idle"}
 
 
 def _read_admin_html() -> str:
@@ -18,8 +19,7 @@ def _function_block(html: str, name: str) -> str:
     start = html.find(f"function {name}")
     assert start != -1, f"could not locate {name}() in admin.html"
     next_function = re.search(r"\n(?:async\s+)?function\s+", html[start + 1 :])
-    assert next_function is not None, f"could not locate end of {name}() in admin.html"
-    next_function_start = start + 1 + next_function.start()
+    next_function_start = start + 1 + next_function.start() if next_function is not None else len(html)
     return html[start:next_function_start]
 
 
@@ -28,6 +28,18 @@ def _class_tokens(html: str) -> set[str]:
     for match in re.finditer(r"""class=(["'])(.*?)\1""", html, re.DOTALL):
         tokens.update(match.group(2).split())
     return tokens
+
+
+def _css_selectors(html: str) -> set[str]:
+    return set(re.findall(r"(?<![-\w])\.([a-zA-Z][-\w]*)(?![-\w])", html))
+
+
+def _literal_status_states(html: str) -> list[str]:
+    states: list[str] = []
+    for helper in ("statusChip", "statusInline"):
+        states.extend(re.findall(rf"{helper}\('([^']+)'", html))
+    states.extend(re.findall(r"statusRow\('[^']+'\s*,\s*'([^']+)'", html))
+    return states
 
 
 def test_legacy_status_pill_classes_are_gone_from_admin_html() -> None:
@@ -40,7 +52,8 @@ def test_legacy_status_pill_classes_are_gone_from_admin_html() -> None:
         "admin.html must not emit class token 'chip'; btn-chip/pl-chips remain separate patterns."
     )
     for legacy in ("now-type-pill", "seg-pill", "lr-pill"):
-        assert legacy not in html, f"admin.html must not keep legacy {legacy} status classes."
+        assert legacy not in _class_tokens(html), f"admin.html must not emit legacy {legacy} class tokens."
+        assert legacy not in _css_selectors(html), f"admin.html must not keep legacy .{legacy} CSS selectors."
 
     assert "btn-chip" in html
     assert "pl-chips" in html
@@ -50,11 +63,22 @@ def test_legacy_status_pill_classes_are_gone_from_admin_html() -> None:
 def test_status_helpers_emit_canonical_classes_and_aria_labels() -> None:
     html = _read_admin_html()
 
+    assert "const STATUS_STATES=['ready','working','degraded','blocked','idle']" in html
+    assert "function statusState(state)" in html
     assert "function statusChip(state,label,title='')" in html
     assert "_statusSpan('status-chip',state,label,title)" in html
     assert "function statusInline(state,label,title='')" in html
     assert "_statusSpan('status-inline',state,label,title)" in html
-    assert 'aria-label="status: ${esc(state)}"' in html
+    assert 'aria-label="${esc(label)}: status ${esc(safeState)}"' in html
+    assert 'aria-label="status: ${esc(state)}"' not in html
+
+
+def test_status_helper_call_sites_use_canonical_literal_states() -> None:
+    states = _literal_status_states(_read_admin_html())
+    unknown = sorted(set(states) - CANONICAL_STATUS_STATES)
+
+    assert states, "expected status helper call sites in admin.html"
+    assert not unknown, f"Unknown status helper states in admin.html: {unknown}"
 
 
 def test_pipeline_status_uses_canonical_status_chips() -> None:
@@ -79,6 +103,12 @@ def test_segment_labels_use_canonical_status_surfaces() -> None:
     assert "function segmentClass(type)" in html
     assert 'class="segment-inline segment-${sKey}"' in html  # sKey = segmentClass(typeKey), not esc()-wrapped
     assert 'aria-label="segment: ${esc(sText)}"' in html
+    assert ".segment-inline { color: var(--muted); }" in html
+    assert ".a-now-compact .segment-inline {" in html
+    assert (
+        "text-transform: uppercase"
+        in html[html.index(".a-now-compact .segment-inline {") : html.index(".a-now-compact .title")]
+    )
     assert "statusInline('idle',segmentBadge(typeKey)" not in html
     assert "segmentInline(typeKey)" in _function_block(html, "renderProgramme")
     assert "segmentInline(typeKey)" in _function_block(html, "updateLog")
@@ -93,6 +123,8 @@ def test_now_type_status_does_not_mark_stopped_or_skipping_ready() -> None:
     assert "cls:'status-chip idle'" in block
     assert "typeKey==='skipping'" in block
     assert "cls:'status-chip working'" in block
+    assert "segment-stopped" not in block
+    assert "segment-skipping" not in block
     # playing segments use segment-inline, not status-chip
     assert "segment-inline segment-" in block
     assert "nowTypeStatus(typeKey)" in update_now
@@ -113,6 +145,23 @@ def test_engine_room_capability_lines_use_status_helpers() -> None:
     assert "Home Assistant: '+statusInline(c.ha?'ready':'idle'" in block
 
 
+def test_system_health_rows_use_canonical_status_helpers() -> None:
+    html = _read_admin_html()
+    status_row = _function_block(html, "statusRow")
+    update_systems = _function_block(html, "updateSystems")
+
+    assert 'class="status-chip ${state}"' not in status_row
+    assert "statusChip(state,label)" in status_row
+    assert "aiState='working'" in update_systems
+    assert "aiState='blocked'" in update_systems
+    assert "aiState='ready'" in update_systems
+    assert "musicState='ready'" in update_systems
+    assert "musicState='working'" in update_systems
+    assert "musicState='blocked'" in update_systems
+    assert "statusRow('Scrittura AI',aiState,aiLabel,aiDetail)" in update_systems
+    assert "statusRow('Fonti musica',musicState,musicLabel,musicDetail)" in update_systems
+
+
 def test_listener_request_statuses_map_to_canonical_states() -> None:
     block = _function_block(_read_admin_html(), "updateListenerRequests")
 
@@ -129,9 +178,6 @@ def test_listener_request_statuses_map_to_canonical_states() -> None:
 
 def test_all_segment_types_have_css_rules() -> None:
     """Every SegmentType enum value must have a .segment-inline.segment-* CSS rule."""
-    import sys
-
-    sys.path.insert(0, str(REPO_ROOT))
     from mammamiradio.core.models import SegmentType
 
     html = _read_admin_html()
