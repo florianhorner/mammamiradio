@@ -19,6 +19,9 @@ concurrency:
 env:
   REGISTRY: ghcr.io
   IMAGE_BASE: ${{ github.repository_owner }}/mammamiradio-addon
+  # Permanent seed tag for the edge channel — always pullable before the first
+  # bump-edge commit lands. Named here so all three references stay in sync.
+  EDGE_SEED_VERSION: '0.0.0'
 
 jobs:
   validate:
@@ -84,7 +87,8 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7.1.0
+      - name: Build and push stable add-on image
+        uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7.1.0
         with:
           context: ha-addon/mammamiradio
           file: ha-addon/mammamiradio/Dockerfile
@@ -92,13 +96,46 @@ jobs:
           push: true
           build-args: |
             BUILD_FROM=${{ matrix.base }}
+            BUILD_VERSION=${{ steps.version.outputs.version }}
             BUILD_ARCH=${{ matrix.arch }}
           tags: |
             ${{ env.REGISTRY }}/${{ env.IMAGE_BASE }}-${{ matrix.arch }}:${{ steps.version.outputs.version }}
             ${{ env.REGISTRY }}/${{ env.IMAGE_BASE }}-${{ matrix.arch }}:latest
             ${{ env.REGISTRY }}/${{ env.IMAGE_BASE }}-${{ matrix.arch }}:${{ github.sha }}
-            ${{ env.REGISTRY }}/${{ env.IMAGE_BASE }}-${{ matrix.arch }}:0.0.0
+          cache-from: type=gha,scope=${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.arch }}
+
+      - name: Build and push edge seed add-on image
+        uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7.1.0
+        with:
+          context: ha-addon/mammamiradio
+          file: ha-addon/mammamiradio/Dockerfile
+          platforms: ${{ matrix.platform }}
+          push: true
+          build-args: |
+            BUILD_FROM=${{ matrix.base }}
+            BUILD_VERSION=${{ env.EDGE_SEED_VERSION }}
+            BUILD_ARCH=${{ matrix.arch }}
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_BASE }}-${{ matrix.arch }}:${{ env.EDGE_SEED_VERSION }}
+          cache-from: type=gha,scope=${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.arch }}
+
+      - name: Build and push edge calver add-on image
+        uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7.1.0
+        with:
+          context: ha-addon/mammamiradio
+          file: ha-addon/mammamiradio/Dockerfile
+          platforms: ${{ matrix.platform }}
+          push: true
+          build-args: |
+            BUILD_FROM=${{ matrix.base }}
+            BUILD_VERSION=${{ needs.validate.outputs.calver }}
+            BUILD_ARCH=${{ matrix.arch }}
+          tags: |
             ${{ env.REGISTRY }}/${{ env.IMAGE_BASE }}-${{ matrix.arch }}:${{ needs.validate.outputs.calver }}
+          cache-from: type=gha,scope=${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.arch }}
 
   smoke:
     runs-on: ubuntu-latest

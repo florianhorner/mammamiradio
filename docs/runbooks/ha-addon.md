@@ -103,6 +103,31 @@ scripts/validate-addon.sh
 
 That command checks the same add-on invariants CI validates. Add `--build` when you also want the slower local-source image build. If this command fails, do not push.
 
+## `io.hass.*` image labels
+
+The addon Dockerfile must declare three Home Assistant image labels using `ARG`-injected build arguments:
+
+```dockerfile
+ARG BUILD_VERSION
+ARG BUILD_ARCH
+LABEL \
+  io.hass.version="${BUILD_VERSION}" \
+  io.hass.type="app" \
+  io.hass.arch="${BUILD_ARCH}"
+```
+
+The HA Supervisor reads these labels to:
+- `io.hass.version` — match the running image against `config.yaml`'s `version:` field. Without this label the Supervisor cannot determine whether the installed image is current.
+- `io.hass.type` — identify this as an application add-on (as opposed to a system add-on).
+- `io.hass.arch` — validate that the pulled image targets the correct host architecture.
+
+CI injects the values via `--build-arg` in `addon-build.yml`:
+- **Stable build**: `BUILD_VERSION` = `config.yaml` version (`X.Y.Z`), `BUILD_ARCH` = matrix arch.
+- **Edge seed build**: `BUILD_VERSION` = `${{ env.EDGE_SEED_VERSION }}` (the `EDGE_SEED_VERSION` workflow-level constant; currently `0.0.0`). The seed tag is a permanent fallback — always pullable in the window before the first `bump-edge` commit lands.
+- **Edge calver build**: `BUILD_VERSION` = `YYYY.M.D.<commit-count>` computed by `scripts/edge-calver.sh`.
+
+`scripts/validate-addon.sh` check 11 verifies that all three label strings are present in the Dockerfile and exits non-zero if any are missing. `ARG BUILD_VERSION=unknown` provides a default so local Docker builds that omit `--build-arg BUILD_VERSION` produce `io.hass.version=unknown` rather than an empty string.
+
 ## Image path
 
 HA expects images at:

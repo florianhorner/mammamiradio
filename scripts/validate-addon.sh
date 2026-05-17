@@ -239,6 +239,14 @@ else
     pass "No COPY to /data/ (persistent volume safe)"
 fi
 
+for label in 'io.hass.version="${BUILD_VERSION}"' 'io.hass.type="app"' 'io.hass.arch="${BUILD_ARCH}"'; do
+    if grep -Fq "$label" ha-addon/mammamiradio/Dockerfile; then
+        pass "Dockerfile label: $label"
+    else
+        fail "Dockerfile missing required Home Assistant image label: $label"
+    fi
+done
+
 # No bare eval 2>&1 in run.sh (subshell captures like SYNC_MSG="$(...2>&1)" are safe)
 # Collapse continuation lines, then reject 2>&1 that is NOT inside a $() capture.
 UNSAFE_2_1=$(awk '/\\$/{buf=buf $0; next} {if(buf){print buf $0; buf=""} else print}' \
@@ -386,6 +394,7 @@ if [ "${1:-}" = "--build" ]; then
     echo "  Building for $BUILD_ARCH..."
     if docker build "$TMPCTX" \
         --build-arg BUILD_FROM="$BASE" \
+        --build-arg BUILD_VERSION="$ADDON_VER" \
         --build-arg BUILD_ARCH="$BUILD_ARCH" \
         -t mammamiradio-addon-test:local 2>&1 | tail -5; then
         pass "Docker build succeeded"
