@@ -1,8 +1,8 @@
 # Festival Mode Feature Train
 
-Status: active integration train  
-Train branch: current workspace branch  
-Base branch: `origin/main` / GitHub base `main`  
+Status: active integration train
+Train branch: `train/festival-mode`
+Base branch: `origin/main` / GitHub base `main`
 Owner role: this workspace is the convergence branch for Festival Mode slices
 
 ## Purpose
