@@ -203,7 +203,7 @@ This is opportunistic context, not a hard dependency. Failures there should not 
 | `/healthz` | GET | Public | Liveness probe with process uptime |
 | `/readyz` | GET | Public | Readiness probe with queue depth and startup status |
 | `/public-status` | GET | Public | Current segment, recent log, and the real queued segments (`upcoming_mode` is `queued` or `building`) |
-| `/status` | GET | Admin | Full admin JSON: queue depth, uptime, scripts, HA context, errors, and `provider_health` |
+| `/status` | GET | Admin | Full admin JSON: queue depth, uptime, scripts, HA context, errors, `provider_health`, and `runtime_status` (normalized provider state + session failover event history) |
 | `/api/setup/status` | GET | Admin | First-run setup status, detected run mode, and station mode |
 | `/api/setup/recheck` | POST | Admin | Re-run setup probes |
 | `/api/setup/provider-check` | POST | Admin | Active, secret-safe Anthropic/OpenAI connectivity check |

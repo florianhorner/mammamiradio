@@ -91,6 +91,17 @@ Admin (require `ADMIN_PASSWORD` or `ADMIN_TOKEN` unless on loopback):
 - `GET /api/search`, `POST /api/playlist/add`, `POST /api/playlist/remove`, `POST /api/playlist/move`, `POST /api/playlist/move_to_next`, `POST /api/playlist/load`, `POST /api/playlist/add-external`
 - `POST /api/hot-reload` — reload `scriptwriter.py` in-place without stopping the stream. Requires `--workers 1` (importlib reloads only the worker that handles the request; multi-worker deployments get inconsistent results).
 
+### Diagnosing provider fallbacks
+
+`GET /status` returns a `runtime_status` object under the top-level response. It contains:
+
+- `providers` — current `audio_source`, `script_provider`, and `tts_provider` with `primary`, `active`, and `fallback_active` flags per provider.
+- `recent_events` — last 10 provider switch/failover events with timestamps, reasons, and whether a fallback was active.
+- `last_switch` — most recent provider change event, or `null` if no switches have occurred this session.
+- `failover_events` — last 10 events where `fallback_active` was true.
+
+The Engine Room card in `/admin` renders this live. Structured log events (`provider_switch_event`, `provider_health_state`) are also emitted so log aggregators can alert on sustained fallback states.
+
 ## Recommended production shape
 
 There is no blessed platform in this repo, but the sensible shape is:

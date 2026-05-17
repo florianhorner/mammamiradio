@@ -1290,6 +1290,9 @@ body[data-stopped="true"] .a-station-card .dot.on { animation-play-state: paused
     <!-- TopBar -->
     <div class="a-topbar" id="topBar">
       <span class="live-pill"><span class="dot"></span> <span id="topBarStatus">In onda</span></span>
+      <span id="headerHealth" class="status-dot working" aria-label="status: working" title="Runtime status">
+        <span class="dot"></span>Controllo
+      </span>
       <div class="a-eq" id="topBarEq">
         <span></span><span></span><span></span><span></span>
       </div>
@@ -1522,6 +1525,10 @@ body[data-stopped="true"] .a-station-card .dot.on { animation-play-state: paused
         <div class="card-label">Sistemi</div>
         <div class="status-stack" id="systemsBody" style="margin-bottom:14px"><div class="empty">Controllo sistemi AI e musica...</div></div>
 
+        <!-- Runtime Status -->
+        <div class="card-label">Runtime Status</div>
+        <div class="status-stack" id="runtimeStatusCard" style="margin-bottom:14px"><div class="empty">Controllo provider runtime...</div></div>
+
         <!-- Runtime — token cost counter lives here -->
         <div class="card-label">Esecuzione</div>
         <div id="engineRuntime" style="font-family:var(--font-mono);font-size:12px;line-height:1.8;color:var(--cream-dk);margin-bottom:14px">Caricamento...</div>
@@ -1619,6 +1626,12 @@ let _lastSetupJson=null;
 function toast(m){const e=document.getElementById('toast');e.textContent=m;e.classList.add('show');setTimeout(()=>e.classList.remove('show'),1600)}
 function esc(s){const d=document.createElement('div');d.textContent=s||'';return d.innerHTML}
 function escJs(s){return String(s||'').replace(/\\/g,'\\\\').replace(/'/g,"\\'");}
+function fmtRuntimeTs(ts){
+  if(!ts)return'—';
+  const d=new Date(Number(ts)*1000);
+  if(Number.isNaN(d.getTime()))return'—';
+  return d.toLocaleTimeString('it-IT',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
+}
 function flash(el){if(!el)return;el.classList.remove('flash');void el.offsetWidth;el.classList.add('flash')}
 function segmentTypeKey(type){const raw=String(type||'music');return raw==='welcome'?'banter':raw}
 function segmentText(type){return ({music:'musica',banter:'intervento',ad:'pubblicità',news_flash:'notizia'}[segmentTypeKey(type)]||segmentTypeKey(type).replace('_',' '))}
@@ -1981,7 +1994,60 @@ function updatePipelineStatus(caps){
   el.innerHTML=html;
 }
 function statusRow(title,state,label,detail){
-  return `<div class="status-row"><div class="status-copy"><div class="status-title">${esc(title)}</div><div class="status-detail">${esc(detail)}</div></div><span class="status-chip ${state}">${esc(label)}</span></div>`;
+  return `<div class="status-row"><div class="status-copy"><div class="status-title">${esc(title)}</div><div class="status-detail">${esc(detail)}</div></div><span class="status-chip ${state}" aria-label="status: ${esc(state)}">${esc(label)}</span></div>`;
+}
+function runtimeProviderRow(title,item){
+  const state=item?.fallback_active?'degraded':'ready';
+  const label=item?.fallback_active?'Fallback':'Primary';
+  const detail=[
+    'Current: '+(item?.current_label||item?.current_provider||'—'),
+    'Primary: '+(item?.primary_label||item?.primary_provider||'—'),
+    item?.switch_reason||'',
+    item?.last_switch_timestamp?'Last switch: '+fmtRuntimeTs(item.last_switch_timestamp):''
+  ].filter(Boolean).join(' · ');
+  return statusRow(title,state,label,detail);
+}
+function updateRuntimeStatus(st){
+  const card=document.getElementById('runtimeStatusCard');
+  const header=document.getElementById('headerHealth');
+  const rs=st?.runtime_status;
+  try{
+    if(!rs){
+      if(card)card.innerHTML='<div class="empty">Runtime status non disponibile</div>';
+      if(header){
+        header.className='status-dot working';
+        header.setAttribute('aria-label','status: working');
+        header.title='Runtime status loading';
+        header.innerHTML='<span class="dot"></span>Controllo';
+      }
+      return;
+    }
+    const state=rs.health_state||'ready';
+    const label=state==='blocked'?'Errore':state==='degraded'?'Fallback':state==='idle'?'Pausa':'Pronto';
+    if(header){
+      header.className='status-dot '+state;
+      header.setAttribute('aria-label',rs.health_explanation||label);
+      header.title=rs.health_explanation||'Runtime status';
+      header.innerHTML='<span class="dot"></span>'+esc(label);
+    }
+    if(!card)return;
+    const providers=rs.providers||{};
+    const failoverEvents=rs.failover_events||[];
+    const lastFailover=failoverEvents[0];
+    const eventLine=lastFailover
+      ? `${lastFailover.provider_class||'provider'}: ${lastFailover.from_provider||'—'} → ${lastFailover.to_provider||'—'} · ${lastFailover.reason||''} · ${fmtRuntimeTs(lastFailover.timestamp)}`
+      : (rs.no_failover_message||'No failover in current session.');
+    card.innerHTML=[
+      statusRow('Current health',state,label,rs.health_explanation||'Runtime health available'),
+      runtimeProviderRow('Audio source',providers.audio_source),
+      runtimeProviderRow('Script provider',providers.script_provider),
+      runtimeProviderRow('TTS provider',providers.tts_provider),
+      statusRow('Recent failover',lastFailover?'degraded':'idle',lastFailover?'Recorded':'None',eventLine)
+    ].join('');
+  }catch(e){
+    console.error('status_card_render_errors',{event:'status_card_render_errors',error:String(e)});
+    if(card)card.innerHTML=statusRow('Runtime status','blocked','Render error','Unable to render runtime provider status');
+  }
 }
 function setupPill(status){
   if(status==='configured'||status==='ok'||status==='done') return {state:'ready',label:'Pronto'};
@@ -2640,6 +2706,7 @@ async function refreshFast(){
     updatePl(_st.playlist||[]);
     updateListenerRequests(lrData.requests||[]);
     updatePaceCounters(_st.pacing);
+    updateRuntimeStatus(_st);
     updateEngineRoom(_st,_caps);
     updateSourceControls(_st,_caps);
     updateChaosState(_st.chaos_mode);
