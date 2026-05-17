@@ -64,6 +64,7 @@ Everything else lives under `docs/`:
 - `docs/design/admin-panel.md` - admin control-room layout, info architecture, motion rules
 - `docs/conductor.md` - Conductor workspace lifecycle and `.env` discovery
 - `docs/agents.md` - agent-specific notes and integration points
+- `docs/listener-qs-train.md` - `Train/Listener QS` intake, merge gate, and handoff contract
 - `docs/stabilization-log.md` - weekly fix-hours and emergency-patch counts (release cooldown gate)
 - `docs/todos.md` - deferred work items (operator-honesty pivot, etc.)
 
@@ -115,7 +116,7 @@ Everything else lives under `docs/`:
 - `JAMENDO_COUNTRY`: 3-letter uppercase ISO 3166-1 alpha-3 (e.g. `ITA`, `DEU`); empty disables the country filter. radio.toml default is `ITA` for Italian-trending music.
 - `JAMENDO_ORDER`: Jamendo sort order (`popularity_week` | `popularity_month` | `popularity_total` | `releasedate_desc` | empty). radio.toml default is `popularity_week`.
 - `MIN_COOLDOWN_HOURS`: override the release-cooldown window (default `24`, read by `scripts/check-release-cooldown.sh`)
-- `MAMMAMIRADIO_SUPER_ITALIAN`: station personality dial (`true`/`1`/`yes` to enable; default off). When OFF, listener UI defaults to English with Italian headlines and station-feel words; AI hosts code-switch (English narrative + Italian flavor). When ON, listener UI flips to full Italian and hosts lean fully into Italian idioms. Operator-toggleable from admin Engine Room (hot-reloadable; persisted to `.env` in standalone mode and `/data/options.json` in HA addon mode).
+- `MAMMAMIRADIO_SUPER_ITALIAN`: station personality dial (`true`/`1`/`yes` to enable; default on). When ON, listener UI and hosts are Italian-first. When OFF, listener UI uses English utility copy with Italian headlines and station-feel words, and AI hosts code-switch (English narrative + Italian flavor). Operator-toggleable from admin Engine Room (hot-reloadable; persisted to `.env` in standalone mode and `/data/options.json` in HA addon mode).
 - `MAMMAMIRADIO_FESTIVAL_MODE`: enable Festival Mode (`true`/`1`/`yes`; default off). Hosts become theatrical music competition MCs — fictional Italian-regional delegations, dramatic scoring, drinking game triggers. Toggleable live from the admin panel without a restart; persisted to `.env` in standalone mode and `/data/options.json` in HA addon mode.
 
 ## Runtime behavior

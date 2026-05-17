@@ -73,7 +73,7 @@ The `tests/` tree mirrors the source tree exactly. To find the test for `mammami
 | Design system (colors, fonts)    | `docs/design/system.md`          |
 | Admin panel layout standards     | `docs/design/admin-panel.md`     |
 | Conductor workspace lifecycle    | `docs/conductor.md`              |
-| Active Festival Mode feature train | `docs/2026-05-17-festival-mode-feature-train.md` |
+| Listener QS integration train    | `docs/listener-qs-train.md`      |
 | Cathedral restructure plan       | `docs/2026-04-28-cathedral-restructure.md` |
 
 ## God modules pending split

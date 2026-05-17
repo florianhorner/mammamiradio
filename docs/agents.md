@@ -15,7 +15,8 @@ This file supplements the global instructions for the `mammamiradio` repository.
 - On version bumps, keep `CHANGELOG.md` and `ha-addon/mammamiradio/CHANGELOG.md` in sync
 - In engineering reviews, when presenting multiple options, explain the tradeoffs without framing one as the choice the user should automatically take
 
-## Active Feature Train
+## Integration Trains
 
-- The current Festival Mode integration train is documented in `docs/2026-05-17-festival-mode-feature-train.md`
-- Feature worktrees that target Festival Mode should hand off slices using that train's intake contract
+- `Train/Listener QS` lives on `train/listener-qs` and uses `origin/main` as
+  its base. Feature worktrees that target this train must hand off through
+  `docs/listener-qs-train.md`.

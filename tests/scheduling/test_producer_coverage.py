@@ -34,6 +34,7 @@ from mammamiradio.hosts.ad_creative import (
 )
 from mammamiradio.scheduling.producer import (
     _latest_music_file,
+    _queue_drain_recovery_bridge,
     _set_last_music_file,
 )
 
@@ -1107,7 +1108,9 @@ async def test_drain_guard_inserts_canned_clip_on_queue_drain(tmp_path):
         patch(f"{PRODUCER_MODULE}._ffprobe_duration_sec", return_value=180.0),
         patch.dict("os.environ", {"MAMMAMIRADIO_SKIP_QUALITY_GATE": "1"}),
     ):
-        # Set lookahead to 1 so after 1 real segment fills the queue, production pauses.
+        # Set lookahead to 2 and wait for it so production is throttled before
+        # draining; otherwise an in-flight music segment can legitimately refill
+        # the queue before the drain guard observes the empty state.
         # Then drain the queue manually to trigger the drain guard on the next pass.
         config.pacing.lookahead_segments = 2
 
@@ -1115,11 +1118,11 @@ async def test_drain_guard_inserts_canned_clip_on_queue_drain(tmp_path):
 
         task = asyncio.create_task(run_producer(queue, state, config))
         try:
-            # Wait for the first real segment to land
+            # Wait for the producer to fill the lookahead buffer.
             deadline = asyncio.get_event_loop().time() + 5.0
-            while queue.qsize() < 1:
+            while queue.qsize() < config.pacing.lookahead_segments:
                 if asyncio.get_event_loop().time() > deadline:
-                    raise TimeoutError("No segment produced in time")
+                    raise TimeoutError("Producer did not fill queue in time")
                 await asyncio.sleep(0.01)
 
             # Drain the queue to simulate the streamer consuming all segments
@@ -1145,3 +1148,154 @@ async def test_drain_guard_inserts_canned_clip_on_queue_drain(tmp_path):
         assert seg.type == SegmentType.BANTER
         assert seg.metadata.get("canned") is True
         assert seg.metadata.get("queue_drain_recovery") is True
+
+
+@pytest.mark.asyncio
+async def test_drain_guard_norm_cache_bridge_when_no_canned_clip(tmp_path):
+    """When the queue drains during active playback and no canned clip is available,
+    the drain guard falls back to inserting a pre-normalized track from cache_dir."""
+    state = _make_run_state()
+    config = _make_run_config()
+    config.tmp_dir = tmp_path
+    config.cache_dir = tmp_path
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+
+    norm_file = tmp_path / "norm_test_song_192k.mp3"
+    norm_file.write_bytes(b"fake norm audio" * 100)
+
+    async def _queue_segment(segment: Segment) -> bool:
+        await queue.put(segment)
+        return True
+
+    with (
+        patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=None),
+        patch(f"{PRODUCER_MODULE}.load_track_metadata", return_value={"title": "Cached", "artist": "Cache Artist"}),
+    ):
+        queued = await _queue_drain_recovery_bridge(_queue_segment, state, config)
+
+    assert queued is True
+    seg = queue.get_nowait()
+    assert seg.type == SegmentType.MUSIC
+    assert seg.path == norm_file
+    assert seg.metadata["title"] == "Cached"
+    assert seg.metadata["artist"] == "Cache Artist"
+    assert seg.metadata["queue_drain_recovery"] is True
+    assert seg.metadata["audio_source"] == "norm_cache"
+
+
+@pytest.mark.asyncio
+async def test_drain_guard_emergency_tone_when_no_canned_clip_or_norm_cache(tmp_path):
+    """When all bridge sources are missing, queue a generated tone instead of leaving dead air."""
+    state = _make_run_state()
+    config = _make_run_config()
+    config.tmp_dir = tmp_path
+    config.cache_dir = tmp_path
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+
+    async def _queue_segment(segment: Segment) -> bool:
+        await queue.put(segment)
+        return True
+
+    def _fake_tone(path: Path, *_args, **_kwargs):
+        path.write_bytes(b"tone")
+        return path
+
+    with (
+        patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=None),
+        patch(f"{PRODUCER_MODULE}.generate_tone", side_effect=_fake_tone) as mock_tone,
+    ):
+        queued = await _queue_drain_recovery_bridge(_queue_segment, state, config)
+
+    assert queued is True
+    mock_tone.assert_called_once()
+    seg = queue.get_nowait()
+    assert seg.type == SegmentType.MUSIC
+    assert seg.path.exists()
+    assert seg.ephemeral is True
+    assert seg.metadata["queue_drain_recovery"] is True
+    assert seg.metadata["audio_source"] == "emergency_tone"
+
+
+@pytest.mark.asyncio
+async def test_drain_guard_emergency_tone_failure_is_contained(tmp_path):
+    """Emergency tone failures must not escape the drain guard and kill the producer."""
+    state = _make_run_state()
+    config = _make_run_config()
+    config.tmp_dir = tmp_path
+    config.cache_dir = tmp_path
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+
+    async def _queue_segment(segment: Segment) -> bool:
+        await queue.put(segment)
+        return True
+
+    with (
+        patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=None),
+        patch(f"{PRODUCER_MODULE}.generate_tone", side_effect=RuntimeError("ffmpeg unavailable")),
+    ):
+        queued = await _queue_drain_recovery_bridge(_queue_segment, state, config)
+
+    assert queued is False
+    assert queue.empty()
+
+
+@pytest.mark.asyncio
+async def test_banter_metadata_includes_has_music_tail(tmp_path):
+    """Banter segments produced after a crossfade transition must carry
+    has_music_tail=True so the sting layer does not double-stack."""
+    state = _make_run_state()
+    config = _make_run_config()
+    config.tmp_dir = tmp_path
+    config.cache_dir = tmp_path
+    config.anthropic_api_key = "test-key"
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+
+    host = config.hosts[0]
+    banter_path = tmp_path / "banter.mp3"
+    banter_path.write_bytes(b"\x00" * 2048)
+    xfade_out = tmp_path / "banter_trans_abc.mp3"
+    xfade_out.write_bytes(b"\x00" * 2048)
+    combined = tmp_path / "banter_combined.mp3"
+    combined.write_bytes(b"\x00" * 2048)
+
+    with (
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.BANTER),
+        patch(
+            "mammamiradio.hosts.scriptwriter.write_banter",
+            new_callable=AsyncMock,
+            return_value=([(host, "Ciao ragazzi!")], None),
+        ),
+        patch(
+            "mammamiradio.hosts.scriptwriter.write_transition",
+            new_callable=AsyncMock,
+            return_value=(host, "Bentornati."),
+        ),
+        patch(f"{PRODUCER_MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=banter_path),
+        patch(f"{PRODUCER_MODULE}._try_crossfade", new_callable=AsyncMock, side_effect=lambda *a, **k: a[2]),
+        patch(f"{PRODUCER_MODULE}.concat_files", return_value=combined),
+        patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=None),
+        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+        patch(f"{PRODUCER_MODULE}.validate_segment_audio", return_value=None),
+        patch(f"{PRODUCER_MODULE}._ffprobe_duration_sec", return_value=30.0),
+    ):
+        from mammamiradio.scheduling.producer import run_producer
+
+        task = asyncio.create_task(run_producer(queue, state, config))
+        try:
+            deadline = asyncio.get_event_loop().time() + 5.0
+            while queue.empty():
+                if asyncio.get_event_loop().time() > deadline:
+                    raise TimeoutError("Producer did not queue banter")
+                await asyncio.sleep(0.05)
+        finally:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+    assert not queue.empty(), "Producer must have queued a banter segment"
+    seg = queue.get_nowait()
+    assert seg.type == SegmentType.BANTER
+    # When _try_crossfade produces xfade_out (different from input path), has_music_tail must be True
+    assert seg.metadata.get("has_music_tail") is True

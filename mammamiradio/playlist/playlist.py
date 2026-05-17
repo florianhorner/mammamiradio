@@ -659,6 +659,36 @@ def fetch_startup_playlist(
     if charts_allowed:
         chart_tracks = _load_chart_source_tracks(config)
         if chart_tracks:
+            jamendo_client_id = (config.playlist.jamendo_client_id or "").strip()
+            if jamendo_client_id:
+                tags = _jamendo_tags(config)
+                country = _jamendo_country(config)
+                order = _jamendo_order(config)
+                jamendo_tracks = _shuffle_if_needed(
+                    config,
+                    _copy_tracks_with_source(
+                        _fetch_jamendo_playlist(config, tags=tags, country=country, order=order),
+                        "jamendo",
+                    ),
+                )
+                existing_keys = {_normalized_track_key(track) for track in chart_tracks}
+                blended = []
+                for track in jamendo_tracks:
+                    track_key = _normalized_track_key(track)
+                    if track_key in existing_keys:
+                        continue
+                    existing_keys.add(track_key)
+                    blended.append(track)
+                if blended:
+                    chart_tracks = chart_tracks + blended
+                    logger.info(
+                        "Using live Italian charts blended with Jamendo (%d chart + %d Jamendo tracks)",
+                        len(chart_tracks) - len(blended),
+                        len(blended),
+                    )
+                    base_source = _charts_source(len(chart_tracks))
+                    source = replace(base_source, label=f"{base_source.label} + Jamendo")
+                    return chart_tracks, source, error
             logger.info("Using live Italian charts (%d tracks total)", len(chart_tracks))
             return chart_tracks, _charts_source(len(chart_tracks)), error
 

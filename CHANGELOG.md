@@ -9,7 +9,23 @@ The current version source of truth is `pyproject.toml`.
 ### Added
 
 - **Festival Mode** — The admin Radio tab now has a `FESTIVAL MODE` toggle. When enabled, the AI hosts become theatrical music competition MCs: songs are announced as fictional Italian-regional delegations taking the stage, dramatic fictional points are awarded, and at least one drinking game trigger is called per song intro. Toggleable live without a restart; disabling returns to the normal host voice on the next banter.
-- **Festival Mode API and persistence** — New admin endpoints `GET /api/party` and `POST /api/party {"action": "enable"|"disable", "mode": "festival"}` expose the toggle. Standalone runs persist `MAMMAMIRADIO_FESTIVAL_MODE` to `.env`; HA add-ons persist `festival_mode` in `/data/options.json` and expose it in add-on options. Festival Mode is idempotent, purges the segment queue on enable, and arms a first-strike theatrical announcement as the next banter.
+- **Festival Mode API and persistence** — New admin endpoints `GET /api/party` and `POST /api/party {"action": "enable"|"disable", "mode": "festival"}` expose the toggle. Standalone runs persist `MAMMAMIRADIO_FESTIVAL_MODE` to `.env`; HA add-ons persist `festival_mode` in `/data/options.json` and expose it in add-on options. Festival Mode is idempotent, purges the segment queue on enable, and queues a theatrical announcement as the next banter.
+
+## [2.12.3] - 2026-05-17
+
+### Fixed
+
+- **Admin source chips now enrich instead of replacing the programme.** Jamendo, chart reload, and decade buttons add fresh tracks into the current rotation without purging the queue, skipping the current segment, or clearing listener requests. The destructive source replacement API remains available for explicit replacement flows.
+- **Scheduler pool internals are hidden from the normal programme view.** `pool[n]` badges and pool wrap diagnostics no longer leak into Palinsesto, and the currently playing item is filtered out of history so it does not appear twice.
+- **Audio transition stacking is reduced.** Speech/ad/news segments that already include a music-tail crossfade no longer receive an additional transition sting before the segment, avoiding the jingle-then-old-song-tail mismatch.
+- **Skip on an empty queue now marks a bridge action and forces next music before cutting.** Status exposes whether skip is immediately ready or would need a bridge, helping HA Green operators see queue risk.
+- **Mobile Palinsesto breakpoint expanded to 768 px.** Tablet-width screens now also collapse the programme table into compact cards.
+
+### Changed
+
+- **Italian-first is now the default.** `super_italian_mode` defaults to `true` in root and add-on configs, and admin copy has been tightened toward consistent Italian.
+- **Jamendo can participate in the normal programme.** When charts and Jamendo are both configured at startup, Jamendo tracks are blended into the chart rotation instead of remaining fallback-only.
+- **Ad disclaimer speed is deterministic by ad format.** The old near-2x role spike is replaced with format-scoped pacing so pharma/legal copy no longer speeds up unpredictably.
 
 ## [2.12.2] - 2026-05-16
 

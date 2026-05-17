@@ -26,7 +26,7 @@ for key in ('anthropic_api_key', 'openai_api_key', 'station_name', 'claude_model
 enabled = opts.get('enable_home_assistant', True)
 ha_val = 'true' if enabled else 'false'
 print('export HA_ENABLED=' + ha_val)
-super_italian = opts.get('super_italian_mode', False)
+super_italian = opts.get('super_italian_mode', True)
 si_val = 'true' if super_italian else 'false'
 print('export MAMMAMIRADIO_SUPER_ITALIAN=' + si_val)
 chaos = opts.get('chaos_mode_active', False)

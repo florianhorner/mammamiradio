@@ -657,36 +657,20 @@ class TestSchedulerReasonsDoNotLeakToUI:
         )
 
 
-class TestPoolPassAnnotationShowsSkipCount:
-    """The Up Next "pool-pass" annotation lists the first two skipped playlist
-    tracks. When the predicted line-up passes over more than two tracks between
-    songs, the row must also show a `(+N more)` count so the operator sees the
-    true size of the skipped run, not just a two-track sample.
-    """
+class TestPoolDiagnosticsStayHidden:
+    """Scheduler pool diagnostics are internal state, not operator programme copy."""
 
-    def test_admin_html_pool_pass_annotation_renders_overflow_count(self):
+    def test_admin_html_does_not_render_pool_pass_annotations(self):
         html = ADMIN_HTML.read_text()
-
-        # Scope to the upcoming-rows render block (same anchor the sibling
-        # reason-leak guard uses).
         start = html.find("upFiltered.slice(0,10).forEach")
         assert start != -1, "could not locate upcoming-rows render section"
         end = html.find("});", start) + 3
         block = html[start:end]
 
-        assert "not selected this pass" in block, (
-            "pool-pass annotation render disappeared from the upcoming-rows block."
-        )
-        # The full skipped slice (`pool`) drives the count; `labels` shows only 2.
-        assert "moreCount" in block and "pool.length" in block, (
-            "pool-pass annotation no longer computes the skipped-track overflow "
-            "count — operators would see only the first two of an N-track run."
-        )
-        # The `(+N more)` suffix must be interpolated into the rendered row.
-        assert "${moreSuffix}" in block, (
-            "pool-pass annotation computes the overflow count but never renders "
-            "it — the `(+N more)` suffix is dropped from the row."
-        )
+        assert "pool-pass" not in block
+        assert "not selected this pass" not in block
+        assert "moreSuffix" not in block
+        assert "pool.length" not in block
 
 
 # ── Item 11: capabilities status reflects runtime health, not just key presence ─
@@ -714,8 +698,8 @@ class TestCapabilitiesStatusIsHonest:
         # Anchor the copy so a future refactor can't silently collapse the
         # three-state render back into connected/not-set.
         html = ADMIN_HTML.read_text()
-        assert "suspended" in html, (
-            "admin.html should render a 'suspended' label when Anthropic "
+        assert "sospeso" in html, (
+            "admin.html should render a suspended-state label when Anthropic "
             "auth failed and we're falling back to OpenAI (Item 11)."
         )
         assert "retry in" in html, (
@@ -787,9 +771,9 @@ class TestStoppedStateQuietsTheUI:
 
     def test_admin_banner_copy_does_not_use_harsh_error_tone(self):
         # "Session stopped — hit Resume to continue" read as an error.
-        # New copy is calmer — "Station paused · hit Resume when you're ready."
+        # Current copy is calmer and localized.
         html = ADMIN_HTML.read_text()
-        assert "Station paused" in html, "admin.html stopped banner should read 'Station paused' (Item 19)."
+        assert "Stazione in pausa" in html, "admin.html stopped banner should use calm paused-state copy (Item 19)."
         # Only check the banner element's text, not toast strings in JS callbacks.
         banner_start = html.find('id="stoppedBanner"')
         banner_end = html.find("</div>", banner_start)
@@ -845,6 +829,19 @@ class TestStoppedStateQuietsTheUI:
                 "metadata is broadcast to OS-level surfaces and brand state belongs in "
                 "radio.toml / /public-status."
             )
+
+    def test_admin_station_card_uses_status_stream_metadata(self):
+        html = ADMIN_HTML.read_text()
+        assert "96.7" not in html
+        assert "320 kbps" not in html
+        assert 'id="stationSignal"' in html
+        assert "st?.stream?.frequency" in html
+        assert "st?.stream?.bitrate_kbps" in html
+
+    def test_admin_programme_history_drops_only_one_live_duplicate(self):
+        html = ADMIN_HTML.read_text()
+        assert "skippedNowDuplicate" in html
+        assert "&& !(now&&e.type===now.type&&e.label===now.label)" not in html
 
 
 class TestHostBlockSelectorScoping:
