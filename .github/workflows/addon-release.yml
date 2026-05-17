@@ -1,0 +1,156 @@
+name: Release HA Addon
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+# Prevent racing on rapid re-tags or manual re-triggers.
+concurrency:
+  group: addon-release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_BASE: ${{ github.repository_owner }}/mammamiradio-addon
+
+jobs:
+  pre-flight:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    outputs:
+      version: ${{ steps.semver.outputs.version }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Validate semver tag format
+        id: semver
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          VERSION="${TAG#v}"
+          if ! echo "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::Tag '$TAG' does not match vX.Y.Z semver format — only exact releases are stable-published"
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Tag: $TAG → version: $VERSION"
+
+      - name: Validate tag matches config.yaml version
+        run: |
+          CONFIG_VERSION=$(grep '^version:' ha-addon/mammamiradio/config.yaml | awk '{print $2}' | tr -d '"')
+          TAG_VERSION="${{ steps.semver.outputs.version }}"
+          if [ "$CONFIG_VERSION" != "$TAG_VERSION" ]; then
+            echo "::error::config.yaml version ($CONFIG_VERSION) does not match tag ($TAG_VERSION) — bump version in both files before tagging"
+            exit 1
+          fi
+          echo "Version match confirmed: $CONFIG_VERSION"
+
+      - uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4.1.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Check GHCR tag immutability
+        run: |
+          VERSION="${{ steps.semver.outputs.version }}"
+          for ARCH in amd64 aarch64; do
+            TAG="${{ env.REGISTRY }}/${{ env.IMAGE_BASE }}-${ARCH}:${VERSION}"
+            if docker manifest inspect "$TAG" > /dev/null 2>&1; then
+              echo "::error::Tag $TAG already exists in GHCR — re-tagging a published stable version is not allowed"
+              exit 1
+            fi
+            echo "Immutability confirmed: $TAG does not exist"
+          done
+
+  build:
+    runs-on: ubuntu-latest
+    needs: pre-flight
+    if: github.repository == 'florianhorner/mammamiradio'
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: true
+      matrix:
+        arch: [amd64, aarch64]
+        include:
+          - arch: amd64
+            platform: linux/amd64
+            base: ghcr.io/home-assistant/amd64-base:3.20
+          - arch: aarch64
+            platform: linux/arm64
+            base: ghcr.io/home-assistant/aarch64-base:3.20
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Copy source into addon build context
+        run: |
+          cp -r mammamiradio/ ha-addon/mammamiradio/mammamiradio/
+          cp pyproject.toml ha-addon/mammamiradio/
+
+      - uses: docker/setup-qemu-action@ce360397dd3f832beb865e1373c09c0e9f86d70a # v4.0.0
+
+      - uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4.0.0
+
+      - uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4.1.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7.1.0
+        with:
+          context: ha-addon/mammamiradio
+          file: ha-addon/mammamiradio/Dockerfile
+          platforms: ${{ matrix.platform }}
+          push: true
+          build-args: |
+            BUILD_FROM=${{ matrix.base }}
+            BUILD_ARCH=${{ matrix.arch }}
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_BASE }}-${{ matrix.arch }}:${{ needs.pre-flight.outputs.version }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_BASE }}-${{ matrix.arch }}:latest
+
+  smoke:
+    runs-on: ubuntu-latest
+    needs: build
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4.1.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Pull amd64 image
+        run: docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_BASE }}-amd64:${{ github.sha }}
+
+      - name: Run container smoke test
+        run: |
+          # Pull :sha (built by addon-build.yml when the version-bump commit merged to main),
+          # not :X.Y.Z (just published, not independently proven by this run).
+          docker run -d --name mamma-smoke \
+            -p 8765:8000 \
+            -e LOG_LEVEL=WARNING \
+            ${{ env.REGISTRY }}/${{ env.IMAGE_BASE }}-amd64:${{ github.sha }}
+          sleep 40
+          HEALTH=$(curl -sS --retry 8 --retry-delay 3 --retry-connrefused http://localhost:8765/healthz)
+          echo "$HEALTH"
+          STATUS=$(echo "$HEALTH" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("status",""))')
+          QE=$(echo "$HEALTH" | python3 -c 'import json,sys; print(float(json.load(sys.stdin).get("queue_empty_elapsed_s",0) or 0))')
+          if [ "$STATUS" = "failing" ] || awk "BEGIN{exit !($QE > 30)}"; then
+            echo "::error::Smoke failed: status=$STATUS queue_empty_elapsed_s=$QE"
+            docker logs mamma-smoke 2>&1 | tail -50
+            exit 1
+          fi
+          echo "Smoke OK: status=$STATUS queue_empty_elapsed_s=$QE"
+          docker logs mamma-smoke 2>&1 | tail -50
+
+      - name: Cleanup
+        if: always()
+        run: docker stop mamma-smoke && docker rm mamma-smoke || true

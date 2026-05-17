@@ -8,8 +8,10 @@ How to release a new version of the Mamma Mi Radio Home Assistant addon without 
 Code change
   → bump version in BOTH files (see below)
   → push/merge to main
-  → addon-build.yml CI validates + builds images
-  → GHCR receives :version and :latest tags
+  → addon-build.yml CI validates + builds :sha, :0.0.0, :calver (NO :X.Y.Z or :latest)
+  → push matching v* tag: git tag vX.Y.Z && git push origin vX.Y.Z
+  → addon-release.yml pre-flight: semver validation, config.yaml version match, GHCR immutability check
+  → addon-release.yml build: publishes :X.Y.Z and :latest for amd64 + aarch64
   → HA discovers new version via config.yaml
   → User clicks "Update" in HA
   → HA pulls image from GHCR
@@ -20,6 +22,8 @@ Code change
 ```
 
 Every step must succeed. A break at ANY point means the addon doesn't work.
+
+**Important:** The version-bump merge and the tag push are separate actions. The tag push is what triggers the stable image build. Wait for `addon-build.yml` to pass on the version-bump commit before pushing the tag — `addon-release.yml` smoke pulls the `:sha` image built by that run.
 
 ## Version: two files, must match
 
@@ -116,7 +120,7 @@ The standalone Docker image (for non-HA users) is separate: `ghcr.io/florianhorn
 
 ## Release channels
 
-Home Assistant add-on updates are driven by `ha-addon/mammamiradio/config.yaml` and images built from `main`. GitHub Releases and tags are curated standalone announcements and may lag add-on version bumps. Before publishing a GitHub Release, write curated release notes instead of copying raw `CHANGELOG.md`.
+Stable add-on images are published by `addon-release.yml`, triggered by a `v*` tag push to the version-bump commit after it merges to `main`. GitHub Releases are curated standalone announcements; always write release notes rather than copying raw `CHANGELOG.md`. Tag the version-bump commit — not a later one — so the release image matches the commit CI already validated.
 
 ## Edge channel (dev releases)
 
@@ -125,8 +129,8 @@ Home Assistant add-on updates are driven by `ha-addon/mammamiradio/config.yaml` 
 | | Stable (`mammamiradio`) | Edge (`mammamiradio-edge`) |
 |--|--|--|
 | `version:` | hand-bumped `X.Y.Z` on deliberate releases | calendar version `YYYY.M.D.<build>`, bumped by CI |
-| Updates when | you bump the version | every `main` merge that changes the add-on or app |
-| Image tag pulled | `:X.Y.Z` | `:YYYY.M.D.<build>` |
+| Updates when | you push a matching `v*` tag after merging the version-bump commit | every `main` merge that changes the add-on or app |
+| Image tag pulled | `:X.Y.Z` (published by `addon-release.yml`) | `:YYYY.M.D.<build>` (published by `addon-build.yml`) |
 | Audience | everyone | the maintainer's soak Pi |
 
 Both add-ons pull the **same image repo** (`ghcr.io/florianhorner/mammamiradio-addon-{arch}`) — they just resolve to different tags. The edge folder holds only metadata (`config.yaml`, `translations/`, `CHANGELOG.md`, icons); it has no `Dockerfile` because HA pulls the prebuilt image.
@@ -150,6 +154,12 @@ Before merging ANY change that touches addon files:
 - [ ] If new config option: added to config.yaml + run.sh + translations
 - [ ] If path changed: grep all files for the old path
 - [ ] If renamed anything: `grep -r "old_name" .` returns zero hits
+
+**After merging a version-bump commit** (to publish the stable image):
+1. Wait for `addon-build.yml` to pass on the merged commit
+2. `git tag vX.Y.Z && git push origin vX.Y.Z`
+3. `addon-release.yml` runs pre-flight → build → smoke; check Actions for green
+4. Verify: `docker pull ghcr.io/florianhorner/mammamiradio-addon-aarch64:X.Y.Z`
 
 ## Release invariants gate (2026-04-27 onward)
 

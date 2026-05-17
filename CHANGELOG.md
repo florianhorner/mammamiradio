@@ -12,6 +12,7 @@ The current version source of truth is `pyproject.toml`.
 
 ### Changed
 
+- **Stable add-on images are now published by Git-tag push** — A new `addon-release.yml` workflow, triggered by `v*` tag push, is now solely responsible for publishing `:X.Y.Z` and `:latest` for the HA add-on. `addon-build.yml` (main-push) no longer publishes those tags; it publishes only `:sha`, `:0.0.0`, and the edge calver. This closes the mutability hole where every main merge was silently overwriting the stable image tag. A pre-flight validates semver format, `config.yaml` version match, and GHCR tag immutability before any image is built. Release flow: merge version-bump commit → wait for CI → `git tag vX.Y.Z && git push origin vX.Y.Z`.
 - **Engineering backlog moved to GitHub issues** — `docs/todos.md` was removed. Open engineering work is now tracked as GitHub issues. A new CI guard (`scripts/check-no-backlog-files.sh`, wired into `quality.yml`) fails the build if a catch-all `TODO.md`/`TODOS.md`/`docs/todos.md`/`docs/backlog.md` file is re-added.
 
 ## [2.12.3] - 2026-05-17
