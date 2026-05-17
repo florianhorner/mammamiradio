@@ -3,7 +3,7 @@
 # headlines and station-feel words; AI hosts code-switch (English narrative +
 # Italian flavor). ON: full Italian throughout. Toggleable from the admin
 # Engine Room or via MAMMAMIRADIO_SUPER_ITALIAN env var.
-super_italian_mode = true
+super_italian_mode = false
 
 [station]
 name = "Mamma Mi Radio"

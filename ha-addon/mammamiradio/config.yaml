@@ -32,7 +32,7 @@ options:
   claude_model: "claude-haiku-4-5-20251001"
   enable_home_assistant: true
   admin_token: ""
-  super_italian_mode: true
+  super_italian_mode: false
   chaos_mode_active: false
   festival_mode: false
 schema:

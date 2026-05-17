@@ -61,7 +61,7 @@ mutate 's/anthropic_api_key: password?/anthropic_api_key: str?/'
 assert_rejects "schema drift" "edge schema block drifted"
 
 # Case 5: options drift from stable
-mutate 's/super_italian_mode: true/super_italian_mode: false/'
+mutate 's/super_italian_mode: false/super_italian_mode: true/'
 assert_rejects "options drift" "edge options block drifted"
 
 echo "All validate-addon edge-block scenarios passed."

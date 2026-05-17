@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from mammamiradio.web.ui_copy import COPY, copy_strings, get_copy
+
+ADMIN_HTML = Path(__file__).resolve().parents[2] / "mammamiradio" / "web" / "templates" / "admin.html"
 
 
 def test_key_parity_between_languages():
@@ -38,3 +42,41 @@ def test_copy_strings_returns_full_dict_for_mode():
     # Returned dict must be a copy — mutating it should not bleed into module state.
     en["listen_now"] = "mutated"
     assert COPY["en"]["listen_now"] == "Listen Now"
+
+
+def test_admin_copy_defaults_to_english_operator_labels():
+    html = ADMIN_HTML.read_text()
+    for expected in (
+        "Programme",
+        "On Air",
+        "Experimental",
+        "Add host break",
+        "Force ad break",
+        "Pacing",
+        "Hosts",
+        "Music &amp; <em>Queue</em>",
+        "Full Italian mode",
+    ):
+        assert expected in html
+    for stale in (
+        "Palinsesto",
+        "In Onda",
+        "Aggiungi intervento",
+        "Forza pubblicità",
+        "Modalità italiana completa",
+    ):
+        assert stale not in html
+
+
+def test_chaos_and_festival_controls_live_in_experimental_section():
+    html = ADMIN_HTML.read_text()
+    experimental_start = html.index('<section class="a-panel" id="experimental">')
+    next_section = html.index("<!-- Tricolor divider -->", experimental_start)
+    experimental = html[experimental_start:next_section]
+    triggers = html[html.index('<section class="a-panel" id="triggers">') : experimental_start]
+
+    assert 'id="chaosControl"' in experimental
+    assert 'id="festivalControl"' in experimental
+    assert "High-personality modes" in experimental
+    assert 'id="chaosControl"' not in triggers
+    assert 'id="festivalControl"' not in triggers

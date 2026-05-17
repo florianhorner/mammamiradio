@@ -1239,7 +1239,7 @@ body[data-stopped="true"] .a-station-card .dot.on { animation-play-state: paused
     <!-- Compact now-playing (below station card) -->
     <div class="a-now-compact">
       <div class="now-type-pill music" id="nowType">—</div>
-      <div class="title" id="nowTitle">In attesa del segnale...</div>
+      <div class="title" id="nowTitle">Waiting for signal...</div>
       <div class="artist" id="nowArtist"></div>
       <div class="progress-row">
         <div class="progress-track">
@@ -1250,14 +1250,15 @@ body[data-stopped="true"] .a-station-card .dot.on { animation-play-state: paused
     </div>
 
     <nav class="a-nav">
-      <div class="a-nav-head">Conduttore</div>
-      <a class="active" href="#programme" onclick="scrollToSection('programme');return false">Palinsesto</a>
-      <a href="#triggers" onclick="scrollToSection('triggers');return false">In Onda</a>
-      <a href="#pacing" onclick="scrollToSection('pacing');return false">Cadenza</a>
+      <div class="a-nav-head">Operator</div>
+      <a class="active" href="#programme" onclick="scrollToSection('programme');return false">Programme</a>
+      <a href="#triggers" onclick="scrollToSection('triggers');return false">On Air</a>
+      <a href="#experimental" onclick="scrollToSection('experimental');return false">Experimental</a>
+      <a href="#pacing" onclick="scrollToSection('pacing');return false">Pacing</a>
       <div class="a-nav-head">Motore</div>
-      <a href="#hosts" onclick="scrollToSection('hosts');return false">Conduttori</a>
-      <a href="#log" onclick="scrollToSection('log');return false">Archivio</a>
-      <a href="#music" onclick="scrollToSection('music');return false">Coda</a>
+      <a href="#hosts" onclick="scrollToSection('hosts');return false">Hosts</a>
+      <a href="#log" onclick="scrollToSection('log');return false">Archive</a>
+      <a href="#music" onclick="scrollToSection('music');return false">Queue</a>
       <a href="#engine" onclick="scrollToSection('engine');return false">Motore</a>
     </nav>
 
@@ -1277,95 +1278,69 @@ body[data-stopped="true"] .a-station-card .dot.on { animation-play-state: paused
 
     <!-- TopBar -->
     <div class="a-topbar" id="topBar">
-      <span class="live-pill"><span class="dot"></span> <span id="topBarStatus">In onda</span></span>
+      <span class="live-pill"><span class="dot"></span> <span id="topBarStatus">On air</span></span>
       <div class="a-eq" id="topBarEq">
         <span></span><span></span><span></span><span></span>
       </div>
       <div class="meta">
-        <div class="eyebrow">In Onda Ora</div>
-        <div class="np-title" id="topBarTitle">In attesa del segnale… <span class="by" id="topBarArtist"></span></div>
+        <div class="eyebrow">Now On Air</div>
+        <div class="np-title" id="topBarTitle">Waiting for signal… <span class="by" id="topBarArtist"></span></div>
       </div>
       <div class="a-topbar-tools">
-        <button type="button" class="btn-icon" title="Prossimo brano" onclick="doSkip(this)">
+        <button type="button" class="btn-icon" title="Next track" onclick="doSkip(this)">
           <svg viewBox="0 0 16 16" fill="currentColor"><path d="M3 3v10l7-5zM11 3h2v10h-2z"/></svg>
         </button>
-        <button type="button" class="btn-icon" title="Pausa" id="topBarPause" onclick="doStop(this)">
+        <button type="button" class="btn-icon" title="Pause" id="topBarPause" onclick="doStop(this)">
           <svg viewBox="0 0 16 16" fill="currentColor"><rect x="3.5" y="3" width="3" height="10" rx="0.5"/><rect x="9.5" y="3" width="3" height="10" rx="0.5"/></svg>
         </button>
-        <button type="button" class="btn-icon" title="Mescola" onclick="doShuffle(this)">
+        <button type="button" class="btn-icon" title="Shuffle" onclick="doShuffle(this)">
           <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 4h2.5l5 8H12"/><path d="M2 12h2.5l1.8-2.9"/><path d="M9.7 6.4 12 4"/><path d="M10 2l2 2-2 2"/><path d="M10 10l2 2-2 2"/></svg>
         </button>
-        <button type="button" class="btn-primary-sm" onclick="doTrigger('banter',this)">Aggiungi intervento</button>
+        <button type="button" class="btn-primary-sm" onclick="doTrigger('banter',this)">Add host break</button>
       </div>
     </div>
 
-    <!-- Palinsesto panel -->
+    <!-- Programme panel -->
     <section class="a-panel" id="programme">
       <header>
         <div class="ttl-wrap">
-          <div class="ttl-eyebrow">Conduttore</div>
-          <h2>Palinsesto</h2>
+          <div class="ttl-eyebrow">Operator</div>
+          <h2>Programme</h2>
         </div>
         <div class="programme-toolbar">
           <span class="filter-count" id="programmeCount"></span>
           <div class="filter-pills">
-            <button type="button" class="filter-pill active" data-filter="all" onclick="setProgrammeFilter('all',this)">Tutto</button>
-            <button type="button" class="filter-pill" data-filter="music" onclick="setProgrammeFilter('music',this)">Musica</button>
-            <button type="button" class="filter-pill" data-filter="banter" onclick="setProgrammeFilter('banter',this)">Interventi</button>
-            <button type="button" class="filter-pill" data-filter="ad" onclick="setProgrammeFilter('ad',this)">Pubblicità</button>
+            <button type="button" class="filter-pill active" data-filter="all" onclick="setProgrammeFilter('all',this)">All</button>
+            <button type="button" class="filter-pill" data-filter="music" onclick="setProgrammeFilter('music',this)">Music</button>
+            <button type="button" class="filter-pill" data-filter="banter" onclick="setProgrammeFilter('banter',this)">Host breaks</button>
+            <button type="button" class="filter-pill" data-filter="ad" onclick="setProgrammeFilter('ad',this)">Ads</button>
           </div>
         </div>
       </header>
       <div id="programmeList">
-        <div class="prog-empty">Caricamento palinsesto...</div>
+        <div class="prog-empty">Loading programme...</div>
       </div>
     </section>
 
-    <!-- In Onda panel -->
+    <!-- On Air panel -->
     <section class="a-panel" id="triggers">
       <header>
         <div class="ttl-wrap">
-          <div class="ttl-eyebrow">Conduttore</div>
-          <h2>In <em>Onda</em></h2>
+          <div class="ttl-eyebrow">Operator</div>
+          <h2>On <em>Air</em></h2>
         </div>
-        <div class="sub">Manda in onda un segmento senza modificare il palinsesto</div>
+        <div class="sub">Queue one segment without changing the programme</div>
       </header>
-      <div class="chaos-control" id="chaosControl">
-        <div class="chaos-label">
-          <span class="chaos-bolt" aria-hidden="true">&#9889;</span>
-          <div>
-            <div class="chaos-title">Chaos Mode</div>
-            <div class="chaos-state" id="chaosState">standby</div>
-          </div>
-        </div>
-        <label class="chaos-switch" for="chaosToggle" title="Toggle Chaos Mode">
-          <input type="checkbox" id="chaosToggle" aria-label="Toggle Chaos Mode" onchange="toggleChaosMode(this)">
-          <span class="chaos-slider"></span>
-        </label>
-      </div>
-      <div class="festival-control" id="festivalControl">
-        <div class="festival-label">
-          <span class="festival-star" aria-hidden="true">&#9733;</span>
-          <div>
-            <div class="festival-title">Festival Mode</div>
-            <div class="festival-state" id="festivalState">standby</div>
-          </div>
-        </div>
-        <label class="festival-switch" for="festivalToggle" title="Toggle Festival Mode">
-          <input type="checkbox" id="festivalToggle" aria-label="Toggle Festival Mode" onchange="toggleFestivalMode(this)">
-          <span class="festival-slider"></span>
-        </label>
-      </div>
       <div class="a-triggers">
         <button type="button" class="a-trigger" onclick="doTrigger('banter',this)">
           <span class="ico-wrap"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="2" width="4" height="7" rx="2"/><path d="M3.5 7.5a4.5 4.5 0 0 0 9 0"/><path d="M8 12v2"/><path d="M5.5 14h5"/></svg></span>
-          <span class="lb">Aggiungi intervento</span>
-          <span class="hi">Dopo il brano in corso</span>
+          <span class="lb">Add host break</span>
+          <span class="hi">After the current track</span>
         </button>
         <button type="button" class="a-trigger" onclick="doTrigger('ad',this)">
           <span class="ico-wrap"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="6" width="12" height="8" rx="1.2"/><path d="M5 4l8-2"/><circle cx="11" cy="10" r="1.6"/><path d="M4.5 9h2M4.5 11h3"/></svg></span>
-          <span class="lb">Forza pubblicità</span>
-          <span class="hi">Prossimo blocco — assurdo italiano</span>
+          <span class="lb">Force ad break</span>
+          <span class="hi">Next break, fictional Italian sponsors</span>
         </button>
         <button type="button" class="a-trigger" onclick="doTrigger('news_flash',this)">
           <span class="ico-wrap"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8 1.8 14.5 13H1.5z"/><path d="M8 6v3.5"/><circle cx="8" cy="11.6" r="0.6" fill="currentColor"/></svg></span>
@@ -1382,97 +1357,136 @@ body[data-stopped="true"] .a-station-card .dot.on { animation-play-state: paused
       <div style="margin-top:16px;padding-top:14px;border-top:1px solid var(--line)">
         <div class="card-label" style="margin-bottom:10px">Azioni rapide</div>
         <div class="quick-actions">
-          <button type="button" class="btn btn-chip" onclick="doQuickAction('less_banter',this)"><svg class="ic" aria-hidden="true"><use href="#ic-mic-off"/></svg> Meno interventi</button>
-          <button type="button" class="btn btn-chip" onclick="doQuickAction('too_many_ads',this)"><svg class="ic" aria-hidden="true"><use href="#ic-ban"/></svg> Meno spot</button>
-          <button type="button" class="btn btn-chip" onclick="doQuickAction('hot_reload',this)"><svg class="ic" aria-hidden="true"><use href="#ic-rotate-cw"/></svg> Ricarica testi</button>
-          <button type="button" class="btn btn-chip" onclick="doPurge(this)"><svg class="ic" aria-hidden="true"><use href="#ic-trash"/></svg> Svuota coda</button>
-          <button type="button" class="btn btn-chip" onclick="flagCurrentTrack(this)"><svg class="ic" aria-hidden="true"><use href="#ic-flag"/></svg> Segnala brano</button>
+          <button type="button" class="btn btn-chip" onclick="doQuickAction('less_banter',this)"><svg class="ic" aria-hidden="true"><use href="#ic-mic-off"/></svg> Less host talk</button>
+          <button type="button" class="btn btn-chip" onclick="doQuickAction('too_many_ads',this)"><svg class="ic" aria-hidden="true"><use href="#ic-ban"/></svg> Fewer ads</button>
+          <button type="button" class="btn btn-chip" onclick="doQuickAction('hot_reload',this)"><svg class="ic" aria-hidden="true"><use href="#ic-rotate-cw"/></svg> Reload copy</button>
+          <button type="button" class="btn btn-chip" onclick="doPurge(this)"><svg class="ic" aria-hidden="true"><use href="#ic-trash"/></svg> Clear queue</button>
+          <button type="button" class="btn btn-chip" onclick="flagCurrentTrack(this)"><svg class="ic" aria-hidden="true"><use href="#ic-flag"/></svg> Flag track</button>
         </div>
         <div style="margin-top:10px">
-          <div class="card-label">Ultimo stacco</div>
-          <div class="script-box" id="recentBody"><div class="empty">Niente in onda finora</div></div>
+          <div class="card-label">Latest break</div>
+          <div class="script-box" id="recentBody"><div class="empty">Nothing aired yet</div></div>
         </div>
+      </div>
+    </section>
+
+    <!-- Experimental panel -->
+    <section class="a-panel" id="experimental">
+      <header>
+        <div class="ttl-wrap">
+          <div class="ttl-eyebrow">Operator</div>
+          <h2>Experimental</h2>
+        </div>
+        <div class="sub">High-personality modes that can purge queued audio or sharply change host behavior.</div>
+      </header>
+      <div class="chaos-control" id="chaosControl">
+        <div class="chaos-label">
+          <span class="chaos-bolt" aria-hidden="true">&#9889;</span>
+          <div>
+            <div class="chaos-title">Chaos Mode</div>
+            <div class="chaos-state" id="chaosState">standby</div>
+            <div class="sub">Arms one unpredictable host break and refreshes the lookahead queue.</div>
+          </div>
+        </div>
+        <label class="chaos-switch" for="chaosToggle" title="Toggle Chaos Mode">
+          <input type="checkbox" id="chaosToggle" aria-label="Toggle Chaos Mode" onchange="toggleChaosMode(this)">
+          <span class="chaos-slider"></span>
+        </label>
+      </div>
+      <div class="festival-control" id="festivalControl">
+        <div class="festival-label">
+          <span class="festival-star" aria-hidden="true">&#9733;</span>
+          <div>
+            <div class="festival-title">Festival Mode</div>
+            <div class="festival-state" id="festivalState">standby</div>
+            <div class="sub">Turns song intros into a theatrical music-competition format.</div>
+          </div>
+        </div>
+        <label class="festival-switch" for="festivalToggle" title="Toggle Festival Mode">
+          <input type="checkbox" id="festivalToggle" aria-label="Toggle Festival Mode" onchange="toggleFestivalMode(this)">
+          <span class="festival-slider"></span>
+        </label>
       </div>
     </section>
 
     <!-- Tricolor divider -->
     <div class="a-divider"><span class="seg g"></span><span class="seg w"></span><span class="seg r"></span></div>
 
-    <!-- 2-column row: Cadenza + Conduttori -->
+    <!-- 2-column row: Pacing + Hosts -->
     <div class="a-row-2">
-      <!-- Cadenza panel -->
+      <!-- Pacing panel -->
       <section class="a-panel" id="pacing">
         <header>
           <div class="ttl-wrap">
-            <div class="ttl-eyebrow">Motore</div>
-            <h2>Cadenza</h2>
+            <div class="ttl-eyebrow">Engine</div>
+            <h2>Pacing</h2>
           </div>
           <div class="sub" id="pacingMeta">4 music · 1 banter</div>
         </header>
         <div class="a-sliders">
           <label>
-            <span class="lab">Intervento ogni</span>
+            <span class="lab">Host break every</span>
             <input type="range" id="pBanter" min="1" max="6" value="2" oninput="updatePaceVal('pBanter','pvBanter',this.value)">
-            <span class="val"><b id="pvBanter">2</b><span class="u">brani</span></span>
+            <span class="val"><b id="pvBanter">2</b><span class="u">tracks</span></span>
           </label>
           <div class="pace-counter" id="pcBanter"></div>
           <label>
-            <span class="lab">Pubblicità ogni</span>
+            <span class="lab">Ads every</span>
             <input type="range" id="pAds" min="1" max="10" value="4" oninput="updatePaceVal('pAds','pvAds',this.value)">
-            <span class="val"><b id="pvAds">4</b><span class="u">segmenti</span></span>
+            <span class="val"><b id="pvAds">4</b><span class="u">segments</span></span>
           </label>
           <div class="pace-counter" id="pcAds"></div>
           <label>
-            <span class="lab">Spot per blocco</span>
+            <span class="lab">Spots per break</span>
             <input type="range" id="pSpots" min="1" max="5" value="2" oninput="updatePaceVal('pSpots','pvSpots',this.value)">
             <span class="val"><b id="pvSpots">2</b><span class="u">spot</span></span>
           </label>
         </div>
       </section>
 
-      <!-- Conduttori panel -->
+      <!-- Hosts panel -->
       <section class="a-panel" id="hosts">
         <header>
           <div class="ttl-wrap">
-            <div class="ttl-eyebrow">Motore</div>
-            <h2>Conduttori</h2>
+            <div class="ttl-eyebrow">Engine</div>
+            <h2>Hosts</h2>
           </div>
-          <div class="sub" id="hostsMeta">Caricamento...</div>
+          <div class="sub" id="hostsMeta">Loading...</div>
         </header>
-        <div id="hostsBody"><div class="empty" style="padding:10px 0;font-size:12px;font-style:italic;color:var(--muted)">Caricamento conduttori...</div></div>
+        <div id="hostsBody"><div class="empty" style="padding:10px 0;font-size:12px;font-style:italic;color:var(--muted)">Loading hosts...</div></div>
       </section>
     </div>
 
-    <!-- Archivio panel -->
+    <!-- Archive panel -->
     <section class="a-panel" id="log">
       <header>
         <div class="ttl-wrap">
-          <div class="ttl-eyebrow">Conduttore</div>
-          <h2>Archivio</h2>
+          <div class="ttl-eyebrow">Operator</div>
+          <h2>Archive</h2>
         </div>
         <div class="sub">Cronologia</div>
       </header>
       <div class="a-log" id="logBody"></div>
     </section>
 
-    <!-- Musica & Coda panel -->
+    <!-- Music & Queue panel -->
     <section class="a-panel" id="music">
       <header>
         <div class="ttl-wrap">
-          <div class="ttl-eyebrow">Conduttore</div>
-          <h2>Musica &amp; <em>Coda</em></h2>
+          <div class="ttl-eyebrow">Operator</div>
+          <h2>Music &amp; <em>Queue</em></h2>
         </div>
         <div class="sub" id="plMeta"></div>
       </header>
       <div class="card-label">Richieste <span id="lrMeta" style="float:right;font-weight:400;color:var(--muted)"></span></div>
       <div id="lrBody" style="margin-bottom:14px"><div class="empty">Nessuna richiesta</div></div>
-      <div class="card-label">Aggiungi alla rotazione</div>
+      <div class="card-label">Add to rotation</div>
       <div class="quick-actions" id="playlistSourceControls" style="margin:10px 0 14px">
-        <button type="button" class="btn btn-chip" id="sourceChartsBtn" data-capability="charts_reload" style="display:none" onclick="enrichPlaylistSource('charts',this)">Aggiungi classifiche</button>
-        <button type="button" class="btn btn-chip" id="sourceJamendoBtn" data-capability="jamendo" style="display:none" onclick="enrichPlaylistSource('jamendo',this)">Aggiungi Jamendo</button>
-        <button type="button" class="btn btn-chip" onclick="enrichPlaylistSource('classic_70s',this)">Aggiungi anni '70</button>
-        <button type="button" class="btn btn-chip" onclick="enrichPlaylistSource('classic_80s',this)">Aggiungi anni '80</button>
-        <button type="button" class="btn btn-chip" onclick="enrichPlaylistSource('classic_90s',this)">Aggiungi anni '90</button>
+        <button type="button" class="btn btn-chip" id="sourceChartsBtn" data-capability="charts_reload" style="display:none" onclick="enrichPlaylistSource('charts',this)">Add charts</button>
+        <button type="button" class="btn btn-chip" id="sourceJamendoBtn" data-capability="jamendo" style="display:none" onclick="enrichPlaylistSource('jamendo',this)">Add Jamendo</button>
+        <button type="button" class="btn btn-chip" onclick="enrichPlaylistSource('classic_70s',this)">Add 70s</button>
+        <button type="button" class="btn btn-chip" onclick="enrichPlaylistSource('classic_80s',this)">Add 80s</button>
+        <button type="button" class="btn btn-chip" onclick="enrichPlaylistSource('classic_90s',this)">Add 90s</button>
       </div>
       <div class="search-row">
         <label for="searchInput" class="sr-only">Cerca musica</label>
@@ -1502,7 +1516,7 @@ body[data-stopped="true"] .a-station-card .dot.on { animation-play-state: paused
             <span><strong>Super Italian Mode</strong></span>
           </label>
           <div style="margin-top:6px;font-size:12px;line-height:1.8;color:var(--cream-dk)">
-            Modalità italiana completa: i conduttori parlano da radio italiana e la pagina ascoltatori resta in italiano.
+            Full Italian mode: hosts speak like Italian radio and the listener page switches to Italian.
           </div>
         </div>
 
@@ -1512,7 +1526,7 @@ body[data-stopped="true"] .a-station-card .dot.on { animation-play-state: paused
 
         <!-- Runtime — token cost counter lives here -->
         <div class="card-label">Esecuzione</div>
-        <div id="engineRuntime" style="font-family:var(--font-mono);font-size:12px;line-height:1.8;color:var(--cream-dk);margin-bottom:14px">Caricamento...</div>
+        <div id="engineRuntime" style="font-family:var(--font-mono);font-size:12px;line-height:1.8;color:var(--cream-dk);margin-bottom:14px">Loading...</div>
 
         <!-- Segment counts -->
         <div class="card-label">Conteggio Segmenti</div>
@@ -1640,27 +1654,27 @@ function toggleSection(head){head.classList.toggle('open');head.nextElementSibli
 
 // ── Transport ──
 async function doSkip(el){flash(el);const r=await api('POST','/api/skip');toast(r.bridged?'Salto preparato — arriva un brano':'Salto — passo al prossimo segmento')}
-async function doTrigger(t,el){flash(el);const r=await api('POST','/api/trigger',{type:t});if(r.ok)toast('In coda: '+segmentText(t)+' dopo il brano in corso');else toast('Errore: '+(r.error||'sconosciuto'))}
+async function doTrigger(t,el){flash(el);const r=await api('POST','/api/trigger',{type:t});if(r.ok)toast('Queued: '+segmentText(t)+' after the current track');else toast('Error: '+(r.error||'unknown'))}
 async function doQuickAction(action,el){
   flash(el);
   if(action==='less_banter'){
     const v=Math.min(6,parseInt(document.getElementById('pBanter').value||'2')+1);
     document.getElementById('pBanter').value=v;document.getElementById('pvBanter').textContent=v;
     await api('PATCH','/api/pacing',{songs_between_banter:v,songs_between_ads:parseInt(document.getElementById('pAds').value||'4'),ad_spots_per_break:parseInt(document.getElementById('pSpots').value||'2')});
-    toast('Meno interventi: ogni '+v+' brani');
+    toast('Less host talk: every '+v+' tracks');
   }else if(action==='more_chaos'){
     const r=await api('POST','/api/trigger',{type:'banter'});
-    toast(r.ok?'Caos in arrivo — intervento in coda':'Errore: '+(r.error||'sconosciuto'));
+    toast(r.ok?'Chaos break queued':'Error: '+(r.error||'unknown'));
   }else if(action==='too_many_ads'){
     const v=Math.min(10,parseInt(document.getElementById('pAds').value||'4')+2);
     document.getElementById('pAds').value=v;document.getElementById('pvAds').textContent=v;
     await api('PATCH','/api/pacing',{songs_between_banter:parseInt(document.getElementById('pBanter').value||'2'),songs_between_ads:v,ad_spots_per_break:parseInt(document.getElementById('pSpots').value||'2')});
-    toast('Meno spot: ogni '+v+' segmenti');
+    toast('Fewer ads: every '+v+' segments');
   }else if(action==='hot_reload'){
     const r=await api('POST','/api/hot-reload',{});
-    if(r.ok)toast('Testi ricaricati in '+r.duration_ms+'ms');
-    else if(r.error_code==='debounced')toast('Ricarica saltata — riprova tra '+r.retry_after_s+'s');
-    else toast('Ricarica fallita: '+(r.exception||r.error_code||r.error||'sconosciuto'));
+    if(r.ok)toast('Copy reloaded in '+r.duration_ms+'ms');
+    else if(r.error_code==='debounced')toast('Reload skipped — retry in '+r.retry_after_s+'s');
+    else toast('Reload failed: '+(r.exception||r.error_code||r.error||'unknown'));
   }
 }
 function updateChaosState(chaos){
@@ -1685,16 +1699,16 @@ async function toggleChaosMode(el){
     const r=await api('POST','/api/chaos',{enabled:value});
     if(r&&r.ok){
       updateChaosState({enabled:value});
-      toast(value?'Caos armato — primo colpo in arrivo':'Chaos Mode: OFF');
+      toast(value?'Chaos Mode armed — first strike queued':'Chaos Mode: OFF');
     }else{
       el.checked=!value;
       updateChaosState({enabled:!value});
-      toast('Errore: '+((r&&r.error)||'sconosciuto'));
+      toast('Error: '+((r&&r.error)||'unknown'));
     }
   }catch(_){
     el.checked=!value;
     updateChaosState({enabled:!value});
-    toast('Errore: connessione fallita');
+    toast('Error: connection failed');
   }finally{
     el.disabled=false;
   }
@@ -1722,22 +1736,22 @@ async function toggleFestivalMode(el){
     const r=await api('POST','/api/party',body);
     if(r&&r.ok){
       updateFestivalState({active:value});
-      toast(value?'Benvenuti al festival!':'Festival Mode: OFF');
+      toast(value?'Festival Mode: ON':'Festival Mode: OFF');
     }else{
       el.checked=!value;
       updateFestivalState({active:!value});
-      toast('Errore: '+((r&&r.error)||'sconosciuto'));
+      toast('Error: '+((r&&r.error)||'unknown'));
     }
   }catch(_){
     el.checked=!value;
     updateFestivalState({active:!value});
-    toast('Errore: connessione fallita');
+    toast('Error: connection failed');
   }finally{
     el.disabled=false;
   }
 }
 async function doShuffle(el){flash(el);await api('POST','/api/shuffle');toast('Playlist mescolata')}
-async function doPurge(el){flash(el);const r=await api('POST','/api/purge');toast('Coda svuotata: '+r.purged+' segmenti')}
+async function doPurge(el){flash(el);const r=await api('POST','/api/purge');toast('Queue cleared: '+r.purged+' segments')}
 async function doStop(el){flash(el);await api('POST','/api/stop');toast('Sessione fermata');updateStopState(true)}
 async function doResume(el){flash(el);await api('POST','/api/resume');toast('Sessione ripresa');updateStopState(false)}
 function updateStopState(stopped){
@@ -1774,7 +1788,7 @@ async function flagCurrentTrack(el) {
   if (!rule) return;
   flash(el);
   const r = await api('POST', '/api/track-rules', { youtube_id: ytId, rule });
-  toast(r.ok ? 'Regola salvata' : 'Errore: ' + (r.error || 'sconosciuto'));
+  toast(r.ok ? 'Rule saved' : 'Error: ' + (r.error || 'unknown'));
 }
 
 // ── Now Playing (sidebar) ──
@@ -1782,14 +1796,14 @@ function updateNow(ns){
   if(!ns||!ns.type){
     const ty=document.getElementById('nowType');
     if(ty){ty.className='now-type-pill music';ty.textContent='—';}
-    document.getElementById('nowTitle').textContent='In attesa del segnale...';
+    document.getElementById('nowTitle').textContent='Waiting for signal...';
     document.getElementById('nowArtist').textContent='';
     document.getElementById('nowElapsed').textContent='—';
     const pf=document.getElementById('progFill');
     if(pf){pf.style.width='0';pf.setAttribute('data-t','music');}
     const topBarTitle=document.getElementById('topBarTitle');
     const topBarArtist=document.getElementById('topBarArtist');
-    if(topBarTitle)topBarTitle.firstChild.nodeValue='In attesa del segnale… ';
+    if(topBarTitle)topBarTitle.firstChild.nodeValue='Waiting for signal… ';
     if(topBarArtist)topBarArtist.textContent='';
     if(_tick){clearInterval(_tick);_tick=null;_prevLabel='';}
     return;
@@ -1922,16 +1936,16 @@ function renderProgramme(st){
   });
 
   if(upFiltered.length>10){
-    rows.push(`<tr class="prog-more"><td colspan="6" class="prog-empty">+ ${upFiltered.length-10} prossimi segmenti</td></tr>`);
+    rows.push(`<tr class="prog-more"><td colspan="6" class="prog-empty">+ ${upFiltered.length-10} upcoming segments</td></tr>`);
   }
 
   const countEl=document.getElementById('programmeCount');
   if(countEl)countEl.textContent=totalCount+' elementi';
 
   if(rows.length){
-    el.innerHTML=`<table class="a-programme"><colgroup><col class="col-time"><col class="col-type"><col class="col-title"><col class="col-host"><col class="col-duration"><col class="col-action"></colgroup><thead><tr><th>Ora</th><th>Tipo</th><th>Titolo</th><th>Host/Fonte</th><th>Durata</th><th></th></tr></thead><tbody>${rows.join('')}</tbody></table>`;
+    el.innerHTML=`<table class="a-programme"><colgroup><col class="col-time"><col class="col-type"><col class="col-title"><col class="col-host"><col class="col-duration"><col class="col-action"></colgroup><thead><tr><th>Time</th><th>Type</th><th>Title</th><th>Host/Source</th><th>Duration</th><th></th></tr></thead><tbody>${rows.join('')}</tbody></table>`;
   }else{
-    el.innerHTML='<div class="prog-empty">In attesa del segnale...</div>';
+    el.innerHTML='<div class="prog-empty">Waiting for signal...</div>';
   }
 }
 
@@ -1988,7 +2002,7 @@ function renderSetup(setup){
   if(_json===_lastSetupJson) return;
   _lastSetupJson=_json;
   const mode=setup.available_modes?.find(m=>m.id===setup.detected_mode);
-  const modeLabel=mode?.label||setup.detected_mode||'sconosciuto';
+  const modeLabel=mode?.label||setup.detected_mode||'unknown';
   const stationLabel=setup.station_mode?.label||'Sconosciuta';
   document.getElementById('setupHeadline').textContent=setup.launch?.headline||'Stato configurazione disponibile';
   document.getElementById('setupMeta').textContent=`Modalità: ${modeLabel} • Stazione: ${stationLabel}`;
@@ -2083,7 +2097,7 @@ function updateSystems(caps,st){
   const recentBanter=[...(st?.stream_log||[])].reverse().find(e=>e.type==='banter'&&e.metadata&&Object.prototype.hasOwnProperty.call(e.metadata,'canned'));
   let aiState='working',aiLabel='Controllo',aiDetail='Nessuna diagnostica AI disponibile.';
   if(!c.script_llm){
-    aiState='blocked';aiLabel='Errore';aiDetail='Nessuna chiave AI per i testi. La stazione usa clip o testi locali.';
+    aiState='blocked';aiLabel='Error';aiDetail='No AI key for scripts. The station is using clips or local copy.';
   }else if(recentBanter&&recentBanter.metadata?.canned===false){
     aiState='ready';aiLabel='Pronto';aiDetail='L’ultimo intervento è stato generato dal vivo.';
   }else if((st?.consumption?.api_calls||0)>0){
@@ -2096,11 +2110,11 @@ function updateSystems(caps,st){
   const upcomingMusic=(st?.upcoming||[]).filter(it=>it.type==='music').map(it=>it.label).slice(0,2);
   let musicState='ready',musicLabel='Pronto',musicDetail=`Fonte: ${sourceLabel}.`;
   if(upcomingMusic.length){
-    musicDetail=`Fonte: ${sourceLabel}. Prossimi brani: ${upcomingMusic.join(' • ')}.`;
+    musicDetail=`Source: ${sourceLabel}. Upcoming tracks: ${upcomingMusic.join(' • ')}.`;
   }else if(st?.upcoming_mode==='building'){
     musicState='working';musicLabel='Controllo';musicDetail=`Fonte: ${sourceLabel}. Il producer sta preparando il prossimo brano.`;
   }else if(sourceLabel==='Nessuna fonte playlist'){
-    musicState='blocked';musicLabel='Errore';musicDetail='Nessuna fonte musica configurata.';
+    musicState='blocked';musicLabel='Error';musicDetail='No music source configured.';
   }
 
   el.innerHTML=[
@@ -2114,15 +2128,15 @@ function updateRecent(st){
   const parts=[];
   const lines=st.last_banter_script||[];
   if(lines.length){
-    parts.push('<div class="card-label">Ultimo intervento</div>'+
+    parts.push('<div class="card-label">Latest host break</div>'+
       lines.map(l=>`<div><span class="script-host" data-h="${esc(l.host)}">${esc(l.host)}:</span> ${esc(l.text)}</div>`).join(''));
   }
   const ad=st.last_ad_script||{};
   if(ad.brands?.length){
-    parts.push('<div class="card-label" style="margin-top:10px">Ultimo blocco pubblicità</div>'+
+    parts.push('<div class="card-label" style="margin-top:10px">Latest ad break</div>'+
       ad.brands.map((brand,i)=>`<div><span class="script-host">${esc(brand)}:</span> ${esc((ad.summaries&&ad.summaries[i])||(ad.formats&&ad.formats[i])||'Aired')}</div>`).join(''));
   }
-  body.innerHTML=parts.length?parts.join(''):'<div class="empty">Niente in onda finora</div>';
+  body.innerHTML=parts.length?parts.join(''):'<div class="empty">Nothing aired yet</div>';
 }
 
 // ── Playlist ──
@@ -2147,7 +2161,7 @@ async function enrichPlaylistSource(kind,el){
   const url=dispatch.url;
   const r=await api('POST','/api/playlist/enrich',{url,position:'end'});
   if(!r.ok){
-    toast('Errore: '+(r.error||'sconosciuto'));
+    toast('Error: '+(r.error||'unknown'));
     return;
   }
   toast(dispatch.toast+` (${r.added} nuovi)`);
@@ -2203,7 +2217,7 @@ function focusPlaylistTrack(index, trackId){
 async function moveNext(i){
   const trackName=document.querySelector(`.pl-row[data-i="${i}"] .pl-t`)?.textContent||'track';
   const r=await api('POST','/api/playlist/move_to_next',{index:i});
-  if(r.ok)toast('Prossimo brano: '+r.moved);else toast('Spostamento brano fallito');
+  if(r.ok)toast('Next track: '+r.moved);else toast('Move failed');
 }
 async function removeTr(i){await api('POST','/api/playlist/remove',{index:i});toast('Removed')}
 
@@ -2250,7 +2264,7 @@ async function addExternal(i){
       document.getElementById('searchResults').innerHTML='';
       si.value='';_plFilter='';
     }else{
-      toast('Errore: '+(r.error||'coda fallita'));
+      toast('Error: '+(r.error||'queue failed'));
     }
   }catch(_){
     toast('Inserimento in coda fallito');
@@ -2302,14 +2316,14 @@ function updatePaceVal(inputId,valId,v){
     const max=+el.max||100;const min=+el.min||0;
     el.style.backgroundSize=`${((+el.value-min)/(max-min))*100}% 100%`;
   });
-  el.addEventListener('change',()=>{api('PATCH','/api/pacing',{songs_between_banter:+document.getElementById('pBanter').value,songs_between_ads:+document.getElementById('pAds').value,ad_spots_per_break:+document.getElementById('pSpots').value});toast('Cadenza salvata')});
+  el.addEventListener('change',()=>{api('PATCH','/api/pacing',{songs_between_banter:+document.getElementById('pBanter').value,songs_between_ads:+document.getElementById('pAds').value,ad_spots_per_break:+document.getElementById('pSpots').value});toast('Pacing saved')});
 });
 function updatePaceCounters(pacing){
   if(!pacing)return;
   const b=pacing.songs_since_banter||0,bMax=pacing.songs_between_banter||2;
   const a=pacing.songs_since_ad||0,aMax=pacing.songs_between_ads||4;
-  document.getElementById('pcBanter').innerHTML='<strong>'+b+'/'+bMax+'</strong> brani dall’ultimo intervento'+(b>=bMax?' — prossimo':'');
-  document.getElementById('pcAds').innerHTML='<strong>'+a+'/'+aMax+'</strong> brani dall’ultimo spot'+(a>=aMax?' — prossimo':'');
+  document.getElementById('pcBanter').innerHTML='<strong>'+b+'/'+bMax+'</strong> tracks since last host break'+(b>=bMax?' — next':'');
+  document.getElementById('pcAds').innerHTML='<strong>'+a+'/'+aMax+'</strong> tracks since last ad'+(a>=aMax?' — next':'');
   const pacingMeta=document.getElementById('pacingMeta');
   if(pacingMeta)pacingMeta.textContent=a+' music · 1 banter every '+bMax;
 }
@@ -2352,7 +2366,7 @@ function buildHostPreview(block){
   const chaosLine=v.chaos>70?"Virate a metà frase e tangenti che atterrano comunque.":v.chaos>40?"Quasi in scaletta, con qualche deviazione.":"Stretto e strutturato. Ogni parola serve.";
   const warmthLine=v.warmth>65?"Gli ascoltatori si sentono chiamati in causa.":v.warmth>35?"Cordiale senza diventare troppo familiare.":"Distanza professionale, da radio notturna.";
   const verbosityLine=v.verbosity>70?"Three minutes of talk between tracks, minimum.":v.verbosity>40?"One or two lines between songs — enough to feel live.":"Barely speaks. Lets the music do it.";
-  const nostalgiaLine=v.nostalgia>65?"Aspettati riferimenti a Sanremo tra un brano e l’altro.":v.nostalgia>35?"Mescola riferimenti recenti e vecchi.":"Suona attuale, senza callback.";
+  const nostalgiaLine=v.nostalgia>65?"Expect Sanremo callbacks between songs.":v.nostalgia>35?"Mix recent references with older ones.":"Current tone, no callbacks.";
   const entries=[
     {val:v.energy,line:energyLine},
     {val:v.chaos,line:chaosLine},
@@ -2441,7 +2455,7 @@ async function applyHostPreset(n,presetName){
 function updateListenerRequests(reqs){
   const el=document.getElementById('lrBody');
   const meta=document.getElementById('lrMeta');
-  if(!reqs?.length){el.innerHTML='<div class="empty">Nessuna richiesta — gli ascoltatori possono chiedere brani o saluti dalla radio</div>';meta.textContent='';return}
+  if(!reqs?.length){el.innerHTML='<div class="empty">No requests — listeners can ask for songs or shoutouts from the radio page</div>';meta.textContent='';return}
   meta.textContent=reqs.length+' in attesa';
   _lrReqs=reqs;
   el.innerHTML=reqs.map((r,i)=>{
@@ -2472,21 +2486,21 @@ let _lrReqs=[];
 async function lrDismiss(id){
   if(!id)return;
   const r=await api('POST','/api/listener-requests/dismiss',{id});
-  if(r.removed>0)toast('Richiesta rimossa');
-  else toast('Già rimossa');
+  if(r.removed>0)toast('Request removed');
+  else toast('Already removed');
 }
 async function lrQueueNext(i){
   const req=_lrReqs[i];if(!req)return;
   if(req.type==='song_request'&&req.song_found){
     const r=await api('POST','/api/listener-requests/dismiss',{id:req.id});
-    toast(r.removed>0?'Richiesta gestita: '+esc(req.song_track||req.name):'Già consumata');
+    toast(r.removed>0?'Request handled: '+esc(req.song_track||req.name):'Already handled');
   }
 }
 
 // ── Log ──
 function updateLog(log){
   const el=document.getElementById('logBody');
-  if(!log?.length){el.innerHTML='<div class="empty" style="padding:14px">Nessuna voce</div>';_lastLogHash='';return}
+  if(!log?.length){el.innerHTML='<div class="empty" style="padding:14px">No entries</div>';_lastLogHash='';return}
   const hash=log.length+'|'+(log[0]?.timestamp||'');
   if(hash===_lastLogHash)return;
   _lastLogHash=hash;
@@ -2512,14 +2526,14 @@ async function toggleSuperItalian(el){
   el.disabled=true;
   try{
     const r=await api('POST','/api/super-italian',{super_italian_mode:value});
-    if(r&&r.ok)toast(value?'Modalità italiana: ON':'Modalità italiana: OFF');
+    if(r&&r.ok)toast(value?'Super Italian Mode: ON':'Super Italian Mode: OFF');
     else{
       el.checked=!value;
-      toast('Errore: '+((r&&r.error)||'sconosciuto'));
+      toast('Error: '+((r&&r.error)||'unknown'));
     }
   }catch(_){
     el.checked=!value;
-    toast('Errore di rete');
+    toast('Network error');
   }finally{
     el.disabled=false;
   }
@@ -2557,8 +2571,8 @@ function updateEngineRoom(st,caps){
 
   rt.innerHTML=[
     'Attivo da: <strong>'+uptime+'</strong>',
-    'Coda: <strong>'+qd+'</strong> segmenti pronti',
-    'Playlist: <strong>'+pl+'</strong> brani',
+    'Queue: <strong>'+qd+'</strong> segments ready',
+    'Playlist: <strong>'+pl+'</strong> tracks',
     'Ascoltatori: <strong>'+listeners+'</strong> (picco: '+(st.listeners?st.listeners.peak:'—')+')',
     'Segmenti prodotti: <strong>'+(st.segments_produced||'—')+'</strong>',
     apiCalls>0?'Chiamate AI: <strong>'+apiCalls+'</strong> ('+inTok.toLocaleString()+' input / '+outTok.toLocaleString()+' output token) · stima <strong id="apiCostEl">'+cost+'</strong>':'Chiamate AI: <strong>0</strong>',
@@ -2605,7 +2619,7 @@ function updateEngineRoom(st,caps){
     if(hd.events_summary_en||hd.events_summary)lines.push('Eventi:<br>'+esc(hd.events_summary_en||hd.events_summary).replace(/\n/g,'<br>'));
     if(hd.pending_directive)lines.push('Direttiva in attesa: <strong style="color:var(--warning)">'+esc(hd.pending_directive.substring(0,80))+'...</strong>');
     lines.push('Eventi recenti: '+(hd.recent_event_count||0));
-    if(hd.last_event_label_en||hd.last_event_label)lines.push('Ultimo evento: '+esc(hd.last_event_label_en||hd.last_event_label));
+    if(hd.last_event_label_en||hd.last_event_label)lines.push('Latest event: '+esc(hd.last_event_label_en||hd.last_event_label));
     haEl.innerHTML=lines.join('<br>')||'Nessun dato HA';
   }else{
     haCard.style.display='none';

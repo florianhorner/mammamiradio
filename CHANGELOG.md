@@ -13,6 +13,7 @@ The current version source of truth is `pyproject.toml`.
 ### Changed
 
 - **Engineering backlog moved to GitHub issues** — `docs/todos.md` was removed. Open engineering work is now tracked as GitHub issues. A new CI guard (`scripts/check-no-backlog-files.sh`, wired into `quality.yml`) fails the build if a catch-all `TODO.md`/`TODOS.md`/`docs/todos.md`/`docs/backlog.md` file is re-added.
+- **Admin copy is English-first again.** `super_italian_mode` now defaults off, the admin control room uses English operator labels, and Chaos/Festival controls live in a clearly marked Experimental section.
 
 ## [2.12.3] - 2026-05-17
 

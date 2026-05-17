@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- **Admin copy is English-first again.** New add-on installs default `super_italian_mode` to `false`, the admin control room uses English operator labels, and Chaos/Festival controls live in a clearly marked Experimental section.
+
 ## 2.12.3
 
 ### Added
