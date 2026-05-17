@@ -112,6 +112,30 @@ class PlayedEntry:
 
 
 @dataclass
+class RuntimeProviderEvent:
+    """Operator-visible runtime provider transition for the current session."""
+
+    event: str
+    provider_class: str
+    from_provider: str
+    to_provider: str
+    reason: str
+    fallback_active: bool
+    timestamp: float = 0.0
+
+    def to_dict(self) -> dict:
+        return {
+            "event": self.event,
+            "provider_class": self.provider_class,
+            "from_provider": self.from_provider,
+            "to_provider": self.to_provider,
+            "reason": self.reason,
+            "fallback_active": self.fallback_active,
+            "timestamp": self.timestamp,
+        }
+
+
+@dataclass
 class PlaylistSource:
     """The user-visible source backing the currently loaded playlist."""
 
@@ -419,6 +443,56 @@ class StationState:
     runtime_sync_events: int = 0
     shadow_queue_corrections: int = 0
     playback_epoch: int = 0
+    runtime_events: deque[RuntimeProviderEvent] = field(default_factory=lambda: deque(maxlen=50))
+    runtime_provider_state: dict[str, dict] = field(default_factory=dict)
+    runtime_health_state: str = ""
+
+    def update_runtime_provider(
+        self,
+        provider_class: str,
+        *,
+        current_provider: str,
+        primary_provider: str,
+        fallback_active: bool,
+        reason: str,
+        event: str = "provider_switch_event",
+        timestamp: float | None = None,
+    ) -> RuntimeProviderEvent | None:
+        """Record a bounded provider transition when runtime truth changes."""
+        now = time.time() if timestamp is None else timestamp
+        previous = self.runtime_provider_state.get(provider_class, {})
+        previous_provider = str(previous.get("current_provider") or "")
+        previous_fallback = bool(previous.get("fallback_active", False))
+        previous_switch_timestamp = previous.get("last_switch_timestamp")
+        has_previous = bool(previous)
+        changed = (
+            previous_provider != current_provider or previous_fallback != fallback_active
+            if has_previous
+            else fallback_active or current_provider != primary_provider
+        )
+
+        self.runtime_provider_state[provider_class] = {
+            "current_provider": current_provider,
+            "primary_provider": primary_provider,
+            "fallback_active": fallback_active,
+            "reason": reason,
+            "last_observed": now,
+            "last_switch_timestamp": now if changed else previous_switch_timestamp,
+        }
+        if not changed:
+            return None
+
+        entry = RuntimeProviderEvent(
+            event=event,
+            provider_class=provider_class,
+            from_provider=previous_provider or primary_provider,
+            to_provider=current_provider,
+            reason=reason,
+            fallback_active=fallback_active,
+            timestamp=now,
+        )
+        self.runtime_events.append(entry)
+        return entry
 
     def switch_playlist(self, tracks: list[Track], source: PlaylistSource | None = None) -> None:
         """Replace the active playlist and bump revision counter.
@@ -475,6 +549,30 @@ class StationState:
         # Track canned banter clips at stream time (shareware trial)
         if segment.metadata.get("canned"):
             self.canned_clips_streamed += 1
+        raw_audio_source = str(segment.metadata.get("audio_source") or "")
+        if raw_audio_source or segment.metadata.get("fallback") or segment.type == SegmentType.MUSIC:
+            fallback_active = bool(segment.metadata.get("fallback")) or raw_audio_source.startswith("fallback")
+            audio_source = raw_audio_source
+            if not audio_source and fallback_active:
+                audio_source = "canned"
+            elif (
+                segment.type == SegmentType.MUSIC
+                and self.playlist_source is not None
+                and (not audio_source or (not fallback_active and audio_source == "download"))
+            ):
+                audio_source = self.playlist_source.kind
+            self.update_runtime_provider(
+                "audio_source",
+                current_provider=audio_source or "stream",
+                primary_provider=self.playlist_source.kind if self.playlist_source is not None else "stream",
+                fallback_active=fallback_active,
+                reason=(
+                    str(segment.metadata.get("fallback_reason") or "Fallback audio is currently on air")
+                    if fallback_active
+                    else "Primary audio source is on air"
+                ),
+                timestamp=now,
+            )
         # Only add to studio-bleed pool once banter truly starts streaming.
         if segment.type == SegmentType.BANTER and not segment.metadata.get("canned"):
             self.recent_banter_paths.append(segment.path)

@@ -288,7 +288,12 @@ def _runtime_health_snapshot(request: Request) -> dict:
     now_streaming = state.now_streaming or {}
     now_metadata = now_streaming.get("metadata", {}) if isinstance(now_streaming, dict) else {}
     audio_source = now_metadata.get("audio_source", "")
-    if not audio_source or audio_source == "prewarm":
+    fallback_active = bool(now_metadata.get("fallback")) or bool(
+        audio_source and str(audio_source).startswith("fallback")
+    )
+    if not audio_source and fallback_active:
+        audio_source = "canned"
+    if not audio_source or audio_source == "prewarm" or (audio_source == "download" and not fallback_active):
         playlist_source = state.playlist_source
         if playlist_source is not None:
             audio_source = playlist_source.kind
@@ -308,8 +313,202 @@ def _runtime_health_snapshot(request: Request) -> dict:
         "queue_empty_elapsed_s": round(queue_empty_elapsed, 1),
         "silence_with_listeners": _silence_with_listeners(state, queue_empty_elapsed),
         "audio_source": audio_source or "unknown",
-        "failover_active": bool(audio_source and audio_source.startswith("fallback")),
+        "failover_active": fallback_active,
         "shadow_queue_corrections": state.shadow_queue_corrections,
+    }
+
+
+def _runtime_provider_label(provider: str) -> str:
+    labels = {
+        "anthropic": "Anthropic",
+        "openai": "OpenAI",
+        "stock": "Stock copy",
+        "edge": "Edge TTS",
+        "silence": "Silence fallback",
+        "fallback_norm_cache": "Norm cache rescue",
+        "fallback_demo_asset": "Demo asset rescue",
+        "canned": "Canned clip",
+        "charts": "Charts",
+        "local": "Local music",
+        "demo": "Demo music",
+        "url": "Custom URL",
+        "jamendo": "Jamendo",
+        "stream": "Stream",
+        "unknown": "Unknown",
+    }
+    return labels.get(provider, provider.replace("_", " ").title() if provider else "Unknown")
+
+
+def _provider_status(
+    provider_class: str,
+    *,
+    primary_provider: str,
+    current_provider: str,
+    fallback_active: bool,
+    reason: str,
+    state: StationState,
+) -> dict:
+    saved = state.runtime_provider_state.get(provider_class, {})
+    return {
+        "provider_class": provider_class,
+        "primary_provider": primary_provider,
+        "primary_label": _runtime_provider_label(primary_provider),
+        "current_provider": current_provider,
+        "current_label": _runtime_provider_label(current_provider),
+        "fallback_active": fallback_active,
+        "last_switch_timestamp": saved.get("last_switch_timestamp") if saved else None,
+        "switch_reason": saved.get("reason") or reason,
+    }
+
+
+def _script_provider_status(config, state: StationState, provider_health: dict) -> dict:
+    anthropic_degraded = bool(provider_health.get("anthropic", {}).get("degraded"))
+    if config.anthropic_api_key:
+        primary = "anthropic"
+        saved = state.runtime_provider_state.get("script_provider", {})
+        saved_current = str(saved.get("current_provider") or "")
+        saved_fallback = bool(saved.get("fallback_active", False))
+        if saved_current and (saved_fallback or saved_current != primary):
+            current = saved_current
+            fallback_active = saved_fallback or current != primary
+            reason = saved.get("reason") or "Script provider fallback is active"
+        elif anthropic_degraded and config.openai_api_key:
+            current = "openai"
+            fallback_active = True
+            reason = (
+                provider_health["anthropic"].get("last_error")
+                or "Anthropic is suspended; OpenAI script fallback is active"
+            )
+        elif anthropic_degraded:
+            current = "stock"
+            fallback_active = True
+            reason = (
+                provider_health["anthropic"].get("last_error")
+                or "Anthropic is suspended and no OpenAI key is available"
+            )
+        else:
+            current = "anthropic"
+            fallback_active = False
+            reason = "Anthropic is the active script provider"
+    elif config.openai_api_key:
+        primary = current = "openai"
+        fallback_active = False
+        reason = "OpenAI is the configured script provider"
+    else:
+        primary = current = "stock"
+        fallback_active = False
+        reason = "No LLM provider configured; stock copy is active"
+    return _provider_status(
+        "script_provider",
+        primary_provider=primary,
+        current_provider=current,
+        fallback_active=fallback_active,
+        reason=reason,
+        state=state,
+    )
+
+
+def _tts_provider_status(config, state: StationState) -> dict:
+    openai_hosts = any((host.engine or "edge") == "openai" for host in config.hosts)
+    if openai_hosts:
+        primary = "openai"
+        if config.openai_api_key:
+            current = "openai"
+            fallback_active = False
+            reason = "OpenAI TTS is configured for at least one host"
+        else:
+            current = "edge"
+            fallback_active = True
+            reason = "OpenAI TTS host configured but OPENAI_API_KEY is unavailable; Edge voice fallback is active"
+    else:
+        primary = current = "edge"
+        fallback_active = False
+        reason = "Edge TTS is the configured voice provider"
+    return _provider_status(
+        "tts_provider",
+        primary_provider=primary,
+        current_provider=current,
+        fallback_active=fallback_active,
+        reason=reason,
+        state=state,
+    )
+
+
+def _runtime_status_snapshot(
+    request: Request,
+    runtime_health: dict | None = None,
+    provider_health: dict | None = None,
+) -> dict:
+    config = request.app.state.config
+    state = request.app.state.station_state
+    runtime_health = runtime_health or _runtime_health_snapshot(request)
+    provider_health = provider_health or _provider_health_snapshot(config, state)
+
+    audio_current = str(runtime_health.get("audio_source") or "unknown")
+    audio_primary = state.playlist_source.kind if state.playlist_source is not None else audio_current
+    audio_fallback = bool(runtime_health.get("failover_active"))
+    audio_reason = "Fallback audio is currently on air" if audio_fallback else "Primary audio source is on air"
+    audio_status = _provider_status(
+        "audio_source",
+        primary_provider=audio_primary or "unknown",
+        current_provider=audio_current,
+        fallback_active=audio_fallback,
+        reason=audio_reason,
+        state=state,
+    )
+    script_status = _script_provider_status(config, state, provider_health)
+    tts_status = _tts_provider_status(config, state)
+    providers = {
+        "audio_source": audio_status,
+        "script_provider": script_status,
+        "tts_provider": tts_status,
+    }
+    fallback_active = any(item["fallback_active"] for item in providers.values())
+    task_blocked = not runtime_health.get("producer_task_alive", True) or not runtime_health.get(
+        "playback_task_alive",
+        True,
+    )
+    if task_blocked:
+        health_state = "blocked"
+        health_color = "red"
+        health_explanation = "A runtime task is stopped; playback needs operator attention."
+    elif fallback_active:
+        health_state = "degraded"
+        health_color = "yellow"
+        active = [item["current_label"] for item in providers.values() if item["fallback_active"]]
+        health_explanation = "Fallback active: " + ", ".join(active)
+    else:
+        health_state = "ready"
+        health_color = "blue"
+        health_explanation = "Primary providers are active."
+
+    if state.runtime_health_state != health_state:
+        state.runtime_health_state = health_state
+        logger.info(
+            "provider_health_state",
+            extra={
+                "event": "provider_health_state",
+                "health_state": health_state,
+                "fallback_active": fallback_active,
+                "runtime_provider_classes": [name for name, item in providers.items() if item["fallback_active"]],
+            },
+        )
+
+    recent_events = [event.to_dict() for event in reversed(state.runtime_events)]
+    failover_events = [event for event in recent_events if event.get("fallback_active")]
+    last_switch = recent_events[0] if recent_events else None
+    return {
+        "health_state": health_state,
+        "health_color": health_color,
+        "current_health": health_state,
+        "health_explanation": health_explanation,
+        "fallback_active": fallback_active,
+        "providers": providers,
+        "last_switch_timestamp": last_switch.get("timestamp") if last_switch else None,
+        "switch_reason": last_switch.get("reason") if last_switch else "",
+        "recent_events": recent_events[:10],
+        "failover_events": failover_events[:10],
+        "no_failover_message": "No failover in current session." if not failover_events else "",
     }
 
 
@@ -1054,6 +1253,10 @@ async def run_playback_loop(app) -> None:
                     continue
 
         state.on_stream_segment(segment)
+        if state.runtime_events:
+            recent_provider_event = state.runtime_events[-1]
+            if abs(recent_provider_event.timestamp - time.time()) < 1.0:
+                logger.info("provider_switch_event", extra=recent_provider_event.to_dict())
         if pulled_from_queue and state.queued_segments:
             state.queued_segments.pop(0)
         logger.info(
@@ -2633,6 +2836,8 @@ async def status(request: Request, _: None = Depends(require_admin_access)):
     station_mode = classify_station_mode(config, state)
     payload = _public_status_payload(request)
     runtime_health = _runtime_health_snapshot(request)
+    provider_health = _provider_health_snapshot(config, state)
+    runtime_status = _runtime_status_snapshot(request, runtime_health=runtime_health, provider_health=provider_health)
     payload.update(
         {
             "queue_depth": segment_queue.qsize(),
@@ -2691,7 +2896,8 @@ async def status(request: Request, _: None = Depends(require_admin_access)):
                 "total": state.listeners_total,
             },
             "runtime_health": runtime_health,
-            "provider_health": _provider_health_snapshot(config, state),
+            "runtime_status": runtime_status,
+            "provider_health": provider_health,
             "chaos_mode": {
                 "enabled": state.chaos_mode_active,
                 "pending": state.chaos_pending.value if state.chaos_pending else "",

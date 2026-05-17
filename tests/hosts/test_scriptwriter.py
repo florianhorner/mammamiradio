@@ -451,6 +451,35 @@ async def test_openai_fallback_logs_structured_event(config, state, caplog):
     assert isinstance(record.latency_ms, int)
     assert record.prompt_tokens == 11
     assert record.completion_tokens == 7
+    switch_records = [r for r in caplog.records if getattr(r, "event", None) == "provider_switch_event"]
+    assert switch_records, "expected provider switch telemetry when Anthropic falls back to OpenAI"
+    switch = switch_records[-1]
+    assert switch.provider_class == "script_provider"
+    assert switch.from_provider == "anthropic"
+    assert switch.to_provider == "openai"
+    assert switch.reason == "anthropic_exception"
+    assert state.runtime_events[-1].provider_class == "script_provider"
+
+
+@pytest.mark.asyncio
+async def test_malformed_anthropic_response_does_not_mark_anthropic_active(config, state):
+    from mammamiradio.hosts.scriptwriter import _generate_json_response
+
+    config.openai_api_key = "openai-key"
+    openai_client = _mock_openai_response(json.dumps({"ok": "fallback"}))
+    mock_cls = _mock_anthropic_response("this is not valid json {{{")
+
+    with (
+        patch("mammamiradio.hosts.scriptwriter._anthropic_client", None),
+        patch("mammamiradio.hosts.scriptwriter._openai_client", None),
+        patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
+        patch("mammamiradio.hosts.scriptwriter._get_openai_client", return_value=openai_client),
+    ):
+        result = await _generate_json_response(prompt="p", config=config, state=state, model="model", max_tokens=100)
+
+    assert result == {"ok": "fallback"}
+    assert state.runtime_provider_state["script_provider"]["current_provider"] == "openai"
+    assert [event.to_provider for event in state.runtime_events] == ["openai"]
 
 
 @pytest.mark.asyncio
@@ -489,6 +518,30 @@ async def test_openai_call_logs_json_parse_failure_and_reraises(config, state, c
     assert record.caller == "ad"
     assert record.fallback_reason == "anthropic_absent"
     assert record.raw_preview.startswith("not valid json")
+
+
+@pytest.mark.asyncio
+async def test_failed_openai_fallback_does_not_update_provider_state(config, state):
+    from mammamiradio.hosts.scriptwriter import _generate_json_response
+
+    config.openai_api_key = "openai-key"
+    openai_client = _mock_openai_response("not valid json {{{")
+    mock_client = MagicMock()
+    mock_client.messages = MagicMock()
+    mock_client.messages.create = AsyncMock(side_effect=Exception("anthropic invalid"))
+    mock_cls = MagicMock(return_value=mock_client)
+
+    with (
+        patch("mammamiradio.hosts.scriptwriter._anthropic_client", None),
+        patch("mammamiradio.hosts.scriptwriter._openai_client", None),
+        patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
+        patch("mammamiradio.hosts.scriptwriter._get_openai_client", return_value=openai_client),
+        pytest.raises(json.JSONDecodeError),
+    ):
+        await _generate_json_response(prompt="p", config=config, state=state, model="model", max_tokens=100)
+
+    assert "script_provider" not in state.runtime_provider_state
+    assert list(state.runtime_events) == []
 
 
 @pytest.mark.asyncio
