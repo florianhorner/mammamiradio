@@ -20,6 +20,7 @@ import mammamiradio.hosts.scriptwriter as _sw
 from mammamiradio.audio.audio_quality import AudioQualityError, AudioToolError, validate_segment_audio
 from mammamiradio.audio.imaging import ImagingLibrary
 from mammamiradio.audio.normalizer import (
+    ConcatDurationShortfallError,
     _ffprobe_duration_sec,
     concat_files,
     crossfade_voice_over_music,
@@ -74,6 +75,7 @@ MUSIC_SELECTION_RETRIES = 20
 MUSIC_QUALITY_GATE_REJECTION_LIMIT = 3
 CACHE_EVICTION_INTERVAL_SECONDS = 3600
 PLAYLIST_REFRESH_INTERVAL_SECONDS = 5400.0
+AD_SPOT_MIN_DURATION_SEC = 8.0
 
 
 @dataclass(frozen=True)
@@ -87,6 +89,54 @@ class RenderedMusicTrack:
 def _probe_segment_duration(path: Path) -> float:
     """Run ffprobe on path and return duration in seconds; 0.0 if probe fails."""
     return _ffprobe_duration_sec(path) or 0.0
+
+
+def _round_duration(value: float) -> float:
+    return round(max(value, 0.0), 3)
+
+
+def _speech_line_stats(lines: list[dict] | None) -> dict:
+    items = []
+    total_chars = 0
+    total_words = 0
+    for idx, line in enumerate(lines or [], start=1):
+        if not isinstance(line, dict):
+            continue
+        text = str(line.get("text") or "")
+        words = len(text.split())
+        chars = len(text)
+        total_chars += chars
+        total_words += words
+        items.append(
+            {
+                "index": idx,
+                "host": str(line.get("host") or ""),
+                "type": str(line.get("type") or ""),
+                "chars": chars,
+                "words": words,
+            }
+        )
+    return {
+        "expected_line_count": len(items),
+        "expected_char_count": total_chars,
+        "expected_word_count": total_words,
+        "expected_lines": items,
+    }
+
+
+def _ad_spot_render_metadata(script, duration_sec: float) -> dict:
+    voice_parts = [p for p in script.parts if p.type == "voice" and p.text]
+    line_chars = [len(p.text) for p in voice_parts]
+    return {
+        "brand": script.brand,
+        "format": script.format,
+        "rendered_duration_sec": _round_duration(duration_sec),
+        "expected_line_count": len(voice_parts),
+        "expected_char_count": sum(line_chars),
+        "expected_word_count": sum(len(p.text.split()) for p in voice_parts),
+        "expected_line_chars": line_chars,
+        "roles_used": script.roles_used or [],
+    }
 
 
 def _is_tmp_render(segment: Segment, tmp_dir: Path) -> bool:
@@ -1271,7 +1321,18 @@ async def run_producer(
                             audio_path = config.tmp_dir / f"banter_full_{uuid4().hex[:8]}.mp3"
                             loop = asyncio.get_running_loop()
                             await loop.run_in_executor(
-                                None, concat_files, [trans_voice_path, banter_path], audio_path, 200, False
+                                None,
+                                lambda _trans=trans_voice_path,
+                                _banter=banter_path,
+                                _out=audio_path,
+                                _line_count=len(lines) + 1: concat_files(
+                                    [_trans, _banter],
+                                    _out,
+                                    200,
+                                    False,
+                                    fail_on_shortfall=True,
+                                    shortfall_context=f"transition plus banter with {_line_count} generated lines",
+                                ),
                             )
                             trans_voice_path.unlink(missing_ok=True)
                             banter_path.unlink(missing_ok=True)
@@ -1420,6 +1481,10 @@ async def run_producer(
                         "chaos_subtype": chaos_subtype.value if chaos_subtype else "",
                         "chaos_degraded": state.chaos_last_degraded_reason if chaos_subtype else "",
                         "has_music_tail": bool(has_music_tail),
+                        "render_quality": {
+                            "source": "canned" if canned is not None else "generated",
+                            **_speech_line_stats(state.last_banter_script),
+                        },
                     },
                     ephemeral=canned is None,
                 )
@@ -1768,12 +1833,62 @@ async def run_producer(
                 )
 
                 # ── PHASE 2: Fan out all ad TTS synthesis in parallel ──
-                ad_paths = await asyncio.gather(
-                    *(
-                        synthesize_ad(script, vm, config.tmp_dir, sfx_dir)
-                        for script, (_, _, _, vm) in zip(scripts, spot_params, strict=False)
+                try:
+                    ad_paths = await asyncio.gather(
+                        *(
+                            synthesize_ad(script, vm, config.tmp_dir, sfx_dir)
+                            for script, (_, _, _, vm) in zip(scripts, spot_params, strict=False)
+                        )
                     )
+                except ConcatDurationShortfallError as exc:
+                    logger.warning(
+                        "Generated ad spot concat failed duration quality check; regenerating later: %s",
+                        exc,
+                    )
+                    for p in [*intro_parts, bumper_in, *mid_bumpers]:
+                        p.unlink(missing_ok=True)
+                    state.songs_since_ad = 0
+                    continue
+                ad_spot_durations = await asyncio.gather(
+                    *(loop.run_in_executor(None, _probe_segment_duration, path) for path in ad_paths)
                 )
+                ad_spot_render_metadata = [
+                    _ad_spot_render_metadata(script, duration)
+                    for script, duration in zip(scripts, ad_spot_durations, strict=False)
+                ]
+
+                if not os.environ.get("MAMMAMIRADIO_SKIP_QUALITY_GATE"):
+                    spot_rejected = False
+                    for spot_idx, ad_path in enumerate(ad_paths):
+                        try:
+                            await loop.run_in_executor(
+                                None,
+                                lambda _path=ad_path: validate_segment_audio(
+                                    _path,
+                                    SegmentType.AD,
+                                    min_duration_sec=AD_SPOT_MIN_DURATION_SEC,
+                                ),
+                            )
+                        except AudioToolError as exc:
+                            logger.warning("Audio tool unavailable, skipping ad spot quality check: %s", exc)
+                        except AudioQualityError as exc:
+                            brand = spot_params[spot_idx][0].name if spot_idx < len(spot_params) else "unknown"
+                            logger.warning(
+                                "Quality gate rejected ad spot %d/%d for %s (%s): %s",
+                                spot_idx + 1,
+                                len(ad_paths),
+                                brand,
+                                ad_path.name,
+                                exc,
+                            )
+                            spot_rejected = True
+                            break
+                    if spot_rejected:
+                        for p in [*intro_parts, bumper_in, *mid_bumpers, *ad_paths]:
+                            p.unlink(missing_ok=True)
+                        # Prevent scheduler lock on AD if we reject a generated spot.
+                        state.songs_since_ad = 0
+                        continue
 
                 # ── PHASE 3: Assemble break_parts in order ──
                 if intro_text:
@@ -1827,14 +1942,28 @@ async def run_producer(
                 else:
                     ad_break_path = config.tmp_dir / f"adbreak_{uuid4().hex[:8]}.mp3"
                     try:
-                        await loop.run_in_executor(
-                            None,
-                            concat_files,
-                            break_parts,
-                            ad_break_path,
-                            300,
-                            False,
-                        )
+                        try:
+                            await loop.run_in_executor(
+                                None,
+                                lambda _parts=list(break_parts),
+                                _out=ad_break_path,
+                                _spot_count=len(scripts): concat_files(
+                                    _parts,
+                                    _out,
+                                    300,
+                                    False,
+                                    fail_on_shortfall=True,
+                                    shortfall_context=f"ad break with {_spot_count} generated spots",
+                                ),
+                            )
+                        except ConcatDurationShortfallError as exc:
+                            logger.warning(
+                                "Generated ad break concat failed duration quality check; regenerating later: %s",
+                                exc,
+                            )
+                            ad_break_path.unlink(missing_ok=True)
+                            state.songs_since_ad = 0
+                            continue
                     finally:
                         for p in break_parts:
                             p.unlink(missing_ok=True)
@@ -1860,6 +1989,7 @@ async def run_producer(
                     "spots": num_spots,
                     "sonic_worlds": break_sonic_worlds,
                     "roles_used": break_roles,
+                    "spot_render_metadata": ad_spot_render_metadata,
                 }
                 segment = Segment(
                     type=SegmentType.AD,
@@ -1871,6 +2001,7 @@ async def run_producer(
                         "formats": break_formats,
                         "sonic_worlds": break_sonic_worlds,
                         "roles_used": break_roles,
+                        "spot_render_metadata": ad_spot_render_metadata,
                         "title": _ad_title(break_brands),
                         "has_music_tail": bool(intro_has_music_tail),
                     },
@@ -1965,6 +2096,11 @@ async def run_producer(
                 except Exception as exc:
                     logger.warning("Transition sting generation failed, using clean cut: %s", exc)
             segment.duration_sec = await asyncio.to_thread(_probe_segment_duration, segment.path)
+            if segment.type in (SegmentType.BANTER, SegmentType.AD):
+                rendered = _round_duration(segment.duration_sec)
+                segment.metadata["rendered_duration_sec"] = rendered
+                if isinstance(segment.metadata.get("render_quality"), dict):
+                    segment.metadata["render_quality"]["rendered_duration_sec"] = rendered
             if generation_revision != state.playlist_revision:
                 logger.info("Discarding stale %s segment after playlist source switch", seg_type.value)
                 _unlink_if_tmp_render(segment, config.tmp_dir)

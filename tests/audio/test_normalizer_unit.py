@@ -717,6 +717,33 @@ class TestConcatFilesDurationInvariant:
             "output is shorter than the sum of inputs by more than 5%."
         )
 
+    def test_duration_guard_can_raise_for_generated_segments(self, tmp_path, monkeypatch):
+        import mammamiradio.audio.normalizer as norm
+
+        monkeypatch.setattr(norm, "_run_ffmpeg", lambda *a, **kw: None)
+        durations = {
+            "input_a.mp3": 10.0,
+            "input_b.mp3": 10.0,
+            "concat_out.mp3": 8.0,
+        }
+        monkeypatch.setattr(norm, "_ffprobe_duration_sec", lambda p: durations.get(Path(p).name))
+
+        inputs = [tmp_path / "input_a.mp3", tmp_path / "input_b.mp3"]
+        for p in inputs:
+            p.write_bytes(b"stub")
+        output = tmp_path / "concat_out.mp3"
+        output.write_bytes(b"stub")
+
+        with pytest.raises(norm.ConcatDurationShortfallError, match="generated dialogue"):
+            norm.concat_files(
+                inputs,
+                output,
+                silence_ms=300,
+                loudnorm=False,
+                fail_on_shortfall=True,
+                shortfall_context="generated dialogue",
+            )
+
     def test_duration_guard_silent_when_output_matches(self, tmp_path, caplog, monkeypatch):
         import mammamiradio.audio.normalizer as norm
 

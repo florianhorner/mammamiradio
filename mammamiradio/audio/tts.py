@@ -332,7 +332,17 @@ async def synthesize_ad(
     else:
         voice_path = tmp_dir / f"ad_voice_{uuid4().hex[:8]}.mp3"
         # Skip loudnorm — each part already normalized by synthesize()
-        await loop.run_in_executor(None, concat_files, voice_sfx_parts, voice_path, 300, False)
+        await loop.run_in_executor(
+            None,
+            lambda: concat_files(
+                voice_sfx_parts,
+                voice_path,
+                300,
+                False,
+                fail_on_shortfall=True,
+                shortfall_context=f"ad spot voice/sfx for {script.brand}",
+            ),
+        )
         for p in voice_sfx_parts:
             p.unlink(missing_ok=True)
 
@@ -403,7 +413,17 @@ async def synthesize_ad(
         ad_parts.append(output_path)
         final_path = tmp_dir / f"ad_final_{uuid4().hex[:8]}.mp3"
         try:
-            await loop.run_in_executor(None, concat_files, ad_parts, final_path, 100)
+            await loop.run_in_executor(
+                None,
+                lambda: concat_files(
+                    ad_parts,
+                    final_path,
+                    100,
+                    True,
+                    fail_on_shortfall=True,
+                    shortfall_context=f"ad spot motif prepend for {script.brand}",
+                ),
+            )
             for p in ad_parts:
                 p.unlink(missing_ok=True)
             output_path = final_path
@@ -478,7 +498,17 @@ async def synthesize_dialogue(
     raw_path = tmp_dir / f"dialogue_raw_{uuid4().hex[:8]}.mp3"
     output_path = tmp_dir / f"dialogue_{uuid4().hex[:8]}.mp3"
     loop = asyncio.get_running_loop()
-    await loop.run_in_executor(None, concat_files, parts, raw_path, 300, False)
+    await loop.run_in_executor(
+        None,
+        lambda: concat_files(
+            parts,
+            raw_path,
+            300,
+            False,
+            fail_on_shortfall=True,
+            shortfall_context=f"dialogue with {len(lines)} generated lines",
+        ),
+    )
     for p in parts:
         p.unlink(missing_ok=True)
 

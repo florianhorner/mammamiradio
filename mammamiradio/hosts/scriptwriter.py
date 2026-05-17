@@ -743,6 +743,9 @@ _QUOTE_CHARS_RE = re.compile(r"[\"`\u201c\u201d\u2018\u2019]")
 _ROLE_MARKER_RE = re.compile(
     r"(?i)\b(?:system|assistant|human|user)\s*:\s*",
 )
+_TERMINAL_PUNCT_RE = re.compile(r"""[.!?;:…\)\]"']$""")
+_INTERRUPTED_ENDINGS = ("...", "…", "—", "-")
+_HARD_TRUNCATION_MIN_CHARS = 220
 
 
 def _sanitize_prompt_data(text: str, max_len: int = 80) -> str:
@@ -758,6 +761,22 @@ def _sanitize_prompt_data(text: str, max_len: int = 80) -> str:
     if len(text) > max_len:
         text = text[:max_len] + "..."
     return text
+
+
+def _looks_hard_truncated_text(text: str, *, min_chars: int = _HARD_TRUNCATION_MIN_CHARS) -> bool:
+    """Detect likely provider cutoffs without rejecting intentional radio interruptions."""
+    stripped = text.strip()
+    if len(stripped) < min_chars:
+        return False
+    if stripped.endswith(_INTERRUPTED_ENDINGS):
+        return False
+    return _TERMINAL_PUNCT_RE.search(stripped) is None
+
+
+def _reject_hard_truncated_generated_text(kind: str, texts: list[str]) -> None:
+    for idx, text in enumerate(texts):
+        if _looks_hard_truncated_text(text):
+            raise ValueError(f"{kind} generated line {idx + 1} appears hard-truncated")
 
 
 async def _load_song_cues_for_current_track(
@@ -1433,6 +1452,7 @@ Return JSON:
 
         # Sanitize: replace any wrong station names the LLM may have hallucinated
         result = [(host, _fix_wrong_station_names(text, config.station.name)) for host, text in result]
+        _reject_hard_truncated_generated_text("banter", [text for _host, text in result])
 
         if data.get("new_joke"):
             state.add_joke(data["new_joke"])
@@ -1893,6 +1913,7 @@ Return JSON:
         if not any(p.type == "voice" for p in parts):
             parts = [AdPart(type="voice", text=data.get("text", brand.tagline))]
         parts = _ensure_attention_grabbing_ad_parts(parts, sonic)
+        _reject_hard_truncated_generated_text("ad", [p.text for p in parts if p.type == "voice" and p.text])
 
         # Light validation: demote single-role duo_scenes
         roles_found = {p.role for p in parts if p.type == "voice" and p.role}

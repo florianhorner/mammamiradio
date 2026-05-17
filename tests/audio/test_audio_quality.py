@@ -65,6 +65,26 @@ def test_validate_segment_audio_rejects_short_duration(tmp_path):
         validate_segment_audio(audio, SegmentType.BANTER)
 
 
+def test_validate_segment_audio_uses_min_duration_override(tmp_path):
+    audio = _mk_audio(tmp_path / "short_ad_spot.mp3")
+
+    def _run(cmd, capture_output, text, check):
+        joined = " ".join(cmd)
+        if "ffprobe" in joined:
+            return _cp(stdout="9.0\n")
+        if "silencedetect" in joined:
+            return _cp(stderr="")
+        if "volumedetect" in joined:
+            return _cp(stderr="mean_volume: -20.0 dB\nmax_volume: -3.0 dB\n")
+        raise AssertionError(f"Unexpected command: {joined}")
+
+    with (
+        patch("mammamiradio.audio.audio_quality.subprocess.run", side_effect=_run),
+        pytest.raises(AudioQualityError, match=r"9.00s < 10.00s"),
+    ):
+        validate_segment_audio(audio, SegmentType.AD, min_duration_sec=10.0)
+
+
 def test_validate_segment_audio_rejects_high_silence_ratio(tmp_path):
     audio = _mk_audio(tmp_path / "silence.mp3")
 

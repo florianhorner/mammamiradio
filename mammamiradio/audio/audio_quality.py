@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 import subprocess
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from mammamiradio.core.models import SegmentType
@@ -68,9 +68,11 @@ _THRESHOLDS_BY_TYPE: dict[SegmentType, QualityThresholds] = {
 }
 
 
-def validate_segment_audio(path: Path, seg_type: SegmentType) -> None:
+def validate_segment_audio(path: Path, seg_type: SegmentType, *, min_duration_sec: float | None = None) -> None:
     """Validate audio for any segment type and raise on quality failure."""
     th = _THRESHOLDS_BY_TYPE.get(seg_type, _DEFAULT_THRESHOLDS)
+    if min_duration_sec is not None:
+        th = replace(th, min_duration_sec=min_duration_sec)
 
     if not path.exists():
         raise AudioQualityError(f"{seg_type.value} audio missing: {path}")

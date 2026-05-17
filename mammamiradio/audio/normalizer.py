@@ -19,6 +19,10 @@ logger = logging.getLogger(__name__)
 _NORM_SEM = BoundedSemaphore(2)
 
 
+class ConcatDurationShortfallError(RuntimeError):
+    """Raised when a concat output is materially shorter than its inputs."""
+
+
 def _norm_sidecar_path(norm_path: Path) -> Path:
     """Companion JSON path for a normalized cache file."""
     return norm_path.parent / f"{norm_path.name}.json"
@@ -297,6 +301,9 @@ def concat_files(
     output_path: Path,
     silence_ms: int = 300,
     loudnorm: bool = True,
+    *,
+    fail_on_shortfall: bool = False,
+    shortfall_context: str = "",
 ) -> Path:
     """Concatenate rendered parts into a single MP3 segment.
 
@@ -375,17 +382,19 @@ def concat_files(
         # Allow 5% slack for ffmpeg encoding rounding + loudnorm edge trimming.
         threshold = 0.95 * expected
         if output_dur < threshold:
-            logger.warning(
-                "concat_files duration shortfall: output=%.2fs expected>=%.2fs "
-                "(sum_inputs=%.2fs + %d gaps x %.2fs). Output: %s. Inputs (dur): %s",
-                output_dur,
-                threshold,
-                sum(input_durs),  # type: ignore[arg-type]
-                max(0, len(paths) - 1),
-                silence_dur,
-                output_path.name,
-                [(p.name, f"{d:.2f}") for p, d in zip(paths, input_durs, strict=False)],
+            inputs_report = [(p.name, f"{d:.2f}") for p, d in zip(paths, input_durs, strict=False)]
+            details = (
+                f"concat_files duration shortfall: output={output_dur:.2f}s expected>={threshold:.2f}s "
+                f"(sum_inputs={sum(input_durs):.2f}s + {max(0, len(paths) - 1)} gaps x {silence_dur:.2f}s). "
+                f"Output: {output_path.name}. Inputs (dur): {inputs_report}"
             )
+            if shortfall_context:
+                details = f"{details}. Context: {shortfall_context}"
+            logger.warning(details)
+            if fail_on_shortfall:
+                raise ConcatDurationShortfallError(details)
+    except ConcatDurationShortfallError:
+        raise
     except Exception as exc:  # defense-in-depth — never let instrumentation break prod
         logger.debug("concat_files duration probe skipped: %s", exc)
 

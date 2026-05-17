@@ -24,7 +24,7 @@ def _normalize_side_effect(input_path, output_path, config=None, *, loudnorm=Tru
     return output_path
 
 
-def _concat_side_effect(paths, output_path, silence_ms=300, loudnorm=True):
+def _concat_side_effect(paths, output_path, silence_ms=300, loudnorm=True, **kwargs):
     """Side-effect for concat_files(paths, output_path, silence_ms, loudnorm)."""
     _touch(output_path)
     return output_path
@@ -679,8 +679,6 @@ def test_instructions_for_host_low_warmth():
 
 def test_synthesize_openai_raises_when_no_key(monkeypatch):
     """synthesize_openai raises RuntimeError when OPENAI_API_KEY is missing."""
-    import asyncio
-
     from mammamiradio.audio.tts import synthesize_openai
 
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
@@ -689,7 +687,9 @@ def test_synthesize_openai_raises_when_no_key(monkeypatch):
         await synthesize_openai("Ciao", "onyx", Path("/tmp/noop.mp3"))
 
     with pytest.raises(RuntimeError, match="OPENAI_API_KEY"):
-        asyncio.get_event_loop().run_until_complete(_run())
+        import asyncio
+
+        asyncio.run(_run())
 
 
 @pytest.mark.asyncio

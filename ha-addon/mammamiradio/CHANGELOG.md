@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- **Generated speech quality gates are stricter.** Ad spots now validate per rendered spot, generated dialogue/ad concat shortfalls can fail quality checks, and banter/ad metadata records expected generated line counts for QA.
+
 ## 2.12.3
 
 ### Added

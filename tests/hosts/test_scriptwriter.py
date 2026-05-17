@@ -23,6 +23,7 @@ from mammamiradio.hosts.scriptwriter import (
     _build_system_prompt,
     _chaos_prompt_block,
     _host_expression_block,
+    _looks_hard_truncated_text,
     _massage_transition_text,
     _personality_modifier,
     _plan_listener_request_block,
@@ -90,6 +91,17 @@ def _mock_openai_response(text: str):
     mock_client.chat.completions = MagicMock()
     mock_client.chat.completions.create = MagicMock(return_value=mock_response)
     return mock_client
+
+
+def test_hard_truncation_check_allows_intentional_interruption_style():
+    assert not _looks_hard_truncated_text("Allora...")
+    assert not _looks_hard_truncated_text("No, dai. Dai, aspetta—")
+    assert not _looks_hard_truncated_text(("parole " * 40).strip() + "...")
+
+
+def test_hard_truncation_check_flags_long_unterminated_generated_line():
+    text = ("questa frase continua senza chiudersi " * 10).strip()
+    assert _looks_hard_truncated_text(text)
 
 
 # --- _build_system_prompt tests ---

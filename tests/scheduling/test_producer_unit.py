@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from mammamiradio.audio.audio_quality import AudioQualityError
 from mammamiradio.audio.normalizer import save_track_metadata
 from mammamiradio.core.config import load_config
 from mammamiradio.core.models import (
@@ -20,7 +21,7 @@ from mammamiradio.core.models import (
     StationState,
     Track,
 )
-from mammamiradio.hosts.ad_creative import AdScript, SonicWorld
+from mammamiradio.hosts.ad_creative import AdPart, AdScript, SonicWorld
 from mammamiradio.hosts.scriptwriter import ListenerRequestCommit
 from mammamiradio.scheduling.producer import (
     SHAREWARE_CANNED_LIMIT,
@@ -1581,6 +1582,10 @@ async def test_ad_break_sets_sonic_worlds_and_roles_in_last_ad_script():
 
     fake_script = AdScript(
         brand="Prezzoforte",
+        parts=[
+            AdPart(type="voice", text="Prezzoforte apre le porte agli sconti impossibili.", role="hammer"),
+            AdPart(type="voice", text="Offerta valida finche il carrello non si offende.", role="disclaimer_goblin"),
+        ],
         summary="Great deals at Prezzoforte",
         format="classic_pitch",
         sonic=SonicWorld(music_bed="cinematic", environment="piazza", transition_motif="fanfare"),
@@ -1594,6 +1599,7 @@ async def test_ad_break_sets_sonic_worlds_and_roles_in_last_ad_script():
         patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, return_value=_fake_path()),
         patch(f"{PRODUCER_MODULE}.generate_bumper_jingle", return_value=_fake_path()),
         patch(f"{PRODUCER_MODULE}.concat_files", return_value=_fake_path()),
+        patch(f"{PRODUCER_MODULE}._probe_segment_duration", side_effect=[12.5, 30.0]),
         patch(f"{PRODUCER_MODULE}.validate_segment_audio"),
         patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
         patch.dict("os.environ", {"MAMMAMIRADIO_SKIP_QUALITY_GATE": "1"}),
@@ -1605,12 +1611,62 @@ async def test_ad_break_sets_sonic_worlds_and_roles_in_last_ad_script():
     assert "roles_used" in state.last_ad_script, "roles_used missing from last_ad_script"
     assert state.last_ad_script["sonic_worlds"] == ["cinematic"]
     assert state.last_ad_script["roles_used"] == [["hammer", "disclaimer_goblin"]]
+    assert state.last_ad_script["spot_render_metadata"][0]["rendered_duration_sec"] == 12.5
+    assert state.last_ad_script["spot_render_metadata"][0]["expected_line_count"] == 2
 
     seg: Segment = queue.get_nowait()
     assert "sonic_worlds" in seg.metadata, "sonic_worlds missing from segment.metadata"
     assert "roles_used" in seg.metadata, "roles_used missing from segment.metadata"
     assert seg.metadata["sonic_worlds"] == ["cinematic"]
     assert seg.metadata["roles_used"] == [["hammer", "disclaimer_goblin"]]
+    assert seg.metadata["rendered_duration_sec"] == 30.0
+    assert seg.metadata["spot_render_metadata"][0]["rendered_duration_sec"] == 12.5
+    assert seg.metadata["spot_render_metadata"][0]["expected_char_count"] > 0
+
+
+@pytest.mark.asyncio
+async def test_ad_spot_quality_rejects_short_spot_before_break_concat():
+    state = _make_state()
+    state.playlist[0].youtube_id = "yt_demo1"
+    state.playlist[1].youtube_id = "yt_demo2"
+    config = _make_config()
+    config.pacing.ad_spots_per_break = 1
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+
+    fake_script = AdScript(
+        brand="Prezzoforte",
+        parts=[AdPart(type="voice", text="Troppo corto.", role="hammer")],
+        summary="Too short",
+        format="classic_pitch",
+        sonic=SonicWorld(music_bed="cinematic"),
+        roles_used=["hammer"],
+    )
+    calls = []
+
+    def _validate(path, seg_type, **kwargs):
+        calls.append((seg_type, kwargs))
+        if seg_type == SegmentType.AD and kwargs.get("min_duration_sec") == 8.0:
+            raise AudioQualityError("ad audio too short")
+
+    with (
+        patch(f"{PRODUCER_MODULE}.next_segment_type", side_effect=[SegmentType.AD, SegmentType.MUSIC]),
+        patch(f"{SCRIPTWRITER_MODULE}.write_ad", new_callable=AsyncMock, return_value=fake_script),
+        patch(f"{PRODUCER_MODULE}.synthesize_ad", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(f"{PRODUCER_MODULE}.generate_bumper_jingle", return_value=_fake_path()),
+        patch(f"{PRODUCER_MODULE}.concat_files", return_value=_fake_path()) as concat_mock,
+        patch(f"{PRODUCER_MODULE}._probe_segment_duration", return_value=5.0),
+        patch(f"{PRODUCER_MODULE}.validate_segment_audio", side_effect=_validate),
+        patch(f"{PRODUCER_MODULE}.download_track", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(f"{PRODUCER_MODULE}.normalize", side_effect=_fake_path),
+        patch(f"{PRODUCER_MODULE}.shutil.copy2"),
+        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+    ):
+        await _run_until_queued(queue, state, config)
+
+    assert any(seg_type == SegmentType.AD and call.get("min_duration_sec") == 8.0 for seg_type, call in calls)
+    assert queue.get_nowait().type == SegmentType.MUSIC
+    assert concat_mock.call_count == 0
 
 
 # ---------------------------------------------------------------------------
