@@ -164,7 +164,12 @@ def test_ci_trigger_paths_cover_version_bump_files():
 
 
 def test_ci_publishes_versioned_per_arch_addon_images():
-    """HA Green updates resolve config.yaml's image template plus the add-on version."""
+    """addon-build.yml publishes :sha, :0.0.0, and :calver for every main merge.
+
+    :X.Y.Z and :latest are owned by addon-release.yml (v* tag triggered) and must
+    NOT appear in addon-build.yml — every main merge was silently overwriting the
+    stable tag, making it mutable. addon-release.yml fixes this.
+    """
     workflow_text = _workflow_text()
     config_text = (REPO_ROOT / "ha-addon" / "mammamiradio" / "config.yaml").read_text(encoding="utf-8")
 
@@ -173,22 +178,42 @@ def test_ci_publishes_versioned_per_arch_addon_images():
     assert image_match.group(1) == "ghcr.io/florianhorner/mammamiradio-addon-{arch}"
 
     assert "IMAGE_BASE: ${{ github.repository_owner }}/mammamiradio-addon" in workflow_text
-    assert "id: version" in workflow_text
-    assert "grep '^version:' ha-addon/mammamiradio/config.yaml" in workflow_text
-    assert "Build and push stable add-on image" in workflow_text
-    assert "BUILD_VERSION=${{ steps.version.outputs.version }}" in workflow_text
 
     required_tags = [
-        "${{ env.REGISTRY }}/${{ env.IMAGE_BASE }}-${{ matrix.arch }}:${{ steps.version.outputs.version }}",
-        "${{ env.REGISTRY }}/${{ env.IMAGE_BASE }}-${{ matrix.arch }}:latest",
         "${{ env.REGISTRY }}/${{ env.IMAGE_BASE }}-${{ matrix.arch }}:${{ github.sha }}",
     ]
     missing_tags = [tag for tag in required_tags if tag not in workflow_text]
     assert not missing_tags, (
         f"addon-build.yml is missing image tags: {missing_tags}\n"
-        "The version tag is what makes an HA add-on install running config.yaml "
-        "version 2.11.1 resolve to the matching GHCR image."
+        "The :sha tag is required for the smoke job and for addon-release.yml "
+        "to pull a proven image on tag-triggered stable builds."
     )
+
+    assert "steps.version.outputs.version" not in workflow_text, (
+        "addon-build.yml must not publish :X.Y.Z — stable image tags are owned by addon-release.yml.\n"
+        "Every main merge was overwriting the stable tag; this is now fixed."
+    )
+
+
+def test_ci_version_step_removed():
+    """The id: version step must not exist in addon-build.yml.
+
+    Version-based publishing moved to addon-release.yml (v* tag triggered).
+    Any reference to id: version or its outputs is dead code.
+    """
+    workflow_text = _workflow_text()
+    assert "id: version" not in workflow_text, (
+        "addon-build.yml must not have `id: version` step.\nVersion-based image publishing moved to addon-release.yml."
+    )
+    assert "steps.version.outputs.version" not in workflow_text, (
+        "addon-build.yml must not reference steps.version.outputs.version.\n"
+        "The id: version step was removed; any reference to its output is dead code."
+    )
+    assert "id: addon-version" in workflow_text, (
+        "addon-build.yml must still read config.yaml version so :sha images promoted to stable "
+        "carry the Home Assistant io.hass.version label."
+    )
+    assert "addon_version: ${{ steps.addon-version.outputs.version }}" in workflow_text
 
 
 def _extract_step_block(workflow_text: str, step_name: str) -> str:
@@ -220,3 +245,15 @@ def test_ci_publishes_edge_tags_with_matching_image_labels():
         "calver step must set BUILD_VERSION to the calver output"
     )
     assert ":${{ needs.validate.outputs.calver }}" in calver_block, "calver step must push the calver tag"
+
+
+def test_ci_sha_artifact_uses_stable_addon_version_label():
+    """:sha images are later promoted to stable tags, so their HA label must be X.Y.Z."""
+    workflow_text = _workflow_text()
+    stable_block = _extract_step_block(workflow_text, "Build and push stable add-on image")
+
+    assert "BUILD_VERSION=${{ needs.validate.outputs.addon_version }}" in stable_block, (
+        "the :sha artifact promoted by addon-release.yml must carry config.yaml's stable version "
+        "in io.hass.version, not the commit SHA."
+    )
+    assert ":${{ github.sha }}" in stable_block, "stable source artifact must still be pushed as :github.sha"
