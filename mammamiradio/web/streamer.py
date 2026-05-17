@@ -860,11 +860,11 @@ async def run_playback_loop(app) -> None:
 
         pulled_from_queue = False
         if segment_queue.empty() and state.queue_empty_since is None:
-            # Mark the exact moment playback ran out of audio. The 30s wait_for()
+            # Mark the exact moment playback ran out of audio. The wait_for()
             # below is part of the listener-visible silence window.
             state.queue_empty_since = _runtime_monotonic()
         try:
-            segment: Segment = await asyncio.wait_for(segment_queue.get(), timeout=30.0)
+            segment: Segment = await asyncio.wait_for(segment_queue.get(), timeout=SILENCE_FAILURE_SECONDS)
             pulled_from_queue = True
             state.queue_empty_since = None
         except TimeoutError:
@@ -891,7 +891,7 @@ async def run_playback_loop(app) -> None:
                 )
             else:
                 rescued_from_norm = False
-                if elapsed >= 30.0:
+                if elapsed >= SILENCE_FAILURE_SECONDS:
                     norm_files = sorted(config.cache_dir.glob("norm_*.mp3"))
                     if norm_files:
                         rescue = norm_files[0]
