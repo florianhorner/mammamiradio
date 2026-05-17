@@ -296,6 +296,7 @@ def _runtime_health_snapshot(request: Request) -> dict:
     playback_task = getattr(request.app.state, "playback_task", None)
     producer_alive = True if producer_task is None else not producer_task.done()
     playback_alive = True if playback_task is None else not playback_task.done()
+    queue_empty_elapsed = _queue_empty_elapsed(state)
     return {
         "queue_depth": queue_depth,
         "shadow_queue_depth": shadow_depth,
@@ -304,6 +305,8 @@ def _runtime_health_snapshot(request: Request) -> dict:
         "playback_task_alive": playback_alive,
         "playback_epoch": state.playback_epoch,
         "queue_empty_since": state.queue_empty_since,
+        "queue_empty_elapsed_s": round(queue_empty_elapsed, 1),
+        "silence_with_listeners": _silence_with_listeners(state, queue_empty_elapsed),
         "audio_source": audio_source or "unknown",
         "failover_active": bool(audio_source and audio_source.startswith("fallback")),
         "shadow_queue_corrections": state.shadow_queue_corrections,

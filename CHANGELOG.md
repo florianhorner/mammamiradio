@@ -8,16 +8,18 @@ The current version source of truth is `pyproject.toml`.
 
 ### Added
 
+- **HA Green performance smoke gate** — `make perf-smoke` now runs a runtime check against a live station, validating `/healthz`, `/readyz`, `/public-status`, and `/stream` first-byte latency with configurable HA Green thresholds.
 - **Edge add-on (development channel)** — A second Home Assistant add-on, **Mamma Mi Radio (Edge)**, now ships from the same repository. It tracks the latest `main` build: its version is a calendar version bumped automatically by CI on every add-on-changing merge, so Home Assistant shows a normal in-place "Update" each time. The stable **Mamma Mi Radio** add-on is unchanged and still updates only on deliberate releases. Edge and stable share one image and cannot run simultaneously (both bind port 8000) — install one. See `docs/runbooks/ha-addon.md` for switching instructions.
 
 ### Changed
 
+- **Queue fallback starts before the health-failure window.** Active listeners now get cache rescue attempts after a 5-second bounded queue-empty wait, before the preserved 30-second silence health-failure threshold triggers.
 - **Engineering backlog moved to GitHub issues** — `docs/todos.md` was removed. Open engineering work is now tracked as GitHub issues. A new CI guard (`scripts/check-no-backlog-files.sh`, wired into `quality.yml`) fails the build if a catch-all `TODO.md`/`TODOS.md`/`docs/todos.md`/`docs/backlog.md` file is re-added.
 
 ### Fixed
 
 - **Spoken host segment assembly is stricter.** Generated multi-line banter now rejects broken intermediate TTS line files, strict concat duration shortfalls, and implausibly short multi-line exchanges before they can reach the listener queue.
-- **Empty-queue playback rescue is fast again.** Live listeners now hit canned/norm-cache/demo fallback audio after the short queue fallback window instead of waiting for the 30-second health-failure window, and norm-cache rescue avoids replaying the current or very recent song when alternatives exist.
+- **Cache rescue no longer repeats the first cached song by filename.** Empty-queue fallback now avoids the current/recent song when alternatives exist and randomizes the rescue candidate, preventing skip from landing back on the same cached track.
 
 ## [2.12.3] - 2026-05-17
 
@@ -240,6 +242,7 @@ entrypoint `mammamiradio.main:app` and Docker invocations are unaffected.
 - **ICY header injection guard**: station name and genre are CRLF-scrubbed before writing to ICY response headers, closing an HTTP response-splitting vector for operators who set `STATION_NAME` with embedded newlines.
 - **youtube\_id format validation**: `/api/playlist/add-external` now validates the `youtube_id` parameter against `[A-Za-z0-9_-]{11}` before passing it to yt-dlp, blocking path traversal and injection payloads.
 - **HA addon version sync**: `ha-addon/mammamiradio/config.yaml` version bumped to `2.10.9` to match `pyproject.toml` (was stale at `2.10.8`).
+- **Local setup now avoids broken Python 3.13 installs**: `conductor-setup.sh` now prefers `python3.11 → python3.12 → python3.13 → python3` instead of leading with 3.13. On machines where 3.13 is installed but its `ensurepip` is broken, setup falls back to the project's target interpreter (3.11) automatically.
 
 ### Changed
 
@@ -263,10 +266,6 @@ entrypoint `mammamiradio.main:app` and Docker invocations are unaffected.
 ### Refactored
 
 - **Dashboard inline CSS/JS extracted into `/static/`**: moved dashboard styles and scripts out of the HTML template so static assets can be cached, reviewed, and reused normally.
-
-### Fixed
-
-- **Local setup now avoids broken Python 3.13 installs**: `conductor-setup.sh` now prefers `python3.11 → python3.12 → python3.13 → python3` instead of leading with 3.13. On machines where 3.13 is installed but its `ensurepip` is broken, setup falls back to the project's target interpreter (3.11) automatically.
 
 ## [2.10.9] - 2026-04-20
 
