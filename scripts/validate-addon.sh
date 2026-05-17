@@ -72,9 +72,18 @@ else
     fail "Image path mismatch: got '$IMAGE', expected '$EXPECTED'"
 fi
 
-# ---- 3. Options mapped in run.sh ----
-echo "3. Options → run.sh mapping"
-SCHEMA_KEYS=$(sed -n '/^schema:/,/^[^ ]/p' ha-addon/mammamiradio/config.yaml | grep -E '^\s+\w+:' | awk -F: '{print $1}' | tr -d ' ')
+# ---- 3. Options contract ----
+echo "3. Options contract"
+OPTIONS_KEYS=$(sed -n '/^options:/,/^[^ ]/p' ha-addon/mammamiradio/config.yaml | grep -E '^[[:space:]]+[[:alnum:]_]+:' | awk -F: '{print $1}' | tr -d ' ')
+SCHEMA_KEYS=$(sed -n '/^schema:/,/^[^ ]/p' ha-addon/mammamiradio/config.yaml | grep -E '^[[:space:]]+[[:alnum:]_]+:' | awk -F: '{print $1}' | tr -d ' ')
+if [ "$OPTIONS_KEYS" = "$SCHEMA_KEYS" ]; then
+    pass "options and schema key order match"
+else
+    fail "options and schema key order differ"
+    echo "    options: $(echo "$OPTIONS_KEYS" | tr '\n' ' ')"
+    echo "    schema:  $(echo "$SCHEMA_KEYS" | tr '\n' ' ')"
+fi
+
 MISSING=""
 for key in $SCHEMA_KEYS; do
     if ! grep -q "$key" ha-addon/mammamiradio/rootfs/run.sh; then
