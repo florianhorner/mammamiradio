@@ -22,6 +22,7 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[2]
 TOKENS_CSS = REPO_ROOT / "mammamiradio" / "web" / "static" / "tokens.css"
 ADMIN_HTML = REPO_ROOT / "mammamiradio" / "web" / "templates" / "admin.html"
+_ADMIN_HTML_TEXT = ADMIN_HTML.read_text(encoding="utf-8")
 _HTML_FILES = sorted((REPO_ROOT / "mammamiradio" / "web" / "templates").rglob("*.html"))
 _CSS_FILES = sorted((REPO_ROOT / "mammamiradio" / "web" / "static").glob("*.css"))
 GUARDED_FILES = [path for path in (_HTML_FILES + _CSS_FILES) if path != TOKENS_CSS]
@@ -145,20 +146,21 @@ def test_every_var_ref_resolves_to_a_defined_token() -> None:
 
 
 @pytest.mark.parametrize(
-    ("control_selector", "switch_selector", "input_id", "aria_label"),
+    ("control_selector", "switch_selector", "slider_selector", "input_id", "aria_label"),
     [
-        (".chaos-control", ".chaos-switch", "chaosToggle", "Toggle Chaos Mode"),
-        (".festival-control", ".festival-switch", "festivalToggle", "Toggle Festival Mode"),
+        (".chaos-control", ".chaos-switch", ".chaos-slider", "chaosToggle", "Toggle Chaos Mode"),
+        (".festival-control", ".festival-switch", ".festival-slider", "festivalToggle", "Toggle Festival Mode"),
     ],
 )
 def test_admin_mode_controls_use_tokens_and_accessible_switches(
     control_selector: str,
     switch_selector: str,
+    slider_selector: str,
     input_id: str,
     aria_label: str,
 ) -> None:
     """Admin mode switches must keep tokenized layout and keyboard accessibility."""
-    html = ADMIN_HTML.read_text(encoding="utf-8")
+    html = _ADMIN_HTML_TEXT
 
     control = _css_declarations(_css_block(html, control_selector))
     tokenized_layout = {
@@ -170,18 +172,16 @@ def test_admin_mode_controls_use_tokens_and_accessible_switches(
     for property_name, expected_value in tokenized_layout.items():
         actual = control.get(property_name)
         assert actual == expected_value, f"{control_selector} {property_name} must use {expected_value}, got {actual!r}"
-        assert "px" not in actual, f"{control_selector} {property_name} must not use px literals"
 
     switch = _css_declarations(_css_block(html, switch_selector))
     assert switch.get("height") == "44px", f"{switch_selector} must keep a 44px touch target."
 
     assert re.search(
-        rf'<input\b[^>]*\bid="{re.escape(input_id)}"[^>]*\baria-label="{re.escape(aria_label)}"',
+        rf'<input\b(?=[^>]*\bid="{re.escape(input_id)}")(?=[^>]*\baria-label="{re.escape(aria_label)}")[^>]*>',
         html,
         re.DOTALL,
     ), f'input#{input_id} must keep aria-label="{aria_label}".'
 
-    slider_selector = f".{switch_selector[1:].replace('-switch', '-slider')}"
     focus_block = _css_block(html, f"{switch_selector} input:focus-visible + {slider_selector}")
     assert "box-shadow" in focus_block or "outline" in focus_block, (
         f"{switch_selector} must show a visible keyboard focus indicator."
