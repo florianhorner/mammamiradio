@@ -3,9 +3,9 @@
 Contract: addon-release.yml triggers on v* tag push only and is responsible for:
   1. Validating the semver tag format (vX.Y.Z — not vfoo, not v1.2)
   2. Confirming the tag version matches ha-addon/mammamiradio/config.yaml version:
-  3. Confirming the GHCR tag does not already exist (immutability guard)
-  4. Publishing :X.Y.Z and :latest for both amd64 and aarch64 with fail-fast: true
-  5. Running a smoke test against the :sha image built by addon-build.yml
+  3. Confirming prebuilt :sha images exist for both architectures
+  4. Promoting those exact :sha images to :X.Y.Z and :latest
+  5. Running smoke tests before and after stable-tag promotion
 
 addon-build.yml (main-push) must NOT publish :X.Y.Z or :latest after this split.
 """
@@ -34,7 +34,7 @@ def _build_workflow_text() -> str:
 
 
 def test_release_workflow_triggers_on_version_tags_only():
-    """Workflow must trigger on v* tag push; must not trigger on branch pushes."""
+    """Workflow must trigger on v* tag push; dispatch is guarded to tag refs."""
     text = _workflow_text()
     trigger_section = re.search(r"\bon:\s*\n(.*?)(?=\njobs:)", text, re.DOTALL)
     assert trigger_section, "Could not locate `on:` block in addon-release.yml"
@@ -44,6 +44,18 @@ def test_release_workflow_triggers_on_version_tags_only():
         "addon-release.yml must not trigger on branch pushes — tag-only.\n"
         "A branch trigger would publish :X.Y.Z on every main merge, recreating the mutability bug."
     )
+    assert "workflow_dispatch:" in trigger_block, "manual dispatch is allowed only with a tag-ref guard."
+
+
+def test_release_workflow_dispatch_requires_tag_ref():
+    """Manual dispatch must not publish stable tags from branch refs."""
+    text = _workflow_text()
+    assert "GITHUB_REF_TYPE" in text, "pre-flight must inspect GITHUB_REF_TYPE."
+    assert '"tag"' in text or "'tag'" in text, (
+        "pre-flight must require github.ref_type/GITHUB_REF_TYPE == tag.\n"
+        "Without this, a branch named vX.Y.Z could be manually dispatched and stable-published."
+    )
+    assert "Stable add-on releases must run from a tag ref" in text
 
 
 def test_release_workflow_validates_semver_format():
@@ -71,16 +83,34 @@ def test_release_workflow_validates_tag_version_matches_config_yaml():
     )
 
 
-def test_release_workflow_immutability_preflight_present():
-    """Pre-flight must run docker manifest inspect to block tag overwrites."""
+def test_release_workflow_requires_prebuilt_sha_images():
+    """Pre-flight must fail before publishing if addon-build.yml did not create :sha."""
     text = _workflow_text()
-    assert "docker manifest inspect" in text, (
-        "pre-flight must run `docker manifest inspect` to check GHCR tag immutability.\n"
-        "Without this, pushing v2.12.4 a second time would silently overwrite the published image."
+    assert "${{ github.sha }}" in text, "release workflow must reference the source :sha tag."
+    assert "Missing $SHA_TAG" in text, (
+        "pre-flight must fail with a clear message when the :sha image is missing.\n"
+        "Without this, a tag on an unbuilt commit could publish stable tags before smoke fails."
+    )
+    assert re.search(r"for ARCH in amd64 aarch64", text), (
+        "pre-flight must require prebuilt :sha images for both stable architectures."
+    )
+
+
+def test_release_workflow_allows_matching_partial_reruns_only():
+    """Existing stable tags may recover partial reruns only when they match :sha."""
+    text = _workflow_text()
+    assert "VERSION_DIGEST" in text and "SHA_DIGEST" in text, (
+        "pre-flight/promote must compare existing version-tag digest to the source SHA digest.\n"
+        "This permits recovery after a partial arch publish without allowing silent retags."
+    )
+    assert "rerun recovery is allowed" in text, (
+        "workflow should explicitly allow matching existing tags so partial arch publishes are recoverable."
+    )
+    assert "does not match $SHA_TAG" in text or "Refusing to overwrite" in text, (
+        "workflow must fail if an existing :X.Y.Z tag points at a different digest."
     )
     assert "exit 1" in text, (
-        "pre-flight must exit 1 (fail loudly) if the tag already exists.\n"
-        "A silent no-op would hide the overwrite attempt."
+        "pre-flight/promote must exit 1 (fail loudly) if an existing stable tag is mismatched."
     )
 
 
@@ -89,15 +119,18 @@ def test_release_workflow_immutability_preflight_present():
 # ---------------------------------------------------------------------------
 
 
-def test_release_workflow_publishes_versioned_per_arch_images():
-    """:X.Y.Z tag must appear in the build job, driven by pre-flight outputs."""
+def test_release_workflow_promotes_versioned_per_arch_images():
+    """:X.Y.Z tag must be created from the prebuilt SHA image."""
     text = _workflow_text()
     assert "needs.pre-flight.outputs.version" in text, (
-        "build job must use ${{ needs.pre-flight.outputs.version }} for the :X.Y.Z tag.\n"
-        "This ensures the tag is validated by pre-flight before it reaches the build step."
+        "promote job must use ${{ needs.pre-flight.outputs.version }} for the :X.Y.Z tag.\n"
+        "This ensures the tag is validated by pre-flight before stable promotion."
     )
     assert "IMAGE_BASE" in text and "matrix.arch" in text, (
-        "build job must publish per-arch images using IMAGE_BASE and matrix.arch."
+        "promote job must publish per-arch images using IMAGE_BASE and matrix.arch."
+    )
+    assert "docker buildx imagetools create --tag \"$VERSION_TAG\" \"$SHA_TAG\"" in text, (
+        "release workflow must promote the already-built SHA artifact instead of rebuilding."
     )
 
 
@@ -121,57 +154,66 @@ def test_release_workflow_does_not_hardcode_version():
         )
 
 
-def test_release_workflow_matrix_includes_aarch64():
-    """aarch64 must be in the release build matrix."""
+def test_release_workflow_does_not_rebuild_stable_images():
+    """Stable release must promote prebuilt :sha images instead of rebuilding."""
     text = _workflow_text()
-    build_section = re.search(r"\n  build:\n((?:    .+\n|\n)*)", text)
-    assert build_section, "Could not locate `build:` job in addon-release.yml"
-    assert "aarch64" in build_section.group(1), (
-        "aarch64 missing from addon-release.yml build matrix.\n"
+    assert "docker/build-push-action" not in text, (
+        "addon-release.yml must not rebuild stable images.\n"
+        "Promoting :sha avoids moving-dependency drift between main CI and tag release."
+    )
+    assert "Copy source into addon build context" not in text
+
+
+def test_release_workflow_matrix_includes_aarch64():
+    """aarch64 must be in the release promote matrix."""
+    text = _workflow_text()
+    promote_section = re.search(r"\n  promote:\n((?:    .+\n|\n)*)", text)
+    assert promote_section, "Could not locate `promote:` job in addon-release.yml"
+    assert "aarch64" in promote_section.group(1), (
+        "aarch64 missing from addon-release.yml promote matrix.\n"
         "HA Green (Raspberry Pi) users would receive a 404 on every stable update."
     )
 
 
 def test_release_workflow_matrix_includes_amd64():
-    """amd64 must be in the release build matrix."""
+    """amd64 must be in the release promote matrix."""
     text = _workflow_text()
-    build_section = re.search(r"\n  build:\n((?:    .+\n|\n)*)", text)
-    assert build_section, "Could not locate `build:` job in addon-release.yml"
-    assert "amd64" in build_section.group(1), "amd64 missing from addon-release.yml build matrix."
+    promote_section = re.search(r"\n  promote:\n((?:    .+\n|\n)*)", text)
+    assert promote_section, "Could not locate `promote:` job in addon-release.yml"
+    assert "amd64" in promote_section.group(1), "amd64 missing from addon-release.yml promote matrix."
 
 
 def test_release_workflow_matrix_fails_fast():
-    """fail-fast: true must be set — partial-arch stable publish is worse than no publish."""
+    """fail-fast: true must be set for stable promotion."""
     text = _workflow_text()
-    build_section = re.search(r"\n  build:\n((?:    .+\n|\n)*)", text)
-    assert build_section, "Could not locate `build:` job in addon-release.yml"
-    assert "fail-fast: true" in build_section.group(1), (
-        "addon-release.yml build matrix must use `fail-fast: true`.\n"
-        "If aarch64 fails after amd64 publishes, HA Green users get a broken stable tag.\n"
-        "addon-build.yml uses fail-fast: false (edge builds are best-effort); stable releases are not."
+    promote_section = re.search(r"\n  promote:\n((?:    .+\n|\n)*)", text)
+    assert promote_section, "Could not locate `promote:` job in addon-release.yml"
+    assert "fail-fast: true" in promote_section.group(1), (
+        "addon-release.yml promote matrix must use `fail-fast: true`.\n"
+        "Matching existing version tags are allowed so reruns can recover a partial arch publish."
     )
 
 
 def test_release_workflow_permissions_scoped():
-    """packages: write must be at job level, not workflow level."""
+    """packages: write must be at promote job level, not workflow level."""
     text = _workflow_text()
     top_level = re.search(r"^permissions:\s*\n((?:  .+\n)*)", text, re.MULTILINE)
     if top_level:
         assert "packages: write" not in top_level.group(0), (
-            "packages: write must not be at workflow level — scope to the build job only.\n"
+            "packages: write must not be at workflow level — scope to the promote job only.\n"
             "Workflow-level permissions apply to all jobs including pre-flight."
         )
-    build_section = re.search(r"\n  build:\n((?:    .+\n|\n)*)", text)
-    assert build_section and "packages: write" in build_section.group(1), (
-        "build job must declare `packages: write` in its job-level permissions block."
+    promote_section = re.search(r"\n  promote:\n((?:    .+\n|\n)*)", text)
+    assert promote_section and "packages: write" in promote_section.group(1), (
+        "promote job must declare `packages: write` in its job-level permissions block."
     )
 
 
 def test_release_workflow_fork_guard():
-    """Build job must have a fork guard to prevent forks from publishing stable images."""
+    """Promote job must have a fork guard to prevent forks from publishing stable images."""
     text = _workflow_text()
-    build_section = re.search(r"\n  build:\n((?:    .+\n|\n)*)", text)
-    assert build_section, "Could not locate `build:` job in addon-release.yml"
+    build_section = re.search(r"\n  promote:\n((?:    .+\n|\n)*)", text)
+    assert build_section, "Could not locate `promote:` job in addon-release.yml"
     assert re.search(
         r"github\.repository\s*==\s*['\"]florianhorner/mammamiradio['\"]",
         build_section.group(1),
@@ -196,26 +238,36 @@ def test_release_workflow_concurrency_defined():
 
 
 def test_release_workflow_build_needs_preflight():
-    """Build job must declare needs: pre-flight."""
+    """Promote job must declare needs: pre-flight and smoke-prebuilt."""
     text = _workflow_text()
-    build_section = re.search(r"\n  build:\n((?:    .+\n|\n)*)", text)
-    assert build_section, "Could not locate `build:` job in addon-release.yml"
-    build_block = build_section.group(1)
-    assert "needs: pre-flight" in build_block or "needs: [pre-flight" in build_block, (
-        "build job must declare `needs: pre-flight` so it does not run if pre-flight validation fails.\n"
-        "Without this, a mismatched tag version or existing GHCR tag would not block the build."
+    promote_section = re.search(r"\n  promote:\n((?:    .+\n|\n)*)", text)
+    assert promote_section, "Could not locate `promote:` job in addon-release.yml"
+    promote_block = promote_section.group(1)
+    assert "needs: [pre-flight, smoke-prebuilt]" in promote_block, (
+        "promote job must wait for both pre-flight and the prebuilt SHA smoke test.\n"
+        "Without this, stable tags could be published before the source artifact is proven."
     )
 
 
 def test_release_workflow_runs_smoke_test():
-    """Smoke job must pull :sha, run on port 8765:8000, and call /healthz."""
+    """Smoke jobs must gate promotion on :sha and verify the published release tag."""
     text = _workflow_text()
+    prebuilt_section = re.search(r"\n  smoke-prebuilt:\n((?:    .+\n|\n)*)", text)
+    assert prebuilt_section, "Could not locate `smoke-prebuilt:` job in addon-release.yml"
+    prebuilt_block = prebuilt_section.group(1)
+    assert "github.sha" in prebuilt_block, (
+        "smoke-prebuilt must pull :${{ github.sha }} before stable tags are promoted."
+    )
+    assert "needs: pre-flight" in prebuilt_block
+
     smoke_section = re.search(r"\n  smoke:\n((?:    .+\n|\n)*)", text)
     assert smoke_section, "Could not locate `smoke:` job in addon-release.yml"
     smoke_block = smoke_section.group(1)
-    assert "github.sha" in smoke_block, (
-        "smoke job must pull :${{ github.sha }} (the image already built by addon-build.yml), "
-        "not :X.Y.Z (which was just published and is not independently proven by this run)."
+    assert "needs: [pre-flight, promote]" in smoke_block, (
+        "final smoke must run after stable promotion."
+    )
+    assert "needs.pre-flight.outputs.version" in smoke_block, (
+        "final smoke must pull the published :X.Y.Z release tag, not only :${{ github.sha }}."
     )
     assert "8765:8000" in smoke_block, (
         "smoke job must map port 8765:8000 — matches the smoke contract in addon-build.yml."
@@ -229,16 +281,29 @@ def test_release_workflow_runs_smoke_test():
 # ---------------------------------------------------------------------------
 
 
-def test_release_workflow_uses_same_pinned_actions_as_build():
-    """Every pinned action SHA in addon-build.yml must appear in addon-release.yml."""
+def test_release_workflow_uses_pinned_actions():
+    """Every action used by addon-release.yml must be pinned to a commit SHA."""
+    release_text = _workflow_text()
+    unpinned = re.findall(r"uses:\s+\S+@(?![0-9a-f]{40})(\S+)", release_text)
+    assert not unpinned, f"addon-release.yml has unpinned action refs: {unpinned}"
+
+
+def test_release_workflow_keeps_common_action_pins_aligned_with_build():
+    """Actions shared with addon-build.yml must use the same pinned SHAs."""
     build_text = _build_workflow_text()
     release_text = _workflow_text()
 
-    pinned_shas = re.findall(r"uses:\s+\S+@([0-9a-f]{40})", build_text)
-    assert pinned_shas, "Expected pinned action SHAs in addon-build.yml — found none."
+    build_actions = dict(re.findall(r"uses:\s+(\S+)@([0-9a-f]{40})", build_text))
+    release_actions = dict(re.findall(r"uses:\s+(\S+)@([0-9a-f]{40})", release_text))
+    shared_actions = sorted(set(build_actions) & set(release_actions))
+    assert shared_actions, "Expected shared pinned actions between addon-build.yml and addon-release.yml."
 
-    missing = [sha for sha in pinned_shas if sha not in release_text]
-    assert not missing, (
-        f"addon-release.yml is missing action SHAs from addon-build.yml: {missing}\n"
-        "Both workflows must use identical pinned SHAs to prevent supply chain divergence."
+    mismatched = [
+        action
+        for action in shared_actions
+        if build_actions[action] != release_actions[action]
+    ]
+    assert not mismatched, (
+        f"Shared actions use different pinned SHAs: {mismatched}\n"
+        "Shared workflow actions must stay aligned to prevent supply chain divergence."
     )

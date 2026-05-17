@@ -10,8 +10,10 @@ Code change
   → push/merge to main
   → addon-build.yml CI validates + builds :sha, :0.0.0, :calver (NO :X.Y.Z or :latest)
   → push matching v* tag: git tag vX.Y.Z && git push origin vX.Y.Z
-  → addon-release.yml pre-flight: semver validation, config.yaml version match, GHCR immutability check
-  → addon-release.yml build: publishes :X.Y.Z and :latest for amd64 + aarch64
+  → addon-release.yml pre-flight: tag-ref, semver, config.yaml, and prebuilt :sha checks
+  → addon-release.yml smoke-prebuilt: runs the amd64 :sha image before stable tags exist
+  → addon-release.yml promote: publishes :X.Y.Z and :latest from the prebuilt :sha image for amd64 + aarch64
+  → addon-release.yml smoke: runs the published amd64 :X.Y.Z image
   → HA discovers new version via config.yaml
   → User clicks "Update" in HA
   → HA pulls image from GHCR
@@ -23,7 +25,7 @@ Code change
 
 Every step must succeed. A break at ANY point means the addon doesn't work.
 
-**Important:** The version-bump merge and the tag push are separate actions. The tag push is what triggers the stable image build. Wait for `addon-build.yml` to pass on the version-bump commit before pushing the tag — `addon-release.yml` smoke pulls the `:sha` image built by that run.
+**Important:** The version-bump merge and the tag push are separate actions. The tag push promotes the already-built `:sha` images to stable tags. Wait for `addon-build.yml` to pass on the version-bump commit before pushing the tag — `addon-release.yml` fails before publishing if either per-arch `:sha` image is missing.
 
 ## Version: two files, must match
 
@@ -122,6 +124,8 @@ The standalone Docker image (for non-HA users) is separate: `ghcr.io/florianhorn
 
 Stable add-on images are published by `addon-release.yml`, triggered by a `v*` tag push to the version-bump commit after it merges to `main`. GitHub Releases are curated standalone announcements; always write release notes rather than copying raw `CHANGELOG.md`. Tag the version-bump commit — not a later one — so the release image matches the commit CI already validated.
 
+`addon-release.yml` does not rebuild the add-on. It verifies that both per-arch `:${git_sha}` images exist, smoke-tests the amd64 SHA image before stable publishing, promotes those exact images to `:X.Y.Z` and `:latest`, and then smoke-tests the published amd64 `:X.Y.Z` image. If a previous run published one architecture and then failed, a rerun is allowed only when the existing `:X.Y.Z` tag digest matches the source `:sha`; mismatched stable tags fail and must be cleaned up manually.
+
 ## Edge channel (dev releases)
 
 `mammamiradio-edge` is a second add-on in this same repo (`ha-addon/mammamiradio-edge/`) for soak-testing `main` on real hardware without disturbing stable users.
@@ -158,7 +162,7 @@ Before merging ANY change that touches addon files:
 **After merging a version-bump commit** (to publish the stable image):
 1. Wait for `addon-build.yml` to pass on the merged commit
 2. `git tag vX.Y.Z && git push origin vX.Y.Z`
-3. `addon-release.yml` runs pre-flight → build → smoke; check Actions for green
+3. `addon-release.yml` runs pre-flight → smoke-prebuilt → promote → smoke; check Actions for green
 4. Verify: `docker pull ghcr.io/florianhorner/mammamiradio-addon-aarch64:X.Y.Z`
 
 ## Release invariants gate (2026-04-27 onward)
