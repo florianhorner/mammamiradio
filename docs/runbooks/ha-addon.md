@@ -8,8 +8,12 @@ How to release a new version of the Mamma Mi Radio Home Assistant addon without 
 Code change
   → bump version in BOTH files (see below)
   → push/merge to main
-  → addon-build.yml CI validates + builds images
-  → GHCR receives :version and :latest tags
+  → addon-build.yml CI validates + builds :sha, :0.0.0, :calver (NO :X.Y.Z or :latest)
+  → push matching v* tag: git tag vX.Y.Z && git push origin vX.Y.Z
+  → addon-release.yml pre-flight: tag-ref, semver, config.yaml, and prebuilt :sha checks
+  → addon-release.yml smoke-prebuilt: runs the amd64 :sha image before stable tags exist
+  → addon-release.yml promote: publishes :X.Y.Z and :latest from the prebuilt :sha image for amd64 + aarch64
+  → addon-release.yml smoke: runs the published amd64 :X.Y.Z image
   → HA discovers new version via config.yaml
   → User clicks "Update" in HA
   → HA pulls image from GHCR
@@ -20,6 +24,8 @@ Code change
 ```
 
 Every step must succeed. A break at ANY point means the addon doesn't work.
+
+**Important:** The version-bump merge and the tag push are separate actions. The tag push promotes the already-built `:sha` images to stable tags. Wait for `addon-build.yml` to pass on the version-bump commit before pushing the tag — `addon-release.yml` fails before publishing if either per-arch `:sha` image is missing.
 
 ## Version: two files, must match
 
@@ -141,7 +147,9 @@ The standalone Docker image (for non-HA users) is separate: `ghcr.io/florianhorn
 
 ## Release channels
 
-Home Assistant add-on updates are driven by `ha-addon/mammamiradio/config.yaml` and images built from `main`. GitHub Releases and tags are curated standalone announcements and may lag add-on version bumps. Before publishing a GitHub Release, write curated release notes instead of copying raw `CHANGELOG.md`.
+Stable add-on images are published by `addon-release.yml`, triggered by a `v*` tag push to the version-bump commit after it merges to `main`. GitHub Releases are curated standalone announcements; always write release notes rather than copying raw `CHANGELOG.md`. Tag the version-bump commit — not a later one — so the release image matches the commit CI already validated.
+
+`addon-release.yml` does not rebuild the add-on. It verifies that both per-arch `:${git_sha}` images exist, smoke-tests the amd64 SHA image before stable publishing, promotes those exact images to `:X.Y.Z` without changing the source manifest shape, updates `:latest` only when the current tag is the newest stable semver, and then smoke-tests the published amd64 `:X.Y.Z` image. The source `:sha` image is built with `io.hass.version` set to the stable `config.yaml` version because it may later become the stable release artifact. If a previous run published one architecture and then failed, a rerun is allowed only when the existing `:X.Y.Z` tag digest matches the source `:sha`; mismatched stable tags fail and must be cleaned up manually.
 
 ## Edge channel (dev releases)
 
@@ -150,8 +158,8 @@ Home Assistant add-on updates are driven by `ha-addon/mammamiradio/config.yaml` 
 | | Stable (`mammamiradio`) | Edge (`mammamiradio-edge`) |
 |--|--|--|
 | `version:` | hand-bumped `X.Y.Z` on deliberate releases | calendar version `YYYY.M.D.<build>`, bumped by CI |
-| Updates when | you bump the version | every `main` merge that changes the add-on or app |
-| Image tag pulled | `:X.Y.Z` | `:YYYY.M.D.<build>` |
+| Updates when | you push a matching `v*` tag after merging the version-bump commit | every `main` merge that changes the add-on or app |
+| Image tag pulled | `:X.Y.Z` (published by `addon-release.yml`) | `:YYYY.M.D.<build>` (published by `addon-build.yml`) |
 | Audience | everyone | the maintainer's soak Pi |
 
 Both add-ons pull the **same image repo** (`ghcr.io/florianhorner/mammamiradio-addon-{arch}`) — they just resolve to different tags. The edge folder holds only metadata (`config.yaml`, `translations/`, `CHANGELOG.md`, icons); it has no `Dockerfile` because HA pulls the prebuilt image.
@@ -175,6 +183,12 @@ Before merging ANY change that touches addon files:
 - [ ] If new config option: added to config.yaml + run.sh + translations
 - [ ] If path changed: grep all files for the old path
 - [ ] If renamed anything: `grep -r "old_name" .` returns zero hits
+
+**After merging a version-bump commit** (to publish the stable image):
+1. Wait for `addon-build.yml` to pass on the merged commit
+2. `git tag vX.Y.Z && git push origin vX.Y.Z`
+3. `addon-release.yml` runs pre-flight → smoke-prebuilt → promote → smoke; check Actions for green
+4. Verify: `docker pull ghcr.io/florianhorner/mammamiradio-addon-aarch64:X.Y.Z`
 
 ## Release invariants gate (2026-04-27 onward)
 
