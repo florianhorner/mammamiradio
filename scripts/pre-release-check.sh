@@ -32,12 +32,12 @@ fi
 echo ""
 echo "2. ha-addon CHANGELOG"
 
-CHANGELOG_VER=$(grep -m1 '^## ' ha-addon/mammamiradio/CHANGELOG.md | sed 's/^## //')
+CHANGELOG_VER=$(awk '/^## / {version=$0; sub(/^##[[:space:]]+/, "", version); if (version != "Unreleased" && version != "[Unreleased]") {gsub(/^\[|\]$/, "", version); print version; exit}}' ha-addon/mammamiradio/CHANGELOG.md)
 
 if [ "$CHANGELOG_VER" = "$ADDON_VER" ]; then
-    ok "CHANGELOG head (## $CHANGELOG_VER) matches config.yaml ($ADDON_VER)"
+    ok "CHANGELOG latest version (## $CHANGELOG_VER) matches config.yaml ($ADDON_VER)"
 else
-    fail "CHANGELOG head is ## $CHANGELOG_VER but config.yaml is $ADDON_VER — update ha-addon/mammamiradio/CHANGELOG.md"
+    fail "CHANGELOG latest version is ## ${CHANGELOG_VER:-missing} but config.yaml is $ADDON_VER — update ha-addon/mammamiradio/CHANGELOG.md"
 fi
 
 # ── 3. FFmpeg music_eq filter chain has exactly 3 equalizers ─────────────────
@@ -77,6 +77,34 @@ if [ "$RESTART_TEST" -gt 0 ]; then
     ok "session_stopped scenario is tested ($RESTART_TEST test file(s))"
 else
     fail "No test covers session_stopped — post-restart silence is untested"
+fi
+
+# ── 6. HA Green fallback performance gates ───────────────────────────────────
+echo ""
+echo "6. HA Green fallback performance gates"
+
+QUEUE_FALLBACK_WAIT=$(awk -F= '/QUEUE_FALLBACK_WAIT_SECONDS/ {gsub(/[[:space:]]/, "", $2); print $2; exit}' mammamiradio/web/streamer.py)
+if python3 - "$QUEUE_FALLBACK_WAIT" <<'PY'
+import sys
+value = float(sys.argv[1])
+raise SystemExit(0 if value <= 5.0 else 1)
+PY
+then
+    ok "queue fallback wait is ${QUEUE_FALLBACK_WAIT}s (<= 5s)"
+else
+    fail "QUEUE_FALLBACK_WAIT_SECONDS must stay <= 5s for HA Green no-content windows (got ${QUEUE_FALLBACK_WAIT:-missing})"
+fi
+
+if grep -q 'norm_files\[0\]' mammamiradio/web/streamer.py; then
+    fail "norm-cache rescue must not use deterministic norm_files[0]"
+else
+    ok "norm-cache rescue avoids deterministic first-file selection"
+fi
+
+if [ -x scripts/ha-green-perf-smoke.py ] && grep -q '^perf-smoke:' Makefile; then
+    ok "HA Green perf smoke script and Make target are present"
+else
+    fail "Missing executable scripts/ha-green-perf-smoke.py or Makefile perf-smoke target"
 fi
 
 # ── Summary ───────────────────────────────────────────────────────────────────
