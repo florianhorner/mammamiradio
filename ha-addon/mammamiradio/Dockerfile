@@ -1,6 +1,14 @@
 ARG BUILD_FROM
 FROM ${BUILD_FROM}
 
+ARG BUILD_VERSION
+ARG BUILD_ARCH
+
+LABEL \
+  io.hass.version="${BUILD_VERSION}" \
+  io.hass.type="app" \
+  io.hass.arch="${BUILD_ARCH}"
+
 # Install Python 3 and FFmpeg
 RUN apk add --no-cache python3 py3-pip ffmpeg
 

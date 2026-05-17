@@ -175,6 +175,8 @@ def test_ci_publishes_versioned_per_arch_addon_images():
     assert "IMAGE_BASE: ${{ github.repository_owner }}/mammamiradio-addon" in workflow_text
     assert "id: version" in workflow_text
     assert "grep '^version:' ha-addon/mammamiradio/config.yaml" in workflow_text
+    assert "Build and push stable add-on image" in workflow_text
+    assert "BUILD_VERSION=${{ steps.version.outputs.version }}" in workflow_text
 
     required_tags = [
         "${{ env.REGISTRY }}/${{ env.IMAGE_BASE }}-${{ matrix.arch }}:${{ steps.version.outputs.version }}",
@@ -187,3 +189,16 @@ def test_ci_publishes_versioned_per_arch_addon_images():
         "The version tag is what makes an HA add-on install running config.yaml "
         "version 2.11.1 resolve to the matching GHCR image."
     )
+
+
+def test_ci_publishes_edge_tags_with_matching_image_labels():
+    """Edge image labels must match the version HA uses for the edge tag."""
+    workflow_text = _workflow_text()
+
+    assert "Build and push edge seed add-on image" in workflow_text
+    assert "BUILD_VERSION=0.0.0" in workflow_text
+    assert "${{ env.REGISTRY }}/${{ env.IMAGE_BASE }}-${{ matrix.arch }}:0.0.0" in workflow_text
+
+    assert "Build and push edge calver add-on image" in workflow_text
+    assert "BUILD_VERSION=${{ needs.validate.outputs.calver }}" in workflow_text
+    assert "${{ env.REGISTRY }}/${{ env.IMAGE_BASE }}-${{ matrix.arch }}:${{ needs.validate.outputs.calver }}" in workflow_text

@@ -229,7 +229,23 @@ def _create_validate_addon_repo(
             ]
         ),
     )
-    _write(tmp_path / "ha-addon/mammamiradio/Dockerfile", "FROM scratch\nCOPY app /app\n")
+    _write(
+        tmp_path / "ha-addon/mammamiradio/Dockerfile",
+        "\n".join(
+            [
+                "ARG BUILD_FROM=scratch",
+                "FROM ${BUILD_FROM}",
+                "ARG BUILD_VERSION",
+                "ARG BUILD_ARCH",
+                "LABEL \\",
+                '  io.hass.version="${BUILD_VERSION}" \\',
+                '  io.hass.type="app" \\',
+                '  io.hass.arch="${BUILD_ARCH}"',
+                "COPY app /app",
+                "",
+            ]
+        ),
+    )
     _write(tmp_path / "ha-addon/mammamiradio/build.yaml", "build_from: {}\n")
     _write(
         tmp_path / "ha-addon/mammamiradio/translations/en.yaml",
@@ -362,6 +378,13 @@ def test_test_addon_local_delegates_to_validate_addon() -> None:
 
     assert "Compatibility wrapper" in wrapper
     assert 'exec "$ROOT/scripts/validate-addon.sh" "$@"' in wrapper
+
+
+def test_validate_addon_build_passes_home_assistant_label_args() -> None:
+    validator = VALIDATE_ADDON.read_text()
+
+    assert '--build-arg BUILD_VERSION="$ADDON_VER"' in validator
+    assert '--build-arg BUILD_ARCH="$BUILD_ARCH"' in validator
 
 
 def test_addon_dockerfile_does_not_drop_root_before_supervisor_mounts() -> None:
