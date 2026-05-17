@@ -235,13 +235,13 @@ def _create_validate_addon_repo(
             [
                 "ARG BUILD_FROM=scratch",
                 "FROM ${BUILD_FROM}",
+                "COPY app /app",
                 "ARG BUILD_VERSION",
                 "ARG BUILD_ARCH",
                 "LABEL \\",
                 '  io.hass.version="${BUILD_VERSION}" \\',
                 '  io.hass.type="app" \\',
                 '  io.hass.arch="${BUILD_ARCH}"',
-                "COPY app /app",
                 "",
             ]
         ),
@@ -385,6 +385,41 @@ def test_validate_addon_build_passes_home_assistant_label_args() -> None:
 
     assert '--build-arg BUILD_VERSION="$ADDON_VER"' in validator
     assert '--build-arg BUILD_ARCH="$BUILD_ARCH"' in validator
+
+
+def test_validate_addon_rejects_dockerfile_missing_hass_labels(tmp_path: Path) -> None:
+    """validate-addon.sh must exit non-zero when the Dockerfile lacks io.hass.* labels.
+
+    This is the negative gate for check 11 (Dockerfile safety). A Dockerfile
+    that ships without these labels cannot be discovered by the HA Supervisor and
+    will silently fail to register the add-on version.
+    """
+    env = _create_validate_addon_repo(
+        tmp_path,
+        streamer_body="""
+def _inject_ingress_prefix(html: str, prefix: str) -> str:
+    html = html.replace('href="/listen"', f'href="{prefix}/listen"')
+    return html
+""".strip()
+        + "\n",
+    )
+    # Overwrite Dockerfile with one that has no io.hass.* labels.
+    _write(
+        tmp_path / "ha-addon/mammamiradio/Dockerfile",
+        "\n".join(
+            [
+                "ARG BUILD_FROM=scratch",
+                "FROM ${BUILD_FROM}",
+                "COPY app /app",
+                "",
+            ]
+        ),
+    )
+
+    result = _run(["bash", str(VALIDATE_ADDON)], cwd=tmp_path, env=env)
+
+    assert result.returncode != 0
+    assert "Dockerfile missing required Home Assistant image label" in result.stdout
 
 
 def test_addon_dockerfile_does_not_drop_root_before_supervisor_mounts() -> None:
