@@ -1171,7 +1171,7 @@ async def run_playback_loop(app) -> None:
                 )
             else:
                 rescued_from_norm = False
-                if elapsed >= SILENCE_FAILURE_SECONDS:
+                if elapsed >= QUEUE_FALLBACK_WAIT_SECONDS:
                     rescue = _select_norm_cache_rescue(config.cache_dir, state)
                     if rescue:
                         logger.warning(

@@ -375,7 +375,7 @@ async def test_run_playback_loop_timeout_uses_norm_cache_after_30s(tmp_path, cap
         patch("mammamiradio.scheduling.producer._pick_canned_clip", return_value=None),
         patch(
             "mammamiradio.web.streamer._runtime_monotonic",
-            side_effect=[100.0, 100.0 + SILENCE_FAILURE_SECONDS + 0.1, 130.5, 130.6, 130.7, 130.8],
+            side_effect=[100.0, 100.0 + QUEUE_FALLBACK_WAIT_SECONDS + 0.1, 105.2, 105.3, 105.4, 105.5],
         ),
     ):
         task = asyncio.create_task(run_playback_loop(app))
