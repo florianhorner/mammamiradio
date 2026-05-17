@@ -30,6 +30,12 @@ Each feature worktree must hand off:
 Incomplete handoffs can be parked until the missing information is supplied.
 The train should stay reviewable before it absorbs another slice.
 
+## Mapped Feature Worktrees
+
+| Worktree | Branch | Current SHA | Status |
+|----------|--------|-------------|--------|
+| `havana` | `florianhorner/feat/festival-party-mode` | `194a27e24d2a40c7fcdfc3ba102a37487274c845` | Mapped to `Train/Listener QS`; no unique commits ahead of `origin/main` at mapping time. |
+
 ## Integration Rules
 
 - Keep `train/listener-qs` based on `origin/main`.
