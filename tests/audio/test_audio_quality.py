@@ -65,6 +65,80 @@ def test_validate_segment_audio_rejects_short_duration(tmp_path):
         validate_segment_audio(audio, SegmentType.BANTER)
 
 
+def test_validate_segment_audio_rejects_implausibly_short_multiline_banter(tmp_path):
+    audio = _mk_audio(tmp_path / "short_exchange.mp3")
+
+    def _run(cmd, capture_output, text, check):
+        joined = " ".join(cmd)
+        if "ffprobe" in joined:
+            return _cp(stdout="8.0\n")
+        if "silencedetect" in joined:
+            return _cp(stderr="")
+        if "volumedetect" in joined:
+            return _cp(stderr="mean_volume: -20.0 dB\nmax_volume: -3.0 dB\n")
+        raise AssertionError(f"Unexpected command: {joined}")
+
+    with (
+        patch("mammamiradio.audio.audio_quality.subprocess.run", side_effect=_run),
+        pytest.raises(AudioQualityError, match="implausibly short"),
+    ):
+        validate_segment_audio(audio, SegmentType.BANTER, expected_line_count=6)
+
+
+def test_validate_segment_audio_rejects_explicit_expected_duration(tmp_path):
+    audio = _mk_audio(tmp_path / "short_expected.mp3")
+
+    def _run(cmd, capture_output, text, check):
+        joined = " ".join(cmd)
+        if "ffprobe" in joined:
+            return _cp(stdout="10.0\n")
+        if "silencedetect" in joined:
+            return _cp(stderr="")
+        if "volumedetect" in joined:
+            return _cp(stderr="mean_volume: -20.0 dB\nmax_volume: -3.0 dB\n")
+        raise AssertionError(f"Unexpected command: {joined}")
+
+    with (
+        patch("mammamiradio.audio.audio_quality.subprocess.run", side_effect=_run),
+        pytest.raises(AudioQualityError, match="implausibly short"),
+    ):
+        validate_segment_audio(audio, SegmentType.BANTER, expected_min_duration_sec=12.0)
+
+
+def test_validate_segment_audio_without_context_preserves_banter_threshold(tmp_path):
+    audio = _mk_audio(tmp_path / "short_but_legacy_valid.mp3")
+
+    def _run(cmd, capture_output, text, check):
+        joined = " ".join(cmd)
+        if "ffprobe" in joined:
+            return _cp(stdout="8.0\n")
+        if "silencedetect" in joined:
+            return _cp(stderr="")
+        if "volumedetect" in joined:
+            return _cp(stderr="mean_volume: -20.0 dB\nmax_volume: -3.0 dB\n")
+        raise AssertionError(f"Unexpected command: {joined}")
+
+    with patch("mammamiradio.audio.audio_quality.subprocess.run", side_effect=_run):
+        validate_segment_audio(audio, SegmentType.BANTER)
+
+
+def test_validate_segment_audio_ignores_expected_context_for_non_banter(tmp_path):
+    audio = _mk_audio(tmp_path / "ad.mp3")
+
+    def _run(cmd, capture_output, text, check):
+        joined = " ".join(cmd)
+        if "ffprobe" in joined:
+            return _cp(stdout="12.0\n")
+        if "silencedetect" in joined:
+            return _cp(stderr="")
+        if "volumedetect" in joined:
+            return _cp(stderr="mean_volume: -20.0 dB\nmax_volume: -3.0 dB\n")
+        raise AssertionError(f"Unexpected command: {joined}")
+
+    with patch("mammamiradio.audio.audio_quality.subprocess.run", side_effect=_run):
+        validate_segment_audio(audio, SegmentType.AD, expected_min_duration_sec=30.0, expected_line_count=6)
+
+
 def test_validate_segment_audio_rejects_high_silence_ratio(tmp_path):
     audio = _mk_audio(tmp_path / "silence.mp3")
 
