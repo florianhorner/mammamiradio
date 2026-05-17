@@ -67,6 +67,11 @@ jobs:
       - name: Changelog content lint
         run: bash scripts/check-changelog-lint.sh
 
+      # Catch-all TODO/backlog files are banned (CLAUDE.md). Public work goes to
+      # GitHub issues; private strategy goes to a private durable store.
+      - name: Backlog-file guard
+        run: bash scripts/check-no-backlog-files.sh
+
       # On PRs: enforce per-module coverage floors (no regressions allowed).
       # `coverage-ratchet.py check` runs pytest internally with coverage flags
       # and hard-exits on returncode != 0 (scripts/coverage-ratchet.py:72-78),

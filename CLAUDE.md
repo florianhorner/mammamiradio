@@ -66,7 +66,11 @@ Everything else lives under `docs/`:
 - `docs/agents.md` - agent-specific notes and integration points
 - `docs/listener-qs-train.md` - `Train/Listener QS` intake, merge gate, and handoff contract
 - `docs/stabilization-log.md` - weekly fix-hours and emergency-patch counts (release cooldown gate)
-- `docs/todos.md` - deferred work items (operator-honesty pivot, etc.)
+
+There is no canonical tracked TODO file. Do not create or revive
+`TODO.md`, `TODOS.md`, `docs/todos.md`, `docs/backlog.md`, or similar
+catch-all backlog files. Use GitHub issues for public engineering work and a
+private durable system for strategy or relationship context.
 
 ## Commands
 
@@ -267,24 +271,26 @@ audit found exactly one major creep instance in 10 PRs — a CI fix bundled with
 a 443-line strategic planning doc — and it is the dominant catchable pattern
 in this repo.
 
-**2. When you stumble on an adjacent issue not in scope:** append one entry to
-`docs/todos.md` (the canonical project backlog) and continue. Do NOT fix inline.
-Do NOT mention in the current PR.
+**2. When you stumble on an adjacent issue not in scope:** classify it before
+writing anything down.
 
-Format — append under a section heading that matches the area, as a brief
-`### <Title>` block in the same shape as the rest of `docs/todos.md`:
+- Public, actionable engineering work goes into a GitHub issue or feature
+  request with a narrow title, user-visible impact, implementation scope,
+  acceptance criteria, and relevant file references. Link the issue from the PR
+  only when it helps reviewers understand why the adjacent work is parked.
+- Non-public strategy, outreach, relationship context, pitch framing, timing
+  gates, or personal writing plans must not be written to tracked repo files or
+  public GitHub issues. Put it in a private durable system outside the repo.
+- If no private durable system is available in the current session, stop and
+  ask where the note should live instead of creating a tracked TODO file or
+  hiding durable strategy in workspace-local `.context/`.
+- Already-shipped items should be removed from backlog surfaces, not moved into
+  another open list.
 
-```text
-### <one-line title>
-**Priority:** P2
-**Source:** scope-parked from <branch-name> on YYYY-MM-DD
-<file:line> — one-sentence description of what was noticed.
-```
-
-This is positive action — the rule has something concrete for you to *do*
-with the finding, instead of just "don't fix it." The cost of one
-TODOS.md line is near zero; the cost of a 200-line adjacent fix bundled into
-a fix PR is hours of review and reshaping.
+Do NOT create or append to `TODO.md`, `TODOS.md`, `docs/todos.md`,
+`docs/backlog.md`, or equivalent tracked catch-all backlog files. A scoped
+planning document is allowed only when it is itself the PR deliverable, not as a
+sidecar parking lot for unrelated work.
 
 **Exemptions** (not scope creep):
 - Doc updates required by the **Doc sync** rule above (same-commit doc-sync

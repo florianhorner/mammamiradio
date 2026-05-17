@@ -1,0 +1,27 @@
+docs/todos.md cleanup — runtime proof
+2026-05-17
+
+=== Backlog-file guard: BEFORE deleting docs/todos.md (must fail) ===
+$ bash scripts/check-no-backlog-files.sh
+ERROR: tracked backlog file 'docs/todos.md' found.
+
+Catch-all TODO/backlog files are banned (see CLAUDE.md).
+Public engineering work goes to GitHub issues; private strategy goes
+to a private durable store. Delete the file and re-route its content.
+exit: 1
+
+=== Backlog-file guard: AFTER deleting docs/todos.md (must pass) ===
+$ bash scripts/check-no-backlog-files.sh
+Backlog-file guard: OK — no tracked catch-all backlog files.
+exit: 0
+
+=== Full test suite ===
+$ python -m pytest tests/ -q
+1892 passed, 2 skipped, 7 deselected in 56.92s
+
+=== Lint / static checks ===
+$ shellcheck scripts/check-no-backlog-files.sh           -> OK
+$ bash scripts/check-changelog-lint.sh                   -> Changelog lint clean.
+$ bash scripts/check-changelog-sync.sh                   -> exit 0
+$ python3 -c "import yaml; yaml.safe_load(open('.github/workflows/quality.yml'))" -> valid YAML
+$ bash tests/workflows/test_cooldown_gate.sh             -> All 9 cooldown gate cases passed.
