@@ -898,9 +898,9 @@ body::before {
 .a-trigger.chaos .ico-wrap { background: rgba(160,32,24,0.15); border-color: rgba(184,44,32,0.35); color: var(--lancia2); }
 .a-trigger.chaos:hover { border-color: rgba(184,44,32,0.55); background: rgba(160,32,24,0.05); }
 .chaos-control {
-  display: flex; align-items: center; justify-content: space-between; gap: 12px;
-  margin-bottom: 12px; padding: 8px 12px;
-  border: 1px solid var(--line); border-radius: 8px;
+  display: flex; align-items: center; justify-content: space-between; gap: var(--space-3);
+  margin-bottom: var(--space-3); padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--line); border-radius: var(--radius-md);
   background: color-mix(in srgb, var(--bg) 72%, transparent);
 }
 .chaos-control.live {
@@ -920,10 +920,10 @@ body::before {
   text-transform: uppercase; color: var(--muted);
 }
 .chaos-control.live .chaos-state { color: var(--lancia2); animation: a-live-pulse 1.4s ease-in-out infinite; }
-.chaos-switch { position: relative; display: inline-flex; align-items: center; width: 48px; height: 26px; flex: 0 0 auto; }
+.chaos-switch { position: relative; display: inline-flex; align-items: center; width: 48px; height: 44px; flex: 0 0 auto; }
 .chaos-switch input { opacity: 0; width: 0; height: 0; }
 .chaos-slider {
-  position: absolute; inset: 0; cursor: pointer; border-radius: 999px;
+  position: absolute; inset: 9px 0; cursor: pointer; border-radius: 999px;
   background: color-mix(in srgb, var(--cream) 12%, transparent); border: 1px solid var(--line);
   transition: background 150ms, border-color 150ms, box-shadow 150ms;
 }
@@ -940,9 +940,9 @@ body::before {
 }
 .chaos-switch input:checked + .chaos-slider::before { transform: translateX(22px); background: var(--lancia2); }
 .festival-control {
-  display: flex; align-items: center; justify-content: space-between; gap: 12px;
-  margin-bottom: 12px; padding: 8px 12px;
-  border: 1px solid var(--line); border-radius: 8px;
+  display: flex; align-items: center; justify-content: space-between; gap: var(--space-3);
+  margin-bottom: var(--space-3); padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--line); border-radius: var(--radius-md);
   background: color-mix(in srgb, var(--bg) 72%, transparent);
 }
 .festival-control.live {
@@ -962,10 +962,10 @@ body::before {
   text-transform: uppercase; color: var(--muted);
 }
 .festival-control.live .festival-state { color: var(--sun2); animation: a-live-pulse 1.4s ease-in-out infinite; }
-.festival-switch { position: relative; display: inline-flex; align-items: center; width: 48px; height: 26px; flex: 0 0 auto; }
+.festival-switch { position: relative; display: inline-flex; align-items: center; width: 48px; height: 44px; flex: 0 0 auto; }
 .festival-switch input { opacity: 0; width: 0; height: 0; }
 .festival-slider {
-  position: absolute; inset: 0; cursor: pointer; border-radius: 999px;
+  position: absolute; inset: 9px 0; cursor: pointer; border-radius: 999px;
   background: color-mix(in srgb, var(--cream) 12%, transparent); border: 1px solid var(--line);
   transition: background 150ms, border-color 150ms, box-shadow 150ms;
 }
