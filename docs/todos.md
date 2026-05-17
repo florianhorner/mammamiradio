@@ -14,6 +14,24 @@
 
 ## Listener UX
 
+### Festival Mode V2 — HA stage lighting
+
+**Priority:** P2
+**Source:** scope-parked from florianhorner/feat/festival-party-mode on 2026-05-17
+`mammamiradio/home/ha_context.py`, `mammamiradio/web/streamer.py` — Bidirectional HA control: when Festival Mode is enabled, call `call_ha_service()` to trigger lighting scenes (e.g. pulse to the rhythm, switch to party colours). Requires new `call_ha_service()` infrastructure (current HA integration is read-only). Leave a clean seam in `set_party` by documenting the hook point.
+
+### Festival Mode V2 — per-track drinking game flags
+
+**Priority:** P3
+**Source:** scope-parked from florianhorner/feat/festival-party-mode on 2026-05-17
+`mammamiradio/playlist/song_cues.py`, `mammamiradio/hosts/scriptwriter.py` — Precision trigger mode: track cues carry per-song flags (`key_change: true`, `wind_machine: true`) so the hosts can call exact triggers rather than inferring from song feel. V1 uses static prompt teaching the pattern; V2 would use DB-backed cues for precision.
+
+### Festival Mode V2 — additional party themes (Hitster)
+
+**Priority:** P3
+**Source:** scope-parked from florianhorner/feat/festival-party-mode on 2026-05-17
+`mammamiradio/core/models.py` (`PartyMode`), `mammamiradio/hosts/scriptwriter.py` — Adding a Hitster-style decade-guessing theme is one new `Literal["hitster"]` value in `PartyMode`, one new `HITSTER_MODE_BLOCK` constant, and a new UI toggle. Architecture is already enum-ready.
+
 ### Listener-visible Chaos Mode signal
 
 **Priority:** P3

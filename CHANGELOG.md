@@ -4,6 +4,13 @@ All notable changes to `mammamiradio` are documented here.
 
 The current version source of truth is `pyproject.toml`.
 
+## [Unreleased]
+
+### Added
+
+- **Festival Mode** — The admin Radio tab now has a `FESTIVAL MODE` toggle. When enabled, the AI hosts become theatrical music competition MCs: songs are announced as fictional Italian-regional delegations taking the stage, dramatic fictional points are awarded, and at least one drinking game trigger is called per song intro. Toggleable live without a restart; disabling returns to the normal host voice on the next banter.
+- **Festival Mode API and persistence** — New admin endpoints `GET /api/party` and `POST /api/party {"action": "enable"|"disable", "mode": "festival"}` expose the toggle. Standalone runs persist `MAMMAMIRADIO_FESTIVAL_MODE` to `.env`; HA add-ons persist `festival_mode` in `/data/options.json` and expose it in add-on options. Festival Mode is idempotent, purges the segment queue on enable, and arms a first-strike theatrical announcement as the next banter.
+
 ## [2.12.2] - 2026-05-16
 
 ### Fixed
