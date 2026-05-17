@@ -29,6 +29,15 @@ logging.basicConfig(
     format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
     datefmt="%H:%M:%S",
 )
+
+
+def _configure_dependency_loggers() -> None:
+    """Keep routine dependency traffic out of INFO-level station logs."""
+    for name in ("httpx", "httpcore"):
+        logging.getLogger(name).setLevel(logging.WARNING)
+
+
+_configure_dependency_loggers()
 logger = logging.getLogger("mammamiradio")
 
 _producer_task: asyncio.Task | None = None

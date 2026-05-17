@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- **HA naming and logs are quieter.** Home Assistant media entities now use `mammamiradio` naming instead of stale `MammaMia` variants, and routine `httpx`/`httpcore` request logs are suppressed below warning level.
+
 ## 2.12.3
 
 ### Added

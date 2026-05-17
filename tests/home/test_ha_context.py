@@ -1323,7 +1323,7 @@ async def test_push_state_to_ha_nonmusic_uses_channel_payload(reset_ha_push_debo
     mp_call = next(c for c in mock_client.post.call_args_list if "media_player" in c.args[0])
     attributes = mp_call.kwargs["json"]["attributes"]
     assert attributes["media_title"] == "Morning handoff"
-    assert attributes["media_artist"] == "Radio MammaMia"
+    assert attributes["media_artist"] == "mammamiradio"
     assert attributes["media_content_type"] == "channel"
     assert attributes["mammamiradio_segment_type"] == "banter"
 

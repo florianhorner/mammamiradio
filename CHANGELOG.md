@@ -13,6 +13,7 @@ The current version source of truth is `pyproject.toml`.
 ### Changed
 
 - **Engineering backlog moved to GitHub issues** — `docs/todos.md` was removed. Open engineering work is now tracked as GitHub issues. A new CI guard (`scripts/check-no-backlog-files.sh`, wired into `quality.yml`) fails the build if a catch-all `TODO.md`/`TODOS.md`/`docs/todos.md`/`docs/backlog.md` file is re-added.
+- **HA naming and logs are quieter.** Home Assistant media entities now use `mammamiradio` naming instead of stale `MammaMia` variants, and routine `httpx`/`httpcore` request logs are suppressed below warning level.
 
 ## [2.12.3] - 2026-05-17
 
