@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 2.12.3
 
 ### Added
 
@@ -10,21 +10,13 @@
 ### Changed
 
 - **Queue fallback starts before the health-failure window.** Active listeners now get cache rescue attempts after a 5-second bounded queue-empty wait, before the preserved 30-second silence health-failure threshold triggers.
-
-### Fixed
-
-- **Cache rescue no longer repeats the first cached song by filename.** Empty-queue fallback avoids the current/recent song when alternatives exist and randomizes the rescue candidate, so skip is less likely to land back on the same cached track.
-
-## 2.12.3
-
-### Changed
-
 - **Italian-first is now the default.** New add-on installs default `super_italian_mode` to `true`, while the option remains available for operators who want the older code-switching style.
 - **Jamendo can participate in the normal programme.** When charts and Jamendo are both configured, startup blends Jamendo tracks into the chart rotation instead of keeping Jamendo fallback-only.
 - **Admin source chips enrich instead of replacing the programme.** Jamendo, chart reload, and decade buttons add tracks into the current rotation without purging the queue, skipping current playback, or clearing listener requests.
 
 ### Fixed
 
+- **Cache rescue no longer repeats the first cached song by filename.** Empty-queue fallback avoids the current/recent song when alternatives exist and randomizes the rescue candidate, so skip is less likely to land back on the same cached track.
 - **Palinsesto hides scheduler pool diagnostics and duplicate current rows.** Pool badges/wrap notes no longer appear in the operator programme, and the current segment is filtered out of history.
 - **Speech/ad transition stacking is reduced.** Segments that already carry a music-tail crossfade no longer receive an extra transition sting before them.
 - **Empty-queue skip is safer on HA Green.** Skip records a bridge action and forces next music before cutting when the queue is empty, and status exposes skip readiness.
@@ -103,16 +95,16 @@ The big one for the addon: Italian-trending music as the default Jamendo source,
 - **Service worker switched to network-first** for `/listen`, CSS, JS, and `sw.js` itself. Was cache-first; UI fixes were getting stuck behind stale caches and the only escape was a hard-refresh + version bump. Now visual fixes reach a returning listener on the next request.
 - **Design system refresh**: `tokens.css` / `base.css` / `waveform.js` extracted; `admin.html` migrated to canonical base.css components; `listener.html` rewritten to a five-band radio-station composition; `/dashboard` surface deleted, redirects to `/admin`.
 - **Ad creative system extracted** into `ad_creative.py` (closes #161).
-- **Dashboard CSS/JS extraction** (PR #203) by [@ashika-rai-n](https://github.com/ashika-rai-n).
+- **Dashboard inline CSS/JS extracted into `/static/`**: moved dashboard styles and scripts out of the HTML template so static assets can be cached, reviewed, and reused normally.
 - **`docs/architecture.md`** updated to describe Jamendo's new country+order filter behavior and the soft-migration path.
 
 ### Fixed
 
-- **CI no longer silently swallows pytest failures.** The coverage ratchet previously only failed when both `returncode != 0` AND no module rows were parsed, which let red tests ride green CI since PR #279. Hard-exit on any non-zero pytest returncode + a dedicated `pytest tests/` step before the coverage ratchet on every PR.
+- **Build validation now fails when the test suite fails.** The coverage ratchet now hard-fails on any non-zero pytest result, reducing the chance of broken images passing CI.
 - **Charts source no longer impersonates local files when the charts API returns empty.** When charts returns zero, the chart loader returns empty too instead of mutating in local MP3s under a `kind="charts"` label. Operator dashboard and persisted source kind now tell the truth.
 - **Local `music/` is a real startup source.** When `yt-dlp` is disabled and Jamendo isn't configured but MP3s exist in `music/`, they load as a first-class source instead of falling through to demo assets with a misleading warning.
 - **Charts `source_id` numerical drift** (`apple_music_it_top_50` → `apple_music_it_top_100`): the URL fetches up to 100 tracks; the persisted label now matches. Transparent migration on read.
-- Stale test-assertion path in `tests/scheduling/test_producer_unit.py:573`. The CI swallow had been hiding this failure.
+- Updated a stale internal test expectation after the asset path migration.
 - **Listener cards visible at rest**: surface tokens lifted hard against the espresso body bg so the Schedule, Dedica, and About cards register as panels at a glance, not page bg with a hairline border.
 - **Listener page sections silently hidden on Safari and Chrome**: the fixed-position `body::before` glow overlay could be promoted into a compositor layer that occluded scrolled real-viewport content. Removed the fixed overlay; the glow and grain stay in the normal page background. Anchor scroll margins added so sticky navigation cannot hide a target section after a hash jump.
 - **Listener now-playing strip never shows "Session stopped"**: idle state used to leak the internal segment label into title and artist slots and broadcast it to the lock screen / Bluetooth / CarPlay via Media Session metadata. Now renders "In pausa" everywhere, with no artist sub-line.
@@ -152,8 +144,6 @@ The big one for the addon: Italian-trending music as the default Jamendo source,
 - `pydantic-settings` 2.13.1 → 2.14.1.
 - Routine: `certifi` 2026.2.25 → 2026.4.22, `click` 8.3.2 → 8.3.3, `idna` 3.11 → 3.13.
 
-**Contributors:** [@ashika-rai-n](https://github.com/ashika-rai-n)
-
 ## 2.10.10
 
 Brand engine, listener redesign, mobile host control room, and security hardening.
@@ -179,13 +169,11 @@ Brand engine, listener redesign, mobile host control room, and security hardenin
 - **Regia progress bar always showed 0%**: `Segment.duration_sec` was never populated in `producer.py`. Now probed via `_ffprobe_duration_sec` at the prewarm path and main convergence point.
 - **Listener now-playing strip falls through "0h 0m"**: now reads `status.uptime_sec` from `/public-status` (station-wide on-air time) and shows "In diretta" for the first minute.
 - **Admin mobile layout — panel header overlap**: title and subtitle stacked vertically below 768px so they don't collide.
-- **Conductor setup fails on machines with broken Python 3.13**: `conductor-setup.sh` prefers `python3.11 → 3.12 → 3.13 → python3` instead of leading with 3.13.
+- **Local setup now avoids broken Python 3.13 installs**: `conductor-setup.sh` prefers `python3.11 → 3.12 → 3.13 → python3` instead of leading with 3.13.
 
 ### Refactored
 
-- **Dashboard inline CSS/JS extracted into `/static/`** by [@ashika-rai-n](https://github.com/ashika-rai-n).
-
-**Contributors:** [@ashika-rai-n](https://github.com/ashika-rai-n)
+- **Dashboard inline CSS/JS extracted into `/static/`**: moved dashboard styles and scripts out of the HTML template so static assets can be cached, reviewed, and reused normally.
 
 ## 2.10.9
 

@@ -230,6 +230,45 @@ def test_release_invariants_guard_ha_green_perf_budget() -> None:
         assert "ha-green-perf-smoke.py" in body
 
 
+def test_check_changelog_lint_rejects_internal_process_phrases(tmp_path: Path) -> None:
+    _write(
+        tmp_path / "CHANGELOG.md",
+        "\n".join(
+            [
+                "# Changelog",
+                "",
+                "## [Unreleased]",
+                "",
+                "- CLAUDE.md documented how red tests ride green.",
+                "- The earlier patch informed the later cleanup.",
+                "",
+            ]
+        ),
+    )
+    _write(
+        tmp_path / "ha-addon/mammamiradio/CHANGELOG.md",
+        "\n".join(
+            [
+                "# Changelog",
+                "",
+                "## Unreleased",
+                "",
+                "- Conductor setup fails when a contributor workflow was superseded.",
+                "",
+            ]
+        ),
+    )
+
+    result = _run(["bash", str(CHECK_CHANGELOG_LINT)], cwd=tmp_path)
+
+    assert result.returncode == 1
+    assert r"\bCLAUDE\.md\b" in result.stdout
+    assert r"\bred tests ride green\b" in result.stdout
+    assert r"\binformed the later\b" in result.stdout
+    assert r"\bConductor setup fails\b" in result.stdout
+    assert r"\bsuperseded\b" in result.stdout
+
+
 def _create_validate_addon_repo(
     tmp_path: Path, *, streamer_body: str, broken_dotvenv_python: bool = False
 ) -> dict[str, str]:
@@ -245,6 +284,11 @@ def _create_validate_addon_repo(
                 "timeout: 300",
                 "host_network: true",
                 "ingress_port: 8000",
+                "options:",
+                '  anthropic_api_key: ""',
+                '  openai_api_key: ""',
+                '  station_name: "Test"',
+                '  claude_model: "claude-haiku-4-5-20251001"',
                 "schema:",
                 "  anthropic_api_key: password?",
                 "  openai_api_key: password?",
@@ -336,6 +380,46 @@ def _inject_ingress_prefix(html: str, prefix: str) -> str:
 
     assert result.returncode == 0
     assert "Ingress prefix injection only rewrites safe patterns" in result.stdout
+
+
+def test_validate_addon_rejects_options_schema_order_mismatch(tmp_path: Path) -> None:
+    env = _create_validate_addon_repo(
+        tmp_path,
+        streamer_body="""
+def _inject_ingress_prefix(html: str, prefix: str) -> str:
+    html = html.replace('href="/listen"', f'href="{prefix}/listen"')
+    return html
+""".strip()
+        + "\n",
+    )
+    _write(
+        tmp_path / "ha-addon/mammamiradio/config.yaml",
+        "\n".join(
+            [
+                'version: "1.1.0"',
+                "image: ghcr.io/florianhorner/mammamiradio-addon-{arch}",
+                "timeout: 300",
+                "host_network: true",
+                "ingress_port: 8000",
+                "options:",
+                '  anthropic_api_key: ""',
+                '  openai_api_key: ""',
+                '  station_name: "Test"',
+                '  claude_model: "claude-haiku-4-5-20251001"',
+                "schema:",
+                "  station_name: str?",
+                "  anthropic_api_key: password?",
+                "  openai_api_key: password?",
+                "  claude_model: str?",
+                "",
+            ]
+        ),
+    )
+
+    result = _run(["bash", str(VALIDATE_ADDON)], cwd=tmp_path, env=env)
+
+    assert result.returncode != 0
+    assert "options and schema key order differ" in result.stdout
 
 
 def test_validate_addon_falls_back_when_dotvenv_python_is_broken(tmp_path: Path) -> None:

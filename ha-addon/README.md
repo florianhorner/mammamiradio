@@ -27,14 +27,16 @@ Install one or the other; they cannot run at the same time (both use port 8000).
 
 After installing, go to the add-on's **Configuration** tab:
 
+- **Station Name**: Customize your station's name (default: "Mamma Mi Radio").
+- **Jamendo Client ID** (optional): Enables CC-licensed music from Jamendo. Get a free client ID at [devportal.jamendo.com](https://devportal.jamendo.com). Leave empty to use other available music sources.
 - **Anthropic API Key** (optional): Enables AI-generated banter and ads via Claude. Get one at [console.anthropic.com](https://console.anthropic.com). Without this, the station uses stock banter lines.
 - **OpenAI API Key** (optional): Enables OpenAI `gpt-4o-mini-tts` host voices and serves as a script generation fallback when Anthropic is unavailable.
-- **Station Name**: Customize your station's name (default: "Mamma Mi Radio").
 - **Claude Model**: Pick between Haiku, Sonnet, and Opus Claude models (default: Haiku 4.5).
-- **Admin Token** (optional): Shared secret for the admin API. If blank, `run.sh` auto-generates one at startup.
 - **Enable Home Assistant**: Toggle ambient home context in hosts' banter (default: on).
-
-For CC-licensed music via Jamendo (no yt-dlp required), set `jamendo_client_id` and optionally `jamendo_tags` in the add-on's `radio.toml` under `[playlist]`. Get a free client ID at [devportal.jamendo.com](https://devportal.jamendo.com).
+- **Admin Token** (optional): Shared secret for the admin API. If blank, `run.sh` auto-generates one at startup.
+- **Super Italian Mode**: Keep listener UI and hosts Italian-first (default: on).
+- **Chaos Mode**: Restore host-chaos mode across restarts when enabled.
+- **Festival Mode**: Restore theatrical music-competition mode across restarts when enabled.
 
 ## Usage
 
