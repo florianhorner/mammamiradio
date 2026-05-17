@@ -4,7 +4,16 @@
 
 ### Added
 
+- **HA Green performance smoke gate** — `make perf-smoke` now checks a live station's health, readiness, public runtime status, and first stream byte against configurable HA Green thresholds.
 - **Festival Mode** — New `festival_mode` add-on option. When enabled, the AI hosts become theatrical music competition MCs: songs are introduced as fictional Italian-regional delegations, dramatic points are assigned, and drinking game triggers are called. Toggleable live from the admin panel without an add-on restart; persisted through `/data/options.json` so it survives restarts.
+
+### Changed
+
+- **Queue fallback starts before the health-failure window.** Active listeners now get cache/demo rescue attempts after a short bounded queue wait instead of waiting for the 30-second silence health threshold.
+
+### Fixed
+
+- **Norm-cache rescue no longer repeats the first cached song by filename.** Empty-queue fallback avoids the current/recent song when alternatives exist and randomizes the rescue candidate, so skip is less likely to land back on the same cached track.
 
 ## 2.12.3
 

@@ -119,6 +119,7 @@ _MUTATING_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 _CSRF_TOKEN_PLACEHOLDER = "__MAMMAMIRADIO_CSRF_TOKEN__"
 SESSION_STOPPED_FLAG = "session_stopped.flag"
 SILENCE_FAILURE_SECONDS = 30.0
+QUEUE_FALLBACK_WAIT_SECONDS = 5.0
 STARTUP_GRACE_SECONDS = 30.0
 CLIP_RATE_LIMIT_SECONDS = 10.0
 CLIP_RATE_PRUNE_SECONDS = 300.0
@@ -295,6 +296,7 @@ def _runtime_health_snapshot(request: Request) -> dict:
     playback_task = getattr(request.app.state, "playback_task", None)
     producer_alive = True if producer_task is None else not producer_task.done()
     playback_alive = True if playback_task is None else not playback_task.done()
+    queue_empty_elapsed = _queue_empty_elapsed(state)
     return {
         "queue_depth": queue_depth,
         "shadow_queue_depth": shadow_depth,
@@ -303,6 +305,8 @@ def _runtime_health_snapshot(request: Request) -> dict:
         "playback_task_alive": playback_alive,
         "playback_epoch": state.playback_epoch,
         "queue_empty_since": state.queue_empty_since,
+        "queue_empty_elapsed_s": round(queue_empty_elapsed, 1),
+        "silence_with_listeners": _silence_with_listeners(state, queue_empty_elapsed),
         "audio_source": audio_source or "unknown",
         "failover_active": bool(audio_source and audio_source.startswith("fallback")),
         "shadow_queue_corrections": state.shadow_queue_corrections,
@@ -320,6 +324,69 @@ def _queue_empty_elapsed(state: StationState) -> float:
 
 def _silence_with_listeners(state: StationState, queue_empty_elapsed: float) -> bool:
     return queue_empty_elapsed > SILENCE_FAILURE_SECONDS and state.listeners_active > 0
+
+
+def _identity_key(value: str) -> str:
+    """Normalize listener-facing titles enough to compare cache fallbacks."""
+    return _re.sub(r"[^a-z0-9]+", " ", value.lower()).strip()
+
+
+def _identity_matches(left: str, right: str) -> bool:
+    if not left or not right:
+        return False
+    if left == right:
+        return True
+    return min(len(left), len(right)) >= 12 and (left in right or right in left)
+
+
+def _segment_identity_keys(segment: dict) -> set[str]:
+    """Return comparable labels for a streamed segment."""
+    keys: set[str] = set()
+    label = str(segment.get("label") or "").strip()
+    if label:
+        keys.add(_identity_key(label))
+    metadata = segment.get("metadata") or {}
+    if isinstance(metadata, dict):
+        title = str(metadata.get("title") or "").strip()
+        title_only = str(metadata.get("title_only") or "").strip()
+        artist = str(metadata.get("artist") or "").strip()
+        for value in (title, title_only):
+            if value:
+                keys.add(_identity_key(value))
+            if value and artist:
+                keys.add(_identity_key(f"{artist} {value}"))
+                keys.add(_identity_key(f"{artist} – {value}"))
+    return {key for key in keys if key}
+
+
+def _norm_cache_identity_keys(path: Path) -> set[str]:
+    """Return cheap comparable labels for a normalized cache file."""
+    keys = {_identity_key(humanize_norm_filename(path.name))}
+    return {key for key in keys if key}
+
+
+def _select_norm_cache_rescue(cache_dir: Path, state: StationState) -> Path | None:
+    """Pick a cache rescue clip without replaying the current/recent song first."""
+    norm_files = sorted(cache_dir.glob("norm_*.mp3"))
+    if not norm_files:
+        return None
+
+    recent_keys: set[str] = set()
+    if state.now_streaming:
+        recent_keys.update(_segment_identity_keys(state.now_streaming))
+    for entry in list(state.stream_log)[-5:]:
+        if entry.type == SegmentType.MUSIC.value:
+            recent_keys.update(_segment_identity_keys({"label": entry.label, "metadata": entry.metadata}))
+    if not recent_keys:
+        return _random.choice(norm_files)
+
+    candidates: list[Path] = []
+    for path in norm_files:
+        path_keys = _norm_cache_identity_keys(path)
+        if not any(_identity_matches(path_key, recent_key) for path_key in path_keys for recent_key in recent_keys):
+            candidates.append(path)
+
+    return _random.choice(candidates or norm_files)
 
 
 def _provider_health_snapshot(config, state: StationState) -> dict:
@@ -864,7 +931,7 @@ async def run_playback_loop(app) -> None:
             # below is part of the listener-visible silence window.
             state.queue_empty_since = _runtime_monotonic()
         try:
-            segment: Segment = await asyncio.wait_for(segment_queue.get(), timeout=30.0)
+            segment: Segment = await asyncio.wait_for(segment_queue.get(), timeout=QUEUE_FALLBACK_WAIT_SECONDS)
             pulled_from_queue = True
             state.queue_empty_since = None
         except TimeoutError:
@@ -891,10 +958,9 @@ async def run_playback_loop(app) -> None:
                 )
             else:
                 rescued_from_norm = False
-                if elapsed >= 30.0:
-                    norm_files = sorted(config.cache_dir.glob("norm_*.mp3"))
-                    if norm_files:
-                        rescue = norm_files[0]
+                if elapsed >= QUEUE_FALLBACK_WAIT_SECONDS:
+                    rescue = _select_norm_cache_rescue(config.cache_dir, state)
+                    if rescue:
                         logger.warning(
                             "Queue empty %ds - rescuing with norm cache: %s",
                             int(elapsed),
