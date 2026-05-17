@@ -110,6 +110,10 @@ This is set in `ha-addon/mammamiradio/config.yaml` (`image:` field) and must mat
 
 The standalone Docker image (for non-HA users) is separate: `ghcr.io/florianhorner/mammamiradio`. Built by `docker.yml` on version tags only.
 
+## Release channels
+
+Home Assistant add-on updates are driven by `ha-addon/mammamiradio/config.yaml` and images built from `main`. GitHub Releases and tags are curated standalone announcements and may lag add-on version bumps. Before publishing a GitHub Release, write curated release notes instead of copying raw `CHANGELOG.md`.
+
 ## Edge channel (dev releases)
 
 `mammamiradio-edge` is a second add-on in this same repo (`ha-addon/mammamiradio-edge/`) for soak-testing `main` on real hardware without disturbing stable users.
