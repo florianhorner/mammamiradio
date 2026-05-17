@@ -19,6 +19,10 @@ logger = logging.getLogger(__name__)
 _NORM_SEM = BoundedSemaphore(2)
 
 
+class ConcatDurationError(RuntimeError):
+    """Raised when strict concat detects a proven output duration shortfall."""
+
+
 def _norm_sidecar_path(norm_path: Path) -> Path:
     """Companion JSON path for a normalized cache file."""
     return norm_path.parent / f"{norm_path.name}.json"
@@ -297,6 +301,8 @@ def concat_files(
     output_path: Path,
     silence_ms: int = 300,
     loudnorm: bool = True,
+    *,
+    strict_duration: bool = False,
 ) -> Path:
     """Concatenate rendered parts into a single MP3 segment.
 
@@ -305,6 +311,9 @@ def concat_files(
 
     Set loudnorm=False when all inputs are already normalized to skip the
     expensive EBU R128 loudness pass (~1-3s saved per concat).
+
+    Set strict_duration=True for host-segment assembly where a proven output
+    shortfall must reject the segment instead of only logging.
     """
     if len(paths) == 0:
         raise ValueError("concat_files: paths list must not be empty")
@@ -371,21 +380,22 @@ def concat_files(
         input_durs = [_ffprobe_duration_sec(p) for p in paths]
         if any(d is None or d <= 0 for d in input_durs):
             return output_path
-        expected = sum(input_durs) + (len(paths) - 1) * silence_dur  # type: ignore[arg-type,operator]
+        known_input_durs = [d for d in input_durs if d is not None]
+        expected = sum(known_input_durs) + (len(paths) - 1) * silence_dur
         # Allow 5% slack for ffmpeg encoding rounding + loudnorm edge trimming.
         threshold = 0.95 * expected
         if output_dur < threshold:
-            logger.warning(
-                "concat_files duration shortfall: output=%.2fs expected>=%.2fs "
-                "(sum_inputs=%.2fs + %d gaps x %.2fs). Output: %s. Inputs (dur): %s",
-                output_dur,
-                threshold,
-                sum(input_durs),  # type: ignore[arg-type]
-                max(0, len(paths) - 1),
-                silence_dur,
-                output_path.name,
-                [(p.name, f"{d:.2f}") for p, d in zip(paths, input_durs, strict=False)],
+            detail = (
+                f"concat_files duration shortfall: output={output_dur:.2f}s expected>={threshold:.2f}s "
+                f"(sum_inputs={sum(known_input_durs):.2f}s + {max(0, len(paths) - 1)} gaps x {silence_dur:.2f}s). "
+                f"Output: {output_path.name}. Inputs (dur): "
+                f"{[(p.name, f'{d:.2f}') for p, d in zip(paths, input_durs, strict=False)]}"
             )
+            logger.warning("%s", detail)
+            if strict_duration:
+                raise ConcatDurationError(detail)
+    except ConcatDurationError:
+        raise
     except Exception as exc:  # defense-in-depth — never let instrumentation break prod
         logger.debug("concat_files duration probe skipped: %s", exc)
 

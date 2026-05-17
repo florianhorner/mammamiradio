@@ -14,6 +14,10 @@ The current version source of truth is `pyproject.toml`.
 
 - **Engineering backlog moved to GitHub issues** — `docs/todos.md` was removed. Open engineering work is now tracked as GitHub issues. A new CI guard (`scripts/check-no-backlog-files.sh`, wired into `quality.yml`) fails the build if a catch-all `TODO.md`/`TODOS.md`/`docs/todos.md`/`docs/backlog.md` file is re-added.
 
+### Fixed
+
+- **Spoken host segment assembly is stricter.** Generated multi-line banter now rejects broken intermediate TTS line files, strict concat duration shortfalls, and implausibly short multi-line exchanges before they can reach the listener queue.
+
 ## [2.12.3] - 2026-05-17
 
 ### Added

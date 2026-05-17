@@ -449,7 +449,7 @@ async def test_synthesize_dialogue_passes_loudnorm_false(tmp_path):
 
     def _touch(path):
         Path(path).parent.mkdir(parents=True, exist_ok=True)
-        Path(path).write_bytes(b"\x00" * 256)
+        Path(path).write_bytes(b"\x00" * 2048)
         return Path(path)
 
     mock_comm_instance = MagicMock()
@@ -460,7 +460,7 @@ async def test_synthesize_dialogue_passes_loudnorm_false(tmp_path):
         _touch(output_path)
         return output_path
 
-    def _concat_side_effect(paths, output_path, silence_ms=300, loudnorm=True):
+    def _concat_side_effect(paths, output_path, silence_ms=300, loudnorm=True, **kwargs):
         _touch(output_path)
         return output_path
 

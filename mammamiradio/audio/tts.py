@@ -6,12 +6,15 @@ import asyncio
 import logging
 import os
 import shutil
+from functools import partial
 from pathlib import Path
 from uuid import uuid4
 
 import edge_tts
 
+from mammamiradio.audio.audio_quality import AudioQualityError
 from mammamiradio.audio.normalizer import (
+    _ffprobe_duration_sec,
     concat_files,
     generate_brand_motif,
     generate_foley_loop,
@@ -51,6 +54,8 @@ _failed_edge_voices: set[str] = set()
 # (e.g. Home Assistant Green — fanless ARM SoC). Two slots let one TTS+normalize and
 # one SFX/bed generation overlap without saturating all cores.
 _HEAVY_SEM = asyncio.Semaphore(2)
+_MIN_DIALOGUE_LINE_BYTES = 1024
+_MIN_DIALOGUE_LINE_DURATION_SEC = 0.5
 # Disclaimer voice rate by ad format. Formats not listed use the +35%
 # disclaimer_goblin default shared by the other ad treatments.
 _DISCLAIMER_RATE_BY_FORMAT = {
@@ -443,11 +448,28 @@ def _prosody_for_host(host: HostPersonality) -> dict[str, str]:
     return kwargs
 
 
+def _validate_dialogue_part(path: Path, *, line_number: int) -> None:
+    """Reject broken intermediate TTS line files before they can hide in concat."""
+    if not path.exists():
+        raise AudioQualityError(f"dialogue line {line_number} audio missing: {path}")
+    size = path.stat().st_size
+    if size < _MIN_DIALOGUE_LINE_BYTES:
+        raise AudioQualityError(f"dialogue line {line_number} audio is too small ({size} bytes)")
+    duration = _ffprobe_duration_sec(path)
+    if duration is not None and duration < _MIN_DIALOGUE_LINE_DURATION_SEC:
+        raise AudioQualityError(
+            f"dialogue line {line_number} audio too short ({duration:.2f}s < {_MIN_DIALOGUE_LINE_DURATION_SEC:.2f}s)"
+        )
+
+
 async def synthesize_dialogue(
     lines: list[tuple[HostPersonality, str]],
     tmp_dir: Path,
 ) -> Path:
     """Render all host lines in parallel and stitch the exchange together."""
+    if not lines:
+        raise ValueError("synthesize_dialogue: lines list must not be empty")
+
     paths = [tmp_dir / f"line_{uuid4().hex[:8]}.mp3" for _ in lines]
     multi_line = len(lines) > 1
 
@@ -472,13 +494,19 @@ async def synthesize_dialogue(
         )
     )
 
+    for idx, part in enumerate(parts, start=1):
+        _validate_dialogue_part(part, line_number=idx)
+
     if not multi_line:
         return parts[0]
 
     raw_path = tmp_dir / f"dialogue_raw_{uuid4().hex[:8]}.mp3"
     output_path = tmp_dir / f"dialogue_{uuid4().hex[:8]}.mp3"
     loop = asyncio.get_running_loop()
-    await loop.run_in_executor(None, concat_files, parts, raw_path, 300, False)
+    await loop.run_in_executor(
+        None,
+        partial(concat_files, parts, raw_path, 300, False, strict_duration=True),
+    )
     for p in parts:
         p.unlink(missing_ok=True)
 

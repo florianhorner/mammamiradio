@@ -68,7 +68,25 @@ _THRESHOLDS_BY_TYPE: dict[SegmentType, QualityThresholds] = {
 }
 
 
-def validate_segment_audio(path: Path, seg_type: SegmentType) -> None:
+def _expected_banter_floor(
+    *,
+    expected_min_duration_sec: float | None,
+    expected_line_count: int | None,
+) -> float | None:
+    if expected_min_duration_sec is not None and expected_min_duration_sec > 0:
+        return expected_min_duration_sec
+    if expected_line_count is not None and expected_line_count > 1:
+        return expected_line_count * 2.0 * 0.8
+    return None
+
+
+def validate_segment_audio(
+    path: Path,
+    seg_type: SegmentType,
+    *,
+    expected_min_duration_sec: float | None = None,
+    expected_line_count: int | None = None,
+) -> None:
     """Validate audio for any segment type and raise on quality failure."""
     th = _THRESHOLDS_BY_TYPE.get(seg_type, _DEFAULT_THRESHOLDS)
 
@@ -80,6 +98,15 @@ def validate_segment_audio(path: Path, seg_type: SegmentType) -> None:
     duration = _probe_duration_sec(path)
     if duration < th.min_duration_sec:
         raise AudioQualityError(f"{seg_type.value} audio too short ({duration:.2f}s < {th.min_duration_sec:.2f}s)")
+    if seg_type == SegmentType.BANTER:
+        expected_floor = _expected_banter_floor(
+            expected_min_duration_sec=expected_min_duration_sec,
+            expected_line_count=expected_line_count,
+        )
+        if expected_floor is not None and duration < expected_floor:
+            raise AudioQualityError(
+                f"{seg_type.value} audio implausibly short for script ({duration:.2f}s < {expected_floor:.2f}s)"
+            )
 
     silence_total, max_silence = _probe_silence(path)
     silence_ratio = silence_total / duration if duration > 0 else 1.0

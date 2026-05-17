@@ -327,6 +327,169 @@ async def test_banter_quality_reject_uses_canned_fallback(tmp_path):
     assert seg.path == canned
 
 
+def _write_concat_output(paths, output_path, silence_ms=300, loudnorm=True, **kwargs):
+    output_path.write_bytes(b"\x00" * 2048)
+    return output_path
+
+
+def _long_banter_lines(host: HostPersonality) -> list[tuple[HostPersonality, str]]:
+    return [
+        (host, "Prima linea con abbastanza parole per stimare durata."),
+        (host, "Seconda linea ancora piena di contenuto radiofonico."),
+        (host, "Terza linea che continua lo scambio tra conduttori."),
+        (host, "Quarta linea con una battuta sul brano appena passato."),
+        (host, "Quinta linea che tiene viva la scena in studio."),
+        (host, "Sesta linea prima di tornare alla musica."),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_banter_generated_audio_passes_expected_duration_context(tmp_path):
+    state = _make_state()
+    config = _make_config(tmp_path)
+    config.anthropic_api_key = "test-key"
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+
+    host = config.hosts[0]
+    trans_path = tmp_path / "transition.mp3"
+    trans_path.write_bytes(b"\x00" * 2048)
+    banter_path = tmp_path / "dialogue.mp3"
+    banter_path.write_bytes(b"\x00" * 2048)
+    validate_calls: list[dict] = []
+
+    def _validate_side_effect(path, seg_type, **kwargs):
+        if seg_type == SegmentType.BANTER:
+            validate_calls.append({"path": path, **kwargs})
+
+    with (
+        patch(f"{MODULE}.next_segment_type", return_value=SegmentType.BANTER),
+        patch(f"{SCRIPTWRITER_MODULE}.has_script_llm", return_value=True),
+        patch(
+            f"{SCRIPTWRITER_MODULE}.write_banter", new_callable=AsyncMock, return_value=(_long_banter_lines(host), None)
+        ),
+        patch(f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Bentornati.")),
+        patch(f"{MODULE}.synthesize", new_callable=AsyncMock, return_value=trans_path),
+        patch(f"{MODULE}._try_crossfade", new_callable=AsyncMock, return_value=trans_path),
+        patch(f"{MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=banter_path),
+        patch(f"{MODULE}.concat_files", side_effect=_write_concat_output) as mock_concat,
+        patch(f"{MODULE}._pick_canned_clip", return_value=None),
+        patch(f"{MODULE}._apply_talk_bed", new_callable=AsyncMock, side_effect=lambda path, *_a, **_k: path),
+        patch(f"{MODULE}.validate_segment_audio", side_effect=_validate_side_effect),
+        patch(f"{MODULE}.fetch_home_context", new_callable=AsyncMock),
+    ):
+        await _run_until_queued(queue, state, config)
+
+    seg = queue.get_nowait()
+    assert seg.type == SegmentType.BANTER
+    assert seg.metadata.get("canned") is False
+    assert validate_calls
+    assert validate_calls[0]["expected_line_count"] == 7
+    assert validate_calls[0]["expected_min_duration_sec"] > 0
+    assert mock_concat.call_args.kwargs["strict_duration"] is True
+
+
+@pytest.mark.asyncio
+async def test_banter_implausibly_short_with_no_canned_fallback_is_not_queued(tmp_path):
+    state = _make_state()
+    config = _make_config(tmp_path)
+    config.anthropic_api_key = "test-key"
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+
+    host = config.hosts[0]
+    trans_path = tmp_path / "transition.mp3"
+    trans_path.write_bytes(b"\x00" * 2048)
+    banter_path = tmp_path / "dialogue.mp3"
+    banter_path.write_bytes(b"\x00" * 2048)
+
+    with (
+        patch(f"{MODULE}.next_segment_type", return_value=SegmentType.BANTER),
+        patch(f"{SCRIPTWRITER_MODULE}.has_script_llm", return_value=True),
+        patch(
+            f"{SCRIPTWRITER_MODULE}.write_banter", new_callable=AsyncMock, return_value=(_long_banter_lines(host), None)
+        ),
+        patch(f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Bentornati.")),
+        patch(f"{MODULE}.synthesize", new_callable=AsyncMock, return_value=trans_path),
+        patch(f"{MODULE}._try_crossfade", new_callable=AsyncMock, return_value=trans_path),
+        patch(f"{MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=banter_path),
+        patch(f"{MODULE}.concat_files", side_effect=_write_concat_output),
+        patch(f"{MODULE}._pick_canned_clip", return_value=None),
+        patch(f"{MODULE}.validate_segment_audio", side_effect=AudioQualityError("implausibly short banter")),
+        patch(f"{MODULE}.fetch_home_context", new_callable=AsyncMock),
+    ):
+        task = asyncio.create_task(run_producer(queue, state, config))
+        try:
+            await asyncio.sleep(0.25)
+        finally:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+    assert queue.empty()
+
+
+@pytest.mark.asyncio
+async def test_banter_after_session_resume_uses_expected_duration_context(tmp_path):
+    state = _make_state()
+    state.session_stopped = True
+    config = _make_config(tmp_path)
+    config.cache_dir = tmp_path
+    config.anthropic_api_key = "test-key"
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+
+    host = config.hosts[0]
+    trans_path = tmp_path / "transition.mp3"
+    trans_path.write_bytes(b"\x00" * 2048)
+    banter_path = tmp_path / "dialogue.mp3"
+    banter_path.write_bytes(b"\x00" * 2048)
+    validate_calls: list[dict] = []
+
+    def _validate_side_effect(path, seg_type, **kwargs):
+        if seg_type == SegmentType.BANTER:
+            validate_calls.append({"path": path, **kwargs})
+
+    with (
+        patch(f"{MODULE}.next_segment_type", return_value=SegmentType.BANTER),
+        patch(f"{SCRIPTWRITER_MODULE}.has_script_llm", return_value=True),
+        patch(
+            f"{SCRIPTWRITER_MODULE}.write_banter", new_callable=AsyncMock, return_value=(_long_banter_lines(host), None)
+        ),
+        patch(f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Bentornati.")),
+        patch(f"{MODULE}.synthesize", new_callable=AsyncMock, return_value=trans_path),
+        patch(f"{MODULE}._try_crossfade", new_callable=AsyncMock, return_value=trans_path),
+        patch(f"{MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=banter_path),
+        patch(f"{MODULE}.concat_files", side_effect=_write_concat_output),
+        patch(f"{MODULE}._pick_canned_clip", return_value=None),
+        patch(f"{MODULE}._apply_talk_bed", new_callable=AsyncMock, side_effect=lambda path, *_a, **_k: path),
+        patch(f"{MODULE}.validate_segment_audio", side_effect=_validate_side_effect),
+        patch(f"{MODULE}.fetch_home_context", new_callable=AsyncMock),
+    ):
+        task = asyncio.create_task(run_producer(queue, state, config))
+        try:
+            await asyncio.sleep(0.05)
+            state.session_stopped = False
+            state.resume_event.set()
+            deadline = asyncio.get_event_loop().time() + 8.0
+            while queue.empty():
+                if asyncio.get_event_loop().time() > deadline:
+                    raise TimeoutError("Producer did not produce BANTER after resume")
+                await asyncio.sleep(0.05)
+        finally:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+    seg = queue.get_nowait()
+    assert seg.type == SegmentType.BANTER
+    assert seg.metadata.get("canned") is False
+    assert validate_calls
+    assert validate_calls[0]["expected_line_count"] == 7
+    assert validate_calls[0]["expected_min_duration_sec"] > 0
+
+
 @pytest.mark.asyncio
 async def test_ad_quality_reject_resets_pacing_and_continues(tmp_path):
     state = _make_state()

@@ -8,6 +8,7 @@ import datetime
 import logging
 import os
 import random
+import re
 import shutil
 from collections import deque
 from collections.abc import Awaitable, Callable
@@ -235,6 +236,14 @@ def _banter_title(script: list[dict] | None, *, canned: bool) -> str:
     if hosts:
         return " & ".join(hosts[:2])
     return "Banter"
+
+
+def _expected_banter_duration_sec(texts: list[str]) -> float | None:
+    """Conservative floor for generated multi-line host exchanges."""
+    if len(texts) <= 1:
+        return None
+    word_count = sum(len(re.findall(r"\w+", text)) for text in texts)
+    return 0.8 * max(len(texts) * 2.0, word_count * 0.22)
 
 
 def _ad_title(brands: list[str] | None) -> str:
@@ -1200,6 +1209,9 @@ async def run_producer(
                                 logger.warning("Impossible TTS failed, falling back to canned: %s", exc)
                                 canned = _pick_canned_clip("banter", state=state)
 
+                banter_expected_min_duration_sec: float | None = None
+                banter_expected_line_count: int | None = None
+
                 if canned:
                     logger.info("Using pre-bundled banter clip: %s", canned.name)
                     audio_path = canned
@@ -1214,6 +1226,9 @@ async def run_producer(
                                 is_first_listener=_is_first_listener,
                                 chaos_subtype=chaos_subtype,
                             )
+                            line_texts = [text for _host, text in lines]
+                            banter_expected_min_duration_sec = _expected_banter_duration_sec(line_texts)
+                            banter_expected_line_count = len(line_texts) if len(line_texts) > 1 else None
                             audio_path = await synthesize_dialogue(lines, config.tmp_dir)
                             state.last_banter_script = [
                                 {
@@ -1236,6 +1251,9 @@ async def run_producer(
                             (trans_host, trans_text), (lines, listener_request_commit) = await asyncio.gather(
                                 transition_task, banter_task
                             )
+                            line_texts = [trans_text] + [text for _host, text in lines]
+                            banter_expected_min_duration_sec = _expected_banter_duration_sec(line_texts)
+                            banter_expected_line_count = len(line_texts) if len(line_texts) > 1 else None
 
                             # Synthesize transition + dialogue in parallel
                             trans_voice_path = config.tmp_dir / f"trans_{uuid4().hex[:8]}.mp3"
@@ -1271,7 +1289,15 @@ async def run_producer(
                             audio_path = config.tmp_dir / f"banter_full_{uuid4().hex[:8]}.mp3"
                             loop = asyncio.get_running_loop()
                             await loop.run_in_executor(
-                                None, concat_files, [trans_voice_path, banter_path], audio_path, 200, False
+                                None,
+                                partial(
+                                    concat_files,
+                                    [trans_voice_path, banter_path],
+                                    audio_path,
+                                    200,
+                                    False,
+                                    strict_duration=True,
+                                ),
                             )
                             trans_voice_path.unlink(missing_ok=True)
                             banter_path.unlink(missing_ok=True)
@@ -1287,6 +1313,8 @@ async def run_producer(
                             logger.warning("Chaos audio generation failed; trying canned fallback: %s", exc)
                             canned = _pick_canned_clip("banter", state=state)
                             if canned:
+                                banter_expected_min_duration_sec = None
+                                banter_expected_line_count = None
                                 audio_path = canned
                                 state.last_banter_script = [
                                     {
@@ -1313,7 +1341,18 @@ async def run_producer(
 
                 if not os.environ.get("MAMMAMIRADIO_SKIP_QUALITY_GATE"):
                     try:
-                        await loop.run_in_executor(None, validate_segment_audio, audio_path, SegmentType.BANTER)
+                        expected_min_duration_sec = None if canned else banter_expected_min_duration_sec
+                        expected_line_count = None if canned else banter_expected_line_count
+                        await loop.run_in_executor(
+                            None,
+                            partial(
+                                validate_segment_audio,
+                                audio_path,
+                                SegmentType.BANTER,
+                                expected_min_duration_sec=expected_min_duration_sec,
+                                expected_line_count=expected_line_count,
+                            ),
+                        )
                     except AudioToolError as exc:
                         logger.warning("Audio tool unavailable, skipping banter quality check: %s", exc)
                     except AudioQualityError as exc:
