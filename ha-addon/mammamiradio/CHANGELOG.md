@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **Festival Mode** — New `festival_mode` add-on option. When enabled, the AI hosts become theatrical music competition MCs: songs are introduced as fictional Italian-regional delegations, dramatic points are assigned, and drinking game triggers are called. Toggleable live from the admin panel without an add-on restart; persisted through `/data/options.json` so it survives restarts.
+
 ## 2.12.3
 
 ### Changed

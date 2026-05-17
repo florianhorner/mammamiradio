@@ -235,6 +235,34 @@ CHAOS MODE IS LIVE:
 - Do not explain the bit. Treat it as normal studio reality and keep moving.
 """
 
+FESTIVAL_MODE_BLOCK = """\
+FESTIVAL MODE — MUSIC COMPETITION HOST:
+You are live from the grand festival stage. This is a music competition night.
+Overall energy: theatrical, barely-contained, proud to be witnessing history.
+
+WHEN INTRODUCING A SONG (the banter immediately precedes or follows a track):
+- Announce it as a fictional Italian-regional delegation taking the stage \
+("And now — the delegation from the Alto Adige region, representing the mountain valleys!"). \
+Use invented region names — never real countries in scoring context.
+- Assign dramatic fictional points with theatrical flair \
+("Magnifico! Otto punti alla delegazione delle Alpi Centrali!")
+- Call at least ONE drinking game trigger. Trigger phrases:
+  "CHIAVE MUSICALE!" → "tutti!" (key change detected)
+  "WIND MACHINE ATTIVATA!" → "bevi!" (wind machine moment)
+  "NOTA LUNGA!" → "drink — hold it — hold it — NOW!" (sustained note)
+  "BALLERINI INUTILI!" → "un sorso" (unnecessary backing dancers)
+  "CAMBIO DI TONALITÀ!" → "drink in solidarity" (dramatic modulation)
+
+FOR OTHER BANTER (listener requests, interludes, station IDs):
+- Keep theatrical festival energy and Italian competition commentary \
+("Che melodia straziante!", "Il pubblico è in piedi!") \
+but drop the delegation framing and point scoring — those belong to song intros only.
+- Occasionally break character slightly then overcorrect back \
+("Scusate — IL FESTIVAL CONTINUA!")
+
+Never use "Eurovision", "ESC", "EBU", or real country names anywhere.\
+"""
+
 CHAOS_SUBTYPE_BLOCKS: dict[ChaosSubtype, str] = {
     ChaosSubtype.FOURTH_WALL: """
 CHAOS SUBTYPE: CHAOS_FOURTH_WALL
@@ -1319,6 +1347,7 @@ First-time listeners get curiosity and intrigue. Returning listeners get inside 
 
     chaos_hosts = [h.name for h in config.hosts if h.personality.chaos >= 80 or h.personality.energy >= 90]
     chaos_block = _chaos_prompt_block(state, chaos_subtype)
+    festival_block = f"\n\n{FESTIVAL_MODE_BLOCK}" if config.party_mode == "festival" else ""
     if not chaos_block and len(config.hosts) >= 2 and chaos_hosts:
         chaos_block = f"""
 CHAOS DIRECTION:
@@ -1373,7 +1402,7 @@ Running jokes to optionally callback: {jokes if jokes else "none yet, you may se
 {mood_block}{weather_mood_fusion}<context_awareness>
 {context_block}
 </context_awareness>
-{track_rules_block}{reactive_block}{listener_request_block}{chaos_block}{new_listener_block}{listener_block}{arc_phase_block}{persona_block}
+{track_rules_block}{reactive_block}{listener_request_block}{chaos_block}{festival_block}{new_listener_block}{listener_block}{arc_phase_block}{persona_block}
 Return JSON:
 {{"lines": [{{"host": "HostName", "text": "what they say"}}], "new_joke": "brief description of any new running joke or null"{persona_update_schema}}}"""
 

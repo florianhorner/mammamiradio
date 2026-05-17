@@ -23,6 +23,9 @@ configuration:
   chaos_mode_active:
     name: Chaos Mode
     description: "Keeps host-chaos mode enabled across restarts. Turning it on from the admin panel still arms the immediate first strike; boot restore does not."
+  festival_mode:
+    name: Festival Mode
+    description: "Turns your station into a theatrical music competition. Hosts announce songs as fictional Italian regional delegations, assign dramatic points, and call drinking game triggers. Toggleable live from the admin panel without a restart."
   jamendo_client_id:
     name: Jamendo Client ID
     description: "Enables CC-licensed music from Jamendo. Get a free client ID at developer.jamendo.com. Leave empty to disable the Jamendo source."

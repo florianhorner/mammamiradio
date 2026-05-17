@@ -25,6 +25,7 @@ If you want to fix or extend X, look in Y. The folder hierarchy IS the mental mo
 | Segment scheduling (banter / ad / music)           | `mammamiradio/scheduling/scheduler.py`       |
 | Producer loop (queue ahead of playback)            | `mammamiradio/scheduling/producer.py`        |
 | WTF clip extraction + ring buffer                  | `mammamiradio/scheduling/clip.py`            |
+| Party mode toggle (Festival Mode, future themes)   | `mammamiradio/web/streamer.py` + `docs/party-mode-extension.md` |
 | HTTP routes / playback loop / auth                 | `mammamiradio/web/streamer.py`               |
 | Listener-request endpoints (dedica, song wish)     | `mammamiradio/web/listener_requests.py`      |
 | Open Graph share card                              | `mammamiradio/web/og_card.py`                |
@@ -67,6 +68,8 @@ The `tests/` tree mirrors the source tree exactly. To find the test for `mammami
 | Deploy / production reality      | `docs/operations.md`             |
 | Common failures + recovery       | `docs/troubleshooting.md`        |
 | HA addon release process         | `docs/runbooks/ha-addon.md`      |
+| Festival Mode (operator guide)   | `docs/festival-mode.md`          |
+| Adding a new party mode theme    | `docs/party-mode-extension.md`   |
 | Design system (colors, fonts)    | `docs/design/system.md`          |
 | Admin panel layout standards     | `docs/design/admin-panel.md`     |
 | Conductor workspace lifecycle    | `docs/conductor.md`              |

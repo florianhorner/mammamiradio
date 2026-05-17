@@ -33,6 +33,7 @@ options:
   enable_home_assistant: true
   super_italian_mode: true
   chaos_mode_active: false
+  festival_mode: false
   jamendo_client_id: ""
 schema:
   anthropic_api_key: password?
@@ -43,4 +44,5 @@ schema:
   enable_home_assistant: bool?
   super_italian_mode: bool?
   chaos_mode_active: bool?
+  festival_mode: bool?
   jamendo_client_id: password?

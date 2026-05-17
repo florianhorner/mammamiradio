@@ -939,6 +939,48 @@ body::before {
   border-color: color-mix(in srgb, var(--lancia2) 65%, var(--line));
 }
 .chaos-switch input:checked + .chaos-slider::before { transform: translateX(22px); background: var(--lancia2); }
+.festival-control {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  margin-bottom: 12px; padding: 8px 12px;
+  border: 1px solid var(--line); border-radius: 8px;
+  background: color-mix(in srgb, var(--bg) 72%, transparent);
+}
+.festival-control.live {
+  border-color: color-mix(in srgb, var(--sun2) 55%, var(--line));
+  background: color-mix(in srgb, var(--sun) 10%, var(--bg) 90%);
+}
+.festival-label { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.festival-star {
+  width: 24px; height: 24px; border-radius: 6px;
+  display: inline-flex; align-items: center; justify-content: center;
+  color: var(--sun2); border: 1px solid color-mix(in srgb, var(--sun2) 35%, var(--line));
+  background: color-mix(in srgb, var(--sun) 14%, var(--bg) 86%); font-size: 14px; flex: 0 0 auto;
+}
+.festival-title { font-size: 12px; font-weight: 800; letter-spacing: 0.18em; text-transform: uppercase; color: var(--cream); }
+.festival-state {
+  font-family: var(--font-mono); font-size: 10px; font-weight: 800; letter-spacing: 0.18em;
+  text-transform: uppercase; color: var(--muted);
+}
+.festival-control.live .festival-state { color: var(--sun2); animation: a-live-pulse 1.4s ease-in-out infinite; }
+.festival-switch { position: relative; display: inline-flex; align-items: center; width: 48px; height: 26px; flex: 0 0 auto; }
+.festival-switch input { opacity: 0; width: 0; height: 0; }
+.festival-slider {
+  position: absolute; inset: 0; cursor: pointer; border-radius: 999px;
+  background: color-mix(in srgb, var(--cream) 12%, transparent); border: 1px solid var(--line);
+  transition: background 150ms, border-color 150ms, box-shadow 150ms;
+}
+.festival-slider::before {
+  content: ''; position: absolute; width: 18px; height: 18px; left: 3px; top: 3px;
+  border-radius: 50%; background: var(--cream-dk); transition: transform 150ms, background 150ms;
+}
+.festival-switch input:focus-visible + .festival-slider {
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--sun2) 70%, transparent);
+}
+.festival-switch input:checked + .festival-slider {
+  background: color-mix(in srgb, var(--sun2) 24%, transparent);
+  border-color: color-mix(in srgb, var(--sun2) 65%, var(--line));
+}
+.festival-switch input:checked + .festival-slider::before { transform: translateX(22px); background: var(--sun2); }
 
 /* Sliders */
 .a-sliders { display: flex; flex-direction: column; gap: 16px; }
@@ -1301,6 +1343,19 @@ body[data-stopped="true"] .a-station-card .dot.on { animation-play-state: paused
           <span class="chaos-slider"></span>
         </label>
       </div>
+      <div class="festival-control" id="festivalControl">
+        <div class="festival-label">
+          <span class="festival-star" aria-hidden="true">&#9733;</span>
+          <div>
+            <div class="festival-title">Festival Mode</div>
+            <div class="festival-state" id="festivalState">standby</div>
+          </div>
+        </div>
+        <label class="festival-switch" for="festivalToggle" title="Toggle Festival Mode">
+          <input type="checkbox" id="festivalToggle" aria-label="Toggle Festival Mode" onchange="toggleFestivalMode(this)">
+          <span class="festival-slider"></span>
+        </label>
+      </div>
       <div class="a-triggers">
         <button type="button" class="a-trigger" onclick="doTrigger('banter',this)">
           <span class="ico-wrap"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="2" width="4" height="7" rx="2"/><path d="M3.5 7.5a4.5 4.5 0 0 0 9 0"/><path d="M8 12v2"/><path d="M5.5 14h5"/></svg></span>
@@ -1639,6 +1694,43 @@ async function toggleChaosMode(el){
   }catch(_){
     el.checked=!value;
     updateChaosState({enabled:!value});
+    toast('Errore: connessione fallita');
+  }finally{
+    el.disabled=false;
+  }
+}
+function updateFestivalState(party){
+  const enabled=!!(party&&party.active);
+  const box=document.getElementById('festivalControl');
+  const cb=document.getElementById('festivalToggle');
+  const stateEl=document.getElementById('festivalState');
+  if(box)box.classList.toggle('live',enabled);
+  if(cb&&cb.checked!==enabled)cb.checked=enabled;
+  if(stateEl)stateEl.textContent=enabled?'FESTIVAL LIVE':'standby';
+}
+async function loadFestivalToggle(){
+  try{
+    const r=await api('GET','/api/party');
+    updateFestivalState(r);
+  }catch(e){/* ignore — toggle defaults to off */}
+}
+async function toggleFestivalMode(el){
+  const value=!!el.checked;
+  el.disabled=true;
+  try{
+    const body=value?{action:'enable',mode:'festival'}:{action:'disable'};
+    const r=await api('POST','/api/party',body);
+    if(r&&r.ok){
+      updateFestivalState({active:value});
+      toast(value?'Benvenuti al festival!':'Festival Mode: OFF');
+    }else{
+      el.checked=!value;
+      updateFestivalState({active:!value});
+      toast('Errore: '+((r&&r.error)||'sconosciuto'));
+    }
+  }catch(_){
+    el.checked=!value;
+    updateFestivalState({active:!value});
     toast('Errore: connessione fallita');
   }finally{
     el.disabled=false;
@@ -2563,6 +2655,7 @@ async function refresh(){await Promise.all([refreshFast(),refreshSlow()])}
 refresh();
 loadSuperItalianToggle();
 loadChaosToggle();
+loadFestivalToggle();
 setInterval(refreshFast,3000);
 setInterval(refreshSlow,30000);
 </script>
