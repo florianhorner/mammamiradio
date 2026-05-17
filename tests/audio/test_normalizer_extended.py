@@ -45,7 +45,7 @@ def mock_subprocess():
 
     with (
         patch("mammamiradio.audio.normalizer.subprocess.run", return_value=completed) as mock_run,
-        patch("mammamiradio.audio.normalizer._ffprobe_duration_sec", return_value=None),
+        patch("mammamiradio.audio.normalizer.probe_duration_sec", return_value=None),
     ):
         yield mock_run, completed
 
@@ -718,7 +718,7 @@ def test_concat_files_with_silence_after_module_reload_still_uses_aevalsrc():
 
     with (
         patch("mammamiradio.audio.normalizer.subprocess.run", return_value=completed) as mock_run,
-        patch("mammamiradio.audio.normalizer._ffprobe_duration_sec", return_value=None),
+        patch("mammamiradio.audio.normalizer.probe_duration_sec", return_value=None),
     ):
         reloaded.concat_files([Path("/tmp/a.mp3"), Path("/tmp/b.mp3")], Path("/tmp/out.mp3"), silence_ms=300)
 

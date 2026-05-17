@@ -23,6 +23,7 @@ The current version source of truth is `pyproject.toml`.
 
 ### Fixed
 
+- **Spoken host segment assembly is stricter.** Generated multi-line banter now rejects broken intermediate TTS line files, strict concat duration shortfalls, and implausibly short multi-line exchanges before they can reach the listener queue.
 - **Cache rescue no longer repeats the first cached song by filename.** Empty-queue fallback now avoids the current/recent song when alternatives exist and randomizes the rescue candidate, preventing skip from landing back on the same cached track.
 
 ## [2.12.3] - 2026-05-17

@@ -559,7 +559,6 @@ def _segment_identity_keys(segment: dict) -> set[str]:
                 keys.add(_identity_key(value))
             if value and artist:
                 keys.add(_identity_key(f"{artist} {value}"))
-                keys.add(_identity_key(f"{artist} – {value}"))
     return {key for key in keys if key}
 
 
@@ -574,7 +573,6 @@ def _norm_cache_identity_keys(path: Path) -> set[str]:
             keys.add(_identity_key(title))
         if title and artist:
             keys.add(_identity_key(f"{artist} {title}"))
-            keys.add(_identity_key(f"{artist} – {title}"))
     return {key for key in keys if key}
 
 
