@@ -299,3 +299,17 @@ Version sync check conditional on `pyproject.toml`/`ha-addon/config.yaml` diff; 
 **Priority:** P3
 **Source:** scope-parked from florianhorner/chore/todos on 2026-05-16
 `mammamiradio/web/templates/admin.html` — colors `#14110F`, `#1E1610`, and raw RGB tints appear inline rather than referencing the canonical custom properties from `tokens.css`; migrate to the palette variables defined there.
+
+## Audio Delivery
+
+### Spoken-segment assembly hardening (deferred from fix/ha-green-hosts-drop)
+
+**Priority:** P2
+**Source:** scope-parked from florianhorner/fix/ha-green-hosts-drop on 2026-05-17
+Three related hardening items from the original HA Green host-cutoff plan, deferred after the immediate root cause (Anthropic usage_limit circuit breaker) was isolated and fixed separately:
+
+1. `mammamiradio/audio/normalizer.py:295` (`concat_files`) — Add opt-in strict mode that raises on duration shortfall instead of logging only. Intended for host-segment assembly callers; warn-only behavior preserved for generic callers.
+2. `mammamiradio/audio/tts.py` (`synthesize_dialogue`) — Pre-check each intermediate line MP3 for zero-byte or sub-threshold duration before passing to `concat_files`. Currently the quality gate runs on the assembled final output only, not on intermediates.
+3. `mammamiradio/audio/audio_quality.py` (`validate_segment_audio`) — Add line-count/input-duration–aware banter check so a 6-line exchange cannot pass as a 6-9s valid segment when the expected duration (based on line count × average line length) is significantly higher.
+
+**Why deferred:** The audio quality gate already validates the final output; the current production issue on HA Green was upstream latency from Anthropic retries, not segment-length validation. These harden against a different failure class and should land once HA Green is stable post usage_limit fix.
