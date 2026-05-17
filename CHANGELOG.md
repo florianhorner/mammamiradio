@@ -8,11 +8,17 @@ The current version source of truth is `pyproject.toml`.
 
 ### Added
 
+- **HA Green performance smoke gate** — `make perf-smoke` now runs a runtime check against a live station, validating `/healthz`, `/readyz`, `/public-status`, and `/stream` first-byte latency with configurable HA Green thresholds.
 - **Edge add-on (development channel)** — A second Home Assistant add-on, **Mamma Mi Radio (Edge)**, now ships from the same repository. It tracks the latest `main` build: its version is a calendar version bumped automatically by CI on every add-on-changing merge, so Home Assistant shows a normal in-place "Update" each time. The stable **Mamma Mi Radio** add-on is unchanged and still updates only on deliberate releases. Edge and stable share one image and cannot run simultaneously (both bind port 8000) — install one. See `docs/runbooks/ha-addon.md` for switching instructions.
 
 ### Changed
 
+- **Queue fallback starts before the health-failure window.** Active listeners now get cache rescue attempts after a 5-second bounded queue-empty wait, before the preserved 30-second silence health-failure threshold triggers.
 - **Engineering backlog moved to GitHub issues** — `docs/todos.md` was removed. Open engineering work is now tracked as GitHub issues. A new CI guard (`scripts/check-no-backlog-files.sh`, wired into `quality.yml`) fails the build if a catch-all `TODO.md`/`TODOS.md`/`docs/todos.md`/`docs/backlog.md` file is re-added.
+
+### Fixed
+
+- **Cache rescue no longer repeats the first cached song by filename.** Empty-queue fallback now avoids the current/recent song when alternatives exist and randomizes the rescue candidate, preventing skip from landing back on the same cached track.
 
 ## [2.12.3] - 2026-05-17
 

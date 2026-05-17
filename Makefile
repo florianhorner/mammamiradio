@@ -1,4 +1,4 @@
-.PHONY: dev test test-fast test-watch lint format typecheck check deadcode validate coverage-check coverage-ratchet pre-release
+.PHONY: dev test test-fast test-watch lint format typecheck check deadcode validate coverage-check coverage-ratchet perf-smoke pre-release
 
 PYTHON := .venv/bin/python
 PYTEST := $(PYTHON) -m pytest
@@ -43,6 +43,9 @@ coverage-check:
 
 coverage-ratchet:
 	$(PYTHON) scripts/coverage-ratchet.py update
+
+perf-smoke:
+	$(PYTHON) scripts/ha-green-perf-smoke.py
 
 pre-release:
 	./scripts/pre-release-check.sh

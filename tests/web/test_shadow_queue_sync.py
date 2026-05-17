@@ -326,6 +326,17 @@ class TestRuntimeHealthSnapshot:
 
         assert snap["audio_source"] == "unknown"
 
+    def test_queue_empty_elapsed_and_silence_failure_are_exposed(self):
+        app = _make_app()
+        app.state.stream_hub.subscribe()
+        app.state.station_state.queue_empty_since = time.monotonic() - 31
+        req = _fake_request(app)
+
+        snap = _runtime_health_snapshot(req)
+
+        assert snap["queue_empty_elapsed_s"] >= 30
+        assert snap["silence_with_listeners"] is True
+
 
 # ---------------------------------------------------------------------------
 # public-status endpoint — upcoming / upcoming_mode selection
@@ -375,6 +386,21 @@ async def test_public_status_predicted_source_when_shadow_empty_but_playlist_pre
     data = resp.json()
     predicted = [i for i in data["upcoming"] if i["source"] == "predicted_from_playlist"]
     assert len(predicted) > 0
+
+
+@pytest.mark.asyncio
+async def test_public_status_runtime_health_exposes_silence_budget():
+    app = _make_app()
+    app.state.stream_hub.subscribe()
+    app.state.station_state.queue_empty_since = time.monotonic() - 31
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        resp = await client.get("/public-status")
+
+    assert resp.status_code == 200
+    runtime_health = resp.json()["runtime_health"]
+    assert runtime_health["queue_empty_elapsed_s"] >= 30
+    assert runtime_health["silence_with_listeners"] is True
 
 
 @pytest.mark.asyncio
