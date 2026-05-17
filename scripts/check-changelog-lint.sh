@@ -57,6 +57,11 @@ PATTERNS=(
   # Contributor archaeology
   '\bfirst outside contribution\b'
   '\bwork was superseded\b'
+  '\bred tests ride green\b'
+  '\binformed the later\b'
+  '\bsuperseded\b'
+  '\bConductor setup fails\b'
+  '\bCLAUDE\.md\b'
 )
 
 FAIL=0

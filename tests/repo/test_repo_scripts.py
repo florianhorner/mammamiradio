@@ -147,6 +147,45 @@ def test_check_changelog_lint_rejects_digit_phase_and_track_labels(tmp_path: Pat
     assert r"\bTrack [A-Z]\b" in result.stdout
 
 
+def test_check_changelog_lint_rejects_internal_process_phrases(tmp_path: Path) -> None:
+    _write(
+        tmp_path / "CHANGELOG.md",
+        "\n".join(
+            [
+                "# Changelog",
+                "",
+                "## [Unreleased]",
+                "",
+                "- CLAUDE.md documented how red tests ride green.",
+                "- The earlier patch informed the later cleanup.",
+                "",
+            ]
+        ),
+    )
+    _write(
+        tmp_path / "ha-addon/mammamiradio/CHANGELOG.md",
+        "\n".join(
+            [
+                "# Changelog",
+                "",
+                "## Unreleased",
+                "",
+                "- Conductor setup fails when a contributor workflow was superseded.",
+                "",
+            ]
+        ),
+    )
+
+    result = _run(["bash", str(CHECK_CHANGELOG_LINT)], cwd=tmp_path)
+
+    assert result.returncode == 1
+    assert r"\bCLAUDE\.md\b" in result.stdout
+    assert r"\bred tests ride green\b" in result.stdout
+    assert r"\binformed the later\b" in result.stdout
+    assert r"\bConductor setup fails\b" in result.stdout
+    assert r"\bsuperseded\b" in result.stdout
+
+
 def _create_validate_addon_repo(
     tmp_path: Path, *, streamer_body: str, broken_dotvenv_python: bool = False
 ) -> dict[str, str]:
