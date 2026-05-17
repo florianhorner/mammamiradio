@@ -387,6 +387,9 @@ class StationState:
     pinned_track: Track | None = None
     # Listener requests: shoutouts and song wishes submitted via the dashboard
     pending_requests: list[dict] = field(default_factory=list)
+    # Operator-visible pending actions/directives. This mirrors legacy single
+    # slots while the producer still consumes those slots for compatibility.
+    pending_actions: deque[dict] = field(default_factory=lambda: deque(maxlen=200))
     # IP-based rate limiting for /api/listener-request {ip: last_ts}
     _listener_request_rl: dict = field(default_factory=dict)
     # Shareware trial: counts canned banter clips actually streamed to listener
@@ -435,6 +438,7 @@ class StationState:
         # download tasks from the old source can't zombie-pin a track into
         # the new playlist context.
         self.pending_requests.clear()
+        self.pending_actions.clear()
         self._listener_request_rl.clear()
         self.pinned_track = None
         self.force_next = None

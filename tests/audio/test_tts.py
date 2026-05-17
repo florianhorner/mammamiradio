@@ -321,7 +321,7 @@ async def test_openai_instructions_from_personality(_mock_all, tmp_path, monkeyp
 
 @pytest.mark.asyncio
 async def test_synthesize_ad_disclaimer_goblin_rate(_mock_all, tmp_path):
-    """Parts with role='disclaimer_goblin' are synthesized at +90% rate."""
+    """Disclaimer speed is format-scoped and no longer the old near-2x spike."""
     from mammamiradio.audio.tts import synthesize_ad
 
     script = AdScript(
@@ -338,16 +338,16 @@ async def test_synthesize_ad_disclaimer_goblin_rate(_mock_all, tmp_path):
     result = await synthesize_ad(script, voices, tmp_path)
     assert result.exists()
 
-    # Check that Communicate was called with rate="+90%"
+    # Check that Communicate was called with the classic-pitch disclaimer rate.
     calls = _mock_all["Communicate"].call_args_list
     assert len(calls) >= 1
     found_rate = False
     for call in calls:
         kwargs = call.kwargs if call.kwargs else {}
-        if kwargs.get("rate") == "+90%":
+        if kwargs.get("rate") == "+55%":
             found_rate = True
             break
-    assert found_rate, f"Expected rate='+90%' in Communicate calls, got: {calls}"
+    assert found_rate, f"Expected rate='+55%' in Communicate calls, got: {calls}"
 
 
 @pytest.mark.asyncio

@@ -12,6 +12,13 @@ This repo ships a `conductor.json` that defines workspace lifecycle for [Conduct
 
 Runtime artifacts created by these scripts land under `.context/` which is gitignored. Do not commit anything from `.context/`.
 
+## Integration trains
+
+Conductor workspaces may be used as integration trains for parallel feature
+worktrees. `Train/Listener QS` is the Listener QS train and should be visible as
+branch `train/listener-qs`. Its intake, merge gate, and handoff contract live in
+[`docs/listener-qs-train.md`](listener-qs-train.md).
+
 ## Shared credentials
 
 The setup script expects your API keys and secrets in a `.env` file at one of two known paths: `~/.config/mammamiradio/.env` (preferred, shared across workspaces) or `$CONDUCTOR_ROOT_PATH/.env` (per-Conductor-root fallback). See `.env.example` for the required keys.

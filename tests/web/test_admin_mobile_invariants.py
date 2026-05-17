@@ -26,9 +26,9 @@ def _phone_css() -> str:
     phone_blocks = [
         _read_balanced_block(text, match.end() - 1)
         for match in _MEDIA_START_RE.finditer(text)
-        if int(match.group(1)) <= 640
+        if int(match.group(1)) <= 768
     ]
-    assert phone_blocks, "admin.html has no <=640px mobile breakpoint for phone layouts."
+    assert phone_blocks, "admin.html has no <=768px mobile breakpoint for tablet/phone layouts."
     return "\n".join(phone_blocks)
 
 
@@ -84,15 +84,12 @@ def test_programme_table_collapses_to_cards_on_phone() -> None:
     )
 
 
-def test_pool_pass_rows_wrap_on_phone() -> None:
-    """Pool-pass annotations can contain long titles and must wrap."""
-    css = _phone_css()
-    pool_pass = re.search(r"\.a-programme\s+tr\.pool-pass\s+td\.pool-pass-cell\s*\{([^}]*)\}", css, re.DOTALL)
-    assert pool_pass, "Phone CSS must include a dedicated pool-pass cell rule."
-    body = pool_pass.group(1)
-    assert re.search(r"white-space\s*:\s*normal", body), "Pool-pass annotations must wrap normally."
-    assert re.search(r"overflow-wrap\s*:\s*anywhere", body), "Pool-pass annotations must break long labels."
-    assert re.search(r"word-break\s*:\s*break-word", body), "Pool-pass annotations need a fallback breaker."
+def test_pool_debug_annotations_hidden_from_operator_programme() -> None:
+    """Scheduler pool internals must not leak into the normal admin programme."""
+    text = _read_admin_html()
+    assert "pool[" not in text
+    assert "pool wrapped around" not in text
+    assert "not selected this pass" not in text
 
 
 def test_colgroup_hidden_on_phone() -> None:
@@ -125,6 +122,14 @@ def test_more_upcoming_row_not_card_styled_on_phone() -> None:
         css,
         re.DOTALL,
     ), "Phone CSS must render tr.prog-more flat (display: block, no card chrome)."
+
+
+def test_playlist_source_controls_are_non_destructive_by_default() -> None:
+    """Era/Jamendo controls should enrich rotation, not replace programme."""
+    text = _read_admin_html()
+    assert "enrichPlaylistSource(" in text
+    assert "loadPlaylistSource(" not in text
+    assert "'/api/playlist/enrich'" in text
 
 
 def test_programme_table_desktop_colgroup_has_all_columns() -> None:

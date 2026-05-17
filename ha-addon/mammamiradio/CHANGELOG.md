@@ -1,5 +1,20 @@
 # Changelog
 
+## 2.12.3
+
+### Changed
+
+- **Italian-first is now the default.** New add-on installs default `super_italian_mode` to `true`, while the option remains available for operators who want the older code-switching style.
+- **Jamendo can participate in the normal programme.** When charts and Jamendo are both configured, startup blends Jamendo tracks into the chart rotation instead of keeping Jamendo fallback-only.
+- **Admin source chips enrich instead of replacing the programme.** Jamendo, chart reload, and decade buttons add tracks into the current rotation without purging the queue, skipping current playback, or clearing listener requests.
+
+### Fixed
+
+- **Palinsesto hides scheduler pool diagnostics and duplicate current rows.** Pool badges/wrap notes no longer appear in the operator programme, and the current segment is filtered out of history.
+- **Speech/ad transition stacking is reduced.** Segments that already carry a music-tail crossfade no longer receive an extra transition sting before them.
+- **Empty-queue skip is safer on HA Green.** Skip records a bridge action and forces next music before cutting when the queue is empty, and status exposes skip readiness.
+- **Ad disclaimer speed is deterministic by format.** The old near-2x role spike is replaced with format-scoped pacing.
+
 ## 2.12.2
 
 ### Fixed

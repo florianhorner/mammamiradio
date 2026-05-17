@@ -51,6 +51,11 @@ _failed_edge_voices: set[str] = set()
 # (e.g. Home Assistant Green — fanless ARM SoC). Two slots let one TTS+normalize and
 # one SFX/bed generation overlap without saturating all cores.
 _HEAVY_SEM = asyncio.Semaphore(2)
+# Disclaimer voice rate by ad format. Formats not listed use the +35%
+# disclaimer_goblin default shared by the other ad treatments.
+_DISCLAIMER_RATE_BY_FORMAT = {
+    "classic_pitch": "+55%",
+}
 
 
 def _looks_like_openai_voice(voice: str) -> bool:
@@ -269,10 +274,10 @@ async def synthesize_ad(
     async def _render_part(part, part_path):
         if part.type == "voice" and part.text:
             voice_for_part = voices.get(part.role, default_voice) if part.role else default_voice
-            # Pharma disclaimers are read at ~2x speed — real Italian radio style
+            # Legal disclaimers are format-scoped, not accidental role spikes.
             extra: dict[str, str] = {}
             if part.role == "disclaimer_goblin":
-                extra["rate"] = "+90%"
+                extra["rate"] = _DISCLAIMER_RATE_BY_FORMAT.get(script.format, "+35%")
             # Skip per-part loudnorm — normalize_ad() handles the final loudnorm pass
             return await synthesize(part.text, voice_for_part.voice, part_path, **extra, loudnorm=False)
         if part.type == "sfx" and part.sfx:
