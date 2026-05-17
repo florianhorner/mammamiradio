@@ -82,9 +82,7 @@ def test_select_norm_cache_rescue_avoids_current_song_when_alternatives_exist(tm
 
     current = tmp_path / "norm_50_cent_in_da_club.mp3"
     current.write_bytes(b"x")
-    (tmp_path / "norm_50_cent_in_da_club.mp3.json").write_text(
-        '{"title": "In Da Club", "artist": "50 Cent"}'
-    )
+    (tmp_path / "norm_50_cent_in_da_club.mp3.json").write_text('{"title": "In Da Club", "artist": "50 Cent"}')
     alternative = tmp_path / "norm_raffaella_carra_a_far_l_amore.mp3"
     alternative.write_bytes(b"x")
     (tmp_path / "norm_raffaella_carra_a_far_l_amore.mp3.json").write_text(
