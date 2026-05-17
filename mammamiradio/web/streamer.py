@@ -1140,7 +1140,7 @@ async def run_playback_loop(app) -> None:
 
         pulled_from_queue = False
         if segment_queue.empty() and state.queue_empty_since is None:
-            # Mark the exact moment playback ran out of audio. The wait_for()
+            # Mark the exact moment playback ran out of audio. The 30s wait_for()
             # below is part of the listener-visible silence window.
             state.queue_empty_since = _runtime_monotonic()
         try:

@@ -354,7 +354,7 @@ async def test_run_playback_loop_timeout_fallback_resets_queue_empty_since_and_n
 
 
 @pytest.mark.asyncio
-async def test_run_playback_loop_timeout_uses_norm_cache_after_30s(tmp_path, caplog):
+async def test_run_playback_loop_timeout_uses_norm_cache_after_short_fallback_wait(tmp_path, caplog):
     app = _make_test_app()
     app.state.config.audio.bitrate = 3200
     app.state.config.cache_dir = tmp_path
