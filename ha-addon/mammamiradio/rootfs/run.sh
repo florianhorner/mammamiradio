@@ -32,6 +32,9 @@ print('export MAMMAMIRADIO_SUPER_ITALIAN=' + si_val)
 chaos = opts.get('chaos_mode_active', False)
 chaos_val = 'true' if chaos else 'false'
 print('export MAMMAMIRADIO_CHAOS_MODE=' + chaos_val)
+festival = opts.get('festival_mode', False)
+festival_val = 'true' if festival else 'false'
+print('export MAMMAMIRADIO_FESTIVAL_MODE=' + festival_val)
 " 2>"$OPTS_LOG"); then
         echo "[mammamiradio] WARNING: Failed to parse options.json, continuing with defaults"
         cat "$OPTS_LOG" 2>/dev/null

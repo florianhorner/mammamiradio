@@ -21,7 +21,7 @@ from dotenv import load_dotenv
 
 from mammamiradio.audio.tts import _EDGE_DEFAULT_FALLBACK_VOICE, _looks_like_openai_voice
 from mammamiradio.audio.voice_catalog import is_known_edge_voice
-from mammamiradio.core.models import HostPersonality, PersonalityAxes
+from mammamiradio.core.models import HostPersonality, PartyMode, PersonalityAxes
 from mammamiradio.hosts.ad_creative import AdBrand, AdVoice, CampaignSpine
 
 load_dotenv()
@@ -294,6 +294,7 @@ class StationConfig:
     is_addon: bool = False
     allow_ytdlp: bool = False
     super_italian_mode: bool = False
+    party_mode: PartyMode | None = None
     # Names of hosts or ad voices that had their configured voice replaced
     # during config load because the configured ID wasn't valid for the chosen
     # backend. Empty when all voices passed validation.
@@ -429,6 +430,10 @@ def _apply_addon_options() -> None:
     si = options.get("super_italian_mode")
     if isinstance(si, bool) and not os.getenv("MAMMAMIRADIO_SUPER_ITALIAN"):
         os.environ["MAMMAMIRADIO_SUPER_ITALIAN"] = "true" if si else "false"
+
+    fm = options.get("festival_mode")
+    if isinstance(fm, bool) and not os.getenv("MAMMAMIRADIO_FESTIVAL_MODE"):
+        os.environ["MAMMAMIRADIO_FESTIVAL_MODE"] = "true" if fm else "false"
 
 
 def _parse_brand(raw: dict, hosts: list[HostPersonality]) -> tuple[BrandSection, list[str]]:
@@ -784,6 +789,12 @@ def load_config(path: str = "radio.toml") -> StationConfig:
         config.super_italian_mode = True
     elif _super_italian_env in _FALSY:
         config.super_italian_mode = False
+
+    _festival_env = os.getenv("MAMMAMIRADIO_FESTIVAL_MODE", "").strip().lower()
+    if _festival_env in _TRUTHY:
+        config.party_mode = "festival"
+    elif _festival_env in _FALSY:
+        config.party_mode = None
 
     # Addon overrides: persistent paths, auto-enable HA
     if addon_mode:

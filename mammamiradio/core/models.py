@@ -18,6 +18,9 @@ if TYPE_CHECKING:
     from mammamiradio.hosts.persona import PersonaStore
 
 
+PartyMode = Literal["festival"]
+
+
 class SegmentType(Enum):
     """Kinds of segments that can appear on the station timeline."""
 

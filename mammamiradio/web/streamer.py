@@ -27,6 +27,7 @@ from mammamiradio.audio.normalizer import humanize_norm_filename, load_track_met
 from mammamiradio.core.capabilities import capabilities_to_dict, get_capabilities
 from mammamiradio.core.models import (
     ChaosSubtype,
+    PartyMode,
     PersonalityAxes,
     PlaylistSource,
     Segment,
@@ -1885,6 +1886,69 @@ async def set_super_italian(request: Request, _: None = Depends(require_admin_ac
         else:
             await loop.run_in_executor(None, _save_dotenv, {"MAMMAMIRADIO_SUPER_ITALIAN": env_value})
     return {"ok": True, "super_italian_mode": value}
+
+
+_party_lock = asyncio.Lock()
+
+
+@router.get("/api/party")
+async def get_party(request: Request, _: None = Depends(require_admin_access)):
+    """Return the current party mode state."""
+    config = request.app.state.config
+    return {"active": config.party_mode is not None, "mode": config.party_mode}
+
+
+def _save_festival_addon_options(enabled: bool) -> None:
+    """Persist festival_mode into /data/options.json for HA addons."""
+    _save_addon_option("festival_mode", enabled)
+
+
+@router.post("/api/party")
+async def set_party(request: Request, _: None = Depends(require_admin_access)):
+    """Toggle Festival Mode live and persist it.
+
+    POST {"action": "enable", "mode": "festival"} to start festival mode.
+    POST {"action": "disable"} to return to normal.
+
+    Idempotent — double-enable or double-disable returns ok without side-effects.
+    """
+    config = request.app.state.config
+    state = request.app.state.station_state
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"ok": False, "error": "invalid JSON body"}, status_code=422)
+    if not isinstance(body, dict):
+        return JSONResponse({"ok": False, "error": "expected JSON object"}, status_code=422)
+    action = body.get("action")
+    mode = body.get("mode")
+
+    if action not in ("enable", "disable"):
+        return JSONResponse({"ok": False, "error": "action must be 'enable' or 'disable'"}, status_code=422)
+    if action == "enable" and mode != "festival":
+        return JSONResponse({"ok": False, "error": "mode must be 'festival'"}, status_code=422)
+
+    target_mode: PartyMode | None = "festival" if action == "enable" else None
+    loop = asyncio.get_running_loop()
+    segment_queue = request.app.state.queue
+
+    async with _party_lock:
+        if config.party_mode == target_mode:
+            return {"ok": True, "active": config.party_mode is not None, "mode": config.party_mode}
+        config.party_mode = target_mode
+        val = "true" if target_mode == "festival" else "false"
+        os.environ["MAMMAMIRADIO_FESTIVAL_MODE"] = val
+        if action == "enable":
+            state.playlist_revision += 1
+            _purge_segment_queue(segment_queue)
+            state.force_next = SegmentType.BANTER
+        if config.is_addon:
+            await loop.run_in_executor(None, _save_festival_addon_options, target_mode == "festival")
+        else:
+            await loop.run_in_executor(None, _save_dotenv, {"MAMMAMIRADIO_FESTIVAL_MODE": val})
+
+    logger.info("Festival Mode %s by admin", "enabled" if target_mode else "disabled")
+    return {"ok": True, "active": config.party_mode is not None, "mode": config.party_mode}
 
 
 @router.post("/api/credentials")
