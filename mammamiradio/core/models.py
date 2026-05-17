@@ -193,6 +193,7 @@ class SegmentLogEntry:
     label: str
     timestamp: float = 0.0
     metadata: dict = field(default_factory=dict)
+    duration_sec: float = 0.0
 
 
 @dataclass
@@ -521,6 +522,7 @@ class StationState:
                 label=label,
                 timestamp=now,
                 metadata=segment.metadata,
+                duration_sec=segment.duration_sec,
             )
         )
 

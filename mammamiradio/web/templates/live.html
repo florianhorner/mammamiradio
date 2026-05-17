@@ -926,7 +926,7 @@ function _render(data) {
   // Progress
   if (now.started) {
     _segStart = now.started * 1000;
-    _segDurMs = (meta.duration_ms || (meta.duration_s && meta.duration_s * 1000)) || null;
+    _segDurMs = (now.duration_sec && now.duration_sec * 1000) || meta.duration_ms || (meta.duration_s && meta.duration_s * 1000) || null;
   } else {
     _segStart = _segDurMs = null;
   }

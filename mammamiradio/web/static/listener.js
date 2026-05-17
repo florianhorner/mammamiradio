@@ -410,7 +410,11 @@
       renderPalinsesto(status);
       renderStoppedState(status);
       updateCasa(status.ha_moments);
-      if (status.current_progress_sec !== undefined && status.current_duration_sec !== undefined) {
+      if (
+        Number.isFinite(status.current_progress_sec) &&
+        Number.isFinite(status.current_duration_sec) &&
+        status.current_duration_sec > 0
+      ) {
         state.currentProgressMs = status.current_progress_sec * 1000;
         state.segmentDurationMs = status.current_duration_sec * 1000;
         renderProgress(status.current_progress_sec, status.current_duration_sec);

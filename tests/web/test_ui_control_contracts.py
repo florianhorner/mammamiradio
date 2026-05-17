@@ -616,6 +616,18 @@ class TestNowStreamingInvariants:
         assert state.now_streaming["type"] == "music"
         assert state.now_streaming.get("label") != "Skipping..."
 
+    def test_admin_duration_rendering_has_no_type_based_fake_fallbacks(self):
+        html = ADMIN_HTML.read_text()
+        forbidden = [
+            r"typeKey==='music'\?240",
+            r"typeKey==='banter'\?30",
+            r"typeKey==='ad'\?60",
+            r"typeKey==='news_flash'\?20",
+        ]
+        for pattern in forbidden:
+            assert not re.search(pattern, html), f"admin.html reintroduced fake duration fallback: {pattern}"
+        assert "function durationSec(item)" in html
+
 
 # ── Item 21: scheduler reason strings must not leak into admin queue rows ─────
 
