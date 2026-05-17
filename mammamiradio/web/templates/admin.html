@@ -571,11 +571,7 @@ body[data-stopped="true"] .sidebar-live-line { color: var(--cream-dk); }
 .lr-btn-dismiss:hover { background: rgba(184,44,32,0.25); color: var(--error); }
 .lr-btn-queue { background: rgba(37,99,235,0.18); color: var(--ok); }
 .lr-btn-queue:hover { background: rgba(37,99,235,0.32); }
-.lr-pill { font-size: 10px; font-weight: 600; padding: 2px 6px; border-radius: 4px; }
-.lr-shout { background: rgba(37,99,235,0.18); color: var(--ok); }
-.lr-found { background: rgba(37,99,235,0.18); color: var(--ok); }
-.lr-searching { background: rgba(244,208,72,0.15); color: var(--sun); }
-.lr-err { background: rgba(184,44,32,0.18); color: var(--error); }
+.lr-head .status-inline { font-size: 10px; font-weight: 600; }
 
 /* ── MISC ── */
 .empty { font-size: 12px; color: rgba(245,237,216,0.35); text-align: center; padding: 16px 0; font-style: italic; }
@@ -694,11 +690,23 @@ body::before {
 
 /* Sidebar now-playing compact (below station card) */
 .a-now-compact { font-size: 11px; color: var(--text-secondary); display: flex; flex-direction: column; gap: 3px; }
-.a-now-compact .now-type-pill { display: inline-flex; align-items: center; gap: 5px; font-size: 9px; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase; padding: 2px 7px; border-radius: 4px; font-family: var(--font-mono); border: 1px solid transparent; margin-bottom: 4px; }
-.a-now-compact .now-type-pill.music { background: rgba(37,99,235,0.12); color: var(--ok); border-color: rgba(37,99,235,0.25); }
-.a-now-compact .now-type-pill.banter { background: rgba(236,204,48,0.12); color: var(--sun2); border-color: rgba(236,204,48,0.25); }
-.a-now-compact .now-type-pill.ad { background: rgba(168,85,247,0.12); color: #a855f7; border-color: rgba(168,85,247,0.25); }
-.a-now-compact .now-type-pill.news_flash { background: rgba(224,112,56,0.12); color: var(--news); border-color: rgba(224,112,56,0.25); }
+.a-now-compact .status-chip,
+.a-now-compact .segment-inline {
+  align-self: flex-start;
+  font-size: 9px;
+  letter-spacing: 0.14em;
+  padding: 2px 7px;
+  margin-bottom: 4px;
+  font-family: var(--font-mono);
+}
+.a-now-compact .segment-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-weight: 700;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
 .a-now-compact .title { font-family: var(--font-display); font-style: italic; font-weight: 600; font-size: 15px; color: var(--cream); line-height: 1.2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .a-now-compact .artist { font-size: 11px; color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .a-now-compact .progress-row { display: flex; align-items: center; gap: 6px; margin-top: 4px; }
@@ -721,17 +729,12 @@ body::before {
 .a-engine-status { margin-top: auto; padding-top: 14px; border-top: 1px solid var(--line); }
 .a-engine-status .eyebrow { font-size: 9px; font-weight: 700; letter-spacing: 0.22em; text-transform: uppercase; color: var(--muted); margin-bottom: 10px; }
 .a-engine-status .srow { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 5px; }
-.a-engine-status .chip {
-  font-size: 9px; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase;
-  padding: 3px 8px 3px 6px; border-radius: 999px; border: 1px solid transparent;
-  display: inline-flex; align-items: center; gap: 5px;
+.a-engine-status .status-chip {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  padding: 3px 8px 3px 6px;
 }
-.a-engine-status .chip svg { width: 8px; height: 8px; flex-shrink: 0; }
-.chip.ready { background: rgba(37,99,235,0.12); color: var(--ok); border-color: rgba(37,99,235,0.3); }
-.chip.degraded { background: rgba(217,119,6,0.12); color: var(--warning); border-color: rgba(217,119,6,0.3); }
-.chip.blocked { background: rgba(196,74,74,0.12); color: var(--error); border-color: rgba(196,74,74,0.3); }
-.chip.idle { background: rgba(155,133,116,0.12); color: var(--muted); border-color: rgba(155,133,116,0.3); }
-.chip.working { background: rgba(155,133,116,0.12); color: var(--muted); border-color: rgba(155,133,116,0.3); }
 .a-engine-status .cost { margin-top: 12px; display: flex; justify-content: space-between; align-items: baseline; }
 .a-engine-status .cost .lbl { font-size: 9px; font-weight: 700; letter-spacing: 0.22em; text-transform: uppercase; color: var(--muted); }
 .a-engine-status .cost b { font-family: var(--font-mono); font-size: 13px; color: var(--sun); font-weight: 500; font-variant-numeric: tabular-nums; }
@@ -857,18 +860,27 @@ body::before {
 .a-programme .ac button:hover { color: var(--sun); border-color: var(--sun2); background: rgba(236,204,48,0.06); }
 .a-programme .ac button:focus-visible { outline: none; box-shadow: 0 0 0 2px rgba(236,204,48,0.5); }
 
-/* Unified type pill */
-.seg-pill {
-  display: inline-flex; align-items: center; gap: 5px;
-  padding: 3px 8px; border-radius: 4px;
-  font-size: 9px; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase;
+/* Compact non-status segment labels for programme categories */
+.a-programme .segment-inline,
+.lg-row .segment-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
   font-family: var(--font-mono);
-  border: 1px solid transparent;
+  white-space: nowrap;
 }
-.seg-pill.seg-music  { background: rgba(37,99,235,0.12);  color: var(--ok);      border-color: rgba(37,99,235,0.25); }
-.seg-pill.seg-banter { background: rgba(236,204,48,0.12); color: var(--sun2);    border-color: rgba(236,204,48,0.25); }
-.seg-pill.seg-ad     { background: rgba(168,85,247,0.12); color: #a855f7;        border-color: rgba(168,85,247,0.25); }
-.seg-pill.seg-news_flash { background: rgba(224,112,56,0.12); color: var(--news); border-color: rgba(224,112,56,0.25); }
+.segment-inline { color: var(--muted); }
+.segment-inline.segment-music { color: var(--ok); }
+.segment-inline.segment-banter { color: var(--sun2); }
+.segment-inline.segment-ad { color: var(--accent-warm); } /* secondary accent — distinct from --warning (degraded) */
+.segment-inline.segment-news_flash { color: var(--news); }
+.segment-inline.segment-station_id,
+.segment-inline.segment-sweeper,
+.segment-inline.segment-time_check { color: var(--muted); }
 
 /* Triggers */
 .a-triggers { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
@@ -1238,7 +1250,7 @@ body[data-stopped="true"] .a-station-card .dot.on { animation-play-state: paused
 
     <!-- Compact now-playing (below station card) -->
     <div class="a-now-compact">
-      <div class="now-type-pill music" id="nowType">—</div>
+      <div class="status-chip idle" id="nowType" aria-label="status: idle">—</div>
       <div class="title" id="nowTitle">In attesa del segnale...</div>
       <div class="artist" id="nowArtist"></div>
       <div class="progress-row">
@@ -1612,7 +1624,7 @@ const SOURCE_CHIPS={
 let _lastSetupJson=null;
 
 function toast(m){const e=document.getElementById('toast');e.textContent=m;e.classList.add('show');setTimeout(()=>e.classList.remove('show'),1600)}
-function esc(s){const d=document.createElement('div');d.textContent=s||'';return d.innerHTML}
+function esc(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;')}
 function escJs(s){return String(s||'').replace(/\\/g,'\\\\').replace(/'/g,"\\'");}
 function fmtRuntimeTs(ts){
   if(!ts)return'—';
@@ -1625,6 +1637,28 @@ function segmentTypeKey(type){const raw=String(type||'music');return raw==='welc
 function segmentText(type){return ({music:'musica',banter:'intervento',ad:'pubblicità',news_flash:'notizia'}[segmentTypeKey(type)]||segmentTypeKey(type).replace('_',' '))}
 function segmentGlyph(type){return SEGMENT_GLYPH[segmentTypeKey(type)]||'•'}
 function segmentBadge(type){return `${segmentGlyph(type)} ${segmentText(type)}`}
+function segmentClass(type){return String(type||'music').replace(/[^a-z0-9_-]/gi,'_').toLowerCase()}
+const STATUS_STATES=['ready','working','degraded','blocked','idle'];
+function statusState(state){const s=String(state||'idle');return STATUS_STATES.includes(s)?s:'idle'}
+function statusTitle(state,label,title=''){return title||`${label} (${state})`}
+function _statusSpan(cls,state,label,title=''){
+  const safeState=statusState(state);
+  return `<span class="${cls} ${safeState}" aria-label="${esc(label)}: status ${esc(safeState)}" title="${esc(statusTitle(safeState,label,title))}">${esc(label)}</span>`;
+}
+function statusChip(state,label,title=''){return _statusSpan('status-chip',state,label,title)}
+function statusInline(state,label,title=''){return _statusSpan('status-inline',state,label,title)}
+function segmentInline(type){
+  const typeKey=segmentTypeKey(type);
+  const sKey=segmentClass(typeKey);const sText=segmentText(typeKey);
+  return `<span class="segment-inline segment-${sKey}" aria-label="segment: ${esc(sText)}">${esc(segmentBadge(typeKey))}</span>`;
+}
+function nowTypeStatus(type){
+  const typeKey=segmentTypeKey(type);
+  if(typeKey==='stopped')return{cls:'status-chip idle',ariaLabel:'status: idle',title:'stazione in pausa',text:'Fermo'};
+  if(typeKey==='skipping')return{cls:'status-chip working',ariaLabel:'status: working',title:'salto in corso',text:'Cambio…'};
+  const sKey=segmentClass(typeKey);const sText=segmentText(typeKey);
+  return{cls:`segment-inline segment-${sKey}`,ariaLabel:`segment: ${sText}`,title:`segment: ${sText}`,text:segmentBadge(typeKey)};
+}
 
 async function api(m,p,b){const o={method:m,headers:H()};if(b)o.body=JSON.stringify(b);return(await fetch(_base+p,o)).json()}
 
@@ -1794,7 +1828,7 @@ async function flagCurrentTrack(el) {
 function updateNow(ns){
   if(!ns||!ns.type){
     const ty=document.getElementById('nowType');
-    if(ty){ty.className='now-type-pill music';ty.textContent='—';}
+    if(ty){ty.className='status-chip idle';ty.setAttribute('aria-label','In attesa: status idle');ty.title='In attesa del segnale';ty.textContent='—';}
     document.getElementById('nowTitle').textContent='In attesa del segnale...';
     document.getElementById('nowArtist').textContent='';
     document.getElementById('nowElapsed').textContent='—';
@@ -1809,8 +1843,11 @@ function updateNow(ns){
   }
   const typeKey=segmentTypeKey(ns.type);
   const ty=document.getElementById('nowType');
-  ty.className='now-type-pill '+typeKey;
-  ty.textContent=segmentBadge(typeKey);
+  const typeStatus=nowTypeStatus(typeKey);
+  ty.className=typeStatus.cls;
+  ty.setAttribute('aria-label',typeStatus.ariaLabel);
+  ty.title=typeStatus.title;
+  ty.textContent=typeStatus.text;
   const titleEl=document.getElementById('nowTitle');
   const artistEl=document.getElementById('nowArtist');
   let title=(ns.label && ns.label !== ns.type) ? ns.label : 'Preparing...';
@@ -1907,7 +1944,7 @@ function renderProgramme(st){
     const d=new Date(e.timestamp*1000);
     const t=d.toLocaleTimeString('it-IT',{hour:'2-digit',minute:'2-digit'});
     const parts=splitTrackLabel(e);
-    rows.push(`<tr class="past"><td class="ts">${t}</td><td><span class="seg-pill seg-${typeKey}">${esc(segmentText(typeKey))}</span></td><td class="ti">${esc(parts.title||typeKey)}</td><td class="ho">${esc(parts.artist)}</td><td class="du">${fmtDur(e,typeKey)}</td><td class="ac"></td></tr>`);
+    rows.push(`<tr class="past"><td class="ts">${t}</td><td>${segmentInline(typeKey)}</td><td class="ti">${esc(parts.title||typeKey)}</td><td class="ho">${esc(parts.artist)}</td><td class="du">${fmtDur(e,typeKey)}</td><td class="ac"></td></tr>`);
   });
 
   // Current row
@@ -1916,7 +1953,7 @@ function renderProgramme(st){
     const typeKey=segmentTypeKey(now.type);
     const parts=splitTrackLabel(now);
     const titleText=parts.title&&parts.title!==now.type?parts.title:'In onda...';
-    rows.push(`<tr class="now"><td class="ts">ORA</td><td><span class="seg-pill seg-${typeKey}">${esc(segmentText(typeKey))}</span></td><td class="ti">${esc(titleText)}</td><td class="ho">${esc(parts.artist)}</td><td class="du">${fmtDur(now,typeKey)}</td><td class="ac"></td></tr>`);
+    rows.push(`<tr class="now"><td class="ts">ORA</td><td>${segmentInline(typeKey)}</td><td class="ti">${esc(titleText)}</td><td class="ho">${esc(parts.artist)}</td><td class="du">${fmtDur(now,typeKey)}</td><td class="ac"></td></tr>`);
   }
 
   // Upcoming rows
@@ -1931,7 +1968,7 @@ function renderProgramme(st){
     // "BANTER banter" if a producer code path ever forgets to set a title.
     const titleText=(parts.title && parts.title.toLowerCase()!==typeKey)?parts.title:'';
     let titleHtml=esc(titleText);
-    rows.push(`<tr ${clickAttrs}><td class="ts"></td><td><span class="seg-pill seg-${typeKey}">${esc(segmentText(typeKey))}</span></td><td class="ti">${titleHtml}</td><td class="ho">${esc(parts.artist)}</td><td class="du">${fmtDur(it,typeKey)}</td><td class="ac"></td></tr>`);
+    rows.push(`<tr ${clickAttrs}><td class="ts"></td><td>${segmentInline(typeKey)}</td><td class="ti">${titleHtml}</td><td class="ho">${esc(parts.artist)}</td><td class="du">${fmtDur(it,typeKey)}</td><td class="ac"></td></tr>`);
   });
 
   if(upFiltered.length>10){
@@ -1961,28 +1998,24 @@ function updatePipelineStatus(caps){
   const el=document.getElementById('pipelineStatus');
   if(!el)return;
   const c=caps?.capabilities||{};
-  const svgCheck='<svg viewBox="0 0 8 8" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M1.5 4.2 3.3 6 6.5 2"/></svg>';
-  const svgTri='<svg viewBox="0 0 8 8" fill="currentColor"><path d="M4 1 7.2 6.5H0.8z"/></svg>';
-  const svgCross='<svg viewBox="0 0 8 8" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M2 2l4 4M6 2l-4 4"/></svg>';
-  const chip=(state,label)=>`<span class="chip ${state}">${state==='ready'?svgCheck:state==='degraded'?svgTri:svgCross} ${label}</span>`;
 
   let html='<div class="srow">';
   if(!Object.keys(c).length){
-    html+=chip('working','Controllo…')+'</div>';
+    html+=statusChip('working','Controllo…')+'</div>';
     el.innerHTML=html; return;
   }
-  if(c.anthropic_key&&c.anthropic_degraded){ html+=chip('degraded','Anthropic'); }
-  else if(c.anthropic_key){ html+=chip('ready','Anthropic'); }
-  else { html+=chip('blocked','Anthropic'); }
-  html+=chip('ready','Stream');
+  if(c.anthropic_key&&c.anthropic_degraded){ html+=statusChip('degraded','Anthropic'); }
+  else if(c.anthropic_key){ html+=statusChip('ready','Anthropic'); }
+  else { html+=statusChip('blocked','Anthropic'); }
+  html+=statusChip('ready','Stream');
   html+='</div><div class="srow">';
-  if(c.ha){ html+=chip('ready','Home Assistant'); }
-  else{ html+=chip('idle','HA: off'); }
+  if(c.ha){ html+=statusChip('ready','Home Assistant'); }
+  else{ html+=statusChip('idle','HA: off'); }
   html+='</div>';
   el.innerHTML=html;
 }
 function statusRow(title,state,label,detail){
-  return `<div class="status-row"><div class="status-copy"><div class="status-title">${esc(title)}</div><div class="status-detail">${esc(detail)}</div></div><span class="status-chip ${state}" aria-label="status: ${esc(state)}">${esc(label)}</span></div>`;
+  return `<div class="status-row"><div class="status-copy"><div class="status-title">${esc(title)}</div><div class="status-detail">${esc(detail)}</div></div>${statusChip(state,label)}</div>`;
 }
 function runtimeProviderRow(title,item){
   const state=item?.fallback_active?'degraded':'ready';
@@ -2046,7 +2079,7 @@ function setupPill(status){
 }
 function setupRow(label, detail, status){
   const pill=setupPill(status);
-  return `<div class="setup-row"><div class="status-copy"><div class="setup-title">${esc(label)}</div><div class="setup-detail">${esc(detail)}</div></div><span class="status-chip ${pill.state}">${esc(pill.label)}</span></div>`;
+  return `<div class="setup-row"><div class="status-copy"><div class="setup-title">${esc(label)}</div><div class="setup-detail">${esc(detail)}</div></div>${statusChip(pill.state,pill.label)}</div>`;
 }
 function renderSetup(setup){
   if(!setup) return;
@@ -2516,15 +2549,15 @@ function updateListenerRequests(reqs){
     let actions='';
     if(r.type==='song_request'){
       if(r.song_found){
-        status=`<span class="lr-pill lr-found">&#9654; ${esc(r.song_track||'ready')}</span>`;
+        status=statusInline('ready',r.song_track||'ready');
         actions+=`<button class="lr-btn lr-btn-queue" onclick="lrQueueNext(${i})">&#10003; Done</button>`;
       } else if(r.song_error){
-        status='<span class="lr-pill lr-err">not found</span>';
+        status=statusInline('blocked','not found');
       } else {
-        status='<span class="lr-pill lr-searching">searching…</span>';
+        status=statusInline('working','searching…');
       }
     } else {
-      status='<span class="lr-pill lr-shout">shoutout</span>';
+      status=statusInline('working','shoutout');
     }
     actions+=`<button class="lr-btn lr-btn-dismiss" onclick="lrDismiss('${esc(r.id||'')}')">&#10005; Dismiss</button>`;
     return `<div class="lr-item" id="lr-item-${esc(r.id||i)}">
@@ -2561,7 +2594,7 @@ function updateLog(log){
     const d=new Date(e.timestamp*1000);
     const t=d.toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
     const typeKey=segmentTypeKey(e.type);
-    return`<div class="lg-row"><span class="ts">${t}</span><span class="seg-pill seg-${typeKey}">${esc(typeKey.replace('_',' '))}</span><span class="tx">${esc(e.label)}</span></div>`;
+    return`<div class="lg-row"><span class="ts">${t}</span>${segmentInline(typeKey)}<span class="tx">${esc(e.label)}</span></div>`;
   }).join('');
 }
 
@@ -2644,19 +2677,19 @@ function updateEngineRoom(st,caps){
     // runtime — presence alone can't tell the truth about auth health.
     let anthropicLine;
     if(!c.anthropic_key){
-      anthropicLine='<span class="status-inline idle" aria-label="status: idle">non configurato</span>';
+      anthropicLine=statusInline('idle','non configurato');
     }else if(c.anthropic_degraded){
       const secs=Math.max(0,c.anthropic_retry_after_s||0);
       const retry=secs>0?' · retry in '+(secs>=60?Math.ceil(secs/60)+'m':secs+'s'):'';
-      anthropicLine='<span class="status-inline degraded" aria-label="status: degraded" title="Auth fallita; fallback OpenAI">sospeso'+retry+'</span>';
+      anthropicLine=statusInline('degraded','sospeso'+retry,'Auth fallita; fallback OpenAI');
     }else{
-      anthropicLine='<span class="status-inline ready" aria-label="status: ready">connesso</span>';
+      anthropicLine=statusInline('ready','connesso');
     }
     ce.innerHTML=[
       'Livello: <strong>'+(caps.tier_label||caps.tier||'—')+'</strong>',
       'Anthropic: '+anthropicLine,
-      'OpenAI: '+(c.openai?'<span class="status-inline ready" aria-label="status: ready">disponibile</span>':'<span class="status-inline idle" aria-label="status: idle">non configurato</span>'),
-      'Home Assistant: '+(c.ha?'<span class="status-inline ready" aria-label="status: ready">connesso</span>':'<span class="status-inline idle" aria-label="status: idle">disattivato</span>'),
+      'OpenAI: '+statusInline(c.openai?'ready':'idle',c.openai?'disponibile':'non configurato'),
+      'Home Assistant: '+statusInline(c.ha?'ready':'idle',c.ha?'connesso':'disattivato'),
     ].join('<br>');
   }
 
