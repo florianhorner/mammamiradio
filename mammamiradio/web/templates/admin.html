@@ -788,7 +788,7 @@ body::before {
 
 .a-topbar-tools { display: flex; gap: 8px; align-items: center; flex-shrink: 0; }
 .btn-icon {
-  width: 36px; height: 36px;
+  width: 44px; height: 44px;
   background: var(--surface-strong); color: var(--cream-dk);
   border: 1px solid var(--line); border-radius: 8px;
   cursor: pointer;
@@ -801,6 +801,7 @@ body::before {
 .btn-primary-sm {
   background: var(--sun2); color: #14110F; border: none;
   padding: 8px 14px; border-radius: 8px;
+  min-height: 44px; min-width: 44px;
   font-family: var(--font-body); font-size: 12px; font-weight: 600; letter-spacing: 0.02em;
   cursor: pointer;
   box-shadow: 0 4px 16px rgba(236,204,48,0.3);
@@ -831,7 +832,7 @@ body::before {
 .a-programme .col-title { width: auto; }
 .a-programme .col-host { width: 120px; }
 .a-programme .col-duration { width: 58px; }
-.a-programme .col-action { width: 30px; }
+.a-programme .col-action { width: 60px; }
 .a-programme th { text-align: left; font-size: 9px; font-weight: 700; letter-spacing: 0.18em; text-transform: uppercase; color: var(--muted); padding: 6px 8px; border-bottom: 1px solid var(--line); }
 .a-programme td { padding: 10px 8px; border-bottom: 1px solid rgba(245,237,216,0.04); vertical-align: middle; }
 .a-programme th, .a-programme td { overflow-wrap: anywhere; }
@@ -852,7 +853,7 @@ body::before {
 .a-programme .ac { text-align: right; }
 .a-programme .ac button {
   background: transparent; border: 1px solid var(--line); color: var(--cream-dk);
-  width: 26px; height: 26px; border-radius: 6px; cursor: pointer;
+  width: 44px; height: 44px; border-radius: 6px; cursor: pointer;
   display: inline-flex; align-items: center; justify-content: center;
   transition: color 150ms, border-color 150ms, background 150ms;
 }
@@ -935,7 +936,8 @@ body::before {
 .chaos-switch { position: relative; display: inline-flex; align-items: center; width: 48px; height: 44px; flex: 0 0 auto; }
 .chaos-switch input { opacity: 0; width: 0; height: 0; }
 .chaos-slider {
-  position: absolute; inset: 9px 0; cursor: pointer; border-radius: 999px;
+  position: absolute; left: 0; right: 0; top: 50%; height: 26px; transform: translateY(-50%);
+  cursor: pointer; border-radius: 999px;
   background: color-mix(in srgb, var(--cream) 12%, transparent); border: 1px solid var(--line);
   transition: background 150ms, border-color 150ms, box-shadow 150ms;
 }
@@ -977,7 +979,8 @@ body::before {
 .festival-switch { position: relative; display: inline-flex; align-items: center; width: 48px; height: 44px; flex: 0 0 auto; }
 .festival-switch input { opacity: 0; width: 0; height: 0; }
 .festival-slider {
-  position: absolute; inset: 9px 0; cursor: pointer; border-radius: 999px;
+  position: absolute; left: 0; right: 0; top: 50%; height: 26px; transform: translateY(-50%);
+  cursor: pointer; border-radius: 999px;
   background: color-mix(in srgb, var(--cream) 12%, transparent); border: 1px solid var(--line);
   transition: background 150ms, border-color 150ms, box-shadow 150ms;
 }
@@ -993,6 +996,15 @@ body::before {
   border-color: color-mix(in srgb, var(--sun2) 65%, var(--line));
 }
 .festival-switch input:checked + .festival-slider::before { transform: translateX(22px); background: var(--sun2); }
+.super-italian-toggle {
+  display: inline-flex; align-items: center; gap: 10px;
+  min-height: 44px; min-width: 44px;
+  cursor: pointer; font-size: 13px;
+}
+.super-italian-checkbox {
+  width: 16px; height: 16px;
+  cursor: pointer; flex: 0 0 auto;
+}
 
 /* Sliders */
 .a-sliders { display: flex; flex-direction: column; gap: 16px; }
@@ -1512,8 +1524,8 @@ body[data-stopped="true"] .a-station-card .dot.on { animation-play-state: paused
         <!-- Super Italian Mode toggle (station personality dial) -->
         <div class="card-label">Super Italian Mode</div>
         <div style="margin-bottom:14px">
-          <label style="display:flex;align-items:center;gap:10px;cursor:pointer;font-size:13px">
-            <input type="checkbox" id="superItalianToggle" onchange="toggleSuperItalian(this)" style="width:16px;height:16px;cursor:pointer">
+          <label class="super-italian-toggle">
+            <input type="checkbox" id="superItalianToggle" class="super-italian-checkbox" onchange="toggleSuperItalian(this)">
             <span><strong>Super Italian Mode</strong></span>
           </label>
           <div style="margin-top:6px;font-size:12px;line-height:1.8;color:var(--cream-dk)">
