@@ -376,6 +376,7 @@ Discovered 2026-04-23 when PR #203 (Ashika Rai N's dashboard extraction) landed 
 - shell: shellcheck $(find . -name "*.sh" -not -path "./.venv/*" -not -path "./.git/*" -not -path "./.claude/skills/*")
 
 
+
 <!-- BEGIN: commit-message-standards (managed by bootstrap-repo.sh — do not hand-edit) -->
 ## Commit message standards
 
