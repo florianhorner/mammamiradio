@@ -14,3 +14,9 @@ This file supplements the global instructions for the `mammamiradio` repository.
 - If Conductor lifecycle hooks change, update `conductor.json` and the related `scripts/conductor-*.sh` files in the same change
 - On version bumps, keep `CHANGELOG.md` and `ha-addon/mammamiradio/CHANGELOG.md` in sync
 - In engineering reviews, when presenting multiple options, explain the tradeoffs without framing one as the choice the user should automatically take
+
+## Integration Trains
+
+- `Train/Listener QS` lives on `train/listener-qs` and uses `origin/main` as
+  its base. Feature worktrees that target this train must hand off through
+  `docs/listener-qs-train.md`.

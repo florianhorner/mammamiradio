@@ -64,6 +64,7 @@ Everything else lives under `docs/`:
 - `docs/design/admin-panel.md` - admin control-room layout, info architecture, motion rules
 - `docs/conductor.md` - Conductor workspace lifecycle and `.env` discovery
 - `docs/agents.md` - agent-specific notes and integration points
+- `docs/listener-qs-train.md` - `Train/Listener QS` intake, merge gate, and handoff contract
 - `docs/stabilization-log.md` - weekly fix-hours and emergency-patch counts (release cooldown gate)
 - `docs/todos.md` - deferred work items (operator-honesty pivot, etc.)
 
