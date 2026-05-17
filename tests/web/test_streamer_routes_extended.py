@@ -439,7 +439,11 @@ async def test_playlist_enrich_adds_source_without_cutover(tmp_path):
     assert app.state.skip_event.is_set() is False
     assert app.state.station_state.queued_segments == [{"type": "banter", "label": "Queued"}]
     assert app.state.station_state.pending_requests == [{"request_id": "req1", "message": "ciao"}]
-    assert app.state.station_state.now_streaming == {"type": "music", "label": "Playing", "started": app.state.station_state.now_streaming["started"]}
+    assert app.state.station_state.now_streaming == {
+        "type": "music",
+        "label": "Playing",
+        "started": app.state.station_state.now_streaming["started"],
+    }
     assert app.state.station_state.playlist_revision == starting_revision + 1
     assert app.state.station_state.playlist[-1].spotify_id == "fresh1"
 
@@ -452,7 +456,10 @@ async def test_playlist_enrich_deduplicates_incoming_source_tracks():
     resolved_source = PlaylistSource(kind="url", url="https://example.com/playlist")
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
 
-    with patch("mammamiradio.web.streamer.load_explicit_source", return_value=([duplicate_a, duplicate_b], resolved_source)):
+    with patch(
+        "mammamiradio.web.streamer.load_explicit_source",
+        return_value=([duplicate_a, duplicate_b], resolved_source),
+    ):
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
             resp = await client.post(
                 "/api/playlist/enrich",

@@ -832,9 +832,13 @@ async def run_producer(
         # (after at least one real segment has been produced), insert a canned clip
         # to bridge the gap while the producer or prefetch task catches up.
         # _drain_guard_queued prevents re-firing until a real segment lands.
-        if queue.empty() and _segments_produced > 0 and not _drain_guard_queued:
-            if await _queue_drain_recovery_bridge(_queue_segment, state, config):
-                _drain_guard_queued = True
+        if (
+            queue.empty()
+            and _segments_produced > 0
+            and not _drain_guard_queued
+            and await _queue_drain_recovery_bridge(_queue_segment, state, config)
+        ):
+            _drain_guard_queued = True
 
         if (
             queue.qsize() >= config.pacing.lookahead_segments
