@@ -162,6 +162,11 @@ def _create_validate_addon_repo(
                 "timeout: 300",
                 "host_network: true",
                 "ingress_port: 8000",
+                "options:",
+                '  anthropic_api_key: ""',
+                '  openai_api_key: ""',
+                '  station_name: "Test"',
+                '  claude_model: "claude-haiku-4-5-20251001"',
                 "schema:",
                 "  anthropic_api_key: password?",
                 "  openai_api_key: password?",
@@ -253,6 +258,46 @@ def _inject_ingress_prefix(html: str, prefix: str) -> str:
 
     assert result.returncode == 0
     assert "Ingress prefix injection only rewrites safe patterns" in result.stdout
+
+
+def test_validate_addon_rejects_options_schema_order_mismatch(tmp_path: Path) -> None:
+    env = _create_validate_addon_repo(
+        tmp_path,
+        streamer_body="""
+def _inject_ingress_prefix(html: str, prefix: str) -> str:
+    html = html.replace('href="/listen"', f'href="{prefix}/listen"')
+    return html
+""".strip()
+        + "\n",
+    )
+    _write(
+        tmp_path / "ha-addon/mammamiradio/config.yaml",
+        "\n".join(
+            [
+                'version: "1.1.0"',
+                "image: ghcr.io/florianhorner/mammamiradio-addon-{arch}",
+                "timeout: 300",
+                "host_network: true",
+                "ingress_port: 8000",
+                "options:",
+                '  anthropic_api_key: ""',
+                '  openai_api_key: ""',
+                '  station_name: "Test"',
+                '  claude_model: "claude-haiku-4-5-20251001"',
+                "schema:",
+                "  station_name: str?",
+                "  anthropic_api_key: password?",
+                "  openai_api_key: password?",
+                "  claude_model: str?",
+                "",
+            ]
+        ),
+    )
+
+    result = _run(["bash", str(VALIDATE_ADDON)], cwd=tmp_path, env=env)
+
+    assert result.returncode != 0
+    assert "options and schema key order differ" in result.stdout
 
 
 def test_validate_addon_falls_back_when_dotvenv_python_is_broken(tmp_path: Path) -> None:
