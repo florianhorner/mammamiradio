@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+import types
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -10,8 +11,10 @@ CHECK_COMMIT_MSG = ROOT / "scripts" / "check-commit-msg.sh"
 CHECK_VERSION_SYNC = ROOT / "scripts" / "check-version-sync.sh"
 CHECK_CHANGELOG_SYNC = ROOT / "scripts" / "check-changelog-sync.sh"
 CHECK_CHANGELOG_LINT = ROOT / "scripts" / "check-changelog-lint.sh"
+PRE_RELEASE_CHECK = ROOT / "scripts" / "pre-release-check.sh"
 VALIDATE_ADDON = ROOT / "scripts" / "validate-addon.sh"
 TEST_ADDON_LOCAL = ROOT / "scripts" / "test-addon-local.sh"
+HA_GREEN_PERF_SMOKE = ROOT / "scripts" / "ha-green-perf-smoke.py"
 
 
 def _run(cmd: list[str], cwd: Path, *, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
@@ -29,6 +32,17 @@ def _init_git_repo(path: Path) -> None:
 def _write(path: Path, content: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content)
+
+
+def _load_ha_green_perf_smoke() -> types.ModuleType:
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("ha_green_perf_smoke", HA_GREEN_PERF_SMOKE)
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def test_check_commit_msg_accepts_conventional_prefix(tmp_path: Path) -> None:
@@ -145,6 +159,75 @@ def test_check_changelog_lint_rejects_digit_phase_and_track_labels(tmp_path: Pat
     assert result.returncode == 1
     assert r"\bPhase [0-9]+\b" in result.stdout
     assert r"\bTrack [A-Z]\b" in result.stdout
+
+
+def test_pre_release_check_skips_unreleased_addon_changelog_heading(tmp_path: Path) -> None:
+    _write(tmp_path / "ha-addon/mammamiradio/config.yaml", "version: 1.1.0\n")
+    _write(tmp_path / "pyproject.toml", '[project]\nname = "mammamiradio"\nversion = "1.1.0"\n')
+    _write(tmp_path / "ha-addon/mammamiradio/CHANGELOG.md", "# Changelog\n\n## Unreleased\n\n## 1.1.0\n")
+    _write(
+        tmp_path / "mammamiradio/audio/normalizer.py",
+        'music_eq_chain = (\n    "equalizer=f=200"\n    "equalizer=f=3000"\n)\n',
+    )
+    _write(tmp_path / "mammamiradio/web/streamer.py", "QUEUE_FALLBACK_WAIT_SECONDS = 5.0\n")
+    _write(tmp_path / "tests/test_fallback.py", "_pick_canned_clip return_value=None\nsession_stopped\n")
+    _write(tmp_path / "Makefile", "perf-smoke:\n\tpython scripts/ha-green-perf-smoke.py\n")
+    _write(tmp_path / "scripts/ha-green-perf-smoke.py", "#!/usr/bin/env python3\n")
+    os.chmod(tmp_path / "scripts/ha-green-perf-smoke.py", 0o755)
+
+    result = _run(["bash", str(PRE_RELEASE_CHECK)], cwd=tmp_path)
+
+    assert result.returncode == 0
+    assert "CHANGELOG latest version (## 1.1.0) matches config.yaml (1.1.0)" in result.stdout
+
+
+def test_ha_green_perf_smoke_script_has_runtime_quality_gates() -> None:
+    body = HA_GREEN_PERF_SMOKE.read_text()
+
+    assert "MAMMAMIRADIO_PERF_BASE_URL" in body
+    assert "MAMMAMIRADIO_PERF_FIRST_BYTE_TIMEOUT_S" in body
+    assert "MAX_QUEUE_EMPTY_S" in body
+    assert "status=failing" in body
+    assert "silence_with_listeners" in body
+    assert "queue_empty_elapsed_s" in body
+    assert "/stream" in body
+
+
+def test_ha_green_perf_smoke_allows_readyz_starting_response() -> None:
+    smoke = _load_ha_green_perf_smoke()
+
+    smoke._assert_not_silence_failure(
+        "/readyz",
+        503,
+        {"status": "starting", "silence_with_listeners": False, "queue_empty_elapsed_s": 0},
+        allow_starting=True,
+    )
+
+
+def test_ha_green_perf_smoke_rejects_unexpected_readyz_500() -> None:
+    smoke = _load_ha_green_perf_smoke()
+
+    try:
+        smoke._assert_not_silence_failure(
+            "/readyz",
+            500,
+            {"status": "error", "silence_with_listeners": False, "queue_empty_elapsed_s": 0},
+            allow_starting=True,
+        )
+    except SystemExit as exc:
+        assert exc.code == 1
+    else:
+        raise AssertionError("unexpected /readyz 500 must fail the smoke gate")
+
+
+def test_release_invariants_guard_ha_green_perf_budget() -> None:
+    release_body = (ROOT / "scripts" / "check-release-invariants.sh").read_text()
+    pre_release_body = (ROOT / "scripts" / "pre-release-check.sh").read_text()
+
+    for body in (release_body, pre_release_body):
+        assert "QUEUE_FALLBACK_WAIT_SECONDS" in body
+        assert "norm_files\\[0\\]" in body
+        assert "ha-green-perf-smoke.py" in body
 
 
 def test_check_changelog_lint_rejects_internal_process_phrases(tmp_path: Path) -> None:

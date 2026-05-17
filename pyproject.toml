@@ -66,6 +66,7 @@ asyncio_mode = "auto"
 addopts = "-m 'not requires_ffmpeg'"
 markers = [
     "requires_ffmpeg: marks tests that need ffmpeg installed (run with '-m requires_ffmpeg')",
+    "perf_smoke: marks runtime performance smoke checks that need a running station",
 ]
 
 [tool.vulture]
