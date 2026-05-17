@@ -26,4 +26,12 @@ RUN chmod a+x /run.sh
 # Validate the install works
 RUN python3 -c "import mammamiradio; print('mammamiradio installed OK')"
 
+ARG BUILD_VERSION=unknown
+ARG BUILD_ARCH=unknown
+
+LABEL \
+  io.hass.version="${BUILD_VERSION}" \
+  io.hass.type="app" \
+  io.hass.arch="${BUILD_ARCH}"
+
 CMD ["/run.sh"]
