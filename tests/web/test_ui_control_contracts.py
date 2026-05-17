@@ -707,6 +707,66 @@ class TestCapabilitiesStatusIsHonest:
         )
 
 
+class TestRuntimeProviderTransparencyUI:
+    def test_admin_html_has_runtime_status_card_and_header_health(self):
+        html = ADMIN_HTML.read_text()
+
+        assert 'id="runtimeStatusCard"' in html
+        assert 'id="headerHealth"' in html
+        assert 'class="status-dot working"' in html
+        assert '<span class="dot"></span>Controllo' in html
+
+    def test_runtime_status_render_uses_normalized_status_contract(self):
+        html = ADMIN_HTML.read_text()
+
+        assert "function updateRuntimeStatus(st)" in html
+        assert "st?.runtime_status" in html
+        assert "providers.audio_source" in html
+        assert "providers.script_provider" in html
+        assert "providers.tts_provider" in html
+        assert "no_failover_message" in html
+        assert "status_card_render_errors" in html
+
+    @pytest.mark.asyncio
+    async def test_status_endpoint_exposes_runtime_status_contract(self):
+        app = _make_app(
+            now_streaming={
+                "type": "music",
+                "label": "Song",
+                "started": time.time(),
+                "metadata": {"audio_source": "charts"},
+            },
+            anthropic_key="sk-ant-test-key",
+            openai_key="sk-openai-test-key",
+        )
+
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            resp = await c.get("/status", headers=AUTH)
+
+        assert resp.status_code == 200
+        runtime_status = resp.json()["runtime_status"]
+        assert runtime_status["health_state"] in {"ready", "degraded", "blocked"}
+        assert isinstance(runtime_status["failover_events"], list)
+        assert "no_failover_message" in runtime_status
+        assert set(runtime_status["providers"]) == {"audio_source", "script_provider", "tts_provider"}
+        for name, provider in runtime_status["providers"].items():
+            assert provider["provider_class"] == name
+            assert "primary_provider" in provider
+            assert "primary_label" in provider
+            assert "current_provider" in provider
+            assert "current_label" in provider
+            assert "fallback_active" in provider
+            assert "last_switch_timestamp" in provider
+            assert "switch_reason" in provider
+
+    def test_status_helpers_emit_accessible_state_labels(self):
+        html = ADMIN_HTML.read_text()
+
+        assert 'aria-label="${esc(safeTitle)}"' in html
+        assert 'aria-label="status: working"' in html
+        assert "header.setAttribute('aria-label',rs.health_explanation||label)" in html
+
+
 # ── Item 19: stopped-state UI actually stops (timer, waveform, producer btns) ──
 
 

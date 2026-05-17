@@ -13,6 +13,16 @@ def test_addon_dockerfile_preserves_package_directory():
     assert "COPY pyproject.toml mammamiradio/ ./" not in dockerfile, "single COPY would flatten package dir"
 
 
+def test_addon_dockerfile_declares_home_assistant_image_labels():
+    dockerfile = (REPO_ROOT / "ha-addon" / "mammamiradio" / "Dockerfile").read_text()
+
+    assert "ARG BUILD_VERSION" in dockerfile
+    assert "ARG BUILD_ARCH" in dockerfile
+    assert 'io.hass.version="${BUILD_VERSION}"' in dockerfile
+    assert 'io.hass.type="app"' in dockerfile
+    assert 'io.hass.arch="${BUILD_ARCH}"' in dockerfile
+
+
 def test_addon_port_8000_consistent_across_config_run_and_runtime_defaults():
     """Guard against drift: all addon/runtime port defaults must stay in lockstep."""
     config_yaml = (REPO_ROOT / "ha-addon" / "mammamiradio" / "config.yaml").read_text()

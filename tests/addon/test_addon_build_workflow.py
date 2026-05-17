@@ -209,3 +209,34 @@ def test_ci_version_step_removed():
         "addon-build.yml must not reference steps.version.outputs.version.\n"
         "The id: version step was removed; any reference to its output is dead code."
     )
+
+
+def _extract_step_block(workflow_text: str, step_name: str) -> str:
+    """Return the YAML text from 'name: <step_name>' up to the next '- name:' or end of file."""
+    pattern = rf"- name: {re.escape(step_name)}\n(.*?)(?=\n      - name:|\Z)"
+    m = re.search(pattern, workflow_text, re.DOTALL)
+    assert m, f"Step '{step_name}' not found in addon-build.yml"
+    return m.group(0)
+
+
+def test_ci_publishes_edge_tags_with_matching_image_labels():
+    """Each edge build step's BUILD_VERSION must pair with its own pushed tag.
+
+    Global string-presence checks would pass even if BUILD_VERSION and tags were
+    swapped between steps. Scoping to the step block catches mis-pairing.
+    """
+    workflow_text = _workflow_text()
+
+    assert "EDGE_SEED_VERSION: '0.0.0'" in workflow_text
+
+    seed_block = _extract_step_block(workflow_text, "Build and push edge seed add-on image")
+    assert "BUILD_VERSION=${{ env.EDGE_SEED_VERSION }}" in seed_block, (
+        "seed step must set BUILD_VERSION to the edge seed version"
+    )
+    assert ":${{ env.EDGE_SEED_VERSION }}" in seed_block, "seed step must push the edge seed tag"
+
+    calver_block = _extract_step_block(workflow_text, "Build and push edge calver add-on image")
+    assert "BUILD_VERSION=${{ needs.validate.outputs.calver }}" in calver_block, (
+        "calver step must set BUILD_VERSION to the calver output"
+    )
+    assert ":${{ needs.validate.outputs.calver }}" in calver_block, "calver step must push the calver tag"
