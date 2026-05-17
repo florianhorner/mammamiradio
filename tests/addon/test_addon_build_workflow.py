@@ -209,6 +209,11 @@ def test_ci_version_step_removed():
         "addon-build.yml must not reference steps.version.outputs.version.\n"
         "The id: version step was removed; any reference to its output is dead code."
     )
+    assert "id: addon-version" in workflow_text, (
+        "addon-build.yml must still read config.yaml version so :sha images promoted to stable "
+        "carry the Home Assistant io.hass.version label."
+    )
+    assert "addon_version: ${{ steps.addon-version.outputs.version }}" in workflow_text
 
 
 def _extract_step_block(workflow_text: str, step_name: str) -> str:
@@ -240,3 +245,15 @@ def test_ci_publishes_edge_tags_with_matching_image_labels():
         "calver step must set BUILD_VERSION to the calver output"
     )
     assert ":${{ needs.validate.outputs.calver }}" in calver_block, "calver step must push the calver tag"
+
+
+def test_ci_sha_artifact_uses_stable_addon_version_label():
+    """:sha images are later promoted to stable tags, so their HA label must be X.Y.Z."""
+    workflow_text = _workflow_text()
+    stable_block = _extract_step_block(workflow_text, "Build and push stable add-on image")
+
+    assert "BUILD_VERSION=${{ needs.validate.outputs.addon_version }}" in stable_block, (
+        "the :sha artifact promoted by addon-release.yml must carry config.yaml's stable version "
+        "in io.hass.version, not the commit SHA."
+    )
+    assert ":${{ github.sha }}" in stable_block, "stable source artifact must still be pushed as :github.sha"

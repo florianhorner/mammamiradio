@@ -28,6 +28,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       calver: ${{ steps.calver.outputs.calver }}
+      addon_version: ${{ steps.addon-version.outputs.version }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -36,6 +37,13 @@ jobs:
 
       - name: Validate add-on invariants
         run: bash scripts/validate-addon.sh
+
+      - name: Read stable add-on version
+        id: addon-version
+        run: |
+          VERSION=$(grep '^version:' ha-addon/mammamiradio/config.yaml | awk '{print $2}' | tr -d '"')
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Stable add-on version: $VERSION"
 
       - name: Compute edge calendar version
         id: calver
@@ -90,7 +98,7 @@ jobs:
           push: true
           build-args: |
             BUILD_FROM=${{ matrix.base }}
-            BUILD_VERSION=${{ github.sha }}
+            BUILD_VERSION=${{ needs.validate.outputs.addon_version }}
             BUILD_ARCH=${{ matrix.arch }}
           tags: |
             ${{ env.REGISTRY }}/${{ env.IMAGE_BASE }}-${{ matrix.arch }}:${{ github.sha }}

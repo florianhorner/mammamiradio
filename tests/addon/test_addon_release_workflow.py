@@ -69,6 +69,9 @@ def test_release_workflow_validates_semver_format():
         "pre-flight must validate semver X.Y.Z format (e.g. grep -Eq '^[0-9]+\\.[0-9]+\\.[0-9]+$').\n"
         "Without this, 'git push tag vfoo' would bypass the pre-flight and attempt a build."
     )
+    assert "sort -V" in text and "publish_latest" in text, (
+        "pre-flight must compute whether this tag is the newest stable semver before :latest is updated."
+    )
 
 
 def test_release_workflow_validates_tag_version_matches_config_yaml():
@@ -136,23 +139,31 @@ def test_release_workflow_promotes_versioned_per_arch_images():
 
 
 def test_release_workflow_publishes_latest():
-    """:latest must appear in addon-release.yml (addon-build.yml no longer owns it)."""
+    """:latest must be promoted only when this tag is the newest stable semver."""
     text = _workflow_text()
-    assert ":latest" in text, (
-        "addon-release.yml must publish :latest — addon-build.yml no longer owns this tag.\n"
-        ":latest should point to the latest stable release, not the latest edge build."
+    assert 'LATEST_TAG="${{ env.REGISTRY }}/${{ env.IMAGE_BASE }}-${{ matrix.arch }}:latest"' in text
+    assert '[ "${{ needs.pre-flight.outputs.publish_latest }}" = "true" ]' in text, (
+        "promote job must guard :latest updates with the newest-stable-semver pre-flight output."
     )
+    assert 'docker buildx imagetools create --prefer-index=false --tag "$LATEST_TAG" "$SHA_TAG"' in text, (
+        "promote job must update :latest from the same prebuilt SHA image used for the version tag."
+    )
+    assert "Skipping $LATEST_TAG because $VERSION is not the newest stable tag" in text
 
 
 def test_release_workflow_does_not_hardcode_version():
-    """No literal semver string must appear in the tags block."""
+    """Stable promotion must use the validated pre-flight version, not literals."""
     text = _workflow_text()
-    tags_blocks = re.findall(r"tags:\s*\|(.*?)(?=\n\s{6}\S|\Z)", text, re.DOTALL)
-    for block in tags_blocks:
-        assert not re.search(r":[0-9]+\.[0-9]+\.[0-9]+\b", block), (
-            f"A literal semver version was found in a tags block.\n"
-            f"Use ${{{{ needs.pre-flight.outputs.version }}}} instead.\nBlock: {block}"
-        )
+    promote_section = re.search(r"\n  promote:\n((?:    .+\n|\n)*)", text)
+    assert promote_section, "Could not locate `promote:` job in addon-release.yml"
+    promote_block = promote_section.group(1)
+    assert 'VERSION="${{ needs.pre-flight.outputs.version }}"' in promote_block, (
+        "promote job must source VERSION from the pre-flight semver/config validation output."
+    )
+    assert 'VERSION_TAG="${{ env.REGISTRY }}/${{ env.IMAGE_BASE }}-${{ matrix.arch }}:${VERSION}"' in promote_block
+    assert not re.search(r":[0-9]+\.[0-9]+\.[0-9]+\b", promote_block), (
+        "promote job must not hardcode a literal stable semver tag."
+    )
 
 
 def test_release_workflow_does_not_rebuild_stable_images():

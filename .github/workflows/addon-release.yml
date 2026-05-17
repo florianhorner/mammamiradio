@@ -22,6 +22,7 @@ jobs:
       packages: read
     outputs:
       version: ${{ steps.semver.outputs.version }}
+      publish_latest: ${{ steps.latest.outputs.publish_latest }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
@@ -44,6 +45,24 @@ jobs:
           fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "Tag: $TAG → version: $VERSION"
+
+      - name: Check latest stable tag
+        id: latest
+        run: |
+          VERSION="${{ steps.semver.outputs.version }}"
+          git fetch --force --tags origin 'refs/tags/v*:refs/tags/v*'
+          LATEST_STABLE="$(git tag -l 'v*' \
+            | sed 's/^v//' \
+            | awk '/^[0-9]+\.[0-9]+\.[0-9]+$/ { print }' \
+            | sort -V \
+            | tail -1)"
+          if [ "$LATEST_STABLE" = "$VERSION" ]; then
+            echo "publish_latest=true" >> "$GITHUB_OUTPUT"
+            echo "Current tag is the newest stable version: $VERSION"
+          else
+            echo "publish_latest=false" >> "$GITHUB_OUTPUT"
+            echo "Current tag $VERSION is older than newest stable version $LATEST_STABLE; :latest will not be moved"
+          fi
 
       - name: Validate tag matches config.yaml version
         run: |
@@ -169,8 +188,12 @@ jobs:
             echo "Published $VERSION_TAG from $SHA_TAG"
           fi
 
-          docker buildx imagetools create --prefer-index=false --tag "$LATEST_TAG" "$SHA_TAG"
-          echo "Updated $LATEST_TAG from $SHA_TAG"
+          if [ "${{ needs.pre-flight.outputs.publish_latest }}" = "true" ]; then
+            docker buildx imagetools create --prefer-index=false --tag "$LATEST_TAG" "$SHA_TAG"
+            echo "Updated $LATEST_TAG from $SHA_TAG"
+          else
+            echo "Skipping $LATEST_TAG because $VERSION is not the newest stable tag"
+          fi
 
   smoke:
     runs-on: ubuntu-latest
