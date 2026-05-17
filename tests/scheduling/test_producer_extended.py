@@ -430,6 +430,58 @@ async def test_banter_implausibly_short_with_no_canned_fallback_is_not_queued(tm
 
 
 @pytest.mark.asyncio
+async def test_banter_concat_duration_failure_cleans_temporary_parts(tmp_path):
+    state = _make_state()
+    config = _make_config(tmp_path)
+    config.anthropic_api_key = "test-key"
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+
+    host = config.hosts[0]
+    trans_path = tmp_path / "transition.mp3"
+    trans_path.write_bytes(b"\x00" * 2048)
+    banter_path = tmp_path / "dialogue.mp3"
+    banter_path.write_bytes(b"\x00" * 2048)
+    concat_calls = 0
+
+    def _concat_fails(paths, output_path, silence_ms=300, loudnorm=True, **kwargs):
+        nonlocal concat_calls
+        concat_calls += 1
+        output_path.write_bytes(b"\x00" * 2048)
+        state.listeners_active = 0
+        raise RuntimeError("duration shortfall")
+
+    with (
+        patch(f"{MODULE}.next_segment_type", return_value=SegmentType.BANTER),
+        patch(f"{SCRIPTWRITER_MODULE}.has_script_llm", return_value=True),
+        patch(
+            f"{SCRIPTWRITER_MODULE}.write_banter", new_callable=AsyncMock, return_value=(_long_banter_lines(host), None)
+        ),
+        patch(f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Bentornati.")),
+        patch(f"{MODULE}.synthesize", new_callable=AsyncMock, return_value=trans_path),
+        patch(f"{MODULE}._try_crossfade", new_callable=AsyncMock, return_value=trans_path),
+        patch(f"{MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=banter_path),
+        patch(f"{MODULE}.concat_files", side_effect=_concat_fails),
+        patch(f"{MODULE}._pick_canned_clip", return_value=None),
+        patch(f"{MODULE}.fetch_home_context", new_callable=AsyncMock),
+    ):
+        task = asyncio.create_task(run_producer(queue, state, config))
+        try:
+            await asyncio.sleep(0.25)
+        finally:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+    assert queue.empty()
+    assert concat_calls == 1
+    assert not trans_path.exists()
+    assert not banter_path.exists()
+    assert not list(tmp_path.glob("banter_full_*.mp3"))
+
+
+@pytest.mark.asyncio
 async def test_banter_after_session_resume_uses_expected_duration_context(tmp_path):
     state = _make_state()
     state.session_stopped = True

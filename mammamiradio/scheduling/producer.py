@@ -21,7 +21,6 @@ import mammamiradio.hosts.scriptwriter as _sw
 from mammamiradio.audio.audio_quality import AudioQualityError, AudioToolError, validate_segment_audio
 from mammamiradio.audio.imaging import ImagingLibrary
 from mammamiradio.audio.normalizer import (
-    _ffprobe_duration_sec,
     concat_files,
     crossfade_voice_over_music,
     generate_bumper_jingle,
@@ -35,6 +34,7 @@ from mammamiradio.audio.normalizer import (
     mix_voice_with_bed,
     mix_voice_with_sting,
     normalize,
+    probe_duration_sec,
     save_track_metadata,
 )
 from mammamiradio.audio.tts import synthesize, synthesize_ad, synthesize_dialogue
@@ -87,7 +87,7 @@ class RenderedMusicTrack:
 
 def _probe_segment_duration(path: Path) -> float:
     """Run ffprobe on path and return duration in seconds; 0.0 if probe fails."""
-    return _ffprobe_duration_sec(path) or 0.0
+    return probe_duration_sec(path) or 0.0
 
 
 def _is_tmp_render(segment: Segment, tmp_dir: Path) -> bool:
@@ -1288,19 +1288,24 @@ async def run_producer(
                             # Concat: transition + banter (both pre-normalized)
                             audio_path = config.tmp_dir / f"banter_full_{uuid4().hex[:8]}.mp3"
                             loop = asyncio.get_running_loop()
-                            await loop.run_in_executor(
-                                None,
-                                partial(
-                                    concat_files,
-                                    [trans_voice_path, banter_path],
-                                    audio_path,
-                                    200,
-                                    False,
-                                    strict_duration=True,
-                                ),
-                            )
-                            trans_voice_path.unlink(missing_ok=True)
-                            banter_path.unlink(missing_ok=True)
+                            try:
+                                await loop.run_in_executor(
+                                    None,
+                                    partial(
+                                        concat_files,
+                                        [trans_voice_path, banter_path],
+                                        audio_path,
+                                        200,
+                                        False,
+                                        strict_duration=True,
+                                    ),
+                                )
+                            except Exception:
+                                audio_path.unlink(missing_ok=True)
+                                raise
+                            finally:
+                                trans_voice_path.unlink(missing_ok=True)
+                                banter_path.unlink(missing_ok=True)
 
                             state.recent_transition_texts.append(trans_text)
                             state.last_banter_script = [

@@ -28,7 +28,7 @@ from mammamiradio.audio.normalizer import (
 def mock_subprocess():
     """Patch subprocess.run to return success by default.
 
-    Also disables the post-concat duration probe (`_ffprobe_duration_sec`) so
+    Also disables the post-concat duration probe (`probe_duration_sec`) so
     tests that inspect `mock_run.call_args` see the ffmpeg call as the last
     subprocess invocation, not a trailing ffprobe from the Item 1 guard.
     Tests that want to exercise the guard explicitly monkeypatch the probe.
@@ -40,7 +40,7 @@ def mock_subprocess():
 
     with (
         patch("mammamiradio.audio.normalizer.subprocess.run", return_value=completed) as mock_run,
-        patch("mammamiradio.audio.normalizer._ffprobe_duration_sec", return_value=None),
+        patch("mammamiradio.audio.normalizer.probe_duration_sec", return_value=None),
     ):
         yield mock_run, completed
 
@@ -700,7 +700,7 @@ class TestConcatFilesDurationInvariant:
         def fake_probe(path):
             return durations.get(Path(path).name)
 
-        monkeypatch.setattr(norm, "_ffprobe_duration_sec", fake_probe)
+        monkeypatch.setattr(norm, "probe_duration_sec", fake_probe)
 
         inputs = [tmp_path / "input_a.mp3", tmp_path / "input_b.mp3", tmp_path / "input_c.mp3"]
         for p in inputs:
@@ -726,7 +726,7 @@ class TestConcatFilesDurationInvariant:
             "input_b.mp3": 6.0,
             "concat_out.mp3": 5.0,
         }
-        monkeypatch.setattr(norm, "_ffprobe_duration_sec", lambda p: durations.get(Path(p).name))
+        monkeypatch.setattr(norm, "probe_duration_sec", lambda p: durations.get(Path(p).name))
 
         inputs = [tmp_path / "input_a.mp3", tmp_path / "input_b.mp3"]
         for p in inputs:
@@ -749,7 +749,7 @@ class TestConcatFilesDurationInvariant:
             "input_b.mp3": 10.0,
             "concat_out.mp3": 20.3,  # matches inputs + 1*0.3s gap
         }
-        monkeypatch.setattr(norm, "_ffprobe_duration_sec", lambda p: durations.get(Path(p).name))
+        monkeypatch.setattr(norm, "probe_duration_sec", lambda p: durations.get(Path(p).name))
 
         inputs = [tmp_path / "input_a.mp3", tmp_path / "input_b.mp3"]
         for p in inputs:
@@ -768,7 +768,7 @@ class TestConcatFilesDurationInvariant:
 
         monkeypatch.setattr(norm, "_run_ffmpeg", lambda *a, **kw: None)
         # Probe returns None on every call — guard must skip gracefully.
-        monkeypatch.setattr(norm, "_ffprobe_duration_sec", lambda p: None)
+        monkeypatch.setattr(norm, "probe_duration_sec", lambda p: None)
 
         inputs = [tmp_path / "a.mp3", tmp_path / "b.mp3"]
         for p in inputs:
@@ -794,7 +794,7 @@ class TestConcatFilesDurationInvariant:
             "b.mp3": None,  # partial probe failure
             "out.mp3": 20.0,
         }
-        monkeypatch.setattr(norm, "_ffprobe_duration_sec", lambda p: durations.get(Path(p).name))
+        monkeypatch.setattr(norm, "probe_duration_sec", lambda p: durations.get(Path(p).name))
 
         inputs = [tmp_path / "a.mp3", tmp_path / "b.mp3"]
         for x in inputs:
@@ -809,7 +809,7 @@ class TestConcatFilesDurationInvariant:
         assert not warnings, "Guard must bail out cleanly when any input probe returns None."
 
     def test_duration_guard_swallows_probe_exception(self, tmp_path, caplog, monkeypatch):
-        """If _ffprobe_duration_sec raises, the guard must catch it (lines
+        """If probe_duration_sec raises, the guard must catch it (lines
         341-342) — instrumentation never breaks production playback."""
         import mammamiradio.audio.normalizer as norm
 
@@ -818,7 +818,7 @@ class TestConcatFilesDurationInvariant:
         def _boom(_p):
             raise RuntimeError("ffprobe exploded")
 
-        monkeypatch.setattr(norm, "_ffprobe_duration_sec", _boom)
+        monkeypatch.setattr(norm, "probe_duration_sec", _boom)
 
         inputs = [tmp_path / "a.mp3"]
         inputs[0].write_bytes(b"stub")
@@ -834,11 +834,11 @@ class TestConcatFilesDurationInvariant:
         assert not warnings, "Exception path must not masquerade as a shortfall warning."
 
 
-# ── _ffprobe_duration_sec parser: exercise the real function body, not the fixture mock ──
+# ── probe_duration_sec parser: exercise the real function body, not the fixture mock ──
 
 
 class TestFFprobeDurationSecParser:
-    """Every concat_files test above monkeypatches `_ffprobe_duration_sec` to
+    """Every concat_files test above monkeypatches `probe_duration_sec` to
     None. That leaves the real function body uncovered by the suite. These
     tests hit the real function directly, mocking only `subprocess.run`, so the
     parser + error branches are measured by the coverage ratchet.
@@ -852,7 +852,7 @@ class TestFFprobeDurationSecParser:
         return cp
 
     def test_valid_duration_parses_as_float(self, tmp_path, monkeypatch):
-        from mammamiradio.audio.normalizer import _ffprobe_duration_sec
+        from mammamiradio.audio.normalizer import probe_duration_sec
 
         p = tmp_path / "ok.mp3"
         p.write_bytes(b"x")
@@ -860,10 +860,10 @@ class TestFFprobeDurationSecParser:
             "mammamiradio.audio.normalizer.subprocess.run",
             lambda *a, **kw: self._fake_completed(returncode=0, stdout="12.345\n"),
         )
-        assert _ffprobe_duration_sec(p) == 12.345
+        assert probe_duration_sec(p) == 12.345
 
     def test_nonzero_returncode_returns_none(self, tmp_path, monkeypatch):
-        from mammamiradio.audio.normalizer import _ffprobe_duration_sec
+        from mammamiradio.audio.normalizer import probe_duration_sec
 
         p = tmp_path / "bad.mp3"
         p.write_bytes(b"x")
@@ -871,10 +871,10 @@ class TestFFprobeDurationSecParser:
             "mammamiradio.audio.normalizer.subprocess.run",
             lambda *a, **kw: self._fake_completed(returncode=1, stderr="bogus"),
         )
-        assert _ffprobe_duration_sec(p) is None
+        assert probe_duration_sec(p) is None
 
     def test_unparseable_stdout_returns_none(self, tmp_path, monkeypatch):
-        from mammamiradio.audio.normalizer import _ffprobe_duration_sec
+        from mammamiradio.audio.normalizer import probe_duration_sec
 
         p = tmp_path / "junk.mp3"
         p.write_bytes(b"x")
@@ -882,10 +882,10 @@ class TestFFprobeDurationSecParser:
             "mammamiradio.audio.normalizer.subprocess.run",
             lambda *a, **kw: self._fake_completed(returncode=0, stdout="not-a-number"),
         )
-        assert _ffprobe_duration_sec(p) is None
+        assert probe_duration_sec(p) is None
 
     def test_oserror_returns_none(self, tmp_path, monkeypatch):
-        from mammamiradio.audio.normalizer import _ffprobe_duration_sec
+        from mammamiradio.audio.normalizer import probe_duration_sec
 
         p = tmp_path / "missing.mp3"
         p.write_bytes(b"x")
@@ -894,10 +894,10 @@ class TestFFprobeDurationSecParser:
             raise OSError("ffprobe not installed")
 
         monkeypatch.setattr("mammamiradio.audio.normalizer.subprocess.run", _raises)
-        assert _ffprobe_duration_sec(p) is None
+        assert probe_duration_sec(p) is None
 
     def test_timeout_returns_none(self, tmp_path, monkeypatch):
-        from mammamiradio.audio.normalizer import _ffprobe_duration_sec
+        from mammamiradio.audio.normalizer import probe_duration_sec
 
         p = tmp_path / "slow.mp3"
         p.write_bytes(b"x")
@@ -906,10 +906,10 @@ class TestFFprobeDurationSecParser:
             raise subprocess.TimeoutExpired(cmd=["ffprobe"], timeout=5)
 
         monkeypatch.setattr("mammamiradio.audio.normalizer.subprocess.run", _timesout)
-        assert _ffprobe_duration_sec(p) is None
+        assert probe_duration_sec(p) is None
 
     def test_empty_stdout_returns_none(self, tmp_path, monkeypatch):
-        from mammamiradio.audio.normalizer import _ffprobe_duration_sec
+        from mammamiradio.audio.normalizer import probe_duration_sec
 
         p = tmp_path / "empty.mp3"
         p.write_bytes(b"x")
@@ -917,7 +917,7 @@ class TestFFprobeDurationSecParser:
             "mammamiradio.audio.normalizer.subprocess.run",
             lambda *a, **kw: self._fake_completed(returncode=0, stdout=""),
         )
-        assert _ffprobe_duration_sec(p) is None
+        assert probe_duration_sec(p) is None
 
 
 def test_normalize_real_encode_has_no_xing_header(tmp_path):

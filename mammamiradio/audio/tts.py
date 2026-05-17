@@ -14,7 +14,6 @@ import edge_tts
 
 from mammamiradio.audio.audio_quality import AudioQualityError
 from mammamiradio.audio.normalizer import (
-    _ffprobe_duration_sec,
     concat_files,
     generate_brand_motif,
     generate_foley_loop,
@@ -24,6 +23,7 @@ from mammamiradio.audio.normalizer import (
     mix_with_bed,
     normalize,
     normalize_ad,
+    probe_duration_sec,
 )
 from mammamiradio.audio.voice_catalog import (
     EDGE_DEFAULT_FALLBACK_VOICE as _EDGE_DEFAULT_FALLBACK_VOICE,
@@ -455,11 +455,18 @@ def _validate_dialogue_part(path: Path, *, line_number: int) -> None:
     size = path.stat().st_size
     if size < _MIN_DIALOGUE_LINE_BYTES:
         raise AudioQualityError(f"dialogue line {line_number} audio is too small ({size} bytes)")
-    duration = _ffprobe_duration_sec(path)
-    if duration is not None and duration < _MIN_DIALOGUE_LINE_DURATION_SEC:
+    duration = probe_duration_sec(path)
+    if duration is None:
+        raise AudioQualityError(f"dialogue line {line_number} audio duration probe failed: {path}")
+    if duration < _MIN_DIALOGUE_LINE_DURATION_SEC:
         raise AudioQualityError(
             f"dialogue line {line_number} audio too short ({duration:.2f}s < {_MIN_DIALOGUE_LINE_DURATION_SEC:.2f}s)"
         )
+
+
+def _unlink_many(paths: list[Path]) -> None:
+    for path in paths:
+        path.unlink(missing_ok=True)
 
 
 async def synthesize_dialogue(
@@ -494,24 +501,39 @@ async def synthesize_dialogue(
         )
     )
 
-    for idx, part in enumerate(parts, start=1):
-        _validate_dialogue_part(part, line_number=idx)
+    loop = asyncio.get_running_loop()
+    try:
+        await asyncio.gather(
+            *(
+                loop.run_in_executor(None, partial(_validate_dialogue_part, part, line_number=idx))
+                for idx, part in enumerate(parts, start=1)
+            )
+        )
+    except Exception:
+        _unlink_many(parts)
+        raise
 
     if not multi_line:
         return parts[0]
 
     raw_path = tmp_dir / f"dialogue_raw_{uuid4().hex[:8]}.mp3"
     output_path = tmp_dir / f"dialogue_{uuid4().hex[:8]}.mp3"
-    loop = asyncio.get_running_loop()
-    await loop.run_in_executor(
-        None,
-        partial(concat_files, parts, raw_path, 300, False, strict_duration=True),
-    )
-    for p in parts:
-        p.unlink(missing_ok=True)
+    try:
+        await loop.run_in_executor(
+            None,
+            partial(concat_files, parts, raw_path, 300, False, strict_duration=True),
+        )
+    except Exception:
+        _unlink_many([*parts, raw_path, output_path])
+        raise
+    _unlink_many(parts)
 
     # One loudnorm pass on the fully assembled dialogue
     async with _HEAVY_SEM:
-        await loop.run_in_executor(None, normalize, raw_path, output_path)
+        try:
+            await loop.run_in_executor(None, normalize, raw_path, output_path)
+        except Exception:
+            _unlink_many([raw_path, output_path])
+            raise
     raw_path.unlink(missing_ok=True)
     return output_path

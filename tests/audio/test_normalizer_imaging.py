@@ -25,7 +25,7 @@ def mock_run():
 
     with (
         patch("mammamiradio.audio.normalizer.subprocess.run", return_value=completed) as m,
-        patch("mammamiradio.audio.normalizer._ffprobe_duration_sec", return_value=None),
+        patch("mammamiradio.audio.normalizer.probe_duration_sec", return_value=None),
     ):
         yield m
 
@@ -182,7 +182,7 @@ def test_generate_sfx_tape_stop_simple_fallback(tmp_path):
 
     with (
         patch("mammamiradio.audio.normalizer.subprocess.run", side_effect=_run),
-        patch("mammamiradio.audio.normalizer._ffprobe_duration_sec", return_value=None),
+        patch("mammamiradio.audio.normalizer.probe_duration_sec", return_value=None),
     ):
         result = generate_sfx(out, "tape_stop")
     assert result == out
@@ -202,7 +202,7 @@ def test_generate_sfx_hotline_beep_simple_fallback(tmp_path):
 
     with (
         patch("mammamiradio.audio.normalizer.subprocess.run", side_effect=_run),
-        patch("mammamiradio.audio.normalizer._ffprobe_duration_sec", return_value=None),
+        patch("mammamiradio.audio.normalizer.probe_duration_sec", return_value=None),
     ):
         result = generate_sfx(out, "hotline_beep")
     assert result == out
@@ -222,7 +222,7 @@ def test_generate_sfx_unknown_type_simple_fallback_default_tone(tmp_path):
 
     with (
         patch("mammamiradio.audio.normalizer.subprocess.run", side_effect=_run),
-        patch("mammamiradio.audio.normalizer._ffprobe_duration_sec", return_value=None),
+        patch("mammamiradio.audio.normalizer.probe_duration_sec", return_value=None),
     ):
         result = generate_sfx(out, "completely_unknown_sfx_type_xyz")
     assert result == out
@@ -241,7 +241,7 @@ def test_concat_files_duration_probe_exception_is_swallowed(tmp_path, mock_run):
     out = tmp_path / "out.mp3"
 
     with patch(
-        "mammamiradio.audio.normalizer._ffprobe_duration_sec",
+        "mammamiradio.audio.normalizer.probe_duration_sec",
         side_effect=RuntimeError("probe failed"),
     ):
         result = concat_files([p1, p2], out)

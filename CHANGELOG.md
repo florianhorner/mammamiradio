@@ -17,6 +17,7 @@ The current version source of truth is `pyproject.toml`.
 ### Fixed
 
 - **Spoken host segment assembly is stricter.** Generated multi-line banter now rejects broken intermediate TTS line files, strict concat duration shortfalls, and implausibly short multi-line exchanges before they can reach the listener queue.
+- **Empty-queue playback rescue is fast again.** Live listeners now hit canned/norm-cache/demo fallback audio after the short queue fallback window instead of waiting for the 30-second health-failure window, and norm-cache rescue avoids replaying the current or very recent song when alternatives exist.
 
 ## [2.12.3] - 2026-05-17
 

@@ -65,6 +65,7 @@ def _mock_all(monkeypatch):
         patch("mammamiradio.audio.tts.generate_silence", side_effect=_single_path_side_effect) as mock_silence,
         patch("mammamiradio.audio.tts.mix_with_bed", side_effect=_mix_side_effect) as mock_mix,
         patch("mammamiradio.audio.tts.generate_brand_motif", side_effect=_single_path_side_effect) as mock_motif,
+        patch("mammamiradio.audio.tts.probe_duration_sec", return_value=1.0) as mock_duration,
     ):
         yield {
             "Communicate": mock_communicate,
@@ -76,6 +77,7 @@ def _mock_all(monkeypatch):
             "generate_silence": mock_silence,
             "mix_with_bed": mock_mix,
             "generate_brand_motif": mock_motif,
+            "ffprobe_duration": mock_duration,
         }
 
 
@@ -601,6 +603,7 @@ async def test_synthesize_dialogue_rejects_zero_byte_intermediate_before_concat(
         await synthesize_dialogue([(host, "good line"), (host, "bad line")], tmp_path)
 
     _mock_all["concat_files"].assert_not_called()
+    assert not list(tmp_path.glob("line_*.mp3"))
 
 
 @pytest.mark.asyncio
@@ -616,12 +619,56 @@ async def test_synthesize_dialogue_rejects_subthreshold_intermediate_before_conc
 
     with (
         patch("mammamiradio.audio.tts.synthesize", side_effect=_synthesize_line),
-        patch("mammamiradio.audio.tts._ffprobe_duration_sec", return_value=0.2),
+        patch("mammamiradio.audio.tts.probe_duration_sec", return_value=0.2),
         pytest.raises(AudioQualityError, match="too short"),
     ):
         await synthesize_dialogue([(host, "prima linea"), (host, "seconda linea")], tmp_path)
 
     _mock_all["concat_files"].assert_not_called()
+    assert not list(tmp_path.glob("line_*.mp3"))
+
+
+@pytest.mark.asyncio
+async def test_synthesize_dialogue_rejects_unprobeable_intermediate_before_concat(_mock_all, tmp_path):
+    from mammamiradio.audio.audio_quality import AudioQualityError
+    from mammamiradio.audio.tts import synthesize_dialogue
+
+    host = HostPersonality(name="Marco", voice="it-IT-DiegoNeural", style="energetic")
+
+    async def _synthesize_line(text, voice, output_path, **kwargs):
+        _touch(output_path)
+        return output_path
+
+    with (
+        patch("mammamiradio.audio.tts.synthesize", side_effect=_synthesize_line),
+        patch("mammamiradio.audio.tts.probe_duration_sec", return_value=None),
+        pytest.raises(AudioQualityError, match="duration probe failed"),
+    ):
+        await synthesize_dialogue([(host, "prima linea"), (host, "seconda linea")], tmp_path)
+
+    _mock_all["concat_files"].assert_not_called()
+    assert not list(tmp_path.glob("line_*.mp3"))
+
+
+@pytest.mark.asyncio
+async def test_synthesize_dialogue_concat_failure_cleans_temporary_parts(_mock_all, tmp_path):
+    from mammamiradio.audio.tts import synthesize_dialogue
+
+    host = HostPersonality(name="Marco", voice="it-IT-DiegoNeural", style="energetic")
+
+    def _concat_fails(paths, output_path, silence_ms=300, loudnorm=True, **kwargs):
+        _touch(output_path)
+        raise RuntimeError("duration shortfall")
+
+    with (
+        patch("mammamiradio.audio.tts.concat_files", side_effect=_concat_fails),
+        pytest.raises(RuntimeError, match="duration shortfall"),
+    ):
+        await synthesize_dialogue([(host, "prima linea"), (host, "seconda linea")], tmp_path)
+
+    assert not list(tmp_path.glob("line_*.mp3"))
+    assert not list(tmp_path.glob("dialogue_raw_*.mp3"))
+    assert not list(tmp_path.glob("dialogue_*.mp3"))
 
 
 @pytest.mark.asyncio

@@ -260,7 +260,7 @@ def normalize(
     return output_path
 
 
-def _ffprobe_duration_sec(path: Path) -> float | None:
+def probe_duration_sec(path: Path) -> float | None:
     """Best-effort mp3 duration probe; None if ffprobe fails.
 
     Used by concat_files for a duration-invariant sanity check. We don't want
@@ -374,10 +374,10 @@ def concat_files(
     # input without re-running the session. Never crash — the stream keeps
     # playing whatever made it into the file.
     try:
-        output_dur = _ffprobe_duration_sec(output_path)
+        output_dur = probe_duration_sec(output_path)
         if output_dur is None or output_dur <= 0:
             return output_path
-        input_durs = [_ffprobe_duration_sec(p) for p in paths]
+        input_durs = [probe_duration_sec(p) for p in paths]
         if any(d is None or d <= 0 for d in input_durs):
             return output_path
         known_input_durs = [d for d in input_durs if d is not None]
