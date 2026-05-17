@@ -548,6 +548,35 @@ async def test_model_not_found_is_memoized_and_skips_repeated_anthropic_calls(co
     assert "NotFoundError" in state.anthropic_last_error
 
 
+@pytest.mark.asyncio
+async def test_usage_limit_is_memoized_and_skips_repeated_anthropic_calls(config, state):
+    class UsageLimitError(Exception):
+        pass
+
+    config.openai_api_key = "openai-key"
+    host_name = config.hosts[0].name
+    openai_client = _mock_openai_response(json.dumps({"lines": [{"host": host_name, "text": "Fallback."}]}))
+
+    mock_client = MagicMock()
+    mock_client.messages = MagicMock()
+    mock_client.messages.create = AsyncMock(side_effect=UsageLimitError("usage_limit: usage limits exceeded"))
+    mock_cls = MagicMock(return_value=mock_client)
+
+    with (
+        patch("mammamiradio.hosts.scriptwriter._anthropic_client", None),
+        patch("mammamiradio.hosts.scriptwriter._openai_client", None),
+        patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
+        patch("mammamiradio.hosts.scriptwriter._get_openai_client", return_value=openai_client),
+    ):
+        await write_banter(state, config)
+        await write_banter(state, config)
+
+    assert mock_client.messages.create.await_count == 1
+    assert state.anthropic_disabled_until > 0
+    assert state.anthropic_auth_failures == 0
+    assert "UsageLimitError" in state.anthropic_last_error
+
+
 def test_nonretryable_classifier_yields_to_auth_precedence():
     from mammamiradio.hosts.scriptwriter import (
         _is_anthropic_auth_error,
@@ -560,6 +589,19 @@ def test_nonretryable_classifier_yields_to_auth_precedence():
     exc = NotFoundError("invalid x-api-key")
     assert _is_anthropic_auth_error(exc) is True
     assert _is_anthropic_nonretryable_provider_error(exc) is False
+
+
+def test_usage_limit_classifier_matches_quota_patterns_only():
+    from mammamiradio.hosts.scriptwriter import _is_anthropic_usage_limit_error
+
+    assert _is_anthropic_usage_limit_error(Exception("You have reached your specified API usage limits")) is True
+    assert _is_anthropic_usage_limit_error(Exception("usage_limit: monthly cap exceeded")) is True
+    assert _is_anthropic_usage_limit_error(Exception("insufficient_quota for this account")) is True
+    assert _is_anthropic_usage_limit_error(Exception("Your credit balance is too low")) is True
+    assert _is_anthropic_usage_limit_error(Exception("invalid x-api-key")) is False
+    assert _is_anthropic_usage_limit_error(Exception("invalid x-api-key; usage limit reached")) is False
+    assert _is_anthropic_usage_limit_error(Exception("404 model not found")) is False
+    assert _is_anthropic_usage_limit_error(Exception("404 model not found; usage limit reached")) is False
 
 
 @pytest.mark.asyncio
@@ -603,6 +645,37 @@ async def test_model_not_found_backoff_is_scoped_to_model(config, state):
     assert third == {"ok": "fallback"}
     assert mock_client.messages.create.await_count == 2
     assert sw._anthropic_blocked_model == "bad-model"
+
+
+@pytest.mark.asyncio
+async def test_usage_limit_backoff_is_account_wide_across_models(config, state):
+    import mammamiradio.hosts.scriptwriter as sw
+    from mammamiradio.hosts.scriptwriter import _generate_json_response
+
+    class UsageLimitError(Exception):
+        pass
+
+    config.openai_api_key = "openai-key"
+    openai_client = _mock_openai_response(json.dumps({"ok": "fallback"}))
+
+    mock_client = MagicMock()
+    mock_client.messages = MagicMock()
+    mock_client.messages.create = AsyncMock(side_effect=UsageLimitError("usage limit reached"))
+
+    with (
+        patch("mammamiradio.hosts.scriptwriter._anthropic_client", None),
+        patch("mammamiradio.hosts.scriptwriter._openai_client", None),
+        patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", MagicMock(return_value=mock_client)),
+        patch("mammamiradio.hosts.scriptwriter._get_openai_client", return_value=openai_client),
+    ):
+        first = await _generate_json_response(prompt="p", config=config, state=state, model="model-a", max_tokens=100)
+        second = await _generate_json_response(prompt="p", config=config, state=state, model="model-b", max_tokens=100)
+
+    assert first == {"ok": "fallback"}
+    assert second == {"ok": "fallback"}
+    assert mock_client.messages.create.await_count == 1
+    assert sw._anthropic_blocked_model == ""
+    assert state.anthropic_auth_failures == 0
 
 
 @pytest.mark.asyncio

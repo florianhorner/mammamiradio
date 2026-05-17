@@ -16,6 +16,7 @@ The current version source of truth is `pyproject.toml`.
 ### Fixed
 
 - **Palinsesto table no longer causes horizontal overflow on phone widths.** The six-column programme table now collapses into compact grid cards at ≤640 px; column widths are locked with `table-layout: fixed` and a `<colgroup>` on desktop so the table stays inside the panel at all screen sizes.
+- **Anthropic usage-limit errors now trip the provider circuit breaker.** Account quota/credit exhaustion suspends Anthropic for the existing 10-minute cooldown and falls through to OpenAI immediately, instead of retrying Anthropic on every host segment while HA Green waits.
 
 ## [2.12.1] - 2026-05-16
 
