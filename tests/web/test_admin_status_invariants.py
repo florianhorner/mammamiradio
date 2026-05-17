@@ -1,0 +1,144 @@
+"""Admin status-chip migration invariants."""
+
+from __future__ import annotations
+
+import re
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+ADMIN_HTML = REPO_ROOT / "mammamiradio" / "web" / "templates" / "admin.html"
+_ADMIN_HTML_TEXT = ADMIN_HTML.read_text(encoding="utf-8")
+
+
+def _read_admin_html() -> str:
+    return _ADMIN_HTML_TEXT
+
+
+def _function_block(html: str, name: str) -> str:
+    start = html.find(f"function {name}")
+    assert start != -1, f"could not locate {name}() in admin.html"
+    next_function = re.search(r"\n(?:async\s+)?function\s+", html[start + 1 :])
+    assert next_function is not None, f"could not locate end of {name}() in admin.html"
+    next_function_start = start + 1 + next_function.start()
+    return html[start:next_function_start]
+
+
+def _class_tokens(html: str) -> set[str]:
+    tokens: set[str] = set()
+    for match in re.finditer(r"""class=(["'])(.*?)\1""", html, re.DOTALL):
+        tokens.update(match.group(2).split())
+    return tokens
+
+
+def test_legacy_status_pill_classes_are_gone_from_admin_html() -> None:
+    html = _read_admin_html()
+
+    assert not re.search(r"(?<![-\w])\.chip(?![-\w])", html), (
+        "admin.html must not keep a standalone .chip CSS selector; use .status-chip."
+    )
+    assert "chip" not in _class_tokens(html), (
+        "admin.html must not emit class token 'chip'; btn-chip/pl-chips remain separate patterns."
+    )
+    for legacy in ("now-type-pill", "seg-pill", "lr-pill"):
+        assert legacy not in html, f"admin.html must not keep legacy {legacy} status classes."
+
+    assert "btn-chip" in html
+    assert "pl-chips" in html
+    assert "sourceChip(" in html
+
+
+def test_status_helpers_emit_canonical_classes_and_aria_labels() -> None:
+    html = _read_admin_html()
+
+    assert "function statusChip(state,label,title='')" in html
+    assert "_statusSpan('status-chip',state,label,title)" in html
+    assert "function statusInline(state,label,title='')" in html
+    assert "_statusSpan('status-inline',state,label,title)" in html
+    assert 'aria-label="status: ${esc(state)}"' in html
+
+
+def test_pipeline_status_uses_canonical_status_chips() -> None:
+    block = _function_block(_read_admin_html(), "updatePipelineStatus")
+
+    assert 'class="chip ${state}"' not in block
+    for expected in (
+        "statusChip('working','Controllo…')",
+        "statusChip('degraded','Anthropic')",
+        "statusChip('ready','Anthropic')",
+        "statusChip('blocked','Anthropic')",
+        "statusChip('ready','Stream')",
+        "statusChip('idle','HA: off')",
+    ):
+        assert expected in block
+
+
+def test_segment_labels_use_canonical_status_surfaces() -> None:
+    html = _read_admin_html()
+
+    assert "function segmentInline(type)" in html
+    assert "function segmentClass(type)" in html
+    assert 'class="segment-inline segment-${sKey}"' in html  # sKey = segmentClass(typeKey), not esc()-wrapped
+    assert 'aria-label="segment: ${esc(sText)}"' in html
+    assert "statusInline('idle',segmentBadge(typeKey)" not in html
+    assert "segmentInline(typeKey)" in _function_block(html, "renderProgramme")
+    assert "segmentInline(typeKey)" in _function_block(html, "updateLog")
+
+
+def test_now_type_status_does_not_mark_stopped_or_skipping_ready() -> None:
+    html = _read_admin_html()
+    block = _function_block(html, "nowTypeStatus")
+    update_now = _function_block(html, "updateNow")
+
+    assert "typeKey==='stopped'" in block
+    assert "cls:'status-chip idle'" in block
+    assert "typeKey==='skipping'" in block
+    assert "cls:'status-chip working'" in block
+    # playing segments use segment-inline, not status-chip
+    assert "segment-inline segment-" in block
+    assert "nowTypeStatus(typeKey)" in update_now
+    assert "ty.className=typeStatus.cls" in update_now
+    assert "ty.setAttribute('aria-label',typeStatus.ariaLabel)" in update_now
+    # label must not include the segment glyph (no double-glyph with ::before)
+    assert "segmentBadge(typeKey)" in block  # badge used for text content (glyph+text)
+    assert "segmentBadge" not in update_now.replace("nowTypeStatus", "")
+
+
+def test_engine_room_capability_lines_use_status_helpers() -> None:
+    block = _function_block(_read_admin_html(), "updateEngineRoom")
+
+    assert "anthropicLine=statusInline('degraded','sospeso'+retry" in block
+    assert "anthropicLine=statusInline('ready','connesso')" in block
+    assert "anthropicLine=statusInline('idle','non configurato')" in block
+    assert "OpenAI: '+statusInline(c.openai?'ready':'idle'" in block
+    assert "Home Assistant: '+statusInline(c.ha?'ready':'idle'" in block
+
+
+def test_listener_request_statuses_map_to_canonical_states() -> None:
+    block = _function_block(_read_admin_html(), "updateListenerRequests")
+
+    for expected in (
+        "statusInline('ready',r.song_track||'ready')",  # no ▶ prefix — ::before adds ✓
+        "statusInline('blocked','not found')",
+        "statusInline('working','searching…')",
+        "statusInline('working','shoutout')",  # shoutout is pending, not idle
+    ):
+        assert expected in block
+    # ensure double-glyph pattern is gone
+    assert "'▶ '" not in block
+
+
+def test_all_segment_types_have_css_rules() -> None:
+    """Every SegmentType enum value must have a .segment-inline.segment-* CSS rule."""
+    import sys
+
+    sys.path.insert(0, str(REPO_ROOT))
+    from mammamiradio.core.models import SegmentType
+
+    html = _read_admin_html()
+    missing = []
+    for seg in SegmentType:
+        css_class = seg.value.replace("-", "_").lower()
+        rule = f".segment-inline.segment-{css_class}"
+        if rule not in html:
+            missing.append(rule)
+    assert not missing, f"Missing CSS rules in admin.html: {missing}"
