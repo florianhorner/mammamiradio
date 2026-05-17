@@ -2325,9 +2325,7 @@ def _public_status_payload(request: Request) -> dict:
         "playback_actions": {
             "skip_ready": bool(state.now_streaming),
             "skip_would_bridge": bool(
-                state.now_streaming
-                and runtime_health.get("queue_depth", 0) == 0
-                and not state.queued_segments
+                state.now_streaming and runtime_health.get("queue_depth", 0) == 0 and not state.queued_segments
             ),
         },
         "ha_moments": ha_moments,
