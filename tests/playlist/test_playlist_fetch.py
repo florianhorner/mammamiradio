@@ -122,7 +122,12 @@ def test_fetch_current_italy_charts_per_artist_cap():
     payload = {
         "feed": {
             "results": [
-                {"name": "Shiva Track 1", "artistName": "Shiva", "id": "1"},
+                {
+                    "name": "Shiva Track 1",
+                    "artistName": "Shiva",
+                    "id": "1",
+                    "artworkUrl100": "https://img.example/shiva1.jpg",
+                },
                 {"name": "Shiva Track 2", "artistName": "Shiva", "id": "2"},
                 {"name": "Shiva Track 3", "artistName": "Shiva", "id": "3"},
                 {"name": "Shiva Track 4", "artistName": "Shiva", "id": "4"},
@@ -145,6 +150,7 @@ def test_fetch_current_italy_charts_per_artist_cap():
     shiva_tracks = [t for t in tracks if t.artist == "Shiva"]
     assert len(shiva_tracks) <= 2, f"Expected at most 2 Shiva tracks, got {len(shiva_tracks)}"
     assert len(tracks) == 4  # 2 Shiva + 1 Geolier + 1 Tiziano Ferro
+    assert shiva_tracks[0].album_art == "https://img.example/shiva1.jpg"
 
 
 def test_fetch_current_italy_charts_network_error():

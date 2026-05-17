@@ -1262,6 +1262,7 @@ async def test_push_state_to_ha_prefers_now_streaming_metadata(reset_ha_push_deb
                     "title": "Current Artist - Current Song",
                     "title_only": "Current Song",
                     "artist": "Current Artist",
+                    "album_art": "https://img.example/current.jpg",
                 },
             },
             current_track=future_track,
@@ -1270,8 +1271,43 @@ async def test_push_state_to_ha_prefers_now_streaming_metadata(reset_ha_push_deb
         )
 
     mp_call = next(c for c in mock_client.post.call_args_list if "media_player" in c.args[0])
-    assert mp_call.kwargs["json"]["attributes"]["media_title"] == "Current Song"
-    assert mp_call.kwargs["json"]["attributes"]["media_artist"] == "Current Artist"
+    attributes = mp_call.kwargs["json"]["attributes"]
+    assert attributes["media_title"] == "Current Song"
+    assert attributes["media_artist"] == "Current Artist"
+    assert attributes["media_image_url"] == "https://img.example/current.jpg"
+    assert attributes["entity_picture"] == "https://img.example/current.jpg"
+    assert attributes["media_image_remotely_accessible"] is True
+
+
+@pytest.mark.asyncio
+async def test_push_state_to_ha_uses_station_artwork_fallback(reset_ha_push_debounce):
+    """Sparse on-air metadata still gives HA media cards stable station art."""
+    mock_client = AsyncMock()
+    mock_client.post.return_value = MagicMock(status_code=200)
+
+    with (
+        patch("mammamiradio.home.ha_context._get_ha_client", return_value=mock_client),
+        patch.dict("os.environ", {"MAMMAMIRADIO_PUBLIC_URL": ""}),
+    ):
+        await push_state_to_ha(
+            ha_url="http://ha.local:8123",
+            ha_token="test-token",
+            now_streaming={
+                "type": "banter",
+                "label": "Studio chat",
+                "started": time.time(),
+                "metadata": {"title": "Studio chat"},
+            },
+            current_track=None,
+            listeners_active=1,
+            session_stopped=False,
+        )
+
+    mp_call = next(c for c in mock_client.post.call_args_list if "media_player" in c.args[0])
+    attributes = mp_call.kwargs["json"]["attributes"]
+    assert attributes["media_image_url"] == "http://ha.local:8000/artwork/station.svg"
+    assert attributes["entity_picture"] == "http://ha.local:8000/artwork/station.svg"
+    assert attributes["media_image_remotely_accessible"] is True
 
 
 @pytest.mark.asyncio

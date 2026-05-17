@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- **Home Assistant now receives radio artwork.** HA media attributes include track artwork when available and fall back to a stable station artwork endpoint, with chart/external artwork preserved through playlist serialization.
+
 ## 2.12.3
 
 ### Added

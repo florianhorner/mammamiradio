@@ -13,6 +13,7 @@ The current version source of truth is `pyproject.toml`.
 ### Changed
 
 - **Engineering backlog moved to GitHub issues** — `docs/todos.md` was removed. Open engineering work is now tracked as GitHub issues. A new CI guard (`scripts/check-no-backlog-files.sh`, wired into `quality.yml`) fails the build if a catch-all `TODO.md`/`TODOS.md`/`docs/todos.md`/`docs/backlog.md` file is re-added.
+- **Home Assistant now receives radio artwork.** HA media attributes include track artwork when available and fall back to a stable station artwork endpoint, with chart/external artwork preserved through playlist serialization.
 
 ## [2.12.3] - 2026-05-17
 

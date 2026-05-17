@@ -424,7 +424,7 @@ def _serialize_brand(brand) -> dict:
 def _preview_tracks(tracks: list, limit: int = 3) -> dict:
     return {
         "track_count": len(tracks),
-        "tracks": [{"title": track.title, "artist": track.artist} for track in tracks[:limit]],
+        "tracks": [_serialize_track(track) for track in tracks[:limit]],
     }
 
 
@@ -1274,6 +1274,15 @@ async def static_files(filename: str):
     return FileResponse(filepath)
 
 
+@router.get("/artwork/station.svg")
+async def station_artwork():
+    """Serve stable station artwork for HA media_player fallbacks."""
+    for candidate in (_ASSETS_DIR / "logo.svg", _STATIC_DIR / "icon-512.svg", _STATIC_DIR / "icon-192.svg"):
+        if candidate.exists():
+            return FileResponse(candidate, media_type="image/svg+xml")
+    raise HTTPException(status_code=404, detail="Station artwork not found")
+
+
 @router.get("/stream")
 async def stream(request: Request):
     """Expose the live MP3 stream consumed by browsers and audio players."""
@@ -2099,6 +2108,7 @@ async def add_external_track(request: Request, _: None = Depends(require_admin_a
         artist=artist,
         duration_ms=duration_ms,
         youtube_id=youtube_id,
+        album_art=str(body.get("album_art") or "").strip(),
     )
 
     # Pre-download so the cache is warm before we purge the queue.
@@ -2140,6 +2150,7 @@ async def add_track(request: Request, _: None = Depends(require_admin_access)):
         artist=body.get("artist", ""),
         duration_ms=body.get("duration_ms", 0),
         spotify_id=body.get("spotify_id", ""),
+        album_art=str(body.get("album_art") or "").strip(),
     )
     if not track.title:
         return {"ok": False, "error": "Missing title"}

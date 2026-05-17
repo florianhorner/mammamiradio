@@ -707,6 +707,16 @@ class TestCapabilitiesStatusIsHonest:
         )
 
 
+class TestExternalArtworkContract:
+    def test_admin_external_queue_payload_preserves_album_art(self):
+        html = ADMIN_HTML.read_text()
+        assert "album_art:t.album_art||''" in html, (
+            "admin.html addExternal() must carry yt-dlp search artwork into "
+            "/api/playlist/add-external so HA media artwork can use the eventual "
+            "now_streaming.metadata.album_art."
+        )
+
+
 # ── Item 19: stopped-state UI actually stops (timer, waveform, producer btns) ──
 
 

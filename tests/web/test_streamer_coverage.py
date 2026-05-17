@@ -137,10 +137,23 @@ def test_serialize_source():
 
 
 def test_preview_tracks():
-    tracks = [MagicMock(title=f"Song {i}", artist=f"Artist {i}") for i in range(5)]
+    from mammamiradio.core.models import Track
+
+    tracks = [
+        Track(
+            title=f"Song {i}",
+            artist=f"Artist {i}",
+            duration_ms=180000,
+            album_art=f"https://img.example/{i}.jpg",
+            youtube_id=f"yt{i}",
+        )
+        for i in range(5)
+    ]
     result = _preview_tracks(tracks, limit=2)
     assert result["track_count"] == 5
     assert len(result["tracks"]) == 2
+    assert result["tracks"][0]["album_art"] == "https://img.example/0.jpg"
+    assert result["tracks"][0]["youtube_id"] == "yt0"
 
 
 # ---------------------------------------------------------------------------

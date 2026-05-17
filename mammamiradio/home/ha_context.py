@@ -10,10 +10,12 @@ from __future__ import annotations
 import asyncio
 import datetime
 import logging
+import os
 import time
 from collections import deque
 from dataclasses import dataclass, field
 from typing import TypedDict
+from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 
@@ -94,6 +96,9 @@ BRONZE_ENTITIES = [
 ]
 
 ALL_ENTITIES = GOLD_ENTITIES + SILVER_ENTITIES + BRONZE_ENTITIES
+
+STATION_ARTWORK_PATH = "/artwork/station.svg"
+_DEFAULT_PUBLIC_PORT = 8000
 
 # Italian-friendly labels for entity states
 ENTITY_LABELS = {
@@ -905,6 +910,38 @@ def _get_ha_push_lock() -> asyncio.Lock:
     return _ha_push_lock
 
 
+def _is_remote_url(value: str) -> bool:
+    parsed = urlsplit(value)
+    return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
+
+
+def _station_artwork_url(ha_url: str) -> str:
+    """Return a stable station artwork URL for HA media cards.
+
+    The add-on exposes port 8000 for stream/static access. In the add-on's
+    Supervisor API case (``http://supervisor/core``), there is no browser-safe
+    host to infer, so the pushed state uses the stable app-local path.
+    Operators can override with MAMMAMIRADIO_PUBLIC_URL when they have a
+    canonical public base URL.
+    """
+    public_base = os.getenv("MAMMAMIRADIO_PUBLIC_URL", "").strip().rstrip("/")
+    if public_base:
+        return f"{public_base}{STATION_ARTWORK_PATH}"
+
+    parsed = urlsplit((ha_url or "").strip())
+    if parsed.scheme in {"http", "https"} and parsed.hostname and parsed.hostname != "supervisor":
+        host = parsed.hostname
+        if ":" in host and not host.startswith("["):
+            host = f"[{host}]"
+        return urlunsplit((parsed.scheme, f"{host}:{_DEFAULT_PUBLIC_PORT}", STATION_ARTWORK_PATH, "", ""))
+    return STATION_ARTWORK_PATH
+
+
+def _media_artwork_url(metadata: dict, ha_url: str) -> str:
+    album_art = str(metadata.get("album_art") or "").strip()
+    return album_art or _station_artwork_url(ha_url)
+
+
 async def push_state_to_ha(
     ha_url: str,
     ha_token: str,
@@ -928,8 +965,11 @@ async def push_state_to_ha(
 
         segment_type = "off" if session_stopped else (now_streaming.get("type", "off") if now_streaming else "off")
         metadata = now_streaming.get("metadata", {}) if now_streaming else {}
+        if not isinstance(metadata, dict):
+            metadata = {}
         is_playing = not session_stopped and bool(now_streaming)
         mp_state = "playing" if is_playing else "idle"
+        media_artwork_url = _media_artwork_url(metadata, ha_url)
 
         if segment_type == "music":
             media_title = (
@@ -956,6 +996,9 @@ async def push_state_to_ha(
                         "media_title": media_title,
                         "media_artist": media_artist,
                         "media_content_type": "music" if segment_type == "music" else "channel",
+                        "media_image_url": media_artwork_url,
+                        "media_image_remotely_accessible": _is_remote_url(media_artwork_url),
+                        "entity_picture": media_artwork_url,
                         "media_position": media_position,
                         "mammamiradio_segment_type": segment_type,
                         "mammamiradio_queue_depth": 0,

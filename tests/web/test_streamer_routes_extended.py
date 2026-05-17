@@ -1223,7 +1223,13 @@ async def test_dismiss_listener_request_removes_downloaded_track(tmp_path):
         patch(
             "mammamiradio.playlist.downloader.search_ytdlp_metadata",
             return_value=[
-                {"title": "Albachiara", "artist": "Vasco Rossi", "duration_ms": 120000, "youtube_id": "yt123"}
+                {
+                    "title": "Albachiara",
+                    "artist": "Vasco Rossi",
+                    "duration_ms": 120000,
+                    "youtube_id": "yt123",
+                    "album_art": "https://img.example/albachiara.jpg",
+                }
             ],
         ),
         patch(
@@ -1234,6 +1240,7 @@ async def test_dismiss_listener_request_removes_downloaded_track(tmp_path):
     ):
         await _download_listener_song(req, app.state, state.playlist_revision)
     assert req["song_track_obj"] in state.playlist
+    assert req["song_track_obj"].album_art == "https://img.example/albachiara.jpg"
     assert state.pinned_track is req["song_track_obj"]
     assert state.force_next == SegmentType.MUSIC
 
@@ -1370,13 +1377,30 @@ async def test_add_external_track_success(tmp_path):
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
             resp = await client.post(
                 "/api/playlist/add-external",
-                json={"youtube_id": "dQw4w9WgXcQ", "title": "Brano", "artist": "Artista", "duration_ms": 123000},
+                json={
+                    "youtube_id": "dQw4w9WgXcQ",
+                    "title": "Brano",
+                    "artist": "Artista",
+                    "duration_ms": 123000,
+                    "album_art": "https://img.example/external.jpg",
+                },
             )
     assert resp.status_code == 200
     assert resp.json()["ok"] is True
     assert len(app.state.station_state.playlist) == original_len + 1
     assert app.state.station_state.pinned_track is not None
     assert app.state.station_state.pinned_track.youtube_id == "dQw4w9WgXcQ"
+    assert app.state.station_state.pinned_track.album_art == "https://img.example/external.jpg"
+
+
+@pytest.mark.asyncio
+async def test_station_artwork_endpoint_serves_stable_svg():
+    app = _make_test_app()
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.get("/artwork/station.svg")
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("image/svg+xml")
 
 
 @pytest.mark.asyncio

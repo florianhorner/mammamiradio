@@ -325,6 +325,7 @@ async def _download_listener_song(req: dict, app_state, originating_revision: in
             artist=meta["artist"],
             duration_ms=meta["duration_ms"],
             youtube_id=meta["youtube_id"],
+            album_art=str(meta.get("album_art") or ""),
         )
         # Download so it's ready when the producer picks it up
         await download_external_track(track, config.cache_dir, music_dir=Path("music"))

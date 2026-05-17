@@ -369,6 +369,7 @@ def _fetch_current_italy_charts(limit: int = 100, max_per_artist: int = 2) -> li
         title = str(item.get("name", "")).strip()
         artist = str(item.get("artistName", "")).strip()
         item_id = str(item.get("id", "")).strip()
+        album_art = str(item.get("artworkUrl100") or item.get("artworkUrl60") or "").strip()
         if not title or not artist:
             continue
         if not _is_plausible_music_title(title, artist):
@@ -386,6 +387,7 @@ def _fetch_current_italy_charts(limit: int = 100, max_per_artist: int = 2) -> li
                 artist=artist,
                 duration_ms=210000,
                 spotify_id=f"chart_{item_id or len(tracks) + 1}",
+                album_art=album_art,
                 source="youtube",
             )
         )
