@@ -21,6 +21,15 @@ warnings=0
 pass() { echo -e "  ${PASS}  $1"; }
 fail() { echo -e "  ${FAIL}  $1"; errors=$((errors + 1)); }
 warn() { echo -e "  ${WARN}  $1"; warnings=$((warnings + 1)); }
+extract_yaml_block() {
+    local section="$1"
+    local file="$2"
+    awk -v section="$section" '
+        $0 == section ":" { in_section = 1; next }
+        in_section && /^[^[:space:]]/ { exit }
+        in_section { print }
+    ' "$file"
+}
 
 ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
 cd "$ROOT"
@@ -237,6 +246,112 @@ if [ -f repository.yaml ]; then
     pass "repository.yaml exists"
 else
     fail "repository.yaml missing (HA can't discover the addon repo)"
+fi
+
+# ---- 13. Edge add-on folder ----
+# The edge add-on runs the SAME image as stable, so its config must stay
+# schema-locked to stable. CI (addon-build.yml bump-edge) advances its version.
+echo "13. Edge add-on"
+EDGE_CONFIG="ha-addon/mammamiradio-edge/config.yaml"
+STABLE_CONFIG="ha-addon/mammamiradio/config.yaml"
+STABLE_TRANS="ha-addon/mammamiradio/translations/en.yaml"
+EDGE_TRANS="ha-addon/mammamiradio-edge/translations/en.yaml"
+if [ ! -f "$EDGE_CONFIG" ]; then
+    echo "  (no edge add-on — skipping)"
+else
+    # YAML validity (best-effort — pyyaml may not be installed)
+    if $PY -c "import yaml" 2>/dev/null; then
+        if $PY -c "import yaml,sys; yaml.safe_load(open('$EDGE_CONFIG'))" 2>/dev/null; then
+            pass "edge config.yaml is valid YAML"
+        else
+            fail "edge config.yaml YAML parse error"
+        fi
+    else
+        warn "pyyaml not available — skipped edge YAML parse check"
+    fi
+
+    # slug
+    EDGE_SLUG=$(grep '^slug:' "$EDGE_CONFIG" | awk '{print $2}' | tr -d '"')
+    if [ "$EDGE_SLUG" = "mammamiradio-edge" ]; then
+        pass "edge slug: $EDGE_SLUG"
+    else
+        fail "edge slug must be 'mammamiradio-edge', got '$EDGE_SLUG'"
+    fi
+
+    # image path — must match stable's expected image (shared repo)
+    EDGE_IMAGE=$(grep '^image:' "$EDGE_CONFIG" | awk '{print $2}')
+    if [ "$EDGE_IMAGE" = "$EXPECTED" ]; then
+        pass "edge image: $EDGE_IMAGE"
+    else
+        fail "edge image mismatch: got '$EDGE_IMAGE', expected '$EXPECTED'"
+    fi
+
+    # version — calver YYYY.M.D.N or the 0.0.0 seed
+    EDGE_VER=$(grep '^version:' "$EDGE_CONFIG" | awk '{print $2}' | tr -d '"')
+    if echo "$EDGE_VER" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+(\.[0-9]+)?$'; then
+        pass "edge version format: $EDGE_VER"
+    else
+        fail "edge version must be calver or 0.0.0 seed, got '$EDGE_VER'"
+    fi
+
+    # options + schema parity with stable (edge runs the same image/run.sh).
+    # Block equality is byte-exact, so it also guarantees key parity and
+    # (via the translations block check below) translation coverage.
+    STABLE_OPT_BLOCK=$(extract_yaml_block options "$STABLE_CONFIG")
+    EDGE_OPT_BLOCK=$(extract_yaml_block options "$EDGE_CONFIG")
+    if [ "$STABLE_OPT_BLOCK" = "$EDGE_OPT_BLOCK" ]; then
+        pass "edge options block matches stable"
+    else
+        fail "edge options block drifted from stable"
+    fi
+
+    STABLE_SCHEMA_BLOCK=$(extract_yaml_block schema "$STABLE_CONFIG")
+    EDGE_SCHEMA_BLOCK=$(extract_yaml_block schema "$EDGE_CONFIG")
+    if [ "$STABLE_SCHEMA_BLOCK" = "$EDGE_SCHEMA_BLOCK" ]; then
+        pass "edge schema block matches stable"
+    else
+        fail "edge schema block drifted from stable"
+    fi
+
+    # Translations must be byte-identical to stable. stable's own translation
+    # coverage is enforced by check 9, so equality here transitively guarantees
+    # the edge translations cover every edge schema key.
+    STABLE_TRANSLATIONS=$(extract_yaml_block configuration "$STABLE_TRANS")
+    EDGE_TRANSLATIONS=$(extract_yaml_block configuration "$EDGE_TRANS")
+    if [ "$STABLE_TRANSLATIONS" = "$EDGE_TRANSLATIONS" ]; then
+        pass "edge translations block matches stable"
+    else
+        fail "edge translations block drifted from stable"
+    fi
+
+    # required files
+    for f in ha-addon/mammamiradio-edge/icon.png ha-addon/mammamiradio-edge/logo.png \
+             "$EDGE_TRANS"; do
+        if [ -f "$f" ]; then
+            pass "$f"
+        else
+            fail "Missing: $f"
+        fi
+    done
+
+    # ingress / network consistency with stable
+    if grep -q 'host_network: true' "$EDGE_CONFIG"; then
+        pass "edge host_network: true"
+    else
+        fail "edge host_network must be true"
+    fi
+    EDGE_PORT=$(grep 'ingress_port:' "$EDGE_CONFIG" | awk '{print $2}')
+    if [ "$EDGE_PORT" = "8000" ]; then
+        pass "edge ingress_port: 8000"
+    else
+        fail "edge ingress_port must be 8000, got: ${EDGE_PORT:-missing}"
+    fi
+    EDGE_TIMEOUT=$(grep '^timeout:' "$EDGE_CONFIG" | awk '{print $2}')
+    if [ "${EDGE_TIMEOUT:-0}" -ge 120 ] 2>/dev/null; then
+        pass "edge timeout: $EDGE_TIMEOUT (>= 120)"
+    else
+        fail "edge timeout should be >= 120, got: ${EDGE_TIMEOUT:-missing}"
+    fi
 fi
 
 # ---- Optional: Docker build ----
