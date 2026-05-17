@@ -610,7 +610,24 @@ async def _generate_json_response(
                             _anthropic_blocked_reason = "provider error"
                             _anthropic_blocked_model = ""
                             _anthropic_block_expired_logged = False
-                        return json.loads(_strip_fences(raw))
+                        parsed = json.loads(_strip_fences(raw))
+                        provider_event = state.update_runtime_provider(
+                            "script_provider",
+                            current_provider="anthropic",
+                            primary_provider="anthropic",
+                            fallback_active=False,
+                            reason="Anthropic is the active script provider",
+                        )
+                        if provider_event is not None:
+                            logger.info(
+                                "provider_switch_event",
+                                extra={
+                                    **provider_event.to_dict(),
+                                    "model": model,
+                                    "caller": caller,
+                                },
+                            )
+                        return parsed
                     except Exception as exc:
                         if _is_anthropic_auth_error(exc):
                             _trip_anthropic_circuit_and_fallback(
@@ -663,9 +680,9 @@ async def _generate_json_response(
     if not openai_key:
         raise RuntimeError("No LLM API key configured for script generation")
 
+    openai_model = config.audio.openai_script_model
     client = _get_openai_client(openai_key)
     loop = asyncio.get_running_loop()
-    openai_model = config.audio.openai_script_model
 
     def _call_openai():
         return client.chat.completions.create(
@@ -721,6 +738,23 @@ async def _generate_json_response(
             "json_ok": True,
         },
     )
+    if fallback_reason != "anthropic_absent":
+        provider_event = state.update_runtime_provider(
+            "script_provider",
+            current_provider="openai",
+            primary_provider="anthropic",
+            fallback_active=True,
+            reason=fallback_reason,
+        )
+        if provider_event is not None:
+            logger.info(
+                "provider_switch_event",
+                extra={
+                    **provider_event.to_dict(),
+                    "model": openai_model,
+                    "caller": caller,
+                },
+            )
     return parsed
 
 
