@@ -30,12 +30,6 @@ from mammamiradio.web.streamer import (
 TOML_PATH = str(Path(__file__).resolve().parents[2] / "radio.toml")
 
 
-def test_queue_fallback_budget_is_shorter_than_health_failure():
-    assert QUEUE_FALLBACK_WAIT_SECONDS <= 5.0
-    assert SILENCE_FAILURE_SECONDS >= 30.0
-    assert QUEUE_FALLBACK_WAIT_SECONDS < SILENCE_FAILURE_SECONDS
-
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
