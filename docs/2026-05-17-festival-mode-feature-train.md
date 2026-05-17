@@ -1,13 +1,13 @@
-# May Festival Feature Train
+# Festival Mode Feature Train
 
 Status: active integration train  
-Train branch: `florianhorner/feat/may-festival-mode`  
+Train branch: current workspace branch  
 Base branch: `origin/main` / GitHub base `main`  
-Owner role: this workspace is the convergence branch for May Festival Mode slices
+Owner role: this workspace is the convergence branch for Festival Mode slices
 
 ## Purpose
 
-This branch is the integration train for May Festival Mode. Feature worktrees may build
+This branch is the integration train for Festival Mode. Feature worktrees may build
 independent slices against this branch, then hand their diffs back here for review,
 integration, validation, and final merge readiness.
 
@@ -17,7 +17,7 @@ Do not rename this branch. Do not use this branch for unrelated cleanup.
 
 Each incoming slice must arrive with:
 
-- A short summary of the intended May Festival behavior.
+- A short summary of the intended Festival Mode behavior.
 - The files changed and the subsystem touched: config/env, scriptwriter, producer,
   admin UI, listener UI, Home Assistant add-on, docs, or tests.
 - The validation run in that worktree, including failures or skipped checks.
@@ -25,7 +25,7 @@ Each incoming slice must arrive with:
   API routes/payloads, status fields, or admin/listener UI controls.
 - A note on sibling paths checked for the same failure mode.
 
-Reject or park slices that are not materially part of May Festival Mode.
+Reject or park slices that are not materially part of Festival Mode.
 
 ## Integration Rules
 
@@ -46,7 +46,7 @@ Reject or park slices that are not materially part of May Festival Mode.
 
 Before this train can merge to `main`:
 
-- All accepted May Festival slices read as one coherent feature.
+- All accepted Festival Mode slices read as one coherent feature.
 - Public behavior has focused regression coverage.
 - Sibling code paths for the same invariant have been checked.
 - HA add-on config, translations, `rootfs/run.sh`, docs, and env handling are in sync
@@ -59,7 +59,7 @@ Before this train can merge to `main`:
 
 ## Suggested Review Order
 
-1. Confirm the slice is in scope for May Festival Mode.
+1. Confirm the slice is in scope for Festival Mode.
 2. Read public interface changes first, then implementation, then tests.
 3. Check config/env/add-on synchronization before UI polish.
 4. Run the smallest relevant tests for the touched subsystem.

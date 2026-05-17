@@ -17,5 +17,5 @@ This file supplements the global instructions for the `mammamiradio` repository.
 
 ## Active Feature Train
 
-- The current May Festival integration train is documented in `docs/2026-05-17-may-festival-feature-train.md`
-- Feature worktrees that target May Festival Mode should hand off slices using that train's intake contract
+- The current Festival Mode integration train is documented in `docs/2026-05-17-festival-mode-feature-train.md`
+- Feature worktrees that target Festival Mode should hand off slices using that train's intake contract
