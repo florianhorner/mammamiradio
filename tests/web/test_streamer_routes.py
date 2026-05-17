@@ -393,7 +393,7 @@ async def test_run_playback_loop_timeout_uses_norm_cache_after_30s(tmp_path, cap
 
     assert app.state.station_state.queue_empty_since is None
     wait_for.assert_called()
-    assert wait_for.call_args.kwargs["timeout"] == SILENCE_FAILURE_SECONDS
+    assert wait_for.call_args.kwargs["timeout"] == QUEUE_FALLBACK_WAIT_SECONDS
     assert any("rescuing with norm cache" in record.message for record in caplog.records)
     # Item 20: title must NEVER be the raw filename ("Recovered: norm_rescue.mp3").
     # Without a sidecar, humanize_norm_filename turns "norm_rescue.mp3" → "Rescue".

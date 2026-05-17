@@ -940,7 +940,7 @@ async def run_playback_loop(app) -> None:
             # below is part of the listener-visible silence window.
             state.queue_empty_since = _runtime_monotonic()
         try:
-            segment: Segment = await asyncio.wait_for(segment_queue.get(), timeout=SILENCE_FAILURE_SECONDS)
+            segment: Segment = await asyncio.wait_for(segment_queue.get(), timeout=QUEUE_FALLBACK_WAIT_SECONDS)
             pulled_from_queue = True
             state.queue_empty_since = None
         except TimeoutError:
@@ -968,8 +968,7 @@ async def run_playback_loop(app) -> None:
             else:
                 rescued_from_norm = False
                 if elapsed >= SILENCE_FAILURE_SECONDS:
-                    norm_files = sorted(config.cache_dir.glob("norm_*.mp3"))
-                    rescue = norm_files[0] if norm_files else None
+                    rescue = _select_norm_cache_rescue(config.cache_dir, state)
                     if rescue:
                         logger.warning(
                             "Queue empty %ds - rescuing with norm cache: %s",
