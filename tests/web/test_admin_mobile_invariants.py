@@ -132,6 +132,25 @@ def test_playlist_source_controls_are_non_destructive_by_default() -> None:
     assert "'/api/playlist/enrich'" in text
 
 
+def test_playlist_and_search_have_load_more_controls() -> None:
+    """Admin playlist/search rendering must expose lazy-load controls backed by paginated APIs."""
+    text = _read_admin_html()
+    assert "loadMorePlaylist()" in text
+    assert "searchMore()" in text
+    assert "'/api/playlist?offset=" in text or "`/api/playlist?offset=" in text
+    assert "has_more" in text
+
+
+def test_empty_playlist_art_is_compact_placeholder() -> None:
+    """Missing artwork should not reserve a full empty album-art square."""
+    text = _read_admin_html()
+    match = re.search(r"\.pl-art-empty\s*\{([^}]*)\}", text, re.DOTALL)
+    assert match, "admin.html must style .pl-art-empty."
+    body = match.group(1)
+    assert re.search(r"width\s*:\s*18px", body), ".pl-art-empty should be a compact marker, not album-art sized."
+    assert re.search(r"height\s*:\s*18px", body), ".pl-art-empty should be a compact marker, not album-art sized."
+
+
 def test_programme_table_desktop_colgroup_has_all_columns() -> None:
     """renderProgramme() must emit all six column classes so fixed-layout widths apply."""
     text = _read_admin_html()

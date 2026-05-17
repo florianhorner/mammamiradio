@@ -115,6 +115,31 @@ def _as_int_index(value, default: int = -1) -> int:
         return default
 
 
+def _page_bounds(offset: int, limit: int, *, default_limit: int, max_limit: int) -> tuple[int, int]:
+    """Clamp client pagination params to bounded, non-negative integers."""
+    try:
+        offset = int(offset)
+    except (TypeError, ValueError):
+        offset = 0
+    try:
+        limit = int(limit)
+    except (TypeError, ValueError):
+        limit = default_limit
+    return max(0, offset), max(1, min(limit, max_limit))
+
+
+def _paginated_tracks(tracks: list[Track], offset: int, limit: int) -> dict:
+    total = len(tracks)
+    page = tracks[offset : offset + limit]
+    return {
+        "tracks": [_serialize_track(track) for track in page],
+        "total": total,
+        "offset": offset,
+        "limit": limit,
+        "has_more": offset + len(page) < total,
+    }
+
+
 _MUTATING_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 _CSRF_TOKEN_PLACEHOLDER = "__MAMMAMIRADIO_CSRF_TOKEN__"
 SESSION_STOPPED_FLAG = "session_stopped.flag"
@@ -2029,22 +2054,56 @@ async def move_track(request: Request, _: None = Depends(require_admin_access)):
     return {"ok": False, "error": "Invalid indices"}
 
 
+@router.get("/api/playlist")
+async def playlist_tracks(
+    request: Request,
+    offset: int = 0,
+    limit: int = 80,
+    _: None = Depends(require_admin_access),
+):
+    """Return a bounded playlist page for admin lazy loading."""
+    offset, limit = _page_bounds(offset, limit, default_limit=80, max_limit=200)
+    state = request.app.state.station_state
+    return _paginated_tracks(state.playlist, offset, limit)
+
+
 @router.get("/api/search")
-async def search_tracks(request: Request, q: str = "", _: None = Depends(require_admin_access)):
+async def search_tracks(
+    request: Request,
+    q: str = "",
+    offset: int = 0,
+    limit: int = 20,
+    external_offset: int = 0,
+    external_limit: int = 5,
+    _: None = Depends(require_admin_access),
+):
     """Search the current playlist and yt-dlp for tracks matching the query."""
     from mammamiradio.playlist.downloader import search_ytdlp_metadata
 
+    offset, limit = _page_bounds(offset, limit, default_limit=20, max_limit=50)
+    external_offset, external_limit = _page_bounds(external_offset, external_limit, default_limit=5, max_limit=10)
     if not q.strip():
-        return {"results": [], "external": []}
+        return {
+            "results": [],
+            "external": [],
+            "total": 0,
+            "offset": offset,
+            "limit": limit,
+            "has_more": False,
+            "external_total": 0,
+            "external_offset": external_offset,
+            "external_limit": external_limit,
+            "external_has_more": False,
+        }
     query = q.strip().lower()
     state = request.app.state.station_state
 
     # Playlist matches (instant)
-    results = []
+    matches = []
     for i, track in enumerate(state.playlist):
         text = f"{track.title} {track.artist}".lower()
         if query in text:
-            results.append(
+            matches.append(
                 {
                     "index": i,
                     "title": track.title,
@@ -2052,20 +2111,39 @@ async def search_tracks(request: Request, q: str = "", _: None = Depends(require
                     "display": track.display,
                     "duration_ms": track.duration_ms,
                     "id": track.spotify_id or track.cache_key,
+                    "album_art": track.album_art,
+                    "source": track.source,
+                    "year": track.year,
                 }
             )
-            if len(results) >= 20:
-                break
+    results = matches[offset : offset + limit]
 
     # External yt-dlp search (blocking, run off the event loop)
     loop = asyncio.get_running_loop()
     try:
-        external = await loop.run_in_executor(None, search_ytdlp_metadata, q.strip(), 5)
+        external_candidates = await loop.run_in_executor(
+            None,
+            search_ytdlp_metadata,
+            q.strip(),
+            external_offset + external_limit + 1,
+        )
     except Exception:
         logger.warning("yt-dlp external search failed for query %r", q, exc_info=True)
-        external = []
+        external_candidates = []
+    external = external_candidates[external_offset : external_offset + external_limit]
 
-    return {"results": results, "external": external}
+    return {
+        "results": results,
+        "external": external,
+        "total": len(matches),
+        "offset": offset,
+        "limit": limit,
+        "has_more": offset + len(results) < len(matches),
+        "external_total": len(external_candidates),
+        "external_offset": external_offset,
+        "external_limit": external_limit,
+        "external_has_more": external_offset + len(external) < len(external_candidates),
+    }
 
 
 @router.post("/api/playlist/add-external")
@@ -2080,6 +2158,7 @@ async def add_external_track(request: Request, _: None = Depends(require_admin_a
     youtube_id = str(body.get("youtube_id") or "").strip()
     title = str(body.get("title") or "").strip()
     artist = str(body.get("artist") or "").strip()
+    album_art = str(body.get("album_art") or "").strip()
     try:
         duration_ms = int(body.get("duration_ms") or 0)
     except (TypeError, ValueError):
@@ -2099,6 +2178,7 @@ async def add_external_track(request: Request, _: None = Depends(require_admin_a
         artist=artist,
         duration_ms=duration_ms,
         youtube_id=youtube_id,
+        album_art=album_art,
     )
 
     # Pre-download so the cache is warm before we purge the queue.
@@ -2135,11 +2215,17 @@ async def add_track(request: Request, _: None = Depends(require_admin_access)):
     from mammamiradio.core.models import Track
 
     body = await request.json()
+    raw_source = str(body.get("source") or "youtube")
+    source = raw_source if raw_source in {"youtube", "jamendo", "local", "demo", "classic"} else "youtube"
     track = Track(
-        title=body.get("title", ""),
-        artist=body.get("artist", ""),
+        title=str(body.get("title") or ""),
+        artist=str(body.get("artist") or ""),
         duration_ms=body.get("duration_ms", 0),
-        spotify_id=body.get("spotify_id", ""),
+        spotify_id=str(body.get("spotify_id") or ""),
+        youtube_id=str(body.get("youtube_id") or ""),
+        album_art=str(body.get("album_art") or ""),
+        year=_as_int_index(body.get("year", 0), 0),
+        source=source,
     )
     if not track.title:
         return {"ok": False, "error": "Missing title"}
@@ -2549,7 +2635,12 @@ async def public_status(request: Request):
 
 
 @router.get("/status")
-async def status(request: Request, _: None = Depends(require_admin_access)):
+async def status(
+    request: Request,
+    playlist_offset: int = 0,
+    playlist_limit: int = 80,
+    _: None = Depends(require_admin_access),
+):
     """Return full admin diagnostics for the running station."""
     config = request.app.state.config
     state = request.app.state.station_state
@@ -2558,6 +2649,13 @@ async def status(request: Request, _: None = Depends(require_admin_access)):
     station_mode = classify_station_mode(config, state)
     payload = _public_status_payload(request)
     runtime_health = _runtime_health_snapshot(request)
+    playlist_offset, playlist_limit = _page_bounds(
+        playlist_offset,
+        playlist_limit,
+        default_limit=80,
+        max_limit=200,
+    )
+    playlist_page = _paginated_tracks(state.playlist, playlist_offset, playlist_limit)
     payload.update(
         {
             "queue_depth": segment_queue.qsize(),
@@ -2625,7 +2723,13 @@ async def status(request: Request, _: None = Depends(require_admin_access)):
             },
             "force_pending": state.force_next.value if state.force_next else None,
             "session_stopped": state.session_stopped,
-            "playlist": [_serialize_track(t) for t in state.playlist[:100]],
+            "playlist": playlist_page["tracks"],
+            "playlist_page": {
+                "total": playlist_page["total"],
+                "offset": playlist_page["offset"],
+                "limit": playlist_page["limit"],
+                "has_more": playlist_page["has_more"],
+            },
             "brand": _serialize_brand(config.brand),
             "brand_warnings": list(config.brand_warnings),
         }

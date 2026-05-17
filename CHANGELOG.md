@@ -13,6 +13,7 @@ The current version source of truth is `pyproject.toml`.
 ### Changed
 
 - **Engineering backlog moved to GitHub issues** — `docs/todos.md` was removed. Open engineering work is now tracked as GitHub issues. A new CI guard (`scripts/check-no-backlog-files.sh`, wired into `quality.yml`) fails the build if a catch-all `TODO.md`/`TODOS.md`/`docs/todos.md`/`docs/backlog.md` file is re-added.
+- **Admin playlist/search can page through results.** `/status` and `/api/search` now expose total/window metadata, admin rows have explicit load-more controls, and artwork from chart/external sources is preserved instead of rendering broken empty thumbnails.
 
 ## [2.12.3] - 2026-05-17
 

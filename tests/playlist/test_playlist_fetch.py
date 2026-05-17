@@ -91,7 +91,12 @@ def test_fetch_current_italy_charts_success():
     payload = {
         "feed": {
             "results": [
-                {"name": "Song One", "artistName": "Artist A", "id": "1"},
+                {
+                    "name": "Song One",
+                    "artistName": "Artist A",
+                    "id": "1",
+                    "artworkUrl100": "https://is1-ssl.mzstatic.com/image/thumb/Music/100x100bb.jpg",
+                },
                 {"name": "Song Two", "artistName": "Artist B", "id": "2"},
                 {"name": "", "artistName": "Artist C", "id": "3"},  # skipped: no title
             ]
@@ -110,6 +115,7 @@ def test_fetch_current_italy_charts_success():
     assert len(tracks) == 2
     assert tracks[0].title == "Song One"
     assert tracks[0].spotify_id == "chart_1"
+    assert tracks[0].album_art == "https://is1-ssl.mzstatic.com/image/thumb/Music/600x600bb.jpg"
     assert tracks[1].title == "Song Two"
     assert tracks[1].spotify_id == "chart_2"
 

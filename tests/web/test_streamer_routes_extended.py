@@ -616,12 +616,51 @@ async def test_search_empty_query():
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
         resp = await client.get("/api/search?q=")
     assert resp.status_code == 200
-    assert resp.json()["results"] == []
+    body = resp.json()
+    assert body["results"] == []
+    assert body["total"] == 0
+    assert body["offset"] == 0
+    assert body["limit"] == 20
+    assert body["has_more"] is False
+
+
+@pytest.mark.asyncio
+async def test_playlist_api_returns_paginated_track_page():
+    app = _make_test_app()
+    app.state.station_state.playlist = [
+        Track(title=f"Song {i}", artist="Artist", duration_ms=180_000, spotify_id=f"t{i}") for i in range(6)
+    ]
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.get("/api/playlist?offset=2&limit=3")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert [track["title"] for track in body["tracks"]] == ["Song 2", "Song 3", "Song 4"]
+    assert body["total"] == 6
+    assert body["offset"] == 2
+    assert body["limit"] == 3
+    assert body["has_more"] is True
+
+
+@pytest.mark.asyncio
+async def test_status_playlist_page_uses_total_offset_limit_contract():
+    app = _make_test_app()
+    app.state.station_state.playlist = [
+        Track(title=f"Song {i}", artist="Artist", duration_ms=180_000, spotify_id=f"t{i}") for i in range(5)
+    ]
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.get("/status?playlist_offset=1&playlist_limit=2")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert [track["title"] for track in body["playlist"]] == ["Song 1", "Song 2"]
+    assert body["playlist_page"] == {"total": 5, "offset": 1, "limit": 2, "has_more": True}
 
 
 @pytest.mark.asyncio
 async def test_search_returns_playlist_and_external_results():
     app = _make_test_app()
+    app.state.station_state.playlist[0].album_art = "https://img.example/song-a.jpg"
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
     with patch(
         "mammamiradio.playlist.downloader.search_ytdlp_metadata",
@@ -640,8 +679,32 @@ async def test_search_returns_playlist_and_external_results():
     assert resp.status_code == 200
     body = resp.json()
     assert len(body["results"]) >= 1
+    assert body["results"][0]["album_art"] == "https://img.example/song-a.jpg"
+    assert body["total"] >= 1
+    assert body["offset"] == 0
+    assert body["limit"] == 20
+    assert body["has_more"] is False
     assert len(body["external"]) == 1
     assert body["external"][0]["youtube_id"] == "yt1"
+
+
+@pytest.mark.asyncio
+async def test_search_playlist_results_are_paginated():
+    app = _make_test_app()
+    app.state.station_state.playlist = [
+        Track(title=f"Song {i}", artist="Artist", duration_ms=180_000, spotify_id=f"t{i}") for i in range(7)
+    ]
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    with patch("mammamiradio.playlist.downloader.search_ytdlp_metadata", return_value=[]):
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            resp = await client.get("/api/search?q=Song&offset=2&limit=3")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert [track["title"] for track in body["results"]] == ["Song 2", "Song 3", "Song 4"]
+    assert body["total"] == 7
+    assert body["offset"] == 2
+    assert body["limit"] == 3
+    assert body["has_more"] is True
 
 
 @pytest.mark.asyncio
@@ -1370,13 +1433,20 @@ async def test_add_external_track_success(tmp_path):
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
             resp = await client.post(
                 "/api/playlist/add-external",
-                json={"youtube_id": "dQw4w9WgXcQ", "title": "Brano", "artist": "Artista", "duration_ms": 123000},
+                json={
+                    "youtube_id": "dQw4w9WgXcQ",
+                    "title": "Brano",
+                    "artist": "Artista",
+                    "duration_ms": 123000,
+                    "album_art": "https://img.example/yt.jpg",
+                },
             )
     assert resp.status_code == 200
     assert resp.json()["ok"] is True
     assert len(app.state.station_state.playlist) == original_len + 1
     assert app.state.station_state.pinned_track is not None
     assert app.state.station_state.pinned_track.youtube_id == "dQw4w9WgXcQ"
+    assert app.state.station_state.pinned_track.album_art == "https://img.example/yt.jpg"
 
 
 @pytest.mark.asyncio

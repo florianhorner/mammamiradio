@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- **Admin playlist/search can page through results.** Status and search payloads now expose total/window metadata, admin rows have explicit load-more controls, and artwork from chart/external sources is preserved instead of rendering broken empty thumbnails.
+
 ## 2.12.3
 
 ### Added
