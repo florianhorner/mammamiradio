@@ -1,4 +1,4 @@
-"""Tests for new features: news flash categories, sports prosody, crossfade,
+"""Tests for new features: news flash categories, host prosody, crossfade,
 concat loudnorm, after_news_flash counters, admin CSRF, trigger endpoint,
 synthesize_dialogue loudnorm passthrough, and _get_client/_get_system_prompt caching."""
 
@@ -106,24 +106,36 @@ async def test_write_news_flash_each_category(category):
 
 
 @pytest.mark.asyncio
-async def test_write_news_flash_sports_picks_most_energetic_host():
-    """Sports flash should be assigned to the host with the highest energy."""
+async def test_write_news_flash_sports_does_not_force_most_energetic_host():
+    """Sports flash should use a steady anchor instead of the highest-energy host."""
     from mammamiradio.hosts.scriptwriter import write_news_flash
 
     config = load_config(TOML_PATH)
     config.anthropic_api_key = "test-key"
-    # Override hosts with known energy values
     config.hosts = [
-        HostPersonality(name="Calm", voice="it-IT-DiegoNeural", style="calm", personality=PersonalityAxes(energy=20)),
         HostPersonality(
-            name="Manic", voice="it-IT-IsabellaNeural", style="manic", personality=PersonalityAxes(energy=90)
+            name="Calm",
+            voice="it-IT-DiegoNeural",
+            style="calm analyst",
+            personality=PersonalityAxes(energy=35, chaos=25, verbosity=45, warmth=60),
+        ),
+        HostPersonality(
+            name="Anchor",
+            voice="it-IT-IsabellaNeural",
+            style="measured sports desk anchor",
+            personality=PersonalityAxes(energy=60, chaos=40, verbosity=50, warmth=55),
+        ),
+        HostPersonality(
+            name="Manic",
+            voice="it-IT-IsabellaNeural",
+            style="manic commentator",
+            personality=PersonalityAxes(energy=95, chaos=80, verbosity=80, warmth=45),
         ),
     ]
     state = _make_state()
-    # played_tracks is a deque (doesn't support slicing); convert to list for test
     state.played_tracks = list(state.played_tracks)
 
-    response_json = json.dumps({"text": "GOOOL!"})
+    response_json = json.dumps({"text": "Il Calabria Nord gestisce il vantaggio con ordine."})
     mock_cls = _mock_anthropic_response(response_json)
 
     with (
@@ -132,15 +144,15 @@ async def test_write_news_flash_sports_picks_most_energetic_host():
     ):
         host, _text, _cat = await write_news_flash(state, config, category="sports")
 
-    assert host.name == "Manic"
+    assert host.name == "Anchor"
 
 
 # ---------------------------------------------------------------------------
-# Sports prosody boost in TTS
+# Host personality prosody in TTS
 # ---------------------------------------------------------------------------
 
 
-def test_prosody_for_host_sports_energy_boost():
+def test_prosody_for_host_high_energy_dialogue_rate():
     """High-energy host should get +10% rate from _prosody_for_host."""
     from mammamiradio.audio.tts import _prosody_for_host
 

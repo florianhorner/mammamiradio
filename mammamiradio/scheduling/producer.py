@@ -1446,13 +1446,9 @@ async def run_producer(
                     host, text, category = await _sw.write_news_flash(state, config)
                     flash_path = config.tmp_dir / f"flash_{uuid4().hex[:8]}.mp3"
 
-                    # Synthesize with extra energy for sports
+                    # Keep news flashes intelligible; only traffic gets a small urgency nudge.
                     flash_rate: str | None = None
-                    flash_pitch: str | None = None
-                    if category == "sports":
-                        flash_rate = "+25%"
-                        flash_pitch = "+12Hz"
-                    elif category == "traffic":
+                    if category == "traffic":
                         flash_rate = "+10%"
 
                     await synthesize(
@@ -1460,7 +1456,6 @@ async def run_producer(
                         host.voice,
                         flash_path,
                         rate=flash_rate,
-                        pitch=flash_pitch,
                         engine=host.engine,
                         edge_fallback_voice=host.edge_fallback_voice,
                     )
