@@ -1,14 +1,6 @@
 ARG BUILD_FROM
 FROM ${BUILD_FROM}
 
-ARG BUILD_VERSION
-ARG BUILD_ARCH
-
-LABEL \
-  io.hass.version="${BUILD_VERSION}" \
-  io.hass.type="app" \
-  io.hass.arch="${BUILD_ARCH}"
-
 # Install Python 3 and FFmpeg
 RUN apk add --no-cache python3 py3-pip ffmpeg
 
@@ -33,5 +25,13 @@ RUN chmod a+x /run.sh
 
 # Validate the install works
 RUN python3 -c "import mammamiradio; print('mammamiradio installed OK')"
+
+ARG BUILD_VERSION=unknown
+ARG BUILD_ARCH=unknown
+
+LABEL \
+  io.hass.version="${BUILD_VERSION}" \
+  io.hass.type="app" \
+  io.hass.arch="${BUILD_ARCH}"
 
 CMD ["/run.sh"]
