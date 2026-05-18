@@ -18,7 +18,12 @@ from pathlib import Path
 from uuid import uuid4
 
 import mammamiradio.hosts.scriptwriter as _sw
-from mammamiradio.audio.audio_quality import AudioQualityError, AudioToolError, validate_segment_audio
+from mammamiradio.audio.audio_quality import (
+    AudioQualityError,
+    AudioToolError,
+    BanterDurationMismatchError,
+    validate_segment_audio,
+)
 from mammamiradio.audio.imaging import ImagingLibrary
 from mammamiradio.audio.normalizer import (
     concat_files,
@@ -75,6 +80,10 @@ MUSIC_SELECTION_RETRIES = 20
 MUSIC_QUALITY_GATE_REJECTION_LIMIT = 3
 CACHE_EVICTION_INTERVAL_SECONDS = 3600
 PLAYLIST_REFRESH_INTERVAL_SECONDS = 5400.0
+
+MAX_BANTER_QUALITY_RETRIES = 2
+BANTER_DURATION_RATIO_ACCEPT_WARN = 0.55
+BANTER_DURATION_RATIO_HARD_REJECT = 0.40
 
 
 @dataclass(frozen=True)
@@ -1211,6 +1220,7 @@ async def run_producer(
 
                 banter_expected_min_duration_sec: float | None = None
                 banter_expected_line_count: int | None = None
+                banter_quality_retries = 0
 
                 if canned:
                     logger.info("Using pre-bundled banter clip: %s", canned.name)
@@ -1361,46 +1371,110 @@ async def run_producer(
                     except AudioToolError as exc:
                         logger.warning("Audio tool unavailable, skipping banter quality check: %s", exc)
                     except AudioQualityError as exc:
-                        logger.warning("Quality gate rejected banter (%s): %s", audio_path.name, exc)
-                        if chaos_subtype is not None:
-                            state.chaos_audio_failures += 1
-                            state.chaos_last_degraded_reason = "audio_failure"
-                        if canned is None:
-                            audio_path.unlink(missing_ok=True)
-                        fallback_canned = _pick_canned_clip("banter", state=state)
-                        if fallback_canned:
-                            try:
-                                await loop.run_in_executor(
-                                    None, validate_segment_audio, fallback_canned, SegmentType.BANTER
-                                )
-                                logger.info(
-                                    "Using canned banter fallback after quality reject: %s", fallback_canned.name
-                                )
-                                audio_path = fallback_canned
-                                canned = fallback_canned
-                                fallback_text = "(pre-recorded banter)"
-                                fallback_type = "banter"
-                                if chaos_subtype is not None:
-                                    fallback_text = "(pre-recorded chaos fallback)"
-                                    fallback_type = "chaos_audio_fallback"
-                                state.last_banter_script = [
-                                    {
-                                        "host": "Radio",
-                                        "text": fallback_text,
-                                        "type": fallback_type,
-                                        "chaos_subtype": chaos_subtype.value if chaos_subtype else "",
-                                    }
-                                ]
-                            except AudioToolError as fallback_tool_exc:
+                        skip_rejection_fallback = False
+                        if isinstance(exc, BanterDurationMismatchError):
+                            ratio = exc.ratio
+                            logger.warning(
+                                "Banter duration mismatch (%s): actual=%.2fs expected>=%.2fs ratio=%.2f retry=%d/%d lines=%d",
+                                audio_path.name,
+                                exc.duration_sec,
+                                exc.expected_floor_sec,
+                                ratio,
+                                banter_quality_retries,
+                                MAX_BANTER_QUALITY_RETRIES,
+                                banter_expected_line_count or 0,
+                            )
+                            if ratio >= BANTER_DURATION_RATIO_ACCEPT_WARN:
                                 logger.warning(
-                                    "Audio tool unavailable during fallback quality check: %s", fallback_tool_exc
+                                    "Accepting banter despite duration mismatch (%s): ratio %.2f >= %.2f",
+                                    audio_path.name,
+                                    ratio,
+                                    BANTER_DURATION_RATIO_ACCEPT_WARN,
                                 )
-                            except AudioQualityError as fallback_exc:
-                                logger.error(
-                                    "ASSET CORRUPTION: canned banter fallback also rejected (%s): %s",
-                                    fallback_canned.name,
-                                    fallback_exc,
+                                skip_rejection_fallback = True
+                            elif ratio >= BANTER_DURATION_RATIO_HARD_REJECT:
+                                if banter_quality_retries < MAX_BANTER_QUALITY_RETRIES:
+                                    banter_quality_retries += 1
+                                    logger.warning(
+                                        "Retrying banter after short-duration mismatch (%s): attempt %d/%d",
+                                        audio_path.name,
+                                        banter_quality_retries,
+                                        MAX_BANTER_QUALITY_RETRIES,
+                                    )
+                                    if canned is None:
+                                        audio_path.unlink(missing_ok=True)
+                                    continue
+                                logger.warning(
+                                    "Airing best-effort banter after retries exhausted (%s): ratio %.2f",
+                                    audio_path.name,
+                                    ratio,
                                 )
+                                skip_rejection_fallback = True
+                            else:
+                                logger.warning(
+                                    "Hard rejecting banter duration mismatch (%s): ratio %.2f < %.2f",
+                                    audio_path.name,
+                                    ratio,
+                                    BANTER_DURATION_RATIO_HARD_REJECT,
+                                )
+                                if canned is None:
+                                    audio_path.unlink(missing_ok=True)
+                                continue
+                        if skip_rejection_fallback:
+                            pass
+                        else:
+                            logger.warning("Quality gate rejected banter (%s): %s", audio_path.name, exc)
+                            if chaos_subtype is not None:
+                                state.chaos_audio_failures += 1
+                                state.chaos_last_degraded_reason = "audio_failure"
+                            if canned is None:
+                                audio_path.unlink(missing_ok=True)
+                            fallback_canned = _pick_canned_clip("banter", state=state)
+                            if fallback_canned:
+                                try:
+                                    await loop.run_in_executor(
+                                        None, validate_segment_audio, fallback_canned, SegmentType.BANTER
+                                    )
+                                    logger.info(
+                                        "Using canned banter fallback after quality reject: %s", fallback_canned.name
+                                    )
+                                    audio_path = fallback_canned
+                                    canned = fallback_canned
+                                    fallback_text = "(pre-recorded banter)"
+                                    fallback_type = "banter"
+                                    if chaos_subtype is not None:
+                                        fallback_text = "(pre-recorded chaos fallback)"
+                                        fallback_type = "chaos_audio_fallback"
+                                    state.last_banter_script = [
+                                        {
+                                            "host": "Radio",
+                                            "text": fallback_text,
+                                            "type": fallback_type,
+                                            "chaos_subtype": chaos_subtype.value if chaos_subtype else "",
+                                        }
+                                    ]
+                                except AudioToolError as fallback_tool_exc:
+                                    logger.warning(
+                                        "Audio tool unavailable during fallback quality check: %s", fallback_tool_exc
+                                    )
+                                except AudioQualityError as fallback_exc:
+                                    logger.error(
+                                        "ASSET CORRUPTION: canned banter fallback also rejected (%s): %s",
+                                        fallback_canned.name,
+                                        fallback_exc,
+                                    )
+                                    if chaos_subtype is not None:
+                                        if state.chaos_audio_failures >= CHAOS_AUDIO_FAILURE_LIMIT:
+                                            state.chaos_pending = None
+                                            state.chaos_last_degraded_reason = "strike_abandoned"
+                                            logger.error(
+                                                "Chaos first-strike abandoned after %d failures",
+                                                state.chaos_audio_failures,
+                                            )
+                                        else:
+                                            await asyncio.sleep(CHAOS_AUDIO_FAILURE_BACKOFF_SECONDS)
+                                    continue
+                            else:
                                 if chaos_subtype is not None:
                                     if state.chaos_audio_failures >= CHAOS_AUDIO_FAILURE_LIMIT:
                                         state.chaos_pending = None
@@ -1412,18 +1486,6 @@ async def run_producer(
                                     else:
                                         await asyncio.sleep(CHAOS_AUDIO_FAILURE_BACKOFF_SECONDS)
                                 continue
-                        else:
-                            if chaos_subtype is not None:
-                                if state.chaos_audio_failures >= CHAOS_AUDIO_FAILURE_LIMIT:
-                                    state.chaos_pending = None
-                                    state.chaos_last_degraded_reason = "strike_abandoned"
-                                    logger.error(
-                                        "Chaos first-strike abandoned after %d failures",
-                                        state.chaos_audio_failures,
-                                    )
-                                else:
-                                    await asyncio.sleep(CHAOS_AUDIO_FAILURE_BACKOFF_SECONDS)
-                            continue
 
                 if canned is None:
                     try:

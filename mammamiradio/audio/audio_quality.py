@@ -22,6 +22,18 @@ class AudioToolError(RuntimeError):
     """
 
 
+class BanterDurationMismatchError(AudioQualityError):
+    """Raised when banter duration is implausibly short for its script context."""
+
+    def __init__(self, *, duration_sec: float, expected_floor_sec: float):
+        self.duration_sec = duration_sec
+        self.expected_floor_sec = expected_floor_sec
+        self.ratio = duration_sec / expected_floor_sec if expected_floor_sec > 0 else 0.0
+        super().__init__(
+            f"banter audio implausibly short for script ({duration_sec:.2f}s < {expected_floor_sec:.2f}s; ratio={self.ratio:.2f})"
+        )
+
+
 @dataclass(frozen=True)
 class QualityThresholds:
     """Per-segment thresholds used by the quality gate."""
@@ -104,9 +116,7 @@ def validate_segment_audio(
             expected_line_count=expected_line_count,
         )
         if expected_floor is not None and duration < expected_floor:
-            raise AudioQualityError(
-                f"{seg_type.value} audio implausibly short for script ({duration:.2f}s < {expected_floor:.2f}s)"
-            )
+            raise BanterDurationMismatchError(duration_sec=duration, expected_floor_sec=expected_floor)
 
     silence_total, max_silence = _probe_silence(path)
     silence_ratio = silence_total / duration if duration > 0 else 1.0
