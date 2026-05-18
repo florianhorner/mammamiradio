@@ -216,7 +216,10 @@ def normalize(
             norm_part = "dynaudnorm=f=150:g=13,alimiter=limit=0.95"
         else:
             norm_part = "loudnorm=I=-16:LRA=11:TP=-1.5"
-        silence_trim = "silenceremove=start_periods=0:stop_periods=1:stop_threshold=-50dB:stop_duration=0.3"
+        # stop_periods MUST stay negative. A positive stop_periods makes silenceremove
+        # halt output at the FIRST silence period, truncating speech at its first
+        # inter-phrase pause (host lines collapsed to ~1.6s). -1 trims trailing silence only.
+        silence_trim = "silenceremove=start_periods=0:stop_periods=-1:stop_threshold=-50dB:stop_duration=0.3"
         # Soft fade-in on every final-output segment: music → banter hand-offs
         # used to be a hard cut at full volume. A short ramp-in on the incoming
         # segment turns the perceived "drop" into a gentle entry without
@@ -230,7 +233,9 @@ def normalize(
             else f"{norm_part},{silence_trim},{fade_in}"
         )
     else:
-        audio_filter = "silenceremove=start_periods=0:stop_periods=1:stop_threshold=-50dB:stop_duration=0.3"
+        # stop_periods=-1 (negative) trims trailing silence only; a positive value
+        # truncates speech at the first pause. See the note in the loudnorm branch above.
+        audio_filter = "silenceremove=start_periods=0:stop_periods=-1:stop_threshold=-50dB:stop_duration=0.3"
 
     cmd = [
         "ffmpeg",

@@ -935,3 +935,73 @@ def test_normalize_real_encode_has_no_xing_header(tmp_path):
     raw = out.read_bytes()[:2048]
     assert b"Xing" not in raw, "Xing VBR header found — -write_xing 0 did not suppress it"
     assert b"Info" not in raw, "Info CBR header found — -write_xing 0 did not suppress it"
+
+
+# ---------------------------------------------------------------------------
+# silenceremove must not truncate speech (2026-05-18 HA Green banter outage)
+# ---------------------------------------------------------------------------
+
+
+def test_normalize_silenceremove_uses_negative_stop_periods(mock_subprocess):
+    """silenceremove stop_periods must be negative on BOTH the loudnorm and fast
+    filter chains.
+
+    A positive stop_periods makes ffmpeg's silenceremove halt output at the FIRST
+    silence period, truncating multi-phrase host lines at their first pause (~1.6s).
+    The 2026-05-18 HA Green run rejected every banter for 4+ hours because of this.
+    A negative stop_periods trims trailing silence only.
+    """
+    mock_run, _ = mock_subprocess
+    for loudnorm in (True, False):
+        mock_run.reset_mock()
+        with patch("mammamiradio.audio.normalizer.measure_lufs", return_value=-25.0):
+            normalize(Path("/tmp/in.mp3"), Path("/tmp/out.mp3"), loudnorm=loudnorm)
+        cmd = mock_run.call_args[0][0]
+        audio_filter = cmd[cmd.index("-filter:a") + 1]
+        assert "silenceremove" in audio_filter
+        assert "stop_periods=-1" in audio_filter, f"loudnorm={loudnorm}: {audio_filter}"
+        assert "stop_periods=1" not in audio_filter, (
+            f"loudnorm={loudnorm}: a positive stop_periods truncates host speech at its first pause: {audio_filter}"
+        )
+
+
+def test_normalize_fast_path_preserves_speech_with_internal_pauses(tmp_path):
+    """normalize(loudnorm=False) must NOT truncate a host line at its internal pauses.
+
+    Behavioural guard for the 2026-05-18 HA Green banter outage: silenceremove with a
+    positive stop_periods halts output at the first silence period, collapsing every
+    multi-phrase host line to ~1.6s. Builds a 7.6s line (speech with three internal
+    0.4s pauses) and asserts it survives the per-line fast-path encode intact.
+    """
+    from mammamiradio.audio.normalizer import probe_duration_sec
+
+    line = tmp_path / "host_line.mp3"
+    subprocess.run(
+        [
+            "ffmpeg",
+            "-y",
+            "-loglevel",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=frequency=300:duration=7.6:sample_rate=44100",
+            "-af",
+            "volume=0:enable='between(t,1.3,1.7)+between(t,3.3,3.7)+between(t,5.7,6.1)'",
+            str(line),
+        ],
+        check=True,
+    )
+    line_dur = probe_duration_sec(line)
+    assert line_dur is not None and line_dur > 7.0, f"fixture line too short: {line_dur}"
+
+    out = tmp_path / "host_line_norm.mp3"
+    normalize(line, out, loudnorm=False)
+    out_dur = probe_duration_sec(out)
+
+    assert out_dur is not None, "normalize produced an unprobeable file"
+    assert out_dur > line_dur * 0.8, (
+        f"normalize() truncated host speech to {out_dur:.2f}s of {line_dur:.2f}s. "
+        f"silenceremove stop_periods must stay negative (trailing-only trim), "
+        f"else multi-phrase banter is rejected as implausibly short."
+    )
