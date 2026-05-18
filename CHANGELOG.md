@@ -6,15 +6,13 @@ The current version source of truth is `pyproject.toml`.
 
 ## [Unreleased]
 
+## [2.12.4] - 2026-05-18
+
 ### Added
 
 - **Runtime provider transparency** — `GET /status` now includes `runtime_status` with health_state, a providers map (primary/current/fallback for audio source, script provider, and TTS provider), and recent failover events. The admin Engine Room shows a header health dot and a Runtime Status card with live primary/fallback state. Provider switch events are logged as `provider_switch_event` with structured fields. Fallback detection covers all producer rescue paths: norm-cache bridges, emergency tone, silence fallback, and `fallback_*` audio sources.
 - **HA Green performance smoke gate** — `make perf-smoke` now runs a runtime check against a live station, validating `/healthz`, `/readyz`, `/public-status`, and `/stream` first-byte latency with configurable HA Green thresholds.
 - **Edge add-on (development channel)** — A second Home Assistant add-on, **Mamma Mi Radio (Edge)**, now ships from the same repository. It tracks the latest `main` build: its version is a calendar version bumped automatically by CI on every add-on-changing merge, so Home Assistant shows a normal in-place "Update" each time. The stable **Mamma Mi Radio** add-on is unchanged and still updates only on deliberate releases. Edge and stable share one image and cannot run simultaneously (both bind port 8000) — install one. See `docs/runbooks/ha-addon.md` for switching instructions.
-
-### Fixed
-
-- **`io.hass.*` labels now correctly embedded in every build variant** — The add-on Dockerfile now injects `io.hass.version`, `io.hass.type`, and `io.hass.arch` from build-args for all three CI build paths (stable, edge seed, edge calver). A missing-labels gate in `scripts/validate-addon.sh` and a scoped test ensure the contract holds. Local Docker builds without `--build-arg` now emit `io.hass.version=unknown` rather than an empty string, making the missing-arg case visible instead of silent.
 
 ### Changed
 
@@ -24,8 +22,10 @@ The current version source of truth is `pyproject.toml`.
 
 ### Fixed
 
+- **`io.hass.*` labels now correctly embedded in every build variant** — The add-on Dockerfile now injects `io.hass.version`, `io.hass.type`, and `io.hass.arch` from build-args for all three CI build paths (stable, edge seed, edge calver). A missing-labels gate in `scripts/validate-addon.sh` and a scoped test ensure the contract holds. Local Docker builds without `--build-arg` now emit `io.hass.version=unknown` rather than an empty string, making the missing-arg case visible instead of silent.
 - **Spoken host segment assembly is stricter.** Generated multi-line banter now rejects broken intermediate TTS line files, strict concat duration shortfalls, and implausibly short multi-line exchanges before they can reach the listener queue.
 - **Cache rescue no longer repeats the first cached song by filename.** Empty-queue fallback now avoids the current/recent song when alternatives exist and randomizes the rescue candidate, preventing skip from landing back on the same cached track.
+- **Admin control touch targets now meet the 44 px WCAG minimum.** Mode-control switches and other admin controls expand their tap area to at least 44×44 px without enlarging the visible control.
 
 ## [2.12.3] - 2026-05-17
 

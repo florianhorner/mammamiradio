@@ -1,5 +1,17 @@
 # Changelog
 
+## 2.12.4
+
+### Added
+
+- **Edge add-on (development channel)** — A second add-on, **Mamma Mi Radio (Edge)**, now ships from this repository and tracks the latest development build. Install the stable **Mamma Mi Radio** add-on for daily listening; Edge is for testing. The two share one image and cannot run at the same time (both use port 8000).
+- **Runtime status in the Engine Room** — The admin Engine Room now shows a live health indicator and a Runtime Status card: which audio, script, and voice providers are active, plus any recent fallbacks.
+
+### Fixed
+
+- **Spoken host segments are assembled more strictly.** Broken or implausibly short multi-line banter is now rejected before it can reach the listener, instead of playing a malformed segment.
+- **Admin control touch targets meet the 44 px accessibility minimum.** Mode toggles and other admin controls are easier to tap on phones and tablets.
+
 ## 2.12.3
 
 ### Added
