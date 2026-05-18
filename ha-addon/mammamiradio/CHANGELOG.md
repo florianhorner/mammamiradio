@@ -1,5 +1,12 @@
 # Changelog
 
+## 2.12.5
+
+### Fixed
+
+- **Banter hosts can no longer fall silent for an entire session.** A per-line voice normalizer setting was trimming banter audio at the first pause, collapsing multi-line host exchanges to about a second. The clip was then rejected as too short. Silence trimming now removes only trailing silence.
+- **Music downloads can no longer stall the audio pipeline.** A 30-second socket timeout now applies to all yt-dlp network operations. A stalled YouTube connection previously blocked a download thread forever, which could exhaust the async pool shared with audio playback. Timed-out downloads now fail fast and fall back to the silence placeholder.
+
 ## 2.12.4
 
 ### Added

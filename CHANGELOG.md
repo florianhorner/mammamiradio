@@ -6,6 +6,8 @@ The current version source of truth is `pyproject.toml`.
 
 ## [Unreleased]
 
+## [2.12.5] - 2026-05-19
+
 ### Fixed
 
 - **Host banter is no longer truncated to its first phrase.** Per-line voice
@@ -13,6 +15,12 @@ The current version source of truth is `pyproject.toml`.
   pause, collapsing multi-line host exchanges to a second or two. The shortened
   audio was then rejected as too short, so the hosts could fall silent for an
   entire session. Silence trimming now removes trailing silence only.
+- **yt-dlp downloads no longer hang indefinitely on a stalled network connection.**
+  A 30-second socket timeout is now set on both track downloads and metadata
+  searches. Without it, a stalled YouTube socket could block a download thread
+  permanently, leaking a slot from the shared async executor pool that the audio
+  pipeline also uses. Stalled downloads now fail fast and fall back to the silence
+  placeholder, keeping the queue healthy.
 
 ## [2.12.4] - 2026-05-18
 
