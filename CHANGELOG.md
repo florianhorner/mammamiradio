@@ -6,6 +6,14 @@ The current version source of truth is `pyproject.toml`.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Host banter is no longer truncated to its first phrase.** Per-line voice
+  normalization trimmed silence with a setting that stopped output at the first
+  pause, collapsing multi-line host exchanges to a second or two. The shortened
+  audio was then rejected as too short, so the hosts could fall silent for an
+  entire session. Silence trimming now removes trailing silence only.
+
 ## [2.12.4] - 2026-05-18
 
 ### Added
