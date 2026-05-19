@@ -229,6 +229,22 @@ def test_on_air_sticky_strip_survives_scrolling() -> None:
     )
 
 
+def test_on_air_zone_renders_ai_cost_counter() -> None:
+    """The On Air zone must carry the AI cost counter (`sidebarCost`).
+
+    The token-cost counter has silently disappeared in two prior admin
+    refactors (see memory `feedback_token_cost_counter.md`). The sticky strip
+    test guards `topBarCost`; this guards the always-visible On Air copy so a
+    future zone rewrite cannot drop it without a red test.
+    """
+    text = _read_admin_html()
+    zone = text[
+        text.index('id="on-air"') : text.index('class="a-topbar producer-sticky-strip"')
+    ]
+    assert 'id="sidebarCost"' in zone, "On Air zone must contain the AI cost counter <b id=\"sidebarCost\">."
+    assert "getElementById('sidebarCost')" in text, "updateEngineRoom() must write the cost into sidebarCost."
+
+
 def test_programme_action_buttons_have_44px_touch_targets() -> None:
     """Scaletta action buttons may be visually compact, but the button box must be tappable."""
     _assert_touch_target(".a-programme .ac button")
@@ -353,7 +369,10 @@ def test_scaletta_actions_only_apply_to_rendered_queue_rows() -> None:
     render_block = text[text.index("function renderProgramme") : text.index("async function removeQueueItem")]
 
     assert "const actionable=source==='rendered_queue'" in render_block
-    assert 'onclick="event.stopPropagation();removeQueueItem(${it._queueIndex},this)"' in render_block
+    # Removal targets the stable queue id, not the row index — the index shifts
+    # whenever the streamer consumes the head segment.
+    assert "removeQueueItem('${escJs(it.id||'')}',this)" in render_block
+    assert "${it._queueIndex}" not in render_block.split("removeQueueItem")[1].split(")")[0]
     assert "disabled>·</button>" in render_block
     assert "'/api/queue/remove'" in text
 

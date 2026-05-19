@@ -1916,16 +1916,23 @@ async def panic_cut(request: Request, _: None = Depends(require_admin_access)):
 
 @router.post("/api/queue/remove")
 async def queue_remove_item(request: Request, _: None = Depends(require_admin_access)):
-    """Remove a single pre-produced segment from the queue by shadow-list index.
+    """Remove a single pre-produced segment from the queue.
 
-    Drains the asyncio.Queue, removes the item at the given index, then re-pushes
-    the remaining segments. The queue is empty for ~1ms during the operation; the
-    streamer's 30-second empty-queue countdown resets as soon as items land back.
+    Identity vs position: the admin UI renders a row, then the click arrives
+    after a network round-trip. In that window the streamer can consume the
+    head segment, shifting every shadow-list index down by one. So callers
+    SHOULD pass a stable ``id`` (the ``queue_id`` stamped by the producer);
+    the legacy ``index`` path is kept for older callers and is position-based.
+
+    The drain-and-repush below uses only synchronous queue operations
+    (``get_nowait``/``put_nowait`` on an unbounded queue), so no ``await`` runs
+    between draining the real queue and mutating the ``queued_segments`` shadow
+    list. The producer and streamer therefore cannot interleave and leave the
+    two views of the queue divergent.
     """
     body = await request.json()
+    seg_id = body.get("id")
     index = body.get("index")
-    if not isinstance(index, int):
-        raise HTTPException(status_code=422, detail="index must be an integer")
 
     state = request.app.state.station_state
     q = request.app.state.queue
@@ -1933,15 +1940,31 @@ async def queue_remove_item(request: Request, _: None = Depends(require_admin_ac
     if not state.queued_segments:
         return {"ok": True, "removed": None}
 
-    if index < 0 or index >= len(state.queued_segments):
-        raise HTTPException(
-            status_code=422,
-            detail=f"index {index} out of range (queue has {len(state.queued_segments)} items)",
+    if isinstance(seg_id, str) and seg_id:
+        # Identity path: resolve the current shadow-list position from the id.
+        index = next(
+            (i for i, seg in enumerate(state.queued_segments) if seg.get("id") == seg_id),
+            None,
         )
+        if index is None:
+            # Segment already played out (or was removed) — nothing to do.
+            return {"ok": True, "removed": None}
+    elif isinstance(index, int):
+        # Legacy position path.
+        if index < 0 or index >= len(state.queued_segments):
+            raise HTTPException(
+                status_code=422,
+                detail=f"index {index} out of range (queue has {len(state.queued_segments)} items)",
+            )
+    else:
+        raise HTTPException(status_code=422, detail="index must be an integer")
 
-    removed_label = state.queued_segments[index].get("label", "unknown")
+    shadow_entry = state.queued_segments[index]
+    removed_label = shadow_entry.get("label", "unknown")
+    target_id = shadow_entry.get("id")
 
-    # Drain the asyncio.Queue into a list, remove item N, re-push rest.
+    # Synchronous drain + repush — no await points until the shadow list is
+    # back in sync, so the producer/streamer cannot interleave.
     items: list = []
     while not q.empty():
         try:
@@ -1949,15 +1972,24 @@ async def queue_remove_item(request: Request, _: None = Depends(require_admin_ac
         except asyncio.QueueEmpty:
             break
 
-    if index < len(items):
+    # Remove the matching Segment from the real queue. Match by queue_id when
+    # available (position-independent); fall back to index alignment otherwise.
+    real_removed = False
+    if target_id:
+        for i, seg in enumerate(items):
+            if getattr(seg, "metadata", {}).get("queue_id") == target_id:
+                items.pop(i)
+                real_removed = True
+                break
+    if not real_removed and index < len(items):
         items.pop(index)
 
     for item in items:
-        await q.put(item)
+        q.put_nowait(item)
 
     state.queued_segments.pop(index)
 
-    logger.info("Queue item %d removed by admin: %s", index, removed_label)
+    logger.info("Queue item removed by admin: %s (id=%s)", removed_label, target_id or "n/a")
     return {"ok": True, "removed": removed_label}
 
 

@@ -717,14 +717,6 @@ body::before {
 .a-now-compact .progress-fill[data-t="news_flash"] { background: var(--news); }
 .a-now-compact .progress-time { font-family: var(--font-mono); font-size: 10px; color: var(--muted); }
 
-/* Nav */
-.a-nav { display: flex; flex-direction: column; gap: 2px; }
-.a-nav-head { font-size: 9px; font-weight: 700; letter-spacing: 0.22em; text-transform: uppercase; color: var(--muted); margin: 8px 6px 4px; }
-.a-nav a { display: block; padding: 13px 10px; font-size: 13px; font-weight: 500; color: var(--cream-dk); border-radius: 6px; cursor: pointer; transition: background 150ms, color 150ms; text-decoration: none; }
-.a-nav a:hover { background: rgba(245,237,216,0.04); color: var(--cream); }
-.a-nav a.active { background: rgba(236,204,48,0.12); color: var(--sun); }
-.a-nav a:focus-visible { outline: none; box-shadow: inset 0 0 0 1px var(--sun2); }
-
 /* Engine status */
 .a-engine-status { margin-top: auto; padding-top: 14px; border-top: 1px solid var(--line); }
 .a-engine-status .eyebrow { font-size: 9px; font-weight: 700; letter-spacing: 0.22em; text-transform: uppercase; color: var(--muted); margin-bottom: 10px; }
@@ -1208,7 +1200,7 @@ body[data-stopped="true"] .a-station-card .dot.on { animation-play-state: paused
   .a-programme tr.pool-pass { display: none; }
 }
 
-/* ══ PRODUCER DESK STAGE 1 ══ */
+/* ══ PRODUCER DESK ══ */
 .a-app.producer-desk {
   display: block;
   min-height: 100vh;
@@ -1632,7 +1624,7 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
       </div>
       <div class="meta">
         <div class="eyebrow">In Onda Ora</div>
-        <div class="np-title" id="topBarTitle">In attesa del segnale… <span class="by" id="topBarArtist"></span></div>
+        <div class="np-title" id="topBarTitle"><span id="topBarTitleText">In attesa del segnale… </span><span class="by" id="topBarArtist"></span></div>
       </div>
       <div class="topbar-cost">
         <span class="lbl">Costo AI</span>
@@ -2063,8 +2055,8 @@ function initOnAirSticky(){
   const onAir=document.getElementById('on-air');
   if(!onAir||!('IntersectionObserver' in window))return;
   const observer=new IntersectionObserver(entries=>{
-    const visible=entries[0]?.isIntersecting;
-    document.body.setAttribute('data-sticky-onair',visible?'false':'true');
+    const next=entries[entries.length-1]?.isIntersecting?'false':'true';
+    if(document.body.getAttribute('data-sticky-onair')!==next)document.body.setAttribute('data-sticky-onair',next);
   },{threshold:0,rootMargin:'-10px 0px 0px 0px'});
   observer.observe(onAir);
 }
@@ -2168,7 +2160,6 @@ async function toggleFestivalMode(el){
     el.disabled=false;
   }
 }
-async function doShuffle(el){flash(el);await api('POST','/api/shuffle');toast('Playlist mescolata')}
 async function doPurge(el){flash(el);const r=await api('POST','/api/purge');toast('Coda svuotata: '+r.purged+' segmenti')}
 async function doStop(el){flash(el);await api('POST','/api/stop');toast('Sessione fermata');updateStopState(true)}
 async function doResume(el){flash(el);await api('POST','/api/resume');toast('Sessione ripresa');updateStopState(false)}
@@ -2219,9 +2210,9 @@ function updateNow(ns){
     document.getElementById('nowElapsed').textContent='—';
     const pf=document.getElementById('progFill');
     if(pf){pf.style.width='0';pf.setAttribute('data-t','music');}
-    const topBarTitle=document.getElementById('topBarTitle');
+    const topBarTitleText=document.getElementById('topBarTitleText');
     const topBarArtist=document.getElementById('topBarArtist');
-    if(topBarTitle)topBarTitle.firstChild.nodeValue='In attesa del segnale… ';
+    if(topBarTitleText)topBarTitleText.textContent='In attesa del segnale… ';
     if(topBarArtist)topBarArtist.textContent='';
     if(_tick){clearInterval(_tick);_tick=null;_prevLabel='';}
     return;
@@ -2247,9 +2238,9 @@ function updateNow(ns){
   }
   titleEl.textContent=title;
   // Update TopBar
-  const topBarTitle=document.getElementById('topBarTitle');
+  const topBarTitleText=document.getElementById('topBarTitleText');
   const topBarArtist=document.getElementById('topBarArtist');
-  if(topBarTitle)topBarTitle.firstChild.nodeValue=title+' ';
+  if(topBarTitleText)topBarTitleText.textContent=title+' ';
   if(topBarArtist)topBarArtist.textContent=artistEl.textContent;
   document.getElementById('progFill').setAttribute('data-t',typeKey);
   const dur=ns.metadata?.duration_ms?ns.metadata.duration_ms/1000:typeKey==='music'?240:typeKey==='banter'?30:typeKey==='ad'?60:20;
@@ -2326,7 +2317,7 @@ function renderProgramme(st){
     const rowClass=[it._queueIndex===0?'next':'', actionable?'rendered-queue':'predicted'].filter(Boolean).join(' ');
     const sourceText=actionable?(parts.artist||it.source_kind||'rendered'):(parts.artist||'pianificato');
     const action=actionable
-      ? `<button type="button" class="queue-remove-btn" title="Rimuovi dalla scaletta" onclick="event.stopPropagation();removeQueueItem(${it._queueIndex},this)">×</button>`
+      ? `<button type="button" class="queue-remove-btn" title="Rimuovi dalla scaletta" onclick="event.stopPropagation();removeQueueItem('${escJs(it.id||'')}',this)">×</button>`
       : '<button type="button" class="queue-remove-btn" title="Elemento pianificato" disabled>·</button>';
     rows.push(`<tr class="${rowClass}" ${clickAttrs}><td class="ts">${relLabel(it._queueIndex)}</td><td>${segmentInline(typeKey)}</td><td class="ti">${esc(titleText||segmentText(typeKey))}</td><td class="ho">${esc(sourceText)}</td><td class="du">${fmtDur(it,typeKey)}</td><td class="ac">${action}</td></tr>`);
   });
@@ -2340,14 +2331,18 @@ function renderProgramme(st){
 
   if(rows.length){
     el.innerHTML=`<table class="a-programme"><colgroup><col class="col-time"><col class="col-type"><col class="col-title"><col class="col-host"><col class="col-duration"><col class="col-action"></colgroup><thead><tr><th>Quando</th><th>Tipo</th><th>Titolo</th><th>Fonte</th><th>Durata</th><th></th></tr></thead><tbody>${rows.join('')}</tbody></table>`;
+  }else if(document.body.getAttribute('data-stopped')==='true'){
+    el.innerHTML='<div class="prog-empty">Stazione in pausa — premi Avvia per ripartire.</div>';
   }else{
     el.innerHTML='<div class="prog-empty">Sto preparando il prossimo segmento...</div>';
   }
 }
 
-async function removeQueueItem(index,el){
+async function removeQueueItem(id,el){
   flash(el);
-  const r=await api('POST','/api/queue/remove',{index});
+  // Pass the stable queue id, not a row index — the streamer may consume the
+  // head segment between render and click, which would shift every index.
+  const r=await api('POST','/api/queue/remove',{id});
   if(r.ok){
     toast('Rimosso: '+(r.removed||'segmento'));
     _lastProgrammeHash='';
@@ -2755,9 +2750,6 @@ function initDragDrop(){
   });
 }
 
-// ── Navigation helpers ──
-function scrollToSection(id){const el=document.getElementById(id);if(el)el.scrollIntoView({behavior:'smooth',block:'start'});}
-
 // ── Pacing slider fill helper ──
 function updatePaceVal(inputId,valId,v){
   const el=document.getElementById(valId);if(el)el.textContent=v;
@@ -3094,6 +3086,7 @@ async function refreshFast(){
       try { localStorage.setItem('stationName', _st.station); } catch (_) {}
     }
     const lrData=lrr.ok?await lrr.json():{requests:[]};
+    if(_st.session_stopped!==undefined)updateStopState(_st.session_stopped);
     updateNow(_st.now_streaming);
     renderProgramme(_st);
     updateRecent(_st);
@@ -3105,7 +3098,6 @@ async function refreshFast(){
     updateEngineRoom(_st,_caps);
     updateSourceControls(_st,_caps);
     updateChaosState(_st.chaos_mode);
-    if(_st.session_stopped!==undefined)updateStopState(_st.session_stopped);
     if(!_paceOk&&_st.pacing){_paceOk=true;
       document.getElementById('pBanter').value=_st.pacing.songs_between_banter;updatePaceVal('pBanter','pvBanter',_st.pacing.songs_between_banter);
       document.getElementById('pAds').value=_st.pacing.songs_between_ads;updatePaceVal('pAds','pvAds',_st.pacing.songs_between_ads);

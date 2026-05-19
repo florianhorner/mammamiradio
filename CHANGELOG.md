@@ -6,6 +6,17 @@ The current version source of truth is `pyproject.toml`.
 
 ## [Unreleased]
 
+### Added
+
+- **Admin producer desk** — The `/admin` panel is reorganized around the live
+  broadcast: an On Air zone (current segment, transport controls, running AI
+  cost), a Live Queue holding the forward Scaletta, and a Rotation Pool, with
+  secondary controls tucked into collapsible drawers. A new
+  `POST /api/queue/remove` endpoint (admin auth) lets operators drop a single
+  queued segment without clearing the whole queue. Removal targets a stable
+  segment id, so a track that scrolls off the head between rendering the row
+  and clicking can never be removed by mistake.
+
 ### Fixed
 
 - **Host banter is no longer truncated to its first phrase.** Per-line voice
