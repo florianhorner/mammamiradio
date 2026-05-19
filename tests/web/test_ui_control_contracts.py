@@ -466,10 +466,7 @@ class TestQueueRemoveEndpoint:
 
         ``entries`` is a list of ``(queue_id, label)`` pairs.
         """
-        shadow = [
-            {"id": qid, "type": "music", "label": label, "metadata": {"title": label}}
-            for qid, label in entries
-        ]
+        shadow = [{"id": qid, "type": "music", "label": label, "metadata": {"title": label}} for qid, label in entries]
         app = _make_app(shadow=shadow, queue_items=0)
         for qid, label in entries:
             seg = _make_seg(label)
@@ -1047,12 +1044,9 @@ class TestStoppedStateQuietsTheUI:
             "renderProgramme() must branch on body[data-stopped] so the empty "
             "Scaletta distinguishes a paused station from one building its queue."
         )
-        assert "Stazione in pausa" in block, (
-            "renderProgramme() stopped branch must render the paused-state copy."
-        )
+        assert "Stazione in pausa" in block, "renderProgramme() stopped branch must render the paused-state copy."
         assert "Sto preparando il prossimo segmento" in block, (
-            "renderProgramme() must keep the building-queue copy for the "
-            "running-but-empty case."
+            "renderProgramme() must keep the building-queue copy for the running-but-empty case."
         )
 
     def test_refresh_fast_syncs_stop_state_from_status_poll(self):
@@ -1062,12 +1056,9 @@ class TestStoppedStateQuietsTheUI:
         html = ADMIN_HTML.read_text()
         block = html[html.index("async function refreshFast") :]
         block = block[: block.index("\n}")]
-        assert "session_stopped" in block, (
-            "refreshFast() must read session_stopped from the status payload."
-        )
+        assert "session_stopped" in block, "refreshFast() must read session_stopped from the status payload."
         assert "updateStopState" in block, (
-            "refreshFast() must call updateStopState() so the poll keeps the "
-            "stopped UI in sync with the server."
+            "refreshFast() must call updateStopState() so the poll keeps the stopped UI in sync with the server."
         )
 
 

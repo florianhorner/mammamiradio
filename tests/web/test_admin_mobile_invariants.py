@@ -238,10 +238,8 @@ def test_on_air_zone_renders_ai_cost_counter() -> None:
     future zone rewrite cannot drop it without a red test.
     """
     text = _read_admin_html()
-    zone = text[
-        text.index('id="on-air"') : text.index('class="a-topbar producer-sticky-strip"')
-    ]
-    assert 'id="sidebarCost"' in zone, "On Air zone must contain the AI cost counter <b id=\"sidebarCost\">."
+    zone = text[text.index('id="on-air"') : text.index('class="a-topbar producer-sticky-strip"')]
+    assert 'id="sidebarCost"' in zone, 'On Air zone must contain the AI cost counter <b id="sidebarCost">.'
     assert "getElementById('sidebarCost')" in text, "updateEngineRoom() must write the cost into sidebarCost."
 
 
