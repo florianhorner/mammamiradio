@@ -187,6 +187,35 @@ If `[homeassistant].enabled = true` and `HA_TOKEN` is present:
 
 This is opportunistic context, not a hard dependency. Failures there should not stop the station.
 
+### Timer interrupt flow
+
+When a HA timer fires, the station immediately interrupts playback with a pissed/urgent host segment:
+
+```
+HA timer fires (timer.xyz → idle)
+    ↓
+ha_context.py: lightweight 5s poll detects idle transition (separate from 60s full fetch)
+    ↓
+check_reactive_triggers() → InterruptSpec(directive, urgency, cooldown)
+    ↓
+producer.py: _fire_interrupt(state, spec, queue, skip_event)
+  1. Load alert.mp3 from assets/sfx/ → state.interrupt_slot
+  2. Drain lookahead queue (no buffered music leaks between bridge and banter)
+  3. state.ha_pending_directive = spec.directive
+  4. state.chaos_pending = ChaosSubtype.URGENT_INTERRUPT  (pissed tone)
+  5. skip_event.set()  ← skips currently playing segment
+    ↓
+run_playback_loop: interrupt_slot checked before queue.get() → bridge plays (≤2s)
+    ↓
+Producer generates URGENT_INTERRUPT banter with directive (async, LLM)
+    ↓
+Pissed banter plays after bridge
+```
+
+Timer interrupts are configured via `[[ha.timer_interrupt]]` blocks in `radio.toml`. Timer entity IDs are added to the HA polling set via `extra_entities` at call time without mutating the module-level entity lists.
+
+The same mechanism is callable directly via `POST /api/interrupt` (admin auth, 60s cooldown) — any HA automation can inject a custom directive without `radio.toml` configuration.
+
 ## Access model
 
 ### Route table
@@ -240,6 +269,7 @@ This is opportunistic context, not a hard dependency. Failures there should not 
 | `/api/listener-requests/dismiss` | POST | Admin | Dismiss a pending listener request by `ts` (legacy) or `request_id` (canonical) |
 | `/api/search` | GET | Admin | Search playlist and external sources |
 | `/api/playlist/add-external` | POST | Admin | Add external track from search results |
+| `/api/interrupt` | POST | Admin | Immediately interrupt the stream — hosts deliver pissed/urgent banter with a custom directive. Body: `{"directive": str, "urgency": "pissed"\|"urgent"\|"gentle"}`. 60s cooldown enforced; returns 429 on spam. |
 | `/api/hot-reload` | POST | Admin | Reload `scriptwriter.py` in-place via `importlib.reload()` — stream continues uninterrupted, next banter uses new code. Requires `--workers 1`. |
 
 ### Auth rules
