@@ -17,6 +17,8 @@ from typing import TypedDict
 
 import httpx
 
+from mammamiradio.core.config import TimerInterruptConfig
+from mammamiradio.core.models import InterruptSpec
 from mammamiradio.home.ha_enrichment import (
     EVENT_BUFFER_SIZE,
     HomeEvent,
@@ -738,20 +740,50 @@ def get_weather_arc_en() -> str:
 def check_reactive_triggers(
     events: deque[HomeEvent],
     current_states: dict[str, dict] | None = None,
-) -> str | None:
+    timer_interrupts: list[TimerInterruptConfig] | None = None,
+) -> str | InterruptSpec | None:
     """Scan recent events and current sensor states for reactive triggers.
 
     Event-based triggers (REACTIVE_TRIGGERS) only consider events less than 2
     minutes old. Threshold triggers (THRESHOLD_TRIGGERS) check the live sensor
     value against a wattage threshold each call; the cooldown prevents re-firing.
-    Both share the module-level _reactive_cooldowns dict with namespaced keys to
-    avoid collision: event keys use "entity:state", threshold keys use
-    "entity:threshold:value".
+    Timer interrupts match timer.xyz → idle transitions and return InterruptSpec.
+    All checks share the module-level _reactive_cooldowns dict with namespaced keys
+    to avoid collision: event keys use "entity:state", threshold keys use
+    "entity:threshold:value", timer keys use "timer:entity_id".
 
-    Returns the first matching directive text, or None.
+    Returns InterruptSpec for timer matches, directive str for other triggers, or None.
     """
     now = time.time()
     age_cutoff = now - 120  # 2 minutes
+
+    # Timer interrupt check: match timer entity idle transitions from recent events.
+    # Checked first — timers take priority over ambient banter triggers.
+    if timer_interrupts and current_states is not None:
+        for cfg in timer_interrupts:
+            state_data = current_states.get(cfg.entity_id, {})
+            if state_data.get("state") != "idle":
+                continue
+            cooldown_key = f"timer:{cfg.entity_id}"
+            if now - _reactive_cooldowns.get(cooldown_key, 0.0) < cfg.cooldown:
+                continue
+            # Confirm via events: a recent active→idle transition must exist
+            fired = False
+            for event in reversed(events):
+                if event.timestamp < age_cutoff:
+                    break
+                if event.entity_id == cfg.entity_id and event.new_state == "idle":
+                    fired = True
+                    break
+            if not fired:
+                continue
+            _reactive_cooldowns[cooldown_key] = now
+            return InterruptSpec(
+                directive=cfg.directive,
+                urgency=cfg.urgency,
+                cooldown=cfg.cooldown,
+            )
+
     for event in reversed(events):
         if event.timestamp < age_cutoff:
             break
@@ -806,6 +838,7 @@ async def fetch_home_context(
     ha_token: str,
     poll_interval: float = 60.0,
     _cache: HomeContext | None = None,
+    extra_entities: set[str] | None = None,
 ) -> HomeContext:
     """Fetch current home state from HA REST API.
 
@@ -839,9 +872,10 @@ async def fetch_home_context(
         resp.raise_for_status()
         all_states = resp.json()
 
-        # Filter to our curated entities
+        # Filter to our curated entities plus any extra entities (e.g. timer interrupts)
         entity_map = {e["entity_id"]: e for e in all_states}
-        relevant = {eid: entity_map[eid] for eid in ALL_ENTITIES if eid in entity_map}
+        watch_entities = ALL_ENTITIES + list(extra_entities or [])
+        relevant = {eid: entity_map[eid] for eid in watch_entities if eid in entity_map}
 
         timestamp = time.time()
         old_states = effective_cache.raw_states if effective_cache else {}
