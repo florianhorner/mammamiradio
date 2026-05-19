@@ -817,14 +817,15 @@ class TestPacingControlsMatchServerContract:
         assert "songs_between_banter:+document.getElementById('pBanter').value" not in html
 
     def test_admin_pacing_save_applies_response_and_resyncs_on_rejection(self):
-        """Slider saves must re-render from the server response and roll back
-        to last known server state when a PATCH is rejected with `detail`."""
+        """Slider saves must re-render only their own field from the server
+        response and roll that field back when a PATCH is rejected."""
         html = ADMIN_HTML.read_text()
 
-        assert "applyPacingResponse(r)" in html
-        # On a rejected save the slider re-syncs from the last server snapshot.
+        # A save re-renders only the field it patched, never sibling sliders.
+        assert "applyPacingResponse(r,field)" in html
+        # On a rejected save the field re-syncs from the last server snapshot.
         assert "if(r&&r.detail){" in html
-        assert "if(!stale&&_st.pacing)applyPacingResponse(_st.pacing);" in html
+        assert "if(_st.pacing)applyPacingResponse(_st.pacing,field);" in html
 
     def test_admin_quick_pacing_actions_check_save_result(self):
         """less_banter / too_many_ads must not toast success on a failed save."""
@@ -832,8 +833,9 @@ class TestPacingControlsMatchServerContract:
 
         assert "savePacingField('songs_between_banter',v,{silent:true})" in html
         assert "savePacingField('songs_between_ads',v,{silent:true})" in html
-        # Stale out-of-order responses must not roll newer slider state back.
-        assert "const stale=mySeq!==_paceSeq;" in html
+        # Per-field sequence guard: a stale response cannot roll the field back.
+        assert "_paceSeq[field]" in html
+        assert "if(mySeq===_paceSeq[field])applyPacingResponse(r,field)" in html
 
 
 class TestPoolDiagnosticsStayHidden:

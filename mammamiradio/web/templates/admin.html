@@ -2767,38 +2767,41 @@ const PACE_INPUTS={
   songs_between_ads:['pAds','pvAds'],
   ad_spots_per_break:['pSpots','pvSpots'],
 };
-function applyPacingResponse(pacing){
+function applyPacingResponse(pacing,onlyField){
+  // onlyField restricts the re-render to a single slider. A partial PATCH
+  // for one field must never rewrite a sibling slider the operator edited
+  // since — even though the server response carries the full snapshot.
   if(!pacing||pacing.detail)return;
-  Object.entries(PACE_INPUTS).forEach(([field,ids])=>{
+  const fields=onlyField?[onlyField]:Object.keys(PACE_INPUTS);
+  fields.forEach(field=>{
     if(pacing[field]===undefined)return;
-    const [inputId,valId]=ids;
+    const [inputId,valId]=PACE_INPUTS[field];
     const input=document.getElementById(inputId);
     if(input)input.value=pacing[field];
     updatePaceVal(inputId,valId,pacing[field]);
+    if(_st.pacing)_st.pacing[field]=pacing[field];
   });
-  if(_st.pacing)_st.pacing={..._st.pacing,...pacing};
   updatePaceCounters(_st.pacing||pacing);
 }
-let _paceSeq=0;
+// Per-field sequence: a slow earlier PATCH for one field must not roll that
+// field back once a newer save for the same field has been accepted.
+const _paceSeq={};
 async function savePacingField(field,value,{silent=false}={}){
-  // _paceSeq guards against out-of-order responses: a slow earlier PATCH
-  // must not roll the sliders back over a newer accepted value.
-  const mySeq=++_paceSeq;
+  const mySeq=(_paceSeq[field]=(_paceSeq[field]||0)+1);
   try{
     const r=await api('PATCH','/api/pacing',{[field]:+value});
-    const stale=mySeq!==_paceSeq;
     if(r&&r.detail){
       toast('Cadenza non salvata: '+r.detail);
-      if(!stale&&_st.pacing)applyPacingResponse(_st.pacing);
+      if(_st.pacing)applyPacingResponse(_st.pacing,field);
       await refreshFast();
       return false;
     }
-    if(!stale)applyPacingResponse(r);
+    if(mySeq===_paceSeq[field])applyPacingResponse(r,field);
     if(!silent)toast('Cadenza salvata');
     return true;
   }catch(_){
     toast('Cadenza non salvata: errore di rete');
-    if(mySeq===_paceSeq&&_st.pacing)applyPacingResponse(_st.pacing);
+    if(_st.pacing)applyPacingResponse(_st.pacing,field);
     return false;
   }
 }
