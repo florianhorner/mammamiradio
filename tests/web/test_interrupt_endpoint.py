@@ -19,6 +19,12 @@ from mammamiradio.web.streamer import LiveStreamHub, router
 TOML_PATH = str(Path(__file__).resolve().parents[2] / "radio.toml")
 
 
+def _fake_tone(path: Path, *_args, **_kwargs) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.touch()
+    return path
+
+
 def _make_test_app(*, admin_token: str = "test-token") -> FastAPI:
     app = FastAPI()
     app.include_router(router)
@@ -147,7 +153,7 @@ def test_interrupt_fires_after_cooldown_expires():
 
 
 @pytest.mark.asyncio
-async def test_fire_interrupt_drains_queue_and_fires_skip():
+async def test_fire_interrupt_drains_queue_and_fires_skip(tmp_path: Path):
     """Scenario 1: interrupt fires → queue drained, skip_event set, directive injected."""
     from mammamiradio.scheduling.producer import _fire_interrupt
 
@@ -158,29 +164,33 @@ async def test_fire_interrupt_drains_queue_and_fires_skip():
     skip_event = asyncio.Event()
 
     # Pre-fill queue with buffered segments
-    dummy_path = Path("/tmp/dummy_test_segment.mp3")
+    dummy_path = tmp_path / "dummy_test_segment.mp3"
     dummy_path.touch()
     for _ in range(3):
         await queue.put(Segment(type=SegmentType.MUSIC, path=dummy_path, metadata={"type": "music"}, ephemeral=False))
+    state.queued_segments = [{"type": "music", "label": f"Queued {idx}"} for idx in range(3)]
 
     spec = InterruptSpec(directive="La pasta sta bruciando!", urgency="pissed", cooldown=60)
-    await _fire_interrupt(state, spec, queue, skip_event)
+    with patch("mammamiradio.scheduling.producer.generate_tone", side_effect=_fake_tone):
+        await _fire_interrupt(state, spec, queue, skip_event, bridge_tmp_dir=tmp_path)
 
     assert queue.empty(), "queue must be drained after interrupt"
+    assert state.queued_segments == [], "shadow queue must be cleared with the real queue"
     assert skip_event.is_set(), "skip_event must be set"
     assert state.ha_pending_directive == "La pasta sta bruciando!"
     assert state.chaos_pending == ChaosSubtype.URGENT_INTERRUPT
+    assert state.chaos_cutover_epoch == 1
     assert state.last_interrupt_ts > 0
 
 
 # ---------------------------------------------------------------------------
-# Scenario 2 (empty fallback): alert.mp3 absent → interrupt_slot is None
+# Scenario 2: alert.mp3 absent → generated bridge tone
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_fire_interrupt_no_bridge_when_alert_missing():
-    """Scenario 2: alert.mp3 absent → interrupt_slot=None, but interrupt still fires."""
+async def test_fire_interrupt_generates_bridge_when_alert_missing(tmp_path: Path):
+    """Scenario 2: alert.mp3 absent → generated bridge tone still gives immediate audio."""
     from mammamiradio.scheduling.producer import _fire_interrupt
 
     state = StationState(
@@ -190,12 +200,64 @@ async def test_fire_interrupt_no_bridge_when_alert_missing():
     skip_event = asyncio.Event()
     spec = InterruptSpec(directive="Svegliati!", urgency="urgent", cooldown=60)
 
-    with patch("mammamiradio.scheduling.producer._SFX_DIR", Path("/nonexistent")):
-        await _fire_interrupt(state, spec, queue, skip_event)
+    with (
+        patch("mammamiradio.scheduling.producer._SFX_DIR", Path("/nonexistent")),
+        patch("mammamiradio.scheduling.producer.generate_tone", side_effect=_fake_tone),
+    ):
+        await _fire_interrupt(state, spec, queue, skip_event, bridge_tmp_dir=tmp_path)
 
-    assert state.interrupt_slot is None
+    assert state.interrupt_slot is not None
+    assert state.interrupt_slot.exists()
+    assert state.interrupt_slot_ephemeral is True
     assert skip_event.is_set()
     assert state.ha_pending_directive == "Svegliati!"
+
+
+@pytest.mark.asyncio
+async def test_fire_interrupt_no_bridge_when_bridge_generation_fails(tmp_path: Path):
+    """Bridge generation failure must not block the interrupt directive."""
+    from mammamiradio.scheduling.producer import _fire_interrupt
+
+    state = StationState(
+        playlist=[Track(title="Song", artist="Artist", duration_ms=180_000, spotify_id="t1")],
+    )
+    queue: asyncio.Queue[Segment] = asyncio.Queue()
+    skip_event = asyncio.Event()
+    spec = InterruptSpec(directive="Svegliati!", urgency="urgent", cooldown=60)
+
+    with (
+        patch("mammamiradio.scheduling.producer._SFX_DIR", Path("/nonexistent")),
+        patch("mammamiradio.scheduling.producer.generate_tone", side_effect=RuntimeError("ffmpeg broken")),
+    ):
+        await _fire_interrupt(state, spec, queue, skip_event, bridge_tmp_dir=tmp_path)
+
+    assert state.interrupt_slot is None
+    assert state.interrupt_slot_ephemeral is False
+    assert skip_event.is_set()
+    assert state.ha_pending_directive == "Svegliati!"
+
+
+@pytest.mark.asyncio
+async def test_fire_interrupt_keeps_bundled_alert_reusable(tmp_path: Path):
+    """A checked-in alert.mp3 asset must not be marked ephemeral and deleted after first use."""
+    from mammamiradio.scheduling.producer import _fire_interrupt
+
+    sfx_dir = tmp_path / "sfx"
+    sfx_dir.mkdir()
+    alert = sfx_dir / "alert.mp3"
+    alert.touch()
+    state = StationState(
+        playlist=[Track(title="Song", artist="Artist", duration_ms=180_000, spotify_id="t1")],
+    )
+    queue: asyncio.Queue[Segment] = asyncio.Queue()
+    skip_event = asyncio.Event()
+    spec = InterruptSpec(directive="Svegliati!", urgency="urgent", cooldown=60)
+
+    with patch("mammamiradio.scheduling.producer._SFX_DIR", sfx_dir):
+        await _fire_interrupt(state, spec, queue, skip_event, bridge_tmp_dir=tmp_path)
+
+    assert state.interrupt_slot == alert
+    assert state.interrupt_slot_ephemeral is False
 
 
 # ---------------------------------------------------------------------------
@@ -204,7 +266,7 @@ async def test_fire_interrupt_no_bridge_when_alert_missing():
 
 
 @pytest.mark.asyncio
-async def test_fire_interrupt_works_after_session_stopped():
+async def test_fire_interrupt_works_after_session_stopped(tmp_path: Path):
     """Scenario 3: interrupt fires even when session was previously stopped."""
     from mammamiradio.scheduling.producer import _fire_interrupt
 
@@ -216,7 +278,8 @@ async def test_fire_interrupt_works_after_session_stopped():
     skip_event = asyncio.Event()
     spec = InterruptSpec(directive="Alzati!", urgency="pissed", cooldown=60)
 
-    await _fire_interrupt(state, spec, queue, skip_event)
+    with patch("mammamiradio.scheduling.producer.generate_tone", side_effect=_fake_tone):
+        await _fire_interrupt(state, spec, queue, skip_event, bridge_tmp_dir=tmp_path)
 
     # Interrupt still fires — producer will resume from stopped state after skip
     assert state.ha_pending_directive == "Alzati!"
@@ -224,12 +287,12 @@ async def test_fire_interrupt_works_after_session_stopped():
 
 
 # ---------------------------------------------------------------------------
-# Scenario: cooldown enforced in _fire_interrupt itself
+# Scenario: API cooldown enforcement remains opt-in for _fire_interrupt
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_fire_interrupt_respects_cooldown():
+async def test_fire_interrupt_respects_global_cooldown_when_requested():
     from mammamiradio.scheduling.producer import _fire_interrupt
 
     state = StationState(
@@ -240,7 +303,35 @@ async def test_fire_interrupt_respects_cooldown():
     skip_event = asyncio.Event()
     spec = InterruptSpec(directive="Di nuovo!", urgency="pissed", cooldown=60)
 
-    await _fire_interrupt(state, spec, queue, skip_event)
+    await _fire_interrupt(state, spec, queue, skip_event, enforce_global_cooldown=True)
 
     assert not skip_event.is_set(), "skip_event must NOT be set when cooldown is active"
     assert state.ha_pending_directive == "", "directive must NOT be injected during cooldown"
+
+
+@pytest.mark.asyncio
+async def test_fire_interrupt_global_cooldown_blocks_distinct_ha_timer(tmp_path: Path):
+    """Global cooldown holds across distinct trigger sources so back-to-back timers
+    don't cut the stream twice in seconds."""
+    from mammamiradio.scheduling.producer import _fire_interrupt
+
+    state = StationState(
+        playlist=[Track(title="Song", artist="Artist", duration_ms=180_000, spotify_id="t1")],
+    )
+    state.last_interrupt_ts = time.time() - 5
+    queue: asyncio.Queue[Segment] = asyncio.Queue()
+    skip_event = asyncio.Event()
+    spec = InterruptSpec(directive="Lavatrice finita!", urgency="urgent", cooldown=60)
+
+    with patch("mammamiradio.scheduling.producer.generate_tone", side_effect=_fake_tone):
+        await _fire_interrupt(
+            state,
+            spec,
+            queue,
+            skip_event,
+            enforce_global_cooldown=True,
+            bridge_tmp_dir=tmp_path,
+        )
+
+    assert not skip_event.is_set()
+    assert state.ha_pending_directive == ""

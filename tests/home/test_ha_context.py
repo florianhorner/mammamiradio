@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import datetime
 import time
 from collections import deque
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -842,7 +843,10 @@ def test_timer_interrupt_returns_interrupt_spec_on_idle():
             timestamp=now - 3,
         )
     )
-    current_states = {"timer.pasta_timer": {"state": "idle"}}
+    finished_iso = datetime.datetime.fromtimestamp(now - 2, tz=datetime.UTC).isoformat()
+    current_states = {
+        "timer.pasta_timer": {"state": "idle", "attributes": {"finished_at": finished_iso}},
+    }
     timer_interrupts = [
         TimerInterruptConfig(
             entity_id="timer.pasta_timer",
@@ -857,6 +861,39 @@ def test_timer_interrupt_returns_interrupt_spec_on_idle():
     assert isinstance(result, InterruptSpec)
     assert result.directive == "Tira fuori quella pasta!"
     assert result.urgency == "pissed"
+
+
+def test_timer_interrupt_cancel_does_not_fire():
+    """Cancelling a timer transitions it to idle but leaves finished_at stale."""
+    import mammamiradio.home.ha_context as _hc
+    from mammamiradio.core.config import TimerInterruptConfig
+
+    _hc._reactive_cooldowns.clear()
+    now = time.time()
+    events: deque[HomeEvent] = deque(maxlen=20)
+    events.append(
+        HomeEvent(
+            entity_id="timer.pasta_timer",
+            label="Timer pasta",
+            old_state="active",
+            new_state="idle",
+            timestamp=now - 3,
+        )
+    )
+    # Cancelled timer: finished_at points at a previous natural finish hours ago,
+    # OR the attribute is missing entirely. Both must suppress the interrupt.
+    stale_iso = datetime.datetime.fromtimestamp(now - 3600, tz=datetime.UTC).isoformat()
+    for attrs in ({"finished_at": stale_iso}, {}, {"finished_at": None}):
+        current_states = {"timer.pasta_timer": {"state": "idle", "attributes": attrs}}
+        timer_interrupts = [
+            TimerInterruptConfig(
+                entity_id="timer.pasta_timer",
+                directive="Tira fuori quella pasta!",
+                urgency="pissed",
+                cooldown=60,
+            )
+        ]
+        assert check_reactive_triggers(events, current_states, timer_interrupts) is None
 
 
 def test_timer_interrupt_no_fire_when_not_idle():

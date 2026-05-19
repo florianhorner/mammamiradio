@@ -407,10 +407,8 @@ class StationState:
     force_next: SegmentType | None = None
     # Host interrupt: pre-generated bridge clip to play immediately on interrupt
     interrupt_slot: Path | None = None
-    # Urgency level passed to scriptwriter for the interrupt banter ("pissed"|"urgent"|"gentle")
-    interrupt_urgency: str = ""
-    # Warm pool: entity_id → path of pre-generated interrupt clip
-    warm_interrupt_cache: dict[str, Path] = field(default_factory=dict)
+    # Whether the current interrupt bridge clip is a generated temp file
+    interrupt_slot_ephemeral: bool = False
     # Timestamp of last fired interrupt (for cooldown enforcement)
     last_interrupt_ts: float = 0.0
     # Chaos Mode: station-wide host-chaos toggle plus first-strike handoff.

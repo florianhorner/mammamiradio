@@ -1146,11 +1146,13 @@ async def run_playback_loop(app) -> None:
                     type=SegmentType.BANTER,
                     path=bridge_path,
                     metadata={"type": "banter", "interrupt": True},
-                    ephemeral=True,
+                    ephemeral=state.interrupt_slot_ephemeral,
                 )
+                state.interrupt_slot_ephemeral = False
                 state.queue_empty_since = None
             else:
                 logger.warning("Interrupt slot path missing: %s — skipping bridge", bridge_path)
+                state.interrupt_slot_ephemeral = False
 
         pulled_from_queue = False
         segment: Segment
@@ -2096,7 +2098,14 @@ async def api_interrupt(request: Request, _: None = Depends(require_admin_access
 
     queue = request.app.state.queue
     skip_event = request.app.state.skip_event
-    await _fire_interrupt(state, spec, queue, skip_event)
+    await _fire_interrupt(
+        state,
+        spec,
+        queue,
+        skip_event,
+        enforce_global_cooldown=True,
+        bridge_tmp_dir=request.app.state.config.tmp_dir,
+    )
     return {"ok": True, "directive": directive, "urgency": urgency}
 
 
@@ -2167,13 +2176,37 @@ async def get_pacing(request: Request, _: None = Depends(require_admin_access)):
 async def update_pacing(request: Request, _: None = Depends(require_admin_access)):
     """Update pacing settings in real-time."""
     config = request.app.state.config
-    body = await request.json()
-    if "songs_between_banter" in body:
-        config.pacing.songs_between_banter = max(1, int(body["songs_between_banter"]))
-    if "songs_between_ads" in body:
-        config.pacing.songs_between_ads = max(1, int(body["songs_between_ads"]))
-    if "ad_spots_per_break" in body:
-        config.pacing.ad_spots_per_break = max(1, min(5, int(body["ad_spots_per_break"])))
+    try:
+        body = await request.json()
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Pacing payload must be valid JSON") from exc
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="Pacing payload must be a JSON object")
+
+    def _parse_pacing_int(field: str) -> int | None:
+        if field not in body:
+            return None
+        raw = body[field]
+        if isinstance(raw, bool) or raw is None:
+            raise HTTPException(status_code=400, detail=f"{field} must be an integer")
+        if isinstance(raw, int):
+            return raw
+        if isinstance(raw, str):
+            text = raw.strip()
+            if _re.fullmatch(r"-?\d{1,9}", text):
+                return int(text)
+        raise HTTPException(status_code=400, detail=f"{field} must be an integer")
+
+    songs_between_banter = _parse_pacing_int("songs_between_banter")
+    songs_between_ads = _parse_pacing_int("songs_between_ads")
+    ad_spots_per_break = _parse_pacing_int("ad_spots_per_break")
+
+    if songs_between_banter is not None:
+        config.pacing.songs_between_banter = max(1, min(60, songs_between_banter))
+    if songs_between_ads is not None:
+        config.pacing.songs_between_ads = max(1, min(60, songs_between_ads))
+    if ad_spots_per_break is not None:
+        config.pacing.ad_spots_per_break = max(1, min(5, ad_spots_per_break))
     return {
         "ok": True,
         "songs_between_banter": config.pacing.songs_between_banter,

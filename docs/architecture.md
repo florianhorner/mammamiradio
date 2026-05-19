@@ -199,7 +199,7 @@ ha_context.py: lightweight 5s poll detects idle transition (separate from 60s fu
 check_reactive_triggers() → InterruptSpec(directive, urgency, cooldown)
     ↓
 producer.py: _fire_interrupt(state, spec, queue, skip_event)
-  1. Load alert.mp3 from assets/sfx/ → state.interrupt_slot
+  1. Load alert.mp3 from assets/sfx/, or generate a short tone → state.interrupt_slot
   2. Drain lookahead queue (no buffered music leaks between bridge and banter)
   3. state.ha_pending_directive = spec.directive
   4. state.chaos_pending = ChaosSubtype.URGENT_INTERRUPT  (pissed tone)
@@ -212,7 +212,7 @@ Producer generates URGENT_INTERRUPT banter with directive (async, LLM)
 Pissed banter plays after bridge
 ```
 
-Timer interrupts are configured via `[[ha.timer_interrupt]]` blocks in `radio.toml`. Timer entity IDs are added to the HA polling set via `extra_entities` at call time without mutating the module-level entity lists.
+Timer interrupts are configured via `[[homeassistant.timer_interrupt]]` blocks in `radio.toml`. The dedicated timer poll reads those entity IDs without mutating the module-level HA entity lists.
 
 The same mechanism is callable directly via `POST /api/interrupt` (admin auth, 60s cooldown) — any HA automation can inject a custom directive without `radio.toml` configuration.
 

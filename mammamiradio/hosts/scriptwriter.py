@@ -889,7 +889,9 @@ def _impossible_recall_target(state: StationState) -> str:
 def _chaos_prompt_block(state: StationState, subtype: ChaosSubtype | None) -> str:
     if not state.chaos_mode_active and subtype is None:
         return ""
-    chosen = subtype or random.choice(list(ChaosSubtype))
+    # URGENT_INTERRUPT is directed-only — it needs a real directive. Excluding it
+    # from the random pool stops hosts raging about a timer that never fired.
+    chosen = subtype or random.choice([s for s in ChaosSubtype if s != ChaosSubtype.URGENT_INTERRUPT])
     recall_line = ""
     if chosen == ChaosSubtype.IMPOSSIBLE_RECALL:
         recall_line = f"\nRECALL TARGET: {_impossible_recall_target(state)}\n"
@@ -1414,8 +1416,12 @@ HIGH PRIORITY — HOME EVENT DIRECTIVE:
 {pending_directive}
 Make this the focus of this banter break. It happened just now — react naturally.
 """
-        # Consume the directive so it fires only once
-        state.ha_pending_directive = ""
+        # Normal reactive directives fire once. Interrupt directives stay pending
+        # until the urgent segment is actually queued, so a stale in-flight render
+        # cannot consume the only copy before producer epoch guards discard it.
+        is_interrupt = ChaosSubtype.URGENT_INTERRUPT in (chaos_subtype, state.chaos_pending)
+        if not is_interrupt:
+            state.ha_pending_directive = ""
 
     # Listener request injection
     listener_request_block, listener_request_commit = _plan_listener_request_block(state)

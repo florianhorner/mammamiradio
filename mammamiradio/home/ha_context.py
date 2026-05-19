@@ -737,6 +737,18 @@ def get_weather_arc_en() -> str:
 # ---------------------------------------------------------------------------
 
 
+def _parse_ha_timestamp(raw: object) -> float | None:
+    """Parse an HA ISO-8601 timestamp string to an epoch float; return None on failure."""
+    if not isinstance(raw, str) or not raw:
+        return None
+    try:
+        # HA emits e.g. "2026-05-20T14:32:17.345678+00:00"; fromisoformat handles
+        # the "Z" suffix from 3.11+.
+        return datetime.datetime.fromisoformat(raw.replace("Z", "+00:00")).timestamp()
+    except (ValueError, TypeError):
+        return None
+
+
 def check_reactive_triggers(
     events: deque[HomeEvent],
     current_states: dict[str, dict] | None = None,
@@ -759,6 +771,10 @@ def check_reactive_triggers(
 
     # Timer interrupt check: match timer entity idle transitions from recent events.
     # Checked first — timers take priority over ambient banter triggers.
+    # Only fire on a *natural* finish: HA stamps the timer's `finished_at`
+    # attribute when it runs out; cancel/reset leaves the prior value untouched.
+    # So require a recent finished_at to distinguish "timer expired" from
+    # "operator cancelled" — both transition state to `idle`.
     if timer_interrupts and current_states is not None:
         for cfg in timer_interrupts:
             state_data = current_states.get(cfg.entity_id, {})
@@ -776,6 +792,10 @@ def check_reactive_triggers(
                     fired = True
                     break
             if not fired:
+                continue
+            # Filter out cancel/reset: finished_at must be set and recent.
+            finished_at_ts = _parse_ha_timestamp((state_data.get("attributes") or {}).get("finished_at"))
+            if finished_at_ts is None or now - finished_at_ts > 30:
                 continue
             _reactive_cooldowns[cooldown_key] = now
             return InterruptSpec(
@@ -838,7 +858,6 @@ async def fetch_home_context(
     ha_token: str,
     poll_interval: float = 60.0,
     _cache: HomeContext | None = None,
-    extra_entities: set[str] | None = None,
 ) -> HomeContext:
     """Fetch current home state from HA REST API.
 
@@ -872,10 +891,9 @@ async def fetch_home_context(
         resp.raise_for_status()
         all_states = resp.json()
 
-        # Filter to our curated entities plus any extra entities (e.g. timer interrupts)
+        # Filter to our curated entities
         entity_map = {e["entity_id"]: e for e in all_states}
-        watch_entities = ALL_ENTITIES + list(extra_entities or [])
-        relevant = {eid: entity_map[eid] for eid in watch_entities if eid in entity_map}
+        relevant = {eid: entity_map[eid] for eid in ALL_ENTITIES if eid in entity_map}
 
         timestamp = time.time()
         old_states = effective_cache.raw_states if effective_cache else {}

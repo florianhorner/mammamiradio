@@ -8,7 +8,7 @@ The current version source of truth is `pyproject.toml`.
 
 ### Added
 
-- **Host interrupt trigger** — when a Home Assistant timer fires, the hosts immediately interrupt whatever is playing and deliver an urgent, pissed banter segment telling the listener to act. Sub-7s end-to-end: HA timer fires → detected within ≤5s (dedicated lightweight poll) → audio within ≤2s of detection. Configure per-timer directives in `radio.toml` under `[[ha.timer_interrupt]]`. The same mechanism is exposed as `POST /api/interrupt` — any HA automation (motion sensor, alarm, dishwasher done) can inject a custom directive into the stream without code changes.
+- **Host interrupt trigger** — when a Home Assistant timer fires, the hosts immediately interrupt whatever is playing and deliver an urgent, pissed banter segment telling the listener to act. Sub-7s end-to-end: HA timer fires → detected within ≤5s (dedicated lightweight poll) → audio within ≤2s of detection. Configure per-timer directives in `radio.toml` under `[[homeassistant.timer_interrupt]]`. The same mechanism is exposed as `POST /api/interrupt` — any HA automation (motion sensor, alarm, dishwasher done) can inject a custom directive into the stream without code changes.
 - **Admin producer desk** — The `/admin` panel is reorganized around the live
   broadcast: an On Air zone (current segment, transport controls, running AI
   cost), a Live Queue holding the forward Scaletta, and a Rotation Pool, with
