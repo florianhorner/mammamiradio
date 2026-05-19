@@ -41,12 +41,11 @@ class _ProducerDeskParser(HTMLParser):
             if tag == "details" and "producer-drawer" in classes and section_id:
                 self.drawer_ids.append(section_id)
 
-        if self._in_drawers:
-            if tag == "section":
-                self._drawers_depth += 1
-                section_id = attr.get("id")
-                if "drawer-section" in classes and section_id:
-                    self.drawer_section_ids.append(section_id)
+        if self._in_drawers and tag == "section":
+            self._drawers_depth += 1
+            section_id = attr.get("id")
+            if "drawer-section" in classes and section_id:
+                self.drawer_section_ids.append(section_id)
 
     def handle_endtag(self, tag: str) -> None:
         if self._in_drawers and tag == "section":
