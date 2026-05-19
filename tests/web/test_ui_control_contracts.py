@@ -398,6 +398,149 @@ class TestPurgeEndpoint:
 
 
 # ---------------------------------------------------------------------------
+# Queue remove endpoint
+# ---------------------------------------------------------------------------
+
+
+class TestQueueRemoveEndpoint:
+    @staticmethod
+    def _make_queue_app(labels: list[str]) -> FastAPI:
+        shadow = [{"type": "music", "label": label, "metadata": {"title": label}} for label in labels]
+        app = _make_app(shadow=shadow, queue_items=0)
+        for label in labels:
+            app.state.queue.put_nowait(_make_seg(label))
+        return app
+
+    @staticmethod
+    def _queue_titles(app: FastAPI) -> list[str]:
+        return [seg.metadata["title"] for seg in list(app.state.queue._queue)]
+
+    @pytest.mark.asyncio
+    async def test_remove_by_index_preserves_remaining_order_and_depth_sync(self):
+        app = self._make_queue_app(["Alpha", "Beta", "Gamma", "Delta"])
+
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            resp = await c.post("/api/queue/remove", json={"index": 1}, headers=AUTH)
+
+        assert resp.status_code == 200
+        assert resp.json() == {"ok": True, "removed": "Beta"}
+        assert [item["label"] for item in app.state.station_state.queued_segments] == [
+            "Alpha",
+            "Gamma",
+            "Delta",
+        ]
+        assert self._queue_titles(app) == ["Alpha", "Gamma", "Delta"]
+        assert app.state.queue.qsize() == len(app.state.station_state.queued_segments) == 3
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("payload", [{"index": "1"}, {"index": 1.5}, {"index": None}, {}])
+    async def test_remove_rejects_non_integer_index_without_mutating_queue(self, payload: dict):
+        app = self._make_queue_app(["Alpha", "Beta"])
+
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            resp = await c.post("/api/queue/remove", json=payload, headers=AUTH)
+
+        assert resp.status_code == 422
+        assert resp.json()["detail"] == "index must be an integer"
+        assert [item["label"] for item in app.state.station_state.queued_segments] == ["Alpha", "Beta"]
+        assert self._queue_titles(app) == ["Alpha", "Beta"]
+        assert app.state.queue.qsize() == len(app.state.station_state.queued_segments) == 2
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("index", [-1, 3])
+    async def test_remove_rejects_out_of_range_index_without_mutating_queue(self, index: int):
+        app = self._make_queue_app(["Alpha", "Beta", "Gamma"])
+
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            resp = await c.post("/api/queue/remove", json={"index": index}, headers=AUTH)
+
+        assert resp.status_code == 422
+        assert resp.json()["detail"] == f"index {index} out of range (queue has 3 items)"
+        assert [item["label"] for item in app.state.station_state.queued_segments] == ["Alpha", "Beta", "Gamma"]
+        assert self._queue_titles(app) == ["Alpha", "Beta", "Gamma"]
+        assert app.state.queue.qsize() == len(app.state.station_state.queued_segments) == 3
+
+    @staticmethod
+    def _make_id_queue_app(entries: list[tuple[str, str]]) -> FastAPI:
+        """Build an app whose shadow list and real queue carry queue ids.
+
+        ``entries`` is a list of ``(queue_id, label)`` pairs.
+        """
+        shadow = [{"id": qid, "type": "music", "label": label, "metadata": {"title": label}} for qid, label in entries]
+        app = _make_app(shadow=shadow, queue_items=0)
+        for qid, label in entries:
+            seg = _make_seg(label)
+            seg.metadata["queue_id"] = qid
+            app.state.queue.put_nowait(seg)
+        return app
+
+    @pytest.mark.asyncio
+    async def test_remove_by_id_targets_the_named_segment(self):
+        app = self._make_id_queue_app([("q-a", "Alpha"), ("q-b", "Beta"), ("q-c", "Gamma")])
+
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            resp = await c.post("/api/queue/remove", json={"id": "q-b"}, headers=AUTH)
+
+        assert resp.status_code == 200
+        assert resp.json() == {"ok": True, "removed": "Beta"}
+        assert [item["label"] for item in app.state.station_state.queued_segments] == ["Alpha", "Gamma"]
+        assert self._queue_titles(app) == ["Alpha", "Gamma"]
+
+    @pytest.mark.asyncio
+    async def test_remove_by_id_after_head_consumed_removes_correct_segment(self):
+        """Stale-index regression guard.
+
+        The streamer consumes the head segment between the admin UI rendering a
+        row and the click landing. A position-based remove would then drop the
+        wrong track; an id-based remove must still hit the intended one.
+        """
+        app = self._make_id_queue_app([("q-a", "Alpha"), ("q-b", "Beta"), ("q-c", "Gamma")])
+
+        # Streamer consumes the head — real queue and shadow list both lose idx 0.
+        app.state.queue.get_nowait()
+        app.state.station_state.queued_segments.pop(0)
+
+        # "Gamma" was rendered at index 2; it is now index 1. Removing by id must
+        # still remove Gamma — never Beta (whatever now sits at the stale index).
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            resp = await c.post("/api/queue/remove", json={"id": "q-c"}, headers=AUTH)
+
+        assert resp.status_code == 200
+        assert resp.json() == {"ok": True, "removed": "Gamma"}
+        assert [item["label"] for item in app.state.station_state.queued_segments] == ["Beta"]
+        assert self._queue_titles(app) == ["Beta"]
+
+    @pytest.mark.asyncio
+    async def test_remove_by_id_for_already_played_segment_is_noop_success(self):
+        """An id that no longer exists (segment already played out) is a no-op
+        success, not a 422 — the operator's intent is already satisfied."""
+        app = self._make_id_queue_app([("q-a", "Alpha"), ("q-b", "Beta")])
+
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            resp = await c.post("/api/queue/remove", json={"id": "gone"}, headers=AUTH)
+
+        assert resp.status_code == 200
+        assert resp.json() == {"ok": True, "removed": None}
+        assert [item["label"] for item in app.state.station_state.queued_segments] == ["Alpha", "Beta"]
+        assert self._queue_titles(app) == ["Alpha", "Beta"]
+
+    @pytest.mark.asyncio
+    async def test_remove_prefers_id_over_index_when_both_provided(self):
+        """When a payload carries both `id` and `index`, `id` wins — it is the
+        authoritative, position-independent identifier."""
+        app = self._make_id_queue_app([("q-a", "Alpha"), ("q-b", "Beta"), ("q-c", "Gamma")])
+
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            # id points at Beta, index points at Gamma — id must win.
+            resp = await c.post("/api/queue/remove", json={"id": "q-b", "index": 2}, headers=AUTH)
+
+        assert resp.status_code == 200
+        assert resp.json() == {"ok": True, "removed": "Beta"}
+        assert [item["label"] for item in app.state.station_state.queued_segments] == ["Alpha", "Gamma"]
+        assert self._queue_titles(app) == ["Alpha", "Gamma"]
+
+
+# ---------------------------------------------------------------------------
 # Capabilities — static key presence, not runtime health
 # ---------------------------------------------------------------------------
 
@@ -638,8 +781,8 @@ class TestSchedulerReasonsDoNotLeakToUI:
         # and "No pacing trigger active" rows in the up-next queue.
         html = ADMIN_HTML.read_text()
 
-        # Find the upcoming-rows render section (starts at `upFiltered.slice(0,10).forEach`).
-        start = html.find("upFiltered.slice(0,10).forEach")
+        # Find the upcoming-rows render section (starts at `upFiltered.slice(0,8).forEach`).
+        start = html.find("upFiltered.slice(0,8).forEach")
         assert start != -1, "could not locate upcoming-rows render section"
         # Scan through to the end of that forEach block.
         end = html.find("});", start) + 3
@@ -655,6 +798,7 @@ class TestSchedulerReasonsDoNotLeakToUI:
             "admin.html upcoming-rows render is falling back to reason text "
             "when artist is empty — this re-leaks scheduler internals."
         )
+        assert "it.reason" not in block
 
 
 class TestPacingControlsMatchServerContract:
@@ -672,13 +816,32 @@ class TestPacingControlsMatchServerContract:
         assert "api('PATCH','/api/pacing',{[field]:+value})" in html
         assert "songs_between_banter:+document.getElementById('pBanter').value" not in html
 
+    def test_admin_pacing_save_applies_response_and_resyncs_on_rejection(self):
+        """Slider saves must re-render from the server response and roll back
+        to last known server state when a PATCH is rejected with `detail`."""
+        html = ADMIN_HTML.read_text()
+
+        assert "applyPacingResponse(r)" in html
+        # On a rejected save the slider re-syncs from the last server snapshot.
+        assert "if(r&&r.detail){" in html
+        assert "if(!stale&&_st.pacing)applyPacingResponse(_st.pacing);" in html
+
+    def test_admin_quick_pacing_actions_check_save_result(self):
+        """less_banter / too_many_ads must not toast success on a failed save."""
+        html = ADMIN_HTML.read_text()
+
+        assert "savePacingField('songs_between_banter',v,{silent:true})" in html
+        assert "savePacingField('songs_between_ads',v,{silent:true})" in html
+        # Stale out-of-order responses must not roll newer slider state back.
+        assert "const stale=mySeq!==_paceSeq;" in html
+
 
 class TestPoolDiagnosticsStayHidden:
     """Scheduler pool diagnostics are internal state, not operator programme copy."""
 
     def test_admin_html_does_not_render_pool_pass_annotations(self):
         html = ADMIN_HTML.read_text()
-        start = html.find("upFiltered.slice(0,10).forEach")
+        start = html.find("upFiltered.slice(0,8).forEach")
         assert start != -1, "could not locate upcoming-rows render section"
         end = html.find("});", start) + 3
         block = html[start:end]
@@ -914,10 +1077,55 @@ class TestStoppedStateQuietsTheUI:
         assert "st?.stream?.frequency" in html
         assert "st?.stream?.bitrate_kbps" in html
 
-    def test_admin_programme_history_drops_only_one_live_duplicate(self):
+    def test_admin_scaletta_is_forward_only(self):
         html = ADMIN_HTML.read_text()
-        assert "skippedNowDuplicate" in html
-        assert "&& !(now&&e.type===now.type&&e.label===now.label)" not in html
+        block = html[html.index("function renderProgramme") : html.index("async function removeQueueItem")]
+        assert "st?.upcoming" in block
+        assert "stream_log" not in block
+        assert "now_streaming" not in block
+
+    def test_render_programme_has_distinct_stopped_empty_state(self):
+        """When the queue is empty AND the station is stopped, the Scaletta must
+        show the paused copy — not the generic "preparing next segment" copy.
+        A listener-facing illusion bug if the two states collapse."""
+        html = ADMIN_HTML.read_text()
+        block = html[html.index("function renderProgramme") : html.index("async function removeQueueItem")]
+        assert "data-stopped" in block, (
+            "renderProgramme() must branch on body[data-stopped] so the empty "
+            "Scaletta distinguishes a paused station from one building its queue."
+        )
+        assert "Stazione in pausa" in block, "renderProgramme() stopped branch must render the paused-state copy."
+        assert "Sto preparando il prossimo segmento" in block, (
+            "renderProgramme() must keep the building-queue copy for the running-but-empty case."
+        )
+
+    def test_render_programme_memo_hash_tracks_id_and_stop_state(self):
+        """The renderProgramme() memoization hash must include each row's queue
+        `id` and the `session_stopped` flag.
+
+        Row actions are generated from `it.id`; if the hash omits `id`, a queue
+        advance that swaps in a segment with identical visible fields leaves the
+        table un-rendered with a stale id, so `/api/queue/remove` no-ops. If it
+        omits `session_stopped`, the empty-state copy can stick across a
+        stop/resume.
+        """
+        html = ADMIN_HTML.read_text()
+        block = html[html.index("function renderProgramme") : html.index("async function removeQueueItem")]
+        hash_line = next(line for line in block.splitlines() if "const hash=" in line)
+        assert "u.id" in hash_line, "renderProgramme() memo hash must include each row's queue id."
+        assert "session_stopped" in hash_line, "renderProgramme() memo hash must include the session_stopped flag."
+
+    def test_refresh_fast_syncs_stop_state_from_status_poll(self):
+        """The status poll must drive `data-stopped` from `session_stopped` so a
+        stop/resume triggered elsewhere (other tab, HA, API) is reflected without
+        a button press — otherwise admin and listener disagree on stream state."""
+        html = ADMIN_HTML.read_text()
+        block = html[html.index("async function refreshFast") :]
+        block = block[: block.index("\n}")]
+        assert "session_stopped" in block, "refreshFast() must read session_stopped from the status payload."
+        assert "updateStopState" in block, (
+            "refreshFast() must call updateStopState() so the poll keeps the stopped UI in sync with the server."
+        )
 
 
 class TestHostBlockSelectorScoping:
