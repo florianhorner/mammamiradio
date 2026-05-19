@@ -657,6 +657,22 @@ class TestSchedulerReasonsDoNotLeakToUI:
         )
 
 
+class TestPacingControlsMatchServerContract:
+    def test_admin_banter_slider_uses_server_floor(self):
+        html = ADMIN_HTML.read_text()
+
+        assert 'id="pBanter" min="2"' in html
+        assert 'id="pacingMeta">Intervento ogni 2 brani' in html
+        assert "pacing.songs_between_banter||2" in html
+
+    def test_admin_pacing_changes_send_partial_patch(self):
+        html = ADMIN_HTML.read_text()
+
+        assert "savePacingField(PACE_FIELDS[n],el.value)" in html
+        assert "api('PATCH','/api/pacing',{[field]:+value})" in html
+        assert "songs_between_banter:+document.getElementById('pBanter').value" not in html
+
+
 class TestPoolDiagnosticsStayHidden:
     """Scheduler pool diagnostics are internal state, not operator programme copy."""
 

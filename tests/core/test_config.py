@@ -153,9 +153,31 @@ def test_load_config_does_not_leak_arc_thresholds_on_validation_failure(tmp_path
     from mammamiradio.hosts.persona import compute_arc_phase, set_arc_thresholds
 
     set_arc_thresholds([4, 11, 26])
-    with pytest.raises(ValueError, match="pacing\\.songs_between_banter must be >= 1"):
+    with pytest.raises(ValueError, match="pacing\\.songs_between_banter must be >= 2"):
         load_config(str(custom_path))
     assert compute_arc_phase(5) == "acquaintance"
+
+
+def test_load_config_rejects_every_song_banter_cadence(tmp_path):
+    source = Path(__file__).resolve().parents[2] / "radio.toml"
+    custom = source.read_text().replace("songs_between_banter = 2", "songs_between_banter = 1")
+    custom_path = tmp_path / "radio.toml"
+    custom_path.write_text(custom)
+
+    with pytest.raises(ValueError, match="pacing\\.songs_between_banter must be >= 2"):
+        load_config(str(custom_path))
+
+
+def test_load_config_rejects_pacing_above_safe_ceiling(tmp_path):
+    """Config-load enforces the same ceilings as PATCH /api/pacing — a stray
+    radio.toml cannot disable banter/ads by going past the runtime clamp."""
+    source = Path(__file__).resolve().parents[2] / "radio.toml"
+    custom = source.read_text().replace("songs_between_banter = 2", "songs_between_banter = 999")
+    custom_path = tmp_path / "radio.toml"
+    custom_path.write_text(custom)
+
+    with pytest.raises(ValueError, match="pacing\\.songs_between_banter must be <= 60"):
+        load_config(str(custom_path))
 
 
 def test_audio_section_defaults():
