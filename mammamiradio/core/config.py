@@ -584,10 +584,20 @@ def _validate(config: StationConfig) -> None:
 
     if not config.hosts:
         errors.append("No hosts configured — banter requires at least one host")
-    if config.pacing.songs_between_banter < 1:
-        errors.append("pacing.songs_between_banter must be >= 1")
+    # Floors and ceilings here mirror the PATCH /api/pacing clamps so that
+    # config-load and the admin runtime path enforce the same valid range.
+    if config.pacing.songs_between_banter < 2:
+        errors.append("pacing.songs_between_banter must be >= 2")
+    if config.pacing.songs_between_banter > 60:
+        errors.append("pacing.songs_between_banter must be <= 60")
     if config.pacing.songs_between_ads < 1:
         errors.append("pacing.songs_between_ads must be >= 1")
+    if config.pacing.songs_between_ads > 60:
+        errors.append("pacing.songs_between_ads must be <= 60")
+    if config.pacing.ad_spots_per_break < 1:
+        errors.append("pacing.ad_spots_per_break must be >= 1")
+    if config.pacing.ad_spots_per_break > 5:
+        errors.append("pacing.ad_spots_per_break must be <= 5")
     if config.pacing.lookahead_segments < 1:
         errors.append("pacing.lookahead_segments must be >= 1")
     if not isinstance(config.persona.anthem_threshold, int) or config.persona.anthem_threshold < 1:

@@ -2201,12 +2201,12 @@ async def update_pacing(request: Request, _: None = Depends(require_admin_access
     songs_between_ads = _parse_pacing_int("songs_between_ads")
     ad_spots_per_break = _parse_pacing_int("ad_spots_per_break")
 
-    if songs_between_banter is not None:
-        config.pacing.songs_between_banter = max(1, min(60, songs_between_banter))
-    if songs_between_ads is not None:
-        config.pacing.songs_between_ads = max(1, min(60, songs_between_ads))
-    if ad_spots_per_break is not None:
-        config.pacing.ad_spots_per_break = max(1, min(5, ad_spots_per_break))
+    if "songs_between_banter" in body:
+        config.pacing.songs_between_banter = max(2, min(60, songs_between_banter or 0))
+    if "songs_between_ads" in body:
+        config.pacing.songs_between_ads = max(1, min(60, songs_between_ads or 0))
+    if "ad_spots_per_break" in body:
+        config.pacing.ad_spots_per_break = max(1, min(5, ad_spots_per_break or 0))
     return {
         "ok": True,
         "songs_between_banter": config.pacing.songs_between_banter,

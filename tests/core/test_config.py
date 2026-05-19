@@ -179,9 +179,50 @@ def test_load_config_does_not_leak_arc_thresholds_on_validation_failure(tmp_path
     from mammamiradio.hosts.persona import compute_arc_phase, set_arc_thresholds
 
     set_arc_thresholds([4, 11, 26])
-    with pytest.raises(ValueError, match="pacing\\.songs_between_banter must be >= 1"):
+    with pytest.raises(ValueError, match="pacing\\.songs_between_banter must be >= 2"):
         load_config(str(custom_path))
     assert compute_arc_phase(5) == "acquaintance"
+
+
+def test_load_config_rejects_every_song_banter_cadence(tmp_path):
+    source = Path(__file__).resolve().parents[2] / "radio.toml"
+    custom = source.read_text().replace("songs_between_banter = 2", "songs_between_banter = 1")
+    custom_path = tmp_path / "radio.toml"
+    custom_path.write_text(custom)
+
+    with pytest.raises(ValueError, match="pacing\\.songs_between_banter must be >= 2"):
+        load_config(str(custom_path))
+
+
+def test_load_config_rejects_pacing_above_safe_ceiling(tmp_path):
+    """Config-load enforces the same ceilings as PATCH /api/pacing — a stray
+    radio.toml cannot disable banter/ads by going past the runtime clamp."""
+    source = Path(__file__).resolve().parents[2] / "radio.toml"
+    custom = source.read_text().replace("songs_between_banter = 2", "songs_between_banter = 999")
+    custom_path = tmp_path / "radio.toml"
+    custom_path.write_text(custom)
+
+    with pytest.raises(ValueError, match="pacing\\.songs_between_banter must be <= 60"):
+        load_config(str(custom_path))
+
+
+@pytest.mark.parametrize(
+    ("replace", "with_", "match"),
+    [
+        ("songs_between_ads = 4", "songs_between_ads = 999", "songs_between_ads must be <= 60"),
+        ("ad_spots_per_break = 2", "ad_spots_per_break = 0", "ad_spots_per_break must be >= 1"),
+        ("ad_spots_per_break = 2", "ad_spots_per_break = 99", "ad_spots_per_break must be <= 5"),
+    ],
+)
+def test_load_config_rejects_pacing_out_of_range(tmp_path, replace, with_, match):
+    """Every pacing floor/ceiling is enforced at config load, mirroring PATCH."""
+    source = Path(__file__).resolve().parents[2] / "radio.toml"
+    custom = source.read_text().replace(replace, with_)
+    custom_path = tmp_path / "radio.toml"
+    custom_path.write_text(custom)
+
+    with pytest.raises(ValueError, match="pacing\\." + match):
+        load_config(str(custom_path))
 
 
 def test_audio_section_defaults():
