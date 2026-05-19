@@ -100,12 +100,24 @@ class AudioSection:
 
 
 @dataclass
+class TimerInterruptConfig:
+    """A single HA timer entity that triggers an immediate host interrupt."""
+
+    entity_id: str
+    directive: str
+    urgency: str = "pissed"  # "pissed" | "urgent" | "gentle"
+    cooldown: int = 60  # seconds before this entity can fire again
+
+
+@dataclass
 class HomeAssistantSection:
     """Optional Home Assistant integration used to seed prompt context."""
 
     enabled: bool = False
     url: str = ""
     poll_interval: int = 60  # seconds between state refreshes
+    timer_poll_interval: int = 5  # seconds between lightweight timer-entity state checks
+    timer_interrupts: list[TimerInterruptConfig] = field(default_factory=list)
 
 
 @dataclass
@@ -698,7 +710,20 @@ def load_config(path: str = "radio.toml") -> StationConfig:
         ha_raw["enabled"] = True
     elif ha_force_disabled:
         ha_raw["enabled"] = False
+    # Parse [[ha.timer_interrupt]] blocks — extracted before ** expansion
+    timer_interrupts_raw = ha_raw.pop("timer_interrupt", [])
+    timer_interrupts = [
+        TimerInterruptConfig(
+            entity_id=t["entity_id"],
+            directive=t["directive"],
+            urgency=t.get("urgency", "pissed"),
+            cooldown=int(t.get("cooldown", 60)),
+        )
+        for t in timer_interrupts_raw
+        if isinstance(t, dict) and t.get("entity_id") and t.get("directive")
+    ]
     ha_section = HomeAssistantSection(**ha_raw)
+    ha_section.timer_interrupts = timer_interrupts
     ha_token = os.getenv("HA_TOKEN", "")
     # Auto-enable HA if token is present and URL is set (Docker/add-on convenience)
     if ha_token and ha_section.url and not ha_section.enabled and not ha_force_disabled:
