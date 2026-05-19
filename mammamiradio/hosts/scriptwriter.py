@@ -284,6 +284,15 @@ CHAOS SUBTYPE: CHAOS_ICON_MOMENT
 - Confidently reference a fictional larger-than-life Italian figure as if everyone knows them.
 - The figure must be invented and absurdist, never a real named person.
 """,
+    ChaosSubtype.URGENT_INTERRUPT: """
+CHAOS SUBTYPE: URGENT_INTERRUPT
+- The hosts are FURIOUS. A timer just went off and whoever set it is still ignoring it.
+- Deliver the directive below without pleasantries. No "ciao", no "buonasera", no warm-up.
+- Fast speech, clipped sentences, maximum energy (95), maximum chaos (80), minimum warmth (10).
+- Italian expletives are acceptable: "Madonna!", "Per l'amor di Dio!", "Dai, muoviti!"
+- This is personal. It is not breaking news. Someone in THIS HOUSE set this timer.
+- Keep it short: 2-4 exchanges maximum. End on music.
+""",
 }
 
 CHAOS_STOCK_LINES: dict[ChaosSubtype, list[str]] = {
@@ -307,6 +316,11 @@ CHAOS_STOCK_LINES: dict[ChaosSubtype, list[str]] = {
         "Questa e esattamente la regola di Zio Bravissimo da Catania Due: mai spiegare, sempre indicare il soffitto.",
         "Finalmente qualcuno lo dice in radio.",
         "E adesso musica, per rispetto del soffitto.",
+    ],
+    ChaosSubtype.URGENT_INTERRUPT: [
+        "Madonna, ma quante volte te lo dobbiamo dire?",
+        "Il timer è scaduto. SCADUTO. Non è una suggestione.",
+        "Dai, muoviti. Ora. Senza aspettare.",
     ],
 }
 
