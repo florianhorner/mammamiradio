@@ -180,6 +180,25 @@ def test_load_config_rejects_pacing_above_safe_ceiling(tmp_path):
         load_config(str(custom_path))
 
 
+@pytest.mark.parametrize(
+    ("replace", "with_", "match"),
+    [
+        ("songs_between_ads = 4", "songs_between_ads = 999", "songs_between_ads must be <= 60"),
+        ("ad_spots_per_break = 2", "ad_spots_per_break = 0", "ad_spots_per_break must be >= 1"),
+        ("ad_spots_per_break = 2", "ad_spots_per_break = 99", "ad_spots_per_break must be <= 5"),
+    ],
+)
+def test_load_config_rejects_pacing_out_of_range(tmp_path, replace, with_, match):
+    """Every pacing floor/ceiling is enforced at config load, mirroring PATCH."""
+    source = Path(__file__).resolve().parents[2] / "radio.toml"
+    custom = source.read_text().replace(replace, with_)
+    custom_path = tmp_path / "radio.toml"
+    custom_path.write_text(custom)
+
+    with pytest.raises(ValueError, match="pacing\\." + match):
+        load_config(str(custom_path))
+
+
 def test_audio_section_defaults():
     """AudioSection dataclass defaults should be sensible."""
     audio = AudioSection()
