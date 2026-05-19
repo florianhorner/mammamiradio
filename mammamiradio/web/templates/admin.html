@@ -1777,12 +1777,12 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
             <div class="ttl-eyebrow">Regia</div>
             <h2>Cadenza</h2>
           </div>
-          <div class="sub" id="pacingMeta">4 music · 1 banter</div>
+          <div class="sub" id="pacingMeta">Intervento ogni 2 brani</div>
         </header>
         <div class="a-sliders">
           <label>
             <span class="lab">Intervento ogni</span>
-            <input type="range" id="pBanter" min="1" max="6" value="2" oninput="updatePaceVal('pBanter','pvBanter',this.value)">
+            <input type="range" id="pBanter" min="2" max="6" value="2" oninput="updatePaceVal('pBanter','pvBanter',this.value)">
             <span class="val"><b id="pvBanter">2</b><span class="u">brani</span></span>
           </label>
           <div class="pace-counter" id="pcBanter"></div>
@@ -2070,16 +2070,16 @@ async function doQuickAction(action,el){
   if(action==='less_banter'){
     const v=Math.min(6,parseInt(document.getElementById('pBanter').value||'2')+1);
     document.getElementById('pBanter').value=v;document.getElementById('pvBanter').textContent=v;
-    await api('PATCH','/api/pacing',{songs_between_banter:v,songs_between_ads:parseInt(document.getElementById('pAds').value||'4'),ad_spots_per_break:parseInt(document.getElementById('pSpots').value||'2')});
-    toast('Meno interventi: ogni '+v+' brani');
+    const ok=await savePacingField('songs_between_banter',v,{silent:true});
+    if(ok)toast('Meno interventi: ogni '+v+' brani');
   }else if(action==='more_chaos'){
     const r=await api('POST','/api/trigger',{type:'banter'});
     toast(r.ok?'Caos in arrivo — intervento in coda':'Errore: '+(r.error||'sconosciuto'));
   }else if(action==='too_many_ads'){
     const v=Math.min(10,parseInt(document.getElementById('pAds').value||'4')+2);
     document.getElementById('pAds').value=v;document.getElementById('pvAds').textContent=v;
-    await api('PATCH','/api/pacing',{songs_between_banter:parseInt(document.getElementById('pBanter').value||'2'),songs_between_ads:v,ad_spots_per_break:parseInt(document.getElementById('pSpots').value||'2')});
-    toast('Meno spot: ogni '+v+' segmenti');
+    const ok=await savePacingField('songs_between_ads',v,{silent:true});
+    if(ok)toast('Meno spot: ogni '+v+' segmenti');
   }else if(action==='hot_reload'){
     const r=await api('POST','/api/hot-reload',{});
     if(r.ok)toast('Testi ricaricati in '+r.duration_ms+'ms');
@@ -2761,6 +2761,50 @@ function updatePaceVal(inputId,valId,v){
 }
 
 // ── Pacing ──
+const PACE_FIELDS={Banter:'songs_between_banter',Ads:'songs_between_ads',Spots:'ad_spots_per_break'};
+const PACE_INPUTS={
+  songs_between_banter:['pBanter','pvBanter'],
+  songs_between_ads:['pAds','pvAds'],
+  ad_spots_per_break:['pSpots','pvSpots'],
+};
+function applyPacingResponse(pacing,onlyField){
+  // onlyField restricts the re-render to a single slider. A partial PATCH
+  // for one field must never rewrite a sibling slider the operator edited
+  // since — even though the server response carries the full snapshot.
+  if(!pacing||pacing.detail)return;
+  const fields=onlyField?[onlyField]:Object.keys(PACE_INPUTS);
+  fields.forEach(field=>{
+    if(pacing[field]===undefined)return;
+    const [inputId,valId]=PACE_INPUTS[field];
+    const input=document.getElementById(inputId);
+    if(input)input.value=pacing[field];
+    updatePaceVal(inputId,valId,pacing[field]);
+    if(_st.pacing)_st.pacing[field]=pacing[field];
+  });
+  updatePaceCounters(_st.pacing||pacing);
+}
+// Per-field sequence: a slow earlier PATCH for one field must not roll that
+// field back once a newer save for the same field has been accepted.
+const _paceSeq={};
+async function savePacingField(field,value,{silent=false}={}){
+  const mySeq=(_paceSeq[field]=(_paceSeq[field]||0)+1);
+  try{
+    const r=await api('PATCH','/api/pacing',{[field]:+value});
+    if(r&&r.detail){
+      toast('Cadenza non salvata: '+r.detail);
+      if(_st.pacing)applyPacingResponse(_st.pacing,field);
+      await refreshFast();
+      return false;
+    }
+    if(mySeq===_paceSeq[field])applyPacingResponse(r,field);
+    if(!silent)toast('Cadenza salvata');
+    return true;
+  }catch(_){
+    toast('Cadenza non salvata: errore di rete');
+    if(_st.pacing)applyPacingResponse(_st.pacing,field);
+    return false;
+  }
+}
 ['Banter','Ads','Spots'].forEach(n=>{
   const el=document.getElementById('p'+n);
   el.addEventListener('input',()=>{
@@ -2768,7 +2812,7 @@ function updatePaceVal(inputId,valId,v){
     const max=+el.max||100;const min=+el.min||0;
     el.style.backgroundSize=`${((+el.value-min)/(max-min))*100}% 100%`;
   });
-  el.addEventListener('change',()=>{api('PATCH','/api/pacing',{songs_between_banter:+document.getElementById('pBanter').value,songs_between_ads:+document.getElementById('pAds').value,ad_spots_per_break:+document.getElementById('pSpots').value});toast('Cadenza salvata')});
+  el.addEventListener('change',()=>savePacingField(PACE_FIELDS[n],el.value));
 });
 function updatePaceCounters(pacing){
   if(!pacing)return;
@@ -2777,7 +2821,7 @@ function updatePaceCounters(pacing){
   document.getElementById('pcBanter').innerHTML='<strong>'+b+'/'+bMax+'</strong> brani dall’ultimo intervento'+(b>=bMax?' — prossimo':'');
   document.getElementById('pcAds').innerHTML='<strong>'+a+'/'+aMax+'</strong> brani dall’ultimo spot'+(a>=aMax?' — prossimo':'');
   const pacingMeta=document.getElementById('pacingMeta');
-  if(pacingMeta)pacingMeta.textContent=a+' music · 1 banter every '+bMax;
+  if(pacingMeta)pacingMeta.textContent='Intervento ogni '+bMax+' brani';
 }
 
 // ── Hosts ──
@@ -3101,11 +3145,7 @@ async function refreshFast(){
     updateEngineRoom(_st,_caps);
     updateSourceControls(_st,_caps);
     updateChaosState(_st.chaos_mode);
-    if(!_paceOk&&_st.pacing){_paceOk=true;
-      document.getElementById('pBanter').value=_st.pacing.songs_between_banter;updatePaceVal('pBanter','pvBanter',_st.pacing.songs_between_banter);
-      document.getElementById('pAds').value=_st.pacing.songs_between_ads;updatePaceVal('pAds','pvAds',_st.pacing.songs_between_ads);
-      document.getElementById('pSpots').value=_st.pacing.ad_spots_per_break;updatePaceVal('pSpots','pvSpots',_st.pacing.ad_spots_per_break);
-    }
+    if(!_paceOk&&_st.pacing){_paceOk=true;applyPacingResponse(_st.pacing);}
     if(!_hostsOk){_hostsOk=true;const r=await fetch(_base+'/api/hosts',{headers:H()});renderHosts((await r.json()).hosts||[])}
   }catch(e){console.error('refreshFast',e)}
 }

@@ -2223,8 +2223,142 @@ async def test_patch_pacing_enforces_floor():
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
         resp = await client.patch("/api/pacing", json={"songs_between_banter": 0})
     assert resp.status_code == 200
-    # Floor of 1 enforced
-    assert resp.json()["songs_between_banter"] == 1
+    # Floor of 2 prevents "banter after every song" overload.
+    assert resp.json()["songs_between_banter"] == 2
+
+
+@pytest.mark.asyncio
+async def test_patch_pacing_clamps_banter_one_to_two():
+    app = _make_test_app()
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.patch("/api/pacing", json={"songs_between_banter": 1})
+    assert resp.status_code == 200
+    assert resp.json()["songs_between_banter"] == 2
+    assert app.state.config.pacing.songs_between_banter == 2
+
+
+@pytest.mark.asyncio
+async def test_patch_pacing_partial_update_preserves_other_values_and_status_reflects_it():
+    app = _make_test_app()
+    app.state.config.pacing.songs_between_banter = 4
+    app.state.config.pacing.songs_between_ads = 7
+    app.state.config.pacing.ad_spots_per_break = 3
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.patch("/api/pacing", json={"songs_between_banter": 5})
+        status = await client.get("/status")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["songs_between_banter"] == 5
+    assert body["songs_between_ads"] == 7
+    assert body["ad_spots_per_break"] == 3
+    assert status.json()["pacing"]["songs_between_banter"] == 5
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bad_value", [None, True, "", "abc", [], {}])
+async def test_patch_pacing_malformed_values_do_not_mutate_config(bad_value):
+    app = _make_test_app()
+    app.state.config.pacing.songs_between_banter = 4
+    app.state.config.pacing.songs_between_ads = 7
+    app.state.config.pacing.ad_spots_per_break = 3
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.patch(
+            "/api/pacing",
+            json={"songs_between_banter": 5, "songs_between_ads": bad_value},
+        )
+    assert resp.status_code == 400
+    assert app.state.config.pacing.songs_between_banter == 4
+    assert app.state.config.pacing.songs_between_ads == 7
+    assert app.state.config.pacing.ad_spots_per_break == 3
+
+
+@pytest.mark.asyncio
+async def test_patch_pacing_rejects_non_object_payload():
+    app = _make_test_app()
+    app.state.config.pacing.songs_between_banter = 4
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.patch("/api/pacing", json=[])
+    assert resp.status_code == 400
+    assert app.state.config.pacing.songs_between_banter == 4
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bad_value", [None, True, "", "abc", [], {}])
+async def test_patch_pacing_malformed_ad_spots_do_not_mutate_config(bad_value):
+    """ad_spots_per_break runs the same strict parser as the sibling fields."""
+    app = _make_test_app()
+    app.state.config.pacing.ad_spots_per_break = 3
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.patch("/api/pacing", json={"ad_spots_per_break": bad_value})
+    assert resp.status_code == 400
+    assert app.state.config.pacing.ad_spots_per_break == 3
+
+
+@pytest.mark.asyncio
+async def test_patch_pacing_enforces_songs_between_ads_floor():
+    app = _make_test_app()
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.patch("/api/pacing", json={"songs_between_ads": 0})
+    assert resp.status_code == 200
+    assert resp.json()["songs_between_ads"] == 1
+    assert app.state.config.pacing.songs_between_ads == 1
+
+
+@pytest.mark.asyncio
+async def test_patch_pacing_clamps_ad_spots_floor_and_ceiling():
+    app = _make_test_app()
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        floor = await client.patch("/api/pacing", json={"ad_spots_per_break": 0})
+        ceiling = await client.patch("/api/pacing", json={"ad_spots_per_break": 99})
+    assert floor.status_code == 200
+    assert floor.json()["ad_spots_per_break"] == 1
+    assert ceiling.status_code == 200
+    assert ceiling.json()["ad_spots_per_break"] == 5
+    assert app.state.config.pacing.ad_spots_per_break == 5
+
+
+@pytest.mark.asyncio
+async def test_patch_pacing_clamps_banter_and_ads_ceiling():
+    """A single PATCH cannot push cadence high enough to silence the station."""
+    app = _make_test_app()
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.patch(
+            "/api/pacing",
+            json={"songs_between_banter": 2147483647, "songs_between_ads": 999999},
+        )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["songs_between_banter"] == 60
+    assert body["songs_between_ads"] == 60
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("content", ["", "{"])
+async def test_patch_pacing_rejects_invalid_json_without_mutating_config(content):
+    app = _make_test_app()
+    app.state.config.pacing.songs_between_banter = 4
+    app.state.config.pacing.songs_between_ads = 7
+    app.state.config.pacing.ad_spots_per_break = 3
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.patch(
+            "/api/pacing",
+            content=content,
+            headers={"content-type": "application/json"},
+        )
+    assert resp.status_code == 400
+    assert resp.json()["detail"] == "Pacing payload must be valid JSON"
+    assert app.state.config.pacing.songs_between_banter == 4
+    assert app.state.config.pacing.songs_between_ads == 7
+    assert app.state.config.pacing.ad_spots_per_break == 3
 
 
 # ---------------------------------------------------------------------------

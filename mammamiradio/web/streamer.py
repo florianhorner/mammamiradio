@@ -2107,13 +2107,37 @@ async def get_pacing(request: Request, _: None = Depends(require_admin_access)):
 async def update_pacing(request: Request, _: None = Depends(require_admin_access)):
     """Update pacing settings in real-time."""
     config = request.app.state.config
-    body = await request.json()
+    try:
+        body = await request.json()
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Pacing payload must be valid JSON") from exc
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="Pacing payload must be a JSON object")
+
+    def _parse_pacing_int(field: str) -> int | None:
+        if field not in body:
+            return None
+        raw = body[field]
+        if isinstance(raw, bool) or raw is None:
+            raise HTTPException(status_code=400, detail=f"{field} must be an integer")
+        if isinstance(raw, int):
+            return raw
+        if isinstance(raw, str):
+            text = raw.strip()
+            if _re.fullmatch(r"-?\d{1,9}", text):
+                return int(text)
+        raise HTTPException(status_code=400, detail=f"{field} must be an integer")
+
+    songs_between_banter = _parse_pacing_int("songs_between_banter")
+    songs_between_ads = _parse_pacing_int("songs_between_ads")
+    ad_spots_per_break = _parse_pacing_int("ad_spots_per_break")
+
     if "songs_between_banter" in body:
-        config.pacing.songs_between_banter = max(1, int(body["songs_between_banter"]))
+        config.pacing.songs_between_banter = max(2, min(60, songs_between_banter or 0))
     if "songs_between_ads" in body:
-        config.pacing.songs_between_ads = max(1, int(body["songs_between_ads"]))
+        config.pacing.songs_between_ads = max(1, min(60, songs_between_ads or 0))
     if "ad_spots_per_break" in body:
-        config.pacing.ad_spots_per_break = max(1, min(5, int(body["ad_spots_per_break"])))
+        config.pacing.ad_spots_per_break = max(1, min(5, ad_spots_per_break or 0))
     return {
         "ok": True,
         "songs_between_banter": config.pacing.songs_between_banter,

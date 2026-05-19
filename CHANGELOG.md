@@ -17,6 +17,13 @@ The current version source of truth is `pyproject.toml`.
   segment id, so a track that scrolls off the head between rendering the row
   and clicking can never be removed by mistake.
 
+### Changed
+
+- **Banter cadence minimum is now 2 songs.** `pacing.songs_between_banter` must
+  be at least 2 — a value of 1 made the hosts talk after every single song.
+  Config validation, the scheduler, and the admin Cadenza slider all enforce
+  the new floor.
+
 ### Fixed
 
 - **Host banter is no longer truncated to its first phrase.** Per-line voice
@@ -24,6 +31,12 @@ The current version source of truth is `pyproject.toml`.
   pause, collapsing multi-line host exchanges to a second or two. The shortened
   audio was then rejected as too short, so the hosts could fall silent for an
   entire session. Silence trimming now removes trailing silence only.
+- **`PATCH /api/pacing` rejects malformed payloads.** Non-object bodies and
+  non-integer field values now return HTTP 400 and leave the running config
+  untouched, instead of raising a 500 or silently coercing the value. Cadence
+  values are also clamped to a safe ceiling so a single request cannot
+  effectively disable banter or ads. Config-load validation now enforces the
+  same ceilings, so a stray `radio.toml` cannot bypass the runtime clamp.
 
 ## [2.12.4] - 2026-05-18
 

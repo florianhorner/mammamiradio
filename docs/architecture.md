@@ -221,7 +221,7 @@ This is opportunistic context, not a hard dependency. Failures there should not 
 | `/api/hosts/{host_name}/personality` | PATCH | Admin | Patch host personality axes (energy, warmth, chaos) |
 | `/api/hosts/{host_name}/personality/reset` | POST | Admin | Reset host personality to defaults |
 | `/api/pacing` | GET | Admin | Current pacing configuration |
-| `/api/pacing` | PATCH | Admin | Patch pacing fields (songs between banter, ad spots per break, etc.) |
+| `/api/pacing` | PATCH | Admin | Patch pacing fields (songs between banter, ad spots per break, etc.); malformed payloads return 400, values are clamped to safe floors/ceilings |
 | `/api/setup/save-keys` | POST | Admin | Save API keys via dashboard |
 | `/api/capabilities` | GET | Admin | Capability flags, tier, next-step hint, connect status, and provider degradation telemetry |
 | `/api/chaos` | GET | Admin | Return `{"enabled": bool}` for Chaos Mode |

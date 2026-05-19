@@ -801,6 +801,43 @@ class TestSchedulerReasonsDoNotLeakToUI:
         assert "it.reason" not in block
 
 
+class TestPacingControlsMatchServerContract:
+    def test_admin_banter_slider_uses_server_floor(self):
+        html = ADMIN_HTML.read_text()
+
+        assert 'id="pBanter" min="2"' in html
+        assert 'id="pacingMeta">Intervento ogni 2 brani' in html
+        assert "pacing.songs_between_banter||2" in html
+
+    def test_admin_pacing_changes_send_partial_patch(self):
+        html = ADMIN_HTML.read_text()
+
+        assert "savePacingField(PACE_FIELDS[n],el.value)" in html
+        assert "api('PATCH','/api/pacing',{[field]:+value})" in html
+        assert "songs_between_banter:+document.getElementById('pBanter').value" not in html
+
+    def test_admin_pacing_save_applies_response_and_resyncs_on_rejection(self):
+        """Slider saves must re-render only their own field from the server
+        response and roll that field back when a PATCH is rejected."""
+        html = ADMIN_HTML.read_text()
+
+        # A save re-renders only the field it patched, never sibling sliders.
+        assert "applyPacingResponse(r,field)" in html
+        # On a rejected save the field re-syncs from the last server snapshot.
+        assert "if(r&&r.detail){" in html
+        assert "if(_st.pacing)applyPacingResponse(_st.pacing,field);" in html
+
+    def test_admin_quick_pacing_actions_check_save_result(self):
+        """less_banter / too_many_ads must not toast success on a failed save."""
+        html = ADMIN_HTML.read_text()
+
+        assert "savePacingField('songs_between_banter',v,{silent:true})" in html
+        assert "savePacingField('songs_between_ads',v,{silent:true})" in html
+        # Per-field sequence guard: a stale response cannot roll the field back.
+        assert "_paceSeq[field]" in html
+        assert "if(mySeq===_paceSeq[field])applyPacingResponse(r,field)" in html
+
+
 class TestPoolDiagnosticsStayHidden:
     """Scheduler pool diagnostics are internal state, not operator programme copy."""
 
