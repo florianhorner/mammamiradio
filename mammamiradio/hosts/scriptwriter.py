@@ -1407,7 +1407,7 @@ CHAOS DIRECTION:
 
     # Phase 4: reactive directive — HIGH PRIORITY impossible moment from a home event
     reactive_block = ""
-    pending_directive = state.ha_pending_directive
+    pending_directive = _sanitize_prompt_data(state.ha_pending_directive, max_len=300)
     if pending_directive:
         reactive_block = f"""
 HIGH PRIORITY — HOME EVENT DIRECTIVE:

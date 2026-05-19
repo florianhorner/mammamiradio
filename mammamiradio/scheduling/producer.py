@@ -701,6 +701,7 @@ async def _fire_interrupt(
 
     # Inject directive + pissed tone for the producer's next banter cycle.
     state.ha_pending_directive = spec.directive
+    state.interrupt_urgency = spec.urgency
     state.chaos_pending = ChaosSubtype.URGENT_INTERRUPT
     state.force_next = SegmentType.BANTER  # safety belt if chaos_pending is raced
 
@@ -822,9 +823,9 @@ async def run_producer(
                                 _timer_old_states,
                                 timer_states,
                                 None,
-                                entity_labels={},
+                                entity_labels={eid: eid for eid in _timer_entity_ids},
                                 state_translations={},
-                                now=asyncio.get_event_loop().time(),
+                                now=asyncio.get_running_loop().time(),
                             )
                             _timer_old_states.update(timer_states)
                             if timer_events:
