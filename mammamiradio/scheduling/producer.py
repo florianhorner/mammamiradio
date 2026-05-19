@@ -17,6 +17,8 @@ from functools import partial
 from pathlib import Path
 from uuid import uuid4
 
+import httpx
+
 import mammamiradio.hosts.scriptwriter as _sw
 from mammamiradio.audio.audio_quality import AudioQualityError, AudioToolError, validate_segment_audio
 from mammamiradio.audio.imaging import ImagingLibrary
@@ -42,6 +44,7 @@ from mammamiradio.core.config import StationConfig
 from mammamiradio.core.models import (
     AdHistoryEntry,
     ChaosSubtype,
+    InterruptSpec,
     Segment,
     SegmentType,
     StationState,
@@ -301,6 +304,9 @@ async def _maybe_start_session(state: StationState) -> None:
 # Directory for pre-bundled banter and ad clips that ship with the package.
 # These provide station personality on day 1 without an Anthropic API key.
 _DEMO_ASSETS_DIR = Path(__file__).resolve().parent.parent / "assets" / "demo"
+
+# SFX assets (alert jingle used as interrupt bridge audio).
+_SFX_DIR = Path(__file__).resolve().parent.parent / "assets" / "sfx"
 
 
 # Tracks the most recent music file to avoid repeated glob scans on every banter.
@@ -652,6 +658,64 @@ async def prewarm_first_segment(
         return False
 
 
+async def _fire_interrupt(
+    state: StationState,
+    spec: InterruptSpec,
+    queue: asyncio.Queue[Segment],
+    skip_event: asyncio.Event | None,
+) -> None:
+    """Immediately interrupt the stream with bridge audio + pissed banter.
+
+    Loads alert.mp3 as a bridge clip (plays in ≤2s), drains the lookahead queue
+    so no buffered music plays between bridge and banter, injects the directive,
+    and fires skip_event to cut the currently-playing segment.
+    """
+    import time as _time
+
+    now = _time.time()
+    if now - state.last_interrupt_ts < spec.cooldown:
+        logger.info(
+            "Interrupt suppressed — cooldown %ds remaining",
+            int(spec.cooldown - (now - state.last_interrupt_ts)),
+        )
+        return
+    state.last_interrupt_ts = now
+
+    # Bridge audio: canned alert jingle for immediate playback (sub-2s).
+    alert_sfx = _SFX_DIR / "alert.mp3"
+    state.interrupt_slot = alert_sfx if alert_sfx.exists() else None
+
+    # Drain the lookahead queue so no buffered music leaks between bridge and banter.
+    purged = 0
+    while not queue.empty():
+        try:
+            seg = queue.get_nowait()
+            if seg.ephemeral:
+                seg.path.unlink(missing_ok=True)
+            queue.task_done()
+            purged += 1
+        except Exception:
+            break
+    if purged:
+        logger.info("Interrupt: purged %d buffered segments", purged)
+
+    # Inject directive + pissed tone for the producer's next banter cycle.
+    state.ha_pending_directive = spec.directive
+    state.chaos_pending = ChaosSubtype.URGENT_INTERRUPT
+    state.force_next = SegmentType.BANTER  # safety belt if chaos_pending is raced
+
+    # Skip the currently playing segment — this is what makes it feel immediate.
+    if skip_event is not None:
+        skip_event.set()
+
+    logger.info(
+        "Interrupt fired: directive=%r urgency=%r bridge=%s",
+        spec.directive,
+        spec.urgency,
+        state.interrupt_slot,
+    )
+
+
 async def run_producer(
     queue: asyncio.Queue[Segment],
     state: StationState,
@@ -723,6 +787,65 @@ async def run_producer(
         producer_task = asyncio.current_task()
         if producer_task is not None:
             producer_task.add_done_callback(lambda _task: _ha_heartbeat_task.cancel())
+
+        # Lightweight timer interrupt poll — runs every timer_poll_interval seconds.
+        # Only fetches the timer entity states, not the full 200+ entity context.
+        if config.homeassistant.timer_interrupts:
+            _timer_entity_ids = {t.entity_id for t in config.homeassistant.timer_interrupts}
+            # Pre-populate old_states for timer entities with "idle" so the first
+            # active→idle transition is detected correctly (cold-start fix).
+            _timer_old_states: dict[str, dict] = {eid: {"state": "idle"} for eid in _timer_entity_ids}
+
+            async def _timer_poll_loop() -> None:
+                poll_interval = float(config.homeassistant.timer_poll_interval)
+                client = httpx.AsyncClient(timeout=5.0)
+                try:
+                    while True:
+                        await asyncio.sleep(poll_interval)
+                        if state.session_stopped:
+                            continue
+                        try:
+                            resp = await client.get(
+                                f"{config.homeassistant.url.rstrip('/')}/api/states",
+                                headers={
+                                    "Authorization": f"Bearer {config.ha_token}",
+                                    "Content-Type": "application/json",
+                                },
+                            )
+                            resp.raise_for_status()
+                            all_states = resp.json()
+                            entity_map = {e["entity_id"]: e for e in all_states}
+                            timer_states = {eid: entity_map[eid] for eid in _timer_entity_ids if eid in entity_map}
+                            from mammamiradio.home.ha_enrichment import diff_states
+
+                            timer_events = diff_states(
+                                _timer_old_states,
+                                timer_states,
+                                None,
+                                entity_labels={},
+                                state_translations={},
+                                now=asyncio.get_event_loop().time(),
+                            )
+                            _timer_old_states.update(timer_states)
+                            if timer_events:
+                                result = check_reactive_triggers(
+                                    timer_events,
+                                    timer_states,
+                                    config.homeassistant.timer_interrupts,
+                                )
+                                if isinstance(result, InterruptSpec):
+                                    await _fire_interrupt(state, result, queue, skip_event)
+                        except asyncio.CancelledError:
+                            raise
+                        except Exception:
+                            logger.debug("Timer poll error (non-fatal)", exc_info=True)
+                finally:
+                    await client.aclose()
+
+            _timer_poll_task = asyncio.create_task(_timer_poll_loop())
+            _track_ha_task(_timer_poll_task)
+            if producer_task is not None:
+                producer_task.add_done_callback(lambda _task: _timer_poll_task.cancel())
 
     while True:
         if state.session_stopped:
@@ -959,11 +1082,17 @@ async def run_producer(
                 state.ha_last_event_label = ""
                 state.ha_last_event_ts = 0.0
                 state.ha_last_event_label_en = ""
-            # Phase 4: only set directive if none is pending (first match wins)
+            # Phase 4: reactive triggers — interrupt takes priority over ambient directives
             if not state.ha_pending_directive:
-                directive = check_reactive_triggers(ha_cache.events, ha_cache.raw_states)
-                if directive:
-                    state.ha_pending_directive = directive
+                result = check_reactive_triggers(
+                    ha_cache.events,
+                    ha_cache.raw_states,
+                    config.homeassistant.timer_interrupts or None,
+                )
+                if isinstance(result, InterruptSpec):
+                    await _fire_interrupt(state, result, queue, skip_event)
+                elif isinstance(result, str):
+                    state.ha_pending_directive = result
 
         try:
             if seg_type == SegmentType.MUSIC:
