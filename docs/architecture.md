@@ -240,6 +240,7 @@ The same mechanism is callable directly via `POST /api/interrupt` (admin auth, 6
 | `/api/shuffle` | POST | Admin | Shuffle playlist |
 | `/api/skip` | POST | Admin | Skip current segment |
 | `/api/purge` | POST | Admin | Remove queued segments |
+| `/api/queue/remove` | POST | Admin | Remove one queued segment by stable `id` (or legacy `index`) |
 | `/api/playlist/remove` | POST | Admin | Remove track by index |
 | `/api/playlist/move` | POST | Admin | Move track with `{from, to}` |
 | `/api/playlist/move_to_next` | POST | Admin | Move track to position 0 in upcoming |

@@ -717,14 +717,6 @@ body::before {
 .a-now-compact .progress-fill[data-t="news_flash"] { background: var(--news); }
 .a-now-compact .progress-time { font-family: var(--font-mono); font-size: 10px; color: var(--muted); }
 
-/* Nav */
-.a-nav { display: flex; flex-direction: column; gap: 2px; }
-.a-nav-head { font-size: 9px; font-weight: 700; letter-spacing: 0.22em; text-transform: uppercase; color: var(--muted); margin: 8px 6px 4px; }
-.a-nav a { display: block; padding: 13px 10px; font-size: 13px; font-weight: 500; color: var(--cream-dk); border-radius: 6px; cursor: pointer; transition: background 150ms, color 150ms; text-decoration: none; }
-.a-nav a:hover { background: rgba(245,237,216,0.04); color: var(--cream); }
-.a-nav a.active { background: rgba(236,204,48,0.12); color: var(--sun); }
-.a-nav a:focus-visible { outline: none; box-shadow: inset 0 0 0 1px var(--sun2); }
-
 /* Engine status */
 .a-engine-status { margin-top: auto; padding-top: 14px; border-top: 1px solid var(--line); }
 .a-engine-status .eyebrow { font-size: 9px; font-weight: 700; letter-spacing: 0.22em; text-transform: uppercase; color: var(--muted); margin-bottom: 10px; }
@@ -1207,6 +1199,334 @@ body[data-stopped="true"] .a-station-card .dot.on { animation-play-state: paused
   }
   .a-programme tr.pool-pass { display: none; }
 }
+
+/* ══ PRODUCER DESK ══ */
+.a-app.producer-desk {
+  display: block;
+  min-height: 100vh;
+  max-width: 1000px;
+  margin: 0 auto;
+  padding: 24px 24px 72px;
+}
+.a-content.producer-main {
+  padding: 0;
+  gap: 18px;
+}
+.producer-header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 4px 0 2px;
+}
+.producer-header .a-brand {
+  border-bottom: none;
+  padding: 0;
+}
+.producer-header .a-brand img { width: 36px; height: 36px; }
+.producer-header .a-brand .wm { font-size: 30px; }
+.producer-header .a-brand .sub { color: var(--muted); }
+.producer-clock {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--muted);
+  text-align: right;
+  white-space: nowrap;
+}
+.producer-zone {
+  border-radius: 8px;
+}
+.zone-eyebrow {
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--sun2);
+  margin-bottom: 8px;
+}
+.on-air-zone {
+  border-color: rgba(236,204,48,0.45);
+  background:
+    linear-gradient(180deg, rgba(93,74,58,0.72) 0%, rgba(55,43,35,0.82) 100%),
+    var(--surface);
+}
+.on-air-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 18px;
+  align-items: center;
+}
+.on-air-now-main {
+  min-width: 0;
+}
+.on-air-now-main #nowType {
+  display: inline-flex;
+  margin-bottom: 10px;
+}
+.on-air-title {
+  font-family: var(--font-display);
+  font-size: 34px;
+  font-style: italic;
+  font-weight: 700;
+  line-height: 1.08;
+  color: var(--cream);
+  overflow-wrap: anywhere;
+}
+.on-air-artist {
+  margin-top: 4px;
+  color: var(--cream-dk);
+  font-size: 14px;
+}
+.on-air-progress-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 14px;
+}
+.on-air-progress-track {
+  flex: 1;
+  height: 4px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: rgba(20,17,15,0.35);
+}
+.on-air-progress-track .progress-fill {
+  height: 100%;
+  border-radius: 999px;
+  transition: width 1s linear;
+  width: 0;
+  background: var(--ok);
+}
+.on-air-progress-track .progress-fill[data-t="banter"] { background: var(--sun); }
+.on-air-progress-track .progress-fill[data-t="ad"] { background: var(--warning); }
+.on-air-progress-track .progress-fill[data-t="news_flash"] { background: var(--news); }
+.on-air-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  align-items: flex-end;
+  min-width: 190px;
+}
+.on-air-status-line,
+.on-air-cost-line {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--cream-dk);
+}
+.on-air-cost-line .lbl {
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.on-air-cost-line b {
+  color: var(--sun);
+  font-weight: 600;
+}
+.on-air-buttons {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+.producer-sticky-strip {
+  display: none;
+  position: sticky;
+  top: 10px;
+  z-index: 30;
+  border-radius: 8px;
+  padding: 10px 14px;
+  margin-bottom: 0;
+}
+body[data-sticky-onair="true"] .producer-sticky-strip {
+  display: flex;
+}
+.topbar-cost {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--cream-dk);
+}
+.topbar-cost .lbl {
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.topbar-cost b {
+  color: var(--sun);
+  font-weight: 600;
+}
+.queue-requests {
+  margin-bottom: 14px;
+  padding: 10px 12px;
+  border: 1px solid rgba(245,237,216,0.08);
+  border-radius: 8px;
+  background: rgba(20,17,15,0.22);
+}
+.queue-requests .card-label {
+  margin-bottom: 8px;
+}
+.a-programme tr.predicted {
+  opacity: 0.72;
+}
+.a-programme tr.predicted .ts::after {
+  content: " · pianificato";
+  color: var(--muted);
+  font-size: 10px;
+  text-transform: none;
+  letter-spacing: 0;
+}
+.a-programme tr.rendered-queue.next {
+  background: rgba(37,99,235,0.08);
+  box-shadow: inset 2px 0 0 var(--ok);
+}
+.queue-remove-btn[disabled] {
+  opacity: 0.35;
+  cursor: default;
+}
+.rotation-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+.rotation-sort {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--muted);
+}
+.producer-drawers {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  align-items: start;
+}
+.producer-drawer {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(20,17,15,0.36);
+  overflow: hidden;
+}
+.producer-drawer[open] {
+  grid-column: 1 / -1;
+  background: rgba(37,30,25,0.88);
+  border-color: var(--line-strong);
+}
+.producer-drawer summary {
+  min-height: 56px;
+  padding: 12px 14px;
+  cursor: pointer;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.producer-drawer summary::-webkit-details-marker { display: none; }
+.drawer-title {
+  display: block;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--cream);
+}
+.drawer-meta {
+  display: block;
+  margin-top: 2px;
+  font-size: 10px;
+  color: var(--muted);
+}
+.drawer-arrow {
+  color: var(--muted);
+  transition: transform 0.15s;
+}
+.producer-drawer[open] .drawer-arrow {
+  transform: rotate(90deg);
+  color: var(--sun);
+}
+.drawer-body {
+  padding: 4px 16px 18px;
+}
+.drawer-section {
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+.drawer-section + .drawer-section {
+  margin-top: 18px;
+}
+.drawer-section > header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 14px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--line);
+}
+.drawer-section .ttl-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.drawer-section .ttl-eyebrow {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--sun2);
+}
+.drawer-section h2 {
+  font-family: var(--font-display);
+  font-style: italic;
+  font-weight: 600;
+  font-size: 22px;
+  color: var(--cream);
+  margin: 0;
+  line-height: 1.1;
+}
+.drawer-section h2 em {
+  color: var(--sun);
+  font-style: italic;
+}
+.drawer-section .sub {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+@media (max-width: 960px) {
+  .a-app.producer-desk { padding: 20px 18px 56px; }
+  .producer-drawers { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .on-air-body { grid-template-columns: 1fr; }
+  .on-air-actions { align-items: flex-start; min-width: 0; }
+  .on-air-buttons { justify-content: flex-start; }
+}
+
+@media (max-width: 600px) {
+  .producer-header { flex-direction: column; align-items: flex-start; }
+  .producer-clock { text-align: left; }
+  .producer-header .a-brand .wm { font-size: 25px; }
+  .producer-drawers { grid-template-columns: 1fr; }
+  .producer-drawer[open] { grid-column: auto; }
+  .on-air-title { font-size: 28px; }
+  .producer-sticky-strip { top: 0; }
+  .producer-sticky-strip { flex-wrap: wrap; }
+  .topbar-cost { align-items: flex-start; }
+  .drawer-section > header { flex-direction: column; align-items: flex-start; }
+}
 </style>
 </head>
 <body>
@@ -1231,76 +1551,70 @@ body[data-stopped="true"] .a-station-card .dot.on { animation-play-state: paused
 
 <div class="a-toptricolor" aria-hidden="true"><span class="g"></span><span class="w"></span><span class="r"></span></div>
 
-<div class="a-app">
+<div class="a-app producer-desk">
 
-  <!-- ══════════════════ SIDEBAR ══════════════════ -->
-  <aside class="a-sidebar">
-    <div class="a-tricolor"><span class="seg g"></span><span class="seg w"></span><span class="seg r"></span></div>
+  <!-- ══════════════════ PRODUCER DESK ══════════════════ -->
+  <main class="a-content producer-main">
 
-    <div class="a-brand">
-      <img src="/static/icon-192.svg" alt="" width="34" height="34">
-      <div>
-        <div class="wm">Mamma <span class="mi">Mi</span> Radio</div>
-        <div class="tricolor-stripe" aria-hidden="true"></div>
-        <div class="sub">Regia · Admin</div>
-      </div>
-      <span class="sr-only">Regia — Control Room</span>
-    </div>
-
-    <div class="a-station-card">
-      <div class="eyebrow">Stazione</div>
-      <div class="row">
-        <span class="dot on" id="onAirDot"></span>
-        <span class="label on" id="onAirBadge">In onda</span>
-        <button type="button" id="stopBtn" class="toggle-btn stop" onclick="doStop(this)">Ferma</button>
-        <button type="button" id="resumeBtn" class="toggle-btn start" onclick="doResume(this)" style="display:none">Avvia</button>
-      </div>
-      <div class="meta">
-        <span id="stationSignal">Segnale live</span><span>attivo da <b id="sidebarUptime">—</b></span>
-      </div>
-    </div>
-
-    <!-- Compact now-playing (below station card) -->
-    <div class="a-now-compact">
-      <div class="status-chip idle" id="nowType" aria-label="status: idle">—</div>
-      <div class="title" id="nowTitle">In attesa del segnale...</div>
-      <div class="artist" id="nowArtist"></div>
-      <div class="progress-row">
-        <div class="progress-track">
-          <div class="progress-fill" id="progFill" data-t="music"></div>
+    <header class="producer-header">
+      <div class="a-brand">
+        <img src="/static/icon-192.svg" alt="" width="36" height="36">
+        <div>
+          <div class="wm">Mamma <span class="mi">Mi</span> Radio</div>
+          <div class="tricolor-stripe" aria-hidden="true"></div>
+          <div class="sub">Regia · Producer Desk</div>
         </div>
-        <span class="progress-time" id="nowElapsed">—</span>
+        <span class="sr-only">Regia — Control Room · Producer Desk</span>
       </div>
-    </div>
-
-    <nav class="a-nav">
-      <div class="a-nav-head">Conduttore</div>
-      <a class="active" href="#programme" onclick="scrollToSection('programme');return false">Palinsesto</a>
-      <a href="#triggers" onclick="scrollToSection('triggers');return false">In Onda</a>
-      <a href="#pacing" onclick="scrollToSection('pacing');return false">Cadenza</a>
-      <div class="a-nav-head">Motore</div>
-      <a href="#hosts" onclick="scrollToSection('hosts');return false">Conduttori</a>
-      <a href="#log" onclick="scrollToSection('log');return false">Archivio</a>
-      <a href="#music" onclick="scrollToSection('music');return false">Coda</a>
-      <a href="#engine" onclick="scrollToSection('engine');return false">Motore</a>
-    </nav>
-
-    <div class="a-engine-status">
-      <div class="eyebrow">Motore</div>
-      <div id="pipelineStatus"></div>
-      <div class="cost">
-        <span class="lbl">Costo AI · 24h</span><b id="sidebarCost">—</b>
+      <div class="producer-clock">
+        <div id="contentClock">—</div>
+        <div>attivo da <b id="sidebarUptime">—</b></div>
       </div>
-    </div>
-  </aside>
-
-  <!-- ══════════════════ CONTENT ══════════════════ -->
-  <main class="a-content">
+    </header>
 
     <div class="stopped-banner" id="stoppedBanner" role="status" aria-live="polite">&#9632; Stazione in pausa · premi Avvia quando sei pronto.</div>
 
-    <!-- TopBar -->
-    <div class="a-topbar" id="topBar">
+    <!-- In Onda zone -->
+    <section class="a-panel producer-zone on-air-zone" id="on-air">
+      <div class="zone-eyebrow">In onda</div>
+      <div class="on-air-body">
+        <div class="on-air-now-main">
+          <div class="status-chip idle" id="nowType" aria-label="status: idle">—</div>
+          <div class="on-air-title" id="nowTitle">In attesa del segnale...</div>
+          <div class="on-air-artist" id="nowArtist"></div>
+          <div class="on-air-progress-row">
+            <span class="progress-time" id="nowElapsed">—</span>
+            <div class="on-air-progress-track">
+              <div class="progress-fill" id="progFill" data-t="music"></div>
+            </div>
+          </div>
+        </div>
+        <div class="on-air-actions">
+          <div class="on-air-status-line">
+            <span class="dot on" id="onAirDot"></span>
+            <span class="label on" id="onAirBadge">In onda</span>
+            <span id="stationSignal">Segnale live</span>
+          </div>
+          <div class="on-air-cost-line">
+            <span class="lbl">Costo AI · 24h</span><b id="sidebarCost">—</b>
+          </div>
+          <div class="on-air-buttons">
+            <button type="button" class="btn-icon" title="Prossimo brano" onclick="doSkip(this)">
+              <svg viewBox="0 0 16 16" fill="currentColor"><path d="M3 3v10l7-5zM11 3h2v10h-2z"/></svg>
+            </button>
+            <button type="button" id="stopBtn" class="btn-icon" title="Ferma" onclick="doStop(this)">
+              <svg viewBox="0 0 16 16" fill="currentColor"><rect x="3.5" y="3" width="3" height="10" rx="0.5"/><rect x="9.5" y="3" width="3" height="10" rx="0.5"/></svg>
+            </button>
+            <button type="button" id="resumeBtn" class="btn-icon" title="Avvia" onclick="doResume(this)" style="display:none">
+              <svg viewBox="0 0 16 16" fill="currentColor"><path d="M4 2.5v11l8-5.5z"/></svg>
+            </button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Sticky On Air strip -->
+    <div class="a-topbar producer-sticky-strip" id="topBar">
       <span class="live-pill"><span class="dot"></span> <span id="topBarStatus">In onda</span></span>
       <span id="headerHealth" class="status-dot working" aria-label="status: working" title="Runtime status">
         <span class="dot"></span>Controllo
@@ -1310,28 +1624,20 @@ body[data-stopped="true"] .a-station-card .dot.on { animation-play-state: paused
       </div>
       <div class="meta">
         <div class="eyebrow">In Onda Ora</div>
-        <div class="np-title" id="topBarTitle">In attesa del segnale… <span class="by" id="topBarArtist"></span></div>
+        <div class="np-title" id="topBarTitle"><span id="topBarTitleText">In attesa del segnale… </span><span class="by" id="topBarArtist"></span></div>
       </div>
-      <div class="a-topbar-tools">
-        <button type="button" class="btn-icon" title="Prossimo brano" onclick="doSkip(this)">
-          <svg viewBox="0 0 16 16" fill="currentColor"><path d="M3 3v10l7-5zM11 3h2v10h-2z"/></svg>
-        </button>
-        <button type="button" class="btn-icon" title="Pausa" id="topBarPause" onclick="doStop(this)">
-          <svg viewBox="0 0 16 16" fill="currentColor"><rect x="3.5" y="3" width="3" height="10" rx="0.5"/><rect x="9.5" y="3" width="3" height="10" rx="0.5"/></svg>
-        </button>
-        <button type="button" class="btn-icon" title="Mescola" onclick="doShuffle(this)">
-          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 4h2.5l5 8H12"/><path d="M2 12h2.5l1.8-2.9"/><path d="M9.7 6.4 12 4"/><path d="M10 2l2 2-2 2"/><path d="M10 10l2 2-2 2"/></svg>
-        </button>
-        <button type="button" class="btn-primary-sm" onclick="doTrigger('banter',this)">Aggiungi intervento</button>
+      <div class="topbar-cost">
+        <span class="lbl">Costo AI</span>
+        <b id="topBarCost">—</b>
       </div>
     </div>
 
-    <!-- Palinsesto panel -->
-    <section class="a-panel" id="programme">
+    <!-- Scaletta zone -->
+    <section class="a-panel producer-zone" id="live-queue">
       <header>
         <div class="ttl-wrap">
-          <div class="ttl-eyebrow">Conduttore</div>
-          <h2>Palinsesto</h2>
+          <div class="ttl-eyebrow">Regia</div>
+          <h2>Scaletta</h2>
         </div>
         <div class="programme-toolbar">
           <span class="filter-count" id="programmeCount"></span>
@@ -1343,16 +1649,55 @@ body[data-stopped="true"] .a-station-card .dot.on { animation-play-state: paused
           </div>
         </div>
       </header>
+      <div class="queue-requests">
+        <div class="card-label">Richieste in attesa <span id="lrMeta" style="float:right;font-weight:400;color:var(--muted)"></span></div>
+        <div id="lrBody"><div class="empty">Nessuna richiesta</div></div>
+      </div>
       <div id="programmeList">
-        <div class="prog-empty">Caricamento palinsesto...</div>
+        <div class="prog-empty">Costruzione scaletta...</div>
       </div>
     </section>
 
-    <!-- In Onda panel -->
-    <section class="a-panel" id="triggers">
+    <!-- Rotation Pool zone -->
+    <section class="a-panel producer-zone" id="rotation-pool">
       <header>
         <div class="ttl-wrap">
-          <div class="ttl-eyebrow">Conduttore</div>
+          <div class="ttl-eyebrow">Regia</div>
+          <h2>Rotazione</h2>
+        </div>
+        <div class="sub" id="plMeta"></div>
+      </header>
+      <div class="rotation-toolbar">
+        <div class="quick-actions" id="playlistSourceControls">
+          <button type="button" class="btn btn-chip" id="sourceChartsBtn" data-capability="charts_reload" style="display:none" onclick="enrichPlaylistSource('charts',this)">Aggiungi classifiche</button>
+          <button type="button" class="btn btn-chip" id="sourceJamendoBtn" data-capability="jamendo" style="display:none" onclick="enrichPlaylistSource('jamendo',this)">Aggiungi Jamendo</button>
+          <button type="button" class="btn btn-chip" onclick="enrichPlaylistSource('classic_70s',this)">Aggiungi anni '70</button>
+          <button type="button" class="btn btn-chip" onclick="enrichPlaylistSource('classic_80s',this)">Aggiungi anni '80</button>
+          <button type="button" class="btn btn-chip" onclick="enrichPlaylistSource('classic_90s',this)">Aggiungi anni '90</button>
+        </div>
+        <div class="rotation-sort">ordine: rotazione corrente</div>
+      </div>
+      <div class="search-row">
+        <label for="searchInput" class="sr-only">Cerca musica</label>
+        <input type="text" class="search-input" id="searchInput" placeholder="Cerca musica nella rotazione e sul web..." autocomplete="off" aria-label="Cerca musica">
+        <button type="button" class="btn btn-util" onclick="doSearch()">Cerca</button>
+      </div>
+      <div id="searchResults"></div>
+      <div id="plBody" style="max-height:400px;overflow-y:auto;overflow-x:hidden"></div>
+    </section>
+
+    <section class="producer-drawers" id="producer-drawers" aria-label="Cassetti regia">
+      <details class="producer-drawer" id="drawer-steer">
+        <summary>
+          <span><span class="drawer-title">Regia</span><span class="drawer-meta">cadenza · modalità · interventi</span></span>
+          <span class="drawer-arrow" aria-hidden="true">›</span>
+        </summary>
+        <div class="drawer-body">
+    <!-- In Onda panel -->
+    <section class="drawer-section" id="triggers">
+      <header>
+        <div class="ttl-wrap">
+          <div class="ttl-eyebrow">Regia</div>
           <h2>In <em>Onda</em></h2>
         </div>
         <div class="sub">Manda in onda un segmento senza modificare il palinsesto</div>
@@ -1425,13 +1770,11 @@ body[data-stopped="true"] .a-station-card .dot.on { animation-play-state: paused
     <!-- Tricolor divider -->
     <div class="a-divider"><span class="seg g"></span><span class="seg w"></span><span class="seg r"></span></div>
 
-    <!-- 2-column row: Cadenza + Conduttori -->
-    <div class="a-row-2">
       <!-- Cadenza panel -->
-      <section class="a-panel" id="pacing">
+      <section class="drawer-section" id="pacing">
         <header>
           <div class="ttl-wrap">
-            <div class="ttl-eyebrow">Motore</div>
+            <div class="ttl-eyebrow">Regia</div>
             <h2>Cadenza</h2>
           </div>
           <div class="sub" id="pacingMeta">4 music · 1 banter</div>
@@ -1456,62 +1799,58 @@ body[data-stopped="true"] .a-station-card .dot.on { animation-play-state: paused
           </label>
         </div>
       </section>
+        </div>
+      </details>
 
-      <!-- Conduttori panel -->
-      <section class="a-panel" id="hosts">
+      <details class="producer-drawer" id="drawer-hosts">
+        <summary>
+          <span><span class="drawer-title">Conduttori</span><span class="drawer-meta">personalità</span></span>
+          <span class="drawer-arrow" aria-hidden="true">›</span>
+        </summary>
+        <div class="drawer-body">
+      <section class="drawer-section" id="hosts">
         <header>
           <div class="ttl-wrap">
-            <div class="ttl-eyebrow">Motore</div>
+            <div class="ttl-eyebrow">Conduttori</div>
             <h2>Conduttori</h2>
           </div>
           <div class="sub" id="hostsMeta">Caricamento...</div>
         </header>
         <div id="hostsBody"><div class="empty" style="padding:10px 0;font-size:12px;font-style:italic;color:var(--muted)">Caricamento conduttori...</div></div>
       </section>
-    </div>
+        </div>
+      </details>
 
-    <!-- Archivio panel -->
-    <section class="a-panel" id="log">
+      <details class="producer-drawer" id="drawer-history">
+        <summary>
+          <span><span class="drawer-title">Archivio</span><span class="drawer-meta">segmenti passati</span></span>
+          <span class="drawer-arrow" aria-hidden="true">›</span>
+        </summary>
+        <div class="drawer-body">
+    <section class="drawer-section" id="log">
       <header>
         <div class="ttl-wrap">
-          <div class="ttl-eyebrow">Conduttore</div>
+          <div class="ttl-eyebrow">Archivio</div>
           <h2>Archivio</h2>
         </div>
         <div class="sub">Cronologia</div>
       </header>
       <div class="a-log" id="logBody"></div>
     </section>
-
-    <!-- Musica & Coda panel -->
-    <section class="a-panel" id="music">
-      <header>
-        <div class="ttl-wrap">
-          <div class="ttl-eyebrow">Conduttore</div>
-          <h2>Musica &amp; <em>Coda</em></h2>
         </div>
-        <div class="sub" id="plMeta"></div>
-      </header>
-      <div class="card-label">Richieste <span id="lrMeta" style="float:right;font-weight:400;color:var(--muted)"></span></div>
-      <div id="lrBody" style="margin-bottom:14px"><div class="empty">Nessuna richiesta</div></div>
-      <div class="card-label">Aggiungi alla rotazione</div>
-      <div class="quick-actions" id="playlistSourceControls" style="margin:10px 0 14px">
-        <button type="button" class="btn btn-chip" id="sourceChartsBtn" data-capability="charts_reload" style="display:none" onclick="enrichPlaylistSource('charts',this)">Aggiungi classifiche</button>
-        <button type="button" class="btn btn-chip" id="sourceJamendoBtn" data-capability="jamendo" style="display:none" onclick="enrichPlaylistSource('jamendo',this)">Aggiungi Jamendo</button>
-        <button type="button" class="btn btn-chip" onclick="enrichPlaylistSource('classic_70s',this)">Aggiungi anni '70</button>
-        <button type="button" class="btn btn-chip" onclick="enrichPlaylistSource('classic_80s',this)">Aggiungi anni '80</button>
-        <button type="button" class="btn btn-chip" onclick="enrichPlaylistSource('classic_90s',this)">Aggiungi anni '90</button>
-      </div>
-      <div class="search-row">
-        <label for="searchInput" class="sr-only">Cerca musica</label>
-        <input type="text" class="search-input" id="searchInput" placeholder="Cerca musica nella coda e sul web..." autocomplete="off" aria-label="Cerca musica">
-        <button type="button" class="btn btn-util" onclick="doSearch()">Cerca</button>
-      </div>
-      <div id="searchResults"></div>
-      <div id="plBody" style="max-height:400px;overflow-y:auto;overflow-x:hidden"></div>
-    </section>
+      </details>
+
+      <details class="producer-drawer" id="drawer-diagnostics">
+        <summary>
+          <span><span class="drawer-title">Motore</span><span class="drawer-meta">costi · provider · setup</span></span>
+          <span class="drawer-arrow" aria-hidden="true">›</span>
+        </summary>
+        <div class="drawer-body">
+          <div class="card-label">Pipeline</div>
+          <div id="pipelineStatus" style="margin-bottom:14px"></div>
 
     <!-- ── MOTORE PANEL ── -->
-    <section class="a-panel" id="engine">
+    <section class="drawer-section" id="engine">
       <header>
         <div class="ttl-wrap">
           <div class="ttl-eyebrow">Motore</div>
@@ -1595,6 +1934,9 @@ body[data-stopped="true"] .a-station-card .dot.on { animation-play-state: paused
         </div>
 
       </div>
+    </section>
+        </div>
+      </details>
     </section>
 
   </main>
@@ -1697,6 +2039,29 @@ function toggleAccordion(head){
 // ── Legacy collapse (used in dynamically rendered content) ──
 function toggleSection(head){head.classList.toggle('open');head.nextElementSibling.classList.toggle('open')}
 
+function initProducerDrawers(){
+  document.querySelectorAll('.producer-drawer').forEach(drawer=>{
+    drawer.addEventListener('toggle',()=>{
+      if(!drawer.open)return;
+      document.querySelectorAll('.producer-drawer').forEach(other=>{
+        if(other!==drawer)other.open=false;
+      });
+    });
+  });
+}
+initProducerDrawers();
+
+function initOnAirSticky(){
+  const onAir=document.getElementById('on-air');
+  if(!onAir||!('IntersectionObserver' in window))return;
+  const observer=new IntersectionObserver(entries=>{
+    const next=entries[entries.length-1]?.isIntersecting?'false':'true';
+    if(document.body.getAttribute('data-sticky-onair')!==next)document.body.setAttribute('data-sticky-onair',next);
+  },{threshold:0,rootMargin:'-10px 0px 0px 0px'});
+  observer.observe(onAir);
+}
+initOnAirSticky();
+
 // ── Transport ──
 async function doSkip(el){flash(el);const r=await api('POST','/api/skip');toast(r.bridged?'Salto preparato — arriva un brano':'Salto — passo al prossimo segmento')}
 async function doTrigger(t,el){flash(el);const r=await api('POST','/api/trigger',{type:t});if(r.ok)toast('In coda: '+segmentText(t)+' dopo il brano in corso');else toast('Errore: '+(r.error||'sconosciuto'))}
@@ -1795,7 +2160,6 @@ async function toggleFestivalMode(el){
     el.disabled=false;
   }
 }
-async function doShuffle(el){flash(el);await api('POST','/api/shuffle');toast('Playlist mescolata')}
 async function doPurge(el){flash(el);const r=await api('POST','/api/purge');toast('Coda svuotata: '+r.purged+' segmenti')}
 async function doStop(el){flash(el);await api('POST','/api/stop');toast('Sessione fermata');updateStopState(true)}
 async function doResume(el){flash(el);await api('POST','/api/resume');toast('Sessione ripresa');updateStopState(false)}
@@ -1846,9 +2210,9 @@ function updateNow(ns){
     document.getElementById('nowElapsed').textContent='—';
     const pf=document.getElementById('progFill');
     if(pf){pf.style.width='0';pf.setAttribute('data-t','music');}
-    const topBarTitle=document.getElementById('topBarTitle');
+    const topBarTitleText=document.getElementById('topBarTitleText');
     const topBarArtist=document.getElementById('topBarArtist');
-    if(topBarTitle)topBarTitle.firstChild.nodeValue='In attesa del segnale… ';
+    if(topBarTitleText)topBarTitleText.textContent='In attesa del segnale… ';
     if(topBarArtist)topBarArtist.textContent='';
     if(_tick){clearInterval(_tick);_tick=null;_prevLabel='';}
     return;
@@ -1874,9 +2238,9 @@ function updateNow(ns){
   }
   titleEl.textContent=title;
   // Update TopBar
-  const topBarTitle=document.getElementById('topBarTitle');
+  const topBarTitleText=document.getElementById('topBarTitleText');
   const topBarArtist=document.getElementById('topBarArtist');
-  if(topBarTitle)topBarTitle.firstChild.nodeValue=title+' ';
+  if(topBarTitleText)topBarTitleText.textContent=title+' ';
   if(topBarArtist)topBarArtist.textContent=artistEl.textContent;
   document.getElementById('progFill').setAttribute('data-t',typeKey);
   const dur=ns.metadata?.duration_ms?ns.metadata.duration_ms/1000:typeKey==='music'?240:typeKey==='banter'?30:typeKey==='ad'?60:20;
@@ -1899,7 +2263,7 @@ function setProgrammeFilter(filter, btn){
   renderProgramme(_st);
 }
 
-// ── Programme List (unified past + current + upcoming) ──
+// ── Scaletta (forward-only live queue) ──
 let _lastLogHash='';
 // Music segments carry labels as "Artist \u2014 Title" AND metadata.artist.
 // Rendering both doubles the artist on screen. Split for music, keep raw otherwise.
@@ -1913,24 +2277,15 @@ function splitTrackLabel(seg){
   return {title:label,artist:(seg&&seg.metadata&&seg.metadata.artist)||''};
 }
 function renderProgramme(st){
-  const hash=JSON.stringify([st?.now_streaming?.label,st?.now_streaming?.type,st?.upcoming?.map(u=>[u.label,u.type,u.segment_type,u.playlist_index,u.source_kind,u.predicted]),(st?.stream_log||[]).slice(-6).map(e=>[e.label,e.type,e.segment_type,e.epoch]),_programmeFilter]);
+  // session_stopped is part of the key: the empty-state branches below render
+  // different copy when stopped vs building, so a stop/resume with an unchanged
+  // upcoming list must still re-render.
+  const hash=JSON.stringify([st?.upcoming?.map(u=>[u.id,u.label,u.type,u.segment_type,u.playlist_index,u.source_kind,u.source,u.predicted,u.duration_ms,u.metadata?.duration_ms]),_programmeFilter,!!st?.session_stopped]);
   if(hash===_lastProgrammeHash)return;
   _lastProgrammeHash=hash;
   const el=document.getElementById('programmeList');
   if(!el)return;
-  const now=st.now_streaming;
   const upcoming=st.upcoming||[];
-  const nowKey=now&&now.type?`${now.type}|${now.label||''}|${now.epoch||''}`:'';
-  let skippedNowDuplicate=false;
-  const history=[...(st.stream_log||[])]
-    .reverse()
-    .filter(e=>{
-      const sameKey=nowKey&&`${e.type}|${e.label||''}|${e.epoch||''}`===nowKey;
-      const sameCurrent=now&&e.type===now.type&&e.label===now.label;
-      if(!skippedNowDuplicate&&(sameKey||sameCurrent)){skippedNowDuplicate=true;return false;}
-      return true;
-    })
-    .slice(0,5);
   const rows=[];
   let totalCount=0;
 
@@ -1939,38 +2294,19 @@ function renderProgramme(st){
     return segmentTypeKey(type)===_programmeFilter;
   }
 
-  // Mobile fix: duration helper for past/now/upcoming Dur column
+  // Mobile fix: duration helper for upcoming Dur column
   const fmtDur=(it,typeKey)=>{
     const ms=it?.duration_ms ?? it?.metadata?.duration_ms;
-    let s=ms!=null?Math.round(ms/1000):(typeKey==='music'?240:typeKey==='banter'?30:typeKey==='ad'?60:typeKey==='news_flash'?20:20);
+    const sec=it?.duration_sec ?? it?.metadata?.duration_sec;
+    let s=ms!=null?Math.round(ms/1000):sec!=null?Math.round(sec):(typeKey==='music'?240:typeKey==='banter'?40:typeKey==='ad'?70:typeKey==='news_flash'?20:20);
     if(!s||s<0)return '';
     const m=Math.floor(s/60),r=s%60;
     return m+':'+(r<10?'0':'')+r;
   };
+  const relLabel=idx=>idx===0?'prossimo':idx===1?'poi':'più tardi';
 
-  // Past rows (from stream_log, most recent last so we show oldest first)
-  const histFiltered=history.filter(e=>matchFilter(e.type));
-  histFiltered.reverse().forEach(e=>{
-    totalCount++;
-    const typeKey=segmentTypeKey(e.type);
-    const d=new Date(e.timestamp*1000);
-    const t=d.toLocaleTimeString('it-IT',{hour:'2-digit',minute:'2-digit'});
-    const parts=splitTrackLabel(e);
-    rows.push(`<tr class="past"><td class="ts">${t}</td><td>${segmentInline(typeKey)}</td><td class="ti">${esc(parts.title||typeKey)}</td><td class="ho">${esc(parts.artist)}</td><td class="du">${fmtDur(e,typeKey)}</td><td class="ac"></td></tr>`);
-  });
-
-  // Current row
-  if(now&&now.type&&matchFilter(now.type)){
-    totalCount++;
-    const typeKey=segmentTypeKey(now.type);
-    const parts=splitTrackLabel(now);
-    const titleText=parts.title&&parts.title!==now.type?parts.title:'In onda...';
-    rows.push(`<tr class="now"><td class="ts">ORA</td><td>${segmentInline(typeKey)}</td><td class="ti">${esc(titleText)}</td><td class="ho">${esc(parts.artist)}</td><td class="du">${fmtDur(now,typeKey)}</td><td class="ac"></td></tr>`);
-  }
-
-  // Upcoming rows
-  const upFiltered=upcoming.filter(it=>matchFilter(it.type));
-  upFiltered.slice(0,10).forEach((it,idx)=>{
+  const upFiltered=upcoming.map((it,idx)=>({...it,_queueIndex:idx})).filter(it=>matchFilter(it.type));
+  upFiltered.slice(0,8).forEach(it=>{
     totalCount++;
     const typeKey=segmentTypeKey(it.type);
     const linked=Number.isInteger(it.playlist_index)||!!it.spotify_id;
@@ -1979,21 +2315,43 @@ function renderProgramme(st){
     // Hide title when it equals the bare segment type — prevents rows like
     // "BANTER banter" if a producer code path ever forgets to set a title.
     const titleText=(parts.title && parts.title.toLowerCase()!==typeKey)?parts.title:'';
-    let titleHtml=esc(titleText);
-    rows.push(`<tr ${clickAttrs}><td class="ts"></td><td>${segmentInline(typeKey)}</td><td class="ti">${titleHtml}</td><td class="ho">${esc(parts.artist)}</td><td class="du">${fmtDur(it,typeKey)}</td><td class="ac"></td></tr>`);
+    const source=it.source||'predicted_from_playlist';
+    const actionable=source==='rendered_queue';
+    const rowClass=[it._queueIndex===0?'next':'', actionable?'rendered-queue':'predicted'].filter(Boolean).join(' ');
+    const sourceText=actionable?(parts.artist||it.source_kind||'rendered'):(parts.artist||'pianificato');
+    const action=actionable
+      ? `<button type="button" class="queue-remove-btn" title="Rimuovi dalla scaletta" onclick="event.stopPropagation();removeQueueItem('${escJs(it.id||'')}',this)">×</button>`
+      : '<button type="button" class="queue-remove-btn" title="Elemento pianificato" disabled>·</button>';
+    rows.push(`<tr class="${rowClass}" ${clickAttrs}><td class="ts">${relLabel(it._queueIndex)}</td><td>${segmentInline(typeKey)}</td><td class="ti">${esc(titleText||segmentText(typeKey))}</td><td class="ho">${esc(sourceText)}</td><td class="du">${fmtDur(it,typeKey)}</td><td class="ac">${action}</td></tr>`);
   });
 
-  if(upFiltered.length>10){
-    rows.push(`<tr class="prog-more"><td colspan="6" class="prog-empty">+ ${upFiltered.length-10} prossimi segmenti</td></tr>`);
+  if(upFiltered.length>8){
+    rows.push(`<tr class="prog-more"><td colspan="6" class="prog-empty">+ ${upFiltered.length-8} prossimi segmenti</td></tr>`);
   }
 
   const countEl=document.getElementById('programmeCount');
-  if(countEl)countEl.textContent=totalCount+' elementi';
+  if(countEl)countEl.textContent=totalCount+' prossimi';
 
   if(rows.length){
-    el.innerHTML=`<table class="a-programme"><colgroup><col class="col-time"><col class="col-type"><col class="col-title"><col class="col-host"><col class="col-duration"><col class="col-action"></colgroup><thead><tr><th>Ora</th><th>Tipo</th><th>Titolo</th><th>Host/Fonte</th><th>Durata</th><th></th></tr></thead><tbody>${rows.join('')}</tbody></table>`;
+    el.innerHTML=`<table class="a-programme"><colgroup><col class="col-time"><col class="col-type"><col class="col-title"><col class="col-host"><col class="col-duration"><col class="col-action"></colgroup><thead><tr><th>Quando</th><th>Tipo</th><th>Titolo</th><th>Fonte</th><th>Durata</th><th></th></tr></thead><tbody>${rows.join('')}</tbody></table>`;
+  }else if(document.body.getAttribute('data-stopped')==='true'){
+    el.innerHTML='<div class="prog-empty">Stazione in pausa — premi Avvia per ripartire.</div>';
   }else{
-    el.innerHTML='<div class="prog-empty">In attesa del segnale...</div>';
+    el.innerHTML='<div class="prog-empty">Sto preparando il prossimo segmento...</div>';
+  }
+}
+
+async function removeQueueItem(id,el){
+  flash(el);
+  // Pass the stable queue id, not a row index — the streamer may consume the
+  // head segment between render and click, which would shift every index.
+  const r=await api('POST','/api/queue/remove',{id});
+  if(r.ok){
+    toast('Rimosso: '+(r.removed||'segmento'));
+    _lastProgrammeHash='';
+    await refreshFast();
+  }else{
+    toast('Rimozione fallita: '+(r.error||r.detail||'sconosciuto'));
   }
 }
 
@@ -2395,9 +2753,6 @@ function initDragDrop(){
   });
 }
 
-// ── Navigation helpers ──
-function scrollToSection(id){const el=document.getElementById(id);if(el)el.scrollIntoView({behavior:'smooth',block:'start'});}
-
 // ── Pacing slider fill helper ──
 function updatePaceVal(inputId,valId,v){
   const el=document.getElementById(valId);if(el)el.textContent=v;
@@ -2654,6 +3009,8 @@ function updateEngineRoom(st,caps){
   // Update sidebar cost
   const sidebarCost=document.getElementById('sidebarCost');
   if(sidebarCost)sidebarCost.textContent=cost;
+  const topBarCost=document.getElementById('topBarCost');
+  if(topBarCost)topBarCost.textContent=cost;
 
   // Update sidebar uptime
   const sidebarUptime=document.getElementById('sidebarUptime');
@@ -2732,6 +3089,7 @@ async function refreshFast(){
       try { localStorage.setItem('stationName', _st.station); } catch (_) {}
     }
     const lrData=lrr.ok?await lrr.json():{requests:[]};
+    if(_st.session_stopped!==undefined)updateStopState(_st.session_stopped);
     updateNow(_st.now_streaming);
     renderProgramme(_st);
     updateRecent(_st);
@@ -2743,7 +3101,6 @@ async function refreshFast(){
     updateEngineRoom(_st,_caps);
     updateSourceControls(_st,_caps);
     updateChaosState(_st.chaos_mode);
-    if(_st.session_stopped!==undefined)updateStopState(_st.session_stopped);
     if(!_paceOk&&_st.pacing){_paceOk=true;
       document.getElementById('pBanter').value=_st.pacing.songs_between_banter;updatePaceVal('pBanter','pvBanter',_st.pacing.songs_between_banter);
       document.getElementById('pAds').value=_st.pacing.songs_between_ads;updatePaceVal('pAds','pvAds',_st.pacing.songs_between_ads);
