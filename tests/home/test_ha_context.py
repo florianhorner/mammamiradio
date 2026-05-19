@@ -820,6 +820,23 @@ def test_threshold_trigger_already_above_after_cooldown_expires():
     assert result2 is not None
 
 
+def test_parse_ha_timestamp_handles_valid_invalid_and_non_string_inputs():
+    """_parse_ha_timestamp covers ISO strings, Z suffix, and rejects bad input."""
+    from mammamiradio.home.ha_context import _parse_ha_timestamp
+
+    iso = "2026-05-20T14:32:17+00:00"
+    assert _parse_ha_timestamp(iso) == pytest.approx(datetime.datetime.fromisoformat(iso).timestamp())
+    # Z suffix is normalized to +00:00
+    assert _parse_ha_timestamp("2026-05-20T14:32:17Z") == pytest.approx(
+        datetime.datetime.fromisoformat("2026-05-20T14:32:17+00:00").timestamp()
+    )
+    # Non-string / empty / malformed all return None
+    assert _parse_ha_timestamp(None) is None
+    assert _parse_ha_timestamp(12345) is None
+    assert _parse_ha_timestamp("") is None
+    assert _parse_ha_timestamp("not-a-timestamp") is None
+
+
 # ---------------------------------------------------------------------------
 # Timer interrupt — check_reactive_triggers with timer_interrupts
 # ---------------------------------------------------------------------------
