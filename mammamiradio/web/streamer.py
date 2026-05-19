@@ -1969,6 +1969,10 @@ async def queue_remove_item(request: Request, _: None = Depends(require_admin_ac
     while not q.empty():
         try:
             items.append(q.get_nowait())
+            # Balance the unfinished-task counter for every drained item, the
+            # same way _purge_segment_queue does — survivors are re-counted by
+            # put_nowait below. Without this, queue.join() would never settle.
+            q.task_done()
         except asyncio.QueueEmpty:
             break
 

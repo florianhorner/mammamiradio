@@ -524,6 +524,21 @@ class TestQueueRemoveEndpoint:
         assert [item["label"] for item in app.state.station_state.queued_segments] == ["Alpha", "Beta"]
         assert self._queue_titles(app) == ["Alpha", "Beta"]
 
+    @pytest.mark.asyncio
+    async def test_remove_prefers_id_over_index_when_both_provided(self):
+        """When a payload carries both `id` and `index`, `id` wins — it is the
+        authoritative, position-independent identifier."""
+        app = self._make_id_queue_app([("q-a", "Alpha"), ("q-b", "Beta"), ("q-c", "Gamma")])
+
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            # id points at Beta, index points at Gamma — id must win.
+            resp = await c.post("/api/queue/remove", json={"id": "q-b", "index": 2}, headers=AUTH)
+
+        assert resp.status_code == 200
+        assert resp.json() == {"ok": True, "removed": "Beta"}
+        assert [item["label"] for item in app.state.station_state.queued_segments] == ["Alpha", "Gamma"]
+        assert self._queue_titles(app) == ["Alpha", "Gamma"]
+
 
 # ---------------------------------------------------------------------------
 # Capabilities — static key presence, not runtime health
@@ -1048,6 +1063,22 @@ class TestStoppedStateQuietsTheUI:
         assert "Sto preparando il prossimo segmento" in block, (
             "renderProgramme() must keep the building-queue copy for the running-but-empty case."
         )
+
+    def test_render_programme_memo_hash_tracks_id_and_stop_state(self):
+        """The renderProgramme() memoization hash must include each row's queue
+        `id` and the `session_stopped` flag.
+
+        Row actions are generated from `it.id`; if the hash omits `id`, a queue
+        advance that swaps in a segment with identical visible fields leaves the
+        table un-rendered with a stale id, so `/api/queue/remove` no-ops. If it
+        omits `session_stopped`, the empty-state copy can stick across a
+        stop/resume.
+        """
+        html = ADMIN_HTML.read_text()
+        block = html[html.index("function renderProgramme") : html.index("async function removeQueueItem")]
+        hash_line = next(line for line in block.splitlines() if "const hash=" in line)
+        assert "u.id" in hash_line, "renderProgramme() memo hash must include each row's queue id."
+        assert "session_stopped" in hash_line, "renderProgramme() memo hash must include the session_stopped flag."
 
     def test_refresh_fast_syncs_stop_state_from_status_poll(self):
         """The status poll must drive `data-stopped` from `session_stopped` so a

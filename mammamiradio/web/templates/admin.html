@@ -2277,7 +2277,10 @@ function splitTrackLabel(seg){
   return {title:label,artist:(seg&&seg.metadata&&seg.metadata.artist)||''};
 }
 function renderProgramme(st){
-  const hash=JSON.stringify([st?.upcoming?.map(u=>[u.label,u.type,u.segment_type,u.playlist_index,u.source_kind,u.source,u.predicted,u.duration_ms,u.metadata?.duration_ms]),_programmeFilter]);
+  // session_stopped is part of the key: the empty-state branches below render
+  // different copy when stopped vs building, so a stop/resume with an unchanged
+  // upcoming list must still re-render.
+  const hash=JSON.stringify([st?.upcoming?.map(u=>[u.id,u.label,u.type,u.segment_type,u.playlist_index,u.source_kind,u.source,u.predicted,u.duration_ms,u.metadata?.duration_ms]),_programmeFilter,!!st?.session_stopped]);
   if(hash===_lastProgrammeHash)return;
   _lastProgrammeHash=hash;
   const el=document.getElementById('programmeList');
