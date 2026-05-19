@@ -1202,3 +1202,148 @@ def test_cast_voices_host_fallback():
     # Should be one of the configured hosts
     host_names = {h.name for h in config.hosts}
     assert voice_map["hammer"].name in host_names
+
+
+# ---------------------------------------------------------------------------
+# Interrupt trigger call paths in producer loop
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_producer_calls_fire_interrupt_when_check_reactive_returns_spec(tmp_path):
+    """check_reactive_triggers → InterruptSpec fires _fire_interrupt in the producer loop."""
+    from mammamiradio.core.models import InterruptSpec
+
+    state = _make_state()
+    config = _make_config(tmp_path)
+    config.homeassistant.enabled = True
+    config.ha_token = "fake-token"
+    config.homeassistant.url = "http://ha.local:8123"
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+
+    host = config.hosts[0] if config.hosts else HostPersonality(name="Marco", voice="it-IT-DiegoNeural", style="warm")
+
+    mock_context = MagicMock()
+    mock_context.summary = ""
+    mock_context.events_summary = ""
+    mock_context.events = []
+    mock_context.raw_states = {}
+    mock_context.mood = ""
+    mock_context.weather_arc = ""
+    mock_context.mood_en = ""
+    mock_context.weather_arc_en = ""
+    mock_context.events_summary_en = ""
+    mock_context.last_event_label_en = ""
+
+    interrupt_spec = InterruptSpec(directive="La pasta scotta!", urgency="pissed", cooldown=60)
+
+    with (
+        patch(f"{MODULE}.next_segment_type", return_value=SegmentType.BANTER),
+        patch(f"{SCRIPTWRITER_MODULE}.write_banter", new_callable=AsyncMock, return_value=([(host, "Allora!")], None)),
+        patch(f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Bene...")),
+        patch(f"{MODULE}.synthesize", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(f"{MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(f"{MODULE}.concat_files", return_value=_fake_path()),
+        patch(f"{MODULE}.fetch_home_context", new_callable=AsyncMock, return_value=mock_context),
+        patch(f"{MODULE}.check_reactive_triggers", return_value=interrupt_spec),
+        patch(f"{MODULE}._fire_interrupt", new_callable=AsyncMock) as mock_fire,
+    ):
+        await _run_until_queued(queue, state, config)
+
+    mock_fire.assert_awaited_once()
+    call_args = mock_fire.call_args
+    assert call_args.args[1] is interrupt_spec
+
+
+@pytest.mark.asyncio
+async def test_producer_sets_ha_directive_when_check_reactive_returns_str(tmp_path):
+    """check_reactive_triggers → str sets ha_pending_directive in the producer loop."""
+    state = _make_state()
+    config = _make_config(tmp_path)
+    config.homeassistant.enabled = True
+    config.ha_token = "fake-token"
+    config.homeassistant.url = "http://ha.local:8123"
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+
+    host = config.hosts[0] if config.hosts else HostPersonality(name="Marco", voice="it-IT-DiegoNeural", style="warm")
+
+    mock_context = MagicMock()
+    mock_context.summary = ""
+    mock_context.events_summary = ""
+    mock_context.events = []
+    mock_context.raw_states = {}
+    mock_context.mood = ""
+    mock_context.weather_arc = ""
+    mock_context.mood_en = ""
+    mock_context.weather_arc_en = ""
+    mock_context.events_summary_en = ""
+    mock_context.last_event_label_en = ""
+
+    with (
+        patch(f"{MODULE}.next_segment_type", return_value=SegmentType.BANTER),
+        patch(f"{SCRIPTWRITER_MODULE}.write_banter", new_callable=AsyncMock, return_value=([(host, "Allora!")], None)),
+        patch(f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Bene...")),
+        patch(f"{MODULE}.synthesize", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(f"{MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(f"{MODULE}.concat_files", return_value=_fake_path()),
+        patch(f"{MODULE}.fetch_home_context", new_callable=AsyncMock, return_value=mock_context),
+        patch(f"{MODULE}.check_reactive_triggers", return_value="Cena pronta!"),
+    ):
+        await _run_until_queued(queue, state, config)
+
+    assert state.ha_pending_directive == "Cena pronta!"
+
+
+@pytest.mark.asyncio
+async def test_timer_interrupt_poll_task_starts_when_configured(tmp_path):
+    """Timer poll task is created and runs when timer_interrupts are configured."""
+    from mammamiradio.core.config import TimerInterruptConfig
+
+    state = _make_state()
+    config = _make_config(tmp_path)
+    config.homeassistant.enabled = True
+    config.ha_token = "fake-token"
+    config.homeassistant.url = "http://ha.local:8123"
+    config.homeassistant.timer_poll_interval = 1  # fast enough to start; test cancels before it fires
+    config.homeassistant.timer_interrupts = [
+        TimerInterruptConfig(
+            entity_id="timer.pasta_timer",
+            directive="La pasta scotta!",
+            urgency="pissed",
+            cooldown=60,
+        )
+    ]
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+
+    host = config.hosts[0] if config.hosts else HostPersonality(name="Marco", voice="it-IT-DiegoNeural", style="warm")
+
+    mock_context = MagicMock()
+    mock_context.summary = ""
+    mock_context.events_summary = ""
+    mock_context.events = []
+    mock_context.raw_states = {}
+    mock_context.mood = ""
+    mock_context.weather_arc = ""
+    mock_context.mood_en = ""
+    mock_context.weather_arc_en = ""
+    mock_context.events_summary_en = ""
+    mock_context.last_event_label_en = ""
+
+    mock_client = MagicMock()
+    mock_client.get = AsyncMock(return_value=MagicMock(raise_for_status=MagicMock(), json=MagicMock(return_value=[])))
+    mock_client.aclose = AsyncMock()
+
+    with (
+        patch(f"{MODULE}.next_segment_type", return_value=SegmentType.BANTER),
+        patch(f"{SCRIPTWRITER_MODULE}.write_banter", new_callable=AsyncMock, return_value=([(host, "Ciao!")], None)),
+        patch(f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora")),
+        patch(f"{MODULE}.synthesize", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(f"{MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(f"{MODULE}.concat_files", return_value=_fake_path()),
+        patch(f"{MODULE}.fetch_home_context", new_callable=AsyncMock, return_value=mock_context),
+        patch(f"{MODULE}.check_reactive_triggers", return_value=None),
+        patch("mammamiradio.scheduling.producer.httpx.AsyncClient", return_value=mock_client),
+    ):
+        await _run_until_queued(queue, state, config)
+
+    assert not queue.empty(), "Producer should queue a segment even when timer_interrupts are configured"

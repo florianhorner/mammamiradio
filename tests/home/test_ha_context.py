@@ -351,7 +351,7 @@ def test_reactive_trigger_fires_on_match():
     )
     directive = check_reactive_triggers(events)
     assert directive is not None
-    assert "caffè" in directive.lower()
+    assert isinstance(directive, str) and "caffè" in directive.lower()
 
 
 def test_reactive_trigger_respects_age_cutoff():
@@ -680,7 +680,7 @@ def test_reactive_terrace_lights():
     )
     result = check_reactive_triggers(events)
     assert result is not None
-    assert "terrazza" in result.lower()
+    assert isinstance(result, str) and "terrazza" in result.lower()
 
 
 def test_reactive_new_trigger_cooldown():
@@ -720,7 +720,7 @@ def test_threshold_trigger_fires_when_above():
     }
     result = check_reactive_triggers(events, current_states)
     assert result is not None
-    assert "caffettiera" in result.lower()
+    assert isinstance(result, str) and "caffettiera" in result.lower()
 
 
 def test_threshold_trigger_no_fire_when_below():
@@ -817,6 +817,134 @@ def test_threshold_trigger_already_above_after_cooldown_expires():
     _hc._reactive_cooldowns[threshold_key] = 0.0
     result2 = check_reactive_triggers(events, current_states)
     assert result2 is not None
+
+
+# ---------------------------------------------------------------------------
+# Timer interrupt — check_reactive_triggers with timer_interrupts
+# ---------------------------------------------------------------------------
+
+
+def test_timer_interrupt_returns_interrupt_spec_on_idle():
+    """Timer entity transitions to idle → InterruptSpec returned."""
+    import mammamiradio.home.ha_context as _hc
+    from mammamiradio.core.config import TimerInterruptConfig
+    from mammamiradio.core.models import InterruptSpec
+
+    _hc._reactive_cooldowns.clear()
+    now = time.time()
+    events: deque[HomeEvent] = deque(maxlen=20)
+    events.append(
+        HomeEvent(
+            entity_id="timer.pasta_timer",
+            label="Timer pasta",
+            old_state="active",
+            new_state="idle",
+            timestamp=now - 3,
+        )
+    )
+    current_states = {"timer.pasta_timer": {"state": "idle"}}
+    timer_interrupts = [
+        TimerInterruptConfig(
+            entity_id="timer.pasta_timer",
+            directive="Tira fuori quella pasta!",
+            urgency="pissed",
+            cooldown=60,
+        )
+    ]
+
+    result = check_reactive_triggers(events, current_states, timer_interrupts)
+
+    assert isinstance(result, InterruptSpec)
+    assert result.directive == "Tira fuori quella pasta!"
+    assert result.urgency == "pissed"
+
+
+def test_timer_interrupt_no_fire_when_not_idle():
+    """Timer entity still active → no interrupt."""
+    import mammamiradio.home.ha_context as _hc
+    from mammamiradio.core.config import TimerInterruptConfig
+
+    _hc._reactive_cooldowns.clear()
+    now = time.time()
+    events: deque[HomeEvent] = deque(maxlen=20)
+    events.append(
+        HomeEvent(
+            entity_id="timer.pasta_timer",
+            label="Timer pasta",
+            old_state="idle",
+            new_state="active",
+            timestamp=now - 3,
+        )
+    )
+    current_states = {"timer.pasta_timer": {"state": "active"}}
+    timer_interrupts = [
+        TimerInterruptConfig(
+            entity_id="timer.pasta_timer",
+            directive="Tira fuori quella pasta!",
+            urgency="pissed",
+            cooldown=60,
+        )
+    ]
+
+    result = check_reactive_triggers(events, current_states, timer_interrupts)
+    assert result is None
+
+
+def test_timer_interrupt_respects_cooldown():
+    """Timer interrupt cooldown key prevents re-firing."""
+    import mammamiradio.home.ha_context as _hc
+    from mammamiradio.core.config import TimerInterruptConfig
+
+    _hc._reactive_cooldowns.clear()
+    _hc._reactive_cooldowns["timer:timer.pasta_timer"] = time.time()  # just fired
+
+    now = time.time()
+    events: deque[HomeEvent] = deque(maxlen=20)
+    events.append(
+        HomeEvent(
+            entity_id="timer.pasta_timer",
+            label="Timer pasta",
+            old_state="active",
+            new_state="idle",
+            timestamp=now - 3,
+        )
+    )
+    current_states = {"timer.pasta_timer": {"state": "idle"}}
+    timer_interrupts = [
+        TimerInterruptConfig(
+            entity_id="timer.pasta_timer",
+            directive="Tira fuori quella pasta!",
+            urgency="pissed",
+            cooldown=60,
+        )
+    ]
+
+    result = check_reactive_triggers(events, current_states, timer_interrupts)
+    assert result is None
+
+
+def test_timer_interrupt_no_event_no_fire():
+    """Timer entity is idle but no recent idle transition event → no interrupt.
+
+    This guards the cold-start case: timer was already idle before station started.
+    """
+    import mammamiradio.home.ha_context as _hc
+    from mammamiradio.core.config import TimerInterruptConfig
+
+    _hc._reactive_cooldowns.clear()
+    events: deque[HomeEvent] = deque(maxlen=20)  # empty — no recent transitions
+    current_states = {"timer.pasta_timer": {"state": "idle"}}
+    timer_interrupts = [
+        TimerInterruptConfig(
+            entity_id="timer.pasta_timer",
+            directive="Tira fuori quella pasta!",
+            urgency="pissed",
+            cooldown=60,
+        )
+    ]
+
+    result = check_reactive_triggers(events, current_states, timer_interrupts)
+    assert result is None
 
 
 # ---------------------------------------------------------------------------
