@@ -1,6 +1,6 @@
-"""Admin mobile layout invariants.
+"""Admin Producer Desk responsive layout invariants.
 
-The /admin Palinsesto programme is rendered as a six-column table on desktop.
+The /admin Scaletta is rendered as a six-column forward queue table on desktop.
 On iPhone portrait widths it must collapse into compact row cards; otherwise
 the table exceeds the panel and creates horizontal overflow.
 """
@@ -191,14 +191,46 @@ def test_programme_table_has_fixed_desktop_columns() -> None:
     )
 
 
-def test_admin_topbar_buttons_have_44px_touch_targets() -> None:
-    """Topbar controls must remain tap-friendly on touch devices."""
-    _assert_touch_target(".a-topbar .btn-icon")
-    _assert_touch_target(".a-topbar .btn-primary-sm")
+def test_admin_transport_buttons_have_44px_touch_targets() -> None:
+    """On Air transport controls must remain tap-friendly on touch devices."""
+    _assert_touch_target(".on-air-buttons .btn-icon")
+    _assert_touch_target(".btn-primary-sm")
+
+
+def test_producer_desk_drawers_have_responsive_grid_rules() -> None:
+    """Drawers are 4-up on desktop, 2-up on tablet, and stacked on phone."""
+    css = _admin_css()
+    phone_css = _phone_css()
+
+    assert re.search(r"\.producer-drawers\s*\{[^}]*repeat\(4,\s*minmax\(0,\s*1fr\)\)", css, re.DOTALL)
+    assert "@media (max-width: 960px)" in css
+    assert ".producer-drawers { grid-template-columns: repeat(2, minmax(0, 1fr)); }" in css
+    assert re.search(r"\.producer-drawers\s*\{[^}]*grid-template-columns\s*:\s*1fr", phone_css, re.DOTALL)
+
+
+def test_on_air_sticky_strip_survives_scrolling() -> None:
+    """The compact On Air strip appears only after the full On Air zone scrolls away."""
+    text = _read_admin_html()
+    css = _admin_css()
+    strip = text[text.index('class="a-topbar producer-sticky-strip"') : text.index("<!-- Scaletta zone -->")]
+
+    assert 'class="a-topbar producer-sticky-strip"' in text
+    assert 'id="topBarCost"' in strip
+    assert "a-topbar-tools" not in strip
+    assert "function initOnAirSticky()" in text
+    assert "IntersectionObserver" in text
+    assert "data-sticky-onair" in text
+    assert re.search(r"\.producer-sticky-strip\s*\{[^}]*position\s*:\s*sticky", css, re.DOTALL)
+    assert re.search(r"\.producer-sticky-strip\s*\{[^}]*display\s*:\s*none", css, re.DOTALL)
+    assert re.search(
+        r'body\[data-sticky-onair="true"\]\s+\.producer-sticky-strip\s*\{[^}]*display\s*:\s*flex',
+        css,
+        re.DOTALL,
+    )
 
 
 def test_programme_action_buttons_have_44px_touch_targets() -> None:
-    """Programme action buttons may be visually compact, but the button box must be tappable."""
+    """Scaletta action buttons may be visually compact, but the button box must be tappable."""
     _assert_touch_target(".a-programme .ac button")
     action_col = _declarations_for_selector(_admin_css(), ".a-programme .col-action")
     width = _effective_px(action_col, "width", "min-width")
@@ -244,7 +276,7 @@ def test_touch_target_css_helper_ignores_non_default_rule_contexts() -> None:
 
 
 def test_programme_table_collapses_to_cards_on_phone() -> None:
-    """Phone breakpoint must stop using the wide six-column table shape."""
+    """Phone breakpoint must stop using the wide six-column Scaletta table shape."""
     css = _phone_css()
     assert re.search(r"\.a-programme\s+thead\s*\{[^}]*display\s*:\s*none", css, re.DOTALL), (
         "Phone CSS must hide the table header."
@@ -261,7 +293,7 @@ def test_programme_table_collapses_to_cards_on_phone() -> None:
 
 
 def test_pool_debug_annotations_hidden_from_operator_programme() -> None:
-    """Scheduler pool internals must not leak into the normal admin programme."""
+    """Scheduler pool internals must not leak into the normal admin Scaletta."""
     text = _read_admin_html()
     assert "pool[" not in text
     assert "pool wrapped around" not in text
@@ -301,7 +333,7 @@ def test_more_upcoming_row_not_card_styled_on_phone() -> None:
 
 
 def test_playlist_source_controls_are_non_destructive_by_default() -> None:
-    """Era/Jamendo controls should enrich rotation, not replace programme."""
+    """Era/Jamendo controls should enrich rotation, not replace the live queue."""
     text = _read_admin_html()
     assert "enrichPlaylistSource(" in text
     assert "loadPlaylistSource(" not in text
@@ -313,3 +345,23 @@ def test_programme_table_desktop_colgroup_has_all_columns() -> None:
     text = _read_admin_html()
     for col in ("col-time", "col-type", "col-title", "col-host", "col-duration", "col-action"):
         assert f'class="{col}"' in text, f'renderProgramme() must emit <col class="{col}"> inside the colgroup.'
+
+
+def test_scaletta_actions_only_apply_to_rendered_queue_rows() -> None:
+    """Predicted rows are read-only; only rendered queue rows call /api/queue/remove."""
+    text = _read_admin_html()
+    render_block = text[text.index("function renderProgramme") : text.index("async function removeQueueItem")]
+
+    assert "const actionable=source==='rendered_queue'" in render_block
+    assert 'onclick="event.stopPropagation();removeQueueItem(${it._queueIndex},this)"' in render_block
+    assert "disabled>·</button>" in render_block
+    assert "'/api/queue/remove'" in text
+
+
+def test_scaletta_relative_labels_use_actual_queue_position() -> None:
+    """Filtered Scaletta rows must not relabel a later item as the real next item."""
+    text = _read_admin_html()
+    render_block = text[text.index("function renderProgramme") : text.index("async function removeQueueItem")]
+
+    assert "relLabel(it._queueIndex)" in render_block
+    assert "it._queueIndex===0?'next'" in render_block

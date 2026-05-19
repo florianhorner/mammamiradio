@@ -2626,11 +2626,11 @@ def _public_status_payload(request: Request) -> dict:
     start_time = getattr(request.app.state, "start_time", None) or 0
     uptime_sec = round(time.time() - start_time) if start_time else 0
     if state.queued_segments:
-        upcoming = [{**item, "source": "rendered_queue"} for item in state.queued_segments[:5]]
+        upcoming = [{**item, "source": "rendered_queue"} for item in state.queued_segments[:8]]
     else:
         upcoming = [
             {**item, "source": "predicted_from_playlist"}
-            for item in preview_upcoming(state, config.pacing, state.playlist, count=5)
+            for item in preview_upcoming(state, config.pacing, state.playlist, count=8)
         ]
     # HA moments for the Casa card (public-safe, no person entity details)
     ha_moments: dict | None = None

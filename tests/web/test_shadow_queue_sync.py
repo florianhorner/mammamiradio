@@ -591,6 +591,22 @@ async def test_public_status_upcoming_mode_queued_when_shadow_has_items():
 
 
 @pytest.mark.asyncio
+async def test_public_status_rendered_upcoming_is_capped_at_8_with_source_fields():
+    """Rendered queue previews expose at most 8 listener-safe rows."""
+    shadow = [_seg(f"Track {i}") for i in range(10)]
+    app = _make_app(shadow=shadow, queue_items=10)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        resp = await client.get("/public-status")
+
+    assert resp.status_code == 200
+    upcoming = resp.json()["upcoming"]
+    assert len(upcoming) == 8
+    assert [item["label"] for item in upcoming] == [f"Track {i}" for i in range(8)]
+    assert all(item["source"] == "rendered_queue" for item in upcoming)
+
+
+@pytest.mark.asyncio
 async def test_public_status_upcoming_mode_building_when_shadow_empty():
     """With empty shadow and no predictions, mode falls to 'building'."""
     app = _make_app(shadow=[], queue_items=0)
@@ -620,6 +636,27 @@ async def test_public_status_predicted_source_when_shadow_empty_but_playlist_pre
     data = resp.json()
     predicted = [i for i in data["upcoming"] if i["source"] == "predicted_from_playlist"]
     assert len(predicted) > 0
+
+
+@pytest.mark.asyncio
+async def test_public_status_predicted_upcoming_requests_8_with_source_fields():
+    """Prediction previews request 8 items and annotate their source."""
+    app = _make_app(shadow=[], queue_items=0)
+
+    def _preview(*_args, count: int) -> list[dict]:
+        return [{"type": "music", "label": f"Predicted {i}"} for i in range(count)]
+
+    with patch("mammamiradio.web.streamer.preview_upcoming", side_effect=_preview) as preview:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            resp = await client.get("/public-status")
+
+    assert resp.status_code == 200
+    preview.assert_called_once()
+    assert preview.call_args.kwargs["count"] == 8
+    upcoming = resp.json()["upcoming"]
+    assert len(upcoming) == 8
+    assert [item["label"] for item in upcoming] == [f"Predicted {i}" for i in range(8)]
+    assert all(item["source"] == "predicted_from_playlist" for item in upcoming)
 
 
 @pytest.mark.asyncio

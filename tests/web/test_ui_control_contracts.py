@@ -398,6 +398,70 @@ class TestPurgeEndpoint:
 
 
 # ---------------------------------------------------------------------------
+# Queue remove endpoint
+# ---------------------------------------------------------------------------
+
+
+class TestQueueRemoveEndpoint:
+    @staticmethod
+    def _make_queue_app(labels: list[str]) -> FastAPI:
+        shadow = [{"type": "music", "label": label, "metadata": {"title": label}} for label in labels]
+        app = _make_app(shadow=shadow, queue_items=0)
+        for label in labels:
+            app.state.queue.put_nowait(_make_seg(label))
+        return app
+
+    @staticmethod
+    def _queue_titles(app: FastAPI) -> list[str]:
+        return [seg.metadata["title"] for seg in list(app.state.queue._queue)]
+
+    @pytest.mark.asyncio
+    async def test_remove_by_index_preserves_remaining_order_and_depth_sync(self):
+        app = self._make_queue_app(["Alpha", "Beta", "Gamma", "Delta"])
+
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            resp = await c.post("/api/queue/remove", json={"index": 1}, headers=AUTH)
+
+        assert resp.status_code == 200
+        assert resp.json() == {"ok": True, "removed": "Beta"}
+        assert [item["label"] for item in app.state.station_state.queued_segments] == [
+            "Alpha",
+            "Gamma",
+            "Delta",
+        ]
+        assert self._queue_titles(app) == ["Alpha", "Gamma", "Delta"]
+        assert app.state.queue.qsize() == len(app.state.station_state.queued_segments) == 3
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("payload", [{"index": "1"}, {"index": 1.5}, {"index": None}, {}])
+    async def test_remove_rejects_non_integer_index_without_mutating_queue(self, payload: dict):
+        app = self._make_queue_app(["Alpha", "Beta"])
+
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            resp = await c.post("/api/queue/remove", json=payload, headers=AUTH)
+
+        assert resp.status_code == 422
+        assert resp.json()["detail"] == "index must be an integer"
+        assert [item["label"] for item in app.state.station_state.queued_segments] == ["Alpha", "Beta"]
+        assert self._queue_titles(app) == ["Alpha", "Beta"]
+        assert app.state.queue.qsize() == len(app.state.station_state.queued_segments) == 2
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("index", [-1, 3])
+    async def test_remove_rejects_out_of_range_index_without_mutating_queue(self, index: int):
+        app = self._make_queue_app(["Alpha", "Beta", "Gamma"])
+
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            resp = await c.post("/api/queue/remove", json={"index": index}, headers=AUTH)
+
+        assert resp.status_code == 422
+        assert resp.json()["detail"] == f"index {index} out of range (queue has 3 items)"
+        assert [item["label"] for item in app.state.station_state.queued_segments] == ["Alpha", "Beta", "Gamma"]
+        assert self._queue_titles(app) == ["Alpha", "Beta", "Gamma"]
+        assert app.state.queue.qsize() == len(app.state.station_state.queued_segments) == 3
+
+
+# ---------------------------------------------------------------------------
 # Capabilities — static key presence, not runtime health
 # ---------------------------------------------------------------------------
 
@@ -638,8 +702,8 @@ class TestSchedulerReasonsDoNotLeakToUI:
         # and "No pacing trigger active" rows in the up-next queue.
         html = ADMIN_HTML.read_text()
 
-        # Find the upcoming-rows render section (starts at `upFiltered.slice(0,10).forEach`).
-        start = html.find("upFiltered.slice(0,10).forEach")
+        # Find the upcoming-rows render section (starts at `upFiltered.slice(0,8).forEach`).
+        start = html.find("upFiltered.slice(0,8).forEach")
         assert start != -1, "could not locate upcoming-rows render section"
         # Scan through to the end of that forEach block.
         end = html.find("});", start) + 3
@@ -655,6 +719,7 @@ class TestSchedulerReasonsDoNotLeakToUI:
             "admin.html upcoming-rows render is falling back to reason text "
             "when artist is empty — this re-leaks scheduler internals."
         )
+        assert "it.reason" not in block
 
 
 class TestPoolDiagnosticsStayHidden:
@@ -662,7 +727,7 @@ class TestPoolDiagnosticsStayHidden:
 
     def test_admin_html_does_not_render_pool_pass_annotations(self):
         html = ADMIN_HTML.read_text()
-        start = html.find("upFiltered.slice(0,10).forEach")
+        start = html.find("upFiltered.slice(0,8).forEach")
         assert start != -1, "could not locate upcoming-rows render section"
         end = html.find("});", start) + 3
         block = html[start:end]
@@ -898,10 +963,12 @@ class TestStoppedStateQuietsTheUI:
         assert "st?.stream?.frequency" in html
         assert "st?.stream?.bitrate_kbps" in html
 
-    def test_admin_programme_history_drops_only_one_live_duplicate(self):
+    def test_admin_scaletta_is_forward_only(self):
         html = ADMIN_HTML.read_text()
-        assert "skippedNowDuplicate" in html
-        assert "&& !(now&&e.type===now.type&&e.label===now.label)" not in html
+        block = html[html.index("function renderProgramme") : html.index("async function removeQueueItem")]
+        assert "st?.upcoming" in block
+        assert "stream_log" not in block
+        assert "now_streaming" not in block
 
 
 class TestHostBlockSelectorScoping:
