@@ -2017,6 +2017,12 @@ async def run_producer(
                 logger.info("Discarding stale %s segment after chaos cutover", seg_type.value)
                 _unlink_if_tmp_render(segment, config.tmp_dir)
                 continue
+            # Stable per-segment id: stamped on the Segment metadata AND the
+            # shadow-list entry so /api/queue/remove can target a segment by
+            # identity rather than position (the position shifts every time the
+            # streamer consumes the head).
+            queue_id = uuid4().hex
+            segment.metadata["queue_id"] = queue_id
             if not await _queue_segment(segment):
                 continue
             if chaos_subtype is not None and state.chaos_pending == chaos_subtype:
@@ -2024,6 +2030,7 @@ async def run_producer(
             _segments_produced += 1
             state.queued_segments.append(
                 {
+                    "id": queue_id,
                     "type": segment.type.value,
                     "label": segment.metadata.get("title", segment.type.value),
                     "spotify_id": segment.metadata.get("spotify_id", ""),
