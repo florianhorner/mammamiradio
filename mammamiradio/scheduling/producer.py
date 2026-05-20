@@ -309,6 +309,11 @@ _DEMO_ASSETS_DIR = Path(__file__).resolve().parent.parent / "assets" / "demo"
 # SFX assets (alert jingle used as interrupt bridge audio).
 _SFX_DIR = Path(__file__).resolve().parent.parent / "assets" / "sfx"
 
+# Global cooldown for interrupt firing — kept separate from per-entity
+# spec.cooldown so a timer configured with cooldown=300 doesn't suppress a
+# different timer's interrupt for 5 minutes.
+_GLOBAL_INTERRUPT_COOLDOWN_SECONDS = 60
+
 
 # Tracks the most recent music file to avoid repeated glob scans on every banter.
 _last_music_file: Path | None = None
@@ -667,20 +672,26 @@ async def _fire_interrupt(
     *,
     enforce_global_cooldown: bool = False,
     bridge_tmp_dir: Path | None = None,
-) -> None:
+) -> bool:
     """Immediately interrupt the stream with bridge audio + pissed banter.
 
     Uses alert.mp3 or a generated tone as a bridge clip (plays in ≤2s), drains
     the lookahead queue so no buffered music plays between bridge and banter,
     injects the directive, and fires skip_event to cut the current segment.
+
+    Returns True if the interrupt fired, False if suppressed by the global
+    cooldown gate. Per-entity cooldowns are enforced upstream by
+    check_reactive_triggers.
     """
     now = time.time()
-    if enforce_global_cooldown and now - state.last_interrupt_ts < spec.cooldown:
-        logger.info(
-            "Interrupt suppressed — cooldown %ds remaining",
-            int(spec.cooldown - (now - state.last_interrupt_ts)),
-        )
-        return
+    if enforce_global_cooldown:
+        elapsed = now - state.last_interrupt_ts
+        if elapsed < _GLOBAL_INTERRUPT_COOLDOWN_SECONDS:
+            logger.info(
+                "Interrupt suppressed — global cooldown %ds remaining",
+                int(_GLOBAL_INTERRUPT_COOLDOWN_SECONDS - elapsed),
+            )
+            return False
     state.last_interrupt_ts = now
 
     # Release any bridge clip a prior interrupt generated but never played.
@@ -738,6 +749,7 @@ async def _fire_interrupt(
         spec.urgency,
         state.interrupt_slot,
     )
+    return True
 
 
 async def run_producer(
@@ -821,7 +833,7 @@ async def run_producer(
             _timer_old_states: dict[str, dict] = {eid: {"state": "idle"} for eid in _timer_entity_ids}
 
             async def _timer_poll_loop() -> None:
-                poll_interval = float(config.homeassistant.timer_poll_interval)
+                poll_interval = max(1.0, float(config.homeassistant.timer_poll_interval))
                 client = httpx.AsyncClient(timeout=5.0)
                 try:
                     while True:
@@ -839,6 +851,12 @@ async def run_producer(
                                 r = await client.get(f"{base}/api/states/{eid}", headers=headers)
                                 if r.status_code == 200:
                                     timer_states[eid] = r.json()
+                                else:
+                                    logger.warning(
+                                        "Timer poll skipped %s — HA returned %s",
+                                        eid,
+                                        r.status_code,
+                                    )
                             from mammamiradio.home.ha_enrichment import diff_states
 
                             timer_events = diff_states(
@@ -2199,6 +2217,11 @@ async def run_producer(
                 state.chaos_pending = None
             if chaos_subtype == ChaosSubtype.URGENT_INTERRUPT:
                 state.ha_pending_directive = ""
+                # The safety-belt force_next was set when the interrupt fired.
+                # chaos_pending already produced the banter; clearing here
+                # prevents the producer from queueing an extra banter next cycle.
+                if state.force_next == SegmentType.BANTER:
+                    state.force_next = None
             _segments_produced += 1
             state.queued_segments.append(
                 {

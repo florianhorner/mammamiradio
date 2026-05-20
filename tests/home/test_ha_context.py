@@ -963,7 +963,12 @@ def test_timer_interrupt_respects_cooldown():
             timestamp=now - 3,
         )
     )
-    current_states = {"timer.pasta_timer": {"state": "idle"}}
+    # Stamp finished_at so the test exercises the cooldown branch specifically,
+    # not the cancel-filter branch.
+    finished_iso = datetime.datetime.fromtimestamp(now - 2, tz=datetime.UTC).isoformat()
+    current_states = {
+        "timer.pasta_timer": {"state": "idle", "attributes": {"finished_at": finished_iso}},
+    }
     timer_interrupts = [
         TimerInterruptConfig(
             entity_id="timer.pasta_timer",
@@ -986,8 +991,14 @@ def test_timer_interrupt_no_event_no_fire():
     from mammamiradio.core.config import TimerInterruptConfig
 
     _hc._reactive_cooldowns.clear()
+    now = time.time()
     events: deque[HomeEvent] = deque(maxlen=20)  # empty — no recent transitions
-    current_states = {"timer.pasta_timer": {"state": "idle"}}
+    # Stamp finished_at so the test exercises the no-event branch specifically,
+    # not the cancel-filter branch.
+    finished_iso = datetime.datetime.fromtimestamp(now - 2, tz=datetime.UTC).isoformat()
+    current_states = {
+        "timer.pasta_timer": {"state": "idle", "attributes": {"finished_at": finished_iso}},
+    }
     timer_interrupts = [
         TimerInterruptConfig(
             entity_id="timer.pasta_timer",

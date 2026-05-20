@@ -9,6 +9,7 @@ import importlib
 import importlib.metadata
 import ipaddress
 import logging
+import math
 import os
 import random as _random
 import re as _re
@@ -2072,7 +2073,13 @@ async def api_interrupt(request: Request, _: None = Depends(require_admin_access
 
     Returns 429 if called within the cooldown window (default 60s).
     """
-    body = await request.json()
+    try:
+        body = await request.json()
+    except ValueError:
+        return JSONResponse(status_code=422, content={"ok": False, "error": "invalid JSON body"})
+    if not isinstance(body, dict):
+        return JSONResponse(status_code=422, content={"ok": False, "error": "expected JSON object"})
+
     directive = (body.get("directive") or "").strip()
     if not directive:
         return JSONResponse(status_code=422, content={"ok": False, "error": "directive is required"})
@@ -2088,7 +2095,11 @@ async def api_interrupt(request: Request, _: None = Depends(require_admin_access
     if remaining > 0:
         return JSONResponse(
             status_code=429,
-            content={"ok": False, "error": "interrupt cooldown active", "retry_after": int(remaining)},
+            content={
+                "ok": False,
+                "error": "interrupt cooldown active",
+                "retry_after": max(1, math.ceil(remaining)),
+            },
         )
 
     from mammamiradio.core.models import InterruptSpec
@@ -2098,7 +2109,7 @@ async def api_interrupt(request: Request, _: None = Depends(require_admin_access
 
     queue = request.app.state.queue
     skip_event = request.app.state.skip_event
-    await _fire_interrupt(
+    fired = await _fire_interrupt(
         state,
         spec,
         queue,
@@ -2106,6 +2117,17 @@ async def api_interrupt(request: Request, _: None = Depends(require_admin_access
         enforce_global_cooldown=True,
         bridge_tmp_dir=request.app.state.config.tmp_dir,
     )
+    if not fired:
+        # _fire_interrupt's global cooldown gate beat us (concurrent caller).
+        remaining_after = cooldown - (time.time() - state.last_interrupt_ts)
+        return JSONResponse(
+            status_code=429,
+            content={
+                "ok": False,
+                "error": "interrupt cooldown active",
+                "retry_after": max(1, math.ceil(remaining_after)),
+            },
+        )
     return {"ok": True, "directive": directive, "urgency": urgency}
 
 

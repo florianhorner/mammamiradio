@@ -600,6 +600,14 @@ def _validate(config: StationConfig) -> None:
         errors.append("pacing.ad_spots_per_break must be <= 5")
     if config.pacing.lookahead_segments < 1:
         errors.append("pacing.lookahead_segments must be >= 1")
+    if config.homeassistant.timer_poll_interval < 1:
+        errors.append("homeassistant.timer_poll_interval must be >= 1")
+    _allowed_urgencies = {"pissed", "urgent", "gentle"}
+    for idx, timer_cfg in enumerate(config.homeassistant.timer_interrupts):
+        if timer_cfg.cooldown < 1:
+            errors.append(f"homeassistant.timer_interrupt[{idx}].cooldown must be >= 1")
+        if timer_cfg.urgency not in _allowed_urgencies:
+            errors.append(f"homeassistant.timer_interrupt[{idx}].urgency must be one of {sorted(_allowed_urgencies)}")
     if not isinstance(config.persona.anthem_threshold, int) or config.persona.anthem_threshold < 1:
         errors.append("persona.anthem_threshold must be >= 1")
     if not isinstance(config.persona.skip_bit_threshold, int) or config.persona.skip_bit_threshold < 1:

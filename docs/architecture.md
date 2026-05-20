@@ -191,19 +191,22 @@ This is opportunistic context, not a hard dependency. Failures there should not 
 
 When a HA timer fires, the station immediately interrupts playback with a pissed/urgent host segment:
 
-```
-HA timer fires (timer.xyz → idle)
+```text
+HA timer fires (timer.xyz → idle, with recent finished_at)
     ↓
-ha_context.py: lightweight 5s poll detects idle transition (separate from 60s full fetch)
+ha_context.py: lightweight 5s poll detects idle transition (separate from 60s full fetch).
+    Cancel/reset filter: only fire when finished_at is set and within the last 30s.
     ↓
 check_reactive_triggers() → InterruptSpec(directive, urgency, cooldown)
     ↓
 producer.py: _fire_interrupt(state, spec, queue, skip_event)
-  1. Load alert.mp3 from assets/sfx/, or generate a short tone → state.interrupt_slot
-  2. Drain lookahead queue (no buffered music leaks between bridge and banter)
-  3. state.ha_pending_directive = spec.directive
-  4. state.chaos_pending = ChaosSubtype.URGENT_INTERRUPT  (pissed tone)
+  1. Drain lookahead queue (no buffered music leaks between bridge and banter)
+  2. state.ha_pending_directive = spec.directive
+  3. state.chaos_pending = ChaosSubtype.URGENT_INTERRUPT  (pissed tone)
+  4. state.chaos_cutover_epoch += 1
   5. skip_event.set()  ← skips currently playing segment
+  6. Load alert.mp3 from assets/sfx/, or generate a short tone → state.interrupt_slot
+     (best-effort; never blocks the skip)
     ↓
 run_playback_loop: interrupt_slot checked before queue.get() → bridge plays (≤2s)
     ↓

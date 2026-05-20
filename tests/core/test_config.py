@@ -111,6 +111,10 @@ entity_id = "timer.pasta_timer"
 directive = "La pasta e pronta!"
 urgency = "urgent"
 cooldown = 300
+
+[[homeassistant.timer_interrupt]]
+entity_id = "timer.lavatrice"
+directive = "Lavatrice finita!"
 """
     )
     custom_path = tmp_path / "radio.toml"
@@ -118,12 +122,18 @@ cooldown = 300
 
     config = load_config(str(custom_path))
 
-    assert len(config.homeassistant.timer_interrupts) == 1
-    timer = config.homeassistant.timer_interrupts[0]
-    assert timer.entity_id == "timer.pasta_timer"
-    assert timer.directive == "La pasta e pronta!"
-    assert timer.urgency == "urgent"
-    assert timer.cooldown == 300
+    assert len(config.homeassistant.timer_interrupts) == 2
+    explicit = config.homeassistant.timer_interrupts[0]
+    assert explicit.entity_id == "timer.pasta_timer"
+    assert explicit.directive == "La pasta e pronta!"
+    assert explicit.urgency == "urgent"
+    assert explicit.cooldown == 300
+    # Defaults apply when urgency / cooldown are omitted.
+    defaults = config.homeassistant.timer_interrupts[1]
+    assert defaults.entity_id == "timer.lavatrice"
+    assert defaults.directive == "Lavatrice finita!"
+    assert defaults.urgency == "pissed"
+    assert defaults.cooldown == 60
 
 
 def test_load_config_applies_persona_arc_thresholds(tmp_path):

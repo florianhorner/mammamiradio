@@ -104,6 +104,19 @@ def test_interrupt_empty_directive_returns_422():
     assert resp.status_code == 422
 
 
+def test_interrupt_non_object_body_returns_422():
+    """A JSON array (or any non-object body) is rejected before .get() can blow up."""
+    app = _make_test_app()
+    with TestClient(app, raise_server_exceptions=True) as client:
+        resp = client.post(
+            "/api/interrupt",
+            json=["not", "an", "object"],
+            headers={"X-Radio-Admin-Token": "test-token"},
+        )
+    assert resp.status_code == 422
+    assert resp.json()["error"] == "expected JSON object"
+
+
 # ---------------------------------------------------------------------------
 # Cooldown (429)
 # ---------------------------------------------------------------------------
@@ -172,14 +185,18 @@ async def test_fire_interrupt_drains_queue_and_fires_skip(tmp_path: Path):
 
     spec = InterruptSpec(directive="La pasta sta bruciando!", urgency="pissed", cooldown=60)
     with patch("mammamiradio.scheduling.producer.generate_tone", side_effect=_fake_tone):
-        await _fire_interrupt(state, spec, queue, skip_event, bridge_tmp_dir=tmp_path)
+        fired = await _fire_interrupt(state, spec, queue, skip_event, bridge_tmp_dir=tmp_path)
 
+    assert fired is True
     assert queue.empty(), "queue must be drained after interrupt"
     assert state.queued_segments == [], "shadow queue must be cleared with the real queue"
     assert skip_event.is_set(), "skip_event must be set"
     assert state.ha_pending_directive == "La pasta sta bruciando!"
     assert state.chaos_pending == ChaosSubtype.URGENT_INTERRUPT
     assert state.chaos_cutover_epoch == 1
+    assert state.force_next == SegmentType.BANTER, (
+        "force_next safety belt must be set; producer clears it after URGENT_INTERRUPT renders"
+    )
     assert state.last_interrupt_ts > 0
 
 
@@ -303,10 +320,43 @@ async def test_fire_interrupt_respects_global_cooldown_when_requested():
     skip_event = asyncio.Event()
     spec = InterruptSpec(directive="Di nuovo!", urgency="pissed", cooldown=60)
 
-    await _fire_interrupt(state, spec, queue, skip_event, enforce_global_cooldown=True)
+    fired = await _fire_interrupt(state, spec, queue, skip_event, enforce_global_cooldown=True)
 
+    assert fired is False, "suppressed call must return False so the endpoint can 429"
     assert not skip_event.is_set(), "skip_event must NOT be set when cooldown is active"
     assert state.ha_pending_directive == "", "directive must NOT be injected during cooldown"
+
+
+@pytest.mark.asyncio
+async def test_fire_interrupt_global_cooldown_uses_fixed_window_not_spec(tmp_path: Path):
+    """spec.cooldown is for per-entity gating upstream; the global window stays at 60s.
+
+    Regression: a timer configured with cooldown=300 used to push the *global*
+    suppression window to 5 minutes, blocking unrelated interrupts.
+    """
+    from mammamiradio.scheduling.producer import _fire_interrupt
+
+    state = StationState(
+        playlist=[Track(title="Song", artist="Artist", duration_ms=180_000, spotify_id="t1")],
+    )
+    state.last_interrupt_ts = time.time() - 90  # 90s ago: past the 60s global window
+    queue: asyncio.Queue[Segment] = asyncio.Queue()
+    skip_event = asyncio.Event()
+    spec = InterruptSpec(directive="Lavatrice!", urgency="urgent", cooldown=300)
+
+    with patch("mammamiradio.scheduling.producer.generate_tone", side_effect=_fake_tone):
+        fired = await _fire_interrupt(
+            state,
+            spec,
+            queue,
+            skip_event,
+            enforce_global_cooldown=True,
+            bridge_tmp_dir=tmp_path,
+        )
+
+    assert fired is True
+    assert skip_event.is_set()
+    assert state.ha_pending_directive == "Lavatrice!"
 
 
 @pytest.mark.asyncio
