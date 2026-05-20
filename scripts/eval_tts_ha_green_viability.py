@@ -207,11 +207,13 @@ _PROVIDER_MATRIX: dict[str, ProviderViability] = {
 
 
 def _canonical_provider(name: str) -> str:
+    """Normalize a provider name or alias into the matrix key shape."""
     key = name.strip().lower()
     return _ALIASES.get(key, key.replace("-", "_"))
 
 
 def _expand_provider_names(provider_names: list[str] | None) -> list[str]:
+    """Expand aliases and 'all' while preserving first-seen provider order."""
     if provider_names is None:
         return list(DEFAULT_PROVIDERS)
 
@@ -241,12 +243,14 @@ def build_provider_matrix(provider_names: list[str] | None = None) -> list[dict[
 
 
 def _join_cell(value: Any) -> str:
+    """Render a scalar or list value as one Markdown table cell."""
     if isinstance(value, list):
         return ", ".join(value) if value else "none"
     return str(value)
 
 
 def _md_escape(value: Any) -> str:
+    """Escape table-breaking characters for deterministic Markdown output."""
     return _join_cell(value).replace("|", "\\|").replace("\n", " ")
 
 
@@ -296,6 +300,7 @@ def render_markdown(records: list[dict[str, Any]]) -> str:
 
 
 def _report_timestamp(timestamp: str | None) -> str:
+    """Return a safe report timestamp suitable for filename construction."""
     stamp = timestamp or datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     if not TIMESTAMP_RE.fullmatch(stamp):
         raise ValueError("timestamp must use YYYYMMDDTHHMMSSZ format")
@@ -327,6 +332,7 @@ def write_reports(
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Run the CLI and return a process-style status code."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--providers",
@@ -354,7 +360,7 @@ def main(argv: list[str] | None = None) -> int:
     if not args.no_write:
         try:
             paths = write_reports(records, args.output_dir, timestamp=args.timestamp, md_content=report)
-        except (FileExistsError, ValueError) as exc:
+        except (OSError, ValueError) as exc:
             print(f"ERROR: {exc}", file=sys.stderr)
             return 2
         print(f"Wrote {len(records)} records to {paths['jsonl']}")

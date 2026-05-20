@@ -136,6 +136,18 @@ def test_render_markdown_is_deterministic_for_operator_review() -> None:
             "expected_latency": "1-3s",
             "operator_cost": "metered",
         },
+        {
+            "provider": "pipe_newline",
+            "kind": "cloud",
+            "ha_green_status": "conditional",
+            "reason": "Needs REST | SDK choice.\nKeep table intact.",
+            "required_env": ["PIPE_TEST_KEY"],
+            "required_packages": ["httpx | sdk"],
+            "aarch64_image_risk": "low | medium",
+            "runtime_risk": "network\nquota",
+            "expected_latency": "1-3s",
+            "operator_cost": "metered",
+        },
     ]
 
     first_render = eval_tts.render_markdown(records)
@@ -147,6 +159,9 @@ def test_render_markdown_is_deterministic_for_operator_review() -> None:
     assert "| edge | cloud | viable |" in first_render
     assert "OPENAI_API_KEY" in first_render
     assert "Requires an API key and network." in first_render
+    assert "Needs REST \\| SDK choice. Keep table intact." in first_render
+    assert "httpx \\| sdk" in first_render
+    assert first_render.count("| pipe_newline |") == 1
 
 
 def test_write_reports_emits_deterministic_markdown_and_jsonl(tmp_path) -> None:
@@ -287,3 +302,16 @@ def test_cli_reports_existing_report_without_overwriting(tmp_path, capsys) -> No
     captured = capsys.readouterr()
     assert "Refusing to overwrite" in captured.err
     assert jsonl_path.read_text() == original_jsonl
+
+
+def test_cli_reports_write_os_error_without_traceback(tmp_path, capsys, monkeypatch) -> None:
+    def fail_write(*args, **kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(eval_tts, "write_reports", fail_write)
+
+    rc = eval_tts.main(["--providers", "edge", "--output-dir", str(tmp_path)])
+
+    assert rc == 2
+    captured = capsys.readouterr()
+    assert "disk full" in captured.err
