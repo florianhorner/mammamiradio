@@ -529,6 +529,39 @@ def test_load_config_rejects_nonpositive_pacing_values(tmp_path):
         load_config(str(custom_path))
 
 
+def test_load_config_rejects_zero_timer_poll_interval(tmp_path):
+    source = Path(__file__).resolve().parents[2] / "radio.toml"
+    custom = source.read_text().replace("timer_poll_interval = 5", "timer_poll_interval = 0")
+    custom_path = tmp_path / "radio.toml"
+    custom_path.write_text(custom)
+
+    with pytest.raises(ValueError, match="homeassistant\\.timer_poll_interval must be >= 1"):
+        load_config(str(custom_path))
+
+
+def test_load_config_rejects_invalid_timer_interrupt_urgency_and_cooldown(tmp_path):
+    source = Path(__file__).resolve().parents[2] / "radio.toml"
+    custom = (
+        source.read_text()
+        + """
+
+[[homeassistant.timer_interrupt]]
+entity_id = "timer.pasta_timer"
+directive = "Bad config!"
+urgency = "screaming"
+cooldown = 0
+"""
+    )
+    custom_path = tmp_path / "radio.toml"
+    custom_path.write_text(custom)
+
+    with pytest.raises(ValueError) as exc:
+        load_config(str(custom_path))
+    msg = str(exc.value)
+    assert "homeassistant.timer_interrupt[0].cooldown must be >= 1" in msg
+    assert "homeassistant.timer_interrupt[0].urgency must be one of" in msg
+
+
 def test_load_config_tolerates_legacy_sonic_brand_keys(tmp_path):
     """load_config must not crash on legacy [sonic_brand] keys from older operator configs.
 
