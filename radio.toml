@@ -116,7 +116,27 @@ claude_creative_model = "claude-opus-4-6"
 [homeassistant]
 enabled = false
 url = ""
-poll_interval = 60  # seconds between state refreshes
+poll_interval = 60           # seconds between full home-state refreshes
+timer_poll_interval = 5      # seconds between lightweight timer-entity checks
+
+# Timer interrupt: when a HA timer fires, hosts immediately interrupt and deliver
+# a pissed/urgent message. Add one [[homeassistant.timer_interrupt]] block per timer.
+# entity_id: the HA timer entity (e.g. timer.pasta_timer)
+# directive:  what the hosts should say — in the language of your station
+# urgency:    "pissed" (default) | "urgent" | "gentle"
+# cooldown:   minimum seconds before the same timer can fire again (default: 60)
+#
+# Example (uncomment and adapt):
+# [[homeassistant.timer_interrupt]]
+# entity_id = "timer.pasta_timer"
+# directive = "Il timer della pasta è scaduto! Tirate fuori quella pasta adesso, per l'amor di Dio!"
+# urgency = "pissed"
+# cooldown = 300
+#
+# [[homeassistant.timer_interrupt]]
+# entity_id = "timer.lavatrice"
+# directive = "La lavatrice ha finito. Muovetevi prima che si sgualcisca tutto."
+# urgency = "urgent"
 
 [persona]
 arc_thresholds = [4, 11, 26]   # session counts for acquaintance, friend, old_friend

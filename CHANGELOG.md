@@ -6,6 +6,25 @@ The current version source of truth is `pyproject.toml`.
 
 ## [Unreleased]
 
+### Added
+
+- **Host interrupt trigger** — when a Home Assistant timer fires, the hosts immediately interrupt whatever is playing and deliver an urgent, pissed banter segment telling the listener to act. Sub-7s end-to-end: HA timer fires → detected within ≤5s (dedicated lightweight poll) → audio within ≤2s of detection. Configure per-timer directives in `radio.toml` under `[[homeassistant.timer_interrupt]]`. The same mechanism is exposed as `POST /api/interrupt` — any HA automation (motion sensor, alarm, dishwasher done) can inject a custom directive into the stream without code changes.
+- **Admin producer desk** — The `/admin` panel is reorganized around the live
+  broadcast: an On Air zone (current segment, transport controls, running AI
+  cost), a Live Queue holding the forward Scaletta, and a Rotation Pool, with
+  secondary controls tucked into collapsible drawers. A new
+  `POST /api/queue/remove` endpoint (admin auth) lets operators drop a single
+  queued segment without clearing the whole queue. Removal targets a stable
+  segment id, so a track that scrolls off the head between rendering the row
+  and clicking can never be removed by mistake.
+
+### Changed
+
+- **Banter cadence minimum is now 2 songs.** `pacing.songs_between_banter` must
+  be at least 2 — a value of 1 made the hosts talk after every single song.
+  Config validation, the scheduler, and the admin Cadenza slider all enforce
+  the new floor.
+
 ### Fixed
 
 - **Host banter is no longer truncated to its first phrase.** Per-line voice
@@ -13,6 +32,17 @@ The current version source of truth is `pyproject.toml`.
   pause, collapsing multi-line host exchanges to a second or two. The shortened
   audio was then rejected as too short, so the hosts could fall silent for an
   entire session. Silence trimming now removes trailing silence only.
+- **`PATCH /api/pacing` rejects malformed payloads.** Non-object bodies and
+  non-integer field values now return HTTP 400 and leave the running config
+  untouched, instead of raising a 500 or silently coercing the value. Cadence
+  values are also clamped to a safe ceiling so a single request cannot
+  effectively disable banter or ads. Config-load validation now enforces the
+  same ceilings, so a stray `radio.toml` cannot bypass the runtime clamp.
+- **yt-dlp downloads now time out after 30 seconds.** Python's urllib has no
+  default socket timeout, so a hung YouTube connection could permanently block
+  a thread in the `run_in_executor` pool shared with the audio pipeline. A
+  30-second socket timeout on both downloads and metadata searches now fails
+  fast and falls back through the existing silence-placeholder path.
 
 ## [2.12.4] - 2026-05-18
 

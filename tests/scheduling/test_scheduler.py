@@ -38,12 +38,25 @@ def test_banter_triggers_with_jitter():
     from mammamiradio.scheduling.scheduler import next_segment_type
 
     pacing = PacingSection(songs_between_banter=2, songs_between_ads=10)
-    # With songs_since_banter=2 and threshold=2+randint(-1,0), threshold is 1 or 2.
-    # Either way, songs_since_banter(2) >= threshold(1 or 2), so BANTER.
+    # With the minimum floor, jitter cannot reduce the threshold below 2.
     random.seed(42)
     state = _make_state(segments_produced=3, songs_since_banter=2, songs_since_ad=0)
     result = next_segment_type(state, pacing)
     assert result == SegmentType.BANTER
+
+
+def test_banter_threshold_floor_is_two_even_with_negative_jitter(monkeypatch):
+    """Minimum cadenza must not become banter after every song."""
+    from mammamiradio.scheduling import scheduler
+
+    monkeypatch.setattr(scheduler.random, "randint", lambda _low, _high: -1)
+    pacing = PacingSection(songs_between_banter=1, songs_between_ads=10)
+
+    after_one = _make_state(segments_produced=2, songs_since_banter=1, songs_since_ad=0)
+    assert scheduler.next_segment_type(after_one, pacing) == SegmentType.MUSIC
+
+    after_two = _make_state(segments_produced=3, songs_since_banter=2, songs_since_ad=0)
+    assert scheduler.next_segment_type(after_two, pacing) == SegmentType.BANTER
 
 
 def test_default_is_music():

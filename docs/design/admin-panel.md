@@ -34,6 +34,34 @@ See `system.md` (sibling) for the full system. Admin panel must use:
 - **Text:** cream `#F5EDD8`
 - **Fonts:** Playfair Display italic (display) · Outfit (body) · JetBrains Mono (technical)
 
+## Information Architecture — Producer Desk
+
+The admin panel is a **producer desk**: opening `/admin` answers two questions
+fast — is the station alive and sounding right, and what plays next. Set-and-forget
+config and debug never occupy the default view.
+
+**Default view — three zones, top to bottom:**
+
+1. **On Air** — now-playing card (segment type, title, artist, progress), a
+   station-health `.status-chip`, the compact token cost counter, skip/pause.
+   The full card sits at the top at rest; once scrolled past, it collapses to a
+   slim sticky strip pinned to the top (title + status + cost). It is the trust
+   glance and must survive scrolling.
+2. **Live Queue** — forward-only rundown of up to ~8 upcoming items, each with a
+   relative label (`next` / `after that` / `later`) + rough duration. Pending
+   listener requests sit in a strip at the top of this zone. No played history.
+3. **Rotation Pool** — separate searchable/prunable music library, distinct from
+   the Live Queue.
+
+**Drawers — collapsed by default, inline `<details>` accordion, one open at a
+time.** Four drawers below the zones: Steer (pacing / triggers / modes), Hosts
+(personality config), History (one filterable segment timeline), Diagnostics
+(engine room — provider health, cost breakdown, segment counts, HA context,
+setup). On mobile the drawer row stacks vertically.
+
+**Labels are Italian-first operator copy** (per `system.md`) — always, independent
+of the super-italian toggle.
+
 ## Interaction standards
 
 - Minimum touch target: 44px height on control buttons, 36px on chips/pills
