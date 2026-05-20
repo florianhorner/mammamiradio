@@ -37,6 +37,11 @@ The current version source of truth is `pyproject.toml`.
   values are also clamped to a safe ceiling so a single request cannot
   effectively disable banter or ads. Config-load validation now enforces the
   same ceilings, so a stray `radio.toml` cannot bypass the runtime clamp.
+- **yt-dlp downloads now time out after 30 seconds.** Python's urllib has no
+  default socket timeout, so a hung YouTube connection could permanently block
+  a thread in the `run_in_executor` pool shared with the audio pipeline. A
+  30-second socket timeout on both downloads and metadata searches now fails
+  fast and falls back through the existing silence-placeholder path.
 
 ## [2.12.4] - 2026-05-18
 
