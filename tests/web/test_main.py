@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -11,6 +12,38 @@ import pytest
 MODULE = "mammamiradio.main"
 TEST_TMP = Path("/tmp/mammamiradio-test-main-tmp")
 TEST_CACHE = Path("/tmp/mammamiradio-test-main-cache")
+
+
+@pytest.mark.parametrize(
+    ("env_value", "expected_level"),
+    [
+        (None, logging.WARNING),
+        ("INFO", logging.INFO),
+        ("invalid", logging.WARNING),
+        ("BASIC_FORMAT", logging.WARNING),
+    ],
+)
+def test_http_dependency_loggers_default_to_warning_with_env_override(monkeypatch, env_value, expected_level):
+    """Successful httpx/httpcore request logs stay quiet unless explicitly enabled."""
+    original_levels = {logger_name: logging.getLogger(logger_name).level for logger_name in ("httpx", "httpcore")}
+    try:
+        from mammamiradio.main import _configure_http_logging
+
+        for logger_name in ("httpx", "httpcore"):
+            logging.getLogger(logger_name).setLevel(logging.NOTSET)
+
+        if env_value is None:
+            monkeypatch.delenv("MAMMAMIRADIO_HTTP_LOG_LEVEL", raising=False)
+        else:
+            monkeypatch.setenv("MAMMAMIRADIO_HTTP_LOG_LEVEL", env_value)
+
+        _configure_http_logging()
+
+        assert logging.getLogger("httpx").level == expected_level
+        assert logging.getLogger("httpcore").level == expected_level
+    finally:
+        for logger_name, level in original_levels.items():
+            logging.getLogger(logger_name).setLevel(level)
 
 
 @pytest.mark.asyncio

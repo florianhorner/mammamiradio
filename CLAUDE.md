@@ -107,6 +107,7 @@ private durable system for strategy or relationship context.
 - `MAMMAMIRADIO_BIND_HOST`, `MAMMAMIRADIO_PORT`: bind address and port
 - `MAMMAMIRADIO_CACHE_DIR`, `MAMMAMIRADIO_TMP_DIR`: override cache/tmp directories (for Docker volumes)
 - `LOG_LEVEL`: override log verbosity (`DEBUG`, `INFO`, `WARNING`, `ERROR`; default `INFO`)
+- `MAMMAMIRADIO_HTTP_LOG_LEVEL`: log level applied to `httpx` and `httpcore` (default `WARNING`). Successful request logs from those libraries are suppressed at default; raise to `INFO` or `DEBUG` to inspect outbound HTTP traffic. Invalid values fall back to `WARNING`.
 - `ADMIN_USERNAME`, `ADMIN_PASSWORD`, `ADMIN_TOKEN`: admin auth
 - `ANTHROPIC_API_KEY`: Claude banter/ad generation
 - `OPENAI_API_KEY`: OpenAI gpt-4o-mini-tts voice synthesis + script generation fallback when Anthropic is unavailable
