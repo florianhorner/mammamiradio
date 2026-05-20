@@ -100,6 +100,42 @@ def test_homeassistant_section_loaded():
     assert config.homeassistant.poll_interval == 60
 
 
+def test_load_config_parses_homeassistant_timer_interrupts(tmp_path):
+    source = Path(__file__).resolve().parents[2] / "radio.toml"
+    custom = (
+        source.read_text()
+        + """
+
+[[homeassistant.timer_interrupt]]
+entity_id = "timer.pasta_timer"
+directive = "La pasta e pronta!"
+urgency = "urgent"
+cooldown = 300
+
+[[homeassistant.timer_interrupt]]
+entity_id = "timer.lavatrice"
+directive = "Lavatrice finita!"
+"""
+    )
+    custom_path = tmp_path / "radio.toml"
+    custom_path.write_text(custom)
+
+    config = load_config(str(custom_path))
+
+    assert len(config.homeassistant.timer_interrupts) == 2
+    explicit = config.homeassistant.timer_interrupts[0]
+    assert explicit.entity_id == "timer.pasta_timer"
+    assert explicit.directive == "La pasta e pronta!"
+    assert explicit.urgency == "urgent"
+    assert explicit.cooldown == 300
+    # Defaults apply when urgency / cooldown are omitted.
+    defaults = config.homeassistant.timer_interrupts[1]
+    assert defaults.entity_id == "timer.lavatrice"
+    assert defaults.directive == "Lavatrice finita!"
+    assert defaults.urgency == "pissed"
+    assert defaults.cooldown == 60
+
+
 def test_load_config_applies_persona_arc_thresholds(tmp_path):
     """Configured arc thresholds should change the phase machine at runtime."""
     source = Path(__file__).resolve().parents[2] / "radio.toml"
@@ -491,6 +527,39 @@ def test_load_config_rejects_nonpositive_pacing_values(tmp_path):
 
     with pytest.raises(ValueError, match="pacing\\.songs_between_ads must be >= 1"):
         load_config(str(custom_path))
+
+
+def test_load_config_rejects_zero_timer_poll_interval(tmp_path):
+    source = Path(__file__).resolve().parents[2] / "radio.toml"
+    custom = source.read_text().replace("timer_poll_interval = 5", "timer_poll_interval = 0")
+    custom_path = tmp_path / "radio.toml"
+    custom_path.write_text(custom)
+
+    with pytest.raises(ValueError, match="homeassistant\\.timer_poll_interval must be >= 1"):
+        load_config(str(custom_path))
+
+
+def test_load_config_rejects_invalid_timer_interrupt_urgency_and_cooldown(tmp_path):
+    source = Path(__file__).resolve().parents[2] / "radio.toml"
+    custom = (
+        source.read_text()
+        + """
+
+[[homeassistant.timer_interrupt]]
+entity_id = "timer.pasta_timer"
+directive = "Bad config!"
+urgency = "screaming"
+cooldown = 0
+"""
+    )
+    custom_path = tmp_path / "radio.toml"
+    custom_path.write_text(custom)
+
+    with pytest.raises(ValueError) as exc:
+        load_config(str(custom_path))
+    msg = str(exc.value)
+    assert "homeassistant.timer_interrupt[0].cooldown must be >= 1" in msg
+    assert "homeassistant.timer_interrupt[0].urgency must be one of" in msg
 
 
 def test_load_config_tolerates_legacy_sonic_brand_keys(tmp_path):

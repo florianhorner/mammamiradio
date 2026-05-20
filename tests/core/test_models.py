@@ -91,6 +91,7 @@ def test_chaos_subtypes_are_not_segment_types():
         "chaos_abandoned_storm",
         "chaos_impossible_recall",
         "chaos_icon_moment",
+        "urgent_interrupt",
     }
     assert not ({item.value for item in ChaosSubtype} & {item.value for item in SegmentType})
 

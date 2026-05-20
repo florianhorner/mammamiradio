@@ -40,6 +40,16 @@ class ChaosSubtype(Enum):
     ABANDONED_STORM = "chaos_abandoned_storm"
     IMPOSSIBLE_RECALL = "chaos_impossible_recall"
     ICON_MOMENT = "chaos_icon_moment"
+    URGENT_INTERRUPT = "urgent_interrupt"
+
+
+@dataclass
+class InterruptSpec:
+    """Describes a pending host interrupt triggered by an HA automation or timer."""
+
+    directive: str
+    urgency: str = "pissed"  # "pissed" | "urgent" | "gentle"
+    cooldown: int = 60  # seconds before this entity can fire again
 
 
 @dataclass
@@ -395,6 +405,12 @@ class StationState:
     ha_last_event_label_en: str = ""
     # Force-trigger: producer will use this type instead of scheduler for the next segment
     force_next: SegmentType | None = None
+    # Host interrupt: pre-generated bridge clip to play immediately on interrupt
+    interrupt_slot: Path | None = None
+    # Whether the current interrupt bridge clip is a generated temp file
+    interrupt_slot_ephemeral: bool = False
+    # Timestamp of last fired interrupt (for cooldown enforcement)
+    last_interrupt_ts: float = 0.0
     # Chaos Mode: station-wide host-chaos toggle plus first-strike handoff.
     chaos_mode_active: bool = False
     chaos_pending: ChaosSubtype | None = None
