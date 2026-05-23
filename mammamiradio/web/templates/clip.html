@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ station_name }}{% if track_title %} — {{ track_title }}{% endif %}</title>
+
+<!-- Open Graph: station identity first so the share preview reads as a radio moment -->
+<meta property="og:title" content="{{ station_name }}{% if track_title %}: {{ track_title }}{% endif %}">
+<meta property="og:description" content="{% if expired %}Questo momento è passato. Ascolta {{ station_name }} in diretta.{% else %}Senti questo momento su {{ station_name }}{% if track_title %} — {{ track_title }}{% if track_artist %} di {{ track_artist }}{% endif %}{% endif %}.{% endif %}">
+<meta property="og:type" content="music.song">
+<meta property="og:image" content="{{ og_image_url }}">
+{% if not expired %}<meta property="og:audio" content="{{ clip_mp3_url }}">{% endif %}
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="{{ station_name }}{% if track_title %}: {{ track_title }}{% endif %}">
+<meta name="twitter:image" content="{{ og_image_url }}">
+<meta name="theme-color" content="#14110F">
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,600;1,400;1,600&family=Outfit:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="{{ ingress_prefix }}/static/tokens.css?v={{ asset_version }}">
+
+<style>
+  *, *::before, *::after { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: var(--espresso, #14110F);
+    color: var(--cream, #F5EDD8);
+    font-family: 'Outfit', system-ui, sans-serif;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+  }
+  .tricolor-stripe {
+    height: 3px;
+    display: flex;
+    width: 100%;
+  }
+  .tricolor-stripe > div { flex: 1; }
+  .tricolor-stripe > div:nth-child(1) { background: #009246; }
+  .tricolor-stripe > div:nth-child(2) { background: rgba(255, 255, 255, 0.9); }
+  .tricolor-stripe > div:nth-child(3) { background: #CE2B37; }
+
+  .clip-card {
+    max-width: 480px;
+    width: calc(100% - 32px);
+    margin: 32px auto;
+    padding: 32px 24px;
+    background: var(--surface, #251E19);
+    border-radius: 12px;
+    border: 1px solid rgba(245, 237, 216, 0.08);
+  }
+  .station {
+    font-family: 'Playfair Display', Georgia, serif;
+    font-style: italic;
+    font-weight: 600;
+    font-size: 28px;
+    margin: 0 0 4px;
+    color: var(--cream, #F5EDD8);
+    line-height: 1.1;
+  }
+  .station .mi { color: var(--sun, #F4D048); }
+  .station-underline {
+    width: 48px;
+    height: 3px;
+    background: var(--sun, #F4D048);
+    margin: 8px 0 24px;
+    border-radius: 2px;
+  }
+  .track-title {
+    font-family: 'Outfit', sans-serif;
+    font-weight: 600;
+    font-size: 20px;
+    margin: 0 0 4px;
+    color: var(--cream, #F5EDD8);
+    line-height: 1.3;
+  }
+  .track-artist {
+    font-size: 15px;
+    color: rgba(245, 237, 216, 0.7);
+    margin: 0 0 24px;
+  }
+  .clip-audio {
+    width: 100%;
+    margin: 0 0 8px;
+    display: block;
+    border-radius: 8px;
+  }
+  .play-hint {
+    font-size: 12px;
+    color: rgba(245, 237, 216, 0.55);
+    text-align: center;
+    margin: 0 0 24px;
+    letter-spacing: 0.04em;
+  }
+  .expired-state {
+    text-align: center;
+    padding: 24px 0;
+  }
+  .expired-heading {
+    font-family: 'Playfair Display', Georgia, serif;
+    font-style: italic;
+    font-size: 22px;
+    margin: 0 0 8px;
+    color: var(--cream, #F5EDD8);
+  }
+  .expired-sub {
+    font-size: 14px;
+    color: rgba(245, 237, 216, 0.7);
+    margin: 0 0 24px;
+    line-height: 1.5;
+  }
+  .cta {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 44px;
+    padding: 12px 24px;
+    background: var(--ok, #2563EB);
+    color: white;
+    text-decoration: none;
+    font-weight: 600;
+    font-size: 15px;
+    border-radius: 8px;
+    letter-spacing: 0.02em;
+    transition: background 0.15s ease;
+    width: 100%;
+  }
+  .cta:hover, .cta:focus-visible { background: #1E50C2; }
+  .cta:focus-visible { outline: 2px solid var(--sun, #F4D048); outline-offset: 2px; }
+  .footer-line {
+    text-align: center;
+    font-size: 12px;
+    color: rgba(245, 237, 216, 0.45);
+    margin-top: 32px;
+    padding-bottom: 24px;
+    letter-spacing: 0.04em;
+  }
+  @media (max-width: 360px) {
+    .clip-card { padding: 24px 16px; }
+    .station { font-size: 24px; }
+  }
+</style>
+</head>
+<body>
+
+<div class="tricolor-stripe" aria-hidden="true"><div></div><div></div><div></div></div>
+
+<main class="clip-card">
+  {% if station_name == "Mamma Mi Radio" %}
+    <h1 class="station">Mamma <span class="mi">Mi</span> Radio</h1>
+  {% else %}
+    <h1 class="station">{{ station_name }}</h1>
+  {% endif %}
+  <div class="station-underline" aria-hidden="true"></div>
+
+  {% if expired %}
+    <div class="expired-state">
+      <h2 class="expired-heading">Questo momento è passato</h2>
+      <p class="expired-sub">Hai aspettato troppo, ma la radio suona ancora.</p>
+      <a class="cta" href="{{ station_url }}">Ascolta in diretta &rarr;</a>
+    </div>
+  {% else %}
+    {% if track_title %}
+      <p class="track-title">{{ track_title }}</p>
+      {% if track_artist %}<p class="track-artist">{{ track_artist }}</p>{% endif %}
+    {% endif %}
+
+    <audio
+      class="clip-audio"
+      controls
+      preload="auto"
+      src="{{ clip_mp3_url }}"
+      title="Clip da {{ station_name }}{% if track_title %} — {{ track_title }}{% endif %}">
+      Il tuo browser non supporta l'audio HTML5. <a href="{{ clip_mp3_url }}">Scarica la clip</a>.
+    </audio>
+    <p class="play-hint">Premi play per ascoltare</p>
+
+    <a class="cta" href="{{ station_url }}">Ascolta in diretta &rarr;</a>
+  {% endif %}
+</main>
+
+<p class="footer-line">{% if expired %}{{ station_name }}{% else %}Questo momento è durato 30 secondi · {{ station_name }}{% endif %}</p>
+
+</body>
+</html>

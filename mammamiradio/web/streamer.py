@@ -2884,15 +2884,43 @@ async def create_clip(request: Request):
 
     clips_dir = config.cache_dir / "clips"
 
-    # Cap total clips on disk to prevent unbounded writes
+    # Cap total clips on disk to prevent unbounded writes; prune .json sidecars too
     existing = sorted(clips_dir.glob("*.mp3"), key=lambda f: f.stat().st_mtime) if clips_dir.is_dir() else []
     if len(existing) >= CLIP_MAX_SAVED:
         for old in existing[: len(existing) - (CLIP_MAX_SAVED - 1)]:
             old.unlink(missing_ok=True)
+            old.with_suffix(".json").unlink(missing_ok=True)
 
     clip_id = save_clip(clip_data, clips_dir)
+
+    # Capture track context at clip creation time as a JSON sidecar.
+    # Best-effort: missing now_streaming or schema drift falls back to station_name.
+    import json as _json
+
+    station_state = getattr(request.app.state, "station_state", None)
+    now_streaming = getattr(station_state, "now_streaming", None) or {}
+    meta = now_streaming.get("metadata", {}) if isinstance(now_streaming, dict) else {}
+    station_name = getattr(config.brand, "station_name", "Mamma Mi Radio")
+    track_title = str(meta.get("title_only") or meta.get("title") or "").strip()
+    track_artist = str(meta.get("artist") or "").strip()
+    sidecar = {
+        "station_name": station_name,
+        "track_title": track_title,
+        "track_artist": track_artist,
+        "created_at": int(time.time()),
+    }
+    try:
+        (clips_dir / f"{clip_id}.json").write_text(_json.dumps(sidecar))
+    except OSError as exc:
+        logger.warning("clip sidecar write failed for %s: %s", clip_id, exc)
+
     cleanup_old_clips(clips_dir, max_age_hours=CLIP_TTL_SECONDS // 3600)
-    return {"ok": True, "clip_id": clip_id, "url": f"/clips/{clip_id}.mp3"}
+    return {
+        "ok": True,
+        "clip_id": clip_id,
+        "url": f"/clips/{clip_id}.mp3",
+        "share_url": f"/clips/{clip_id}",
+    }
 
 
 @router.get("/clips/{clip_id}.mp3")
@@ -2921,6 +2949,66 @@ async def serve_clip(clip_id: str, request: Request):
         return JSONResponse({"ok": False, "error": "Clip expired"}, status_code=404)
 
     return FileResponse(clip_path, media_type="audio/mpeg")
+
+
+@router.get("/clips/{clip_id}")
+async def clip_landing(clip_id: str, request: Request):
+    """HTML landing page for a shared clip — OG meta + audio player.
+
+    Expired clips return HTTP 200 with a graceful "expired" state, not 404.
+    OG scrapers (WhatsApp, iMessage) cache 404s permanently; a 200 with
+    "Questo momento è passato" preserves the brand and points to the live stream.
+    """
+    import json as _json
+
+    from mammamiradio.scheduling.clip import CLIP_TTL_SECONDS
+
+    if "/" in clip_id or "\\" in clip_id or ".." in clip_id:
+        return JSONResponse({"ok": False, "error": "Invalid clip ID"}, status_code=400)
+
+    config = request.app.state.config
+    clips_dir = config.cache_dir / "clips"
+    clip_path = clips_dir / f"{clip_id}.mp3"
+    sidecar_path = clips_dir / f"{clip_id}.json"
+
+    expired = False
+    if not clip_path.exists():
+        # Missing clip → treat as expired (graceful HTML, not 404)
+        expired = True
+    elif time.time() - clip_path.stat().st_mtime > CLIP_TTL_SECONDS:
+        clip_path.unlink(missing_ok=True)
+        sidecar_path.unlink(missing_ok=True)
+        expired = True
+
+    # Load sidecar metadata if present (graceful when missing)
+    sidecar: dict = {}
+    if sidecar_path.exists():
+        try:
+            sidecar = _json.loads(sidecar_path.read_text())
+        except (OSError, ValueError):
+            sidecar = {}
+
+    ingress_prefix = request.headers.get("X-Ingress-Path", "")
+    station_name = sidecar.get("station_name") or getattr(config.brand, "station_name", "Mamma Mi Radio")
+    track_title = sidecar.get("track_title", "")
+    track_artist = sidecar.get("track_artist", "")
+
+    return _TEMPLATES.TemplateResponse(
+        request,
+        "clip.html",
+        {
+            "clip_id": clip_id,
+            "expired": expired,
+            "station_name": station_name,
+            "track_title": track_title,
+            "track_artist": track_artist,
+            "clip_mp3_url": f"{ingress_prefix}/clips/{clip_id}.mp3",
+            "og_image_url": f"{ingress_prefix}/og-card.png",
+            "station_url": ingress_prefix or "/",
+            "ingress_prefix": ingress_prefix,
+            "asset_version": _ASSET_VERSION,
+        },
+    )
 
 
 @router.get("/healthz")
