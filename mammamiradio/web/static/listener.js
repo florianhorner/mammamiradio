@@ -377,6 +377,92 @@
       audio && audio.pause();
     }
     state.wasStopped = stopped;
+    // Share button visibility: hidden when session stopped, visible otherwise.
+    // The button has 4 states: hidden / enabled / loading / shared (handled in doShare).
+    const shareBtn = document.getElementById('share-clip-btn');
+    if (shareBtn) {
+      if (stopped) {
+        shareBtn.hidden = true;
+        shareBtn.setAttribute('data-state', 'hidden');
+      } else {
+        shareBtn.hidden = false;
+        // Only reset to enabled when not mid-action
+        const cur = shareBtn.getAttribute('data-state');
+        if (cur === 'hidden' || cur === 'shared') {
+          shareBtn.setAttribute('data-state', 'enabled');
+        }
+      }
+    }
+  }
+
+  /* ── Toast helper (used by clip sharing) ── */
+  let _toastTimer = null;
+  function _showToast(msg, durationMs = 2400) {
+    let el = document.getElementById('mmr-toast');
+    if (!el) {
+      el = document.createElement('div');
+      el.id = 'mmr-toast';
+      el.setAttribute('role', 'status');
+      el.setAttribute('aria-live', 'polite');
+      el.style.cssText = (
+        'position:fixed;left:50%;bottom:24px;transform:translateX(-50%);' +
+        'background:rgba(20,17,15,0.96);color:var(--cream,#F5EDD8);' +
+        'padding:10px 18px;border-radius:8px;font-size:14px;font-family:Outfit,sans-serif;' +
+        'z-index:9999;box-shadow:0 4px 16px rgba(0,0,0,0.4);' +
+        'border:1px solid rgba(244,208,72,0.2);opacity:0;transition:opacity 0.18s ease;'
+      );
+      document.body.appendChild(el);
+    }
+    el.textContent = msg;
+    requestAnimationFrame(() => { el.style.opacity = '1'; });
+    if (_toastTimer) clearTimeout(_toastTimer);
+    _toastTimer = setTimeout(() => { el.style.opacity = '0'; }, durationMs);
+  }
+
+  /* ── Clip sharing: POST /api/clip, share via native sheet or clipboard ── */
+  async function doShare() {
+    const btn = document.getElementById('share-clip-btn');
+    if (!btn || btn.disabled) return;
+    const labelEl = btn.querySelector('.mmr-share-btn-label');
+    const origLabel = labelEl ? labelEl.textContent : '';
+    btn.disabled = true;
+    btn.setAttribute('data-state', 'loading');
+    if (labelEl) labelEl.textContent = _t('clip_saving', 'Salvando…');
+    try {
+      const res = await fetch(_base + '/api/clip', { method: 'POST' });
+      const data = res.ok ? await res.json() : null;
+      if (!data || !data.ok) {
+        const err = (data && data.error) || _t('clip_error', 'Nessun audio in memoria');
+        _showToast(err);
+        return;
+      }
+      const shareUrl = window.location.origin + _base + (data.share_url || data.url);
+      const npEl = document.getElementById('np-track');
+      const stationName = localStorage.getItem('stationName') || 'Mamma Mi Radio';
+      const title = (npEl && npEl.textContent && npEl.textContent.trim()) || stationName;
+      if (navigator.share) {
+        try {
+          await navigator.share({ title: title + ' — ' + stationName, url: shareUrl });
+        } catch (err) {
+          if (err && err.name === 'AbortError') return;  // user cancelled, no toast
+          throw err;
+        }
+      } else if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(shareUrl);
+        _showToast(_t('clip_copied', 'Link copiato!'));
+      } else {
+        // Last-resort fallback: prompt
+        window.prompt(_t('clip_copy_prompt', 'Copia il link:'), shareUrl);
+      }
+      btn.setAttribute('data-state', 'shared');
+    } catch (err) {
+      console.warn('doShare failed', err);
+      _showToast(_t('clip_error', 'Errore clip'));
+      btn.setAttribute('data-state', 'enabled');
+    } finally {
+      btn.disabled = false;
+      if (labelEl) labelEl.textContent = origLabel;
+    }
   }
 
   /* ── Polling ──
@@ -514,6 +600,10 @@
     // Request form
     const reqForm = $('request-form');
     if (reqForm) reqForm.addEventListener('submit', submitRequest);
+
+    // Clip sharing button
+    const shareBtn = document.getElementById('share-clip-btn');
+    if (shareBtn) shareBtn.addEventListener('click', doShare);
 
     // Auto-start on first interaction (bypass autoplay block)
     function autoStartOnce() {
