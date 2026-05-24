@@ -1964,6 +1964,19 @@ async def test_listener_page_includes_casa_card_and_public_status_binding():
     assert "fetch(_base + '/public-status')" in js_resp.text
 
 
+@pytest.mark.asyncio
+async def test_listener_share_reads_clip_error_body():
+    """Listener clip sharing must surface JSON errors from non-2xx responses."""
+    app = _make_test_app()
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        js_resp = await client.get("/static/listener.js")
+
+    assert js_resp.status_code == 200
+    assert "const data = await res.json().catch(() => null);" in js_resp.text
+    assert "if (!res.ok || !data || !data.ok)" in js_resp.text
+
+
 # ---------------------------------------------------------------------------
 # _tail_log helper
 # ---------------------------------------------------------------------------
@@ -2956,7 +2969,7 @@ async def test_clip_landing_returns_html(tmp_path):
 
 @pytest.mark.asyncio
 async def test_clip_landing_og_tags(tmp_path):
-    """GET /clips/{id} response contains og:audio and og:title meta tags."""
+    """GET /clips/{id} response contains absolute OG media URLs."""
     app = _make_test_app()
     app.state.config.cache_dir = tmp_path / "cache"
     clips_dir = app.state.config.cache_dir / "clips"
@@ -2969,6 +2982,47 @@ async def test_clip_landing_og_tags(tmp_path):
     assert resp.status_code == 200
     assert 'property="og:audio"' in resp.text
     assert 'property="og:title"' in resp.text
+    assert 'property="og:image" content="http://testserver/og-card.png"' in resp.text
+    assert 'property="og:audio" content="http://testserver/clips/abc123.mp3"' in resp.text
+    assert 'name="twitter:image" content="http://testserver/og-card.png"' in resp.text
+
+
+@pytest.mark.asyncio
+async def test_clip_landing_uses_absolute_ingress_urls(tmp_path):
+    """Valid ingress prefixes are included in absolute clip preview URLs."""
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path / "cache"
+    clips_dir = app.state.config.cache_dir / "clips"
+    clips_dir.mkdir(parents=True)
+    (clips_dir / "abc123.mp3").write_bytes(b"\xff" * 1000)
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.get("/clips/abc123", headers={"X-Ingress-Path": "/api/hassio_ingress/abc123"})
+
+    assert resp.status_code == 200
+    assert 'property="og:image" content="http://testserver/api/hassio_ingress/abc123/og-card.png"' in resp.text
+    assert 'property="og:audio" content="http://testserver/api/hassio_ingress/abc123/clips/abc123.mp3"' in resp.text
+    assert 'href="/api/hassio_ingress/abc123/static/tokens.css' in resp.text
+
+
+@pytest.mark.asyncio
+async def test_clip_landing_sanitizes_ingress_prefix(tmp_path):
+    """Malformed ingress headers must not become protocol-relative asset URLs."""
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path / "cache"
+    clips_dir = app.state.config.cache_dir / "clips"
+    clips_dir.mkdir(parents=True)
+    (clips_dir / "abc123.mp3").write_bytes(b"\xff" * 1000)
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.get("/clips/abc123", headers={"X-Ingress-Path": "//evil.example"})
+
+    assert resp.status_code == 200
+    assert "//evil.example" not in resp.text
+    assert 'property="og:image" content="http://testserver/og-card.png"' in resp.text
+    assert 'href="/static/tokens.css' in resp.text
 
 
 @pytest.mark.asyncio

@@ -2971,24 +2971,27 @@ async def clip_landing(clip_id: str, request: Request):
     clip_path = clips_dir / f"{clip_id}.mp3"
     sidecar_path = clips_dir / f"{clip_id}.json"
 
+    # Single stat() instead of exists() then stat() — saves a syscall and
+    # avoids the TOCTOU window between the two. Missing clip → expired page.
     expired = False
-    if not clip_path.exists():
-        # Missing clip → treat as expired (graceful HTML, not 404)
-        expired = True
-    elif time.time() - clip_path.stat().st_mtime > CLIP_TTL_SECONDS:
-        clip_path.unlink(missing_ok=True)
-        sidecar_path.unlink(missing_ok=True)
+    try:
+        if time.time() - clip_path.stat().st_mtime > CLIP_TTL_SECONDS:
+            clip_path.unlink(missing_ok=True)
+            sidecar_path.unlink(missing_ok=True)
+            expired = True
+    except FileNotFoundError:
         expired = True
 
-    # Load sidecar metadata if present (graceful when missing)
+    # Sidecar read is best-effort. read_text() already raises FileNotFoundError
+    # when missing, so an explicit exists() check would be a redundant syscall.
     sidecar: dict = {}
-    if sidecar_path.exists():
-        try:
-            sidecar = _json.loads(sidecar_path.read_text())
-        except (OSError, ValueError):
-            sidecar = {}
+    try:
+        sidecar = _json.loads(sidecar_path.read_text())
+    except (FileNotFoundError, OSError, ValueError):
+        sidecar = {}
 
-    ingress_prefix = request.headers.get("X-Ingress-Path", "")
+    ingress_prefix = _sanitize_ingress_prefix(request.headers.get("X-Ingress-Path", ""))
+    public_base_url = f"{str(request.base_url).rstrip('/')}{ingress_prefix}"
     station_name = sidecar.get("station_name") or getattr(config.brand, "station_name", "Mamma Mi Radio")
     track_title = sidecar.get("track_title", "")
     track_artist = sidecar.get("track_artist", "")
@@ -3002,9 +3005,9 @@ async def clip_landing(clip_id: str, request: Request):
             "station_name": station_name,
             "track_title": track_title,
             "track_artist": track_artist,
-            "clip_mp3_url": f"{ingress_prefix}/clips/{clip_id}.mp3",
-            "og_image_url": f"{ingress_prefix}/og-card.png",
-            "station_url": ingress_prefix or "/",
+            "clip_mp3_url": f"{public_base_url}/clips/{clip_id}.mp3",
+            "og_image_url": f"{public_base_url}/og-card.png",
+            "station_url": f"{public_base_url}/listen" if ingress_prefix else f"{public_base_url}/",
             "ingress_prefix": ingress_prefix,
             "asset_version": _ASSET_VERSION,
         },

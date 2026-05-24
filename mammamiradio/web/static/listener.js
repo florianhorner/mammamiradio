@@ -430,8 +430,8 @@
     if (labelEl) labelEl.textContent = _t('clip_saving', 'Salvando…');
     try {
       const res = await fetch(_base + '/api/clip', { method: 'POST' });
-      const data = res.ok ? await res.json() : null;
-      if (!data || !data.ok) {
+      const data = await res.json().catch(() => null);
+      if (!res.ok || !data || !data.ok) {
         const err = (data && data.error) || _t('clip_error', 'Nessun audio in memoria');
         _showToast(err);
         return;
