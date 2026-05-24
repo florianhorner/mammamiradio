@@ -3072,6 +3072,29 @@ async def test_clip_landing_without_sidecar(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_clip_landing_sidecar_non_dict_json_falls_back_gracefully(tmp_path):
+    """Sidecar that is valid JSON but not a dict must not crash the route.
+
+    _json.loads can return a list/string/number; the route's .get() calls would
+    raise AttributeError on those. Regression guard for the dict-type check.
+    """
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path / "cache"
+    clips_dir = app.state.config.cache_dir / "clips"
+    clips_dir.mkdir(parents=True)
+    (clips_dir / "abc123.mp3").write_bytes(b"\xff" * 1000)
+    (clips_dir / "abc123.json").write_text('["not-a-dict"]')
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.get("/clips/abc123")
+
+    assert resp.status_code == 200
+    assert "text/html" in resp.headers["content-type"]
+    assert "<audio" in resp.text
+
+
+@pytest.mark.asyncio
 async def test_clip_landing_missing_returns_expired_html(tmp_path):
     """GET /clips/{nonexistent} returns 200 HTML 'expired' state, not 404 JSON.
 

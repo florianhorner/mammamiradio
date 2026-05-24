@@ -2899,7 +2899,11 @@ async def create_clip(request: Request):
 
     station_state = getattr(request.app.state, "station_state", None)
     now_streaming = getattr(station_state, "now_streaming", None) or {}
-    meta = now_streaming.get("metadata", {}) if isinstance(now_streaming, dict) else {}
+    # metadata is producer-managed and normally a dict, but a None or an
+    # unexpected scalar would crash the .get() below and turn a successful
+    # clip into a 500. Normalize to dict before reading fields.
+    raw_meta = now_streaming.get("metadata", {}) if isinstance(now_streaming, dict) else {}
+    meta = raw_meta if isinstance(raw_meta, dict) else {}
     station_name = getattr(config.brand, "station_name", "Mamma Mi Radio")
     track_title = str(meta.get("title_only") or meta.get("title") or "").strip()
     track_artist = str(meta.get("artist") or "").strip()
@@ -2984,9 +2988,13 @@ async def clip_landing(clip_id: str, request: Request):
 
     # Sidecar read is best-effort. read_text() already raises FileNotFoundError
     # when missing, so an explicit exists() check would be a redundant syscall.
+    # _json.loads can return a list/string/number for valid-but-wrong-shape
+    # files; isinstance guard keeps later .get() calls from crashing the route.
     sidecar: dict = {}
     try:
-        sidecar = _json.loads(sidecar_path.read_text())
+        loaded = _json.loads(sidecar_path.read_text())
+        if isinstance(loaded, dict):
+            sidecar = loaded
     except (FileNotFoundError, OSError, ValueError):
         sidecar = {}
 

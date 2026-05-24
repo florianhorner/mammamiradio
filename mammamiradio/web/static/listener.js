@@ -425,6 +425,10 @@
     if (!btn || btn.disabled) return;
     const labelEl = btn.querySelector('.mmr-share-btn-label');
     const origLabel = labelEl ? labelEl.textContent : '';
+    // Centralized state restoration: every early-exit and the success path set
+    // nextState, and the finally block writes it once. Avoids leaving the
+    // button stuck at "loading" on API errors or user-cancelled share sheets.
+    let nextState = 'enabled';
     btn.disabled = true;
     btn.setAttribute('data-state', 'loading');
     if (labelEl) labelEl.textContent = _t('clip_saving', 'Salvando…');
@@ -454,14 +458,14 @@
         // Last-resort fallback: prompt
         window.prompt(_t('clip_copy_prompt', 'Copia il link:'), shareUrl);
       }
-      btn.setAttribute('data-state', 'shared');
+      nextState = 'shared';
     } catch (err) {
       console.warn('doShare failed', err);
       _showToast(_t('clip_error', 'Errore clip'));
-      btn.setAttribute('data-state', 'enabled');
     } finally {
       btn.disabled = false;
       if (labelEl) labelEl.textContent = origLabel;
+      btn.setAttribute('data-state', nextState);
     }
   }
 
