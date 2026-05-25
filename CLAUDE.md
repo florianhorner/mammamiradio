@@ -255,9 +255,14 @@ If the behavior changed and the docs didn't, the docs are wrong. Fix them in the
 - Architectural metaphors as labels: `cathedral`, `domain naves`, `sacred files`, `god-module`, `leadership principle`, `operator-honesty`
 - Contributor archaeology: `first outside contribution`, `work was superseded`
 
-**Where this content belongs instead:** PR bodies, runbooks (`docs/runbooks/`), stabilization log (`docs/stabilization-log.md`), strategic planning docs (`docs/YYYY-MM-DD-*.md`).
+**Where this content belongs instead:** runbooks (`docs/runbooks/`), stabilization log (`docs/stabilization-log.md`), strategic planning docs (`docs/YYYY-MM-DD-*.md`). **Not** PR bodies — the same editorial boundary applies to pull-request descriptions.
 
-**Enforcement:** `scripts/check-changelog-lint.sh` runs in CI on every PR. To extend, add a regex pattern to the `PATTERNS` array in that file.
+**Enforcement:** the shared pattern list lives in `scripts/lint-patterns.sh` (`LINT_PATTERNS` array). Two lints consume it:
+
+- `scripts/check-changelog-lint.sh` — runs in `quality.yml` against `CHANGELOG.md` and `ha-addon/mammamiradio/CHANGELOG.md`.
+- `scripts/check-pr-body-lint.sh` — runs in `.github/workflows/pr-body-lint.yml` against the PR body on every `opened/edited/synchronize/ready_for_review` event, plus a small set of PR-body-specific patterns for process narrative (`N commits ahead`, `picked up cleanly`, `auto-decided`, `soak verification`, `dual-voice review`, `🤖 Generated with`). The local PreToolUse hook (`~/.claude/hooks/verify-proof-block.sh`) chains it in at `gh pr create` time when the script is present in the project.
+
+To extend the rules, add a regex to `LINT_PATTERNS` in `scripts/lint-patterns.sh` — both lints pick it up automatically.
 
 ## Scope discipline
 
