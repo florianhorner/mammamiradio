@@ -8,6 +8,13 @@ The current version source of truth is `pyproject.toml`.
 
 ### Added
 
+- **PR-body editorial lint** — Pull-request descriptions are now linted against
+  the same vocabulary banned in the public changelog (internal sprint labels,
+  agent tool provenance, planning vocabulary, contributor archaeology), plus a
+  small set of process-narrative phrases. Enforced in CI on every PR
+  open/edit/synchronize, and at the local `gh pr create` boundary via the
+  existing proof-block hook. The shared pattern list lives in
+  `scripts/lint-patterns.sh`; both lints consume it so the rules can't drift.
 - **Host interrupt trigger** — when a Home Assistant timer fires, the hosts immediately interrupt whatever is playing and deliver an urgent, pissed banter segment telling the listener to act. Sub-7s end-to-end: HA timer fires → detected within ≤5s (dedicated lightweight poll) → audio within ≤2s of detection. Configure per-timer directives in `radio.toml` under `[[homeassistant.timer_interrupt]]`. The same mechanism is exposed as `POST /api/interrupt` — any HA automation (motion sensor, alarm, dishwasher done) can inject a custom directive into the stream without code changes.
 - **Admin producer desk** — The `/admin` panel is reorganized around the live
   broadcast: an On Air zone (current segment, transport controls, running AI
