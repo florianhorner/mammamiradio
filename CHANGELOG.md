@@ -6,6 +6,8 @@ The current version source of truth is `pyproject.toml`.
 
 ## [Unreleased]
 
+## [2.13.0] - 2026-05-26
+
 ### Added
 
 - **Shareable clip moments** — Tap "Condividi clip" on the listener page (or the Clip button on `/live`) to share the last 30 seconds as a branded landing page (`/clips/{id}`), not a raw MP3. The link previews in iMessage / WhatsApp with the station name, the track that was playing, the 30s audio, and an "Ascolta in diretta" button. Clip metadata is captured at creation time as a JSON sidecar so the landing page can show what was playing even after the track ends. Expired and missing clips return a graceful "Questo momento è passato" HTML page (HTTP 200) instead of a 404 — OG scrapers cache 404s permanently, which would kill the preview forever.
