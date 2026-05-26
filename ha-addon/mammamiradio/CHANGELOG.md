@@ -1,5 +1,25 @@
 # Changelog
 
+## 2.13.0
+
+### Added
+
+- **Shareable clip moments** — Tap "Condividi clip" on the listener page (or the Clip button on `/live`) to share the last 30 seconds as a branded landing page. The link previews in iMessage and WhatsApp with the station name, the track that was playing, the 30-second audio, and an "Ascolta in diretta" button. Expired and missing clips show a friendly "Questo momento è passato" page instead of a 404.
+- **Host interrupt trigger** — When a Home Assistant timer fires, the hosts immediately interrupt whatever is playing and deliver an urgent banter segment telling the listener to act. Configure per-timer directives in `radio.toml` under `[[homeassistant.timer_interrupt]]`. The same mechanism is exposed as `POST /api/interrupt`, so any HA automation (motion sensor, alarm, dishwasher done) can inject a custom directive into the stream without code changes.
+- **Admin producer desk** — The admin panel is reorganized around the live broadcast: an On Air zone (current segment, transport controls, running AI cost), a Live Queue holding the forward Scaletta, and a Rotation Pool, with secondary controls tucked into collapsible drawers. Operators can drop a single queued segment without clearing the whole queue.
+- **Stream audio format on `/public-status`** — The public payload now exposes a `stream.audio_format` object (codec, mime type, bitrate, sample rate, channels). External integrations can declare `/stream` correctly before playback instead of assuming the default MP3/192k configuration.
+
+### Changed
+
+- **Banter cadence minimum is now 2 songs.** Previously a value of `1` for `songs_between_banter` made the hosts talk after every single song. The admin Cadenza slider and config validation now enforce a floor of 2.
+
+### Fixed
+
+- **Host banter is no longer truncated to its first phrase.** Per-line voice normalization had been trimming silence with a setting that stopped output at the first pause, collapsing multi-line host exchanges to a second or two. Silence trimming now removes trailing silence only.
+- **Pacing API rejects malformed payloads.** Non-object bodies and non-integer fields on `PATCH /api/pacing` now return a clear error instead of a 500 or silent coercion. Cadence values are clamped to a safe ceiling so a single request cannot effectively disable banter or ads.
+- **yt-dlp downloads now time out after 30 seconds.** A hung YouTube connection can no longer permanently block a thread in the audio pipeline.
+- **`httpx` and `httpcore` request logs are quiet by default.** Successful outbound HTTP calls no longer flood the log stream. Set `MAMMAMIRADIO_HTTP_LOG_LEVEL=INFO` (or `DEBUG`) to re-enable detailed traffic logs.
+
 ## 2.12.4
 
 ### Added
