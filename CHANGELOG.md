@@ -9,6 +9,19 @@ The current version source of truth is `pyproject.toml`.
 ### Added
 
 - **Shareable clip moments** — Tap "Condividi clip" on the listener page (or the Clip button on `/live`) to share the last 30 seconds as a branded landing page (`/clips/{id}`), not a raw MP3. The link previews in iMessage / WhatsApp with the station name, the track that was playing, the 30s audio, and an "Ascolta in diretta" button. Clip metadata is captured at creation time as a JSON sidecar so the landing page can show what was playing even after the track ends. Expired and missing clips return a graceful "Questo momento è passato" HTML page (HTTP 200) instead of a 404 — OG scrapers cache 404s permanently, which would kill the preview forever.
+- **Stream audio format metadata on `/public-status`** — the public payload now
+  exposes a `stream.audio_format` object with `codec`, `mime_type`,
+  `bitrate_kbps`, `sample_rate_hz`, and `channels`. External integrations can
+  read it before playback to declare `/stream` correctly without assuming the
+  default MP3/192k configuration. Backed by a shared helper that also feeds the
+  `/stream` response headers, so the API metadata and ICY headers cannot drift.
+- **PR-body editorial lint** — Pull-request descriptions are now linted against
+  the same vocabulary banned in the public changelog (internal sprint labels,
+  agent tool provenance, planning vocabulary, contributor archaeology), plus a
+  small set of process-narrative phrases. Enforced in CI on every PR
+  open/edit/synchronize, and at the local `gh pr create` boundary via the
+  existing proof-block hook. The shared pattern list lives in
+  `scripts/lint-patterns.sh`; both lints consume it so the rules can't drift.
 - **Host interrupt trigger** — when a Home Assistant timer fires, the hosts immediately interrupt whatever is playing and deliver an urgent, pissed banter segment telling the listener to act. Sub-7s end-to-end: HA timer fires → detected within ≤5s (dedicated lightweight poll) → audio within ≤2s of detection. Configure per-timer directives in `radio.toml` under `[[homeassistant.timer_interrupt]]`. The same mechanism is exposed as `POST /api/interrupt` — any HA automation (motion sensor, alarm, dishwasher done) can inject a custom directive into the stream without code changes.
 - **Admin producer desk** — The `/admin` panel is reorganized around the live
   broadcast: an On Air zone (current segment, transport controls, running AI
@@ -44,6 +57,10 @@ The current version source of truth is `pyproject.toml`.
   a thread in the `run_in_executor` pool shared with the audio pipeline. A
   30-second socket timeout on both downloads and metadata searches now fails
   fast and falls back through the existing silence-placeholder path.
+- **`httpx` and `httpcore` request logs are no longer spammy.** Both libraries
+  default to `WARNING` so successful outbound calls do not flood the log
+  stream. Set `MAMMAMIRADIO_HTTP_LOG_LEVEL=INFO` (or `DEBUG`) to re-enable
+  detailed HTTP traffic logs.
 
 ## [2.12.4] - 2026-05-18
 

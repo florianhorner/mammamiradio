@@ -25,6 +25,7 @@ from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.templating import Jinja2Templates
 
 from mammamiradio.audio.normalizer import humanize_norm_filename, load_track_metadata
+from mammamiradio.audio.stream_format import stream_audio_metadata
 from mammamiradio.core.capabilities import capabilities_to_dict, get_capabilities
 from mammamiradio.core.models import (
     ChaosSubtype,
@@ -1583,18 +1584,18 @@ async def static_files(filename: str):
 async def stream(request: Request):
     """Expose the live MP3 stream consumed by browsers and audio players."""
     config = request.app.state.config
+    audio_format = stream_audio_metadata(config)
     headers = {
-        "Content-Type": "audio/mpeg",
         "icy-name": config.station.name.replace("\r", "").replace("\n", ""),
         "icy-genre": config.station.theme[:64].replace("\r", "").replace("\n", ""),
-        "icy-br": str(config.audio.bitrate),
+        "icy-br": str(audio_format["bitrate_kbps"]),
         "Cache-Control": "no-cache, no-store",
         "Connection": "keep-alive",
     }
     return StreamingResponse(
         _audio_generator(request),
         headers=headers,
-        media_type="audio/mpeg",
+        media_type=audio_format["mime_type"],
     )
 
 
@@ -2768,11 +2769,20 @@ def _public_status_payload(request: Request) -> dict:
     extends this payload with operator-only fields (queue depth, segment log,
     api costs, etc). The CROSS-PAGE INVARIANT is that any field present in
     both payloads must hold the same value at the same time — enforced by
-    tests/test_public_status_contract.py.
+    tests/web/test_public_status_contract.py.
+
+    SECOND CONSUMER — Music Assistant: the mammamiradio MA provider
+    (music-assistant/server: providers/mammamiradio/) polls /public-status to
+    drive its now-playing card, reading ``now_streaming`` (incl.
+    ``metadata.title``/``title_only``/``artist``/``album_art``/``host``),
+    ``upcoming``, ``ha_moments``, and ``brand``. Renaming or dropping any of
+    those silently degrades the merged MA provider — the MA-contract tests in
+    tests/web/test_public_status_contract.py are the drift detector.
     """
     _sync_runtime_state(request)
     state = request.app.state.station_state
     config = request.app.state.config
+    audio_format = stream_audio_metadata(config)
     runtime_health = _runtime_health_snapshot(request)
     start_time = getattr(request.app.state, "start_time", None) or 0
     uptime_sec = round(time.time() - start_time) if start_time else 0
@@ -2817,7 +2827,8 @@ def _public_status_payload(request: Request) -> dict:
         "upcoming_mode": "queued" if upcoming else "building",
         "stream": {
             "frequency": config.brand.frequency,
-            "bitrate_kbps": config.audio.bitrate,
+            "bitrate_kbps": audio_format["bitrate_kbps"],
+            "audio_format": audio_format,
         },
         "playback_actions": {
             "skip_ready": bool(state.now_streaming),
