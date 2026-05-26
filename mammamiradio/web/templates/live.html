@@ -731,9 +731,23 @@ async function doSOS() {
 
 // ── Clip ──
 async function doClip() {
-  _toast('Saving clip…', 5000);
+  _toast('Salvando clip…', 5000);
   const res = await _post('/api/clip');
-  _toast(res && res.ok ? 'Clip saved!' : 'No audio buffered yet');
+  if (!res || !res.ok) { _toast((res && res.error) || 'No audio buffered yet'); return; }
+  const shareUrl = window.location.origin + _base + (res.share_url || res.url);
+  try {
+    if (navigator.share) {
+      await navigator.share({ title: 'Clip — mammamiradio', url: shareUrl });
+      _toast('Condiviso!');
+    } else if (navigator.clipboard && navigator.clipboard.writeText) {
+      await navigator.clipboard.writeText(shareUrl);
+      _toast('Link copiato!');
+    } else {
+      window.prompt('Copia il link:', shareUrl);
+    }
+  } catch (err) {
+    if (err && err.name !== 'AbortError') _toast('Errore condivisione');
+  }
 }
 
 // ── Play / Pause state ──

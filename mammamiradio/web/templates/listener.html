@@ -86,6 +86,10 @@
       <span></span><span></span><span></span><span></span><span></span>
     </div>
     <button class="mmr-play-btn" id="np-play" type="button" aria-label="Play">&#9654;</button>
+    <button class="btn-ghost mmr-share-btn" id="share-clip-btn" type="button"
+            aria-label="{{ copy.get('share_clip_aria', 'Condividi clip') }}" data-state="hidden" hidden>
+      <span aria-hidden="true">&#10530;</span> <span class="mmr-share-btn-label">{{ copy.get('share_clip', 'Condividi clip') }}</span>
+    </button>
   </div>
 
   <div class="mmr-stage-seam" aria-hidden="true">

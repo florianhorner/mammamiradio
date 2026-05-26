@@ -339,3 +339,25 @@ html, body {
   .mmr-wave span { animation: none; }
   .mmr-ticker .track { animation: none; transform: none; }
 }
+
+/* Clip sharing — share button in mmr-stage-header. */
+.mmr-share-btn {
+  margin-top: 12px;
+  font-size: 13px;
+  padding: 10px 20px;
+  min-height: 44px;  /* WCAG touch target minimum */
+  letter-spacing: 0.06em;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.mmr-share-btn[hidden] { display: none !important; }
+.mmr-share-btn:disabled { opacity: 0.6; cursor: progress; }
+.mmr-share-btn[data-state="shared"] {
+  color: var(--ok, #2563EB);
+  border-color: var(--ok, #2563EB);
+}
+.mmr-share-btn:focus-visible {
+  outline: 2px solid var(--sun, #F4D048);
+  outline-offset: 2px;
+}
