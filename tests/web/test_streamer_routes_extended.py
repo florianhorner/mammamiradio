@@ -13,6 +13,7 @@ import httpx
 import pytest
 from fastapi import FastAPI
 
+from mammamiradio.audio.stream_format import stream_audio_metadata
 from mammamiradio.core.config import load_config
 from mammamiradio.core.models import PlaylistSource, Segment, SegmentType, StationState, Track
 from mammamiradio.playlist.playlist import ExplicitSourceError
@@ -1927,6 +1928,32 @@ async def test_stream_returns_audio_headers():
             assert resp.headers["content-type"] == "audio/mpeg"
             assert "icy-name" in resp.headers
             assert "icy-br" in resp.headers
+
+
+@pytest.mark.asyncio
+async def test_stream_headers_match_audio_format_helper():
+    """The /stream response headers and the /public-status audio_format object
+    must derive from the same helper, so a config change cannot make them
+    disagree. Reads real response headers without consuming the endless body.
+    """
+    app = _make_test_app()
+    # Mutate bitrate so a hardcoded icy-br=192 implementation would fail this test.
+    app.state.config.audio.bitrate = 128
+    expected = stream_audio_metadata(app.state.config)
+    transport = httpx.ASGITransport(app=app)
+
+    async def fake_audio_generator(_request):
+        yield b"frame"
+
+    with patch("mammamiradio.web.streamer._audio_generator", fake_audio_generator):
+        async with (
+            httpx.AsyncClient(transport=transport, base_url="http://testserver") as client,
+            client.stream("GET", "/stream") as resp,
+        ):
+            assert resp.status_code == 200
+            # Exact content-type — audio/mpeg never gets a charset suffix.
+            assert resp.headers["content-type"] == expected["mime_type"]
+            assert resp.headers["icy-br"] == str(expected["bitrate_kbps"])
 
 
 @pytest.mark.asyncio

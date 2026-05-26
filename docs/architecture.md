@@ -104,6 +104,27 @@ When the playlist source is charts, the producer checks every 90 minutes and mer
 
 Important design choice: there is one shared timeline. Listeners tune into the current live point, not their own private playback state.
 
+### Stream audio format metadata
+
+External integrations should call `GET /public-status` before playback and read
+`stream.audio_format` to declare the stream correctly. The object exposes
+`codec`, `mime_type`, `bitrate_kbps`, `sample_rate_hz`, and `channels`. Use
+`mime_type` and `bitrate_kbps` when declaring `/stream`.
+
+`audio_format` is the station's **canonical/target encoding** — the format the
+normalizer produces and the `/stream` response headers advertise. Bundled demo
+and canned fallback assets are not guaranteed to be re-encoded to this format,
+so players must rely on MP3 frame self-description for exact decode parameters
+on a per-frame basis. The contract `audio_format` provides is the nominal one,
+which is the same contract every ICY-headered internet radio publishes.
+
+The canonical metadata is built once per response by
+`mammamiradio/audio/stream_format.py::stream_audio_metadata(config)` and is the
+single source feeding both the `/public-status` payload and the `/stream`
+response headers (`Content-Type` and `icy-br`). The legacy
+`stream.bitrate_kbps` field reads from the same helper output so it can never
+diverge from `stream.audio_format.bitrate_kbps` in the same response.
+
 ## Capability flags
 
 The system uses two independent boolean flags in a frozen `Capabilities` dataclass (`mammamiradio/core/models.py`, with detection and serialization in `mammamiradio/core/capabilities.py`):
@@ -234,7 +255,7 @@ The same mechanism is callable directly via `POST /api/interrupt` (admin auth, 6
 | `/stream` | GET | Public | Infinite MP3 stream |
 | `/healthz` | GET | Public | Liveness probe with process uptime |
 | `/readyz` | GET | Public | Readiness probe with queue depth and startup status |
-| `/public-status` | GET | Public | Current segment, recent log, and the real queued segments (`upcoming_mode` is `queued` or `building`) |
+| `/public-status` | GET | Public | Current segment, recent log, the real queued segments (`upcoming_mode` is `queued` or `building`), and `stream.audio_format` (the canonical encoding contract — see "Stream audio format metadata" below) |
 | `/status` | GET | Admin | Full admin JSON: queue depth, uptime, scripts, HA context, errors, `provider_health`, and `runtime_status` (normalized provider state + session failover event history) |
 | `/api/setup/status` | GET | Admin | First-run setup status, detected run mode, and station mode |
 | `/api/setup/recheck` | POST | Admin | Re-run setup probes |
