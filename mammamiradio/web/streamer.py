@@ -9,6 +9,7 @@ import importlib
 import importlib.metadata
 import ipaddress
 import logging
+import math
 import os
 import random as _random
 import re as _re
@@ -1136,124 +1137,146 @@ async def run_playback_loop(app) -> None:
             await asyncio.sleep(1.0)
             continue
 
-        pulled_from_queue = False
-        if segment_queue.empty() and state.queue_empty_since is None:
-            # Mark the exact moment playback ran out of audio. The 30s wait_for()
-            # below is part of the listener-visible silence window.
-            state.queue_empty_since = _runtime_monotonic()
-        try:
-            segment: Segment = await asyncio.wait_for(segment_queue.get(), timeout=QUEUE_FALLBACK_WAIT_SECONDS)
-            pulled_from_queue = True
-            state.queue_empty_since = None
-        except TimeoutError:
-            if not hub._listeners:
-                state.queue_empty_since = None
-                continue
-
-            if state.queue_empty_since is None:
-                state.queue_empty_since = _runtime_monotonic()
-            elapsed = _runtime_monotonic() - state.queue_empty_since
-
-            # Serve a canned clip instead of dead air while the producer catches up
-            from mammamiradio.scheduling.producer import _pick_canned_clip
-
-            fallback = _pick_canned_clip("banter", state=state) or _pick_canned_clip("welcome")
-            if fallback:
-                logger.info("Queue empty — serving fallback clip: %s", fallback.name)
-                state.queue_empty_since = None
-                segment = Segment(
+        # Priority slot: interrupt bridge audio plays before anything in the queue.
+        _bridge_segment: Segment | None = None
+        if state.interrupt_slot is not None:
+            bridge_path = state.interrupt_slot
+            state.interrupt_slot = None
+            if bridge_path.exists():
+                _bridge_segment = Segment(
                     type=SegmentType.BANTER,
-                    path=fallback,
-                    metadata={"type": "banter", "canned": True, "fallback": True},
-                    ephemeral=False,
+                    path=bridge_path,
+                    metadata={"type": "banter", "interrupt": True},
+                    ephemeral=state.interrupt_slot_ephemeral,
                 )
+                state.interrupt_slot_ephemeral = False
+                state.queue_empty_since = None
             else:
-                rescued_from_norm = False
-                if elapsed >= QUEUE_FALLBACK_WAIT_SECONDS:
-                    rescue = _select_norm_cache_rescue(config.cache_dir, state)
-                    if rescue:
-                        logger.warning(
-                            "Queue empty %ds - rescuing with norm cache: %s",
-                            int(elapsed),
-                            rescue.name,
-                        )
-                        state.queue_empty_since = None
-                        rescued_from_norm = True
-                        sidecar = load_track_metadata(rescue)
-                        if sidecar:
-                            rescue_title = f"{sidecar['artist']} – {sidecar['title']}"
-                            rescue_artist: str | None = sidecar["artist"]
-                        else:
-                            rescue_title = humanize_norm_filename(rescue.name)
-                            rescue_artist = None
-                        segment = Segment(
-                            type=SegmentType.MUSIC,
-                            path=rescue,
-                            metadata={
-                                "type": "music",
-                                "title": rescue_title,
-                                **({"artist": rescue_artist} if rescue_artist else {}),
-                                "audio_source": "fallback_norm_cache",
-                                "fallback": True,
-                            },
-                            ephemeral=False,
-                        )
+                logger.warning("Interrupt slot path missing: %s — skipping bridge", bridge_path)
+                state.interrupt_slot_ephemeral = False
 
-                if rescued_from_norm:
-                    pass
-                else:
-                    # Try bundled demo assets as a last-resort audio source before
-                    # forcing banter. Raw (un-normalized) audio beats dead air.
-                    demo_music_dir = _ASSETS_DIR / "demo" / "music"
-                    demo_files = list(demo_music_dir.glob("*.mp3")) if demo_music_dir.exists() else []
-                    if demo_files:
-                        rescue = _random.choice(demo_files)
-                        # Parse "Artist - Title.mp3" so the listener UI shows proper
-                        # metadata instead of the raw stem. Preserves the illusion.
-                        stem = rescue.stem
-                        if " - " in stem:
-                            rescue_artist, rescue_title = stem.split(" - ", 1)
-                            rescue_artist = rescue_artist.strip() or "Unknown"
-                            rescue_title = rescue_title.strip() or stem
-                        else:
-                            rescue_artist = "Unknown"
-                            rescue_title = stem
-                        logger.warning(
-                            "Queue empty %ds - rescuing with demo asset: %s",
-                            int(elapsed),
-                            rescue.name,
-                        )
-                        state.queue_empty_since = None
-                        segment = Segment(
-                            type=SegmentType.MUSIC,
-                            path=rescue,
-                            metadata={
-                                "type": "music",
-                                "title": rescue_title,
-                                "artist": rescue_artist,
-                                "audio_source": "fallback_demo_asset",
-                                "fallback": True,
-                            },
-                            ephemeral=False,
-                        )
+        pulled_from_queue = False
+        segment: Segment
+        if _bridge_segment is not None:
+            segment = _bridge_segment
+        else:
+            if segment_queue.empty() and state.queue_empty_since is None:
+                # Mark the exact moment playback ran out of audio. The 30s wait_for()
+                # below is part of the listener-visible silence window.
+                state.queue_empty_since = _runtime_monotonic()
+            try:
+                segment = await asyncio.wait_for(segment_queue.get(), timeout=QUEUE_FALLBACK_WAIT_SECONDS)
+                pulled_from_queue = True
+                state.queue_empty_since = None
+            except TimeoutError:
+                if not hub._listeners:
+                    state.queue_empty_since = None
+                    continue
 
-                if rescued_from_norm or (segment_queue.empty() and state.queue_empty_since is None):
-                    pass
-                elif elapsed >= 60.0:
-                    # Request forced banter once per silence episode to avoid producer thrash.
-                    # queue_empty_since is intentionally NOT reset — the silence gate on
-                    # /healthz and /readyz must stay active until real audio resumes.
-                    if state.force_next is None:
-                        state.force_next = SegmentType.BANTER
-                        logger.error(
-                            "Queue empty %ds with %d active listeners - requesting forced banter from producer",
-                            int(elapsed),
-                            len(hub._listeners),
-                        )
-                    continue
+                if state.queue_empty_since is None:
+                    state.queue_empty_since = _runtime_monotonic()
+                elapsed = _runtime_monotonic() - state.queue_empty_since
+
+                # Serve a canned clip instead of dead air while the producer catches up
+                from mammamiradio.scheduling.producer import _pick_canned_clip
+
+                fallback = _pick_canned_clip("banter", state=state) or _pick_canned_clip("welcome")
+                if fallback:
+                    logger.info("Queue empty — serving fallback clip: %s", fallback.name)
+                    state.queue_empty_since = None
+                    segment = Segment(
+                        type=SegmentType.BANTER,
+                        path=fallback,
+                        metadata={"type": "banter", "canned": True, "fallback": True},
+                        ephemeral=False,
+                    )
                 else:
-                    logger.warning("Queue empty for %ds, no fallback clips available", int(elapsed))
-                    continue
+                    rescued_from_norm = False
+                    if elapsed >= QUEUE_FALLBACK_WAIT_SECONDS:
+                        rescue = _select_norm_cache_rescue(config.cache_dir, state)
+                        if rescue:
+                            logger.warning(
+                                "Queue empty %ds - rescuing with norm cache: %s",
+                                int(elapsed),
+                                rescue.name,
+                            )
+                            state.queue_empty_since = None
+                            rescued_from_norm = True
+                            sidecar = load_track_metadata(rescue)
+                            if sidecar:
+                                rescue_title = f"{sidecar['artist']} – {sidecar['title']}"
+                                rescue_artist: str | None = sidecar["artist"]
+                            else:
+                                rescue_title = humanize_norm_filename(rescue.name)
+                                rescue_artist = None
+                            segment = Segment(
+                                type=SegmentType.MUSIC,
+                                path=rescue,
+                                metadata={
+                                    "type": "music",
+                                    "title": rescue_title,
+                                    **({"artist": rescue_artist} if rescue_artist else {}),
+                                    "audio_source": "fallback_norm_cache",
+                                    "fallback": True,
+                                },
+                                ephemeral=False,
+                            )
+
+                    if rescued_from_norm:
+                        pass
+                    else:
+                        # Try bundled demo assets as a last-resort audio source before
+                        # forcing banter. Raw (un-normalized) audio beats dead air.
+                        demo_music_dir = _ASSETS_DIR / "demo" / "music"
+                        demo_files = list(demo_music_dir.glob("*.mp3")) if demo_music_dir.exists() else []
+                        if demo_files:
+                            rescue = _random.choice(demo_files)
+                            # Parse "Artist - Title.mp3" so the listener UI shows proper
+                            # metadata instead of the raw stem. Preserves the illusion.
+                            stem = rescue.stem
+                            if " - " in stem:
+                                rescue_artist, rescue_title = stem.split(" - ", 1)
+                                rescue_artist = rescue_artist.strip() or "Unknown"
+                                rescue_title = rescue_title.strip() or stem
+                            else:
+                                rescue_artist = "Unknown"
+                                rescue_title = stem
+                            logger.warning(
+                                "Queue empty %ds - rescuing with demo asset: %s",
+                                int(elapsed),
+                                rescue.name,
+                            )
+                            state.queue_empty_since = None
+                            segment = Segment(
+                                type=SegmentType.MUSIC,
+                                path=rescue,
+                                metadata={
+                                    "type": "music",
+                                    "title": rescue_title,
+                                    "artist": rescue_artist,
+                                    "audio_source": "fallback_demo_asset",
+                                    "fallback": True,
+                                },
+                                ephemeral=False,
+                            )
+
+                    if rescued_from_norm or (segment_queue.empty() and state.queue_empty_since is None):
+                        pass
+                    elif elapsed >= 60.0:
+                        # Request forced banter once per silence episode to avoid producer thrash.
+                        # queue_empty_since is intentionally NOT reset — the silence gate on
+                        # /healthz and /readyz must stay active until real audio resumes.
+                        if state.force_next is None:
+                            state.force_next = SegmentType.BANTER
+                            logger.error(
+                                "Queue empty %ds with %d active listeners - requesting forced banter from producer",
+                                int(elapsed),
+                                len(hub._listeners),
+                            )
+                        continue
+                    else:
+                        logger.warning("Queue empty for %ds, no fallback clips available", int(elapsed))
+                        continue
 
         prev_last_provider_event = state.runtime_events[-1] if state.runtime_events else None
         state.on_stream_segment(segment)
@@ -1916,16 +1939,23 @@ async def panic_cut(request: Request, _: None = Depends(require_admin_access)):
 
 @router.post("/api/queue/remove")
 async def queue_remove_item(request: Request, _: None = Depends(require_admin_access)):
-    """Remove a single pre-produced segment from the queue by shadow-list index.
+    """Remove a single pre-produced segment from the queue.
 
-    Drains the asyncio.Queue, removes the item at the given index, then re-pushes
-    the remaining segments. The queue is empty for ~1ms during the operation; the
-    streamer's 30-second empty-queue countdown resets as soon as items land back.
+    Identity vs position: the admin UI renders a row, then the click arrives
+    after a network round-trip. In that window the streamer can consume the
+    head segment, shifting every shadow-list index down by one. So callers
+    SHOULD pass a stable ``id`` (the ``queue_id`` stamped by the producer);
+    the legacy ``index`` path is kept for older callers and is position-based.
+
+    The drain-and-repush below uses only synchronous queue operations
+    (``get_nowait``/``put_nowait`` on an unbounded queue), so no ``await`` runs
+    between draining the real queue and mutating the ``queued_segments`` shadow
+    list. The producer and streamer therefore cannot interleave and leave the
+    two views of the queue divergent.
     """
     body = await request.json()
+    seg_id = body.get("id")
     index = body.get("index")
-    if not isinstance(index, int):
-        raise HTTPException(status_code=422, detail="index must be an integer")
 
     state = request.app.state.station_state
     q = request.app.state.queue
@@ -1933,31 +1963,60 @@ async def queue_remove_item(request: Request, _: None = Depends(require_admin_ac
     if not state.queued_segments:
         return {"ok": True, "removed": None}
 
-    if index < 0 or index >= len(state.queued_segments):
-        raise HTTPException(
-            status_code=422,
-            detail=f"index {index} out of range (queue has {len(state.queued_segments)} items)",
+    if isinstance(seg_id, str) and seg_id:
+        # Identity path: resolve the current shadow-list position from the id.
+        index = next(
+            (i for i, seg in enumerate(state.queued_segments) if seg.get("id") == seg_id),
+            None,
         )
+        if index is None:
+            # Segment already played out (or was removed) — nothing to do.
+            return {"ok": True, "removed": None}
+    elif isinstance(index, int):
+        # Legacy position path.
+        if index < 0 or index >= len(state.queued_segments):
+            raise HTTPException(
+                status_code=422,
+                detail=f"index {index} out of range (queue has {len(state.queued_segments)} items)",
+            )
+    else:
+        raise HTTPException(status_code=422, detail="index must be an integer")
 
-    removed_label = state.queued_segments[index].get("label", "unknown")
+    shadow_entry = state.queued_segments[index]
+    removed_label = shadow_entry.get("label", "unknown")
+    target_id = shadow_entry.get("id")
 
-    # Drain the asyncio.Queue into a list, remove item N, re-push rest.
+    # Synchronous drain + repush — no await points until the shadow list is
+    # back in sync, so the producer/streamer cannot interleave.
     items: list = []
     while not q.empty():
         try:
             items.append(q.get_nowait())
+            # Balance the unfinished-task counter for every drained item, the
+            # same way _purge_segment_queue does — survivors are re-counted by
+            # put_nowait below. Without this, queue.join() would never settle.
+            q.task_done()
         except asyncio.QueueEmpty:
             break
 
-    if index < len(items):
+    # Remove the matching Segment from the real queue. Match by queue_id when
+    # available (position-independent); fall back to index alignment otherwise.
+    real_removed = False
+    if target_id:
+        for i, seg in enumerate(items):
+            if getattr(seg, "metadata", {}).get("queue_id") == target_id:
+                items.pop(i)
+                real_removed = True
+                break
+    if not real_removed and index < len(items):
         items.pop(index)
 
     for item in items:
-        await q.put(item)
+        q.put_nowait(item)
 
     state.queued_segments.pop(index)
 
-    logger.info("Queue item %d removed by admin: %s", index, removed_label)
+    logger.info("Queue item removed by admin: %s (id=%s)", removed_label, target_id or "n/a")
     return {"ok": True, "removed": removed_label}
 
 
@@ -2002,6 +2061,74 @@ async def trigger_segment(request: Request, _: None = Depends(require_admin_acce
     state = request.app.state.station_state
     state.force_next = valid[seg_type]
     return {"ok": True, "triggered": seg_type}
+
+
+@router.post("/api/interrupt")
+async def api_interrupt(request: Request, _: None = Depends(require_admin_access)):
+    """Immediately interrupt the stream and have the hosts deliver a pissed/urgent message.
+
+    Body: {"directive": str, "urgency": str}
+    - directive: what the hosts should say (required)
+    - urgency: "pissed" | "urgent" | "gentle" (default: "pissed")
+
+    Returns 429 if called within the cooldown window (default 60s).
+    """
+    try:
+        body = await request.json()
+    except ValueError:
+        return JSONResponse(status_code=422, content={"ok": False, "error": "invalid JSON body"})
+    if not isinstance(body, dict):
+        return JSONResponse(status_code=422, content={"ok": False, "error": "expected JSON object"})
+
+    directive = (body.get("directive") or "").strip()
+    if not directive:
+        return JSONResponse(status_code=422, content={"ok": False, "error": "directive is required"})
+
+    urgency = (body.get("urgency") or "pissed").strip().lower()
+    if urgency not in ("pissed", "urgent", "gentle"):
+        urgency = "pissed"
+
+    state: StationState = request.app.state.station_state
+    now = time.time()
+    cooldown = 60
+    remaining = cooldown - (now - state.last_interrupt_ts)
+    if remaining > 0:
+        return JSONResponse(
+            status_code=429,
+            content={
+                "ok": False,
+                "error": "interrupt cooldown active",
+                "retry_after": max(1, math.ceil(remaining)),
+            },
+        )
+
+    from mammamiradio.core.models import InterruptSpec
+    from mammamiradio.scheduling.producer import _fire_interrupt
+
+    spec = InterruptSpec(directive=directive, urgency=urgency, cooldown=cooldown)
+
+    queue = request.app.state.queue
+    skip_event = request.app.state.skip_event
+    fired = await _fire_interrupt(
+        state,
+        spec,
+        queue,
+        skip_event,
+        enforce_global_cooldown=True,
+        bridge_tmp_dir=request.app.state.config.tmp_dir,
+    )
+    if not fired:
+        # _fire_interrupt's global cooldown gate beat us (concurrent caller).
+        remaining_after = cooldown - (time.time() - state.last_interrupt_ts)
+        return JSONResponse(
+            status_code=429,
+            content={
+                "ok": False,
+                "error": "interrupt cooldown active",
+                "retry_after": max(1, math.ceil(remaining_after)),
+            },
+        )
+    return {"ok": True, "directive": directive, "urgency": urgency}
 
 
 @router.post("/api/hot-reload")
@@ -2071,13 +2198,37 @@ async def get_pacing(request: Request, _: None = Depends(require_admin_access)):
 async def update_pacing(request: Request, _: None = Depends(require_admin_access)):
     """Update pacing settings in real-time."""
     config = request.app.state.config
-    body = await request.json()
+    try:
+        body = await request.json()
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Pacing payload must be valid JSON") from exc
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="Pacing payload must be a JSON object")
+
+    def _parse_pacing_int(field: str) -> int | None:
+        if field not in body:
+            return None
+        raw = body[field]
+        if isinstance(raw, bool) or raw is None:
+            raise HTTPException(status_code=400, detail=f"{field} must be an integer")
+        if isinstance(raw, int):
+            return raw
+        if isinstance(raw, str):
+            text = raw.strip()
+            if _re.fullmatch(r"-?\d{1,9}", text):
+                return int(text)
+        raise HTTPException(status_code=400, detail=f"{field} must be an integer")
+
+    songs_between_banter = _parse_pacing_int("songs_between_banter")
+    songs_between_ads = _parse_pacing_int("songs_between_ads")
+    ad_spots_per_break = _parse_pacing_int("ad_spots_per_break")
+
     if "songs_between_banter" in body:
-        config.pacing.songs_between_banter = max(1, int(body["songs_between_banter"]))
+        config.pacing.songs_between_banter = max(2, min(60, songs_between_banter or 0))
     if "songs_between_ads" in body:
-        config.pacing.songs_between_ads = max(1, int(body["songs_between_ads"]))
+        config.pacing.songs_between_ads = max(1, min(60, songs_between_ads or 0))
     if "ad_spots_per_break" in body:
-        config.pacing.ad_spots_per_break = max(1, min(5, int(body["ad_spots_per_break"])))
+        config.pacing.ad_spots_per_break = max(1, min(5, ad_spots_per_break or 0))
     return {
         "ok": True,
         "songs_between_banter": config.pacing.songs_between_banter,
@@ -2634,11 +2785,11 @@ def _public_status_payload(request: Request) -> dict:
     start_time = getattr(request.app.state, "start_time", None) or 0
     uptime_sec = round(time.time() - start_time) if start_time else 0
     if state.queued_segments:
-        upcoming = [{**item, "source": "rendered_queue"} for item in state.queued_segments[:5]]
+        upcoming = [{**item, "source": "rendered_queue"} for item in state.queued_segments[:8]]
     else:
         upcoming = [
             {**item, "source": "predicted_from_playlist"}
-            for item in preview_upcoming(state, config.pacing, state.playlist, count=5)
+            for item in preview_upcoming(state, config.pacing, state.playlist, count=8)
         ]
     # HA moments for the Casa card (public-safe, no person entity details)
     ha_moments: dict | None = None

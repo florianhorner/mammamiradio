@@ -8,7 +8,8 @@ says 'IN ONDA' — different code paths producing different state).
 Cathedral standard:
 - Strict subset: every field in /public-status must also exist in /status
 - Bytes-identical for shared fields: capabilities dict, brand dict, uptime,
-  tracks_played, session_stopped, now_streaming, ha_moments
+  tracks_played, session_stopped, now_streaming, upcoming/upcoming_mode,
+  runtime_health, playback_actions, ha_moments
 - Shape snapshot: catches accidental field additions on the listener side
 """
 
@@ -101,6 +102,10 @@ async def test_admin_listener_facts_agree():
     assert admin.get("now_streaming") == public.get("now_streaming")
     assert admin["brand"] == public["brand"]
     assert admin["capabilities"] == public["capabilities"]
+    assert admin["upcoming"] == public["upcoming"]
+    assert admin["upcoming_mode"] == public["upcoming_mode"]
+    assert admin["runtime_health"] == public["runtime_health"]
+    assert admin["playback_actions"] == public["playback_actions"]
     assert admin.get("ha_moments") == public.get("ha_moments")
 
 

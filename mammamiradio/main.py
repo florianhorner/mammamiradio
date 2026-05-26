@@ -29,6 +29,16 @@ logging.basicConfig(
     format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
     datefmt="%H:%M:%S",
 )
+
+
+def _configure_http_logging() -> None:
+    level_name = os.getenv("MAMMAMIRADIO_HTTP_LOG_LEVEL", "WARNING").strip().upper()
+    level = logging.getLevelNamesMapping().get(level_name, logging.WARNING)
+    logging.getLogger("httpx").setLevel(level)
+    logging.getLogger("httpcore").setLevel(level)
+
+
+_configure_http_logging()
 logger = logging.getLogger("mammamiradio")
 
 _producer_task: asyncio.Task | None = None
