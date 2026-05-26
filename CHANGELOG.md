@@ -50,6 +50,10 @@ The current version source of truth is `pyproject.toml`.
   a thread in the `run_in_executor` pool shared with the audio pipeline. A
   30-second socket timeout on both downloads and metadata searches now fails
   fast and falls back through the existing silence-placeholder path.
+- **`httpx` and `httpcore` request logs are no longer spammy.** Both libraries
+  default to `WARNING` so successful outbound calls do not flood the log
+  stream. Set `MAMMAMIRADIO_HTTP_LOG_LEVEL=INFO` (or `DEBUG`) to re-enable
+  detailed HTTP traffic logs.
 
 ## [2.12.4] - 2026-05-18
 
