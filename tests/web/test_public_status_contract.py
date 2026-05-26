@@ -184,12 +184,16 @@ async def test_public_status_audio_format_reflects_non_default_config():
     """
     app = _make_test_app()
     app.state.config.audio.bitrate = 128
+    app.state.config.audio.sample_rate = 44100
+    app.state.config.audio.channels = 1
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
         resp = await client.get("/public-status")
     body = resp.json()
     stream = body["stream"]
     assert stream["audio_format"]["bitrate_kbps"] == 128
+    assert stream["audio_format"]["sample_rate_hz"] == 44100
+    assert stream["audio_format"]["channels"] == 1
     assert stream["bitrate_kbps"] == 128
 
 

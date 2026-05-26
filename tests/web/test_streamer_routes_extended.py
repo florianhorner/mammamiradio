@@ -1937,6 +1937,8 @@ async def test_stream_headers_match_audio_format_helper():
     disagree. Reads real response headers without consuming the endless body.
     """
     app = _make_test_app()
+    # Mutate bitrate so a hardcoded icy-br=192 implementation would fail this test.
+    app.state.config.audio.bitrate = 128
     expected = stream_audio_metadata(app.state.config)
     transport = httpx.ASGITransport(app=app)
 
