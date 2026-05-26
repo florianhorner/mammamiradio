@@ -2819,8 +2819,6 @@ def _public_status_payload(request: Request) -> dict:
         "upcoming_mode": "queued" if upcoming else "building",
         "stream": {
             "frequency": config.brand.frequency,
-            # Legacy field — read from helper output (not config) so it cannot
-            # diverge from audio_format.bitrate_kbps in the same response.
             "bitrate_kbps": audio_format["bitrate_kbps"],
             "audio_format": audio_format,
         },

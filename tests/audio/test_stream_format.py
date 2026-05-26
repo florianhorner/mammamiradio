@@ -24,13 +24,7 @@ def test_stream_audio_metadata_default_config():
 
 
 def test_stream_audio_metadata_reads_every_config_field():
-    """Mutating bitrate, sample_rate, and channels all propagate.
-
-    This is the regression guard against a careless implementation that
-    hardcodes sample_rate_hz or channels as a literal instead of reading
-    config. Mutating only `bitrate` (as the original plan did) would not
-    catch it.
-    """
+    """Mutating bitrate, sample_rate, and channels all propagate to the payload."""
     config = load_config(TOML_PATH)
     config.audio.bitrate = 96
     config.audio.sample_rate = 44100

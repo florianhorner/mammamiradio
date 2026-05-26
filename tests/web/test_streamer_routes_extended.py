@@ -13,6 +13,7 @@ import httpx
 import pytest
 from fastapi import FastAPI
 
+from mammamiradio.audio.stream_format import stream_audio_metadata
 from mammamiradio.core.config import load_config
 from mammamiradio.core.models import PlaylistSource, Segment, SegmentType, StationState, Track
 from mammamiradio.playlist.playlist import ExplicitSourceError
@@ -1935,8 +1936,6 @@ async def test_stream_headers_match_audio_format_helper():
     must derive from the same helper, so a config change cannot make them
     disagree. Reads real response headers without consuming the endless body.
     """
-    from mammamiradio.audio.stream_format import stream_audio_metadata
-
     app = _make_test_app()
     expected = stream_audio_metadata(app.state.config)
     transport = httpx.ASGITransport(app=app)
