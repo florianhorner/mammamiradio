@@ -8,6 +8,12 @@ The current version source of truth is `pyproject.toml`.
 
 ### Added
 
+- **Stream audio format metadata on `/public-status`** — the public payload now
+  exposes a `stream.audio_format` object with `codec`, `mime_type`,
+  `bitrate_kbps`, `sample_rate_hz`, and `channels`. External integrations can
+  read it before playback to declare `/stream` correctly without assuming the
+  default MP3/192k configuration. Backed by a shared helper that also feeds the
+  `/stream` response headers, so the API metadata and ICY headers cannot drift.
 - **PR-body editorial lint** — Pull-request descriptions are now linted against
   the same vocabulary banned in the public changelog (internal sprint labels,
   agent tool provenance, planning vocabulary, contributor archaeology), plus a

@@ -151,6 +151,49 @@ async def test_public_status_no_admin_secrets_leak():
 
 
 @pytest.mark.asyncio
+async def test_public_status_exposes_audio_format():
+    """Integrations read stream.audio_format before declaring /stream playback.
+
+    Defaults must match the documented MP3 contract. The legacy bitrate field
+    must equal audio_format.bitrate_kbps in the same response so they cannot
+    drift (cross-page invariant inside one payload).
+    """
+    app = _make_test_app()
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.get("/public-status")
+    body = resp.json()
+    stream = body["stream"]
+    assert stream["audio_format"] == {
+        "codec": "mp3",
+        "mime_type": "audio/mpeg",
+        "bitrate_kbps": 192,
+        "sample_rate_hz": 48000,
+        "channels": 2,
+    }
+    # Legacy field must read from the same source so it cannot diverge.
+    assert stream["bitrate_kbps"] == stream["audio_format"]["bitrate_kbps"]
+
+
+@pytest.mark.asyncio
+async def test_public_status_audio_format_reflects_non_default_config():
+    """A non-default bitrate must propagate to both audio_format and the legacy field.
+
+    Uses a test-local app instance so the config mutation cannot leak to
+    other tests (no shared/global state).
+    """
+    app = _make_test_app()
+    app.state.config.audio.bitrate = 128
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.get("/public-status")
+    body = resp.json()
+    stream = body["stream"]
+    assert stream["audio_format"]["bitrate_kbps"] == 128
+    assert stream["bitrate_kbps"] == 128
+
+
+@pytest.mark.asyncio
 async def test_public_listener_requests_endpoint():
     """Listener-safe dediche feed (filtered version of /api/listener-requests)."""
     app = _make_test_app()

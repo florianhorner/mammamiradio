@@ -1930,6 +1930,32 @@ async def test_stream_returns_audio_headers():
 
 
 @pytest.mark.asyncio
+async def test_stream_headers_match_audio_format_helper():
+    """The /stream response headers and the /public-status audio_format object
+    must derive from the same helper, so a config change cannot make them
+    disagree. Reads real response headers without consuming the endless body.
+    """
+    from mammamiradio.audio.stream_format import stream_audio_metadata
+
+    app = _make_test_app()
+    expected = stream_audio_metadata(app.state.config)
+    transport = httpx.ASGITransport(app=app)
+
+    async def fake_audio_generator(_request):
+        yield b"frame"
+
+    with patch("mammamiradio.web.streamer._audio_generator", fake_audio_generator):
+        async with (
+            httpx.AsyncClient(transport=transport, base_url="http://testserver") as client,
+            client.stream("GET", "/stream") as resp,
+        ):
+            assert resp.status_code == 200
+            # Exact content-type — audio/mpeg never gets a charset suffix.
+            assert resp.headers["content-type"] == expected["mime_type"]
+            assert resp.headers["icy-br"] == str(expected["bitrate_kbps"])
+
+
+@pytest.mark.asyncio
 async def test_listener_page_registers_service_worker_inside_main_script():
     """Service worker registration lives in listener.js after the site-v1 refactor."""
     app = _make_test_app()
