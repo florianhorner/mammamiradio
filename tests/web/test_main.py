@@ -46,6 +46,27 @@ def test_http_dependency_loggers_default_to_warning_with_env_override(monkeypatc
             logging.getLogger(logger_name).setLevel(level)
 
 
+def test_module_import_applies_http_logging_configuration(monkeypatch):
+    """Removing the module-level _configure_http_logging() call must break this test."""
+    import importlib
+
+    import mammamiradio.main
+
+    original_levels = {logger_name: logging.getLogger(logger_name).level for logger_name in ("httpx", "httpcore")}
+    try:
+        for logger_name in ("httpx", "httpcore"):
+            logging.getLogger(logger_name).setLevel(logging.NOTSET)
+        monkeypatch.setenv("MAMMAMIRADIO_HTTP_LOG_LEVEL", "DEBUG")
+
+        importlib.reload(mammamiradio.main)
+
+        assert logging.getLogger("httpx").level == logging.DEBUG
+        assert logging.getLogger("httpcore").level == logging.DEBUG
+    finally:
+        for logger_name, level in original_levels.items():
+            logging.getLogger(logger_name).setLevel(level)
+
+
 @pytest.mark.asyncio
 async def test_startup_creates_state_and_tasks():
     """startup() loads config, fetches playlist, sets app.state, creates tasks."""
