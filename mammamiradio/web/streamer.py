@@ -2768,7 +2768,15 @@ def _public_status_payload(request: Request) -> dict:
     extends this payload with operator-only fields (queue depth, segment log,
     api costs, etc). The CROSS-PAGE INVARIANT is that any field present in
     both payloads must hold the same value at the same time — enforced by
-    tests/test_public_status_contract.py.
+    tests/web/test_public_status_contract.py.
+
+    SECOND CONSUMER — Music Assistant: the mammamiradio MA provider
+    (music-assistant/server: providers/mammamiradio/) polls /public-status to
+    drive its now-playing card, reading ``now_streaming`` (incl.
+    ``metadata.title``/``title_only``/``artist``/``album_art``/``host``),
+    ``upcoming``, ``ha_moments``, and ``brand``. Renaming or dropping any of
+    those silently degrades the merged MA provider — the MA-contract tests in
+    tests/web/test_public_status_contract.py are the drift detector.
     """
     _sync_runtime_state(request)
     state = request.app.state.station_state
