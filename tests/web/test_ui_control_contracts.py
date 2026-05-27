@@ -276,6 +276,18 @@ class TestStopEndpoint:
 
         assert not app.state.skip_event.is_set()
 
+    @pytest.mark.asyncio
+    async def test_stop_bumps_last_state_change_at(self):
+        """The integration-contract ETag relies on this timestamp moving forward."""
+        app = _make_app(now_streaming={"type": "music", "label": "Song", "started": time.time(), "metadata": {}})
+        app.state.station_state.last_state_change_at = 0.0
+        before = time.time()
+
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            await c.post("/api/stop", headers=AUTH)
+
+        assert app.state.station_state.last_state_change_at >= before
+
 
 # ---------------------------------------------------------------------------
 # Resume endpoint — documents the "resume gap"
@@ -344,6 +356,18 @@ class TestResumeEndpoint:
             await c.post("/api/resume", headers=AUTH)
 
         assert app.state.station_state.force_next == SegmentType.AD
+
+    @pytest.mark.asyncio
+    async def test_resume_bumps_last_state_change_at(self):
+        """Integration-contract ETag invalidation depends on this timestamp moving forward."""
+        app = _make_app(session_stopped=True)
+        app.state.station_state.last_state_change_at = 0.0
+        before = time.time()
+
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            await c.post("/api/resume", headers=AUTH)
+
+        assert app.state.station_state.last_state_change_at >= before
 
 
 # ---------------------------------------------------------------------------

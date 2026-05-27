@@ -13,7 +13,7 @@ cp .env.example .env
 docker compose up
 ```
 
-→ **[Read the code](docs/REPO_MAP.md)** · **[Ship to your home](ha-addon/README.md)** · **[Contribute](CONTRIBUTING.md)** · **[Changelog](CHANGELOG.md)**
+→ **[Read the code](docs/REPO_MAP.md)** · **[Ship to your home](ha-addon/README.md)** · **[Integrate](docs/integrations/README.md)** · **[Contribute](CONTRIBUTING.md)** · **[Changelog](CHANGELOG.md)**
 
 <p align="center">
   <img src="https://img.shields.io/github/stars/florianhorner/mammamiradio?style=flat" alt="GitHub stars">

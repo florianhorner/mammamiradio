@@ -6,6 +6,21 @@ The current version source of truth is `pyproject.toml`.
 
 ## [Unreleased]
 
+### Added
+
+- **Music Assistant now-playing contract** — a dedicated read-only JSON
+  endpoint at `GET /api/integrations/v1/now-playing` exposes a stable shape
+  for third-party music controllers: station identity, stream URL,
+  segment display class (music / voice / interstitial / unavailable),
+  current track or host, up next, session state, and a `changed_at`
+  timestamp paired with a weak `ETag` + `Cache-Control` for cheap polling.
+  Internal metadata fields are filtered through a server-side allowlist
+  so signed URLs, file paths, and download errors cannot leak. Contract
+  pinned by ten sample-payload JSON fixtures under
+  `docs/integrations/sample-payloads/`, each wired into the test suite.
+  Documented at `docs/integrations/now-playing.md` with a migration guide
+  from `/public-status`.
+
 ## [2.13.0] - 2026-05-26
 
 ### Added

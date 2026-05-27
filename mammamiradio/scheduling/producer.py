@@ -2234,6 +2234,9 @@ async def run_producer(
                     "source_kind": segment.metadata.get("source_kind", ""),
                 }
             )
+            # Queue appended → up_next changed → integration consumers polling
+            # ``changed_at`` need to see this even without a segment transition.
+            state.last_state_change_at = time.time()
             if "error" not in segment.metadata:
                 if success_callback:
                     success_callback()

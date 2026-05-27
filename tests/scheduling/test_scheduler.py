@@ -422,17 +422,23 @@ def test_preview_upcoming_pinned_track_plays_next():
     assert music_items[0]["label"] == "P – Pinned"
 
 
-def test_preview_upcoming_unhandled_segment_type_does_not_crash():
-    """preview_upcoming silently skips unhandled segment types (e.g. SWEEPER via force_next)."""
+def test_preview_upcoming_sweeper_is_first_class():
+    """preview_upcoming renders a forced SWEEPER as a sweeper entry, not a silent skip.
+
+    The forced segment MUST be the first item — anything else means force_next
+    is being deferred and a regression in slot ordering would slip past the
+    presence-only check.
+    """
     from mammamiradio.scheduling.scheduler import preview_upcoming
 
     tracks = [Track(title="T", artist="A", duration_ms=200000, spotify_id="t1")]
     state = _make_state(segments_produced=5, songs_since_banter=0, songs_since_ad=0)
-    state.force_next = SegmentType.SWEEPER  # Not in preview_upcoming elif chain
+    state.force_next = SegmentType.SWEEPER
     pacing = PacingSection(songs_between_banter=99, songs_between_ads=99)
     preview = preview_upcoming(state, pacing, tracks, count=2)
-    # SWEEPER is consumed but produces no entry; second slot is MUSIC
-    assert any(p["type"] == "music" for p in preview)
+    types = [p["type"] for p in preview]
+    assert types[0] == "sweeper", f"forced SWEEPER must be the first preview slot, got {types}"
+    assert "music" in types
 
 
 def test_preview_upcoming_includes_ad():
