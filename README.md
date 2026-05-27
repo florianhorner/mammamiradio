@@ -13,7 +13,7 @@ cp .env.example .env
 docker compose up
 ```
 
-→ **[Read the code](docs/REPO_MAP.md)** · **[Ship to your home](ha-addon/README.md)** · **[Integrate](docs/integrations/README.md)** · **[Contribute](CONTRIBUTING.md)** · **[Changelog](CHANGELOG.md)**
+→ **[Read the code](docs/REPO_MAP.md)** · **[Ship to your home](ha-addon/README.md)** · **[Contribute](CONTRIBUTING.md)** · **[Changelog](CHANGELOG.md)**
 
 <p align="center">
   <img src="https://img.shields.io/github/stars/florianhorner/mammamiradio?style=flat" alt="GitHub stars">
@@ -39,6 +39,14 @@ docker compose up
 ```
 
 Open `http://localhost:8000` for the listener page (`/admin` for the control room). Music plays from live Italian charts when `MAMMAMIRADIO_ALLOW_YTDLP=true` (enabled in `docker-compose.yml`), from CC-licensed tracks via Jamendo (set `jamendo_client_id` in `radio.toml`), or from local files dropped into `music/`.
+
+**Verify it's working:**
+
+```bash
+curl http://localhost:8000/healthz   # → {"ok":true}
+```
+
+Expect music within ~10s on a warm cache. First boot can take 30–60s while yt-dlp pulls the Italian chart. The dashboard's tier badge (Demo Radio / Full AI Radio / Connected Home) tells you what's active.
 
 ### Home Assistant Add-on
 

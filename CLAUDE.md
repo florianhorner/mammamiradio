@@ -158,7 +158,7 @@ start.sh                    dev entrypoint with uvicorn and reload
 tests/                      mirrors mammamiradio/ — tests/<nave>/test_*.py
 ```
 
-Two god modules carry a `# TODO: split` marker: `web/streamer.py` (~2,300 LOC) and `hosts/scriptwriter.py` (~1,500 LOC). They have postal addresses now; the actual splits land in PRs 5 and 6 of the cathedral plan (`docs/2026-04-28-cathedral-restructure.md`).
+Two god modules carry a `# TODO: split` marker: `web/streamer.py` (~2,300 LOC) and `hosts/scriptwriter.py` (~1,500 LOC). They have postal addresses now; the actual splits land in PRs 5 and 6 of the cathedral plan (`docs/archive/2026-04-28-cathedral-restructure.md`).
 
 ## Design System
 

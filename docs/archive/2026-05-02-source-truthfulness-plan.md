@@ -103,9 +103,9 @@ Very high. Five independent lenses, five framings, full convergence on root caus
 
 - Council artifact: `.context/research/2026-05-02-council-playlist-source-truthfulness.md`
 - PR #281 (in draft, holding for this work): https://github.com/florianhorner/mammamiradio/pull/281
-- Codex-bot finding doc: `docs/2026-04-28-codebase-issues-task-vorschlaege.md`
-- Cathedral plan precedent (multi-PR architectural work): `docs/2026-04-28-cathedral-restructure.md`
-- Doc-sweep recipe: `docs/2026-04-28-post-cathedral-doc-sweep.md`
+- Codex-bot finding doc: `docs/archive/2026-04-28-codebase-issues-task-vorschlaege.md`
+- Cathedral plan precedent (multi-PR architectural work): `docs/archive/2026-04-28-cathedral-restructure.md`
+- Doc-sweep recipe: `docs/archive/2026-04-28-post-cathedral-doc-sweep.md`
 
 ---
 

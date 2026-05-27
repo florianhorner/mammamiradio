@@ -20,7 +20,7 @@ The 5-second test fails today. Hard numbers:
 - HTML templates and `static/` live **inside the Python package** — packaging confusion
 - 8 candidate files for "where does banter live?" (`scriptwriter`, `persona`, `scheduler`, `song_cues`, `context_cues`, `ad_creative`, `track_rationale`, `track_rules`) with no hierarchy hints
 
-Prior audit `docs/2026-04-16-documentation-structure-audit.md` flagged the doc drift twelve days ago. Hierarchy was not addressed.
+Prior audit `docs/archive/2026-04-16-documentation-structure-audit.md` flagged the doc drift twelve days ago. Hierarchy was not addressed.
 
 ## Goal
 

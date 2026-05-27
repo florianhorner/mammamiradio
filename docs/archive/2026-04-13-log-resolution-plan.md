@@ -369,7 +369,7 @@ This is a recommendation, not a hard requirement. If the swarm has stronger owne
 Use this to launch a swarm task from the plan:
 
 ```text
-Take WSX from docs/2026-04-13-log-resolution-plan.md.
+Take WSX from docs/archive/2026-04-13-log-resolution-plan.md.
 
 Goal: restore the named invariant with a minimal diff.
 Constraints:
