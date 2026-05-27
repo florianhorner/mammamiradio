@@ -131,8 +131,8 @@ def test_serialize_up_next_predicted_items_marked_predicted_true():
 
 
 def test_serialize_absolute_url_optional():
-    snapshot = _make_snapshot(absolute_stream_url="https://radio.example/stream")
-    payload = serialize_now_playing(snapshot)
-    assert payload["stream"]["absolute_url"] == "https://radio.example/stream"
-    payload2 = serialize_now_playing(_make_snapshot(absolute_stream_url=None))
-    assert "absolute_url" not in payload2["stream"]
+    snapshot_with_url = _make_snapshot(absolute_stream_url="https://radio.example/stream")
+    payload_with_absolute_url = serialize_now_playing(snapshot_with_url)
+    assert payload_with_absolute_url["stream"]["absolute_url"] == "https://radio.example/stream"
+    payload_without_absolute_url = serialize_now_playing(_make_snapshot(absolute_stream_url=None))
+    assert "absolute_url" not in payload_without_absolute_url["stream"]

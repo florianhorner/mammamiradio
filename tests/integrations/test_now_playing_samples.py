@@ -41,14 +41,36 @@ V1_TOP_LEVEL_KEYS = {
 }
 
 
+def test_sample_payloads_directory_matches_expected_files() -> None:
+    """No sample file can be added without registering it in EXPECTED_FILES.
+
+    Closes the one-way drift gap: parametrize covers every file in
+    EXPECTED_FILES, but adding a new JSON to the directory without
+    updating this tuple would slip past contract assertions. This test
+    locks the directory contents.
+    """
+    on_disk = {p.name for p in SAMPLE_DIR.glob("*.json")}
+    expected = set(EXPECTED_FILES)
+    extra = on_disk - expected
+    missing = expected - on_disk
+    assert not extra, f"unregistered sample payload(s) — add to EXPECTED_FILES: {extra}"
+    assert not missing, f"expected sample payload(s) missing on disk: {missing}"
+
+
 @pytest.mark.parametrize("filename", EXPECTED_FILES)
 def test_sample_payload_has_v1_top_level_keys(filename: str) -> None:
-    """Each documented sample is itself a v1-shaped payload."""
+    """Each documented sample is itself a v1-shaped payload.
+
+    Uses exact set equality so a new undocumented top-level key cannot
+    sneak into a sample without showing up in V1_TOP_LEVEL_KEYS first.
+    """
     path = SAMPLE_DIR / filename
     assert path.exists(), f"sample payload missing on disk: {filename}"
     data = json.loads(path.read_text())
-    missing = V1_TOP_LEVEL_KEYS - data.keys()
-    assert not missing, f"{filename}: missing top-level keys {missing}"
+    assert set(data.keys()) == V1_TOP_LEVEL_KEYS, (
+        f"{filename}: top-level keys diverged from V1_TOP_LEVEL_KEYS "
+        f"(extra={set(data.keys()) - V1_TOP_LEVEL_KEYS}, missing={V1_TOP_LEVEL_KEYS - set(data.keys())})"
+    )
     assert data["schema_version"] == "1"
 
 

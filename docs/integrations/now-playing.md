@@ -20,9 +20,12 @@ if (now_playing?.segment_class === 'music') showTrackCard(now_playing.title, now
 
 ## Response shape
 
-The endpoint always returns `200 OK` with a stable payload. Degradations
-(stopped session, empty queue, unknown segment) are expressed in the
-payload's `session_state` and `segment_class` fields — not as HTTP errors.
+Successful contract responses return `200 OK` with a stable payload.
+Domain-level degradations (stopped session, empty queue, unknown segment)
+are expressed in the payload's `session_state` and `segment_class` fields,
+NOT as HTTP errors. Transport-level failures (4xx/5xx — see the **Error
+contract** section below) still use non-200 responses, so consumers must
+check the status code before parsing the body.
 
 ```json
 {
@@ -123,7 +126,7 @@ moves.
 
 Every response carries:
 
-```
+```http
 ETag: W/"<weak fingerprint>"
 Cache-Control: public, max-age=2
 ```

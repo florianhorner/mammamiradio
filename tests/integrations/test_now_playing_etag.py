@@ -18,7 +18,11 @@ async def test_response_has_etag_and_cache_control():
     etag = resp.headers.get("ETag")
     assert etag is not None
     assert etag.startswith('W/"')
-    assert "max-age" in resp.headers.get("Cache-Control", "")
+    # Lock the exact policy — drifting to private or a different TTL is a contract change.
+    cache_control = resp.headers.get("Cache-Control", "")
+    directives = {d.strip() for d in cache_control.split(",")}
+    assert "public" in directives, f"Cache-Control missing 'public': {cache_control!r}"
+    assert "max-age=2" in directives, f"Cache-Control max-age must be 2: {cache_control!r}"
 
 
 @pytest.mark.asyncio
@@ -100,6 +104,35 @@ async def test_etag_invalidates_when_force_next_changes_predicted_up_next():
     # First predicted item changed type — that change MUST show through to the ETag.
     assert first_up_next[0]["segment_type"] != second_body["up_next"][0]["segment_type"]
     assert first_etag != second_etag, "body changed but ETag did not — clients will see stale 304s"
+
+
+@pytest.mark.asyncio
+async def test_if_none_match_with_multiple_etags_returns_304_when_any_match():
+    """RFC 7232: ``If-None-Match`` carries a comma-separated list of ETags."""
+    app = make_integrations_app()
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        first = await client.get("/api/integrations/v1/now-playing")
+        etag = first.headers["ETag"]
+        multi = f'W/"stale-1", {etag}, W/"stale-2"'
+        resp = await client.get(
+            "/api/integrations/v1/now-playing",
+            headers={"If-None-Match": multi},
+        )
+    assert resp.status_code == 304
+
+
+@pytest.mark.asyncio
+async def test_if_none_match_star_returns_304():
+    """``If-None-Match: *`` is a wildcard match per RFC 7232."""
+    app = make_integrations_app()
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.get(
+            "/api/integrations/v1/now-playing",
+            headers={"If-None-Match": "*"},
+        )
+    assert resp.status_code == 304
 
 
 @pytest.mark.asyncio

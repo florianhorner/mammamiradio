@@ -43,6 +43,26 @@ async def test_empty_queue_no_now_streaming_returns_empty_queue_state():
 
 
 @pytest.mark.asyncio
+async def test_empty_up_next_shape_is_array_not_absent(monkeypatch):
+    """When the scheduler returns nothing, ``up_next`` must be an empty array.
+
+    Locks the shape contract: consumers can rely on ``up_next`` being an
+    array even when there is literally nothing to schedule (the key is
+    always present, the value is ``[]``).
+    """
+    import mammamiradio.integrations.now_playing as np
+
+    monkeypatch.setattr(np, "preview_upcoming", lambda *_a, **_kw: [])
+    app = make_integrations_app()
+    app.state.station_state.queued_segments = []
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        body = (await client.get("/api/integrations/v1/now-playing")).json()
+    assert "up_next" in body
+    assert body["up_next"] == []
+
+
+@pytest.mark.asyncio
 async def test_session_stopped_via_admin_returns_stopped_state():
     app = make_integrations_app()
     state = app.state.station_state
@@ -60,6 +80,31 @@ async def test_session_stopped_via_admin_returns_stopped_state():
     assert body["now_playing"] is None
     # stream.relative_url still present — operator honesty
     assert body["stream"]["relative_url"] == "/stream"
+
+
+@pytest.mark.asyncio
+async def test_session_stopped_takes_precedence_over_music_now_streaming():
+    """``session_stopped=True`` wins even if a valid music segment lingers.
+
+    Lock the precedence: if /api/stop fires mid-track, the flag is set
+    before ``now_streaming`` is overwritten to the sentinel. A consumer
+    polling in that race window must see ``stopped``, not the stale track.
+    """
+    app = make_integrations_app()
+    state = app.state.station_state
+    state.session_stopped = True
+    state.now_streaming = {
+        "type": "music",
+        "label": "Volare — Domenico Modugno",
+        "started": 1.0,
+        "duration_sec": 210.0,
+        "metadata": {"title": "Volare", "artist": "Domenico Modugno"},
+    }
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        body = (await client.get("/api/integrations/v1/now-playing")).json()
+    assert body["session_state"] == "stopped"
+    assert body["now_playing"] is None, "stopped flag must mask any lingering segment metadata"
 
 
 @pytest.mark.asyncio

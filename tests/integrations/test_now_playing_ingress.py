@@ -16,7 +16,10 @@ async def test_absolute_url_set_when_request_is_direct():
         body = (await client.get("/api/integrations/v1/now-playing")).json()
     stream = body["stream"]
     assert stream["relative_url"] == "/stream"
-    assert stream.get("absolute_url", "").endswith("/stream")
+    absolute_url = stream.get("absolute_url")
+    assert isinstance(absolute_url, str) and absolute_url.endswith("/stream"), (
+        f"direct requests must include an absolute stream URL, got {absolute_url!r}"
+    )
 
 
 @pytest.mark.asyncio

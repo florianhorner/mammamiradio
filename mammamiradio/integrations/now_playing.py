@@ -145,8 +145,11 @@ async def now_playing(request: Request) -> Response:
         "Cache-Control": CACHE_CONTROL,
     }
     if_none_match = request.headers.get("If-None-Match") or request.headers.get("if-none-match")
-    if if_none_match and if_none_match.strip() == etag:
-        return Response(status_code=304, headers=headers)
+    if if_none_match:
+        # RFC 7232: header may carry comma-separated ETags or a lone "*".
+        candidates = {token.strip() for token in if_none_match.split(",")}
+        if "*" in candidates or etag in candidates:
+            return Response(status_code=304, headers=headers)
     if request.method == "HEAD":
         headers["Content-Length"] = str(len(body))
         return Response(status_code=200, headers=headers, media_type="application/json")
