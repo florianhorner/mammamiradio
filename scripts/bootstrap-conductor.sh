@@ -1,5 +1,29 @@
 #!/usr/bin/env bash
+# Bootstrap a Conductor workspace: create .venv, install -e, set up env.
+# Usage: scripts/bootstrap-conductor.sh
 set -euo pipefail
+
+case "${1:-}" in
+  -h|--help)
+    cat <<'EOF'
+Usage: scripts/bootstrap-conductor.sh
+
+Bootstrap a fresh Conductor workspace:
+  - Create .venv with PYTHON_BIN (defaults to python3.11)
+  - Install the package in editable mode (pip install -e .)
+  - Wire up Conductor-specific env defaults
+
+Env:
+  PYTHON_BIN   Python interpreter to use (default: python3.11)
+
+Options:
+  -h, --help   Show this help and exit
+
+Invoked by Conductor's `setup` hook in conductor.json.
+EOF
+    exit 0
+    ;;
+esac
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"

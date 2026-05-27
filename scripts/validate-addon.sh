@@ -7,6 +7,25 @@
 #   --build    Also build the Docker image locally (slow, requires Docker)
 set -euo pipefail
 
+case "${1:-}" in
+  -h|--help)
+    cat <<'EOF'
+Usage: scripts/validate-addon.sh [--build]
+
+Local pre-flight for the HA add-on. Mirrors the validation steps in
+.github/workflows/addon-build.yml plus checks derived from real production
+failures (version sync, image path, options contract, critical files).
+
+Options:
+  -h, --help   Show this help and exit
+  --build      Also build the Docker image locally (slow, requires Docker)
+
+Runs in pre-commit and pre-push hooks for files that can break the add-on.
+EOF
+    exit 0
+    ;;
+esac
+
 RED='\033[0;31m'
 BLUE='\033[0;34m'
 AMBER='\033[0;33m'
