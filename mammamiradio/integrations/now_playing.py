@@ -12,6 +12,7 @@ documented at ``docs/integrations/now-playing.md``.
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import logging
 from urllib.parse import urlsplit
@@ -22,7 +23,6 @@ from mammamiradio.audio.stream_format import stream_audio_metadata
 from mammamiradio.integrations.schema import HostEntry, StationBlock
 from mammamiradio.integrations.serializer import (
     NowPlayingSnapshot,
-    fingerprint,
     serialize_now_playing,
 )
 from mammamiradio.scheduling.scheduler import preview_upcoming
@@ -121,17 +121,25 @@ def _capture_snapshot(request: Request) -> NowPlayingSnapshot:
     )
 
 
-@router.get("/now-playing")
+@router.api_route("/now-playing", methods=["GET", "HEAD"])
 async def now_playing(request: Request) -> Response:
     """Return the v1 now-playing contract for external integrators.
 
     Returns 304 Not Modified when ``If-None-Match`` matches the current
-    weak ETag derived from the snapshot fingerprint. Always returns 200 +
-    a stable payload otherwise — degradations are expressed in the payload
-    (``session_state`` / ``segment_class``), not in the HTTP status.
+    weak ETag. The ETag is derived from a BLAKE2b digest of the serialized
+    body so any visible change to the payload invalidates the cache —
+    including changes that don't touch the snapshot fingerprint (e.g.
+    ``force_next`` flipping a predicted ``up_next`` item). Always returns
+    200 + a stable payload otherwise — degradations are expressed in the
+    payload (``session_state`` / ``segment_class``), not in the HTTP status.
+
+    HEAD is supported so consumers can fetch the ETag/Cache-Control headers
+    without paying for the body (matches the curl quickstart in the docs).
     """
     snapshot = _capture_snapshot(request)
-    etag = f'W/"{fingerprint(snapshot)}"'
+    payload = serialize_now_playing(snapshot)
+    body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+    etag = f'W/"{hashlib.blake2b(body, digest_size=8).hexdigest()}"'
     headers = {
         "ETag": etag,
         "Cache-Control": CACHE_CONTROL,
@@ -139,6 +147,7 @@ async def now_playing(request: Request) -> Response:
     if_none_match = request.headers.get("If-None-Match") or request.headers.get("if-none-match")
     if if_none_match and if_none_match.strip() == etag:
         return Response(status_code=304, headers=headers)
-    payload = serialize_now_playing(snapshot)
-    body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+    if request.method == "HEAD":
+        headers["Content-Length"] = str(len(body))
+        return Response(status_code=200, headers=headers, media_type="application/json")
     return Response(content=body, media_type="application/json", headers=headers)

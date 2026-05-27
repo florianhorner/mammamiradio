@@ -120,16 +120,15 @@ def _title_for_segment(now: dict, safe_meta: dict) -> str | None:
     return None
 
 
-def _build_now_playing(now: dict) -> NowPlayingBlock | None:
-    """Render the ``now_playing`` block from a snapshotted segment dict.
+def _build_now_playing(now: dict) -> NowPlayingBlock:
+    """Render the ``now_playing`` block from a non-empty segment dict.
 
-    Returns ``None`` when nothing meaningful is playing. Always returns the
-    same shape when a block is returned — absent optional fields appear as
+    Always returns the same shape — absent optional fields appear as
     ``null`` (or ``{}`` for ``external_ids`` and ``context``) so consumers
-    can rely on the keyset.
+    can rely on the keyset. The caller (``serialize_now_playing``) only
+    invokes this when ``session_state == "live"``, which the classifier
+    guarantees by checking ``now_streaming`` is non-empty first.
     """
-    if not now:
-        return None
     seg_class = _segment_class_for_now_streaming(now)
     raw_type = str(now.get("type") or "")
     safe_meta = _safe_metadata(now.get("metadata"))
@@ -219,19 +218,26 @@ def _classify_session_state(snapshot: NowPlayingSnapshot) -> SessionState:
     """Map snapshot fields to the stable session_state literal.
 
     Order matters:
-    1. ``session_stopped`` flag wins (admin-driven, persistent across restart).
-    2. A ``{"type": "stopped"}`` sentinel ``now_streaming`` also resolves to
-       ``stopped`` so the transient window between stop and queue purge
-       doesn't look ``live`` to a consumer.
-    3. A non-empty ``now_streaming`` is ``live``.
-    4. Otherwise the consumer sees ``empty_queue`` even when ``up_next``
-       contains predictions — predictions are speculation, not a real queue.
+    1. ``session_stopped`` flag is the only authority for ``stopped``. It is
+       admin-driven and persisted across restart, so consumers can trust it.
+    2. When ``session_stopped`` is False, a leftover ``{"type": "stopped"}``
+       sentinel in ``now_streaming`` is treated as ``empty_queue``: /api/resume
+       clears ``session_stopped`` first but the sentinel lingers until the
+       producer fires ``on_stream_segment``. Classifying that window as
+       ``stopped`` would lie to consumers right after the operator pressed
+       resume.
+    3. A live ``{"type": "skipping"}`` sentinel is mid-transition, so the
+       session is ``live`` (now_playing renders as ``unavailable``).
+    4. Any other non-empty ``now_streaming`` is ``live``.
+    5. Empty snapshot means ``empty_queue`` regardless of ``up_next`` content
+       — predictions are speculation, not a real queue.
     """
     if snapshot.session_stopped:
         return "stopped"
     transient = str(snapshot.now_streaming.get("type") or "")
     if transient == "stopped":
-        return "stopped"
+        # Stale sentinel after /api/resume — treat as empty_queue.
+        return "empty_queue"
     if snapshot.now_streaming:
         return "live"
     return "empty_queue"
@@ -246,7 +252,10 @@ def serialize_now_playing(snapshot: NowPlayingSnapshot) -> NowPlayingResponse:
     if snapshot.absolute_stream_url:
         stream["absolute_url"] = snapshot.absolute_stream_url
     session_state = _classify_session_state(snapshot)
-    now_playing = _build_now_playing(snapshot.now_streaming) if session_state != "stopped" else None
+    # stopped → no segment is meaningful. empty_queue → nothing playing yet
+    # (covers the post-resume window where the stale sentinel still sits in
+    # ``now_streaming`` but session_stopped is False).
+    now_playing = _build_now_playing(snapshot.now_streaming) if session_state == "live" else None
     return NowPlayingResponse(
         schema_version=SCHEMA_VERSION,
         station=snapshot.station,
@@ -255,21 +264,4 @@ def serialize_now_playing(snapshot: NowPlayingSnapshot) -> NowPlayingResponse:
         up_next=_build_up_next(snapshot),
         session_state=session_state,
         changed_at=snapshot.changed_at,
-    )
-
-
-def fingerprint(snapshot: NowPlayingSnapshot) -> str:
-    """Cheap weak-ETag fingerprint derived from snapshot identity.
-
-    Includes everything that can change the response body. Cheap to compute
-    (no serialization). Designed so a stale fingerprint always means a
-    response body change.
-    """
-    return (
-        f"{SCHEMA_VERSION}"
-        f"-{snapshot.playback_epoch}"
-        f"-{snapshot.changed_at}"
-        f"-{len(snapshot.queued_segments)}"
-        f"-{len(snapshot.upcoming_predicted)}"
-        f"-{int(snapshot.session_stopped)}"
     )

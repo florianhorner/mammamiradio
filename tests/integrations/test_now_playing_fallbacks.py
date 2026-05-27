@@ -76,11 +76,16 @@ async def test_post_restart_session_stopped_persisted_returns_stopped_state():
 
 
 @pytest.mark.asyncio
-async def test_admin_stop_transient_now_streaming_is_unavailable():
-    """A live ``{type: stopped}`` sentinel must NOT render as music."""
+async def test_resumed_session_with_stale_stopped_sentinel_is_empty_queue():
+    """Right after /api/resume, ``session_stopped`` is False but the
+    ``{"type": "stopped"}`` sentinel can still sit in ``now_streaming``
+    until the producer fires the next segment. The integration endpoint
+    must report ``empty_queue`` (operator resumed, waiting for first segment)
+    rather than lying with ``stopped``.
+    """
     app = make_integrations_app()
     state = app.state.station_state
-    state.session_stopped = False  # Not yet fully stopped — transient
+    state.session_stopped = False  # /api/resume cleared the flag
     state.now_streaming = {
         "type": "stopped",
         "label": "Session stopped",
@@ -90,9 +95,7 @@ async def test_admin_stop_transient_now_streaming_is_unavailable():
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
         body = (await client.get("/api/integrations/v1/now-playing")).json()
-    # Without session_stopped flag this still maps to "stopped" session state
-    # because the now_streaming sentinel is type=stopped.
-    assert body["session_state"] == "stopped"
+    assert body["session_state"] == "empty_queue"
     assert body["now_playing"] is None
 
 

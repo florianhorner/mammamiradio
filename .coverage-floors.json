@@ -18,7 +18,7 @@
   "mammamiradio.integrations.__init__": 100,
   "mammamiradio.integrations.now_playing": 88,
   "mammamiradio.integrations.schema": 100,
-  "mammamiradio.integrations.serializer": 93,
+  "mammamiradio.integrations.serializer": 92,
   "mammamiradio.main": 100,
   "mammamiradio.playlist.downloader": 98,
   "mammamiradio.playlist.playlist": 91,

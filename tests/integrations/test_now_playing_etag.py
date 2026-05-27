@@ -75,6 +75,48 @@ async def test_etag_includes_session_stopped_in_fingerprint():
 
 
 @pytest.mark.asyncio
+async def test_etag_invalidates_when_force_next_changes_predicted_up_next():
+    """force_next can flip the first predicted up_next item without changing
+    queue length or any other snapshot field. The body-hash ETag must catch
+    this — a length-only fingerprint would silently serve 304 with a stale
+    representation.
+    """
+    from mammamiradio.core.models import SegmentType
+
+    app = make_integrations_app()
+    state = app.state.station_state
+    state.force_next = None
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        first = await client.get("/api/integrations/v1/now-playing")
+        first_etag = first.headers["ETag"]
+        first_up_next = first.json()["up_next"]
+        # Now flip force_next — predicted up_next first item changes.
+        state.force_next = SegmentType.AD
+        second = await client.get("/api/integrations/v1/now-playing")
+    assert second.status_code == 200
+    second_etag = second.headers["ETag"]
+    second_body = second.json()
+    # First predicted item changed type — that change MUST show through to the ETag.
+    assert first_up_next[0]["segment_type"] != second_body["up_next"][0]["segment_type"]
+    assert first_etag != second_etag, "body changed but ETag did not — clients will see stale 304s"
+
+
+@pytest.mark.asyncio
+async def test_head_returns_etag_without_body():
+    """HEAD must surface ETag + Cache-Control so the curl quickstart works."""
+    app = make_integrations_app()
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        get_resp = await client.get("/api/integrations/v1/now-playing")
+        head_resp = await client.head("/api/integrations/v1/now-playing")
+    assert head_resp.status_code == 200
+    assert head_resp.headers.get("ETag") == get_resp.headers.get("ETag")
+    assert "max-age" in head_resp.headers.get("Cache-Control", "")
+    assert head_resp.content == b""
+
+
+@pytest.mark.asyncio
 async def test_etag_invalidates_when_now_streaming_swaps_to_skipping_sentinel():
     """A /api/skip transition writes a fresh ``started`` timestamp to ``now_streaming``.
 

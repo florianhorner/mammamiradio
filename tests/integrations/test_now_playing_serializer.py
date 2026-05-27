@@ -6,7 +6,6 @@ from mammamiradio.integrations.schema import StationBlock
 from mammamiradio.integrations.serializer import (
     SAFE_METADATA_KEYS,
     NowPlayingSnapshot,
-    fingerprint,
     serialize_now_playing,
 )
 
@@ -60,24 +59,6 @@ def test_safe_metadata_keys_locked():
         "source_kind",
     }
     assert frozenset(expected) == SAFE_METADATA_KEYS
-
-
-def test_fingerprint_changes_on_session_stopped():
-    a = _make_snapshot(session_stopped=False)
-    b = _make_snapshot(session_stopped=True)
-    assert fingerprint(a) != fingerprint(b)
-
-
-def test_fingerprint_changes_on_playback_epoch():
-    a = _make_snapshot(playback_epoch=1)
-    b = _make_snapshot(playback_epoch=2)
-    assert fingerprint(a) != fingerprint(b)
-
-
-def test_fingerprint_changes_on_queue_length():
-    a = _make_snapshot(queued_segments=())
-    b = _make_snapshot(queued_segments=({"type": "music", "label": "X"},))
-    assert fingerprint(a) != fingerprint(b)
 
 
 def test_serialize_empty_queue_state():

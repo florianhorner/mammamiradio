@@ -129,18 +129,20 @@ Cache-Control: public, max-age=2
 ```
 
 Subsequent requests should send `If-None-Match` to get a `304 Not
-Modified` when nothing has changed:
+Modified` when nothing has changed. Use `HEAD` (or `GET` with a discarded
+body) to fetch the ETag without paying for the JSON:
 
 ```bash
-ETAG=$(curl -sI http://host/api/integrations/v1/now-playing | grep -i ETag | awk '{print $2}' | tr -d '\r')
+# HEAD returns the ETag + Cache-Control headers, no body.
+ETAG=$(curl -sI -X HEAD http://host/api/integrations/v1/now-playing | grep -i ETag | awk '{print $2}' | tr -d '\r')
 curl -i -H "If-None-Match: $ETAG" http://host/api/integrations/v1/now-playing
 # HTTP/1.1 304 Not Modified
 ```
 
-The fingerprint is derived from a cheap snapshot tuple (`schema_version`,
-`playback_epoch`, `changed_at`, queue length, predicted-upcoming length,
-`session_stopped`). No body hashing — `304` decisions are made before the
-body is built.
+The ETag is a BLAKE2b digest of the serialized JSON body, so any
+visible change to the payload invalidates the cache — including the
+``up_next`` contents flipping under ``force_next`` even when the queue
+length stays the same.
 
 ## Error contract
 
