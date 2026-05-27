@@ -36,7 +36,13 @@ router = APIRouter(prefix="/api/integrations/v1", tags=["integrations"])
 
 
 def _station_block(config) -> StationBlock:
-    """Return the station identity slice of the v1 contract."""
+    """Return the station identity slice of the v1 contract.
+
+    Reads everything listener-facing from ``config.brand`` only.
+    ``config.station.theme`` holds the internal scriptwriter prompt and
+    must never leak into this public endpoint — the listener-safe
+    equivalent is ``brand.tagline``.
+    """
     brand = getattr(config, "brand", None)
     hosts: list[HostEntry] = []
     if brand is not None:
@@ -49,10 +55,12 @@ def _station_block(config) -> StationBlock:
                 )
             )
     frequency = getattr(brand, "frequency", "") if brand is not None else ""
+    tagline = getattr(brand, "tagline", "") if brand is not None else ""
+    station_name = getattr(brand, "station_name", "") or config.station.name
     return StationBlock(
-        name=config.station.name,
+        name=station_name,
         frequency=frequency,
-        theme=config.station.theme,
+        theme=tagline,
         hosts=hosts,
     )
 
@@ -87,22 +95,26 @@ def _capture_snapshot(request: Request) -> NowPlayingSnapshot:
     now_streaming = copy.deepcopy(getattr(state, "now_streaming", {}) or {})
     queued_segments = tuple(copy.deepcopy(item) for item in (getattr(state, "queued_segments", []) or []))
     session_stopped = bool(getattr(state, "session_stopped", False))
-    if queued_segments:
-        upcoming_predicted: tuple[dict, ...] = ()
-        upcoming_mode = "queued"
-    elif session_stopped:
+    if session_stopped:
         # Producer is paused — speculative predictions would contradict the
         # ``stopped`` session_state and the documented stopped sample payload.
-        upcoming_predicted = ()
+        upcoming_predicted: tuple[dict, ...] = ()
         upcoming_mode = "stopped"
+    elif len(queued_segments) >= UP_NEXT_LIMIT:
+        upcoming_predicted = ()
+        upcoming_mode = "queued"
     else:
+        # Queue is empty OR partially filled — fetch enough predictions to
+        # cover the remaining slots so consumers don't see a truncated list
+        # whenever the producer has only rendered some of the lookahead.
+        remaining = UP_NEXT_LIMIT - len(queued_segments)
         try:
-            predicted = preview_upcoming(state, config.pacing, state.playlist, count=UP_NEXT_LIMIT)
+            predicted = preview_upcoming(state, config.pacing, state.playlist, count=remaining)
         except Exception as exc:
             logger.warning("preview_upcoming raised %s; returning empty up_next", exc.__class__.__name__)
             predicted = []
         upcoming_predicted = tuple(predicted)
-        upcoming_mode = "building"
+        upcoming_mode = "queued" if queued_segments else "building"
     playback_epoch = int(getattr(state, "playback_epoch", 0) or 0)
     last_change = float(getattr(state, "last_state_change_at", 0.0) or 0.0)
     started = now_streaming.get("started")

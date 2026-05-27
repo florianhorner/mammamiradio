@@ -240,6 +240,58 @@ async def test_external_ids_is_provider_keyed_map():
 
 
 @pytest.mark.asyncio
+async def test_station_theme_uses_brand_tagline_not_internal_prompt():
+    """``station.theme`` must surface ``brand.tagline`` (listener-safe), NOT
+    ``config.station.theme`` (the internal scriptwriter prompt).
+
+    The internal prompt contains production-side direction for the AI hosts
+    and must never leak into the unauthenticated public endpoint.
+    """
+    app = make_integrations_app()
+    config = app.state.config
+    # Force a known divergence between the two fields so a regression that
+    # reads station.theme by mistake shows up immediately.
+    config.station.theme = "INTERNAL: scriptwriter directive, never expose"
+    config.brand.tagline = "Public tagline"
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        body = (await client.get("/api/integrations/v1/now-playing")).json()
+    assert body["station"]["theme"] == "Public tagline"
+    assert "INTERNAL" not in body["station"]["theme"]
+
+
+@pytest.mark.asyncio
+async def test_up_next_combines_queued_prefix_with_predicted_tail():
+    """When the queue is partially filled, ``up_next`` must extend with
+    predicted items so consumers see the full lookahead, not a truncated list.
+    """
+
+    app = make_integrations_app()
+    state = app.state.station_state
+    # Real queued segment (will appear with predicted=false).
+    state.queued_segments = [
+        {"type": "music", "label": "Queued track", "metadata": {"title": "Queued track"}},
+    ]
+    state.now_streaming = {
+        "type": "music",
+        "label": "Now playing",
+        "started": 1.0,
+        "duration_sec": 1.0,
+        "metadata": {"title": "Now playing"},
+    }
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        body = (await client.get("/api/integrations/v1/now-playing")).json()
+    items = body["up_next"]
+    assert len(items) > 1, f"expected queued + predicted tail, got {items}"
+    assert items[0]["predicted"] is False, "queued segment must lead the list"
+    assert items[0]["title"] == "Queued track"
+    assert any(item["predicted"] is True for item in items[1:]), (
+        "expected predicted entries to fill remaining slots after the queued prefix"
+    )
+
+
+@pytest.mark.asyncio
 async def test_up_next_items_have_drift_guard_keys():
     app = make_integrations_app()
     # Force at least one predicted item by leaving queue empty
