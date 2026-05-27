@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import copy
 import json
+import logging
 from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Request, Response
@@ -28,6 +29,8 @@ from mammamiradio.scheduling.scheduler import preview_upcoming
 
 UP_NEXT_LIMIT = 8
 CACHE_CONTROL = "public, max-age=2"
+
+logger = logging.getLogger("mammamiradio.integrations")
 
 router = APIRouter(prefix="/api/integrations/v1", tags=["integrations"])
 
@@ -89,7 +92,8 @@ def _capture_snapshot(request: Request) -> NowPlayingSnapshot:
     else:
         try:
             predicted = preview_upcoming(state, config.pacing, state.playlist, count=UP_NEXT_LIMIT)
-        except Exception:
+        except Exception as exc:
+            logger.warning("preview_upcoming raised %s; returning empty up_next", exc.__class__.__name__)
             predicted = []
         upcoming_predicted = tuple(predicted)
         upcoming_mode = "building"
@@ -97,7 +101,8 @@ def _capture_snapshot(request: Request) -> NowPlayingSnapshot:
     playback_epoch = int(getattr(state, "playback_epoch", 0) or 0)
     last_change = float(getattr(state, "last_state_change_at", 0.0) or 0.0)
     started = now_streaming.get("started")
-    if isinstance(started, int | float):
+    # bool inherits from int; exclude it explicitly so a stray flag never pollutes the timestamp.
+    if isinstance(started, int | float) and not isinstance(started, bool):
         last_change = max(last_change, float(started))
     relative_url, absolute_url = _resolve_stream_urls(request)
     return NowPlayingSnapshot(

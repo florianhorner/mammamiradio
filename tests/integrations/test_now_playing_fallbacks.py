@@ -117,3 +117,22 @@ async def test_skipping_transient_now_streaming_is_unavailable():
     assert now["artwork"] is None
     # Session is still "live" — skipping is mid-transition
     assert body["session_state"] == "live"
+
+
+@pytest.mark.asyncio
+async def test_preview_upcoming_exception_returns_empty_up_next(monkeypatch):
+    """A scheduler bug must not bring down the integration endpoint."""
+    import mammamiradio.integrations.now_playing as np
+
+    def _boom(*_args, **_kwargs):
+        raise RuntimeError("scheduler exploded")
+
+    monkeypatch.setattr(np, "preview_upcoming", _boom)
+    app = make_integrations_app()
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.get("/api/integrations/v1/now-playing")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["up_next"] == []
+    assert body["session_state"] == "empty_queue"

@@ -72,3 +72,34 @@ async def test_etag_includes_session_stopped_in_fingerprint():
         second = await client.get("/api/integrations/v1/now-playing")
     new_etag = second.headers["ETag"]
     assert new_etag != old_etag
+
+
+@pytest.mark.asyncio
+async def test_etag_invalidates_when_now_streaming_swaps_to_skipping_sentinel():
+    """A /api/skip transition writes a fresh ``started`` timestamp to ``now_streaming``.
+
+    /api/skip does not call ``on_stream_segment`` (it writes the sentinel
+    directly), so ``last_state_change_at`` is NOT bumped. The route still
+    has to invalidate the ETag because the response body changed. The
+    snapshot does this by max()-ing ``now_streaming["started"]`` into
+    ``changed_at`` before fingerprinting.
+    """
+    app = make_integrations_app()
+    state = app.state.station_state
+    play_music_segment(state)
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        first = await client.get("/api/integrations/v1/now-playing")
+        old_etag = first.headers["ETag"]
+        # Simulate /api/skip writing a new sentinel WITHOUT going through on_stream_segment.
+        state.now_streaming = {
+            "type": "skipping",
+            "label": "Skipping...",
+            "started": state.now_streaming["started"] + 5.0,
+            "metadata": {},
+        }
+        second = await client.get("/api/integrations/v1/now-playing")
+    new_etag = second.headers["ETag"]
+    assert new_etag != old_etag, "skip sentinel must invalidate the ETag even without last_state_change_at bump"
+    body = second.json()
+    assert body["now_playing"]["segment_class"] == "unavailable"
