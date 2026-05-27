@@ -575,6 +575,16 @@ def _parse_brand(raw: dict, hosts: list[HostPersonality]) -> tuple[BrandSection,
     return brand, warnings
 
 
+def _err(field: str, msg: str) -> str:
+    """Format a config validation error with a hint about which TOML section to edit.
+
+    >>> _err("pacing.ad_spots_per_break", "must be <= 5")
+    'pacing.ad_spots_per_break must be <= 5 (set in radio.toml [pacing])'
+    """
+    section = field.split(".", 1)[0]
+    return f"{field} {msg} (set in radio.toml [{section}])"
+
+
 def _validate(config: StationConfig) -> None:
     """Fail fast on bad config instead of cryptic runtime errors."""
     import logging
@@ -583,35 +593,37 @@ def _validate(config: StationConfig) -> None:
     errors = []
 
     if not config.hosts:
-        errors.append("No hosts configured — banter requires at least one host")
+        errors.append("No hosts configured — banter requires at least one host (set in radio.toml [[hosts]])")
     # Floors and ceilings here mirror the PATCH /api/pacing clamps so that
     # config-load and the admin runtime path enforce the same valid range.
     if config.pacing.songs_between_banter < 2:
-        errors.append("pacing.songs_between_banter must be >= 2")
+        errors.append(_err("pacing.songs_between_banter", "must be >= 2"))
     if config.pacing.songs_between_banter > 60:
-        errors.append("pacing.songs_between_banter must be <= 60")
+        errors.append(_err("pacing.songs_between_banter", "must be <= 60"))
     if config.pacing.songs_between_ads < 1:
-        errors.append("pacing.songs_between_ads must be >= 1")
+        errors.append(_err("pacing.songs_between_ads", "must be >= 1"))
     if config.pacing.songs_between_ads > 60:
-        errors.append("pacing.songs_between_ads must be <= 60")
+        errors.append(_err("pacing.songs_between_ads", "must be <= 60"))
     if config.pacing.ad_spots_per_break < 1:
-        errors.append("pacing.ad_spots_per_break must be >= 1")
+        errors.append(_err("pacing.ad_spots_per_break", "must be >= 1"))
     if config.pacing.ad_spots_per_break > 5:
-        errors.append("pacing.ad_spots_per_break must be <= 5")
+        errors.append(_err("pacing.ad_spots_per_break", "must be <= 5"))
     if config.pacing.lookahead_segments < 1:
-        errors.append("pacing.lookahead_segments must be >= 1")
+        errors.append(_err("pacing.lookahead_segments", "must be >= 1"))
     if config.homeassistant.timer_poll_interval < 1:
-        errors.append("homeassistant.timer_poll_interval must be >= 1")
+        errors.append(_err("homeassistant.timer_poll_interval", "must be >= 1"))
     _allowed_urgencies = {"pissed", "urgent", "gentle"}
     for idx, timer_cfg in enumerate(config.homeassistant.timer_interrupts):
         if timer_cfg.cooldown < 1:
-            errors.append(f"homeassistant.timer_interrupt[{idx}].cooldown must be >= 1")
+            errors.append(_err(f"homeassistant.timer_interrupt[{idx}].cooldown", "must be >= 1"))
         if timer_cfg.urgency not in _allowed_urgencies:
-            errors.append(f"homeassistant.timer_interrupt[{idx}].urgency must be one of {sorted(_allowed_urgencies)}")
+            errors.append(
+                _err(f"homeassistant.timer_interrupt[{idx}].urgency", f"must be one of {sorted(_allowed_urgencies)}")
+            )
     if not isinstance(config.persona.anthem_threshold, int) or config.persona.anthem_threshold < 1:
-        errors.append("persona.anthem_threshold must be >= 1")
+        errors.append(_err("persona.anthem_threshold", "must be >= 1"))
     if not isinstance(config.persona.skip_bit_threshold, int) or config.persona.skip_bit_threshold < 1:
-        errors.append("persona.skip_bit_threshold must be >= 1")
+        errors.append(_err("persona.skip_bit_threshold", "must be >= 1"))
     if config.playlist.jamendo_client_id:
         config.playlist.jamendo_client_id = config.playlist.jamendo_client_id.strip()
     if config.playlist.jamendo_client_id and not re.match(r"^[A-Za-z0-9_-]+$", config.playlist.jamendo_client_id):
@@ -619,8 +631,10 @@ def _validate(config: StationConfig) -> None:
         config.playlist.jamendo_client_id = ""
     if config.playlist.jamendo_country and not re.match(r"^[A-Z]{3}$", config.playlist.jamendo_country):
         errors.append(
-            "playlist.jamendo_country must be a 3-letter uppercase ISO 3166-1 alpha-3 code "
-            "(e.g. 'ITA', 'DEU', 'FRA') or empty"
+            _err(
+                "playlist.jamendo_country",
+                "must be a 3-letter uppercase ISO 3166-1 alpha-3 code (e.g. 'ITA', 'DEU', 'FRA') or empty",
+            )
         )
     _valid_jamendo_orders = {
         "popularity_total",
@@ -629,7 +643,7 @@ def _validate(config: StationConfig) -> None:
         "releasedate_desc",
     }
     if config.playlist.jamendo_order and config.playlist.jamendo_order not in _valid_jamendo_orders:
-        errors.append(f"playlist.jamendo_order must be one of {sorted(_valid_jamendo_orders)} or empty")
+        errors.append(_err("playlist.jamendo_order", f"must be one of {sorted(_valid_jamendo_orders)} or empty"))
 
     if not (config.anthropic_api_key or config.openai_api_key):
         log.warning("No ANTHROPIC_API_KEY or OPENAI_API_KEY — banter/ads will use fallback text")
