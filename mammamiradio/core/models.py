@@ -32,6 +32,23 @@ class SegmentType(Enum):
     SWEEPER = "sweeper"
     TIME_CHECK = "time_check"
 
+    @property
+    def segment_class(self) -> Literal["music", "voice", "interstitial"]:
+        """Stable display bucket consumed by the v1 integration contract.
+
+        Maps every internal SegmentType to one of three renderer buckets so
+        integration consumers (Music Assistant, custom HA cards, future
+        provider authors) can branch on a small stable enum instead of the
+        full internal taxonomy. Transient runtime states like ``stopped`` or
+        ``skipping`` are mapped to ``unavailable`` by the serializer, not by
+        this property.
+        """
+        if self is SegmentType.MUSIC:
+            return "music"
+        if self in (SegmentType.BANTER, SegmentType.NEWS_FLASH):
+            return "voice"
+        return "interstitial"
+
 
 class ChaosSubtype(Enum):
     """Host-chaos flavors carried by BANTER segments."""
@@ -451,6 +468,11 @@ class StationState:
     runtime_sync_events: int = 0
     shadow_queue_corrections: int = 0
     playback_epoch: int = 0
+    # Most recent observable state change for the v1 integration contract.
+    # Updated by on_stream_segment, /api/stop, and /api/resume so the
+    # changed_at field and weak ETag in /api/integrations/v1/now-playing
+    # reflect any consumer-visible mutation.
+    last_state_change_at: float = 0.0
     runtime_events: deque[RuntimeProviderEvent] = field(default_factory=lambda: deque(maxlen=50))
     runtime_provider_state: dict[str, dict] = field(default_factory=dict)
     runtime_health_state: str = ""
@@ -627,6 +649,7 @@ class StationState:
             "duration_sec": segment.duration_sec,
             "metadata": segment.metadata,
         }
+        self.last_state_change_at = now
         self.stream_log.append(
             SegmentLogEntry(
                 type=seg_type,

@@ -1,0 +1,23 @@
+{
+  "schema_version": "1",
+  "station": {
+    "name": "Mamma Mi Radio",
+    "frequency": "94.7",
+    "theme": "Italia da bere",
+    "hosts": []
+  },
+  "stream": {
+    "relative_url": "/stream",
+    "audio_format": {
+      "codec": "mp3",
+      "mime_type": "audio/mpeg",
+      "bitrate_kbps": 192,
+      "sample_rate_hz": 44100,
+      "channels": 2
+    }
+  },
+  "now_playing": null,
+  "up_next": [],
+  "session_state": "empty_queue",
+  "changed_at": 0.0
+}

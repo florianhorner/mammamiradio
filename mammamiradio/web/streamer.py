@@ -169,6 +169,7 @@ def _persist_session_stopped(config, stopped: bool) -> None:
 def _clear_session_stopped(state: StationState, config) -> None:
     """Resume playback state and clear the persisted stop marker."""
     state.session_stopped = False
+    state.last_state_change_at = time.time()
     state.resume_event.set()
     _persist_session_stopped(config, False)
 
@@ -2033,6 +2034,7 @@ async def stop_session(request: Request, _: None = Depends(require_admin_access)
         request.app.state.skip_event.set()
     # Signal producer to pause and persist across reloads
     state.session_stopped = True
+    state.last_state_change_at = time.time()
     config = request.app.state.config
     _persist_session_stopped(config, True)
     state.now_streaming = {"type": "stopped", "label": "Session stopped", "started": time.time(), "metadata": {}}
