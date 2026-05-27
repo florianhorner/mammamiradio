@@ -188,9 +188,9 @@ edge-tts==7.2.8 \
     --hash=sha256:361fe48ce7ef613adbe30f664e3765dd71029c6cb57427279eff8ad6df2eb211 \
     --hash=sha256:fcf185a0d527a0d2d003f9d5841facc1d5e0e7b3b88d5df9c32990402c6b8cd0
     # via mammamiradio (pyproject.toml)
-fastapi==0.136.1 \
-    --hash=sha256:7af665ad7acfa0a3baf8983d393b6b471b9da10ede59c60045f49fbc89a0fa7f \
-    --hash=sha256:a6e9d7eeada96c93a4d69cb03836b44fa34e2854accb7244a1ece36cd4781c3f
+fastapi==0.136.3 \
+    --hash=sha256:3d2a69bdf04b7e9f3afa292c3bc7a98816bbfafa10bc9b45f3f3700d2f761620 \
+    --hash=sha256:e487fae93ad408e6f47641ee4dfe389864fd7bec92e547ea8498fc13f43e83ab
     # via mammamiradio (pyproject.toml)
 frozenlist==1.8.0 \
     --hash=sha256:0325024fe97f94c41c08872db482cf8ac4800d80e79222c6b0b7b162d5b13686 \
@@ -1040,9 +1040,9 @@ typing-inspection==0.4.2 \
     #   fastapi
     #   pydantic
     #   pydantic-settings
-uvicorn==0.47.0 \
-    --hash=sha256:2c5715bc12d1892d84752049f400cd1c3cb018514967fdfeb97640443a6a9432 \
-    --hash=sha256:7c9a0ea1a9414106bbab7324609c162d8fa0cdcdcb703060987269d77c7bb533
+uvicorn==0.48.0 \
+    --hash=sha256:48097851328b87ec36117d3d575234519eb58c2b22d79666e9bbc6c49a761dad \
+    --hash=sha256:a5504207195d08c2511bf9125ede5ac4a4b71725d519e758d01dcf0bc2d31c37
     # via mammamiradio (pyproject.toml)
 uvloop==0.22.1 \
     --hash=sha256:017bd46f9e7b78e81606329d07141d3da446f8798c6baeec124260e22c262772 \
