@@ -83,6 +83,32 @@ async def test_session_stopped_via_admin_returns_stopped_state():
 
 
 @pytest.mark.asyncio
+async def test_stopped_session_returns_empty_up_next_not_predictions():
+    """Stopped sessions must NOT leak speculative predictions into up_next.
+
+    The producer is paused while ``session_stopped`` is True, so emitting
+    predicted tracks would contradict the documented ``stopped`` sample
+    payload (``up_next: []``) and tell consumers to render upcoming music
+    for a station that is off-air.
+    """
+    app = make_integrations_app()
+    state = app.state.station_state
+    state.session_stopped = True
+    state.queued_segments = []
+    state.now_streaming = {
+        "type": "stopped",
+        "label": "Session stopped",
+        "started": 1.0,
+        "metadata": {},
+    }
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        body = (await client.get("/api/integrations/v1/now-playing")).json()
+    assert body["session_state"] == "stopped"
+    assert body["up_next"] == [], "stopped sessions must not surface scheduler predictions"
+
+
+@pytest.mark.asyncio
 async def test_session_stopped_takes_precedence_over_music_now_streaming():
     """``session_stopped=True`` wins even if a valid music segment lingers.
 

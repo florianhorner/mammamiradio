@@ -101,6 +101,10 @@ async def test_etag_invalidates_when_force_next_changes_predicted_up_next():
     assert second.status_code == 200
     second_etag = second.headers["ETag"]
     second_body = second.json()
+    # Guard the array access — if the scheduler stops emitting predictions for
+    # some unrelated reason the test would crash before validating the ETag.
+    assert first_up_next, "expected at least one predicted up_next item before force_next flip"
+    assert second_body["up_next"], "expected at least one predicted up_next item after force_next flip"
     # First predicted item changed type — that change MUST show through to the ETag.
     assert first_up_next[0]["segment_type"] != second_body["up_next"][0]["segment_type"]
     assert first_etag != second_etag, "body changed but ETag did not — clients will see stale 304s"

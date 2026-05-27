@@ -86,9 +86,15 @@ def _capture_snapshot(request: Request) -> NowPlayingSnapshot:
     config = request.app.state.config
     now_streaming = copy.deepcopy(getattr(state, "now_streaming", {}) or {})
     queued_segments = tuple(copy.deepcopy(item) for item in (getattr(state, "queued_segments", []) or []))
+    session_stopped = bool(getattr(state, "session_stopped", False))
     if queued_segments:
         upcoming_predicted: tuple[dict, ...] = ()
         upcoming_mode = "queued"
+    elif session_stopped:
+        # Producer is paused — speculative predictions would contradict the
+        # ``stopped`` session_state and the documented stopped sample payload.
+        upcoming_predicted = ()
+        upcoming_mode = "stopped"
     else:
         try:
             predicted = preview_upcoming(state, config.pacing, state.playlist, count=UP_NEXT_LIMIT)
@@ -97,7 +103,6 @@ def _capture_snapshot(request: Request) -> NowPlayingSnapshot:
             predicted = []
         upcoming_predicted = tuple(predicted)
         upcoming_mode = "building"
-    session_stopped = bool(getattr(state, "session_stopped", False))
     playback_epoch = int(getattr(state, "playback_epoch", 0) or 0)
     last_change = float(getattr(state, "last_state_change_at", 0.0) or 0.0)
     started = now_streaming.get("started")
