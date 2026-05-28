@@ -607,8 +607,8 @@ def _validate(config: StationConfig) -> None:
         log.warning("Home Assistant enabled but no HA_TOKEN in environment")
     if not config.ads.brands:
         log.warning("No ad brands configured — ad segments will be skipped")
-    # Non-loopback bind without auth is fine — admin access trusts private
-    # networks (RFC1918, Tailscale CGNAT). Auth is only needed for public access.
+    if not _is_loopback_host(config.bind_host) and not (config.admin_password or config.admin_token):
+        errors.append("Set ADMIN_PASSWORD or ADMIN_TOKEN when binding to a non-loopback host")
 
     if errors:
         raise ValueError("Config errors:\n  " + "\n  ".join(errors))
