@@ -2,7 +2,7 @@
 
 **Status:** deferred. Planning artifact — no implementation has landed against this spec.
 **Author:** original draft 2026-04-13. Paths and test layout refreshed 2026-05-10 to match the cathedral restructure (PR #275).
-**Relationship to other plans:** the cathedral plan (`docs/2026-04-28-cathedral-restructure.md`) relocated the producer to `mammamiradio/scheduling/producer.py` but explicitly does not split it. This plan picks up where the cathedral left off and is the spec for that internal split.
+**Relationship to other plans:** the cathedral plan (`docs/archive/2026-04-28-cathedral-restructure.md`) relocated the producer to `mammamiradio/scheduling/producer.py` but explicitly does not split it. This plan picks up where the cathedral left off and is the spec for that internal split.
 
 ## Context
 
@@ -323,6 +323,6 @@ The refactor is succeeding if:
 
 ## See Also
 
-- `docs/2026-04-28-cathedral-restructure.md` — the nave layout this plan operates within. Cathedral PR 3 relocated `producer.py` to `mammamiradio/scheduling/producer.py`; cathedral PRs 5/6 split `streamer.py` and `scriptwriter.py` (independent of this plan).
+- `docs/archive/2026-04-28-cathedral-restructure.md` — the nave layout this plan operates within. Cathedral PR 3 relocated `producer.py` to `mammamiradio/scheduling/producer.py`; cathedral PRs 5/6 split `streamer.py` and `scriptwriter.py` (independent of this plan).
 - `CLAUDE.md` § "Project structure" — current god-module markers.
 - `CLAUDE.md` § "Audio delivery test coverage rule" — the three-scenario test gate (Normal, Empty fallback, Post-restart) every PR in this plan must satisfy.

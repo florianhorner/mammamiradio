@@ -3,7 +3,7 @@
 **Date:** 2026-04-28
 **Status:** Recipe (reusable for any future structural PR)
 **Originally executed as:** PR #277 (`docs: post-cathedral correctness sweep`)
-**Companion plan:** `docs/2026-04-28-cathedral-restructure.md` (the structural move this swept up after)
+**Companion plan:** `docs/archive/2026-04-28-cathedral-restructure.md` (the structural move this swept up after)
 
 ---
 
@@ -98,8 +98,8 @@ Read these files top-to-bottom for tone/accuracy after a major move:
 
 - **`CHANGELOG.md` historical release notes** — immutable per project rule. They describe state at the time of the release. Do not rewrite history.
 - **`ha-addon/mammamiradio/CHANGELOG.md` historical entries** — same reason.
-- **Dated snapshot docs** — `docs/2026-04-DD-...md` style audit notes that are point-in-time observations. The dated filename signals snapshot. Updating them rewrites history.
-- **The plan doc that describes the move** — e.g. `docs/2026-04-28-cathedral-restructure.md` — it intentionally references the future state.
+- **Dated snapshot docs** — `docs/archive/2026-04-DD-...md` style audit notes that are point-in-time observations. The dated filename signals snapshot. Updating them rewrites history.
+- **The plan doc that describes the move** — e.g. `docs/archive/2026-04-28-cathedral-restructure.md` — it intentionally references the future state.
 
 ### FLAG (don't fix, but note)
 

@@ -4,6 +4,17 @@ This repo is small, but it has real moving parts: FastAPI, FFmpeg, Edge TTS, Cla
 
 Do the local setup, run targeted tests, then do a quick listen-through.
 
+## TL;DR
+
+```bash
+python3.11 -m venv .venv && source .venv/bin/activate
+pip install -e . && cp .env.example .env
+./start.sh                # or: docker compose up
+pytest tests/             # before any commit
+```
+
+Full prerequisites, run modes, tests, lint, and commit-message rules below.
+
 ## Prerequisites
 
 - Python 3.11+
