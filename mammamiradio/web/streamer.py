@@ -975,15 +975,7 @@ def require_admin_access(
     request: Request,
     credentials: HTTPBasicCredentials | None = Depends(security),
 ) -> None:
-    """Authorize admin-only routes using private network trust, token, or basic auth.
-
-    Trust hierarchy (first match wins):
-    1. Private network (LAN, Tailscale, HA Supervisor) — trusted for reads,
-       CSRF-checked for writes
-    2. Admin token (header only)
-    3. Basic auth (username/password)
-    4. Reject
-    """
+    """Authorize admin-only routes using configured credentials or local trust."""
     config = request.app.state.config
 
     # Loopback is fully trusted — same machine, no CSRF risk.
@@ -996,13 +988,7 @@ def require_admin_access(
     if config.is_addon and _is_hassio_or_loopback(request):
         return
 
-    # Other private networks (LAN, Tailscale): trusted for identity but
-    # CSRF-checked on writes to prevent cross-site POSTs from other browsers.
-    if _is_private_network(request):
-        _enforce_csrf_for_private_network(request)
-        return
-
-    # Explicit auth for public/remote access.
+    # Explicit auth for all non-local traffic when credentials are configured.
     if config.admin_token:
         token = request.headers.get("X-Radio-Admin-Token")
         if token and secrets.compare_digest(token, config.admin_token):
@@ -1031,6 +1017,15 @@ def require_admin_access(
             status_code=401,
             detail="X-Radio-Admin-Token required",
         )
+
+    # Backward-compatible fallback when no admin credentials are configured.
+    # In standalone mode load_config() now rejects a non-loopback bind without
+    # creds, so in production this only fires for loopback binds (already
+    # short-circuited above). Reachable here mainly via test apps built without
+    # creds — kept so credential-less LAN deployments keep working with CSRF.
+    if _is_private_network(request):
+        _enforce_csrf_for_private_network(request)
+        return
 
     raise HTTPException(
         status_code=403,

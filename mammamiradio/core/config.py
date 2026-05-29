@@ -400,8 +400,13 @@ def _normalize_tts_voices(config: StationConfig) -> None:
 
 
 def _is_loopback_host(host: str) -> bool:
-    """Return whether a bind target should be treated as localhost-only."""
-    if host in {"localhost", ""}:
+    """Return whether a bind target should be treated as localhost-only.
+
+    An empty bind host is NOT loopback: ``socket.bind("")`` listens on all
+    interfaces (equivalent to ``0.0.0.0``), so it must satisfy the same
+    credential requirement as any other non-loopback bind.
+    """
+    if host == "localhost":
         return True
     try:
         return ipaddress.ip_address(host).is_loopback
@@ -637,8 +642,8 @@ def _validate(config: StationConfig) -> None:
         log.warning("Home Assistant enabled but no HA_TOKEN in environment")
     if not config.ads.brands:
         log.warning("No ad brands configured — ad segments will be skipped")
-    # Non-loopback bind without auth is fine — admin access trusts private
-    # networks (RFC1918, Tailscale CGNAT). Auth is only needed for public access.
+    if not _is_loopback_host(config.bind_host) and not (config.admin_password or config.admin_token):
+        errors.append("Set ADMIN_PASSWORD or ADMIN_TOKEN when binding to a non-loopback host")
 
     if errors:
         raise ValueError("Config errors:\n  " + "\n  ".join(errors))
