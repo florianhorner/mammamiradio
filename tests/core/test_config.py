@@ -9,7 +9,9 @@ import pytest
 from mammamiradio.core.config import (
     AudioSection,
     _apply_addon_options,
+    _err,
     _is_addon,
+    _validate,
     coerce_bool,
     load_config,
     runtime_json,
@@ -660,3 +662,48 @@ def test_coerce_bool_default():
     # Out-of-range ints honour the caller-provided default
     assert coerce_bool(2, default=True) is True
     assert coerce_bool(-1, default=True) is True
+
+
+def test_err_helper_formats_field_and_section_hint():
+    """_err must point operators at the TOML section that owns the field."""
+    assert (
+        _err("pacing.ad_spots_per_break", "must be <= 5")
+        == "pacing.ad_spots_per_break must be <= 5 (set in radio.toml [pacing])"
+    )
+    assert (
+        _err("homeassistant.timer_interrupt[0].cooldown", "must be >= 1")
+        == "homeassistant.timer_interrupt[0].cooldown must be >= 1 (set in radio.toml [homeassistant])"
+    )
+    assert _err("persona.anthem_threshold", "must be >= 1").endswith("(set in radio.toml [persona])")
+
+
+def test_validate_includes_section_hint_for_invalid_pacing():
+    """A bad pacing value must surface in the raised error with the [pacing] hint."""
+    toml_path = Path(__file__).resolve().parents[2] / "radio.toml"
+    config = load_config(str(toml_path))
+    config.pacing.ad_spots_per_break = 99
+
+    with pytest.raises(ValueError) as exc_info:
+        _validate(config)
+
+    msg = str(exc_info.value)
+    assert "pacing.ad_spots_per_break" in msg
+    assert "must be <= 5" in msg
+    assert "(set in radio.toml [pacing])" in msg
+
+
+def test_validate_aggregates_multiple_errors_each_with_hint():
+    """Multiple invalid fields produce one line per error, each tagged with its section."""
+    toml_path = Path(__file__).resolve().parents[2] / "radio.toml"
+    config = load_config(str(toml_path))
+    config.pacing.songs_between_banter = 1
+    config.persona.anthem_threshold = 0
+    config.playlist.jamendo_order = "definitely-not-valid"
+
+    with pytest.raises(ValueError) as exc_info:
+        _validate(config)
+
+    msg = str(exc_info.value)
+    assert "(set in radio.toml [pacing])" in msg
+    assert "(set in radio.toml [persona])" in msg
+    assert "(set in radio.toml [playlist])" in msg
