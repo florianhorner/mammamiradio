@@ -388,8 +388,13 @@ def _normalize_tts_voices(config: StationConfig) -> None:
 
 
 def _is_loopback_host(host: str) -> bool:
-    """Return whether a bind target should be treated as localhost-only."""
-    if host in {"localhost", ""}:
+    """Return whether a bind target should be treated as localhost-only.
+
+    An empty bind host is NOT loopback: ``socket.bind("")`` listens on all
+    interfaces (equivalent to ``0.0.0.0``), so it must satisfy the same
+    credential requirement as any other non-loopback bind.
+    """
+    if host == "localhost":
         return True
     try:
         return ipaddress.ip_address(host).is_loopback

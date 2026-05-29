@@ -1177,9 +1177,20 @@ async def test_admin_status_without_auth_public_ip_rejected():
 
 
 @pytest.mark.asyncio
-async def test_admin_status_private_network_trusted():
-    """Private network (RFC1918) client should be trusted without credentials."""
+async def test_admin_status_private_network_rejected_when_password_set():
+    """When admin_password is configured, a LAN client must still authenticate —
+    private-network trust no longer bypasses configured credentials."""
     app = _make_test_app(admin_password="secret123")
+    transport = httpx.ASGITransport(app=app, client=("192.168.1.50", 9999))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.get("/status")
+    assert resp.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_admin_status_private_network_trusted_without_creds():
+    """With no admin creds configured, a LAN client is still trusted (CSRF-guarded)."""
+    app = _make_test_app()
     transport = httpx.ASGITransport(app=app, client=("192.168.1.50", 9999))
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
         resp = await client.get("/status")

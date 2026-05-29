@@ -29,7 +29,7 @@ Environment:
 - `MAMMAMIRADIO_PORT`
 - `MAMMAMIRADIO_ALLOW_YTDLP` (optional, enables live charts and yt-dlp downloads; enabled by default in HA addon and Conductor)
 - `ADMIN_USERNAME`
-- `ADMIN_PASSWORD` or `ADMIN_TOKEN` for non-local access
+- `ADMIN_PASSWORD` or `ADMIN_TOKEN` — required for any non-loopback bind (see **Admin access model**)
 - `ANTHROPIC_API_KEY`
 - `OPENAI_API_KEY` (optional, used for TTS and as script generation fallback)
 - `HA_TOKEN` if Home Assistant integration is enabled
@@ -111,6 +111,28 @@ There is no blessed platform in this repo, but the sensible shape is:
 3. Require `ADMIN_PASSWORD` or `ADMIN_TOKEN`.
 4. Persist `cache/`, `tmp/` where practical.
 5. Monitor app logs.
+
+## Admin access model
+
+Loopback (`127.0.0.1`, `localhost`) is fully trusted — no credentials needed.
+
+For any non-loopback bind (`0.0.0.0`, a LAN/Tailscale address, or an empty
+`MAMMAMIRADIO_BIND_HOST`, which listens on all interfaces):
+
+- **Standalone startup now fails** unless `ADMIN_PASSWORD` or `ADMIN_TOKEN` is
+  set. This is a behavior change: earlier versions started without credentials
+  and trusted private networks at runtime. If you bind to `0.0.0.0` in
+  standalone mode, set a credential or startup raises a config error.
+- **When a credential is configured, private-network trust no longer bypasses
+  it.** A LAN/Tailscale client must present the credential; it is no longer
+  auto-trusted just for being on a private network.
+- **`ADMIN_TOKEN` is a header-only API credential** (`X-Radio-Admin-Token`). A
+  browser cannot send it on plain navigation, so to open `/admin` in a browser
+  on a non-loopback bind you need `ADMIN_PASSWORD`. Use `ADMIN_TOKEN` for
+  programmatic/API callers (HA `rest_command`, scripts).
+- **Credential-less private-network deployments are unchanged** — still trusted
+  for reads and CSRF-guarded on writes. The HA add-on auto-generates an
+  `ADMIN_TOKEN` at startup, so it is always in the credentialed path.
 
 ## Docker
 

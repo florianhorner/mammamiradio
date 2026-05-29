@@ -6,6 +6,10 @@ The current version source of truth is `pyproject.toml`.
 
 ## [Unreleased]
 
+### Security
+
+- **Admin endpoints no longer auto-trust private networks when admin credentials are configured.** Previously a client on a LAN or Tailscale address was trusted for admin access even when `ADMIN_PASSWORD` or `ADMIN_TOKEN` was set, so a configured credential could be silently bypassed from any private-network browser. Now, when a credential is configured, all non-loopback admin traffic must present it. Credential-less private-network deployments are unchanged (still trusted, still CSRF-guarded on writes). Standalone runs that bind to a non-loopback host (including an empty bind host, which listens on all interfaces) now require `ADMIN_PASSWORD` or `ADMIN_TOKEN` at startup. Browser admin access requires `ADMIN_PASSWORD`; `ADMIN_TOKEN` is a header-only API credential a browser cannot send on navigation.
+
 ## [2.12.4] - 2026-05-18
 
 ### Added

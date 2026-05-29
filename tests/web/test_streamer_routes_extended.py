@@ -1856,12 +1856,23 @@ async def test_token_auth_public_ip_requires_token():
 
 
 @pytest.mark.asyncio
-async def test_token_auth_private_network_trusted():
-    """Private network (RFC1918) should be trusted without token."""
+async def test_token_auth_private_network_rejected_when_token_set():
+    """When admin_token is configured, a LAN client without the token header is
+    rejected — private-network trust no longer bypasses configured credentials."""
     app = _make_test_app(admin_token="tok-123")
     transport = httpx.ASGITransport(app=app, client=("10.0.0.1", 9999))
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
         resp = await client.get("/status")
+    assert resp.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_token_auth_private_network_accepts_token_header():
+    """A LAN client presenting the configured token header is authorized."""
+    app = _make_test_app(admin_token="tok-123")
+    transport = httpx.ASGITransport(app=app, client=("10.0.0.1", 9999))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.get("/status", headers={"X-Radio-Admin-Token": "tok-123"})
     assert resp.status_code == 200
 
 

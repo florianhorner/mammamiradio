@@ -1016,6 +1016,10 @@ def require_admin_access(
         )
 
     # Backward-compatible fallback when no admin credentials are configured.
+    # In standalone mode load_config() now rejects a non-loopback bind without
+    # creds, so in production this only fires for loopback binds (already
+    # short-circuited above). Reachable here mainly via test apps built without
+    # creds — kept so credential-less LAN deployments keep working with CSRF.
     if _is_private_network(request):
         _enforce_csrf_for_private_network(request)
         return
