@@ -104,6 +104,27 @@ When the playlist source is charts, the producer checks every 90 minutes and mer
 
 Important design choice: there is one shared timeline. Listeners tune into the current live point, not their own private playback state.
 
+### Stream audio format metadata
+
+External integrations should call `GET /public-status` before playback and read
+`stream.audio_format` to declare the stream correctly. The object exposes
+`codec`, `mime_type`, `bitrate_kbps`, `sample_rate_hz`, and `channels`. Use
+`mime_type` and `bitrate_kbps` when declaring `/stream`.
+
+`audio_format` is the station's **canonical/target encoding** — the format the
+normalizer produces and the `/stream` response headers advertise. Bundled demo
+and canned fallback assets are not guaranteed to be re-encoded to this format,
+so players must rely on MP3 frame self-description for exact decode parameters
+on a per-frame basis. The contract `audio_format` provides is the nominal one,
+which is the same contract every ICY-headered internet radio publishes.
+
+The canonical metadata is built once per response by
+`mammamiradio/audio/stream_format.py::stream_audio_metadata(config)` and is the
+single source feeding both the `/public-status` payload and the `/stream`
+response headers (`Content-Type` and `icy-br`). The legacy
+`stream.bitrate_kbps` field reads from the same helper output so it can never
+diverge from `stream.audio_format.bitrate_kbps` in the same response.
+
 ## Capability flags
 
 The system uses two independent boolean flags in a frozen `Capabilities` dataclass (`mammamiradio/core/models.py`, with detection and serialization in `mammamiradio/core/capabilities.py`):
@@ -187,6 +208,38 @@ If `[homeassistant].enabled = true` and `HA_TOKEN` is present:
 
 This is opportunistic context, not a hard dependency. Failures there should not stop the station.
 
+### Timer interrupt flow
+
+When a HA timer fires, the station immediately interrupts playback with a pissed/urgent host segment:
+
+```text
+HA timer fires (timer.xyz → idle, with recent finished_at)
+    ↓
+ha_context.py: lightweight 5s poll detects idle transition (separate from 60s full fetch).
+    Cancel/reset filter: only fire when finished_at is set and within the last 30s.
+    ↓
+check_reactive_triggers() → InterruptSpec(directive, urgency, cooldown)
+    ↓
+producer.py: _fire_interrupt(state, spec, queue, skip_event)
+  1. Drain lookahead queue (no buffered music leaks between bridge and banter)
+  2. state.ha_pending_directive = spec.directive
+  3. state.chaos_pending = ChaosSubtype.URGENT_INTERRUPT  (pissed tone)
+  4. state.chaos_cutover_epoch += 1
+  5. skip_event.set()  ← skips currently playing segment
+  6. Load alert.mp3 from assets/sfx/, or generate a short tone → state.interrupt_slot
+     (best-effort; never blocks the skip)
+    ↓
+run_playback_loop: interrupt_slot checked before queue.get() → bridge plays (≤2s)
+    ↓
+Producer generates URGENT_INTERRUPT banter with directive (async, LLM)
+    ↓
+Pissed banter plays after bridge
+```
+
+Timer interrupts are configured via `[[homeassistant.timer_interrupt]]` blocks in `radio.toml`. The dedicated timer poll reads those entity IDs without mutating the module-level HA entity lists.
+
+The same mechanism is callable directly via `POST /api/interrupt` (admin auth, 60s cooldown) — any HA automation can inject a custom directive without `radio.toml` configuration.
+
 ## Access model
 
 ### Route table
@@ -202,7 +255,7 @@ This is opportunistic context, not a hard dependency. Failures there should not 
 | `/stream` | GET | Public | Infinite MP3 stream |
 | `/healthz` | GET | Public | Liveness probe with process uptime |
 | `/readyz` | GET | Public | Readiness probe with queue depth and startup status |
-| `/public-status` | GET | Public | Current segment, recent log, and the real queued segments (`upcoming_mode` is `queued` or `building`) |
+| `/public-status` | GET | Public | Current segment, recent log, the real queued segments (`upcoming_mode` is `queued` or `building`), and `stream.audio_format` (the canonical encoding contract — see "Stream audio format metadata" below) |
 | `/status` | GET | Admin | Full admin JSON: queue depth, uptime, scripts, HA context, errors, `provider_health`, and `runtime_status` (normalized provider state + session failover event history) |
 | `/api/setup/status` | GET | Admin | First-run setup status, detected run mode, and station mode |
 | `/api/setup/recheck` | POST | Admin | Re-run setup probes |
@@ -211,6 +264,7 @@ This is opportunistic context, not a hard dependency. Failures there should not 
 | `/api/shuffle` | POST | Admin | Shuffle playlist |
 | `/api/skip` | POST | Admin | Skip current segment |
 | `/api/purge` | POST | Admin | Remove queued segments |
+| `/api/queue/remove` | POST | Admin | Remove one queued segment by stable `id` (or legacy `index`) |
 | `/api/playlist/remove` | POST | Admin | Remove track by index |
 | `/api/playlist/move` | POST | Admin | Move track with `{from, to}` |
 | `/api/playlist/move_to_next` | POST | Admin | Move track to position 0 in upcoming |
@@ -220,7 +274,7 @@ This is opportunistic context, not a hard dependency. Failures there should not 
 | `/api/hosts/{host_name}/personality` | PATCH | Admin | Patch host personality axes (energy, warmth, chaos) |
 | `/api/hosts/{host_name}/personality/reset` | POST | Admin | Reset host personality to defaults |
 | `/api/pacing` | GET | Admin | Current pacing configuration |
-| `/api/pacing` | PATCH | Admin | Patch pacing fields (songs between banter, ad spots per break, etc.) |
+| `/api/pacing` | PATCH | Admin | Patch pacing fields (songs between banter, ad spots per break, etc.); malformed payloads return 400, values are clamped to safe floors/ceilings |
 | `/api/setup/save-keys` | POST | Admin | Save API keys via dashboard |
 | `/api/capabilities` | GET | Admin | Capability flags, tier, next-step hint, connect status, and provider degradation telemetry |
 | `/api/chaos` | GET | Admin | Return `{"enabled": bool}` for Chaos Mode |
@@ -240,6 +294,7 @@ This is opportunistic context, not a hard dependency. Failures there should not 
 | `/api/listener-requests/dismiss` | POST | Admin | Dismiss a pending listener request by `ts` (legacy) or `request_id` (canonical) |
 | `/api/search` | GET | Admin | Search playlist and external sources |
 | `/api/playlist/add-external` | POST | Admin | Add external track from search results |
+| `/api/interrupt` | POST | Admin | Immediately interrupt the stream — hosts deliver pissed/urgent banter with a custom directive. Body: `{"directive": str, "urgency": "pissed"\|"urgent"\|"gentle"}`. 60s cooldown enforced; returns 429 on spam. |
 | `/api/hot-reload` | POST | Admin | Reload `scriptwriter.py` in-place via `importlib.reload()` — stream continues uninterrupted, next banter uses new code. Requires `--workers 1`. |
 
 ### Auth rules

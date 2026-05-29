@@ -100,12 +100,24 @@ class AudioSection:
 
 
 @dataclass
+class TimerInterruptConfig:
+    """A single HA timer entity that triggers an immediate host interrupt."""
+
+    entity_id: str
+    directive: str
+    urgency: str = "pissed"  # "pissed" | "urgent" | "gentle"
+    cooldown: int = 60  # seconds before this entity can fire again
+
+
+@dataclass
 class HomeAssistantSection:
     """Optional Home Assistant integration used to seed prompt context."""
 
     enabled: bool = False
     url: str = ""
     poll_interval: int = 60  # seconds between state refreshes
+    timer_poll_interval: int = 5  # seconds between lightweight timer-entity state checks
+    timer_interrupts: list[TimerInterruptConfig] = field(default_factory=list)
 
 
 @dataclass
@@ -577,12 +589,30 @@ def _validate(config: StationConfig) -> None:
 
     if not config.hosts:
         errors.append("No hosts configured — banter requires at least one host")
-    if config.pacing.songs_between_banter < 1:
-        errors.append("pacing.songs_between_banter must be >= 1")
+    # Floors and ceilings here mirror the PATCH /api/pacing clamps so that
+    # config-load and the admin runtime path enforce the same valid range.
+    if config.pacing.songs_between_banter < 2:
+        errors.append("pacing.songs_between_banter must be >= 2")
+    if config.pacing.songs_between_banter > 60:
+        errors.append("pacing.songs_between_banter must be <= 60")
     if config.pacing.songs_between_ads < 1:
         errors.append("pacing.songs_between_ads must be >= 1")
+    if config.pacing.songs_between_ads > 60:
+        errors.append("pacing.songs_between_ads must be <= 60")
+    if config.pacing.ad_spots_per_break < 1:
+        errors.append("pacing.ad_spots_per_break must be >= 1")
+    if config.pacing.ad_spots_per_break > 5:
+        errors.append("pacing.ad_spots_per_break must be <= 5")
     if config.pacing.lookahead_segments < 1:
         errors.append("pacing.lookahead_segments must be >= 1")
+    if config.homeassistant.timer_poll_interval < 1:
+        errors.append("homeassistant.timer_poll_interval must be >= 1")
+    _allowed_urgencies = {"pissed", "urgent", "gentle"}
+    for idx, timer_cfg in enumerate(config.homeassistant.timer_interrupts):
+        if timer_cfg.cooldown < 1:
+            errors.append(f"homeassistant.timer_interrupt[{idx}].cooldown must be >= 1")
+        if timer_cfg.urgency not in _allowed_urgencies:
+            errors.append(f"homeassistant.timer_interrupt[{idx}].urgency must be one of {sorted(_allowed_urgencies)}")
     if not isinstance(config.persona.anthem_threshold, int) or config.persona.anthem_threshold < 1:
         errors.append("persona.anthem_threshold must be >= 1")
     if not isinstance(config.persona.skip_bit_threshold, int) or config.persona.skip_bit_threshold < 1:
@@ -703,7 +733,20 @@ def load_config(path: str = "radio.toml") -> StationConfig:
         ha_raw["enabled"] = True
     elif ha_force_disabled:
         ha_raw["enabled"] = False
+    # Parse [[ha.timer_interrupt]] blocks — extracted before ** expansion
+    timer_interrupts_raw = ha_raw.pop("timer_interrupt", [])
+    timer_interrupts = [
+        TimerInterruptConfig(
+            entity_id=t["entity_id"],
+            directive=t["directive"],
+            urgency=t.get("urgency", "pissed"),
+            cooldown=int(t.get("cooldown", 60)),
+        )
+        for t in timer_interrupts_raw
+        if isinstance(t, dict) and t.get("entity_id") and t.get("directive")
+    ]
     ha_section = HomeAssistantSection(**ha_raw)
+    ha_section.timer_interrupts = timer_interrupts
     ha_token = os.getenv("HA_TOKEN", "")
     # Auto-enable HA if token is present and URL is set (Docker/add-on convenience)
     if ha_token and ha_section.url and not ha_section.enabled and not ha_force_disabled:

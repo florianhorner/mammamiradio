@@ -338,7 +338,7 @@ Lives in `static/base.css`. Replaces the ad-hoc Engine Room green-button-vs-blue
 **The 3 visual forms (same states, different density):**
 
 1. **`.status-chip`** — full chip with label. Used in Engine Room rows, admin card headers. ~10-12px label, rounded pill, bordered.
-2. **`.status-dot`** — compact pill with icon + short label. Used in admin sidebar pipeline status, header chips. ~9-10px label.
+2. **`.status-dot`** — compact pill with icon + short label. Used in producer-desk header chips and zone status lines. ~9-10px label.
 3. **`.status-inline`** — icon only, no pill. Used inline next to text (queue-source tags, log entries).
 
 **CSS:**
@@ -432,7 +432,7 @@ Lives in `static/base.css`. Replaces the ad-hoc Engine Room green-button-vs-blue
 <span class="status-chip degraded">AI Fallback</span>
 <span class="status-chip blocked">HA Disconnected</span>
 
-<!-- Admin sidebar pipeline -->
+<!-- Producer desk header chips -->
 <span class="status-dot ready"><span class="dot"></span>AI</span>
 <span class="status-dot degraded"><span class="dot"></span>AI Fallback</span>
 <span class="status-dot idle"><span class="dot"></span>HA</span>
@@ -510,7 +510,6 @@ one label.
 - Card-level eyebrow above the card's `<h2>` (use `.ttl-eyebrow` — no
   underline, it's part of the title block, not a divider).
 - Status pill, badge, or inline tag (those are unrelated patterns).
-- Sidebar nav heading (`.a-nav-head` — uses `--muted`, not gold).
 - **Listener cards** (`.mmr-schedule`, `.mmr-dedica`, `.mmr-about-card`).
   Each listener card is a single-purpose composition — there are no named
   sub-sections to divide. Adding the gold rule there would introduce

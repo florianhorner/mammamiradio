@@ -8,15 +8,19 @@ says 'IN ONDA' — different code paths producing different state).
 Cathedral standard:
 - Strict subset: every field in /public-status must also exist in /status
 - Bytes-identical for shared fields: capabilities dict, brand dict, uptime,
-  tracks_played, session_stopped, now_streaming, ha_moments
+  tracks_played, session_stopped, now_streaming, upcoming/upcoming_mode,
+  runtime_health, playback_actions, ha_moments
 - Shape snapshot: catches accidental field additions on the listener side
 """
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import httpx
 import pytest
 
+from mammamiradio.core.models import Segment, SegmentType
 from tests.web.test_streamer_routes import _make_test_app
 
 
@@ -98,6 +102,10 @@ async def test_admin_listener_facts_agree():
     assert admin.get("now_streaming") == public.get("now_streaming")
     assert admin["brand"] == public["brand"]
     assert admin["capabilities"] == public["capabilities"]
+    assert admin["upcoming"] == public["upcoming"]
+    assert admin["upcoming_mode"] == public["upcoming_mode"]
+    assert admin["runtime_health"] == public["runtime_health"]
+    assert admin["playback_actions"] == public["playback_actions"]
     assert admin.get("ha_moments") == public.get("ha_moments")
 
 
@@ -143,6 +151,53 @@ async def test_public_status_no_admin_secrets_leak():
     }
     leaked = forbidden & set(body.keys())
     assert not leaked, f"Listener payload leaks admin-only fields: {leaked}"
+
+
+@pytest.mark.asyncio
+async def test_public_status_exposes_audio_format():
+    """Integrations read stream.audio_format before declaring /stream playback.
+
+    Defaults must match the documented MP3 contract. The legacy bitrate field
+    must equal audio_format.bitrate_kbps in the same response so they cannot
+    drift (cross-page invariant inside one payload).
+    """
+    app = _make_test_app()
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.get("/public-status")
+    body = resp.json()
+    stream = body["stream"]
+    assert stream["audio_format"] == {
+        "codec": "mp3",
+        "mime_type": "audio/mpeg",
+        "bitrate_kbps": 192,
+        "sample_rate_hz": 48000,
+        "channels": 2,
+    }
+    # Legacy field must read from the same source so it cannot diverge.
+    assert stream["bitrate_kbps"] == stream["audio_format"]["bitrate_kbps"]
+
+
+@pytest.mark.asyncio
+async def test_public_status_audio_format_reflects_non_default_config():
+    """A non-default bitrate must propagate to both audio_format and the legacy field.
+
+    Uses a test-local app instance so the config mutation cannot leak to
+    other tests (no shared/global state).
+    """
+    app = _make_test_app()
+    app.state.config.audio.bitrate = 128
+    app.state.config.audio.sample_rate = 44100
+    app.state.config.audio.channels = 1
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.get("/public-status")
+    body = resp.json()
+    stream = body["stream"]
+    assert stream["audio_format"]["bitrate_kbps"] == 128
+    assert stream["audio_format"]["sample_rate_hz"] == 44100
+    assert stream["audio_format"]["channels"] == 1
+    assert stream["bitrate_kbps"] == 128
 
 
 @pytest.mark.asyncio
@@ -197,3 +252,98 @@ async def test_public_listener_requests_filters_sensitive_fields():
         assert "request_id" not in req, "Admin mutation ID must not leak to public"
         assert "song_error" not in req, "Error details must not leak to public"
         assert "ts" not in req, "Raw timestamp must not leak (use age_s instead)"
+
+
+# ---------------------------------------------------------------------------
+# Music Assistant integration contract
+#
+# The mammamiradio Music Assistant provider (music-assistant/server:
+# providers/mammamiradio/) polls /public-status every ~12s and maps
+# now_streaming onto a StreamMetadata for MA's now-playing card. That makes
+# /public-status a SECOND-CONSUMER contract beyond listener.js — renaming or
+# dropping any field below silently degrades the merged MA provider with no
+# other test catching it. These tests are the drift detector: keep the
+# MA_CONSUMED_* tuples in sync with the MA provider's
+# _segment_to_stream_metadata helper.
+# ---------------------------------------------------------------------------
+
+# Top-level keys the MA provider reads from /public-status.
+MA_CONSUMED_TOP_LEVEL = ("now_streaming", "upcoming", "ha_moments", "brand")
+# now_streaming keys the MA provider reads for every segment.
+MA_CONSUMED_SEGMENT = ("type", "label", "started", "metadata")
+# now_streaming.metadata sub-keys read for a music segment.
+MA_CONSUMED_MUSIC_META = ("title", "title_only", "artist", "album_art")
+# now_streaming.metadata sub-keys read for a news_flash segment.
+MA_CONSUMED_NEWS_META = ("host",)
+
+
+def _assert_ma_segment_contract(now: dict, metadata_keys: tuple[str, ...], *, prefix: str = "now_streaming") -> None:
+    assert now is not None
+    for key in MA_CONSUMED_SEGMENT:
+        assert key in now, f"{prefix} missing MA-consumed key: {key}"
+    for key in metadata_keys:
+        assert key in now["metadata"], f"{prefix} metadata missing MA-consumed key: {key}"
+
+
+@pytest.mark.asyncio
+async def test_public_status_ma_top_level_keys_present():
+    """The four top-level keys the MA provider polls must always be present."""
+    app = _make_test_app()
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        body = (await client.get("/public-status")).json()
+    for key in MA_CONSUMED_TOP_LEVEL:
+        assert key in body, f"/public-status missing MA-consumed key: {key}"
+    # brand sub-fields the provider reads for banter artist / station name.
+    assert "station_name" in body["brand"], "brand missing MA-consumed key: station_name"
+    assert "hosts" in body["brand"], "brand missing MA-consumed key: hosts"
+
+
+@pytest.mark.asyncio
+async def test_public_status_ma_music_segment_contract():
+    """A music now_streaming exposes every field the MA provider's music branch reads."""
+    app = _make_test_app()
+    app.state.station_state.on_stream_segment(
+        Segment(
+            type=SegmentType.MUSIC,
+            path=Path("/tmp/volare.mp3"),
+            duration_sec=210,
+            metadata={
+                "title": "Volare — Domenico Modugno",
+                "title_only": "Volare",
+                "artist": "Domenico Modugno",
+                "album_art": "http://example/art.jpg",
+            },
+        )
+    )
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        body = (await client.get("/public-status")).json()
+    now = body["now_streaming"]
+    assert now["label"] == "Volare — Domenico Modugno"
+    _assert_ma_segment_contract(now, MA_CONSUMED_MUSIC_META)
+
+
+@pytest.mark.asyncio
+async def test_public_status_ma_news_flash_segment_contract():
+    """A news_flash now_streaming exposes metadata.host — the MA provider's artist source."""
+    app = _make_test_app()
+    app.state.station_state.on_stream_segment(
+        Segment(
+            type=SegmentType.NEWS_FLASH,
+            path=Path("/tmp/news.mp3"),
+            duration_sec=20,
+            metadata={
+                "host": "Gianni",
+                "title": "News flash: sports",
+            },
+        )
+    )
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        body = (await client.get("/public-status")).json()
+    now = body["now_streaming"]
+    assert now["label"] == "News flash: sports"
+    _assert_ma_segment_contract(now, MA_CONSUMED_NEWS_META, prefix="news_flash now_streaming")

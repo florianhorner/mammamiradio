@@ -72,6 +72,45 @@ def test_cleanup_old_clips_returns_zero_when_dir_missing(tmp_path):
     assert removed == 0
 
 
+def test_cleanup_prunes_json_sidecar(tmp_path):
+    """Expired MP3 + matching .json sidecar are both deleted by cleanup_old_clips."""
+    import os
+    import time
+
+    clips_dir = tmp_path / "clips"
+    clips_dir.mkdir()
+
+    mp3 = clips_dir / "old.mp3"
+    mp3.write_bytes(b"\x00" * 100)
+    sidecar = clips_dir / "old.json"
+    sidecar.write_text('{"station_name": "test"}')
+
+    old_time = time.time() - 48 * 3600
+    os.utime(mp3, (old_time, old_time))
+    os.utime(sidecar, (old_time, old_time))
+
+    removed = cleanup_old_clips(clips_dir, max_age_hours=24)
+    assert removed == 1
+    assert not mp3.exists()
+    assert not sidecar.exists()
+
+
+def test_cleanup_keeps_sidecar_when_mp3_fresh(tmp_path):
+    """Fresh MP3 + sidecar pair is left intact by cleanup_old_clips."""
+    clips_dir = tmp_path / "clips"
+    clips_dir.mkdir()
+
+    mp3 = clips_dir / "fresh.mp3"
+    mp3.write_bytes(b"\x00" * 100)
+    sidecar = clips_dir / "fresh.json"
+    sidecar.write_text('{"station_name": "test"}')
+
+    removed = cleanup_old_clips(clips_dir, max_age_hours=24)
+    assert removed == 0
+    assert mp3.exists()
+    assert sidecar.exists()
+
+
 def test_cleanup_old_clips_skips_file_on_stat_oserror(tmp_path):
     """OSError during stat is silently skipped; function returns 0 removed."""
     from pathlib import Path

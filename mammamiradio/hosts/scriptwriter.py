@@ -284,6 +284,15 @@ CHAOS SUBTYPE: CHAOS_ICON_MOMENT
 - Confidently reference a fictional larger-than-life Italian figure as if everyone knows them.
 - The figure must be invented and absurdist, never a real named person.
 """,
+    ChaosSubtype.URGENT_INTERRUPT: """
+CHAOS SUBTYPE: URGENT_INTERRUPT
+- The hosts are FURIOUS. A timer just went off and whoever set it is still ignoring it.
+- Deliver the directive below without pleasantries. No "ciao", no "buonasera", no warm-up.
+- Fast speech, clipped sentences, maximum energy (95), maximum chaos (80), minimum warmth (10).
+- Italian expletives are acceptable: "Madonna!", "Per l'amor di Dio!", "Dai, muoviti!"
+- This is personal. It is not breaking news. Someone in THIS HOUSE set this timer.
+- Keep it short: 2-4 exchanges maximum. End on music.
+""",
 }
 
 CHAOS_STOCK_LINES: dict[ChaosSubtype, list[str]] = {
@@ -307,6 +316,11 @@ CHAOS_STOCK_LINES: dict[ChaosSubtype, list[str]] = {
         "Questa e esattamente la regola di Zio Bravissimo da Catania Due: mai spiegare, sempre indicare il soffitto.",
         "Finalmente qualcuno lo dice in radio.",
         "E adesso musica, per rispetto del soffitto.",
+    ],
+    ChaosSubtype.URGENT_INTERRUPT: [
+        "Madonna, ma quante volte te lo dobbiamo dire?",
+        "Il timer è scaduto. SCADUTO. Non è una suggestione.",
+        "Dai, muoviti. Ora. Senza aspettare.",
     ],
 }
 
@@ -875,7 +889,9 @@ def _impossible_recall_target(state: StationState) -> str:
 def _chaos_prompt_block(state: StationState, subtype: ChaosSubtype | None) -> str:
     if not state.chaos_mode_active and subtype is None:
         return ""
-    chosen = subtype or random.choice(list(ChaosSubtype))
+    # URGENT_INTERRUPT is directed-only — it needs a real directive. Excluding it
+    # from the random pool stops hosts raging about a timer that never fired.
+    chosen = subtype or random.choice([s for s in ChaosSubtype if s != ChaosSubtype.URGENT_INTERRUPT])
     recall_line = ""
     if chosen == ChaosSubtype.IMPOSSIBLE_RECALL:
         recall_line = f"\nRECALL TARGET: {_impossible_recall_target(state)}\n"
@@ -1393,15 +1409,19 @@ CHAOS DIRECTION:
 
     # Phase 4: reactive directive — HIGH PRIORITY impossible moment from a home event
     reactive_block = ""
-    pending_directive = state.ha_pending_directive
+    pending_directive = _sanitize_prompt_data(state.ha_pending_directive, max_len=300)
     if pending_directive:
         reactive_block = f"""
 HIGH PRIORITY — HOME EVENT DIRECTIVE:
 {pending_directive}
 Make this the focus of this banter break. It happened just now — react naturally.
 """
-        # Consume the directive so it fires only once
-        state.ha_pending_directive = ""
+        # Normal reactive directives fire once. Interrupt directives stay pending
+        # until the urgent segment is actually queued, so a stale in-flight render
+        # cannot consume the only copy before producer epoch guards discard it.
+        is_interrupt = ChaosSubtype.URGENT_INTERRUPT in (chaos_subtype, state.chaos_pending)
+        if not is_interrupt:
+            state.ha_pending_directive = ""
 
     # Listener request injection
     listener_request_block, listener_request_commit = _plan_listener_request_block(state)

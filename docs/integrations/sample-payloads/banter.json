@@ -1,0 +1,40 @@
+{
+  "schema_version": "1",
+  "station": {
+    "name": "Mamma Mi Radio",
+    "frequency": "94.7",
+    "theme": "Italia da bere",
+    "hosts": [
+      {"engine_host": "gianni", "display_name": "Gianni", "description": "Anchor host."}
+    ]
+  },
+  "stream": {
+    "relative_url": "/stream",
+    "audio_format": {
+      "codec": "mp3",
+      "mime_type": "audio/mpeg",
+      "bitrate_kbps": 192,
+      "sample_rate_hz": 44100,
+      "channels": 2
+    }
+  },
+  "now_playing": {
+    "segment_class": "voice",
+    "segment_type": "banter",
+    "title": "Gianni e Marco parlano del weekend",
+    "started_at": 1746500220.0,
+    "duration_estimate_sec": 35.0,
+    "artist": null,
+    "artwork": null,
+    "album": null,
+    "year": null,
+    "external_ids": {},
+    "host": "Gianni",
+    "context": {}
+  },
+  "up_next": [
+    {"segment_class": "music", "segment_type": "music", "title": "Next song", "predicted": true}
+  ],
+  "session_state": "live",
+  "changed_at": 1746500220.0
+}

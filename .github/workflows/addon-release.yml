@@ -74,13 +74,13 @@ jobs:
           fi
           echo "Version match confirmed: $CONFIG_VERSION"
 
-      - uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4.1.0
+      - uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4.0.0
+      - uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4.1.0
 
       - name: Require prebuilt SHA images and check stable tags
         run: |
@@ -93,11 +93,11 @@ jobs:
               echo "::error::Missing $SHA_TAG. Tag the already-built version-bump commit after addon-build.yml is green."
               exit 1
             fi
-            SHA_DIGEST="$(docker buildx imagetools inspect "$SHA_TAG" --format '{{.Digest}}')"
+            SHA_DIGEST="$(printf 'sha256:%s' "$(docker buildx imagetools inspect "$SHA_TAG" --raw | sha256sum | awk '{print $1}')")"
             echo "Prebuilt SHA image found: $SHA_TAG ($SHA_DIGEST)"
 
             if docker buildx imagetools inspect "$VERSION_TAG" > /dev/null 2>&1; then
-              VERSION_DIGEST="$(docker buildx imagetools inspect "$VERSION_TAG" --format '{{.Digest}}')"
+              VERSION_DIGEST="$(printf 'sha256:%s' "$(docker buildx imagetools inspect "$VERSION_TAG" --raw | sha256sum | awk '{print $1}')")"
               if [ "$VERSION_DIGEST" != "$SHA_DIGEST" ]; then
                 echo "::error::Tag $VERSION_TAG already exists but does not match $SHA_TAG — delete the bad registry tag manually before retrying"
                 exit 1
@@ -115,7 +115,7 @@ jobs:
       contents: read
       packages: read
     steps:
-      - uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4.1.0
+      - uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
@@ -165,9 +165,9 @@ jobs:
         with:
           fetch-depth: 0
 
-      - uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4.0.0
+      - uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4.1.0
 
-      - uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4.1.0
+      - uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
@@ -180,9 +180,9 @@ jobs:
           VERSION_TAG="${{ env.REGISTRY }}/${{ env.IMAGE_BASE }}-${{ matrix.arch }}:${VERSION}"
           LATEST_TAG="${{ env.REGISTRY }}/${{ env.IMAGE_BASE }}-${{ matrix.arch }}:latest"
 
-          SHA_DIGEST="$(docker buildx imagetools inspect "$SHA_TAG" --format '{{.Digest}}')"
+          SHA_DIGEST="$(printf 'sha256:%s' "$(docker buildx imagetools inspect "$SHA_TAG" --raw | sha256sum | awk '{print $1}')")"
           if docker buildx imagetools inspect "$VERSION_TAG" > /dev/null 2>&1; then
-            VERSION_DIGEST="$(docker buildx imagetools inspect "$VERSION_TAG" --format '{{.Digest}}')"
+            VERSION_DIGEST="$(printf 'sha256:%s' "$(docker buildx imagetools inspect "$VERSION_TAG" --raw | sha256sum | awk '{print $1}')")"
             if [ "$VERSION_DIGEST" != "$SHA_DIGEST" ]; then
               echo "::error::Refusing to overwrite $VERSION_TAG ($VERSION_DIGEST) with $SHA_TAG ($SHA_DIGEST)"
               exit 1
@@ -223,7 +223,7 @@ jobs:
       contents: read
       packages: read
     steps:
-      - uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4.1.0
+      - uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}

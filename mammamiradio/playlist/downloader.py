@@ -23,6 +23,13 @@ logger = logging.getLogger(__name__)
 _CACHE_PROTECTED = {"mammamiradio.db", "playlist_source.json", "session_stopped.flag"}
 _TRUTHY = ("true", "1", "yes")
 
+# Per-socket-operation timeout for yt-dlp network reads. Python's urllib has no
+# default socket timeout — without this a stalled YouTube socket blocks a
+# download thread forever, leaking a slot from the shared run_in_executor pool
+# the audio pipeline also uses. Pairs with the `throttled_rate` opt, which
+# already bounds slow-but-alive transfers.
+_YTDLP_SOCKET_TIMEOUT_SEC = 30
+
 # Per-session denylist of track cache keys rejected by validate_download or the
 # quality gate. Keeps a poisoned cache file or a structurally-bad track from
 # looping through the quality gate forever — once rejected, the track stays
@@ -297,6 +304,7 @@ def _download_ytdlp(track: Track, cache_dir: Path) -> Path:
         "no_warnings": True,
         "noprogress": True,
         "abort_on_unavailable_fragments": True,
+        "socket_timeout": _YTDLP_SOCKET_TIMEOUT_SEC,  # fail a stalled socket, never hang
         "throttled_rate": 100_000,  # re-extract URLs if speed drops below 100 KB/s
         "check_formats": True,  # verify formats are downloadable before selecting
         "concurrent_fragment_downloads": 2,  # parallel fragment downloads
@@ -475,6 +483,7 @@ def search_ytdlp_metadata(query: str, max_results: int = 5) -> list[dict]:
         "no_warnings": True,
         "noprogress": True,
         "extract_flat": True,
+        "socket_timeout": _YTDLP_SOCKET_TIMEOUT_SEC,  # fail a stalled socket, never hang
     }
     try:
         with yt_dlp.YoutubeDL(opts) as ydl:
