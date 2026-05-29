@@ -371,7 +371,11 @@ def test_scaletta_actions_only_apply_to_rendered_queue_rows() -> None:
     # whenever the streamer consumes the head segment.
     assert "removeQueueItem('${escJs(it.id||'')}',this)" in render_block
     assert "${it._queueIndex}" not in render_block.split("removeQueueItem")[1].split(")")[0]
-    assert "disabled>·</button>" in render_block
+    # Predicted rows render NO action control (design review Pass 7 — clickable
+    # things must look clickable; the old disabled "·" placeholder was removed).
+    assert "disabled>·</button>" not in render_block
+    assert "const action=actionable" in render_block
+    assert "      : '';" in render_block
     assert "'/api/queue/remove'" in text
 
 

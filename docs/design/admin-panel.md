@@ -54,13 +54,42 @@ config and debug never occupy the default view.
    the Live Queue.
 
 **Drawers — collapsed by default, inline `<details>` accordion, one open at a
-time.** Four drawers below the zones: Steer (pacing / triggers / modes), Hosts
-(personality config), History (one filterable segment timeline), Diagnostics
-(engine room — provider health, cost breakdown, segment counts, HA context,
-setup). On mobile the drawer row stacks vertically.
+time.** Four drawers below the zones:
 
-**Labels are Italian-first operator copy** (per `system.md`) — always, independent
-of the super-italian toggle.
+1. **Diretta** (steer) — one section with four `role="group"` subgroups:
+   `Modalità live` (Chaos/Festival toggles), `Azioni immediate` (banter / ad /
+   news / more chaos), `Azioni rapide` (fewer banter / fewer ads / reload /
+   flag, plus a Lancia-red `Purge queue`), `Cadenza` (pacing sliders).
+2. **Conduttori** — host personality config. Active preset chips carry a
+   checkmark shape cue alongside the gold fill (colorblind safety).
+3. **Archivio** — filterable segment history. Search box + type chips
+   (All/Music/Hosts/Ads/News) + time chips (Last hour/Today/All available).
+   Filter state persists across drawer toggles via sessionStorage
+   (`mmr.admin.archivio.filters`), cleared on browser close.
+4. **Motore** (diagnostics) — three subgroups: `Status` (systems, runtime
+   health, capabilities, HA context), `Costi` (token cost counter + segment
+   counts — always visible), `Setup` (a collapsible `<details>` that
+   auto-collapses when every readiness item is ready and auto-expands when any
+   needs attention; shows an `All ready ✓` blue badge when collapsed).
+
+On mobile the drawer row stacks vertically.
+
+**Destructive actions use a 5s undo toast** (`undoableToast` in
+`static/admin.js`): the row is removed optimistically, the backend call is
+deferred for the undo window, and Undo cancels it. Stack capped at 5 toasts.
+
+**Labels are English-first operator copy, with Italian reserved for structural
+section names and on-air flair** — independent of the super-italian toggle. This
+mirrors the `MAMMAMIRADIO_SUPER_ITALIAN` OFF contract (English utility copy,
+Italian headlines and station-feel words).
+
+- **Italian (flair):** section/drawer names (`Diretta`, `Scaletta`, `Rotazione`,
+  `Conduttori`, `Motore`, `Archivio`), the `Regia` eyebrow, subgroup eyebrow
+  labels (`Modalità live`, `Azioni immediate`, `Azioni rapide`, `Cadenza`), the
+  `In onda` / `Fermo` on-air badge, and the `Anni '70/'80/'90` era chips.
+- **English (utility):** every button, tooltip, toast, form subhead, search
+  state, empty state, status label, and helper line.
+- Regression guard: `tests/web/test_admin_regia_polish.py::test_no_italian_utility_strings_remain`.
 
 ## Interaction standards
 

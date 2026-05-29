@@ -830,7 +830,7 @@ class TestPacingControlsMatchServerContract:
         html = ADMIN_HTML.read_text()
 
         assert 'id="pBanter" min="2"' in html
-        assert 'id="pacingMeta">Intervento ogni 2 brani' in html
+        assert 'id="pacingMeta">Banter every 2 tracks' in html
         assert "pacing.songs_between_banter||2" in html
 
     def test_admin_pacing_changes_send_partial_patch(self):
@@ -903,7 +903,7 @@ class TestCapabilitiesStatusIsHonest:
         # Anchor the copy so a future refactor can't silently collapse the
         # three-state render back into connected/not-set.
         html = ADMIN_HTML.read_text()
-        assert "sospeso" in html, (
+        assert "suspended" in html, (
             "admin.html should render a suspended-state label when Anthropic "
             "auth failed and we're falling back to OpenAI (Item 11)."
         )
@@ -919,7 +919,7 @@ class TestRuntimeProviderTransparencyUI:
         assert 'id="runtimeStatusCard"' in html
         assert 'id="headerHealth"' in html
         assert 'class="status-dot working"' in html
-        assert '<span class="dot"></span>Controllo' in html
+        assert '<span class="dot"></span>Checking' in html
 
     def test_runtime_status_render_uses_normalized_status_contract(self):
         html = ADMIN_HTML.read_text()
@@ -1038,7 +1038,7 @@ class TestStoppedStateQuietsTheUI:
         # "Session stopped — hit Resume to continue" read as an error.
         # Current copy is calmer and localized.
         html = ADMIN_HTML.read_text()
-        assert "Stazione in pausa" in html, "admin.html stopped banner should use calm paused-state copy (Item 19)."
+        assert "Station paused" in html, "admin.html stopped banner should use calm paused-state copy (Item 19)."
         # Only check the banner element's text, not toast strings in JS callbacks.
         banner_start = html.find('id="stoppedBanner"')
         banner_end = html.find("</div>", banner_start)
@@ -1120,8 +1120,8 @@ class TestStoppedStateQuietsTheUI:
             "renderProgramme() must branch on body[data-stopped] so the empty "
             "Scaletta distinguishes a paused station from one building its queue."
         )
-        assert "Stazione in pausa" in block, "renderProgramme() stopped branch must render the paused-state copy."
-        assert "Sto preparando il prossimo segmento" in block, (
+        assert "Station paused" in block, "renderProgramme() stopped branch must render the paused-state copy."
+        assert "Preparing the next segment" in block, (
             "renderProgramme() must keep the building-queue copy for the running-but-empty case."
         )
 
