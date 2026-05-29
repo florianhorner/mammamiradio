@@ -243,6 +243,34 @@ def test_ytdlp_uses_no_progress_options(track, cache_dir):
     assert "temp" in captured_opts.get("paths", {})
 
 
+def test_ytdlp_sets_socket_timeout(track, cache_dir):
+    """G1: _download_ytdlp wires socket_timeout so a stalled socket cannot hang forever."""
+    from mammamiradio.playlist.downloader import _YTDLP_SOCKET_TIMEOUT_SEC, _download_ytdlp
+
+    captured_opts = {}
+
+    class _FakeYoutubeDL:
+        def __init__(self, opts):
+            captured_opts.update(opts)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def download(self, queries):
+            (cache_dir / f"{track.cache_key}.mp3").write_text("downloaded audio")
+
+    mock_yt_dlp = MagicMock()
+    mock_yt_dlp.YoutubeDL = _FakeYoutubeDL
+
+    with patch.dict(sys.modules, {"yt_dlp": mock_yt_dlp}):
+        _download_ytdlp(track, cache_dir)
+
+    assert captured_opts["socket_timeout"] == _YTDLP_SOCKET_TIMEOUT_SEC
+
+
 def test_ytdlp_cleans_up_temp_dir_on_success(track, cache_dir):
     """Temp fragment dir is removed after a successful download."""
     import sys
@@ -362,6 +390,34 @@ def test_ytdlp_failure_falls_back_to_placeholder(track, cache_dir, music_dir):
     mock_ffmpeg.assert_called_once()
     expected_path = cache_dir / f"_silence_{track.cache_key}.mp3"
     assert result == expected_path
+
+
+def test_ytdlp_socket_timeout_falls_back_to_placeholder(track, cache_dir, music_dir):
+    """G3: a socket-timeout-style yt-dlp failure still degrades to the silence placeholder.
+
+    Audio-delivery Scenario 2 (empty fallback) — a stalled download must never
+    leave the listener with dead air.
+    """
+    import os
+
+    from mammamiradio.playlist.downloader import _download_sync
+
+    mock_yt_dlp = MagicMock()
+    mock_ydl_instance = MagicMock()
+    mock_ydl_instance.__enter__ = MagicMock(return_value=mock_ydl_instance)
+    mock_ydl_instance.__exit__ = MagicMock(return_value=False)
+    mock_ydl_instance.download.side_effect = TimeoutError("timed out")
+    mock_yt_dlp.YoutubeDL.return_value = mock_ydl_instance
+
+    with (
+        patch.dict(os.environ, {"MAMMAMIRADIO_ALLOW_YTDLP": "true"}),
+        patch.dict(sys.modules, {"yt_dlp": mock_yt_dlp}),
+        patch("mammamiradio.playlist.downloader._run_ffmpeg") as mock_ffmpeg,
+    ):
+        result = _download_sync(track, cache_dir, music_dir)
+
+    mock_ffmpeg.assert_called_once()
+    assert result == cache_dir / f"_silence_{track.cache_key}.mp3"
 
 
 # --- _download_sync: yt-dlp not installed falls back to placeholder ---
@@ -604,6 +660,37 @@ def test_search_ytdlp_metadata_success_parses_entries():
     assert results[0]["duration_ms"] == 123000
     assert results[1]["youtube_id"] == "yt2"
     assert results[1]["artist"] == "Modugno Channel"
+
+
+def test_search_ytdlp_metadata_sets_socket_timeout():
+    """G2: the metadata search wires socket_timeout so a stalled socket cannot hang forever."""
+    from mammamiradio.playlist.downloader import _YTDLP_SOCKET_TIMEOUT_SEC, search_ytdlp_metadata
+
+    captured_opts = {}
+
+    class _FakeYoutubeDL:
+        def __init__(self, opts):
+            captured_opts.update(opts)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def extract_info(self, query, download=False):
+            return {"entries": []}
+
+    mock_yt_dlp = MagicMock()
+    mock_yt_dlp.YoutubeDL = _FakeYoutubeDL
+
+    with (
+        patch.dict("os.environ", {"MAMMAMIRADIO_ALLOW_YTDLP": "true"}),
+        patch.dict(sys.modules, {"yt_dlp": mock_yt_dlp}),
+    ):
+        search_ytdlp_metadata("vasco", max_results=2)
+
+    assert captured_opts["socket_timeout"] == _YTDLP_SOCKET_TIMEOUT_SEC
 
 
 # --- purge_suspect_cache_files ---

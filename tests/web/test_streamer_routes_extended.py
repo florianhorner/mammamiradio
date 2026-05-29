@@ -13,6 +13,7 @@ import httpx
 import pytest
 from fastapi import FastAPI
 
+from mammamiradio.audio.stream_format import stream_audio_metadata
 from mammamiradio.core.config import load_config
 from mammamiradio.core.models import PlaylistSource, Segment, SegmentType, StationState, Track
 from mammamiradio.playlist.playlist import ExplicitSourceError
@@ -1930,6 +1931,32 @@ async def test_stream_returns_audio_headers():
 
 
 @pytest.mark.asyncio
+async def test_stream_headers_match_audio_format_helper():
+    """The /stream response headers and the /public-status audio_format object
+    must derive from the same helper, so a config change cannot make them
+    disagree. Reads real response headers without consuming the endless body.
+    """
+    app = _make_test_app()
+    # Mutate bitrate so a hardcoded icy-br=192 implementation would fail this test.
+    app.state.config.audio.bitrate = 128
+    expected = stream_audio_metadata(app.state.config)
+    transport = httpx.ASGITransport(app=app)
+
+    async def fake_audio_generator(_request):
+        yield b"frame"
+
+    with patch("mammamiradio.web.streamer._audio_generator", fake_audio_generator):
+        async with (
+            httpx.AsyncClient(transport=transport, base_url="http://testserver") as client,
+            client.stream("GET", "/stream") as resp,
+        ):
+            assert resp.status_code == 200
+            # Exact content-type — audio/mpeg never gets a charset suffix.
+            assert resp.headers["content-type"] == expected["mime_type"]
+            assert resp.headers["icy-br"] == str(expected["bitrate_kbps"])
+
+
+@pytest.mark.asyncio
 async def test_listener_page_registers_service_worker_inside_main_script():
     """Service worker registration lives in listener.js after the site-v1 refactor."""
     app = _make_test_app()
@@ -1962,6 +1989,19 @@ async def test_listener_page_includes_casa_card_and_public_status_binding():
     assert 'id="casa-mood"' in resp.text
     assert "updateCasa(status.ha_moments);" in js_resp.text  # PR-F: ha_moments now part of /public-status payload
     assert "fetch(_base + '/public-status')" in js_resp.text
+
+
+@pytest.mark.asyncio
+async def test_listener_share_reads_clip_error_body():
+    """Listener clip sharing must surface JSON errors from non-2xx responses."""
+    app = _make_test_app()
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        js_resp = await client.get("/static/listener.js")
+
+    assert js_resp.status_code == 200
+    assert "const data = await res.json().catch(() => null);" in js_resp.text
+    assert "if (!res.ok || !data || !data.ok)" in js_resp.text
 
 
 # ---------------------------------------------------------------------------
@@ -2223,8 +2263,142 @@ async def test_patch_pacing_enforces_floor():
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
         resp = await client.patch("/api/pacing", json={"songs_between_banter": 0})
     assert resp.status_code == 200
-    # Floor of 1 enforced
-    assert resp.json()["songs_between_banter"] == 1
+    # Floor of 2 prevents "banter after every song" overload.
+    assert resp.json()["songs_between_banter"] == 2
+
+
+@pytest.mark.asyncio
+async def test_patch_pacing_clamps_banter_one_to_two():
+    app = _make_test_app()
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.patch("/api/pacing", json={"songs_between_banter": 1})
+    assert resp.status_code == 200
+    assert resp.json()["songs_between_banter"] == 2
+    assert app.state.config.pacing.songs_between_banter == 2
+
+
+@pytest.mark.asyncio
+async def test_patch_pacing_partial_update_preserves_other_values_and_status_reflects_it():
+    app = _make_test_app()
+    app.state.config.pacing.songs_between_banter = 4
+    app.state.config.pacing.songs_between_ads = 7
+    app.state.config.pacing.ad_spots_per_break = 3
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.patch("/api/pacing", json={"songs_between_banter": 5})
+        status = await client.get("/status")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["songs_between_banter"] == 5
+    assert body["songs_between_ads"] == 7
+    assert body["ad_spots_per_break"] == 3
+    assert status.json()["pacing"]["songs_between_banter"] == 5
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bad_value", [None, True, "", "abc", [], {}])
+async def test_patch_pacing_malformed_values_do_not_mutate_config(bad_value):
+    app = _make_test_app()
+    app.state.config.pacing.songs_between_banter = 4
+    app.state.config.pacing.songs_between_ads = 7
+    app.state.config.pacing.ad_spots_per_break = 3
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.patch(
+            "/api/pacing",
+            json={"songs_between_banter": 5, "songs_between_ads": bad_value},
+        )
+    assert resp.status_code == 400
+    assert app.state.config.pacing.songs_between_banter == 4
+    assert app.state.config.pacing.songs_between_ads == 7
+    assert app.state.config.pacing.ad_spots_per_break == 3
+
+
+@pytest.mark.asyncio
+async def test_patch_pacing_rejects_non_object_payload():
+    app = _make_test_app()
+    app.state.config.pacing.songs_between_banter = 4
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.patch("/api/pacing", json=[])
+    assert resp.status_code == 400
+    assert app.state.config.pacing.songs_between_banter == 4
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bad_value", [None, True, "", "abc", [], {}])
+async def test_patch_pacing_malformed_ad_spots_do_not_mutate_config(bad_value):
+    """ad_spots_per_break runs the same strict parser as the sibling fields."""
+    app = _make_test_app()
+    app.state.config.pacing.ad_spots_per_break = 3
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.patch("/api/pacing", json={"ad_spots_per_break": bad_value})
+    assert resp.status_code == 400
+    assert app.state.config.pacing.ad_spots_per_break == 3
+
+
+@pytest.mark.asyncio
+async def test_patch_pacing_enforces_songs_between_ads_floor():
+    app = _make_test_app()
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.patch("/api/pacing", json={"songs_between_ads": 0})
+    assert resp.status_code == 200
+    assert resp.json()["songs_between_ads"] == 1
+    assert app.state.config.pacing.songs_between_ads == 1
+
+
+@pytest.mark.asyncio
+async def test_patch_pacing_clamps_ad_spots_floor_and_ceiling():
+    app = _make_test_app()
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        floor = await client.patch("/api/pacing", json={"ad_spots_per_break": 0})
+        ceiling = await client.patch("/api/pacing", json={"ad_spots_per_break": 99})
+    assert floor.status_code == 200
+    assert floor.json()["ad_spots_per_break"] == 1
+    assert ceiling.status_code == 200
+    assert ceiling.json()["ad_spots_per_break"] == 5
+    assert app.state.config.pacing.ad_spots_per_break == 5
+
+
+@pytest.mark.asyncio
+async def test_patch_pacing_clamps_banter_and_ads_ceiling():
+    """A single PATCH cannot push cadence high enough to silence the station."""
+    app = _make_test_app()
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.patch(
+            "/api/pacing",
+            json={"songs_between_banter": 2147483647, "songs_between_ads": 999999},
+        )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["songs_between_banter"] == 60
+    assert body["songs_between_ads"] == 60
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("content", ["", "{"])
+async def test_patch_pacing_rejects_invalid_json_without_mutating_config(content):
+    app = _make_test_app()
+    app.state.config.pacing.songs_between_banter = 4
+    app.state.config.pacing.songs_between_ads = 7
+    app.state.config.pacing.ad_spots_per_break = 3
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.patch(
+            "/api/pacing",
+            content=content,
+            headers={"content-type": "application/json"},
+        )
+    assert resp.status_code == 400
+    assert resp.json()["detail"] == "Pacing payload must be valid JSON"
+    assert app.state.config.pacing.songs_between_banter == 4
+    assert app.state.config.pacing.songs_between_ads == 7
+    assert app.state.config.pacing.ad_spots_per_break == 3
 
 
 # ---------------------------------------------------------------------------
@@ -2684,6 +2858,346 @@ async def test_clip_rate_prune_keeps_recent_entries():
     assert streamer_mod._clip_rate["198.51.100.1"] == pytest.approx(now - 5)
     assert "198.51.100.2" not in streamer_mod._clip_rate
     assert streamer_mod._clip_rate["203.0.113.9"] == pytest.approx(now)
+
+
+# ---------------------------------------------------------------------------
+# Clip sharing — share_url + sidecar (extends TestClipCreation surface)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_clear_clip_rate")
+async def test_create_clip_returns_share_url(tmp_path):
+    """POST /api/clip response includes share_url pointing at the HTML landing page."""
+    import json as _json
+
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path / "cache"
+    app.state.config.cache_dir.mkdir()
+    app.state.config.audio.bitrate = 192
+    from collections import deque
+
+    ring = deque(maxlen=240)
+    for _ in range(10):
+        ring.append(b"\xff" * 4096)
+    app.state.clip_ring_buffer = ring
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.post("/api/clip")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ok"] is True
+    assert "share_url" in body
+    assert body["share_url"] == f"/clips/{body['clip_id']}"
+    # url and share_url differ: url serves the MP3, share_url is the landing page
+    assert body["url"].endswith(".mp3")
+    assert not body["share_url"].endswith(".mp3")
+    _ = _json  # silence unused import lint when only sidecar test uses it
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_clear_clip_rate")
+async def test_create_clip_writes_sidecar(tmp_path):
+    """POST /api/clip writes a {clip_id}.json sidecar with track metadata."""
+    import json as _json
+
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path / "cache"
+    app.state.config.cache_dir.mkdir()
+    app.state.config.audio.bitrate = 192
+    app.state.station_state.now_streaming = {
+        "type": "music",
+        "label": "Playing",
+        "started": time.time(),
+        "metadata": {"title": "Albachiara", "artist": "Vasco Rossi", "title_only": "Albachiara"},
+    }
+    from collections import deque
+
+    ring = deque(maxlen=240)
+    for _ in range(10):
+        ring.append(b"\xff" * 4096)
+    app.state.clip_ring_buffer = ring
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.post("/api/clip")
+    assert resp.status_code == 200
+    body = resp.json()
+    sidecar_path = app.state.config.cache_dir / "clips" / f"{body['clip_id']}.json"
+    assert sidecar_path.exists()
+    sidecar = _json.loads(sidecar_path.read_text())
+    assert sidecar["track_title"] == "Albachiara"
+    assert sidecar["track_artist"] == "Vasco Rossi"
+    assert "station_name" in sidecar
+    assert "created_at" in sidecar
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_clear_clip_rate")
+async def test_create_clip_sidecar_pruned_with_cap(tmp_path):
+    """Cap eviction in create_clip prunes .json sidecars alongside .mp3 files."""
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path / "cache"
+    app.state.config.cache_dir.mkdir()
+    app.state.config.audio.bitrate = 192
+    clips_dir = app.state.config.cache_dir / "clips"
+    clips_dir.mkdir(parents=True)
+
+    from collections import deque
+
+    ring = deque(maxlen=240)
+    for _ in range(10):
+        ring.append(b"\xff" * 4096)
+    app.state.clip_ring_buffer = ring
+
+    now = time.time()
+    for idx in range(50):
+        mp3 = clips_dir / f"existing_{idx:02d}.mp3"
+        json_side = clips_dir / f"existing_{idx:02d}.json"
+        mp3.write_bytes(b"data")
+        json_side.write_text("{}")
+        ts = now - (1000 - idx)
+        os.utime(mp3, (ts, ts))
+        os.utime(json_side, (ts, ts))
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    with patch("mammamiradio.scheduling.clip.cleanup_old_clips", return_value=0):
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            resp = await client.post("/api/clip")
+    assert resp.status_code == 200
+    assert resp.json()["ok"] is True
+    # Oldest mp3 + matching .json should be gone
+    assert not (clips_dir / "existing_00.mp3").exists()
+    assert not (clips_dir / "existing_00.json").exists()
+
+
+# ---------------------------------------------------------------------------
+# Clip landing page (HTML) — GET /clips/{clip_id}
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_clip_landing_returns_html(tmp_path):
+    """GET /clips/{id} returns 200 HTML with an <audio> element."""
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path / "cache"
+    clips_dir = app.state.config.cache_dir / "clips"
+    clips_dir.mkdir(parents=True)
+    (clips_dir / "abc123.mp3").write_bytes(b"\xff" * 1000)
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.get("/clips/abc123")
+    assert resp.status_code == 200
+    assert "text/html" in resp.headers["content-type"]
+    assert "<audio" in resp.text
+
+
+@pytest.mark.asyncio
+async def test_clip_landing_og_tags(tmp_path):
+    """GET /clips/{id} response contains absolute OG media URLs."""
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path / "cache"
+    clips_dir = app.state.config.cache_dir / "clips"
+    clips_dir.mkdir(parents=True)
+    (clips_dir / "abc123.mp3").write_bytes(b"\xff" * 1000)
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.get("/clips/abc123")
+    assert resp.status_code == 200
+    assert 'property="og:audio"' in resp.text
+    assert 'property="og:title"' in resp.text
+    assert 'property="og:image" content="http://testserver/og-card.png"' in resp.text
+    assert 'property="og:audio" content="http://testserver/clips/abc123.mp3"' in resp.text
+    assert 'name="twitter:image" content="http://testserver/og-card.png"' in resp.text
+
+
+@pytest.mark.asyncio
+async def test_clip_landing_uses_absolute_ingress_urls(tmp_path):
+    """Valid ingress prefixes are included in absolute clip preview URLs."""
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path / "cache"
+    clips_dir = app.state.config.cache_dir / "clips"
+    clips_dir.mkdir(parents=True)
+    (clips_dir / "abc123.mp3").write_bytes(b"\xff" * 1000)
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.get("/clips/abc123", headers={"X-Ingress-Path": "/api/hassio_ingress/abc123"})
+
+    assert resp.status_code == 200
+    assert 'property="og:image" content="http://testserver/api/hassio_ingress/abc123/og-card.png"' in resp.text
+    assert 'property="og:audio" content="http://testserver/api/hassio_ingress/abc123/clips/abc123.mp3"' in resp.text
+    assert 'href="/api/hassio_ingress/abc123/static/tokens.css' in resp.text
+
+
+@pytest.mark.asyncio
+async def test_clip_landing_sanitizes_ingress_prefix(tmp_path):
+    """Malformed ingress headers must not become protocol-relative asset URLs."""
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path / "cache"
+    clips_dir = app.state.config.cache_dir / "clips"
+    clips_dir.mkdir(parents=True)
+    (clips_dir / "abc123.mp3").write_bytes(b"\xff" * 1000)
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.get("/clips/abc123", headers={"X-Ingress-Path": "//evil.example"})
+
+    assert resp.status_code == 200
+    assert "//evil.example" not in resp.text
+    assert 'property="og:image" content="http://testserver/og-card.png"' in resp.text
+    assert 'href="/static/tokens.css' in resp.text
+
+
+@pytest.mark.asyncio
+async def test_clip_landing_with_sidecar(tmp_path):
+    """GET /clips/{id} with .json sidecar surfaces the track title in the body."""
+    import json as _json
+
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path / "cache"
+    clips_dir = app.state.config.cache_dir / "clips"
+    clips_dir.mkdir(parents=True)
+    (clips_dir / "abc123.mp3").write_bytes(b"\xff" * 1000)
+    (clips_dir / "abc123.json").write_text(
+        _json.dumps(
+            {
+                "station_name": "Mamma Mi Radio",
+                "track_title": "Albachiara",
+                "track_artist": "Vasco Rossi",
+                "created_at": int(time.time()),
+            }
+        )
+    )
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.get("/clips/abc123")
+    assert resp.status_code == 200
+    assert "Albachiara" in resp.text
+    assert "Vasco Rossi" in resp.text
+
+
+@pytest.mark.asyncio
+async def test_clip_landing_without_sidecar(tmp_path):
+    """GET /clips/{id} without a .json sidecar returns 200 with station fallback."""
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path / "cache"
+    clips_dir = app.state.config.cache_dir / "clips"
+    clips_dir.mkdir(parents=True)
+    (clips_dir / "abc123.mp3").write_bytes(b"\xff" * 1000)
+    # No sidecar written
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.get("/clips/abc123")
+    assert resp.status_code == 200
+    assert "<audio" in resp.text
+
+
+@pytest.mark.asyncio
+async def test_clip_landing_sidecar_non_dict_json_falls_back_gracefully(tmp_path):
+    """Sidecar that is valid JSON but not a dict must not crash the route.
+
+    _json.loads can return a list/string/number; the route's .get() calls would
+    raise AttributeError on those. Regression guard for the dict-type check.
+    """
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path / "cache"
+    clips_dir = app.state.config.cache_dir / "clips"
+    clips_dir.mkdir(parents=True)
+    (clips_dir / "abc123.mp3").write_bytes(b"\xff" * 1000)
+    (clips_dir / "abc123.json").write_text('["not-a-dict"]')
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.get("/clips/abc123")
+
+    assert resp.status_code == 200
+    assert "text/html" in resp.headers["content-type"]
+    assert "<audio" in resp.text
+
+
+@pytest.mark.asyncio
+async def test_clip_landing_missing_returns_expired_html(tmp_path):
+    """GET /clips/{nonexistent} returns 200 HTML 'expired' state, not 404 JSON.
+
+    Rationale: OG scrapers (WhatsApp, iMessage) cache 404s permanently. Returning
+    a graceful HTML page preserves the brand and points to the live stream.
+    """
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path / "cache"
+    (app.state.config.cache_dir / "clips").mkdir(parents=True)
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.get("/clips/nonexistent123")
+    assert resp.status_code == 200
+    assert "text/html" in resp.headers["content-type"]
+    assert "passato" in resp.text  # "Questo momento è passato"
+
+
+@pytest.mark.asyncio
+async def test_clip_landing_expired_returns_html(tmp_path):
+    """GET /clips/{id} with an expired MP3 returns 200 HTML expired page and deletes the file."""
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path / "cache"
+    clips_dir = app.state.config.cache_dir / "clips"
+    clips_dir.mkdir(parents=True)
+    clip_file = clips_dir / "expired1.mp3"
+    clip_file.write_bytes(b"\xff" * 1000)
+    sidecar = clips_dir / "expired1.json"
+    sidecar.write_text("{}")
+
+    now = 1_700_000_000.0
+    old = now - (25 * 3600)
+    os.utime(clip_file, (old, old))
+    os.utime(sidecar, (old, old))
+
+    transport = httpx.ASGITransport(app=app)
+    with patch("mammamiradio.web.streamer.time.time", return_value=now):
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            resp = await client.get("/clips/expired1")
+
+    assert resp.status_code == 200
+    assert "text/html" in resp.headers["content-type"]
+    assert "passato" in resp.text
+    assert not clip_file.exists()
+    assert not sidecar.exists()
+
+
+@pytest.mark.asyncio
+async def test_clip_landing_invalid_id(tmp_path):
+    """GET /clips/{id} rejects clip IDs containing '..' with a 400."""
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path / "cache"
+    (app.state.config.cache_dir / "clips").mkdir(parents=True)
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.get("/clips/..evilthing")
+    assert resp.status_code == 400
+    assert resp.json()["ok"] is False
+
+
+@pytest.mark.asyncio
+async def test_clip_landing_does_not_collide_with_mp3_route(tmp_path):
+    """GET /clips/{id}.mp3 must still serve audio, not be caught by the HTML landing route."""
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path / "cache"
+    clips_dir = app.state.config.cache_dir / "clips"
+    clips_dir.mkdir(parents=True)
+    (clips_dir / "abc999.mp3").write_bytes(b"\xff" * 1000)
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.get("/clips/abc999.mp3")
+    assert resp.status_code == 200
+    # MP3 route returns audio/mpeg, HTML route returns text/html. Critical: route order.
+    assert resp.headers["content-type"].startswith("audio/")
 
 
 # ---------------------------------------------------------------------------

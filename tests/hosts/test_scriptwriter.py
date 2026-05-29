@@ -900,6 +900,30 @@ async def test_write_banter_prompt_includes_optional_context_blocks(config, stat
 
 
 @pytest.mark.asyncio
+async def test_write_banter_keeps_interrupt_directive_until_producer_queues(config, state):
+    state.ha_pending_directive = "La pasta scotta. Interrompi tutto."
+    state.chaos_pending = ChaosSubtype.URGENT_INTERRUPT
+
+    captured = {}
+
+    async def _fake_generate_json_response(**kwargs):
+        captured["prompt"] = kwargs["prompt"]
+        return {
+            "lines": [{"host": config.hosts[0].name, "text": "Muoviti."}],
+            "new_joke": None,
+            "persona_updates": {"new_theories": [], "new_jokes": [], "callbacks_used": []},
+        }
+
+    with patch("mammamiradio.hosts.scriptwriter._generate_json_response", side_effect=_fake_generate_json_response):
+        result, _ = await write_banter(state, config)
+
+    assert result == [(config.hosts[0], "Muoviti.")]
+    assert "HIGH PRIORITY" in captured["prompt"]
+    assert "La pasta scotta" in captured["prompt"]
+    assert state.ha_pending_directive == "La pasta scotta. Interrompi tutto."
+
+
+@pytest.mark.asyncio
 async def test_write_banter_prompt_includes_new_listener_block_for_non_first_listener(config, state):
     state.ha_home_mood = "Mood sconosciuto"
     state.ha_weather_arc = "Pioggia in avvicinamento"

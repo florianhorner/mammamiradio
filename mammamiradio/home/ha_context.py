@@ -17,6 +17,8 @@ from typing import TypedDict
 
 import httpx
 
+from mammamiradio.core.config import TimerInterruptConfig
+from mammamiradio.core.models import InterruptSpec
 from mammamiradio.home.ha_enrichment import (
     EVENT_BUFFER_SIZE,
     HomeEvent,
@@ -735,23 +737,73 @@ def get_weather_arc_en() -> str:
 # ---------------------------------------------------------------------------
 
 
+def _parse_ha_timestamp(raw: object) -> float | None:
+    """Parse an HA ISO-8601 timestamp string to an epoch float; return None on failure."""
+    if not isinstance(raw, str) or not raw:
+        return None
+    try:
+        # HA emits e.g. "2026-05-20T14:32:17.345678+00:00"; fromisoformat handles
+        # the "Z" suffix from 3.11+.
+        return datetime.datetime.fromisoformat(raw.replace("Z", "+00:00")).timestamp()
+    except (ValueError, TypeError):
+        return None
+
+
 def check_reactive_triggers(
     events: deque[HomeEvent],
     current_states: dict[str, dict] | None = None,
-) -> str | None:
+    timer_interrupts: list[TimerInterruptConfig] | None = None,
+) -> str | InterruptSpec | None:
     """Scan recent events and current sensor states for reactive triggers.
 
     Event-based triggers (REACTIVE_TRIGGERS) only consider events less than 2
     minutes old. Threshold triggers (THRESHOLD_TRIGGERS) check the live sensor
     value against a wattage threshold each call; the cooldown prevents re-firing.
-    Both share the module-level _reactive_cooldowns dict with namespaced keys to
-    avoid collision: event keys use "entity:state", threshold keys use
-    "entity:threshold:value".
+    Timer interrupts match timer.xyz → idle transitions and return InterruptSpec.
+    All checks share the module-level _reactive_cooldowns dict with namespaced keys
+    to avoid collision: event keys use "entity:state", threshold keys use
+    "entity:threshold:value", timer keys use "timer:entity_id".
 
-    Returns the first matching directive text, or None.
+    Returns InterruptSpec for timer matches, directive str for other triggers, or None.
     """
     now = time.time()
     age_cutoff = now - 120  # 2 minutes
+
+    # Timer interrupt check: match timer entity idle transitions from recent events.
+    # Checked first — timers take priority over ambient banter triggers.
+    # Only fire on a *natural* finish: HA stamps the timer's `finished_at`
+    # attribute when it runs out; cancel/reset leaves the prior value untouched.
+    # So require a recent finished_at to distinguish "timer expired" from
+    # "operator cancelled" — both transition state to `idle`.
+    if timer_interrupts and current_states is not None:
+        for cfg in timer_interrupts:
+            state_data = current_states.get(cfg.entity_id, {})
+            if state_data.get("state") != "idle":
+                continue
+            cooldown_key = f"timer:{cfg.entity_id}"
+            if now - _reactive_cooldowns.get(cooldown_key, 0.0) < cfg.cooldown:
+                continue
+            # Confirm via events: a recent active→idle transition must exist
+            fired = False
+            for event in reversed(events):
+                if event.timestamp < age_cutoff:
+                    break
+                if event.entity_id == cfg.entity_id and event.new_state == "idle":
+                    fired = True
+                    break
+            if not fired:
+                continue
+            # Filter out cancel/reset: finished_at must be set and recent.
+            finished_at_ts = _parse_ha_timestamp((state_data.get("attributes") or {}).get("finished_at"))
+            if finished_at_ts is None or now - finished_at_ts > 30:
+                continue
+            _reactive_cooldowns[cooldown_key] = now
+            return InterruptSpec(
+                directive=cfg.directive,
+                urgency=cfg.urgency,
+                cooldown=cfg.cooldown,
+            )
+
     for event in reversed(events):
         if event.timestamp < age_cutoff:
             break
