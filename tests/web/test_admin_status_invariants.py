@@ -86,7 +86,7 @@ def test_pipeline_status_uses_canonical_status_chips() -> None:
 
     assert 'class="chip ${state}"' not in block
     for expected in (
-        "statusChip('working','Controllo…')",
+        "statusChip('working','Checking…')",
         "statusChip('degraded','Anthropic')",
         "statusChip('ready','Anthropic')",
         "statusChip('blocked','Anthropic')",
@@ -111,7 +111,8 @@ def test_segment_labels_use_canonical_status_surfaces() -> None:
     )
     assert "statusInline('idle',segmentBadge(typeKey)" not in html
     assert "segmentInline(typeKey)" in _function_block(html, "renderProgramme")
-    assert "segmentInline(typeKey)" in _function_block(html, "updateLog")
+    # Archivio rendering split out of updateLog into _renderArchivio (T6).
+    assert "segmentInline(typeKey)" in _function_block(html, "_renderArchivio")
 
 
 def test_now_type_status_does_not_mark_stopped_or_skipping_ready() -> None:
@@ -138,9 +139,9 @@ def test_now_type_status_does_not_mark_stopped_or_skipping_ready() -> None:
 def test_engine_room_capability_lines_use_status_helpers() -> None:
     block = _function_block(_read_admin_html(), "updateEngineRoom")
 
-    assert "anthropicLine=statusInline('degraded','sospeso'+retry" in block
-    assert "anthropicLine=statusInline('ready','connesso')" in block
-    assert "anthropicLine=statusInline('idle','non configurato')" in block
+    assert "anthropicLine=statusInline('degraded','suspended'+retry" in block
+    assert "anthropicLine=statusInline('ready','connected')" in block
+    assert "anthropicLine=statusInline('idle','not configured')" in block
     assert "OpenAI: '+statusInline(c.openai?'ready':'idle'" in block
     assert "Home Assistant: '+statusInline(c.ha?'ready':'idle'" in block
 

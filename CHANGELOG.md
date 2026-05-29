@@ -10,6 +10,21 @@ The current version source of truth is `pyproject.toml`.
 
 - **Admin endpoints no longer auto-trust private networks when admin credentials are configured.** Previously a client on a LAN or Tailscale address was trusted for admin access even when `ADMIN_PASSWORD` or `ADMIN_TOKEN` was set, so a configured credential could be silently bypassed from any private-network browser. Now, when a credential is configured, all non-loopback admin traffic must present it. Credential-less private-network deployments are unchanged (still trusted, still CSRF-guarded on writes). Standalone runs that bind to a non-loopback host (including an empty bind host, which listens on all interfaces) now require `ADMIN_PASSWORD` or `ADMIN_TOKEN` at startup. Browser admin access requires `ADMIN_PASSWORD`; `ADMIN_TOKEN` is a header-only API credential a browser cannot send on navigation.
 
+### Changed
+
+- **Admin producer-desk polish** — the `/admin` control room is now English-first
+  for all utility copy (buttons, tooltips, toasts, status, empty states), with
+  Italian kept for structural section names and the on-air badge. The Diretta
+  drawer groups its controls into four labeled sections (live modes, immediate
+  actions, quick actions, pacing). The Motore drawer splits into Status / Costi /
+  Setup, and Setup collapses on its own once everything is ready. Archivio gains a
+  search box plus type and time filters that remember your selection while you
+  work. The Scaletta table now sheds optional columns on tablet widths before
+  collapsing to cards on phones.
+- **Undo for destructive admin actions** — purging the queue or removing a
+  segment shows a 5-second Undo toast and only commits when the window closes, so
+  a mis-tap on a running station is recoverable.
+
 ### Added
 
 - **Music Assistant now-playing contract** — a dedicated read-only JSON

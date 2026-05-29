@@ -84,9 +84,11 @@ def test_admin_drawers_follow_producer_desk_order() -> None:
         "drawer-history",
         "drawer-diagnostics",
     ]
+    # Pacing is no longer its own drawer-section: it folded into the Diretta
+    # drawer as the "Cadenza" subgroup (design review T4). The steer drawer now
+    # holds a single section (`triggers`) with four labeled subgroups.
     assert parser.drawer_section_ids == [
         "triggers",
-        "pacing",
         "hosts",
         "log",
         "engine",
@@ -110,4 +112,5 @@ def test_live_queue_renderer_is_forward_only() -> None:
     assert "st?.upcoming" in block
     assert "stream_log" not in block
     assert "now_streaming" not in block
-    assert "prossimo" in block and "più tardi" in block
+    # Relative labels are English-first now (localization sweep T1/E5).
+    assert "'next'" in block and "'later'" in block
