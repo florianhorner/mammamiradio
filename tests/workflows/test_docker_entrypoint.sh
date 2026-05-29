@@ -59,17 +59,26 @@ ADMIN_TOKEN="external-pinned-token" \
 assert "external ADMIN_TOKEN is honored verbatim" "$TOKEN3" "external-pinned-token"
 assert "persisted file was NOT overwritten by external value" "$(cat "$TMP1/admin_token")" "$TOKEN1"
 
-# Case 4: read-only /data degrades to logging the token
-TMP2="$(mktemp -d)"
-chmod 555 "$TMP2"
-unset ADMIN_TOKEN
-TOKEN4="$(MAMMAMIRADIO_ADMIN_TOKEN_FILE="$TMP2/admin_token" "$ENTRYPOINT" sh -c 'echo "$ADMIN_TOKEN"' 2>/dev/null)"
-assert_nonempty "read-only /data still generates ADMIN_TOKEN" "$TOKEN4"
-[ ! -f "$TMP2/admin_token" ] && echo "  PASS  read-only /data does not create token file" && PASS=$((PASS + 1)) || { echo "  FAIL  unexpected file created"; FAIL=$((FAIL + 1)); }
-chmod 755 "$TMP2"
+# Case 4: read-only /data degrades to logging the token.
+# Skipped under root: uid 0 ignores the directory write bit, so `chmod 555`
+# does not make the path unwritable and the entrypoint would still create the
+# file. The image itself runs as the non-root `radio` user, so the real
+# runtime path is the one exercised here on non-root hosts.
+if [ "$(id -u)" = "0" ]; then
+    echo "  SKIP  read-only /data case (running as root — write bit not enforced)"
+else
+    TMP2="$(mktemp -d)"
+    chmod 555 "$TMP2"
+    unset ADMIN_TOKEN
+    TOKEN4="$(MAMMAMIRADIO_ADMIN_TOKEN_FILE="$TMP2/admin_token" "$ENTRYPOINT" sh -c 'echo "$ADMIN_TOKEN"' 2>/dev/null)"
+    assert_nonempty "read-only /data still generates ADMIN_TOKEN" "$TOKEN4"
+    [ ! -f "$TMP2/admin_token" ] && echo "  PASS  read-only /data does not create token file" && PASS=$((PASS + 1)) || { echo "  FAIL  unexpected file created"; FAIL=$((FAIL + 1)); }
+    chmod 755 "$TMP2"
+    rm -rf "$TMP2"
+fi
 
 # Cleanup
-rm -rf "$TMP1" "$TMP2"
+rm -rf "$TMP1"
 
 echo "=== $PASS passed, $FAIL failed ==="
 [ "$FAIL" -eq 0 ] || exit 1
