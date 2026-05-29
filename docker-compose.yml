@@ -8,8 +8,11 @@ services:
       - MAMMAMIRADIO_PORT=8000
       - MAMMAMIRADIO_CACHE_DIR=/data/cache
       - MAMMAMIRADIO_TMP_DIR=/data/tmp
-      # Set an admin token for non-loopback access
-      - ADMIN_TOKEN=${ADMIN_TOKEN:?Set ADMIN_TOKEN in .env or environment}
+      # Admin token for non-loopback access.
+      # If unset, the entrypoint auto-generates one and persists it to
+      # /data/admin_token (readable via `docker compose exec mammamiradio cat /data/admin_token`).
+      # Override here only if you want to pin a known value.
+      - ADMIN_TOKEN=${ADMIN_TOKEN:-}
       # Enable yt-dlp chart music by default so `docker compose up` has something to play.
       # Set MAMMAMIRADIO_ALLOW_YTDLP=false in .env to restrict to local MP3s.
       - MAMMAMIRADIO_ALLOW_YTDLP=${MAMMAMIRADIO_ALLOW_YTDLP:-true}
