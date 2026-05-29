@@ -98,6 +98,40 @@ def test_mode_chip_element_and_wiring() -> None:
     assert "MODES: " in js
 
 
+# ── Undo safety + restore ordering (Codex review regressions) ───────
+
+
+def test_queue_removal_defers_by_stable_id_not_index() -> None:
+    """removeQueueItem must defer using the stable queue id, never a row index —
+    deferred index-based commits delete the wrong row after the list shifts."""
+    html = _html()
+    block = html[html.index("async function removeQueueItem") : html.index("function statusDot")]
+    assert "undoableToast" in block
+    assert "/api/queue/remove" in block and "{id}" in block
+
+
+def test_rotation_removal_commits_immediately() -> None:
+    """Rotation removal is index-based (/api/playlist/remove) with no id variant,
+    so it must NOT defer — a deferred index goes stale once an earlier commit
+    shifts the list (Codex P2). It commits immediately instead."""
+    html = _html()
+    block = html[html.index("async function removeTr") : html.index("async function removeTr") + 400]
+    assert "undoableToast" not in block, "removeTr must not defer an index-based delete"
+    assert "/api/playlist/remove" in block
+
+
+def test_archivio_filters_restored_after_deferred_helpers_load() -> None:
+    """admin.js is deferred, so the inline restore must run on DOMContentLoaded
+    (after defer), not at parse time when window.archivioFilterRestore is still
+    undefined (Codex P2)."""
+    html = _html()
+    # Parse-time init is plain defaults, not a restore call.
+    assert "let _archivioFilters={q:'',type:'all',scope:'all'};" in html
+    assert "_initArchivioFilters" in html
+    init_at = html.index("_initArchivioFilters")
+    assert "DOMContentLoaded" in html[init_at - 400 : init_at + 400]
+
+
 # ── Motore three-group split + Setup auto-collapse (T5) ─────────────
 
 
@@ -230,6 +264,9 @@ _ITALIAN_UTILITY_FORBIDDEN = (
     "Chiavi AI configurate",
     "prossimo':idx===1?'poi",
     "segmenti pronti",
+    "— prossimo",
+    " aggiornato'",
+    "'Saltato'",
 )
 
 

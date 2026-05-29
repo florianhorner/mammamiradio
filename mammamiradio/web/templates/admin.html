@@ -1464,10 +1464,6 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
   background: rgba(37,99,235,0.08);
   box-shadow: inset 2px 0 0 var(--ok);
 }
-.queue-remove-btn[disabled] {
-  opacity: 0.35;
-  cursor: default;
-}
 .rotation-toolbar {
   display: flex;
   align-items: center;
@@ -2624,7 +2620,7 @@ function setupPill(status){
   if(status==='configured'||status==='ok'||status==='done') return {state:'ready',label:'Ready'};
   if(status==='warn'||status==='missing'||status==='todo') return {state:'degraded',label:'To do'};
   if(status==='fail'||status==='blocked') return {state:'blocked',label:'Blocked'};
-  if(status==='skipped') return {state:'idle',label:'Saltato'};
+  if(status==='skipped') return {state:'idle',label:'Skipped'};
   return {state:'idle',label:'Info'};
 }
 function setupRow(label, detail, status){
@@ -2833,7 +2829,7 @@ function updatePl(tracks){
     const idx=filter?tracks.indexOf(t):i;
     const era=eraLabel(t.year);
     const eraPill=era?`<span class="pl-era">${era}</span>`:'';
-    return `<div class="pl-row" draggable="true" data-i="${idx}" data-id="${esc(t.spotify_id||t.id||'')}"><span class="pl-grip" title="Drag to reorder" tabindex="0" role="button" aria-label="Drag to reorder"><svg class="grip-dots" viewBox="0 0 10 16" fill="currentColor" aria-hidden="true"><circle cx="3" cy="3" r="1.2"/><circle cx="7" cy="3" r="1.2"/><circle cx="3" cy="8" r="1.2"/><circle cx="7" cy="8" r="1.2"/><circle cx="3" cy="13" r="1.2"/><circle cx="7" cy="13" r="1.2"/></svg></span><span class="pl-n">${idx+1}</span>${trackThumb(t)}<span class="pl-t">${esc(t.display||t.title||'?')}</span><div class="pl-chips">${eraPill}${sourceChip(t.source)}</div><div class="pl-a"><button class="pl-btn" onclick="moveNext(${idx})" aria-label="Move to next">&#9654; Next</button><button class="pl-btn" onclick="removeTr(${idx},this)" aria-label="Remove from rotation">&#10005;</button></div></div>`;
+    return `<div class="pl-row" draggable="true" data-i="${idx}" data-id="${esc(t.spotify_id||t.id||'')}"><span class="pl-grip" title="Drag to reorder" tabindex="0" role="button" aria-label="Drag to reorder"><svg class="grip-dots" viewBox="0 0 10 16" fill="currentColor" aria-hidden="true"><circle cx="3" cy="3" r="1.2"/><circle cx="7" cy="3" r="1.2"/><circle cx="3" cy="8" r="1.2"/><circle cx="7" cy="8" r="1.2"/><circle cx="3" cy="13" r="1.2"/><circle cx="7" cy="13" r="1.2"/></svg></span><span class="pl-n">${idx+1}</span>${trackThumb(t)}<span class="pl-t">${esc(t.display||t.title||'?')}</span><div class="pl-chips">${eraPill}${sourceChip(t.source)}</div><div class="pl-a"><button class="pl-btn" onclick="moveNext(${idx})" aria-label="Move to next">&#9654; Next</button><button class="pl-btn" onclick="removeTr(${idx})" aria-label="Remove from rotation">&#10005;</button></div></div>`;
   }).join('')+(tracks.length>80?`<div class="empty">+ ${tracks.length-80} more</div>`:'');
   initDragDrop();
 }
@@ -2860,20 +2856,12 @@ async function moveNext(i){
 // Delayed-commit undo: hide the row, defer /api/playlist/remove by 5s, allow
 // Undo to restore it. The rotation list only re-renders on explicit reload, so
 // hiding the row in place is sufficient (no status-poll resurrection).
-async function removeTr(i,el){
-  if(typeof window.undoableToast!=='function'){await api('POST','/api/playlist/remove',{index:i});toast('Removed');return;}
-  const row=el?el.closest('.pl-row'):document.querySelector(`.pl-row[data-i="${i}"]`);
-  if(row)row.style.display='none';
-  window.undoableToast(
-    'Removed from rotation.',
-    ()=>{if(row)row.style.display='';},
-    5000,
-    async()=>{
-      try{const r=await api('POST','/api/playlist/remove',{index:i});if(!r.ok)window.errorToast('Remove failed.');}
-      catch(_){window.errorToast('Remove failed.');}
-    }
-  );
-}
+// Rotation removal commits immediately. /api/playlist/remove is index-based and
+// there is no id-based variant (no new endpoints in this pass), so a deferred
+// commit is unsafe: a second removal queued in the undo window would post a now
+// stale index after the first commit shifts the list, deleting the wrong track.
+// The queue (removeQueueItem) can defer safely because it removes by stable id.
+async function removeTr(i){await api('POST','/api/playlist/remove',{index:i});toast('Removed')}
 
 // ── Search ──
 const si=document.getElementById('searchInput');
@@ -3017,8 +3005,8 @@ function updatePaceCounters(pacing){
   if(!pacing)return;
   const b=pacing.songs_since_banter||0,bMax=pacing.songs_between_banter||2;
   const a=pacing.songs_since_ad||0,aMax=pacing.songs_between_ads||4;
-  document.getElementById('pcBanter').innerHTML='<strong>'+b+'/'+bMax+'</strong> tracks since last banter'+(b>=bMax?' — prossimo':'');
-  document.getElementById('pcAds').innerHTML='<strong>'+a+'/'+aMax+'</strong> tracks since last ad'+(a>=aMax?' — prossimo':'');
+  document.getElementById('pcBanter').innerHTML='<strong>'+b+'/'+bMax+'</strong> tracks since last banter'+(b>=bMax?' — next':'');
+  document.getElementById('pcAds').innerHTML='<strong>'+a+'/'+aMax+'</strong> tracks since last ad'+(a>=aMax?' — next':'');
   const pacingMeta=document.getElementById('pacingMeta');
   if(pacingMeta)pacingMeta.textContent='Banter every '+bMax+' tracks';
 }
@@ -3123,7 +3111,7 @@ async function updHost(n,vals=null){
     block.querySelectorAll('input[type="range"]').forEach(e=>{b[e.dataset.a]=+e.value});
   }
   await api('PATCH',`/api/hosts/${encodeURIComponent(n)}/personality`,b);
-  toast(n+' aggiornato');
+  toast(n+' updated');
 }
 async function rstHost(n){await api('POST',`/api/hosts/${encodeURIComponent(n)}/personality/reset`);toast(n+' reset');const r=await fetch(_base+'/api/hosts',{headers:H()});renderHosts((await r.json()).hosts||[])}
 async function applyHostPreset(n,presetName){
@@ -3194,7 +3182,10 @@ async function lrQueueNext(i){
 
 // ── Log / Archivio ──
 // Filter state persists across drawer toggles via sessionStorage (eng review T6).
-let _archivioFilters=(typeof window.archivioFilterRestore==='function'&&window.archivioFilterRestore())||{q:'',type:'all',scope:'all'};
+// Defaults at parse time; sessionStorage restore happens on DOMContentLoaded
+// because admin.js (window.archivioFilterRestore) is deferred and is not yet
+// defined while this inline script runs.
+let _archivioFilters={q:'',type:'all',scope:'all'};
 let _lastLogRaw=[];
 
 function _persistArchivio(){
@@ -3256,8 +3247,15 @@ function updateLog(log){
   _lastLogRaw=log||[];
   _renderArchivio();
 }
-// Reflect any sessionStorage-restored filters into the chips on load.
-_syncArchivioChips();
+// Restore persisted Archivio filters and reflect them into the chips once the
+// deferred admin.js helpers are available (DOMContentLoaded fires after defer).
+function _initArchivioFilters(){
+  const saved=(typeof window.archivioFilterRestore==='function')&&window.archivioFilterRestore();
+  if(saved&&typeof saved==='object')_archivioFilters=saved;
+  _syncArchivioChips();
+}
+if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',_initArchivioFilters);
+else _initArchivioFilters();
 
 // ── Super Italian Mode toggle ──
 async function loadSuperItalianToggle(){

@@ -93,12 +93,7 @@
 
     btn.addEventListener('click', () => {
       if (entry.committed) return;
-      entry.committed = true;
-      if (entry.timer) clearTimeout(entry.timer);
-      const idx = _live.indexOf(entry);
-      if (idx !== -1) _live.splice(idx, 1);
-      el.classList.remove('show');
-      setTimeout(() => el.remove(), 220);
+      _dismiss(entry, { runCommit: false }); // undo: skip the commit, run onUndo instead
       try {
         if (typeof onUndo === 'function') onUndo();
       } catch (e) {
