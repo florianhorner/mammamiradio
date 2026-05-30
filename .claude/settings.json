@@ -6,6 +6,19 @@
       "mcp__claude-in-chrome__tabs_context_mcp",
       "mcp__claude-in-chrome__get_page_text",
       "mcp__mempalace__mempalace_search"
+    ],
+    "deny": [
+      "Bash(ha core restart*)",
+      "Bash(ha core check*)",
+      "Bash(docker restart addon_*)",
+      "Bash(docker stop addon_*)",
+      "Bash(docker kill addon_*)"
+    ],
+    "ask": [
+      "Bash(git tag v*)",
+      "Bash(gh release create*)",
+      "Bash(gh release edit*)",
+      "Bash(gh release upload*)"
     ]
   },
   "hooks": {
