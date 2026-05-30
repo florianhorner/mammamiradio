@@ -90,7 +90,7 @@ Content-Type: application/json
 
 1. The segment queue is purged (pre-produced segments from normal mode are discarded).
 2. `state.force_next` is set to `BANTER` so the first new segment is festival-flavored commentary.
-3. The LLM prompt for all subsequent banter segments receives the `FESTIVAL_MODE_BLOCK` injection, which instructs hosts to:
+3. The LLM prompt for all subsequent banter segments receives the `FESTIVAL_MODE_BLOCK` injection (defined in `mammamiradio/hosts/prompt_world.py`, injected by `write_banter` in `scriptwriter.py`), which instructs hosts to:
    - Announce each song as a fictional Italian-regional delegation
    - Award dramatic point scores per track
    - Call at least one drinking-game trigger per song intro
