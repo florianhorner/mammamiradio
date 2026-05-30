@@ -70,7 +70,9 @@ _GAG_ENTITY_ALLOWLIST: frozenset[str] = frozenset(
         "vacuum.goldstaubsucher",  # robot vacuum docked/cleaning
         "vacuum.matrix10_ultra",
         "lock.lock_ultra_8d3c",  # door lock locked/unlocked
-        "input_button.foyer_fahrstuhl_fingerbot_push_button",  # elevator press
+        # NOTE: input_button.* and other timestamp-state entities are deliberately
+        # excluded — their state is the last-press time, so every press is a unique
+        # transition that never forms a repeat (no gag) while bloating the ledger.
         "switch.bad_gross_waschmaschine_steckdose",  # washing machine on/off
         "fan.bad_gross_lufter_shelly",  # bathroom / kitchen fans on/off
         "fan.bad_klein_lufter",
@@ -180,7 +182,9 @@ def _render_gag(bucket: GagBucket) -> str:
     (codex review). PROVISIONAL phrasing — Phase 1 finalizes and golden-snapshots.
     """
     cadence = "praticamente non si ferma stasera" if bucket.count >= 4 else "di nuovo stasera"
-    return f"{bucket.label}: {bucket.old_state} -> {bucket.new_state}, {cadence}."
+    # No "old -> new" arrow: _sanitize_prompt_data strips '>' before the gag
+    # reaches the prompt, which would mangle it. State the new state in prose.
+    return f"{bucket.label}: {bucket.new_state}, {cadence}."
 
 
 @dataclass

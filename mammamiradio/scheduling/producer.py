@@ -1157,9 +1157,19 @@ async def run_producer(
                 _now = time.time()
                 state.evening_ledger.observe(ha_cache.events, now=_now)
                 if seg_type == SegmentType.BANTER:
-                    state.ha_running_gag = state.evening_ledger.select_and_render(now=_now)
+                    # Offer (don't spend) — the cooldown is marked in the banter
+                    # success callback only if generated banter actually airs, so
+                    # an LLM failure that falls back to a canned clip does not burn
+                    # the callback.
+                    offered = state.evening_ledger.offer_gag(now=_now)
+                    if offered is not None:
+                        state.ha_running_gag_key, state.ha_running_gag = offered
+                    else:
+                        state.ha_running_gag = ""
+                        state.ha_running_gag_key = ""
                 else:
                     state.ha_running_gag = ""
+                    state.ha_running_gag_key = ""
                 state.evening_ledger.save_if_dirty(config.cache_dir)
 
         if generation_chaos_epoch != state.chaos_cutover_epoch:
@@ -1675,12 +1685,22 @@ async def run_producer(
                     _new_listener_count=_new_listener_count,
                     _listener_request_commit=listener_request_commit,
                     _used_generated_banter=(canned is None and not impossible_tts),
+                    _gag_key=state.ha_running_gag_key,
+                    _ledger=state.evening_ledger,
+                    _cache_dir=config.cache_dir,
                 ) -> None:
                     state.after_banter()
                     if _is_new_listener:
                         state.new_listeners_pending = max(0, state.new_listeners_pending - _new_listener_count)
                     if _used_generated_banter and _listener_request_commit is not None:
                         _listener_request_commit.apply(state)
+                    # Spend the running-gag cooldown only when generated banter
+                    # (which carried the gag) actually airs — not on canned or
+                    # failed-LLM fallbacks. Honors EveningLedger.offer_gag's contract.
+                    if _used_generated_banter and _ledger is not None and _gag_key:
+                        _ledger.mark_spoken(_gag_key, now=time.time())
+                        _ledger.save_if_dirty(_cache_dir)
+                    state.ha_running_gag_key = ""
 
                 success_callback = _banter_callback
 

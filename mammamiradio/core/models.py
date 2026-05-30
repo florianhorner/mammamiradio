@@ -415,6 +415,9 @@ class StationState:
     # Impossible Moments v2 (A): one rendered evening running-gag for the next
     # banter (consumed after one use); populated by the producer from the ledger.
     ha_running_gag: str = ""
+    # Ledger bucket key for the offered gag, so the producer can spend its
+    # cooldown (mark_spoken) only after generated banter actually airs.
+    ha_running_gag_key: str = ""
     # Dashboard HA moments: last notable event (for Casa card)
     ha_recent_event_count: int = 0
     ha_last_event_label: str = ""
