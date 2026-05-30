@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, ClassVar, Literal
 from urllib.parse import urlsplit, urlunsplit
 
 if TYPE_CHECKING:
+    from mammamiradio.home.evening_memory import EveningLedger
     from mammamiradio.hosts.persona import PersonaStore
 
 
@@ -411,6 +412,12 @@ class StationState:
     ha_weather_arc: str = ""
     # Phase 4: pending reactive directive (consumed after one use)
     ha_pending_directive: str = ""
+    # Impossible Moments v2 (A): one rendered evening running-gag for the next
+    # banter (consumed after one use); populated by the producer from the ledger.
+    ha_running_gag: str = ""
+    # Ledger bucket key for the offered gag, so the producer can spend its
+    # cooldown (mark_spoken) only after generated banter actually airs.
+    ha_running_gag_key: str = ""
     # Dashboard HA moments: last notable event (for Casa card)
     ha_recent_event_count: int = 0
     ha_last_event_label: str = ""
@@ -448,6 +455,8 @@ class StationState:
     canned_clips_streamed: int = 0
     # Persona store for compounding listener memory (set by main.py at startup)
     persona_store: PersonaStore | None = None
+    # Evening running-gag ledger (Impossible Moments v2 A); set by main.py at startup
+    evening_ledger: EveningLedger | None = None
     # Consumption metrics
     api_calls: int = 0
     api_input_tokens: int = 0

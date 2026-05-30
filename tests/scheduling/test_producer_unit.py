@@ -20,6 +20,7 @@ from mammamiradio.core.models import (
     StationState,
     Track,
 )
+from mammamiradio.home.evening_memory import EveningLedger
 from mammamiradio.hosts.ad_creative import AdScript, SonicWorld
 from mammamiradio.hosts.scriptwriter import ListenerRequestCommit
 from mammamiradio.scheduling.producer import (
@@ -906,6 +907,90 @@ async def test_banter_canned_path_does_not_apply_listener_request_commit():
 
     # canned path: _used_generated_banter is False, commit is None — request must remain
     assert req in state.pending_requests
+
+
+def _ha_ctx_mock():
+    """A HomeContext-shaped mock with the fields the producer HA block reads."""
+    ctx = MagicMock()
+    ctx.summary = ""
+    ctx.events_summary = ""
+    ctx.events = []
+    ctx.raw_states = {}
+    ctx.mood = ""
+    ctx.weather_arc = ""
+    ctx.mood_en = ""
+    ctx.weather_arc_en = ""
+    ctx.events_summary_en = ""
+    ctx.last_event_label_en = ""
+    return ctx
+
+
+@pytest.mark.asyncio
+async def test_running_gag_marked_spoken_only_when_generated_banter_airs():
+    """The evening-gag cooldown is spent only when generated banter actually airs.
+
+    Invariant (EveningLedger.offer_gag contract): the producer offers a gag, but
+    mark_spoken runs in the banter success callback — so generated banter that
+    reaches air spends the cooldown.
+    """
+    state = _make_state()
+    config = _make_config()
+    config.homeassistant.enabled = True
+    config.ha_token = "fake-token"
+    config.homeassistant.url = "http://ha.local:8123"
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+
+    ledger = MagicMock(spec=EveningLedger)
+    ledger.offer_gag.return_value = ("k_coffee", "La macchina del caffè di nuovo stasera.")
+    state.evening_ledger = ledger
+
+    host = config.hosts[0]
+    banter_lines = [(host, "Ancora caffè!")]
+
+    with (
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.BANTER),
+        patch(f"{SCRIPTWRITER_MODULE}.has_script_llm", return_value=True),
+        patch(f"{SCRIPTWRITER_MODULE}.write_banter", new_callable=AsyncMock, return_value=(banter_lines, None)),
+        patch(f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora...")),
+        patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(f"{PRODUCER_MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(f"{PRODUCER_MODULE}.concat_files", return_value=_fake_path()),
+        patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=None),
+        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock, return_value=_ha_ctx_mock()),
+        patch(f"{PRODUCER_MODULE}.check_reactive_triggers", return_value=None),
+    ):
+        await _run_until_queued(queue, state, config)
+
+    ledger.offer_gag.assert_called()
+    ledger.mark_spoken.assert_called_once()
+    assert ledger.mark_spoken.call_args.args[0] == "k_coffee"
+
+
+@pytest.mark.asyncio
+async def test_running_gag_not_marked_on_canned_fallback():
+    """A canned-clip fallback must NOT spend the gag cooldown — the gag never aired."""
+    state = _make_state()
+    config = _make_config()
+    config.homeassistant.enabled = True
+    config.ha_token = "fake-token"
+    config.homeassistant.url = "http://ha.local:8123"
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+
+    ledger = MagicMock(spec=EveningLedger)
+    ledger.offer_gag.return_value = ("k_coffee", "La macchina del caffè di nuovo stasera.")
+    state.evening_ledger = ledger
+
+    with (
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.BANTER),
+        patch(f"{SCRIPTWRITER_MODULE}.has_script_llm", return_value=False),
+        patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=_fake_path()),
+        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock, return_value=_ha_ctx_mock()),
+        patch(f"{PRODUCER_MODULE}.check_reactive_triggers", return_value=None),
+    ):
+        await _run_until_queued(queue, state, config)
+
+    ledger.offer_gag.assert_called()
+    ledger.mark_spoken.assert_not_called()
 
 
 @pytest.mark.asyncio

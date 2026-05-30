@@ -2300,3 +2300,57 @@ async def test_key_rotation_clears_block(config, state):
     assert result == {"ok": True}
     assert sw._anthropic_auth_blocked_key == ""
     assert sw._anthropic_auth_blocked_until == 0.0
+
+
+@pytest.mark.asyncio
+async def test_write_banter_injects_running_gag_with_instruction_outside_fence(config, state):
+    """Gag DATA goes inside <home_state_data>; the use/no-use INSTRUCTION outside it."""
+    state.ha_running_gag = "La macchina del caffè: spento/a → acceso/a, di nuovo stasera."
+    captured = {}
+
+    async def _fake_generate_json_response(**kwargs):
+        captured["prompt"] = kwargs["prompt"]
+        return {"lines": [{"host": config.hosts[0].name, "text": "Ancora caffè?"}], "new_joke": None}
+
+    with patch(
+        "mammamiradio.hosts.scriptwriter._generate_json_response",
+        side_effect=_fake_generate_json_response,
+    ):
+        await write_banter(state, config)
+
+    prompt = captured["prompt"]
+    assert "STASERA:" in prompt
+    assert "di nuovo stasera" in prompt
+    assert "RUNNING GAG:" in prompt
+    # The instruction must sit OUTSIDE the fence (before the opening tag); the
+    # gag data must sit INSIDE it. The opening fence is the tag-on-its-own-line
+    # ("<home_state_data>\n"); the bare "<home_state_data>" also appears in the
+    # IMPORTANT boundary instruction, so anchor on the newline-delimited tags.
+    fence_open = prompt.index("<home_state_data>\n")
+    fence_close = prompt.index("</home_state_data>")
+    assert prompt.index("RUNNING GAG:") < fence_open
+    assert fence_open < prompt.index("STASERA:") < fence_close
+    # Consumed after one use.
+    assert state.ha_running_gag == ""
+
+
+@pytest.mark.asyncio
+async def test_write_banter_omits_running_gag_block_when_empty(config, state):
+    """S2 empty-fallback: no gag → no STASERA block, no instruction, no crash."""
+    state.ha_running_gag = ""
+    captured = {}
+
+    async def _fake_generate_json_response(**kwargs):
+        captured["prompt"] = kwargs["prompt"]
+        return {"lines": [{"host": config.hosts[0].name, "text": "Si parte."}], "new_joke": None}
+
+    with patch(
+        "mammamiradio.hosts.scriptwriter._generate_json_response",
+        side_effect=_fake_generate_json_response,
+    ):
+        result, _ = await write_banter(state, config)
+
+    prompt = captured["prompt"]
+    assert "STASERA:" not in prompt
+    assert "RUNNING GAG:" not in prompt
+    assert len(result) == 1
