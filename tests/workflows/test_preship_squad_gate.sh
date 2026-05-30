@@ -127,5 +127,12 @@ pass "wrong-skill entry denies"
   || fail "bogus non-ancestor commit should deny"
 pass "bogus-commit entry denies"
 
+# Case 13: gh pr create, entry for HEAD but UNPARSEABLE timestamp => DENY
+# A timestamp the guard cannot verify must fail toward "not authorized", never
+# be blessed as fresh (regression guard for the es=0 fail-open-wrong-direction).
+[ "$(verdict '{"tool_input":{"command":"gh pr create"}}' "$(make_reader review "$HEAD_SHA" "not-a-timestamp")")" = deny ] \
+  || fail "unparseable timestamp should deny (not be treated as fresh)"
+pass "unparseable timestamp denies"
+
 echo
-echo "All 12 pre-ship squad gate cases passed."
+echo "All 13 pre-ship squad gate cases passed."
