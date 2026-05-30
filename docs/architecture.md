@@ -295,7 +295,7 @@ The same mechanism is callable directly via `POST /api/interrupt` (admin auth, 6
 | `/api/search` | GET | Admin | Search playlist and external sources |
 | `/api/playlist/add-external` | POST | Admin | Add external track from search results |
 | `/api/interrupt` | POST | Admin | Immediately interrupt the stream — hosts deliver pissed/urgent banter with a custom directive. Body: `{"directive": str, "urgency": "pissed"\|"urgent"\|"gentle"}`. 60s cooldown enforced; returns 429 on spam. |
-| `/api/hot-reload` | POST | Admin | Reload `scriptwriter.py` in-place via `importlib.reload()` — stream continues uninterrupted, next banter uses new code. Requires `--workers 1`. |
+| `/api/hot-reload` | POST | Admin | Reload `prompt_world.py` then `scriptwriter.py` (leaves-first) in-place via `importlib.reload()` — stream continues uninterrupted, next banter uses new code. Requires `--workers 1`. |
 
 ### Auth rules
 
@@ -347,6 +347,7 @@ The rich path is richer, but the failure path still produces a stream.
 | `mammamiradio/scheduling/producer.py` | segment generation pipeline |
 | `mammamiradio/scheduling/clip.py` | WTF clip extraction from ring buffer, save, cleanup |
 | `mammamiradio/hosts/scriptwriter.py` | Anthropic/OpenAI prompts for banter and ad copy (TODO: split — see cathedral plan PR 6) |
+| `mammamiradio/hosts/prompt_world.py` | Prompt-fiction data: expression banks, host fingerprints, style directives, Chaos/Festival mode blocks |
 | `mammamiradio/hosts/persona.py` | Listener persona: compounding memory, arc phases, motif tracking, session counting |
 | `mammamiradio/hosts/context_cues.py` | Time-of-day and cultural context for prompts |
 | `mammamiradio/hosts/ad_creative.py` | Brand and voice selection, campaign-spine sampling for ad breaks |

@@ -7,6 +7,7 @@ If you want to fix or extend X, look in Y. The folder hierarchy IS the mental mo
 | What you want to change                            | Where to look                                |
 |----------------------------------------------------|-----------------------------------------------|
 | What hosts say (banter, jokes, callouts)           | `mammamiradio/hosts/scriptwriter.py`         |
+| Host voice: expression banks, fingerprints, Chaos/Festival fiction | `mammamiradio/hosts/prompt_world.py` |
 | Host personality, listener memory, motifs          | `mammamiradio/hosts/persona.py`              |
 | Time-of-day / cultural cues injected into prompts  | `mammamiradio/hosts/context_cues.py`         |
 | Ads (brands, voices, campaign spines)              | `mammamiradio/hosts/ad_creative.py`          |

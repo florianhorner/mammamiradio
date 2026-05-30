@@ -1,11 +1,12 @@
 """Prompt-fiction data for the AI hosts: expression banks, host fingerprints,
 style directives, and Chaos/Festival mode prompt blocks.
 
-Extracted verbatim from ``hosts/scriptwriter.py`` (god-module split). This is the
-one file to edit when tuning "what the hosts know and how they sound". Pure data;
+Extracted verbatim from ``hosts/scriptwriter.py`` (god-module split). Holds the
+expression/mode prompt-fiction — tune most of "how the hosts sound" here. Pure data;
 the assembling logic (_build_system_prompt, _personality_modifier) stays in
-scriptwriter for now. Reloaded ahead of the scriptwriter facade by /api/hot-reload
-so edits here take effect without a stream gap.
+scriptwriter, and transition/fallback copy (_TRANSITION_REWRITE_MAP, CHAOS_STOCK_LINES,
+AD_BREAK_*) is still in scriptwriter pending a follow-up cut. Reloaded ahead of the
+scriptwriter facade by /api/hot-reload so edits here take effect without a stream gap.
 """
 
 from __future__ import annotations
