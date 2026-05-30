@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, ClassVar, Literal
 from urllib.parse import urlsplit, urlunsplit
 
 if TYPE_CHECKING:
+    from mammamiradio.home.evening_memory import EveningLedger
     from mammamiradio.hosts.persona import PersonaStore
 
 

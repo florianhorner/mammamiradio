@@ -17,6 +17,7 @@ from fastapi import FastAPI
 from mammamiradio.core.config import load_config
 from mammamiradio.core.models import StationState
 from mammamiradio.core.sync import init_db
+from mammamiradio.home.evening_memory import EveningLedger
 from mammamiradio.hosts.persona import PersonaStore
 from mammamiradio.integrations import router as integrations_router
 from mammamiradio.playlist.downloader import evict_cache_lru, purge_suspect_cache_files
