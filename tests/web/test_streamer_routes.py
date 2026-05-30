@@ -1812,3 +1812,28 @@ async def test_hot_reload_debounce_returns_429_on_rapid_calls():
     assert body["stream_status"] == "unaffected"
     assert body["retryable"] is True
     assert body["retry_after_s"] > 0
+
+
+@pytest.mark.asyncio
+async def test_hot_reload_reloads_prompt_world_before_scriptwriter():
+    """Data submodules reload before the scriptwriter facade (leaves-first).
+
+    The facade re-imports prompt-fiction values via ``from .prompt_world import ...``.
+    Reloading the facade alone would rebind those names to the stale submodule, so an
+    operator's edit to prompt_world.py would silently not take effect. The reload set
+    must list (and reload) prompt_world ahead of scriptwriter.
+    """
+    app = _make_test_app(admin_token="testtoken")
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.post(
+            "/api/hot-reload",
+            headers={"X-Radio-Admin-Token": "testtoken"},
+        )
+    assert resp.status_code == 200
+    modules = resp.json()["reloaded_modules"]
+    assert "mammamiradio.hosts.prompt_world" in modules
+    assert "mammamiradio.hosts.scriptwriter" in modules
+    assert modules.index("mammamiradio.hosts.prompt_world") < modules.index("mammamiradio.hosts.scriptwriter"), (
+        "prompt_world must reload before scriptwriter (leaves-first)"
+    )

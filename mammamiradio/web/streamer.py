@@ -2033,12 +2033,16 @@ async def api_interrupt(request: Request, _: None = Depends(require_admin_access
 
 @router.post("/api/hot-reload")
 async def hot_reload_modules(request: Request, _: None = Depends(require_admin_access)):
-    """Reload scriptwriter module in-place. Stream continues uninterrupted.
+    """Reload scriptwriter and its data submodules in-place. Stream continues uninterrupted.
 
-    Safe to reload: scriptwriter (stateless functions + lazy-init clients).
+    Safe to reload: prompt_world (prompt-fiction data) + scriptwriter (stateless
+    functions + lazy-init clients). Data submodules reload FIRST (leaves-first) so the
+    scriptwriter facade re-imports fresh values — reloading the facade alone would
+    rebind its ``from .prompt_world import ...`` names to the stale submodule.
     NOT reloaded: producer, streamer, persona (hold live task/instance state).
     Requires --workers 1 (importlib reloads only the worker handling the request).
     """
+    import mammamiradio.hosts.prompt_world as _prompt_world_mod
     import mammamiradio.hosts.scriptwriter as _scriptwriter_mod
 
     # Debounce: reject if called within 5s of last reload (monotonic to avoid NTP skew)
@@ -2058,13 +2062,24 @@ async def hot_reload_modules(request: Request, _: None = Depends(require_admin_a
 
     t0 = time.monotonic()
     try:
+        # Leaves-first ordering is load-bearing. scriptwriter does
+        # `from .prompt_world import ...`, so reloading scriptwriter re-runs those
+        # imports and rebinds the names to whatever prompt_world holds NOW. Reload the
+        # data submodule FIRST; reload the facade first and it would rebind to the stale
+        # prompt_world, leaving operator edits invisible. Reloading scriptwriter also
+        # re-runs its module body, which resets _cached_system_prompt — so edited prompt
+        # data takes effect on the next generation rather than serving a stale cache.
+        importlib.reload(_prompt_world_mod)
         importlib.reload(_scriptwriter_mod)
         duration_ms = int((time.monotonic() - t0) * 1000)
         request.app.state._last_hot_reload_ts = now
-        logger.info("hot-reload: reloaded mammamiradio.hosts.scriptwriter in %dms", duration_ms)
+        logger.info("hot-reload: reloaded prompt_world + scriptwriter in %dms", duration_ms)
         return {
             "ok": True,
-            "reloaded_modules": ["mammamiradio.hosts.scriptwriter"],
+            "reloaded_modules": [
+                "mammamiradio.hosts.prompt_world",
+                "mammamiradio.hosts.scriptwriter",
+            ],
             "duration_ms": duration_ms,
             "effective_on": "next_banter_generation",
             "stream_status": "unaffected",

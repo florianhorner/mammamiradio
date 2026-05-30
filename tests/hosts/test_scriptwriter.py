@@ -116,6 +116,41 @@ def test_system_prompt_includes_station_name(config):
     assert config.station.name in prompt
 
 
+def test_system_prompt_golden_hash(config):
+    """Pin the full assembled system prompt byte-for-byte.
+
+    Guards against whitespace / load-bearing-newline drift when prompt-fiction
+    constants move between modules (e.g. the prompt_world extraction). The
+    substring assertions above wouldn't catch a stray newline; this does. If the
+    prompt legitimately changes, re-capture the hash and update it here.
+    """
+    import hashlib
+
+    prompt = _build_system_prompt(config)
+    assert (
+        hashlib.sha256(prompt.encode("utf-8")).hexdigest()
+        == "249bf941ef22b80cbbda3672d0952cc3ffaf41b2533236bdf5fa360e995f6783"
+    ), "assembled system prompt changed — if intentional, re-capture the golden hash"
+
+
+def test_hot_reload_resets_system_prompt_cache():
+    """Reloading scriptwriter must clear the cached system prompt.
+
+    /api/hot-reload reloads prompt_world then scriptwriter. importlib.reload re-runs
+    scriptwriter's module body, which re-executes ``_cached_system_prompt = ""`` /
+    ``_cached_prompt_key = ""``. Without that reset, an operator editing prompt_world.py
+    and hot-reloading would keep serving the stale cached prompt until the config
+    structure changed. This locks the propagation contract.
+    """
+    import importlib
+
+    scriptwriter_module._cached_system_prompt = "stale-sentinel"
+    scriptwriter_module._cached_prompt_key = "stale-key"
+    importlib.reload(scriptwriter_module)
+    assert scriptwriter_module._cached_system_prompt == ""
+    assert scriptwriter_module._cached_prompt_key == ""
+
+
 # --- _host_expression_block tests ---
 
 
