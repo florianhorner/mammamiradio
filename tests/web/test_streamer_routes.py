@@ -1772,12 +1772,45 @@ async def test_hot_reload_unauthenticated_rejected():
 
 
 @pytest.mark.asyncio
-async def test_hot_reload_importerror_returns_500_with_stream_status():
-    """When importlib.reload raises, the endpoint returns 500 with stream_status=unaffected."""
+async def test_hot_reload_prompt_world_stage_failure_returns_500():
+    """First reload stage (prompt_world) raises → 500 with stream_status=unaffected.
+
+    Guards the failure contract for the leaves-first stage. With prompt_world reloaded
+    first, a single raising reload exercises this stage.
+    """
     app = _make_test_app(admin_token="testtoken")
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
     with patch(
-        "mammamiradio.web.streamer.importlib.reload", side_effect=ImportError("syntax error in scriptwriter.py")
+        "mammamiradio.web.streamer.importlib.reload",
+        side_effect=ImportError("syntax error in prompt_world.py"),
+    ):
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            resp = await client.post(
+                "/api/hot-reload",
+                headers={"X-Radio-Admin-Token": "testtoken"},
+            )
+    assert resp.status_code == 500
+    body = resp.json()
+    assert body["ok"] is False
+    assert body["stream_status"] == "unaffected"
+    assert body["error_code"] == "reload_failed"
+    assert body["retryable"] is True
+    assert "syntax error in prompt_world.py" in body["exception"]
+
+
+@pytest.mark.asyncio
+async def test_hot_reload_scriptwriter_stage_failure_returns_500():
+    """Second reload stage fails after the first succeeds → 500, stream unaffected.
+
+    prompt_world reloads cleanly (first side-effect returns), then scriptwriter raises
+    (second side-effect). Without the sequenced side-effect this stage would go
+    uncovered, since the first reload would short-circuit the failure.
+    """
+    app = _make_test_app(admin_token="testtoken")
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    with patch(
+        "mammamiradio.web.streamer.importlib.reload",
+        side_effect=[None, ImportError("syntax error in scriptwriter.py")],
     ):
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
             resp = await client.post(
@@ -1824,16 +1857,22 @@ async def test_hot_reload_reloads_prompt_world_before_scriptwriter():
     must list (and reload) prompt_world ahead of scriptwriter.
     """
     app = _make_test_app(admin_token="testtoken")
+    reloaded: list[str] = []
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
-    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
-        resp = await client.post(
-            "/api/hot-reload",
-            headers={"X-Radio-Admin-Token": "testtoken"},
-        )
+    # Record the ACTUAL importlib.reload call sequence. Asserting only the response
+    # `reloaded_modules` list is too weak — it's a fixed literal and would pass even if
+    # the implementation issued the reloads in the wrong order.
+    with patch(
+        "mammamiradio.web.streamer.importlib.reload",
+        side_effect=lambda mod: reloaded.append(mod.__name__),
+    ):
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            resp = await client.post(
+                "/api/hot-reload",
+                headers={"X-Radio-Admin-Token": "testtoken"},
+            )
     assert resp.status_code == 200
-    modules = resp.json()["reloaded_modules"]
-    assert "mammamiradio.hosts.prompt_world" in modules
-    assert "mammamiradio.hosts.scriptwriter" in modules
-    assert modules.index("mammamiradio.hosts.prompt_world") < modules.index("mammamiradio.hosts.scriptwriter"), (
-        "prompt_world must reload before scriptwriter (leaves-first)"
-    )
+    assert reloaded == [
+        "mammamiradio.hosts.prompt_world",
+        "mammamiradio.hosts.scriptwriter",
+    ], "prompt_world must reload before scriptwriter (leaves-first)"
