@@ -20,6 +20,17 @@
             "statusMessage": "Checking for merge conflicts with main..."
           }
         ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$(git rev-parse --show-toplevel 2>/dev/null)/scripts/hooks/require-preship-squad.sh\" 2>/dev/null || exit 0",
+            "timeout": 20,
+            "statusMessage": "Checking pre-ship squad ran before PR..."
+          }
+        ]
       }
     ]
   }
