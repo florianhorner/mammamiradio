@@ -1149,6 +1149,19 @@ async def run_producer(
                 elif isinstance(result, str):
                     state.ha_pending_directive = result
 
+            # Impossible Moments v2 (A): fold new events into the evening ledger
+            # (watermark-deduped) and, for banter only, surface one eligible
+            # running-gag. Ads stay gag-free in v0. The ledger persists across
+            # the addon's frequent restarts.
+            if state.evening_ledger is not None:
+                _now = time.time()
+                state.evening_ledger.observe(ha_cache.events, now=_now)
+                if seg_type == SegmentType.BANTER:
+                    state.ha_running_gag = state.evening_ledger.select_and_render(now=_now)
+                else:
+                    state.ha_running_gag = ""
+                state.evening_ledger.save_if_dirty(config.cache_dir)
+
         if generation_chaos_epoch != state.chaos_cutover_epoch:
             logger.info("Restarting producer cycle after interrupt cutover")
             continue

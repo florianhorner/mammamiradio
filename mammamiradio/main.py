@@ -129,6 +129,11 @@ async def startup():
             "Restoring stopped session state from previous run — use /api/resume or the admin panel to start playback"
         )
 
+    # Restore the evening running-gag ledger so a mid-evening addon restart
+    # resumes the same session and gags instead of resetting them. Missing or
+    # corrupt files start fresh and never block boot.
+    evening_ledger = EveningLedger.load(config.cache_dir)
+
     persisted_source = read_persisted_source(config.cache_dir)
     logger.info("Fetching startup playlist")
     try:
@@ -153,6 +158,7 @@ async def startup():
         playlist_source=playlist_source,
         startup_source_error=startup_source_error,
         persona_store=persona_store,
+        evening_ledger=evening_ledger,
         session_stopped=_session_stopped,
         chaos_mode_active=_read_persisted_chaos_mode(config),
     )
