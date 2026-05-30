@@ -116,21 +116,36 @@ def test_system_prompt_includes_station_name(config):
     assert config.station.name in prompt
 
 
-def test_system_prompt_golden_hash(config):
-    """Pin the full assembled system prompt byte-for-byte.
+def test_prompt_world_constants_byte_stable():
+    """Pin the moved prompt-fiction constants byte-for-byte (env-independent).
 
-    Guards against whitespace / load-bearing-newline drift when prompt-fiction
-    constants move between modules (e.g. the prompt_world extraction). The
-    substring assertions above wouldn't catch a stray newline; this does. If the
-    prompt legitimately changes, re-capture the hash and update it here.
+    Guards the verbatim prompt_world extraction against whitespace / load-bearing-
+    newline drift — the substring assertions above wouldn't catch a stray newline.
+    Unlike the assembled system prompt (which varies with config/env, so it can't be
+    pinned across machines and CI), these are pure module constants and hash stably
+    everywhere. If the prompt-fiction data legitimately changes, re-capture the hash.
     """
     import hashlib
 
-    prompt = _build_system_prompt(config)
+    from mammamiradio.hosts import prompt_world as pw
+
+    blob = "\x00".join(
+        [
+            repr(pw._EXPRESSION_BANK),
+            repr(pw._HOST_FINGERPRINTS),
+            pw._ECHO_STYLE_INSTRUCTION,
+            pw._REACT_STYLE_INSTRUCTION,
+            pw._EXCLAIM_STYLE_INSTRUCTION,
+            repr(pw._STYLE_INSTRUCTIONS),
+            pw.CHAOS_MODE_BLOCK,
+            pw.FESTIVAL_MODE_BLOCK,
+            repr(pw.CHAOS_SUBTYPE_BLOCKS),
+        ]
+    )
     assert (
-        hashlib.sha256(prompt.encode("utf-8")).hexdigest()
-        == "249bf941ef22b80cbbda3672d0952cc3ffaf41b2533236bdf5fa360e995f6783"
-    ), "assembled system prompt changed — if intentional, re-capture the golden hash"
+        hashlib.sha256(blob.encode("utf-8")).hexdigest()
+        == "b4901714e3e4476dfd2da6645cdf5c9d79ed50354d0aac71832fdea5a209001f"
+    ), "prompt-fiction constants changed — if intentional, re-capture the hash"
 
 
 def test_hot_reload_resets_system_prompt_cache():
