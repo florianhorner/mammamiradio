@@ -38,7 +38,11 @@ while IFS= read -r line; do
   rc="$(printf '%s' "$line" | jq -r '.commit // ""' 2>/dev/null)"
   { [ -z "$rc" ] || [ "$rc" = "null" ]; } && continue
   ts="$(printf '%s' "$line" | jq -r '.timestamp // ""' 2>/dev/null)"
-  es="$(date -j -f '%Y-%m-%dT%H:%M:%SZ' "$ts" +%s 2>/dev/null || date -d "$ts" +%s 2>/dev/null || echo 0)"
+  # Parse the trailing-Z timestamp as UTC. macOS `date -j -f` ignores the Z and
+  # reads local time without -u, which offsets the 2h window by the local UTC
+  # offset (caught a non-UTC false-stale that blocked legit PRs). GNU `date -d`
+  # honors the Z; -u there is harmless.
+  es="$(date -j -u -f '%Y-%m-%dT%H:%M:%SZ' "$ts" +%s 2>/dev/null || date -u -d "$ts" +%s 2>/dev/null || echo 0)"
   if [ "$es" -gt 0 ] 2>/dev/null && [ "$((now - es))" -gt 7200 ]; then
     continue # stale (>2h) — not this work session
   fi
