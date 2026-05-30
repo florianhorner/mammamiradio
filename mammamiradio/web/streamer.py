@@ -4,9 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
-import hashlib
 import importlib
-import importlib.metadata
 import ipaddress
 import logging
 import math
@@ -47,6 +45,14 @@ from mammamiradio.playlist.playlist import (
     write_persisted_source,
 )
 from mammamiradio.scheduling.scheduler import preview_upcoming
+from mammamiradio.web.assets import (
+    _ASSET_VERSION,
+    _ASSETS_DIR,
+    _STATIC_DIR,
+    _TEMPLATES_DIR,
+    _bust_static_cache,
+)
+from mammamiradio.web.mp3_frames import _skip_id3_and_xing_header
 from mammamiradio.web.ui_copy import copy_strings
 
 logger = logging.getLogger(__name__)
@@ -56,35 +62,12 @@ security = HTTPBasic(auto_error=False)
 
 # TODO: split — this 2,395-line god module is a postal address, not a destination.
 # See docs/2026-04-28-cathedral-restructure.md (PR 5) for the routes/auth/playback split plan.
-_THIS_DIR = Path(__file__).resolve().parent  # mammamiradio/web/
-_PKG_ROOT = _THIS_DIR.parent  # mammamiradio/
-_TEMPLATES_DIR = _THIS_DIR / "templates"
-_STATIC_DIR = _THIS_DIR / "static"
-_ASSETS_DIR = _PKG_ROOT / "assets"
-
-
-def _static_asset_digest() -> str:
-    """Return a short content hash for browser-visible CSS/JS assets."""
-    digest = hashlib.sha256()
-    for name in ("tokens.css", "base.css", "listener.css", "waveform.js", "listener.js", "sw.js"):
-        path = _STATIC_DIR / name
-        if path.exists():
-            digest.update(name.encode("utf-8"))
-            digest.update(b"\0")
-            digest.update(path.read_bytes())
-    return digest.hexdigest()[:8]
-
-
-_ASSET_VERSION = f"{importlib.metadata.version('mammamiradio')}-{_static_asset_digest()}"
-
+# Path roots, the static-asset content hash (_ASSET_VERSION), and
+# _bust_static_cache now live in web/assets.py and are imported above.
+#
 # Jinja2 templates for brand-engine listener page (PR-C). Admin/live still use
 # string-replace via _inject_ingress_prefix; only listener migrates to Jinja for now.
 _TEMPLATES = Jinja2Templates(directory=str(_TEMPLATES_DIR))
-
-
-def _bust_static_cache(html: str) -> str:
-    """Append a content-based version to /static/*.css and /static/*.js URLs."""
-    return _re.sub(r'(/static/[^"?]+\.(css|js))"', rf'\1?v={_ASSET_VERSION}"', html)
 
 
 # Admin/live pages still loaded as raw strings + post-render prefix injection.
@@ -1031,87 +1014,6 @@ def require_admin_access(
         status_code=403,
         detail="Admin endpoints are only available from private networks unless admin auth is configured",
     )
-
-
-_MPEG1_L3_BITRATES_KBPS = (0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320)
-_MPEG1_SAMPLE_RATES = (44100, 48000, 32000)
-
-
-def _is_mpeg1_l3_header(frame_header: bytes, *, allow_free_bitrate: bool) -> bool:
-    """Return whether ``frame_header`` is a plausible MPEG-1 Layer III frame."""
-    if len(frame_header) < 4 or frame_header[0] != 0xFF or (frame_header[1] & 0xE0) != 0xE0:
-        return False
-
-    version = (frame_header[1] >> 3) & 0x03
-    layer = (frame_header[1] >> 1) & 0x03
-    bitrate_idx = (frame_header[2] >> 4) & 0x0F
-    sample_rate_idx = (frame_header[2] >> 2) & 0x03
-
-    if version != 3 or layer != 1 or sample_rate_idx == 3 or bitrate_idx == 0x0F:
-        return False
-    return not (not allow_free_bitrate and bitrate_idx == 0)
-
-
-def _skip_id3_and_xing_header(f) -> None:
-    """Advance the file pointer past any leading ID3v2 tag and Xing/Info metadata frame.
-
-    Safari's ``<audio>`` element honors the Xing/Info duration header of each
-    concatenated segment as end-of-track, causing short segments (banter ~9 s,
-    news flash ~6 s) to fire ``ended`` at the declared duration instead of
-    playing through the ongoing stream. Long music segments (180 s+) don't
-    trip this because the listener tops up buffered bytes before the counter
-    expires. Stripping the tag on every segment makes the stream look like a
-    continuous ICECast feed, which all browsers handle correctly.
-
-    The helper is defensive: any unexpected header shape rewinds to the start,
-    so the worst case is "did nothing" rather than "cut a real audio frame".
-    """
-    header = f.read(10)
-    if len(header) == 10 and header[:3] == b"ID3":
-        size = ((header[6] & 0x7F) << 21) | ((header[7] & 0x7F) << 14) | ((header[8] & 0x7F) << 7) | (header[9] & 0x7F)
-        f.seek(10 + size)
-    else:
-        f.seek(0)
-
-    frame_start = f.tell()
-    frame_header = f.read(4)
-    if not _is_mpeg1_l3_header(frame_header, allow_free_bitrate=True):
-        f.seek(frame_start)
-        return
-
-    bitrate_idx = (frame_header[2] >> 4) & 0x0F
-    sample_rate_idx = (frame_header[2] >> 2) & 0x03
-    padding = (frame_header[2] >> 1) & 0x01
-    channel_mode = (frame_header[3] >> 6) & 0x03
-
-    magic_offset = 21 if channel_mode == 3 else 36
-    f.seek(frame_start + magic_offset)
-    magic = f.read(4)
-    if magic not in (b"Xing", b"Info"):
-        f.seek(frame_start)
-        return
-
-    if bitrate_idx == 0:
-        # VBR info frame (free-format): frame_length is unknown from the header alone.
-        # Scan forward from just after the Xing magic and only accept plausible
-        # MPEG-1 Layer III headers so sync-like metadata bytes are ignored.
-        f.seek(frame_start + magic_offset + 4)
-        data = f.read(8192)
-        sync_pos = -1
-        for i in range(len(data) - 3):
-            if _is_mpeg1_l3_header(data[i : i + 4], allow_free_bitrate=False):
-                sync_pos = i
-                break
-        if sync_pos >= 0:
-            f.seek(frame_start + magic_offset + 4 + sync_pos)
-        else:
-            f.seek(frame_start)
-        return
-
-    bitrate_kbps = _MPEG1_L3_BITRATES_KBPS[bitrate_idx]
-    sample_rate = _MPEG1_SAMPLE_RATES[sample_rate_idx]
-    frame_length = (144 * bitrate_kbps * 1000 // sample_rate) + padding
-    f.seek(frame_start + frame_length)
 
 
 async def run_playback_loop(app) -> None:
