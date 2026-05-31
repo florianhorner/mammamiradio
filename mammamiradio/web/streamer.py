@@ -2127,15 +2127,18 @@ async def api_interrupt(request: Request, _: None = Depends(require_admin_access
 async def hot_reload_modules(request: Request, _: None = Depends(require_admin_access)):
     """Reload scriptwriter and its data submodules in-place. Stream continues uninterrupted.
 
-    Safe to reload: prompt_world (prompt-fiction data) + scriptwriter (stateless
-    functions + lazy-init clients). Data submodules reload FIRST (leaves-first) so the
-    scriptwriter facade re-imports fresh values — reloading the facade alone would
-    rebind its ``from .prompt_world import ...`` names to the stale submodule.
+    Safe to reload: prompt_world / transitions / fallbacks (prompt-fiction + stock copy)
+    + scriptwriter (stateless functions + lazy-init clients). Data submodules reload FIRST
+    (leaves-first) so the scriptwriter facade re-imports fresh values — reloading the facade
+    alone would rebind its ``from .prompt_world`` / ``.transitions`` / ``.fallbacks`` import
+    names to the stale submodules.
     NOT reloaded: producer, streamer, persona (hold live task/instance state).
     Requires --workers 1 (importlib reloads only the worker handling the request).
     """
+    import mammamiradio.hosts.fallbacks as _fallbacks_mod
     import mammamiradio.hosts.prompt_world as _prompt_world_mod
     import mammamiradio.hosts.scriptwriter as _scriptwriter_mod
+    import mammamiradio.hosts.transitions as _transitions_mod
 
     # Debounce: reject if called within 5s of last reload (monotonic to avoid NTP skew)
     last_reload: float = getattr(request.app.state, "_last_hot_reload_ts", 0.0)
@@ -2155,21 +2158,29 @@ async def hot_reload_modules(request: Request, _: None = Depends(require_admin_a
     t0 = time.monotonic()
     try:
         # Leaves-first ordering is load-bearing. scriptwriter does
-        # `from .prompt_world import ...`, so reloading scriptwriter re-runs those
-        # imports and rebinds the names to whatever prompt_world holds NOW. Reload the
-        # data submodule FIRST; reload the facade first and it would rebind to the stale
-        # prompt_world, leaving operator edits invisible. Reloading scriptwriter also
-        # re-runs its module body, which resets _cached_system_prompt — so edited prompt
-        # data takes effect on the next generation rather than serving a stale cache.
+        # `from .prompt_world import ...` / `.transitions` / `.fallbacks`, so reloading
+        # scriptwriter re-runs those imports and rebinds the names to whatever the data
+        # submodules hold NOW. Reload the data submodules FIRST; reload the facade first
+        # and it would rebind to the stale submodules, leaving operator edits invisible.
+        # Reloading scriptwriter also re-runs its module body, which resets
+        # _cached_system_prompt — so edited prompt data takes effect on the next
+        # generation rather than serving a stale cache.
         importlib.reload(_prompt_world_mod)
+        importlib.reload(_transitions_mod)
+        importlib.reload(_fallbacks_mod)
         importlib.reload(_scriptwriter_mod)
         duration_ms = int((time.monotonic() - t0) * 1000)
         request.app.state._last_hot_reload_ts = now
-        logger.info("hot-reload: reloaded prompt_world + scriptwriter in %dms", duration_ms)
+        logger.info(
+            "hot-reload: reloaded prompt_world + transitions + fallbacks + scriptwriter in %dms",
+            duration_ms,
+        )
         return {
             "ok": True,
             "reloaded_modules": [
                 "mammamiradio.hosts.prompt_world",
+                "mammamiradio.hosts.transitions",
+                "mammamiradio.hosts.fallbacks",
                 "mammamiradio.hosts.scriptwriter",
             ],
             "duration_ms": duration_ms,
