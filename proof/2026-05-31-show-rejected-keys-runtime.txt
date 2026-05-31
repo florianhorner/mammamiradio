@@ -1,0 +1,286 @@
+Runtime proof — show not-working AI keys (branch florianhorner/feat/show-rejected-api-keys)
+Captured: 2026-05-31T17:31:34Z
+Commit: ae0aa97605ab0f6e0ccae6f0fd9694531c957680
+
+== 1. Real-provider proof: a bogus key returns a live 401 -> verdict 'rejected' ==
+anthropic probe: {'configured': True, 'ok': False, 'status_code': 401, 'error_type': 'authentication_error'}
+status before: unverified
+status after : rejected
+OK: real 401 -> anthropic_key_status == 'rejected'
+
+== 2. make check (lint + mypy + full suite + per-module coverage floors) ==
+.venv/bin/ruff check .
+All checks passed!
+.venv/bin/mypy mammamiradio/ tests/
+tests/repo/test_stream_watch_server.py:18: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/scheduling/test_clip.py:9: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/scheduling/test_clip.py:14: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/scheduling/test_clip.py:30: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/scheduling/test_clip.py:153: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/scheduling/test_clip.py:166: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/scheduling/test_clip.py:176: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+mammamiradio/audio/tts.py:283: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/home/test_ha_context.py:343: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/home/test_ha_context.py:362: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/home/test_ha_context.py:384: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/home/test_ha_context.py:402: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/home/test_ha_context.py:672: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/home/test_ha_context.py:691: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/home/test_ha_context.py:718: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/home/test_ha_context.py:731: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/home/test_ha_context.py:743: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/home/test_ha_context.py:762: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/home/test_ha_context.py:778: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/home/test_ha_context.py:787: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/home/test_ha_context.py:799: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/home/test_ha_context.py:800: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/home/test_ha_context.py:810: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/home/test_ha_context.py:853: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/home/test_ha_context.py:890: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/home/test_ha_context.py:923: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/home/test_ha_context.py:956: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/home/test_ha_context.py:995: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/scheduling/test_scheduler.py:297: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/core/test_provider_checks.py:37: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/audio/test_voice_validation.py:177: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/audio/test_voice_validation.py:228: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/audio/test_voice_validation.py:316: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/scheduling/test_producer_unit.py:113: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/scheduling/test_producer_unit.py:141: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/scheduling/test_producer_unit.py:170: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/scheduling/test_producer_unit.py:194: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/scheduling/test_producer_unit.py:223: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/scheduling/test_producer_unit.py:250: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/scheduling/test_producer_unit.py:307: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/scheduling/test_producer_unit.py:358: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/scheduling/test_producer_unit.py:392: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/scheduling/test_producer_unit.py:522: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/scheduling/test_producer_unit.py:556: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/scheduling/test_producer_unit.py:557: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/scheduling/test_producer_unit.py:652: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/scheduling/test_producer_unit.py:666: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/scheduling/test_producer_unit.py:680: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/scheduling/test_producer_unit.py:707: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/scheduling/test_producer_unit.py:736: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/scheduling/test_producer_unit.py:760: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/scheduling/test_producer_unit.py:784: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/scheduling/test_producer_unit.py:800: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/scheduling/test_producer_unit.py:830: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/scheduling/test_producer_unit.py:860: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/scheduling/test_producer_unit.py:893: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/scheduling/test_producer_unit.py:941: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/scheduling/test_producer_unit.py:977: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/scheduling/test_producer_unit.py:1001: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/scheduling/test_producer_unit.py:1548: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/scheduling/test_producer_unit.py:1564: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/scheduling/test_producer_unit.py:1605: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/scheduling/test_producer_unit.py:1665: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/scheduling/test_producer_unit.py:1694: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/scheduling/test_producer_unit.py:1724: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/scheduling/test_producer_unit.py:1778: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/scheduling/test_producer_unit.py:1819: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/scheduling/test_producer_unit.py:1877: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/scheduling/test_producer_unit.py:1967: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/scheduling/test_producer_unit.py:2003: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/scheduling/test_producer_unit.py:2042: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/scheduling/test_producer_unit.py:2080: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/scheduling/test_producer_unit.py:2115: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/scheduling/test_producer_unit.py:2154: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/scheduling/test_producer_unit.py:2192: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/scheduling/test_producer_unit.py:2233: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/scheduling/test_producer_unit.py:2275: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/scheduling/test_producer_imaging.py:106: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/scheduling/test_producer_imaging.py:146: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/scheduling/test_producer_imaging.py:181: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/scheduling/test_producer_imaging.py:229: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/scheduling/test_producer_imaging.py:268: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/scheduling/test_producer_imaging.py:299: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/scheduling/test_producer_imaging.py:331: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/scheduling/test_producer_imaging.py:364: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/scheduling/test_producer_imaging.py:393: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/scheduling/test_producer_extended.py:155: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/scheduling/test_producer_extended.py:189: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/scheduling/test_producer_extended.py:226: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/scheduling/test_producer_extended.py:260: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/scheduling/test_producer_extended.py:290: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/scheduling/test_producer_extended.py:352: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/scheduling/test_producer_extended.py:359: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/scheduling/test_producer_extended.py:397: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/scheduling/test_producer_extended.py:438: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/scheduling/test_producer_extended.py:492: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/scheduling/test_producer_extended.py:499: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/scheduling/test_producer_extended.py:554: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/scheduling/test_producer_extended.py:606: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/scheduling/test_producer_extended.py:647: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/scheduling/test_producer_extended.py:665: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/scheduling/test_producer_extended.py:690: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/scheduling/test_producer_extended.py:726: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/scheduling/test_producer_extended.py:765: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/scheduling/test_producer_extended.py:806: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/scheduling/test_producer_extended.py:848: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/scheduling/test_producer_extended.py:1032: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/scheduling/test_producer_extended.py:1065: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/scheduling/test_producer_extended.py:1071: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/scheduling/test_producer_extended.py:1102: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/scheduling/test_producer_extended.py:1156: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/scheduling/test_producer_extended.py:1223: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/scheduling/test_producer_extended.py:1267: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/scheduling/test_producer_extended.py:1317: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/scheduling/test_producer_extended.py:1372: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/scheduling/test_producer_extended.py:1392: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/scheduling/test_producer_coverage.py:454: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/scheduling/test_producer_coverage.py:493: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/scheduling/test_producer_coverage.py:536: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/scheduling/test_producer_coverage.py:547: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/scheduling/test_producer_coverage.py:590: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/scheduling/test_producer_coverage.py:631: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/scheduling/test_producer_coverage.py:716: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/scheduling/test_producer_coverage.py:782: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/scheduling/test_producer_coverage.py:972: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/scheduling/test_producer_coverage.py:994: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/scheduling/test_producer_coverage.py:1026: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/scheduling/test_producer_coverage.py:1052: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/scheduling/test_producer_coverage.py:1077: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/scheduling/test_producer_coverage.py:1161: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/scheduling/test_producer_coverage.py:1193: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/scheduling/test_producer_coverage.py:1226: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/scheduling/test_producer_coverage.py:1251: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/scheduling/test_producer.py:74: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/scheduling/test_producer.py:105: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/scheduling/test_producer.py:132: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/scheduling/test_producer.py:157: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/scheduling/test_producer.py:203: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/scheduling/test_producer.py:240: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/core/test_chaos.py:55: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/core/test_chaos.py:56: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/core/test_chaos.py:97: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/core/test_chaos.py:98: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/core/test_chaos.py:158: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/core/test_chaos.py:209: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/core/test_chaos.py:243: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/core/test_chaos.py:244: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/core/test_chaos.py:281: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/core/test_chaos.py:282: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/core/test_chaos.py:323: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/core/test_chaos.py:324: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/web/test_festival_mode.py:162: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/web/test_festival_mode.py:193: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/web/test_festival_mode.py:293: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/web/test_festival_mode.py:460: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/web/test_streamer_routes.py:1869: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/web/test_interrupt_endpoint.py:127: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/web/test_interrupt_endpoint.py:146: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/web/test_interrupt_endpoint.py:319: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+mammamiradio/main.py:166: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+mammamiradio/main.py:175: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/web/test_public_status_contract.py:222: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/web/test_main.py:305: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+Success: no issues found in 143 source files
+.venv/bin/vulture mammamiradio/
+.venv/bin/python scripts/coverage-ratchet.py check
+........................................................................ [  3%]
+........................................................................ [  6%]
+........................................................................ [  9%]
+........................................................................ [ 12%]
+........................................................................ [ 15%]
+........................................................................ [ 18%]
+........................................................................ [ 22%]
+........................................................................ [ 25%]
+........................................................................ [ 28%]
+.............................s.......................................... [ 31%]
+........................................................................ [ 34%]
+........................................................................ [ 37%]
+........................................................................ [ 40%]
+........................................................................ [ 44%]
+........................................................................ [ 47%]
+........................................................................ [ 50%]
+........................................................................ [ 53%]
+........................................................................ [ 56%]
+........................................................................ [ 59%]
+........................................................................ [ 62%]
+........................................................................ [ 66%]
+........................................................................ [ 69%]
+........................................................................ [ 72%]
+........................................................................ [ 75%]
+........................................................................ [ 78%]
+........................................................................ [ 81%]
+........................s............................................... [ 84%]
+........................................................................ [ 88%]
+........................................................................ [ 91%]
+........................................................................ [ 94%]
+........................................................................ [ 97%]
+..........................................................               [100%]
+=============================== warnings summary ===============================
+.venv/lib/python3.11/site-packages/fastapi/testclient.py:1
+  /Users/florianhorner/conductor/workspaces/mammamiradio/cancun-v1/.venv/lib/python3.11/site-packages/fastapi/testclient.py:1: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.
+    from starlette.testclient import TestClient as TestClient  # noqa
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+================================ tests coverage ================================
+______________ coverage: platform darwin, python 3.11.15-final-0 _______________
+
+Name                                       Stmts   Miss Branch BrPart  Cover   Missing
+--------------------------------------------------------------------------------------
+mammamiradio/__init__.py                       0      0      0      0   100%
+mammamiradio/audio/__init__.py                 0      0      0      0   100%
+mammamiradio/audio/audio_quality.py           72      0     28      0   100%
+mammamiradio/audio/imaging.py                 44      1     10      2    94%   61->64, 67
+mammamiradio/audio/normalizer.py             535      1    144      2    99%   631->638, 1234
+mammamiradio/audio/stream_format.py           11      0      0      0   100%
+mammamiradio/audio/tts.py                    308      1     84      3    99%   381->385, 403->407, 454
+mammamiradio/audio/voice_catalog.py            8      0      0      0   100%
+mammamiradio/core/__init__.py                  0      0      0      0   100%
+mammamiradio/core/capabilities.py             13      0      4      0   100%
+mammamiradio/core/config.py                  487     35    186     22    91%   12-13, 203-204, 211, 332-333, 390-397, 410, 453, 505-509, 601, 617, 633, 635-636, 656, 691-693, 738, 769-771, 778->780, 783, 786, 814-818, 851, 853, 874->878, 889
+mammamiradio/core/models.py                  504      4    116      5    99%   102, 105, 122->124, 342, 637
+mammamiradio/core/provider_checks.py          71      7     32     10    83%   21-22, 35, 37, 39, 41, 44, 78->77, 119->135, 135->162
+mammamiradio/core/setup_status.py             61      0     16      0   100%
+mammamiradio/core/sync.py                    129     13     32      5    88%   137->148, 145-146, 165, 211->214, 226-233, 236-237, 301-302
+mammamiradio/home/__init__.py                  0      0      0      0   100%
+mammamiradio/home/evening_memory.py          175      5     38      3    96%   102, 284, 296, 370-371
+mammamiradio/home/ha_context.py              453     11    198     11    97%   393, 407-408, 413, 419-420, 480-481, 533->535, 605->607, 687, 790, 791->788, 815, 851->853, 917->920
+mammamiradio/home/ha_enrichment.py            68      1     14      1    98%   94
+mammamiradio/hosts/__init__.py                 0      0      0      0   100%
+mammamiradio/hosts/ad_creative.py            132      0     38      0   100%
+mammamiradio/hosts/context_cues.py            70      0     32      1    99%   435->437
+mammamiradio/hosts/fallbacks.py                5      0      0      0   100%
+mammamiradio/hosts/persona.py                196     16     46      9    90%   66-67, 115, 159, 165-167, 169, 194, 199-200, 232->254, 243->233, 282-283, 322-323, 387
+mammamiradio/hosts/prompt_world.py            11      0      0      0   100%
+mammamiradio/hosts/scriptwriter.py           686     26    268     17    95%   135->138, 178-183, 367->371, 452, 474->480, 512->529, 587-589, 621, 672, 677-679, 834->836, 841->845, 1136->1150, 1262-1277, 1312, 1446->1455, 1467->1471, 1472, 1704
+mammamiradio/hosts/transitions.py             18      0      6      0   100%
+mammamiradio/integrations/__init__.py          2      0      0      0   100%
+mammamiradio/integrations/now_playing.py      82      5     20      3    92%   48->57, 85, 87-88, 104-105
+mammamiradio/integrations/schema.py           49      0      0      0   100%
+mammamiradio/integrations/serializer.py      113      6     46      6    92%   87, 120, 167->169, 176, 179-180, 201->214, 205
+mammamiradio/main.py                         154      0     38      0   100%
+mammamiradio/playlist/__init__.py              0      0      0      0   100%
+mammamiradio/playlist/downloader.py          308      6    104      4    98%   143-146, 180, 234->232, 506
+mammamiradio/playlist/playlist.py            379     13    148     10    95%   176->170, 189, 207->209, 210, 403->407, 463, 492, 498-499, 526, 590, 634-638, 682->692
+mammamiradio/playlist/song_cues.py            95      0     28      0   100%
+mammamiradio/playlist/track_rationale.py      26      0     12      0   100%
+mammamiradio/playlist/track_rules.py          24      0      2      0   100%
+mammamiradio/scheduling/__init__.py            0      0      0      0   100%
+mammamiradio/scheduling/clip.py               44      1     14      1    97%   46
+mammamiradio/scheduling/producer.py         1135    154    356     52    84%   102-103, 134-135, 283->exit, 388, 404, 406, 627->637, 631, 634->636, 699, 709, 712-713, 725->731, 769->771, 807-819, 824->829, 842, 853, 872-889, 895->898, 914, 967->970, 978->1012, 995->1012, 1053-1058, 1118-1128, 1134->1156, 1168-1172, 1176-1177, 1183->1195, 1197-1198, 1226, 1244->1246, 1270->1272, 1289-1297, 1317->1319, 1332-1344, 1393-1404, 1406->1423, 1573, 1577-1578, 1579->1581, 1583-1625, 1628-1636, 1648-1665, 1694, 1720->1723, 1741-1742, 1783->1788, 1805-1807, 1827-1830, 1847, 1854-1855, 1860-1865, 1876, 1900-1902, 1911->2192, 1961-1963, 1997-1998, 2044->2046, 2091, 2157-2159, 2192->898, 2222-2224, 2231, 2252-2257, 2283
+mammamiradio/scheduling/scheduler.py          85      0     36      1    99%   181->184
+mammamiradio/web/__init__.py                   0      0      0      0   100%
+mammamiradio/web/assets.py                    22      0      4      1    96%   29->27
+mammamiradio/web/listener_requests.py        169      0     50      3    99%   212->207, 214->207, 349->351
+mammamiradio/web/mp3_frames.py                50      1     18      2    96%   77->81, 84
+mammamiradio/web/og_card.py                   95      3     22      2    96%   60-61, 94, 155->157
+mammamiradio/web/streamer.py                1691    115    490     62    91%   128->130, 132-133, 206->209, 232-245, 367-369, 374-376, 385-387, 415-417, 476->488, 526, 528, 536->538, 539->548, 555->562, 558->560, 560->562, 575-576, 849, 853, 856, 858, 870, 1009, 1017, 1103-1105, 1110-1123, 1128, 1140-1141, 1144, 1162->1192, 1209-1210, 1245-1246, 1252->1254, 1255, 1263-1274, 1285-1288, 1296, 1301->1283, 1303->1313, 1315->1099, 1324, 1338, 1365->exit, 1399-1409, 1518, 1524, 1613-1623, 1624->1628, 1632->1634, 1637->1641, 1678, 1697, 1708->1718, 1760->1765, 1773-1792, 1999-2000, 2006->2011, 2079-2080, 2090, 2123-2124, 2246, 2418, 2506->2504, 2518, 2550, 2569-2571, 2654->2656, 2955-2956
+mammamiradio/web/ui_copy.py                    7      0      0      0   100%
+--------------------------------------------------------------------------------------
+TOTAL                                       8587    425   2680    238    94%
+Required test coverage of 92.0% reached. Total coverage: 93.64%
+2288 passed, 2 skipped, 7 deselected, 1 warning in 58.50s
+
+
+All coverage floors held. Total: 94% (floor: 92%)
+
+Modules with ratchet headroom (will auto-update on main):
+  mammamiradio.audio.tts: 99% (floor: 90%)
+  mammamiradio.hosts.context_cues: 99% (floor: 94%)
+  mammamiradio.integrations.now_playing: 92% (floor: 88%)
+  mammamiradio.playlist.playlist: 95% (floor: 91%)
+All checks passed
