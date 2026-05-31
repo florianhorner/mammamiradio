@@ -1,8 +1,9 @@
 """Prompt assembly and LLM calls for banter and ad copy generation.
 
-TODO: split — this 1,488-line module is a postal address, not a destination.
-See docs/2026-04-28-cathedral-restructure.md (PR 6) for the planned split into
-hosts/banter.py, hosts/ads.py, hosts/llm_client.py, hosts/fallbacks.py.
+TODO: split — this module is a postal address, not a destination. See
+docs/archive/2026-04-28-cathedral-restructure.md (PR 6) for the planned split into
+hosts/prompts.py, hosts/llm_client.py, hosts/banter.py, hosts/ads.py. The data leaves
+(prompt_world.py, transitions.py, fallbacks.py) are already extracted.
 """
 
 from __future__ import annotations
@@ -42,6 +43,11 @@ from mammamiradio.hosts.ad_creative import (
     SonicWorld,
 )
 from mammamiradio.hosts.context_cues import compute_context_block
+from mammamiradio.hosts.fallbacks import (  # noqa: F401  facade re-export — AD_BREAK_* are read only as scriptwriter.* (CHAOS_STOCK_LINES is also used in-module)
+    AD_BREAK_INTROS,
+    AD_BREAK_OUTROS,
+    CHAOS_STOCK_LINES,
+)
 from mammamiradio.hosts.prompt_world import (
     _EXPRESSION_BANK,
     _HOST_FINGERPRINTS,
@@ -51,6 +57,7 @@ from mammamiradio.hosts.prompt_world import (
     CHAOS_SUBTYPE_BLOCKS,
     FESTIVAL_MODE_BLOCK,
 )
+from mammamiradio.hosts.transitions import _massage_transition_text, _transition_stem
 
 logger = logging.getLogger(__name__)
 
@@ -73,56 +80,6 @@ _anthropic_block_expired_logged: bool = False
 # Cached system prompt — rebuilt only when config changes
 _cached_system_prompt: str = ""
 _cached_prompt_key: str = ""
-_TRANSITION_REWRITE_MAP: dict[str, list[str]] = {
-    "banter": [
-        "Mamma mia... adesso si litiga davvero.",
-        "Aspetta un secondo, perche qui c'e da dire una cosa.",
-        "No, ma senti questa, perche adesso parte il casino vero.",
-        "Madonna, fermati un attimo, perche qui c'e materiale.",
-    ],
-    "ad": [
-        "Aspetta, ma prima ci tocca la pubblicita.",
-        "Un secondo solo, che arrivano gli sponsor peggiori d'Italia.",
-        "No, no, fermi tutti, prima passa la pubblicita.",
-        "Prima di continuare, c'e una pausa che nessuno ha chiesto.",
-    ],
-    "news_flash": [
-        "Un secondo, mi stanno urlando qualcosa in cuffia.",
-        "Aspetta, aspetta, qui c'e aria di notizia improvvisa.",
-        "No, ferma tutto, mi dicono che sta succedendo qualcosa.",
-        "Un attimo, questa sembra una notizia vera. Purtroppo.",
-    ],
-}
-_BORING_TRANSITION_STEMS = {"che pezzo", "eh non", "bellissima", "allora", "e adesso"}
-
-CHAOS_STOCK_LINES: dict[ChaosSubtype, list[str]] = {
-    ChaosSubtype.FOURTH_WALL: [
-        "Aspetta. Hai sentito anche tu il momento in cui siamo diventati una frase dentro una macchina?",
-        "No, no, continua. Se lo dici piano sembra ancora radio.",
-        "Perfetto. Musica prima che qualcuno legga il prompt.",
-    ],
-    ChaosSubtype.ABANDONED_STORM: [
-        "Allora io volevo dire che—",
-        "No, perche il punto vero e— aspetta, non quello, l'altro—",
-        "Musica. Subito. Prima che finiamo una frase.",
-    ],
-    ChaosSubtype.IMPOSSIBLE_RECALL: [
-        "Mi torna in testa quel pezzo di prima, quello sentito earlier, "
-        "come se fosse passato qui con le scarpe bagnate.",
-        "Sì. Non nominarlo troppo forte o rientra dalla finestra.",
-        "Troppo tardi. Andiamo avanti.",
-    ],
-    ChaosSubtype.ICON_MOMENT: [
-        "Questa e esattamente la regola di Zio Bravissimo da Catania Due: mai spiegare, sempre indicare il soffitto.",
-        "Finalmente qualcuno lo dice in radio.",
-        "E adesso musica, per rispetto del soffitto.",
-    ],
-    ChaosSubtype.URGENT_INTERRUPT: [
-        "Madonna, ma quante volte te lo dobbiamo dire?",
-        "Il timer è scaduto. SCADUTO. Non è una suggestione.",
-        "Dai, muoviti. Ora. Senza aspettare.",
-    ],
-}
 
 
 @dataclass
@@ -703,26 +660,6 @@ def _strip_fences(raw: str) -> str:
     if raw.startswith("```"):
         raw = raw.split("\n", 1)[1].rsplit("```", 1)[0].strip()
     return raw
-
-
-def _transition_stem(text: str) -> str:
-    cleaned = re.sub(r"[^a-zA-Z0-9\s]", " ", text.lower())
-    words = [w for w in cleaned.split() if w]
-    return " ".join(words[:2])
-
-
-def _massage_transition_text(text: str, next_segment: str, recent_texts: list[str]) -> str:
-    """Replace stale opener patterns when the LLM falls into a rut."""
-    stem = _transition_stem(text)
-    recent_stems = [_transition_stem(item) for item in recent_texts if item]
-    repeated = recent_stems.count(stem) >= 1 and stem in _BORING_TRANSITION_STEMS
-    if not repeated:
-        return text.strip()
-
-    for candidate in _TRANSITION_REWRITE_MAP.get(next_segment, _TRANSITION_REWRITE_MAP["banter"]):
-        if _transition_stem(candidate) not in recent_stems:
-            return candidate
-    return _TRANSITION_REWRITE_MAP.get(next_segment, _TRANSITION_REWRITE_MAP["banter"])[0]
 
 
 def _ensure_attention_grabbing_ad_parts(parts: list[AdPart], sonic: SonicWorld) -> list[AdPart]:
@@ -1381,24 +1318,6 @@ Return JSON:
             ]
         return random.choice(_fallback_pools), None
 
-
-AD_BREAK_INTROS = [
-    "E ora... un messaggio dai nostri sponsor!",
-    "Ma prima, una pausa pubblicitaria!",
-    "Restate con noi, torniamo dopo questi messaggi!",
-    "E ora, le cose importanti della vita... la pubblicità!",
-    "Un attimo di pausa per i nostri amici commerciali!",
-    "Ecco a voi... la pubblicità! Non cambiate stazione!",
-]
-
-AD_BREAK_OUTROS = [
-    "Bene, siamo tornati!",
-    "Eccoci di nuovo! Vi siete persi?",
-    "E torniamo alla musica, finalmente!",
-    "Siamo ancora qui! Non siamo scappati!",
-    "Ok, basta pubblicità. Per ora.",
-    "Torniamo a noi! Dove eravamo rimasti?",
-]
 
 NEWS_FLASH_CATEGORIES = {
     "traffic": (
