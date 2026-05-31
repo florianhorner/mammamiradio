@@ -12,7 +12,6 @@ import os
 import random as _random
 import re as _re
 import secrets
-import threading
 import time
 from pathlib import Path
 from urllib.parse import urlparse
@@ -53,6 +52,15 @@ from mammamiradio.web.assets import (
     _bust_static_cache,
 )
 from mammamiradio.web.mp3_frames import _skip_id3_and_xing_header
+from mammamiradio.web.persistence import (
+    _CREDENTIAL_ENV_TO_FIELD,
+    _CREDENTIAL_FIELDS,
+    _apply_live_credentials,
+    _sanitize_credential_value,
+    _save_addon_option,
+    _save_addon_options,
+    _save_dotenv,
+)
 from mammamiradio.web.ui_copy import copy_strings
 
 logger = logging.getLogger(__name__)
@@ -111,12 +119,6 @@ CLIP_RATE_PRUNE_SECONDS = 300.0
 CLIP_DURATION_SECONDS = 30
 CLIP_MAX_SAVED = 50
 DEFAULT_CLIP_BITRATE_KBPS = 192
-_CREDENTIAL_FIELDS: dict[str, tuple[str, str]] = {
-    "anthropic_api_key": ("ANTHROPIC_API_KEY", "anthropic_api_key"),
-    "openai_api_key": ("OPENAI_API_KEY", "openai_api_key"),
-}
-_CREDENTIAL_ENV_TO_FIELD = {env_key: field for field, (env_key, _config_attr) in _CREDENTIAL_FIELDS.items()}
-_ADDON_OPTIONS_LOCK = threading.Lock()
 
 
 def _purge_segment_queue(q) -> int:
@@ -1662,11 +1664,6 @@ async def save_keys(request: Request):
     return {"ok": True, "saved": list(updates.keys())}
 
 
-def _sanitize_credential_value(value: str) -> str:
-    """Strip env-breaking characters before persistence or live application."""
-    return value.replace("\n", "").replace("\r", "")
-
-
 def _credential_updates_from_env_payload(body: dict, *, require_nonempty: bool) -> dict[str, str]:
     updates: dict[str, str] = {}
     for env_key in _CREDENTIAL_ENV_TO_FIELD:
@@ -1699,97 +1696,6 @@ async def _persist_and_apply_credentials(request: Request, updates: dict[str, st
         await loop.run_in_executor(None, _save_dotenv, updates)
 
     _apply_live_credentials(request.app.state.station_state, config, updates)
-
-
-def _apply_live_credentials(state: StationState, config, updates: dict[str, str]) -> None:
-    for env_key, value in updates.items():
-        os.environ[env_key] = value
-
-    if "ANTHROPIC_API_KEY" in updates:
-        config.anthropic_api_key = updates["ANTHROPIC_API_KEY"]
-        from mammamiradio.hosts.scriptwriter import reset_provider_backoff
-
-        reset_provider_backoff()
-        state.anthropic_disabled_until = 0.0
-        state.anthropic_last_error = ""
-        # New key: prior verdict is meaningless until re-probed (save_keys schedules it).
-        state.anthropic_key_status = "unverified"
-        state.anthropic_key_checked_at = 0.0
-    if "OPENAI_API_KEY" in updates:
-        config.openai_api_key = updates["OPENAI_API_KEY"]
-        state.openai_key_status = "unverified"
-        state.openai_key_checked_at = 0.0
-
-
-def _save_dotenv(updates: dict[str, str]) -> None:
-    """Write key=value pairs to .env, updating existing keys or appending new ones."""
-    env_path = Path(".env")
-    lines = env_path.read_text().splitlines() if env_path.exists() else []
-
-    safe_updates = {k: _sanitize_credential_value(v) for k, v in updates.items()}
-
-    written = set()
-    new_lines = []
-    for line in lines:
-        stripped = line.strip()
-        if stripped and not stripped.startswith("#") and "=" in stripped:
-            key = stripped.split("=", 1)[0].strip()
-            if key in safe_updates:
-                new_lines.append(f'{key}="{safe_updates[key]}"')
-                written.add(key)
-                continue
-        new_lines.append(line)
-
-    for key, value in safe_updates.items():
-        if key not in written:
-            new_lines.append(f'{key}="{value}"')
-
-    tmp = env_path.with_suffix(".env.tmp")
-    tmp.write_text("\n".join(new_lines) + "\n")
-    tmp.replace(env_path)
-
-
-def _save_addon_option(key: str, value) -> None:
-    """Persist a single option into /data/options.json atomically."""
-    import json as _json
-    import os as _os
-
-    with _ADDON_OPTIONS_LOCK:
-        options_path = Path("/data/options.json")
-        options: dict = {}
-        if options_path.exists():
-            try:
-                options = _json.loads(options_path.read_text())
-            except (ValueError, OSError):
-                options = {}
-        options[key] = value
-        tmp_path = options_path.with_suffix(options_path.suffix + ".tmp")
-        tmp_path.write_text(_json.dumps(options, indent=2))
-        _os.replace(tmp_path, options_path)
-
-
-def _save_addon_options(updates: dict[str, str]) -> None:
-    """Update /data/options.json with new credential values."""
-    import json as _json
-    import os as _os
-
-    with _ADDON_OPTIONS_LOCK:
-        options_path = Path("/data/options.json")
-        options = {}
-        if options_path.exists():
-            try:
-                options = _json.loads(options_path.read_text())
-            except (ValueError, OSError):
-                pass
-
-        for env_key, value in updates.items():
-            opt_key = _CREDENTIAL_ENV_TO_FIELD.get(env_key)
-            if opt_key:
-                options[opt_key] = _sanitize_credential_value(value)
-
-        tmp_path = options_path.with_suffix(options_path.suffix + ".tmp")
-        tmp_path.write_text(_json.dumps(options, indent=2))
-        _os.replace(tmp_path, options_path)
 
 
 @router.get("/api/setup/addon-snippet")

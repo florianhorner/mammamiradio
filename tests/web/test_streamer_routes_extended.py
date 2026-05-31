@@ -2583,7 +2583,7 @@ async def test_post_super_italian_addon_mode_writes_options(tmp_path, monkeypatc
     try:
         with (
             patch("mammamiradio.web.streamer._save_dotenv"),
-            patch("mammamiradio.web.streamer.Path") as mock_path,
+            patch("mammamiradio.web.persistence.Path") as mock_path,
         ):
             mock_path.return_value = options_file
             transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
@@ -2608,7 +2608,7 @@ def test_save_super_italian_addon_options_handles_corrupt_file(tmp_path):
     options_file = tmp_path / "options.json"
     options_file.write_text("not valid json {{{")
 
-    with patch("mammamiradio.web.streamer.Path") as mock_path:
+    with patch("mammamiradio.web.persistence.Path") as mock_path:
         mock_path.return_value = options_file
         _save_super_italian_addon_options(True)
 

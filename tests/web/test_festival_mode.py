@@ -425,7 +425,7 @@ async def test_party_addon_mode_writes_options_json(tmp_path, monkeypatch):
     options_file = tmp_path / "options.json"
     options_file.write_text(json.dumps({"existing": "value"}))
 
-    with patch("mammamiradio.web.streamer.Path", return_value=options_file):
+    with patch("mammamiradio.web.persistence.Path", return_value=options_file):
         async with httpx.AsyncClient(
             transport=httpx.ASGITransport(app=app, client=("127.0.0.1", 12345)),
             base_url="http://testserver",
