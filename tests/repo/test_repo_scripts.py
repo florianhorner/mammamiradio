@@ -344,7 +344,7 @@ def _create_validate_addon_repo(
         ),
     )
     _write(tmp_path / "mammamiradio/__init__.py", "")
-    _write(tmp_path / "mammamiradio/web/streamer.py", streamer_body)
+    _write(tmp_path / "mammamiradio/web/pages.py", streamer_body)
     _write(tmp_path / "radio.toml", "[station]\nname = 'Test'\n")
     _write(tmp_path / "ha-addon/mammamiradio/radio.toml", "[station]\nname = 'Test'\n")
     _write(tmp_path / "pyproject.toml", '[project]\nname = "mammamiradio"\nversion = "1.1.0"\n')

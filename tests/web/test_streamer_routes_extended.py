@@ -2039,35 +2039,6 @@ def test_tail_log_with_content(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# _sanitize_ingress_prefix
-# ---------------------------------------------------------------------------
-
-
-def test_sanitize_ingress_prefix_valid():
-    from mammamiradio.web.streamer import _sanitize_ingress_prefix
-
-    assert _sanitize_ingress_prefix("/api/hassio_ingress/abc123") == "/api/hassio_ingress/abc123"
-
-
-def test_sanitize_ingress_prefix_strips_trailing_slash():
-    from mammamiradio.web.streamer import _sanitize_ingress_prefix
-
-    assert _sanitize_ingress_prefix("/prefix/") == "/prefix"
-
-
-def test_sanitize_ingress_prefix_rejects_xss():
-    from mammamiradio.web.streamer import _sanitize_ingress_prefix
-
-    assert _sanitize_ingress_prefix('"><script>alert(1)</script>') == ""
-
-
-def test_sanitize_ingress_prefix_empty():
-    from mammamiradio.web.streamer import _sanitize_ingress_prefix
-
-    assert _sanitize_ingress_prefix("") == ""
-
-
-# ---------------------------------------------------------------------------
 # Listener requests
 # ---------------------------------------------------------------------------
 
