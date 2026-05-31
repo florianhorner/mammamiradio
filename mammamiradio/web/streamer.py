@@ -52,6 +52,7 @@ from mammamiradio.web.assets import (
     _bust_static_cache,
 )
 from mammamiradio.web.mp3_frames import _skip_id3_and_xing_header
+from mammamiradio.web.pages import _get_injected_html, _sanitize_ingress_prefix
 from mammamiradio.web.persistence import (
     _CREDENTIAL_ENV_TO_FIELD,
     _CREDENTIAL_FIELDS,
@@ -78,7 +79,7 @@ security = HTTPBasic(auto_error=False)
 # _bust_static_cache now live in web/assets.py and are imported above.
 #
 # Jinja2 templates for brand-engine listener page (PR-C). Admin/live still use
-# string-replace via _inject_ingress_prefix; only listener migrates to Jinja for now.
+# string-replace via _inject_ingress_prefix (web/pages.py); only listener migrates to Jinja for now.
 _TEMPLATES = Jinja2Templates(directory=str(_TEMPLATES_DIR))
 
 
@@ -88,20 +89,6 @@ _LISTENER_HTML = _bust_static_cache((_TEMPLATES_DIR / "listener.html").read_text
 
 _ADMIN_HTML = _bust_static_cache((_TEMPLATES_DIR / "admin.html").read_text())
 _LIVE_HTML = _bust_static_cache((_TEMPLATES_DIR / "live.html").read_text())
-
-_INGRESS_PREFIX_RE = _re.compile(r"^/[a-zA-Z0-9/_-]+$")
-
-# Cache ingress-injected HTML to avoid repeated string replacements on every request.
-# Key: (html_id, prefix) → injected HTML. Typically 1-2 entries per page.
-_injected_html_cache: dict[tuple[str, str], str] = {}
-
-
-def _get_injected_html(html_id: str, html: str, prefix: str) -> str:
-    """Return ingress-injected HTML, cached by (page, prefix)."""
-    key = (html_id, prefix)
-    if key not in _injected_html_cache:
-        _injected_html_cache[key] = _inject_ingress_prefix(html, prefix)
-    return _injected_html_cache[key]
 
 
 def _as_int_index(value, default: int = -1) -> int:
@@ -716,39 +703,6 @@ def _serialize_track(track: Track) -> dict:
 
 def _source_options_reason(config, exc: Exception) -> str:
     return f"Source loading failed: {exc}"
-
-
-def _sanitize_ingress_prefix(prefix: str) -> str:
-    """Validate and sanitize the X-Ingress-Path header to prevent XSS."""
-    prefix = prefix.rstrip("/")
-    if not prefix or not _INGRESS_PREFIX_RE.match(prefix):
-        return ""
-    return prefix
-
-
-def _inject_ingress_prefix(html: str, prefix: str) -> str:
-    """Rewrite static HTML attribute URLs to work behind HA Ingress proxy.
-
-    Only rewrites HTML attributes (href=, src=) — JavaScript API calls use the
-    client-side ``_base`` variable derived from ``window.location.pathname``,
-    so JS string literals must NOT be replaced here to avoid double-prefixing.
-    """
-    prefix = _sanitize_ingress_prefix(prefix)
-    if not prefix:
-        return html
-    # Only rewrite HTML attributes (double-quoted href=, src=) and standalone JS
-    # paths without _base. NEVER rewrite single-quoted JS strings that use _base
-    # (e.g. _base + '/api/hosts') — that causes double-prefixing.
-    html = html.replace('href="/static/', f'href="{prefix}/static/')
-    html = html.replace('src="/static/', f'src="{prefix}/static/')
-    html = html.replace('href="/listen"', f'href="{prefix}/listen"')
-    html = html.replace('href="/dashboard"', f'href="{prefix}/dashboard"')
-    html = html.replace('href="/admin"', f'href="{prefix}/admin"')
-    html = html.replace('href="/live"', f'href="{prefix}/live"')
-    html = html.replace('src="/stream"', f'src="{prefix}/stream"')
-    # Service worker registration is standalone (no _base), needs rewriting
-    html = html.replace("'/sw.js'", f"'{prefix}/sw.js'")
-    return html
 
 
 def _get_csrf_token(app) -> str:

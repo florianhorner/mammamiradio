@@ -23,7 +23,6 @@ from mammamiradio.web.streamer import (
     _preview_tracks,
     _purge_segment_queue,
     _same_origin,
-    _sanitize_ingress_prefix,
     _serialize_source,
     _tail_log,
 )
@@ -141,27 +140,6 @@ def test_preview_tracks():
     result = _preview_tracks(tracks, limit=2)
     assert result["track_count"] == 5
     assert len(result["tracks"]) == 2
-
-
-# ---------------------------------------------------------------------------
-# _sanitize_ingress_prefix
-# ---------------------------------------------------------------------------
-
-
-def test_sanitize_valid_prefix():
-    assert _sanitize_ingress_prefix("/api/hassio_ingress/abc123") == "/api/hassio_ingress/abc123"
-
-
-def test_sanitize_empty():
-    assert _sanitize_ingress_prefix("") == ""
-
-
-def test_sanitize_xss():
-    assert _sanitize_ingress_prefix('"><script>alert(1)</script>') == ""
-
-
-def test_sanitize_trailing_slash():
-    assert _sanitize_ingress_prefix("/prefix/") == "/prefix"
 
 
 # ---------------------------------------------------------------------------
