@@ -43,11 +43,12 @@ while IFS= read -r line; do
   # offset (caught a non-UTC false-stale that blocked legit PRs). GNU `date -d`
   # honors the Z; -u there is harmless.
   es="$(date -j -u -f '%Y-%m-%dT%H:%M:%SZ' "$ts" +%s 2>/dev/null || date -u -d "$ts" +%s 2>/dev/null || echo 0)"
-  # Treat an unparseable/missing/non-numeric timestamp as stale (skip it). A guard
-  # must fail toward "not authorized" on data whose freshness it cannot verify —
-  # never bless an entry just because its timestamp didn't parse.
-  if ! [ "$es" -gt 0 ] 2>/dev/null || [ "$((now - es))" -gt 7200 ]; then
-    continue # unverifiable or stale (>2h) — not this work session
+  # The entry must fall inside a +/-2h window around now. Reject unverifiable
+  # (unparseable/zero/non-numeric), far-future (clock skew or a forged-ahead
+  # timestamp >2h out), and stale (>2h old). A guard fails toward "not authorized"
+  # on data whose freshness it cannot trust; a few seconds of benign skew stays valid.
+  if ! [ "$es" -gt 0 ] 2>/dev/null || [ "$((es - now))" -gt 7200 ] || [ "$((now - es))" -gt 7200 ]; then
+    continue # unverifiable, far-future, or stale — outside the 2h work-session window
   fi
   if [ "$rc" = "$head" ] || git merge-base --is-ancestor "$rc" HEAD 2>/dev/null; then
     ok=1

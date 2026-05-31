@@ -10,6 +10,8 @@
     "deny": [
       "Bash(ha core restart*)",
       "Bash(ha core check*)",
+      "Bash(ha apps restart*)",
+      "Bash(ha apps stop*)",
       "Bash(docker restart addon_*)",
       "Bash(docker stop addon_*)",
       "Bash(docker kill addon_*)"

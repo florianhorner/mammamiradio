@@ -27,9 +27,11 @@ BOGUS_SHA="0000000"
 
 NOW_ISO="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 if date -u -v-3H +%s >/dev/null 2>&1; then
-  STALE_ISO="$(date -u -v-3H +%Y-%m-%dT%H:%M:%SZ)"   # BSD/macOS
+  STALE_ISO="$(date -u -v-3H +%Y-%m-%dT%H:%M:%SZ)"    # BSD/macOS
+  FUTURE_ISO="$(date -u -v+3H +%Y-%m-%dT%H:%M:%SZ)"
 else
   STALE_ISO="$(date -u -d '3 hours ago' +%Y-%m-%dT%H:%M:%SZ)"  # GNU/Linux CI
+  FUTURE_ISO="$(date -u -d '3 hours' +%Y-%m-%dT%H:%M:%SZ)"
 fi
 
 TMPDIR_T="$(mktemp -d)"
@@ -134,5 +136,11 @@ pass "bogus-commit entry denies"
   || fail "unparseable timestamp should deny (not be treated as fresh)"
 pass "unparseable timestamp denies"
 
+# Case 14: gh pr create, entry timestamped >2h in the FUTURE => DENY
+# A far-future timestamp is outside the +/-2h window and must not read as fresh.
+[ "$(verdict '{"tool_input":{"command":"gh pr create"}}' "$(make_reader review "$HEAD_SHA" "$FUTURE_ISO")")" = deny ] \
+  || fail "far-future timestamp should deny (not be treated as fresh)"
+pass "far-future timestamp denies"
+
 echo
-echo "All 13 pre-ship squad gate cases passed."
+echo "All 14 pre-ship squad gate cases passed."
