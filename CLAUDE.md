@@ -206,6 +206,7 @@ Why: the scriptwriter generates fake ads in the brand's voice, makes false produ
 
 ## Quality gates
 
+- **Land via `/ship` — never a bare merge (enforced)**: Every PR is opened and merged through `/ship`, which runs the mandatory pre-ship review squad (adversarial + test-coverage + docs/config-consistency). A `PreToolUse` hook (`scripts/hooks/require-preship-squad.sh`, wired in `.claude/settings.json`) refuses a bare `gh pr create` / `gh pr merge` unless a `review`/`adversarial-review` entry is logged for HEAD (or a recent ancestor). Added after a refactor cut opened PRs with bare `gh pr create`, skipping the squad's docs/config-consistency check and letting a doc-sync violation reach a green PR. Fail-open and project-scoped.
 - **Pre-merge QA (mandatory)**: Every PR must pass two separate `/qa` runs before merge:
   1. **Player QA** (`/qa` on `/` dashboard) — listener-facing: stream playback, now-playing, up-next, Casa card, song requests, clip sharing, responsive layout.
   2. **Admin QA** (`/qa` on `/admin`) — operator-facing: controls (skip/stop/resume/shuffle), pacing sliders, host config, key management, engine room, playlist management.

@@ -6,6 +6,21 @@
       "mcp__claude-in-chrome__tabs_context_mcp",
       "mcp__claude-in-chrome__get_page_text",
       "mcp__mempalace__mempalace_search"
+    ],
+    "deny": [
+      "Bash(ha core restart*)",
+      "Bash(ha core check*)",
+      "Bash(ha apps restart*)",
+      "Bash(ha apps stop*)",
+      "Bash(docker restart addon_*)",
+      "Bash(docker stop addon_*)",
+      "Bash(docker kill addon_*)"
+    ],
+    "ask": [
+      "Bash(git tag v*)",
+      "Bash(gh release create*)",
+      "Bash(gh release edit*)",
+      "Bash(gh release upload*)"
     ]
   },
   "hooks": {
@@ -18,6 +33,17 @@
             "command": "git fetch origin main 2>/dev/null; BRANCH=$(jq -r '.tool_input.head' 2>/dev/null); [ -z \"$BRANCH\" ] || [ \"$BRANCH\" = \"null\" ] && BRANCH=$(git branch --show-current); if ! git merge-tree --write-tree origin/main \"$BRANCH\" >/dev/null 2>&1; then echo '{\"decision\":\"block\",\"reason\":\"Branch has merge conflicts with main. Run: git fetch origin main && git merge origin/main, then resolve conflicts, commit, and push before creating the PR.\"}'; else echo '{\"decision\":\"allow\",\"reason\":\"Branch merges cleanly with main.\"}'; fi",
             "timeout": 30,
             "statusMessage": "Checking for merge conflicts with main..."
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$(git rev-parse --show-toplevel 2>/dev/null)/scripts/hooks/require-preship-squad.sh\" 2>/dev/null || exit 0",
+            "timeout": 20,
+            "statusMessage": "Checking pre-ship squad ran before PR..."
           }
         ]
       }
