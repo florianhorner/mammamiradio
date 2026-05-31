@@ -2161,3 +2161,34 @@ async def test_run_provider_verdict_discards_stale_result_when_key_changed():
         await _run_provider_verdict(app.state)
     # Stale "rejected" for the old key must be discarded; the fresh verdict stands.
     assert app.state.station_state.anthropic_key_status == "valid"
+
+
+@pytest.mark.asyncio
+async def test_provider_check_stale_shared_task_not_recorded_after_key_swap():
+    """A shared in-flight probe must not record its verdict against a key saved mid-check.
+
+    Covers the case a per-request snapshot missed: a later waiter joins an OLD task after
+    a save swapped the key, so the verdict must travel with the task, not the waiter.
+    """
+    app = _make_test_app()
+    app.state.config.anthropic_api_key = "sk-ant-old"
+    app.state.station_state.anthropic_key_status = "valid"  # fresh verdict from a save
+    started = asyncio.Event()
+    gate = asyncio.Event()
+
+    async def _gated_old_probe(_config):
+        started.set()
+        await gate.wait()
+        return _probe_payload(anthropic="auth")  # old key 401
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    with patch("mammamiradio.web.streamer.check_provider_keys", new=AsyncMock(side_effect=_gated_old_probe)):
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            req = asyncio.create_task(client.post("/api/setup/provider-check"))
+            await started.wait()  # task created with the "sk-ant-old" snapshot
+            app.state.config.anthropic_api_key = "sk-ant-new"  # operator saves a new key
+            gate.set()
+            resp = await req
+    assert resp.status_code == 200
+    # The stale old-key 401 must NOT clobber the fresh "valid" verdict.
+    assert app.state.station_state.anthropic_key_status == "valid"

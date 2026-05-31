@@ -2436,7 +2436,15 @@ async def test_credentials_saves_valid_key(tmp_path):
     previous = os.environ.get("ANTHROPIC_API_KEY")
     try:
         transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
-        with patch("mammamiradio.web.streamer._save_dotenv") as save_dotenv:
+        with (
+            patch("mammamiradio.web.streamer._save_dotenv") as save_dotenv,
+            # Saving credentials now schedules a background re-validation probe; stub it
+            # so this test never reaches the network.
+            patch(
+                "mammamiradio.web.provider_verdict.check_provider_keys",
+                new=AsyncMock(return_value={"ok": True, "providers": {}}),
+            ),
+        ):
             async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
                 resp = await client.post("/api/credentials", json={"anthropic_api_key": "sk-test\nKEY"})
         assert resp.status_code == 200
@@ -2445,6 +2453,62 @@ async def test_credentials_saves_valid_key(tmp_path):
         assert "ANTHROPIC_API_KEY" in body["saved"]
         assert app.state.config.anthropic_api_key == "sk-testKEY"
         save_dotenv.assert_called_once_with({"ANTHROPIC_API_KEY": "sk-testKEY"})
+        # Fix: /api/credentials must schedule re-validation like /api/setup/save-keys.
+        assert hasattr(app.state, "provider_verdict_task")
+    finally:
+        if previous is None:
+            os.environ.pop("ANTHROPIC_API_KEY", None)
+        else:
+            os.environ["ANTHROPIC_API_KEY"] = previous
+
+
+@pytest.mark.asyncio
+async def test_credentials_bad_key_surfaces_rejected(tmp_path):
+    """A bogus key saved via /api/credentials must read as rejected without a restart."""
+    app = _make_test_app()
+    app.state.station_state.anthropic_key_status = "rejected"  # stale prior verdict
+    previous = os.environ.get("ANTHROPIC_API_KEY")
+    probe = {
+        "ok": False,
+        "providers": {
+            "anthropic": {
+                "provider": "anthropic",
+                "configured": True,
+                "ok": False,
+                "status_code": 401,
+                "error_type": "authentication_error",
+                "detail": "",
+            },
+            "openai_chat": {
+                "provider": "openai_chat",
+                "configured": False,
+                "ok": False,
+                "status_code": None,
+                "error_type": "not_configured",
+                "detail": "",
+            },
+            "openai_tts": {
+                "provider": "openai_tts",
+                "configured": False,
+                "ok": False,
+                "status_code": None,
+                "error_type": "not_configured",
+                "detail": "",
+            },
+        },
+    }
+    try:
+        transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+        with (
+            patch("mammamiradio.web.streamer._save_dotenv"),
+            patch("mammamiradio.web.provider_verdict.check_provider_keys", new=AsyncMock(return_value=probe)),
+        ):
+            async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+                resp = await client.post("/api/credentials", json={"anthropic_api_key": "sk-ant-bogus"})
+            assert resp.status_code == 200
+            # _apply_live_credentials reset to "unverified"; the scheduled probe then rejects.
+            await app.state.provider_verdict_task
+        assert app.state.station_state.anthropic_key_status == "rejected"
     finally:
         if previous is None:
             os.environ.pop("ANTHROPIC_API_KEY", None)

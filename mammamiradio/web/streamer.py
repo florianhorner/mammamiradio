@@ -1535,14 +1535,14 @@ async def setup_provider_check(request: Request, _: None = Depends(require_admin
     launching overlapping 12-second outbound checks against every provider.
     """
     config = request.app.state.config
-    # Snapshot the keys this check is about to validate. A verdict from THIS probe must
-    # not clobber a fresher one written by a concurrent save_keys that swapped a key
-    # mid-check (same stale-write guard as _run_provider_verdict).
-    anthropic_key0 = config.anthropic_api_key
-    openai_key0 = config.openai_api_key
 
-    def _record_if_keys_unchanged(probe_result: dict) -> None:
-        if config.anthropic_api_key == anthropic_key0 and config.openai_api_key == openai_key0:
+    def _record_if_task_keys_match(probe_result: dict) -> None:
+        # The verdict must reflect the keys the SHARED in-flight task actually probed,
+        # not this waiter's snapshot. A later request joining an old task after a
+        # concurrent save swapped a key must NOT accept that task's stale 401. Compare
+        # current config to the keys captured when the task was created.
+        snapshot = getattr(request.app.state, "_provider_check_task_keys", None)
+        if snapshot == (config.anthropic_api_key, config.openai_api_key):
             _record_provider_verdict(request.app.state.station_state, probe_result)
 
     lock = getattr(request.app.state, "_provider_check_lock", None)
@@ -1568,10 +1568,13 @@ async def setup_provider_check(request: Request, _: None = Depends(require_admin
                 request.app.state._provider_check_cached_result = result
                 request.app.state._provider_check_cached_at = time.time()
                 request.app.state._provider_check_task = None
-                _record_if_keys_unchanged(result)
+                _record_if_task_keys_match(result)
                 return result
             task = None
         if task is None:
+            # Capture the keys this task probes so the verdict can't be misattributed
+            # to a later config (Codex: snapshot travels with the task, not the waiter).
+            request.app.state._provider_check_task_keys = (config.anthropic_api_key, config.openai_api_key)
             task = asyncio.create_task(check_provider_keys(config))
             request.app.state._provider_check_task = task
 
@@ -1588,7 +1591,7 @@ async def setup_provider_check(request: Request, _: None = Depends(require_admin
             request.app.state._provider_check_cached_result = result
             request.app.state._provider_check_cached_at = time.time()
             request.app.state._provider_check_task = None
-    _record_if_keys_unchanged(result)
+    _record_if_task_keys_match(result)
     return result
 
 
@@ -1602,12 +1605,6 @@ async def save_keys(request: Request):
         return {"ok": False, "error": "No keys provided"}
 
     await _persist_and_apply_credentials(request, updates, use_addon_options=True)
-
-    # Re-validate the freshly-saved key in the background so the admin reflects a
-    # bogus key WITHOUT waiting for a banter segment to fail. Fire-and-forget — the
-    # save response stays fast (Leadership Principle #2). Keep a reference so the task
-    # isn't garbage-collected mid-flight (RUF006).
-    request.app.state.provider_verdict_task = asyncio.create_task(_run_provider_verdict(request.app.state))
 
     return {"ok": True, "saved": list(updates.keys())}
 
@@ -1644,6 +1641,13 @@ async def _persist_and_apply_credentials(request: Request, updates: dict[str, st
         await loop.run_in_executor(None, _save_dotenv, updates)
 
     _apply_live_credentials(request.app.state.station_state, config, updates)
+
+    # Re-validate the freshly-saved key in the background so the admin reflects a bogus
+    # key WITHOUT waiting for a banter segment to fail. Applies to EVERY credential-save
+    # path (both /api/setup/save-keys and /api/credentials). Fire-and-forget so the
+    # response stays fast (Leadership Principle #2); keep a reference so the task isn't
+    # garbage-collected mid-flight (RUF006).
+    request.app.state.provider_verdict_task = asyncio.create_task(_run_provider_verdict(request.app.state))
 
 
 @router.get("/api/setup/addon-snippet")
