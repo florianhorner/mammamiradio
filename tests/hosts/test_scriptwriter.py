@@ -166,6 +166,43 @@ def test_hot_reload_resets_system_prompt_cache():
     assert scriptwriter_module._cached_prompt_key == ""
 
 
+def test_transitions_fallbacks_extraction_structural_and_reexport():
+    """Guard the H1b move of transition + fallback data to their own modules.
+
+    Structural, not byte-locked: these are frequently-tuned host copy, so we assert the
+    moved constants stay well-formed rather than pinning a hash (test_chaos_banter /
+    test_ads pin the exact chaos + ad-break content; the transition map is covered here
+    plus by test_massage_transition_text_*). Re-export identity: every moved symbol the
+    facade re-exposes must resolve to the SAME object as its new home, so the facade
+    re-import didn't fork a stale copy.
+    """
+    from mammamiradio.hosts import fallbacks, transitions
+
+    # transitions: rewrite map covers each next-segment, openers/stems are non-empty str
+    assert {"banter", "ad", "news_flash"} <= set(transitions._TRANSITION_REWRITE_MAP)
+    for openers in transitions._TRANSITION_REWRITE_MAP.values():
+        assert openers and all(isinstance(o, str) and o.strip() for o in openers)
+    assert transitions._BORING_TRANSITION_STEMS and all(
+        isinstance(s, str) and s for s in transitions._BORING_TRANSITION_STEMS
+    )
+
+    # fallbacks: every chaos subtype has stock lines; ad bumpers are non-empty str
+    assert set(fallbacks.CHAOS_STOCK_LINES) == set(ChaosSubtype)
+    for lines in fallbacks.CHAOS_STOCK_LINES.values():
+        assert lines and all(isinstance(line, str) and line.strip() for line in lines)
+    for bumpers in (fallbacks.AD_BREAK_INTROS, fallbacks.AD_BREAK_OUTROS):
+        assert bumpers and all(isinstance(b, str) and b.strip() for b in bumpers)
+
+    # facade re-export identity — same object, not a forked copy. Every moved symbol
+    # the facade still exposes (producer/tests read these through scriptwriter) is checked
+    # uniformly so the AD_BREAK_* re-export can't silently drop off the facade namespace.
+    assert scriptwriter_module.CHAOS_STOCK_LINES is fallbacks.CHAOS_STOCK_LINES
+    assert scriptwriter_module.AD_BREAK_INTROS is fallbacks.AD_BREAK_INTROS
+    assert scriptwriter_module.AD_BREAK_OUTROS is fallbacks.AD_BREAK_OUTROS
+    assert scriptwriter_module._massage_transition_text is transitions._massage_transition_text
+    assert scriptwriter_module._transition_stem is transitions._transition_stem
+
+
 # --- _host_expression_block tests ---
 
 
@@ -270,6 +307,17 @@ def test_massage_transition_text_keeps_fresh_opener():
     )
 
     assert text == "Aspetta un secondo, qui c'e da ridere."
+
+
+def test_massage_transition_text_all_rewrites_exhausted_returns_first():
+    """When the opener is a repeated boring stem AND every rewrite candidate's stem is
+    already in the recent set, fall through to the first canned opener (defensive path).
+    """
+    from mammamiradio.hosts.transitions import _TRANSITION_REWRITE_MAP
+
+    recent = ["Allora"] + _TRANSITION_REWRITE_MAP["banter"]
+    text = _massage_transition_text("Allora", "banter", recent)
+    assert text == _TRANSITION_REWRITE_MAP["banter"][0]
 
 
 # --- write_banter tests ---

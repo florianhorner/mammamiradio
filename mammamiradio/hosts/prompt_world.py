@@ -4,9 +4,10 @@ style directives, and Chaos/Festival mode prompt blocks.
 Extracted verbatim from ``hosts/scriptwriter.py`` (god-module split). Holds the
 expression/mode prompt-fiction — tune most of "how the hosts sound" here. Pure data;
 the assembling logic (_build_system_prompt, _personality_modifier) stays in
-scriptwriter, and transition/fallback copy (_TRANSITION_REWRITE_MAP, CHAOS_STOCK_LINES,
-AD_BREAK_*) is still in scriptwriter pending a follow-up cut. Reloaded ahead of the
-scriptwriter facade by /api/hot-reload so edits here take effect without a stream gap.
+scriptwriter. Sibling data leaves live in ``hosts/transitions.py`` (transition rewrite
+openers) and ``hosts/fallbacks.py`` (chaos stock lines, ad-break bumpers). All three
+are reloaded ahead of the scriptwriter facade by /api/hot-reload so edits here take
+effect without a stream gap.
 """
 
 from __future__ import annotations

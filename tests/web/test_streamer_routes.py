@@ -1755,7 +1755,12 @@ async def test_hot_reload_authenticated_200():
     assert resp.status_code == 200
     body = resp.json()
     assert body["ok"] is True
-    assert "mammamiradio.hosts.scriptwriter" in body["reloaded_modules"]
+    assert body["reloaded_modules"] == [
+        "mammamiradio.hosts.prompt_world",
+        "mammamiradio.hosts.transitions",
+        "mammamiradio.hosts.fallbacks",
+        "mammamiradio.hosts.scriptwriter",
+    ]
     assert body["stream_status"] == "unaffected"
     assert body["effective_on"] == "next_banter_generation"
     assert isinstance(body["duration_ms"], int)
@@ -1800,17 +1805,18 @@ async def test_hot_reload_prompt_world_stage_failure_returns_500():
 
 @pytest.mark.asyncio
 async def test_hot_reload_scriptwriter_stage_failure_returns_500():
-    """Second reload stage fails after the first succeeds → 500, stream unaffected.
+    """Last reload stage (the scriptwriter facade) fails after the leaves succeed → 500.
 
-    prompt_world reloads cleanly (first side-effect returns), then scriptwriter raises
-    (second side-effect). Without the sequenced side-effect this stage would go
-    uncovered, since the first reload would short-circuit the failure.
+    The data leaves (prompt_world, transitions, fallbacks) reload cleanly (first three
+    side-effects return), then the scriptwriter facade raises (fourth side-effect).
+    Without the sequenced side-effect this stage would go uncovered, since an earlier
+    reload would short-circuit the failure.
     """
     app = _make_test_app(admin_token="testtoken")
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
     with patch(
         "mammamiradio.web.streamer.importlib.reload",
-        side_effect=[None, ImportError("syntax error in scriptwriter.py")],
+        side_effect=[None, None, None, ImportError("syntax error in scriptwriter.py")],
     ):
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
             resp = await client.post(
@@ -1851,10 +1857,10 @@ async def test_hot_reload_debounce_returns_429_on_rapid_calls():
 async def test_hot_reload_reloads_prompt_world_before_scriptwriter():
     """Data submodules reload before the scriptwriter facade (leaves-first).
 
-    The facade re-imports prompt-fiction values via ``from .prompt_world import ...``.
-    Reloading the facade alone would rebind those names to the stale submodule, so an
-    operator's edit to prompt_world.py would silently not take effect. The reload set
-    must list (and reload) prompt_world ahead of scriptwriter.
+    The facade re-imports values via ``from .prompt_world / .transitions / .fallbacks
+    import ...``. Reloading the facade alone would rebind those names to the stale
+    submodules, so an operator's edit to any data leaf would silently not take effect.
+    The reload set must list (and reload) every data submodule ahead of scriptwriter.
     """
     app = _make_test_app(admin_token="testtoken")
     reloaded: list[str] = []
@@ -1874,5 +1880,7 @@ async def test_hot_reload_reloads_prompt_world_before_scriptwriter():
     assert resp.status_code == 200
     assert reloaded == [
         "mammamiradio.hosts.prompt_world",
+        "mammamiradio.hosts.transitions",
+        "mammamiradio.hosts.fallbacks",
         "mammamiradio.hosts.scriptwriter",
-    ], "prompt_world must reload before scriptwriter (leaves-first)"
+    ], "data submodules must reload before scriptwriter (leaves-first)"
