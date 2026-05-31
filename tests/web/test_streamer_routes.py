@@ -1975,7 +1975,7 @@ async def test_run_provider_verdict_no_keys_skips_probe():
     app = _make_test_app()
     app.state.config.anthropic_api_key = ""
     app.state.config.openai_api_key = ""
-    with patch("mammamiradio.web.streamer.check_provider_keys", new=AsyncMock()) as probe:
+    with patch("mammamiradio.web.provider_verdict.check_provider_keys", new=AsyncMock()) as probe:
         await _run_provider_verdict(app.state)
     probe.assert_not_awaited()
     assert app.state.station_state.anthropic_key_status == "unverified"
@@ -1986,7 +1986,9 @@ async def test_run_provider_verdict_swallows_probe_exception():
     """A flaky network must never crash boot or a key-save — status stays unverified."""
     app = _make_test_app()
     app.state.config.anthropic_api_key = "sk-ant-x"
-    with patch("mammamiradio.web.streamer.check_provider_keys", new=AsyncMock(side_effect=RuntimeError("boom"))):
+    with patch(
+        "mammamiradio.web.provider_verdict.check_provider_keys", new=AsyncMock(side_effect=RuntimeError("boom"))
+    ):
         await _run_provider_verdict(app.state)  # must not raise
     assert app.state.station_state.anthropic_key_status == "unverified"
 
@@ -1996,7 +1998,8 @@ async def test_run_provider_verdict_success_writes_state():
     app = _make_test_app()
     app.state.config.anthropic_api_key = "sk-ant-bogus"
     with patch(
-        "mammamiradio.web.streamer.check_provider_keys", new=AsyncMock(return_value=_probe_payload(anthropic="auth"))
+        "mammamiradio.web.provider_verdict.check_provider_keys",
+        new=AsyncMock(return_value=_probe_payload(anthropic="auth")),
     ):
         await _run_provider_verdict(app.state)
     assert app.state.station_state.anthropic_key_status == "rejected"
@@ -2023,20 +2026,27 @@ async def test_save_keys_resets_status_and_revalidates():
     app.state.station_state.anthropic_key_status = "rejected"  # stale prior verdict
     previous = os.environ.get("ANTHROPIC_API_KEY")
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    # Gate the background probe so it can't finish before we observe the synchronous
+    # reset — otherwise an immediate AsyncMock makes the "unverified" assertion racy.
+    gate = asyncio.Event()
+
+    async def _delayed_probe(_config):
+        await gate.wait()
+        return _probe_payload(anthropic="ok")
+
     try:
         with (
             patch("mammamiradio.web.streamer._save_dotenv"),
-            patch(
-                "mammamiradio.web.streamer.check_provider_keys",
-                new=AsyncMock(return_value=_probe_payload(anthropic="ok")),
-            ),
+            patch("mammamiradio.web.provider_verdict.check_provider_keys", new=AsyncMock(side_effect=_delayed_probe)),
         ):
             async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
                 resp = await client.post("/api/setup/save-keys", json={"ANTHROPIC_API_KEY": "sk-ant-new"})
             assert resp.status_code == 200
-            # _apply_live_credentials wiped the stale verdict synchronously.
+            # _apply_live_credentials wiped the stale verdict synchronously; the gated
+            # probe is still parked, so this is deterministic.
             assert app.state.station_state.anthropic_key_status == "unverified"
-            # The scheduled background re-probe then writes the fresh verdict.
+            # Release the background re-probe; it then writes the fresh verdict.
+            gate.set()
             await app.state.provider_verdict_task
         assert app.state.station_state.anthropic_key_status == "valid"
     finally:
@@ -2147,7 +2157,7 @@ async def test_run_provider_verdict_discards_stale_result_when_key_changed():
         config.anthropic_api_key = "sk-ant-new-good"
         return _probe_payload(anthropic="auth")
 
-    with patch("mammamiradio.web.streamer.check_provider_keys", new=_slow_probe):
+    with patch("mammamiradio.web.provider_verdict.check_provider_keys", new=_slow_probe):
         await _run_provider_verdict(app.state)
     # Stale "rejected" for the old key must be discarded; the fresh verdict stands.
     assert app.state.station_state.anthropic_key_status == "valid"

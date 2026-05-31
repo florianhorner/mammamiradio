@@ -251,7 +251,7 @@ async def test_startup_persisted_bogus_key_reads_rejected_after_boot():
         patch(f"{MODULE}.run_playback_loop", new_callable=AsyncMock),
         # Real _run_provider_verdict (autouse stub bypassed) with a mocked probe boundary.
         patch("mammamiradio.web.streamer._run_provider_verdict", new=_real_run_provider_verdict),
-        patch("mammamiradio.web.streamer.check_provider_keys", new=AsyncMock(return_value=probe)),
+        patch("mammamiradio.web.provider_verdict.check_provider_keys", new=AsyncMock(return_value=probe)),
     ):
         from mammamiradio.main import app, startup
 

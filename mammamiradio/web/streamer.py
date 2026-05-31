@@ -61,6 +61,10 @@ from mammamiradio.web.persistence import (
     _save_addon_options,
     _save_dotenv,
 )
+from mammamiradio.web.provider_verdict import (
+    _record_provider_verdict,
+    _run_provider_verdict,
+)
 from mammamiradio.web.ui_copy import copy_strings
 
 logger = logging.getLogger(__name__)
@@ -586,72 +590,6 @@ def _select_norm_cache_rescue(cache_dir: Path, state: StationState) -> Path | No
             candidates.append(path)
 
     return _random.choice(candidates or norm_files)
-
-
-def _verdict_from_probe_entry(entry: dict) -> str | None:
-    """Map a single ``check_provider_keys`` provider entry to a key-status verdict.
-
-    Returns "valid" / "rejected" for a definitive auth answer, or ``None`` when the
-    probe was inconclusive (key absent, quota/rate-limit/network error) so the caller
-    leaves the prior status untouched rather than overwriting it with a false signal.
-    """
-    if not isinstance(entry, dict) or not entry.get("configured"):
-        return None
-    if entry.get("ok"):
-        return "valid"
-    if entry.get("error_type") == "authentication_error":
-        return "rejected"
-    # Quota / rate-limit / network / unknown: the key was NOT actively refused, so we
-    # cannot claim "rejected". Stay "unverified" (handled by the caller as a no-op).
-    return None
-
-
-def _record_provider_verdict(state: StationState, probe_result: dict) -> None:
-    """Persist a ``check_provider_keys`` payload onto StationState key-status fields.
-
-    Only a definitive verdict ("valid"/"rejected") overwrites the prior status; an
-    inconclusive probe leaves the existing status as-is.
-    """
-    providers = (probe_result or {}).get("providers", {})
-    now = time.time()
-
-    anthropic_verdict = _verdict_from_probe_entry(providers.get("anthropic", {}))
-    if anthropic_verdict is not None:
-        state.anthropic_key_status = anthropic_verdict
-        state.anthropic_key_checked_at = now
-
-    # OpenAI is keyed by a single OPENAI_API_KEY; the chat endpoint is the canonical
-    # signal for the script-generation fallback path, so base the verdict on it.
-    openai_verdict = _verdict_from_probe_entry(providers.get("openai_chat", {}))
-    if openai_verdict is not None:
-        state.openai_key_status = openai_verdict
-        state.openai_key_checked_at = now
-
-
-async def _run_provider_verdict(app_state) -> None:
-    """Probe configured AI keys and persist the verdict onto StationState.
-
-    Non-blocking by contract: callers schedule this via ``asyncio.create_task`` and
-    never await it, so it can never delay boot or the first audio (Leadership
-    Principle #2). All exceptions are swallowed — a flaky network must never crash
-    startup or a key-save; the status simply stays "unverified".
-    """
-    config = app_state.config
-    state = app_state.station_state
-    if not config.anthropic_api_key and not config.openai_api_key:
-        return
-    # Snapshot the keys we're validating. If a concurrent save_keys swaps a key
-    # mid-probe, a late-finishing stale probe must not clobber the fresh verdict —
-    # its sibling save-scheduled probe already owns the new key's result.
-    anthropic_key = config.anthropic_api_key
-    openai_key = config.openai_api_key
-    try:
-        result = await check_provider_keys(config)
-    except BaseException:
-        return
-    if config.anthropic_api_key != anthropic_key or config.openai_api_key != openai_key:
-        return  # key changed mid-flight; the save-scheduled probe owns the verdict now
-    _record_provider_verdict(state, result)
 
 
 def _provider_health_snapshot(config, state: StationState) -> dict:
@@ -1597,6 +1535,16 @@ async def setup_provider_check(request: Request, _: None = Depends(require_admin
     launching overlapping 12-second outbound checks against every provider.
     """
     config = request.app.state.config
+    # Snapshot the keys this check is about to validate. A verdict from THIS probe must
+    # not clobber a fresher one written by a concurrent save_keys that swapped a key
+    # mid-check (same stale-write guard as _run_provider_verdict).
+    anthropic_key0 = config.anthropic_api_key
+    openai_key0 = config.openai_api_key
+
+    def _record_if_keys_unchanged(probe_result: dict) -> None:
+        if config.anthropic_api_key == anthropic_key0 and config.openai_api_key == openai_key0:
+            _record_provider_verdict(request.app.state.station_state, probe_result)
+
     lock = getattr(request.app.state, "_provider_check_lock", None)
     if lock is None:
         lock = asyncio.Lock()
@@ -1620,7 +1568,7 @@ async def setup_provider_check(request: Request, _: None = Depends(require_admin
                 request.app.state._provider_check_cached_result = result
                 request.app.state._provider_check_cached_at = time.time()
                 request.app.state._provider_check_task = None
-                _record_provider_verdict(request.app.state.station_state, result)
+                _record_if_keys_unchanged(result)
                 return result
             task = None
         if task is None:
@@ -1640,7 +1588,7 @@ async def setup_provider_check(request: Request, _: None = Depends(require_admin
             request.app.state._provider_check_cached_result = result
             request.app.state._provider_check_cached_at = time.time()
             request.app.state._provider_check_task = None
-    _record_provider_verdict(request.app.state.station_state, result)
+    _record_if_keys_unchanged(result)
     return result
 
 
