@@ -14,6 +14,19 @@ TEST_TMP = Path("/tmp/mammamiradio-test-main-tmp")
 TEST_CACHE = Path("/tmp/mammamiradio-test-main-cache")
 
 
+@pytest.fixture(autouse=True)
+def _stub_provider_verdict():
+    """Stop startup() from firing a real key-validation probe in lifecycle tests.
+
+    The MagicMock configs below have truthy api-key attributes, so startup schedules
+    the background verdict task. Stub the runner so it never reaches the network (it
+    is looked up via a late `from ...streamer import _run_provider_verdict` inside
+    startup, so patch the streamer module where it lives — not main).
+    """
+    with patch("mammamiradio.web.streamer._run_provider_verdict", new=AsyncMock()):
+        yield
+
+
 @pytest.mark.parametrize(
     ("env_value", "expected_level"),
     [
@@ -103,6 +116,40 @@ async def test_startup_creates_state_and_tasks():
         assert hasattr(app.state, "producer_task")
         assert hasattr(app.state, "playback_task")
         assert app.state.station_state.playlist == demo_tracks
+
+
+@pytest.mark.asyncio
+async def test_startup_skips_provider_verdict_when_no_keys():
+    """With no AI key configured, startup() must NOT schedule a validation probe."""
+    from mammamiradio.core.models import Track
+
+    mock_config = MagicMock()
+    mock_config.station.name = "TestRadio"
+    mock_config.station.language = "it"
+    mock_config.bind_host = "127.0.0.1"
+    mock_config.port = 8000
+    mock_config.pacing.lookahead_segments = 3
+    mock_config.max_cache_size_mb = 500
+    mock_config.tmp_dir = TEST_TMP
+    mock_config.cache_dir = TEST_CACHE
+    mock_config.anthropic_api_key = ""
+    mock_config.openai_api_key = ""
+
+    demo_tracks = [Track(title="Song", artist="Art", duration_ms=1000, spotify_id="t1")]
+
+    with (
+        patch(f"{MODULE}.load_config", return_value=mock_config),
+        patch(f"{MODULE}.read_persisted_source", return_value=None),
+        patch(f"{MODULE}.fetch_startup_playlist", return_value=(demo_tracks, None, "")),
+        patch(f"{MODULE}.run_producer", new_callable=AsyncMock),
+        patch(f"{MODULE}.run_playback_loop", new_callable=AsyncMock),
+        patch("mammamiradio.web.streamer._run_provider_verdict", new=AsyncMock()) as verdict,
+    ):
+        from mammamiradio.main import startup
+
+        await startup()
+
+        verdict.assert_not_called()
 
 
 @pytest.mark.asyncio

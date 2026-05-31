@@ -911,6 +911,22 @@ class TestCapabilitiesStatusIsHonest:
             "admin.html should surface the retry countdown when Anthropic is in backoff (Item 11)."
         )
 
+    def test_admin_html_renders_key_not_working_state(self):
+        # A bogus key (active-validation verdict "rejected") must render a distinct,
+        # persistent not-working state keyed on key_status — NOT reuse the transient
+        # amber "suspended" path. Both Anthropic and OpenAI consult the verdict.
+        html = ADMIN_HTML.read_text()
+        assert "anthropic_key_status" in html and "openai_key_status" in html, (
+            "admin.html engine-room render must consult `c.anthropic_key_status` and "
+            "`c.openai_key_status` so a key refused at boot reads as not-working before "
+            "any banter fails."
+        )
+        assert "key not working" in html, (
+            "admin.html must render a plain 'key not working' state for an auth-rejected key, "
+            "distinct from the transient 'suspended' fallback."
+        )
+        assert "rejected" in html, "the not-working branch must key on the 'rejected' verdict value."
+
 
 class TestRuntimeProviderTransparencyUI:
     def test_admin_html_has_runtime_status_card_and_header_health(self):

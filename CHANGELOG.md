@@ -8,6 +8,8 @@ The current version source of truth is `pyproject.toml`.
 
 ### Added
 
+- **The admin now tells you when an AI key isn't working** — a wrong or revoked Anthropic or OpenAI key is checked the moment the station starts (and again whenever you save a key), so the Engine Room shows a clear "key not working — replace key" state right away instead of looking connected until a host segment silently fails. Listeners never see any of this, and if a second valid key is configured the station keeps sounding live.
+
 - **Running-gag callbacks about your home** — when Home Assistant is connected, the AI hosts now occasionally land a deferred callback about a recurring home event from the same evening (the coffee machine going on yet again, the door, the vacuum), like an inside joke that builds over the night. The station keeps a small per-evening tally that survives addon restarts, paces each gag with a cooldown so it never repeats too often, and only draws on discrete on/off events (never numeric sensor noise). No effect when Home Assistant is not connected.
 
 ### Security

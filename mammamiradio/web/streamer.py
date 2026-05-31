@@ -586,6 +586,65 @@ def _select_norm_cache_rescue(cache_dir: Path, state: StationState) -> Path | No
     return _random.choice(candidates or norm_files)
 
 
+def _verdict_from_probe_entry(entry: dict) -> str | None:
+    """Map a single ``check_provider_keys`` provider entry to a key-status verdict.
+
+    Returns "valid" / "rejected" for a definitive auth answer, or ``None`` when the
+    probe was inconclusive (key absent, quota/rate-limit/network error) so the caller
+    leaves the prior status untouched rather than overwriting it with a false signal.
+    """
+    if not isinstance(entry, dict) or not entry.get("configured"):
+        return None
+    if entry.get("ok"):
+        return "valid"
+    if entry.get("error_type") == "authentication_error":
+        return "rejected"
+    # Quota / rate-limit / network / unknown: the key was NOT actively refused, so we
+    # cannot claim "rejected". Stay "unverified" (handled by the caller as a no-op).
+    return None
+
+
+def _record_provider_verdict(state: StationState, probe_result: dict) -> None:
+    """Persist a ``check_provider_keys`` payload onto StationState key-status fields.
+
+    Only a definitive verdict ("valid"/"rejected") overwrites the prior status; an
+    inconclusive probe leaves the existing status as-is.
+    """
+    providers = (probe_result or {}).get("providers", {})
+    now = time.time()
+
+    anthropic_verdict = _verdict_from_probe_entry(providers.get("anthropic", {}))
+    if anthropic_verdict is not None:
+        state.anthropic_key_status = anthropic_verdict
+        state.anthropic_key_checked_at = now
+
+    # OpenAI is keyed by a single OPENAI_API_KEY; the chat endpoint is the canonical
+    # signal for the script-generation fallback path, so base the verdict on it.
+    openai_verdict = _verdict_from_probe_entry(providers.get("openai_chat", {}))
+    if openai_verdict is not None:
+        state.openai_key_status = openai_verdict
+        state.openai_key_checked_at = now
+
+
+async def _run_provider_verdict(app_state) -> None:
+    """Probe configured AI keys and persist the verdict onto StationState.
+
+    Non-blocking by contract: callers schedule this via ``asyncio.create_task`` and
+    never await it, so it can never delay boot or the first audio (Leadership
+    Principle #2). All exceptions are swallowed — a flaky network must never crash
+    startup or a key-save; the status simply stays "unverified".
+    """
+    config = app_state.config
+    state = app_state.station_state
+    if not config.anthropic_api_key and not config.openai_api_key:
+        return
+    try:
+        result = await check_provider_keys(config)
+    except BaseException:
+        return
+    _record_provider_verdict(state, result)
+
+
 def _provider_health_snapshot(config, state: StationState) -> dict:
     """Return current provider degradation state for admin diagnostics."""
     now = time.time()
@@ -599,9 +658,11 @@ def _provider_health_snapshot(config, state: StationState) -> dict:
             "retry_after_s": retry_after,
             "last_error": state.anthropic_last_error if anthropic_degraded else "",
             "auth_failures": state.anthropic_auth_failures,
+            "key_status": state.anthropic_key_status,
         },
         "openai": {
             "configured": bool(config.openai_api_key),
+            "key_status": state.openai_key_status,
         },
         "chaos": {
             "enabled": state.chaos_mode_active,
@@ -1550,6 +1611,7 @@ async def setup_provider_check(request: Request, _: None = Depends(require_admin
                 request.app.state._provider_check_cached_result = result
                 request.app.state._provider_check_cached_at = time.time()
                 request.app.state._provider_check_task = None
+                _record_provider_verdict(request.app.state.station_state, result)
                 return result
             task = None
         if task is None:
@@ -1569,6 +1631,7 @@ async def setup_provider_check(request: Request, _: None = Depends(require_admin
             request.app.state._provider_check_cached_result = result
             request.app.state._provider_check_cached_at = time.time()
             request.app.state._provider_check_task = None
+    _record_provider_verdict(request.app.state.station_state, result)
     return result
 
 
@@ -1582,6 +1645,12 @@ async def save_keys(request: Request):
         return {"ok": False, "error": "No keys provided"}
 
     await _persist_and_apply_credentials(request, updates, use_addon_options=True)
+
+    # Re-validate the freshly-saved key in the background so the admin reflects a
+    # bogus key WITHOUT waiting for a banter segment to fail. Fire-and-forget — the
+    # save response stays fast (Leadership Principle #2). Keep a reference so the task
+    # isn't garbage-collected mid-flight (RUF006).
+    request.app.state.provider_verdict_task = asyncio.create_task(_run_provider_verdict(request.app.state))
 
     return {"ok": True, "saved": list(updates.keys())}
 
@@ -1636,8 +1705,13 @@ def _apply_live_credentials(state: StationState, config, updates: dict[str, str]
         reset_provider_backoff()
         state.anthropic_disabled_until = 0.0
         state.anthropic_last_error = ""
+        # New key: prior verdict is meaningless until re-probed (save_keys schedules it).
+        state.anthropic_key_status = "unverified"
+        state.anthropic_key_checked_at = 0.0
     if "OPENAI_API_KEY" in updates:
         config.openai_api_key = updates["OPENAI_API_KEY"]
+        state.openai_key_status = "unverified"
+        state.openai_key_checked_at = 0.0
 
 
 def _save_dotenv(updates: dict[str, str]) -> None:
@@ -1738,6 +1812,24 @@ async def capabilities(request: Request, _: None = Depends(require_admin_access)
     provider_health = _provider_health_snapshot(config, state)
     capabilities["anthropic_degraded"] = provider_health["anthropic"]["degraded"]
     capabilities["anthropic_retry_after_s"] = provider_health["anthropic"]["retry_after_s"]
+    # Tri-state key-validation verdict ("unverified" | "valid" | "rejected"), distinct
+    # from the time-based `anthropic_degraded`. Lets the admin show a persistent
+    # "key not working" state WITHOUT waiting for a banter segment to 401.
+    capabilities["anthropic_key_status"] = provider_health["anthropic"]["key_status"]
+    capabilities["openai_key_status"] = provider_health["openai"]["key_status"]
+    # If a configured key was actively refused and nothing else is confirmed working,
+    # steer next_step toward replacing it (placeholder copy — final operator wording is
+    # a separate communication pass). Tier itself stays key-presence-derived (conservative).
+    statuses = [
+        provider_health["anthropic"]["key_status"] if config.anthropic_api_key else None,
+        provider_health["openai"]["key_status"] if config.openai_api_key else None,
+    ]
+    if "rejected" in statuses and "valid" not in statuses:
+        result["next_step"] = {
+            "key": "fix_llm_key",
+            "message": "An AI key isn't working — replace it in Settings to restore AI hosts",
+            "action": "open_settings",
+        }
 
     now = state.now_streaming or {}
     result["now_playing"] = now
