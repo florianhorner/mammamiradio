@@ -56,8 +56,11 @@ def test_save_addon_options_treats_corrupt_file_as_empty(tmp_path):
 
 
 def test_apply_live_credentials_updates_config_env_and_clears_backoff(monkeypatch):
-    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    # setenv (not delenv) so monkeypatch tracks both keys and reliably restores them on
+    # teardown — _apply_live_credentials writes os.environ directly, which delenv on an
+    # absent key would not clean up, leaking the test values into later tests.
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "")
+    monkeypatch.setenv("OPENAI_API_KEY", "")
     config = SimpleNamespace(anthropic_api_key="", openai_api_key="")
     state = SimpleNamespace(anthropic_disabled_until=99.0, anthropic_last_error="boom")
 
