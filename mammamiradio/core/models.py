@@ -361,6 +361,11 @@ class ListenerProfile:
         )
 
 
+# Tri-state verdict from the active key-validation probe. Typed so route logic,
+# UI shaping, and tests share one contract and mypy catches drift/typos.
+KeyStatus = Literal["unverified", "valid", "rejected"]
+
+
 @dataclass
 class StationState:
     """Mutable in-memory state shared by producer and streamer tasks."""
@@ -467,6 +472,15 @@ class StationState:
     anthropic_last_error: str = ""
     anthropic_last_error_at: float = 0.0
     anthropic_auth_failures: int = 0
+    # Active key-validation verdict (set by a startup/on-save/on-demand auth ping;
+    # distinct from the time-based suspend above). "rejected" means the provider
+    # actively refused the key (401) — a persistent "replace the key" condition the
+    # operator can see WITHOUT waiting for a banter segment to fail. "unverified"
+    # means not-yet-checked or a non-auth probe failure (quota/rate-limit/network).
+    anthropic_key_status: KeyStatus = "unverified"
+    anthropic_key_checked_at: float = 0.0
+    openai_key_status: KeyStatus = "unverified"
+    openai_key_checked_at: float = 0.0
     # Listener connection tracking for "impossible moments"
     listeners_active: int = 0
     listeners_peak: int = 0

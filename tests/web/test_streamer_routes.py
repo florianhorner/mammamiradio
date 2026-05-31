@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import re
 import time
 from pathlib import Path
@@ -22,6 +23,8 @@ from mammamiradio.web.streamer import (
     SILENCE_FAILURE_SECONDS,
     LiveStreamHub,
     _persist_completed_music,
+    _record_provider_verdict,
+    _run_provider_verdict,
     _select_norm_cache_rescue,
     router,
     run_playback_loop,
@@ -1884,3 +1887,308 @@ async def test_hot_reload_reloads_prompt_world_before_scriptwriter():
         "mammamiradio.hosts.fallbacks",
         "mammamiradio.hosts.scriptwriter",
     ], "data submodules must reload before scriptwriter (leaves-first)"
+
+
+# ---------------------------------------------------------------------------
+# Provider key-validation verdict (rejected/valid/unverified)
+#
+# A bogus key persisted at boot must read as "key not working" BEFORE any banter
+# segment 401s. These cover the mapping helper, the non-blocking runner, and the
+# startup/save/on-demand wiring that persists the verdict onto StationState.
+# ---------------------------------------------------------------------------
+
+
+def _probe_entry(provider: str, outcome: str | None) -> dict:
+    """Build one check_provider_keys provider entry. outcome: 'ok'|'auth'|'quota'|None."""
+    if outcome is None:
+        return {
+            "provider": provider,
+            "configured": False,
+            "ok": False,
+            "status_code": None,
+            "error_type": "not_configured",
+            "detail": "",
+        }
+    if outcome == "ok":
+        return {
+            "provider": provider,
+            "configured": True,
+            "ok": True,
+            "status_code": 200,
+            "error_type": "",
+            "detail": "",
+        }
+    mapping = {"auth": (401, "authentication_error"), "quota": (403, "insufficient_quota"), "rate": (429, "rate_limit")}
+    status_code, error_type = mapping[outcome]
+    return {
+        "provider": provider,
+        "configured": True,
+        "ok": False,
+        "status_code": status_code,
+        "error_type": error_type,
+        "detail": "",
+    }
+
+
+def _probe_payload(*, anthropic: str | None = None, openai_chat: str | None = None) -> dict:
+    providers = {
+        "anthropic": _probe_entry("anthropic", anthropic),
+        "openai_chat": _probe_entry("openai_chat", openai_chat),
+        "openai_tts": _probe_entry("openai_tts", openai_chat),
+    }
+    return {"ok": any(p["ok"] for p in providers.values()), "providers": providers}
+
+
+def test_record_provider_verdict_maps_auth_to_rejected():
+    state = StationState()
+    _record_provider_verdict(state, _probe_payload(anthropic="auth"))
+    assert state.anthropic_key_status == "rejected"
+    assert state.anthropic_key_checked_at > 0
+
+
+def test_record_provider_verdict_maps_ok_to_valid():
+    state = StationState()
+    _record_provider_verdict(state, _probe_payload(anthropic="ok"))
+    assert state.anthropic_key_status == "valid"
+
+
+def test_record_provider_verdict_leaves_inconclusive_unchanged():
+    """Quota / rate-limit / network are NOT auth rejections — status must not flip to rejected."""
+    state = StationState()
+    state.anthropic_key_status = "valid"
+    _record_provider_verdict(state, _probe_payload(anthropic="quota"))
+    assert state.anthropic_key_status == "valid", "quota error must not be mislabeled rejected"
+    _record_provider_verdict(state, _probe_payload(anthropic="rate"))
+    assert state.anthropic_key_status == "valid"
+
+
+def test_record_provider_verdict_openai_parity():
+    state = StationState()
+    _record_provider_verdict(state, _probe_payload(openai_chat="auth"))
+    assert state.openai_key_status == "rejected"
+    _record_provider_verdict(state, _probe_payload(openai_chat="ok"))
+    assert state.openai_key_status == "valid"
+
+
+@pytest.mark.asyncio
+async def test_run_provider_verdict_no_keys_skips_probe():
+    app = _make_test_app()
+    app.state.config.anthropic_api_key = ""
+    app.state.config.openai_api_key = ""
+    with patch("mammamiradio.web.provider_verdict.check_provider_keys", new=AsyncMock()) as probe:
+        await _run_provider_verdict(app.state)
+    probe.assert_not_awaited()
+    assert app.state.station_state.anthropic_key_status == "unverified"
+
+
+@pytest.mark.asyncio
+async def test_run_provider_verdict_swallows_probe_exception():
+    """A flaky network must never crash boot or a key-save — status stays unverified."""
+    app = _make_test_app()
+    app.state.config.anthropic_api_key = "sk-ant-x"
+    with patch(
+        "mammamiradio.web.provider_verdict.check_provider_keys", new=AsyncMock(side_effect=RuntimeError("boom"))
+    ):
+        await _run_provider_verdict(app.state)  # must not raise
+    assert app.state.station_state.anthropic_key_status == "unverified"
+
+
+@pytest.mark.asyncio
+async def test_run_provider_verdict_success_writes_state():
+    app = _make_test_app()
+    app.state.config.anthropic_api_key = "sk-ant-bogus"
+    with patch(
+        "mammamiradio.web.provider_verdict.check_provider_keys",
+        new=AsyncMock(return_value=_probe_payload(anthropic="auth")),
+    ):
+        await _run_provider_verdict(app.state)
+    assert app.state.station_state.anthropic_key_status == "rejected"
+
+
+@pytest.mark.asyncio
+async def test_provider_check_route_persists_rejected_verdict():
+    """POST /api/setup/provider-check records the verdict on state, not just the response."""
+    app = _make_test_app()
+    app.state.config.anthropic_api_key = "anthropic-secret"
+    payload = _probe_payload(anthropic="auth")
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    with patch("mammamiradio.web.streamer.check_provider_keys", new=AsyncMock(return_value=payload)):
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            resp = await client.post("/api/setup/provider-check")
+    assert resp.status_code == 200
+    assert resp.json() == payload  # response body unchanged (existing contract)
+    assert app.state.station_state.anthropic_key_status == "rejected"
+
+
+@pytest.mark.asyncio
+async def test_save_keys_resets_status_and_revalidates():
+    app = _make_test_app()
+    app.state.station_state.anthropic_key_status = "rejected"  # stale prior verdict
+    previous = os.environ.get("ANTHROPIC_API_KEY")
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    # Gate the background probe so it can't finish before we observe the synchronous
+    # reset — otherwise an immediate AsyncMock makes the "unverified" assertion racy.
+    gate = asyncio.Event()
+
+    async def _delayed_probe(_config):
+        await gate.wait()
+        return _probe_payload(anthropic="ok")
+
+    try:
+        with (
+            patch("mammamiradio.web.streamer._save_dotenv"),
+            patch("mammamiradio.web.provider_verdict.check_provider_keys", new=AsyncMock(side_effect=_delayed_probe)),
+        ):
+            async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+                resp = await client.post("/api/setup/save-keys", json={"ANTHROPIC_API_KEY": "sk-ant-new"})
+            assert resp.status_code == 200
+            # _apply_live_credentials wiped the stale verdict synchronously; the gated
+            # probe is still parked, so this is deterministic.
+            assert app.state.station_state.anthropic_key_status == "unverified"
+            # Release the background re-probe; it then writes the fresh verdict.
+            gate.set()
+            await app.state.provider_verdict_task
+        assert app.state.station_state.anthropic_key_status == "valid"
+    finally:
+        if previous is None:
+            os.environ.pop("ANTHROPIC_API_KEY", None)
+        else:
+            os.environ["ANTHROPIC_API_KEY"] = previous
+
+
+@pytest.mark.asyncio
+async def test_capabilities_exposes_key_status_and_steers_next_step():
+    app = _make_test_app()
+    app.state.config.anthropic_api_key = "sk-ant-bogus"
+    app.state.config.openai_api_key = ""
+    app.state.station_state.anthropic_key_status = "rejected"
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        body = (await client.get("/api/capabilities")).json()
+    caps = body["capabilities"]
+    assert caps["anthropic_key_status"] == "rejected"
+    assert "openai_key_status" in caps
+    # A confirmed-rejected sole key steers next_step toward replacing it.
+    assert body["next_step"]["key"] == "fix_llm_key"
+    # provider_health carries the verdict for both providers.
+    assert body["provider_health"]["anthropic"]["key_status"] == "rejected"
+    assert "key_status" in body["provider_health"]["openai"]
+
+
+@pytest.mark.asyncio
+async def test_capabilities_valid_key_does_not_steer_next_step():
+    app = _make_test_app()
+    app.state.config.anthropic_api_key = "sk-ant-good"
+    app.state.station_state.anthropic_key_status = "valid"
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        body = (await client.get("/api/capabilities")).json()
+    assert body["next_step"]["key"] != "fix_llm_key"
+
+
+@pytest.mark.asyncio
+async def test_capabilities_rejected_anthropic_but_valid_openai_does_not_steer():
+    """OpenAI is a working fallback — a rejected Anthropic key must NOT nag to fix it."""
+    app = _make_test_app()
+    app.state.config.anthropic_api_key = "sk-ant-bad"
+    app.state.config.openai_api_key = "sk-openai-good"
+    app.state.station_state.anthropic_key_status = "rejected"
+    app.state.station_state.openai_key_status = "valid"
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        body = (await client.get("/api/capabilities")).json()
+    assert body["next_step"]["key"] != "fix_llm_key"
+
+
+@pytest.mark.asyncio
+async def test_capabilities_rejected_anthropic_with_unverified_openai_does_not_steer_yet():
+    """While the second provider's probe is still in flight, hold the fix nudge."""
+    app = _make_test_app()
+    app.state.config.anthropic_api_key = "sk-ant-bad"
+    app.state.config.openai_api_key = "sk-openai-pending"
+    app.state.station_state.anthropic_key_status = "rejected"
+    app.state.station_state.openai_key_status = "unverified"
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        body = (await client.get("/api/capabilities")).json()
+    assert body["next_step"]["key"] != "fix_llm_key"
+
+
+@pytest.mark.asyncio
+async def test_capabilities_openai_rejected_alone_steers_fix_llm_key():
+    """OpenAI-only deployment with a rejected key: surface it end-to-end via /api/capabilities."""
+    app = _make_test_app()
+    app.state.config.anthropic_api_key = ""
+    app.state.config.openai_api_key = "sk-openai-bad"
+    app.state.station_state.openai_key_status = "rejected"
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        body = (await client.get("/api/capabilities")).json()
+    assert body["capabilities"]["openai_key_status"] == "rejected"
+    assert body["provider_health"]["openai"]["key_status"] == "rejected"
+    assert body["next_step"]["key"] == "fix_llm_key"
+
+
+@pytest.mark.asyncio
+async def test_provider_check_cached_result_does_not_clear_verdict():
+    """A debounced (cached) second /provider-check must not wipe the persisted verdict."""
+    app = _make_test_app()
+    app.state.config.anthropic_api_key = "anthropic-secret"
+    payload = _probe_payload(anthropic="auth")
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    with patch("mammamiradio.web.streamer.check_provider_keys", new=AsyncMock(return_value=payload)):
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            await client.post("/api/setup/provider-check")
+            assert app.state.station_state.anthropic_key_status == "rejected"
+            # Second call inside the 2s debounce window returns the cached result.
+            await client.post("/api/setup/provider-check")
+    assert app.state.station_state.anthropic_key_status == "rejected"
+
+
+@pytest.mark.asyncio
+async def test_run_provider_verdict_discards_stale_result_when_key_changed():
+    """A late-finishing probe must not clobber the verdict after the key was swapped."""
+    app = _make_test_app()
+    app.state.config.anthropic_api_key = "sk-ant-old-bad"
+    app.state.station_state.anthropic_key_status = "valid"  # a fresh save already set this
+
+    async def _slow_probe(config):
+        # Simulate save_keys swapping the key while this stale probe is in flight.
+        config.anthropic_api_key = "sk-ant-new-good"
+        return _probe_payload(anthropic="auth")
+
+    with patch("mammamiradio.web.provider_verdict.check_provider_keys", new=_slow_probe):
+        await _run_provider_verdict(app.state)
+    # Stale "rejected" for the old key must be discarded; the fresh verdict stands.
+    assert app.state.station_state.anthropic_key_status == "valid"
+
+
+@pytest.mark.asyncio
+async def test_provider_check_stale_shared_task_not_recorded_after_key_swap():
+    """A shared in-flight probe must not record its verdict against a key saved mid-check.
+
+    Covers the case a per-request snapshot missed: a later waiter joins an OLD task after
+    a save swapped the key, so the verdict must travel with the task, not the waiter.
+    """
+    app = _make_test_app()
+    app.state.config.anthropic_api_key = "sk-ant-old"
+    app.state.station_state.anthropic_key_status = "valid"  # fresh verdict from a save
+    started = asyncio.Event()
+    gate = asyncio.Event()
+
+    async def _gated_old_probe(_config):
+        started.set()
+        await gate.wait()
+        return _probe_payload(anthropic="auth")  # old key 401
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    with patch("mammamiradio.web.streamer.check_provider_keys", new=AsyncMock(side_effect=_gated_old_probe)):
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            req = asyncio.create_task(client.post("/api/setup/provider-check"))
+            await started.wait()  # task created with the "sk-ant-old" snapshot
+            app.state.config.anthropic_api_key = "sk-ant-new"  # operator saves a new key
+            gate.set()
+            resp = await req
+    assert resp.status_code == 200
+    # The stale old-key 401 must NOT clobber the fresh "valid" verdict.
+    assert app.state.station_state.anthropic_key_status == "valid"

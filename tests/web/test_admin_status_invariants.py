@@ -142,7 +142,12 @@ def test_engine_room_capability_lines_use_status_helpers() -> None:
     assert "anthropicLine=statusInline('degraded','suspended'+retry" in block
     assert "anthropicLine=statusInline('ready','connected')" in block
     assert "anthropicLine=statusInline('idle','not configured')" in block
-    assert "OpenAI: '+statusInline(c.openai?'ready':'idle'" in block
+    # Auth-rejected key reads as a persistent not-working state (red ✗ blocked chip),
+    # for both Anthropic and OpenAI — distinct from the transient amber "suspended".
+    assert "anthropicLine=statusInline('blocked','key not working'" in block
+    assert "openaiLine=statusInline('blocked','key not working'" in block
+    assert "openaiLine=statusInline('ready','available')" in block
+    assert "OpenAI: '+openaiLine" in block
     assert "Home Assistant: '+statusInline(c.ha?'ready':'idle'" in block
 
 

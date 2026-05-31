@@ -61,6 +61,10 @@ from mammamiradio.web.persistence import (
     _save_addon_options,
     _save_dotenv,
 )
+from mammamiradio.web.provider_verdict import (
+    _record_provider_verdict,
+    _run_provider_verdict,
+)
 from mammamiradio.web.ui_copy import copy_strings
 
 logger = logging.getLogger(__name__)
@@ -601,9 +605,11 @@ def _provider_health_snapshot(config, state: StationState) -> dict:
             "retry_after_s": retry_after,
             "last_error": state.anthropic_last_error if anthropic_degraded else "",
             "auth_failures": state.anthropic_auth_failures,
+            "key_status": state.anthropic_key_status,
         },
         "openai": {
             "configured": bool(config.openai_api_key),
+            "key_status": state.openai_key_status,
         },
         "chaos": {
             "enabled": state.chaos_mode_active,
@@ -1529,6 +1535,16 @@ async def setup_provider_check(request: Request, _: None = Depends(require_admin
     launching overlapping 12-second outbound checks against every provider.
     """
     config = request.app.state.config
+
+    def _record_if_task_keys_match(probe_result: dict) -> None:
+        # The verdict must reflect the keys the SHARED in-flight task actually probed,
+        # not this waiter's snapshot. A later request joining an old task after a
+        # concurrent save swapped a key must NOT accept that task's stale 401. Compare
+        # current config to the keys captured when the task was created.
+        snapshot = getattr(request.app.state, "_provider_check_task_keys", None)
+        if snapshot == (config.anthropic_api_key, config.openai_api_key):
+            _record_provider_verdict(request.app.state.station_state, probe_result)
+
     lock = getattr(request.app.state, "_provider_check_lock", None)
     if lock is None:
         lock = asyncio.Lock()
@@ -1552,9 +1568,13 @@ async def setup_provider_check(request: Request, _: None = Depends(require_admin
                 request.app.state._provider_check_cached_result = result
                 request.app.state._provider_check_cached_at = time.time()
                 request.app.state._provider_check_task = None
+                _record_if_task_keys_match(result)
                 return result
             task = None
         if task is None:
+            # Capture the keys this task probes so the verdict can't be misattributed
+            # to a later config (Codex: snapshot travels with the task, not the waiter).
+            request.app.state._provider_check_task_keys = (config.anthropic_api_key, config.openai_api_key)
             task = asyncio.create_task(check_provider_keys(config))
             request.app.state._provider_check_task = task
 
@@ -1571,6 +1591,7 @@ async def setup_provider_check(request: Request, _: None = Depends(require_admin
             request.app.state._provider_check_cached_result = result
             request.app.state._provider_check_cached_at = time.time()
             request.app.state._provider_check_task = None
+    _record_if_task_keys_match(result)
     return result
 
 
@@ -1621,6 +1642,13 @@ async def _persist_and_apply_credentials(request: Request, updates: dict[str, st
 
     _apply_live_credentials(request.app.state.station_state, config, updates)
 
+    # Re-validate the freshly-saved key in the background so the admin reflects a bogus
+    # key WITHOUT waiting for a banter segment to fail. Applies to EVERY credential-save
+    # path (both /api/setup/save-keys and /api/credentials). Fire-and-forget so the
+    # response stays fast (Leadership Principle #2); keep a reference so the task isn't
+    # garbage-collected mid-flight (RUF006).
+    request.app.state.provider_verdict_task = asyncio.create_task(_run_provider_verdict(request.app.state))
+
 
 @router.get("/api/setup/addon-snippet")
 async def setup_addon_snippet(request: Request, _: None = Depends(require_admin_access)):
@@ -1649,6 +1677,26 @@ async def capabilities(request: Request, _: None = Depends(require_admin_access)
     provider_health = _provider_health_snapshot(config, state)
     capabilities["anthropic_degraded"] = provider_health["anthropic"]["degraded"]
     capabilities["anthropic_retry_after_s"] = provider_health["anthropic"]["retry_after_s"]
+    # Tri-state key-validation verdict ("unverified" | "valid" | "rejected"), distinct
+    # from the time-based `anthropic_degraded`. Lets the admin show a persistent
+    # "key not working" state WITHOUT waiting for a banter segment to 401.
+    capabilities["anthropic_key_status"] = provider_health["anthropic"]["key_status"]
+    capabilities["openai_key_status"] = provider_health["openai"]["key_status"]
+    # If a configured key was actively refused and nothing else is confirmed working,
+    # steer next_step toward replacing it (placeholder copy — final operator wording is
+    # a separate communication pass). Tier itself stays key-presence-derived (conservative).
+    statuses = [
+        provider_health["anthropic"]["key_status"] if config.anthropic_api_key else None,
+        provider_health["openai"]["key_status"] if config.openai_api_key else None,
+    ]
+    # Only steer once the probes have settled: an "unverified" key is still in flight,
+    # so don't nudge "replace your key" while a configured key might yet come back valid.
+    if "rejected" in statuses and "valid" not in statuses and "unverified" not in statuses:
+        result["next_step"] = {
+            "key": "fix_llm_key",
+            "message": "An AI key isn't working — replace it in Settings to restore AI hosts",
+            "action": "open_settings",
+        }
 
     now = state.now_streaming or {}
     result["now_playing"] = now

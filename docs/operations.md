@@ -102,6 +102,24 @@ Admin (require `ADMIN_PASSWORD` or `ADMIN_TOKEN` unless on loopback):
 
 The Engine Room card in `/admin` renders this live. Structured log events (`provider_switch_event`, `provider_health_state`) are also emitted so log aggregators can alert on sustained fallback states.
 
+### Detecting a not-working AI key
+
+A key that is present but invalid (a wrong or revoked `ANTHROPIC_API_KEY` / `OPENAI_API_KEY`)
+is validated actively, so the operator sees it without waiting for a banter segment to fail:
+
+- On startup (when any key is configured) and after a key-save, a single secret-safe
+  `max_tokens=1` probe (`check_provider_keys`) runs in the background — fire-and-forget, so it
+  never delays boot or the first audio. `POST /api/setup/provider-check` runs it on demand.
+- The verdict is cached on the station state and exposed in `GET /api/capabilities`:
+  `capabilities.anthropic_key_status` / `capabilities.openai_key_status`, and
+  `provider_health.{anthropic,openai}.key_status`. Each is `"unverified"` (not yet checked, or a
+  non-auth probe error such as quota/rate-limit/network), `"valid"`, or `"rejected"` (the
+  provider actively refused the key with a 401).
+- A `"rejected"` key reads in the Engine Room as a persistent **key not working — replace key**
+  state, distinct from the transient time-based `anthropic_degraded` "suspended" fallback. When a
+  rejected key is the only configured LLM key, `capabilities.next_step` steers toward replacing it.
+- The listener side never surfaces key health; if OpenAI is valid the station keeps sounding live.
+
 ## Recommended production shape
 
 There is no blessed platform in this repo, but the sensible shape is:

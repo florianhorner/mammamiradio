@@ -39,8 +39,13 @@ def _apply_live_credentials(state: StationState, config, updates: dict[str, str]
         reset_provider_backoff()
         state.anthropic_disabled_until = 0.0
         state.anthropic_last_error = ""
+        # New key: prior verdict is meaningless until re-probed (save_keys schedules it).
+        state.anthropic_key_status = "unverified"
+        state.anthropic_key_checked_at = 0.0
     if "OPENAI_API_KEY" in updates:
         config.openai_api_key = updates["OPENAI_API_KEY"]
+        state.openai_key_status = "unverified"
+        state.openai_key_checked_at = 0.0
 
 
 def _save_dotenv(updates: dict[str, str]) -> None:
