@@ -9,6 +9,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 
+# Capture the real verdict runner at import time, before the autouse stub below
+# patches the module attribute — Scenario-3 test needs the genuine function.
+from mammamiradio.web.streamer import _run_provider_verdict as _real_run_provider_verdict
+
 MODULE = "mammamiradio.main"
 TEST_TMP = Path("/tmp/mammamiradio-test-main-tmp")
 TEST_CACHE = Path("/tmp/mammamiradio-test-main-cache")
@@ -150,6 +154,111 @@ async def test_startup_skips_provider_verdict_when_no_keys():
         await startup()
 
         verdict.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_startup_with_key_schedules_provider_verdict():
+    """With a key configured, startup() must schedule the background validation probe."""
+    from mammamiradio.core.models import Track
+
+    mock_config = MagicMock()
+    mock_config.station.name = "TestRadio"
+    mock_config.station.language = "it"
+    mock_config.bind_host = "127.0.0.1"
+    mock_config.port = 8000
+    mock_config.pacing.lookahead_segments = 3
+    mock_config.max_cache_size_mb = 500
+    mock_config.tmp_dir = TEST_TMP
+    mock_config.cache_dir = TEST_CACHE
+    mock_config.anthropic_api_key = "sk-ant-x"
+    mock_config.openai_api_key = ""
+
+    demo_tracks = [Track(title="Song", artist="Art", duration_ms=1000, spotify_id="t1")]
+
+    with (
+        patch(f"{MODULE}.load_config", return_value=mock_config),
+        patch(f"{MODULE}.read_persisted_source", return_value=None),
+        patch(f"{MODULE}.fetch_startup_playlist", return_value=(demo_tracks, None, "")),
+        patch(f"{MODULE}.run_producer", new_callable=AsyncMock),
+        patch(f"{MODULE}.run_playback_loop", new_callable=AsyncMock),
+        patch("mammamiradio.web.streamer._run_provider_verdict", new=AsyncMock()) as verdict,
+    ):
+        from mammamiradio.main import app, startup
+
+        await startup()
+
+        verdict.assert_called_once()
+        assert hasattr(app.state, "provider_verdict_task")
+
+
+@pytest.mark.asyncio
+async def test_startup_persisted_bogus_key_reads_rejected_after_boot():
+    """Scenario 3 (post-restart): a bogus key persisted in .env surfaces as rejected on boot.
+
+    Simulates the HA-watchdog-restart path — fresh StationState, key already on disk —
+    and proves the admin would show "not working" without waiting for a banter to fail.
+    """
+    from mammamiradio.core.models import Track
+
+    mock_config = MagicMock()
+    mock_config.station.name = "TestRadio"
+    mock_config.station.language = "it"
+    mock_config.bind_host = "127.0.0.1"
+    mock_config.port = 8000
+    mock_config.pacing.lookahead_segments = 3
+    mock_config.max_cache_size_mb = 500
+    mock_config.tmp_dir = TEST_TMP
+    mock_config.cache_dir = TEST_CACHE
+    mock_config.anthropic_api_key = "sk-ant-persisted-bogus"
+    mock_config.openai_api_key = ""
+
+    demo_tracks = [Track(title="Song", artist="Art", duration_ms=1000, spotify_id="t1")]
+    probe = {
+        "ok": False,
+        "providers": {
+            "anthropic": {
+                "provider": "anthropic",
+                "configured": True,
+                "ok": False,
+                "status_code": 401,
+                "error_type": "authentication_error",
+                "detail": "",
+            },
+            "openai_chat": {
+                "provider": "openai_chat",
+                "configured": False,
+                "ok": False,
+                "status_code": None,
+                "error_type": "not_configured",
+                "detail": "",
+            },
+            "openai_tts": {
+                "provider": "openai_tts",
+                "configured": False,
+                "ok": False,
+                "status_code": None,
+                "error_type": "not_configured",
+                "detail": "",
+            },
+        },
+    }
+
+    with (
+        patch(f"{MODULE}.load_config", return_value=mock_config),
+        patch(f"{MODULE}.read_persisted_source", return_value=None),
+        patch(f"{MODULE}.fetch_startup_playlist", return_value=(demo_tracks, None, "")),
+        patch(f"{MODULE}.run_producer", new_callable=AsyncMock),
+        patch(f"{MODULE}.run_playback_loop", new_callable=AsyncMock),
+        # Real _run_provider_verdict (autouse stub bypassed) with a mocked probe boundary.
+        patch("mammamiradio.web.streamer._run_provider_verdict", new=_real_run_provider_verdict),
+        patch("mammamiradio.web.streamer.check_provider_keys", new=AsyncMock(return_value=probe)),
+    ):
+        from mammamiradio.main import app, startup
+
+        await startup()
+        await app.state.provider_verdict_task
+
+    assert app.state.station_state.anthropic_key_status == "rejected"
 
 
 @pytest.mark.asyncio

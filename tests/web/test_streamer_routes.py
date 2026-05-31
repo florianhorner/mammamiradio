@@ -2074,3 +2074,80 @@ async def test_capabilities_valid_key_does_not_steer_next_step():
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
         body = (await client.get("/api/capabilities")).json()
     assert body["next_step"]["key"] != "fix_llm_key"
+
+
+@pytest.mark.asyncio
+async def test_capabilities_rejected_anthropic_but_valid_openai_does_not_steer():
+    """OpenAI is a working fallback — a rejected Anthropic key must NOT nag to fix it."""
+    app = _make_test_app()
+    app.state.config.anthropic_api_key = "sk-ant-bad"
+    app.state.config.openai_api_key = "sk-openai-good"
+    app.state.station_state.anthropic_key_status = "rejected"
+    app.state.station_state.openai_key_status = "valid"
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        body = (await client.get("/api/capabilities")).json()
+    assert body["next_step"]["key"] != "fix_llm_key"
+
+
+@pytest.mark.asyncio
+async def test_capabilities_rejected_anthropic_with_unverified_openai_does_not_steer_yet():
+    """While the second provider's probe is still in flight, hold the fix nudge."""
+    app = _make_test_app()
+    app.state.config.anthropic_api_key = "sk-ant-bad"
+    app.state.config.openai_api_key = "sk-openai-pending"
+    app.state.station_state.anthropic_key_status = "rejected"
+    app.state.station_state.openai_key_status = "unverified"
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        body = (await client.get("/api/capabilities")).json()
+    assert body["next_step"]["key"] != "fix_llm_key"
+
+
+@pytest.mark.asyncio
+async def test_capabilities_openai_rejected_alone_steers_fix_llm_key():
+    """OpenAI-only deployment with a rejected key: surface it end-to-end via /api/capabilities."""
+    app = _make_test_app()
+    app.state.config.anthropic_api_key = ""
+    app.state.config.openai_api_key = "sk-openai-bad"
+    app.state.station_state.openai_key_status = "rejected"
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        body = (await client.get("/api/capabilities")).json()
+    assert body["capabilities"]["openai_key_status"] == "rejected"
+    assert body["provider_health"]["openai"]["key_status"] == "rejected"
+    assert body["next_step"]["key"] == "fix_llm_key"
+
+
+@pytest.mark.asyncio
+async def test_provider_check_cached_result_does_not_clear_verdict():
+    """A debounced (cached) second /provider-check must not wipe the persisted verdict."""
+    app = _make_test_app()
+    app.state.config.anthropic_api_key = "anthropic-secret"
+    payload = _probe_payload(anthropic="auth")
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    with patch("mammamiradio.web.streamer.check_provider_keys", new=AsyncMock(return_value=payload)):
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            await client.post("/api/setup/provider-check")
+            assert app.state.station_state.anthropic_key_status == "rejected"
+            # Second call inside the 2s debounce window returns the cached result.
+            await client.post("/api/setup/provider-check")
+    assert app.state.station_state.anthropic_key_status == "rejected"
+
+
+@pytest.mark.asyncio
+async def test_run_provider_verdict_discards_stale_result_when_key_changed():
+    """A late-finishing probe must not clobber the verdict after the key was swapped."""
+    app = _make_test_app()
+    app.state.config.anthropic_api_key = "sk-ant-old-bad"
+    app.state.station_state.anthropic_key_status = "valid"  # a fresh save already set this
+
+    async def _slow_probe(config):
+        # Simulate save_keys swapping the key while this stale probe is in flight.
+        config.anthropic_api_key = "sk-ant-new-good"
+        return _probe_payload(anthropic="auth")
+
+    with patch("mammamiradio.web.streamer.check_provider_keys", new=_slow_probe):
+        await _run_provider_verdict(app.state)
+    # Stale "rejected" for the old key must be discarded; the fresh verdict stands.
+    assert app.state.station_state.anthropic_key_status == "valid"

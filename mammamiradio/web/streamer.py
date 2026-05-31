@@ -638,10 +638,17 @@ async def _run_provider_verdict(app_state) -> None:
     state = app_state.station_state
     if not config.anthropic_api_key and not config.openai_api_key:
         return
+    # Snapshot the keys we're validating. If a concurrent save_keys swaps a key
+    # mid-probe, a late-finishing stale probe must not clobber the fresh verdict —
+    # its sibling save-scheduled probe already owns the new key's result.
+    anthropic_key = config.anthropic_api_key
+    openai_key = config.openai_api_key
     try:
         result = await check_provider_keys(config)
     except BaseException:
         return
+    if config.anthropic_api_key != anthropic_key or config.openai_api_key != openai_key:
+        return  # key changed mid-flight; the save-scheduled probe owns the verdict now
     _record_provider_verdict(state, result)
 
 
@@ -1824,7 +1831,9 @@ async def capabilities(request: Request, _: None = Depends(require_admin_access)
         provider_health["anthropic"]["key_status"] if config.anthropic_api_key else None,
         provider_health["openai"]["key_status"] if config.openai_api_key else None,
     ]
-    if "rejected" in statuses and "valid" not in statuses:
+    # Only steer once the probes have settled: an "unverified" key is still in flight,
+    # so don't nudge "replace your key" while a configured key might yet come back valid.
+    if "rejected" in statuses and "valid" not in statuses and "unverified" not in statuses:
         result["next_step"] = {
             "key": "fix_llm_key",
             "message": "An AI key isn't working — replace it in Settings to restore AI hosts",
