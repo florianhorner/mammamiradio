@@ -60,6 +60,7 @@ Everything else lives under `docs/`:
 - `docs/operations.md` - runtime assumptions and deploy reality
 - `docs/troubleshooting.md` - common failures and recovery paths
 - `docs/runbooks/ha-addon.md` - addon release process, config contract, pre-merge checklist
+- `docs/runbooks/refactor-cuts.md` - god-module split: per-cut pre-flight checklist and lessons
 - `docs/design/system.md` - Volare design system: colors, typography, components, motion
 - `docs/design/admin-panel.md` - admin control-room layout, info architecture, motion rules
 - `docs/conductor.md` - Conductor workspace lifecycle and `.env` discovery
@@ -331,6 +332,25 @@ For every bug fix or behavior change, do not stop at the first broken instance.
 Review question to apply before merge:
 
 `What invariant failed here, where else could it fail the same way, and what automated check will catch the next instance before a user does?`
+
+## Refactor discipline
+
+For behavior-preserving refactors that MOVE a symbol between modules (the god-module
+split train, and any future relocation), run these checks at SCOPE time — before naming
+what moves — not only during execution:
+
+- **Whole-repo symbol grep.** Grep every moved symbol across the ENTIRE repo, including
+  `scripts/`, `.github/workflows/`, and `docs/` — not just `mammamiradio/` + `tests/`. CI
+  guards and shell scripts hardcode symbol names; a move that ignores them red-fails the
+  build (W3b near-miss: `scripts/validate-addon.sh` AST-scans for `_inject_ingress_prefix`).
+- **Dependency-closure gate.** Verify every symbol the move-target calls that is SHARED
+  with code staying behind or destined for another cut. A target that reaches a shared
+  primitive must not move until that primitive's home is settled (W3b: `_render_admin_response`
+  → `_get_csrf_token`, shared with the auth cut).
+- **Read the test bodies, not just grep counts.** Refines the plan-audit rule — read the
+  actual test files; counts miss pre-existing duplication (W3b: 8 sanitize tests, not 4).
+
+Full per-cut checklist + cut-by-cut lessons: `docs/runbooks/refactor-cuts.md`.
 
 ## Audio delivery test coverage rule
 
