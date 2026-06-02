@@ -192,6 +192,9 @@ def test_filter_state_denies_sensitive_entities_and_strips_secret_attributes():
 
     assert _filter_state("device_tracker.phone", tracker, denylist_hits) is None
     assert denylist_hits["privacy:device_tracker"] == 1
+    # Re-filtering the same entity initializes-then-increments the counter.
+    assert _filter_state("device_tracker.phone", tracker, denylist_hits) is None
+    assert denylist_hits["privacy:device_tracker"] == 2
 
     filtered = _filter_state(
         "sensor.router_status",
@@ -227,6 +230,11 @@ def test_apply_registry_area_fills_missing_area_without_overwriting_state_attrs(
     unchanged = _apply_registry_area("light.counter", with_area, {"light.counter": "Kitchen"})
     assert unchanged is with_area
     assert unchanged["attributes"]["area"] == "Bar"
+
+    # Entity absent from the registry mapping -> state returned unchanged.
+    missing = _apply_registry_area("light.missing", state, {})
+    assert missing is state
+    assert "area" not in missing["attributes"]
 
 
 # ---------------------------------------------------------------------------
@@ -1840,26 +1848,30 @@ async def test_push_state_to_ha_partial_failure_continues(reset_ha_push_debounce
 class _FakeRegistryWS:
     """Async context manager mock for the HA registry websocket."""
 
-    def __init__(self, messages):
+    def __init__(self, messages: list[dict]) -> None:
         self._messages = [json.dumps(m) for m in messages]
         self.sent: list[dict] = []
 
-    async def __aenter__(self):
+    async def __aenter__(self) -> _FakeRegistryWS:
         return self
 
-    async def __aexit__(self, *exc):
+    async def __aexit__(self, *exc: object) -> bool:
         return False
 
-    async def recv(self):
+    async def recv(self) -> str:
         return self._messages.pop(0)
 
-    async def send(self, payload):
+    async def send(self, payload: str) -> None:
         self.sent.append(json.loads(payload))
 
 
-def test_ha_websocket_url_maps_scheme():
-    assert _ha_websocket_url("http://supervisor/core/api") == "ws://supervisor/api/websocket"
+def test_ha_websocket_url_maps_scheme_and_supervisor_proxy():
+    # Supervisor add-on: HA_URL is http://supervisor/core; the Core WS proxy is /core/websocket.
+    assert _ha_websocket_url("http://supervisor/core") == "ws://supervisor/core/websocket"
+    # Direct Core: standard /api/websocket, https -> wss.
     assert _ha_websocket_url("https://ha.example.com:8123/") == "wss://ha.example.com:8123/api/websocket"
+    # Direct Core behind a reverse-proxy subpath preserves the prefix.
+    assert _ha_websocket_url("https://ha.example.com/hass") == "wss://ha.example.com/hass/api/websocket"
 
 
 @pytest.mark.asyncio
@@ -1972,6 +1984,21 @@ def test_filter_state_drops_domains_categories_classes_and_unavailable():
     assert _filter_state("sensor.gone", {"state": "unavailable", "attributes": {}}, hits) is None
     assert hits["state:unavailable"] == 1
 
+    # Re-filtering increments each counter (initialized-then-incremented).
+    assert _filter_state("update.firmware", {"state": "on", "attributes": {}}, hits) is None
+    assert hits["domain:update"] == 2
+    assert _filter_state("sensor.gone", {"state": "unavailable", "attributes": {}}, hits) is None
+    assert hits["state:unavailable"] == 2
+
+
+def test_filter_state_drops_station_own_entities():
+    hits: dict[str, int] = {}
+    # The station's own pushed entities must never reach the prompt slice.
+    assert _filter_state("media_player.mammamiradio", {"state": "playing", "attributes": {}}, hits) is None
+    assert _filter_state("sensor.mammamiradio_segment_type", {"state": "banter", "attributes": {}}, hits) is None
+    assert _filter_state("binary_sensor.mammamiradio_on_air", {"state": "on", "attributes": {}}, hits) is None
+    assert hits["self:mammamiradio"] == 3
+
 
 def test_filter_state_passes_through_and_sanitizes_list_attribute():
     hits: dict[str, int] = {}
@@ -1995,7 +2022,7 @@ def test_filter_state_passes_through_and_sanitizes_list_attribute():
 def test_score_entity_branches():
     now = time.time()
 
-    def score(entity_id, attrs, events=None):
+    def score(entity_id: str, attrs: dict, events: set[str] | None = None) -> float:
         return _score_entity(entity_id, {"attributes": attrs}, event_entity_ids=events or set(), now=now)
 
     # Power sensor overrides the base sensor weight.
@@ -2034,6 +2061,7 @@ def test_build_scored_entities_char_limit_disabled_returns_full_selection():
     # char_limit <= 0 skips budgeting and returns the full ranked selection.
     scored = _build_scored_entities(states, event_entity_ids=set(), now=time.time(), limit=5, char_limit=0)
     assert len(scored) == 2
+    assert all(entity.score > 0 for entity in scored), "scores must be populated"
 
 
 def test_build_scored_entities_char_budget_drops_overflow():
@@ -2049,3 +2077,4 @@ def test_build_scored_entities_char_budget_drops_overflow():
     rendered = _build_budgeted_summary(scored)
     assert len(rendered) <= 20
     assert len(scored) < len(states)
+    assert all(entity.score > 0 for entity in scored), "scores must be populated"
