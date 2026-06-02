@@ -194,6 +194,18 @@ def test_scored_entities_rank_curated_and_budget_prompt_slice():
     assert "La macchina del caffè" in summary
 
 
+def test_filter_state_drops_text_helper_domains():
+    # input_text / text helpers can carry plaintext secrets (e.g.,
+    # input_text.guest_wifi_password) that the uppercase-token regex
+    # in _sanitize_state_value will not catch.
+    hits: dict[str, int] = {}
+    secret = {"state": "supersecret123", "attributes": {"friendly_name": "Guest WiFi"}}
+    assert _filter_state("input_text.guest_wifi_password", secret, hits) is None
+    assert hits["domain:input_text"] == 1
+    assert _filter_state("text.api_key", secret, hits) is None
+    assert hits["domain:text"] == 1
+
+
 def test_filter_state_denies_sensitive_entities_and_strips_secret_attributes():
     denylist_hits: dict[str, int] = {}
     tracker = {

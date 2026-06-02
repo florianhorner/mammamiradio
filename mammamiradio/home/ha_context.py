@@ -103,7 +103,19 @@ ALL_ENTITIES = GOLD_ENTITIES + SILVER_ENTITIES + BRONZE_ENTITIES
 
 DEFAULT_CONTEXT_ENTITY_LIMIT = 12
 DEFAULT_CONTEXT_CHAR_LIMIT = 2000
-DROP_DOMAINS = {"update", "button", "scene", "automation", "script", "zone"}
+DROP_DOMAINS = {
+    "update",
+    "button",
+    "scene",
+    "automation",
+    "script",
+    "zone",
+    # Free-text helpers (input_text) and the first-class text entity domain can
+    # carry plaintext secrets (e.g., input_text.guest_wifi_password) that the
+    # uppercase-token regex won't catch. Drop them at the privacy layer.
+    "input_text",
+    "text",
+}
 DROP_ENTITY_CATEGORIES = {"diagnostic", "config"}
 DROP_DEVICE_CLASSES = {"signal_strength", "battery", "timestamp"}
 PRIVACY_DENY_DOMAINS = {"device_tracker", "person", "camera", "alarm_control_panel"}
