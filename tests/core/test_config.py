@@ -9,7 +9,9 @@ import pytest
 from mammamiradio.core.config import (
     AudioSection,
     _apply_addon_options,
+    _err,
     _is_addon,
+    _validate,
     coerce_bool,
     load_config,
     runtime_json,
@@ -273,15 +275,37 @@ def test_runtime_json_keys():
     assert "tmp_dir" in result
 
 
-def test_non_local_bind_allowed_without_auth(monkeypatch):
-    """Non-local bind without auth is allowed — private networks are trusted at runtime."""
+def test_non_local_bind_requires_auth(monkeypatch):
+    """Non-loopback bind without ADMIN_PASSWORD/ADMIN_TOKEN must be rejected."""
     toml_path = Path(__file__).resolve().parents[2] / "radio.toml"
     monkeypatch.setenv("MAMMAMIRADIO_BIND_HOST", "0.0.0.0")
     monkeypatch.delenv("ADMIN_PASSWORD", raising=False)
     monkeypatch.delenv("ADMIN_TOKEN", raising=False)
 
+    with pytest.raises(ValueError, match="ADMIN_PASSWORD or ADMIN_TOKEN"):
+        load_config(str(toml_path))
+
+
+def test_non_local_bind_allowed_with_token(monkeypatch):
+    """Non-loopback bind is allowed once an admin credential is configured."""
+    toml_path = Path(__file__).resolve().parents[2] / "radio.toml"
+    monkeypatch.setenv("MAMMAMIRADIO_BIND_HOST", "0.0.0.0")
+    monkeypatch.setenv("ADMIN_TOKEN", "tok-non-local")
+    monkeypatch.delenv("ADMIN_PASSWORD", raising=False)
+
     config = load_config(str(toml_path))
     assert config.bind_host == "0.0.0.0"
+
+
+def test_empty_bind_host_requires_auth(monkeypatch):
+    """Empty bind host binds all interfaces, so it needs admin creds too."""
+    toml_path = Path(__file__).resolve().parents[2] / "radio.toml"
+    monkeypatch.setenv("MAMMAMIRADIO_BIND_HOST", "")
+    monkeypatch.delenv("ADMIN_PASSWORD", raising=False)
+    monkeypatch.delenv("ADMIN_TOKEN", raising=False)
+
+    with pytest.raises(ValueError, match="ADMIN_PASSWORD or ADMIN_TOKEN"):
+        load_config(str(toml_path))
 
 
 # --- Addon detection tests ---
@@ -460,13 +484,15 @@ def test_addon_mode_respects_ha_enabled_false(monkeypatch):
     assert config.ha_token == ""
 
 
-def test_addon_mode_skips_bind_auth(monkeypatch):
-    """Addon mode should not require ADMIN_PASSWORD for non-local bind."""
+def test_addon_mode_bind_auth_uses_supervisor_token(monkeypatch):
+    """Addon mode binds 0.0.0.0 but run.sh auto-generates ADMIN_TOKEN first,
+    so config validation passes via the standard credential requirement."""
     toml_path = Path(__file__).resolve().parents[2] / "radio.toml"
     monkeypatch.setenv("SUPERVISOR_TOKEN", "test_token")
     monkeypatch.setenv("MAMMAMIRADIO_BIND_HOST", "0.0.0.0")
+    # rootfs/run.sh exports ADMIN_TOKEN before launching the app in addon mode.
+    monkeypatch.setenv("ADMIN_TOKEN", "addon-generated-token")
     monkeypatch.delenv("ADMIN_PASSWORD", raising=False)
-    monkeypatch.delenv("ADMIN_TOKEN", raising=False)
 
     config = load_config(str(toml_path))  # Should not raise
     assert config.is_addon is True
@@ -636,3 +662,48 @@ def test_coerce_bool_default():
     # Out-of-range ints honour the caller-provided default
     assert coerce_bool(2, default=True) is True
     assert coerce_bool(-1, default=True) is True
+
+
+def test_err_helper_formats_field_and_section_hint():
+    """_err must point operators at the TOML section that owns the field."""
+    assert (
+        _err("pacing.ad_spots_per_break", "must be <= 5")
+        == "pacing.ad_spots_per_break must be <= 5 (set in radio.toml [pacing])"
+    )
+    assert (
+        _err("homeassistant.timer_interrupt[0].cooldown", "must be >= 1")
+        == "homeassistant.timer_interrupt[0].cooldown must be >= 1 (set in radio.toml [homeassistant])"
+    )
+    assert _err("persona.anthem_threshold", "must be >= 1").endswith("(set in radio.toml [persona])")
+
+
+def test_validate_includes_section_hint_for_invalid_pacing():
+    """A bad pacing value must surface in the raised error with the [pacing] hint."""
+    toml_path = Path(__file__).resolve().parents[2] / "radio.toml"
+    config = load_config(str(toml_path))
+    config.pacing.ad_spots_per_break = 99
+
+    with pytest.raises(ValueError) as exc_info:
+        _validate(config)
+
+    msg = str(exc_info.value)
+    assert "pacing.ad_spots_per_break" in msg
+    assert "must be <= 5" in msg
+    assert "(set in radio.toml [pacing])" in msg
+
+
+def test_validate_aggregates_multiple_errors_each_with_hint():
+    """Multiple invalid fields produce one line per error, each tagged with its section."""
+    toml_path = Path(__file__).resolve().parents[2] / "radio.toml"
+    config = load_config(str(toml_path))
+    config.pacing.songs_between_banter = 1
+    config.persona.anthem_threshold = 0
+    config.playlist.jamendo_order = "definitely-not-valid"
+
+    with pytest.raises(ValueError) as exc_info:
+        _validate(config)
+
+    msg = str(exc_info.value)
+    assert "(set in radio.toml [pacing])" in msg
+    assert "(set in radio.toml [persona])" in msg
+    assert "(set in radio.toml [playlist])" in msg

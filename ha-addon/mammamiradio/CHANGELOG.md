@@ -10,6 +10,15 @@
   filtered before prompt assembly, and the admin Engine Room shows what was
   selected plus privacy filter counts.
 
+- **Music Assistant now-playing contract** — a new read-only endpoint at
+  `GET /api/integrations/v1/now-playing` exposes a stable, normalized
+  shape for third-party music controllers (Music Assistant, custom
+  Lovelace cards). External players can show the current track, host
+  banter, ads, and station IDs without reverse-engineering the listener
+  payload. Includes `ETag` + `Cache-Control` for cheap polling and ten
+  sample-payload JSON fixtures committed under
+  `docs/integrations/sample-payloads/` as the binding contract.
+
 ## 2.13.0
 
 ### Added

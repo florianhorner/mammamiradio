@@ -6,6 +6,27 @@
 #        make pre-release
 set -euo pipefail
 
+case "${1:-}" in
+  -h|--help)
+    cat <<'EOF'
+Usage: scripts/pre-release-check.sh
+
+Pre-release sanity check. Run before bumping the version number.
+Verifies version consistency across pyproject.toml + addon config.yaml,
+CHANGELOG head matches the version, and all release invariants
+(FFmpeg eq chain count, test mocks, post-restart silence guard).
+
+Catches the class of bugs that have caused production silence incidents.
+
+Options:
+  -h, --help   Show this help and exit
+
+Also runs via `make pre-release`.
+EOF
+    exit 0
+    ;;
+esac
+
 PASS=0
 FAIL=0
 

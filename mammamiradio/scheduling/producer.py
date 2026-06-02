@@ -1153,6 +1153,29 @@ async def run_producer(
                 elif isinstance(result, str):
                     state.ha_pending_directive = result
 
+            # Impossible Moments v2 (A): fold new events into the evening ledger
+            # (watermark-deduped) and, for banter only, surface one eligible
+            # running-gag. Ads stay gag-free in v0. The ledger persists across
+            # the addon's frequent restarts.
+            if state.evening_ledger is not None:
+                _now = time.time()
+                state.evening_ledger.observe(ha_cache.events, now=_now)
+                if seg_type == SegmentType.BANTER:
+                    # Offer (don't spend) — the cooldown is marked in the banter
+                    # success callback only if generated banter actually airs, so
+                    # an LLM failure that falls back to a canned clip does not burn
+                    # the callback.
+                    offered = state.evening_ledger.offer_gag(now=_now)
+                    if offered is not None:
+                        state.ha_running_gag_key, state.ha_running_gag = offered
+                    else:
+                        state.ha_running_gag = ""
+                        state.ha_running_gag_key = ""
+                else:
+                    state.ha_running_gag = ""
+                    state.ha_running_gag_key = ""
+                state.evening_ledger.save_if_dirty(config.cache_dir)
+
         if generation_chaos_epoch != state.chaos_cutover_epoch:
             logger.info("Restarting producer cycle after interrupt cutover")
             continue
@@ -1666,12 +1689,22 @@ async def run_producer(
                     _new_listener_count=_new_listener_count,
                     _listener_request_commit=listener_request_commit,
                     _used_generated_banter=(canned is None and not impossible_tts),
+                    _gag_key=state.ha_running_gag_key,
+                    _ledger=state.evening_ledger,
+                    _cache_dir=config.cache_dir,
                 ) -> None:
                     state.after_banter()
                     if _is_new_listener:
                         state.new_listeners_pending = max(0, state.new_listeners_pending - _new_listener_count)
                     if _used_generated_banter and _listener_request_commit is not None:
                         _listener_request_commit.apply(state)
+                    # Spend the running-gag cooldown only when generated banter
+                    # (which carried the gag) actually airs — not on canned or
+                    # failed-LLM fallbacks. Honors EveningLedger.offer_gag's contract.
+                    if _used_generated_banter and _ledger is not None and _gag_key:
+                        _ledger.mark_spoken(_gag_key, now=time.time())
+                        _ledger.save_if_dirty(_cache_dir)
+                    state.ha_running_gag_key = ""
 
                 success_callback = _banter_callback
 
@@ -2238,6 +2271,9 @@ async def run_producer(
                     "source_kind": segment.metadata.get("source_kind", ""),
                 }
             )
+            # Queue appended → up_next changed → integration consumers polling
+            # ``changed_at`` need to see this even without a segment transition.
+            state.last_state_change_at = time.time()
             if "error" not in segment.metadata:
                 if success_callback:
                     success_callback()

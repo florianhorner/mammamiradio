@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import sys
 import types
@@ -270,7 +271,11 @@ def test_check_changelog_lint_rejects_internal_process_phrases(tmp_path: Path) -
 
 
 def _create_validate_addon_repo(
-    tmp_path: Path, *, streamer_body: str, broken_dotvenv_python: bool = False
+    tmp_path: Path,
+    *,
+    streamer_body: str,
+    broken_dotvenv_python: bool = False,
+    web_module: str = "mammamiradio/web/pages.py",
 ) -> dict[str, str]:
     _init_git_repo(tmp_path)
     _run(["git", "remote", "add", "origin", "https://github.com/florianhorner/fakeitaliradio.git"], cwd=tmp_path)
@@ -344,7 +349,7 @@ def _create_validate_addon_repo(
         ),
     )
     _write(tmp_path / "mammamiradio/__init__.py", "")
-    _write(tmp_path / "mammamiradio/web/streamer.py", streamer_body)
+    _write(tmp_path / web_module, streamer_body)
     _write(tmp_path / "radio.toml", "[station]\nname = 'Test'\n")
     _write(tmp_path / "ha-addon/mammamiradio/radio.toml", "[station]\nname = 'Test'\n")
     _write(tmp_path / "pyproject.toml", '[project]\nname = "mammamiradio"\nversion = "1.1.0"\n')
@@ -454,6 +459,127 @@ def _inject_ingress_prefix(html: str, prefix: str) -> str:
 
     assert result.returncode == 0
     assert "radio.toml is valid TOML" in result.stdout
+
+
+def test_validate_addon_discovers_helper_in_alternate_module(tmp_path: Path) -> None:
+    # Helper lives outside pages.py — discovery must still find and pass it.
+    env = _create_validate_addon_repo(
+        tmp_path,
+        web_module="mammamiradio/web/ingress.py",
+        streamer_body="""
+def _inject_ingress_prefix(html: str, prefix: str) -> str:
+    html = html.replace('href="/listen"', f'href="{prefix}/listen"')
+    html = html.replace("'/sw.js'", f"'{prefix}/sw.js'")
+    return html
+""".strip()
+        + "\n",
+    )
+
+    result = _run(["bash", str(VALIDATE_ADDON)], cwd=tmp_path, env=env)
+
+    assert result.returncode == 0
+    assert "Ingress prefix injection only rewrites safe patterns" in result.stdout
+
+
+def test_validate_addon_rejects_unsafe_rewrite_in_alternate_module(tmp_path: Path) -> None:
+    # An unsafe rewrite must fail no matter which web/*.py module holds it.
+    env = _create_validate_addon_repo(
+        tmp_path,
+        web_module="mammamiradio/web/ingress.py",
+        streamer_body="""
+def _inject_ingress_prefix(html: str, prefix: str) -> str:
+    html = html.replace("'/api/hosts'", f"'{prefix}/api/hosts'")
+    return html
+""".strip()
+        + "\n",
+    )
+
+    result = _run(["bash", str(VALIDATE_ADDON)], cwd=tmp_path, env=env)
+
+    assert result.returncode != 0
+    assert "rewrites single-quoted JS path" in result.stdout
+
+
+def test_validate_addon_scans_all_modules_for_unsafe_rewrite(tmp_path: Path) -> None:
+    # Two definitions across modules: a safe one in pages.py and a stale unsafe
+    # copy in streamer.py. Scan-all must fail (a first-match-only scan would
+    # wrongly pass on the alphabetically-earlier safe pages.py).
+    env = _create_validate_addon_repo(
+        tmp_path,
+        streamer_body="""
+def _inject_ingress_prefix(html: str, prefix: str) -> str:
+    html = html.replace('href="/listen"', f'href="{prefix}/listen"')
+    return html
+""".strip()
+        + "\n",
+    )
+    _write(
+        tmp_path / "mammamiradio/web/streamer.py",
+        """
+def _inject_ingress_prefix(html: str, prefix: str) -> str:
+    html = html.replace("'/api/hosts'", f"'{prefix}/api/hosts'")
+    return html
+""".strip()
+        + "\n",
+    )
+
+    result = _run(["bash", str(VALIDATE_ADDON)], cwd=tmp_path, env=env)
+
+    assert result.returncode != 0
+    assert "rewrites single-quoted JS path" in result.stdout
+
+
+def test_validate_addon_warns_when_no_helper_anywhere(tmp_path: Path) -> None:
+    # No _inject_ingress_prefix in any web/*.py — the discovery path must emit a
+    # soft warning (the "none" sentinel), not a hard failure.
+    env = _create_validate_addon_repo(
+        tmp_path,
+        streamer_body="# no ingress helper defined in this module\n",
+    )
+
+    result = _run(["bash", str(VALIDATE_ADDON)], cwd=tmp_path, env=env)
+
+    assert result.returncode == 0
+    assert "No _inject_ingress_prefix found" in result.stdout
+
+
+def test_validate_addon_fails_when_web_dir_missing(tmp_path: Path) -> None:
+    # mammamiradio/web absent entirely — the safety check cannot run and must fail.
+    env = _create_validate_addon_repo(
+        tmp_path,
+        streamer_body="""
+def _inject_ingress_prefix(html: str, prefix: str) -> str:
+    return html
+""".strip()
+        + "\n",
+    )
+    shutil.rmtree(tmp_path / "mammamiradio/web")
+
+    result = _run(["bash", str(VALIDATE_ADDON)], cwd=tmp_path, env=env)
+
+    assert result.returncode != 0
+    assert "Missing mammamiradio/web" in result.stdout
+
+
+def test_validate_addon_skips_unparseable_module_during_discovery(tmp_path: Path) -> None:
+    # A syntax error in an unrelated web/*.py module must be skipped, not treated
+    # as an ingress-safety failure: the scan still discovers the safe helper in
+    # another module and passes (the D2 per-file parse-isolation branch).
+    env = _create_validate_addon_repo(
+        tmp_path,
+        streamer_body="""
+def _inject_ingress_prefix(html: str, prefix: str) -> str:
+    html = html.replace('href="/listen"', f'href="{prefix}/listen"')
+    return html
+""".strip()
+        + "\n",
+    )
+    _write(tmp_path / "mammamiradio/web/broken.py", "def (:\n")
+
+    result = _run(["bash", str(VALIDATE_ADDON)], cwd=tmp_path, env=env)
+
+    assert result.returncode == 0
+    assert "Ingress prefix injection only rewrites safe patterns" in result.stdout
 
 
 def test_test_addon_local_delegates_to_validate_addon() -> None:

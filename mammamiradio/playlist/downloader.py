@@ -20,7 +20,12 @@ from mammamiradio.core.models import Track
 logger = logging.getLogger(__name__)
 
 # Files that must never be evicted from the cache directory
-_CACHE_PROTECTED = {"mammamiradio.db", "playlist_source.json", "session_stopped.flag"}
+_CACHE_PROTECTED = {
+    "mammamiradio.db",
+    "playlist_source.json",
+    "session_stopped.flag",
+    "evening_ledger.json",
+}
 _TRUTHY = ("true", "1", "yes")
 
 # Per-socket-operation timeout for yt-dlp network reads. Python's urllib has no

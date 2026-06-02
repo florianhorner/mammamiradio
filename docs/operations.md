@@ -29,7 +29,7 @@ Environment:
 - `MAMMAMIRADIO_PORT`
 - `MAMMAMIRADIO_ALLOW_YTDLP` (optional, enables live charts and yt-dlp downloads; enabled by default in HA addon and Conductor)
 - `ADMIN_USERNAME`
-- `ADMIN_PASSWORD` or `ADMIN_TOKEN` for non-local access
+- `ADMIN_PASSWORD` or `ADMIN_TOKEN` — required for any non-loopback bind (see **Admin access model**)
 - `ANTHROPIC_API_KEY`
 - `OPENAI_API_KEY` (optional, used for TTS and as script generation fallback)
 - `HA_TOKEN` if Home Assistant integration is enabled
@@ -89,7 +89,7 @@ Admin (require `ADMIN_PASSWORD` or `ADMIN_TOKEN` unless on loopback):
 - `POST /api/credentials`, `POST /api/track-rules`
 - `GET /api/listener-requests`, `POST /api/listener-requests/dismiss`
 - `GET /api/search`, `POST /api/playlist/add`, `POST /api/playlist/remove`, `POST /api/playlist/move`, `POST /api/playlist/move_to_next`, `POST /api/playlist/load`, `POST /api/playlist/add-external`
-- `POST /api/hot-reload` — reload `scriptwriter.py` in-place without stopping the stream. Requires `--workers 1` (importlib reloads only the worker that handles the request; multi-worker deployments get inconsistent results).
+- `POST /api/hot-reload` — reload `prompt_world.py`, `transitions.py`, `fallbacks.py` then `scriptwriter.py` (leaves-first) in-place without stopping the stream. Requires `--workers 1` (importlib reloads only the worker that handles the request; multi-worker deployments get inconsistent results).
 
 ### Diagnosing provider fallbacks
 
@@ -102,6 +102,24 @@ Admin (require `ADMIN_PASSWORD` or `ADMIN_TOKEN` unless on loopback):
 
 The Engine Room card in `/admin` renders this live. Structured log events (`provider_switch_event`, `provider_health_state`) are also emitted so log aggregators can alert on sustained fallback states.
 
+### Detecting a not-working AI key
+
+A key that is present but invalid (a wrong or revoked `ANTHROPIC_API_KEY` / `OPENAI_API_KEY`)
+is validated actively, so the operator sees it without waiting for a banter segment to fail:
+
+- On startup (when any key is configured) and after a key-save, a single secret-safe
+  `max_tokens=1` probe (`check_provider_keys`) runs in the background — fire-and-forget, so it
+  never delays boot or the first audio. `POST /api/setup/provider-check` runs it on demand.
+- The verdict is cached on the station state and exposed in `GET /api/capabilities`:
+  `capabilities.anthropic_key_status` / `capabilities.openai_key_status`, and
+  `provider_health.{anthropic,openai}.key_status`. Each is `"unverified"` (not yet checked, or a
+  non-auth probe error such as quota/rate-limit/network), `"valid"`, or `"rejected"` (the
+  provider actively refused the key with a 401).
+- A `"rejected"` key reads in the Engine Room as a persistent **key not working — replace key**
+  state, distinct from the transient time-based `anthropic_degraded` "suspended" fallback. When a
+  rejected key is the only configured LLM key, `capabilities.next_step` steers toward replacing it.
+- The listener side never surfaces key health; if OpenAI is valid the station keeps sounding live.
+
 ## Recommended production shape
 
 There is no blessed platform in this repo, but the sensible shape is:
@@ -111,6 +129,28 @@ There is no blessed platform in this repo, but the sensible shape is:
 3. Require `ADMIN_PASSWORD` or `ADMIN_TOKEN`.
 4. Persist `cache/`, `tmp/` where practical.
 5. Monitor app logs.
+
+## Admin access model
+
+Loopback (`127.0.0.1`, `localhost`) is fully trusted — no credentials needed.
+
+For any non-loopback bind (`0.0.0.0`, a LAN/Tailscale address, or an empty
+`MAMMAMIRADIO_BIND_HOST`, which listens on all interfaces):
+
+- **Standalone startup now fails** unless `ADMIN_PASSWORD` or `ADMIN_TOKEN` is
+  set. This is a behavior change: earlier versions started without credentials
+  and trusted private networks at runtime. If you bind to `0.0.0.0` in
+  standalone mode, set a credential or startup raises a config error.
+- **When a credential is configured, private-network trust no longer bypasses
+  it.** A LAN/Tailscale client must present the credential; it is no longer
+  auto-trusted just for being on a private network.
+- **`ADMIN_TOKEN` is a header-only API credential** (`X-Radio-Admin-Token`). A
+  browser cannot send it on plain navigation, so to open `/admin` in a browser
+  on a non-loopback bind you need `ADMIN_PASSWORD`. Use `ADMIN_TOKEN` for
+  programmatic/API callers (HA `rest_command`, scripts).
+- **Credential-less private-network deployments are unchanged** — still trusted
+  for reads and CSRF-guarded on writes. The HA add-on auto-generates an
+  `ADMIN_TOKEN` at startup, so it is always in the credentialed path.
 
 ## Docker
 

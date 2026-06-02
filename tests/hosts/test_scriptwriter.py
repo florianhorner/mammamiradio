@@ -116,6 +116,93 @@ def test_system_prompt_includes_station_name(config):
     assert config.station.name in prompt
 
 
+def test_prompt_world_constants_byte_stable():
+    """Pin the moved prompt-fiction constants byte-for-byte (env-independent).
+
+    Guards the verbatim prompt_world extraction against whitespace / load-bearing-
+    newline drift — the substring assertions above wouldn't catch a stray newline.
+    Unlike the assembled system prompt (which varies with config/env, so it can't be
+    pinned across machines and CI), these are pure module constants and hash stably
+    everywhere. If the prompt-fiction data legitimately changes, re-capture the hash.
+    """
+    import hashlib
+
+    from mammamiradio.hosts import prompt_world as pw
+
+    blob = "\x00".join(
+        [
+            repr(pw._EXPRESSION_BANK),
+            repr(pw._HOST_FINGERPRINTS),
+            pw._ECHO_STYLE_INSTRUCTION,
+            pw._REACT_STYLE_INSTRUCTION,
+            pw._EXCLAIM_STYLE_INSTRUCTION,
+            repr(pw._STYLE_INSTRUCTIONS),
+            pw.CHAOS_MODE_BLOCK,
+            pw.FESTIVAL_MODE_BLOCK,
+            repr(pw.CHAOS_SUBTYPE_BLOCKS),
+        ]
+    )
+    assert (
+        hashlib.sha256(blob.encode("utf-8")).hexdigest()
+        == "b4901714e3e4476dfd2da6645cdf5c9d79ed50354d0aac71832fdea5a209001f"
+    ), "prompt-fiction constants changed — if intentional, re-capture the hash"
+
+
+def test_hot_reload_resets_system_prompt_cache():
+    """Reloading scriptwriter must clear the cached system prompt.
+
+    /api/hot-reload reloads prompt_world then scriptwriter. importlib.reload re-runs
+    scriptwriter's module body, which re-executes ``_cached_system_prompt = ""`` /
+    ``_cached_prompt_key = ""``. Without that reset, an operator editing prompt_world.py
+    and hot-reloading would keep serving the stale cached prompt until the config
+    structure changed. This locks the propagation contract.
+    """
+    import importlib
+
+    scriptwriter_module._cached_system_prompt = "stale-sentinel"
+    scriptwriter_module._cached_prompt_key = "stale-key"
+    importlib.reload(scriptwriter_module)
+    assert scriptwriter_module._cached_system_prompt == ""
+    assert scriptwriter_module._cached_prompt_key == ""
+
+
+def test_transitions_fallbacks_extraction_structural_and_reexport():
+    """Guard the H1b move of transition + fallback data to their own modules.
+
+    Structural, not byte-locked: these are frequently-tuned host copy, so we assert the
+    moved constants stay well-formed rather than pinning a hash (test_chaos_banter /
+    test_ads pin the exact chaos + ad-break content; the transition map is covered here
+    plus by test_massage_transition_text_*). Re-export identity: every moved symbol the
+    facade re-exposes must resolve to the SAME object as its new home, so the facade
+    re-import didn't fork a stale copy.
+    """
+    from mammamiradio.hosts import fallbacks, transitions
+
+    # transitions: rewrite map covers each next-segment, openers/stems are non-empty str
+    assert {"banter", "ad", "news_flash"} <= set(transitions._TRANSITION_REWRITE_MAP)
+    for openers in transitions._TRANSITION_REWRITE_MAP.values():
+        assert openers and all(isinstance(o, str) and o.strip() for o in openers)
+    assert transitions._BORING_TRANSITION_STEMS and all(
+        isinstance(s, str) and s for s in transitions._BORING_TRANSITION_STEMS
+    )
+
+    # fallbacks: every chaos subtype has stock lines; ad bumpers are non-empty str
+    assert set(fallbacks.CHAOS_STOCK_LINES) == set(ChaosSubtype)
+    for lines in fallbacks.CHAOS_STOCK_LINES.values():
+        assert lines and all(isinstance(line, str) and line.strip() for line in lines)
+    for bumpers in (fallbacks.AD_BREAK_INTROS, fallbacks.AD_BREAK_OUTROS):
+        assert bumpers and all(isinstance(b, str) and b.strip() for b in bumpers)
+
+    # facade re-export identity — same object, not a forked copy. Every moved symbol
+    # the facade still exposes (producer/tests read these through scriptwriter) is checked
+    # uniformly so the AD_BREAK_* re-export can't silently drop off the facade namespace.
+    assert scriptwriter_module.CHAOS_STOCK_LINES is fallbacks.CHAOS_STOCK_LINES
+    assert scriptwriter_module.AD_BREAK_INTROS is fallbacks.AD_BREAK_INTROS
+    assert scriptwriter_module.AD_BREAK_OUTROS is fallbacks.AD_BREAK_OUTROS
+    assert scriptwriter_module._massage_transition_text is transitions._massage_transition_text
+    assert scriptwriter_module._transition_stem is transitions._transition_stem
+
+
 # --- _host_expression_block tests ---
 
 
@@ -220,6 +307,17 @@ def test_massage_transition_text_keeps_fresh_opener():
     )
 
     assert text == "Aspetta un secondo, qui c'e da ridere."
+
+
+def test_massage_transition_text_all_rewrites_exhausted_returns_first():
+    """When the opener is a repeated boring stem AND every rewrite candidate's stem is
+    already in the recent set, fall through to the first canned opener (defensive path).
+    """
+    from mammamiradio.hosts.transitions import _TRANSITION_REWRITE_MAP
+
+    recent = ["Allora"] + _TRANSITION_REWRITE_MAP["banter"]
+    text = _massage_transition_text("Allora", "banter", recent)
+    assert text == _TRANSITION_REWRITE_MAP["banter"][0]
 
 
 # --- write_banter tests ---
@@ -2300,3 +2398,57 @@ async def test_key_rotation_clears_block(config, state):
     assert result == {"ok": True}
     assert sw._anthropic_auth_blocked_key == ""
     assert sw._anthropic_auth_blocked_until == 0.0
+
+
+@pytest.mark.asyncio
+async def test_write_banter_injects_running_gag_with_instruction_outside_fence(config, state):
+    """Gag DATA goes inside <home_state_data>; the use/no-use INSTRUCTION outside it."""
+    state.ha_running_gag = "La macchina del caffè: spento/a → acceso/a, di nuovo stasera."
+    captured = {}
+
+    async def _fake_generate_json_response(**kwargs):
+        captured["prompt"] = kwargs["prompt"]
+        return {"lines": [{"host": config.hosts[0].name, "text": "Ancora caffè?"}], "new_joke": None}
+
+    with patch(
+        "mammamiradio.hosts.scriptwriter._generate_json_response",
+        side_effect=_fake_generate_json_response,
+    ):
+        await write_banter(state, config)
+
+    prompt = captured["prompt"]
+    assert "STASERA:" in prompt
+    assert "di nuovo stasera" in prompt
+    assert "RUNNING GAG:" in prompt
+    # The instruction must sit OUTSIDE the fence (before the opening tag); the
+    # gag data must sit INSIDE it. The opening fence is the tag-on-its-own-line
+    # ("<home_state_data>\n"); the bare "<home_state_data>" also appears in the
+    # IMPORTANT boundary instruction, so anchor on the newline-delimited tags.
+    fence_open = prompt.index("<home_state_data>\n")
+    fence_close = prompt.index("</home_state_data>")
+    assert prompt.index("RUNNING GAG:") < fence_open
+    assert fence_open < prompt.index("STASERA:") < fence_close
+    # Consumed after one use.
+    assert state.ha_running_gag == ""
+
+
+@pytest.mark.asyncio
+async def test_write_banter_omits_running_gag_block_when_empty(config, state):
+    """S2 empty-fallback: no gag → no STASERA block, no instruction, no crash."""
+    state.ha_running_gag = ""
+    captured = {}
+
+    async def _fake_generate_json_response(**kwargs):
+        captured["prompt"] = kwargs["prompt"]
+        return {"lines": [{"host": config.hosts[0].name, "text": "Si parte."}], "new_joke": None}
+
+    with patch(
+        "mammamiradio.hosts.scriptwriter._generate_json_response",
+        side_effect=_fake_generate_json_response,
+    ):
+        result, _ = await write_banter(state, config)
+
+    prompt = captured["prompt"]
+    assert "STASERA:" not in prompt
+    assert "RUNNING GAG:" not in prompt
+    assert len(result) == 1

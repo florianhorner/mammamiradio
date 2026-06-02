@@ -6,7 +6,7 @@ import io
 from pathlib import Path
 
 from mammamiradio.core.config import load_config, runtime_json
-from mammamiradio.web.streamer import _inject_ingress_prefix, _skip_id3_and_xing_header
+from mammamiradio.web.streamer import _skip_id3_and_xing_header
 
 
 def test_streamer_uses_audio_bitrate_for_throttle():
@@ -74,68 +74,6 @@ style = "test"
     config = load_config(str(toml_file))
     assert config.audio.bitrate == 128
     assert not hasattr(config.station, "bitrate")
-
-
-# --- Ingress prefix injection tests ---
-
-
-def test_inject_ingress_prefix_empty():
-    """Empty prefix should return HTML unchanged."""
-    html = """<script>fetch('/stream')</script>"""
-    assert _inject_ingress_prefix(html, "") is html
-
-
-def test_inject_ingress_prefix_rewrites_html_attributes():
-    """Non-empty prefix should rewrite static HTML attributes only."""
-    prefix = "/api/hassio_ingress/abc123"
-    # Static HTML attributes are rewritten
-    assert f'href="{prefix}/listen"' in _inject_ingress_prefix('href="/listen"', prefix)
-    assert f'src="{prefix}/stream"' in _inject_ingress_prefix('src="/stream"', prefix)
-
-
-def test_inject_ingress_prefix_does_not_rewrite_js_strings():
-    """Single-quoted JS strings must NOT be rewritten — _base handles them."""
-    prefix = "/api/hassio_ingress/abc123"
-    # JS patterns like _base + '/stream' must stay untouched
-    js = "_base + '/stream'"
-    assert _inject_ingress_prefix(js, prefix) == js
-    js2 = "_base + '/status'"
-    assert _inject_ingress_prefix(js2, prefix) == js2
-    js3 = "fetch(_base + '/api/skip')"
-    assert _inject_ingress_prefix(js3, prefix) == js3
-
-
-def test_inject_ingress_prefix_no_false_positives():
-    """Prefix injection should not affect non-matching patterns."""
-    html = "some random text with /stream in prose"
-    result = _inject_ingress_prefix(html, "/prefix")
-    assert result == html
-
-
-def test_inject_ingress_prefix_rewrites_static_paths():
-    """Ingress prefix should rewrite /static/ asset references."""
-    prefix = "/api/hassio_ingress/abc123"
-    assert f'"{prefix}/static/manifest.json"' in _inject_ingress_prefix('href="/static/manifest.json"', prefix)
-    assert f'"{prefix}/static/icon-192.svg"' in _inject_ingress_prefix('href="/static/icon-192.svg"', prefix)
-
-
-def test_inject_ingress_prefix_rewrites_script_src_static():
-    """Ingress prefix must rewrite <script src="/static/..."> alongside href= attributes.
-
-    Guards the listener site-v1 split that serves its client code from
-    /static/listener.js. Without this, HA Ingress users hit dead <script> tags
-    and the listener loses its runtime wiring under the Supervisor proxy.
-    """
-    prefix = "/api/hassio_ingress/abc123"
-    html = '<script src="/static/listener.js" defer></script>'
-    expected = f'<script src="{prefix}/static/listener.js" defer></script>'
-    assert _inject_ingress_prefix(html, prefix) == expected
-
-
-def test_inject_ingress_prefix_rewrites_sw_path():
-    """Ingress prefix should rewrite /sw.js reference."""
-    prefix = "/api/hassio_ingress/abc123"
-    assert f"'{prefix}/sw.js'" in _inject_ingress_prefix("register('/sw.js')", prefix)
 
 
 # --- Safari banter-cutoff guard: _skip_id3_and_xing_header ---

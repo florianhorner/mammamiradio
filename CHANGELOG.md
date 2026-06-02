@@ -15,6 +15,46 @@ The current version source of truth is `pyproject.toml`.
   are filtered before prompt assembly, and the admin Engine Room shows the
   scored slice plus privacy filter counts.
 
+- **The admin now tells you when an AI key isn't working** — a wrong or revoked Anthropic or OpenAI key is checked the moment the station starts (and again whenever you save a key), so the Engine Room shows a clear "key not working — replace key" state right away instead of looking connected until a host segment silently fails. Listeners never see any of this, and if a second valid key is configured the station keeps sounding live.
+
+- **Running-gag callbacks about your home** — when Home Assistant is connected, the AI hosts now occasionally land a deferred callback about a recurring home event from the same evening (the coffee machine going on yet again, the door, the vacuum), like an inside joke that builds over the night. The station keeps a small per-evening tally that survives addon restarts, paces each gag with a cooldown so it never repeats too often, and only draws on discrete on/off events (never numeric sensor noise). No effect when Home Assistant is not connected.
+
+- **Music Assistant now-playing contract** — a dedicated read-only JSON
+  endpoint at `GET /api/integrations/v1/now-playing` exposes a stable shape
+  for third-party music controllers: station identity, stream URL,
+  segment display class (music / voice / interstitial / unavailable),
+  current track or host, up next, session state, and a `changed_at`
+  timestamp paired with a weak `ETag` + `Cache-Control` for cheap polling.
+  Internal metadata fields are filtered through a server-side allowlist
+  so signed URLs, file paths, and download errors cannot leak. Contract
+  pinned by ten sample-payload JSON fixtures under
+  `docs/integrations/sample-payloads/`, each wired into the test suite.
+  Documented at `docs/integrations/now-playing.md` with a migration guide
+  from `/public-status`.
+
+### Fixed
+
+- **The Edge add-on now auto-updates after every add-on change.** The automated edge-channel version bump previously could not land on the protected branch, so Home Assistant never showed an Edge "Update" and the add-on build reported a failure on every change. The bump now goes through the normal checks, so the Edge channel tracks the latest build again.
+
+### Security
+
+- **Admin endpoints no longer auto-trust private networks when admin credentials are configured.** Previously a client on a LAN or Tailscale address was trusted for admin access even when `ADMIN_PASSWORD` or `ADMIN_TOKEN` was set, so a configured credential could be silently bypassed from any private-network browser. Now, when a credential is configured, all non-loopback admin traffic must present it. Credential-less private-network deployments are unchanged (still trusted, still CSRF-guarded on writes). Standalone runs that bind to a non-loopback host (including an empty bind host, which listens on all interfaces) now require `ADMIN_PASSWORD` or `ADMIN_TOKEN` at startup. Browser admin access requires `ADMIN_PASSWORD`; `ADMIN_TOKEN` is a header-only API credential a browser cannot send on navigation.
+
+### Changed
+
+- **Admin producer-desk polish** — the `/admin` control room is now English-first
+  for all utility copy (buttons, tooltips, toasts, status, empty states), with
+  Italian kept for structural section names and the on-air badge. The Diretta
+  drawer groups its controls into four labeled sections (live modes, immediate
+  actions, quick actions, pacing). The Motore drawer splits into Status / Costi /
+  Setup, and Setup collapses on its own once everything is ready. Archivio gains a
+  search box plus type and time filters that remember your selection while you
+  work. The Scaletta table now sheds optional columns on tablet widths before
+  collapsing to cards on phones.
+- **Undo for destructive admin actions** — purging the queue or removing a
+  segment shows a 5-second Undo toast and only commits when the window closes, so
+  a mis-tap on a running station is recoverable.
+
 ## [2.13.0] - 2026-05-26
 
 ### Added
@@ -239,7 +279,7 @@ entrypoint `mammamiradio.main:app` and Docker invocations are unaffected.
   - `ADMIN_PANEL_STANDARDS.md` → `docs/design/admin-panel.md`
   - `HA_ADDON_RUNBOOK.md` → `docs/runbooks/ha-addon.md`
 
-  **Cross-references updated** in `README.md`, repo agent guidance, `CONTRIBUTING.md`, the moved docs themselves, and four source/test files that referenced `DESIGN.md` in comments (`mammamiradio/core/config.py`, `mammamiradio/web/templates/admin.html`, `tests/hosts/test_brand_config.py`, `tests/web/test_design_tokens.py`). Historical audit notes (`docs/2026-04-13-log-resolution-plan.md`, `docs/2026-04-16-documentation-structure-audit.md`) are dated snapshots and were left untouched.
+  **Cross-references updated** in `README.md`, repo agent guidance, `CONTRIBUTING.md`, the moved docs themselves, and four source/test files that referenced `DESIGN.md` in comments (`mammamiradio/core/config.py`, `mammamiradio/web/templates/admin.html`, `tests/hosts/test_brand_config.py`, `tests/web/test_design_tokens.py`). Historical audit notes (`docs/archive/2026-04-13-log-resolution-plan.md`, `docs/archive/2026-04-16-documentation-structure-audit.md`) are dated snapshots and were left untouched.
 - **Admin panel fully Italianized**: all operator-facing label strings in `admin.html` — trigger card titles (`Aggiungi banter`, `Forza pubblicità`, `Notizia flash`, `Caos in arrivo`), quick-action chips (`Taglia banter/pubblicità`, `Ricarica live`, `Svuota coda`, `Segnala traccia`), filter pills (`Tutto`, `Musica`, `Pubblicità`), preset names (`EQUILIBRATO`, `CALMO`), slider axis labels (`Energia`, `Caos`, `Calore`, `Verbosità`), search placeholder and button (`Cerca musica`, `Cerca`), engine room section headings, setup subheadings, toast strings, and the `ON AIR` → `IN ONDA` pill — are now in Italian. API endpoint strings, JS variable names, CSS class names, and `data-` identifiers are unchanged. Eliminates the mixed-language whiplash that remained after the panel shell was italianized but content strings stayed in English.
 - **`CSS.escape()` hardens host-name CSS attribute selectors** in `admin.html`: two `` `[data-h="${n}"]` `` template literals in `updHost()` and `applyHostPreset()` now wrap `n` with `CSS.escape()`. Host names containing CSS special characters (quotes, brackets, dots) previously caused silent no-match — the host block was never found and the UI failed closed. No XSS risk existed, but operators with unconventional host names saw broken personality sliders.
 - **Host preset active-state comparison uses `data-preset` attribute** instead of visible button text, so preset highlight survives localized display labels (previously broke when `BALANCED` → `EQUILIBRATO`).

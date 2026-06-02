@@ -14,12 +14,43 @@
 # Env:
 #   MIN_COOLDOWN_HOURS  default 24
 #
+# Usage:
+#   -h, --help   Show this help and exit
+#
 # Exit:
 #   0  release allowed (cooldown cleared, or no prior release)
 #   1  release blocked (within cooldown window)
 #   2  usage / lookup error
 
 set -euo pipefail
+
+case "${1:-}" in
+  -h|--help)
+    cat <<'EOF'
+Usage: scripts/check-release-cooldown.sh [prior_iso] [now_iso]
+
+Blocks a release if the prior release tag is less than MIN_COOLDOWN_HOURS
+old. Rule: GIT_TIME(prior_release) + MIN_COOLDOWN_HOURS > NOW => exit 1.
+
+Args (both optional):
+  prior_iso    Prior release publishedAt (ISO-8601 UTC).
+               Defaults to `gh release list --limit 1 --json publishedAt`.
+  now_iso      Current time (ISO-8601 UTC). Defaults to `date -u`.
+
+Env:
+  MIN_COOLDOWN_HOURS    Cooldown window (default: 24)
+
+Exit codes:
+  0  release allowed
+  1  release blocked (within cooldown window)
+  2  usage / lookup error
+
+Options:
+  -h, --help   Show this help and exit
+EOF
+    exit 0
+    ;;
+esac
 
 MIN_COOLDOWN_HOURS="${MIN_COOLDOWN_HOURS:-24}"
 

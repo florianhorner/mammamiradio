@@ -60,6 +60,7 @@ Everything else lives under `docs/`:
 - `docs/operations.md` - runtime assumptions and deploy reality
 - `docs/troubleshooting.md` - common failures and recovery paths
 - `docs/runbooks/ha-addon.md` - addon release process, config contract, pre-merge checklist
+- `docs/runbooks/refactor-cuts.md` - god-module split: per-cut pre-flight checklist and lessons
 - `docs/design/system.md` - Volare design system: colors, typography, components, motion
 - `docs/design/admin-panel.md` - admin control-room layout, info architecture, motion rules
 - `docs/conductor.md` - Conductor workspace lifecycle and `.env` discovery
@@ -158,7 +159,7 @@ start.sh                    dev entrypoint with uvicorn and reload
 tests/                      mirrors mammamiradio/ — tests/<nave>/test_*.py
 ```
 
-Two god modules carry a `# TODO: split` marker: `web/streamer.py` (~2,300 LOC) and `hosts/scriptwriter.py` (~1,500 LOC). They have postal addresses now; the actual splits land in PRs 5 and 6 of the cathedral plan (`docs/2026-04-28-cathedral-restructure.md`).
+Two god modules carry a `# TODO: split` marker: `web/streamer.py` (~2,300 LOC) and `hosts/scriptwriter.py` (~1,500 LOC). They have postal addresses now; the actual splits land in PRs 5 and 6 of the cathedral plan (`docs/archive/2026-04-28-cathedral-restructure.md`).
 
 ## Design System
 
@@ -202,10 +203,11 @@ Why: the scriptwriter generates fake ads in the brand's voice, makes false produ
 - Treat 60 minutes of uninterrupted runtime per live station object as the default minimum when tinkering around an active stream.
 - Built-in demo music should favor current modern tracks, not nostalgic or older fallback selections.
 - Advertisements need a convincing underlying sound bed. Prefer CC-free music or sound design beds under ad voiceovers instead of dry voice-only spots.
-- To tune scriptwriter behavior without a stream gap: edit `mammamiradio/hosts/scriptwriter.py`, run `make check`, then `POST /api/hot-reload` (admin auth, empty body), then `POST /api/trigger {"type": "banter"}` to generate a segment with the new code. The stream stays live throughout. If reload fails (syntax error), the endpoint returns 500 and the stream keeps running with the old code.
+- To tune host behavior without a stream gap: edit `mammamiradio/hosts/scriptwriter.py` (generation logic) and/or the prompt-data leaves — `mammamiradio/hosts/prompt_world.py` (expression banks, host fingerprints, Chaos/Festival mode blocks), `mammamiradio/hosts/transitions.py` (transition rewrite openers), `mammamiradio/hosts/fallbacks.py` (chaos stock lines, ad-break bumpers) — run `make check`, then `POST /api/hot-reload` (admin auth, empty body) — it reloads `prompt_world`, `transitions`, `fallbacks` then `scriptwriter` leaves-first, so edits to any of them take effect — then `POST /api/trigger {"type": "banter"}` to generate a segment with the new code. The stream stays live throughout. If reload fails (syntax error), the endpoint returns 500 and the stream keeps running with the old code.
 
 ## Quality gates
 
+- **Land via `/ship` — never a bare merge (enforced)**: Every PR is opened and merged through `/ship`, which runs the mandatory pre-ship review squad (adversarial + test-coverage + docs/config-consistency). A `PreToolUse` hook (`scripts/hooks/require-preship-squad.sh`, wired in `.claude/settings.json`) refuses a bare `gh pr create` / `gh pr merge` unless a `review`/`adversarial-review` entry is logged for HEAD (or a recent ancestor). Added after a refactor cut opened PRs with bare `gh pr create`, skipping the squad's docs/config-consistency check and letting a doc-sync violation reach a green PR. Fail-open and project-scoped.
 - **Pre-merge QA (mandatory)**: Every PR must pass two separate `/qa` runs before merge:
   1. **Player QA** (`/qa` on `/` dashboard) — listener-facing: stream playback, now-playing, up-next, Casa card, song requests, clip sharing, responsive layout.
   2. **Admin QA** (`/qa` on `/admin`) — operator-facing: controls (skip/stop/resume/shuffle), pacing sliders, host config, key management, engine room, playlist management.
@@ -330,6 +332,25 @@ For every bug fix or behavior change, do not stop at the first broken instance.
 Review question to apply before merge:
 
 `What invariant failed here, where else could it fail the same way, and what automated check will catch the next instance before a user does?`
+
+## Refactor discipline
+
+For behavior-preserving refactors that MOVE a symbol between modules (the god-module
+split train, and any future relocation), run these checks at SCOPE time — before naming
+what moves — not only during execution:
+
+- **Whole-repo symbol grep.** Grep every moved symbol across the ENTIRE repo, including
+  `scripts/`, `.github/workflows/`, and `docs/` — not just `mammamiradio/` + `tests/`. CI
+  guards and shell scripts hardcode symbol names; a move that ignores them red-fails the
+  build (W3b near-miss: `scripts/validate-addon.sh` AST-scans for `_inject_ingress_prefix`).
+- **Dependency-closure gate.** Verify every symbol the move-target calls that is SHARED
+  with code staying behind or destined for another cut. A target that reaches a shared
+  primitive must not move until that primitive's home is settled (W3b: `_render_admin_response`
+  → `_get_csrf_token`, shared with the auth cut).
+- **Read the test bodies, not just grep counts.** Refines the plan-audit rule — read the
+  actual test files; counts miss pre-existing duplication (W3b: 8 sanitize tests, not 4).
+
+Full per-cut checklist + cut-by-cut lessons: `docs/runbooks/refactor-cuts.md`.
 
 ## Audio delivery test coverage rule
 

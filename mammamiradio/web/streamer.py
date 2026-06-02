@@ -4,9 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
-import hashlib
 import importlib
-import importlib.metadata
 import ipaddress
 import logging
 import math
@@ -14,7 +12,6 @@ import os
 import random as _random
 import re as _re
 import secrets
-import threading
 import time
 from pathlib import Path
 from urllib.parse import urlparse
@@ -47,6 +44,28 @@ from mammamiradio.playlist.playlist import (
     write_persisted_source,
 )
 from mammamiradio.scheduling.scheduler import preview_upcoming
+from mammamiradio.web.assets import (
+    _ASSET_VERSION,
+    _ASSETS_DIR,
+    _STATIC_DIR,
+    _TEMPLATES_DIR,
+    _bust_static_cache,
+)
+from mammamiradio.web.mp3_frames import _skip_id3_and_xing_header
+from mammamiradio.web.pages import _get_injected_html, _sanitize_ingress_prefix
+from mammamiradio.web.persistence import (
+    _CREDENTIAL_ENV_TO_FIELD,
+    _CREDENTIAL_FIELDS,
+    _apply_live_credentials,
+    _sanitize_credential_value,
+    _save_addon_option,
+    _save_addon_options,
+    _save_dotenv,
+)
+from mammamiradio.web.provider_verdict import (
+    _record_provider_verdict,
+    _run_provider_verdict,
+)
 from mammamiradio.web.ui_copy import copy_strings
 
 logger = logging.getLogger(__name__)
@@ -56,35 +75,12 @@ security = HTTPBasic(auto_error=False)
 
 # TODO: split — this 2,395-line god module is a postal address, not a destination.
 # See docs/2026-04-28-cathedral-restructure.md (PR 5) for the routes/auth/playback split plan.
-_THIS_DIR = Path(__file__).resolve().parent  # mammamiradio/web/
-_PKG_ROOT = _THIS_DIR.parent  # mammamiradio/
-_TEMPLATES_DIR = _THIS_DIR / "templates"
-_STATIC_DIR = _THIS_DIR / "static"
-_ASSETS_DIR = _PKG_ROOT / "assets"
-
-
-def _static_asset_digest() -> str:
-    """Return a short content hash for browser-visible CSS/JS assets."""
-    digest = hashlib.sha256()
-    for name in ("tokens.css", "base.css", "listener.css", "waveform.js", "listener.js", "sw.js"):
-        path = _STATIC_DIR / name
-        if path.exists():
-            digest.update(name.encode("utf-8"))
-            digest.update(b"\0")
-            digest.update(path.read_bytes())
-    return digest.hexdigest()[:8]
-
-
-_ASSET_VERSION = f"{importlib.metadata.version('mammamiradio')}-{_static_asset_digest()}"
-
+# Path roots, the static-asset content hash (_ASSET_VERSION), and
+# _bust_static_cache now live in web/assets.py and are imported above.
+#
 # Jinja2 templates for brand-engine listener page (PR-C). Admin/live still use
-# string-replace via _inject_ingress_prefix; only listener migrates to Jinja for now.
+# string-replace via _inject_ingress_prefix (web/pages.py); only listener migrates to Jinja for now.
 _TEMPLATES = Jinja2Templates(directory=str(_TEMPLATES_DIR))
-
-
-def _bust_static_cache(html: str) -> str:
-    """Append a content-based version to /static/*.css and /static/*.js URLs."""
-    return _re.sub(r'(/static/[^"?]+\.(css|js))"', rf'\1?v={_ASSET_VERSION}"', html)
 
 
 # Admin/live pages still loaded as raw strings + post-render prefix injection.
@@ -93,20 +89,6 @@ _LISTENER_HTML = _bust_static_cache((_TEMPLATES_DIR / "listener.html").read_text
 
 _ADMIN_HTML = _bust_static_cache((_TEMPLATES_DIR / "admin.html").read_text())
 _LIVE_HTML = _bust_static_cache((_TEMPLATES_DIR / "live.html").read_text())
-
-_INGRESS_PREFIX_RE = _re.compile(r"^/[a-zA-Z0-9/_-]+$")
-
-# Cache ingress-injected HTML to avoid repeated string replacements on every request.
-# Key: (html_id, prefix) → injected HTML. Typically 1-2 entries per page.
-_injected_html_cache: dict[tuple[str, str], str] = {}
-
-
-def _get_injected_html(html_id: str, html: str, prefix: str) -> str:
-    """Return ingress-injected HTML, cached by (page, prefix)."""
-    key = (html_id, prefix)
-    if key not in _injected_html_cache:
-        _injected_html_cache[key] = _inject_ingress_prefix(html, prefix)
-    return _injected_html_cache[key]
 
 
 def _as_int_index(value, default: int = -1) -> int:
@@ -128,12 +110,6 @@ CLIP_RATE_PRUNE_SECONDS = 300.0
 CLIP_DURATION_SECONDS = 30
 CLIP_MAX_SAVED = 50
 DEFAULT_CLIP_BITRATE_KBPS = 192
-_CREDENTIAL_FIELDS: dict[str, tuple[str, str]] = {
-    "anthropic_api_key": ("ANTHROPIC_API_KEY", "anthropic_api_key"),
-    "openai_api_key": ("OPENAI_API_KEY", "openai_api_key"),
-}
-_CREDENTIAL_ENV_TO_FIELD = {env_key: field for field, (env_key, _config_attr) in _CREDENTIAL_FIELDS.items()}
-_ADDON_OPTIONS_LOCK = threading.Lock()
 
 
 def _purge_segment_queue(q) -> int:
@@ -169,6 +145,7 @@ def _persist_session_stopped(config, stopped: bool) -> None:
 def _clear_session_stopped(state: StationState, config) -> None:
     """Resume playback state and clear the persisted stop marker."""
     state.session_stopped = False
+    state.last_state_change_at = time.time()
     state.resume_event.set()
     _persist_session_stopped(config, False)
 
@@ -636,9 +613,11 @@ def _provider_health_snapshot(config, state: StationState) -> dict:
             "retry_after_s": retry_after,
             "last_error": state.anthropic_last_error if anthropic_degraded else "",
             "auth_failures": state.anthropic_auth_failures,
+            "key_status": state.anthropic_key_status,
         },
         "openai": {
             "configured": bool(config.openai_api_key),
+            "key_status": state.openai_key_status,
         },
         "chaos": {
             "enabled": state.chaos_mode_active,
@@ -745,39 +724,6 @@ def _serialize_track(track: Track) -> dict:
 
 def _source_options_reason(config, exc: Exception) -> str:
     return f"Source loading failed: {exc}"
-
-
-def _sanitize_ingress_prefix(prefix: str) -> str:
-    """Validate and sanitize the X-Ingress-Path header to prevent XSS."""
-    prefix = prefix.rstrip("/")
-    if not prefix or not _INGRESS_PREFIX_RE.match(prefix):
-        return ""
-    return prefix
-
-
-def _inject_ingress_prefix(html: str, prefix: str) -> str:
-    """Rewrite static HTML attribute URLs to work behind HA Ingress proxy.
-
-    Only rewrites HTML attributes (href=, src=) — JavaScript API calls use the
-    client-side ``_base`` variable derived from ``window.location.pathname``,
-    so JS string literals must NOT be replaced here to avoid double-prefixing.
-    """
-    prefix = _sanitize_ingress_prefix(prefix)
-    if not prefix:
-        return html
-    # Only rewrite HTML attributes (double-quoted href=, src=) and standalone JS
-    # paths without _base. NEVER rewrite single-quoted JS strings that use _base
-    # (e.g. _base + '/api/hosts') — that causes double-prefixing.
-    html = html.replace('href="/static/', f'href="{prefix}/static/')
-    html = html.replace('src="/static/', f'src="{prefix}/static/')
-    html = html.replace('href="/listen"', f'href="{prefix}/listen"')
-    html = html.replace('href="/dashboard"', f'href="{prefix}/dashboard"')
-    html = html.replace('href="/admin"', f'href="{prefix}/admin"')
-    html = html.replace('href="/live"', f'href="{prefix}/live"')
-    html = html.replace('src="/stream"', f'src="{prefix}/stream"')
-    # Service worker registration is standalone (no _base), needs rewriting
-    html = html.replace("'/sw.js'", f"'{prefix}/sw.js'")
-    return html
 
 
 def _get_csrf_token(app) -> str:
@@ -995,15 +941,7 @@ def require_admin_access(
     request: Request,
     credentials: HTTPBasicCredentials | None = Depends(security),
 ) -> None:
-    """Authorize admin-only routes using private network trust, token, or basic auth.
-
-    Trust hierarchy (first match wins):
-    1. Private network (LAN, Tailscale, HA Supervisor) — trusted for reads,
-       CSRF-checked for writes
-    2. Admin token (header only)
-    3. Basic auth (username/password)
-    4. Reject
-    """
+    """Authorize admin-only routes using configured credentials or local trust."""
     config = request.app.state.config
 
     # Loopback is fully trusted — same machine, no CSRF risk.
@@ -1016,13 +954,7 @@ def require_admin_access(
     if config.is_addon and _is_hassio_or_loopback(request):
         return
 
-    # Other private networks (LAN, Tailscale): trusted for identity but
-    # CSRF-checked on writes to prevent cross-site POSTs from other browsers.
-    if _is_private_network(request):
-        _enforce_csrf_for_private_network(request)
-        return
-
-    # Explicit auth for public/remote access.
+    # Explicit auth for all non-local traffic when credentials are configured.
     if config.admin_token:
         token = request.headers.get("X-Radio-Admin-Token")
         if token and secrets.compare_digest(token, config.admin_token):
@@ -1052,91 +984,19 @@ def require_admin_access(
             detail="X-Radio-Admin-Token required",
         )
 
+    # Backward-compatible fallback when no admin credentials are configured.
+    # In standalone mode load_config() now rejects a non-loopback bind without
+    # creds, so in production this only fires for loopback binds (already
+    # short-circuited above). Reachable here mainly via test apps built without
+    # creds — kept so credential-less LAN deployments keep working with CSRF.
+    if _is_private_network(request):
+        _enforce_csrf_for_private_network(request)
+        return
+
     raise HTTPException(
         status_code=403,
         detail="Admin endpoints are only available from private networks unless admin auth is configured",
     )
-
-
-_MPEG1_L3_BITRATES_KBPS = (0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320)
-_MPEG1_SAMPLE_RATES = (44100, 48000, 32000)
-
-
-def _is_mpeg1_l3_header(frame_header: bytes, *, allow_free_bitrate: bool) -> bool:
-    """Return whether ``frame_header`` is a plausible MPEG-1 Layer III frame."""
-    if len(frame_header) < 4 or frame_header[0] != 0xFF or (frame_header[1] & 0xE0) != 0xE0:
-        return False
-
-    version = (frame_header[1] >> 3) & 0x03
-    layer = (frame_header[1] >> 1) & 0x03
-    bitrate_idx = (frame_header[2] >> 4) & 0x0F
-    sample_rate_idx = (frame_header[2] >> 2) & 0x03
-
-    if version != 3 or layer != 1 or sample_rate_idx == 3 or bitrate_idx == 0x0F:
-        return False
-    return not (not allow_free_bitrate and bitrate_idx == 0)
-
-
-def _skip_id3_and_xing_header(f) -> None:
-    """Advance the file pointer past any leading ID3v2 tag and Xing/Info metadata frame.
-
-    Safari's ``<audio>`` element honors the Xing/Info duration header of each
-    concatenated segment as end-of-track, causing short segments (banter ~9 s,
-    news flash ~6 s) to fire ``ended`` at the declared duration instead of
-    playing through the ongoing stream. Long music segments (180 s+) don't
-    trip this because the listener tops up buffered bytes before the counter
-    expires. Stripping the tag on every segment makes the stream look like a
-    continuous ICECast feed, which all browsers handle correctly.
-
-    The helper is defensive: any unexpected header shape rewinds to the start,
-    so the worst case is "did nothing" rather than "cut a real audio frame".
-    """
-    header = f.read(10)
-    if len(header) == 10 and header[:3] == b"ID3":
-        size = ((header[6] & 0x7F) << 21) | ((header[7] & 0x7F) << 14) | ((header[8] & 0x7F) << 7) | (header[9] & 0x7F)
-        f.seek(10 + size)
-    else:
-        f.seek(0)
-
-    frame_start = f.tell()
-    frame_header = f.read(4)
-    if not _is_mpeg1_l3_header(frame_header, allow_free_bitrate=True):
-        f.seek(frame_start)
-        return
-
-    bitrate_idx = (frame_header[2] >> 4) & 0x0F
-    sample_rate_idx = (frame_header[2] >> 2) & 0x03
-    padding = (frame_header[2] >> 1) & 0x01
-    channel_mode = (frame_header[3] >> 6) & 0x03
-
-    magic_offset = 21 if channel_mode == 3 else 36
-    f.seek(frame_start + magic_offset)
-    magic = f.read(4)
-    if magic not in (b"Xing", b"Info"):
-        f.seek(frame_start)
-        return
-
-    if bitrate_idx == 0:
-        # VBR info frame (free-format): frame_length is unknown from the header alone.
-        # Scan forward from just after the Xing magic and only accept plausible
-        # MPEG-1 Layer III headers so sync-like metadata bytes are ignored.
-        f.seek(frame_start + magic_offset + 4)
-        data = f.read(8192)
-        sync_pos = -1
-        for i in range(len(data) - 3):
-            if _is_mpeg1_l3_header(data[i : i + 4], allow_free_bitrate=False):
-                sync_pos = i
-                break
-        if sync_pos >= 0:
-            f.seek(frame_start + magic_offset + 4 + sync_pos)
-        else:
-            f.seek(frame_start)
-        return
-
-    bitrate_kbps = _MPEG1_L3_BITRATES_KBPS[bitrate_idx]
-    sample_rate = _MPEG1_SAMPLE_RATES[sample_rate_idx]
-    frame_length = (144 * bitrate_kbps * 1000 // sample_rate) + padding
-    f.seek(frame_start + frame_length)
 
 
 async def run_playback_loop(app) -> None:
@@ -1650,6 +1510,16 @@ async def setup_provider_check(request: Request, _: None = Depends(require_admin
     launching overlapping 12-second outbound checks against every provider.
     """
     config = request.app.state.config
+
+    def _record_if_task_keys_match(probe_result: dict) -> None:
+        # The verdict must reflect the keys the SHARED in-flight task actually probed,
+        # not this waiter's snapshot. A later request joining an old task after a
+        # concurrent save swapped a key must NOT accept that task's stale 401. Compare
+        # current config to the keys captured when the task was created.
+        snapshot = getattr(request.app.state, "_provider_check_task_keys", None)
+        if snapshot == (config.anthropic_api_key, config.openai_api_key):
+            _record_provider_verdict(request.app.state.station_state, probe_result)
+
     lock = getattr(request.app.state, "_provider_check_lock", None)
     if lock is None:
         lock = asyncio.Lock()
@@ -1673,9 +1543,13 @@ async def setup_provider_check(request: Request, _: None = Depends(require_admin
                 request.app.state._provider_check_cached_result = result
                 request.app.state._provider_check_cached_at = time.time()
                 request.app.state._provider_check_task = None
+                _record_if_task_keys_match(result)
                 return result
             task = None
         if task is None:
+            # Capture the keys this task probes so the verdict can't be misattributed
+            # to a later config (Codex: snapshot travels with the task, not the waiter).
+            request.app.state._provider_check_task_keys = (config.anthropic_api_key, config.openai_api_key)
             task = asyncio.create_task(check_provider_keys(config))
             request.app.state._provider_check_task = task
 
@@ -1692,6 +1566,7 @@ async def setup_provider_check(request: Request, _: None = Depends(require_admin
             request.app.state._provider_check_cached_result = result
             request.app.state._provider_check_cached_at = time.time()
             request.app.state._provider_check_task = None
+    _record_if_task_keys_match(result)
     return result
 
 
@@ -1707,11 +1582,6 @@ async def save_keys(request: Request):
     await _persist_and_apply_credentials(request, updates, use_addon_options=True)
 
     return {"ok": True, "saved": list(updates.keys())}
-
-
-def _sanitize_credential_value(value: str) -> str:
-    """Strip env-breaking characters before persistence or live application."""
-    return value.replace("\n", "").replace("\r", "")
 
 
 def _credential_updates_from_env_payload(body: dict, *, require_nonempty: bool) -> dict[str, str]:
@@ -1747,91 +1617,12 @@ async def _persist_and_apply_credentials(request: Request, updates: dict[str, st
 
     _apply_live_credentials(request.app.state.station_state, config, updates)
 
-
-def _apply_live_credentials(state: StationState, config, updates: dict[str, str]) -> None:
-    for env_key, value in updates.items():
-        os.environ[env_key] = value
-
-    if "ANTHROPIC_API_KEY" in updates:
-        config.anthropic_api_key = updates["ANTHROPIC_API_KEY"]
-        from mammamiradio.hosts.scriptwriter import reset_provider_backoff
-
-        reset_provider_backoff()
-        state.anthropic_disabled_until = 0.0
-        state.anthropic_last_error = ""
-    if "OPENAI_API_KEY" in updates:
-        config.openai_api_key = updates["OPENAI_API_KEY"]
-
-
-def _save_dotenv(updates: dict[str, str]) -> None:
-    """Write key=value pairs to .env, updating existing keys or appending new ones."""
-    env_path = Path(".env")
-    lines = env_path.read_text().splitlines() if env_path.exists() else []
-
-    safe_updates = {k: _sanitize_credential_value(v) for k, v in updates.items()}
-
-    written = set()
-    new_lines = []
-    for line in lines:
-        stripped = line.strip()
-        if stripped and not stripped.startswith("#") and "=" in stripped:
-            key = stripped.split("=", 1)[0].strip()
-            if key in safe_updates:
-                new_lines.append(f'{key}="{safe_updates[key]}"')
-                written.add(key)
-                continue
-        new_lines.append(line)
-
-    for key, value in safe_updates.items():
-        if key not in written:
-            new_lines.append(f'{key}="{value}"')
-
-    tmp = env_path.with_suffix(".env.tmp")
-    tmp.write_text("\n".join(new_lines) + "\n")
-    tmp.replace(env_path)
-
-
-def _save_addon_option(key: str, value) -> None:
-    """Persist a single option into /data/options.json atomically."""
-    import json as _json
-    import os as _os
-
-    with _ADDON_OPTIONS_LOCK:
-        options_path = Path("/data/options.json")
-        options: dict = {}
-        if options_path.exists():
-            try:
-                options = _json.loads(options_path.read_text())
-            except (ValueError, OSError):
-                options = {}
-        options[key] = value
-        tmp_path = options_path.with_suffix(options_path.suffix + ".tmp")
-        tmp_path.write_text(_json.dumps(options, indent=2))
-        _os.replace(tmp_path, options_path)
-
-
-def _save_addon_options(updates: dict[str, str]) -> None:
-    """Update /data/options.json with new credential values."""
-    import json as _json
-    import os as _os
-
-    with _ADDON_OPTIONS_LOCK:
-        options_path = Path("/data/options.json")
-        options = {}
-        if options_path.exists():
-            try:
-                options = _json.loads(options_path.read_text())
-            except (ValueError, OSError):
-                pass
-
-        for env_key, value in updates.items():
-            opt_key = _CREDENTIAL_ENV_TO_FIELD.get(env_key)
-            if opt_key:
-                options[opt_key] = _sanitize_credential_value(value)
-
-        tmp_path = options_path.with_suffix(options_path.suffix + ".tmp")
-        tmp_path.write_text(_json.dumps(options, indent=2))
-        _os.replace(tmp_path, options_path)
+    # Re-validate the freshly-saved key in the background so the admin reflects a bogus
+    # key WITHOUT waiting for a banter segment to fail. Applies to EVERY credential-save
+    # path (both /api/setup/save-keys and /api/credentials). Fire-and-forget so the
+    # response stays fast (Leadership Principle #2); keep a reference so the task isn't
+    # garbage-collected mid-flight (RUF006).
+    request.app.state.provider_verdict_task = asyncio.create_task(_run_provider_verdict(request.app.state))
 
 
 @router.get("/api/setup/addon-snippet")
@@ -1861,6 +1652,26 @@ async def capabilities(request: Request, _: None = Depends(require_admin_access)
     provider_health = _provider_health_snapshot(config, state)
     capabilities["anthropic_degraded"] = provider_health["anthropic"]["degraded"]
     capabilities["anthropic_retry_after_s"] = provider_health["anthropic"]["retry_after_s"]
+    # Tri-state key-validation verdict ("unverified" | "valid" | "rejected"), distinct
+    # from the time-based `anthropic_degraded`. Lets the admin show a persistent
+    # "key not working" state WITHOUT waiting for a banter segment to 401.
+    capabilities["anthropic_key_status"] = provider_health["anthropic"]["key_status"]
+    capabilities["openai_key_status"] = provider_health["openai"]["key_status"]
+    # If a configured key was actively refused and nothing else is confirmed working,
+    # steer next_step toward replacing it (placeholder copy — final operator wording is
+    # a separate communication pass). Tier itself stays key-presence-derived (conservative).
+    statuses = [
+        provider_health["anthropic"]["key_status"] if config.anthropic_api_key else None,
+        provider_health["openai"]["key_status"] if config.openai_api_key else None,
+    ]
+    # Only steer once the probes have settled: an "unverified" key is still in flight,
+    # so don't nudge "replace your key" while a configured key might yet come back valid.
+    if "rejected" in statuses and "valid" not in statuses and "unverified" not in statuses:
+        result["next_step"] = {
+            "key": "fix_llm_key",
+            "message": "An AI key isn't working — replace it in Settings to restore AI hosts",
+            "action": "open_settings",
+        }
 
     now = state.now_streaming or {}
     result["now_playing"] = now
@@ -2054,6 +1865,7 @@ async def stop_session(request: Request, _: None = Depends(require_admin_access)
         request.app.state.skip_event.set()
     # Signal producer to pause and persist across reloads
     state.session_stopped = True
+    state.last_state_change_at = time.time()
     config = request.app.state.config
     _persist_session_stopped(config, True)
     state.now_streaming = {"type": "stopped", "label": "Session stopped", "started": time.time(), "metadata": {}}
@@ -2155,13 +1967,20 @@ async def api_interrupt(request: Request, _: None = Depends(require_admin_access
 
 @router.post("/api/hot-reload")
 async def hot_reload_modules(request: Request, _: None = Depends(require_admin_access)):
-    """Reload scriptwriter module in-place. Stream continues uninterrupted.
+    """Reload scriptwriter and its data submodules in-place. Stream continues uninterrupted.
 
-    Safe to reload: scriptwriter (stateless functions + lazy-init clients).
+    Safe to reload: prompt_world / transitions / fallbacks (prompt-fiction + stock copy)
+    + scriptwriter (stateless functions + lazy-init clients). Data submodules reload FIRST
+    (leaves-first) so the scriptwriter facade re-imports fresh values — reloading the facade
+    alone would rebind its ``from .prompt_world`` / ``.transitions`` / ``.fallbacks`` import
+    names to the stale submodules.
     NOT reloaded: producer, streamer, persona (hold live task/instance state).
     Requires --workers 1 (importlib reloads only the worker handling the request).
     """
+    import mammamiradio.hosts.fallbacks as _fallbacks_mod
+    import mammamiradio.hosts.prompt_world as _prompt_world_mod
     import mammamiradio.hosts.scriptwriter as _scriptwriter_mod
+    import mammamiradio.hosts.transitions as _transitions_mod
 
     # Debounce: reject if called within 5s of last reload (monotonic to avoid NTP skew)
     last_reload: float = getattr(request.app.state, "_last_hot_reload_ts", 0.0)
@@ -2180,13 +1999,32 @@ async def hot_reload_modules(request: Request, _: None = Depends(require_admin_a
 
     t0 = time.monotonic()
     try:
+        # Leaves-first ordering is load-bearing. scriptwriter does
+        # `from .prompt_world import ...` / `.transitions` / `.fallbacks`, so reloading
+        # scriptwriter re-runs those imports and rebinds the names to whatever the data
+        # submodules hold NOW. Reload the data submodules FIRST; reload the facade first
+        # and it would rebind to the stale submodules, leaving operator edits invisible.
+        # Reloading scriptwriter also re-runs its module body, which resets
+        # _cached_system_prompt — so edited prompt data takes effect on the next
+        # generation rather than serving a stale cache.
+        importlib.reload(_prompt_world_mod)
+        importlib.reload(_transitions_mod)
+        importlib.reload(_fallbacks_mod)
         importlib.reload(_scriptwriter_mod)
         duration_ms = int((time.monotonic() - t0) * 1000)
         request.app.state._last_hot_reload_ts = now
-        logger.info("hot-reload: reloaded mammamiradio.hosts.scriptwriter in %dms", duration_ms)
+        logger.info(
+            "hot-reload: reloaded prompt_world + transitions + fallbacks + scriptwriter in %dms",
+            duration_ms,
+        )
         return {
             "ok": True,
-            "reloaded_modules": ["mammamiradio.hosts.scriptwriter"],
+            "reloaded_modules": [
+                "mammamiradio.hosts.prompt_world",
+                "mammamiradio.hosts.transitions",
+                "mammamiradio.hosts.fallbacks",
+                "mammamiradio.hosts.scriptwriter",
+            ],
             "duration_ms": duration_ms,
             "effective_on": "next_banter_generation",
             "stream_status": "unaffected",

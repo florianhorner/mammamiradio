@@ -276,6 +276,18 @@ class TestStopEndpoint:
 
         assert not app.state.skip_event.is_set()
 
+    @pytest.mark.asyncio
+    async def test_stop_bumps_last_state_change_at(self):
+        """The integration-contract ETag relies on this timestamp moving forward."""
+        app = _make_app(now_streaming={"type": "music", "label": "Song", "started": time.time(), "metadata": {}})
+        app.state.station_state.last_state_change_at = 0.0
+        before = time.time()
+
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            await c.post("/api/stop", headers=AUTH)
+
+        assert app.state.station_state.last_state_change_at >= before
+
 
 # ---------------------------------------------------------------------------
 # Resume endpoint — documents the "resume gap"
@@ -344,6 +356,18 @@ class TestResumeEndpoint:
             await c.post("/api/resume", headers=AUTH)
 
         assert app.state.station_state.force_next == SegmentType.AD
+
+    @pytest.mark.asyncio
+    async def test_resume_bumps_last_state_change_at(self):
+        """Integration-contract ETag invalidation depends on this timestamp moving forward."""
+        app = _make_app(session_stopped=True)
+        app.state.station_state.last_state_change_at = 0.0
+        before = time.time()
+
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            await c.post("/api/resume", headers=AUTH)
+
+        assert app.state.station_state.last_state_change_at >= before
 
 
 # ---------------------------------------------------------------------------
@@ -806,7 +830,7 @@ class TestPacingControlsMatchServerContract:
         html = ADMIN_HTML.read_text()
 
         assert 'id="pBanter" min="2"' in html
-        assert 'id="pacingMeta">Intervento ogni 2 brani' in html
+        assert 'id="pacingMeta">Banter every 2 tracks' in html
         assert "pacing.songs_between_banter||2" in html
 
     def test_admin_pacing_changes_send_partial_patch(self):
@@ -879,13 +903,29 @@ class TestCapabilitiesStatusIsHonest:
         # Anchor the copy so a future refactor can't silently collapse the
         # three-state render back into connected/not-set.
         html = ADMIN_HTML.read_text()
-        assert "sospeso" in html, (
+        assert "suspended" in html, (
             "admin.html should render a suspended-state label when Anthropic "
             "auth failed and we're falling back to OpenAI (Item 11)."
         )
         assert "retry in" in html, (
             "admin.html should surface the retry countdown when Anthropic is in backoff (Item 11)."
         )
+
+    def test_admin_html_renders_key_not_working_state(self):
+        # A bogus key (active-validation verdict "rejected") must render a distinct,
+        # persistent not-working state keyed on key_status — NOT reuse the transient
+        # amber "suspended" path. Both Anthropic and OpenAI consult the verdict.
+        html = ADMIN_HTML.read_text()
+        assert "anthropic_key_status" in html and "openai_key_status" in html, (
+            "admin.html engine-room render must consult `c.anthropic_key_status` and "
+            "`c.openai_key_status` so a key refused at boot reads as not-working before "
+            "any banter fails."
+        )
+        assert "key not working" in html, (
+            "admin.html must render a plain 'key not working' state for an auth-rejected key, "
+            "distinct from the transient 'suspended' fallback."
+        )
+        assert "rejected" in html, "the not-working branch must key on the 'rejected' verdict value."
 
 
 class TestRuntimeProviderTransparencyUI:
@@ -895,7 +935,7 @@ class TestRuntimeProviderTransparencyUI:
         assert 'id="runtimeStatusCard"' in html
         assert 'id="headerHealth"' in html
         assert 'class="status-dot working"' in html
-        assert '<span class="dot"></span>Controllo' in html
+        assert '<span class="dot"></span>Checking' in html
 
     def test_runtime_status_render_uses_normalized_status_contract(self):
         html = ADMIN_HTML.read_text()
@@ -1014,7 +1054,7 @@ class TestStoppedStateQuietsTheUI:
         # "Session stopped — hit Resume to continue" read as an error.
         # Current copy is calmer and localized.
         html = ADMIN_HTML.read_text()
-        assert "Stazione in pausa" in html, "admin.html stopped banner should use calm paused-state copy (Item 19)."
+        assert "Station paused" in html, "admin.html stopped banner should use calm paused-state copy (Item 19)."
         # Only check the banner element's text, not toast strings in JS callbacks.
         banner_start = html.find('id="stoppedBanner"')
         banner_end = html.find("</div>", banner_start)
@@ -1096,8 +1136,8 @@ class TestStoppedStateQuietsTheUI:
             "renderProgramme() must branch on body[data-stopped] so the empty "
             "Scaletta distinguishes a paused station from one building its queue."
         )
-        assert "Stazione in pausa" in block, "renderProgramme() stopped branch must render the paused-state copy."
-        assert "Sto preparando il prossimo segmento" in block, (
+        assert "Station paused" in block, "renderProgramme() stopped branch must render the paused-state copy."
+        assert "Preparing the next segment" in block, (
             "renderProgramme() must keep the building-queue copy for the running-but-empty case."
         )
 

@@ -111,4 +111,67 @@ grep -q 'MAIN_SHA.*GITHUB_SHA' "$WORKFLOW" \
   || fail "edge bump job must skip when main advanced beyond the triggering SHA"
 pass "workflow skips stale main bumps"
 
+# --- PR-based bump contract (issue #384) -------------------------------------
+# The edge version lands on protected main via a GitHub App PR that passes the
+# normal quality+pi-smoke gate, NOT a direct push. These assertions lock that in.
+
+grep -q 'create-github-app-token' "$WORKFLOW" \
+  || fail "edge bump must mint a GitHub App token (create-github-app-token)"
+pass "edge bump mints a GitHub App token"
+
+# No direct push to main: the old 'git pull --rebase origin main && git push'
+# direct-push path must be gone — the bump reaches main only through a PR merge.
+if grep -q 'git pull --rebase origin main' "$WORKFLOW"; then
+  fail "edge bump must NOT push directly to main (found direct-push rebase loop)"
+fi
+# Any push targeting main (origin main, HEAD:main, :main) is forbidden — the bump
+# reaches main only through a PR merge. Catches future direct-push regressions,
+# not just the removed rebase-loop idiom.
+if grep -qE 'git push.*main' "$WORKFLOW"; then
+  fail "edge bump must NOT push directly to main (found a git push targeting main)"
+fi
+# shellcheck disable=SC2016
+grep -qF 'HEAD:$BRANCH' "$WORKFLOW" \
+  || fail "edge bump must push the bump commit to a branch, not main"
+pass "edge bump pushes to a branch, never directly to main"
+
+grep -q 'gh pr create' "$WORKFLOW" \
+  || fail "edge bump must open a PR (gh pr create)"
+if ! grep -q 'gh pr merge' "$WORKFLOW" || ! grep -q -- '--squash' "$WORKFLOW"; then
+  fail "edge bump must squash-merge (gh pr merge --squash) so the loop-guard subject matches"
+fi
+pass "edge bump opens and squash-merges a PR"
+
+# The App token must be wired to gh via GH_TOKEN — otherwise gh falls back to the
+# default GITHUB_TOKEN, the PR's required checks never fire, and the bump deadlocks
+# (the exact failure this change fixes).
+# shellcheck disable=SC2016
+grep -qF 'GH_TOKEN: ${{ steps.app-token.outputs.token }}' "$WORKFLOW" \
+  || fail "bump-edge must run gh as the App (GH_TOKEN = app-token), else required checks never fire"
+pass "bump-edge wires the App token to gh (GH_TOKEN)"
+
+# Least privilege: nothing in this workflow may hold contents: write — a re-grant
+# would re-enable a direct push to protected main.
+if grep -q 'contents: write' "$WORKFLOW"; then
+  fail "addon-build.yml must not grant contents: write (would re-enable direct push to main)"
+fi
+pass "addon-build.yml grants no contents: write"
+
+# Synchronous, required-checks-only wait + TOCTOU-safe merge + bounded runtime.
+if ! grep -q 'gh pr checks' "$WORKFLOW" || ! grep -q -- '--required' "$WORKFLOW"; then
+  fail "edge bump must wait on REQUIRED checks (gh pr checks --required)"
+fi
+grep -q -- '--match-head-commit' "$WORKFLOW" \
+  || fail "edge bump must merge the validated SHA (--match-head-commit)"
+grep -q 'timeout-minutes' "$WORKFLOW" \
+  || fail "bump-edge job must be time-bounded (timeout-minutes) for the loud-fail path"
+pass "edge bump waits on required checks, is TOCTOU-safe, and time-bounded"
+
+# Loop guard: the bump-merge commit must not re-trigger the workflow.
+grep -qF "github.actor != 'mammamiradio-edge-bumper[bot]'" "$WORKFLOW" \
+  || fail "validate job must skip pushes from the edge-bump App (loop guard)"
+grep -qF "startsWith(github.event.head_commit.message, 'chore(edge): bump')" "$WORKFLOW" \
+  || fail "validate job must skip chore(edge): bump commits (loop guard fallback)"
+pass "workflow loop guard skips edge-bump merges"
+
 echo "All edge-bump monotonic guard scenarios passed."

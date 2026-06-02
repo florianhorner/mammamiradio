@@ -17,7 +17,9 @@ from fastapi import FastAPI
 from mammamiradio.core.config import load_config
 from mammamiradio.core.models import StationState
 from mammamiradio.core.sync import init_db
+from mammamiradio.home.evening_memory import EveningLedger
 from mammamiradio.hosts.persona import PersonaStore
+from mammamiradio.integrations import router as integrations_router
 from mammamiradio.playlist.downloader import evict_cache_lru, purge_suspect_cache_files
 from mammamiradio.playlist.playlist import DEMO_TRACKS, fetch_startup_playlist, read_persisted_source
 from mammamiradio.scheduling.producer import prewarm_first_segment, run_producer
@@ -76,6 +78,7 @@ async def _lifespan(app: FastAPI):
 app = FastAPI(title="mammamiradio", lifespan=_lifespan)
 app.include_router(router)
 app.include_router(listener_requests_router)
+app.include_router(integrations_router)
 
 
 async def startup():
@@ -127,6 +130,11 @@ async def startup():
             "Restoring stopped session state from previous run — use /api/resume or the admin panel to start playback"
         )
 
+    # Restore the evening running-gag ledger so a mid-evening addon restart
+    # resumes the same session and gags instead of resetting them. Missing or
+    # corrupt files start fresh and never block boot.
+    evening_ledger = EveningLedger.load(config.cache_dir)
+
     persisted_source = read_persisted_source(config.cache_dir)
     logger.info("Fetching startup playlist")
     try:
@@ -151,6 +159,7 @@ async def startup():
         playlist_source=playlist_source,
         startup_source_error=startup_source_error,
         persona_store=persona_store,
+        evening_ledger=evening_ledger,
         session_stopped=_session_stopped,
         chaos_mode_active=_read_persisted_chaos_mode(config),
     )
@@ -193,6 +202,13 @@ async def startup():
     app.state.prewarm_task = _prewarm_task
     app.state.playback_task = _playback_task
     app.state.producer_task = _producer_task
+    # Validate configured AI keys in the background so a bogus key persisted in .env /
+    # options.json surfaces in the admin BEFORE any banter fails. Fire-and-forget —
+    # never awaited, so it can't delay first audio (Leadership Principle #2).
+    if config.anthropic_api_key or config.openai_api_key:
+        from mammamiradio.web.streamer import _run_provider_verdict
+
+        app.state.provider_verdict_task = asyncio.create_task(_run_provider_verdict(app.state))
     # Startup diagnostics — first 5 seconds of logs must be actionable for debugging
     _config_file = Path("radio.toml").resolve()
     _audio_src = {"charts": "yt-dlp", "demo": "demo", "local": "local"}.get(

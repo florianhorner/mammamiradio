@@ -26,6 +26,16 @@ env:
 jobs:
   validate:
     runs-on: ubuntu-latest
+    # Loop guard: a squash-merge of the edge-bump PR lands a `chore(edge): bump`
+    # commit on main (touching ha-addon/**) that would otherwise re-trigger this
+    # whole workflow → an endless bump loop. Skip when the push was made by the
+    # edge-bump App (deterministic) OR carries the bump subject (belt-and-suspenders;
+    # robust to the App slug changing). Skipping validate cascades to build/smoke/
+    # bump-edge via `needs:`, so the bump-merge run goes green with no rebuild.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.actor != 'mammamiradio-edge-bumper[bot]' &&
+       !startsWith(github.event.head_commit.message, 'chore(edge): bump'))
     outputs:
       calver: ${{ steps.calver.outputs.calver }}
       addon_version: ${{ steps.addon-version.outputs.version }}
@@ -86,16 +96,16 @@ jobs:
 
       - uses: docker/setup-qemu-action@ce360397dd3f832beb865e1373c09c0e9f86d70a # v4.0.0
 
-      - uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4.0.0
+      - uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4.1.0
 
-      - uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4.1.0
+      - uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and push stable add-on image
-        uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7.1.0
+        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
         with:
           context: ha-addon/mammamiradio
           file: ha-addon/mammamiradio/Dockerfile
@@ -111,7 +121,7 @@ jobs:
           cache-to: type=gha,mode=max,scope=${{ matrix.arch }}
 
       - name: Build and push edge seed add-on image
-        uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7.1.0
+        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
         with:
           context: ha-addon/mammamiradio
           file: ha-addon/mammamiradio/Dockerfile
@@ -127,7 +137,7 @@ jobs:
           cache-to: type=gha,mode=max,scope=${{ matrix.arch }}
 
       - name: Build and push edge calver add-on image
-        uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7.1.0
+        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
         with:
           context: ha-addon/mammamiradio
           file: ha-addon/mammamiradio/Dockerfile
@@ -149,7 +159,7 @@ jobs:
       contents: read
       packages: read
     steps:
-      - uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4.1.0
+      - uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
@@ -187,24 +197,45 @@ jobs:
 
   # Advance the edge add-on to the calendar version built by this run, so HA
   # shows an in-place "Update" on the Edge add-on. Runs only after smoke passes,
-  # so HA is never offered an un-smoke-tested build. The push uses the default
-  # GITHUB_TOKEN — GitHub does not trigger workflows from GITHUB_TOKEN pushes, so
-  # the commit (which touches ha-addon/**) cannot re-trigger this workflow.
+  # so HA is never offered an un-smoke-tested build.
+  #
+  # The edge version lives in ha-addon/mammamiradio-edge/config.yaml on `main`,
+  # which is protected (required checks: quality, pi-smoke). A direct push is
+  # rejected, and a PR opened with the default GITHUB_TOKEN does not get its
+  # required checks run (GitHub suppresses GITHUB_TOKEN-triggered workflow runs to
+  # prevent recursion). So a dedicated GitHub App (contents + pull-requests write,
+  # NO branch-protection bypass) opens the bump PR — which runs the normal gate.
+  #
+  # The job is SYNCHRONOUS: it opens the PR, waits for the REQUIRED checks, merges,
+  # and only then exits 0. Any failure exits 1 (loud) — a silently-frozen edge
+  # channel behind a green CI is the exact failure this gate exists to prevent.
+  # The merged squash commit is guarded by the loop-skip on the `validate` job.
   bump-edge:
     runs-on: ubuntu-latest
     needs: [validate, build, smoke]
     if: github.event_name == 'push'
+    timeout-minutes: 20
     permissions:
-      contents: write
+      contents: read
     steps:
+      - name: Mint edge-bump app token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.EDGE_BUMP_APP_ID }}
+          private-key: ${{ secrets.EDGE_BUMP_APP_PRIVATE_KEY }}
+
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           ref: main
           fetch-depth: 0
+          # Push the bump branch authed as the App so the PR's required checks fire.
+          token: ${{ steps.app-token.outputs.token }}
 
-      - name: Bump edge add-on version
+      - name: Open and merge edge bump PR
         env:
           CALVER: ${{ needs.validate.outputs.calver }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
           EDGE_CONFIG="ha-addon/mammamiradio-edge/config.yaml"
           git fetch origin main:refs/remotes/origin/main
@@ -224,28 +255,46 @@ jobs:
             exit 0
           fi
 
+          BRANCH="edge-bump/$CALVER"
           sed -i "s/^version: .*/version: $CALVER/" "$EDGE_CONFIG"
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git config user.name "mammamiradio-edge-bumper[bot]"
+          git config user.email "mammamiradio-edge-bumper[bot]@users.noreply.github.com"
           git add "$EDGE_CONFIG"
-          git commit -m "chore(edge): bump edge add-on to $CALVER
+          git commit -m "chore(edge): bump edge add-on to $CALVER"
 
-          Co-Authored-By: github-actions[bot] <github-actions[bot]@users.noreply.github.com>"
+          # Push to a branch (NOT main) — force so re-running the same commit is
+          # idempotent. The push is authed as the App, so the bump PR's required
+          # checks (quality, pi-smoke) actually run.
+          git push -f origin "HEAD:$BRANCH"
+          HEAD_SHA="$(git rev-parse HEAD)"
 
-          # main may have advanced (e.g. coverage-ratchet) since checkout —
-          # rebase and retry rather than fail the bump. A rebase conflict (a
-          # concurrent edge-config write) is aborted before the next attempt so
-          # the retry is not blocked by an in-progress rebase.
-          for attempt in 1 2 3; do
-            if git pull --rebase origin main && git push; then
-              echo "Edge bump pushed: $CALVER"
-              exit 0
-            fi
-            git rebase --abort 2>/dev/null || true
-            echo "Push attempt $attempt failed — retrying..."
-            sleep 3
-          done
-          # Fail loud: a swallowed push failure would silently freeze the edge
-          # channel while CI stayed green. Surface it so it gets fixed.
-          echo "::error::Edge bump could not be pushed after 3 attempts — the edge add-on will not auto-update until this is resolved (check branch protection / token permissions)."
-          exit 1
+          # Open the PR — or recover the URL if a prior run already opened it for
+          # this branch. Capture combined output so a real failure (token perms,
+          # API error) is visible in the log instead of swallowed by 2>/dev/null.
+          PR_BODY=$'## Proof\n- [ ] runtime: n/a — automated edge calendar-version bump, config-only, no runtime change\n\nAuto-opened by the Build HA Addon workflow; merges once required checks pass.'
+          if PR_URL="$(gh pr create --base main --head "$BRANCH" \
+              --title "chore(edge): bump edge add-on to $CALVER" \
+              --body "$PR_BODY" 2>&1)"; then
+            echo "Opened edge bump PR: $PR_URL"
+          else
+            echo "gh pr create did not open a new PR (it may already exist):"
+            echo "$PR_URL"
+            PR_URL="$(gh pr view "$BRANCH" --json url -q .url)"
+            echo "Recovered existing edge bump PR: $PR_URL"
+          fi
+
+          # Block on REQUIRED checks only — GitHub reports which checks are required,
+          # so non-required red checks (e.g. verify-claims) are ignored. The job
+          # timeout-minutes bounds this wait.
+          if ! gh pr checks "$PR_URL" --required --watch --fail-fast; then
+            echo "::error::Edge bump PR ($PR_URL) failed its required checks — the edge add-on will not auto-update until this is resolved."
+            exit 1
+          fi
+
+          # Merge the exact SHA we validated (--match-head-commit = TOCTOU guard).
+          # Squash keeps the head-commit subject == the PR title for the loop guard.
+          if ! gh pr merge "$PR_URL" --squash --delete-branch --match-head-commit "$HEAD_SHA"; then
+            echo "::error::Edge bump PR ($PR_URL) could not be merged (conflict / blocked / timed out) — the edge channel is frozen until this is resolved."
+            exit 1
+          fi
+          echo "Edge bump merged: $CALVER"

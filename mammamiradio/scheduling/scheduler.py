@@ -178,6 +178,8 @@ def preview_upcoming(state: StationState, pacing: PacingSection, tracks: list[Tr
         elif seg_type == SegmentType.TIME_CHECK:
             preview.append({"type": "time_check", "label": "Ora esatta", "reason": reason, "predicted": True})
             segments_since_time_check = 0
+        elif seg_type == SegmentType.SWEEPER:
+            preview.append({"type": "sweeper", "label": "Sweeper", "reason": reason, "predicted": True})
 
         segments_produced += 1
 
