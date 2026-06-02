@@ -118,7 +118,10 @@ DROP_DOMAINS = {
 }
 DROP_ENTITY_CATEGORIES = {"diagnostic", "config"}
 DROP_DEVICE_CLASSES = {"signal_strength", "battery", "timestamp"}
-PRIVACY_DENY_DOMAINS = {"device_tracker", "person", "camera", "alarm_control_panel"}
+# person is intentionally NOT denied: home/away presence drives arrival greetings
+# and the empty-home mood. GPS/location and identity attributes are stripped via
+# SENSITIVE_ATTRIBUTE_KEYS, and person events are filtered from /public-status.
+PRIVACY_DENY_DOMAINS = {"device_tracker", "camera", "alarm_control_panel"}
 SENSITIVE_ATTRIBUTE_KEYS = {
     "latitude",
     "longitude",
@@ -128,6 +131,8 @@ SENSITIVE_ATTRIBUTE_KEYS = {
     "mac_address",
     "unique_id",
     "device_id",
+    "user_id",
+    "device_trackers",
     "token",
     "access_token",
     "refresh_token",
