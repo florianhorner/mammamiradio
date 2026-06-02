@@ -319,6 +319,60 @@ async def test_ha_context_refreshed_for_banter(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_public_status_only_surfaces_curated_event_labels(tmp_path):
+    # /public-status exposes state.ha_last_event_label to listeners. Phase A
+    # widened the ingest to all HA entities; only curated entities are listener-safe.
+    state = _make_state()
+    config = _make_config(tmp_path)
+    config.anthropic_api_key = "test-key"
+    config.homeassistant.enabled = True
+    config.ha_token = "fake-token"
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+
+    host = config.hosts[0] if config.hosts else HostPersonality(name="Marco", voice="it-IT-DiegoNeural", style="warm")
+
+    mock_context = MagicMock()
+    mock_context.summary = ""
+    mock_context.events_summary = "- Hallway Motion: spento/a -> acceso/a (1 min fa)"
+    mock_context.mood = ""
+    mock_context.weather_arc = ""
+    mock_context.mood_en = ""
+    mock_context.weather_arc_en = ""
+    mock_context.events_summary_en = ""
+    mock_context.scored = []
+    mock_context.denylist_hits = {}
+    mock_context.catalog_hit_rate = 0.0
+    mock_context.last_event_label_en = ""
+    # Uncurated entity with a friendly_name — must not surface on /public-status.
+    mock_context.events = deque(
+        [
+            HomeEvent(
+                entity_id="binary_sensor.bedroom_motion",
+                label="Hallway Motion",
+                old_state="spento/a",
+                new_state="acceso/a",
+                timestamp=1.0,
+            )
+        ]
+    )
+
+    with (
+        patch(f"{MODULE}.next_segment_type", return_value=SegmentType.BANTER),
+        patch(f"{SCRIPTWRITER_MODULE}.write_banter", new_callable=AsyncMock, return_value=([(host, "Ciao!")], None)),
+        patch(f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora...")),
+        patch(f"{MODULE}.synthesize", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(f"{MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(f"{MODULE}.concat_files", return_value=_fake_path()),
+        patch(f"{MODULE}.fetch_home_context", new_callable=AsyncMock, return_value=mock_context),
+    ):
+        await _run_until_queued(queue, state, config)
+
+    # Uncurated event must not leak to listener-facing fields.
+    assert state.ha_last_event_label == ""
+    assert state.ha_last_event_label_en == ""
+
+
+@pytest.mark.asyncio
 async def test_banter_quality_reject_uses_canned_fallback(tmp_path):
     state = _make_state()
     config = _make_config(tmp_path)

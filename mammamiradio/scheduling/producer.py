@@ -52,6 +52,7 @@ from mammamiradio.core.models import (
     Track,
 )
 from mammamiradio.home.ha_context import (
+    ENTITY_LABELS,
     GOLD_ENTITIES,
     HomeContext,
     check_reactive_triggers,
@@ -1114,9 +1115,15 @@ async def run_producer(
             state.ha_scored_entities = [entity.to_status_dict() for entity in ha_cache.scored]
             state.ha_denylist_hits = dict(ha_cache.denylist_hits)
             state.ha_catalog_hit_rate = ha_cache.catalog_hit_rate
-            # Dashboard HA moments: pick the most notable recent non-person event
+            # Dashboard HA moments: pick the most notable recent non-person event.
+            # Restrict listener-visible events to the curated set: pre-Phase-A only
+            # vetted entities could surface here, and Phase A's full-snapshot ingest
+            # would otherwise leak any HA entity's friendly_name (e.g.
+            # binary_sensor.bedroom_motion, lock.gun_safe) to /public-status.
             state.ha_recent_event_count = len(ha_cache.events)
-            _public_events = [e for e in ha_cache.events if not e.entity_id.startswith("person.")]
+            _public_events = [
+                e for e in ha_cache.events if not e.entity_id.startswith("person.") and e.entity_id in ENTITY_LABELS
+            ]
             if _public_events:
                 _gold_set = set(GOLD_ENTITIES)
                 best = max(
