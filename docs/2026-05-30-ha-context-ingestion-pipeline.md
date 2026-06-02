@@ -39,7 +39,7 @@ Consequences:
 ## 4. Architecture — five layers
 
 ```
-HA REST /api/states + registries
+HA REST /api/states + one-shot WebSocket registries
         │
         ▼
 [L1 Ingest]    fetch all entities + entity/device/area registries
@@ -57,13 +57,13 @@ HA REST /api/states + registries
 [L5 Narrate]   hand-tuned overrides + LLM-generated label cache  →  prompt text
         │
         ▼
-scriptwriter.py (unchanged interface: HomeContext.summary / .events_summary / .mood / .weather_arc)
+producer.py copies HomeContext into StationState; scriptwriter.py still reads state.ha_context / .ha_events_summary / .ha_home_mood / .ha_weather_arc
 ```
 
 ### L1 — Ingest
 
-- Add a **registry fetch** alongside `/api/states`: entity registry, device registry, area registry (REST or one-shot WebSocket). Cache for the addon lifetime, refresh on schedule or on first-seen entity.
-- Areas (`area.kitchen`, `area.bedroom`) become first-class context. The FP300 paired in `area.bedroom` automatically inherits "bedroom" semantics — that's where the sleep-persona magic comes from with zero per-device code.
+- Add a **registry fetch** alongside `/api/states`: entity registry, device registry, and area registry via one-shot Home Assistant WebSocket commands (`config/entity_registry/list`, `config/device_registry/list`, `config/area_registry/list`). Cache for the addon lifetime, refresh on schedule or on first-seen entity.
+- Area registry records (`area_id: kitchen`, `area_id: bedroom`) become first-class context. The FP300 assigned to the bedroom area automatically inherits "bedroom" semantics — that's where the sleep-persona magic comes from with zero per-device code.
 - Persist registry snapshot to `cache/ha_registry.json` so a cold start has it before HA replies.
 
 ### L2 — Filter (denylist, not allowlist)
@@ -76,20 +76,21 @@ Default-deny rules — generalize to every home:
 | `entity_category ∈ {diagnostic, config}` | drop | Telemetry |
 | `device_class ∈ {signal_strength, battery, timestamp}` | drop | Telemetry |
 | `state ∈ {unknown, unavailable}` | drop | Already done today |
-| Entity in **privacy_deny_default** set (D2): `device_tracker.*`, `person.*` GPS attributes, `camera.*`, `alarm_control_panel.*` | drop unless opt-in | D2 |
+| Entity in **privacy_deny_default** set (D2): `device_tracker.*`, `person.*`, `camera.*`, `alarm_control_panel.*` | drop unless opt-in | D2 |
+| Sensitive attributes (`latitude`, `longitude`, `gps_accuracy`, `source_type`, tracker IDs) | strip globally before scoring | D2 |
 | `friendly_name` or state matches injection patterns | sanitize | Already done today via `_sanitize_state_value`; widened |
 
 Privacy opt-in lives in addon config:
 
 ```yaml
 ha_privacy:
-  share_person_presence: true   # home/away only, never GPS
+  share_person_presence: false  # if true: home/away only, never GPS
   share_cameras: false
   share_alarm: false
   share_device_trackers: false
 ```
 
-`person.*` keeps the home/away state by default; GPS attributes are stripped before scoring.
+When `share_person_presence` is enabled, `person.*` keeps only the home/away state; GPS and tracker attributes are stripped before scoring. With the default config, `person.*` is omitted entirely.
 
 ### L3 — Score "radio interestingness"
 
@@ -109,7 +110,7 @@ Scoring is a pure function; testable in isolation with synthetic entity dicts.
 Two hard ceilings, enforced before narration:
 
 - **Top-N entities by score** (default `N=12`, configurable). Steady state.
-- **All recent events** within the existing 30-min window (already bounded to 20 by `EVENT_BUFFER_SIZE`).
+- **Recent event summary** within the existing 30-min window: the event deque remains bounded to 20 by `EVENT_BUFFER_SIZE`, while the prompt summary currently renders the newest 5 via `EVENT_SUMMARY_LIMIT`.
 - **Total prompt-section character cap** (default `2000`): truncate lowest-scored entities first.
 
 This is the answer to "why not capture all?" — we *capture* all, but only the top slice is *sent*. Token cost is decoupled from home size.
@@ -133,7 +134,7 @@ The hardcoded **mood classifier** (`classify_home_mood`) stays in Phase A as a f
 ## 5. Privacy model (D2)
 
 - Default-deny set lives in code, not config — operator can *widen* via config, never silently expanded by a release.
-- Admin Engine Room gets a new panel: **"What HA sees the LLM"** — renders the L4-budgeted slice in real time, with a copy button. No hidden state.
+- Admin Engine Room gets a new panel: **"What HA sends to the LLM"** — renders the L4-budgeted slice in real time, with a copy button. No hidden state.
 - `_sanitize_state_value` extended to scrub: lat/long-shaped strings, email addresses, IP addresses, MACs, anything matching `^[A-Z0-9_]{16,}$` (looks like a token).
 - Same prompt-injection patterns as today, expanded denylist.
 - New invariant test: privacy-denied entities never appear in `HomeContext.summary` or `.events_summary`.
@@ -162,7 +163,7 @@ class HomeContext:
     catalog_hit_rate: float = 0.0  # observability: % of summary lines from catalog vs override
 ```
 
-The scriptwriter consumes `summary` / `events_summary` / `mood` / `weather_arc` the same way it does today. **No scriptwriter prompt changes in Phase A.**
+The producer must continue copying `summary` / `events_summary` / `mood` / `weather_arc` into `StationState` (`ha_context`, `ha_events_summary`, `ha_home_mood`, `ha_weather_arc`) the same way it does today. Any new observability fields (`scored`, `catalog_hit_rate`) need explicit propagation to `/status` / Engine Room; they are not visible to `scriptwriter.py` just because they exist on `HomeContext`. **No scriptwriter prompt changes in Phase A.**
 
 ## 7. Phasing
 
@@ -189,15 +190,15 @@ The scriptwriter consumes `summary` / `events_summary` / `mood` / `weather_arc` 
 
 Each phase ships independently. Each phase's PR follows scope discipline (no planning-doc hitchhikers).
 
-## 8. Test plan — audio-delivery three-scenario rule
+## 8. Test plan — HA-ingestion three-scenario rule
 
-Per `CLAUDE.md` audio-delivery rule, every phase covers all three:
+Adapt the repo review discipline to this subsystem: every phase covers normal, empty, and post-restart behavior for HA ingestion. The `CLAUDE.md` audio-delivery rule remains scoped to PRs that touch producer/streamer/normalizer/bridge/fallback audio paths.
 
 | Scenario | Test |
 |---|---|
 | **Normal** | Synthetic 50-entity HA snapshot → asserts top-N selection, scoring order, denylist hits, narrated lines. |
 | **Empty** | HA returns 0 entities or all entities filtered out → `HomeContext.summary == ""`, scriptwriter falls through to its existing no-HA path. Stream continues. |
-| **Post-restart** | Cold start with no `cache/ha_registry.json`, no label catalog, HA reachable: first poll degrades to domain-only labels (no Italian flair yet), still produces banter. Second poll, catalog warm: full narration. |
+| **Post-restart** | Cold start with no `cache/ha_registry.json`, HA reachable: first poll uses `/api/states` plus raw registry fetch and still produces banter. If the registry request fails, Phase A degrades to domain/friendly-name labels; Phase B adds label-catalog warmup coverage. |
 
 Plus phase-specific tests:
 
@@ -213,7 +214,7 @@ Plus phase-specific tests:
 | LLM-generated labels are *worse* than entity_id passthrough | Quality gate: catalog gen rejects responses that look like JSON garbage or echo the entity_id verbatim. Fallback to "friendly_name + state" if rejection |
 | Privacy leak via attributes (not just state) | L2 strips known sensitive attribute keys (`latitude`, `longitude`, `gps_accuracy`, `source_type`) globally before L3 sees them |
 | Score function tuned for Florian's home only | Score weights live in config (`radio.toml` or addon options), not constants. Document the tuning knob |
-| Customer addon starts narrating sensitive household state by surprise | Engine Room "What HA sees the LLM" panel is the canary. First-run experience surfaces it |
+| Customer addon starts narrating sensitive household state by surprise | Engine Room "What HA sends to the LLM" panel is the canary. First-run experience surfaces it |
 | Hardcoded mood classifier and LLM scene-namer disagree on Florian's home | Phase C decision: data-driven. If LLM consistently produces less interesting moods, keep the ladder |
 
 ## 10. Doc-sync touchpoints
@@ -231,7 +232,7 @@ Plus phase-specific tests:
 1. Should privacy opt-ins also be **per-entity** (admin UI checkbox list), not just per-category? Probably yes for v2; per-category for v1.
 2. Phase C: LLM scene-namer or smarter heuristic? Re-decide post Phase B.
 3. Multi-resident dynamic (`person.*` count > 2) is implicit in the scoring layer — do we need explicit "guest detected" / "solo" / "couple" scene classes, or does the LLM handle it free-form? Probably free-form, but worth measuring.
-4. Vibration sensors specifically: these are *events without state* (a tap doesn't have a "state" worth ranking). Phase A's event pipeline already handles this — verify with a synthetic Aqara vibration event in Phase A's test snapshot.
+4. Vibration sensors specifically: many useful taps are transient and may not survive a polling interval as a meaningful state diff. Phase A needs either explicit HA event ingestion for these devices or a documented snapshot semantic that turns the vibration event into a poll-visible state. Verify with a synthetic Aqara vibration case before claiming support.
 
 ---
 

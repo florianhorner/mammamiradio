@@ -6,6 +6,15 @@ The current version source of truth is `pyproject.toml`.
 
 ## [Unreleased]
 
+### Added
+
+- **Home Assistant context now adapts to each home.** The add-on scores prompt-safe
+  entities from the full Home Assistant state snapshot instead of only using a
+  hardcoded apartment list, so newly paired devices can contribute ambient radio
+  context without code changes. Sensitive domains and secret-shaped attributes
+  are filtered before prompt assembly, and the admin Engine Room shows the
+  scored slice plus privacy filter counts.
+
 ## [2.13.0] - 2026-05-26
 
 ### Added

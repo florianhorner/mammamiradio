@@ -403,6 +403,9 @@ class StationState:
     ha_weather_arc_en: str = ""
     ha_events_summary_en: str = ""
     ha_last_event_label_en: str = ""
+    ha_scored_entities: list[dict] = field(default_factory=list)
+    ha_denylist_hits: dict[str, int] = field(default_factory=dict)
+    ha_catalog_hit_rate: float = 0.0
     # Force-trigger: producer will use this type instead of scheduler for the next segment
     force_next: SegmentType | None = None
     # Host interrupt: pre-generated bridge clip to play immediately on interrupt

@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **Home Assistant context now adapts to each home.** The add-on scores prompt-safe
+  entities from the full Home Assistant state snapshot instead of only using a
+  hardcoded apartment list. Sensitive domains and secret-shaped attributes are
+  filtered before prompt assembly, and the admin Engine Room shows what was
+  selected plus privacy filter counts.
+
 ## 2.13.0
 
 ### Added

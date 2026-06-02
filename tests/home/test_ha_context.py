@@ -14,9 +14,13 @@ import pytest
 from mammamiradio.home.ha_context import (
     HomeContext,
     HomeEvent,
+    _apply_registry_area,
+    _build_budgeted_summary,
+    _build_scored_entities,
     _build_summary,
     _build_weather_arc,
     _build_weather_arc_en,
+    _filter_state,
     _format_state,
     _sanitize_state_value,
     check_reactive_triggers,
@@ -144,6 +148,83 @@ def test_build_summary_empty_states():
     assert result == ""
 
 
+def test_scored_entities_rank_curated_and_budget_prompt_slice():
+    states = {
+        "switch.bar_kaffeemaschine_steckdose": {
+            "state": "on",
+            "attributes": {"friendly_name": "Generic coffee", "area": "Kitchen"},
+        },
+        "media_player.living_room": {
+            "state": "playing",
+            "attributes": {"friendly_name": "Living room speaker", "media_title": "Volare", "area": "Living room"},
+        },
+        "sensor.random_temperature": {
+            "state": "21",
+            "attributes": {"friendly_name": "Random temperature", "device_class": "temperature"},
+        },
+    }
+
+    scored = _build_scored_entities(states, event_entity_ids=set(), now=time.time(), limit=2, char_limit=500)
+
+    assert len(scored) == 2
+    assert scored[0].entity_id == "switch.bar_kaffeemaschine_steckdose"
+    assert scored[0].label_it == "La macchina del caffè"
+    assert all(entity.entity_id != "sensor.random_temperature" for entity in scored)
+    summary = _build_budgeted_summary(scored)
+    assert "entity_id" not in summary
+    assert "La macchina del caffè" in summary
+
+
+def test_filter_state_denies_sensitive_entities_and_strips_secret_attributes():
+    denylist_hits: dict[str, int] = {}
+    tracker = {
+        "state": "home",
+        "attributes": {
+            "friendly_name": "Phone",
+            "latitude": 52.5,
+            "longitude": 13.4,
+        },
+    }
+
+    assert _filter_state("device_tracker.phone", tracker, denylist_hits) is None
+    assert denylist_hits["privacy:device_tracker"] == 1
+
+    filtered = _filter_state(
+        "sensor.router_status",
+        {
+            "state": "connected",
+            "attributes": {
+                "friendly_name": "Router",
+                "ip_address": "192.168.1.44",
+                "note": "operator@example.com",
+                "area": "Office",
+            },
+        },
+        denylist_hits,
+    )
+
+    assert filtered is not None
+    attrs = filtered["attributes"]
+    assert "ip_address" not in attrs
+    assert attrs["note"] == "(filtered)"
+    assert attrs["area"] == "Office"
+
+
+def test_apply_registry_area_fills_missing_area_without_overwriting_state_attrs():
+    state = {"state": "on", "attributes": {"friendly_name": "Counter light"}}
+
+    enriched = _apply_registry_area("light.counter", state, {"light.counter": "Kitchen"})
+
+    assert enriched is not state
+    assert enriched["attributes"]["area"] == "Kitchen"
+    assert state["attributes"].get("area") is None
+
+    with_area = {"state": "on", "attributes": {"friendly_name": "Counter light", "area": "Bar"}}
+    unchanged = _apply_registry_area("light.counter", with_area, {"light.counter": "Kitchen"})
+    assert unchanged is with_area
+    assert unchanged["attributes"]["area"] == "Bar"
+
+
 # ---------------------------------------------------------------------------
 # fetch_home_context
 # ---------------------------------------------------------------------------
@@ -153,9 +234,9 @@ def _mock_ha_response():
     """Build a mock HA API response with a couple of known entities."""
     return [
         {
-            "entity_id": "person.florian_horner",
-            "state": "home",
-            "attributes": {"friendly_name": "Florian"},
+            "entity_id": "switch.bar_kaffeemaschine_steckdose",
+            "state": "on",
+            "attributes": {"friendly_name": "Coffee machine"},
         },
         {
             "entity_id": "weather.forecast_home",
@@ -180,7 +261,7 @@ async def test_fetch_returns_cached_if_fresh():
 @pytest.mark.asyncio
 async def test_fetch_calls_api_when_stale():
     stale_cache = HomeContext(
-        raw_states={"person.florian_horner": {"state": "not_home", "attributes": {}}},
+        raw_states={"switch.bar_kaffeemaschine_steckdose": {"state": "off", "attributes": {}}},
         summary="old",
         timestamp=time.time() - 120.0,
     )
@@ -196,6 +277,7 @@ async def test_fetch_calls_api_when_stale():
 
     with (
         patch("mammamiradio.home.ha_context._get_ha_client", return_value=mock_client),
+        patch("mammamiradio.home.ha_context._fetch_ha_registry_areas", new_callable=AsyncMock, return_value={}),
         patch("mammamiradio.home.ha_context._ha_cache", None),
         patch("mammamiradio.home.ha_context._weather_forecast_fetched_at", 0.0),
     ):
@@ -203,8 +285,8 @@ async def test_fetch_calls_api_when_stale():
 
     assert result is not stale_cache
     assert result.timestamp > stale_cache.timestamp
-    assert "Florian" in result.summary
-    assert "Florian" in result.events_summary
+    assert "macchina del caff" in result.summary
+    assert "macchina del caff" in result.events_summary
 
 
 @pytest.mark.asyncio

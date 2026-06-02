@@ -145,6 +145,15 @@ def test_engine_room_capability_lines_use_status_helpers() -> None:
     assert "Home Assistant: '+statusInline(c.ha?'ready':'idle'" in block
 
 
+def test_engine_room_ha_observability_escapes_home_assistant_values() -> None:
+    block = _function_block(_read_admin_html(), "updateEngineRoom")
+
+    assert "Array.isArray(hd.scored_entities)" in block
+    assert "esc(e.label||e.entity_id||'Entity')" in block
+    assert "hd.denylist_hits&&Object.keys(hd.denylist_hits).length" in block
+    assert "esc(k)+': <strong>'" in block
+
+
 def test_system_health_rows_use_canonical_status_helpers() -> None:
     html = _read_admin_html()
     status_row = _function_block(html, "statusRow")

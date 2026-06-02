@@ -1111,6 +1111,9 @@ async def run_producer(
             state.ha_home_mood_en = ha_cache.mood_en
             state.ha_weather_arc_en = ha_cache.weather_arc_en
             state.ha_events_summary_en = ha_cache.events_summary_en
+            state.ha_scored_entities = [entity.to_status_dict() for entity in ha_cache.scored]
+            state.ha_denylist_hits = dict(ha_cache.denylist_hits)
+            state.ha_catalog_hit_rate = ha_cache.catalog_hit_rate
             # Dashboard HA moments: pick the most notable recent non-person event
             state.ha_recent_event_count = len(ha_cache.events)
             _public_events = [e for e in ha_cache.events if not e.entity_id.startswith("person.")]
@@ -1125,7 +1128,8 @@ async def run_producer(
                 )
                 state.ha_last_event_label = best.label
                 state.ha_last_event_ts = best.timestamp
-                state.ha_last_event_label_en = ha_cache.last_event_label_en or best.label
+                scored_labels_en = {entity["entity_id"]: entity["label"] for entity in state.ha_scored_entities}
+                state.ha_last_event_label_en = scored_labels_en.get(best.entity_id, best.label)
             else:
                 state.ha_last_event_label = ""
                 state.ha_last_event_ts = 0.0
