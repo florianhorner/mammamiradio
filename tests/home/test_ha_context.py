@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import datetime
+import json
 import time
 from collections import deque
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -20,9 +21,12 @@ from mammamiradio.home.ha_context import (
     _build_summary,
     _build_weather_arc,
     _build_weather_arc_en,
+    _fetch_ha_registry_areas,
     _filter_state,
     _format_state,
+    _ha_websocket_url,
     _sanitize_state_value,
+    _score_entity,
     check_reactive_triggers,
     classify_home_mood,
     classify_home_mood_en,
@@ -1826,3 +1830,222 @@ async def test_push_state_to_ha_partial_failure_continues(reset_ha_push_debounce
     mock_logger.warning.assert_called_once()
     # The entity that failed (index 1 = sensor.mammamiradio_segment_type) is named in the warning
     assert "sensor.mammamiradio_segment_type" in mock_logger.warning.call_args.args[1]
+
+
+# ---------------------------------------------------------------------------
+# Websocket registry fetch
+# ---------------------------------------------------------------------------
+
+
+class _FakeRegistryWS:
+    """Async context manager mock for the HA registry websocket."""
+
+    def __init__(self, messages):
+        self._messages = [json.dumps(m) for m in messages]
+        self.sent: list[dict] = []
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+    async def recv(self):
+        return self._messages.pop(0)
+
+    async def send(self, payload):
+        self.sent.append(json.loads(payload))
+
+
+def test_ha_websocket_url_maps_scheme():
+    assert _ha_websocket_url("http://supervisor/core/api") == "ws://supervisor/api/websocket"
+    assert _ha_websocket_url("https://ha.example.com:8123/") == "wss://ha.example.com:8123/api/websocket"
+
+
+@pytest.mark.asyncio
+async def test_fetch_registry_areas_maps_entities_via_device_and_direct_area():
+    messages = [
+        {"type": "auth_required"},
+        {"type": "auth_ok"},
+        {
+            "id": 1,
+            "type": "result",
+            "success": True,
+            "result": [
+                {"entity_id": "light.counter", "device_id": "dev1"},
+                {"entity_id": "light.lamp", "area_id": "living"},
+                {"entity_id": "light.orphan"},
+            ],
+        },
+        {"id": 2, "type": "result", "success": True, "result": [{"id": "dev1", "area_id": "kitchen"}]},
+        {
+            "id": 3,
+            "type": "result",
+            "success": True,
+            "result": [
+                {"area_id": "kitchen", "name": "Kitchen"},
+                {"area_id": "living", "name": "Living Room"},
+            ],
+        },
+    ]
+    fake_ws = _FakeRegistryWS(messages)
+
+    with (
+        patch("mammamiradio.home.ha_context.websocket_connect", MagicMock(return_value=fake_ws)),
+        patch("mammamiradio.home.ha_context._ha_registry_area_cache", None),
+        patch("mammamiradio.home.ha_context._ha_registry_fetched_at", 0.0),
+    ):
+        result = await _fetch_ha_registry_areas("http://supervisor/core/api", "tok")
+
+    assert result == {"light.counter": "Kitchen", "light.lamp": "Living Room"}
+    assert "light.orphan" not in result
+    # Auth frame carried the token; three registry commands were issued.
+    assert fake_ws.sent[0] == {"type": "auth", "access_token": "tok"}
+    assert {cmd["type"] for cmd in fake_ws.sent[1:]} == {
+        "config/entity_registry/list",
+        "config/device_registry/list",
+        "config/area_registry/list",
+    }
+
+
+@pytest.mark.asyncio
+async def test_fetch_registry_areas_returns_empty_on_failure():
+    with (
+        patch(
+            "mammamiradio.home.ha_context.websocket_connect",
+            MagicMock(side_effect=RuntimeError("connection refused")),
+        ),
+        patch("mammamiradio.home.ha_context._ha_registry_area_cache", None),
+        patch("mammamiradio.home.ha_context._ha_registry_fetched_at", 0.0),
+    ):
+        result = await _fetch_ha_registry_areas("http://supervisor/core/api", "tok")
+
+    assert result == {}
+
+
+@pytest.mark.asyncio
+async def test_fetch_registry_areas_uses_cache_without_reconnecting():
+    guard = MagicMock(side_effect=AssertionError("should not open a websocket on cache hit"))
+    with (
+        patch("mammamiradio.home.ha_context.websocket_connect", guard),
+        patch("mammamiradio.home.ha_context._ha_registry_area_cache", {"light.x": "Office"}),
+        patch("mammamiradio.home.ha_context._ha_registry_fetched_at", time.time()),
+    ):
+        result = await _fetch_ha_registry_areas("http://supervisor/core/api", "tok")
+
+    assert result == {"light.x": "Office"}
+    guard.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_fetch_registry_areas_raises_on_bad_auth_returns_empty():
+    messages = [
+        {"type": "auth_required"},
+        {"type": "auth_invalid", "message": "bad token"},
+    ]
+    with (
+        patch("mammamiradio.home.ha_context.websocket_connect", MagicMock(return_value=_FakeRegistryWS(messages))),
+        patch("mammamiradio.home.ha_context._ha_registry_area_cache", None),
+        patch("mammamiradio.home.ha_context._ha_registry_fetched_at", 0.0),
+    ):
+        result = await _fetch_ha_registry_areas("http://supervisor/core/api", "tok")
+
+    assert result == {}
+
+
+# ---------------------------------------------------------------------------
+# _filter_state denylist branches
+# ---------------------------------------------------------------------------
+
+
+def test_filter_state_drops_domains_categories_classes_and_unavailable():
+    hits: dict[str, int] = {}
+    assert _filter_state("update.firmware", {"state": "on", "attributes": {}}, hits) is None
+    assert hits["domain:update"] == 1
+
+    assert _filter_state("sensor.uptime", {"state": "5", "attributes": {"entity_category": "diagnostic"}}, hits) is None
+    assert hits["entity_category:diagnostic"] == 1
+
+    assert _filter_state("sensor.batt", {"state": "80", "attributes": {"device_class": "battery"}}, hits) is None
+    assert hits["device_class:battery"] == 1
+
+    assert _filter_state("sensor.gone", {"state": "unavailable", "attributes": {}}, hits) is None
+    assert hits["state:unavailable"] == 1
+
+
+def test_filter_state_passes_through_and_sanitizes_list_attribute():
+    hits: dict[str, int] = {}
+    filtered = _filter_state(
+        "light.kitchen",
+        {"state": "on", "attributes": {"friendly_name": "Kitchen", "rgb_color": [255, 200, 100]}},
+        hits,
+    )
+    assert filtered is not None
+    assert filtered["state"] == "on"
+    # Non-scalar attribute is stringified and retained (not a secret).
+    assert "rgb_color" in filtered["attributes"]
+    assert hits == {}
+
+
+# ---------------------------------------------------------------------------
+# _score_entity branches
+# ---------------------------------------------------------------------------
+
+
+def test_score_entity_branches():
+    now = time.time()
+
+    def score(entity_id, attrs, events=None):
+        return _score_entity(entity_id, {"attributes": attrs}, event_entity_ids=events or set(), now=now)
+
+    # Power sensor overrides the base sensor weight.
+    assert score("sensor.power", {"device_class": "power"}) == 0.5
+    # Presence/motion binary_sensor is highly salient.
+    assert score("binary_sensor.hall", {"device_class": "motion"}) == 0.9
+    # Curated override entity gets the base + override boost.
+    assert score("switch.bar_kaffeemaschine_steckdose", {}) == 1.0
+    # Area metadata adds a boost on top of the domain weight.
+    assert score("light.x", {"area": "Kitchen"}) == 0.8
+
+    base = _score_entity("light.y", {"attributes": {}}, event_entity_ids=set(), now=now)
+    # Recent change boosts score.
+    recent = _score_entity(
+        "light.y",
+        {"attributes": {}, "last_changed": datetime.datetime.now(datetime.UTC).isoformat()},
+        event_entity_ids=set(),
+        now=now,
+    )
+    assert recent > base
+    # Being in the recent-events set boosts score.
+    with_event = _score_entity("light.y", {"attributes": {}}, event_entity_ids={"light.y"}, now=now)
+    assert with_event > base
+
+
+# ---------------------------------------------------------------------------
+# _build_scored_entities budget
+# ---------------------------------------------------------------------------
+
+
+def test_build_scored_entities_char_limit_disabled_returns_full_selection():
+    states = {
+        "media_player.living_room": {"state": "playing", "attributes": {"friendly_name": "Speaker"}},
+        "light.kitchen": {"state": "on", "attributes": {"friendly_name": "Kitchen light"}},
+    }
+    # char_limit <= 0 skips budgeting and returns the full ranked selection.
+    scored = _build_scored_entities(states, event_entity_ids=set(), now=time.time(), limit=5, char_limit=0)
+    assert len(scored) == 2
+
+
+def test_build_scored_entities_char_budget_drops_overflow():
+    states = {
+        "media_player.living_room": {"state": "playing", "attributes": {"friendly_name": "Speaker"}},
+        "light.kitchen": {"state": "on", "attributes": {"friendly_name": "Kitchen light"}},
+        "fan.bedroom": {"state": "on", "attributes": {"friendly_name": "Bedroom fan"}},
+    }
+    # A tiny char budget admits fewer entities than the full ranked set; if no
+    # single line fits, the budget loop yields an empty slice (it skips, never
+    # truncates a line).
+    scored = _build_scored_entities(states, event_entity_ids=set(), now=time.time(), limit=5, char_limit=20)
+    rendered = _build_budgeted_summary(scored)
+    assert len(rendered) <= 20
+    assert len(scored) < len(states)
