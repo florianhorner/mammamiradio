@@ -105,6 +105,21 @@ def test_format_state_unknown_returns_none():
     assert result is None
 
 
+def test_format_state_skips_entity_without_curated_or_friendly_label():
+    # Anti-illusion guard: raw entity IDs must never reach the host.
+    assert _format_state("sensor.some_random_helper", {"state": "on", "attributes": {}}) is None
+
+
+def test_format_state_uses_friendly_name_when_uncurated():
+    line = _format_state(
+        "sensor.some_random_helper",
+        {"state": "on", "attributes": {"friendly_name": "Hallway Motion"}},
+    )
+    assert line is not None
+    assert "Hallway Motion" in line
+    assert "sensor.some_random_helper" not in line
+
+
 def test_format_state_standard_entity_uses_translations():
     data = {"state": "home", "attributes": {}}
     result = _format_state("person.florian_horner", data)

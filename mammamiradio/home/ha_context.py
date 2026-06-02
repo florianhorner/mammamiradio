@@ -560,7 +560,16 @@ def _format_state(entity_id: str, state_data: dict) -> str | None:
     """Format a single entity state as a natural language line."""
     state = _sanitize_state_value(state_data.get("state", "unknown"))
     attrs = state_data.get("attributes", {})
-    label = ENTITY_LABELS.get(entity_id, _sanitize_state_value(attrs.get("friendly_name", entity_id)))
+    curated = ENTITY_LABELS.get(entity_id)
+    if curated is None:
+        friendly = attrs.get("friendly_name")
+        if not friendly:
+            # Anti-illusion guard: raw entity IDs never reach the host. Until a
+            # Phase B catalog label is available, drop the entity from the slice.
+            return None
+        label = _sanitize_state_value(str(friendly))
+    else:
+        label = curated
 
     if state in ("unavailable", "unknown"):
         return None
