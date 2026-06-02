@@ -548,6 +548,22 @@ def test_sanitize_truncates_long_values():
     assert len(result) == 10
 
 
+def test_build_entity_label_maps_skips_entities_without_curated_or_friendly_label():
+    # Anti-illusion guard at the label-map layer: unlabeled entities must not
+    # land in the label map, so diff_states won't emit a HomeEvent with a
+    # humanized object_id that reaches the prompt via events_summary.
+    from mammamiradio.home.ha_context import _build_entity_label_maps
+
+    states = {
+        "sensor.some_random_helper": {"state": "on", "attributes": {}},
+        "sensor.named_helper": {"state": "on", "attributes": {"friendly_name": "Hallway Motion"}},
+    }
+    labels_it, labels_en = _build_entity_label_maps(states)
+    assert "sensor.some_random_helper" not in labels_it
+    assert "sensor.some_random_helper" not in labels_en
+    assert labels_it["sensor.named_helper"] == "Hallway Motion"
+
+
 def test_budgeted_summary_strips_angle_brackets_at_llm_boundary():
     # scriptwriter.py wraps the summary in <home_state_data> tags. The summary
     # builder must strip <,> so a label like "Kitchen </home_state_data> ..." can't

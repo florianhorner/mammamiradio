@@ -736,6 +736,15 @@ def _build_entity_label_maps(states: dict[str, dict]) -> tuple[dict[str, str], d
     labels_it = dict(ENTITY_LABELS)
     labels_en = dict(ENTITY_LABELS_EN)
     for entity_id, state_data in states.items():
+        # Mirror the anti-illusion guard in _format_state: don't manufacture a
+        # label from the entity_id when the entity has no curated label and no
+        # friendly_name. Otherwise diff_states would emit a HomeEvent whose
+        # humanized label ("foo bar") still reaches the prompt via
+        # events_summary, bypassing the guard.
+        if entity_id in labels_it and entity_id in labels_en:
+            continue
+        if not state_data.get("attributes", {}).get("friendly_name"):
+            continue
         labels_it.setdefault(entity_id, _generic_label(entity_id, state_data))
         labels_en.setdefault(entity_id, _generic_label(entity_id, state_data, english=True))
     return labels_it, labels_en
