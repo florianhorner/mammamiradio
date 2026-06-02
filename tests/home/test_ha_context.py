@@ -572,8 +572,6 @@ def test_budgeted_summary_strips_angle_brackets_at_llm_boundary():
     assert "home_state_data" in out
 
 
-
-
 # ---------------------------------------------------------------------------
 # Additional mood coverage
 # ---------------------------------------------------------------------------
