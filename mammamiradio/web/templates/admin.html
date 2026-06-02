@@ -3382,7 +3382,7 @@ function updateEngineRoom(st,caps){
     lines.push('Recent events: '+(hd.recent_event_count||0));
     if(hd.last_event_label_en||hd.last_event_label)lines.push('Last event: '+esc(hd.last_event_label_en||hd.last_event_label));
     if(Array.isArray(hd.scored_entities)&&hd.scored_entities.length){
-      const scored=hd.scored_entities.slice(0,6).map(e=>esc(e.label||e.entity_id||'Entity')+' <span class="muted">'+Number(e.score||0).toFixed(2)+'</span>');
+      const scored=hd.scored_entities.slice(0,6).map(e=>esc(e.label||e.entity_id||'Entity')+' <span style="color:var(--muted)">'+Number(e.score||0).toFixed(2)+'</span>');
       lines.push('Sent to prompt:<br>'+scored.join('<br>'));
     }
     if(hd.denylist_hits&&Object.keys(hd.denylist_hits).length){

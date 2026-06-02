@@ -38,7 +38,7 @@ Consequences:
 
 ## 4. Architecture — five layers
 
-```
+```text
 HA REST /api/states + one-shot WebSocket registries
         │
         ▼
