@@ -446,10 +446,6 @@ class HomeContext:
 def _sanitize_state_value(value: str, max_len: int = 100) -> str:
     """Truncate and strip instruction-like patterns from HA state values."""
     value = str(value)[:max_len]
-    # Strip angle brackets so HA-controlled text can't close the
-    # <home_state_data> fence that scriptwriter.py wraps the summary in.
-    if "<" in value or ">" in value:
-        value = value.replace("<", "").replace(">", "")
     # Strip patterns that look like prompt injection attempts
     for pattern in ("ignore previous", "disregard", "system override", "forget your"):
         if pattern in value.lower():
@@ -727,7 +723,13 @@ def _build_scored_entities(
 
 
 def _build_budgeted_summary(scored: list[ScoredEntity]) -> str:
-    return "\n".join(f"- {entity.summary_line}" for entity in scored)
+    rendered = "\n".join(f"- {entity.summary_line}" for entity in scored)
+    # The summary is concatenated between <home_state_data> tags in
+    # scriptwriter.py. Strip angle brackets at the LLM boundary so HA-controlled
+    # labels can't close the fence. (Done here, not in _sanitize_state_value,
+    # because that sanitizer is also used by the admin UI path where esc()
+    # handles HTML escaping client-side.)
+    return rendered.replace("<", "").replace(">", "")
 
 
 def _build_entity_label_maps(states: dict[str, dict]) -> tuple[dict[str, str], dict[str, str]]:
