@@ -25,11 +25,12 @@ Run at SCOPE time (before naming what moves), then again before shipping:
 
 ## Lessons (cuts 1–6: W1 / H1 / W3a / W3b + edge release)
 
-1. **CI guards hardcode symbol names.** `scripts/validate-addon.sh` check 10 AST-scans the
-   source file for a top-level `def _inject_ingress_prefix`; moving the function would have
-   red-failed the addon build. The handover's gotcha list missed it because it scoped to
-   `mammamiradio/` + `tests/`. Structural fix tracked in #467 (make the check discover the
-   function across `web/*.py` instead of hardcoding a path).
+1. **CI guards hardcode symbol names.** `scripts/validate-addon.sh` check 10 AST-scans
+   `mammamiradio/web/*.py` for a top-level `def _inject_ingress_prefix`; moving the function
+   between modules no longer red-fails the addon build. The handover's gotcha list missed
+   the original hardcoded-path version because it scoped to `mammamiradio/` + `tests/`.
+   Structural fix landed in #467: check 10 now discovers the helper across
+   `mammamiradio/web/*.py` instead of hardcoding `pages.py`.
 2. **Handovers can name a layering-inverting target.** W3b's handover said move
    `_render_admin_response`, which shares `_get_csrf_token` with the auth cut (W2). The
    dependency-closure check caught it; the planning artifact should have.
