@@ -244,6 +244,35 @@ def test_filter_state_denies_sensitive_entities_and_strips_secret_attributes():
     assert attrs["area"] == "Office"
 
 
+def test_filter_state_keeps_person_presence_but_strips_location_and_identity():
+    """person.* drives arrival greetings and the empty-home mood, so home/away
+    presence is kept, but GPS/identity attributes are stripped and person is not
+    a privacy-denied domain."""
+    hits: dict[str, int] = {}
+    filtered = _filter_state(
+        "person.florian_horner",
+        {
+            "state": "not_home",
+            "attributes": {
+                "friendly_name": "Florian",
+                "latitude": 52.52,
+                "longitude": 13.4,
+                "gps_accuracy": 5,
+                "user_id": "abcd1234ef567890",
+                "device_trackers": ["device_tracker.florian_iphone"],
+            },
+        },
+        hits,
+    )
+    assert filtered is not None
+    assert filtered["state"] == "not_home"
+    attrs = filtered["attributes"]
+    assert attrs["friendly_name"] == "Florian"
+    for leaked in ("latitude", "longitude", "gps_accuracy", "user_id", "device_trackers"):
+        assert leaked not in attrs
+    assert "privacy:person" not in hits
+
+
 def test_apply_registry_area_fills_missing_area_without_overwriting_state_attrs():
     state = {"state": "on", "attributes": {"friendly_name": "Counter light"}}
 
