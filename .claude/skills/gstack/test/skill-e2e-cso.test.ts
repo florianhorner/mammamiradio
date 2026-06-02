@@ -42,7 +42,7 @@ describeIfSelected('CSO v2 — full audit', ['cso-full-audit'], () => {
     fs.writeFileSync(path.join(csoDir, 'server.ts'), `
 import express from 'express';
 const app = express();
-const API_KEY = "sk-1234567890abcdef1234567890abcdef";
+const API_KEY = "sk-" + "1234567890abcdef1234567890abcdef";
 app.get('/api/data', (req, res) => {
   const id = req.query.id;
   res.json({ data: \`result for \${id}\` });
