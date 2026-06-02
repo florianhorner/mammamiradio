@@ -207,47 +207,70 @@ if [ $trans_errors -eq 0 ]; then
 fi
 
 # ---- 10. No JS string rewriting in ingress prefix injection ----
+# Discover _inject_ingress_prefix anywhere under mammamiradio/web/*.py rather
+# than hardcoding a single source file (issue #467 — the helper has moved
+# modules twice). The Python scan reports one of three sentinel tokens so the
+# three outcomes stay an explicit, testable contract instead of overloaded
+# exit codes:
+#   found + all safe   -> stdout "safe"          -> pass
+#   found + any unsafe -> stdout "unsafe:<path>" -> fail (same message as before)
+#   not found anywhere -> stdout "none"          -> warn (ingress may not work)
+# All matching definitions are validated (not just the first), so a stale
+# unsafe copy left behind by a refactor cannot slip through. Each file is
+# parsed in isolation: a syntax error in an unrelated web module is skipped
+# (ruff/mypy/pytest surface that loudly elsewhere) instead of masquerading as
+# an ingress-safety failure.
 echo "10. Ingress safety"
-if [ ! -f mammamiradio/web/pages.py ]; then
-    fail "Missing mammamiradio/web/pages.py (cannot run ingress safety check)"
-elif grep -q "_inject_ingress_prefix" mammamiradio/web/pages.py; then
-    if CHECK_OUTPUT=$($PY -c "
+if [ ! -d mammamiradio/web ]; then
+    fail "Missing mammamiradio/web (cannot run ingress safety check)"
+elif CHECK_OUTPUT=$($PY -c "
 import ast
 from pathlib import Path
 
-src = Path('mammamiradio/web/pages.py').read_text()
-tree = ast.parse(src)
-target = None
-for node in tree.body:
-    if isinstance(node, ast.FunctionDef) and node.name == '_inject_ingress_prefix':
-        target = node
-        break
+targets = []
+for path in sorted(Path('mammamiradio/web').glob('*.py')):
+    try:
+        tree = ast.parse(path.read_text())
+    except (SyntaxError, UnicodeDecodeError):
+        continue
+    for node in tree.body:
+        if isinstance(node, ast.FunctionDef) and node.name == '_inject_ingress_prefix':
+            targets.append(node)
 
-if target is None:
-    raise SystemExit('missing _inject_ingress_prefix')
+if not targets:
+    print('none')
+    raise SystemExit(0)
 
-for node in ast.walk(target):
-    if not isinstance(node, ast.Call):
-        continue
-    if not isinstance(node.func, ast.Attribute) or node.func.attr != 'replace':
-        continue
-    if not node.args:
-        continue
-    first = node.args[0]
-    if not isinstance(first, ast.Constant) or not isinstance(first.value, str):
-        continue
-    pattern = first.value
-    if pattern.startswith(\"'/\") and pattern != \"'/sw.js'\":
-        raise SystemExit(f'rewrites single-quoted JS path: {pattern}')
+for target in targets:
+    for node in ast.walk(target):
+        if not isinstance(node, ast.Call):
+            continue
+        if not isinstance(node.func, ast.Attribute) or node.func.attr != 'replace':
+            continue
+        if not node.args:
+            continue
+        first = node.args[0]
+        if not isinstance(first, ast.Constant) or not isinstance(first.value, str):
+            continue
+        pattern = first.value
+        if pattern.startswith(\"'/\") and pattern != \"'/sw.js'\":
+            print(f'unsafe:{pattern}')
+            raise SystemExit(0)
 
 print('safe')
 " 2>&1); then
-        pass "Ingress prefix injection only rewrites safe patterns"
-    else
-        fail "Ingress safety check failed: $CHECK_OUTPUT"
-    fi
+    case "$CHECK_OUTPUT" in
+        safe)
+            pass "Ingress prefix injection only rewrites safe patterns" ;;
+        none)
+            warn "No _inject_ingress_prefix found (ingress may not work)" ;;
+        unsafe:*)
+            fail "Ingress safety check failed: rewrites single-quoted JS path: ${CHECK_OUTPUT#unsafe:}" ;;
+        *)
+            fail "Ingress safety check failed: $CHECK_OUTPUT" ;;
+    esac
 else
-    warn "No _inject_ingress_prefix found (ingress may not work)"
+    fail "Ingress safety check failed: $CHECK_OUTPUT"
 fi
 
 # ---- 11. Dockerfile doesn't COPY to /data/ ----
