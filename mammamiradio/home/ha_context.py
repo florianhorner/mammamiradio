@@ -446,6 +446,10 @@ class HomeContext:
 def _sanitize_state_value(value: str, max_len: int = 100) -> str:
     """Truncate and strip instruction-like patterns from HA state values."""
     value = str(value)[:max_len]
+    # Strip angle brackets so HA-controlled text can't close the
+    # <home_state_data> fence that scriptwriter.py wraps the summary in.
+    if "<" in value or ">" in value:
+        value = value.replace("<", "").replace(">", "")
     # Strip patterns that look like prompt injection attempts
     for pattern in ("ignore previous", "disregard", "system override", "forget your"):
         if pattern in value.lower():
