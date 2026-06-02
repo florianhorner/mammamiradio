@@ -1236,7 +1236,7 @@ def test_get_ha_client_recreates_closed_client():
     original = _hc._ha_client
     try:
         closed_client = httpx.AsyncClient()
-        asyncio.get_event_loop().run_until_complete(closed_client.aclose())
+        asyncio.run(closed_client.aclose())
         _hc._ha_client = closed_client
         new_client = _get_ha_client()
         assert new_client is not closed_client

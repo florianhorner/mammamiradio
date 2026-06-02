@@ -729,7 +729,7 @@ async def test_audio_tool_error_in_banter_does_not_drop_segment(tmp_path):
     generated = tmp_path / "banter_generated.mp3"
     generated.write_bytes(b"\x00" * 2048)
 
-    def _quality_side_effect(path, seg_type):
+    def _quality_side_effect(path, seg_type, **_kwargs):
         if seg_type == SegmentType.BANTER:
             raise AudioToolError("ffmpeg not found")
         return None
