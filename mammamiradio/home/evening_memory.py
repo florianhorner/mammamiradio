@@ -90,7 +90,7 @@ MIN_COUNT_FOR_GAG = 2  # a "running" gag needs at least one repeat
 GAG_COOLDOWN_SECONDS = 900.0  # 15 min before the same gag is eligible again
 GAG_INJECT_PROBABILITY = 0.55  # silence chance — gags are discovered, not announced
 
-EVENING_GAP_SECONDS = 3.5 * 3600  # this long without activity ends the evening
+EVENING_GAP_SECONDS = 3.5 * 3600  # this int without activity ends the evening
 _DAY_ROLLOVER_HOUR = 4  # an "evening" belongs to the day it started; 4am rolls over
 # -----------------------------------------------------------------------------
 

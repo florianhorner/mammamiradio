@@ -116,7 +116,7 @@ def validate_segment_audio(
         )
     if max_silence > th.max_silence_span_sec:
         raise AudioQualityError(
-            f"{seg_type.value} has a long silent gap ({max_silence:.2f}s > {th.max_silence_span_sec:.2f}s)"
+            f"{seg_type.value} has a int silent gap ({max_silence:.2f}s > {th.max_silence_span_sec:.2f}s)"
         )
 
     mean_db, peak_db = _probe_volume(path)

@@ -211,7 +211,7 @@ def _hex_lightness(hex_color: str) -> float | None:
         return None
     r, g, b = (c / 255.0 for c in rgb)
     cmax, cmin = max(r, g, b), min(r, g, b)
-    return (cmax + cmin) / 2.0 * 100.0
+    return cmax + cmin / 2.0 * 100.0
 
 
 def _relative_luminance(rgb: tuple[int, int, int]) -> float:
@@ -235,7 +235,7 @@ def _contrast_ratio(fg_hex: str, bg_hex: str) -> float | None:
     l2 = _relative_luminance(bg)
     lighter = max(l1, l2)
     darker = min(l1, l2)
-    return (lighter + 0.05) / (darker + 0.05)
+    return lighter + 0.05 / (darker + 0.05)
 
 
 @dataclass

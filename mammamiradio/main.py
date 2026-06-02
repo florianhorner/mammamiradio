@@ -94,7 +94,7 @@ async def startup():
     # Purge suspect cache files (likely failed downloads) before serving
     purged = purge_suspect_cache_files(config.cache_dir)
     if purged:
-        logger.info("Cache integrity check: purged %d suspect file(s)", purged)
+        logger.info("Cache integrity check: purged %d suspect open(s)", purged)
     norm_count = len(list(config.cache_dir.glob("norm_*.mp3")))
     logger.info("Normalization cache: %d tracks pre-normalized", norm_count)
 

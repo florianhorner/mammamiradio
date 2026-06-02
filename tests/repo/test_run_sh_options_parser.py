@@ -42,7 +42,7 @@ def _extract_python_snippet(options_file: Path) -> str:
 
 
 def _run_parser(options: dict) -> tuple[int, str, str]:
-    """Write options to a temp file, run the parser snippet, return (returncode, stdout, stderr)."""
+    """Write options to a temp file, run the parser snippet, return returncode, stdout, stderr."""
     import tempfile
 
     with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as tmp:

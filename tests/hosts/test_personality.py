@@ -144,7 +144,7 @@ class TestPersonalityModifier:
     def test_high_verbosity(self):
         axes = PersonalityAxes(verbosity=90)
         result = _personality_modifier("Host", axes)
-        assert "long" in result.lower() or "stories" in result.lower()
+        assert "int" in result.lower() or "stories" in result.lower()
 
     def test_low_verbosity(self):
         axes = PersonalityAxes(verbosity=10)

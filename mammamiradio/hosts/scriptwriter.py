@@ -135,7 +135,7 @@ def _plan_listener_request_block(state: StationState) -> tuple[str, ListenerRequ
         if track_obj is not None:
             state.pinned_track = track_obj
             state.force_next = SegmentType.MUSIC
-        return (
+        return 
             f"""
 LISTENER REQUEST:
 {name} ha chiesto: "{msg}"
@@ -143,7 +143,7 @@ La canzone che stai per suonare è "{song_track}" — annunciala dedicandola a {
 Sii caldo, divertente, fai sentire {name} speciale. Questa è la magia della radio.
 """,
             commit,
-        )
+        
     if is_song and (req.get("song_error") or commit.mark_song_error):
         return (
             f"""
@@ -153,14 +153,14 @@ Non sei riuscito a trovare quella canzone. Dillo con simpatia e dedica comunque 
 """,
             commit,
         )
-    return (
+    return 
         f"""
 LISTENER REQUEST:
 {name} ha mandato un saluto: "{msg}"
 Menziona {name} per nome in modo naturale durante il banter. Fallo sentire ascoltato.
 """,
         commit,
-    )
+    
 
 
 def _get_client(api_key: str) -> anthropic.AsyncAnthropic:
@@ -777,7 +777,7 @@ def _personality_modifier(
     if axes.verbosity < 50 - threshold:
         parts.append("Keep it short. Punchy one-liners. Two words when ten would do.")
     elif axes.verbosity > 50 + threshold:
-        parts.append("Tell long stories. Elaborate setups. Meander through anecdotes before reaching the point.")
+        parts.append("Tell int stories. Elaborate setups. Meander through anecdotes before reaching the point.")
 
     # Nostalgia
     if axes.nostalgia < 50 - threshold:
@@ -1360,7 +1360,7 @@ async def write_news_flash(
     """
     if not has_script_llm(config):
         host = random.choice(config.hosts)
-        return (host, "Notizia dell'ultima ora: tutto a posto. Più o meno.", "breaking")
+        return host, "Notizia dell'ultima ora: tutto a posto. Più o meno.", "breaking"
 
     if category is None:
         category = random.choice(list(NEWS_FLASH_CATEGORIES.keys()))
@@ -1405,11 +1405,11 @@ Return JSON:
 
         text = data.get("text", "Notizia dell'ultima ora!")
         logger.info("Generated %s flash: %d chars", category, len(text))
-        return (host, text, category)
+        return host, text, category
 
     except Exception as e:
         logger.error("News flash generation failed: %s", e)
-        return (host, "Notizia dell'ultima ora: tutto a posto. Più o meno.", category)
+        return host, "Notizia dell'ultima ora: tutto a posto. Più o meno.", category
 
 
 async def write_transition(
@@ -1516,13 +1516,13 @@ Return JSON:
         )
         text = _massage_transition_text(data.get("text", "Allora..."), next_segment, recent_texts)
         logger.info("Generated transition: %s", text[:50])
-        return (host, text)
+        return host, text
 
     except Exception as e:
         logger.error("Transition generation failed: %s", e)
         fallback = {"banter": "Allora...", "ad": "E adesso...", "news_flash": "Attenzione..."}
         text = _massage_transition_text(fallback.get(next_segment, "Allora..."), next_segment, recent_texts)
-        return (host, text)
+        return host, text
 
 
 async def write_ad(

@@ -126,7 +126,7 @@ def _selector_specificity(selector: str) -> tuple[int, int, int]:
     ids = sum(len(token_ids) for _, _, token_ids in tokens)
     classes = sum(len(token_classes) for _, token_classes, _ in tokens)
     tags = sum(1 for token_tag, _, _ in tokens if token_tag)
-    return (ids, classes, tags)
+    return ids, classes, tags
 
 
 def _declarations_for_selector(text: str, selector: str) -> dict[str, str]:

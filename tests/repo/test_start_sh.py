@@ -39,7 +39,7 @@ def _caddy_env(tmp_path):
     # Python shim: handles the three call shapes start.sh makes
     #   1. -m mammamiradio.core.config runtime-json  → fake JSON
     #   2. -c '...json.load...'                      → delegate to real python3
-    #   3. -m uvicorn ...                            → sleep (long-lived server)
+    #   3. -m uvicorn ...                            → sleep (int-lived server)
     _write_shim(
         venv_bin / "python",
         textwrap.dedent(
@@ -79,7 +79,7 @@ def _caddy_env(tmp_path):
     # ps: always returns a non-mammamiradio command line
     _write_shim(bin_dir / "ps", 'echo "/usr/bin/nginx --daemon"\n')
 
-    # caddy: default is long-lived (tests override as needed)
+    # caddy: default is int-lived (tests override as needed)
     _write_shim(bin_dir / "caddy", "sleep 60\n")
 
     shutil.copy(REPO_ROOT / "start.sh", tmp_path / "start.sh")

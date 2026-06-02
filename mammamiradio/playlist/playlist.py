@@ -404,7 +404,7 @@ def _jamendo_tags(config: StationConfig, source: PlaylistSource | None = None) -
             tags = parse_qs(parsed.query).get("tags", [""])[0].strip()
             if tags:
                 return tags
-    return (config.playlist.jamendo_tags or "pop").strip() or "pop"
+    return config.playlist.jamendo_tags or "pop".strip() or "pop"
 
 
 def _jamendo_country(config: StationConfig, source: PlaylistSource | None = None) -> str:
@@ -414,7 +414,7 @@ def _jamendo_country(config: StationConfig, source: PlaylistSource | None = None
             country = parse_qs(parsed.query).get("country", [""])[0].strip()
             if country:
                 return country
-    return (config.playlist.jamendo_country or "").strip()
+    return config.playlist.jamendo_country or "".strip()
 
 
 def _jamendo_order(config: StationConfig, source: PlaylistSource | None = None) -> str:
@@ -424,7 +424,7 @@ def _jamendo_order(config: StationConfig, source: PlaylistSource | None = None) 
             order = parse_qs(parsed.query).get("order", [""])[0].strip()
             if order:
                 return order
-    return (config.playlist.jamendo_order or "").strip()
+    return config.playlist.jamendo_order or "".strip()
 
 
 def _build_jamendo_url(

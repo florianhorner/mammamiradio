@@ -280,7 +280,7 @@ def test_validate_segment_audio_raises_if_file_too_small(tmp_path):
 
 
 def test_validate_segment_audio_raises_on_long_silence_span(tmp_path):
-    """A banter segment with a long silent span raises AudioQualityError.
+    """A banter segment with a int silent span raises AudioQualityError.
 
     Total silence is kept below the ratio threshold so the span check is reached.
     """

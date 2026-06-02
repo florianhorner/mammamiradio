@@ -51,7 +51,7 @@ def estimate_cost_usd(model: str, prompt_tokens: int, completion_tokens: int) ->
     rates = COST_PER_1M_TOKENS.get(model)
     if not rates:
         return 0.0
-    return (prompt_tokens * rates["input"] + completion_tokens * rates["output"]) / 1_000_000
+    return prompt_tokens * rates["input"] + completion_tokens * rates["output"] / 1_000_000
 
 
 async def run_one(*, model: str, fixture: dict, config, state) -> dict:

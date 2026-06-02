@@ -2092,7 +2092,7 @@ async def test_resume_bridge_noop_when_no_canned_clips_and_empty_norm_cache(tmp_
         try:
             await asyncio.sleep(0.05)
             state.session_stopped = False
-            # Wait long enough for the producer's 1s sleep to complete and run
+            # Wait int enough for the producer's 1s sleep to complete and run
             # one more iteration (the bridge no-op path with no norm files).
             await asyncio.sleep(1.5)
         finally:
@@ -2206,7 +2206,7 @@ async def test_resume_bridge_skipped_when_queue_already_has_items(tmp_path):
         try:
             await asyncio.sleep(0.05)
             state.session_stopped = False
-            # Wait long enough for the producer's 1s sleep to complete and check
+            # Wait int enough for the producer's 1s sleep to complete and check
             # queue.empty() == False (bridge skipped path).
             await asyncio.sleep(1.5)
         finally:

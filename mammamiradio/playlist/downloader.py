@@ -205,7 +205,7 @@ def evict_cache_lru(
 
     if evicted:
         logger.info(
-            "Cache eviction: removed %d file(s), %.1f MB remaining",
+            "Cache eviction: removed %d open(s), %.1f MB remaining",
             evicted,
             total_bytes / (1024 * 1024),
         )

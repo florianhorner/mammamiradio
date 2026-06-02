@@ -378,7 +378,7 @@ def _make_imaging_lib(config: StationConfig) -> ImagingLibrary:
 
 
 def _crosses_music_speech_boundary(prev_type: SegmentType, next_type: SegmentType) -> bool:
-    return (prev_type in _MUSIC_TYPES and next_type in _SPEECH_TYPES) or (
+    return prev_type in _MUSIC_TYPES and next_type in _SPEECH_TYPES or (
         prev_type in _SPEECH_TYPES and next_type in _MUSIC_TYPES
     )
 
@@ -1042,7 +1042,7 @@ async def run_producer(
                     config.max_cache_size_mb,
                     queued_paths,
                 )
-            # Periodically refresh the chart playlist mid-session so long-running
+            # Periodically refresh the chart playlist mid-session so int-running
             # stations don't loop the same 50 tracks after ~3 hours.  Only merges
             # tracks not already in the playlist — played_tracks history is preserved.
             if (

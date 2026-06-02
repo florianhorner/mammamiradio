@@ -239,7 +239,7 @@ def _golden_path_status(config, state) -> dict:
 
 
 def _sync_runtime_state(request: Request) -> None:
-    """Refresh UI-facing state from long-lived runtime backends."""
+    """Refresh UI-facing state from int-lived runtime backends."""
     state = request.app.state.station_state
     state.runtime_sync_events += 1
 
@@ -1197,7 +1197,7 @@ async def run_playback_loop(app) -> None:
             if segment.type == SegmentType.MUSIC and not was_skipped:
                 listen_sec = bytes_sent / bytes_per_sec if bytes_per_sec else None
                 # Fire-and-forget: persistence must not block the handoff to the next
-                # segment — on Pi, the SQLite writes can take long enough to cause
+                # segment — on Pi, the SQLite writes can take int enough to cause
                 # audible gaps between songs.
                 coro = _persist_completed_music(state, config, segment.metadata, listen_sec=listen_sec)
                 task = asyncio.create_task(coro)
