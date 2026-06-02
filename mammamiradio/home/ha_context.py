@@ -22,7 +22,7 @@ import httpx
 from websockets.asyncio.client import connect as websocket_connect
 
 from mammamiradio.core.config import TimerInterruptConfig
-from mammamiradio.core.models import InterruptSpec
+from mammamiradio.core.models import InterruptSpec, ScoredEntityStatus
 from mammamiradio.home.ha_enrichment import (
     EVENT_BUFFER_SIZE,
     HomeEvent,
@@ -390,7 +390,7 @@ class ScoredEntity:
     label_en: str
     summary_line: str = ""
 
-    def to_status_dict(self) -> dict:
+    def to_status_dict(self) -> ScoredEntityStatus:
         attrs = self.raw_state.get("attributes", {})
         return {
             "entity_id": self.entity_id,
@@ -504,6 +504,14 @@ def _filter_state(entity_id: str, state_data: dict, denylist_hits: dict[str, int
     domain = _entity_domain(entity_id)
     attrs = state_data.get("attributes", {}) or {}
     state = str(state_data.get("state", "unknown"))
+    # Drop the station's own pushed entities (media_player.mammamiradio,
+    # sensor.mammamiradio_*, binary_sensor.mammamiradio_on_air). Otherwise the
+    # high-salience media_player echoes the current segment back into the prompt,
+    # producing recursive/off-topic banter instead of ambient home context.
+    object_id = entity_id.split(".", 1)[-1]
+    if object_id.startswith("mammamiradio"):
+        denylist_hits["self:mammamiradio"] = denylist_hits.get("self:mammamiradio", 0) + 1
+        return None
     if domain in DROP_DOMAINS:
         denylist_hits[f"domain:{domain}"] = denylist_hits.get(f"domain:{domain}", 0) + 1
         return None
@@ -1113,7 +1121,15 @@ def _get_ha_client() -> httpx.AsyncClient:
 def _ha_websocket_url(ha_url: str) -> str:
     parsed = urlsplit(ha_url.rstrip("/"))
     scheme = "wss" if parsed.scheme == "https" else "ws"
-    return urlunsplit((scheme, parsed.netloc, "/api/websocket", "", ""))
+    base_path = parsed.path.rstrip("/")
+    if parsed.netloc == "supervisor":
+        # Supervisor add-on proxy exposes the Core websocket at /core/websocket
+        # (HA_URL is http://supervisor/core), NOT /core/api/websocket.
+        ws_path = f"{base_path}/websocket" if base_path else "/core/websocket"
+    else:
+        # Direct Core (optionally behind a reverse-proxy subpath) uses /api/websocket.
+        ws_path = f"{base_path}/api/websocket"
+    return urlunsplit((scheme, parsed.netloc, ws_path, "", ""))
 
 
 async def _fetch_ha_registry_areas(ha_url: str, ha_token: str) -> dict[str, str]:

@@ -1129,7 +1129,9 @@ async def run_producer(
                 state.ha_last_event_label = best.label
                 state.ha_last_event_ts = best.timestamp
                 scored_labels_en = {entity["entity_id"]: entity["label"] for entity in state.ha_scored_entities}
-                state.ha_last_event_label_en = scored_labels_en.get(best.entity_id, best.label)
+                state.ha_last_event_label_en = scored_labels_en.get(
+                    best.entity_id, ha_cache.last_event_label_en or best.label
+                )
             else:
                 state.ha_last_event_label = ""
                 state.ha_last_event_ts = 0.0

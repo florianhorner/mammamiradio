@@ -11,7 +11,7 @@ from collections import deque
 from dataclasses import asdict, dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import TYPE_CHECKING, ClassVar, Literal
+from typing import TYPE_CHECKING, ClassVar, Literal, TypedDict
 from urllib.parse import urlsplit, urlunsplit
 
 if TYPE_CHECKING:
@@ -366,6 +366,19 @@ class ListenerProfile:
 KeyStatus = Literal["unverified", "valid", "rejected"]
 
 
+class ScoredEntityStatus(TypedDict):
+    """Admin-only telemetry shape for a budgeted HA entity (see ScoredEntity.to_status_dict)."""
+
+    entity_id: str
+    area: str | None
+    domain: str
+    score: float
+    state: object
+    label: str
+    summary: str
+    device_class: object
+
+
 @dataclass
 class StationState:
     """Mutable in-memory state shared by producer and streamer tasks."""
@@ -432,7 +445,7 @@ class StationState:
     ha_weather_arc_en: str = ""
     ha_events_summary_en: str = ""
     ha_last_event_label_en: str = ""
-    ha_scored_entities: list[dict] = field(default_factory=list)
+    ha_scored_entities: list[ScoredEntityStatus] = field(default_factory=list)
     ha_denylist_hits: dict[str, int] = field(default_factory=dict)
     ha_catalog_hit_rate: float = 0.0
     # Force-trigger: producer will use this type instead of scheduler for the next segment
