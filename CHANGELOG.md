@@ -11,8 +11,10 @@ The current version source of truth is `pyproject.toml`.
 - **Home Assistant context now adapts to each home.** The add-on scores prompt-safe
   entities from the full Home Assistant state snapshot instead of only using a
   hardcoded apartment list, so newly paired devices can contribute ambient radio
-  context without code changes. Sensitive domains and secret-shaped attributes
-  are filtered before prompt assembly, and the admin Engine Room shows the
+  context without code changes. Location, camera, alarm, and free-text helper
+  entities plus secret-shaped attributes are filtered before prompt assembly;
+  who's home stays as simple home/away (never location) so the hosts can still
+  welcome you back and notice an empty house. The admin Engine Room shows the
   scored slice plus privacy filter counts.
 
 - **The admin now tells you when an AI key isn't working** — a wrong or revoked Anthropic or OpenAI key is checked the moment the station starts (and again whenever you save a key), so the Engine Room shows a clear "key not working — replace key" state right away instead of looking connected until a host segment silently fails. Listeners never see any of this, and if a second valid key is configured the station keeps sounding live.

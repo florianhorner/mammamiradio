@@ -196,7 +196,8 @@ Cue text is sanitized via `_sanitize_prompt_data` on the read path before inject
 If `[homeassistant].enabled = true` and `HA_TOKEN` is present:
 
 - `ha_context.py` polls the Home Assistant REST API state snapshot and filters it through a default-deny privacy layer
-- sensitive domains (`device_tracker`, `person`, `camera`, `alarm_control_panel`) and telemetry/config entities are excluded before prompt assembly
+- sensitive domains (`device_tracker`, `camera`, `alarm_control_panel`), free-text helper domains (`input_text`, `text`), and telemetry/config entities are excluded before prompt assembly
+- `person.*` is kept as home/away presence only (GPS, `user_id`, and tracker attributes stripped) so arrival greetings and the empty-home mood still work; person events never reach `/public-status`
 - allowed entities are scored by domain salience, recent changes, area metadata, event activity, and curated-label overrides
 - the prompt receives a bounded top slice (12 entities by default, capped at 2000 characters) rather than the full home snapshot
 - hand-tuned entity labels remain authoritative; unknown entities fall back to sanitized friendly names plus area metadata where available
