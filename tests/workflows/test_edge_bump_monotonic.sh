@@ -124,6 +124,12 @@ pass "edge bump mints a GitHub App token"
 if grep -q 'git pull --rebase origin main' "$WORKFLOW"; then
   fail "edge bump must NOT push directly to main (found direct-push rebase loop)"
 fi
+# Any push targeting main (origin main, HEAD:main, :main) is forbidden — the bump
+# reaches main only through a PR merge. Catches future direct-push regressions,
+# not just the removed rebase-loop idiom.
+if grep -qE 'git push.*main' "$WORKFLOW"; then
+  fail "edge bump must NOT push directly to main (found a git push targeting main)"
+fi
 # shellcheck disable=SC2016
 grep -qF 'HEAD:$BRANCH' "$WORKFLOW" \
   || fail "edge bump must push the bump commit to a branch, not main"
@@ -131,8 +137,9 @@ pass "edge bump pushes to a branch, never directly to main"
 
 grep -q 'gh pr create' "$WORKFLOW" \
   || fail "edge bump must open a PR (gh pr create)"
-grep -q 'gh pr merge' "$WORKFLOW" && grep -q -- '--squash' "$WORKFLOW" \
-  || fail "edge bump must squash-merge (gh pr merge --squash) so the loop-guard subject matches"
+if ! grep -q 'gh pr merge' "$WORKFLOW" || ! grep -q -- '--squash' "$WORKFLOW"; then
+  fail "edge bump must squash-merge (gh pr merge --squash) so the loop-guard subject matches"
+fi
 pass "edge bump opens and squash-merges a PR"
 
 # The App token must be wired to gh via GH_TOKEN — otherwise gh falls back to the
@@ -151,8 +158,9 @@ fi
 pass "addon-build.yml grants no contents: write"
 
 # Synchronous, required-checks-only wait + TOCTOU-safe merge + bounded runtime.
-grep -q 'gh pr checks' "$WORKFLOW" && grep -q -- '--required' "$WORKFLOW" \
-  || fail "edge bump must wait on REQUIRED checks (gh pr checks --required)"
+if ! grep -q 'gh pr checks' "$WORKFLOW" || ! grep -q -- '--required' "$WORKFLOW"; then
+  fail "edge bump must wait on REQUIRED checks (gh pr checks --required)"
+fi
 grep -q -- '--match-head-commit' "$WORKFLOW" \
   || fail "edge bump must merge the validated SHA (--match-head-commit)"
 grep -q 'timeout-minutes' "$WORKFLOW" \
