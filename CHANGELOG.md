@@ -12,6 +12,10 @@ The current version source of truth is `pyproject.toml`.
 
 - **Running-gag callbacks about your home** — when Home Assistant is connected, the AI hosts now occasionally land a deferred callback about a recurring home event from the same evening (the coffee machine going on yet again, the door, the vacuum), like an inside joke that builds over the night. The station keeps a small per-evening tally that survives addon restarts, paces each gag with a cooldown so it never repeats too often, and only draws on discrete on/off events (never numeric sensor noise). No effect when Home Assistant is not connected.
 
+### Fixed
+
+- **The Edge add-on now auto-updates after every add-on change.** The automated edge-channel version bump previously could not land on the protected branch, so Home Assistant never showed an Edge "Update" and the add-on build reported a failure on every change. The bump now goes through the normal checks, so the Edge channel tracks the latest build again.
+
 ### Security
 
 - **Admin endpoints no longer auto-trust private networks when admin credentials are configured.** Previously a client on a LAN or Tailscale address was trusted for admin access even when `ADMIN_PASSWORD` or `ADMIN_TOKEN` was set, so a configured credential could be silently bypassed from any private-network browser. Now, when a credential is configured, all non-loopback admin traffic must present it. Credential-less private-network deployments are unchanged (still trusted, still CSRF-guarded on writes). Standalone runs that bind to a non-loopback host (including an empty bind host, which listens on all interfaces) now require `ADMIN_PASSWORD` or `ADMIN_TOKEN` at startup. Browser admin access requires `ADMIN_PASSWORD`; `ADMIN_TOKEN` is a header-only API credential a browser cannot send on navigation.
