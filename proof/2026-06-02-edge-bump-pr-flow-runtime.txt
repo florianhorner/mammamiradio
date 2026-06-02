@@ -1,0 +1,19 @@
+Runtime/verification artifact — issue #384 edge-bump PR flow
+Generated: 2026-06-02 (UTC)
+Branch: issue-384   Base: main
+
+== Workflow self-tests (wired into quality.yml) ==
+test_edge_bump_monotonic.sh   PASS (13 comparison + 11 PR-flow contract assertions)
+test_edge_calver.sh           PASS (4 scenarios)
+test_validate_addon_edge.sh   PASS (5 mutation scenarios; rejects malformed edge version)
+
+== Repo gates ==
+scripts/validate-addon.sh         PASS
+scripts/check-changelog-lint.sh   PASS
+addon-build.yml                   valid YAML
+
+== New PR-flow contract assertions (test_edge_bump_monotonic.sh) ==
+app-token mint; no direct push to main; branch push (HEAD:$BRANCH);
+gh pr create; squash merge; gh pr checks --required; --match-head-commit;
+timeout-minutes; GH_TOKEN wired to app-token; no contents: write;
+actor + message loop guard on validate.if -- all PASS

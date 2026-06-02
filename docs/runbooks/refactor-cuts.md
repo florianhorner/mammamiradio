@@ -19,9 +19,10 @@ Run at SCOPE time (before naming what moves), then again before shipping:
       `origin/main`.
 - [ ] **Facade-identity guard test** (`facade.X is newmodule.X`) for every re-exported
       symbol.
-- [ ] **Edge soak per cut** — bump the edge calver so the cut reaches the soak Pi, OR
-      confirm the parked `bump-edge` (#384) is fixed. Don't batch (cuts went 34 commits
-      without soaking).
+- [ ] **Edge soak per cut** — `bump-edge` auto-bumps the edge calver on every
+      addon-changing merge again (the #384 protected-branch deadlock is fixed), so the
+      cut reaches the soak Pi on its own. Don't batch (cuts went 34 commits without
+      soaking).
 
 ## Lessons (cuts 1–6: W1 / H1 / W3a / W3b + edge release)
 
@@ -35,8 +36,9 @@ Run at SCOPE time (before naming what moves), then again before shipping:
    dependency-closure check caught it; the planning artifact should have.
 3. **Grep counts hide duplication.** Two identical sanitize-test sets lived in two files;
    the plan said "4 tests," reality was 8. Reading the files surfaced it.
-4. **Merged ≠ soaked.** `bump-edge` is parked (#384), so 5 cuts merged without reaching the
-   soak Pi until a manual edge bump. Soak per cut, not in a batch.
+4. **Merged ≠ soaked.** `bump-edge` was parked (#384) for a stretch, so 5 cuts merged
+   without reaching the soak Pi until a manual edge bump. It auto-bumps again now; soak
+   per cut, not in a batch.
 
 ## What worked (repeat)
 
