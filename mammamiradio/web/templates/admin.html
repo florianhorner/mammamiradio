@@ -2100,6 +2100,23 @@ const SOURCE_CHIPS={
 let _lastSetupJson=null;
 
 function toast(m){const e=document.getElementById('toast');e.textContent=m;e.classList.add('show');setTimeout(()=>e.classList.remove('show'),1600)}
+// Surface background queue-from-search failures the POST couldn't report (it
+// returned 200 before the download finished). /status carries recent notices;
+// toast any whose ts we haven't shown yet.
+let _lastNoticeTs=0;
+function notifyExternalAddNotices(notices){
+  if(!Array.isArray(notices)||!notices.length)return;
+  const fresh=notices.filter(n=>n&&!n.ok&&(n.ts||0)>_lastNoticeTs);
+  if(!fresh.length)return;
+  _lastNoticeTs=Math.max(_lastNoticeTs,...notices.map(n=>(n&&n.ts)||0));
+  for(const n of fresh){
+    const name=n.display||'track';
+    const msg=n.reason==='source_changed'
+      ? 'Couldn’t queue “'+name+'” — the playlist source changed.'
+      : 'Couldn’t download “'+name+'” — try another result.';
+    if(typeof window.errorToast==='function')window.errorToast(msg);else toast(msg);
+  }
+}
 function esc(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;')}
 function escJs(s){return String(s||'').replace(/\\/g,'\\\\').replace(/'/g,"\\'");}
 function fmtRuntimeTs(ts){
@@ -3397,6 +3414,7 @@ async function refreshFast(){
     if (_st.station) {
       try { localStorage.setItem('stationName', _st.station); } catch (_) {}
     }
+    notifyExternalAddNotices(_st.external_add_notices);
     const lrData=lrr.ok?await lrr.json():{requests:[]};
     if(_st.session_stopped!==undefined)updateStopState(_st.session_stopped);
     updateNow(_st.now_streaming);

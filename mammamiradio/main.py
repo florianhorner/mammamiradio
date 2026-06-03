@@ -248,6 +248,14 @@ async def shutdown():
     if _playback_task:
         _playback_task.cancel()
         tasks_to_cancel.append(_playback_task)
+    # Fire-and-forget background tasks (queue-from-search / listener song
+    # downloads). Cancel them too so an in-flight yt-dlp download can't write to
+    # app.state after teardown begins.
+    background_tasks = getattr(app.state, "background_tasks", None)
+    if background_tasks:
+        for _bg in list(background_tasks):
+            _bg.cancel()
+            tasks_to_cancel.append(_bg)
     if tasks_to_cancel:
         await asyncio.gather(*tasks_to_cancel, return_exceptions=True)
     if hasattr(app.state, "producer_task"):

@@ -1415,22 +1415,23 @@ async def test_add_external_track_background_failure_leaves_no_pin(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_add_external_track_dropped_when_playlist_revision_changes(tmp_path):
-    """Source switch mid-download → the stale pick is dropped, not pinned."""
+async def test_add_external_track_dropped_when_source_switches(tmp_path):
+    """A real source switch mid-download → the stale pick is dropped, not pinned,
+    and the admin gets a notice."""
     app = _make_test_app()
     app.state.config.cache_dir = tmp_path
     app.state.config.allow_ytdlp = True
     original_len = len(app.state.station_state.playlist)
 
-    async def _bump_then_return(*_args, **_kwargs):
-        # Simulate a playlist source switch landing while the download runs.
-        app.state.station_state.playlist_revision += 1
+    async def _switch_then_return(*_args, **_kwargs):
+        # Simulate a playlist SOURCE switch landing while the download runs.
+        app.state.station_state.source_revision += 1
         return tmp_path / "dl.mp3"
 
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
     with patch(
         "mammamiradio.playlist.downloader.download_external_track",
-        new=_bump_then_return,
+        new=_switch_then_return,
     ):
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
             resp = await client.post(
@@ -1441,6 +1442,39 @@ async def test_add_external_track_dropped_when_playlist_revision_changes(tmp_pat
         await asyncio.gather(*list(app.state.background_tasks))
     assert len(app.state.station_state.playlist) == original_len
     assert app.state.station_state.pinned_track is None
+    notices = list(app.state.station_state.external_add_notices)
+    assert notices and notices[-1]["reason"] == "source_changed" and notices[-1]["ok"] is False
+
+
+@pytest.mark.asyncio
+async def test_add_external_track_survives_benign_playlist_revision_bump(tmp_path):
+    """A benign edit (enrich / move-to-next / festival) bumps playlist_revision
+    but NOT source_revision, so an in-flight queued track must still land."""
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path
+    app.state.config.allow_ytdlp = True
+    original_len = len(app.state.station_state.playlist)
+
+    async def _bump_playlist_rev_then_return(*_args, **_kwargs):
+        # Benign in-place edit during the download — NOT a source switch.
+        app.state.station_state.playlist_revision += 1
+        return tmp_path / "dl.mp3"
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    with patch(
+        "mammamiradio.playlist.downloader.download_external_track",
+        new=_bump_playlist_rev_then_return,
+    ):
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            resp = await client.post(
+                "/api/playlist/add-external",
+                json={"youtube_id": "dQw4w9WgXcQ", "title": "Brano", "artist": "Artista", "duration_ms": 123000},
+            )
+        assert resp.status_code == 200
+        await asyncio.gather(*list(app.state.background_tasks))
+    assert len(app.state.station_state.playlist) == original_len + 1
+    assert app.state.station_state.pinned_track is not None
+    assert app.state.station_state.pinned_track.youtube_id == "dQw4w9WgXcQ"
 
 
 @pytest.mark.asyncio
@@ -1586,8 +1620,8 @@ async def test_download_listener_song_drops_track_on_revision_change(tmp_path):
     req = {"song_query": "track", "message": "track", "song_found": False, "song_error": False}
     state.pending_requests.append(req)
 
-    async def _download_with_revision_bump(*_args, **_kwargs):
-        state.playlist_revision += 1
+    async def _download_with_source_switch(*_args, **_kwargs):
+        state.source_revision += 1
         return tmp_path / "song.mp3"
 
     with (
@@ -1598,10 +1632,10 @@ async def test_download_listener_song_drops_track_on_revision_change(tmp_path):
         patch(
             "mammamiradio.playlist.downloader.download_external_track",
             new_callable=AsyncMock,
-            side_effect=_download_with_revision_bump,
+            side_effect=_download_with_source_switch,
         ),
     ):
-        await _download_listener_song(req, app.state, state.playlist_revision)
+        await _download_listener_song(req, app.state, state.source_revision)
     assert req["song_found"] is False
     assert req["song_error"] is False
     assert len(state.playlist) == original_len

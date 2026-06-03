@@ -36,6 +36,11 @@ _TRUTHY = ("true", "1", "yes")
 # already bounds slow-but-alive transfers.
 _YTDLP_SOCKET_TIMEOUT_SEC = 30
 
+# Canonical YouTube video-id shape (11 chars, base64url alphabet). Single source
+# of truth for both the search-result filter (below) and the add-external payload
+# validator in web/streamer.py — keep them importing this, not re-spelling it.
+YOUTUBE_VIDEO_ID_RE = re.compile(r"[A-Za-z0-9_-]{11}")
+
 # Per-session denylist of track cache keys rejected by validate_download or the
 # quality gate. Keeps a poisoned cache file or a structurally-bad track from
 # looping through the quality gate forever — once rejected, the track stays
@@ -502,8 +507,9 @@ def search_ytdlp_metadata(query: str, max_results: int = 5) -> list[dict]:
             # ytsearch mixes channel/playlist hits (e.g. a "UC..." channel id)
             # in with videos. Those aren't downloadable and would 400 at
             # /api/playlist/add-external, so keep only real 11-char video ids —
-            # the same shape the queue endpoint validates against.
-            if not re.fullmatch(r"[A-Za-z0-9_-]{11}", e["id"]):
+            # the same shape the queue endpoint validates against. str() guards
+            # against a non-string id wiping the whole result set via TypeError.
+            if not YOUTUBE_VIDEO_ID_RE.fullmatch(str(e["id"])):
                 continue
             title = e.get("title") or ""
             artist = e.get("uploader") or e.get("channel") or ""

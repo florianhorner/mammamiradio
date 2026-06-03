@@ -385,6 +385,11 @@ class StationState:
 
     playlist: list[Track] = field(default_factory=list)
     playlist_revision: int = 0
+    # Bumped ONLY when the playlist source is replaced (switch_playlist), never
+    # on in-place mutations like enrich / move-to-next / festival toggle. Used by
+    # background external downloads to tell a real source switch (drop the pick)
+    # from a benign edit (keep it). See _commit_external_download.
+    source_revision: int = 0
     played_tracks: deque[Track] = field(default_factory=lambda: deque(maxlen=50))
     played_track_log: deque[PlayedEntry] = field(default_factory=lambda: deque(maxlen=100))
     songs_since_banter: int = 0
@@ -470,6 +475,11 @@ class StationState:
     # Operator-visible pending actions/directives. This mirrors legacy single
     # slots while the producer still consumes those slots for compatibility.
     pending_actions: deque[dict] = field(default_factory=lambda: deque(maxlen=200))
+    # Recent background external-add outcomes the admin couldn't see synchronously
+    # (the request returned 200 before the download finished). Each entry:
+    # {"display": str, "ok": bool, "reason": str, "ts": float}. Surfaced in
+    # /status so the admin UI can toast a failed/dropped queue-from-search.
+    external_add_notices: deque[dict] = field(default_factory=lambda: deque(maxlen=10))
     # IP-based rate limiting for /api/listener-request {ip: last_ts}
     _listener_request_rl: dict = field(default_factory=dict)
     # Shareware trial: counts canned banter clips actually streamed to listener
@@ -568,6 +578,7 @@ class StationState:
         In-flight producer segments are discarded on next commit check.
         """
         self.playlist_revision += 1
+        self.source_revision += 1
         self.playlist = tracks
         self.playlist_source = source
         self.startup_source_error = ""

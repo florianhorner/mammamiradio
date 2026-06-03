@@ -552,6 +552,33 @@ async def test_shutdown_cancels_tasks():
 
 
 @pytest.mark.asyncio
+async def test_shutdown_cancels_background_tasks():
+    """shutdown() also cancels fire-and-forget background tasks (queue-from-search
+    / listener song downloads) so an in-flight yt-dlp fetch can't write to
+    app.state after teardown begins."""
+    import mammamiradio.main as main_mod
+
+    main_mod._prewarm_task = None
+    main_mod._producer_task = None
+    main_mod._playback_task = None
+    bg_task = AsyncMock()
+    bg_task.cancel = MagicMock()
+    main_mod.app.state.background_tasks = {bg_task}
+    main_mod.app.state.stream_hub = MagicMock()
+
+    with patch("asyncio.gather", new_callable=AsyncMock) as mock_gather:
+        await main_mod.shutdown()
+
+    bg_task.cancel.assert_called_once()
+    _args, _kwargs = mock_gather.call_args
+    assert bg_task in _args
+    assert _kwargs.get("return_exceptions") is True
+
+    # Cleanup
+    main_mod.app.state.background_tasks = set()
+
+
+@pytest.mark.asyncio
 async def test_startup_demo_fallback_on_fetch_exception(tmp_path: Path):
     """When fetch_startup_playlist raises, startup falls back to DEMO_TRACKS."""
     from mammamiradio.main import app, startup
