@@ -44,6 +44,18 @@ assert_rejects() {
   pass "$desc rejected ('$msg')"
 }
 
+# assert_accepts <description>: the already-mutated config must PASS validation.
+assert_accepts() {
+  local desc="$1" out rc
+  set +e
+  out="$(bash "$VALIDATE" 2>&1)"
+  rc=$?
+  set -e
+  cp "$BACKUP" "$EDGE_CONFIG"
+  [ "$rc" -eq 0 ] || { echo "$out" | tail -5 >&2; fail "$desc: validate-addon.sh exited $rc, expected pass"; }
+  pass "$desc accepted"
+}
+
 # Case 1: wrong slug
 mutate 's/^slug: .*/slug: wrong-edge-slug/'
 assert_rejects "wrong slug" "edge slug must be"
@@ -51,6 +63,10 @@ assert_rejects "wrong slug" "edge slug must be"
 # Case 2: malformed version
 mutate 's/^version: .*/version: not-a-version/'
 assert_rejects "malformed version" "edge version must be"
+
+# Case 2b: a manual edge release version (main short SHA) is accepted.
+mutate 's/^version: .*/version: b1866c8/'
+assert_accepts "short-SHA edge version (make edge-release)"
 
 # Case 3: wrong image path
 mutate 's#^image: .*#image: ghcr.io/wrong/image#'
