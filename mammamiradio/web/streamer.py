@@ -2472,22 +2472,30 @@ async def _commit_external_download(
     state = app_state.station_state
     config = app_state.config
     await download_external_track(track, config.cache_dir, music_dir=Path("music"))
-    if state.source_revision != originating_source_revision or not should_commit():
-        return "dropped"
-    state.playlist.append(track)
-    # Don't clobber a pin that's still pending — claim the play-next slot only
-    # when the caller's guard says it's free. Otherwise the track is in rotation
-    # and the caller surfaces that it's queued-behind rather than next.
-    if not should_pin():
-        return "queued"
-    state.pinned_track = track
-    # Only force MUSIC when nothing else is already forced. An operator trigger
-    # (banter/ad/news) or a mode change may have set force_next; that directive
-    # plays first, then the pinned track lands on the next music slot. Overwriting
-    # it would silently drop the operator's request.
-    if state.force_next is None:
-        state.force_next = SegmentType.MUSIC
-    return "pinned"
+    # Serialize the commit decision with source switches. /api/playlist/load holds
+    # source_switch_lock across the slow load and only bumps source_revision at the
+    # very end (switch_playlist). Without this lock a download finishing mid-load
+    # would see the not-yet-bumped revision, commit to the about-to-be-replaced
+    # playlist, and then get silently wiped by switch_playlist with no notice.
+    # Acquiring the lock makes us wait out any in-flight switch, then re-check the
+    # (now bumped) revision. The block below is synchronous — it never awaits while
+    # holding the lock, so it can't deadlock the switch routes.
+    async with app_state.source_switch_lock:
+        if state.source_revision != originating_source_revision or not should_commit():
+            return "dropped"
+        state.playlist.append(track)
+        # Don't clobber a pin that's still pending — claim the play-next slot only
+        # when the caller's guard says it's free. Otherwise the track is in
+        # rotation and the caller surfaces that it's queued-behind, not next.
+        if not should_pin():
+            return "queued"
+        state.pinned_track = track
+        # Only force MUSIC when nothing else is already forced. An operator trigger
+        # (banter/ad/news) or a mode change may have set force_next; that directive
+        # plays first, then the pinned track lands on the next music slot.
+        if state.force_next is None:
+            state.force_next = SegmentType.MUSIC
+        return "pinned"
 
 
 async def _download_admin_external_track(track: Any, app_state: Any, originating_source_revision: int) -> None:

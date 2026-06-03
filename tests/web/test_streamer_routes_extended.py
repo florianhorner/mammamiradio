@@ -1446,6 +1446,41 @@ async def test_add_external_track_queued_behind_existing_pin(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_commit_external_waits_out_in_flight_source_switch(tmp_path):
+    """A source switch in progress (source_switch_lock held) when the download
+    finishes makes the commit wait, then drop against the bumped revision — no
+    track leaks into the new source, and the admin gets a source_changed notice."""
+    from mammamiradio.core.models import Track
+    from mammamiradio.web.streamer import _download_admin_external_track
+
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path
+    state = app.state.station_state
+    rev = state.source_revision
+    track = Track(title="Brano", artist="A", duration_ms=1000, youtube_id="dQw4w9WgXcQ")
+    original_len = len(state.playlist)
+
+    # Simulate an in-flight /api/playlist/load holding the lock.
+    await app.state.source_switch_lock.acquire()
+    with patch(
+        "mammamiradio.playlist.downloader.download_external_track",
+        new_callable=AsyncMock,
+        return_value=tmp_path / "dl.mp3",
+    ):
+        task = asyncio.create_task(_download_admin_external_track(track, app.state, rev))
+        await asyncio.sleep(0.05)  # download completes, commit blocks on the lock
+        # The switch completes: bump source_revision, then release the lock.
+        state.source_revision += 1
+        app.state.source_switch_lock.release()
+        await task
+
+    assert len(state.playlist) == original_len
+    assert state.pinned_track is None
+    notices = list(state.external_add_notices)
+    assert notices and notices[-1]["reason"] == "source_changed"
+
+
+@pytest.mark.asyncio
 async def test_add_external_track_background_failure_leaves_no_pin(tmp_path):
     """Scenario 2 (download fails): no stale pin, playlist unchanged, stream intact."""
     app = _make_test_app()
