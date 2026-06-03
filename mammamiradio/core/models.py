@@ -379,6 +379,15 @@ class ScoredEntityStatus(TypedDict):
     device_class: object
 
 
+class ExternalAddNotice(TypedDict):
+    """A failed/dropped background queue-from-search outcome surfaced in /status."""
+
+    display: str
+    ok: bool
+    reason: str
+    ts: float
+
+
 @dataclass
 class StationState:
     """Mutable in-memory state shared by producer and streamer tasks."""
@@ -479,7 +488,7 @@ class StationState:
     # (the request returned 200 before the download finished). Each entry:
     # {"display": str, "ok": bool, "reason": str, "ts": float}. Surfaced in
     # /status so the admin UI can toast a failed/dropped queue-from-search.
-    external_add_notices: deque[dict] = field(default_factory=lambda: deque(maxlen=10))
+    external_add_notices: deque[ExternalAddNotice] = field(default_factory=lambda: deque(maxlen=10))
     # IP-based rate limiting for /api/listener-request {ip: last_ts}
     _listener_request_rl: dict = field(default_factory=dict)
     # Shareware trial: counts canned banter clips actually streamed to listener

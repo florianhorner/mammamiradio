@@ -1388,6 +1388,32 @@ async def test_add_external_track_success(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_add_external_track_preserves_pending_force_next(tmp_path):
+    """A pending forced segment (e.g. operator-triggered banter) is not clobbered:
+    the track still pins, but force_next keeps the existing directive."""
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path
+    app.state.config.allow_ytdlp = True
+    app.state.station_state.force_next = SegmentType.BANTER
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    with patch(
+        "mammamiradio.playlist.downloader.download_external_track",
+        new_callable=AsyncMock,
+        return_value=tmp_path / "dl.mp3",
+    ):
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            resp = await client.post(
+                "/api/playlist/add-external",
+                json={"youtube_id": "dQw4w9WgXcQ", "title": "Brano", "artist": "Artista", "duration_ms": 123000},
+            )
+        assert resp.status_code == 200
+        await asyncio.gather(*list(app.state.background_tasks))
+    # Track is pinned, but the operator's forced banter is preserved.
+    assert app.state.station_state.pinned_track is not None
+    assert app.state.station_state.force_next == SegmentType.BANTER
+
+
+@pytest.mark.asyncio
 async def test_add_external_track_background_failure_leaves_no_pin(tmp_path):
     """Scenario 2 (download fails): no stale pin, playlist unchanged, stream intact."""
     app = _make_test_app()
@@ -1536,7 +1562,7 @@ async def test_download_admin_external_track_cancelled_reraises_without_pin(tmp_
     app = _make_test_app()
     app.state.config.cache_dir = tmp_path
     track = Track(title="Brano", artist="Artista", duration_ms=123000, youtube_id="dQw4w9WgXcQ")
-    rev = app.state.station_state.playlist_revision
+    rev = app.state.station_state.source_revision
     with (
         patch(
             "mammamiradio.playlist.downloader.download_external_track",

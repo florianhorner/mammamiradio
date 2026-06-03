@@ -2475,7 +2475,12 @@ async def _commit_external_download(
     # when the caller's guard says it's free. Either way the track is in rotation.
     if should_pin():
         state.pinned_track = track
-        state.force_next = SegmentType.MUSIC
+        # Only force MUSIC when nothing else is already forced. An operator
+        # trigger (banter/ad/news) or a mode change may have set force_next; that
+        # directive plays first, then the pinned track lands on the next music
+        # slot. Overwriting it would silently drop the operator's request.
+        if state.force_next is None:
+            state.force_next = SegmentType.MUSIC
     return True
 
 
