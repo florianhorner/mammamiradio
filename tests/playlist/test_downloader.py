@@ -1470,6 +1470,9 @@ def test_search_ytdlp_metadata_filters_non_video_ids():
                     {"id": "UC2y0t3AAHuZxb8IgNm-A-yA", "title": "Nina Chuba", "uploader": "Nina Chuba"},
                     # Playlist hit (34-char "PL..." id) — must be dropped.
                     {"id": "PLFgquLnL59alW3xmYiWRaoz0oM3H17Lth", "title": "Nina Chuba Mix", "uploader": "YouTube"},
+                    # Non-string id (provider quirk) — str() guard must drop it,
+                    # NOT raise TypeError and wipe the whole result set.
+                    {"id": 1234567890, "title": "numeric id", "uploader": "x"},
                     # Real video.
                     {"id": "qVSALcVpwkc", "title": "Wildberry Lillet", "uploader": "Nina Chuba", "duration": 180},
                     # Empty id — dropped by the pre-existing guard.
@@ -1487,5 +1490,6 @@ def test_search_ytdlp_metadata_filters_non_video_ids():
         out = search_ytdlp_metadata("nina chuba", 5)
 
     ids = [r["youtube_id"] for r in out]
+    # The non-string id is dropped without crashing; only the real video survives.
     assert ids == ["qVSALcVpwkc"]
-    assert all(len(i) == 11 for i in ids)
+    assert all(isinstance(i, str) and len(i) == 11 for i in ids)

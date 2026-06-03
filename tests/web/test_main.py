@@ -533,6 +533,11 @@ async def test_shutdown_cancels_tasks():
     main_mod.app.state.producer_task = producer_task
     main_mod.app.state.playback_task = playback_task
     main_mod.app.state.stream_hub = MagicMock()
+    # Isolate from prior tests that may have left a verdict probe / background
+    # tasks on the shared app.state — this test asserts exactly the 3 lifecycle
+    # tasks are gathered.
+    main_mod.app.state.provider_verdict_task = None
+    main_mod.app.state.background_tasks = set()
 
     with patch("asyncio.gather", new_callable=AsyncMock) as mock_gather:
         await main_mod.shutdown()
@@ -563,6 +568,11 @@ async def test_shutdown_cancels_background_tasks():
     main_mod._playback_task = None
     bg_task = AsyncMock()
     bg_task.cancel = MagicMock()
+    # The provider-verdict probe lives outside the background_tasks set; shutdown
+    # must cancel it too.
+    verdict_task = AsyncMock()
+    verdict_task.cancel = MagicMock()
+    main_mod.app.state.provider_verdict_task = verdict_task
     main_mod.app.state.background_tasks = {bg_task}
     main_mod.app.state.stream_hub = MagicMock()
 
@@ -570,12 +580,15 @@ async def test_shutdown_cancels_background_tasks():
         await main_mod.shutdown()
 
     bg_task.cancel.assert_called_once()
+    verdict_task.cancel.assert_called_once()
     _args, _kwargs = mock_gather.call_args
     assert bg_task in _args
+    assert verdict_task in _args
     assert _kwargs.get("return_exceptions") is True
 
     # Cleanup
     main_mod.app.state.background_tasks = set()
+    main_mod.app.state.provider_verdict_task = None
 
 
 @pytest.mark.asyncio
@@ -974,7 +987,14 @@ async def test_shutdown_with_no_tasks_set():
     main_mod._playback_task = None
     main_mod._prewarm_task = None
 
-    for attr in ("producer_task", "prewarm_task", "playback_task", "stream_hub"):
+    for attr in (
+        "producer_task",
+        "prewarm_task",
+        "playback_task",
+        "stream_hub",
+        "provider_verdict_task",
+        "background_tasks",
+    ):
         if hasattr(main_mod.app.state, attr):
             delattr(main_mod.app.state, attr)
 

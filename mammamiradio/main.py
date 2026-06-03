@@ -248,6 +248,13 @@ async def shutdown():
     if _playback_task:
         _playback_task.cancel()
         tasks_to_cancel.append(_playback_task)
+    # The provider-verdict probe is created outside the producer/playback set
+    # (startup + credential saves); cancel it so it can't mutate station_state
+    # after teardown begins — same write-after-shutdown race as the downloads.
+    verdict_task = getattr(app.state, "provider_verdict_task", None)
+    if verdict_task:
+        verdict_task.cancel()
+        tasks_to_cancel.append(verdict_task)
     # Fire-and-forget background tasks (queue-from-search / listener song
     # downloads). Cancel them too so an in-flight yt-dlp download can't write to
     # app.state after teardown begins.

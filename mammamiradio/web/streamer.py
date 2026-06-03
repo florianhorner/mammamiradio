@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import atexit
+import concurrent.futures
 import copy
 import importlib
 import ipaddress
@@ -13,7 +15,9 @@ import random as _random
 import re as _re
 import secrets
 import time
+from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -69,6 +73,14 @@ from mammamiradio.web.provider_verdict import (
 from mammamiradio.web.ui_copy import copy_strings
 
 logger = logging.getLogger(__name__)
+
+# Bounded pool for the admin /api/search yt-dlp lookup. asyncio.wait_for cancels
+# the awaiting future on timeout but cannot kill the underlying thread (it runs
+# until its socket timeout), so an abandoned search must not accumulate in the
+# default executor and starve the producer's audio prefetch on Pi-class hardware.
+# Mirrors listener_requests._listener_dl_executor.
+_search_executor = concurrent.futures.ThreadPoolExecutor(max_workers=2, thread_name_prefix="admin-search")
+atexit.register(_search_executor.shutdown, wait=False, cancel_futures=True)
 
 router = APIRouter()
 security = HTTPBasic(auto_error=False)
@@ -2358,7 +2370,7 @@ async def search_tracks(request: Request, q: str = "", _: None = Depends(require
     loop = asyncio.get_running_loop()
     try:
         external = await asyncio.wait_for(
-            loop.run_in_executor(None, search_ytdlp_metadata, q.strip(), 5),
+            loop.run_in_executor(_search_executor, search_ytdlp_metadata, q.strip(), 5),
             timeout=45,
         )
     except Exception:
@@ -2425,7 +2437,7 @@ async def add_external_track(request: Request, _: None = Depends(require_admin_a
     return {"ok": True, "queued": track.display, "status": "downloading"}
 
 
-def _register_background_task(app_state, task) -> None:
+def _register_background_task(app_state: Any, task: asyncio.Task) -> None:
     """Track a fire-and-forget task on app.state so it survives GC mid-flight and
     can be cancelled at shutdown (main.shutdown). Shared by the admin
     queue-from-search and listener song-request paths."""
@@ -2438,7 +2450,12 @@ def _register_background_task(app_state, task) -> None:
 
 
 async def _commit_external_download(
-    track, app_state, originating_source_revision, *, should_commit, should_pin
+    track: Any,
+    app_state: Any,
+    originating_source_revision: int,
+    *,
+    should_commit: Callable[[], bool],
+    should_pin: Callable[[], bool],
 ) -> bool:
     """Download `track` and commit it to the rotation pool unless the playlist
     SOURCE switched while downloading. Only switch_playlist bumps source_revision,
@@ -2462,7 +2479,7 @@ async def _commit_external_download(
     return True
 
 
-async def _download_admin_external_track(track, app_state, originating_source_revision: int) -> None:
+async def _download_admin_external_track(track: Any, app_state: Any, originating_source_revision: int) -> None:
     """Background download for an admin queue-from-search request.
 
     Stream-safe: does NOT purge the queue. On success the track joins the rotation

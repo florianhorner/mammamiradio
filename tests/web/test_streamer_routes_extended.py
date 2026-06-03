@@ -1412,6 +1412,7 @@ async def test_add_external_track_background_failure_leaves_no_pin(tmp_path):
         await asyncio.gather(*list(app.state.background_tasks))
     assert len(app.state.station_state.playlist) == original_len
     assert app.state.station_state.pinned_track is None
+    assert app.state.station_state.force_next is None
 
 
 @pytest.mark.asyncio
@@ -1442,6 +1443,7 @@ async def test_add_external_track_dropped_when_source_switches(tmp_path):
         await asyncio.gather(*list(app.state.background_tasks))
     assert len(app.state.station_state.playlist) == original_len
     assert app.state.station_state.pinned_track is None
+    assert app.state.station_state.force_next is None
     notices = list(app.state.station_state.external_add_notices)
     assert notices and notices[-1]["reason"] == "source_changed" and notices[-1]["ok"] is False
 
