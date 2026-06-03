@@ -133,7 +133,12 @@ def build_events_summary(
         event.describe(now=ref_now)
         for event in sorted(recent_events, key=lambda event: event.timestamp, reverse=True)[:max_lines]
     ]
-    return "\n".join(lines)
+    rendered = "\n".join(lines)
+    # Mirrors _build_budgeted_summary: scriptwriter.py embeds this between
+    # <home_state_data> tags, so HA-controlled labels/states can't be allowed
+    # to close the fence. Strip < and > at the LLM boundary. The English
+    # sibling stays raw because it only feeds the admin UI's esc() path.
+    return rendered.replace("<", "").replace(">", "")
 
 
 def build_events_summary_en(

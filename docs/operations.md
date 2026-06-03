@@ -170,6 +170,8 @@ The add-on entrypoint (`ha-addon/mammamiradio/rootfs/run.sh`) maps Supervisor-in
 
 The dashboard is accessible via HA ingress (sidebar). The first-run flow exposes the same setup checks there as every other run mode, and the stream URL can be played on any HA media player.
 
+When HA context is enabled, the station reads the Home Assistant state snapshot opportunistically before banter/ad generation. It does not send every entity to the script prompt: telemetry/config entities, unavailable states, free-text helpers (e.g. `input_text`), and sensitive domains such as trackers, cameras, and alarms are filtered first. Resident presence (`person.*`) is kept as home/away only, with GPS and identity attributes stripped, so arrival greetings and the empty-home mood keep working without leaking location. The remaining entities are scored and capped before prompt assembly. The admin Engine Room shows the scored prompt slice and privacy filter counts under Home Assistant details; `/public-status` exposes only listener-safe Casa moments.
+
 ## Home Assistant pushed entities
 
 When the HA integration is enabled (`ha_enabled: true` in `radio.toml` or the HA add-on), mammamiradio automatically pushes its playback state to HA after each segment transition and every 30 seconds. No operator configuration required — entities appear in **Developer Tools → States** within 30 seconds of startup.

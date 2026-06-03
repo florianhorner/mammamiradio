@@ -496,6 +496,27 @@ def _runtime_status_snapshot(
     }
 
 
+def _ha_details_payload(state: StationState) -> dict | None:
+    has_ha_observability = bool(state.ha_context or state.ha_scored_entities or state.ha_denylist_hits)
+    if not has_ha_observability:
+        return None
+    return {
+        "mood": state.ha_home_mood or None,
+        "weather_arc": state.ha_weather_arc or None,
+        "events_summary": state.ha_events_summary or None,
+        "pending_directive": state.ha_pending_directive or None,
+        "recent_event_count": state.ha_recent_event_count,
+        "last_event_label": state.ha_last_event_label or None,
+        "mood_en": state.ha_home_mood_en or None,
+        "weather_arc_en": state.ha_weather_arc_en or None,
+        "events_summary_en": state.ha_events_summary_en or None,
+        "last_event_label_en": state.ha_last_event_label_en or None,
+        "scored_entities": state.ha_scored_entities[:12],
+        "denylist_hits": dict(state.ha_denylist_hits),
+        "catalog_hit_rate": state.ha_catalog_hit_rate,
+    }
+
+
 def _runtime_monotonic() -> float:
     """Monotonic clock for readiness and silence accounting."""
     return time.monotonic()
@@ -2983,20 +3004,7 @@ async def status(request: Request, _: None = Depends(require_admin_access)):
             "last_banter_script": state.last_banter_script,
             "last_ad_script": state.last_ad_script,
             "ha_context": state.ha_context if state.ha_context else None,
-            "ha_details": {
-                "mood": state.ha_home_mood or None,
-                "weather_arc": state.ha_weather_arc or None,
-                "events_summary": state.ha_events_summary or None,
-                "pending_directive": state.ha_pending_directive or None,
-                "recent_event_count": state.ha_recent_event_count,
-                "last_event_label": state.ha_last_event_label or None,
-                "mood_en": state.ha_home_mood_en or None,
-                "weather_arc_en": state.ha_weather_arc_en or None,
-                "events_summary_en": state.ha_events_summary_en or None,
-                "last_event_label_en": state.ha_last_event_label_en or None,
-            }
-            if state.ha_context
-            else None,
+            "ha_details": _ha_details_payload(state),
             "pending_actions": list(state.pending_actions)[-10:] or None,
             "station_mode": station_mode,
             "producer_errors": [
