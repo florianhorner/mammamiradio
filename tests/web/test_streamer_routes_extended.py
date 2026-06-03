@@ -1477,6 +1477,44 @@ async def test_add_external_track_invalid_payload():
 
 
 @pytest.mark.asyncio
+async def test_add_external_track_invalid_json():
+    """Malformed body returns 400, not a 500 — the parse is guarded."""
+    app = _make_test_app()
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.post(
+            "/api/playlist/add-external",
+            content=b"{not valid json",
+            headers={"Content-Type": "application/json"},
+        )
+    assert resp.status_code == 400
+    assert resp.json()["error"] == "invalid JSON"
+
+
+@pytest.mark.asyncio
+async def test_download_admin_external_track_cancelled_reraises_without_pin(tmp_path):
+    """Shutdown-cancelled download re-raises (not swallowed) and pins nothing."""
+    from mammamiradio.core.models import Track
+    from mammamiradio.web.streamer import _download_admin_external_track
+
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path
+    track = Track(title="Brano", artist="Artista", duration_ms=123000, youtube_id="dQw4w9WgXcQ")
+    rev = app.state.station_state.playlist_revision
+    with (
+        patch(
+            "mammamiradio.playlist.downloader.download_external_track",
+            new_callable=AsyncMock,
+            side_effect=asyncio.CancelledError(),
+        ),
+        pytest.raises(asyncio.CancelledError),
+    ):
+        await _download_admin_external_track(track, app.state, rev)
+    assert app.state.station_state.pinned_track is None
+    assert track not in app.state.station_state.playlist
+
+
+@pytest.mark.asyncio
 async def test_add_external_track_rejected_when_ytdlp_disabled():
     app = _make_test_app()
     app.state.config.allow_ytdlp = False

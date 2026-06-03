@@ -2375,7 +2375,10 @@ async def add_external_track(request: Request, _: None = Depends(require_admin_a
     """
     from mammamiradio.core.models import Track
 
-    body = await request.json()
+    try:
+        body = await request.json()
+    except ValueError:
+        return JSONResponse({"ok": False, "error": "invalid JSON"}, status_code=400)
     if not isinstance(body, dict):
         return JSONResponse({"ok": False, "error": "invalid payload"}, status_code=400)
     youtube_id = str(body.get("youtube_id") or "").strip()
@@ -2443,8 +2446,12 @@ async def _download_admin_external_track(track, app_state, originating_revision:
         return
 
     state.playlist.append(track)
-    state.pinned_track = track
-    state.force_next = SegmentType.MUSIC
+    # Don't clobber a pin that's still pending (a concurrent add or a listener
+    # request that finished first): only claim the "play next" slot when it's
+    # free. Either way the track joins the rotation pool above.
+    if state.pinned_track is None:
+        state.pinned_track = track
+        state.force_next = SegmentType.MUSIC
     logger.info("Queued external track: %s (yt:%s)", track.display, track.youtube_id)
 
 

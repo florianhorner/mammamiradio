@@ -1468,6 +1468,8 @@ def test_search_ytdlp_metadata_filters_non_video_ids():
                 "entries": [
                     # Channel hit (24-char "UC..." id) — must be dropped.
                     {"id": "UC2y0t3AAHuZxb8IgNm-A-yA", "title": "Nina Chuba", "uploader": "Nina Chuba"},
+                    # Playlist hit (34-char "PL..." id) — must be dropped.
+                    {"id": "PLFgquLnL59alW3xmYiWRaoz0oM3H17Lth", "title": "Nina Chuba Mix", "uploader": "YouTube"},
                     # Real video.
                     {"id": "qVSALcVpwkc", "title": "Wildberry Lillet", "uploader": "Nina Chuba", "duration": 180},
                     # Empty id — dropped by the pre-existing guard.
