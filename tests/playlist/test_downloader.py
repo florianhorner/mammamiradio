@@ -640,8 +640,8 @@ def test_search_ytdlp_metadata_success_parses_entries():
                 "entries": [
                     None,
                     {"id": ""},
-                    {"id": "yt1", "title": "Albachiara", "uploader": "Vasco Rossi", "duration": 123},
-                    {"id": "yt2", "title": "Volare", "channel": "Modugno Channel", "duration": 0},
+                    {"id": "albachiar01", "title": "Albachiara", "uploader": "Vasco Rossi", "duration": 123},
+                    {"id": "volare00001", "title": "Volare", "channel": "Modugno Channel", "duration": 0},
                 ]
             }
 
@@ -655,10 +655,10 @@ def test_search_ytdlp_metadata_success_parses_entries():
         results = search_ytdlp_metadata("vasco", max_results=2)
 
     assert len(results) == 2
-    assert results[0]["youtube_id"] == "yt1"
+    assert results[0]["youtube_id"] == "albachiar01"
     assert results[0]["artist"] == "Vasco Rossi"
     assert results[0]["duration_ms"] == 123000
-    assert results[1]["youtube_id"] == "yt2"
+    assert results[1]["youtube_id"] == "volare00001"
     assert results[1]["artist"] == "Modugno Channel"
 
 
@@ -1444,3 +1444,52 @@ def test_resolve_uses_track_local_path_when_set(tmp_path):
 
     result = _resolve_cached_or_local(track, cache_dir, music_dir)
     assert result == local_file
+
+
+def test_search_ytdlp_metadata_filters_non_video_ids():
+    """ytsearch mixes channel/playlist hits in with videos; only 11-char
+    video ids survive so every search result is queueable (no 400 on add)."""
+    import os
+
+    from mammamiradio.playlist.downloader import search_ytdlp_metadata
+
+    class _FakeYoutubeDL:
+        def __init__(self, opts):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def extract_info(self, query, download=False):
+            return {
+                "entries": [
+                    # Channel hit (24-char "UC..." id) — must be dropped.
+                    {"id": "UC2y0t3AAHuZxb8IgNm-A-yA", "title": "Nina Chuba", "uploader": "Nina Chuba"},
+                    # Playlist hit (34-char "PL..." id) — must be dropped.
+                    {"id": "PLFgquLnL59alW3xmYiWRaoz0oM3H17Lth", "title": "Nina Chuba Mix", "uploader": "YouTube"},
+                    # Non-string id (provider quirk) — str() guard must drop it,
+                    # NOT raise TypeError and wipe the whole result set.
+                    {"id": 1234567890, "title": "numeric id", "uploader": "x"},
+                    # Real video.
+                    {"id": "qVSALcVpwkc", "title": "Wildberry Lillet", "uploader": "Nina Chuba", "duration": 180},
+                    # Empty id — dropped by the pre-existing guard.
+                    {"id": "", "title": "junk"},
+                ]
+            }
+
+    mock_yt_dlp = MagicMock()
+    mock_yt_dlp.YoutubeDL = _FakeYoutubeDL
+
+    with (
+        patch.dict(os.environ, {"MAMMAMIRADIO_ALLOW_YTDLP": "true"}),
+        patch.dict(sys.modules, {"yt_dlp": mock_yt_dlp}),
+    ):
+        out = search_ytdlp_metadata("nina chuba", 5)
+
+    ids = [r["youtube_id"] for r in out]
+    # The non-string id is dropped without crashing; only the real video survives.
+    assert ids == ["qVSALcVpwkc"]
+    assert all(isinstance(i, str) and len(i) == 11 for i in ids)

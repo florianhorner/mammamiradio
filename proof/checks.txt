@@ -1,0 +1,32 @@
+Verification for florianhorner/chore/inspect-ha-green-logs
+(run locally against the branch merged with origin/main)
+
+$ python scripts/coverage-ratchet.py check   # CI's actual test+coverage gate
+2329 passed, 2 skipped, 7 deselected in ~60s
+Required test coverage of 92.0% reached. Total coverage: 94.04%
+All coverage floors held. Total: 94% (floor: 92%)
+
+$ ruff check mammamiradio/ tests/
+All checks passed!
+
+$ ruff format --check mammamiradio/ tests/
+all files already formatted
+
+$ mypy mammamiradio/ tests/
+Success: no issues found in 148 source files
+
+Note: local `make check` also runs `vulture` (deadcode), which flags a
+pre-existing unused param at mammamiradio/home/ha_context.py:490 ('english',
+from PR #457) — not in this diff and not a CI gate. Left untouched (collaborative
+repo). All CI gates above pass.
+
+New/changed tests:
+  tests/web/test_streamer_routes_extended.py::test_add_external_track_success
+  tests/web/test_streamer_routes_extended.py::test_add_external_track_background_failure_leaves_no_pin
+  tests/web/test_streamer_routes_extended.py::test_add_external_track_dropped_when_source_switches
+  tests/web/test_streamer_routes_extended.py::test_add_external_track_survives_benign_playlist_revision_bump
+  tests/web/test_streamer_routes_extended.py::test_add_external_track_invalid_json
+  tests/web/test_streamer_routes_extended.py::test_download_admin_external_track_cancelled_reraises_without_pin
+  tests/web/test_streamer_routes_extended.py::test_download_listener_song_drops_track_on_revision_change
+  tests/web/test_main.py::test_shutdown_cancels_background_tasks
+  tests/playlist/test_downloader.py::test_search_ytdlp_metadata_filters_non_video_ids

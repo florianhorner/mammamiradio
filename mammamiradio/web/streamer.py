@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import atexit
+import concurrent.futures
 import copy
 import importlib
 import ipaddress
@@ -13,7 +15,9 @@ import random as _random
 import re as _re
 import secrets
 import time
+from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -69,6 +73,16 @@ from mammamiradio.web.provider_verdict import (
 from mammamiradio.web.ui_copy import copy_strings
 
 logger = logging.getLogger(__name__)
+
+# Bounded pool for the admin /api/search yt-dlp lookup. asyncio.wait_for cancels
+# the awaiting future on timeout but cannot kill the underlying thread (it runs
+# until its socket timeout), so an abandoned search must not accumulate in the
+# default executor and starve the producer's audio prefetch on Pi-class hardware.
+# Sized above realistic admin search concurrency (typically 1) so a timed-out
+# thread holding its slot for the socket-timeout window can't head-of-line-block
+# the operator's next search, while staying well under the default pool.
+_search_executor = concurrent.futures.ThreadPoolExecutor(max_workers=4, thread_name_prefix="admin-search")
+atexit.register(_search_executor.shutdown, wait=False, cancel_futures=True)
 
 router = APIRouter()
 security = HTTPBasic(auto_error=False)
@@ -2350,12 +2364,19 @@ async def search_tracks(request: Request, q: str = "", _: None = Depends(require
             if len(results) >= 20:
                 break
 
-    # External yt-dlp search (blocking, run off the event loop)
+    # External yt-dlp search (blocking, run off the event loop). Bound the total
+    # wait so a slow/cold yt-dlp search can't hang past the HA ingress proxy read
+    # timeout and surface as a connection error in the admin (same failure class
+    # that motivated backgrounding add-external). On timeout we return the
+    # in-playlist results with no web hits rather than failing the whole request.
     loop = asyncio.get_running_loop()
     try:
-        external = await loop.run_in_executor(None, search_ytdlp_metadata, q.strip(), 5)
+        external = await asyncio.wait_for(
+            loop.run_in_executor(_search_executor, search_ytdlp_metadata, q.strip(), 5),
+            timeout=45,
+        )
     except Exception:
-        logger.warning("yt-dlp external search failed for query %r", q, exc_info=True)
+        logger.warning("yt-dlp external search failed/timed out for query %r", q, exc_info=True)
         external = []
 
     return {"results": results, "external": external}
@@ -2363,11 +2384,23 @@ async def search_tracks(request: Request, q: str = "", _: None = Depends(require
 
 @router.post("/api/playlist/add-external")
 async def add_external_track(request: Request, _: None = Depends(require_admin_access)):
-    """Download a yt-dlp search result and pin it to play next."""
-    from mammamiradio.core.models import Track
-    from mammamiradio.playlist.downloader import download_external_track
+    """Queue a yt-dlp search result to play next via a background download.
 
-    body = await request.json()
+    The download runs in the background so this request returns immediately. A
+    synchronous yt-dlp fetch takes 10-60s, which overruns the HA ingress proxy
+    read timeout — the browser fetch then throws and the admin UI shows a false
+    "Failed to add to queue" even though the track downloads and queues fine.
+    Returning fast keeps the request well under the proxy timeout. Stream-safe:
+    the queue is NOT purged here; the pinned track enters play after the current
+    lookahead drains, so there is no silence gap (leadership principle #2).
+    """
+    from mammamiradio.core.models import Track
+    from mammamiradio.playlist.downloader import YOUTUBE_VIDEO_ID_RE
+
+    try:
+        body = await request.json()
+    except ValueError:
+        return JSONResponse({"ok": False, "error": "invalid JSON"}, status_code=400)
     if not isinstance(body, dict):
         return JSONResponse({"ok": False, "error": "invalid payload"}, status_code=400)
     youtube_id = str(body.get("youtube_id") or "").strip()
@@ -2379,7 +2412,7 @@ async def add_external_track(request: Request, _: None = Depends(require_admin_a
         return JSONResponse({"ok": False, "error": "invalid duration_ms"}, status_code=400)
     if not youtube_id:
         return JSONResponse({"ok": False, "error": "youtube_id required"}, status_code=400)
-    if not _re.fullmatch(r"[A-Za-z0-9_-]{11}", youtube_id):
+    if not YOUTUBE_VIDEO_ID_RE.fullmatch(youtube_id):
         return JSONResponse({"ok": False, "error": "invalid youtube_id format"}, status_code=400)
 
     state = request.app.state.station_state
@@ -2394,27 +2427,121 @@ async def add_external_track(request: Request, _: None = Depends(require_admin_a
         youtube_id=youtube_id,
     )
 
-    # Pre-download so the cache is warm before we purge the queue.
-    # Without this, the producer would hit a cache miss after the purge,
-    # causing 30-60s of silence while yt-dlp downloads.
+    # Fire the download in the background and return before the ingress proxy
+    # times out the long yt-dlp fetch. The task pins the track to play next once
+    # it is ready; see _download_admin_external_track. We capture source_revision
+    # (not playlist_revision) so a benign edit during the download — enrich,
+    # move-to-next, festival toggle — does not drop the pick.
+    dl_task = asyncio.create_task(_download_admin_external_track(track, request.app.state, state.source_revision))
+    _register_background_task(request.app.state, dl_task)
+
+    logger.info("Queueing external track (background): %s (yt:%s)", track.display, youtube_id)
+    return {"ok": True, "queued": track.display, "status": "downloading"}
+
+
+def _register_background_task(app_state: Any, task: asyncio.Task) -> None:
+    """Track a fire-and-forget task on app.state so it survives GC mid-flight and
+    can be cancelled at shutdown (main.shutdown). Shared by the admin
+    queue-from-search and listener song-request paths."""
+    tasks = getattr(app_state, "background_tasks", None)
+    if tasks is None:
+        tasks = set()
+        app_state.background_tasks = tasks
+    tasks.add(task)
+    task.add_done_callback(tasks.discard)
+
+
+async def _commit_external_download(
+    track: Any,
+    app_state: Any,
+    originating_source_revision: int,
+    *,
+    should_commit: Callable[[], bool],
+    should_pin: Callable[[], bool],
+) -> str:
+    """Download `track` and commit it to the rotation pool unless the playlist
+    SOURCE switched while downloading. Only switch_playlist bumps source_revision,
+    so benign edits (enrich / move-to-next / festival toggle) do NOT drop the
+    pick. Pins the track to play next when `should_pin()` is true. Returns one of:
+    "pinned" (committed and claimed the play-next slot), "queued" (committed to
+    the rotation pool but the play-next slot was occupied), or "dropped" (source
+    switched / consumed). Raises on download failure / cancellation for the caller
+    to surface. Shared by the admin and listener download paths."""
+    from mammamiradio.playlist.downloader import download_external_track
+
+    state = app_state.station_state
+    config = app_state.config
+    await download_external_track(track, config.cache_dir, music_dir=Path("music"))
+    # Serialize the commit decision with source switches. /api/playlist/load holds
+    # source_switch_lock across the slow load and only bumps source_revision at the
+    # very end (switch_playlist). Without this lock a download finishing mid-load
+    # would see the not-yet-bumped revision, commit to the about-to-be-replaced
+    # playlist, and then get silently wiped by switch_playlist with no notice.
+    # Acquiring the lock makes us wait out any in-flight switch, then re-check the
+    # (now bumped) revision. The block below is synchronous — it never awaits while
+    # holding the lock, so it can't deadlock the switch routes.
+    async with app_state.source_switch_lock:
+        if state.source_revision != originating_source_revision or not should_commit():
+            return "dropped"
+        state.playlist.append(track)
+        # Don't clobber a pin that's still pending — claim the play-next slot only
+        # when the caller's guard says it's free. Otherwise the track is in
+        # rotation and the caller surfaces that it's queued-behind, not next.
+        if not should_pin():
+            return "queued"
+        state.pinned_track = track
+        # Only force MUSIC when nothing else is already forced. An operator trigger
+        # (banter/ad/news) or a mode change may have set force_next; that directive
+        # plays first, then the pinned track lands on the next music slot.
+        if state.force_next is None:
+            state.force_next = SegmentType.MUSIC
+        return "pinned"
+
+
+async def _download_admin_external_track(track: Any, app_state: Any, originating_source_revision: int) -> None:
+    """Background download for an admin queue-from-search request.
+
+    Stream-safe: does NOT purge the queue. On success the track joins the rotation
+    pool and claims the play-next pin when free. A real source switch during the
+    download drops the pick; a failed download or a dropped pick records a notice
+    so the admin UI can surface it (the request already returned 200 before the
+    download finished)."""
+    state = app_state.station_state
+
+    def _notice(ok: bool, reason: str) -> None:
+        state.external_add_notices.append({"display": track.display, "ok": ok, "reason": reason, "ts": time.time()})
+
     try:
-        await download_external_track(track, config.cache_dir, music_dir=Path("music"))
+        status = await _commit_external_download(
+            track,
+            app_state,
+            originating_source_revision,
+            should_commit=lambda: True,
+            should_pin=lambda: state.pinned_track is None,
+        )
+    except asyncio.CancelledError:
+        logger.info("Admin external download cancelled: %s (yt:%s)", track.display, track.youtube_id)
+        raise
     except Exception:
-        logger.warning("External track download failed for %s (yt:%s)", track.display, youtube_id, exc_info=True)
-        return JSONResponse({"ok": False, "error": "download_failed"}, status_code=502)
+        logger.warning("External track download failed for %s (yt:%s)", track.display, track.youtube_id, exc_info=True)
+        _notice(False, "download_failed")
+        return
 
-    # Add to playlist pool so it's available for future cycles too
-    state.playlist.append(track)
+    if status == "dropped":
+        logger.info("Admin external track dropped — playlist source changed: %s", track.display)
+        _notice(False, "source_changed")
+        return
 
-    # Pin it so the producer plays it next
-    state.pinned_track = track
-    state.playlist_revision += 1
-    purged = _purge_segment_queue(request.app.state.queue)
-    state.queued_segments.clear()
-    state.force_next = SegmentType.MUSIC
+    if status == "queued":
+        # Committed to the rotation pool, but the play-next slot was already taken
+        # (a prior add or a listener request) and playlist order is NOT next-play
+        # order — so we can't promise it plays right after the current pick. Tell
+        # the operator it's in rotation rather than imminent.
+        logger.info("Added external track to rotation: %s (yt:%s)", track.display, track.youtube_id)
+        _notice(True, "added_to_rotation")
+        return
 
-    logger.info("Queued external track: %s (yt:%s)", track.display, youtube_id)
-    return {"ok": True, "queued": track.display, "purged": purged}
+    logger.info("Queued external track: %s (yt:%s)", track.display, track.youtube_id)
 
 
 # Listener-request endpoints + _download_listener_song background task moved to
@@ -2975,6 +3102,11 @@ async def status(request: Request, _: None = Depends(require_admin_access)):
             "ha_context": state.ha_context if state.ha_context else None,
             "ha_details": _ha_details_payload(state),
             "pending_actions": list(state.pending_actions)[-10:] or None,
+            # Background queue-from-search outcomes the admin couldn't see
+            # synchronously; the UI toasts new entries by ts. Return the whole
+            # bounded deque (maxlen 10) so a burst between two polls can't evict an
+            # un-toasted entry past the client watermark. See admin.html.
+            "external_add_notices": list(state.external_add_notices) or None,
             "station_mode": station_mode,
             "producer_errors": [
                 {"type": e.type, "label": e.label, "metadata": e.metadata}
