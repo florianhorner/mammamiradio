@@ -1414,6 +1414,38 @@ async def test_add_external_track_preserves_pending_force_next(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_add_external_track_queued_behind_existing_pin(tmp_path):
+    """When the play-next slot is already taken, the track joins rotation and the
+    admin gets an informational 'queued behind' notice (not a failure, not silent)."""
+    from mammamiradio.core.models import Track
+
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path
+    app.state.config.allow_ytdlp = True
+    occupant = Track(title="Occupant", artist="X", duration_ms=1000, youtube_id="occupant001")
+    app.state.station_state.pinned_track = occupant
+    original_len = len(app.state.station_state.playlist)
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    with patch(
+        "mammamiradio.playlist.downloader.download_external_track",
+        new_callable=AsyncMock,
+        return_value=tmp_path / "dl.mp3",
+    ):
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            resp = await client.post(
+                "/api/playlist/add-external",
+                json={"youtube_id": "dQw4w9WgXcQ", "title": "Brano", "artist": "Artista", "duration_ms": 123000},
+            )
+        assert resp.status_code == 200
+        await asyncio.gather(*list(app.state.background_tasks))
+    # Track joined rotation; the existing pin is untouched; an info notice is recorded.
+    assert len(app.state.station_state.playlist) == original_len + 1
+    assert app.state.station_state.pinned_track is occupant
+    notices = list(app.state.station_state.external_add_notices)
+    assert notices and notices[-1]["ok"] is True and notices[-1]["reason"] == "queued_behind"
+
+
+@pytest.mark.asyncio
 async def test_add_external_track_background_failure_leaves_no_pin(tmp_path):
     """Scenario 2 (download fails): no stale pin, playlist unchanged, stream intact."""
     app = _make_test_app()

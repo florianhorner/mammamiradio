@@ -324,7 +324,7 @@ async def _download_listener_song(req: dict, app_state, originating_source_revis
             duration_ms=meta["duration_ms"],
             youtube_id=meta["youtube_id"],
         )
-        committed = await _commit_external_download(
+        status = await _commit_external_download(
             track,
             app_state,
             originating_source_revision,
@@ -333,7 +333,9 @@ async def _download_listener_song(req: dict, app_state, originating_source_revis
             # Pin only while this request is still at the head of the queue.
             should_pin=lambda: bool(state.pending_requests) and state.pending_requests[0] is req,
         )
-        if committed:
+        # "pinned" or "queued" both mean the track landed in the playlist for this
+        # request; only "dropped" means a source switch / consumption discarded it.
+        if status != "dropped":
             req["song_found"] = True
             req["song_track"] = track.display
             req["song_track_obj"] = track

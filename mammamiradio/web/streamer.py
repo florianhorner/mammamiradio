@@ -78,8 +78,10 @@ logger = logging.getLogger(__name__)
 # the awaiting future on timeout but cannot kill the underlying thread (it runs
 # until its socket timeout), so an abandoned search must not accumulate in the
 # default executor and starve the producer's audio prefetch on Pi-class hardware.
-# Mirrors listener_requests._listener_dl_executor.
-_search_executor = concurrent.futures.ThreadPoolExecutor(max_workers=2, thread_name_prefix="admin-search")
+# Sized above realistic admin search concurrency (typically 1) so a timed-out
+# thread holding its slot for the socket-timeout window can't head-of-line-block
+# the operator's next search, while staying well under the default pool.
+_search_executor = concurrent.futures.ThreadPoolExecutor(max_workers=4, thread_name_prefix="admin-search")
 atexit.register(_search_executor.shutdown, wait=False, cancel_futures=True)
 
 router = APIRouter()
@@ -2456,32 +2458,36 @@ async def _commit_external_download(
     *,
     should_commit: Callable[[], bool],
     should_pin: Callable[[], bool],
-) -> bool:
+) -> str:
     """Download `track` and commit it to the rotation pool unless the playlist
     SOURCE switched while downloading. Only switch_playlist bumps source_revision,
     so benign edits (enrich / move-to-next / festival toggle) do NOT drop the
-    pick. Pins the track to play next when `should_pin()` is true. Returns True if
-    committed, False if dropped. Raises on download failure / cancellation for the
-    caller to surface. Shared by the admin and listener download paths."""
+    pick. Pins the track to play next when `should_pin()` is true. Returns one of:
+    "pinned" (committed and claimed the play-next slot), "queued" (committed to
+    the rotation pool but the play-next slot was occupied), or "dropped" (source
+    switched / consumed). Raises on download failure / cancellation for the caller
+    to surface. Shared by the admin and listener download paths."""
     from mammamiradio.playlist.downloader import download_external_track
 
     state = app_state.station_state
     config = app_state.config
     await download_external_track(track, config.cache_dir, music_dir=Path("music"))
     if state.source_revision != originating_source_revision or not should_commit():
-        return False
+        return "dropped"
     state.playlist.append(track)
     # Don't clobber a pin that's still pending — claim the play-next slot only
-    # when the caller's guard says it's free. Either way the track is in rotation.
-    if should_pin():
-        state.pinned_track = track
-        # Only force MUSIC when nothing else is already forced. An operator
-        # trigger (banter/ad/news) or a mode change may have set force_next; that
-        # directive plays first, then the pinned track lands on the next music
-        # slot. Overwriting it would silently drop the operator's request.
-        if state.force_next is None:
-            state.force_next = SegmentType.MUSIC
-    return True
+    # when the caller's guard says it's free. Otherwise the track is in rotation
+    # and the caller surfaces that it's queued-behind rather than next.
+    if not should_pin():
+        return "queued"
+    state.pinned_track = track
+    # Only force MUSIC when nothing else is already forced. An operator trigger
+    # (banter/ad/news) or a mode change may have set force_next; that directive
+    # plays first, then the pinned track lands on the next music slot. Overwriting
+    # it would silently drop the operator's request.
+    if state.force_next is None:
+        state.force_next = SegmentType.MUSIC
+    return "pinned"
 
 
 async def _download_admin_external_track(track: Any, app_state: Any, originating_source_revision: int) -> None:
@@ -2494,11 +2500,11 @@ async def _download_admin_external_track(track: Any, app_state: Any, originating
     download finished)."""
     state = app_state.station_state
 
-    def _notice(reason: str) -> None:
-        state.external_add_notices.append({"display": track.display, "ok": False, "reason": reason, "ts": time.time()})
+    def _notice(ok: bool, reason: str) -> None:
+        state.external_add_notices.append({"display": track.display, "ok": ok, "reason": reason, "ts": time.time()})
 
     try:
-        committed = await _commit_external_download(
+        status = await _commit_external_download(
             track,
             app_state,
             originating_source_revision,
@@ -2510,12 +2516,20 @@ async def _download_admin_external_track(track: Any, app_state: Any, originating
         raise
     except Exception:
         logger.warning("External track download failed for %s (yt:%s)", track.display, track.youtube_id, exc_info=True)
-        _notice("download_failed")
+        _notice(False, "download_failed")
         return
 
-    if not committed:
+    if status == "dropped":
         logger.info("Admin external track dropped — playlist source changed: %s", track.display)
-        _notice("source_changed")
+        _notice(False, "source_changed")
+        return
+
+    if status == "queued":
+        # Committed to rotation but the play-next slot was already taken (a prior
+        # add or a listener request). Tell the operator it's queued, not next, so
+        # the "on air shortly" toast isn't misleading.
+        logger.info("Queued external track (behind current pick): %s (yt:%s)", track.display, track.youtube_id)
+        _notice(True, "queued_behind")
         return
 
     logger.info("Queued external track: %s (yt:%s)", track.display, track.youtube_id)
@@ -3079,9 +3093,11 @@ async def status(request: Request, _: None = Depends(require_admin_access)):
             "ha_context": state.ha_context if state.ha_context else None,
             "ha_details": _ha_details_payload(state),
             "pending_actions": list(state.pending_actions)[-10:] or None,
-            # Failed/dropped background queue-from-search adds the admin couldn't
-            # see synchronously; the UI toasts new entries by ts. See admin.html.
-            "external_add_notices": list(state.external_add_notices)[-5:] or None,
+            # Background queue-from-search outcomes the admin couldn't see
+            # synchronously; the UI toasts new entries by ts. Return the whole
+            # bounded deque (maxlen 10) so a burst between two polls can't evict an
+            # un-toasted entry past the client watermark. See admin.html.
+            "external_add_notices": list(state.external_add_notices) or None,
             "station_mode": station_mode,
             "producer_errors": [
                 {"type": e.type, "label": e.label, "metadata": e.metadata}

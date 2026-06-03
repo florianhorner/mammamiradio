@@ -2102,15 +2102,26 @@ let _lastSetupJson=null;
 function toast(m){const e=document.getElementById('toast');e.textContent=m;e.classList.add('show');setTimeout(()=>e.classList.remove('show'),1600)}
 // Surface background queue-from-search failures the POST couldn't report (it
 // returned 200 before the download finished). /status carries recent notices;
-// toast any whose ts we haven't shown yet.
-let _lastNoticeTs=0;
+// toast any whose ts we haven't shown yet. The first poll only primes the
+// watermark — notices that already existed at page load (a refresh re-fetches
+// the server-side deque) are NOT re-toasted; we only toast failures that occur
+// during this session.
+let _lastNoticeTs=0, _noticesPrimed=false;
 function notifyExternalAddNotices(notices){
-  if(!Array.isArray(notices)||!notices.length)return;
-  const fresh=notices.filter(n=>n&&!n.ok&&(n.ts||0)>_lastNoticeTs);
+  if(!Array.isArray(notices)||!notices.length){_noticesPrimed=true;return;}
+  const maxTs=Math.max(...notices.map(n=>(n&&n.ts)||0));
+  if(!_noticesPrimed){_lastNoticeTs=maxTs;_noticesPrimed=true;return;}
+  const fresh=notices.filter(n=>n&&(n.ts||0)>_lastNoticeTs);
+  _lastNoticeTs=Math.max(_lastNoticeTs,maxTs);
   if(!fresh.length)return;
-  _lastNoticeTs=Math.max(_lastNoticeTs,...notices.map(n=>(n&&n.ts)||0));
   for(const n of fresh){
     const name=n.display||'track';
+    if(n.ok){
+      // Informational: committed to rotation but the play-next slot was taken,
+      // so it isn't strictly next. Plain toast, not an error.
+      toast('Queued “'+name+'” — it’ll play after the current pick.');
+      continue;
+    }
     const msg=n.reason==='source_changed'
       ? 'Couldn’t queue “'+name+'” — the playlist source changed.'
       : 'Couldn’t download “'+name+'” — try another result.';
