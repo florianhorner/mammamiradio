@@ -14,6 +14,9 @@ async def test_provider_check_reports_missing_keys_without_network(monkeypatch):
     config = load_config(TOML_PATH)
     config.anthropic_api_key = ""
     config.openai_api_key = ""
+    config.azure_speech_key = ""
+    config.azure_speech_region = ""
+    config.elevenlabs_api_key = ""
 
     def fail_if_called(*args, **kwargs):
         raise AssertionError("network client should not be created when no provider keys are configured")
@@ -26,6 +29,8 @@ async def test_provider_check_reports_missing_keys_without_network(monkeypatch):
     assert result["providers"]["anthropic"]["error_type"] == "not_configured"
     assert result["providers"]["openai_chat"]["error_type"] == "not_configured"
     assert result["providers"]["openai_tts"]["error_type"] == "not_configured"
+    assert result["providers"]["azure_speech"]["error_type"] == "not_configured"
+    assert result["providers"]["elevenlabs_tts"]["error_type"] == "not_configured"
 
 
 @pytest.mark.asyncio
@@ -33,6 +38,9 @@ async def test_provider_check_classifies_anthropic_auth_and_openai_success(monke
     config = load_config(TOML_PATH)
     config.anthropic_api_key = "anthropic-secret"
     config.openai_api_key = "openai-secret"
+    config.azure_speech_key = ""
+    config.azure_speech_region = ""
+    config.elevenlabs_api_key = ""
 
     seen_auth_headers: list[str] = []
     async_client = httpx.AsyncClient
@@ -78,6 +86,9 @@ async def test_provider_check_classifies_network_error(monkeypatch):
     config = load_config(TOML_PATH)
     config.anthropic_api_key = "anthropic-secret"
     config.openai_api_key = ""
+    config.azure_speech_key = ""
+    config.azure_speech_region = ""
+    config.elevenlabs_api_key = ""
 
     async_client = httpx.AsyncClient
 
@@ -105,6 +116,9 @@ async def test_provider_check_classifies_anthropic_credit_exhausted(monkeypatch)
     config = load_config(TOML_PATH)
     config.anthropic_api_key = "anthropic-secret"
     config.openai_api_key = ""
+    config.azure_speech_key = ""
+    config.azure_speech_region = ""
+    config.elevenlabs_api_key = ""
 
     async_client = httpx.AsyncClient
 
@@ -131,3 +145,45 @@ async def test_provider_check_classifies_anthropic_credit_exhausted(monkeypatch)
     assert result["providers"]["anthropic"]["ok"] is False
     assert result["providers"]["anthropic"]["error_type"] == "insufficient_quota"
     assert "anthropic-secret" not in str(result)
+
+
+@pytest.mark.asyncio
+async def test_provider_check_probes_azure_and_elevenlabs_tts(monkeypatch):
+    config = load_config(TOML_PATH)
+    config.anthropic_api_key = ""
+    config.openai_api_key = ""
+    config.azure_speech_key = "azure-secret"
+    config.azure_speech_region = "westeurope"
+    config.elevenlabs_api_key = "eleven-secret"
+
+    async_client = httpx.AsyncClient
+    seen_hosts: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen_hosts.append(request.url.host or "")
+        # Azure: token issuer endpoint (POST, no body) — lightweight key probe
+        if request.url.host == "westeurope.api.cognitive.microsoft.com":
+            assert request.headers["Ocp-Apim-Subscription-Key"] == "azure-secret"
+            return httpx.Response(200, content=b"eyJhbGciOiJIUzI1NiJ9.fake.token")
+        # ElevenLabs: /v1/user — lightweight key probe
+        if request.url.host == "api.elevenlabs.io":
+            assert request.headers["xi-api-key"] == "eleven-secret"
+            return httpx.Response(200, json={"xi_api_key": "eleven-secret", "subscription": {}})
+        return httpx.Response(500, json={"error": {"message": "unexpected URL"}})
+
+    transport = httpx.MockTransport(handler)
+
+    def client_factory(*args, **kwargs):
+        kwargs["transport"] = transport
+        return async_client(*args, **kwargs)
+
+    monkeypatch.setattr(httpx, "AsyncClient", client_factory)
+
+    result = await check_provider_keys(config)
+
+    assert result["ok"] is True
+    assert result["providers"]["azure_speech"]["ok"] is True
+    assert result["providers"]["elevenlabs_tts"]["ok"] is True
+    assert "azure-secret" not in str(result)
+    assert "eleven-secret" not in str(result)
+    assert seen_hosts == ["westeurope.api.cognitive.microsoft.com", "api.elevenlabs.io"]

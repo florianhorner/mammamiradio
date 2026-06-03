@@ -187,6 +187,59 @@ async def test_station_id_uses_host_engine_when_sweeper_voice_is_host_based():
 
 
 @pytest.mark.asyncio
+async def test_station_id_uses_configured_sweeper_engine():
+    state = _make_state()
+    config = _make_config()
+    config.sonic_brand.sweeper_voice = "marin"
+    config.sonic_brand.sweeper_engine = "openai"
+    config.sonic_brand.sweeper_edge_fallback_voice = "it-IT-GiuseppeMultilingualNeural"
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+
+    with (
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.STATION_ID),
+        patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, return_value=_fake_path()) as mock_synthesize,
+        patch(f"{PRODUCER_MODULE}.generate_station_id_bed", side_effect=_fake_path),
+        patch(f"{PRODUCER_MODULE}.mix_voice_with_sting", side_effect=_fake_path),
+        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+    ):
+        await _run_until_queued(queue, state, config)
+
+    seg = queue.get_nowait()
+    assert seg.type == SegmentType.STATION_ID
+    kwargs = mock_synthesize.call_args.kwargs
+    assert kwargs["engine"] == "openai"
+    assert kwargs["edge_fallback_voice"] == "it-IT-GiuseppeMultilingualNeural"
+
+
+@pytest.mark.asyncio
+async def test_sweeper_uses_configured_sweeper_engine():
+    state = _make_state()
+    config = _make_config()
+    config.sonic_brand.sweeper_voice = "marin"
+    config.sonic_brand.sweeper_engine = "openai"
+    config.sonic_brand.sweeper_edge_fallback_voice = "it-IT-GiuseppeMultilingualNeural"
+    config.sonic_brand.sweepers = ["Mamma Mi Radio."]
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    imaging = MagicMock()
+    imaging.pick_sweeper_sting.side_effect = _fake_path
+
+    with (
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.SWEEPER),
+        patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, return_value=_fake_path()) as mock_synthesize,
+        patch(f"{PRODUCER_MODULE}._make_imaging_lib", return_value=imaging),
+        patch(f"{PRODUCER_MODULE}.mix_voice_with_sting", side_effect=_fake_path),
+        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+    ):
+        await _run_until_queued(queue, state, config)
+
+    seg = queue.get_nowait()
+    assert seg.type == SegmentType.SWEEPER
+    kwargs = mock_synthesize.call_args.kwargs
+    assert kwargs["engine"] == "openai"
+    assert kwargs["edge_fallback_voice"] == "it-IT-GiuseppeMultilingualNeural"
+
+
+@pytest.mark.asyncio
 async def test_time_check_uses_host_engine_for_tts():
     state = _make_state()
     config = _make_config()

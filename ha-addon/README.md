@@ -31,6 +31,8 @@ After installing, go to the add-on's **Configuration** tab:
 - **Jamendo Client ID** (optional): Enables CC-licensed music from Jamendo. Get a free client ID at [devportal.jamendo.com](https://devportal.jamendo.com). Leave empty to use other available music sources.
 - **Anthropic API Key** (optional): Enables AI-generated banter and ads via Claude. Get one at [console.anthropic.com](https://console.anthropic.com). Without this, the station uses stock banter lines.
 - **OpenAI API Key** (optional): Enables OpenAI `gpt-4o-mini-tts` host voices and serves as a script generation fallback when Anthropic is unavailable.
+- **Azure Speech Key / Region** (optional): Enables official Azure Speech voices for Italian hosts, sweepers, and ad characters. Configure both values; missing or failing Azure voices fall back to Edge TTS.
+- **ElevenLabs API Key** (optional): Enables custom ElevenLabs character voices when `radio.toml` uses `engine = "elevenlabs"`. Missing or failing ElevenLabs voices fall back to Edge TTS.
 - **Claude Model**: Pick between Haiku, Sonnet, and Opus Claude models (default: Haiku 4.5).
 - **Enable Home Assistant**: Toggle ambient home context in hosts' banter (default: on).
 - **Admin Token** (optional): Shared secret for the admin API. If blank, `run.sh` auto-generates one at startup.

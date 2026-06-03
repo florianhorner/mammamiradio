@@ -38,7 +38,10 @@ def test_load_config_from_radio_toml(monkeypatch):
 
 def test_load_config_sets_default_edge_fallback_for_openai_hosts(tmp_path):
     source = Path(__file__).resolve().parents[2] / "radio.toml"
-    custom = source.read_text().replace('edge_fallback_voice = "it-IT-GiuseppeMultilingualNeural"\n', "")
+    custom = source.read_text().replace(
+        'voice = "cedar"\nengine = "openai"\nedge_fallback_voice = "it-IT-GiuseppeMultilingualNeural"\n',
+        'voice = "cedar"\nengine = "openai"\n',
+    )
     custom_path = tmp_path / "radio.toml"
     custom_path.write_text(custom)
 
@@ -52,8 +55,8 @@ def test_load_config_sets_default_edge_fallback_for_openai_hosts(tmp_path):
 def test_load_config_normalizes_edge_host_with_openai_voice(tmp_path):
     source = Path(__file__).resolve().parents[2] / "radio.toml"
     custom = source.read_text().replace(
-        'voice = "onyx"\nengine = "openai"\nedge_fallback_voice = "it-IT-GiuseppeMultilingualNeural"',
-        'voice = "onyx"\nengine = "edge"\nedge_fallback_voice = ""',
+        'voice = "cedar"\nengine = "openai"\nedge_fallback_voice = "it-IT-GiuseppeMultilingualNeural"',
+        'voice = "cedar"\nengine = "edge"\nedge_fallback_voice = ""',
     )
     custom_path = tmp_path / "radio.toml"
     custom_path.write_text(custom)
@@ -68,16 +71,32 @@ def test_load_config_normalizes_edge_host_with_openai_voice(tmp_path):
 def test_load_config_normalizes_ad_voice_with_openai_id(tmp_path):
     source = Path(__file__).resolve().parents[2] / "radio.toml"
     custom = source.read_text().replace(
-        'name = "Roberto"\nvoice = "it-IT-DiegoNeural"',
-        'name = "Roberto"\nvoice = "onyx"',
+        'name = "Rinaldo"\nvoice = "it-IT-DiegoNeural"',
+        'name = "Rinaldo"\nvoice = "onyx"',
     )
     custom_path = tmp_path / "radio.toml"
     custom_path.write_text(custom)
 
     config = load_config(str(custom_path))
 
+    rinaldo = next(v for v in config.ads.voices if v.name == "Rinaldo")
+    assert rinaldo.engine == "edge"
+    assert rinaldo.voice == "it-IT-DiegoNeural"
+
+
+def test_load_config_accepts_provider_routed_ad_voice_with_openai_id():
+    toml_path = Path(__file__).resolve().parents[2] / "radio.toml"
+    config = load_config(str(toml_path))
+
+    palmira = next(v for v in config.ads.voices if v.name == "Palmira")
+    assert palmira.engine == "openai"
+    assert palmira.voice == "shimmer"
+    assert palmira.edge_fallback_voice == "it-IT-IsabellaNeural"
+
     roberto = next(v for v in config.ads.voices if v.name == "Roberto")
-    assert roberto.voice == "it-IT-DiegoNeural"
+    assert roberto.engine == "azure"
+    assert roberto.voice == "it-IT-Alessio:DragonHDLatestNeural"
+    assert roberto.edge_fallback_voice == "it-IT-DiegoNeural"
 
 
 def test_audio_section_loaded():
@@ -611,7 +630,7 @@ def test_load_config_tolerates_legacy_sonic_brand_keys(tmp_path):
 
     source = Path(__file__).resolve().parents[2] / "radio.toml"
     raw = source.read_text()
-    anchor = 'sweeper_voice = "it-IT-GiuseppeMultilingualNeural"'
+    anchor = 'sweeper_edge_fallback_voice = "it-IT-GiuseppeMultilingualNeural"'
     assert anchor in raw, "anchor line drifted; update this test's injection point"
     custom = raw.replace(
         anchor,

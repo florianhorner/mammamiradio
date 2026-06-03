@@ -18,7 +18,17 @@ try:
 except (json.JSONDecodeError, OSError) as e:
     print(f'FATAL: corrupt options.json: {e}', file=sys.stderr)
     sys.exit(1)
-for key in ('anthropic_api_key', 'openai_api_key', 'station_name', 'claude_model', 'admin_token', 'jamendo_client_id'):
+for key in (
+    'anthropic_api_key',
+    'openai_api_key',
+    'azure_speech_key',
+    'azure_speech_region',
+    'elevenlabs_api_key',
+    'station_name',
+    'claude_model',
+    'admin_token',
+    'jamendo_client_id',
+):
     val = opts.get(key, '')
     if val:
         env_key = key.upper()

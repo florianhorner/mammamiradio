@@ -306,6 +306,9 @@ def _runtime_provider_label(provider: str) -> str:
     labels = {
         "anthropic": "Anthropic",
         "openai": "OpenAI",
+        "azure": "Azure Speech",
+        "elevenlabs": "ElevenLabs",
+        "mixed_tts": "Mixed TTS",
         "stock": "Stock copy",
         "edge": "Edge TTS",
         "silence": "Silence fallback",
@@ -393,17 +396,34 @@ def _script_provider_status(config, state: StationState, provider_health: dict) 
 
 
 def _tts_provider_status(config, state: StationState) -> dict:
-    openai_hosts = any((host.engine or "edge") == "openai" for host in config.hosts)
-    if openai_hosts:
-        primary = "openai"
-        if config.openai_api_key:
-            current = "openai"
-            fallback_active = False
-            reason = "OpenAI TTS is configured for at least one host"
-        else:
+    engines = {(host.engine or "edge").strip().lower() for host in config.hosts}
+    engines.update((voice.engine or "edge").strip().lower() for voice in config.ads.voices)
+    if config.sonic_brand.sweeper_voice:
+        engines.add((config.sonic_brand.sweeper_engine or "edge").strip().lower())
+    cloud_engines = sorted(engine for engine in engines if engine != "edge")
+
+    if cloud_engines:
+        primary = cloud_engines[0] if len(cloud_engines) == 1 else "mixed_tts"
+        configured = {
+            "openai": bool(config.openai_api_key),
+            "azure": bool(config.azure_speech_key and config.azure_speech_region),
+            "elevenlabs": bool(config.elevenlabs_api_key),
+        }
+        missing = [engine for engine in cloud_engines if not configured.get(engine, False)]
+        if missing and len(missing) == len(cloud_engines):
             current = "edge"
             fallback_active = True
-            reason = "OpenAI TTS host configured but OPENAI_API_KEY is unavailable; Edge voice fallback is active"
+            reason = f"TTS provider key missing for {', '.join(missing)}; Edge voice fallback is active"
+        elif missing:
+            current = primary
+            fallback_active = True
+            reason = f"Mixed TTS configured; {', '.join(missing)} voices are falling back to Edge"
+        else:
+            current = primary
+            fallback_active = False
+            reason = (
+                "Mixed TTS voice providers are configured" if len(cloud_engines) > 1 else f"{primary} TTS is configured"
+            )
     else:
         primary = current = "edge"
         fallback_active = False
@@ -447,7 +467,7 @@ def _runtime_status_snapshot(
         "script_provider": script_status,
         "tts_provider": tts_status,
     }
-    fallback_active = any(item["fallback_active"] for item in providers.values())
+    fallback_active = any(providers[name]["fallback_active"] for name in ("audio_source", "script_provider"))
     task_blocked = not runtime_health.get("producer_task_alive", True) or not runtime_health.get(
         "playback_task_alive",
         True,
@@ -459,7 +479,11 @@ def _runtime_status_snapshot(
     elif fallback_active:
         health_state = "degraded"
         health_color = "yellow"
-        active = [item["current_label"] for item in providers.values() if item["fallback_active"]]
+        active = [
+            providers[name]["current_label"]
+            for name in ("audio_source", "script_provider")
+            if providers[name]["fallback_active"]
+        ]
         health_explanation = "Fallback active: " + ", ".join(active)
     else:
         health_state = "ready"
@@ -474,7 +498,9 @@ def _runtime_status_snapshot(
                 "event": "provider_health_state",
                 "health_state": health_state,
                 "fallback_active": fallback_active,
-                "runtime_provider_classes": [name for name, item in providers.items() if item["fallback_active"]],
+                "runtime_provider_classes": [
+                    name for name in ("audio_source", "script_provider") if providers[name]["fallback_active"]
+                ],
             },
         )
 
@@ -618,6 +644,12 @@ def _provider_health_snapshot(config, state: StationState) -> dict:
         "openai": {
             "configured": bool(config.openai_api_key),
             "key_status": state.openai_key_status,
+        },
+        "azure_speech": {
+            "configured": bool(config.azure_speech_key and config.azure_speech_region),
+        },
+        "elevenlabs": {
+            "configured": bool(config.elevenlabs_api_key),
         },
         "chaos": {
             "enabled": state.chaos_mode_active,
@@ -1517,7 +1549,13 @@ async def setup_provider_check(request: Request, _: None = Depends(require_admin
         # concurrent save swapped a key must NOT accept that task's stale 401. Compare
         # current config to the keys captured when the task was created.
         snapshot = getattr(request.app.state, "_provider_check_task_keys", None)
-        if snapshot == (config.anthropic_api_key, config.openai_api_key):
+        if snapshot == (
+            config.anthropic_api_key,
+            config.openai_api_key,
+            config.azure_speech_key,
+            config.azure_speech_region,
+            config.elevenlabs_api_key,
+        ):
             _record_provider_verdict(request.app.state.station_state, probe_result)
 
     lock = getattr(request.app.state, "_provider_check_lock", None)
@@ -1549,7 +1587,13 @@ async def setup_provider_check(request: Request, _: None = Depends(require_admin
         if task is None:
             # Capture the keys this task probes so the verdict can't be misattributed
             # to a later config (Codex: snapshot travels with the task, not the waiter).
-            request.app.state._provider_check_task_keys = (config.anthropic_api_key, config.openai_api_key)
+            request.app.state._provider_check_task_keys = (
+                config.anthropic_api_key,
+                config.openai_api_key,
+                config.azure_speech_key,
+                config.azure_speech_region,
+                config.elevenlabs_api_key,
+            )
             task = asyncio.create_task(check_provider_keys(config))
             request.app.state._provider_check_task = task
 

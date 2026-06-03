@@ -8,6 +8,19 @@ The current version source of truth is `pyproject.toml`.
 
 ### Added
 
+- **Expanded TTS voice routing** — hosts, sweepers, station IDs, and ad
+  character voices can now use Edge, OpenAI, Azure Speech, or ElevenLabs TTS
+  with per-voice Edge fallbacks. The built-in cast now mixes OpenAI `cedar`,
+  `marin`, `coral`, Azure Italian HD voices, and existing Edge fallbacks so
+  commercials and imaging no longer collapse onto the same few Edge timbres.
+  Home Assistant add-on options and setup checks accept Azure Speech and
+  ElevenLabs credentials without requiring secrets in `radio.toml`.
+
+- **Voice audition clips** — `scripts/audition_tts_voices.py` can now generate
+  local MP3 samples plus a manifest for the configured cast and the built-in
+  Edge/OpenAI/Azure catalogs. Missing provider credentials are reported as
+  skipped so auditions are not confused with runtime Edge fallback.
+
 - **Home Assistant context now adapts to each home.** The add-on scores prompt-safe
   entities from the full Home Assistant state snapshot instead of only using a
   hardcoded apartment list, so newly paired devices can contribute ambient radio

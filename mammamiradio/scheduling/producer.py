@@ -1791,8 +1791,8 @@ async def run_producer(
 
                     # Use configured sweeper voice, or a random host
                     sweeper_voice = sb.sweeper_voice
-                    sweeper_engine = "edge"
-                    sweeper_fallback = ""
+                    sweeper_engine = sb.sweeper_engine
+                    sweeper_fallback = sb.sweeper_edge_fallback_voice
                     if not sweeper_voice:
                         sweeper_host = random.choice(config.hosts)
                         sweeper_voice = sweeper_host.voice
@@ -1834,8 +1834,8 @@ async def run_producer(
                     sweeper_text = random.choice(sb.sweepers) if sb.sweepers else config.station.name
 
                     sweeper_voice = sb.sweeper_voice
-                    sweeper_engine = "edge"
-                    sweeper_fallback = ""
+                    sweeper_engine = sb.sweeper_engine
+                    sweeper_fallback = sb.sweeper_edge_fallback_voice
                     if not sweeper_voice:
                         sweeper_host = random.choice(config.hosts)
                         sweeper_voice = sweeper_host.voice

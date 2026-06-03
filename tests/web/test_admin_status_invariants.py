@@ -96,6 +96,14 @@ def test_pipeline_status_uses_canonical_status_chips() -> None:
         assert expected in block
 
 
+def test_setup_keys_banner_includes_voice_provider_credentials() -> None:
+    block = _function_block(_read_admin_html(), "renderSetup")
+
+    assert "Provider keys configured" in _read_admin_html()
+    assert "e.key==='llm_keys'||e.key==='tts_keys'" in block
+    assert "configuredKeys=[...new Set(keyEssentials.flatMap(e=>e.configured_keys||[]))]" in block
+
+
 def test_segment_labels_use_canonical_status_surfaces() -> None:
     html = _read_admin_html()
 

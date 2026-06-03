@@ -4,6 +4,17 @@
 
 ### Added
 
+- **Expanded TTS voice routing** — hosts, sweepers, station IDs, and ad
+  character voices can now use Edge, OpenAI, Azure Speech, or ElevenLabs TTS
+  with per-voice Edge fallbacks. Add-on options now include Azure Speech and
+  ElevenLabs credentials for premium voice mixes without editing secrets into
+  `radio.toml`.
+
+- **Voice audition clips** — `scripts/audition_tts_voices.py` can now generate
+  local MP3 samples plus a manifest for the configured cast and the built-in
+  Edge/OpenAI/Azure catalogs. Missing provider credentials are reported as
+  skipped so auditions are not confused with runtime Edge fallback.
+
 - **Home Assistant context now adapts to each home.** The add-on scores prompt-safe
   entities from the full Home Assistant state snapshot instead of only using a
   hardcoded apartment list. Location, camera, alarm, and free-text helper
