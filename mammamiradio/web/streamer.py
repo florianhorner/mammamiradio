@@ -2533,11 +2533,12 @@ async def _download_admin_external_track(track: Any, app_state: Any, originating
         return
 
     if status == "queued":
-        # Committed to rotation but the play-next slot was already taken (a prior
-        # add or a listener request). Tell the operator it's queued, not next, so
-        # the "on air shortly" toast isn't misleading.
-        logger.info("Queued external track (behind current pick): %s (yt:%s)", track.display, track.youtube_id)
-        _notice(True, "queued_behind")
+        # Committed to the rotation pool, but the play-next slot was already taken
+        # (a prior add or a listener request) and playlist order is NOT next-play
+        # order — so we can't promise it plays right after the current pick. Tell
+        # the operator it's in rotation rather than imminent.
+        logger.info("Added external track to rotation: %s (yt:%s)", track.display, track.youtube_id)
+        _notice(True, "added_to_rotation")
         return
 
     logger.info("Queued external track: %s (yt:%s)", track.display, track.youtube_id)

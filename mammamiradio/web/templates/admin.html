@@ -2117,9 +2117,10 @@ function notifyExternalAddNotices(notices){
   for(const n of fresh){
     const name=n.display||'track';
     if(n.ok){
-      // Informational: committed to rotation but the play-next slot was taken,
-      // so it isn't strictly next. Plain toast, not an error.
-      toast('Queued “'+name+'” — it’ll play after the current pick.');
+      // Added to the rotation pool because the play-next slot was taken. No
+      // strict ordering promise — playlist order isn't next-play order. Plain
+      // toast, not an error.
+      toast('Added “'+name+'” to rotation — it’ll play soon.');
       continue;
     }
     const msg=n.reason==='source_changed'

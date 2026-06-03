@@ -1442,7 +1442,7 @@ async def test_add_external_track_queued_behind_existing_pin(tmp_path):
     assert len(app.state.station_state.playlist) == original_len + 1
     assert app.state.station_state.pinned_track is occupant
     notices = list(app.state.station_state.external_add_notices)
-    assert notices and notices[-1]["ok"] is True and notices[-1]["reason"] == "queued_behind"
+    assert notices and notices[-1]["ok"] is True and notices[-1]["reason"] == "added_to_rotation"
 
 
 @pytest.mark.asyncio
