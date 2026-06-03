@@ -1373,11 +1373,74 @@ async def test_add_external_track_success(tmp_path):
                 "/api/playlist/add-external",
                 json={"youtube_id": "dQw4w9WgXcQ", "title": "Brano", "artist": "Artista", "duration_ms": 123000},
             )
-    assert resp.status_code == 200
-    assert resp.json()["ok"] is True
+        # Endpoint returns immediately so the request can't overrun the ingress
+        # proxy timeout; the download + pin happen in a background task.
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["ok"] is True
+        assert body["status"] == "downloading"
+        # Drain the background download before asserting the pin landed.
+        await asyncio.gather(*list(app.state.background_tasks))
     assert len(app.state.station_state.playlist) == original_len + 1
     assert app.state.station_state.pinned_track is not None
     assert app.state.station_state.pinned_track.youtube_id == "dQw4w9WgXcQ"
+    assert app.state.station_state.force_next == SegmentType.MUSIC
+
+
+@pytest.mark.asyncio
+async def test_add_external_track_background_failure_leaves_no_pin(tmp_path):
+    """Scenario 2 (download fails): no stale pin, playlist unchanged, stream intact."""
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path
+    app.state.config.allow_ytdlp = True
+    original_len = len(app.state.station_state.playlist)
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    with patch(
+        "mammamiradio.playlist.downloader.download_external_track",
+        new_callable=AsyncMock,
+        side_effect=RuntimeError("yt-dlp boom"),
+    ):
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            resp = await client.post(
+                "/api/playlist/add-external",
+                json={"youtube_id": "dQw4w9WgXcQ", "title": "Brano", "artist": "Artista", "duration_ms": 123000},
+            )
+        # The endpoint still returns ok — the failure surfaces only in the
+        # background task, which must not pin a track or grow the playlist.
+        assert resp.status_code == 200
+        assert resp.json()["ok"] is True
+        await asyncio.gather(*list(app.state.background_tasks))
+    assert len(app.state.station_state.playlist) == original_len
+    assert app.state.station_state.pinned_track is None
+
+
+@pytest.mark.asyncio
+async def test_add_external_track_dropped_when_playlist_revision_changes(tmp_path):
+    """Source switch mid-download → the stale pick is dropped, not pinned."""
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path
+    app.state.config.allow_ytdlp = True
+    original_len = len(app.state.station_state.playlist)
+
+    async def _bump_then_return(*_args, **_kwargs):
+        # Simulate a playlist source switch landing while the download runs.
+        app.state.station_state.playlist_revision += 1
+        return tmp_path / "dl.mp3"
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    with patch(
+        "mammamiradio.playlist.downloader.download_external_track",
+        new=_bump_then_return,
+    ):
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            resp = await client.post(
+                "/api/playlist/add-external",
+                json={"youtube_id": "dQw4w9WgXcQ", "title": "Brano", "artist": "Artista", "duration_ms": 123000},
+            )
+        assert resp.status_code == 200
+        await asyncio.gather(*list(app.state.background_tasks))
+    assert len(app.state.station_state.playlist) == original_len
+    assert app.state.station_state.pinned_track is None
 
 
 @pytest.mark.asyncio

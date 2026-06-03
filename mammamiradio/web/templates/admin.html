@@ -1453,13 +1453,6 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
 .a-programme tr.predicted {
   opacity: 0.72;
 }
-.a-programme tr.predicted .ts::after {
-  content: " · planned";
-  color: var(--muted);
-  font-size: 10px;
-  text-transform: none;
-  letter-spacing: 0;
-}
 .a-programme tr.rendered-queue.next {
   background: rgba(37,99,235,0.08);
   box-shadow: inset 2px 0 0 var(--ok);
@@ -2903,7 +2896,7 @@ async function addExternal(i){
   try{
     const r=await api('POST','/api/playlist/add-external',{youtube_id:t.youtube_id,title:t.title,artist:t.artist,duration_ms:t.duration_ms});
     if(r.ok){
-      toast('Queued: '+t.display);
+      toast('Downloading: '+t.display+' — on air shortly');
       document.getElementById('searchResults').innerHTML='';
       si.value='';_plFilter='';
     }else{

@@ -2342,9 +2342,17 @@ async def search_tracks(request: Request, q: str = "", _: None = Depends(require
 
 @router.post("/api/playlist/add-external")
 async def add_external_track(request: Request, _: None = Depends(require_admin_access)):
-    """Download a yt-dlp search result and pin it to play next."""
+    """Queue a yt-dlp search result to play next via a background download.
+
+    The download runs in the background so this request returns immediately. A
+    synchronous yt-dlp fetch takes 10-60s, which overruns the HA ingress proxy
+    read timeout — the browser fetch then throws and the admin UI shows a false
+    "Failed to add to queue" even though the track downloads and queues fine.
+    Returning fast keeps the request well under the proxy timeout. Stream-safe:
+    the queue is NOT purged here; the pinned track enters play after the current
+    lookahead drains, so there is no silence gap (leadership principle #2).
+    """
     from mammamiradio.core.models import Track
-    from mammamiradio.playlist.downloader import download_external_track
 
     body = await request.json()
     if not isinstance(body, dict):
@@ -2373,27 +2381,50 @@ async def add_external_track(request: Request, _: None = Depends(require_admin_a
         youtube_id=youtube_id,
     )
 
-    # Pre-download so the cache is warm before we purge the queue.
-    # Without this, the producer would hit a cache miss after the purge,
-    # causing 30-60s of silence while yt-dlp downloads.
+    # Fire the download in the background and return before the ingress proxy
+    # times out the long yt-dlp fetch. The task pins the track to play next once
+    # it is ready; see _download_admin_external_track.
+    dl_task = asyncio.create_task(_download_admin_external_track(track, request.app.state, state.playlist_revision))
+    request.app.state.background_tasks = getattr(request.app.state, "background_tasks", set())
+    request.app.state.background_tasks.add(dl_task)
+    dl_task.add_done_callback(request.app.state.background_tasks.discard)
+
+    logger.info("Queueing external track (background): %s (yt:%s)", track.display, youtube_id)
+    return {"ok": True, "queued": track.display, "status": "downloading"}
+
+
+async def _download_admin_external_track(track, app_state, originating_revision: int) -> None:
+    """Background download for an admin queue-from-search request.
+
+    Stream-safe mirror of listener_requests._download_listener_song: does NOT
+    purge the queue. On success the track joins the rotation pool and is pinned
+    to play next. If the playlist source switched while downloading (revision
+    mismatch) the result is dropped, so a stale pick can't leak into a freshly
+    loaded source.
+    """
+    from mammamiradio.playlist.downloader import download_external_track
+
+    state = app_state.station_state
+    config = app_state.config
     try:
         await download_external_track(track, config.cache_dir, music_dir=Path("music"))
+    except asyncio.CancelledError:
+        logger.info("Admin external download cancelled: %s (yt:%s)", track.display, track.youtube_id)
+        raise
     except Exception:
-        logger.warning("External track download failed for %s (yt:%s)", track.display, youtube_id, exc_info=True)
-        return JSONResponse({"ok": False, "error": "download_failed"}, status_code=502)
+        logger.warning("External track download failed for %s (yt:%s)", track.display, track.youtube_id, exc_info=True)
+        return
 
-    # Add to playlist pool so it's available for future cycles too
+    # Guard: if the playlist source switched while we were downloading, drop the
+    # result rather than pinning a track from the previous source.
+    if state.playlist_revision != originating_revision:
+        logger.info("Admin external track downloaded but playlist changed: %s", track.display)
+        return
+
     state.playlist.append(track)
-
-    # Pin it so the producer plays it next
     state.pinned_track = track
-    state.playlist_revision += 1
-    purged = _purge_segment_queue(request.app.state.queue)
-    state.queued_segments.clear()
     state.force_next = SegmentType.MUSIC
-
-    logger.info("Queued external track: %s (yt:%s)", track.display, youtube_id)
-    return {"ok": True, "queued": track.display, "purged": purged}
+    logger.info("Queued external track: %s (yt:%s)", track.display, track.youtube_id)
 
 
 # Listener-request endpoints + _download_listener_song background task moved to
