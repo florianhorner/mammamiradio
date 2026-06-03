@@ -1691,6 +1691,41 @@ async def test_download_listener_song_success(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_download_listener_song_preserves_operator_pin(tmp_path):
+    """A listener song finishing after an operator claimed pinned_track (e.g.
+    move-to-next, which bumps playlist_revision but not source_revision) must NOT
+    overwrite the operator's pin; the song still joins the rotation pool."""
+    from mammamiradio.core.models import Track
+
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path
+    state = app.state.station_state
+    operator_pick = Track(title="Operator", artist="Op", duration_ms=1000, youtube_id="operator001")
+    state.pinned_track = operator_pick
+    original_len = len(state.playlist)
+    req = {"song_query": "albachiara", "message": "metti albachiara", "song_found": False, "song_error": False}
+    state.pending_requests.append(req)
+    with (
+        patch(
+            "mammamiradio.playlist.downloader.search_ytdlp_metadata",
+            return_value=[
+                {"title": "Albachiara", "artist": "Vasco Rossi", "duration_ms": 120000, "youtube_id": "yt123"}
+            ],
+        ),
+        patch(
+            "mammamiradio.playlist.downloader.download_external_track",
+            new_callable=AsyncMock,
+            return_value=tmp_path / "song.mp3",
+        ),
+    ):
+        await _download_listener_song(req, app.state, state.source_revision)
+    # Operator pin preserved; listener song still committed to rotation.
+    assert state.pinned_track is operator_pick
+    assert req["song_found"] is True
+    assert len(state.playlist) == original_len + 1
+
+
+@pytest.mark.asyncio
 async def test_download_listener_song_no_results_marks_error(tmp_path):
     app = _make_test_app()
     app.state.config.cache_dir = tmp_path

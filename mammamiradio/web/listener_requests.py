@@ -330,8 +330,14 @@ async def _download_listener_song(req: dict, app_state, originating_source_revis
             originating_source_revision,
             # Drop if the request was consumed/dismissed while downloading.
             should_commit=lambda: req in state.pending_requests,
-            # Pin only while this request is still at the head of the queue.
-            should_pin=lambda: bool(state.pending_requests) and state.pending_requests[0] is req,
+            # Pin only when the play-next slot is free AND this request is still at
+            # the head of the queue. The pinned_track guard preserves an operator
+            # pin (e.g. move-to-next, which bumps playlist_revision but not
+            # source_revision) instead of clobbering it; the track still joins
+            # rotation via the "queued" path.
+            should_pin=lambda: (
+                state.pinned_track is None and bool(state.pending_requests) and state.pending_requests[0] is req
+            ),
         )
         # "pinned" or "queued" both mean the track landed in the playlist for this
         # request; only "dropped" means a source switch / consumption discarded it.
