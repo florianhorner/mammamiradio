@@ -1,4 +1,4 @@
-.PHONY: help dev test test-fast test-watch lint format typecheck check deadcode validate coverage-check coverage-ratchet perf-smoke pre-release
+.PHONY: help dev test test-fast test-watch lint format typecheck check deadcode validate coverage-check coverage-ratchet perf-smoke pre-release edge-release
 
 PYTHON := .venv/bin/python
 PYTEST := $(PYTHON) -m pytest
@@ -54,3 +54,6 @@ perf-smoke: ## Run HA Green perf smoke against a live station
 
 pre-release: ## Run pre-release checks (version sync + invariants + CHANGELOG head)
 	./scripts/pre-release-check.sh
+
+edge-release: ## Cut a manual edge release (edge version = main short-SHA, opens a PR)
+	./scripts/cut-edge-release.sh

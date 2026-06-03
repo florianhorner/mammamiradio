@@ -164,11 +164,11 @@ def test_ci_trigger_paths_cover_version_bump_files():
 
 
 def test_ci_publishes_versioned_per_arch_addon_images():
-    """addon-build.yml publishes :sha, :0.0.0, and :calver for every main merge.
+    """addon-build.yml publishes :sha and :<short-sha> for every main merge.
 
-    :X.Y.Z and :latest are owned by addon-release.yml (v* tag triggered) and must
-    NOT appear in addon-build.yml — every main merge was silently overwriting the
-    stable tag, making it mutable. addon-release.yml fixes this.
+    :<short-sha> is the tag the edge channel points at (a manual ``make edge-release``
+    sets the edge ``version:`` to that SHA). :X.Y.Z and :latest are owned by
+    addon-release.yml (v* tag triggered) and must NOT appear in addon-build.yml.
     """
     workflow_text = _workflow_text()
     config_text = (REPO_ROOT / "ha-addon" / "mammamiradio" / "config.yaml").read_text(encoding="utf-8")
@@ -181,12 +181,13 @@ def test_ci_publishes_versioned_per_arch_addon_images():
 
     required_tags = [
         "${{ env.REGISTRY }}/${{ env.IMAGE_BASE }}-${{ matrix.arch }}:${{ github.sha }}",
+        "${{ env.REGISTRY }}/${{ env.IMAGE_BASE }}-${{ matrix.arch }}:${{ needs.validate.outputs.short_sha }}",
     ]
     missing_tags = [tag for tag in required_tags if tag not in workflow_text]
     assert not missing_tags, (
         f"addon-build.yml is missing image tags: {missing_tags}\n"
-        "The :sha tag is required for the smoke job and for addon-release.yml "
-        "to pull a proven image on tag-triggered stable builds."
+        "The :sha tag feeds the smoke job + addon-release.yml; the :<short-sha> tag is "
+        "what a manual edge release points the edge add-on at."
     )
 
     assert "steps.version.outputs.version" not in workflow_text, (
@@ -224,27 +225,24 @@ def _extract_step_block(workflow_text: str, step_name: str) -> str:
     return m.group(0)
 
 
-def test_ci_publishes_edge_tags_with_matching_image_labels():
-    """Each edge build step's BUILD_VERSION must pair with its own pushed tag.
+def test_ci_publishes_short_sha_edge_tag():
+    """The single build per arch must also push the :<short-sha> edge tag.
 
-    Global string-presence checks would pass even if BUILD_VERSION and tags were
-    swapped between steps. Scoping to the step block catches mis-pairing.
+    Edge releases are manual (``make edge-release`` sets the edge ``version:`` to a
+    main short SHA); that SHA must resolve to an image tag the build pushed. The old
+    per-merge seed (:0.0.0) and calver builds were deleted along with the bump-edge
+    job — guard that they don't creep back.
     """
     workflow_text = _workflow_text()
 
-    assert "EDGE_SEED_VERSION: '0.0.0'" in workflow_text
-
-    seed_block = _extract_step_block(workflow_text, "Build and push edge seed add-on image")
-    assert "BUILD_VERSION=${{ env.EDGE_SEED_VERSION }}" in seed_block, (
-        "seed step must set BUILD_VERSION to the edge seed version"
+    stable_block = _extract_step_block(workflow_text, "Build and push stable add-on image")
+    assert ":${{ needs.validate.outputs.short_sha }}" in stable_block, (
+        "the add-on build must push :<short-sha> so a manual edge release can point at it"
     )
-    assert ":${{ env.EDGE_SEED_VERSION }}" in seed_block, "seed step must push the edge seed tag"
 
-    calver_block = _extract_step_block(workflow_text, "Build and push edge calver add-on image")
-    assert "BUILD_VERSION=${{ needs.validate.outputs.calver }}" in calver_block, (
-        "calver step must set BUILD_VERSION to the calver output"
-    )
-    assert ":${{ needs.validate.outputs.calver }}" in calver_block, "calver step must push the calver tag"
+    assert "EDGE_SEED_VERSION" not in workflow_text, "the edge seed scheme was removed"
+    assert "needs.validate.outputs.calver" not in workflow_text, "the calver scheme was removed"
+    assert "bump-edge" not in workflow_text, "the auto-bump-edge job was removed (edge releases are manual)"
 
 
 def test_ci_sha_artifact_uses_stable_addon_version_label():
