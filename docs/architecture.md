@@ -195,16 +195,20 @@ Cue text is sanitized via `_sanitize_prompt_data` on the read path before inject
 
 If `[homeassistant].enabled = true` and `HA_TOKEN` is present:
 
-- `ha_context.py` polls the Home Assistant REST API for ~35 curated entities (gold/silver/bronze tiers)
-- entities include room-level light groups, power sensors, weather, presence, vacuums, star projectors, terrace lights
-- a 4-phase pipeline processes the data: state summary → event diffing → mood classification → weather narrative arc
+- `ha_context.py` polls the Home Assistant REST API state snapshot and filters it through a default-deny privacy layer
+- sensitive domains (`device_tracker`, `camera`, `alarm_control_panel`), free-text helper domains (`input_text`, `text`), and telemetry/config entities are excluded before prompt assembly
+- `person.*` is kept as home/away presence only (GPS, `user_id`, and tracker attributes stripped) so arrival greetings and the empty-home mood still work; person events never reach `/public-status`
+- allowed entities are scored by domain salience, recent changes, area metadata, event activity, and curated-label overrides
+- the prompt receives a bounded top slice (12 entities by default, capped at 2000 characters) rather than the full home snapshot
+- hand-tuned entity labels remain authoritative; unknown entities fall back to sanitized friendly names plus area metadata where available
+- event diffing, mood classification, and weather narrative arcs continue to feed the existing scriptwriter fields
 - 7 reactive triggers fire on specific state changes (coffee machine, door unlock, vacuums, arrivals, terrace lights)
 - banter references are tiered: 1 item by default, up to 2 when a mood scene is active (mood counts toward cap)
 - weather-mood fusion allows hosts to connect outdoor conditions to indoor activity
 - numeric state passthrough in `ha_enrichment.diff_states()` ensures power sensors generate events
 - the listener dashboard shows a "Casa" card with mood, weather, and recent events via `ha_moments` in `/public-status`
-- the admin panel shows full HA details (mood, weather arc, events summary, pending directives) via `ha_details` in `/status`
-- person entity events are filtered from public API responses (privacy)
+- the admin panel shows full HA details (mood, weather arc, events summary, pending directives, scored entities, and privacy filter counts) via `ha_details` in `/status`
+- scored entities and privacy filter counts are admin-only and never appear in `/public-status`
 
 This is opportunistic context, not a hard dependency. Failures there should not stop the station.
 

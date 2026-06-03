@@ -19,6 +19,8 @@ from mammamiradio.core.models import (
     StationState,
     Track,
 )
+from mammamiradio.home.ha_context import ScoredEntity
+from mammamiradio.home.ha_enrichment import HomeEvent
 from mammamiradio.hosts.ad_creative import (
     AdBrand,
     AdFormat,
@@ -265,6 +267,36 @@ async def test_ha_context_refreshed_for_banter(tmp_path):
     mock_context = MagicMock()
     mock_context.summary = "Il tempo e' bello"
     mock_context.events_summary = "- La macchina del caffe: spento/a -> acceso/a (1 min fa)"
+    mock_context.mood = "Caffe in preparazione"
+    mock_context.weather_arc = "Meteo: soleggiato, 22C."
+    mock_context.mood_en = "Coffee brewing"
+    mock_context.weather_arc_en = "Weather: sunny, 22C."
+    mock_context.events_summary_en = "- Coffee machine: off -> on (1 min ago)"
+    mock_context.scored = [
+        ScoredEntity(
+            entity_id="switch.bar_kaffeemaschine_steckdose",
+            area="Kitchen",
+            domain="switch",
+            score=1.4,
+            raw_state={"state": "on", "attributes": {"friendly_name": "Coffee machine"}},
+            label_it="La macchina del caffe",
+            label_en="Coffee machine",
+            summary_line="La macchina del caffe: acceso/a",
+        )
+    ]
+    mock_context.denylist_hits = {"privacy:person": 1}
+    mock_context.catalog_hit_rate = 0.0
+    mock_context.events = deque(
+        [
+            HomeEvent(
+                entity_id="switch.bar_kaffeemaschine_steckdose",
+                label="La macchina del caffe",
+                old_state="spento/a",
+                new_state="acceso/a",
+                timestamp=1.0,
+            )
+        ]
+    )
 
     with (
         patch(f"{MODULE}.next_segment_type", return_value=SegmentType.BANTER),
@@ -280,6 +312,64 @@ async def test_ha_context_refreshed_for_banter(tmp_path):
     mock_fetch.assert_called_once()
     assert state.ha_context == "Il tempo e' bello"
     assert state.ha_events_summary == "- La macchina del caffe: spento/a -> acceso/a (1 min fa)"
+    assert state.ha_scored_entities[0]["label"] == "Coffee machine"
+    assert state.ha_denylist_hits == {"privacy:person": 1}
+    assert state.ha_last_event_label == "La macchina del caffe"
+    assert state.ha_last_event_label_en == "Coffee machine"
+
+
+@pytest.mark.asyncio
+async def test_public_status_only_surfaces_curated_event_labels(tmp_path):
+    # /public-status exposes state.ha_last_event_label to listeners. Phase A
+    # widened the ingest to all HA entities; only curated entities are listener-safe.
+    state = _make_state()
+    config = _make_config(tmp_path)
+    config.anthropic_api_key = "test-key"
+    config.homeassistant.enabled = True
+    config.ha_token = "fake-token"
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+
+    host = config.hosts[0] if config.hosts else HostPersonality(name="Marco", voice="it-IT-DiegoNeural", style="warm")
+
+    mock_context = MagicMock()
+    mock_context.summary = ""
+    mock_context.events_summary = "- Hallway Motion: spento/a -> acceso/a (1 min fa)"
+    mock_context.mood = ""
+    mock_context.weather_arc = ""
+    mock_context.mood_en = ""
+    mock_context.weather_arc_en = ""
+    mock_context.events_summary_en = ""
+    mock_context.scored = []
+    mock_context.denylist_hits = {}
+    mock_context.catalog_hit_rate = 0.0
+    mock_context.last_event_label_en = ""
+    # Uncurated entity with a friendly_name — must not surface on /public-status.
+    mock_context.events = deque(
+        [
+            HomeEvent(
+                entity_id="binary_sensor.bedroom_motion",
+                label="Hallway Motion",
+                old_state="spento/a",
+                new_state="acceso/a",
+                timestamp=1.0,
+            )
+        ]
+    )
+
+    with (
+        patch(f"{MODULE}.next_segment_type", return_value=SegmentType.BANTER),
+        patch(f"{SCRIPTWRITER_MODULE}.write_banter", new_callable=AsyncMock, return_value=([(host, "Ciao!")], None)),
+        patch(f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora...")),
+        patch(f"{MODULE}.synthesize", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(f"{MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(f"{MODULE}.concat_files", return_value=_fake_path()),
+        patch(f"{MODULE}.fetch_home_context", new_callable=AsyncMock, return_value=mock_context),
+    ):
+        await _run_until_queued(queue, state, config)
+
+    # Uncurated event must not leak to listener-facing fields.
+    assert state.ha_last_event_label == ""
+    assert state.ha_last_event_label_en == ""
 
 
 @pytest.mark.asyncio
@@ -693,7 +783,7 @@ async def test_audio_tool_error_in_banter_does_not_drop_segment(tmp_path):
     generated = tmp_path / "banter_generated.mp3"
     generated.write_bytes(b"\x00" * 2048)
 
-    def _quality_side_effect(path, seg_type):
+    def _quality_side_effect(path, seg_type, **_kwargs):
         if seg_type == SegmentType.BANTER:
             raise AudioToolError("ffmpeg not found")
         return None

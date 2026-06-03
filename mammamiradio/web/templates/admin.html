@@ -3381,6 +3381,15 @@ function updateEngineRoom(st,caps){
     if(hd.pending_directive)lines.push('Directive pending: <strong style="color:var(--warning)">'+esc(hd.pending_directive.substring(0,80))+'...</strong>');
     lines.push('Recent events: '+(hd.recent_event_count||0));
     if(hd.last_event_label_en||hd.last_event_label)lines.push('Last event: '+esc(hd.last_event_label_en||hd.last_event_label));
+    if(Array.isArray(hd.scored_entities)&&hd.scored_entities.length){
+      const scored=hd.scored_entities.slice(0,6).map(e=>esc(e.label||e.entity_id||'Entity')+' <span style="color:var(--muted)">'+Number(e.score||0).toFixed(2)+'</span>');
+      lines.push('Sent to prompt:<br>'+scored.join('<br>'));
+    }
+    if(hd.denylist_hits&&Object.keys(hd.denylist_hits).length){
+      const denied=Object.entries(hd.denylist_hits).sort((a,b)=>String(a[0]).localeCompare(String(b[0]))).map(([k,v])=>esc(k)+': <strong>'+Number(v||0)+'</strong>');
+      lines.push('Filtered for privacy:<br>'+denied.join('<br>'));
+    }
+    if(hd.catalog_hit_rate!=null)lines.push('Label catalog: <strong>'+Math.round(Number(hd.catalog_hit_rate||0)*100)+'%</strong>');
     haEl.innerHTML=lines.join('<br>')||'No HA data';
   }else{
     haCard.style.display='none';

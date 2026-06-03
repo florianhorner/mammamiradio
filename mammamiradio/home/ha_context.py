@@ -9,16 +9,20 @@ from __future__ import annotations
 
 import asyncio
 import datetime
+import json
 import logging
+import re
 import time
 from collections import deque
 from dataclasses import dataclass, field
 from typing import TypedDict
+from urllib.parse import urlsplit, urlunsplit
 
 import httpx
+from websockets.asyncio.client import connect as websocket_connect
 
 from mammamiradio.core.config import TimerInterruptConfig
-from mammamiradio.core.models import InterruptSpec
+from mammamiradio.core.models import InterruptSpec, ScoredEntityStatus
 from mammamiradio.home.ha_enrichment import (
     EVENT_BUFFER_SIZE,
     HomeEvent,
@@ -96,6 +100,71 @@ BRONZE_ENTITIES = [
 ]
 
 ALL_ENTITIES = GOLD_ENTITIES + SILVER_ENTITIES + BRONZE_ENTITIES
+
+DEFAULT_CONTEXT_ENTITY_LIMIT = 12
+DEFAULT_CONTEXT_CHAR_LIMIT = 2000
+DROP_DOMAINS = {
+    "update",
+    "button",
+    "scene",
+    "automation",
+    "script",
+    "zone",
+    # Free-text helpers (input_text) and the first-class text entity domain can
+    # carry plaintext secrets (e.g., input_text.guest_wifi_password) that the
+    # uppercase-token regex won't catch. Drop them at the privacy layer.
+    "input_text",
+    "text",
+}
+DROP_ENTITY_CATEGORIES = {"diagnostic", "config"}
+DROP_DEVICE_CLASSES = {"signal_strength", "battery", "timestamp"}
+# person is intentionally NOT denied: home/away presence drives arrival greetings
+# and the empty-home mood. GPS/location and identity attributes are stripped via
+# SENSITIVE_ATTRIBUTE_KEYS, and person events are filtered from /public-status.
+PRIVACY_DENY_DOMAINS = {"device_tracker", "camera", "alarm_control_panel"}
+SENSITIVE_ATTRIBUTE_KEYS = {
+    "latitude",
+    "longitude",
+    "gps_accuracy",
+    "source_type",
+    "ip_address",
+    "mac_address",
+    "unique_id",
+    "device_id",
+    "user_id",
+    "device_trackers",
+    "token",
+    "access_token",
+    "refresh_token",
+}
+DOMAIN_SALIENCE_WEIGHTS = {
+    "media_player": 1.0,
+    "vacuum": 0.9,
+    "lock": 0.8,
+    "weather": 0.8,
+    "climate": 0.7,
+    "light": 0.6,
+    "fan": 0.6,
+    "switch": 0.5,
+    "sensor": 0.2,
+    "binary_sensor": 0.2,
+}
+POWER_SENSOR_WEIGHT = 0.5
+PRESENCE_SENSOR_WEIGHT = 0.9
+OVERRIDE_SCORE_BOOST = 0.5
+AREA_SCORE_BOOST = 0.2
+RECENT_CHANGE_WINDOW_SECONDS = 15 * 60
+RECENT_CHANGE_SCORE_BOOST = 0.4
+EVENT_SCORE_BOOST = 0.3
+
+_UUID_RE = re.compile(r"^[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}$")
+_HEX_TOKEN_RE = re.compile(r"^[a-fA-F0-9]{32,}$")
+_GENERIC_TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{20,}$")
+_IP_RE = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
+_MAC_RE = re.compile(r"\b[0-9A-Fa-f]{2}(?::[0-9A-Fa-f]{2}){5}\b")
+_EMAIL_RE = re.compile(r"\b[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}\b")
+_LAT_LON_RE = re.compile(r"[-+]?\d{1,2}\.\d{4,}\s*,\s*[-+]?\d{1,3}\.\d{4,}")
+_TOKEN_EXCLUSIONS = {"CONNECTED", "PENDING_UPDATE", "RESTORED", "UNAVAILABLE", "UNKNOWN"}
 
 # Italian-friendly labels for entity states
 ENTITY_LABELS = {
@@ -326,6 +395,33 @@ THRESHOLD_TRIGGERS: list[ThresholdTrigger] = [
 
 
 @dataclass
+class ScoredEntity:
+    """Budgeted HA entity selected for prompt context and Engine Room visibility."""
+
+    entity_id: str
+    area: str | None
+    domain: str
+    score: float
+    raw_state: dict
+    label_it: str
+    label_en: str
+    summary_line: str = ""
+
+    def to_status_dict(self) -> ScoredEntityStatus:
+        attrs = self.raw_state.get("attributes", {})
+        return {
+            "entity_id": self.entity_id,
+            "area": self.area,
+            "domain": self.domain,
+            "score": round(self.score, 3),
+            "state": self.raw_state.get("state"),
+            "label": self.label_en,
+            "summary": self.summary_line,
+            "device_class": attrs.get("device_class"),
+        }
+
+
+@dataclass
 class HomeContext:
     """Snapshot of interesting home state, formatted for scriptwriter."""
 
@@ -343,6 +439,9 @@ class HomeContext:
     weather_arc_en: str = ""
     events_summary_en: str = ""
     last_event_label_en: str = ""
+    scored: list[ScoredEntity] = field(default_factory=list)
+    catalog_hit_rate: float = 0.0
+    denylist_hits: dict[str, int] = field(default_factory=dict)
 
     @property
     def age_seconds(self) -> float:
@@ -351,19 +450,143 @@ class HomeContext:
 
 def _sanitize_state_value(value: str, max_len: int = 100) -> str:
     """Truncate and strip instruction-like patterns from HA state values."""
-    value = value[:max_len]
+    value = str(value)[:max_len]
     # Strip patterns that look like prompt injection attempts
     for pattern in ("ignore previous", "disregard", "system override", "forget your"):
         if pattern in value.lower():
             return "(filtered)"
+    if _looks_sensitive_value(value):
+        return "(filtered)"
     return value
+
+
+def _looks_sensitive_value(value: str) -> bool:
+    candidate = value.strip()
+    if not candidate or candidate.upper() in _TOKEN_EXCLUSIONS:
+        return False
+    return bool(
+        _UUID_RE.fullmatch(candidate)
+        or _HEX_TOKEN_RE.fullmatch(candidate)
+        or _GENERIC_TOKEN_RE.fullmatch(candidate)
+        or _IP_RE.search(candidate)
+        or _MAC_RE.search(candidate)
+        or _EMAIL_RE.search(candidate)
+        or _LAT_LON_RE.search(candidate)
+    )
+
+
+def _entity_domain(entity_id: str) -> str:
+    return entity_id.split(".", 1)[0] if "." in entity_id else ""
+
+
+def _area_from_attrs(attrs: dict) -> str | None:
+    raw = attrs.get("area") or attrs.get("area_name") or attrs.get("area_id")
+    if raw is None:
+        return None
+    area = _sanitize_state_value(str(raw), max_len=40).strip()
+    return area or None
+
+
+def _generic_label(entity_id: str, state_data: dict, *, english: bool = False) -> str:
+    attrs = state_data.get("attributes", {})
+    friendly = attrs.get("friendly_name")
+    if friendly:
+        label = _sanitize_state_value(str(friendly), max_len=80)
+    else:
+        label = entity_id.split(".", 1)[-1].replace("_", " ").strip() or entity_id
+    area = _area_from_attrs(attrs)
+    if area and area.lower() not in label.lower():
+        return f"{label} ({area})"
+    return label
+
+
+def _sanitize_attributes(attrs: dict) -> dict:
+    sanitized: dict = {}
+    for key, value in attrs.items():
+        key_s = str(key)
+        if key_s.lower() in SENSITIVE_ATTRIBUTE_KEYS:
+            continue
+        if isinstance(value, str):
+            sanitized[key_s] = _sanitize_state_value(value)
+        elif isinstance(value, int | float | bool) or value is None:
+            sanitized[key_s] = value
+        else:
+            text = _sanitize_state_value(str(value), max_len=120)
+            if text != "(filtered)":
+                sanitized[key_s] = text
+    return sanitized
+
+
+def _filter_state(entity_id: str, state_data: dict, denylist_hits: dict[str, int]) -> dict | None:
+    domain = _entity_domain(entity_id)
+    attrs = state_data.get("attributes", {}) or {}
+    state = str(state_data.get("state", "unknown"))
+    # Drop the station's own pushed entities (media_player.mammamiradio,
+    # sensor.mammamiradio_*, binary_sensor.mammamiradio_on_air). Otherwise the
+    # high-salience media_player echoes the current segment back into the prompt,
+    # producing recursive/off-topic banter instead of ambient home context.
+    object_id = entity_id.split(".", 1)[-1]
+    if object_id.startswith("mammamiradio"):
+        denylist_hits["self:mammamiradio"] = denylist_hits.get("self:mammamiradio", 0) + 1
+        return None
+    if domain in DROP_DOMAINS:
+        denylist_hits[f"domain:{domain}"] = denylist_hits.get(f"domain:{domain}", 0) + 1
+        return None
+    if attrs.get("entity_category") in DROP_ENTITY_CATEGORIES:
+        key = f"entity_category:{attrs.get('entity_category')}"
+        denylist_hits[key] = denylist_hits.get(key, 0) + 1
+        return None
+    if attrs.get("device_class") in DROP_DEVICE_CLASSES:
+        key = f"device_class:{attrs.get('device_class')}"
+        denylist_hits[key] = denylist_hits.get(key, 0) + 1
+        return None
+    if state in ("unavailable", "unknown"):
+        denylist_hits[f"state:{state}"] = denylist_hits.get(f"state:{state}", 0) + 1
+        return None
+    if domain in PRIVACY_DENY_DOMAINS:
+        denylist_hits[f"privacy:{domain}"] = denylist_hits.get(f"privacy:{domain}", 0) + 1
+        return None
+    sanitized = dict(state_data)
+    sanitized["state"] = _sanitize_state_value(state, max_len=100)
+    sanitized["attributes"] = _sanitize_attributes(attrs)
+    return sanitized
+
+
+def _score_entity(entity_id: str, state_data: dict, *, event_entity_ids: set[str], now: float) -> float:
+    domain = _entity_domain(entity_id)
+    attrs = state_data.get("attributes", {}) or {}
+    device_class = attrs.get("device_class")
+    score = DOMAIN_SALIENCE_WEIGHTS.get(domain, 0.1)
+    if domain == "sensor" and device_class == "power":
+        score = POWER_SENSOR_WEIGHT
+    if domain == "binary_sensor" and device_class in {"presence", "occupancy", "motion"}:
+        score = PRESENCE_SENSOR_WEIGHT
+    if entity_id in ENTITY_LABELS:
+        score += OVERRIDE_SCORE_BOOST
+    if _area_from_attrs(attrs):
+        score += AREA_SCORE_BOOST
+    changed = _parse_ha_timestamp(state_data.get("last_changed"))
+    if changed is not None and now - changed <= RECENT_CHANGE_WINDOW_SECONDS:
+        score += RECENT_CHANGE_SCORE_BOOST
+    if entity_id in event_entity_ids:
+        score += EVENT_SCORE_BOOST
+    return score
 
 
 def _format_state(entity_id: str, state_data: dict) -> str | None:
     """Format a single entity state as a natural language line."""
     state = _sanitize_state_value(state_data.get("state", "unknown"))
     attrs = state_data.get("attributes", {})
-    label = ENTITY_LABELS.get(entity_id, _sanitize_state_value(attrs.get("friendly_name", entity_id)))
+    curated = ENTITY_LABELS.get(entity_id)
+    if curated is None:
+        friendly = attrs.get("friendly_name")
+        if not friendly:
+            # Anti-illusion guard: raw entity IDs never reach the host. Until a
+            # Phase B catalog label is available, drop the entity from the slice.
+            return None
+        label = _sanitize_state_value(str(friendly))
+    else:
+        label = curated
 
     if state in ("unavailable", "unknown"):
         return None
@@ -451,6 +674,85 @@ def _build_summary(states: dict[str, dict]) -> str:
             if line:
                 lines.append(f"- {line}")
     return "\n".join(lines) if lines else ""
+
+
+def _build_scored_entities(
+    states: dict[str, dict],
+    *,
+    event_entity_ids: set[str] | None = None,
+    now: float | None = None,
+    limit: int = DEFAULT_CONTEXT_ENTITY_LIMIT,
+    char_limit: int = DEFAULT_CONTEXT_CHAR_LIMIT,
+) -> list[ScoredEntity]:
+    """Score filtered HA entities and return the budgeted prompt slice."""
+    ref_now = time.time() if now is None else now
+    event_ids = event_entity_ids or set()
+    scored: list[ScoredEntity] = []
+    for entity_id, state_data in states.items():
+        line = _format_state(entity_id, state_data)
+        if not line:
+            continue
+        label_it = ENTITY_LABELS.get(entity_id, _generic_label(entity_id, state_data))
+        label_en = ENTITY_LABELS_EN.get(entity_id, _generic_label(entity_id, state_data, english=True))
+        scored.append(
+            ScoredEntity(
+                entity_id=entity_id,
+                area=_area_from_attrs(state_data.get("attributes", {}) or {}),
+                domain=_entity_domain(entity_id),
+                score=_score_entity(entity_id, state_data, event_entity_ids=event_ids, now=ref_now),
+                raw_state=state_data,
+                label_it=label_it,
+                label_en=label_en,
+                summary_line=line,
+            )
+        )
+
+    selected = sorted(
+        scored,
+        key=lambda item: (item.score, item.entity_id in ENTITY_LABELS, item.entity_id),
+        reverse=True,
+    )[:limit]
+    if char_limit <= 0:
+        return selected
+
+    budgeted: list[ScoredEntity] = []
+    used = 0
+    for item in selected:
+        rendered = f"- {item.summary_line}"
+        projected = used + len(rendered) + (1 if budgeted else 0)
+        if projected > char_limit:
+            continue
+        budgeted.append(item)
+        used = projected
+    return budgeted
+
+
+def _build_budgeted_summary(scored: list[ScoredEntity]) -> str:
+    rendered = "\n".join(f"- {entity.summary_line}" for entity in scored)
+    # The summary is concatenated between <home_state_data> tags in
+    # scriptwriter.py. Strip angle brackets at the LLM boundary so HA-controlled
+    # labels can't close the fence. (Done here, not in _sanitize_state_value,
+    # because that sanitizer is also used by the admin UI path where esc()
+    # handles HTML escaping client-side.)
+    return rendered.replace("<", "").replace(">", "")
+
+
+def _build_entity_label_maps(states: dict[str, dict]) -> tuple[dict[str, str], dict[str, str]]:
+    labels_it = dict(ENTITY_LABELS)
+    labels_en = dict(ENTITY_LABELS_EN)
+    for entity_id, state_data in states.items():
+        # Mirror the anti-illusion guard in _format_state: don't manufacture a
+        # label from the entity_id when the entity has no curated label and no
+        # friendly_name. Otherwise diff_states would emit a HomeEvent whose
+        # humanized label ("foo bar") still reaches the prompt via
+        # events_summary, bypassing the guard.
+        if entity_id in labels_it and entity_id in labels_en:
+            continue
+        if not state_data.get("attributes", {}).get("friendly_name"):
+            continue
+        labels_it.setdefault(entity_id, _generic_label(entity_id, state_data))
+        labels_en.setdefault(entity_id, _generic_label(entity_id, state_data, english=True))
+    return labels_it, labels_en
 
 
 # ---------------------------------------------------------------------------
@@ -843,6 +1145,10 @@ def check_reactive_triggers(
 
 _ha_client: httpx.AsyncClient | None = None
 _ha_cache: HomeContext | None = None
+_ha_registry_area_cache: dict[str, str] | None = None
+_ha_registry_fetched_at: float = 0.0
+_HA_REGISTRY_TTL = 6 * 60 * 60
+_HA_REGISTRY_FAILURE_TTL = 60
 
 
 def _get_ha_client() -> httpx.AsyncClient:
@@ -851,6 +1157,100 @@ def _get_ha_client() -> httpx.AsyncClient:
     if _ha_client is None or _ha_client.is_closed:
         _ha_client = httpx.AsyncClient(timeout=10.0)
     return _ha_client
+
+
+def _ha_websocket_url(ha_url: str) -> str:
+    parsed = urlsplit(ha_url.rstrip("/"))
+    scheme = "wss" if parsed.scheme == "https" else "ws"
+    base_path = parsed.path.rstrip("/")
+    if parsed.netloc == "supervisor":
+        # Supervisor add-on proxy exposes the Core websocket at /core/websocket
+        # (HA_URL is http://supervisor/core), NOT /core/api/websocket.
+        ws_path = f"{base_path}/websocket" if base_path else "/core/websocket"
+    else:
+        # Direct Core (optionally behind a reverse-proxy subpath) uses /api/websocket.
+        ws_path = f"{base_path}/api/websocket"
+    return urlunsplit((scheme, parsed.netloc, ws_path, "", ""))
+
+
+async def _fetch_ha_registry_areas(ha_url: str, ha_token: str) -> dict[str, str]:
+    """Fetch HA entity/device/area registries once and map entity_id -> area name."""
+    global _ha_registry_area_cache, _ha_registry_fetched_at
+    now = time.time()
+    if _ha_registry_area_cache is not None and now - _ha_registry_fetched_at < _HA_REGISTRY_TTL:
+        return _ha_registry_area_cache
+
+    try:
+        async with websocket_connect(_ha_websocket_url(ha_url), open_timeout=5, close_timeout=1) as ws:
+            auth_required = json.loads(await asyncio.wait_for(ws.recv(), timeout=5))
+            if auth_required.get("type") != "auth_required":
+                raise RuntimeError("unexpected HA websocket greeting")
+            await ws.send(json.dumps({"type": "auth", "access_token": ha_token}))
+            auth_response = json.loads(await asyncio.wait_for(ws.recv(), timeout=5))
+            if auth_response.get("type") != "auth_ok":
+                raise RuntimeError(auth_response.get("message") or "HA websocket auth failed")
+
+            commands = [
+                (1, "config/entity_registry/list"),
+                (2, "config/device_registry/list"),
+                (3, "config/area_registry/list"),
+            ]
+            for msg_id, msg_type in commands:
+                await ws.send(json.dumps({"id": msg_id, "type": msg_type}))
+
+            results: dict[int, list[dict]] = {}
+            while len(results) < len(commands):
+                message = json.loads(await asyncio.wait_for(ws.recv(), timeout=5))
+                msg_id = message.get("id")
+                if message.get("type") != "result" or msg_id not in {1, 2, 3}:
+                    continue
+                if not message.get("success", False):
+                    raise RuntimeError(f"HA registry command {msg_id} failed")
+                result = message.get("result") or []
+                results[int(msg_id)] = result if isinstance(result, list) else []
+
+        areas = {
+            str(area.get("area_id")): str(area.get("name") or area.get("area_id"))
+            for area in results.get(3, [])
+            if area.get("area_id")
+        }
+        devices = {
+            str(device.get("id")): str(device.get("area_id"))
+            for device in results.get(2, [])
+            if device.get("id") and device.get("area_id")
+        }
+        entity_areas: dict[str, str] = {}
+        for entity in results.get(1, []):
+            entity_id = entity.get("entity_id")
+            if not entity_id:
+                continue
+            area_id = entity.get("area_id") or devices.get(str(entity.get("device_id")))
+            area_name = areas.get(str(area_id)) if area_id else None
+            if area_name:
+                entity_areas[str(entity_id)] = area_name
+
+        _ha_registry_area_cache = entity_areas
+        _ha_registry_fetched_at = now
+        logger.debug("Fetched HA registries: %d entity areas", len(entity_areas))
+        return entity_areas
+    except Exception as exc:
+        logger.debug("HA registry fetch unavailable: %s", exc)
+        _ha_registry_area_cache = {}
+        _ha_registry_fetched_at = now - _HA_REGISTRY_TTL + _HA_REGISTRY_FAILURE_TTL
+        return {}
+
+
+def _apply_registry_area(entity_id: str, state_data: dict, registry_areas: dict[str, str]) -> dict:
+    area = registry_areas.get(entity_id)
+    if not area:
+        return state_data
+    attrs = dict(state_data.get("attributes", {}) or {})
+    if attrs.get("area") or attrs.get("area_name") or attrs.get("area_id"):
+        return state_data
+    enriched = dict(state_data)
+    attrs["area"] = area
+    enriched["attributes"] = attrs
+    return enriched
 
 
 async def fetch_home_context(
@@ -891,32 +1291,49 @@ async def fetch_home_context(
         resp.raise_for_status()
         all_states = resp.json()
 
-        # Filter to our curated entities
-        entity_map = {e["entity_id"]: e for e in all_states}
-        relevant = {eid: entity_map[eid] for eid in ALL_ENTITIES if eid in entity_map}
-
         timestamp = time.time()
+        denylist_hits: dict[str, int] = {}
+        registry_areas = await _fetch_ha_registry_areas(ha_url, ha_token)
+        entity_map = {str(e.get("entity_id", "")): e for e in all_states if e.get("entity_id")}
+        relevant = {
+            entity_id: filtered
+            for entity_id, state_data in entity_map.items()
+            if (
+                filtered := _filter_state(
+                    entity_id,
+                    _apply_registry_area(entity_id, state_data, registry_areas),
+                    denylist_hits,
+                )
+            )
+            is not None
+        }
         old_states = effective_cache.raw_states if effective_cache else {}
         old_events = effective_cache.events if effective_cache else None
+        labels_it, labels_en = _build_entity_label_maps(relevant)
         events = diff_states(
             old_states,
             relevant,
             old_events,
-            entity_labels=ENTITY_LABELS,
+            entity_labels=labels_it,
             state_translations=STATE_TRANSLATIONS,
+            now=timestamp,
+        )
+        scored = _build_scored_entities(
+            relevant,
+            event_entity_ids={event.entity_id for event in events},
             now=timestamp,
         )
         mood = classify_home_mood(relevant)
         mood_en = classify_home_mood_en(relevant)
         weather_arc = await fetch_weather_forecast(ha_url, ha_token)
-        summary = _build_summary(relevant)
+        summary = _build_budgeted_summary(scored)
         events_summary = build_events_summary(events, now=timestamp)
-        events_summary_en = build_events_summary_en(events, ENTITY_LABELS_EN, STATE_TRANSLATIONS_EN, now=timestamp)
+        events_summary_en = build_events_summary_en(events, labels_en, STATE_TRANSLATIONS_EN, now=timestamp)
         # Determine English label of the most recent event for admin display
         last_event_label_en = ""
         if events:
             newest = max(events, key=lambda e: e.timestamp)
-            last_event_label_en = ENTITY_LABELS_EN.get(newest.entity_id, newest.label)
+            last_event_label_en = labels_en.get(newest.entity_id, newest.label)
         context = HomeContext(
             raw_states=relevant,
             summary=summary,
@@ -929,9 +1346,18 @@ async def fetch_home_context(
             weather_arc_en=get_weather_arc_en(),
             events_summary_en=events_summary_en,
             last_event_label_en=last_event_label_en,
+            scored=scored,
+            denylist_hits=denylist_hits,
         )
         _ha_cache = context
-        logger.info("Fetched HA context: %d entities, %d events, mood=%r", len(relevant), len(events), mood or "none")
+        logger.info(
+            "Fetched HA context: %d/%d entities, %d scored, %d events, mood=%r",
+            len(relevant),
+            len(entity_map),
+            len(scored),
+            len(events),
+            mood or "none",
+        )
         return context
 
     except Exception as e:

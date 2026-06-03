@@ -3388,6 +3388,17 @@ async def test_admin_status_ha_details_present_with_full_context():
     state.ha_events_summary = "- Lavatrice: inattivo → 450 W"
     state.ha_recent_event_count = 3
     state.ha_last_event_label = "Lavatrice (consumo)"
+    state.ha_scored_entities = [
+        {
+            "entity_id": "switch.bar_kaffeemaschine_steckdose",
+            "label": "Coffee machine",
+            "score": 1.4,
+            "state": "on",
+            "domain": "switch",
+        }
+    ]
+    state.ha_denylist_hits = {"privacy:device_tracker": 1}
+    state.ha_catalog_hit_rate = 0.0
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
         resp = await client.get("/status", headers={"Authorization": "Bearer secret-tok"})
@@ -3399,6 +3410,26 @@ async def test_admin_status_ha_details_present_with_full_context():
     assert hd["events_summary"] == "- Lavatrice: inattivo → 450 W"
     assert hd["recent_event_count"] == 3
     assert hd["last_event_label"] == "Lavatrice (consumo)"
+    assert hd["scored_entities"][0]["label"] == "Coffee machine"
+    assert hd["denylist_hits"] == {"privacy:device_tracker": 1}
+    assert hd["catalog_hit_rate"] == 0.0
+
+
+@pytest.mark.asyncio
+async def test_admin_status_ha_details_present_when_all_entities_filtered():
+    """Denylist observability still appears when no HA entity is prompt-safe."""
+    app = _make_test_app(admin_token="secret-tok")
+    state = app.state.station_state
+    state.ha_context = ""
+    state.ha_denylist_hits = {"privacy:person": 2, "privacy:camera": 1}
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.get("/status", headers={"Authorization": "Bearer secret-tok"})
+    assert resp.status_code == 200
+    hd = resp.json()["ha_details"]
+    assert hd is not None
+    assert hd["denylist_hits"] == {"privacy:person": 2, "privacy:camera": 1}
+    assert hd["scored_entities"] == []
 
 
 @pytest.mark.asyncio

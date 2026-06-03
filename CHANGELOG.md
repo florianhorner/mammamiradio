@@ -8,9 +8,31 @@ The current version source of truth is `pyproject.toml`.
 
 ### Added
 
+- **Home Assistant context now adapts to each home.** The add-on scores prompt-safe
+  entities from the full Home Assistant state snapshot instead of only using a
+  hardcoded apartment list, so newly paired devices can contribute ambient radio
+  context without code changes. Location, camera, alarm, and free-text helper
+  entities plus secret-shaped attributes are filtered before prompt assembly;
+  who's home stays as simple home/away (never location) so the hosts can still
+  welcome you back and notice an empty house. The admin Engine Room shows the
+  scored slice plus privacy filter counts.
+
 - **The admin now tells you when an AI key isn't working** — a wrong or revoked Anthropic or OpenAI key is checked the moment the station starts (and again whenever you save a key), so the Engine Room shows a clear "key not working — replace key" state right away instead of looking connected until a host segment silently fails. Listeners never see any of this, and if a second valid key is configured the station keeps sounding live.
 
 - **Running-gag callbacks about your home** — when Home Assistant is connected, the AI hosts now occasionally land a deferred callback about a recurring home event from the same evening (the coffee machine going on yet again, the door, the vacuum), like an inside joke that builds over the night. The station keeps a small per-evening tally that survives addon restarts, paces each gag with a cooldown so it never repeats too often, and only draws on discrete on/off events (never numeric sensor noise). No effect when Home Assistant is not connected.
+
+- **Music Assistant now-playing contract** — a dedicated read-only JSON
+  endpoint at `GET /api/integrations/v1/now-playing` exposes a stable shape
+  for third-party music controllers: station identity, stream URL,
+  segment display class (music / voice / interstitial / unavailable),
+  current track or host, up next, session state, and a `changed_at`
+  timestamp paired with a weak `ETag` + `Cache-Control` for cheap polling.
+  Internal metadata fields are filtered through a server-side allowlist
+  so signed URLs, file paths, and download errors cannot leak. Contract
+  pinned by ten sample-payload JSON fixtures under
+  `docs/integrations/sample-payloads/`, each wired into the test suite.
+  Documented at `docs/integrations/now-playing.md` with a migration guide
+  from `/public-status`.
 
 ### Fixed
 
@@ -34,21 +56,6 @@ The current version source of truth is `pyproject.toml`.
 - **Undo for destructive admin actions** — purging the queue or removing a
   segment shows a 5-second Undo toast and only commits when the window closes, so
   a mis-tap on a running station is recoverable.
-
-### Added
-
-- **Music Assistant now-playing contract** — a dedicated read-only JSON
-  endpoint at `GET /api/integrations/v1/now-playing` exposes a stable shape
-  for third-party music controllers: station identity, stream URL,
-  segment display class (music / voice / interstitial / unavailable),
-  current track or host, up next, session state, and a `changed_at`
-  timestamp paired with a weak `ETag` + `Cache-Control` for cheap polling.
-  Internal metadata fields are filtered through a server-side allowlist
-  so signed URLs, file paths, and download errors cannot leak. Contract
-  pinned by ten sample-payload JSON fixtures under
-  `docs/integrations/sample-payloads/`, each wired into the test suite.
-  Documented at `docs/integrations/now-playing.md` with a migration guide
-  from `/public-status`.
 
 ## [2.13.0] - 2026-05-26
 

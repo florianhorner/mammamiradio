@@ -833,7 +833,7 @@ def test_synthesize_openai_raises_when_no_key(monkeypatch):
         await synthesize_openai("Ciao", "onyx", Path("/tmp/noop.mp3"))
 
     with pytest.raises(RuntimeError, match="OPENAI_API_KEY"):
-        asyncio.get_event_loop().run_until_complete(_run())
+        asyncio.run(_run())
 
 
 @pytest.mark.asyncio
