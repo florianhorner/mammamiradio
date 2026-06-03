@@ -148,7 +148,19 @@ async def get_listener_requests(request: Request, _: None = Depends(require_admi
                 "evict_after": r.get("evict_after"),
             }
             for r in state.pending_requests
-        ]
+        ],
+        "recently_consumed": [
+            {
+                "id": r.get("id"),
+                "name": r.get("name"),
+                "message": r.get("message"),
+                "song_track": r.get("song_track"),
+                "type": r.get("type"),
+                "status": r.get("status"),
+                "age_s": int(now - r.get("consumed_at", now)),
+            }
+            for r in state.recently_consumed_requests
+        ],
     }
 
 

@@ -481,6 +481,9 @@ class StationState:
     pinned_track: Track | None = None
     # Listener requests: shoutouts and song wishes submitted via the dashboard
     pending_requests: list[dict] = field(default_factory=list)
+    # Recently consumed requests kept for 5 min so the admin can see what happened
+    # to a request that left Pending (acknowledged by hosts, or song not found).
+    recently_consumed_requests: list[dict] = field(default_factory=list)
     # Operator-visible pending actions/directives. This mirrors legacy single
     # slots while the producer still consumes those slots for compatibility.
     pending_actions: deque[dict] = field(default_factory=lambda: deque(maxlen=200))

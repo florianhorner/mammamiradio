@@ -99,6 +99,21 @@ class ListenerRequestCommit:
         if self.mark_song_error:
             self.request["song_error"] = True
         if self.consume:
+            state.recently_consumed_requests.append(
+                {
+                    "id": self.request.get("request_id") or str(self.request.get("ts", "")),
+                    "name": self.request.get("name"),
+                    "message": self.request.get("message"),
+                    "song_track": self.request.get("song_track"),
+                    "type": self.request.get("type"),
+                    "status": "song_not_found" if self.mark_song_error else "acknowledged",
+                    "consumed_at": time.time(),
+                }
+            )
+            cutoff = time.time() - 300
+            state.recently_consumed_requests = [
+                r for r in state.recently_consumed_requests if r["consumed_at"] >= cutoff
+            ]
             state.pending_requests.remove(self.request)
 
 
@@ -114,7 +129,7 @@ def _plan_listener_request_block(state: StationState) -> tuple[str, ListenerRequ
 
     if still_downloading:
         next_missed = req.get("banter_cycles_missed", 0) + 1
-        if next_missed >= 2:
+        if next_missed >= 5:
             still_downloading = False
             commit = ListenerRequestCommit(
                 request=req,
