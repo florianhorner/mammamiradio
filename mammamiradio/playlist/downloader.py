@@ -6,6 +6,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 import uuid
@@ -497,6 +498,12 @@ def search_ytdlp_metadata(query: str, max_results: int = 5) -> list[dict]:
         results = []
         for e in entries or []:
             if not e or not e.get("id"):
+                continue
+            # ytsearch mixes channel/playlist hits (e.g. a "UC..." channel id)
+            # in with videos. Those aren't downloadable and would 400 at
+            # /api/playlist/add-external, so keep only real 11-char video ids —
+            # the same shape the queue endpoint validates against.
+            if not re.fullmatch(r"[A-Za-z0-9_-]{11}", e["id"]):
                 continue
             title = e.get("title") or ""
             artist = e.get("uploader") or e.get("channel") or ""

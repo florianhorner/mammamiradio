@@ -16,6 +16,8 @@ The current version source of truth is `pyproject.toml`.
 
 - **Queueing a song from admin search no longer shows a false error.** Previously, picking a track from the admin search could pop "Failed to add to queue" even though the track was downloading fine and would play — the browser request was waiting on the full download and the connection timed out. The download now runs in the background and the request returns instantly, so the admin sees a "downloading — on air shortly" confirmation and the track plays next once it is ready. The live stream is never interrupted.
 
+- **Admin search no longer surfaces unplayable results.** The web search sometimes listed an artist's channel as the top hit; clicking it failed with an error because a channel can't be queued. Search now returns only real tracks, so every result can be queued.
+
 - **The admin live queue no longer overlaps itself.** In the Scaletta (live queue), the "when" label and the segment-type badge could collide into unreadable text on narrower screens. The redundant "planned" tag was removed; upcoming-but-not-yet-rendered rows stay dimmed to mark them.
 
 - **The Edge add-on now auto-updates after every add-on change.** The automated edge-channel version bump previously could not land on the protected branch, so Home Assistant never showed an Edge "Update" and the add-on build reported a failure on every change. The bump now goes through the normal checks, so the Edge channel tracks the latest build again.
