@@ -4,6 +4,14 @@
 
 ### Added
 
+- **Share a whole moment, not just thirty seconds.** The Share button now always
+  copies the clip link to your clipboard (alongside the native share sheet). Clips
+  of host banter and ads capture the full segment instead of a fixed 30-second
+  window, with a short grace period so you can still grab a great ad a beat too
+  late; music clips stay at 30 seconds. When the station is busy, the Share button
+  speaks plainly ("the tape decks need a moment — give them a few seconds and tap
+  again") instead of a technical error.
+
 - **Jamendo rotation depth now defaults to 200 tracks.** The add-on's bundled
   `radio.toml` sets `jamendo_limit = 200`, and advanced deployments can override
   it with `JAMENDO_LIMIT` (`1`-`200`) to tune Jamendo API result depth.

@@ -122,6 +122,13 @@ STARTUP_GRACE_SECONDS = 30.0
 CLIP_RATE_LIMIT_SECONDS = 10.0
 CLIP_RATE_PRUNE_SECONDS = 300.0
 CLIP_DURATION_SECONDS = 30
+# Ad/banter are operator-authored (no copyright cap), so a shared clip can cover
+# the whole segment. This ceiling bounds both the ring buffer (main.py sizes it
+# from this) and the per-clip extraction so memory stays bounded on Pi hardware.
+CLIP_MAX_SEGMENT_SECONDS = 180
+# After an ad/banter ends we keep its snapshot briefly, so a listener who taps
+# Share a moment too late (music already playing again) still gets the whole bit.
+CLIP_LOOKBACK_SECONDS = 15
 CLIP_MAX_SAVED = 50
 DEFAULT_CLIP_BITRATE_KBPS = 192
 
@@ -1233,6 +1240,29 @@ async def run_playback_loop(app) -> None:
                     ahead = expected - elapsed
                     if ahead > 0.005:
                         await asyncio.sleep(ahead)
+            # Lookback snapshot: when an ad/banter segment finishes, remember the
+            # whole thing so a listener who taps Share just after it ends (music
+            # already playing again) still captures it. Single extract at the
+            # boundary — no per-chunk work on the throttled send path above.
+            if segment.type in (SegmentType.AD, SegmentType.BANTER) and not was_skipped:
+                from mammamiradio.scheduling.clip import extract_clip as _extract_clip
+
+                _clip_buf = getattr(app.state, "clip_ring_buffer", None)
+                if _clip_buf:
+                    _bitrate = config.audio.bitrate if hasattr(config, "audio") else DEFAULT_CLIP_BITRATE_KBPS
+                    _secs = min(
+                        CLIP_MAX_SEGMENT_SECONDS,
+                        max(CLIP_DURATION_SECONDS, math.ceil(segment.duration_sec or 0)),
+                    )
+                    _snap = _extract_clip(_clip_buf, duration_seconds=_secs, bitrate_kbps=_bitrate)
+                    if _snap:
+                        _meta = segment.metadata if isinstance(segment.metadata, dict) else {}
+                        app.state.last_shareworthy_clip = {
+                            "bytes": _snap,
+                            "ended_monotonic": time.monotonic(),
+                            "type": segment.type.value,
+                            "title": str(_meta.get("title") or "").strip(),
+                        }
             if segment.type == SegmentType.MUSIC and not was_skipped:
                 listen_sec = bytes_sent / bytes_per_sec if bytes_per_sec else None
                 # Fire-and-forget: persistence must not block the handoff to the next
@@ -1929,6 +1959,8 @@ async def stop_session(request: Request, _: None = Depends(require_admin_access)
     config = request.app.state.config
     _persist_session_stopped(config, True)
     state.now_streaming = {"type": "stopped", "label": "Session stopped", "started": time.time(), "metadata": {}}
+    # Drop any remembered ad/banter snapshot so a clip can't leak across a stop.
+    request.app.state.last_shareworthy_clip = None
     logger.info("Session stopped by admin (purged %d segments)", purged)
     return {"ok": True, "purged": purged}
 
@@ -2901,29 +2933,61 @@ async def create_clip(request: Request):
     """Extract the last ~30s of audio into a shareable clip."""
     from mammamiradio.scheduling.clip import CLIP_TTL_SECONDS, cleanup_old_clips, extract_clip, save_clip
 
-    # Rate limit: 1 clip per 10 seconds per IP
+    # Rate limit: 1 clip per 10 seconds per IP. Return retry_after (seconds), not
+    # tech-lingo prose — the listener UI turns it into warm, actionable copy.
     client_ip = request.client.host if request.client else "unknown"
     now = time.time()
     async with _clip_rate_lock:
-        if now - _clip_rate.get(client_ip, 0) < CLIP_RATE_LIMIT_SECONDS:
+        last = _clip_rate.get(client_ip, 0)
+        if now - last < CLIP_RATE_LIMIT_SECONDS:
             from fastapi.responses import JSONResponse
 
-            return JSONResponse({"ok": False, "error": "Rate limited — try again in a few seconds"}, status_code=429)
+            retry_after = max(1, math.ceil(CLIP_RATE_LIMIT_SECONDS - (now - last)))
+            return JSONResponse({"ok": False, "retry_after": retry_after}, status_code=429)
         _clip_rate[client_ip] = now
         # Prune stale entries to avoid unbounded growth.
         stale_keys = [k for k, v in _clip_rate.items() if now - v >= CLIP_RATE_PRUNE_SECONDS]
         for key in stale_keys:
             _clip_rate.pop(key, None)
 
-    ring_buffer = getattr(request.app.state, "clip_ring_buffer", None)
-    if ring_buffer is None or len(ring_buffer) == 0:
-        return {"ok": False, "error": "No audio buffered yet"}
-
     config = request.app.state.config
     bitrate = config.audio.bitrate if hasattr(config, "audio") else DEFAULT_CLIP_BITRATE_KBPS
-    clip_data = extract_clip(ring_buffer, duration_seconds=CLIP_DURATION_SECONDS, bitrate_kbps=bitrate)
+    station_state = getattr(request.app.state, "station_state", None)
+    now_streaming = getattr(station_state, "now_streaming", None) or {}
+    if not isinstance(now_streaming, dict):
+        now_streaming = {}
+    ring_buffer = getattr(request.app.state, "clip_ring_buffer", None)
+
+    # Pick what to clip:
+    #  - live ad/banter  → the whole segment so far (operator content, no 30s cap)
+    #  - just-finished ad/banter within the lookback window → the saved snapshot
+    #  - otherwise (music) → the rolling 30s window (copyright-capped)
+    seg_type = now_streaming.get("type")
+    clip_data = None
+    clip_title_override = None
+    if seg_type in ("ad", "banter") and ring_buffer:
+        started = float(now_streaming.get("started") or now)
+        duration_sec = float(now_streaming.get("duration_sec") or CLIP_DURATION_SECONDS)
+        elapsed = max(0.0, now - started)
+        cap = min(float(CLIP_MAX_SEGMENT_SECONDS), duration_sec)
+        secs = min(cap, max(float(CLIP_DURATION_SECONDS), elapsed))
+        clip_data = extract_clip(ring_buffer, duration_seconds=math.ceil(secs), bitrate_kbps=bitrate)
+    else:
+        snap = getattr(request.app.state, "last_shareworthy_clip", None)
+        if (
+            isinstance(snap, dict)
+            and snap.get("bytes")
+            and (time.monotonic() - float(snap.get("ended_monotonic", 0))) < CLIP_LOOKBACK_SECONDS
+        ):
+            clip_data = snap["bytes"]
+            clip_title_override = str(snap.get("title") or "").strip()
+
+    if clip_data is None:
+        if ring_buffer is None or len(ring_buffer) == 0:
+            return {"ok": False, "reason": "no_audio"}
+        clip_data = extract_clip(ring_buffer, duration_seconds=CLIP_DURATION_SECONDS, bitrate_kbps=bitrate)
     if not clip_data:
-        return {"ok": False, "error": "Buffer empty"}
+        return {"ok": False, "reason": "no_audio"}
 
     clips_dir = config.cache_dir / "clips"
 
@@ -2940,16 +3004,20 @@ async def create_clip(request: Request):
     # Best-effort: missing now_streaming or schema drift falls back to station_name.
     import json as _json
 
-    station_state = getattr(request.app.state, "station_state", None)
-    now_streaming = getattr(station_state, "now_streaming", None) or {}
     # metadata is producer-managed and normally a dict, but a None or an
     # unexpected scalar would crash the .get() below and turn a successful
     # clip into a 500. Normalize to dict before reading fields.
-    raw_meta = now_streaming.get("metadata", {}) if isinstance(now_streaming, dict) else {}
+    raw_meta = now_streaming.get("metadata", {})
     meta = raw_meta if isinstance(raw_meta, dict) else {}
     station_name = config.display_station_name
     track_title = str(meta.get("title_only") or meta.get("title") or "").strip()
     track_artist = str(meta.get("artist") or "").strip()
+    # When we served a just-finished ad/banter via the lookback snapshot,
+    # now_streaming describes the CURRENT segment (music) — stamp the remembered
+    # ad/banter title instead so the share card names what was actually clipped.
+    if clip_title_override is not None:
+        track_title = clip_title_override
+        track_artist = ""
     sidecar = {
         "station_name": station_name,
         "track_title": track_title,

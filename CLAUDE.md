@@ -18,6 +18,9 @@ The only legitimate code-change path for the addon is `branch → PR → merge �
 **4. THE README IS THE PITCH**
 A new reader must get it in 30 seconds or less. That is a KPI, not an aspiration. If the README needs scrolling, paragraphs of context, or a glossary before the product clicks, we failed. The first viewport carries the entire pitch: what it is, what makes it different, and what the reader does next. Same standard applies to the repo at large — when a new contributor opens the source tree, the folder hierarchy IS the mental model. If they can't find where a feature lives in 30 seconds, the structure failed.
 
+**5. SPEAK HUMAN, ALWAYS WITH A WAY OUT**
+Every word a listener or operator reads is product copy, not a log line. No tech lingo reaches a human screen — "rate limit", "buffer empty", "429", "timeout", "rejected", "degraded" are machine words and belong in logs, never in the UI. Replace them with warm, in-character language a non-technical listener understands. And never just name a problem: every error must also tell the user how to fix it, with a concrete next step ("give the tape decks a few seconds and tap again"). A message that states a failure without a way forward is a bug, not a message. Applies to every human-facing surface — listener and admin alike.
+
 ## Production Systems Discipline — HARD STOP
 
 **Principle: No live surgery on the HA Green.** The only legitimate code-change path for the mammamiradio addon is:
