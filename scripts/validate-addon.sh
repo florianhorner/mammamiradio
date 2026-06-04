@@ -119,7 +119,7 @@ fi
 echo "4. Critical files"
 for f in mammamiradio/__init__.py radio.toml ha-addon/mammamiradio/Dockerfile \
          ha-addon/mammamiradio/rootfs/run.sh ha-addon/mammamiradio/config.yaml \
-         ha-addon/mammamiradio/build.yaml \
+         ha-addon/mammamiradio/build.yaml ha-addon/mammamiradio/apparmor.txt \
          ha-addon/mammamiradio/translations/en.yaml; do
     if [ -f "$f" ]; then
         pass "$f"
@@ -168,6 +168,13 @@ fi
 
 # ---- 8. Hardcoded value sync ----
 echo "8. Hardcoded value sync"
+
+STABLE_STAGE=$(grep '^stage:' ha-addon/mammamiradio/config.yaml | awk '{print $2}' | tr -d '"')
+if [ "$STABLE_STAGE" = "stable" ]; then
+    pass "stable add-on stage: stable"
+else
+    fail "stable add-on stage must be stable, got: ${STABLE_STAGE:-missing}"
+fi
 
 # Port 8000 must appear in config.yaml, run.sh
 PORT_CONFIG=$(grep 'ingress_port:' ha-addon/mammamiradio/config.yaml | awk '{print $2}')
@@ -355,6 +362,13 @@ else
         fail "edge version must be a 7-char short SHA (make edge-release), got '$EDGE_VER'"
     fi
 
+    EDGE_STAGE=$(grep '^stage:' "$EDGE_CONFIG" | awk '{print $2}' | tr -d '"')
+    if [ "$EDGE_STAGE" = "experimental" ]; then
+        pass "edge stage: experimental"
+    else
+        fail "edge stage must stay experimental, got: ${EDGE_STAGE:-missing}"
+    fi
+
     # options + schema parity with stable (edge runs the same image/run.sh).
     # Block equality is byte-exact, so it also guarantees key parity and
     # (via the translations block check below) translation coverage.
@@ -387,13 +401,19 @@ else
 
     # required files
     for f in ha-addon/mammamiradio-edge/icon.png ha-addon/mammamiradio-edge/logo.png \
-             "$EDGE_TRANS"; do
+             ha-addon/mammamiradio-edge/apparmor.txt "$EDGE_TRANS"; do
         if [ -f "$f" ]; then
             pass "$f"
         else
             fail "Missing: $f"
         fi
     done
+
+    if cmp -s ha-addon/mammamiradio/apparmor.txt ha-addon/mammamiradio-edge/apparmor.txt; then
+        pass "edge AppArmor profile matches stable"
+    else
+        fail "edge AppArmor profile drifted from stable"
+    fi
 
     # ingress / network consistency with stable
     if grep -q 'host_network: true' "$EDGE_CONFIG"; then

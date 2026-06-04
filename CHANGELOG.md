@@ -74,6 +74,8 @@ The current version source of truth is `pyproject.toml`.
 
 ### Changed
 
+- **The stable Home Assistant add-on now presents as stable in the store.** The release channel no longer carries the Experimental pill, while the Edge channel keeps it. Both add-on folders now ship the same custom AppArmor profile so Supervisor can award the extra security-rating point after install/update.
+
 - **Jamendo rotation depth now defaults to 200 tracks.** The `[playlist].jamendo_limit`
   config key and `JAMENDO_LIMIT` env override control Jamendo API result depth
   from `1` to `200`, reducing repeats when Jamendo is the active music source.

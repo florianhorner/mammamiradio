@@ -285,6 +285,7 @@ def _create_validate_addon_repo(
         "\n".join(
             [
                 'version: "1.1.0"',
+                "stage: stable",
                 "image: ghcr.io/florianhorner/mammamiradio-addon-{arch}",
                 "timeout: 300",
                 "host_network: true",
@@ -335,6 +336,10 @@ def _create_validate_addon_repo(
         ),
     )
     _write(tmp_path / "ha-addon/mammamiradio/build.yaml", "build_from: {}\n")
+    _write(
+        tmp_path / "ha-addon/mammamiradio/apparmor.txt",
+        "#include <tunables/global>\n\nprofile mammamiradio flags=(attach_disconnected,mediate_deleted) {\n}\n",
+    )
     _write(
         tmp_path / "ha-addon/mammamiradio/translations/en.yaml",
         "\n".join(
