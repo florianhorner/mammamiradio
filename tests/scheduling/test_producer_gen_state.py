@@ -11,17 +11,20 @@ from __future__ import annotations
 import asyncio
 import time
 from pathlib import Path
+from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
 from fastapi import FastAPI
 
 from mammamiradio.core.config import load_config
-from mammamiradio.core.models import StationState, Track
+from mammamiradio.core.models import Segment, SegmentType, StationState, Track
+from mammamiradio.scheduling.producer import RenderedMusicTrack, run_producer
 from mammamiradio.web.listener_requests import router as listener_requests_router
 from mammamiradio.web.streamer import LiveStreamHub, router
 
 TOML_PATH = str(Path(__file__).resolve().parents[2] / "radio.toml")
+PRODUCER_MODULE = "mammamiradio.scheduling.producer"
 
 
 # ---------------------------------------------------------------------------
@@ -175,3 +178,58 @@ async def test_production_not_in_public_listener_status():
         resp = await client.get("/public-status")
     assert resp.status_code == 200
     assert "production" not in resp.json()
+
+
+# ---------------------------------------------------------------------------
+# Producer wiring — verify (not just execute) the gen-state instrumentation
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_producer_records_music_phase_in_gen_recent(tmp_path):
+    """Driving a real MUSIC segment through run_producer must record a
+    finding/music phase — verifies the producer wiring, not just the helpers.
+    Closes the coverage gap where the instrumentation was executed but the
+    kind/label/ok effect was never asserted."""
+    track = Track(title="Canzone", artist="Artista", duration_ms=180_000, spotify_id="demo1", source="classic")
+    state = StationState(playlist=[track], listeners_active=1)
+    config = load_config(TOML_PATH)
+    config.pacing.lookahead_segments = 1
+    config.homeassistant.enabled = False
+    config.tmp_dir = tmp_path
+    config.cache_dir = tmp_path
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    music_path = tmp_path / "music.mp3"
+    music_path.write_bytes(b"fake audio")
+
+    async def fake_render(t, *_args, **_kwargs):
+        return RenderedMusicTrack(track=t, path=music_path, cache_path=music_path, cache_hit=True)
+
+    with (
+        patch(f"{PRODUCER_MODULE}.validate_segment_audio", return_value=None),
+        patch(f"{PRODUCER_MODULE}._probe_segment_duration", return_value=180.0),
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.MUSIC),
+        patch(f"{PRODUCER_MODULE}._render_music_track", new_callable=AsyncMock, side_effect=fake_render),
+        patch(f"{PRODUCER_MODULE}._prefetch_next", new_callable=AsyncMock),
+        patch(f"{PRODUCER_MODULE}.generate_track_rationale", return_value="fits"),
+        patch(f"{PRODUCER_MODULE}.classify_track_crate", return_value="test"),
+    ):
+        task = asyncio.create_task(run_producer(queue, state, config))
+        try:
+            deadline = asyncio.get_event_loop().time() + 5.0
+            while not state.gen_recent:
+                if asyncio.get_event_loop().time() > deadline:
+                    raise TimeoutError("producer did not record a gen phase")
+                await asyncio.sleep(0.05)
+        finally:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+    entry = state.gen_recent[0]
+    assert entry["kind"] == "music"
+    assert entry["phase"] == "finding"
+    assert entry["ok"] is True
+    assert entry["label"].startswith("Finding")
