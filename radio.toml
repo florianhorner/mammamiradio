@@ -26,7 +26,9 @@ sweepers = [
 # Rhodes motif: C5 → E5 → G5 → C6 (ascending major arpeggio)
 motif_notes = [523, 659, 784, 1047]
 # Sweeper voice — uses a host voice for station idents
-sweeper_voice = "it-IT-GiuseppeMultilingualNeural"
+sweeper_voice = "it-IT-Isabella:DragonHDLatestNeural"
+sweeper_engine = "azure"
+sweeper_edge_fallback_voice = "it-IT-GiuseppeMultilingualNeural"
 
 # ────────────────────────────────────────────────────────────────────────
 # [brand] — what the LISTENER reads on the public page. Separate from
@@ -85,7 +87,7 @@ lookahead_segments = 3
 
 [[hosts]]
 name = "Marco"
-voice = "onyx"
+voice = "cedar"
 engine = "openai"
 edge_fallback_voice = "it-IT-GiuseppeMultilingualNeural"
 style = "manic energy, steamrolls every conversation, interrupts people mid-thought, says things he shouldn't on air, conspiracy theories about Italian food, gets way too personal about listeners' lives, drops obscure cinema references nobody asked for, once got suspended for a week (he's proud of it), massive ego, catastrophically bad takes delivered with total conviction, never admits he's wrong — doubles down harder when cornered, genuinely believes he is the reason people tune in"
@@ -98,7 +100,9 @@ nostalgia = 75
 
 [[hosts]]
 name = "Giulia"
-voice = "it-IT-IsabellaNeural"
+voice = "it-IT-Isabella:DragonHDLatestNeural"
+engine = "azure"
+edge_fallback_voice = "it-IT-IsabellaNeural"
 style = "razor-sharp sarcasm, cuts Marco off whenever he deserves it, openly judges the playlist, delivers devastating one-liners with zero emotion, pretends she's too good for this station but clearly loves it, will burn any caller who says something stupid, openly contemptuous of Marco's intelligence, delivers devastation with the warmth of a tax audit, treats him like a slow child she is legally obligated to work with"
 [hosts.personality]
 energy = 72
@@ -401,13 +405,17 @@ recurring = false
 
 [[ads.voices]]
 name = "Roberto"
-voice = "it-IT-DiegoNeural"
+voice = "it-IT-Alessio:DragonHDLatestNeural"
+engine = "azure"
+edge_fallback_voice = "it-IT-DiegoNeural"
 style = "booming TV announcer, dramatic pauses, sells everything like it's the last day on earth"
 role = "hammer"
 
 [[ads.voices]]
 name = "Palmira"
-voice = "it-IT-IsabellaNeural"
+voice = "shimmer"
+engine = "openai"
+edge_fallback_voice = "it-IT-IsabellaNeural"
 style = "ASMR whisperer, unsettlingly intimate, makes toothpaste sound sensual"
 role = "seductress"
 
@@ -419,18 +427,24 @@ role = "disclaimer_goblin"
 
 [[ads.voices]]
 name = "Fiamma"
-voice = "it-IT-ElsaNeural"
+voice = "coral"
+engine = "openai"
+edge_fallback_voice = "it-IT-ElsaNeural"
 style = "overly enthusiastic infomercial host, everything is INCREDIBILE"
 role = "maniac"
 
 [[ads.voices]]
 name = "Dottore Marzio"
-voice = "it-IT-GiuseppeMultilingualNeural"
+voice = "it-IT-DiegoNeural"
+engine = "azure"
+edge_fallback_voice = "it-IT-GiuseppeMultilingualNeural"
 style = "dry official government notice voice, reads absurd regulations with total sincerity"
 role = "bureaucrat"
 
 [[ads.voices]]
 name = "Signora Testimonia"
-voice = "it-IT-ElsaNeural"
+voice = "marin"
+engine = "openai"
+edge_fallback_voice = "it-IT-ElsaNeural"
 style = "fake customer testimonial voice, suspiciously specific enthusiasm, clearly reading a script"
 role = "witness"

@@ -72,6 +72,10 @@ assert_accepts "short-SHA edge version (make edge-release)"
 mutate 's#^image: .*#image: ghcr.io/wrong/image#'
 assert_rejects "wrong image" "edge image mismatch"
 
+# Case 3b: edge must keep the visible experimental channel marker.
+mutate 's/^stage: .*/stage: stable/'
+assert_rejects "wrong stage" "edge stage must stay experimental"
+
 # Case 4: schema drift from stable
 mutate 's/anthropic_api_key: password?/anthropic_api_key: str?/'
 assert_rejects "schema drift" "edge schema block drifted"

@@ -23,25 +23,34 @@ OPENAI_VOICES = frozenset(
         "sage",
         "shimmer",
         "verse",
+        "marin",
+        "cedar",
     }
 )
 
-# edge-tts Italian voice IDs used by the station. edge-tts ships a larger
-# multilingual catalog; we only need to validate the subset the radio actually
-# configures. Entries are case-sensitive because edge-tts compares IDs
-# verbatim.
+# edge-tts Italian voice IDs exposed by the installed edge-tts package in this
+# workspace. The package fronts Microsoft Edge Read Aloud, not the official
+# Azure Speech catalog; keep this intentionally narrower than Azure.
 EDGE_ITALIAN_VOICES = frozenset(
     {
         "it-IT-DiegoNeural",
         "it-IT-ElsaNeural",
-        "it-IT-FabiolaNeural",
-        "it-IT-FiammaNeural",
-        "it-IT-GianniNeural",
         "it-IT-GiuseppeMultilingualNeural",
         "it-IT-IsabellaNeural",
-        "it-IT-PalmiraNeural",
-        "it-IT-PierinaNeural",
-        "it-IT-RinaldoNeural",
+    }
+)
+
+# Official Azure Speech Italian voices that are useful for the station. Azure
+# also exposes broader multilingual catalogs and a Voice List API; unknown Azure
+# IDs are not rejected at config load because availability varies by region.
+AZURE_ITALIAN_VOICES = frozenset(
+    {
+        "it-IT-Alessio:DragonHDLatestNeural",
+        "it-IT-Isabella:DragonHDLatestNeural",
+        "it-IT-DiegoNeural",
+        "it-IT-ElsaNeural",
+        "it-IT-GiuseppeMultilingualNeural",
+        "it-IT-IsabellaNeural",
     }
 )
 
@@ -56,3 +65,8 @@ def is_openai_voice(voice: str) -> bool:
 def is_known_edge_voice(voice: str) -> bool:
     """Return True if the voice ID is in the Italian edge-tts catalog."""
     return voice.strip() in EDGE_ITALIAN_VOICES
+
+
+def is_known_azure_voice(voice: str) -> bool:
+    """Return True if the voice ID is in the curated Azure Italian catalog."""
+    return voice.strip() in AZURE_ITALIAN_VOICES

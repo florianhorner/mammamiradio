@@ -202,8 +202,8 @@ class HostPersonality:
     voice: str
     style: str
     personality: PersonalityAxes = field(default_factory=PersonalityAxes)
-    engine: str = "edge"  # "edge" for edge-tts, "openai" for OpenAI gpt-4o-mini-tts
-    edge_fallback_voice: str = ""  # edge-tts voice used when OpenAI engine falls back
+    engine: str = "edge"  # edge|openai|azure|elevenlabs
+    edge_fallback_voice: str = ""  # edge-tts voice used when a cloud TTS engine falls back
 
 
 @dataclass

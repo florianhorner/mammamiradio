@@ -38,3 +38,40 @@ def test_copy_strings_returns_full_dict_for_mode():
     # Returned dict must be a copy — mutating it should not bleed into module state.
     en["listen_now"] = "mutated"
     assert COPY["en"]["listen_now"] == "Listen Now"
+
+
+def test_clip_copy_keys_present():
+    """The clip-sharing copy must exist in both languages (leadership principle #5)."""
+    for lang in ("en", "it"):
+        for key in ("clip_saving", "clip_copied", "clip_rate_limited", "clip_no_audio", "clip_error"):
+            assert COPY[lang].get(key), f"missing {key} in {lang}"
+    # The rate-limit string must carry the {s} seconds placeholder the JS fills in.
+    assert "{s}" in COPY["en"]["clip_rate_limited"]
+    assert "{s}" in COPY["it"]["clip_rate_limited"]
+
+
+def test_no_tech_lingo_reaches_the_listener():
+    """Leadership principle #5: no machine words in listener-facing copy.
+
+    Guards every swappable string in both languages against the dev-lingo that
+    has leaked to the UI before ("rate limit", "buffer", HTTP codes, etc.).
+    """
+    banned = (
+        "rate limit",
+        "429",
+        "503",
+        "500",
+        "buffer",
+        "timeout",
+        "rejected",
+        "degraded",
+        "null",
+        "undefined",
+        "traceback",
+        "exception",
+    )
+    for lang in ("en", "it"):
+        for key, value in COPY[lang].items():
+            low = value.lower()
+            for term in banned:
+                assert term not in low, f"tech lingo '{term}' in COPY[{lang}][{key}]: {value!r}"

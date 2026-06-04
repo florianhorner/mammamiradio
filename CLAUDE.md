@@ -18,6 +18,9 @@ The only legitimate code-change path for the addon is `branch → PR → merge �
 **4. THE README IS THE PITCH**
 A new reader must get it in 30 seconds or less. That is a KPI, not an aspiration. If the README needs scrolling, paragraphs of context, or a glossary before the product clicks, we failed. The first viewport carries the entire pitch: what it is, what makes it different, and what the reader does next. Same standard applies to the repo at large — when a new contributor opens the source tree, the folder hierarchy IS the mental model. If they can't find where a feature lives in 30 seconds, the structure failed.
 
+**5. SPEAK HUMAN, ALWAYS WITH A WAY OUT**
+Every word a listener or operator reads is product copy, not a log line. No tech lingo reaches a human screen — "rate limit", "buffer empty", "429", "timeout", "rejected", "degraded" are machine words and belong in logs, never in the UI. Replace them with warm, human-readable language a non-technical person understands. And never just name a problem: every error must also tell the user how to fix it, with a concrete next step ("give the tape decks a few seconds and tap again"). A message that states a failure without a way forward is a bug, not a message. This applies to every human-facing surface. Voice differs by surface: the listener UI speaks in the station's full in-character voice (Italian-first under Super Italian Mode); the admin UI stays warm but plain English (see the admin-localization rule) — same no-lingo, always-a-fix standard, different register.
+
 ## Production Systems Discipline — HARD STOP
 
 **Principle: No live surgery on the HA Green.** The only legitimate code-change path for the mammamiradio addon is:
@@ -112,6 +115,8 @@ private durable system for strategy or relationship context.
 - `ADMIN_USERNAME`, `ADMIN_PASSWORD`, `ADMIN_TOKEN`: admin auth
 - `ANTHROPIC_API_KEY`: Claude banter/ad generation
 - `OPENAI_API_KEY`: OpenAI gpt-4o-mini-tts voice synthesis + script generation fallback when Anthropic is unavailable
+- `AZURE_SPEECH_KEY`, `AZURE_SPEECH_REGION`: Azure Speech TTS for host/sweeper/ad voices routed to `engine = "azure"`. Both required together; if either is absent the voice falls back to its per-voice Edge fallback (never silence). Listeners never see the downgrade.
+- `ELEVENLABS_API_KEY`: ElevenLabs TTS for voices routed to `engine = "elevenlabs"`. Absent key falls back to the per-voice Edge fallback.
 - `HA_TOKEN`: Home Assistant API token
 - `HA_URL`: Home Assistant API base URL (auto-set by HA add-on to `http://supervisor/core/api`)
 - `HA_ENABLED`: force-enable HA integration (`true`/`1`/`yes`)

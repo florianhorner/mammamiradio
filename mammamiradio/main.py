@@ -24,7 +24,13 @@ from mammamiradio.playlist.downloader import evict_cache_lru, purge_suspect_cach
 from mammamiradio.playlist.playlist import DEMO_TRACKS, fetch_startup_playlist, read_persisted_source
 from mammamiradio.scheduling.producer import prewarm_first_segment, run_producer
 from mammamiradio.web.listener_requests import router as listener_requests_router
-from mammamiradio.web.streamer import LiveStreamHub, _session_stopped_flag, router, run_playback_loop
+from mammamiradio.web.streamer import (
+    CLIP_MAX_SEGMENT_SECONDS,
+    LiveStreamHub,
+    _session_stopped_flag,
+    router,
+    run_playback_loop,
+)
 
 logging.basicConfig(
     level=getattr(logging, os.getenv("LOG_LEVEL", "INFO").upper(), logging.INFO),
@@ -165,14 +171,21 @@ async def startup():
     )
     queue: asyncio.Queue = asyncio.Queue(maxsize=config.pacing.lookahead_segments + 2)
 
-    # Ring buffer for clip sharing ("share WTF moment") — holds ~60s of MP3 chunks
+    # Ring buffer for clip sharing ("share WTF moment"). Sized to hold the longest
+    # shareable ad/banter segment (CLIP_MAX_SEGMENT_SECONDS) so a full spot can be
+    # captured whole; music clips still only read the trailing 30s. Chunks are the
+    # ~4 KB MP3 reads fed by the playback send loop. The max(240, …) floor keeps a
+    # usable buffer when bitrate is missing or malformed.
     from collections import deque
 
+    _clip_chunk_bytes = 4096
     try:
-        _clip_maxlen = max(240, int(config.audio.bitrate) * 1000 // 8 * 60 // 4096)
+        _bytes_per_sec = int(config.audio.bitrate) * 1000 // 8
+        _clip_maxlen = max(240, _bytes_per_sec * CLIP_MAX_SEGMENT_SECONDS // _clip_chunk_bytes)
     except (TypeError, ValueError, AttributeError):
         _clip_maxlen = 240
     app.state.clip_ring_buffer: deque[bytes] = deque(maxlen=_clip_maxlen)
+    app.state.last_shareworthy_clip = None
 
     # Set app.state for streamer access
     app.state.queue = queue
