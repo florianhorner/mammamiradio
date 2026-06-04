@@ -95,12 +95,14 @@ Admin (require `ADMIN_PASSWORD` or `ADMIN_TOKEN` unless on loopback):
 
 `GET /status` returns a `runtime_status` object under the top-level response. It contains:
 
-- `providers` — current `audio_source`, `script_provider`, and `tts_provider` with `primary`, `active`, and `fallback_active` flags per provider.
+- `station_on_air` — listener-centric boolean that is true only when producer/playback tasks are alive, no listener-facing silence failure is active, and the session is not stopped.
+- `health_state` — backward-compatible runtime health state for blocked tasks, listener-facing silence, paused sessions, and provider fallback summaries.
+- `providers` — current `audio_source`, `script_provider`, and `tts_provider` with `primary_provider`, `current_provider`, `fallback_active`, `recovery_mode`, `retry_in_seconds`, and `action_guidance` fields per provider. `script_provider` populates the recovery fields so transient Anthropic errors read differently from circuit-breaker and `action_required` fallback; non-script providers keep those fields empty unless future recovery metadata is added.
 - `recent_events` — last 10 provider switch/failover events with timestamps, reasons, and whether a fallback was active.
 - `last_switch` — most recent provider change event, or `null` if no switches have occurred this session.
 - `failover_events` — last 10 events where `fallback_active` was true.
 
-The Engine Room card in `/admin` renders this live. Structured log events (`provider_switch_event`, `provider_health_state`) are also emitted so log aggregators can alert on sustained fallback states.
+The Engine Room card in `/admin` renders this as two tiers: station health ("On Air" / "Paused" / "Error") and provider health ("Primary" / "Auto-recovering" / "Backup active"). Structured log events (`provider_switch_event`, `provider_health_state`) are also emitted so log aggregators can alert on sustained fallback states.
 
 ### Detecting a not-working AI key
 
