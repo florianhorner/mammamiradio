@@ -1,49 +1,34 @@
-Verification for florianhorner/fix/app-name-callouts
+Verification for florianhorner/fix/media-player-entity-feature
 (run locally in .venv / Python 3.11 against the branch merged with origin/main)
-Code commit: a70b24d8 (test: cover canonical station-name resolver and HA labels)
+Code commit: 7790e277 (fix(ha): add supported_features=0 to media_player state push)
 
 $ python -m pytest tests/ -q
-2340 passed, 2 skipped, 7 deselected, 1 warning in ~50s
+2340 passed, 2 skipped, 7 deselected, 1 warning in 69.75s
 
-$ make coverage-check   # CI's test+coverage gate
-Required test coverage of 92.0% reached. Total coverage: 94.10%
-All coverage floors held. Total: 94% (floor: 92%)
+$ python -m pytest tests/home/test_ha_context.py -q
+141 passed in 0.21s
 
-$ ruff check mammamiradio/ tests/
+$ ruff check .
 All checks passed!
 
-$ ruff format --check mammamiradio/ tests/
-all files already formatted
-
-$ mypy mammamiradio/core/config.py mammamiradio/home/ha_context.py \
-       mammamiradio/web/streamer.py mammamiradio/scheduling/producer.py mammamiradio/main.py
-Success: no issues found in 5 source files
+$ mypy mammamiradio/ tests/
+Success: no issues found in 148 source files
 
 $ bash scripts/check-release-invariants.sh
 Passed: 6  Failed: 0 — All invariants passed.
 
 $ bash scripts/check-changelog-lint.sh
-Changelog lint clean. (no changelog touched — branding consistency fix, not a release cut)
+Changelog lint clean. (no changelog touched — no release cut, single-line attribute fix)
 
-$ diff -q radio.toml ha-addon/mammamiradio/radio.toml
-(identical — add-on radio sync test holds)
-
-Pre-ship review squad (3 parallel agents: adversarial / test-coverage / docs-config) on the
-full diff. P1 findings fixed before commit:
-  - docs/operations.md: documented the HA friendly_name = {station_name} contract (doc-sync rule)
-  - tests/web/test_streamer_routes_extended.py: pin clip-sidecar station_name to display_station_name
-  - tests/core/test_config.py: new resolver tests made env-deterministic (delenv STATION_NAME)
-Deferred (out of scope for this PR): now_playing/scriptwriter/og_card/status still resolve the
-name independently, but all return the canonical "Mamma Mi Radio" for the shipped config; they
-only diverge under the STATION_NAME/[brand] override path, which is explicitly not this PR's focus.
+Pre-ship review squad (3 parallel agents: adversarial / test-coverage / docs-config):
+  P1 raised: "supported_features belongs at top-level, not in attributes dict"
+  P1 verdict: FALSE POSITIVE — for REST API state pushes, all entity data (including
+    supported_features) lives in the attributes dict. MA reads it via
+    state.attributes.get("supported_features", 0). Top-level placement applies to
+    native Python MediaPlayerEntity classes, not the /api/states REST push.
+  Doc sync: docs/operations.md entity table updated to list supported_features.
+  Test regression: assertion added to test_push_state_to_ha_uses_track_fallback_for_music.
 
 New/changed tests:
-  tests/core/test_config.py::test_display_station_name_is_canonical_and_never_blank
-  tests/core/test_config.py::test_loaded_sweepers_use_canonical_station_name
-  tests/home/test_ha_context.py::test_push_state_to_ha_friendly_names_have_no_legacy_brand
-  tests/home/test_ha_context.py::test_push_state_to_ha_honors_station_name_param
-  tests/home/test_ha_context.py::test_push_state_to_ha_music_fallback_uses_station_name
-  tests/home/test_ha_context.py::test_push_state_to_ha_floors_blank_station_name
-  tests/scheduling/test_producer.py::test_ha_stop_transition_pushes_idle_state (station_name asserted)
-  tests/web/test_main.py::test_fastapi_title_uses_canonical_station_name
-  tests/web/test_streamer_routes_extended.py::test_create_clip_writes_sidecar (value pinned)
+  tests/home/test_ha_context.py::test_push_state_to_ha_uses_track_fallback_for_music
+    (added: assert attributes["supported_features"] == 0)
