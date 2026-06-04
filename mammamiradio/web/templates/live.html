@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<title>mammamiradio — Live</title>
+<title>Mamma Mi Radio — Live</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,700;1,700&family=Outfit:wght@400;500;700;900&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -484,7 +484,7 @@ body {
 
     <!-- Top bar -->
     <div class="top-bar">
-      <span class="station-name">mammamiradio</span>
+      <span class="station-name">Mamma Mi Radio</span>
       <div class="on-air-badge" id="onAirBadge">
         <div class="on-air-dot"></div>
         <span class="on-air-text" id="onAirText">On Air</span>
@@ -737,7 +737,7 @@ async function doClip() {
   const shareUrl = window.location.origin + _base + (res.share_url || res.url);
   try {
     if (navigator.share) {
-      await navigator.share({ title: 'Clip — mammamiradio', url: shareUrl });
+      await navigator.share({ title: 'Clip — Mamma Mi Radio', url: shareUrl });
       _toast('Condiviso!');
     } else if (navigator.clipboard && navigator.clipboard.writeText) {
       await navigator.clipboard.writeText(shareUrl);
