@@ -737,7 +737,9 @@ def _duration_sec_from_payload(payload: dict | None) -> float | None:
     duration = payload.get("duration_sec")
     if isinstance(duration, (int, float)) and duration > 0:
         return float(duration)
-    metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
+    metadata = payload.get("metadata")
+    if not isinstance(metadata, dict):
+        metadata = {}
     duration_ms = metadata.get("duration_ms")
     if isinstance(duration_ms, (int, float)) and duration_ms > 0:
         return float(duration_ms) / 1000.0
