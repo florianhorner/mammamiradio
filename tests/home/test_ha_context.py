@@ -1706,9 +1706,111 @@ async def test_push_state_to_ha_nonmusic_uses_channel_payload(reset_ha_push_debo
     mp_call = next(c for c in mock_client.post.call_args_list if "media_player" in c.args[0])
     attributes = mp_call.kwargs["json"]["attributes"]
     assert attributes["media_title"] == "Morning handoff"
-    assert attributes["media_artist"] == "Radio MammaMia"
+    assert attributes["media_artist"] == "Mamma Mi Radio"
     assert attributes["media_content_type"] == "channel"
     assert attributes["mammamiradio_segment_type"] == "banter"
+
+
+@pytest.mark.asyncio
+async def test_push_state_to_ha_friendly_names_have_no_legacy_brand(reset_ha_push_debounce):
+    """Every pushed friendly name/artist uses the canonical station name, never legacy spellings."""
+    mock_client = AsyncMock()
+    mock_client.post.return_value = MagicMock(status_code=200)
+
+    with patch("mammamiradio.home.ha_context._get_ha_client", return_value=mock_client):
+        await push_state_to_ha(
+            ha_url="http://ha.local:8123",
+            ha_token="test-token",
+            now_streaming={"type": "banter", "label": "Chat", "started": time.time(), "metadata": {}},
+            current_track=None,
+            listeners_active=1,
+            session_stopped=False,
+        )
+
+    # Guard against a no-op pass: all four entities must actually be pushed.
+    assert mock_client.post.call_count == 4
+    # "mammamiradio" (lowercase) is the exact legacy default this normalization
+    # replaced — keep it in the set so a revert is caught, not just the MammaMia spellings.
+    forbidden = ("MammaMia", "Radio MammaMia", "Malamie", "mammamiradio")
+    for call in mock_client.post.call_args_list:
+        attributes = call.kwargs["json"]["attributes"]
+        for label in (attributes.get("friendly_name", ""), attributes.get("media_artist", "")):
+            for bad in forbidden:
+                assert bad not in label, f"legacy brand {bad!r} leaked into HA label {label!r}"
+
+    mp_call = next(c for c in mock_client.post.call_args_list if "media_player" in c.args[0])
+    assert mp_call.kwargs["json"]["attributes"]["friendly_name"] == "Mamma Mi Radio"
+    assert mp_call.kwargs["json"]["attributes"]["media_artist"] == "Mamma Mi Radio"
+
+
+@pytest.mark.asyncio
+async def test_push_state_to_ha_honors_station_name_param(reset_ha_push_debounce):
+    """The station_name argument flows into the media_player and all sensor friendly names."""
+    mock_client = AsyncMock()
+    mock_client.post.return_value = MagicMock(status_code=200)
+
+    with patch("mammamiradio.home.ha_context._get_ha_client", return_value=mock_client):
+        await push_state_to_ha(
+            ha_url="http://ha.local:8123",
+            ha_token="test-token",
+            now_streaming={"type": "banter", "label": "Chat", "started": time.time(), "metadata": {}},
+            current_track=None,
+            listeners_active=1,
+            session_stopped=False,
+            station_name="Custom FM",
+        )
+
+    by_url = {c.args[0].rsplit("/", 1)[-1]: c.kwargs["json"]["attributes"] for c in mock_client.post.call_args_list}
+    assert by_url["media_player.mammamiradio"]["friendly_name"] == "Custom FM"
+    assert by_url["media_player.mammamiradio"]["media_artist"] == "Custom FM"
+    assert by_url["sensor.mammamiradio_segment_type"]["friendly_name"] == "Custom FM Segment Type"
+    assert by_url["sensor.mammamiradio_listeners"]["friendly_name"] == "Custom FM Listeners"
+    assert by_url["binary_sensor.mammamiradio_on_air"]["friendly_name"] == "Custom FM On Air"
+
+
+@pytest.mark.asyncio
+async def test_push_state_to_ha_music_fallback_uses_station_name(reset_ha_push_debounce):
+    """A music segment with no artist metadata falls back to the station name, not a legacy literal."""
+    mock_client = AsyncMock()
+    mock_client.post.return_value = MagicMock(status_code=200)
+
+    with patch("mammamiradio.home.ha_context._get_ha_client", return_value=mock_client):
+        await push_state_to_ha(
+            ha_url="http://ha.local:8123",
+            ha_token="test-token",
+            now_streaming={"type": "music", "label": "Untitled", "started": time.time(), "metadata": {}},
+            current_track=None,
+            listeners_active=1,
+            session_stopped=False,
+            station_name="Custom FM",
+        )
+
+    mp_call = next(c for c in mock_client.post.call_args_list if "media_player" in c.args[0])
+    assert mp_call.kwargs["json"]["attributes"]["media_content_type"] == "music"
+    assert mp_call.kwargs["json"]["attributes"]["media_artist"] == "Custom FM"
+
+
+@pytest.mark.asyncio
+async def test_push_state_to_ha_floors_blank_station_name(reset_ha_push_debounce):
+    """An empty station_name is floored to the canonical default — HA labels are never blank."""
+    mock_client = AsyncMock()
+    mock_client.post.return_value = MagicMock(status_code=200)
+
+    with patch("mammamiradio.home.ha_context._get_ha_client", return_value=mock_client):
+        await push_state_to_ha(
+            ha_url="http://ha.local:8123",
+            ha_token="test-token",
+            now_streaming={"type": "banter", "label": "Chat", "started": time.time(), "metadata": {}},
+            current_track=None,
+            listeners_active=1,
+            session_stopped=False,
+            station_name="",
+        )
+
+    mp_call = next(c for c in mock_client.post.call_args_list if "media_player" in c.args[0])
+    assert mp_call.kwargs["json"]["attributes"]["friendly_name"] == "Mamma Mi Radio"
+    seg_call = next(c for c in mock_client.post.call_args_list if "segment_type" in c.args[0])
+    assert seg_call.kwargs["json"]["attributes"]["friendly_name"] == "Mamma Mi Radio Segment Type"
 
 
 @pytest.mark.asyncio
