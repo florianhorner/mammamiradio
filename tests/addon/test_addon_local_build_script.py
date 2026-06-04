@@ -23,6 +23,25 @@ def test_addon_dockerfile_declares_home_assistant_image_labels():
     assert 'io.hass.arch="${BUILD_ARCH}"' in dockerfile
 
 
+def test_addon_metadata_exposes_stable_channel_and_edge_channel():
+    stable = (REPO_ROOT / "ha-addon" / "mammamiradio" / "config.yaml").read_text()
+    edge = (REPO_ROOT / "ha-addon" / "mammamiradio-edge" / "config.yaml").read_text()
+
+    assert re.search(r"^stage:\s*stable\s*$", stable, re.MULTILINE)
+    assert re.search(r"^stage:\s*experimental\s*$", edge, re.MULTILINE)
+
+
+def test_addon_apparmor_profile_is_shared_with_edge():
+    stable = REPO_ROOT / "ha-addon" / "mammamiradio" / "apparmor.txt"
+    edge = REPO_ROOT / "ha-addon" / "mammamiradio-edge" / "apparmor.txt"
+
+    stable_text = stable.read_text()
+    assert stable_text == edge.read_text()
+    assert re.search(r"^profile\s+\S+\s+flags=", stable_text, re.MULTILINE)
+    assert "network," in stable_text
+    assert "/data/** rwk," in stable_text
+
+
 def test_addon_port_8000_consistent_across_config_run_and_runtime_defaults():
     """Guard against drift: all addon/runtime port defaults must stay in lockstep."""
     config_yaml = (REPO_ROOT / "ha-addon" / "mammamiradio" / "config.yaml").read_text()

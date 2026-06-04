@@ -40,10 +40,21 @@ def test_save_addon_options_maps_env_keys_to_fields(tmp_path):
     options_file = tmp_path / "options.json"
     options_file.write_text(json.dumps({"existing": "keep"}))
     with patch("mammamiradio.web.persistence.Path", return_value=options_file):
-        persistence._save_addon_options({"ANTHROPIC_API_KEY": "sk-test", "OPENAI_API_KEY": "oa-test"})
+        persistence._save_addon_options(
+            {
+                "ANTHROPIC_API_KEY": "sk-test",
+                "OPENAI_API_KEY": "oa-test",
+                "AZURE_SPEECH_KEY": "az-test",
+                "AZURE_SPEECH_REGION": "westeurope",
+                "ELEVENLABS_API_KEY": "el-test",
+            }
+        )
     written = json.loads(options_file.read_text())
     assert written["anthropic_api_key"] == "sk-test"
     assert written["openai_api_key"] == "oa-test"
+    assert written["azure_speech_key"] == "az-test"
+    assert written["azure_speech_region"] == "westeurope"
+    assert written["elevenlabs_api_key"] == "el-test"
     assert written["existing"] == "keep"
 
 
@@ -61,13 +72,38 @@ def test_apply_live_credentials_updates_config_env_and_clears_backoff(monkeypatc
     # absent key would not clean up, leaking the test values into later tests.
     monkeypatch.setenv("ANTHROPIC_API_KEY", "")
     monkeypatch.setenv("OPENAI_API_KEY", "")
-    config = SimpleNamespace(anthropic_api_key="", openai_api_key="")
+    monkeypatch.setenv("AZURE_SPEECH_KEY", "")
+    monkeypatch.setenv("AZURE_SPEECH_REGION", "")
+    monkeypatch.setenv("ELEVENLABS_API_KEY", "")
+    config = SimpleNamespace(
+        anthropic_api_key="",
+        openai_api_key="",
+        azure_speech_key="",
+        azure_speech_region="",
+        elevenlabs_api_key="",
+    )
     state = SimpleNamespace(anthropic_disabled_until=99.0, anthropic_last_error="boom")
 
-    persistence._apply_live_credentials(state, config, {"ANTHROPIC_API_KEY": "sk-new", "OPENAI_API_KEY": "oa-new"})
+    persistence._apply_live_credentials(
+        state,
+        config,
+        {
+            "ANTHROPIC_API_KEY": "sk-new",
+            "OPENAI_API_KEY": "oa-new",
+            "AZURE_SPEECH_KEY": "az-new",
+            "AZURE_SPEECH_REGION": "westeurope",
+            "ELEVENLABS_API_KEY": "el-new",
+        },
+    )
 
     assert config.anthropic_api_key == "sk-new"
     assert config.openai_api_key == "oa-new"
+    assert config.azure_speech_key == "az-new"
+    assert config.azure_speech_region == "westeurope"
+    assert config.elevenlabs_api_key == "el-new"
     assert os.environ["ANTHROPIC_API_KEY"] == "sk-new"
+    assert os.environ["AZURE_SPEECH_KEY"] == "az-new"
+    assert os.environ["AZURE_SPEECH_REGION"] == "westeurope"
+    assert os.environ["ELEVENLABS_API_KEY"] == "el-new"
     assert state.anthropic_disabled_until == 0.0
     assert state.anthropic_last_error == ""

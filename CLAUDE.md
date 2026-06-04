@@ -115,6 +115,8 @@ private durable system for strategy or relationship context.
 - `ADMIN_USERNAME`, `ADMIN_PASSWORD`, `ADMIN_TOKEN`: admin auth
 - `ANTHROPIC_API_KEY`: Claude banter/ad generation
 - `OPENAI_API_KEY`: OpenAI gpt-4o-mini-tts voice synthesis + script generation fallback when Anthropic is unavailable
+- `AZURE_SPEECH_KEY`, `AZURE_SPEECH_REGION`: Azure Speech TTS for host/sweeper/ad voices routed to `engine = "azure"`. Both required together; if either is absent the voice falls back to its per-voice Edge fallback (never silence). Listeners never see the downgrade.
+- `ELEVENLABS_API_KEY`: ElevenLabs TTS for voices routed to `engine = "elevenlabs"`. Absent key falls back to the per-voice Edge fallback.
 - `HA_TOKEN`: Home Assistant API token
 - `HA_URL`: Home Assistant API base URL (auto-set by HA add-on to `http://supervisor/core/api`)
 - `HA_ENABLED`: force-enable HA integration (`true`/`1`/`yes`)

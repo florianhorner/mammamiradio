@@ -2029,7 +2029,7 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
             <div class="setup-subhead">Initial checks</div>
             <div class="setup-list" id="setupChecks"></div>
             <div id="setupKeysConfigured" style="display:none;padding:0.75rem 1rem;background:rgba(37,99,235,0.1);border:1px solid rgba(37,99,235,0.3);border-radius:8px;margin-bottom:0.75rem">
-              <span style="color:var(--ok);font-weight:600" id="setupKeysLabel">&#10003; AI keys configured</span>
+              <span style="color:var(--ok);font-weight:600" id="setupKeysLabel">&#10003; Provider keys configured</span>
               <span style="opacity:0.7;margin-left:0.5rem;font-size:0.85em" id="setupKeysDetail"></span>
               <button type="button" class="btn btn-util" style="margin-left:0.75rem;font-size:0.8em;padding:0.2rem 0.6rem" onclick="_keysEditMode=true;document.getElementById('setupKeysForm').style.display='block'">Replace</button>
             </div>
@@ -2038,6 +2038,9 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
               <div class="setup-keys">
                 <input class="input" id="setupAnthropicKey" type="password" placeholder="ANTHROPIC_API_KEY (optional)" autocomplete="off" aria-label="Anthropic API key">
                 <input class="input" id="setupOpenaiKey" type="password" placeholder="OPENAI_API_KEY (optional)" autocomplete="off" aria-label="OpenAI API key">
+                <input class="input" id="setupAzureSpeechKey" type="password" placeholder="AZURE_SPEECH_KEY (optional)" autocomplete="off" aria-label="Azure Speech key">
+                <input class="input" id="setupAzureSpeechRegion" type="text" placeholder="AZURE_SPEECH_REGION (optional)" autocomplete="off" aria-label="Azure Speech region">
+                <input class="input" id="setupElevenlabsKey" type="password" placeholder="ELEVENLABS_API_KEY (optional)" autocomplete="off" aria-label="ElevenLabs API key">
               </div>
               <div class="setup-actions" style="margin-top:10px">
                 <button type="button" class="btn btn-trigger" id="setupSaveBtn" onclick="setupSaveKeys(this)">Save Keys</button>
@@ -2711,8 +2714,8 @@ function renderSetup(setup){
   });
   document.getElementById('setupChecks').innerHTML=checks.join('')||'<div class="empty">No checks flagged</div>';
 
-  const llmEssential=(setup.essentials||[]).find(e=>e.key==='llm_keys');
-  const configuredKeys=llmEssential?.configured_keys||[];
+  const keyEssentials=(setup.essentials||[]).filter(e=>e.key==='llm_keys'||e.key==='tts_keys');
+  const configuredKeys=[...new Set(keyEssentials.flatMap(e=>e.configured_keys||[]))];
   const keysConfigured=configuredKeys.length>0;
   document.getElementById('setupKeysConfigured').style.display=keysConfigured?'block':'none';
   if(!_keysEditMode) document.getElementById('setupKeysForm').style.display=keysConfigured?'none':'block';
@@ -2746,14 +2749,23 @@ async function setupSaveKeys(el){
   flash(el);
   const anthropic=(document.getElementById('setupAnthropicKey')?.value||'').trim();
   const openai=(document.getElementById('setupOpenaiKey')?.value||'').trim();
+  const azureKey=(document.getElementById('setupAzureSpeechKey')?.value||'').trim();
+  const azureRegion=(document.getElementById('setupAzureSpeechRegion')?.value||'').trim();
+  const elevenlabs=(document.getElementById('setupElevenlabsKey')?.value||'').trim();
   const payload={};
   if(anthropic) payload.ANTHROPIC_API_KEY=anthropic;
   if(openai) payload.OPENAI_API_KEY=openai;
+  if(azureKey) payload.AZURE_SPEECH_KEY=azureKey;
+  if(azureRegion) payload.AZURE_SPEECH_REGION=azureRegion;
+  if(elevenlabs) payload.ELEVENLABS_API_KEY=elevenlabs;
   if(!Object.keys(payload).length){toast('Enter at least one key');return}
   const resp=await api('POST','/api/setup/save-keys',payload);
   if(!resp.ok){toast(resp.error||'Saving keys failed');return}
   document.getElementById('setupAnthropicKey').value='';
   document.getElementById('setupOpenaiKey').value='';
+  document.getElementById('setupAzureSpeechKey').value='';
+  document.getElementById('setupAzureSpeechRegion').value='';
+  document.getElementById('setupElevenlabsKey').value='';
   _keysEditMode=false;
   const updated=await api('POST','/api/setup/recheck');
   renderSetup(updated);

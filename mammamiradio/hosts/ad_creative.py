@@ -75,9 +75,11 @@ class AdVoice:
     """A non-host voice used to perform commercial copy."""
 
     name: str
-    voice: str  # edge-tts voice ID
+    voice: str
     style: str  # character description for the prompt
     role: str = ""  # speaker role: "hammer", "seductress", etc.
+    engine: str = "edge"  # edge|openai|azure|elevenlabs
+    edge_fallback_voice: str = ""  # edge-tts voice used when a cloud TTS engine falls back
 
 
 @dataclass
@@ -342,7 +344,13 @@ def _cast_voices(
             raise ValueError("At least one host or ad voice is required to cast ad voices")
         # No voices configured — assign the same host voice to every needed role
         host = random.choice(hosts)
-        fallback = AdVoice(name=host.name, voice=host.voice, style=host.style)
+        fallback = AdVoice(
+            name=host.name,
+            voice=host.voice,
+            style=host.style,
+            engine=host.engine,
+            edge_fallback_voice=host.edge_fallback_voice,
+        )
         return {role: fallback for role in roles_needed} if roles_needed else {"default": fallback}
 
     # Build role->voice index

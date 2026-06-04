@@ -1,0 +1,28 @@
+#include <tunables/global>
+
+profile mammamiradio flags=(attach_disconnected,mediate_deleted) {
+  #include <abstractions/base>
+  #include <abstractions/nameservice>
+
+  # Python/FastAPI runtime with FFmpeg, edge-tts, yt-dlp, and Supervisor/Core API calls.
+  file,
+  network,
+  signal,
+
+  # Home Assistant base image / s6-overlay startup path.
+  /init rix,
+  /bin/** ix,
+  /usr/bin/** ix,
+  /run/{s6,s6-rc*,service}/** rwix,
+  /package/** ix,
+  /command/** ix,
+  /etc/services.d/** rwix,
+  /etc/cont-init.d/** rwix,
+  /etc/cont-finish.d/** rwix,
+  /run/{,**} rwk,
+
+  # Runtime app, persisted add-on state, and temporary audio work directories.
+  /app/** r,
+  /data/** rwk,
+  /tmp/** rwk,
+}
