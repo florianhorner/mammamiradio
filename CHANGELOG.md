@@ -8,6 +8,16 @@ The current version source of truth is `pyproject.toml`.
 
 ### Added
 
+- **Show Memory: an opt-in record of how each moment was made.** A new provenance
+  ledger (off by default) can record, for operators who turn it on, exactly how a
+  given second of radio came to be: the raw AI attempts behind a host or ad, the
+  final spoken script, and whether it actually reached listeners. It writes
+  daily-rotated, private files under the cache directory and is strictly
+  best-effort — it never delays, blocks, or interrupts the live stream, and a
+  busy moment simply drops the oldest record and notes that it did. Enable it with
+  `MAMMAMIRADIO_LEDGER_ENABLED`; tune history with `MAMMAMIRADIO_LEDGER_RETENTION_DAYS`
+  (default 14 days). Listeners never see any of this.
+
 - **Home Assistant context now adapts to each home.** The add-on scores prompt-safe
   entities from the full Home Assistant state snapshot instead of only using a
   hardcoded apartment list, so newly paired devices can contribute ambient radio
