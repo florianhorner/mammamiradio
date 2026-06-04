@@ -2598,8 +2598,7 @@ function runtimeProviderRow(title,item){
     state=item?.fallback_active?'degraded':'ready';
     label=item?.fallback_active?'Fallback':'Primary';
   }
-  const guidanceLine=item?.action_guidance||'';
-  const reasonLine=guidanceLine||item?.switch_reason||'';
+  const reasonLine=item?.action_guidance||item?.switch_reason||'';
   const retryLine=item?.retry_in_seconds>0?'Retrying in '+Math.ceil(item.retry_in_seconds/60)+' min':'';
   const detail=[
     'Current: '+(item?.current_label||item?.current_provider||'—'),

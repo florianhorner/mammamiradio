@@ -420,14 +420,15 @@ def _script_provider_status(config, state: StationState, provider_health: dict) 
         primary = current = "stock"
         fallback_active = False
         reason = "No LLM provider configured; stock copy is active"
-    fallback_reason = str(saved.get("reason") or reason)
+    fallback_reason = saved.get("reason") or reason
     recovery_mode: str | None = None
     retry_in_seconds: int | None = None
     action_guidance = ""
     if fallback_active:
         if state.anthropic_disabled_until > time.time():
             recovery_mode = "circuit_breaker"
-            retry_in_seconds = int(provider_health.get("anthropic", {}).get("retry_after_s") or 0)
+            _r = provider_health.get("anthropic", {}).get("retry_after_s")
+            retry_in_seconds = int(_r) if _r else None
             action_guidance = _FALLBACK_REASON_LABELS.get(fallback_reason, fallback_reason)
         elif fallback_reason in _ACTION_REQUIRED_FALLBACK_REASONS:
             recovery_mode = "action_required"
@@ -504,13 +505,10 @@ def _runtime_status_snapshot(
         "tts_provider": tts_status,
     }
     fallback_active = any(item["fallback_active"] for item in providers.values())
-    tasks_alive = bool(runtime_health.get("producer_task_alive", True)) and bool(
-        runtime_health.get("playback_task_alive", True)
-    )
+    tasks_alive = runtime_health.get("producer_task_alive", True) and runtime_health.get("playback_task_alive", True)
     silence_with_listeners = bool(runtime_health.get("silence_with_listeners", False))
     station_on_air = tasks_alive and not silence_with_listeners and not state.session_stopped
-    task_blocked = not tasks_alive
-    if task_blocked:
+    if not tasks_alive:
         health_state = "blocked"
         health_color = "red"
         health_explanation = "A runtime task is stopped; playback needs operator attention."

@@ -120,12 +120,10 @@ def test_runtime_provider_row_handles_recovery_mode() -> None:
     assert "item?.recovery_mode==='transient'" in block
     assert "state='working'" in block
     assert "label='Auto-recovering'" in block
-    assert "const guidanceLine=item?.action_guidance||''" in block
-    assert "const reasonLine=guidanceLine||item?.switch_reason||''" in block
+    assert "const reasonLine=item?.action_guidance||item?.switch_reason||''" in block
     assert (
         "const retryLine=item?.retry_in_seconds>0?'Retrying in '+Math.ceil(item.retry_in_seconds/60)+' min':''"
     ) in block
-    assert "guidanceLine" in block
     assert "reasonLine" in block
     assert "retryLine" in block
 
