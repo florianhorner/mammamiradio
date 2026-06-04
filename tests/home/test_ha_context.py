@@ -1892,6 +1892,33 @@ async def test_push_state_to_ha_queue_depth(reset_ha_push_debounce):
 
 
 @pytest.mark.asyncio
+async def test_push_state_to_ha_playing_after_stopped_is_not_debounced(reset_ha_push_debounce):
+    """Resume push immediately after a stopped push is not swallowed by the stopped debounce."""
+    mock_client = AsyncMock()
+    mock_client.post.return_value = MagicMock(status_code=200)
+
+    with patch("mammamiradio.home.ha_context._get_ha_client", return_value=mock_client):
+        await push_state_to_ha(
+            ha_url="http://ha.local:8123",
+            ha_token="test-token",
+            now_streaming={},
+            current_track=None,
+            listeners_active=0,
+            session_stopped=True,
+        )
+        await push_state_to_ha(
+            ha_url="http://ha.local:8123",
+            ha_token="test-token",
+            now_streaming={"type": "music", "label": "Song", "started": time.time(), "metadata": {}},
+            current_track=None,
+            listeners_active=1,
+            session_stopped=False,
+        )
+
+    assert mock_client.post.call_count == 8  # both pushes fire; resume not suppressed
+
+
+@pytest.mark.asyncio
 async def test_push_state_to_ha_serializes_stop_after_slow_transition(reset_ha_push_debounce):
     """A stopped push must not be overwritten by an older slow transition push."""
     music_first_post_started = asyncio.Event()

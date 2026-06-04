@@ -1402,9 +1402,10 @@ async def push_state_to_ha(
             return
         if session_stopped and now - _last_ha_stop_push < 2.0:
             return
-        _last_ha_push = now
         if session_stopped:
             _last_ha_stop_push = now
+        else:
+            _last_ha_push = now
 
         headers = {"Authorization": f"Bearer {ha_token}", "Content-Type": "application/json"}
         base_url = ha_url.rstrip("/")
