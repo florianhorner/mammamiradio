@@ -1371,7 +1371,8 @@ async def fetch_home_context(
         return HomeContext()
 
 
-_last_ha_push: float = 0.0  # debounce: skip if last push was < 2s ago
+_last_ha_push: float = 0.0  # debounce: skip playing pushes < 2s apart
+_last_ha_stop_push: float = 0.0  # debounce: skip consecutive stopped pushes < 2s apart
 _ha_push_lock: asyncio.Lock | None = None
 
 
@@ -1390,15 +1391,20 @@ async def push_state_to_ha(
     current_track: object | None,
     listeners_active: int,
     session_stopped: bool,
+    queue_depth: int = 0,
 ) -> None:
     """Push radio state to HA as media_player + sensor entities. Fire-and-forget."""
-    global _last_ha_push
+    global _last_ha_push, _last_ha_stop_push
 
     async with _get_ha_push_lock():
         now = time.time()
         if not session_stopped and now - _last_ha_push < 2.0:
             return
+        if session_stopped and now - _last_ha_stop_push < 2.0:
+            return
         _last_ha_push = now
+        if session_stopped:
+            _last_ha_stop_push = now
 
         headers = {"Authorization": f"Bearer {ha_token}", "Content-Type": "application/json"}
         base_url = ha_url.rstrip("/")
@@ -1422,23 +1428,28 @@ async def push_state_to_ha(
             media_artist = "Radio MammaMia"
 
         started = (now_streaming.get("started", now) if now_streaming else now) or now
-        media_position = now - started
+        media_position = max(0.0, now - started)
+
+        media_attrs: dict = {
+            "friendly_name": "Radio MammaMia",
+            "supported_features": 0,
+            "media_title": media_title,
+            "media_artist": media_artist,
+            "media_content_type": "music" if segment_type == "music" else "channel",
+            "mammamiradio_segment_type": segment_type,
+            "mammamiradio_queue_depth": queue_depth,
+            "mammamiradio_listeners": listeners_active,
+        }
+        if is_playing:
+            media_attrs["media_position"] = media_position
+            media_attrs["media_position_updated_at"] = datetime.datetime.now(datetime.UTC).isoformat()
 
         entities: list[tuple[str, dict]] = [
             (
                 "media_player.mammamiradio",
                 {
                     "state": mp_state,
-                    "attributes": {
-                        "friendly_name": "Radio MammaMia",
-                        "media_title": media_title,
-                        "media_artist": media_artist,
-                        "media_content_type": "music" if segment_type == "music" else "channel",
-                        "media_position": media_position,
-                        "mammamiradio_segment_type": segment_type,
-                        "mammamiradio_queue_depth": 0,
-                        "mammamiradio_listeners": listeners_active,
-                    },
+                    "attributes": media_attrs,
                 },
             ),
             (

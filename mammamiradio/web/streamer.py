@@ -1197,6 +1197,7 @@ async def run_playback_loop(app) -> None:
                     current_track=state.current_track,
                     listeners_active=state.listeners_active,
                     session_stopped=state.session_stopped,
+                    queue_depth=len(state.queued_segments),
                 )
             )
             _ha_push_tasks.add(_ha_task)
