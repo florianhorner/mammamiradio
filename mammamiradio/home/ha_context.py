@@ -487,7 +487,7 @@ def _area_from_attrs(attrs: dict) -> str | None:
     return area or None
 
 
-def _generic_label(entity_id: str, state_data: dict, *, english: bool = False) -> str:
+def _generic_label(entity_id: str, state_data: dict) -> str:
     attrs = state_data.get("attributes", {})
     friendly = attrs.get("friendly_name")
     if friendly:
@@ -693,7 +693,7 @@ def _build_scored_entities(
         if not line:
             continue
         label_it = ENTITY_LABELS.get(entity_id, _generic_label(entity_id, state_data))
-        label_en = ENTITY_LABELS_EN.get(entity_id, _generic_label(entity_id, state_data, english=True))
+        label_en = ENTITY_LABELS_EN.get(entity_id, _generic_label(entity_id, state_data))
         scored.append(
             ScoredEntity(
                 entity_id=entity_id,
@@ -751,7 +751,7 @@ def _build_entity_label_maps(states: dict[str, dict]) -> tuple[dict[str, str], d
         if not state_data.get("attributes", {}).get("friendly_name"):
             continue
         labels_it.setdefault(entity_id, _generic_label(entity_id, state_data))
-        labels_en.setdefault(entity_id, _generic_label(entity_id, state_data, english=True))
+        labels_en.setdefault(entity_id, _generic_label(entity_id, state_data))
     return labels_it, labels_en
 
 
