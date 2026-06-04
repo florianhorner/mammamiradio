@@ -731,6 +731,57 @@ def _serialize_track(track: Track) -> dict:
     }
 
 
+def _duration_sec_from_payload(payload: dict | None) -> float | None:
+    if not payload:
+        return None
+    duration = payload.get("duration_sec")
+    if isinstance(duration, (int, float)) and duration > 0:
+        return float(duration)
+    metadata = payload.get("metadata")
+    if not isinstance(metadata, dict):
+        metadata = {}
+    duration_ms = metadata.get("duration_ms")
+    if isinstance(duration_ms, (int, float)) and duration_ms > 0:
+        return float(duration_ms) / 1000.0
+    duration_s = metadata.get("duration_s")
+    if isinstance(duration_s, (int, float)) and duration_s > 0:
+        return float(duration_s)
+    return None
+
+
+def _status_now_playback(now_streaming: dict, now_ts: float) -> dict:
+    duration_sec = _duration_sec_from_payload(now_streaming)
+    if not now_streaming:
+        return {
+            "now_streaming": now_streaming,
+            "current_progress_sec": None,
+            "current_duration_sec": None,
+        }
+    started = now_streaming.get("started")
+    progress_sec = max(0.0, now_ts - started) if isinstance(started, (int, float)) and started > 0 else None
+    return {
+        "now_streaming": now_streaming,
+        "current_progress_sec": round(progress_sec, 1) if progress_sec is not None else None,
+        "current_duration_sec": round(duration_sec, 1) if duration_sec is not None else None,
+    }
+
+
+def _serialize_stream_log_entry(entry) -> dict:
+    payload = {
+        "type": entry.type,
+        "label": entry.label,
+        "timestamp": entry.timestamp,
+        "metadata": entry.metadata,
+    }
+    duration_sec = float(getattr(entry, "duration_sec", 0.0) or 0.0)
+    if duration_sec <= 0:
+        duration_sec = _duration_sec_from_payload({"metadata": entry.metadata}) or 0.0
+    if duration_sec > 0:
+        payload["duration_sec"] = duration_sec
+        payload["duration_ms"] = round(duration_sec * 1000)
+    return payload
+
+
 def _source_options_reason(config, exc: Exception) -> str:
     return f"Source loading failed: {exc}"
 
@@ -2818,6 +2869,7 @@ def _public_status_payload(request: Request) -> dict:
     runtime_health = _runtime_health_snapshot(request)
     start_time = getattr(request.app.state, "start_time", None) or 0
     uptime_sec = round(time.time() - start_time) if start_time else 0
+    now_ts = time.time()
     if state.queued_segments:
         upcoming = [{**item, "source": "rendered_queue"} for item in state.queued_segments[:8]]
     else:
@@ -2835,7 +2887,7 @@ def _public_status_payload(request: Request) -> dict:
         }
         # Event fields: only if within retention window (person filter applied in producer)
         _retention = EVENT_RETENTION_SECONDS
-        _now = time.time()
+        _now = now_ts
         if state.ha_last_event_ts > 0 and (_now - state.ha_last_event_ts) < _retention:
             ha_moments["last_event_label"] = state.ha_last_event_label
             ha_moments["last_event_ago_min"] = max(1, round((_now - state.ha_last_event_ts) / 60))
@@ -2843,18 +2895,16 @@ def _public_status_payload(request: Request) -> dict:
         if not ha_moments.get("mood") and not ha_moments.get("weather") and not ha_moments.get("last_event_label"):
             ha_moments = None
 
+    playback = _status_now_playback(state.now_streaming, now_ts)
     return {
         "station": config.station.name,
         "running_jokes": list(state.running_jokes),
-        "now_streaming": state.now_streaming,
+        **playback,
         "current_source": _serialize_source(state.playlist_source),
         "golden_path": _golden_path_status(config, state),
         "runtime_health": runtime_health,
         "session_stopped": state.session_stopped,
-        "stream_log": [
-            {"type": e.type, "label": e.label, "timestamp": e.timestamp, "metadata": e.metadata}
-            for e in state.stream_log
-        ],
+        "stream_log": [_serialize_stream_log_entry(e) for e in state.stream_log],
         "upcoming": upcoming,
         "upcoming_mode": "queued" if upcoming else "building",
         "stream": {

@@ -46,6 +46,8 @@ The current version source of truth is `pyproject.toml`.
 
 ### Fixed
 
+- **Admin programme durations are now truthful.** Status payloads expose real current segment duration/progress and stream-log durations, and the admin/live/listener UIs no longer invent music, banter, or ad durations when metadata is missing.
+
 - **The HA media player card now shows accurate elapsed time.** The station's Home Assistant entity now includes the `media_position_updated_at` timestamp that HA requires to count forward between updates, so the playback position no longer resets or freezes every 30 seconds in the media card and companion app.
 
 - **`mammamiradio_queue_depth` in the HA entity now reflects the real queue.** The attribute previously always reported 0, so automations checking queue depth never triggered. It now carries the live count of segments waiting to play.

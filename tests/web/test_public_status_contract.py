@@ -20,7 +20,7 @@ from pathlib import Path
 import httpx
 import pytest
 
-from mammamiradio.core.models import Segment, SegmentType
+from mammamiradio.core.models import Segment, SegmentLogEntry, SegmentType
 from tests.web.test_streamer_routes import _make_test_app
 
 
@@ -107,6 +107,53 @@ async def test_admin_listener_facts_agree():
     assert admin["runtime_health"] == public["runtime_health"]
     assert admin["playback_actions"] == public["playback_actions"]
     assert admin.get("ha_moments") == public.get("ha_moments")
+
+
+@pytest.mark.asyncio
+async def test_public_status_exposes_truthful_current_duration_and_progress():
+    app = _make_test_app()
+    state = app.state.station_state
+    state.on_stream_segment(
+        Segment(
+            type=SegmentType.BANTER,
+            path=Path("/tmp/brief-silence.mp3"),
+            duration_sec=5.0,
+            metadata={"title": "Brief silence", "error": "recovering"},
+        )
+    )
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        public = (await client.get("/public-status")).json()
+        admin = (await client.get("/status")).json()
+
+    assert public["now_streaming"]["duration_sec"] == 5.0
+    assert public["current_duration_sec"] == 5.0
+    assert public["current_progress_sec"] >= 0
+    assert admin["current_duration_sec"] == public["current_duration_sec"]
+    assert admin["current_progress_sec"] >= public["current_progress_sec"]
+
+
+@pytest.mark.asyncio
+async def test_stream_log_serializes_real_duration_when_available():
+    app = _make_test_app()
+    app.state.station_state.stream_log.append(
+        SegmentLogEntry(
+            type="banter",
+            label="Brief silence",
+            timestamp=1700000000.0,
+            metadata={"title": "Brief silence"},
+            duration_sec=5.0,
+        )
+    )
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        body = (await client.get("/public-status")).json()
+
+    entry = body["stream_log"][-1]
+    assert entry["duration_sec"] == 5.0
+    assert entry["duration_ms"] == 5000
 
 
 @pytest.mark.asyncio
