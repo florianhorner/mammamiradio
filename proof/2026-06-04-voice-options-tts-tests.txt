@@ -1,13 +1,18 @@
 Verification for florianhorner/feat/voice-options-research
 (run locally in .venv / Python 3.11 against the branch merged with origin/main)
-Merge commit: c1319ea7 (Merge origin/main); fix commit: 7a190b23
+Merge commit: 67f4662b (Merge origin/main, 2nd); fix commit: 7a190b23
 
 $ python scripts/coverage-ratchet.py check   # CI's full-suite test + coverage gate
-2392 passed, 2 skipped, 7 deselected, 1 warning in ~66s
-Required test coverage of 92.0% reached. Total coverage: 94.14%
+2476 passed, 2 skipped, 7 deselected, 1 warning in ~64s
+Required test coverage of 92.0% reached. Total coverage: 93.95%
 All coverage floors held. Total: 94% (floor: 92%)
   mammamiradio/core/config.py            93% (floor 90)
   mammamiradio/core/provider_checks.py   85% (floor 85, newly added)
+
+Note: the 2nd origin/main merge overlapped admin status-IA work (#506).
+Resolution: took the newer rollup (header degrades when any provider — incl.
+TTS — is in fallback); two script-focused snapshot tests now supply an Azure
+key so the default Azure cast is healthy and they isolate script recovery.
 
 $ ruff check .
 All checks passed!
