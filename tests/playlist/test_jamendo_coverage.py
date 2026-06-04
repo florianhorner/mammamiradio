@@ -996,6 +996,22 @@ def test_jamendo_source_round_trip_preserves_country_and_order(config):
     assert _jamendo_request_url(tags="pop", country="ITA", order="popularity_week") == src.url
 
 
+def test_jamendo_source_url_does_not_encode_limit(config):
+    """`limit` is intentionally NOT round-tripped in the persisted Jamendo source URL.
+
+    Contract documented in docs/architecture.md: result depth is always re-read
+    from the active radio.toml / JAMENDO_LIMIT config at fetch time, never from the
+    saved source URL. Guards against a regression that leaks limit into the URL.
+    """
+    from urllib.parse import parse_qs, urlparse
+
+    from mammamiradio.playlist.playlist import _jamendo_source
+
+    src = _jamendo_source(200, tags="pop", country="ITA", order="popularity_week")
+    qs = parse_qs(urlparse(src.url).query)
+    assert "limit" not in qs
+
+
 def test_validate_config_rejects_bad_jamendo_country(config):
     """validate_config rejects non-3-letter country codes."""
     from mammamiradio.core.config import _validate as validate_config
