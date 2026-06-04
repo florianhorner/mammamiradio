@@ -10,6 +10,8 @@ The current version source of truth is `pyproject.toml`.
 
 - **The admin queue now shows the studio working in the background.** Above the Scaletta, an "In produzione" feed reveals what the hosts are creating right now — writing an ad, voicing a banter, finding the next track — with a live timer and a short trail of what just finished. The next-up segment is highlighted with the studio gold accent and a one-line detail (artist, hosts, or brand). The operator no longer stares at a static list wondering whether anything is happening.
 
+- **The admin Engine Room now tells you exactly what the station is doing** — the header badge shows "On Air" when music or hosts are streaming, "Paused" when you've stopped it deliberately, and "Error" when a task has died and needs attention. Provider chips (script, audio, TTS) now distinguish between "Backup active" (primary is down, using fallback) and "Auto-recovering" (transient error, no action needed), and show a plain-English reason plus a countdown when the circuit breaker is cooling off. Silence while listeners are connected is now surfaced as a blocked state immediately rather than waiting for the next polling cycle.
+
 - **The admin now shows what happened to a listener request after the hosts handled it.** A "Recently handled" section appears below the Pending queue for up to 5 minutes, showing each request with a status badge — "Sent to hosts" (blue) when the hosts picked it up, or "Song not found" (amber) when the requested track could not be downloaded. Requests leave the Pending list as soon as they're consumed, so operators no longer wonder whether their action registered.
 
 - **Show Memory: an opt-in record of how each moment was made.** A new provenance
