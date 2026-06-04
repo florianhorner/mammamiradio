@@ -187,3 +187,47 @@ async def test_provider_check_probes_azure_and_elevenlabs_tts(monkeypatch):
     assert "azure-secret" not in str(result)
     assert "eleven-secret" not in str(result)
     assert seen_hosts == ["westeurope.api.cognitive.microsoft.com", "api.elevenlabs.io"]
+
+
+@pytest.mark.asyncio
+async def test_provider_check_classifies_azure_and_elevenlabs_auth_errors(monkeypatch):
+    """A revoked Azure/ElevenLabs key yields ok=False, authentication_error, and the
+    secret is scrubbed from the detail — the Engine Room shows 'replace key', not green."""
+    config = load_config(TOML_PATH)
+    config.anthropic_api_key = ""
+    config.openai_api_key = ""
+    config.azure_speech_key = "azure-secret"
+    config.azure_speech_region = "westeurope"
+    config.elevenlabs_api_key = "eleven-secret"
+
+    async_client = httpx.AsyncClient
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "westeurope.api.cognitive.microsoft.com":
+            return httpx.Response(401, text="Access denied due to invalid subscription key azure-secret")
+        if request.url.host == "api.elevenlabs.io":
+            return httpx.Response(
+                401,
+                json={"detail": {"status": "invalid_api_key", "message": "Invalid x-api-key eleven-secret"}},
+            )
+        return httpx.Response(500, json={"error": {"message": "unexpected URL"}})
+
+    transport = httpx.MockTransport(handler)
+
+    def client_factory(*args, **kwargs):
+        kwargs["transport"] = transport
+        return async_client(*args, **kwargs)
+
+    monkeypatch.setattr(httpx, "AsyncClient", client_factory)
+
+    result = await check_provider_keys(config)
+
+    assert result["ok"] is False
+    assert result["providers"]["azure_speech"]["ok"] is False
+    assert result["providers"]["azure_speech"]["status_code"] == 401
+    assert result["providers"]["azure_speech"]["error_type"] == "authentication_error"
+    assert result["providers"]["elevenlabs_tts"]["ok"] is False
+    assert result["providers"]["elevenlabs_tts"]["status_code"] == 401
+    assert result["providers"]["elevenlabs_tts"]["error_type"] == "authentication_error"
+    assert "azure-secret" not in str(result)
+    assert "eleven-secret" not in str(result)
