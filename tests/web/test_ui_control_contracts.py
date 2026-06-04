@@ -276,6 +276,18 @@ class TestStopEndpoint:
 
         assert not app.state.skip_event.is_set()
 
+    @pytest.mark.asyncio
+    async def test_stop_bumps_last_state_change_at(self):
+        """The integration-contract ETag relies on this timestamp moving forward."""
+        app = _make_app(now_streaming={"type": "music", "label": "Song", "started": time.time(), "metadata": {}})
+        app.state.station_state.last_state_change_at = 0.0
+        before = time.time()
+
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            await c.post("/api/stop", headers=AUTH)
+
+        assert app.state.station_state.last_state_change_at >= before
+
 
 # ---------------------------------------------------------------------------
 # Resume endpoint — documents the "resume gap"
@@ -345,6 +357,18 @@ class TestResumeEndpoint:
 
         assert app.state.station_state.force_next == SegmentType.AD
 
+    @pytest.mark.asyncio
+    async def test_resume_bumps_last_state_change_at(self):
+        """Integration-contract ETag invalidation depends on this timestamp moving forward."""
+        app = _make_app(session_stopped=True)
+        app.state.station_state.last_state_change_at = 0.0
+        before = time.time()
+
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            await c.post("/api/resume", headers=AUTH)
+
+        assert app.state.station_state.last_state_change_at >= before
+
 
 # ---------------------------------------------------------------------------
 # Purge endpoint
@@ -395,6 +419,149 @@ class TestPurgeEndpoint:
             await c.post("/api/purge", headers=AUTH)
 
         assert not app.state.skip_event.is_set()
+
+
+# ---------------------------------------------------------------------------
+# Queue remove endpoint
+# ---------------------------------------------------------------------------
+
+
+class TestQueueRemoveEndpoint:
+    @staticmethod
+    def _make_queue_app(labels: list[str]) -> FastAPI:
+        shadow = [{"type": "music", "label": label, "metadata": {"title": label}} for label in labels]
+        app = _make_app(shadow=shadow, queue_items=0)
+        for label in labels:
+            app.state.queue.put_nowait(_make_seg(label))
+        return app
+
+    @staticmethod
+    def _queue_titles(app: FastAPI) -> list[str]:
+        return [seg.metadata["title"] for seg in list(app.state.queue._queue)]
+
+    @pytest.mark.asyncio
+    async def test_remove_by_index_preserves_remaining_order_and_depth_sync(self):
+        app = self._make_queue_app(["Alpha", "Beta", "Gamma", "Delta"])
+
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            resp = await c.post("/api/queue/remove", json={"index": 1}, headers=AUTH)
+
+        assert resp.status_code == 200
+        assert resp.json() == {"ok": True, "removed": "Beta"}
+        assert [item["label"] for item in app.state.station_state.queued_segments] == [
+            "Alpha",
+            "Gamma",
+            "Delta",
+        ]
+        assert self._queue_titles(app) == ["Alpha", "Gamma", "Delta"]
+        assert app.state.queue.qsize() == len(app.state.station_state.queued_segments) == 3
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("payload", [{"index": "1"}, {"index": 1.5}, {"index": None}, {}])
+    async def test_remove_rejects_non_integer_index_without_mutating_queue(self, payload: dict):
+        app = self._make_queue_app(["Alpha", "Beta"])
+
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            resp = await c.post("/api/queue/remove", json=payload, headers=AUTH)
+
+        assert resp.status_code == 422
+        assert resp.json()["detail"] == "index must be an integer"
+        assert [item["label"] for item in app.state.station_state.queued_segments] == ["Alpha", "Beta"]
+        assert self._queue_titles(app) == ["Alpha", "Beta"]
+        assert app.state.queue.qsize() == len(app.state.station_state.queued_segments) == 2
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("index", [-1, 3])
+    async def test_remove_rejects_out_of_range_index_without_mutating_queue(self, index: int):
+        app = self._make_queue_app(["Alpha", "Beta", "Gamma"])
+
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            resp = await c.post("/api/queue/remove", json={"index": index}, headers=AUTH)
+
+        assert resp.status_code == 422
+        assert resp.json()["detail"] == f"index {index} out of range (queue has 3 items)"
+        assert [item["label"] for item in app.state.station_state.queued_segments] == ["Alpha", "Beta", "Gamma"]
+        assert self._queue_titles(app) == ["Alpha", "Beta", "Gamma"]
+        assert app.state.queue.qsize() == len(app.state.station_state.queued_segments) == 3
+
+    @staticmethod
+    def _make_id_queue_app(entries: list[tuple[str, str]]) -> FastAPI:
+        """Build an app whose shadow list and real queue carry queue ids.
+
+        ``entries`` is a list of ``(queue_id, label)`` pairs.
+        """
+        shadow = [{"id": qid, "type": "music", "label": label, "metadata": {"title": label}} for qid, label in entries]
+        app = _make_app(shadow=shadow, queue_items=0)
+        for qid, label in entries:
+            seg = _make_seg(label)
+            seg.metadata["queue_id"] = qid
+            app.state.queue.put_nowait(seg)
+        return app
+
+    @pytest.mark.asyncio
+    async def test_remove_by_id_targets_the_named_segment(self):
+        app = self._make_id_queue_app([("q-a", "Alpha"), ("q-b", "Beta"), ("q-c", "Gamma")])
+
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            resp = await c.post("/api/queue/remove", json={"id": "q-b"}, headers=AUTH)
+
+        assert resp.status_code == 200
+        assert resp.json() == {"ok": True, "removed": "Beta"}
+        assert [item["label"] for item in app.state.station_state.queued_segments] == ["Alpha", "Gamma"]
+        assert self._queue_titles(app) == ["Alpha", "Gamma"]
+
+    @pytest.mark.asyncio
+    async def test_remove_by_id_after_head_consumed_removes_correct_segment(self):
+        """Stale-index regression guard.
+
+        The streamer consumes the head segment between the admin UI rendering a
+        row and the click landing. A position-based remove would then drop the
+        wrong track; an id-based remove must still hit the intended one.
+        """
+        app = self._make_id_queue_app([("q-a", "Alpha"), ("q-b", "Beta"), ("q-c", "Gamma")])
+
+        # Streamer consumes the head — real queue and shadow list both lose idx 0.
+        app.state.queue.get_nowait()
+        app.state.station_state.queued_segments.pop(0)
+
+        # "Gamma" was rendered at index 2; it is now index 1. Removing by id must
+        # still remove Gamma — never Beta (whatever now sits at the stale index).
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            resp = await c.post("/api/queue/remove", json={"id": "q-c"}, headers=AUTH)
+
+        assert resp.status_code == 200
+        assert resp.json() == {"ok": True, "removed": "Gamma"}
+        assert [item["label"] for item in app.state.station_state.queued_segments] == ["Beta"]
+        assert self._queue_titles(app) == ["Beta"]
+
+    @pytest.mark.asyncio
+    async def test_remove_by_id_for_already_played_segment_is_noop_success(self):
+        """An id that no longer exists (segment already played out) is a no-op
+        success, not a 422 — the operator's intent is already satisfied."""
+        app = self._make_id_queue_app([("q-a", "Alpha"), ("q-b", "Beta")])
+
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            resp = await c.post("/api/queue/remove", json={"id": "gone"}, headers=AUTH)
+
+        assert resp.status_code == 200
+        assert resp.json() == {"ok": True, "removed": None}
+        assert [item["label"] for item in app.state.station_state.queued_segments] == ["Alpha", "Beta"]
+        assert self._queue_titles(app) == ["Alpha", "Beta"]
+
+    @pytest.mark.asyncio
+    async def test_remove_prefers_id_over_index_when_both_provided(self):
+        """When a payload carries both `id` and `index`, `id` wins — it is the
+        authoritative, position-independent identifier."""
+        app = self._make_id_queue_app([("q-a", "Alpha"), ("q-b", "Beta"), ("q-c", "Gamma")])
+
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            # id points at Beta, index points at Gamma — id must win.
+            resp = await c.post("/api/queue/remove", json={"id": "q-b", "index": 2}, headers=AUTH)
+
+        assert resp.status_code == 200
+        assert resp.json() == {"ok": True, "removed": "Beta"}
+        assert [item["label"] for item in app.state.station_state.queued_segments] == ["Alpha", "Gamma"]
+        assert self._queue_titles(app) == ["Alpha", "Gamma"]
 
 
 # ---------------------------------------------------------------------------
@@ -616,6 +783,18 @@ class TestNowStreamingInvariants:
         assert state.now_streaming["type"] == "music"
         assert state.now_streaming.get("label") != "Skipping..."
 
+    def test_admin_duration_rendering_has_no_type_based_fake_fallbacks(self):
+        html = ADMIN_HTML.read_text()
+        forbidden = [
+            r"typeKey==='music'\?240",
+            r"typeKey==='banter'\?30",
+            r"typeKey==='ad'\?60",
+            r"typeKey==='news_flash'\?20",
+        ]
+        for pattern in forbidden:
+            assert not re.search(pattern, html), f"admin.html reintroduced fake duration fallback: {pattern}"
+        assert "function durationSec(item)" in html
+
 
 # ── Item 21: scheduler reason strings must not leak into admin queue rows ─────
 
@@ -638,8 +817,8 @@ class TestSchedulerReasonsDoNotLeakToUI:
         # and "No pacing trigger active" rows in the up-next queue.
         html = ADMIN_HTML.read_text()
 
-        # Find the upcoming-rows render section (starts at `upFiltered.slice(0,10).forEach`).
-        start = html.find("upFiltered.slice(0,10).forEach")
+        # Find the upcoming-rows render section (starts at `upFiltered.slice(0,8).forEach`).
+        start = html.find("upFiltered.slice(0,8).forEach")
         assert start != -1, "could not locate upcoming-rows render section"
         # Scan through to the end of that forEach block.
         end = html.find("});", start) + 3
@@ -655,6 +834,44 @@ class TestSchedulerReasonsDoNotLeakToUI:
             "admin.html upcoming-rows render is falling back to reason text "
             "when artist is empty — this re-leaks scheduler internals."
         )
+        assert "it.reason" not in block
+
+
+class TestPacingControlsMatchServerContract:
+    def test_admin_banter_slider_uses_server_floor(self):
+        html = ADMIN_HTML.read_text()
+
+        assert 'id="pBanter" min="2"' in html
+        assert 'id="pacingMeta">Banter every 2 tracks' in html
+        assert "pacing.songs_between_banter||2" in html
+
+    def test_admin_pacing_changes_send_partial_patch(self):
+        html = ADMIN_HTML.read_text()
+
+        assert "savePacingField(PACE_FIELDS[n],el.value)" in html
+        assert "api('PATCH','/api/pacing',{[field]:+value})" in html
+        assert "songs_between_banter:+document.getElementById('pBanter').value" not in html
+
+    def test_admin_pacing_save_applies_response_and_resyncs_on_rejection(self):
+        """Slider saves must re-render only their own field from the server
+        response and roll that field back when a PATCH is rejected."""
+        html = ADMIN_HTML.read_text()
+
+        # A save re-renders only the field it patched, never sibling sliders.
+        assert "applyPacingResponse(r,field)" in html
+        # On a rejected save the field re-syncs from the last server snapshot.
+        assert "if(r&&r.detail){" in html
+        assert "if(_st.pacing)applyPacingResponse(_st.pacing,field);" in html
+
+    def test_admin_quick_pacing_actions_check_save_result(self):
+        """less_banter / too_many_ads must not toast success on a failed save."""
+        html = ADMIN_HTML.read_text()
+
+        assert "savePacingField('songs_between_banter',v,{silent:true})" in html
+        assert "savePacingField('songs_between_ads',v,{silent:true})" in html
+        # Per-field sequence guard: a stale response cannot roll the field back.
+        assert "_paceSeq[field]" in html
+        assert "if(mySeq===_paceSeq[field])applyPacingResponse(r,field)" in html
 
 
 class TestPoolDiagnosticsStayHidden:
@@ -662,7 +879,7 @@ class TestPoolDiagnosticsStayHidden:
 
     def test_admin_html_does_not_render_pool_pass_annotations(self):
         html = ADMIN_HTML.read_text()
-        start = html.find("upFiltered.slice(0,10).forEach")
+        start = html.find("upFiltered.slice(0,8).forEach")
         assert start != -1, "could not locate upcoming-rows render section"
         end = html.find("});", start) + 3
         block = html[start:end]
@@ -698,13 +915,89 @@ class TestCapabilitiesStatusIsHonest:
         # Anchor the copy so a future refactor can't silently collapse the
         # three-state render back into connected/not-set.
         html = ADMIN_HTML.read_text()
-        assert "sospeso" in html, (
+        assert "suspended" in html, (
             "admin.html should render a suspended-state label when Anthropic "
             "auth failed and we're falling back to OpenAI (Item 11)."
         )
         assert "retry in" in html, (
             "admin.html should surface the retry countdown when Anthropic is in backoff (Item 11)."
         )
+
+    def test_admin_html_renders_key_not_working_state(self):
+        # A bogus key (active-validation verdict "rejected") must render a distinct,
+        # persistent not-working state keyed on key_status — NOT reuse the transient
+        # amber "suspended" path. Both Anthropic and OpenAI consult the verdict.
+        html = ADMIN_HTML.read_text()
+        assert "anthropic_key_status" in html and "openai_key_status" in html, (
+            "admin.html engine-room render must consult `c.anthropic_key_status` and "
+            "`c.openai_key_status` so a key refused at boot reads as not-working before "
+            "any banter fails."
+        )
+        assert "key not working" in html, (
+            "admin.html must render a plain 'key not working' state for an auth-rejected key, "
+            "distinct from the transient 'suspended' fallback."
+        )
+        assert "rejected" in html, "the not-working branch must key on the 'rejected' verdict value."
+
+
+class TestRuntimeProviderTransparencyUI:
+    def test_admin_html_has_runtime_status_card_and_header_health(self):
+        html = ADMIN_HTML.read_text()
+
+        assert 'id="runtimeStatusCard"' in html
+        assert 'id="headerHealth"' in html
+        assert 'class="status-dot working"' in html
+        assert '<span class="dot"></span>Checking' in html
+
+    def test_runtime_status_render_uses_normalized_status_contract(self):
+        html = ADMIN_HTML.read_text()
+
+        assert "function updateRuntimeStatus(st)" in html
+        assert "st?.runtime_status" in html
+        assert "providers.audio_source" in html
+        assert "providers.script_provider" in html
+        assert "providers.tts_provider" in html
+        assert "no_failover_message" in html
+        assert "status_card_render_errors" in html
+
+    @pytest.mark.asyncio
+    async def test_status_endpoint_exposes_runtime_status_contract(self):
+        app = _make_app(
+            now_streaming={
+                "type": "music",
+                "label": "Song",
+                "started": time.time(),
+                "metadata": {"audio_source": "charts"},
+            },
+            anthropic_key="sk-ant-test-key",
+            openai_key="sk-openai-test-key",
+        )
+
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            resp = await c.get("/status", headers=AUTH)
+
+        assert resp.status_code == 200
+        runtime_status = resp.json()["runtime_status"]
+        assert runtime_status["health_state"] in {"ready", "degraded", "blocked"}
+        assert isinstance(runtime_status["failover_events"], list)
+        assert "no_failover_message" in runtime_status
+        assert set(runtime_status["providers"]) == {"audio_source", "script_provider", "tts_provider"}
+        for name, provider in runtime_status["providers"].items():
+            assert provider["provider_class"] == name
+            assert "primary_provider" in provider
+            assert "primary_label" in provider
+            assert "current_provider" in provider
+            assert "current_label" in provider
+            assert "fallback_active" in provider
+            assert "last_switch_timestamp" in provider
+            assert "switch_reason" in provider
+
+    def test_status_helpers_emit_accessible_state_labels(self):
+        html = ADMIN_HTML.read_text()
+
+        assert 'aria-label="${esc(safeTitle)}"' in html
+        assert 'aria-label="status: working"' in html
+        assert "header.setAttribute('aria-label',rs.health_explanation||label)" in html
 
 
 # ── Item 19: stopped-state UI actually stops (timer, waveform, producer btns) ──
@@ -773,7 +1066,7 @@ class TestStoppedStateQuietsTheUI:
         # "Session stopped — hit Resume to continue" read as an error.
         # Current copy is calmer and localized.
         html = ADMIN_HTML.read_text()
-        assert "Stazione in pausa" in html, "admin.html stopped banner should use calm paused-state copy (Item 19)."
+        assert "Station paused" in html, "admin.html stopped banner should use calm paused-state copy (Item 19)."
         # Only check the banner element's text, not toast strings in JS callbacks.
         banner_start = html.find('id="stoppedBanner"')
         banner_end = html.find("</div>", banner_start)
@@ -838,10 +1131,55 @@ class TestStoppedStateQuietsTheUI:
         assert "st?.stream?.frequency" in html
         assert "st?.stream?.bitrate_kbps" in html
 
-    def test_admin_programme_history_drops_only_one_live_duplicate(self):
+    def test_admin_scaletta_is_forward_only(self):
         html = ADMIN_HTML.read_text()
-        assert "skippedNowDuplicate" in html
-        assert "&& !(now&&e.type===now.type&&e.label===now.label)" not in html
+        block = html[html.index("function renderProgramme") : html.index("async function removeQueueItem")]
+        assert "st?.upcoming" in block
+        assert "stream_log" not in block
+        assert "now_streaming" not in block
+
+    def test_render_programme_has_distinct_stopped_empty_state(self):
+        """When the queue is empty AND the station is stopped, the Scaletta must
+        show the paused copy — not the generic "preparing next segment" copy.
+        A listener-facing illusion bug if the two states collapse."""
+        html = ADMIN_HTML.read_text()
+        block = html[html.index("function renderProgramme") : html.index("async function removeQueueItem")]
+        assert "data-stopped" in block, (
+            "renderProgramme() must branch on body[data-stopped] so the empty "
+            "Scaletta distinguishes a paused station from one building its queue."
+        )
+        assert "Station paused" in block, "renderProgramme() stopped branch must render the paused-state copy."
+        assert "Preparing the next segment" in block, (
+            "renderProgramme() must keep the building-queue copy for the running-but-empty case."
+        )
+
+    def test_render_programme_memo_hash_tracks_id_and_stop_state(self):
+        """The renderProgramme() memoization hash must include each row's queue
+        `id` and the `session_stopped` flag.
+
+        Row actions are generated from `it.id`; if the hash omits `id`, a queue
+        advance that swaps in a segment with identical visible fields leaves the
+        table un-rendered with a stale id, so `/api/queue/remove` no-ops. If it
+        omits `session_stopped`, the empty-state copy can stick across a
+        stop/resume.
+        """
+        html = ADMIN_HTML.read_text()
+        block = html[html.index("function renderProgramme") : html.index("async function removeQueueItem")]
+        hash_line = next(line for line in block.splitlines() if "const hash=" in line)
+        assert "u.id" in hash_line, "renderProgramme() memo hash must include each row's queue id."
+        assert "session_stopped" in hash_line, "renderProgramme() memo hash must include the session_stopped flag."
+
+    def test_refresh_fast_syncs_stop_state_from_status_poll(self):
+        """The status poll must drive `data-stopped` from `session_stopped` so a
+        stop/resume triggered elsewhere (other tab, HA, API) is reflected without
+        a button press — otherwise admin and listener disagree on stream state."""
+        html = ADMIN_HTML.read_text()
+        block = html[html.index("async function refreshFast") :]
+        block = block[: block.index("\n}")]
+        assert "session_stopped" in block, "refreshFast() must read session_stopped from the status payload."
+        assert "updateStopState" in block, (
+            "refreshFast() must call updateStopState() so the poll keeps the stopped UI in sync with the server."
+        )
 
 
 class TestHostBlockSelectorScoping:

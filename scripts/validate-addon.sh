@@ -7,6 +7,25 @@
 #   --build    Also build the Docker image locally (slow, requires Docker)
 set -euo pipefail
 
+case "${1:-}" in
+  -h|--help)
+    cat <<'EOF'
+Usage: scripts/validate-addon.sh [--build]
+
+Local pre-flight for the HA add-on. Mirrors the validation steps in
+.github/workflows/addon-build.yml plus checks derived from real production
+failures (version sync, image path, options contract, critical files).
+
+Options:
+  -h, --help   Show this help and exit
+  --build      Also build the Docker image locally (slow, requires Docker)
+
+Runs in pre-commit and pre-push hooks for files that can break the add-on.
+EOF
+    exit 0
+    ;;
+esac
+
 RED='\033[0;31m'
 BLUE='\033[0;34m'
 AMBER='\033[0;33m'
@@ -188,47 +207,70 @@ if [ $trans_errors -eq 0 ]; then
 fi
 
 # ---- 10. No JS string rewriting in ingress prefix injection ----
+# Discover _inject_ingress_prefix anywhere under mammamiradio/web/*.py rather
+# than hardcoding a single source file (issue #467 — the helper has moved
+# modules twice). The Python scan reports one of three sentinel tokens so the
+# three outcomes stay an explicit, testable contract instead of overloaded
+# exit codes:
+#   found + all safe   -> stdout "safe"          -> pass
+#   found + any unsafe -> stdout "unsafe:<path>" -> fail (same message as before)
+#   not found anywhere -> stdout "none"          -> warn (ingress may not work)
+# All matching definitions are validated (not just the first), so a stale
+# unsafe copy left behind by a refactor cannot slip through. Each file is
+# parsed in isolation: a syntax error in an unrelated web module is skipped
+# (ruff/mypy/pytest surface that loudly elsewhere) instead of masquerading as
+# an ingress-safety failure.
 echo "10. Ingress safety"
-if [ ! -f mammamiradio/web/streamer.py ]; then
-    fail "Missing mammamiradio/web/streamer.py (cannot run ingress safety check)"
-elif grep -q "_inject_ingress_prefix" mammamiradio/web/streamer.py; then
-    if CHECK_OUTPUT=$($PY -c "
+if [ ! -d mammamiradio/web ]; then
+    fail "Missing mammamiradio/web (cannot run ingress safety check)"
+elif CHECK_OUTPUT=$($PY -c "
 import ast
 from pathlib import Path
 
-src = Path('mammamiradio/web/streamer.py').read_text()
-tree = ast.parse(src)
-target = None
-for node in tree.body:
-    if isinstance(node, ast.FunctionDef) and node.name == '_inject_ingress_prefix':
-        target = node
-        break
+targets = []
+for path in sorted(Path('mammamiradio/web').glob('*.py')):
+    try:
+        tree = ast.parse(path.read_text())
+    except (SyntaxError, UnicodeDecodeError):
+        continue
+    for node in tree.body:
+        if isinstance(node, ast.FunctionDef) and node.name == '_inject_ingress_prefix':
+            targets.append(node)
 
-if target is None:
-    raise SystemExit('missing _inject_ingress_prefix')
+if not targets:
+    print('none')
+    raise SystemExit(0)
 
-for node in ast.walk(target):
-    if not isinstance(node, ast.Call):
-        continue
-    if not isinstance(node.func, ast.Attribute) or node.func.attr != 'replace':
-        continue
-    if not node.args:
-        continue
-    first = node.args[0]
-    if not isinstance(first, ast.Constant) or not isinstance(first.value, str):
-        continue
-    pattern = first.value
-    if pattern.startswith(\"'/\") and pattern != \"'/sw.js'\":
-        raise SystemExit(f'rewrites single-quoted JS path: {pattern}')
+for target in targets:
+    for node in ast.walk(target):
+        if not isinstance(node, ast.Call):
+            continue
+        if not isinstance(node.func, ast.Attribute) or node.func.attr != 'replace':
+            continue
+        if not node.args:
+            continue
+        first = node.args[0]
+        if not isinstance(first, ast.Constant) or not isinstance(first.value, str):
+            continue
+        pattern = first.value
+        if pattern.startswith(\"'/\") and pattern != \"'/sw.js'\":
+            print(f'unsafe:{pattern}')
+            raise SystemExit(0)
 
 print('safe')
 " 2>&1); then
-        pass "Ingress prefix injection only rewrites safe patterns"
-    else
-        fail "Ingress safety check failed: $CHECK_OUTPUT"
-    fi
+    case "$CHECK_OUTPUT" in
+        safe)
+            pass "Ingress prefix injection only rewrites safe patterns" ;;
+        none)
+            warn "No _inject_ingress_prefix found (ingress may not work)" ;;
+        unsafe:*)
+            fail "Ingress safety check failed: rewrites single-quoted JS path: ${CHECK_OUTPUT#unsafe:}" ;;
+        *)
+            fail "Ingress safety check failed: $CHECK_OUTPUT" ;;
+    esac
 else
-    warn "No _inject_ingress_prefix found (ingress may not work)"
+    fail "Ingress safety check failed: $CHECK_OUTPUT"
 fi
 
 # ---- 11. Dockerfile doesn't COPY to /data/ ----
@@ -238,6 +280,14 @@ if grep -qE '^COPY.*\s/data/' ha-addon/mammamiradio/Dockerfile; then
 else
     pass "No COPY to /data/ (persistent volume safe)"
 fi
+
+for label in 'io.hass.version="${BUILD_VERSION}"' 'io.hass.type="app"' 'io.hass.arch="${BUILD_ARCH}"'; do
+    if grep -Fq "$label" ha-addon/mammamiradio/Dockerfile; then
+        pass "Dockerfile label: $label"
+    else
+        fail "Dockerfile missing required Home Assistant image label: $label"
+    fi
+done
 
 # No bare eval 2>&1 in run.sh (subshell captures like SYNC_MSG="$(...2>&1)" are safe)
 # Collapse continuation lines, then reject 2>&1 that is NOT inside a $() capture.
@@ -259,7 +309,7 @@ fi
 
 # ---- 13. Edge add-on folder ----
 # The edge add-on runs the SAME image as stable, so its config must stay
-# schema-locked to stable. CI (addon-build.yml bump-edge) advances its version.
+# schema-locked to stable. Its version is a manual edge release (`make edge-release`).
 echo "13. Edge add-on"
 EDGE_CONFIG="ha-addon/mammamiradio-edge/config.yaml"
 STABLE_CONFIG="ha-addon/mammamiradio/config.yaml"
@@ -295,12 +345,14 @@ else
         fail "edge image mismatch: got '$EDGE_IMAGE', expected '$EXPECTED'"
     fi
 
-    # version — calver YYYY.M.D.N or the 0.0.0 seed
+    # version — a manual edge release sets this to the main short SHA (7-char hex,
+    # see `make edge-release`). The dotted-numeric form is still accepted so the
+    # pre-migration calver value validates until the first SHA release is cut.
     EDGE_VER=$(grep '^version:' "$EDGE_CONFIG" | awk '{print $2}' | tr -d '"')
-    if echo "$EDGE_VER" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+(\.[0-9]+)?$'; then
+    if echo "$EDGE_VER" | grep -qE '^[0-9a-f]{7}$|^[0-9]+\.[0-9]+\.[0-9]+(\.[0-9]+)?$'; then
         pass "edge version format: $EDGE_VER"
     else
-        fail "edge version must be calver or 0.0.0 seed, got '$EDGE_VER'"
+        fail "edge version must be a 7-char short SHA (make edge-release), got '$EDGE_VER'"
     fi
 
     # options + schema parity with stable (edge runs the same image/run.sh).
@@ -386,6 +438,7 @@ if [ "${1:-}" = "--build" ]; then
     echo "  Building for $BUILD_ARCH..."
     if docker build "$TMPCTX" \
         --build-arg BUILD_FROM="$BASE" \
+        --build-arg BUILD_VERSION="$ADDON_VER" \
         --build-arg BUILD_ARCH="$BUILD_ARCH" \
         -t mammamiradio-addon-test:local 2>&1 | tail -5; then
         pass "Docker build succeeded"

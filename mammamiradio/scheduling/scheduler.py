@@ -41,7 +41,7 @@ def _decide_with_reason(
     threshold = pacing.songs_between_banter
     if not deterministic:
         threshold += random.randint(-1, 0)
-    threshold = max(1, threshold)
+    threshold = max(2, threshold)
     if songs_since_banter >= threshold:
         # News flash fires deterministically once songs_since_news >= 6.
         # The 30% probability gate (previously here) caused news to fire ~once
@@ -178,6 +178,8 @@ def preview_upcoming(state: StationState, pacing: PacingSection, tracks: list[Tr
         elif seg_type == SegmentType.TIME_CHECK:
             preview.append({"type": "time_check", "label": "Ora esatta", "reason": reason, "predicted": True})
             segments_since_time_check = 0
+        elif seg_type == SegmentType.SWEEPER:
+            preview.append({"type": "sweeper", "label": "Sweeper", "reason": reason, "predicted": True})
 
         segments_produced += 1
 

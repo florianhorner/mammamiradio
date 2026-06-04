@@ -19,6 +19,10 @@ logger = logging.getLogger(__name__)
 _NORM_SEM = BoundedSemaphore(2)
 
 
+class ConcatDurationError(RuntimeError):
+    """Raised when strict concat detects a proven output duration shortfall."""
+
+
 def _norm_sidecar_path(norm_path: Path) -> Path:
     """Companion JSON path for a normalized cache file."""
     return norm_path.parent / f"{norm_path.name}.json"
@@ -212,7 +216,10 @@ def normalize(
             norm_part = "dynaudnorm=f=150:g=13,alimiter=limit=0.95"
         else:
             norm_part = "loudnorm=I=-16:LRA=11:TP=-1.5"
-        silence_trim = "silenceremove=start_periods=0:stop_periods=1:stop_threshold=-50dB:stop_duration=0.3"
+        # stop_periods MUST stay negative. A positive stop_periods makes silenceremove
+        # halt output at the FIRST silence period, truncating speech at its first
+        # inter-phrase pause (host lines collapsed to ~1.6s). -1 trims trailing silence only.
+        silence_trim = "silenceremove=start_periods=0:stop_periods=-1:stop_threshold=-50dB:stop_duration=0.3"
         # Soft fade-in on every final-output segment: music → banter hand-offs
         # used to be a hard cut at full volume. A short ramp-in on the incoming
         # segment turns the perceived "drop" into a gentle entry without
@@ -226,7 +233,9 @@ def normalize(
             else f"{norm_part},{silence_trim},{fade_in}"
         )
     else:
-        audio_filter = "silenceremove=start_periods=0:stop_periods=1:stop_threshold=-50dB:stop_duration=0.3"
+        # stop_periods=-1 (negative) trims trailing silence only; a positive value
+        # truncates speech at the first pause. See the note in the loudnorm branch above.
+        audio_filter = "silenceremove=start_periods=0:stop_periods=-1:stop_threshold=-50dB:stop_duration=0.3"
 
     cmd = [
         "ffmpeg",
@@ -256,7 +265,7 @@ def normalize(
     return output_path
 
 
-def _ffprobe_duration_sec(path: Path) -> float | None:
+def probe_duration_sec(path: Path) -> float | None:
     """Best-effort mp3 duration probe; None if ffprobe fails.
 
     Used by concat_files for a duration-invariant sanity check. We don't want
@@ -297,6 +306,8 @@ def concat_files(
     output_path: Path,
     silence_ms: int = 300,
     loudnorm: bool = True,
+    *,
+    strict_duration: bool = False,
 ) -> Path:
     """Concatenate rendered parts into a single MP3 segment.
 
@@ -305,6 +316,9 @@ def concat_files(
 
     Set loudnorm=False when all inputs are already normalized to skip the
     expensive EBU R128 loudness pass (~1-3s saved per concat).
+
+    Set strict_duration=True for host-segment assembly where a proven output
+    shortfall must reject the segment instead of only logging.
     """
     if len(paths) == 0:
         raise ValueError("concat_files: paths list must not be empty")
@@ -365,27 +379,28 @@ def concat_files(
     # input without re-running the session. Never crash — the stream keeps
     # playing whatever made it into the file.
     try:
-        output_dur = _ffprobe_duration_sec(output_path)
+        output_dur = probe_duration_sec(output_path)
         if output_dur is None or output_dur <= 0:
             return output_path
-        input_durs = [_ffprobe_duration_sec(p) for p in paths]
+        input_durs = [probe_duration_sec(p) for p in paths]
         if any(d is None or d <= 0 for d in input_durs):
             return output_path
-        expected = sum(input_durs) + (len(paths) - 1) * silence_dur  # type: ignore[arg-type,operator]
+        total_input_dur = sum(input_durs)  # type: ignore[arg-type]  # all non-None guarded above
+        expected = total_input_dur + (len(paths) - 1) * silence_dur
         # Allow 5% slack for ffmpeg encoding rounding + loudnorm edge trimming.
         threshold = 0.95 * expected
         if output_dur < threshold:
-            logger.warning(
-                "concat_files duration shortfall: output=%.2fs expected>=%.2fs "
-                "(sum_inputs=%.2fs + %d gaps x %.2fs). Output: %s. Inputs (dur): %s",
-                output_dur,
-                threshold,
-                sum(input_durs),  # type: ignore[arg-type]
-                max(0, len(paths) - 1),
-                silence_dur,
-                output_path.name,
-                [(p.name, f"{d:.2f}") for p, d in zip(paths, input_durs, strict=False)],
+            detail = (
+                f"concat_files duration shortfall: output={output_dur:.2f}s expected>={threshold:.2f}s "
+                f"(sum_inputs={total_input_dur:.2f}s + {max(0, len(paths) - 1)} gaps x {silence_dur:.2f}s). "
+                f"Output: {output_path.name}. Inputs (dur): "
+                f"{[(p.name, f'{d:.2f}') for p, d in zip(paths, input_durs, strict=False)]}"
             )
+            logger.warning("%s", detail)
+            if strict_duration:
+                raise ConcatDurationError(detail)
+    except ConcatDurationError:
+        raise  # must not be swallowed by the broad instrumentation guard below
     except Exception as exc:  # defense-in-depth — never let instrumentation break prod
         logger.debug("concat_files duration probe skipped: %s", exc)
 

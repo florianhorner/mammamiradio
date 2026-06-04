@@ -8,8 +8,12 @@ How to release a new version of the Mamma Mi Radio Home Assistant addon without 
 Code change
   → bump version in BOTH files (see below)
   → push/merge to main
-  → addon-build.yml CI validates + builds images
-  → GHCR receives :version and :latest tags
+  → addon-build.yml CI validates + builds :sha and :<short-sha> (NO :X.Y.Z or :latest)
+  → push matching v* tag: git tag vX.Y.Z && git push origin vX.Y.Z
+  → addon-release.yml pre-flight: tag-ref, semver, config.yaml, and prebuilt :sha checks
+  → addon-release.yml smoke-prebuilt: runs the amd64 :sha image before stable tags exist
+  → addon-release.yml promote: publishes :X.Y.Z and :latest from the prebuilt :sha image for amd64 + aarch64
+  → addon-release.yml smoke: runs the published amd64 :X.Y.Z image
   → HA discovers new version via config.yaml
   → User clicks "Update" in HA
   → HA pulls image from GHCR
@@ -20,6 +24,8 @@ Code change
 ```
 
 Every step must succeed. A break at ANY point means the addon doesn't work.
+
+**Important:** The version-bump merge and the tag push are separate actions. The tag push promotes the already-built `:sha` images to stable tags. Wait for `addon-build.yml` to pass on the version-bump commit before pushing the tag — `addon-release.yml` fails before publishing if either per-arch `:sha` image is missing.
 
 ## Version: two files, must match
 
@@ -68,6 +74,8 @@ Current config options:
 | `chaos_mode_active` | `bool?` | `MAMMAMIRADIO_CHAOS_MODE` |
 | `festival_mode` | `bool?` | `MAMMAMIRADIO_FESTIVAL_MODE` |
 
+Additional Jamendo tuning can be set in `radio.toml` or container env without exposing new Supervisor UI options: `JAMENDO_COUNTRY`, `JAMENDO_ORDER`, and `JAMENDO_LIMIT` (`1`-`200`).
+
 The option extraction in run.sh uses a single Python script that reads keys from `/data/options.json`. Tuple-loop keys export as UPPER_CASE names (`jamendo_client_id` → `JAMENDO_CLIENT_ID`); behavior toggles with app-specific env vars are mapped explicitly (`enable_home_assistant` → `HA_ENABLED`, `super_italian_mode` → `MAMMAMIRADIO_SUPER_ITALIAN`, `chaos_mode_active` → `MAMMAMIRADIO_CHAOS_MODE`, `festival_mode` → `MAMMAMIRADIO_FESTIVAL_MODE`). To add a new option:
 
 1. Add to `options:` and `schema:` in `config.yaml` in the same order
@@ -103,6 +111,31 @@ scripts/validate-addon.sh
 
 That command checks the same add-on invariants CI validates. Add `--build` when you also want the slower local-source image build. If this command fails, do not push.
 
+## `io.hass.*` image labels
+
+The addon Dockerfile must declare three Home Assistant image labels using `ARG`-injected build arguments:
+
+```dockerfile
+ARG BUILD_VERSION
+ARG BUILD_ARCH
+LABEL \
+  io.hass.version="${BUILD_VERSION}" \
+  io.hass.type="app" \
+  io.hass.arch="${BUILD_ARCH}"
+```
+
+The HA Supervisor reads these labels to:
+- `io.hass.version` — match the running image against `config.yaml`'s `version:` field. Without this label the Supervisor cannot determine whether the installed image is current.
+- `io.hass.type` — identify this as an application add-on (as opposed to a system add-on).
+- `io.hass.arch` — validate that the pulled image targets the correct host architecture.
+
+CI injects the values via `--build-arg` in `addon-build.yml`. The one build per arch
+sets `BUILD_VERSION` = stable `config.yaml` version (`X.Y.Z`), `BUILD_ARCH` = matrix arch,
+and tags the image `:${git_sha}` (full) plus `:<short-sha>` — the latter is the tag the
+edge channel points at.
+
+`scripts/validate-addon.sh` check 11 verifies that all three label strings are present in the Dockerfile and exits non-zero if any are missing. `ARG BUILD_VERSION=unknown` provides a default so local Docker builds that omit `--build-arg BUILD_VERSION` produce `io.hass.version=unknown` rather than an empty string.
+
 ## Image path
 
 HA expects images at:
@@ -116,7 +149,9 @@ The standalone Docker image (for non-HA users) is separate: `ghcr.io/florianhorn
 
 ## Release channels
 
-Home Assistant add-on updates are driven by `ha-addon/mammamiradio/config.yaml` and images built from `main`. GitHub Releases and tags are curated standalone announcements and may lag add-on version bumps. Before publishing a GitHub Release, write curated release notes instead of copying raw `CHANGELOG.md`.
+Stable add-on images are published by `addon-release.yml`, triggered by a `v*` tag push to the version-bump commit after it merges to `main`. GitHub Releases are curated standalone announcements; always write release notes rather than copying raw `CHANGELOG.md`. Tag the version-bump commit — not a later one — so the release image matches the commit CI already validated.
+
+`addon-release.yml` does not rebuild the add-on. It verifies that both per-arch `:${git_sha}` images exist, smoke-tests the amd64 SHA image before stable publishing, promotes those exact images to `:X.Y.Z` without changing the source manifest shape, updates `:latest` only when the current tag is the newest stable semver, and then smoke-tests the published amd64 `:X.Y.Z` image. The source `:sha` image is built with `io.hass.version` set to the stable `config.yaml` version because it may later become the stable release artifact. If a previous run published one architecture and then failed, a rerun is allowed only when the existing `:X.Y.Z` tag digest matches the source `:sha`; mismatched stable tags fail and must be cleaned up manually.
 
 ## Edge channel (dev releases)
 
@@ -124,20 +159,25 @@ Home Assistant add-on updates are driven by `ha-addon/mammamiradio/config.yaml` 
 
 | | Stable (`mammamiradio`) | Edge (`mammamiradio-edge`) |
 |--|--|--|
-| `version:` | hand-bumped `X.Y.Z` on deliberate releases | calendar version `YYYY.M.D.<build>`, bumped by CI |
-| Updates when | you bump the version | every `main` merge that changes the add-on or app |
-| Image tag pulled | `:X.Y.Z` | `:YYYY.M.D.<build>` |
+| `version:` | hand-bumped `X.Y.Z` on deliberate releases | the `main` short commit SHA, cut manually with `make edge-release` |
+| Updates when | you push a matching `v*` tag after merging the version-bump commit | you cut an edge release (the version string changes, so HA shows an Update) |
+| Image tag pulled | `:X.Y.Z` (published by `addon-release.yml`) | `:<short-sha>` (published by `addon-build.yml` on every `main` build) |
 | Audience | everyone | the maintainer's soak Pi |
 
 Both add-ons pull the **same image repo** (`ghcr.io/florianhorner/mammamiradio-addon-{arch}`) — they just resolve to different tags. The edge folder holds only metadata (`config.yaml`, `translations/`, `CHANGELOG.md`, icons); it has no `Dockerfile` because HA pulls the prebuilt image.
 
-**How the calendar version is set.** `addon-build.yml`'s `bump-edge` job runs after `build` + `smoke` pass. It writes `version: YYYY.M.D.<commit-count>` into `ha-addon/mammamiradio-edge/config.yaml` and pushes the commit to `main`. The version is computed by `scripts/edge-calver.sh`: the ordering segment is `git rev-list --count HEAD` (the commit count — timestamp-free, so a skewed committer clock cannot mint a version that freezes the monotonic guard), and the `YYYY.M.D` prefix is the CI runner's UTC date (cosmetic). A monotonic guard (`scripts/edge-version-newer.sh`) skips the write if the new version would not be strictly greater, and the bump job also skips if `main` has advanced beyond the commit that was just built. If the push cannot land after 3 attempts the job **fails loudly** (`exit 1`) rather than going green — a silently-frozen edge channel is the failure mode that gate exists to prevent. The push uses the default `GITHUB_TOKEN`: GitHub does not trigger workflows from `GITHUB_TOKEN` pushes, so the commit cannot re-trigger `addon-build.yml` — no `[skip ci]` needed, no loop.
+**Cutting an edge release.** Edge releases are **manual and deliberate** — there is no CI bot. The HA Supervisor pulls `{image}:{version}` (the `version:` field *is* the Docker tag) and decides "update available" by a version-string compare, so advancing the edge `version:` to a new value surfaces an in-place Update on the soak Pi. To cut one:
 
-**Seed version.** The committed seed is `version: 0.0.0`. `addon-build.yml` pushes a permanent `:0.0.0` image tag (always the latest `main` build) so the seed is always pullable in the window before the first `bump-edge` commit lands.
+1. Make sure `Build HA Addon` is green on the `main` commit you want to release — it pushes the `:<short-sha>` image the edge channel will point at.
+2. Run `make edge-release` (`scripts/cut-edge-release.sh`): it sets the edge `version:` to the current `origin/main` short SHA, verifies the `:<short-sha>` image exists, and opens a normal PR you merge via `/ship`.
+
+Because *you* open the PR (not a bot / `GITHUB_TOKEN`), its required checks (`quality`, `pi-smoke`) run normally and you merge it like any PR — no protected-branch fight, no self-merging CI, no races. Stable is never touched. (This replaced an auto-bump CI job that opened a PR and busy-waited on its own checks; it raced check-creation and orphaned PRs — see #384 / #476 / #487.)
+
+**Constraint:** `Build HA Addon` is push-only (it does not run on PRs), so it must never be a required check on `main` — requiring it would make every PR unmergeable.
 
 **Switching the soak Pi to edge.** Edge and stable both use `host_network: true` and port 8000 — they cannot run at the same time. Uninstall stable, install "Mamma Mi Radio (Edge)" from the same add-on store entry, re-enter API keys. Reverse it to go back.
 
-**Editing the edge add-on.** Its `options`/`schema` MUST stay identical to stable — edge runs the same image and the same `run.sh` reads the options. `scripts/validate-addon.sh` fails CI on any drift. When you add a config option to stable (the THREE-files contract above), the edge `config.yaml` and `translations/en.yaml` are a fourth and fifth file to update in the same commit. **Do not hand-edit the edge `version:` line** — CI owns it (`bump-edge` rewrites it on every addon-changing merge); a manual bump can conflict with that job or, if set too high, freeze the monotonic guard.
+**Editing the edge add-on.** Its `options`/`schema` MUST stay identical to stable — edge runs the same image and the same `run.sh` reads the options. `scripts/validate-addon.sh` fails CI on any drift. When you add a config option to stable (the THREE-files contract above), the edge `config.yaml` and `translations/en.yaml` are a fourth and fifth file to update in the same commit. The edge `version:` line is the only field that changes to cut a release, and `make edge-release` does that for you.
 
 ## Pre-merge checklist
 
@@ -150,6 +190,12 @@ Before merging ANY change that touches addon files:
 - [ ] If new config option: added to config.yaml + run.sh + translations
 - [ ] If path changed: grep all files for the old path
 - [ ] If renamed anything: `grep -r "old_name" .` returns zero hits
+
+**After merging a version-bump commit** (to publish the stable image):
+1. Wait for `addon-build.yml` to pass on the merged commit
+2. `git tag vX.Y.Z && git push origin vX.Y.Z`
+3. `addon-release.yml` runs pre-flight → smoke-prebuilt → promote → smoke; check Actions for green
+4. Verify: `docker pull ghcr.io/florianhorner/mammamiradio-addon-aarch64:X.Y.Z`
 
 ## Release invariants gate (2026-04-27 onward)
 

@@ -24,6 +24,8 @@ from mammamiradio.core.models import (
 )
 
 TOML_PATH = str(Path(__file__).resolve().parents[2] / "radio.toml")
+# Minimum dummy size that passes synthesize_dialogue per-line validation.
+TEST_DIALOGUE_LINE_BYTES = 2048
 
 
 # ---------------------------------------------------------------------------
@@ -264,7 +266,7 @@ def test_concat_files_without_loudnorm():
     # invocation the mock sees (Item 1 added a post-concat ffprobe sanity check).
     with (
         patch("mammamiradio.audio.normalizer.subprocess.run", return_value=completed) as mock_run,
-        patch("mammamiradio.audio.normalizer._ffprobe_duration_sec", return_value=None),
+        patch("mammamiradio.audio.normalizer.probe_duration_sec", return_value=None),
     ):
         concat_files(paths, Path("/fake/out.mp3"), loudnorm=False)
 
@@ -288,7 +290,7 @@ def test_concat_files_with_loudnorm():
 
     with (
         patch("mammamiradio.audio.normalizer.subprocess.run", return_value=completed) as mock_run,
-        patch("mammamiradio.audio.normalizer._ffprobe_duration_sec", return_value=None),
+        patch("mammamiradio.audio.normalizer.probe_duration_sec", return_value=None),
     ):
         concat_files(paths, Path("/fake/out.mp3"), loudnorm=True)
 
@@ -461,7 +463,7 @@ async def test_synthesize_dialogue_passes_loudnorm_false(tmp_path):
 
     def _touch(path):
         Path(path).parent.mkdir(parents=True, exist_ok=True)
-        Path(path).write_bytes(b"\x00" * 256)
+        Path(path).write_bytes(b"\x00" * TEST_DIALOGUE_LINE_BYTES)
         return Path(path)
 
     mock_comm_instance = MagicMock()
@@ -472,7 +474,7 @@ async def test_synthesize_dialogue_passes_loudnorm_false(tmp_path):
         _touch(output_path)
         return output_path
 
-    def _concat_side_effect(paths, output_path, silence_ms=300, loudnorm=True):
+    def _concat_side_effect(paths, output_path, silence_ms=300, loudnorm=True, **kwargs):
         _touch(output_path)
         return output_path
 
@@ -484,6 +486,7 @@ async def test_synthesize_dialogue_passes_loudnorm_false(tmp_path):
         patch("mammamiradio.audio.tts.edge_tts.Communicate", mock_communicate),
         patch("mammamiradio.audio.tts.normalize", side_effect=_normalize_side_effect),
         patch("mammamiradio.audio.tts.concat_files", side_effect=_concat_side_effect) as mock_concat,
+        patch("mammamiradio.audio.tts.probe_duration_sec", return_value=1.0),
     ):
         await synthesize_dialogue(lines, tmp_path)
 

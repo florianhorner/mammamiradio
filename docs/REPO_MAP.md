@@ -7,6 +7,9 @@ If you want to fix or extend X, look in Y. The folder hierarchy IS the mental mo
 | What you want to change                            | Where to look                                |
 |----------------------------------------------------|-----------------------------------------------|
 | What hosts say (banter, jokes, callouts)           | `mammamiradio/hosts/scriptwriter.py`         |
+| Host voice: expression banks, fingerprints, Chaos/Festival fiction | `mammamiradio/hosts/prompt_world.py` |
+| Transition rewrite openers (anti-repeat copy + helpers) | `mammamiradio/hosts/transitions.py`     |
+| Stock fallback copy: chaos stock lines, ad-break bumpers | `mammamiradio/hosts/fallbacks.py`       |
 | Host personality, listener memory, motifs          | `mammamiradio/hosts/persona.py`              |
 | Time-of-day / cultural cues injected into prompts  | `mammamiradio/hosts/context_cues.py`         |
 | Ads (brands, voices, campaign spines)              | `mammamiradio/hosts/ad_creative.py`          |
@@ -74,13 +77,13 @@ The `tests/` tree mirrors the source tree exactly. To find the test for `mammami
 | Admin panel layout standards     | `docs/design/admin-panel.md`     |
 | Conductor workspace lifecycle    | `docs/conductor.md`              |
 | Listener QS integration train    | `docs/listener-qs-train.md`      |
-| Cathedral restructure plan       | `docs/2026-04-28-cathedral-restructure.md` |
+| Cathedral restructure plan       | `docs/archive/2026-04-28-cathedral-restructure.md` |
 
 ## God modules pending split
 
 Two modules carry a `# TODO: split` marker referencing the cathedral plan:
 
 - `mammamiradio/web/streamer.py` (~2,300 LOC) — splits in PR 5 of the cathedral plan into `routes_listener.py`, `routes_admin.py`, `auth.py`, `playback_loop.py`, `public_status.py`
-- `mammamiradio/hosts/scriptwriter.py` (~1,500 LOC) — splits in PR 6 into `banter.py`, `ads.py`, `llm_client.py`, `fallbacks.py`
+- `mammamiradio/hosts/scriptwriter.py` (~1,500 LOC) — splits in PR 6 into `prompts.py`, `llm_client.py`, `banter.py`, `ads.py`. Data leaves `prompt_world.py`, `transitions.py`, `fallbacks.py` are already extracted.
 
 Until those PRs land, these modules are postal addresses, not destinations. Ride the structure that exists today; do not pre-split.

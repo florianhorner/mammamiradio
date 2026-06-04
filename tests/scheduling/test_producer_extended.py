@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections import deque
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -18,6 +19,8 @@ from mammamiradio.core.models import (
     StationState,
     Track,
 )
+from mammamiradio.home.ha_context import ScoredEntity
+from mammamiradio.home.ha_enrichment import HomeEvent
 from mammamiradio.hosts.ad_creative import (
     AdBrand,
     AdFormat,
@@ -264,6 +267,36 @@ async def test_ha_context_refreshed_for_banter(tmp_path):
     mock_context = MagicMock()
     mock_context.summary = "Il tempo e' bello"
     mock_context.events_summary = "- La macchina del caffe: spento/a -> acceso/a (1 min fa)"
+    mock_context.mood = "Caffe in preparazione"
+    mock_context.weather_arc = "Meteo: soleggiato, 22C."
+    mock_context.mood_en = "Coffee brewing"
+    mock_context.weather_arc_en = "Weather: sunny, 22C."
+    mock_context.events_summary_en = "- Coffee machine: off -> on (1 min ago)"
+    mock_context.scored = [
+        ScoredEntity(
+            entity_id="switch.bar_kaffeemaschine_steckdose",
+            area="Kitchen",
+            domain="switch",
+            score=1.4,
+            raw_state={"state": "on", "attributes": {"friendly_name": "Coffee machine"}},
+            label_it="La macchina del caffe",
+            label_en="Coffee machine",
+            summary_line="La macchina del caffe: acceso/a",
+        )
+    ]
+    mock_context.denylist_hits = {"privacy:person": 1}
+    mock_context.catalog_hit_rate = 0.0
+    mock_context.events = deque(
+        [
+            HomeEvent(
+                entity_id="switch.bar_kaffeemaschine_steckdose",
+                label="La macchina del caffe",
+                old_state="spento/a",
+                new_state="acceso/a",
+                timestamp=1.0,
+            )
+        ]
+    )
 
     with (
         patch(f"{MODULE}.next_segment_type", return_value=SegmentType.BANTER),
@@ -279,6 +312,64 @@ async def test_ha_context_refreshed_for_banter(tmp_path):
     mock_fetch.assert_called_once()
     assert state.ha_context == "Il tempo e' bello"
     assert state.ha_events_summary == "- La macchina del caffe: spento/a -> acceso/a (1 min fa)"
+    assert state.ha_scored_entities[0]["label"] == "Coffee machine"
+    assert state.ha_denylist_hits == {"privacy:person": 1}
+    assert state.ha_last_event_label == "La macchina del caffe"
+    assert state.ha_last_event_label_en == "Coffee machine"
+
+
+@pytest.mark.asyncio
+async def test_public_status_only_surfaces_curated_event_labels(tmp_path):
+    # /public-status exposes state.ha_last_event_label to listeners. Phase A
+    # widened the ingest to all HA entities; only curated entities are listener-safe.
+    state = _make_state()
+    config = _make_config(tmp_path)
+    config.anthropic_api_key = "test-key"
+    config.homeassistant.enabled = True
+    config.ha_token = "fake-token"
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+
+    host = config.hosts[0] if config.hosts else HostPersonality(name="Marco", voice="it-IT-DiegoNeural", style="warm")
+
+    mock_context = MagicMock()
+    mock_context.summary = ""
+    mock_context.events_summary = "- Hallway Motion: spento/a -> acceso/a (1 min fa)"
+    mock_context.mood = ""
+    mock_context.weather_arc = ""
+    mock_context.mood_en = ""
+    mock_context.weather_arc_en = ""
+    mock_context.events_summary_en = ""
+    mock_context.scored = []
+    mock_context.denylist_hits = {}
+    mock_context.catalog_hit_rate = 0.0
+    mock_context.last_event_label_en = ""
+    # Uncurated entity with a friendly_name — must not surface on /public-status.
+    mock_context.events = deque(
+        [
+            HomeEvent(
+                entity_id="binary_sensor.bedroom_motion",
+                label="Hallway Motion",
+                old_state="spento/a",
+                new_state="acceso/a",
+                timestamp=1.0,
+            )
+        ]
+    )
+
+    with (
+        patch(f"{MODULE}.next_segment_type", return_value=SegmentType.BANTER),
+        patch(f"{SCRIPTWRITER_MODULE}.write_banter", new_callable=AsyncMock, return_value=([(host, "Ciao!")], None)),
+        patch(f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora...")),
+        patch(f"{MODULE}.synthesize", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(f"{MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(f"{MODULE}.concat_files", return_value=_fake_path()),
+        patch(f"{MODULE}.fetch_home_context", new_callable=AsyncMock, return_value=mock_context),
+    ):
+        await _run_until_queued(queue, state, config)
+
+    # Uncurated event must not leak to listener-facing fields.
+    assert state.ha_last_event_label == ""
+    assert state.ha_last_event_label_en == ""
 
 
 @pytest.mark.asyncio
@@ -325,6 +416,221 @@ async def test_banter_quality_reject_uses_canned_fallback(tmp_path):
     assert seg.type == SegmentType.BANTER
     assert seg.metadata.get("canned") is True
     assert seg.path == canned
+
+
+def _write_concat_output(paths, output_path, silence_ms=300, loudnorm=True, **kwargs):
+    output_path.write_bytes(b"\x00" * 2048)
+    return output_path
+
+
+def _long_banter_lines(host: HostPersonality) -> list[tuple[HostPersonality, str]]:
+    return [
+        (host, "Prima linea con abbastanza parole per stimare durata."),
+        (host, "Seconda linea ancora piena di contenuto radiofonico."),
+        (host, "Terza linea che continua lo scambio tra conduttori."),
+        (host, "Quarta linea con una battuta sul brano appena passato."),
+        (host, "Quinta linea che tiene viva la scena in studio."),
+        (host, "Sesta linea prima di tornare alla musica."),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_banter_generated_audio_passes_expected_duration_context(tmp_path):
+    state = _make_state()
+    config = _make_config(tmp_path)
+    config.anthropic_api_key = "test-key"
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+
+    host = config.hosts[0]
+    trans_path = tmp_path / "transition.mp3"
+    trans_path.write_bytes(b"\x00" * 2048)
+    banter_path = tmp_path / "dialogue.mp3"
+    banter_path.write_bytes(b"\x00" * 2048)
+    validate_calls: list[dict] = []
+
+    def _validate_side_effect(path, seg_type, **kwargs):
+        if seg_type == SegmentType.BANTER:
+            validate_calls.append({"path": path, **kwargs})
+
+    with (
+        patch(f"{MODULE}.next_segment_type", return_value=SegmentType.BANTER),
+        patch(f"{SCRIPTWRITER_MODULE}.has_script_llm", return_value=True),
+        patch(
+            f"{SCRIPTWRITER_MODULE}.write_banter", new_callable=AsyncMock, return_value=(_long_banter_lines(host), None)
+        ),
+        patch(f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Bentornati.")),
+        patch(f"{MODULE}.synthesize", new_callable=AsyncMock, return_value=trans_path),
+        patch(f"{MODULE}._try_crossfade", new_callable=AsyncMock, return_value=trans_path),
+        patch(f"{MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=banter_path),
+        patch(f"{MODULE}.concat_files", side_effect=_write_concat_output) as mock_concat,
+        patch(f"{MODULE}._pick_canned_clip", return_value=None),
+        patch(f"{MODULE}._apply_talk_bed", new_callable=AsyncMock, side_effect=lambda path, *_a, **_k: path),
+        patch(f"{MODULE}.validate_segment_audio", side_effect=_validate_side_effect),
+        patch(f"{MODULE}.fetch_home_context", new_callable=AsyncMock),
+    ):
+        await _run_until_queued(queue, state, config)
+
+    seg = queue.get_nowait()
+    assert seg.type == SegmentType.BANTER
+    assert seg.metadata.get("canned") is False
+    assert validate_calls
+    assert validate_calls[0]["expected_line_count"] == 7
+    assert validate_calls[0]["expected_min_duration_sec"] > 0
+    assert mock_concat.call_args.kwargs["strict_duration"] is True
+
+
+@pytest.mark.asyncio
+async def test_banter_implausibly_short_with_no_canned_fallback_is_not_queued(tmp_path):
+    state = _make_state()
+    config = _make_config(tmp_path)
+    config.anthropic_api_key = "test-key"
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+
+    host = config.hosts[0]
+    trans_path = tmp_path / "transition.mp3"
+    trans_path.write_bytes(b"\x00" * 2048)
+    banter_path = tmp_path / "dialogue.mp3"
+    banter_path.write_bytes(b"\x00" * 2048)
+
+    with (
+        patch(f"{MODULE}.next_segment_type", return_value=SegmentType.BANTER),
+        patch(f"{SCRIPTWRITER_MODULE}.has_script_llm", return_value=True),
+        patch(
+            f"{SCRIPTWRITER_MODULE}.write_banter", new_callable=AsyncMock, return_value=(_long_banter_lines(host), None)
+        ),
+        patch(f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Bentornati.")),
+        patch(f"{MODULE}.synthesize", new_callable=AsyncMock, return_value=trans_path),
+        patch(f"{MODULE}._try_crossfade", new_callable=AsyncMock, return_value=trans_path),
+        patch(f"{MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=banter_path),
+        patch(f"{MODULE}.concat_files", side_effect=_write_concat_output),
+        patch(f"{MODULE}._pick_canned_clip", return_value=None),
+        patch(f"{MODULE}.validate_segment_audio", side_effect=AudioQualityError("implausibly short banter")),
+        patch(f"{MODULE}.fetch_home_context", new_callable=AsyncMock),
+    ):
+        task = asyncio.create_task(run_producer(queue, state, config))
+        try:
+            await asyncio.sleep(0.25)
+        finally:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+    assert queue.empty()
+
+
+@pytest.mark.asyncio
+async def test_banter_concat_duration_failure_cleans_temporary_parts(tmp_path):
+    state = _make_state()
+    config = _make_config(tmp_path)
+    config.anthropic_api_key = "test-key"
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+
+    host = config.hosts[0]
+    trans_path = tmp_path / "transition.mp3"
+    trans_path.write_bytes(b"\x00" * 2048)
+    banter_path = tmp_path / "dialogue.mp3"
+    banter_path.write_bytes(b"\x00" * 2048)
+    concat_calls = 0
+
+    def _concat_fails(paths, output_path, silence_ms=300, loudnorm=True, **kwargs):
+        nonlocal concat_calls
+        concat_calls += 1
+        output_path.write_bytes(b"\x00" * 2048)
+        state.listeners_active = 0
+        raise RuntimeError("duration shortfall")
+
+    with (
+        patch(f"{MODULE}.next_segment_type", return_value=SegmentType.BANTER),
+        patch(f"{SCRIPTWRITER_MODULE}.has_script_llm", return_value=True),
+        patch(
+            f"{SCRIPTWRITER_MODULE}.write_banter", new_callable=AsyncMock, return_value=(_long_banter_lines(host), None)
+        ),
+        patch(f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Bentornati.")),
+        patch(f"{MODULE}.synthesize", new_callable=AsyncMock, return_value=trans_path),
+        patch(f"{MODULE}._try_crossfade", new_callable=AsyncMock, return_value=trans_path),
+        patch(f"{MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=banter_path),
+        patch(f"{MODULE}.concat_files", side_effect=_concat_fails),
+        patch(f"{MODULE}._pick_canned_clip", return_value=None),
+        patch(f"{MODULE}.fetch_home_context", new_callable=AsyncMock),
+    ):
+        task = asyncio.create_task(run_producer(queue, state, config))
+        try:
+            await asyncio.sleep(0.25)
+        finally:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+    assert queue.empty()
+    assert concat_calls == 1
+    assert not trans_path.exists()
+    assert not banter_path.exists()
+    assert not list(tmp_path.glob("banter_full_*.mp3"))
+
+
+@pytest.mark.asyncio
+async def test_banter_after_session_resume_uses_expected_duration_context(tmp_path):
+    state = _make_state()
+    state.session_stopped = True
+    config = _make_config(tmp_path)
+    config.cache_dir = tmp_path
+    config.anthropic_api_key = "test-key"
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+
+    host = config.hosts[0]
+    trans_path = tmp_path / "transition.mp3"
+    trans_path.write_bytes(b"\x00" * 2048)
+    banter_path = tmp_path / "dialogue.mp3"
+    banter_path.write_bytes(b"\x00" * 2048)
+    validate_calls: list[dict] = []
+
+    def _validate_side_effect(path, seg_type, **kwargs):
+        if seg_type == SegmentType.BANTER:
+            validate_calls.append({"path": path, **kwargs})
+
+    with (
+        patch(f"{MODULE}.next_segment_type", return_value=SegmentType.BANTER),
+        patch(f"{SCRIPTWRITER_MODULE}.has_script_llm", return_value=True),
+        patch(
+            f"{SCRIPTWRITER_MODULE}.write_banter", new_callable=AsyncMock, return_value=(_long_banter_lines(host), None)
+        ),
+        patch(f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Bentornati.")),
+        patch(f"{MODULE}.synthesize", new_callable=AsyncMock, return_value=trans_path),
+        patch(f"{MODULE}._try_crossfade", new_callable=AsyncMock, return_value=trans_path),
+        patch(f"{MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=banter_path),
+        patch(f"{MODULE}.concat_files", side_effect=_write_concat_output),
+        patch(f"{MODULE}._pick_canned_clip", return_value=None),
+        patch(f"{MODULE}._apply_talk_bed", new_callable=AsyncMock, side_effect=lambda path, *_a, **_k: path),
+        patch(f"{MODULE}.validate_segment_audio", side_effect=_validate_side_effect),
+        patch(f"{MODULE}.fetch_home_context", new_callable=AsyncMock),
+    ):
+        task = asyncio.create_task(run_producer(queue, state, config))
+        try:
+            await asyncio.sleep(0.05)
+            state.session_stopped = False
+            state.resume_event.set()
+            deadline = asyncio.get_event_loop().time() + 8.0
+            while queue.empty():
+                if asyncio.get_event_loop().time() > deadline:
+                    raise TimeoutError("Producer did not produce BANTER after resume")
+                await asyncio.sleep(0.05)
+        finally:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+    seg = queue.get_nowait()
+    assert seg.type == SegmentType.BANTER
+    assert seg.metadata.get("canned") is False
+    assert validate_calls
+    assert validate_calls[0]["expected_line_count"] == 7
+    assert validate_calls[0]["expected_min_duration_sec"] > 0
 
 
 @pytest.mark.asyncio
@@ -477,7 +783,7 @@ async def test_audio_tool_error_in_banter_does_not_drop_segment(tmp_path):
     generated = tmp_path / "banter_generated.mp3"
     generated.write_bytes(b"\x00" * 2048)
 
-    def _quality_side_effect(path, seg_type):
+    def _quality_side_effect(path, seg_type, **_kwargs):
         if seg_type == SegmentType.BANTER:
             raise AudioToolError("ffmpeg not found")
         return None
@@ -987,3 +1293,221 @@ def test_cast_voices_host_fallback():
     # Should be one of the configured hosts
     host_names = {h.name for h in config.hosts}
     assert voice_map["hammer"].name in host_names
+
+
+# ---------------------------------------------------------------------------
+# Interrupt trigger call paths in producer loop
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_producer_calls_fire_interrupt_when_check_reactive_returns_spec(tmp_path):
+    """check_reactive_triggers → InterruptSpec fires _fire_interrupt in the producer loop."""
+    from mammamiradio.core.models import InterruptSpec
+
+    state = _make_state()
+    config = _make_config(tmp_path)
+    config.homeassistant.enabled = True
+    config.ha_token = "fake-token"
+    config.homeassistant.url = "http://ha.local:8123"
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+
+    host = config.hosts[0] if config.hosts else HostPersonality(name="Marco", voice="it-IT-DiegoNeural", style="warm")
+
+    mock_context = MagicMock()
+    mock_context.summary = ""
+    mock_context.events_summary = ""
+    mock_context.events = []
+    mock_context.raw_states = {}
+    mock_context.mood = ""
+    mock_context.weather_arc = ""
+    mock_context.mood_en = ""
+    mock_context.weather_arc_en = ""
+    mock_context.events_summary_en = ""
+    mock_context.last_event_label_en = ""
+
+    interrupt_spec = InterruptSpec(directive="La pasta scotta!", urgency="pissed", cooldown=60)
+
+    with (
+        patch(f"{MODULE}.next_segment_type", return_value=SegmentType.BANTER),
+        patch(f"{SCRIPTWRITER_MODULE}.write_banter", new_callable=AsyncMock, return_value=([(host, "Allora!")], None)),
+        patch(f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Bene...")),
+        patch(f"{MODULE}.synthesize", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(f"{MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(f"{MODULE}.concat_files", return_value=_fake_path()),
+        patch(f"{MODULE}.fetch_home_context", new_callable=AsyncMock, return_value=mock_context),
+        patch(f"{MODULE}.check_reactive_triggers", return_value=interrupt_spec),
+        patch(f"{MODULE}._fire_interrupt", new_callable=AsyncMock) as mock_fire,
+    ):
+        await _run_until_queued(queue, state, config)
+
+    mock_fire.assert_awaited_once()
+    call_args = mock_fire.call_args
+    assert call_args.args[1] is interrupt_spec
+
+
+@pytest.mark.asyncio
+async def test_producer_sets_ha_directive_when_check_reactive_returns_str(tmp_path):
+    """check_reactive_triggers → str sets ha_pending_directive in the producer loop."""
+    state = _make_state()
+    config = _make_config(tmp_path)
+    config.homeassistant.enabled = True
+    config.ha_token = "fake-token"
+    config.homeassistant.url = "http://ha.local:8123"
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+
+    host = config.hosts[0] if config.hosts else HostPersonality(name="Marco", voice="it-IT-DiegoNeural", style="warm")
+
+    mock_context = MagicMock()
+    mock_context.summary = ""
+    mock_context.events_summary = ""
+    mock_context.events = []
+    mock_context.raw_states = {}
+    mock_context.mood = ""
+    mock_context.weather_arc = ""
+    mock_context.mood_en = ""
+    mock_context.weather_arc_en = ""
+    mock_context.events_summary_en = ""
+    mock_context.last_event_label_en = ""
+
+    with (
+        patch(f"{MODULE}.next_segment_type", return_value=SegmentType.BANTER),
+        patch(f"{SCRIPTWRITER_MODULE}.write_banter", new_callable=AsyncMock, return_value=([(host, "Allora!")], None)),
+        patch(f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Bene...")),
+        patch(f"{MODULE}.synthesize", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(f"{MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(f"{MODULE}.concat_files", return_value=_fake_path()),
+        patch(f"{MODULE}.fetch_home_context", new_callable=AsyncMock, return_value=mock_context),
+        patch(f"{MODULE}.check_reactive_triggers", return_value="Cena pronta!"),
+    ):
+        await _run_until_queued(queue, state, config)
+
+    assert state.ha_pending_directive == "Cena pronta!"
+
+
+@pytest.mark.asyncio
+async def test_timer_interrupt_poll_task_starts_when_configured(tmp_path):
+    """Timer poll task is created and runs when timer_interrupts are configured."""
+    from mammamiradio.core.config import TimerInterruptConfig
+
+    state = _make_state()
+    config = _make_config(tmp_path)
+    config.homeassistant.enabled = True
+    config.ha_token = "fake-token"
+    config.homeassistant.url = "http://ha.local:8123"
+    config.homeassistant.timer_poll_interval = 1  # fast enough to start; test cancels before it fires
+    config.homeassistant.timer_interrupts = [
+        TimerInterruptConfig(
+            entity_id="timer.pasta_timer",
+            directive="La pasta scotta!",
+            urgency="pissed",
+            cooldown=60,
+        )
+    ]
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+
+    host = config.hosts[0] if config.hosts else HostPersonality(name="Marco", voice="it-IT-DiegoNeural", style="warm")
+
+    mock_context = MagicMock()
+    mock_context.summary = ""
+    mock_context.events_summary = ""
+    mock_context.events = []
+    mock_context.raw_states = {}
+    mock_context.mood = ""
+    mock_context.weather_arc = ""
+    mock_context.mood_en = ""
+    mock_context.weather_arc_en = ""
+    mock_context.events_summary_en = ""
+    mock_context.last_event_label_en = ""
+
+    mock_client = MagicMock()
+    mock_client.get = AsyncMock(return_value=MagicMock(raise_for_status=MagicMock(), json=MagicMock(return_value=[])))
+    mock_client.aclose = AsyncMock()
+
+    with (
+        patch(f"{MODULE}.next_segment_type", return_value=SegmentType.BANTER),
+        patch(f"{SCRIPTWRITER_MODULE}.write_banter", new_callable=AsyncMock, return_value=([(host, "Ciao!")], None)),
+        patch(f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora")),
+        patch(f"{MODULE}.synthesize", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(f"{MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(f"{MODULE}.concat_files", return_value=_fake_path()),
+        patch(f"{MODULE}.fetch_home_context", new_callable=AsyncMock, return_value=mock_context),
+        patch(f"{MODULE}.check_reactive_triggers", return_value=None),
+        patch("mammamiradio.scheduling.producer.httpx.AsyncClient", return_value=mock_client),
+    ):
+        await _run_until_queued(queue, state, config)
+
+    assert not queue.empty(), "Producer should queue a segment even when timer_interrupts are configured"
+
+
+@pytest.mark.asyncio
+async def test_timer_interrupt_poll_uses_wall_clock_timestamps(tmp_path):
+    """Timer poll events must use wall-clock time so reactive age checks can see them."""
+    from mammamiradio.core.config import TimerInterruptConfig
+
+    state = _make_state()
+    config = _make_config(tmp_path)
+    config.homeassistant.enabled = True
+    config.ha_token = "fake-token"
+    config.homeassistant.url = "http://ha.local:8123"
+    config.homeassistant.timer_poll_interval = 0.01
+    config.homeassistant.timer_interrupts = [
+        TimerInterruptConfig(
+            entity_id="timer.pasta_timer",
+            directive="La pasta scotta!",
+            urgency="pissed",
+            cooldown=60,
+        )
+    ]
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    host = config.hosts[0] if config.hosts else HostPersonality(name="Marco", voice="it-IT-DiegoNeural", style="warm")
+
+    mock_context = MagicMock()
+    mock_context.summary = ""
+    mock_context.events_summary = ""
+    mock_context.events = []
+    mock_context.raw_states = {}
+    mock_context.mood = ""
+    mock_context.weather_arc = ""
+    mock_context.mood_en = ""
+    mock_context.weather_arc_en = ""
+    mock_context.events_summary_en = ""
+    mock_context.last_event_label_en = ""
+
+    mock_client = MagicMock()
+    mock_client.get = AsyncMock(return_value=MagicMock(raise_for_status=MagicMock(), json=MagicMock(return_value=[])))
+    mock_client.aclose = AsyncMock()
+
+    seen = asyncio.Event()
+    captured_now: list[float | None] = []
+
+    def _capture_diff_states(*_args, now=None, **_kwargs):
+        captured_now.append(now)
+        seen.set()
+        return deque(maxlen=20)
+
+    with (
+        patch(f"{MODULE}.next_segment_type", return_value=SegmentType.BANTER),
+        patch(f"{SCRIPTWRITER_MODULE}.write_banter", new_callable=AsyncMock, return_value=([(host, "Ciao!")], None)),
+        patch(f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora")),
+        patch(f"{MODULE}.synthesize", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(f"{MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(f"{MODULE}.concat_files", return_value=_fake_path()),
+        patch(f"{MODULE}.fetch_home_context", new_callable=AsyncMock, return_value=mock_context),
+        patch(f"{MODULE}.check_reactive_triggers", return_value=None),
+        patch("mammamiradio.home.ha_enrichment.diff_states", side_effect=_capture_diff_states),
+        patch("mammamiradio.scheduling.producer.httpx.AsyncClient", return_value=mock_client),
+    ):
+        task = asyncio.create_task(run_producer(queue, state, config))
+        try:
+            await asyncio.wait_for(seen.wait(), timeout=2.0)
+        finally:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+    assert captured_now
+    assert captured_now[0] is not None
+    assert captured_now[0] > 1_000_000_000

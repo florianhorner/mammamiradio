@@ -53,6 +53,34 @@ else
     fail "No test covers session_stopped — post-restart silence is untested"
 fi
 
+# ── 4. HA Green fallback performance gates ───────────────────────────────────
+echo ""
+echo "4. HA Green fallback performance gates"
+
+QUEUE_FALLBACK_WAIT=$(awk -F= '/QUEUE_FALLBACK_WAIT_SECONDS/ {gsub(/[[:space:]]/, "", $2); print $2; exit}' mammamiradio/web/streamer.py)
+if python3 - "$QUEUE_FALLBACK_WAIT" <<'PY'
+import sys
+value = float(sys.argv[1])
+raise SystemExit(0 if value <= 5.0 else 1)
+PY
+then
+    ok "queue fallback wait is ${QUEUE_FALLBACK_WAIT}s (<= 5s)"
+else
+    fail "QUEUE_FALLBACK_WAIT_SECONDS must stay <= 5s for HA Green no-content windows (got ${QUEUE_FALLBACK_WAIT:-missing})"
+fi
+
+if grep -q 'norm_files\[0\]' mammamiradio/web/streamer.py; then
+    fail "norm-cache rescue must not use deterministic norm_files[0]"
+else
+    ok "norm-cache rescue avoids deterministic first-file selection"
+fi
+
+if [ -x scripts/ha-green-perf-smoke.py ] && grep -q '^perf-smoke:' Makefile; then
+    ok "HA Green perf smoke script and Make target are present"
+else
+    fail "Missing executable scripts/ha-green-perf-smoke.py or Makefile perf-smoke target"
+fi
+
 # ── Summary ───────────────────────────────────────────────────────────────────
 echo ""
 echo "======================================="

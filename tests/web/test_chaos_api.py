@@ -15,7 +15,8 @@ from fastapi import FastAPI
 
 from mammamiradio.core.config import load_config
 from mammamiradio.core.models import ChaosSubtype, Segment, SegmentType, StationState, Track
-from mammamiradio.web.streamer import LiveStreamHub, _provider_health_snapshot, _save_addon_option, router
+from mammamiradio.web.persistence import _save_addon_option
+from mammamiradio.web.streamer import LiveStreamHub, _provider_health_snapshot, router
 
 TOML_PATH = str(Path(__file__).resolve().parents[2] / "radio.toml")
 
@@ -173,7 +174,7 @@ async def test_chaos_addon_mode_writes_options_json(tmp_path, monkeypatch):
     options_file = tmp_path / "options.json"
     options_file.write_text(json.dumps({"existing": "value"}))
 
-    with patch("mammamiradio.web.streamer.Path", return_value=options_file):
+    with patch("mammamiradio.web.persistence.Path", return_value=options_file):
         async with httpx.AsyncClient(
             transport=httpx.ASGITransport(app=app, client=("127.0.0.1", 12345)),
             base_url="http://testserver",
@@ -243,7 +244,7 @@ def test_save_addon_option_handles_corrupt_file(tmp_path):
     options_file = tmp_path / "options.json"
     options_file.write_text("not json")
 
-    with patch("mammamiradio.web.streamer.Path", return_value=options_file):
+    with patch("mammamiradio.web.persistence.Path", return_value=options_file):
         _save_addon_option("chaos_mode_active", True)
 
     assert json.loads(options_file.read_text()) == {"chaos_mode_active": True}

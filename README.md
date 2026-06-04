@@ -40,6 +40,14 @@ docker compose up
 
 Open `http://localhost:8000` for the listener page (`/admin` for the control room). Music plays from live Italian charts when `MAMMAMIRADIO_ALLOW_YTDLP=true` (enabled in `docker-compose.yml`), from CC-licensed tracks via Jamendo (set `jamendo_client_id` in `radio.toml`), or from local files dropped into `music/`.
 
+**Verify it's working:**
+
+```bash
+curl http://localhost:8000/healthz   # → {"ok":true}
+```
+
+Expect music within ~10s on a warm cache. First boot can take 30–60s while yt-dlp pulls the Italian chart. The dashboard's tier badge (Demo Radio / Full AI Radio / Connected Home) tells you what's active.
+
 ### Home Assistant Add-on
 
 1. Go to **Settings > Add-ons > Add-on Store** > three-dot menu > **Repositories**
@@ -148,7 +156,7 @@ Most station behavior lives in `radio.toml`:
 | Section | What it controls |
 |---------|-----------------|
 | `[station]` | Station name, language, theme |
-| `[playlist]` | Shuffle behavior, repeat/artist cooldowns, Jamendo CC music (`jamendo_client_id`, `jamendo_tags`) |
+| `[playlist]` | Shuffle behavior, repeat/artist cooldowns, Jamendo CC music (`jamendo_client_id`, `jamendo_tags`, `jamendo_limit`) |
 | `[pacing]` | Songs between banter, songs between ads, spots per break |
 | `[[hosts]]` | Host names, TTS engine (`edge`/`openai`), voices, personality |
 | `[audio]` | Sample rate, channels, bitrate, Claude model |

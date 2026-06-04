@@ -28,7 +28,7 @@ from mammamiradio.audio.normalizer import (
 def mock_subprocess():
     """Patch subprocess.run to return success by default.
 
-    Also disables the post-concat duration probe (`_ffprobe_duration_sec`) so
+    Also disables the post-concat duration probe (`probe_duration_sec`) so
     tests that inspect `mock_run.call_args` see the ffmpeg call as the last
     subprocess invocation, not a trailing ffprobe from the Item 1 guard.
     Tests that want to exercise the guard explicitly monkeypatch the probe.
@@ -40,7 +40,7 @@ def mock_subprocess():
 
     with (
         patch("mammamiradio.audio.normalizer.subprocess.run", return_value=completed) as mock_run,
-        patch("mammamiradio.audio.normalizer._ffprobe_duration_sec", return_value=None),
+        patch("mammamiradio.audio.normalizer.probe_duration_sec", return_value=None),
     ):
         yield mock_run, completed
 
@@ -700,7 +700,7 @@ class TestConcatFilesDurationInvariant:
         def fake_probe(path):
             return durations.get(Path(path).name)
 
-        monkeypatch.setattr(norm, "_ffprobe_duration_sec", fake_probe)
+        monkeypatch.setattr(norm, "probe_duration_sec", fake_probe)
 
         inputs = [tmp_path / "input_a.mp3", tmp_path / "input_b.mp3", tmp_path / "input_c.mp3"]
         for p in inputs:
@@ -717,6 +717,29 @@ class TestConcatFilesDurationInvariant:
             "output is shorter than the sum of inputs by more than 5%."
         )
 
+    def test_duration_guard_strict_raises_when_output_too_short(self, tmp_path, caplog, monkeypatch):
+        import mammamiradio.audio.normalizer as norm
+
+        monkeypatch.setattr(norm, "_run_ffmpeg", lambda *a, **kw: None)
+        durations = {
+            "input_a.mp3": 6.0,
+            "input_b.mp3": 6.0,
+            "concat_out.mp3": 5.0,
+        }
+        monkeypatch.setattr(norm, "probe_duration_sec", lambda p: durations.get(Path(p).name))
+
+        inputs = [tmp_path / "input_a.mp3", tmp_path / "input_b.mp3"]
+        for p in inputs:
+            p.write_bytes(b"stub")
+        output = tmp_path / "concat_out.mp3"
+        output.write_bytes(b"stub")
+
+        caplog.set_level("WARNING", logger="mammamiradio.audio.normalizer")
+        with pytest.raises(norm.ConcatDurationError, match="duration shortfall"):
+            norm.concat_files(inputs, output, silence_ms=0, loudnorm=False, strict_duration=True)
+
+        assert any("duration shortfall" in r.message for r in caplog.records)
+
     def test_duration_guard_silent_when_output_matches(self, tmp_path, caplog, monkeypatch):
         import mammamiradio.audio.normalizer as norm
 
@@ -726,7 +749,7 @@ class TestConcatFilesDurationInvariant:
             "input_b.mp3": 10.0,
             "concat_out.mp3": 20.3,  # matches inputs + 1*0.3s gap
         }
-        monkeypatch.setattr(norm, "_ffprobe_duration_sec", lambda p: durations.get(Path(p).name))
+        monkeypatch.setattr(norm, "probe_duration_sec", lambda p: durations.get(Path(p).name))
 
         inputs = [tmp_path / "input_a.mp3", tmp_path / "input_b.mp3"]
         for p in inputs:
@@ -745,7 +768,7 @@ class TestConcatFilesDurationInvariant:
 
         monkeypatch.setattr(norm, "_run_ffmpeg", lambda *a, **kw: None)
         # Probe returns None on every call — guard must skip gracefully.
-        monkeypatch.setattr(norm, "_ffprobe_duration_sec", lambda p: None)
+        monkeypatch.setattr(norm, "probe_duration_sec", lambda p: None)
 
         inputs = [tmp_path / "a.mp3", tmp_path / "b.mp3"]
         for p in inputs:
@@ -771,7 +794,7 @@ class TestConcatFilesDurationInvariant:
             "b.mp3": None,  # partial probe failure
             "out.mp3": 20.0,
         }
-        monkeypatch.setattr(norm, "_ffprobe_duration_sec", lambda p: durations.get(Path(p).name))
+        monkeypatch.setattr(norm, "probe_duration_sec", lambda p: durations.get(Path(p).name))
 
         inputs = [tmp_path / "a.mp3", tmp_path / "b.mp3"]
         for x in inputs:
@@ -786,7 +809,7 @@ class TestConcatFilesDurationInvariant:
         assert not warnings, "Guard must bail out cleanly when any input probe returns None."
 
     def test_duration_guard_swallows_probe_exception(self, tmp_path, caplog, monkeypatch):
-        """If _ffprobe_duration_sec raises, the guard must catch it (lines
+        """If probe_duration_sec raises, the guard must catch it (lines
         341-342) — instrumentation never breaks production playback."""
         import mammamiradio.audio.normalizer as norm
 
@@ -795,7 +818,7 @@ class TestConcatFilesDurationInvariant:
         def _boom(_p):
             raise RuntimeError("ffprobe exploded")
 
-        monkeypatch.setattr(norm, "_ffprobe_duration_sec", _boom)
+        monkeypatch.setattr(norm, "probe_duration_sec", _boom)
 
         inputs = [tmp_path / "a.mp3"]
         inputs[0].write_bytes(b"stub")
@@ -811,11 +834,11 @@ class TestConcatFilesDurationInvariant:
         assert not warnings, "Exception path must not masquerade as a shortfall warning."
 
 
-# ── _ffprobe_duration_sec parser: exercise the real function body, not the fixture mock ──
+# ── probe_duration_sec parser: exercise the real function body, not the fixture mock ──
 
 
 class TestFFprobeDurationSecParser:
-    """Every concat_files test above monkeypatches `_ffprobe_duration_sec` to
+    """Every concat_files test above monkeypatches `probe_duration_sec` to
     None. That leaves the real function body uncovered by the suite. These
     tests hit the real function directly, mocking only `subprocess.run`, so the
     parser + error branches are measured by the coverage ratchet.
@@ -829,7 +852,7 @@ class TestFFprobeDurationSecParser:
         return cp
 
     def test_valid_duration_parses_as_float(self, tmp_path, monkeypatch):
-        from mammamiradio.audio.normalizer import _ffprobe_duration_sec
+        from mammamiradio.audio.normalizer import probe_duration_sec
 
         p = tmp_path / "ok.mp3"
         p.write_bytes(b"x")
@@ -837,10 +860,10 @@ class TestFFprobeDurationSecParser:
             "mammamiradio.audio.normalizer.subprocess.run",
             lambda *a, **kw: self._fake_completed(returncode=0, stdout="12.345\n"),
         )
-        assert _ffprobe_duration_sec(p) == 12.345
+        assert probe_duration_sec(p) == 12.345
 
     def test_nonzero_returncode_returns_none(self, tmp_path, monkeypatch):
-        from mammamiradio.audio.normalizer import _ffprobe_duration_sec
+        from mammamiradio.audio.normalizer import probe_duration_sec
 
         p = tmp_path / "bad.mp3"
         p.write_bytes(b"x")
@@ -848,10 +871,10 @@ class TestFFprobeDurationSecParser:
             "mammamiradio.audio.normalizer.subprocess.run",
             lambda *a, **kw: self._fake_completed(returncode=1, stderr="bogus"),
         )
-        assert _ffprobe_duration_sec(p) is None
+        assert probe_duration_sec(p) is None
 
     def test_unparseable_stdout_returns_none(self, tmp_path, monkeypatch):
-        from mammamiradio.audio.normalizer import _ffprobe_duration_sec
+        from mammamiradio.audio.normalizer import probe_duration_sec
 
         p = tmp_path / "junk.mp3"
         p.write_bytes(b"x")
@@ -859,10 +882,10 @@ class TestFFprobeDurationSecParser:
             "mammamiradio.audio.normalizer.subprocess.run",
             lambda *a, **kw: self._fake_completed(returncode=0, stdout="not-a-number"),
         )
-        assert _ffprobe_duration_sec(p) is None
+        assert probe_duration_sec(p) is None
 
     def test_oserror_returns_none(self, tmp_path, monkeypatch):
-        from mammamiradio.audio.normalizer import _ffprobe_duration_sec
+        from mammamiradio.audio.normalizer import probe_duration_sec
 
         p = tmp_path / "missing.mp3"
         p.write_bytes(b"x")
@@ -871,10 +894,10 @@ class TestFFprobeDurationSecParser:
             raise OSError("ffprobe not installed")
 
         monkeypatch.setattr("mammamiradio.audio.normalizer.subprocess.run", _raises)
-        assert _ffprobe_duration_sec(p) is None
+        assert probe_duration_sec(p) is None
 
     def test_timeout_returns_none(self, tmp_path, monkeypatch):
-        from mammamiradio.audio.normalizer import _ffprobe_duration_sec
+        from mammamiradio.audio.normalizer import probe_duration_sec
 
         p = tmp_path / "slow.mp3"
         p.write_bytes(b"x")
@@ -883,10 +906,10 @@ class TestFFprobeDurationSecParser:
             raise subprocess.TimeoutExpired(cmd=["ffprobe"], timeout=5)
 
         monkeypatch.setattr("mammamiradio.audio.normalizer.subprocess.run", _timesout)
-        assert _ffprobe_duration_sec(p) is None
+        assert probe_duration_sec(p) is None
 
     def test_empty_stdout_returns_none(self, tmp_path, monkeypatch):
-        from mammamiradio.audio.normalizer import _ffprobe_duration_sec
+        from mammamiradio.audio.normalizer import probe_duration_sec
 
         p = tmp_path / "empty.mp3"
         p.write_bytes(b"x")
@@ -894,7 +917,7 @@ class TestFFprobeDurationSecParser:
             "mammamiradio.audio.normalizer.subprocess.run",
             lambda *a, **kw: self._fake_completed(returncode=0, stdout=""),
         )
-        assert _ffprobe_duration_sec(p) is None
+        assert probe_duration_sec(p) is None
 
 
 def test_normalize_real_encode_has_no_xing_header(tmp_path):
@@ -912,3 +935,73 @@ def test_normalize_real_encode_has_no_xing_header(tmp_path):
     raw = out.read_bytes()[:2048]
     assert b"Xing" not in raw, "Xing VBR header found — -write_xing 0 did not suppress it"
     assert b"Info" not in raw, "Info CBR header found — -write_xing 0 did not suppress it"
+
+
+# ---------------------------------------------------------------------------
+# silenceremove must not truncate speech (2026-05-18 HA Green banter outage)
+# ---------------------------------------------------------------------------
+
+
+def test_normalize_silenceremove_uses_negative_stop_periods(mock_subprocess):
+    """silenceremove stop_periods must be negative on BOTH the loudnorm and fast
+    filter chains.
+
+    A positive stop_periods makes ffmpeg's silenceremove halt output at the FIRST
+    silence period, truncating multi-phrase host lines at their first pause (~1.6s).
+    The 2026-05-18 HA Green run rejected every banter for 4+ hours because of this.
+    A negative stop_periods trims trailing silence only.
+    """
+    mock_run, _ = mock_subprocess
+    for loudnorm in (True, False):
+        mock_run.reset_mock()
+        with patch("mammamiradio.audio.normalizer.measure_lufs", return_value=-25.0):
+            normalize(Path("/tmp/in.mp3"), Path("/tmp/out.mp3"), loudnorm=loudnorm)
+        cmd = mock_run.call_args[0][0]
+        audio_filter = cmd[cmd.index("-filter:a") + 1]
+        assert "silenceremove" in audio_filter
+        assert "stop_periods=-1" in audio_filter, f"loudnorm={loudnorm}: {audio_filter}"
+        assert "stop_periods=1" not in audio_filter, (
+            f"loudnorm={loudnorm}: a positive stop_periods truncates host speech at its first pause: {audio_filter}"
+        )
+
+
+def test_normalize_fast_path_preserves_speech_with_internal_pauses(tmp_path):
+    """normalize(loudnorm=False) must NOT truncate a host line at its internal pauses.
+
+    Behavioural guard for the 2026-05-18 HA Green banter outage: silenceremove with a
+    positive stop_periods halts output at the first silence period, collapsing every
+    multi-phrase host line to ~1.6s. Builds a 7.6s line (speech with three internal
+    0.4s pauses) and asserts it survives the per-line fast-path encode intact.
+    """
+    from mammamiradio.audio.normalizer import probe_duration_sec
+
+    line = tmp_path / "host_line.mp3"
+    subprocess.run(
+        [
+            "ffmpeg",
+            "-y",
+            "-loglevel",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=frequency=300:duration=7.6:sample_rate=44100",
+            "-af",
+            "volume=0:enable='between(t,1.3,1.7)+between(t,3.3,3.7)+between(t,5.7,6.1)'",
+            str(line),
+        ],
+        check=True,
+    )
+    line_dur = probe_duration_sec(line)
+    assert line_dur is not None and line_dur > 7.0, f"fixture line too short: {line_dur}"
+
+    out = tmp_path / "host_line_norm.mp3"
+    normalize(line, out, loudnorm=False)
+    out_dur = probe_duration_sec(out)
+
+    assert out_dur is not None, "normalize produced an unprobeable file"
+    assert out_dur > line_dur * 0.8, (
+        f"normalize() truncated host speech to {out_dur:.2f}s of {line_dur:.2f}s. "
+        f"silenceremove stop_periods must stay negative (trailing-only trim), "
+        f"else multi-phrase banter is rejected as implausibly short."
+    )

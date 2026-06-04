@@ -1,4 +1,4 @@
-"""Regression guards for the admin sidebar order."""
+"""Regression guards for the Producer Desk admin information architecture."""
 
 from __future__ import annotations
 
@@ -8,71 +8,109 @@ from pathlib import Path
 ADMIN_HTML = Path(__file__).resolve().parents[2] / "mammamiradio" / "web" / "templates" / "admin.html"
 
 
-class _AdminOrderParser(HTMLParser):
+class _ProducerDeskParser(HTMLParser):
     def __init__(self) -> None:
         super().__init__()
-        self._in_admin_nav = False
         self._in_admin_content = False
+        self._in_drawers = False
         self._main_depth = 0
-        self._nav_depth = 0
-        self.sidebar_targets: list[str] = []
+        self._drawers_depth = 0
         self.content_sections: list[str] = []
+        self.drawer_ids: list[str] = []
+        self.drawer_section_ids: list[str] = []
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         attr = dict(attrs)
         classes = set((attr.get("class") or "").split())
 
-        if tag == "main" and "a-content" in classes:
+        if tag == "main" and {"a-content", "producer-main"}.issubset(classes):
             self._in_admin_content = True
             self._main_depth = 1
-            return
-
-        if tag == "nav" and "a-nav" in classes:
-            self._in_admin_nav = True
-            self._nav_depth = 1
             return
 
         if self._in_admin_content:
             if tag == "main":
                 self._main_depth += 1
             section_id = attr.get("id")
-            if tag == "section" and "a-panel" in classes and section_id:
+            if tag == "section" and "producer-zone" in classes and section_id:
                 self.content_sections.append(section_id)
+            if tag == "section" and section_id == "producer-drawers":
+                self._in_drawers = True
+                self._drawers_depth = 1
+                return
+            if tag == "details" and "producer-drawer" in classes and section_id:
+                self.drawer_ids.append(section_id)
 
-        if self._in_admin_nav:
-            if tag == "nav":
-                self._nav_depth += 1
-            if tag == "a":
-                href = attr.get("href") or ""
-                if href.startswith("#"):
-                    self.sidebar_targets.append(href.removeprefix("#"))
+        if self._in_drawers and tag == "section":
+            self._drawers_depth += 1
+            section_id = attr.get("id")
+            if "drawer-section" in classes and section_id:
+                self.drawer_section_ids.append(section_id)
 
     def handle_endtag(self, tag: str) -> None:
+        if self._in_drawers and tag == "section":
+            self._drawers_depth -= 1
+            if self._drawers_depth == 0:
+                self._in_drawers = False
+
         if self._in_admin_content and tag == "main":
             self._main_depth -= 1
             if self._main_depth == 0:
                 self._in_admin_content = False
 
-        if self._in_admin_nav and tag == "nav":
-            self._nav_depth -= 1
-            if self._nav_depth == 0:
-                self._in_admin_nav = False
 
-
-def test_admin_sidebar_links_follow_visual_section_order() -> None:
-    """The sidebar order must match the built page's top-level panel order."""
-    parser = _AdminOrderParser()
+def test_admin_producer_desk_sections_follow_visual_order() -> None:
+    """Default `/admin` view must be the three-zone Producer Desk."""
+    parser = _ProducerDeskParser()
     parser.feed(ADMIN_HTML.read_text(encoding="utf-8"))
 
     assert not parser._in_admin_content
-    assert not parser._in_admin_nav
+    assert not parser._in_drawers
     assert parser.content_sections == [
-        "programme",
+        "on-air",
+        "live-queue",
+        "rotation-pool",
+    ]
+
+
+def test_admin_drawers_follow_producer_desk_order() -> None:
+    """Occasional controls must live behind the four labeled drawers."""
+    parser = _ProducerDeskParser()
+    parser.feed(ADMIN_HTML.read_text(encoding="utf-8"))
+
+    assert parser.drawer_ids == [
+        "drawer-steer",
+        "drawer-hosts",
+        "drawer-history",
+        "drawer-diagnostics",
+    ]
+    # Pacing is no longer its own drawer-section: it folded into the Diretta
+    # drawer as the "Cadenza" subgroup (design review T4). The steer drawer now
+    # holds a single section (`triggers`) with four labeled subgroups.
+    assert parser.drawer_section_ids == [
         "triggers",
-        "pacing",
         "hosts",
         "log",
-        "music",
         "engine",
     ]
-    assert parser.sidebar_targets == parser.content_sections
+
+
+def test_admin_drawer_js_closes_siblings() -> None:
+    """The native details accordion must keep only one drawer open at a time."""
+    html = ADMIN_HTML.read_text(encoding="utf-8")
+
+    assert "function initProducerDrawers()" in html
+    assert "document.querySelectorAll('.producer-drawer').forEach(drawer=>" in html
+    assert "if(other!==drawer)other.open=false;" in html
+
+
+def test_live_queue_renderer_is_forward_only() -> None:
+    """Scaletta must not mix now-playing or played history into the forward queue."""
+    html = ADMIN_HTML.read_text(encoding="utf-8")
+    block = html[html.index("function renderProgramme") : html.index("async function removeQueueItem")]
+
+    assert "st?.upcoming" in block
+    assert "stream_log" not in block
+    assert "now_streaming" not in block
+    # Relative labels are English-first now (localization sweep T1/E5).
+    assert "'next'" in block and "'later'" in block

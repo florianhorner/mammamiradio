@@ -34,6 +34,63 @@ See `system.md` (sibling) for the full system. Admin panel must use:
 - **Text:** cream `#F5EDD8`
 - **Fonts:** Playfair Display italic (display) · Outfit (body) · JetBrains Mono (technical)
 
+## Information Architecture — Producer Desk
+
+The admin panel is a **producer desk**: opening `/admin` answers two questions
+fast — is the station alive and sounding right, and what plays next. Set-and-forget
+config and debug never occupy the default view.
+
+**Default view — three zones, top to bottom:**
+
+1. **On Air** — now-playing card (segment type, title, artist, progress), a
+   station-health `.status-chip`, the compact token cost counter, skip/pause.
+   The full card sits at the top at rest; once scrolled past, it collapses to a
+   slim sticky strip pinned to the top (title + status + cost). It is the trust
+   glance and must survive scrolling.
+2. **Live Queue** — forward-only rundown of up to ~8 upcoming items, each with a
+   relative label (`next` / `after that` / `later`) + rough duration. Pending
+   listener requests sit in a strip at the top of this zone. No played history.
+3. **Rotation Pool** — separate searchable/prunable music library, distinct from
+   the Live Queue.
+
+**Drawers — collapsed by default, inline `<details>` accordion, one open at a
+time.** Four drawers below the zones:
+
+1. **Diretta** (steer) — one section with four `role="group"` subgroups:
+   `Modalità live` (Chaos/Festival toggles), `Azioni immediate` (banter / ad /
+   news / more chaos), `Azioni rapide` (fewer banter / fewer ads / reload /
+   flag, plus a Lancia-red `Purge queue`), `Cadenza` (pacing sliders).
+2. **Conduttori** — host personality config. Active preset chips carry a
+   checkmark shape cue alongside the gold fill (colorblind safety).
+3. **Archivio** — filterable segment history. Search box + type chips
+   (All/Music/Hosts/Ads/News) + time chips (Last hour/Today/All available).
+   Filter state persists across drawer toggles via sessionStorage
+   (`mmr.admin.archivio.filters`), cleared on browser close.
+4. **Motore** (diagnostics) — three subgroups: `Status` (systems, runtime
+   health, capabilities, HA context), `Costi` (token cost counter + segment
+   counts — always visible), `Setup` (a collapsible `<details>` that
+   auto-collapses when every readiness item is ready and auto-expands when any
+   needs attention; shows an `All ready ✓` blue badge when collapsed).
+
+On mobile the drawer row stacks vertically.
+
+**Destructive actions use a 5s undo toast** (`undoableToast` in
+`static/admin.js`): the row is removed optimistically, the backend call is
+deferred for the undo window, and Undo cancels it. Stack capped at 5 toasts.
+
+**Labels are English-first operator copy, with Italian reserved for structural
+section names and on-air flair** — independent of the super-italian toggle. This
+mirrors the `MAMMAMIRADIO_SUPER_ITALIAN` OFF contract (English utility copy,
+Italian headlines and station-feel words).
+
+- **Italian (flair):** section/drawer names (`Diretta`, `Scaletta`, `Rotazione`,
+  `Conduttori`, `Motore`, `Archivio`), the `Regia` eyebrow, subgroup eyebrow
+  labels (`Modalità live`, `Azioni immediate`, `Azioni rapide`, `Cadenza`), the
+  `In onda` / `Fermo` on-air badge, and the `Anni '70/'80/'90` era chips.
+- **English (utility):** every button, tooltip, toast, form subhead, search
+  state, empty state, status label, and helper line.
+- Regression guard: `tests/web/test_admin_regia_polish.py::test_no_italian_utility_strings_remain`.
+
 ## Interaction standards
 
 - Minimum touch target: 44px height on control buttons, 36px on chips/pills

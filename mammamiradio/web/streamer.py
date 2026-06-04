@@ -3,19 +3,21 @@
 from __future__ import annotations
 
 import asyncio
+import atexit
+import concurrent.futures
 import copy
-import hashlib
 import importlib
-import importlib.metadata
 import ipaddress
 import logging
+import math
 import os
 import random as _random
 import re as _re
 import secrets
-import threading
 import time
+from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -24,6 +26,7 @@ from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.templating import Jinja2Templates
 
 from mammamiradio.audio.normalizer import humanize_norm_filename, load_track_metadata
+from mammamiradio.audio.stream_format import stream_audio_metadata
 from mammamiradio.core.capabilities import capabilities_to_dict, get_capabilities
 from mammamiradio.core.models import (
     ChaosSubtype,
@@ -45,44 +48,53 @@ from mammamiradio.playlist.playlist import (
     write_persisted_source,
 )
 from mammamiradio.scheduling.scheduler import preview_upcoming
+from mammamiradio.web.assets import (
+    _ASSET_VERSION,
+    _ASSETS_DIR,
+    _STATIC_DIR,
+    _TEMPLATES_DIR,
+    _bust_static_cache,
+)
+from mammamiradio.web.mp3_frames import _skip_id3_and_xing_header
+from mammamiradio.web.pages import _get_injected_html, _sanitize_ingress_prefix
+from mammamiradio.web.persistence import (
+    _CREDENTIAL_ENV_TO_FIELD,
+    _CREDENTIAL_FIELDS,
+    _apply_live_credentials,
+    _sanitize_credential_value,
+    _save_addon_option,
+    _save_addon_options,
+    _save_dotenv,
+)
+from mammamiradio.web.provider_verdict import (
+    _record_provider_verdict,
+    _run_provider_verdict,
+)
 from mammamiradio.web.ui_copy import copy_strings
 
 logger = logging.getLogger(__name__)
+
+# Bounded pool for the admin /api/search yt-dlp lookup. asyncio.wait_for cancels
+# the awaiting future on timeout but cannot kill the underlying thread (it runs
+# until its socket timeout), so an abandoned search must not accumulate in the
+# default executor and starve the producer's audio prefetch on Pi-class hardware.
+# Sized above realistic admin search concurrency (typically 1) so a timed-out
+# thread holding its slot for the socket-timeout window can't head-of-line-block
+# the operator's next search, while staying well under the default pool.
+_search_executor = concurrent.futures.ThreadPoolExecutor(max_workers=4, thread_name_prefix="admin-search")
+atexit.register(_search_executor.shutdown, wait=False, cancel_futures=True)
 
 router = APIRouter()
 security = HTTPBasic(auto_error=False)
 
 # TODO: split — this 2,395-line god module is a postal address, not a destination.
 # See docs/2026-04-28-cathedral-restructure.md (PR 5) for the routes/auth/playback split plan.
-_THIS_DIR = Path(__file__).resolve().parent  # mammamiradio/web/
-_PKG_ROOT = _THIS_DIR.parent  # mammamiradio/
-_TEMPLATES_DIR = _THIS_DIR / "templates"
-_STATIC_DIR = _THIS_DIR / "static"
-_ASSETS_DIR = _PKG_ROOT / "assets"
-
-
-def _static_asset_digest() -> str:
-    """Return a short content hash for browser-visible CSS/JS assets."""
-    digest = hashlib.sha256()
-    for name in ("tokens.css", "base.css", "listener.css", "waveform.js", "listener.js", "sw.js"):
-        path = _STATIC_DIR / name
-        if path.exists():
-            digest.update(name.encode("utf-8"))
-            digest.update(b"\0")
-            digest.update(path.read_bytes())
-    return digest.hexdigest()[:8]
-
-
-_ASSET_VERSION = f"{importlib.metadata.version('mammamiradio')}-{_static_asset_digest()}"
-
+# Path roots, the static-asset content hash (_ASSET_VERSION), and
+# _bust_static_cache now live in web/assets.py and are imported above.
+#
 # Jinja2 templates for brand-engine listener page (PR-C). Admin/live still use
-# string-replace via _inject_ingress_prefix; only listener migrates to Jinja for now.
+# string-replace via _inject_ingress_prefix (web/pages.py); only listener migrates to Jinja for now.
 _TEMPLATES = Jinja2Templates(directory=str(_TEMPLATES_DIR))
-
-
-def _bust_static_cache(html: str) -> str:
-    """Append a content-based version to /static/*.css and /static/*.js URLs."""
-    return _re.sub(r'(/static/[^"?]+\.(css|js))"', rf'\1?v={_ASSET_VERSION}"', html)
 
 
 # Admin/live pages still loaded as raw strings + post-render prefix injection.
@@ -91,20 +103,6 @@ _LISTENER_HTML = _bust_static_cache((_TEMPLATES_DIR / "listener.html").read_text
 
 _ADMIN_HTML = _bust_static_cache((_TEMPLATES_DIR / "admin.html").read_text())
 _LIVE_HTML = _bust_static_cache((_TEMPLATES_DIR / "live.html").read_text())
-
-_INGRESS_PREFIX_RE = _re.compile(r"^/[a-zA-Z0-9/_-]+$")
-
-# Cache ingress-injected HTML to avoid repeated string replacements on every request.
-# Key: (html_id, prefix) → injected HTML. Typically 1-2 entries per page.
-_injected_html_cache: dict[tuple[str, str], str] = {}
-
-
-def _get_injected_html(html_id: str, html: str, prefix: str) -> str:
-    """Return ingress-injected HTML, cached by (page, prefix)."""
-    key = (html_id, prefix)
-    if key not in _injected_html_cache:
-        _injected_html_cache[key] = _inject_ingress_prefix(html, prefix)
-    return _injected_html_cache[key]
 
 
 def _as_int_index(value, default: int = -1) -> int:
@@ -119,18 +117,13 @@ _MUTATING_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 _CSRF_TOKEN_PLACEHOLDER = "__MAMMAMIRADIO_CSRF_TOKEN__"
 SESSION_STOPPED_FLAG = "session_stopped.flag"
 SILENCE_FAILURE_SECONDS = 30.0
+QUEUE_FALLBACK_WAIT_SECONDS = 5.0
 STARTUP_GRACE_SECONDS = 30.0
 CLIP_RATE_LIMIT_SECONDS = 10.0
 CLIP_RATE_PRUNE_SECONDS = 300.0
 CLIP_DURATION_SECONDS = 30
 CLIP_MAX_SAVED = 50
 DEFAULT_CLIP_BITRATE_KBPS = 192
-_CREDENTIAL_FIELDS: dict[str, tuple[str, str]] = {
-    "anthropic_api_key": ("ANTHROPIC_API_KEY", "anthropic_api_key"),
-    "openai_api_key": ("OPENAI_API_KEY", "openai_api_key"),
-}
-_CREDENTIAL_ENV_TO_FIELD = {env_key: field for field, (env_key, _config_attr) in _CREDENTIAL_FIELDS.items()}
-_ADDON_OPTIONS_LOCK = threading.Lock()
 
 
 def _purge_segment_queue(q) -> int:
@@ -166,6 +159,7 @@ def _persist_session_stopped(config, stopped: bool) -> None:
 def _clear_session_stopped(state: StationState, config) -> None:
     """Resume playback state and clear the persisted stop marker."""
     state.session_stopped = False
+    state.last_state_change_at = time.time()
     state.resume_event.set()
     _persist_session_stopped(config, False)
 
@@ -286,8 +280,13 @@ def _runtime_health_snapshot(request: Request) -> dict:
     shadow_depth = len(state.queued_segments)
     now_streaming = state.now_streaming or {}
     now_metadata = now_streaming.get("metadata", {}) if isinstance(now_streaming, dict) else {}
+    from mammamiradio.core.segment_status import is_fallback_active
+
     audio_source = now_metadata.get("audio_source", "")
-    if not audio_source or audio_source == "prewarm":
+    fallback_active = is_fallback_active(now_metadata)
+    if not audio_source and fallback_active:
+        audio_source = "canned"
+    if not audio_source or audio_source == "prewarm" or (audio_source == "download" and not fallback_active):
         playlist_source = state.playlist_source
         if playlist_source is not None:
             audio_source = playlist_source.kind
@@ -295,6 +294,7 @@ def _runtime_health_snapshot(request: Request) -> dict:
     playback_task = getattr(request.app.state, "playback_task", None)
     producer_alive = True if producer_task is None else not producer_task.done()
     playback_alive = True if playback_task is None else not playback_task.done()
+    queue_empty_elapsed = _queue_empty_elapsed(state)
     return {
         "queue_depth": queue_depth,
         "shadow_queue_depth": shadow_depth,
@@ -303,9 +303,226 @@ def _runtime_health_snapshot(request: Request) -> dict:
         "playback_task_alive": playback_alive,
         "playback_epoch": state.playback_epoch,
         "queue_empty_since": state.queue_empty_since,
+        "queue_empty_elapsed_s": round(queue_empty_elapsed, 1),
+        "silence_with_listeners": _silence_with_listeners(state, queue_empty_elapsed),
         "audio_source": audio_source or "unknown",
-        "failover_active": bool(audio_source and audio_source.startswith("fallback")),
+        "failover_active": fallback_active,
         "shadow_queue_corrections": state.shadow_queue_corrections,
+    }
+
+
+def _runtime_provider_label(provider: str) -> str:
+    labels = {
+        "anthropic": "Anthropic",
+        "openai": "OpenAI",
+        "stock": "Stock copy",
+        "edge": "Edge TTS",
+        "silence": "Silence fallback",
+        "fallback_norm_cache": "Norm cache rescue",
+        "fallback_demo_asset": "Demo asset rescue",
+        "canned": "Canned clip",
+        "charts": "Charts",
+        "local": "Local music",
+        "demo": "Demo music",
+        "url": "Custom URL",
+        "jamendo": "Jamendo",
+        "stream": "Stream",
+        "unknown": "Unknown",
+    }
+    return labels.get(provider, provider.replace("_", " ").title() if provider else "Unknown")
+
+
+def _provider_status(
+    provider_class: str,
+    *,
+    primary_provider: str,
+    current_provider: str,
+    fallback_active: bool,
+    reason: str,
+    state: StationState,
+) -> dict:
+    saved = state.runtime_provider_state.get(provider_class, {})
+    return {
+        "provider_class": provider_class,
+        "primary_provider": primary_provider,
+        "primary_label": _runtime_provider_label(primary_provider),
+        "current_provider": current_provider,
+        "current_label": _runtime_provider_label(current_provider),
+        "fallback_active": fallback_active,
+        "last_switch_timestamp": saved.get("last_switch_timestamp") if saved else None,
+        "switch_reason": saved.get("reason") or reason,
+    }
+
+
+def _script_provider_status(config, state: StationState, provider_health: dict) -> dict:
+    anthropic_degraded = bool(provider_health.get("anthropic", {}).get("degraded"))
+    if config.anthropic_api_key:
+        primary = "anthropic"
+        saved = state.runtime_provider_state.get("script_provider", {})
+        saved_current = str(saved.get("current_provider") or "")
+        saved_fallback = bool(saved.get("fallback_active", False))
+        if saved_current and (saved_fallback or saved_current != primary):
+            current = saved_current
+            fallback_active = saved_fallback or current != primary
+            reason = saved.get("reason") or "Script provider fallback is active"
+        elif anthropic_degraded and config.openai_api_key:
+            current = "openai"
+            fallback_active = True
+            reason = (
+                provider_health["anthropic"].get("last_error")
+                or "Anthropic is suspended; OpenAI script fallback is active"
+            )
+        elif anthropic_degraded:
+            current = "stock"
+            fallback_active = True
+            reason = (
+                provider_health["anthropic"].get("last_error")
+                or "Anthropic is suspended and no OpenAI key is available"
+            )
+        else:
+            current = "anthropic"
+            fallback_active = False
+            reason = "Anthropic is the active script provider"
+    elif config.openai_api_key:
+        primary = current = "openai"
+        fallback_active = False
+        reason = "OpenAI is the configured script provider"
+    else:
+        primary = current = "stock"
+        fallback_active = False
+        reason = "No LLM provider configured; stock copy is active"
+    return _provider_status(
+        "script_provider",
+        primary_provider=primary,
+        current_provider=current,
+        fallback_active=fallback_active,
+        reason=reason,
+        state=state,
+    )
+
+
+def _tts_provider_status(config, state: StationState) -> dict:
+    openai_hosts = any((host.engine or "edge") == "openai" for host in config.hosts)
+    if openai_hosts:
+        primary = "openai"
+        if config.openai_api_key:
+            current = "openai"
+            fallback_active = False
+            reason = "OpenAI TTS is configured for at least one host"
+        else:
+            current = "edge"
+            fallback_active = True
+            reason = "OpenAI TTS host configured but OPENAI_API_KEY is unavailable; Edge voice fallback is active"
+    else:
+        primary = current = "edge"
+        fallback_active = False
+        reason = "Edge TTS is the configured voice provider"
+    return _provider_status(
+        "tts_provider",
+        primary_provider=primary,
+        current_provider=current,
+        fallback_active=fallback_active,
+        reason=reason,
+        state=state,
+    )
+
+
+def _runtime_status_snapshot(
+    request: Request,
+    runtime_health: dict | None = None,
+    provider_health: dict | None = None,
+) -> dict:
+    config = request.app.state.config
+    state = request.app.state.station_state
+    runtime_health = runtime_health or _runtime_health_snapshot(request)
+    provider_health = provider_health or _provider_health_snapshot(config, state)
+
+    audio_current = str(runtime_health.get("audio_source") or "unknown")
+    audio_primary = state.playlist_source.kind if state.playlist_source is not None else audio_current
+    audio_fallback = bool(runtime_health.get("failover_active"))
+    audio_reason = "Fallback audio is currently on air" if audio_fallback else "Primary audio source is on air"
+    audio_status = _provider_status(
+        "audio_source",
+        primary_provider=audio_primary or "unknown",
+        current_provider=audio_current,
+        fallback_active=audio_fallback,
+        reason=audio_reason,
+        state=state,
+    )
+    script_status = _script_provider_status(config, state, provider_health)
+    tts_status = _tts_provider_status(config, state)
+    providers = {
+        "audio_source": audio_status,
+        "script_provider": script_status,
+        "tts_provider": tts_status,
+    }
+    fallback_active = any(item["fallback_active"] for item in providers.values())
+    task_blocked = not runtime_health.get("producer_task_alive", True) or not runtime_health.get(
+        "playback_task_alive",
+        True,
+    )
+    if task_blocked:
+        health_state = "blocked"
+        health_color = "red"
+        health_explanation = "A runtime task is stopped; playback needs operator attention."
+    elif fallback_active:
+        health_state = "degraded"
+        health_color = "yellow"
+        active = [item["current_label"] for item in providers.values() if item["fallback_active"]]
+        health_explanation = "Fallback active: " + ", ".join(active)
+    else:
+        health_state = "ready"
+        health_color = "blue"
+        health_explanation = "Primary providers are active."
+
+    if state.runtime_health_state != health_state:
+        state.runtime_health_state = health_state
+        logger.info(
+            "provider_health_state",
+            extra={
+                "event": "provider_health_state",
+                "health_state": health_state,
+                "fallback_active": fallback_active,
+                "runtime_provider_classes": [name for name, item in providers.items() if item["fallback_active"]],
+            },
+        )
+
+    events_desc = list(reversed(state.runtime_events))
+    recent_events = [e.to_dict() for e in events_desc[:10]]
+    last_switch = recent_events[0] if recent_events else None
+    failover_events = [e.to_dict() for e in events_desc if e.fallback_active][:10]
+    return {
+        "health_state": health_state,
+        "health_color": health_color,
+        "health_explanation": health_explanation,
+        "fallback_active": fallback_active,
+        "providers": providers,
+        "last_switch_timestamp": last_switch.get("timestamp") if last_switch else None,
+        "switch_reason": last_switch.get("reason") if last_switch else "",
+        "recent_events": recent_events,
+        "failover_events": failover_events,
+        "no_failover_message": "No failover in current session." if not failover_events else "",
+    }
+
+
+def _ha_details_payload(state: StationState) -> dict | None:
+    has_ha_observability = bool(state.ha_context or state.ha_scored_entities or state.ha_denylist_hits)
+    if not has_ha_observability:
+        return None
+    return {
+        "mood": state.ha_home_mood or None,
+        "weather_arc": state.ha_weather_arc or None,
+        "events_summary": state.ha_events_summary or None,
+        "pending_directive": state.ha_pending_directive or None,
+        "recent_event_count": state.ha_recent_event_count,
+        "last_event_label": state.ha_last_event_label or None,
+        "mood_en": state.ha_home_mood_en or None,
+        "weather_arc_en": state.ha_weather_arc_en or None,
+        "events_summary_en": state.ha_events_summary_en or None,
+        "last_event_label_en": state.ha_last_event_label_en or None,
+        "scored_entities": state.ha_scored_entities[:12],
+        "denylist_hits": dict(state.ha_denylist_hits),
+        "catalog_hit_rate": state.ha_catalog_hit_rate,
     }
 
 
@@ -322,6 +539,76 @@ def _silence_with_listeners(state: StationState, queue_empty_elapsed: float) -> 
     return queue_empty_elapsed > SILENCE_FAILURE_SECONDS and state.listeners_active > 0
 
 
+def _identity_key(value: str) -> str:
+    """Normalize listener-facing titles enough to compare cache fallbacks."""
+    return _re.sub(r"[^a-z0-9]+", " ", value.lower()).strip()
+
+
+def _identity_matches(left: str, right: str) -> bool:
+    if not left or not right:
+        return False
+    if left == right:
+        return True
+    return min(len(left), len(right)) >= 12 and (left in right or right in left)
+
+
+def _segment_identity_keys(segment: dict) -> set[str]:
+    """Return comparable labels for a streamed segment."""
+    keys: set[str] = set()
+    label = str(segment.get("label") or "").strip()
+    if label:
+        keys.add(_identity_key(label))
+    metadata = segment.get("metadata") or {}
+    if isinstance(metadata, dict):
+        title = str(metadata.get("title") or "").strip()
+        title_only = str(metadata.get("title_only") or "").strip()
+        artist = str(metadata.get("artist") or "").strip()
+        for value in (title, title_only):
+            if value:
+                keys.add(_identity_key(value))
+            if value and artist:
+                keys.add(_identity_key(f"{artist} {value}"))
+    return {key for key in keys if key}
+
+
+def _norm_cache_identity_keys(path: Path) -> set[str]:
+    """Return comparable title/artist labels for a normalized cache file."""
+    keys = {_identity_key(humanize_norm_filename(path.name))}
+    sidecar = load_track_metadata(path)
+    if sidecar:
+        title = str(sidecar.get("title") or "").strip()
+        artist = str(sidecar.get("artist") or "").strip()
+        if title:
+            keys.add(_identity_key(title))
+        if title and artist:
+            keys.add(_identity_key(f"{artist} {title}"))
+    return {key for key in keys if key}
+
+
+def _select_norm_cache_rescue(cache_dir: Path, state: StationState) -> Path | None:
+    """Pick a cache rescue clip without replaying the current/recent song first."""
+    norm_files = sorted(cache_dir.glob("norm_*.mp3"))
+    if not norm_files:
+        return None
+
+    recent_keys: set[str] = set()
+    if state.now_streaming:
+        recent_keys.update(_segment_identity_keys(state.now_streaming))
+    for entry in list(state.stream_log)[-5:]:
+        if entry.type == SegmentType.MUSIC.value:
+            recent_keys.update(_segment_identity_keys({"label": entry.label, "metadata": entry.metadata}))
+    if not recent_keys:
+        return _random.choice(norm_files)
+
+    candidates: list[Path] = []
+    for path in norm_files:
+        path_keys = _norm_cache_identity_keys(path)
+        if not any(_identity_matches(path_key, recent_key) for path_key in path_keys for recent_key in recent_keys):
+            candidates.append(path)
+
+    return _random.choice(candidates or norm_files)
+
+
 def _provider_health_snapshot(config, state: StationState) -> dict:
     """Return current provider degradation state for admin diagnostics."""
     now = time.time()
@@ -335,9 +622,11 @@ def _provider_health_snapshot(config, state: StationState) -> dict:
             "retry_after_s": retry_after,
             "last_error": state.anthropic_last_error if anthropic_degraded else "",
             "auth_failures": state.anthropic_auth_failures,
+            "key_status": state.anthropic_key_status,
         },
         "openai": {
             "configured": bool(config.openai_api_key),
+            "key_status": state.openai_key_status,
         },
         "chaos": {
             "enabled": state.chaos_mode_active,
@@ -442,41 +731,59 @@ def _serialize_track(track: Track) -> dict:
     }
 
 
+def _duration_sec_from_payload(payload: dict | None) -> float | None:
+    if not payload:
+        return None
+    duration = payload.get("duration_sec")
+    if isinstance(duration, (int, float)) and duration > 0:
+        return float(duration)
+    metadata = payload.get("metadata")
+    if not isinstance(metadata, dict):
+        metadata = {}
+    duration_ms = metadata.get("duration_ms")
+    if isinstance(duration_ms, (int, float)) and duration_ms > 0:
+        return float(duration_ms) / 1000.0
+    duration_s = metadata.get("duration_s")
+    if isinstance(duration_s, (int, float)) and duration_s > 0:
+        return float(duration_s)
+    return None
+
+
+def _status_now_playback(now_streaming: dict, now_ts: float) -> dict:
+    duration_sec = _duration_sec_from_payload(now_streaming)
+    if not now_streaming:
+        return {
+            "now_streaming": now_streaming,
+            "current_progress_sec": None,
+            "current_duration_sec": None,
+        }
+    started = now_streaming.get("started")
+    progress_sec = max(0.0, now_ts - started) if isinstance(started, (int, float)) and started > 0 else None
+    return {
+        "now_streaming": now_streaming,
+        "current_progress_sec": round(progress_sec, 1) if progress_sec is not None else None,
+        "current_duration_sec": round(duration_sec, 1) if duration_sec is not None else None,
+    }
+
+
+def _serialize_stream_log_entry(entry) -> dict:
+    payload = {
+        "type": entry.type,
+        "label": entry.label,
+        "timestamp": entry.timestamp,
+        "metadata": entry.metadata,
+    }
+    duration_sec = float(getattr(entry, "duration_sec", 0.0) or 0.0)
+    if duration_sec <= 0:
+        duration_sec = _duration_sec_from_payload({"metadata": entry.metadata}) or 0.0
+    if duration_sec > 0:
+        payload["duration_sec"] = duration_sec
+        payload["duration_ms"] = round(duration_sec * 1000)
+    return payload
+
+
 def _source_options_reason(config, exc: Exception) -> str:
     return f"Source loading failed: {exc}"
-
-
-def _sanitize_ingress_prefix(prefix: str) -> str:
-    """Validate and sanitize the X-Ingress-Path header to prevent XSS."""
-    prefix = prefix.rstrip("/")
-    if not prefix or not _INGRESS_PREFIX_RE.match(prefix):
-        return ""
-    return prefix
-
-
-def _inject_ingress_prefix(html: str, prefix: str) -> str:
-    """Rewrite static HTML attribute URLs to work behind HA Ingress proxy.
-
-    Only rewrites HTML attributes (href=, src=) — JavaScript API calls use the
-    client-side ``_base`` variable derived from ``window.location.pathname``,
-    so JS string literals must NOT be replaced here to avoid double-prefixing.
-    """
-    prefix = _sanitize_ingress_prefix(prefix)
-    if not prefix:
-        return html
-    # Only rewrite HTML attributes (double-quoted href=, src=) and standalone JS
-    # paths without _base. NEVER rewrite single-quoted JS strings that use _base
-    # (e.g. _base + '/api/hosts') — that causes double-prefixing.
-    html = html.replace('href="/static/', f'href="{prefix}/static/')
-    html = html.replace('src="/static/', f'src="{prefix}/static/')
-    html = html.replace('href="/listen"', f'href="{prefix}/listen"')
-    html = html.replace('href="/dashboard"', f'href="{prefix}/dashboard"')
-    html = html.replace('href="/admin"', f'href="{prefix}/admin"')
-    html = html.replace('href="/live"', f'href="{prefix}/live"')
-    html = html.replace('src="/stream"', f'src="{prefix}/stream"')
-    # Service worker registration is standalone (no _base), needs rewriting
-    html = html.replace("'/sw.js'", f"'{prefix}/sw.js'")
-    return html
 
 
 def _get_csrf_token(app) -> str:
@@ -694,15 +1001,7 @@ def require_admin_access(
     request: Request,
     credentials: HTTPBasicCredentials | None = Depends(security),
 ) -> None:
-    """Authorize admin-only routes using private network trust, token, or basic auth.
-
-    Trust hierarchy (first match wins):
-    1. Private network (LAN, Tailscale, HA Supervisor) — trusted for reads,
-       CSRF-checked for writes
-    2. Admin token (header only)
-    3. Basic auth (username/password)
-    4. Reject
-    """
+    """Authorize admin-only routes using configured credentials or local trust."""
     config = request.app.state.config
 
     # Loopback is fully trusted — same machine, no CSRF risk.
@@ -715,13 +1014,7 @@ def require_admin_access(
     if config.is_addon and _is_hassio_or_loopback(request):
         return
 
-    # Other private networks (LAN, Tailscale): trusted for identity but
-    # CSRF-checked on writes to prevent cross-site POSTs from other browsers.
-    if _is_private_network(request):
-        _enforce_csrf_for_private_network(request)
-        return
-
-    # Explicit auth for public/remote access.
+    # Explicit auth for all non-local traffic when credentials are configured.
     if config.admin_token:
         token = request.headers.get("X-Radio-Admin-Token")
         if token and secrets.compare_digest(token, config.admin_token):
@@ -751,91 +1044,19 @@ def require_admin_access(
             detail="X-Radio-Admin-Token required",
         )
 
+    # Backward-compatible fallback when no admin credentials are configured.
+    # In standalone mode load_config() now rejects a non-loopback bind without
+    # creds, so in production this only fires for loopback binds (already
+    # short-circuited above). Reachable here mainly via test apps built without
+    # creds — kept so credential-less LAN deployments keep working with CSRF.
+    if _is_private_network(request):
+        _enforce_csrf_for_private_network(request)
+        return
+
     raise HTTPException(
         status_code=403,
         detail="Admin endpoints are only available from private networks unless admin auth is configured",
     )
-
-
-_MPEG1_L3_BITRATES_KBPS = (0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320)
-_MPEG1_SAMPLE_RATES = (44100, 48000, 32000)
-
-
-def _is_mpeg1_l3_header(frame_header: bytes, *, allow_free_bitrate: bool) -> bool:
-    """Return whether ``frame_header`` is a plausible MPEG-1 Layer III frame."""
-    if len(frame_header) < 4 or frame_header[0] != 0xFF or (frame_header[1] & 0xE0) != 0xE0:
-        return False
-
-    version = (frame_header[1] >> 3) & 0x03
-    layer = (frame_header[1] >> 1) & 0x03
-    bitrate_idx = (frame_header[2] >> 4) & 0x0F
-    sample_rate_idx = (frame_header[2] >> 2) & 0x03
-
-    if version != 3 or layer != 1 or sample_rate_idx == 3 or bitrate_idx == 0x0F:
-        return False
-    return not (not allow_free_bitrate and bitrate_idx == 0)
-
-
-def _skip_id3_and_xing_header(f) -> None:
-    """Advance the file pointer past any leading ID3v2 tag and Xing/Info metadata frame.
-
-    Safari's ``<audio>`` element honors the Xing/Info duration header of each
-    concatenated segment as end-of-track, causing short segments (banter ~9 s,
-    news flash ~6 s) to fire ``ended`` at the declared duration instead of
-    playing through the ongoing stream. Long music segments (180 s+) don't
-    trip this because the listener tops up buffered bytes before the counter
-    expires. Stripping the tag on every segment makes the stream look like a
-    continuous ICECast feed, which all browsers handle correctly.
-
-    The helper is defensive: any unexpected header shape rewinds to the start,
-    so the worst case is "did nothing" rather than "cut a real audio frame".
-    """
-    header = f.read(10)
-    if len(header) == 10 and header[:3] == b"ID3":
-        size = ((header[6] & 0x7F) << 21) | ((header[7] & 0x7F) << 14) | ((header[8] & 0x7F) << 7) | (header[9] & 0x7F)
-        f.seek(10 + size)
-    else:
-        f.seek(0)
-
-    frame_start = f.tell()
-    frame_header = f.read(4)
-    if not _is_mpeg1_l3_header(frame_header, allow_free_bitrate=True):
-        f.seek(frame_start)
-        return
-
-    bitrate_idx = (frame_header[2] >> 4) & 0x0F
-    sample_rate_idx = (frame_header[2] >> 2) & 0x03
-    padding = (frame_header[2] >> 1) & 0x01
-    channel_mode = (frame_header[3] >> 6) & 0x03
-
-    magic_offset = 21 if channel_mode == 3 else 36
-    f.seek(frame_start + magic_offset)
-    magic = f.read(4)
-    if magic not in (b"Xing", b"Info"):
-        f.seek(frame_start)
-        return
-
-    if bitrate_idx == 0:
-        # VBR info frame (free-format): frame_length is unknown from the header alone.
-        # Scan forward from just after the Xing magic and only accept plausible
-        # MPEG-1 Layer III headers so sync-like metadata bytes are ignored.
-        f.seek(frame_start + magic_offset + 4)
-        data = f.read(8192)
-        sync_pos = -1
-        for i in range(len(data) - 3):
-            if _is_mpeg1_l3_header(data[i : i + 4], allow_free_bitrate=False):
-                sync_pos = i
-                break
-        if sync_pos >= 0:
-            f.seek(frame_start + magic_offset + 4 + sync_pos)
-        else:
-            f.seek(frame_start)
-        return
-
-    bitrate_kbps = _MPEG1_L3_BITRATES_KBPS[bitrate_idx]
-    sample_rate = _MPEG1_SAMPLE_RATES[sample_rate_idx]
-    frame_length = (144 * bitrate_kbps * 1000 // sample_rate) + padding
-    f.seek(frame_start + frame_length)
 
 
 async def run_playback_loop(app) -> None:
@@ -858,127 +1079,153 @@ async def run_playback_loop(app) -> None:
             await asyncio.sleep(1.0)
             continue
 
-        pulled_from_queue = False
-        if segment_queue.empty() and state.queue_empty_since is None:
-            # Mark the exact moment playback ran out of audio. The 30s wait_for()
-            # below is part of the listener-visible silence window.
-            state.queue_empty_since = _runtime_monotonic()
-        try:
-            segment: Segment = await asyncio.wait_for(segment_queue.get(), timeout=30.0)
-            pulled_from_queue = True
-            state.queue_empty_since = None
-        except TimeoutError:
-            if not hub._listeners:
-                state.queue_empty_since = None
-                continue
-
-            if state.queue_empty_since is None:
-                state.queue_empty_since = _runtime_monotonic()
-            elapsed = _runtime_monotonic() - state.queue_empty_since
-
-            # Serve a canned clip instead of dead air while the producer catches up
-            from mammamiradio.scheduling.producer import _pick_canned_clip
-
-            fallback = _pick_canned_clip("banter", state=state) or _pick_canned_clip("welcome")
-            if fallback:
-                logger.info("Queue empty — serving fallback clip: %s", fallback.name)
-                state.queue_empty_since = None
-                segment = Segment(
+        # Priority slot: interrupt bridge audio plays before anything in the queue.
+        _bridge_segment: Segment | None = None
+        if state.interrupt_slot is not None:
+            bridge_path = state.interrupt_slot
+            state.interrupt_slot = None
+            if bridge_path.exists():
+                _bridge_segment = Segment(
                     type=SegmentType.BANTER,
-                    path=fallback,
-                    metadata={"type": "banter", "canned": True, "fallback": True},
-                    ephemeral=False,
+                    path=bridge_path,
+                    metadata={"type": "banter", "interrupt": True},
+                    ephemeral=state.interrupt_slot_ephemeral,
                 )
+                state.interrupt_slot_ephemeral = False
+                state.queue_empty_since = None
             else:
-                rescued_from_norm = False
-                if elapsed >= 30.0:
-                    norm_files = sorted(config.cache_dir.glob("norm_*.mp3"))
-                    if norm_files:
-                        rescue = norm_files[0]
-                        logger.warning(
-                            "Queue empty %ds - rescuing with norm cache: %s",
-                            int(elapsed),
-                            rescue.name,
-                        )
-                        state.queue_empty_since = None
-                        rescued_from_norm = True
-                        sidecar = load_track_metadata(rescue)
-                        if sidecar:
-                            rescue_title = f"{sidecar['artist']} – {sidecar['title']}"
-                            rescue_artist: str | None = sidecar["artist"]
-                        else:
-                            rescue_title = humanize_norm_filename(rescue.name)
-                            rescue_artist = None
-                        segment = Segment(
-                            type=SegmentType.MUSIC,
-                            path=rescue,
-                            metadata={
-                                "type": "music",
-                                "title": rescue_title,
-                                **({"artist": rescue_artist} if rescue_artist else {}),
-                                "audio_source": "fallback_norm_cache",
-                                "fallback": True,
-                            },
-                            ephemeral=False,
-                        )
+                logger.warning("Interrupt slot path missing: %s — skipping bridge", bridge_path)
+                state.interrupt_slot_ephemeral = False
 
-                if rescued_from_norm:
-                    pass
-                else:
-                    # Try bundled demo assets as a last-resort audio source before
-                    # forcing banter. Raw (un-normalized) audio beats dead air.
-                    demo_music_dir = _ASSETS_DIR / "demo" / "music"
-                    demo_files = list(demo_music_dir.glob("*.mp3")) if demo_music_dir.exists() else []
-                    if demo_files:
-                        rescue = _random.choice(demo_files)
-                        # Parse "Artist - Title.mp3" so the listener UI shows proper
-                        # metadata instead of the raw stem. Preserves the illusion.
-                        stem = rescue.stem
-                        if " - " in stem:
-                            rescue_artist, rescue_title = stem.split(" - ", 1)
-                            rescue_artist = rescue_artist.strip() or "Unknown"
-                            rescue_title = rescue_title.strip() or stem
-                        else:
-                            rescue_artist = "Unknown"
-                            rescue_title = stem
-                        logger.warning(
-                            "Queue empty %ds - rescuing with demo asset: %s",
-                            int(elapsed),
-                            rescue.name,
-                        )
-                        state.queue_empty_since = None
-                        segment = Segment(
-                            type=SegmentType.MUSIC,
-                            path=rescue,
-                            metadata={
-                                "type": "music",
-                                "title": rescue_title,
-                                "artist": rescue_artist,
-                                "audio_source": "fallback_demo_asset",
-                                "fallback": True,
-                            },
-                            ephemeral=False,
-                        )
-
-                if rescued_from_norm or (segment_queue.empty() and state.queue_empty_since is None):
-                    pass
-                elif elapsed >= 60.0:
-                    # Request forced banter once per silence episode to avoid producer thrash.
-                    # queue_empty_since is intentionally NOT reset — the silence gate on
-                    # /healthz and /readyz must stay active until real audio resumes.
-                    if state.force_next is None:
-                        state.force_next = SegmentType.BANTER
-                        logger.error(
-                            "Queue empty %ds with %d active listeners - requesting forced banter from producer",
-                            int(elapsed),
-                            len(hub._listeners),
-                        )
-                    continue
-                else:
-                    logger.warning("Queue empty for %ds, no fallback clips available", int(elapsed))
+        pulled_from_queue = False
+        segment: Segment
+        if _bridge_segment is not None:
+            segment = _bridge_segment
+        else:
+            if segment_queue.empty() and state.queue_empty_since is None:
+                # Mark the exact moment playback ran out of audio. The 30s wait_for()
+                # below is part of the listener-visible silence window.
+                state.queue_empty_since = _runtime_monotonic()
+            try:
+                segment = await asyncio.wait_for(segment_queue.get(), timeout=QUEUE_FALLBACK_WAIT_SECONDS)
+                pulled_from_queue = True
+                state.queue_empty_since = None
+            except TimeoutError:
+                if not hub._listeners:
+                    state.queue_empty_since = None
                     continue
 
+                if state.queue_empty_since is None:
+                    state.queue_empty_since = _runtime_monotonic()
+                elapsed = _runtime_monotonic() - state.queue_empty_since
+
+                # Serve a canned clip instead of dead air while the producer catches up
+                from mammamiradio.scheduling.producer import _pick_canned_clip
+
+                fallback = _pick_canned_clip("banter", state=state) or _pick_canned_clip("welcome")
+                if fallback:
+                    logger.info("Queue empty — serving fallback clip: %s", fallback.name)
+                    state.queue_empty_since = None
+                    segment = Segment(
+                        type=SegmentType.BANTER,
+                        path=fallback,
+                        metadata={"type": "banter", "canned": True, "fallback": True},
+                        ephemeral=False,
+                    )
+                else:
+                    rescued_from_norm = False
+                    if elapsed >= QUEUE_FALLBACK_WAIT_SECONDS:
+                        rescue = _select_norm_cache_rescue(config.cache_dir, state)
+                        if rescue:
+                            logger.warning(
+                                "Queue empty %ds - rescuing with norm cache: %s",
+                                int(elapsed),
+                                rescue.name,
+                            )
+                            state.queue_empty_since = None
+                            rescued_from_norm = True
+                            sidecar = load_track_metadata(rescue)
+                            if sidecar:
+                                rescue_title = f"{sidecar['artist']} – {sidecar['title']}"
+                                rescue_artist: str | None = sidecar["artist"]
+                            else:
+                                rescue_title = humanize_norm_filename(rescue.name)
+                                rescue_artist = None
+                            segment = Segment(
+                                type=SegmentType.MUSIC,
+                                path=rescue,
+                                metadata={
+                                    "type": "music",
+                                    "title": rescue_title,
+                                    **({"artist": rescue_artist} if rescue_artist else {}),
+                                    "audio_source": "fallback_norm_cache",
+                                    "fallback": True,
+                                },
+                                ephemeral=False,
+                            )
+
+                    if rescued_from_norm:
+                        pass
+                    else:
+                        # Try bundled demo assets as a last-resort audio source before
+                        # forcing banter. Raw (un-normalized) audio beats dead air.
+                        demo_music_dir = _ASSETS_DIR / "demo" / "music"
+                        demo_files = list(demo_music_dir.glob("*.mp3")) if demo_music_dir.exists() else []
+                        if demo_files:
+                            rescue = _random.choice(demo_files)
+                            # Parse "Artist - Title.mp3" so the listener UI shows proper
+                            # metadata instead of the raw stem. Preserves the illusion.
+                            stem = rescue.stem
+                            if " - " in stem:
+                                rescue_artist, rescue_title = stem.split(" - ", 1)
+                                rescue_artist = rescue_artist.strip() or "Unknown"
+                                rescue_title = rescue_title.strip() or stem
+                            else:
+                                rescue_artist = "Unknown"
+                                rescue_title = stem
+                            logger.warning(
+                                "Queue empty %ds - rescuing with demo asset: %s",
+                                int(elapsed),
+                                rescue.name,
+                            )
+                            state.queue_empty_since = None
+                            segment = Segment(
+                                type=SegmentType.MUSIC,
+                                path=rescue,
+                                metadata={
+                                    "type": "music",
+                                    "title": rescue_title,
+                                    "artist": rescue_artist,
+                                    "audio_source": "fallback_demo_asset",
+                                    "fallback": True,
+                                },
+                                ephemeral=False,
+                            )
+
+                    if rescued_from_norm or (segment_queue.empty() and state.queue_empty_since is None):
+                        pass
+                    elif elapsed >= 60.0:
+                        # Request forced banter once per silence episode to avoid producer thrash.
+                        # queue_empty_since is intentionally NOT reset — the silence gate on
+                        # /healthz and /readyz must stay active until real audio resumes.
+                        if state.force_next is None:
+                            state.force_next = SegmentType.BANTER
+                            logger.error(
+                                "Queue empty %ds with %d active listeners - requesting forced banter from producer",
+                                int(elapsed),
+                                len(hub._listeners),
+                            )
+                        continue
+                    else:
+                        logger.warning("Queue empty for %ds, no fallback clips available", int(elapsed))
+                        continue
+
+        prev_last_provider_event = state.runtime_events[-1] if state.runtime_events else None
         state.on_stream_segment(segment)
+        if state.runtime_events:
+            new_last_provider_event = state.runtime_events[-1]
+            if new_last_provider_event is not prev_last_provider_event:
+                logger.info("provider_switch_event", extra=new_last_provider_event.to_dict())
         if pulled_from_queue and state.queued_segments:
             state.queued_segments.pop(0)
         logger.info(
@@ -996,6 +1243,8 @@ async def run_playback_loop(app) -> None:
                     current_track=state.current_track,
                     listeners_active=state.listeners_active,
                     session_stopped=state.session_stopped,
+                    queue_depth=len(state.queued_segments),
+                    station_name=config.display_station_name,
                 )
             )
             _ha_push_tasks.add(_ha_task)
@@ -1005,6 +1254,13 @@ async def run_playback_loop(app) -> None:
             send_start = time.monotonic()
             bytes_sent = 0
             was_skipped = False
+            # Sample listeners at the START of the send loop so a mid-segment
+            # disconnect doesn't mislabel an aired segment as no_listeners
+            # (matches classify_stream_outcome's documented contract). Default to
+            # 0 first so the finally's _emit_stream_result never references an
+            # unbound local if listener sampling itself raises.
+            start_listeners = 0
+            start_listeners = len(hub._listeners)
             skip_event.clear()
             with open(segment.path, "rb") as f:
                 _skip_id3_and_xing_header(f)
@@ -1038,10 +1294,52 @@ async def run_playback_loop(app) -> None:
                 _persist_tasks.add(task)
                 task.add_done_callback(_persist_tasks.discard)
         finally:
+            _emit_stream_result(state, segment, bytes_sent, was_skipped, start_listeners)
             if segment.ephemeral:
                 segment.path.unlink(missing_ok=True)
             if pulled_from_queue:
                 segment_queue.task_done()
+
+
+def _emit_stream_result(state, segment, bytes_sent: int, was_skipped: bool, listeners: int) -> None:
+    """Tier-3: record the TRUE aired outcome after the send loop.
+
+    Fires from the (sync) playback loop's finally, so it captures partial and
+    failed sends too. Enabled-check first; never raises into the stream.
+    """
+    led = getattr(state, "ledger", None)
+    if led is None or not led.enabled:
+        return
+    try:
+        import time as _time
+
+        from mammamiradio.core.ledger import SCHEMA_VERSION
+        from mammamiradio.core.segment_status import classify_stream_outcome, is_fallback_active
+
+        meta = segment.metadata or {}
+        fallback_active = is_fallback_active(meta)
+        led.record(
+            {
+                "schema_version": SCHEMA_VERSION,
+                "ts": _time.time(),
+                "record": "stream_result",
+                "segment_id": meta.get("ledger_segment_id"),
+                "segment_type": segment.type.value,
+                "aired_status": classify_stream_outcome(
+                    was_skipped=was_skipped,
+                    bytes_sent=bytes_sent,
+                    listeners=listeners,
+                    fallback_active=fallback_active,
+                ),
+                "bytes_sent": bytes_sent,
+                "listeners": listeners,
+                "audio_source": str(meta.get("audio_source") or ""),
+                "fallback_active": fallback_active,
+                "title": meta.get("title") or meta.get("brand"),
+            }
+        )
+    except Exception as exc:  # pragma: no cover - provenance must never break audio
+        logger.debug("Provenance Tier-3 emit failed: %s", exc)
 
 
 def _track_from_music_metadata(metadata: dict) -> Track | None:
@@ -1278,18 +1576,18 @@ async def static_files(filename: str):
 async def stream(request: Request):
     """Expose the live MP3 stream consumed by browsers and audio players."""
     config = request.app.state.config
+    audio_format = stream_audio_metadata(config)
     headers = {
-        "Content-Type": "audio/mpeg",
         "icy-name": config.station.name.replace("\r", "").replace("\n", ""),
         "icy-genre": config.station.theme[:64].replace("\r", "").replace("\n", ""),
-        "icy-br": str(config.audio.bitrate),
+        "icy-br": str(audio_format["bitrate_kbps"]),
         "Cache-Control": "no-cache, no-store",
         "Connection": "keep-alive",
     }
     return StreamingResponse(
         _audio_generator(request),
         headers=headers,
-        media_type="audio/mpeg",
+        media_type=audio_format["mime_type"],
     )
 
 
@@ -1323,6 +1621,16 @@ async def setup_provider_check(request: Request, _: None = Depends(require_admin
     launching overlapping 12-second outbound checks against every provider.
     """
     config = request.app.state.config
+
+    def _record_if_task_keys_match(probe_result: dict) -> None:
+        # The verdict must reflect the keys the SHARED in-flight task actually probed,
+        # not this waiter's snapshot. A later request joining an old task after a
+        # concurrent save swapped a key must NOT accept that task's stale 401. Compare
+        # current config to the keys captured when the task was created.
+        snapshot = getattr(request.app.state, "_provider_check_task_keys", None)
+        if snapshot == (config.anthropic_api_key, config.openai_api_key):
+            _record_provider_verdict(request.app.state.station_state, probe_result)
+
     lock = getattr(request.app.state, "_provider_check_lock", None)
     if lock is None:
         lock = asyncio.Lock()
@@ -1346,9 +1654,13 @@ async def setup_provider_check(request: Request, _: None = Depends(require_admin
                 request.app.state._provider_check_cached_result = result
                 request.app.state._provider_check_cached_at = time.time()
                 request.app.state._provider_check_task = None
+                _record_if_task_keys_match(result)
                 return result
             task = None
         if task is None:
+            # Capture the keys this task probes so the verdict can't be misattributed
+            # to a later config (Codex: snapshot travels with the task, not the waiter).
+            request.app.state._provider_check_task_keys = (config.anthropic_api_key, config.openai_api_key)
             task = asyncio.create_task(check_provider_keys(config))
             request.app.state._provider_check_task = task
 
@@ -1365,6 +1677,7 @@ async def setup_provider_check(request: Request, _: None = Depends(require_admin
             request.app.state._provider_check_cached_result = result
             request.app.state._provider_check_cached_at = time.time()
             request.app.state._provider_check_task = None
+    _record_if_task_keys_match(result)
     return result
 
 
@@ -1380,11 +1693,6 @@ async def save_keys(request: Request):
     await _persist_and_apply_credentials(request, updates, use_addon_options=True)
 
     return {"ok": True, "saved": list(updates.keys())}
-
-
-def _sanitize_credential_value(value: str) -> str:
-    """Strip env-breaking characters before persistence or live application."""
-    return value.replace("\n", "").replace("\r", "")
 
 
 def _credential_updates_from_env_payload(body: dict, *, require_nonempty: bool) -> dict[str, str]:
@@ -1420,91 +1728,12 @@ async def _persist_and_apply_credentials(request: Request, updates: dict[str, st
 
     _apply_live_credentials(request.app.state.station_state, config, updates)
 
-
-def _apply_live_credentials(state: StationState, config, updates: dict[str, str]) -> None:
-    for env_key, value in updates.items():
-        os.environ[env_key] = value
-
-    if "ANTHROPIC_API_KEY" in updates:
-        config.anthropic_api_key = updates["ANTHROPIC_API_KEY"]
-        from mammamiradio.hosts.scriptwriter import reset_provider_backoff
-
-        reset_provider_backoff()
-        state.anthropic_disabled_until = 0.0
-        state.anthropic_last_error = ""
-    if "OPENAI_API_KEY" in updates:
-        config.openai_api_key = updates["OPENAI_API_KEY"]
-
-
-def _save_dotenv(updates: dict[str, str]) -> None:
-    """Write key=value pairs to .env, updating existing keys or appending new ones."""
-    env_path = Path(".env")
-    lines = env_path.read_text().splitlines() if env_path.exists() else []
-
-    safe_updates = {k: _sanitize_credential_value(v) for k, v in updates.items()}
-
-    written = set()
-    new_lines = []
-    for line in lines:
-        stripped = line.strip()
-        if stripped and not stripped.startswith("#") and "=" in stripped:
-            key = stripped.split("=", 1)[0].strip()
-            if key in safe_updates:
-                new_lines.append(f'{key}="{safe_updates[key]}"')
-                written.add(key)
-                continue
-        new_lines.append(line)
-
-    for key, value in safe_updates.items():
-        if key not in written:
-            new_lines.append(f'{key}="{value}"')
-
-    tmp = env_path.with_suffix(".env.tmp")
-    tmp.write_text("\n".join(new_lines) + "\n")
-    tmp.replace(env_path)
-
-
-def _save_addon_option(key: str, value) -> None:
-    """Persist a single option into /data/options.json atomically."""
-    import json as _json
-    import os as _os
-
-    with _ADDON_OPTIONS_LOCK:
-        options_path = Path("/data/options.json")
-        options: dict = {}
-        if options_path.exists():
-            try:
-                options = _json.loads(options_path.read_text())
-            except (ValueError, OSError):
-                options = {}
-        options[key] = value
-        tmp_path = options_path.with_suffix(options_path.suffix + ".tmp")
-        tmp_path.write_text(_json.dumps(options, indent=2))
-        _os.replace(tmp_path, options_path)
-
-
-def _save_addon_options(updates: dict[str, str]) -> None:
-    """Update /data/options.json with new credential values."""
-    import json as _json
-    import os as _os
-
-    with _ADDON_OPTIONS_LOCK:
-        options_path = Path("/data/options.json")
-        options = {}
-        if options_path.exists():
-            try:
-                options = _json.loads(options_path.read_text())
-            except (ValueError, OSError):
-                pass
-
-        for env_key, value in updates.items():
-            opt_key = _CREDENTIAL_ENV_TO_FIELD.get(env_key)
-            if opt_key:
-                options[opt_key] = _sanitize_credential_value(value)
-
-        tmp_path = options_path.with_suffix(options_path.suffix + ".tmp")
-        tmp_path.write_text(_json.dumps(options, indent=2))
-        _os.replace(tmp_path, options_path)
+    # Re-validate the freshly-saved key in the background so the admin reflects a bogus
+    # key WITHOUT waiting for a banter segment to fail. Applies to EVERY credential-save
+    # path (both /api/setup/save-keys and /api/credentials). Fire-and-forget so the
+    # response stays fast (Leadership Principle #2); keep a reference so the task isn't
+    # garbage-collected mid-flight (RUF006).
+    request.app.state.provider_verdict_task = asyncio.create_task(_run_provider_verdict(request.app.state))
 
 
 @router.get("/api/setup/addon-snippet")
@@ -1534,6 +1763,26 @@ async def capabilities(request: Request, _: None = Depends(require_admin_access)
     provider_health = _provider_health_snapshot(config, state)
     capabilities["anthropic_degraded"] = provider_health["anthropic"]["degraded"]
     capabilities["anthropic_retry_after_s"] = provider_health["anthropic"]["retry_after_s"]
+    # Tri-state key-validation verdict ("unverified" | "valid" | "rejected"), distinct
+    # from the time-based `anthropic_degraded`. Lets the admin show a persistent
+    # "key not working" state WITHOUT waiting for a banter segment to 401.
+    capabilities["anthropic_key_status"] = provider_health["anthropic"]["key_status"]
+    capabilities["openai_key_status"] = provider_health["openai"]["key_status"]
+    # If a configured key was actively refused and nothing else is confirmed working,
+    # steer next_step toward replacing it (placeholder copy — final operator wording is
+    # a separate communication pass). Tier itself stays key-presence-derived (conservative).
+    statuses = [
+        provider_health["anthropic"]["key_status"] if config.anthropic_api_key else None,
+        provider_health["openai"]["key_status"] if config.openai_api_key else None,
+    ]
+    # Only steer once the probes have settled: an "unverified" key is still in flight,
+    # so don't nudge "replace your key" while a configured key might yet come back valid.
+    if "rejected" in statuses and "valid" not in statuses and "unverified" not in statuses:
+        result["next_step"] = {
+            "key": "fix_llm_key",
+            "message": "An AI key isn't working — replace it in Settings to restore AI hosts",
+            "action": "open_settings",
+        }
 
     now = state.now_streaming or {}
     result["now_playing"] = now
@@ -1634,16 +1883,23 @@ async def panic_cut(request: Request, _: None = Depends(require_admin_access)):
 
 @router.post("/api/queue/remove")
 async def queue_remove_item(request: Request, _: None = Depends(require_admin_access)):
-    """Remove a single pre-produced segment from the queue by shadow-list index.
+    """Remove a single pre-produced segment from the queue.
 
-    Drains the asyncio.Queue, removes the item at the given index, then re-pushes
-    the remaining segments. The queue is empty for ~1ms during the operation; the
-    streamer's 30-second empty-queue countdown resets as soon as items land back.
+    Identity vs position: the admin UI renders a row, then the click arrives
+    after a network round-trip. In that window the streamer can consume the
+    head segment, shifting every shadow-list index down by one. So callers
+    SHOULD pass a stable ``id`` (the ``queue_id`` stamped by the producer);
+    the legacy ``index`` path is kept for older callers and is position-based.
+
+    The drain-and-repush below uses only synchronous queue operations
+    (``get_nowait``/``put_nowait`` on an unbounded queue), so no ``await`` runs
+    between draining the real queue and mutating the ``queued_segments`` shadow
+    list. The producer and streamer therefore cannot interleave and leave the
+    two views of the queue divergent.
     """
     body = await request.json()
+    seg_id = body.get("id")
     index = body.get("index")
-    if not isinstance(index, int):
-        raise HTTPException(status_code=422, detail="index must be an integer")
 
     state = request.app.state.station_state
     q = request.app.state.queue
@@ -1651,31 +1907,60 @@ async def queue_remove_item(request: Request, _: None = Depends(require_admin_ac
     if not state.queued_segments:
         return {"ok": True, "removed": None}
 
-    if index < 0 or index >= len(state.queued_segments):
-        raise HTTPException(
-            status_code=422,
-            detail=f"index {index} out of range (queue has {len(state.queued_segments)} items)",
+    if isinstance(seg_id, str) and seg_id:
+        # Identity path: resolve the current shadow-list position from the id.
+        index = next(
+            (i for i, seg in enumerate(state.queued_segments) if seg.get("id") == seg_id),
+            None,
         )
+        if index is None:
+            # Segment already played out (or was removed) — nothing to do.
+            return {"ok": True, "removed": None}
+    elif isinstance(index, int):
+        # Legacy position path.
+        if index < 0 or index >= len(state.queued_segments):
+            raise HTTPException(
+                status_code=422,
+                detail=f"index {index} out of range (queue has {len(state.queued_segments)} items)",
+            )
+    else:
+        raise HTTPException(status_code=422, detail="index must be an integer")
 
-    removed_label = state.queued_segments[index].get("label", "unknown")
+    shadow_entry = state.queued_segments[index]
+    removed_label = shadow_entry.get("label", "unknown")
+    target_id = shadow_entry.get("id")
 
-    # Drain the asyncio.Queue into a list, remove item N, re-push rest.
+    # Synchronous drain + repush — no await points until the shadow list is
+    # back in sync, so the producer/streamer cannot interleave.
     items: list = []
     while not q.empty():
         try:
             items.append(q.get_nowait())
+            # Balance the unfinished-task counter for every drained item, the
+            # same way _purge_segment_queue does — survivors are re-counted by
+            # put_nowait below. Without this, queue.join() would never settle.
+            q.task_done()
         except asyncio.QueueEmpty:
             break
 
-    if index < len(items):
+    # Remove the matching Segment from the real queue. Match by queue_id when
+    # available (position-independent); fall back to index alignment otherwise.
+    real_removed = False
+    if target_id:
+        for i, seg in enumerate(items):
+            if getattr(seg, "metadata", {}).get("queue_id") == target_id:
+                items.pop(i)
+                real_removed = True
+                break
+    if not real_removed and index < len(items):
         items.pop(index)
 
     for item in items:
-        await q.put(item)
+        q.put_nowait(item)
 
     state.queued_segments.pop(index)
 
-    logger.info("Queue item %d removed by admin: %s", index, removed_label)
+    logger.info("Queue item removed by admin: %s (id=%s)", removed_label, target_id or "n/a")
     return {"ok": True, "removed": removed_label}
 
 
@@ -1691,6 +1976,7 @@ async def stop_session(request: Request, _: None = Depends(require_admin_access)
         request.app.state.skip_event.set()
     # Signal producer to pause and persist across reloads
     state.session_stopped = True
+    state.last_state_change_at = time.time()
     config = request.app.state.config
     _persist_session_stopped(config, True)
     state.now_streaming = {"type": "stopped", "label": "Session stopped", "started": time.time(), "metadata": {}}
@@ -1722,15 +2008,90 @@ async def trigger_segment(request: Request, _: None = Depends(require_admin_acce
     return {"ok": True, "triggered": seg_type}
 
 
+@router.post("/api/interrupt")
+async def api_interrupt(request: Request, _: None = Depends(require_admin_access)):
+    """Immediately interrupt the stream and have the hosts deliver a pissed/urgent message.
+
+    Body: {"directive": str, "urgency": str}
+    - directive: what the hosts should say (required)
+    - urgency: "pissed" | "urgent" | "gentle" (default: "pissed")
+
+    Returns 429 if called within the cooldown window (default 60s).
+    """
+    try:
+        body = await request.json()
+    except ValueError:
+        return JSONResponse(status_code=422, content={"ok": False, "error": "invalid JSON body"})
+    if not isinstance(body, dict):
+        return JSONResponse(status_code=422, content={"ok": False, "error": "expected JSON object"})
+
+    directive = (body.get("directive") or "").strip()
+    if not directive:
+        return JSONResponse(status_code=422, content={"ok": False, "error": "directive is required"})
+
+    urgency = (body.get("urgency") or "pissed").strip().lower()
+    if urgency not in ("pissed", "urgent", "gentle"):
+        urgency = "pissed"
+
+    state: StationState = request.app.state.station_state
+    now = time.time()
+    cooldown = 60
+    remaining = cooldown - (now - state.last_interrupt_ts)
+    if remaining > 0:
+        return JSONResponse(
+            status_code=429,
+            content={
+                "ok": False,
+                "error": "interrupt cooldown active",
+                "retry_after": max(1, math.ceil(remaining)),
+            },
+        )
+
+    from mammamiradio.core.models import InterruptSpec
+    from mammamiradio.scheduling.producer import _fire_interrupt
+
+    spec = InterruptSpec(directive=directive, urgency=urgency, cooldown=cooldown)
+
+    queue = request.app.state.queue
+    skip_event = request.app.state.skip_event
+    fired = await _fire_interrupt(
+        state,
+        spec,
+        queue,
+        skip_event,
+        enforce_global_cooldown=True,
+        bridge_tmp_dir=request.app.state.config.tmp_dir,
+    )
+    if not fired:
+        # _fire_interrupt's global cooldown gate beat us (concurrent caller).
+        remaining_after = cooldown - (time.time() - state.last_interrupt_ts)
+        return JSONResponse(
+            status_code=429,
+            content={
+                "ok": False,
+                "error": "interrupt cooldown active",
+                "retry_after": max(1, math.ceil(remaining_after)),
+            },
+        )
+    return {"ok": True, "directive": directive, "urgency": urgency}
+
+
 @router.post("/api/hot-reload")
 async def hot_reload_modules(request: Request, _: None = Depends(require_admin_access)):
-    """Reload scriptwriter module in-place. Stream continues uninterrupted.
+    """Reload scriptwriter and its data submodules in-place. Stream continues uninterrupted.
 
-    Safe to reload: scriptwriter (stateless functions + lazy-init clients).
+    Safe to reload: prompt_world / transitions / fallbacks (prompt-fiction + stock copy)
+    + scriptwriter (stateless functions + lazy-init clients). Data submodules reload FIRST
+    (leaves-first) so the scriptwriter facade re-imports fresh values — reloading the facade
+    alone would rebind its ``from .prompt_world`` / ``.transitions`` / ``.fallbacks`` import
+    names to the stale submodules.
     NOT reloaded: producer, streamer, persona (hold live task/instance state).
     Requires --workers 1 (importlib reloads only the worker handling the request).
     """
+    import mammamiradio.hosts.fallbacks as _fallbacks_mod
+    import mammamiradio.hosts.prompt_world as _prompt_world_mod
     import mammamiradio.hosts.scriptwriter as _scriptwriter_mod
+    import mammamiradio.hosts.transitions as _transitions_mod
 
     # Debounce: reject if called within 5s of last reload (monotonic to avoid NTP skew)
     last_reload: float = getattr(request.app.state, "_last_hot_reload_ts", 0.0)
@@ -1749,13 +2110,32 @@ async def hot_reload_modules(request: Request, _: None = Depends(require_admin_a
 
     t0 = time.monotonic()
     try:
+        # Leaves-first ordering is load-bearing. scriptwriter does
+        # `from .prompt_world import ...` / `.transitions` / `.fallbacks`, so reloading
+        # scriptwriter re-runs those imports and rebinds the names to whatever the data
+        # submodules hold NOW. Reload the data submodules FIRST; reload the facade first
+        # and it would rebind to the stale submodules, leaving operator edits invisible.
+        # Reloading scriptwriter also re-runs its module body, which resets
+        # _cached_system_prompt — so edited prompt data takes effect on the next
+        # generation rather than serving a stale cache.
+        importlib.reload(_prompt_world_mod)
+        importlib.reload(_transitions_mod)
+        importlib.reload(_fallbacks_mod)
         importlib.reload(_scriptwriter_mod)
         duration_ms = int((time.monotonic() - t0) * 1000)
         request.app.state._last_hot_reload_ts = now
-        logger.info("hot-reload: reloaded mammamiradio.hosts.scriptwriter in %dms", duration_ms)
+        logger.info(
+            "hot-reload: reloaded prompt_world + transitions + fallbacks + scriptwriter in %dms",
+            duration_ms,
+        )
         return {
             "ok": True,
-            "reloaded_modules": ["mammamiradio.hosts.scriptwriter"],
+            "reloaded_modules": [
+                "mammamiradio.hosts.prompt_world",
+                "mammamiradio.hosts.transitions",
+                "mammamiradio.hosts.fallbacks",
+                "mammamiradio.hosts.scriptwriter",
+            ],
             "duration_ms": duration_ms,
             "effective_on": "next_banter_generation",
             "stream_status": "unaffected",
@@ -1789,13 +2169,37 @@ async def get_pacing(request: Request, _: None = Depends(require_admin_access)):
 async def update_pacing(request: Request, _: None = Depends(require_admin_access)):
     """Update pacing settings in real-time."""
     config = request.app.state.config
-    body = await request.json()
+    try:
+        body = await request.json()
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Pacing payload must be valid JSON") from exc
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="Pacing payload must be a JSON object")
+
+    def _parse_pacing_int(field: str) -> int | None:
+        if field not in body:
+            return None
+        raw = body[field]
+        if isinstance(raw, bool) or raw is None:
+            raise HTTPException(status_code=400, detail=f"{field} must be an integer")
+        if isinstance(raw, int):
+            return raw
+        if isinstance(raw, str):
+            text = raw.strip()
+            if _re.fullmatch(r"-?\d{1,9}", text):
+                return int(text)
+        raise HTTPException(status_code=400, detail=f"{field} must be an integer")
+
+    songs_between_banter = _parse_pacing_int("songs_between_banter")
+    songs_between_ads = _parse_pacing_int("songs_between_ads")
+    ad_spots_per_break = _parse_pacing_int("ad_spots_per_break")
+
     if "songs_between_banter" in body:
-        config.pacing.songs_between_banter = max(1, int(body["songs_between_banter"]))
+        config.pacing.songs_between_banter = max(2, min(60, songs_between_banter or 0))
     if "songs_between_ads" in body:
-        config.pacing.songs_between_ads = max(1, int(body["songs_between_ads"]))
+        config.pacing.songs_between_ads = max(1, min(60, songs_between_ads or 0))
     if "ad_spots_per_break" in body:
-        config.pacing.ad_spots_per_break = max(1, min(5, int(body["ad_spots_per_break"])))
+        config.pacing.ad_spots_per_break = max(1, min(5, ad_spots_per_break or 0))
     return {
         "ok": True,
         "songs_between_banter": config.pacing.songs_between_banter,
@@ -2057,12 +2461,19 @@ async def search_tracks(request: Request, q: str = "", _: None = Depends(require
             if len(results) >= 20:
                 break
 
-    # External yt-dlp search (blocking, run off the event loop)
+    # External yt-dlp search (blocking, run off the event loop). Bound the total
+    # wait so a slow/cold yt-dlp search can't hang past the HA ingress proxy read
+    # timeout and surface as a connection error in the admin (same failure class
+    # that motivated backgrounding add-external). On timeout we return the
+    # in-playlist results with no web hits rather than failing the whole request.
     loop = asyncio.get_running_loop()
     try:
-        external = await loop.run_in_executor(None, search_ytdlp_metadata, q.strip(), 5)
+        external = await asyncio.wait_for(
+            loop.run_in_executor(_search_executor, search_ytdlp_metadata, q.strip(), 5),
+            timeout=45,
+        )
     except Exception:
-        logger.warning("yt-dlp external search failed for query %r", q, exc_info=True)
+        logger.warning("yt-dlp external search failed/timed out for query %r", q, exc_info=True)
         external = []
 
     return {"results": results, "external": external}
@@ -2070,11 +2481,23 @@ async def search_tracks(request: Request, q: str = "", _: None = Depends(require
 
 @router.post("/api/playlist/add-external")
 async def add_external_track(request: Request, _: None = Depends(require_admin_access)):
-    """Download a yt-dlp search result and pin it to play next."""
-    from mammamiradio.core.models import Track
-    from mammamiradio.playlist.downloader import download_external_track
+    """Queue a yt-dlp search result to play next via a background download.
 
-    body = await request.json()
+    The download runs in the background so this request returns immediately. A
+    synchronous yt-dlp fetch takes 10-60s, which overruns the HA ingress proxy
+    read timeout — the browser fetch then throws and the admin UI shows a false
+    "Failed to add to queue" even though the track downloads and queues fine.
+    Returning fast keeps the request well under the proxy timeout. Stream-safe:
+    the queue is NOT purged here; the pinned track enters play after the current
+    lookahead drains, so there is no silence gap (leadership principle #2).
+    """
+    from mammamiradio.core.models import Track
+    from mammamiradio.playlist.downloader import YOUTUBE_VIDEO_ID_RE
+
+    try:
+        body = await request.json()
+    except ValueError:
+        return JSONResponse({"ok": False, "error": "invalid JSON"}, status_code=400)
     if not isinstance(body, dict):
         return JSONResponse({"ok": False, "error": "invalid payload"}, status_code=400)
     youtube_id = str(body.get("youtube_id") or "").strip()
@@ -2086,7 +2509,7 @@ async def add_external_track(request: Request, _: None = Depends(require_admin_a
         return JSONResponse({"ok": False, "error": "invalid duration_ms"}, status_code=400)
     if not youtube_id:
         return JSONResponse({"ok": False, "error": "youtube_id required"}, status_code=400)
-    if not _re.fullmatch(r"[A-Za-z0-9_-]{11}", youtube_id):
+    if not YOUTUBE_VIDEO_ID_RE.fullmatch(youtube_id):
         return JSONResponse({"ok": False, "error": "invalid youtube_id format"}, status_code=400)
 
     state = request.app.state.station_state
@@ -2101,27 +2524,121 @@ async def add_external_track(request: Request, _: None = Depends(require_admin_a
         youtube_id=youtube_id,
     )
 
-    # Pre-download so the cache is warm before we purge the queue.
-    # Without this, the producer would hit a cache miss after the purge,
-    # causing 30-60s of silence while yt-dlp downloads.
+    # Fire the download in the background and return before the ingress proxy
+    # times out the long yt-dlp fetch. The task pins the track to play next once
+    # it is ready; see _download_admin_external_track. We capture source_revision
+    # (not playlist_revision) so a benign edit during the download — enrich,
+    # move-to-next, festival toggle — does not drop the pick.
+    dl_task = asyncio.create_task(_download_admin_external_track(track, request.app.state, state.source_revision))
+    _register_background_task(request.app.state, dl_task)
+
+    logger.info("Queueing external track (background): %s (yt:%s)", track.display, youtube_id)
+    return {"ok": True, "queued": track.display, "status": "downloading"}
+
+
+def _register_background_task(app_state: Any, task: asyncio.Task) -> None:
+    """Track a fire-and-forget task on app.state so it survives GC mid-flight and
+    can be cancelled at shutdown (main.shutdown). Shared by the admin
+    queue-from-search and listener song-request paths."""
+    tasks = getattr(app_state, "background_tasks", None)
+    if tasks is None:
+        tasks = set()
+        app_state.background_tasks = tasks
+    tasks.add(task)
+    task.add_done_callback(tasks.discard)
+
+
+async def _commit_external_download(
+    track: Any,
+    app_state: Any,
+    originating_source_revision: int,
+    *,
+    should_commit: Callable[[], bool],
+    should_pin: Callable[[], bool],
+) -> str:
+    """Download `track` and commit it to the rotation pool unless the playlist
+    SOURCE switched while downloading. Only switch_playlist bumps source_revision,
+    so benign edits (enrich / move-to-next / festival toggle) do NOT drop the
+    pick. Pins the track to play next when `should_pin()` is true. Returns one of:
+    "pinned" (committed and claimed the play-next slot), "queued" (committed to
+    the rotation pool but the play-next slot was occupied), or "dropped" (source
+    switched / consumed). Raises on download failure / cancellation for the caller
+    to surface. Shared by the admin and listener download paths."""
+    from mammamiradio.playlist.downloader import download_external_track
+
+    state = app_state.station_state
+    config = app_state.config
+    await download_external_track(track, config.cache_dir, music_dir=Path("music"))
+    # Serialize the commit decision with source switches. /api/playlist/load holds
+    # source_switch_lock across the slow load and only bumps source_revision at the
+    # very end (switch_playlist). Without this lock a download finishing mid-load
+    # would see the not-yet-bumped revision, commit to the about-to-be-replaced
+    # playlist, and then get silently wiped by switch_playlist with no notice.
+    # Acquiring the lock makes us wait out any in-flight switch, then re-check the
+    # (now bumped) revision. The block below is synchronous — it never awaits while
+    # holding the lock, so it can't deadlock the switch routes.
+    async with app_state.source_switch_lock:
+        if state.source_revision != originating_source_revision or not should_commit():
+            return "dropped"
+        state.playlist.append(track)
+        # Don't clobber a pin that's still pending — claim the play-next slot only
+        # when the caller's guard says it's free. Otherwise the track is in
+        # rotation and the caller surfaces that it's queued-behind, not next.
+        if not should_pin():
+            return "queued"
+        state.pinned_track = track
+        # Only force MUSIC when nothing else is already forced. An operator trigger
+        # (banter/ad/news) or a mode change may have set force_next; that directive
+        # plays first, then the pinned track lands on the next music slot.
+        if state.force_next is None:
+            state.force_next = SegmentType.MUSIC
+        return "pinned"
+
+
+async def _download_admin_external_track(track: Any, app_state: Any, originating_source_revision: int) -> None:
+    """Background download for an admin queue-from-search request.
+
+    Stream-safe: does NOT purge the queue. On success the track joins the rotation
+    pool and claims the play-next pin when free. A real source switch during the
+    download drops the pick; a failed download or a dropped pick records a notice
+    so the admin UI can surface it (the request already returned 200 before the
+    download finished)."""
+    state = app_state.station_state
+
+    def _notice(ok: bool, reason: str) -> None:
+        state.external_add_notices.append({"display": track.display, "ok": ok, "reason": reason, "ts": time.time()})
+
     try:
-        await download_external_track(track, config.cache_dir, music_dir=Path("music"))
+        status = await _commit_external_download(
+            track,
+            app_state,
+            originating_source_revision,
+            should_commit=lambda: True,
+            should_pin=lambda: state.pinned_track is None,
+        )
+    except asyncio.CancelledError:
+        logger.info("Admin external download cancelled: %s (yt:%s)", track.display, track.youtube_id)
+        raise
     except Exception:
-        logger.warning("External track download failed for %s (yt:%s)", track.display, youtube_id, exc_info=True)
-        return JSONResponse({"ok": False, "error": "download_failed"}, status_code=502)
+        logger.warning("External track download failed for %s (yt:%s)", track.display, track.youtube_id, exc_info=True)
+        _notice(False, "download_failed")
+        return
 
-    # Add to playlist pool so it's available for future cycles too
-    state.playlist.append(track)
+    if status == "dropped":
+        logger.info("Admin external track dropped — playlist source changed: %s", track.display)
+        _notice(False, "source_changed")
+        return
 
-    # Pin it so the producer plays it next
-    state.pinned_track = track
-    state.playlist_revision += 1
-    purged = _purge_segment_queue(request.app.state.queue)
-    state.queued_segments.clear()
-    state.force_next = SegmentType.MUSIC
+    if status == "queued":
+        # Committed to the rotation pool, but the play-next slot was already taken
+        # (a prior add or a listener request) and playlist order is NOT next-play
+        # order — so we can't promise it plays right after the current pick. Tell
+        # the operator it's in rotation rather than imminent.
+        logger.info("Added external track to rotation: %s (yt:%s)", track.display, track.youtube_id)
+        _notice(True, "added_to_rotation")
+        return
 
-    logger.info("Queued external track: %s (yt:%s)", track.display, youtube_id)
-    return {"ok": True, "queued": track.display, "purged": purged}
+    logger.info("Queued external track: %s (yt:%s)", track.display, track.youtube_id)
 
 
 # Listener-request endpoints + _download_listener_song background task moved to
@@ -2335,20 +2852,30 @@ def _public_status_payload(request: Request) -> dict:
     extends this payload with operator-only fields (queue depth, segment log,
     api costs, etc). The CROSS-PAGE INVARIANT is that any field present in
     both payloads must hold the same value at the same time — enforced by
-    tests/test_public_status_contract.py.
+    tests/web/test_public_status_contract.py.
+
+    SECOND CONSUMER — Music Assistant: the mammamiradio MA provider
+    (music-assistant/server: providers/mammamiradio/) polls /public-status to
+    drive its now-playing card, reading ``now_streaming`` (incl.
+    ``metadata.title``/``title_only``/``artist``/``album_art``/``host``),
+    ``upcoming``, ``ha_moments``, and ``brand``. Renaming or dropping any of
+    those silently degrades the merged MA provider — the MA-contract tests in
+    tests/web/test_public_status_contract.py are the drift detector.
     """
     _sync_runtime_state(request)
     state = request.app.state.station_state
     config = request.app.state.config
+    audio_format = stream_audio_metadata(config)
     runtime_health = _runtime_health_snapshot(request)
     start_time = getattr(request.app.state, "start_time", None) or 0
     uptime_sec = round(time.time() - start_time) if start_time else 0
+    now_ts = time.time()
     if state.queued_segments:
-        upcoming = [{**item, "source": "rendered_queue"} for item in state.queued_segments[:5]]
+        upcoming = [{**item, "source": "rendered_queue"} for item in state.queued_segments[:8]]
     else:
         upcoming = [
             {**item, "source": "predicted_from_playlist"}
-            for item in preview_upcoming(state, config.pacing, state.playlist, count=5)
+            for item in preview_upcoming(state, config.pacing, state.playlist, count=8)
         ]
     # HA moments for the Casa card (public-safe, no person entity details)
     ha_moments: dict | None = None
@@ -2360,7 +2887,7 @@ def _public_status_payload(request: Request) -> dict:
         }
         # Event fields: only if within retention window (person filter applied in producer)
         _retention = EVENT_RETENTION_SECONDS
-        _now = time.time()
+        _now = now_ts
         if state.ha_last_event_ts > 0 and (_now - state.ha_last_event_ts) < _retention:
             ha_moments["last_event_label"] = state.ha_last_event_label
             ha_moments["last_event_ago_min"] = max(1, round((_now - state.ha_last_event_ts) / 60))
@@ -2368,23 +2895,22 @@ def _public_status_payload(request: Request) -> dict:
         if not ha_moments.get("mood") and not ha_moments.get("weather") and not ha_moments.get("last_event_label"):
             ha_moments = None
 
+    playback = _status_now_playback(state.now_streaming, now_ts)
     return {
         "station": config.station.name,
         "running_jokes": list(state.running_jokes),
-        "now_streaming": state.now_streaming,
+        **playback,
         "current_source": _serialize_source(state.playlist_source),
         "golden_path": _golden_path_status(config, state),
         "runtime_health": runtime_health,
         "session_stopped": state.session_stopped,
-        "stream_log": [
-            {"type": e.type, "label": e.label, "timestamp": e.timestamp, "metadata": e.metadata}
-            for e in state.stream_log
-        ],
+        "stream_log": [_serialize_stream_log_entry(e) for e in state.stream_log],
         "upcoming": upcoming,
         "upcoming_mode": "queued" if upcoming else "building",
         "stream": {
             "frequency": config.brand.frequency,
-            "bitrate_kbps": config.audio.bitrate,
+            "bitrate_kbps": audio_format["bitrate_kbps"],
+            "audio_format": audio_format,
         },
         "playback_actions": {
             "skip_ready": bool(state.now_streaming),
@@ -2451,15 +2977,47 @@ async def create_clip(request: Request):
 
     clips_dir = config.cache_dir / "clips"
 
-    # Cap total clips on disk to prevent unbounded writes
+    # Cap total clips on disk to prevent unbounded writes; prune .json sidecars too
     existing = sorted(clips_dir.glob("*.mp3"), key=lambda f: f.stat().st_mtime) if clips_dir.is_dir() else []
     if len(existing) >= CLIP_MAX_SAVED:
         for old in existing[: len(existing) - (CLIP_MAX_SAVED - 1)]:
             old.unlink(missing_ok=True)
+            old.with_suffix(".json").unlink(missing_ok=True)
 
     clip_id = save_clip(clip_data, clips_dir)
+
+    # Capture track context at clip creation time as a JSON sidecar.
+    # Best-effort: missing now_streaming or schema drift falls back to station_name.
+    import json as _json
+
+    station_state = getattr(request.app.state, "station_state", None)
+    now_streaming = getattr(station_state, "now_streaming", None) or {}
+    # metadata is producer-managed and normally a dict, but a None or an
+    # unexpected scalar would crash the .get() below and turn a successful
+    # clip into a 500. Normalize to dict before reading fields.
+    raw_meta = now_streaming.get("metadata", {}) if isinstance(now_streaming, dict) else {}
+    meta = raw_meta if isinstance(raw_meta, dict) else {}
+    station_name = config.display_station_name
+    track_title = str(meta.get("title_only") or meta.get("title") or "").strip()
+    track_artist = str(meta.get("artist") or "").strip()
+    sidecar = {
+        "station_name": station_name,
+        "track_title": track_title,
+        "track_artist": track_artist,
+        "created_at": int(time.time()),
+    }
+    try:
+        (clips_dir / f"{clip_id}.json").write_text(_json.dumps(sidecar))
+    except OSError as exc:
+        logger.warning("clip sidecar write failed for %s: %s", clip_id, exc)
+
     cleanup_old_clips(clips_dir, max_age_hours=CLIP_TTL_SECONDS // 3600)
-    return {"ok": True, "clip_id": clip_id, "url": f"/clips/{clip_id}.mp3"}
+    return {
+        "ok": True,
+        "clip_id": clip_id,
+        "url": f"/clips/{clip_id}.mp3",
+        "share_url": f"/clips/{clip_id}",
+    }
 
 
 @router.get("/clips/{clip_id}.mp3")
@@ -2488,6 +3046,73 @@ async def serve_clip(clip_id: str, request: Request):
         return JSONResponse({"ok": False, "error": "Clip expired"}, status_code=404)
 
     return FileResponse(clip_path, media_type="audio/mpeg")
+
+
+@router.get("/clips/{clip_id}")
+async def clip_landing(clip_id: str, request: Request):
+    """HTML landing page for a shared clip — OG meta + audio player.
+
+    Expired clips return HTTP 200 with a graceful "expired" state, not 404.
+    OG scrapers (WhatsApp, iMessage) cache 404s permanently; a 200 with
+    "Questo momento è passato" preserves the brand and points to the live stream.
+    """
+    import json as _json
+
+    from mammamiradio.scheduling.clip import CLIP_TTL_SECONDS
+
+    if "/" in clip_id or "\\" in clip_id or ".." in clip_id:
+        return JSONResponse({"ok": False, "error": "Invalid clip ID"}, status_code=400)
+
+    config = request.app.state.config
+    clips_dir = config.cache_dir / "clips"
+    clip_path = clips_dir / f"{clip_id}.mp3"
+    sidecar_path = clips_dir / f"{clip_id}.json"
+
+    # Single stat() instead of exists() then stat() — saves a syscall and
+    # avoids the TOCTOU window between the two. Missing clip → expired page.
+    expired = False
+    try:
+        if time.time() - clip_path.stat().st_mtime > CLIP_TTL_SECONDS:
+            clip_path.unlink(missing_ok=True)
+            sidecar_path.unlink(missing_ok=True)
+            expired = True
+    except FileNotFoundError:
+        expired = True
+
+    # Sidecar read is best-effort. read_text() already raises FileNotFoundError
+    # when missing, so an explicit exists() check would be a redundant syscall.
+    # _json.loads can return a list/string/number for valid-but-wrong-shape
+    # files; isinstance guard keeps later .get() calls from crashing the route.
+    sidecar: dict = {}
+    try:
+        loaded = _json.loads(sidecar_path.read_text())
+        if isinstance(loaded, dict):
+            sidecar = loaded
+    except (FileNotFoundError, OSError, ValueError):
+        sidecar = {}
+
+    ingress_prefix = _sanitize_ingress_prefix(request.headers.get("X-Ingress-Path", ""))
+    public_base_url = f"{str(request.base_url).rstrip('/')}{ingress_prefix}"
+    station_name = sidecar.get("station_name") or config.display_station_name
+    track_title = sidecar.get("track_title", "")
+    track_artist = sidecar.get("track_artist", "")
+
+    return _TEMPLATES.TemplateResponse(
+        request,
+        "clip.html",
+        {
+            "clip_id": clip_id,
+            "expired": expired,
+            "station_name": station_name,
+            "track_title": track_title,
+            "track_artist": track_artist,
+            "clip_mp3_url": f"{public_base_url}/clips/{clip_id}.mp3",
+            "og_image_url": f"{public_base_url}/og-card.png",
+            "station_url": f"{public_base_url}/listen" if ingress_prefix else f"{public_base_url}/",
+            "ingress_prefix": ingress_prefix,
+            "asset_version": _ASSET_VERSION,
+        },
+    )
 
 
 @router.get("/healthz")
@@ -2558,6 +3183,8 @@ async def status(request: Request, _: None = Depends(require_admin_access)):
     station_mode = classify_station_mode(config, state)
     payload = _public_status_payload(request)
     runtime_health = _runtime_health_snapshot(request)
+    provider_health = _provider_health_snapshot(config, state)
+    runtime_status = _runtime_status_snapshot(request, runtime_health=runtime_health, provider_health=provider_health)
     payload.update(
         {
             "queue_depth": segment_queue.qsize(),
@@ -2569,21 +3196,13 @@ async def status(request: Request, _: None = Depends(require_admin_access)):
             "last_banter_script": state.last_banter_script,
             "last_ad_script": state.last_ad_script,
             "ha_context": state.ha_context if state.ha_context else None,
-            "ha_details": {
-                "mood": state.ha_home_mood or None,
-                "weather_arc": state.ha_weather_arc or None,
-                "events_summary": state.ha_events_summary or None,
-                "pending_directive": state.ha_pending_directive or None,
-                "recent_event_count": state.ha_recent_event_count,
-                "last_event_label": state.ha_last_event_label or None,
-                "mood_en": state.ha_home_mood_en or None,
-                "weather_arc_en": state.ha_weather_arc_en or None,
-                "events_summary_en": state.ha_events_summary_en or None,
-                "last_event_label_en": state.ha_last_event_label_en or None,
-            }
-            if state.ha_context
-            else None,
+            "ha_details": _ha_details_payload(state),
             "pending_actions": list(state.pending_actions)[-10:] or None,
+            # Background queue-from-search outcomes the admin couldn't see
+            # synchronously; the UI toasts new entries by ts. Return the whole
+            # bounded deque (maxlen 10) so a burst between two polls can't evict an
+            # un-toasted entry past the client watermark. See admin.html.
+            "external_add_notices": list(state.external_add_notices) or None,
             "station_mode": station_mode,
             "producer_errors": [
                 {"type": e.type, "label": e.label, "metadata": e.metadata}
@@ -2616,7 +3235,8 @@ async def status(request: Request, _: None = Depends(require_admin_access)):
                 "total": state.listeners_total,
             },
             "runtime_health": runtime_health,
-            "provider_health": _provider_health_snapshot(config, state),
+            "runtime_status": runtime_status,
+            "provider_health": provider_health,
             "chaos_mode": {
                 "enabled": state.chaos_mode_active,
                 "pending": state.chaos_pending.value if state.chaos_pending else "",

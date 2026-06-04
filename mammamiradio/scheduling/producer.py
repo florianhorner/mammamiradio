@@ -8,7 +8,9 @@ import datetime
 import logging
 import os
 import random
+import re
 import shutil
+import time
 from collections import deque
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, replace
@@ -16,11 +18,12 @@ from functools import partial
 from pathlib import Path
 from uuid import uuid4
 
+import httpx
+
 import mammamiradio.hosts.scriptwriter as _sw
 from mammamiradio.audio.audio_quality import AudioQualityError, AudioToolError, validate_segment_audio
 from mammamiradio.audio.imaging import ImagingLibrary
 from mammamiradio.audio.normalizer import (
-    _ffprobe_duration_sec,
     concat_files,
     crossfade_voice_over_music,
     generate_bumper_jingle,
@@ -34,6 +37,7 @@ from mammamiradio.audio.normalizer import (
     mix_voice_with_bed,
     mix_voice_with_sting,
     normalize,
+    probe_duration_sec,
     save_track_metadata,
 )
 from mammamiradio.audio.tts import synthesize, synthesize_ad, synthesize_dialogue
@@ -41,12 +45,14 @@ from mammamiradio.core.config import StationConfig
 from mammamiradio.core.models import (
     AdHistoryEntry,
     ChaosSubtype,
+    InterruptSpec,
     Segment,
     SegmentType,
     StationState,
     Track,
 )
 from mammamiradio.home.ha_context import (
+    ENTITY_LABELS,
     GOLD_ENTITIES,
     HomeContext,
     check_reactive_triggers,
@@ -86,7 +92,7 @@ class RenderedMusicTrack:
 
 def _probe_segment_duration(path: Path) -> float:
     """Run ffprobe on path and return duration in seconds; 0.0 if probe fails."""
-    return _ffprobe_duration_sec(path) or 0.0
+    return probe_duration_sec(path) or 0.0
 
 
 def _is_tmp_render(segment: Segment, tmp_dir: Path) -> bool:
@@ -237,6 +243,14 @@ def _banter_title(script: list[dict] | None, *, canned: bool) -> str:
     return "Banter"
 
 
+def _expected_banter_duration_sec(texts: list[str]) -> float | None:
+    """Conservative floor for generated multi-line host exchanges."""
+    if len(texts) <= 1:
+        return None
+    word_count = sum(len(re.findall(r"\w+", text)) for text in texts)
+    return 0.8 * max(len(texts) * 2.0, word_count * 0.22)
+
+
 def _ad_title(brands: list[str] | None) -> str:
     """Produce a user-facing label for an AD break.
 
@@ -292,6 +306,14 @@ async def _maybe_start_session(state: StationState) -> None:
 # Directory for pre-bundled banter and ad clips that ship with the package.
 # These provide station personality on day 1 without an Anthropic API key.
 _DEMO_ASSETS_DIR = Path(__file__).resolve().parent.parent / "assets" / "demo"
+
+# SFX assets (alert jingle used as interrupt bridge audio).
+_SFX_DIR = Path(__file__).resolve().parent.parent / "assets" / "sfx"
+
+# Global cooldown for interrupt firing — kept separate from per-entity
+# spec.cooldown so a timer configured with cooldown=300 doesn't suppress a
+# different timer's interrupt for 5 minutes.
+_GLOBAL_INTERRUPT_COOLDOWN_SECONDS = 60
 
 
 # Tracks the most recent music file to avoid repeated glob scans on every banter.
@@ -643,6 +665,132 @@ async def prewarm_first_segment(
         return False
 
 
+async def _fire_interrupt(
+    state: StationState,
+    spec: InterruptSpec,
+    queue: asyncio.Queue[Segment],
+    skip_event: asyncio.Event | None,
+    *,
+    enforce_global_cooldown: bool = False,
+    bridge_tmp_dir: Path | None = None,
+) -> bool:
+    """Immediately interrupt the stream with bridge audio + pissed banter.
+
+    Uses alert.mp3 or a generated tone as a bridge clip (plays in ≤2s), drains
+    the lookahead queue so no buffered music plays between bridge and banter,
+    injects the directive, and fires skip_event to cut the current segment.
+
+    Returns True if the interrupt fired, False if suppressed by the global
+    cooldown gate. Per-entity cooldowns are enforced upstream by
+    check_reactive_triggers.
+    """
+    now = time.time()
+    if enforce_global_cooldown:
+        elapsed = now - state.last_interrupt_ts
+        if elapsed < _GLOBAL_INTERRUPT_COOLDOWN_SECONDS:
+            logger.info(
+                "Interrupt suppressed — global cooldown %ds remaining",
+                int(_GLOBAL_INTERRUPT_COOLDOWN_SECONDS - elapsed),
+            )
+            return False
+    state.last_interrupt_ts = now
+
+    # Release any bridge clip a prior interrupt generated but never played.
+    if state.interrupt_slot_ephemeral and state.interrupt_slot is not None:
+        state.interrupt_slot.unlink(missing_ok=True)
+    state.interrupt_slot = None
+    state.interrupt_slot_ephemeral = False
+
+    # Drain the lookahead queue so no buffered music leaks between bridge and banter.
+    purged = 0
+    while not queue.empty():
+        try:
+            seg = queue.get_nowait()
+            if seg.ephemeral:
+                seg.path.unlink(missing_ok=True)
+            queue.task_done()
+            purged += 1
+        except Exception:
+            break
+    if purged:
+        logger.info("Interrupt: purged %d buffered segments", purged)
+    state.queued_segments.clear()
+
+    # Inject directive + pissed tone, then cut the current segment FIRST so the
+    # interrupt feels immediate. Bridge-tone generation (below) can take seconds
+    # on a loaded Pi — it must never block the skip.
+    state.ha_pending_directive = spec.directive
+    state.chaos_pending = ChaosSubtype.URGENT_INTERRUPT
+    state.force_next = SegmentType.BANTER  # safety belt if chaos_pending is raced
+    state.chaos_cutover_epoch += 1
+    if skip_event is not None:
+        skip_event.set()
+
+    # Bridge audio: canned alert jingle for immediate playback. Best-effort —
+    # the playback loop picks up interrupt_slot on its next iteration, so a
+    # late or missing bridge just means the banter starts a beat sooner.
+    alert_sfx = _SFX_DIR / "alert.mp3"
+    if alert_sfx.exists():
+        state.interrupt_slot = alert_sfx
+    else:
+        tmp_dir = bridge_tmp_dir or Path(os.getenv("MAMMAMIRADIO_TMP_DIR", "/tmp"))
+        tmp_dir.mkdir(parents=True, exist_ok=True)
+        bridge_path = tmp_dir / f"interrupt_bridge_{uuid4().hex[:8]}.mp3"
+        try:
+            await asyncio.to_thread(generate_tone, bridge_path, 1046.5, 0.75)
+            state.interrupt_slot = bridge_path
+            state.interrupt_slot_ephemeral = True
+        except Exception:
+            bridge_path.unlink(missing_ok=True)
+            logger.warning("Interrupt bridge generation failed; continuing without bridge", exc_info=True)
+
+    logger.info(
+        "Interrupt fired: directive=%r urgency=%r bridge=%s",
+        spec.directive,
+        spec.urgency,
+        state.interrupt_slot,
+    )
+    return True
+
+
+def _emit_segment_prepared(
+    state,
+    *,
+    segment_id: str,
+    role: str,
+    final_script: list[str],
+    collector,
+) -> None:
+    """Tier-2: record the FINAL spoken script (post-processing) for one segment.
+
+    Joins back to the Tier-1 ``llm_call`` rows via ``llm_call_refs`` (the ids the
+    collector accumulated while the segment's calls fanned out) and forward to the
+    Tier-3 ``stream_result`` row via the shared ``segment_id``. Enabled-check first;
+    never raises into the producer.
+    """
+    led = getattr(state, "ledger", None)
+    if led is None or not led.enabled:
+        return
+    try:
+        import time as _time
+
+        from mammamiradio.core.ledger import SCHEMA_VERSION
+
+        led.record(
+            {
+                "schema_version": SCHEMA_VERSION,
+                "ts": _time.time(),
+                "record": "segment_prepared",
+                "segment_id": segment_id,
+                "role": role,
+                "final_script": final_script,
+                "llm_call_refs": [c.get("llm_call_id") for c in collector.calls] if collector else [],
+            }
+        )
+    except Exception as exc:  # pragma: no cover - provenance must never break audio
+        logger.debug("Provenance Tier-2 emit failed: %s", exc)
+
+
 async def run_producer(
     queue: asyncio.Queue[Segment],
     state: StationState,
@@ -704,6 +852,8 @@ async def run_producer(
                             current_track=state.current_track,
                             listeners_active=state.listeners_active,
                             session_stopped=state.session_stopped,
+                            queue_depth=len(state.queued_segments),
+                            station_name=config.display_station_name,
                         )
                         interval = 30.0
                     except Exception:
@@ -714,6 +864,77 @@ async def run_producer(
         producer_task = asyncio.current_task()
         if producer_task is not None:
             producer_task.add_done_callback(lambda _task: _ha_heartbeat_task.cancel())
+
+        # Lightweight timer interrupt poll — runs every timer_poll_interval seconds.
+        # Only fetches the timer entity states, not the full 200+ entity context.
+        if config.homeassistant.timer_interrupts:
+            _timer_entity_ids = {t.entity_id for t in config.homeassistant.timer_interrupts}
+            # Pre-populate old_states for timer entities with "idle" so the first
+            # active→idle transition is detected correctly (cold-start fix).
+            _timer_old_states: dict[str, dict] = {eid: {"state": "idle"} for eid in _timer_entity_ids}
+
+            async def _timer_poll_loop() -> None:
+                poll_interval = max(1.0, float(config.homeassistant.timer_poll_interval))
+                client = httpx.AsyncClient(timeout=5.0)
+                try:
+                    while True:
+                        await asyncio.sleep(poll_interval)
+                        if state.session_stopped:
+                            continue
+                        try:
+                            base = config.homeassistant.url.rstrip("/")
+                            headers = {
+                                "Authorization": f"Bearer {config.ha_token}",
+                                "Content-Type": "application/json",
+                            }
+                            timer_states: dict[str, dict] = {}
+                            for eid in _timer_entity_ids:
+                                r = await client.get(f"{base}/api/states/{eid}", headers=headers)
+                                if r.status_code == 200:
+                                    timer_states[eid] = r.json()
+                                else:
+                                    logger.warning(
+                                        "Timer poll skipped %s — HA returned %s",
+                                        eid,
+                                        r.status_code,
+                                    )
+                            from mammamiradio.home.ha_enrichment import diff_states
+
+                            timer_events = diff_states(
+                                _timer_old_states,
+                                timer_states,
+                                None,
+                                entity_labels={eid: eid for eid in _timer_entity_ids},
+                                state_translations={},
+                                now=time.time(),
+                            )
+                            _timer_old_states.update(timer_states)
+                            if timer_events:
+                                result = check_reactive_triggers(
+                                    timer_events,
+                                    timer_states,
+                                    config.homeassistant.timer_interrupts,
+                                )
+                                if isinstance(result, InterruptSpec):
+                                    await _fire_interrupt(
+                                        state,
+                                        result,
+                                        queue,
+                                        skip_event,
+                                        enforce_global_cooldown=True,
+                                        bridge_tmp_dir=config.tmp_dir,
+                                    )
+                        except asyncio.CancelledError:
+                            raise
+                        except Exception:
+                            logger.debug("Timer poll error (non-fatal)", exc_info=True)
+                finally:
+                    await client.aclose()
+
+            _timer_poll_task = asyncio.create_task(_timer_poll_loop())
+            _track_ha_task(_timer_poll_task)
+            if producer_task is not None:
+                producer_task.add_done_callback(lambda _task: _timer_poll_task.cancel())
 
     while True:
         if state.session_stopped:
@@ -727,6 +948,8 @@ async def run_producer(
                             current_track=None,
                             listeners_active=state.listeners_active,
                             session_stopped=True,
+                            queue_depth=0,
+                            station_name=config.display_station_name,
                         )
                     )
                 )
@@ -931,9 +1154,18 @@ async def run_producer(
             state.ha_home_mood_en = ha_cache.mood_en
             state.ha_weather_arc_en = ha_cache.weather_arc_en
             state.ha_events_summary_en = ha_cache.events_summary_en
-            # Dashboard HA moments: pick the most notable recent non-person event
+            state.ha_scored_entities = [entity.to_status_dict() for entity in ha_cache.scored]
+            state.ha_denylist_hits = dict(ha_cache.denylist_hits)
+            state.ha_catalog_hit_rate = ha_cache.catalog_hit_rate
+            # Dashboard HA moments: pick the most notable recent non-person event.
+            # Restrict listener-visible events to the curated set: pre-Phase-A only
+            # vetted entities could surface here, and Phase A's full-snapshot ingest
+            # would otherwise leak any HA entity's friendly_name (e.g.
+            # binary_sensor.bedroom_motion, lock.gun_safe) to /public-status.
             state.ha_recent_event_count = len(ha_cache.events)
-            _public_events = [e for e in ha_cache.events if not e.entity_id.startswith("person.")]
+            _public_events = [
+                e for e in ha_cache.events if not e.entity_id.startswith("person.") and e.entity_id in ENTITY_LABELS
+            ]
             if _public_events:
                 _gold_set = set(GOLD_ENTITIES)
                 best = max(
@@ -945,16 +1177,59 @@ async def run_producer(
                 )
                 state.ha_last_event_label = best.label
                 state.ha_last_event_ts = best.timestamp
-                state.ha_last_event_label_en = ha_cache.last_event_label_en or best.label
+                scored_labels_en = {entity["entity_id"]: entity["label"] for entity in state.ha_scored_entities}
+                state.ha_last_event_label_en = scored_labels_en.get(
+                    best.entity_id, ha_cache.last_event_label_en or best.label
+                )
             else:
                 state.ha_last_event_label = ""
                 state.ha_last_event_ts = 0.0
                 state.ha_last_event_label_en = ""
-            # Phase 4: only set directive if none is pending (first match wins)
+            # Phase 4: reactive triggers — interrupt takes priority over ambient directives
             if not state.ha_pending_directive:
-                directive = check_reactive_triggers(ha_cache.events, ha_cache.raw_states)
-                if directive:
-                    state.ha_pending_directive = directive
+                result = check_reactive_triggers(
+                    ha_cache.events,
+                    ha_cache.raw_states,
+                    config.homeassistant.timer_interrupts or None,
+                )
+                if isinstance(result, InterruptSpec):
+                    await _fire_interrupt(
+                        state,
+                        result,
+                        queue,
+                        skip_event,
+                        enforce_global_cooldown=True,
+                        bridge_tmp_dir=config.tmp_dir,
+                    )
+                elif isinstance(result, str):
+                    state.ha_pending_directive = result
+
+            # Impossible Moments v2 (A): fold new events into the evening ledger
+            # (watermark-deduped) and, for banter only, surface one eligible
+            # running-gag. Ads stay gag-free in v0. The ledger persists across
+            # the addon's frequent restarts.
+            if state.evening_ledger is not None:
+                _now = time.time()
+                state.evening_ledger.observe(ha_cache.events, now=_now)
+                if seg_type == SegmentType.BANTER:
+                    # Offer (don't spend) — the cooldown is marked in the banter
+                    # success callback only if generated banter actually airs, so
+                    # an LLM failure that falls back to a canned clip does not burn
+                    # the callback.
+                    offered = state.evening_ledger.offer_gag(now=_now)
+                    if offered is not None:
+                        state.ha_running_gag_key, state.ha_running_gag = offered
+                    else:
+                        state.ha_running_gag = ""
+                        state.ha_running_gag_key = ""
+                else:
+                    state.ha_running_gag = ""
+                    state.ha_running_gag_key = ""
+                state.evening_ledger.save_if_dirty(config.cache_dir)
+
+        if generation_chaos_epoch != state.chaos_cutover_epoch:
+            logger.info("Restarting producer cycle after interrupt cutover")
+            continue
 
         try:
             if seg_type == SegmentType.MUSIC:
@@ -1200,20 +1475,46 @@ async def run_producer(
                                 logger.warning("Impossible TTS failed, falling back to canned: %s", exc)
                                 canned = _pick_canned_clip("banter", state=state)
 
+                banter_expected_min_duration_sec: float | None = None
+                banter_expected_line_count: int | None = None
+                _banter_attempt_id: str = ""
+
                 if canned:
                     logger.info("Using pre-bundled banter clip: %s", canned.name)
                     audio_path = canned
                     state.last_banter_script = [{"host": "Radio", "text": "(pre-recorded banter)"}]
                 elif not impossible_tts:
                     try:
+                        from mammamiradio.core.provenance_ctx import (
+                            CallCollector,
+                            reset_collector,
+                            set_collector,
+                        )
+
                         if chaos_subtype is not None:
-                            lines, listener_request_commit = await _sw.write_banter(
+                            _banter_attempt_id = uuid4().hex
+                            _banter_collector = CallCollector(attempt_id=_banter_attempt_id)
+                            _prov_tok = set_collector(_banter_collector)
+                            try:
+                                lines, listener_request_commit = await _sw.write_banter(
+                                    state,
+                                    config,
+                                    is_new_listener=_is_new_listener,
+                                    is_first_listener=_is_first_listener,
+                                    chaos_subtype=chaos_subtype,
+                                )
+                            finally:
+                                reset_collector(_prov_tok)
+                            line_texts = [text for _host, text in lines]
+                            _emit_segment_prepared(
                                 state,
-                                config,
-                                is_new_listener=_is_new_listener,
-                                is_first_listener=_is_first_listener,
-                                chaos_subtype=chaos_subtype,
+                                segment_id=_banter_attempt_id,
+                                role="banter",
+                                final_script=line_texts,
+                                collector=_banter_collector,
                             )
+                            banter_expected_min_duration_sec = _expected_banter_duration_sec(line_texts)
+                            banter_expected_line_count = len(line_texts) if len(line_texts) > 1 else None
                             audio_path = await synthesize_dialogue(lines, config.tmp_dir)
                             state.last_banter_script = [
                                 {
@@ -1226,16 +1527,32 @@ async def run_producer(
                             ]
                         else:
                             # Generate transition voice + banter in parallel
-                            transition_task = _sw.write_transition(state, config, next_segment="banter")
-                            banter_task = _sw.write_banter(
+                            _banter_attempt_id = uuid4().hex
+                            _banter_collector = CallCollector(attempt_id=_banter_attempt_id)
+                            _prov_tok = set_collector(_banter_collector)
+                            try:
+                                transition_task = _sw.write_transition(state, config, next_segment="banter")
+                                banter_task = _sw.write_banter(
+                                    state,
+                                    config,
+                                    is_new_listener=_is_new_listener,
+                                    is_first_listener=_is_first_listener,
+                                )
+                                (trans_host, trans_text), (lines, listener_request_commit) = await asyncio.gather(
+                                    transition_task, banter_task
+                                )
+                            finally:
+                                reset_collector(_prov_tok)
+                            line_texts = [trans_text] + [text for _host, text in lines]
+                            _emit_segment_prepared(
                                 state,
-                                config,
-                                is_new_listener=_is_new_listener,
-                                is_first_listener=_is_first_listener,
+                                segment_id=_banter_attempt_id,
+                                role="banter",
+                                final_script=line_texts,
+                                collector=_banter_collector,
                             )
-                            (trans_host, trans_text), (lines, listener_request_commit) = await asyncio.gather(
-                                transition_task, banter_task
-                            )
+                            banter_expected_min_duration_sec = _expected_banter_duration_sec(line_texts)
+                            banter_expected_line_count = len(line_texts) if len(line_texts) > 1 else None
 
                             # Synthesize transition + dialogue in parallel
                             trans_voice_path = config.tmp_dir / f"trans_{uuid4().hex[:8]}.mp3"
@@ -1270,11 +1587,24 @@ async def run_producer(
                             # Concat: transition + banter (both pre-normalized)
                             audio_path = config.tmp_dir / f"banter_full_{uuid4().hex[:8]}.mp3"
                             loop = asyncio.get_running_loop()
-                            await loop.run_in_executor(
-                                None, concat_files, [trans_voice_path, banter_path], audio_path, 200, False
-                            )
-                            trans_voice_path.unlink(missing_ok=True)
-                            banter_path.unlink(missing_ok=True)
+                            try:
+                                await loop.run_in_executor(
+                                    None,
+                                    partial(
+                                        concat_files,
+                                        [trans_voice_path, banter_path],
+                                        audio_path,
+                                        200,
+                                        False,
+                                        strict_duration=True,
+                                    ),
+                                )
+                            except Exception:
+                                audio_path.unlink(missing_ok=True)
+                                raise
+                            finally:
+                                trans_voice_path.unlink(missing_ok=True)
+                                banter_path.unlink(missing_ok=True)
 
                             state.recent_transition_texts.append(trans_text)
                             state.last_banter_script = [
@@ -1287,6 +1617,8 @@ async def run_producer(
                             logger.warning("Chaos audio generation failed; trying canned fallback: %s", exc)
                             canned = _pick_canned_clip("banter", state=state)
                             if canned:
+                                banter_expected_min_duration_sec = None
+                                banter_expected_line_count = None
                                 audio_path = canned
                                 state.last_banter_script = [
                                     {
@@ -1313,7 +1645,18 @@ async def run_producer(
 
                 if not os.environ.get("MAMMAMIRADIO_SKIP_QUALITY_GATE"):
                     try:
-                        await loop.run_in_executor(None, validate_segment_audio, audio_path, SegmentType.BANTER)
+                        expected_min_duration_sec = None if canned else banter_expected_min_duration_sec
+                        expected_line_count = None if canned else banter_expected_line_count
+                        await loop.run_in_executor(
+                            None,
+                            partial(
+                                validate_segment_audio,
+                                audio_path,
+                                SegmentType.BANTER,
+                                expected_min_duration_sec=expected_min_duration_sec,
+                                expected_line_count=expected_line_count,
+                            ),
+                        )
                     except AudioToolError as exc:
                         logger.warning("Audio tool unavailable, skipping banter quality check: %s", exc)
                     except AudioQualityError as exc:
@@ -1420,6 +1763,7 @@ async def run_producer(
                         "chaos_subtype": chaos_subtype.value if chaos_subtype else "",
                         "chaos_degraded": state.chaos_last_degraded_reason if chaos_subtype else "",
                         "has_music_tail": bool(has_music_tail),
+                        "ledger_segment_id": _banter_attempt_id or None,
                     },
                     ephemeral=canned is None,
                 )
@@ -1430,12 +1774,22 @@ async def run_producer(
                     _new_listener_count=_new_listener_count,
                     _listener_request_commit=listener_request_commit,
                     _used_generated_banter=(canned is None and not impossible_tts),
+                    _gag_key=state.ha_running_gag_key,
+                    _ledger=state.evening_ledger,
+                    _cache_dir=config.cache_dir,
                 ) -> None:
                     state.after_banter()
                     if _is_new_listener:
                         state.new_listeners_pending = max(0, state.new_listeners_pending - _new_listener_count)
                     if _used_generated_banter and _listener_request_commit is not None:
                         _listener_request_commit.apply(state)
+                    # Spend the running-gag cooldown only when generated banter
+                    # (which carried the gag) actually airs — not on canned or
+                    # failed-LLM fallbacks. Honors EveningLedger.offer_gag's contract.
+                    if _used_generated_banter and _ledger is not None and _gag_key:
+                        _ledger.mark_spoken(_gag_key, now=time.time())
+                        _ledger.save_if_dirty(_cache_dir)
+                    state.ha_running_gag_key = ""
 
                 success_callback = _banter_callback
 
@@ -1747,20 +2101,32 @@ async def run_producer(
                     return bumper_in, mid_bumpers
 
                 # Fan out: intro + LLM scripts + bumpers all in parallel
-                (
-                    (intro_parts, intro_text, intro_has_music_tail),
-                    scripts,
-                    (bumper_in, mid_bumpers),
-                ) = await asyncio.gather(
-                    _build_intro(),
-                    asyncio.gather(
-                        *(
-                            _sw.write_ad(brand, vm, state, config, ad_format=af, sonic=sn)
-                            for brand, af, sn, vm in spot_params
-                        )
-                    ),
-                    _build_bumpers(),
+                from mammamiradio.core.provenance_ctx import (
+                    CallCollector,
+                    reset_collector,
+                    set_collector,
                 )
+
+                _ad_attempt_id = uuid4().hex
+                _ad_collector = CallCollector(attempt_id=_ad_attempt_id, ad_break_id=_ad_attempt_id)
+                _ad_prov_tok = set_collector(_ad_collector)
+                try:
+                    (
+                        (intro_parts, intro_text, intro_has_music_tail),
+                        scripts,
+                        (bumper_in, mid_bumpers),
+                    ) = await asyncio.gather(
+                        _build_intro(),
+                        asyncio.gather(
+                            *(
+                                _sw.write_ad(brand, vm, state, config, ad_format=af, sonic=sn, spot_index=i)
+                                for i, (brand, af, sn, vm) in enumerate(spot_params)
+                            )
+                        ),
+                        _build_bumpers(),
+                    )
+                finally:
+                    reset_collector(_ad_prov_tok)
 
                 # ── PHASE 2: Fan out all ad TTS synthesis in parallel ──
                 ad_paths = await asyncio.gather(
@@ -1797,6 +2163,14 @@ async def run_producer(
                     )
                     if spot_idx < num_spots - 1 and spot_idx < len(mid_bumpers):
                         break_parts.append(mid_bumpers[spot_idx])
+
+                _emit_segment_prepared(
+                    state,
+                    segment_id=_ad_attempt_id,
+                    role="ad_break",
+                    final_script=break_texts,
+                    collector=_ad_collector,
+                )
 
                 # ── PHASE 4: Closing bumper + outro in parallel ──
                 bumper_out = config.tmp_dir / f"bumper_out_{uuid4().hex[:8]}.mp3"
@@ -1868,6 +2242,7 @@ async def run_producer(
                         "roles_used": break_roles,
                         "title": _ad_title(break_brands),
                         "has_music_tail": bool(intro_has_music_tail),
+                        "ledger_segment_id": _ad_attempt_id,
                     },
                 )
                 _bound_brands = break_brands
@@ -1968,13 +2343,27 @@ async def run_producer(
                 logger.info("Discarding stale %s segment after chaos cutover", seg_type.value)
                 _unlink_if_tmp_render(segment, config.tmp_dir)
                 continue
+            # Stable per-segment id: stamped on the Segment metadata AND the
+            # shadow-list entry so /api/queue/remove can target a segment by
+            # identity rather than position (the position shifts every time the
+            # streamer consumes the head).
+            queue_id = uuid4().hex
+            segment.metadata["queue_id"] = queue_id
             if not await _queue_segment(segment):
                 continue
             if chaos_subtype is not None and state.chaos_pending == chaos_subtype:
                 state.chaos_pending = None
+            if chaos_subtype == ChaosSubtype.URGENT_INTERRUPT:
+                state.ha_pending_directive = ""
+                # The safety-belt force_next was set when the interrupt fired.
+                # chaos_pending already produced the banter; clearing here
+                # prevents the producer from queueing an extra banter next cycle.
+                if state.force_next == SegmentType.BANTER:
+                    state.force_next = None
             _segments_produced += 1
             state.queued_segments.append(
                 {
+                    "id": queue_id,
                     "type": segment.type.value,
                     "label": segment.metadata.get("title", segment.type.value),
                     "spotify_id": segment.metadata.get("spotify_id", ""),
@@ -1983,6 +2372,9 @@ async def run_producer(
                     "source_kind": segment.metadata.get("source_kind", ""),
                 }
             )
+            # Queue appended → up_next changed → integration consumers polling
+            # ``changed_at`` need to see this even without a segment transition.
+            state.last_state_change_at = time.time()
             if "error" not in segment.metadata:
                 if success_callback:
                     success_callback()

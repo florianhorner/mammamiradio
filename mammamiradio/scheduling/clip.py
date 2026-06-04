@@ -62,7 +62,11 @@ def save_clip(clip_data: bytes, clips_dir: Path) -> str:
 
 
 def cleanup_old_clips(clips_dir: Path, max_age_hours: int = 24) -> int:
-    """Delete clips older than *max_age_hours*. Returns count removed."""
+    """Delete clips older than *max_age_hours*. Returns count of MP3s removed.
+
+    Also prunes the matching ``{clip_id}.json`` sidecar so metadata does not
+    accumulate after the audio is gone.
+    """
     if not clips_dir.is_dir():
         return 0
     cutoff = time.time() - max_age_hours * 3600
@@ -71,6 +75,7 @@ def cleanup_old_clips(clips_dir: Path, max_age_hours: int = 24) -> int:
         try:
             if f.stat().st_mtime < cutoff:
                 f.unlink(missing_ok=True)
+                f.with_suffix(".json").unlink(missing_ok=True)
                 removed += 1
         except OSError:
             continue

@@ -104,6 +104,27 @@ When the playlist source is charts, the producer checks every 90 minutes and mer
 
 Important design choice: there is one shared timeline. Listeners tune into the current live point, not their own private playback state.
 
+### Stream audio format metadata
+
+External integrations should call `GET /public-status` before playback and read
+`stream.audio_format` to declare the stream correctly. The object exposes
+`codec`, `mime_type`, `bitrate_kbps`, `sample_rate_hz`, and `channels`. Use
+`mime_type` and `bitrate_kbps` when declaring `/stream`.
+
+`audio_format` is the station's **canonical/target encoding** — the format the
+normalizer produces and the `/stream` response headers advertise. Bundled demo
+and canned fallback assets are not guaranteed to be re-encoded to this format,
+so players must rely on MP3 frame self-description for exact decode parameters
+on a per-frame basis. The contract `audio_format` provides is the nominal one,
+which is the same contract every ICY-headered internet radio publishes.
+
+The canonical metadata is built once per response by
+`mammamiradio/audio/stream_format.py::stream_audio_metadata(config)` and is the
+single source feeding both the `/public-status` payload and the `/stream`
+response headers (`Content-Type` and `icy-br`). The legacy
+`stream.bitrate_kbps` field reads from the same helper output so it can never
+diverge from `stream.audio_format.bitrate_kbps` in the same response.
+
 ## Capability flags
 
 The system uses two independent boolean flags in a frozen `Capabilities` dataclass (`mammamiradio/core/models.py`, with detection and serialization in `mammamiradio/core/capabilities.py`):
@@ -121,7 +142,7 @@ The dashboard derives a tier label from these flags: Demo Radio, Full AI Radio, 
 
 1. **Persisted source** (any prior `cache/playlist_source.json` selection). Restored verbatim if loadable.
 2. **Charts + local blend** (when `MAMMAMIRADIO_ALLOW_YTDLP=true`): up to 100 tracks fetched from Apple Music Italy RSS. MP3s in `music/` are merged in and deduplicated by `spotify_id`. Total catalog typically 100-300 tracks. `source_id="apple_music_it_top_100"`.
-3. **Jamendo CC** (when `radio.toml` `[playlist].jamendo_client_id` is set): CC-licensed tracks via the Jamendo API. Default radio.toml ships `jamendo_country = "ITA"` + `jamendo_order = "popularity_week"`, so the resulting fetch is "Italian-trending" (artist nationality = ITA, sorted by current week popularity). Both fields are optional — empty country = no nationality filter; empty order = Jamendo's default sort. Fields also overridable via `JAMENDO_COUNTRY` / `JAMENDO_ORDER` env vars. `source_id` is the tag string; the persisted source URL `jamendo://playlist?tags=…&country=…&order=…` round-trips all three so reload via `/api/playlist/load` reproduces the exact same fetch.
+3. **Jamendo CC** (when `radio.toml` `[playlist].jamendo_client_id` is set): CC-licensed tracks via the Jamendo API. Default radio.toml ships `jamendo_country = "ITA"` + `jamendo_order = "popularity_week"`, so the resulting fetch is "Italian-trending" (artist nationality = ITA, sorted by current week popularity), and `jamendo_limit = 200` to keep the rotation pool deep. These fields are optional — empty country = no nationality filter; empty order = Jamendo's default sort; limit must be `1`-`200`. Fields are also overridable via `JAMENDO_COUNTRY`, `JAMENDO_ORDER`, and `JAMENDO_LIMIT` env vars. `source_id` is the tag string; the persisted source URL `jamendo://playlist?tags=…&country=…&order=…` encodes the source identity (tags, country, order) so reload via `/api/playlist/load` restores the same playlist selection. `limit` is NOT encoded in the persisted URL — it always comes from the active `radio.toml` / `JAMENDO_LIMIT` config at fetch time.
 4. **Classic Italian eras** (explicit admin selection only): `classic://italian/70s`, `classic://italian/80s`, and `classic://italian/90s` resolve through yt-dlp search queries for cantautori/classic-pop eras. Each era stamps fetched tracks with a `year` hint (`1975`, `1985`, `1995`) so the admin playlist can render decade badges. Because this is an operator-selected source, failure raises an explicit toast instead of silently falling through.
 5. **Local `music/` files** (always available when MP3s exist on disk): operator-supplied MP3s in `music/`. Loaded as a first-class source — yt-dlp is not required, and this branch fires whether or not Jamendo is configured. `source_id="local_music_dir"`.
 6. **Bundled demo assets**: pre-shipped MP3s in `mammamiradio/assets/demo/music/`. Empty by default; populated optionally per the demo-asset contract.
@@ -174,18 +195,54 @@ Cue text is sanitized via `_sanitize_prompt_data` on the read path before inject
 
 If `[homeassistant].enabled = true` and `HA_TOKEN` is present:
 
-- `ha_context.py` polls the Home Assistant REST API for ~35 curated entities (gold/silver/bronze tiers)
-- entities include room-level light groups, power sensors, weather, presence, vacuums, star projectors, terrace lights
-- a 4-phase pipeline processes the data: state summary → event diffing → mood classification → weather narrative arc
+- `ha_context.py` polls the Home Assistant REST API state snapshot and filters it through a default-deny privacy layer
+- sensitive domains (`device_tracker`, `camera`, `alarm_control_panel`), free-text helper domains (`input_text`, `text`), and telemetry/config entities are excluded before prompt assembly
+- `person.*` is kept as home/away presence only (GPS, `user_id`, and tracker attributes stripped) so arrival greetings and the empty-home mood still work; person events never reach `/public-status`
+- allowed entities are scored by domain salience, recent changes, area metadata, event activity, and curated-label overrides
+- the prompt receives a bounded top slice (12 entities by default, capped at 2000 characters) rather than the full home snapshot
+- hand-tuned entity labels remain authoritative; unknown entities fall back to sanitized friendly names plus area metadata where available
+- event diffing, mood classification, and weather narrative arcs continue to feed the existing scriptwriter fields
 - 7 reactive triggers fire on specific state changes (coffee machine, door unlock, vacuums, arrivals, terrace lights)
 - banter references are tiered: 1 item by default, up to 2 when a mood scene is active (mood counts toward cap)
 - weather-mood fusion allows hosts to connect outdoor conditions to indoor activity
 - numeric state passthrough in `ha_enrichment.diff_states()` ensures power sensors generate events
 - the listener dashboard shows a "Casa" card with mood, weather, and recent events via `ha_moments` in `/public-status`
-- the admin panel shows full HA details (mood, weather arc, events summary, pending directives) via `ha_details` in `/status`
-- person entity events are filtered from public API responses (privacy)
+- the admin panel shows full HA details (mood, weather arc, events summary, pending directives, scored entities, and privacy filter counts) via `ha_details` in `/status`
+- scored entities and privacy filter counts are admin-only and never appear in `/public-status`
 
 This is opportunistic context, not a hard dependency. Failures there should not stop the station.
+
+### Timer interrupt flow
+
+When a HA timer fires, the station immediately interrupts playback with a pissed/urgent host segment:
+
+```text
+HA timer fires (timer.xyz → idle, with recent finished_at)
+    ↓
+ha_context.py: lightweight 5s poll detects idle transition (separate from 60s full fetch).
+    Cancel/reset filter: only fire when finished_at is set and within the last 30s.
+    ↓
+check_reactive_triggers() → InterruptSpec(directive, urgency, cooldown)
+    ↓
+producer.py: _fire_interrupt(state, spec, queue, skip_event)
+  1. Drain lookahead queue (no buffered music leaks between bridge and banter)
+  2. state.ha_pending_directive = spec.directive
+  3. state.chaos_pending = ChaosSubtype.URGENT_INTERRUPT  (pissed tone)
+  4. state.chaos_cutover_epoch += 1
+  5. skip_event.set()  ← skips currently playing segment
+  6. Load alert.mp3 from assets/sfx/, or generate a short tone → state.interrupt_slot
+     (best-effort; never blocks the skip)
+    ↓
+run_playback_loop: interrupt_slot checked before queue.get() → bridge plays (≤2s)
+    ↓
+Producer generates URGENT_INTERRUPT banter with directive (async, LLM)
+    ↓
+Pissed banter plays after bridge
+```
+
+Timer interrupts are configured via `[[homeassistant.timer_interrupt]]` blocks in `radio.toml`. The dedicated timer poll reads those entity IDs without mutating the module-level HA entity lists.
+
+The same mechanism is callable directly via `POST /api/interrupt` (admin auth, 60s cooldown) — any HA automation can inject a custom directive without `radio.toml` configuration.
 
 ## Access model
 
@@ -202,8 +259,8 @@ This is opportunistic context, not a hard dependency. Failures there should not 
 | `/stream` | GET | Public | Infinite MP3 stream |
 | `/healthz` | GET | Public | Liveness probe with process uptime |
 | `/readyz` | GET | Public | Readiness probe with queue depth and startup status |
-| `/public-status` | GET | Public | Current segment, recent log, and the real queued segments (`upcoming_mode` is `queued` or `building`) |
-| `/status` | GET | Admin | Full admin JSON: queue depth, uptime, scripts, HA context, errors, and `provider_health` |
+| `/public-status` | GET | Public | Current segment, recent log, the real queued segments (`upcoming_mode` is `queued` or `building`), and `stream.audio_format` (the canonical encoding contract — see "Stream audio format metadata" below) |
+| `/status` | GET | Admin | Full admin JSON: queue depth, uptime, scripts, HA context, errors, `provider_health`, and `runtime_status` (normalized provider state + session failover event history) |
 | `/api/setup/status` | GET | Admin | First-run setup status, detected run mode, and station mode |
 | `/api/setup/recheck` | POST | Admin | Re-run setup probes |
 | `/api/setup/provider-check` | POST | Admin | Active, secret-safe Anthropic/OpenAI connectivity check |
@@ -211,6 +268,7 @@ This is opportunistic context, not a hard dependency. Failures there should not 
 | `/api/shuffle` | POST | Admin | Shuffle playlist |
 | `/api/skip` | POST | Admin | Skip current segment |
 | `/api/purge` | POST | Admin | Remove queued segments |
+| `/api/queue/remove` | POST | Admin | Remove one queued segment by stable `id` (or legacy `index`) |
 | `/api/playlist/remove` | POST | Admin | Remove track by index |
 | `/api/playlist/move` | POST | Admin | Move track with `{from, to}` |
 | `/api/playlist/move_to_next` | POST | Admin | Move track to position 0 in upcoming |
@@ -220,7 +278,7 @@ This is opportunistic context, not a hard dependency. Failures there should not 
 | `/api/hosts/{host_name}/personality` | PATCH | Admin | Patch host personality axes (energy, warmth, chaos) |
 | `/api/hosts/{host_name}/personality/reset` | POST | Admin | Reset host personality to defaults |
 | `/api/pacing` | GET | Admin | Current pacing configuration |
-| `/api/pacing` | PATCH | Admin | Patch pacing fields (songs between banter, ad spots per break, etc.) |
+| `/api/pacing` | PATCH | Admin | Patch pacing fields (songs between banter, ad spots per break, etc.); malformed payloads return 400, values are clamped to safe floors/ceilings |
 | `/api/setup/save-keys` | POST | Admin | Save API keys via dashboard |
 | `/api/capabilities` | GET | Admin | Capability flags, tier, next-step hint, connect status, and provider degradation telemetry |
 | `/api/chaos` | GET | Admin | Return `{"enabled": bool}` for Chaos Mode |
@@ -240,7 +298,8 @@ This is opportunistic context, not a hard dependency. Failures there should not 
 | `/api/listener-requests/dismiss` | POST | Admin | Dismiss a pending listener request by `ts` (legacy) or `request_id` (canonical) |
 | `/api/search` | GET | Admin | Search playlist and external sources |
 | `/api/playlist/add-external` | POST | Admin | Add external track from search results |
-| `/api/hot-reload` | POST | Admin | Reload `scriptwriter.py` in-place via `importlib.reload()` — stream continues uninterrupted, next banter uses new code. Requires `--workers 1`. |
+| `/api/interrupt` | POST | Admin | Immediately interrupt the stream — hosts deliver pissed/urgent banter with a custom directive. Body: `{"directive": str, "urgency": "pissed"\|"urgent"\|"gentle"}`. 60s cooldown enforced; returns 429 on spam. |
+| `/api/hot-reload` | POST | Admin | Reload `prompt_world.py`, `transitions.py`, `fallbacks.py` then `scriptwriter.py` (leaves-first) in-place via `importlib.reload()` — stream continues uninterrupted, next banter uses new code. Requires `--workers 1`. |
 
 ### Auth rules
 
@@ -292,6 +351,9 @@ The rich path is richer, but the failure path still produces a stream.
 | `mammamiradio/scheduling/producer.py` | segment generation pipeline |
 | `mammamiradio/scheduling/clip.py` | WTF clip extraction from ring buffer, save, cleanup |
 | `mammamiradio/hosts/scriptwriter.py` | Anthropic/OpenAI prompts for banter and ad copy (TODO: split — see cathedral plan PR 6) |
+| `mammamiradio/hosts/prompt_world.py` | Prompt-fiction data: expression banks, host fingerprints, style directives, Chaos/Festival mode blocks |
+| `mammamiradio/hosts/transitions.py` | Transition rewrite openers + anti-repeat stem/massage helpers |
+| `mammamiradio/hosts/fallbacks.py` | Stock fallback copy: chaos stock lines, ad-break intros/outros |
 | `mammamiradio/hosts/persona.py` | Listener persona: compounding memory, arc phases, motif tracking, session counting |
 | `mammamiradio/hosts/context_cues.py` | Time-of-day and cultural context for prompts |
 | `mammamiradio/hosts/ad_creative.py` | Brand and voice selection, campaign-spine sampling for ad breaks |

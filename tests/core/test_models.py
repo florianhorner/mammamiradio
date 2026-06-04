@@ -76,13 +76,16 @@ def test_on_stream_segment_updates_now_streaming():
     seg = Segment(
         type=SegmentType.MUSIC,
         path=Path("/tmp/fake.mp3"),
+        duration_sec=5.0,
         metadata={"title": "Test Song"},
     )
     state.on_stream_segment(seg)
 
     assert state.now_streaming["type"] == "music"
     assert state.now_streaming["label"] == "Test Song"
+    assert state.now_streaming["duration_sec"] == 5.0
     assert len(state.stream_log) == 1
+    assert state.stream_log[0].duration_sec == 5.0
 
 
 def test_chaos_subtypes_are_not_segment_types():
@@ -91,6 +94,7 @@ def test_chaos_subtypes_are_not_segment_types():
         "chaos_abandoned_storm",
         "chaos_impossible_recall",
         "chaos_icon_moment",
+        "urgent_interrupt",
     }
     assert not ({item.value for item in ChaosSubtype} & {item.value for item in SegmentType})
 

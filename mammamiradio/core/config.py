@@ -29,6 +29,13 @@ load_dotenv()
 _TRUTHY = {"true", "1", "yes"}
 _FALSY = {"false", "0", "no"}
 
+# Canonical user-facing station name — the single source of truth. Every
+# user-visible surface (HA entities, FastAPI/OpenAPI title, clip sidecar, config
+# fallbacks) references this so the name cannot drift the way "Radio MammaMia",
+# "MammaMia", "Malamie", and lowercase "mammamiradio" once did. Technical
+# identifiers (package name, env vars, entity IDs, slugs) stay "mammamiradio".
+DEFAULT_STATION_NAME = "Mamma Mi Radio"
+
 
 def coerce_bool(value: object, default: bool = False) -> bool:
     """Type-safe bool coercion that rejects truthy-string-of-falsy-word.
@@ -57,7 +64,7 @@ def coerce_bool(value: object, default: bool = False) -> bool:
 class StationSection:
     """Station identity and public stream metadata."""
 
-    name: str = "Mamma Mi Radio"
+    name: str = DEFAULT_STATION_NAME
     language: str = "it"
     theme: str = ""
 
@@ -75,6 +82,7 @@ class PlaylistSection:
     jamendo_tags: str = "pop"
     jamendo_country: str = ""
     jamendo_order: str = ""
+    jamendo_limit: int = 200
 
 
 @dataclass
@@ -100,12 +108,24 @@ class AudioSection:
 
 
 @dataclass
+class TimerInterruptConfig:
+    """A single HA timer entity that triggers an immediate host interrupt."""
+
+    entity_id: str
+    directive: str
+    urgency: str = "pissed"  # "pissed" | "urgent" | "gentle"
+    cooldown: int = 60  # seconds before this entity can fire again
+
+
+@dataclass
 class HomeAssistantSection:
     """Optional Home Assistant integration used to seed prompt context."""
 
     enabled: bool = False
     url: str = ""
     poll_interval: int = 60  # seconds between state refreshes
+    timer_poll_interval: int = 5  # seconds between lightweight timer-entity state checks
+    timer_interrupts: list[TimerInterruptConfig] = field(default_factory=list)
 
 
 @dataclass
@@ -251,7 +271,7 @@ class BrandTheme:
 class BrandSection:
     """The brand-fiction layer: what listeners see, separate from the engine config."""
 
-    station_name: str = "mammamiradio"
+    station_name: str = DEFAULT_STATION_NAME
     frequency: str = ""
     city: str = ""
     founded: int = 0
@@ -295,10 +315,34 @@ class StationConfig:
     allow_ytdlp: bool = False
     super_italian_mode: bool = True
     party_mode: PartyMode | None = None
+    # Provenance ledger (Show Memory): opt-in, off by default. Records how each
+    # aired moment was made to a daily-rotated JSONL under cache_dir/ledger.
+    ledger_enabled: bool = False
+    ledger_retention_days: int = 14
+    ledger_queue_max: int = 2000
     # Names of hosts or ad voices that had their configured voice replaced
     # during config load because the configured ID wasn't valid for the chosen
     # backend. Empty when all voices passed validation.
     tts_degraded_voices: list[str] = field(default_factory=list)
+
+    @property
+    def ledger_dir(self) -> Path:
+        """Provenance ledger directory, derived from cache_dir (never hardcoded).
+
+        Inherits the addon (/data/cache) vs standalone (./cache) vs /tmp fallback
+        resolution that cache_dir already performs.
+        """
+        return self.cache_dir / "ledger"
+
+    @property
+    def display_station_name(self) -> str:
+        """Canonical listener-facing station name — the single resolver, never blank.
+
+        Every user-visible surface (HA entities, clip sidecar, etc.) reads this
+        instead of re-deriving the name, so the value stays consistent. Resolves
+        brand → station → the canonical default.
+        """
+        return self.brand.station_name or self.station.name or DEFAULT_STATION_NAME
 
 
 def _normalize_tts_voices(config: StationConfig) -> None:
@@ -388,8 +432,13 @@ def _normalize_tts_voices(config: StationConfig) -> None:
 
 
 def _is_loopback_host(host: str) -> bool:
-    """Return whether a bind target should be treated as localhost-only."""
-    if host in {"localhost", ""}:
+    """Return whether a bind target should be treated as localhost-only.
+
+    An empty bind host is NOT loopback: ``socket.bind("")`` listens on all
+    interfaces (equivalent to ``0.0.0.0``), so it must satisfy the same
+    credential requirement as any other non-loopback bind.
+    """
+    if host == "localhost":
         return True
     try:
         return ipaddress.ip_address(host).is_loopback
@@ -449,7 +498,7 @@ def _parse_brand(raw: dict, hosts: list[HostPersonality]) -> tuple[BrandSection,
     if not brand_raw:
         return (
             BrandSection(
-                station_name=raw.get("station", {}).get("name", "mammamiradio"),
+                station_name=raw.get("station", {}).get("name", DEFAULT_STATION_NAME),
                 hosts=[
                     BrandHost(engine_host=h.name, display_name=h.name, description=(h.style or "")[:160]) for h in hosts
                 ],
@@ -550,7 +599,7 @@ def _parse_brand(raw: dict, hosts: list[HostPersonality]) -> tuple[BrandSection,
                 brand_raw["founded"] = year
 
     brand = BrandSection(
-        station_name=brand_raw.get("station_name", raw.get("station", {}).get("name", "mammamiradio")),
+        station_name=brand_raw.get("station_name", raw.get("station", {}).get("name", DEFAULT_STATION_NAME)),
         frequency=brand_raw.get("frequency", ""),
         city=brand_raw.get("city", ""),
         founded=int(brand_raw.get("founded", 0)),
@@ -563,6 +612,16 @@ def _parse_brand(raw: dict, hosts: list[HostPersonality]) -> tuple[BrandSection,
     return brand, warnings
 
 
+def _err(field: str, msg: str) -> str:
+    """Format a config validation error with a hint about which TOML section to edit.
+
+    >>> _err("pacing.ad_spots_per_break", "must be <= 5")
+    'pacing.ad_spots_per_break must be <= 5 (set in radio.toml [pacing])'
+    """
+    section = field.split(".", 1)[0]
+    return f"{field} {msg} (set in radio.toml [{section}])"
+
+
 def _validate(config: StationConfig) -> None:
     """Fail fast on bad config instead of cryptic runtime errors."""
     import logging
@@ -571,17 +630,37 @@ def _validate(config: StationConfig) -> None:
     errors = []
 
     if not config.hosts:
-        errors.append("No hosts configured — banter requires at least one host")
-    if config.pacing.songs_between_banter < 1:
-        errors.append("pacing.songs_between_banter must be >= 1")
+        errors.append("No hosts configured — banter requires at least one host (set in radio.toml [[hosts]])")
+    # Floors and ceilings here mirror the PATCH /api/pacing clamps so that
+    # config-load and the admin runtime path enforce the same valid range.
+    if config.pacing.songs_between_banter < 2:
+        errors.append(_err("pacing.songs_between_banter", "must be >= 2"))
+    if config.pacing.songs_between_banter > 60:
+        errors.append(_err("pacing.songs_between_banter", "must be <= 60"))
     if config.pacing.songs_between_ads < 1:
-        errors.append("pacing.songs_between_ads must be >= 1")
+        errors.append(_err("pacing.songs_between_ads", "must be >= 1"))
+    if config.pacing.songs_between_ads > 60:
+        errors.append(_err("pacing.songs_between_ads", "must be <= 60"))
+    if config.pacing.ad_spots_per_break < 1:
+        errors.append(_err("pacing.ad_spots_per_break", "must be >= 1"))
+    if config.pacing.ad_spots_per_break > 5:
+        errors.append(_err("pacing.ad_spots_per_break", "must be <= 5"))
     if config.pacing.lookahead_segments < 1:
-        errors.append("pacing.lookahead_segments must be >= 1")
+        errors.append(_err("pacing.lookahead_segments", "must be >= 1"))
+    if config.homeassistant.timer_poll_interval < 1:
+        errors.append(_err("homeassistant.timer_poll_interval", "must be >= 1"))
+    _allowed_urgencies = {"pissed", "urgent", "gentle"}
+    for idx, timer_cfg in enumerate(config.homeassistant.timer_interrupts):
+        if timer_cfg.cooldown < 1:
+            errors.append(_err(f"homeassistant.timer_interrupt[{idx}].cooldown", "must be >= 1"))
+        if timer_cfg.urgency not in _allowed_urgencies:
+            errors.append(
+                _err(f"homeassistant.timer_interrupt[{idx}].urgency", f"must be one of {sorted(_allowed_urgencies)}")
+            )
     if not isinstance(config.persona.anthem_threshold, int) or config.persona.anthem_threshold < 1:
-        errors.append("persona.anthem_threshold must be >= 1")
+        errors.append(_err("persona.anthem_threshold", "must be >= 1"))
     if not isinstance(config.persona.skip_bit_threshold, int) or config.persona.skip_bit_threshold < 1:
-        errors.append("persona.skip_bit_threshold must be >= 1")
+        errors.append(_err("persona.skip_bit_threshold", "must be >= 1"))
     if config.playlist.jamendo_client_id:
         config.playlist.jamendo_client_id = config.playlist.jamendo_client_id.strip()
     if config.playlist.jamendo_client_id and not re.match(r"^[A-Za-z0-9_-]+$", config.playlist.jamendo_client_id):
@@ -589,8 +668,10 @@ def _validate(config: StationConfig) -> None:
         config.playlist.jamendo_client_id = ""
     if config.playlist.jamendo_country and not re.match(r"^[A-Z]{3}$", config.playlist.jamendo_country):
         errors.append(
-            "playlist.jamendo_country must be a 3-letter uppercase ISO 3166-1 alpha-3 code "
-            "(e.g. 'ITA', 'DEU', 'FRA') or empty"
+            _err(
+                "playlist.jamendo_country",
+                "must be a 3-letter uppercase ISO 3166-1 alpha-3 code (e.g. 'ITA', 'DEU', 'FRA') or empty",
+            )
         )
     _valid_jamendo_orders = {
         "popularity_total",
@@ -599,7 +680,11 @@ def _validate(config: StationConfig) -> None:
         "releasedate_desc",
     }
     if config.playlist.jamendo_order and config.playlist.jamendo_order not in _valid_jamendo_orders:
-        errors.append(f"playlist.jamendo_order must be one of {sorted(_valid_jamendo_orders)} or empty")
+        errors.append(_err("playlist.jamendo_order", f"must be one of {sorted(_valid_jamendo_orders)} or empty"))
+    if not isinstance(config.playlist.jamendo_limit, int) or isinstance(config.playlist.jamendo_limit, bool):
+        errors.append(_err("playlist.jamendo_limit", "must be an integer between 1 and 200"))
+    elif not 1 <= config.playlist.jamendo_limit <= 200:
+        errors.append(_err("playlist.jamendo_limit", "must be between 1 and 200"))
 
     if not (config.anthropic_api_key or config.openai_api_key):
         log.warning("No ANTHROPIC_API_KEY or OPENAI_API_KEY — banter/ads will use fallback text")
@@ -607,8 +692,8 @@ def _validate(config: StationConfig) -> None:
         log.warning("Home Assistant enabled but no HA_TOKEN in environment")
     if not config.ads.brands:
         log.warning("No ad brands configured — ad segments will be skipped")
-    # Non-loopback bind without auth is fine — admin access trusts private
-    # networks (RFC1918, Tailscale CGNAT). Auth is only needed for public access.
+    if not _is_loopback_host(config.bind_host) and not (config.admin_password or config.admin_token):
+        errors.append("Set ADMIN_PASSWORD or ADMIN_TOKEN when binding to a non-loopback host")
 
     if errors:
         raise ValueError("Config errors:\n  " + "\n  ".join(errors))
@@ -698,7 +783,20 @@ def load_config(path: str = "radio.toml") -> StationConfig:
         ha_raw["enabled"] = True
     elif ha_force_disabled:
         ha_raw["enabled"] = False
+    # Parse [[ha.timer_interrupt]] blocks — extracted before ** expansion
+    timer_interrupts_raw = ha_raw.pop("timer_interrupt", [])
+    timer_interrupts = [
+        TimerInterruptConfig(
+            entity_id=t["entity_id"],
+            directive=t["directive"],
+            urgency=t.get("urgency", "pissed"),
+            cooldown=int(t.get("cooldown", 60)),
+        )
+        for t in timer_interrupts_raw
+        if isinstance(t, dict) and t.get("entity_id") and t.get("directive")
+    ]
     ha_section = HomeAssistantSection(**ha_raw)
+    ha_section.timer_interrupts = timer_interrupts
     ha_token = os.getenv("HA_TOKEN", "")
     # Auto-enable HA if token is present and URL is set (Docker/add-on convenience)
     if ha_token and ha_section.url and not ha_section.enabled and not ha_force_disabled:
@@ -726,6 +824,12 @@ def load_config(path: str = "radio.toml") -> StationConfig:
         playlist_raw["jamendo_country"] = os.getenv("JAMENDO_COUNTRY", "").strip()
     if os.getenv("JAMENDO_ORDER") is not None:
         playlist_raw["jamendo_order"] = os.getenv("JAMENDO_ORDER", "").strip()
+    jamendo_limit_env = os.getenv("JAMENDO_LIMIT")
+    if jamendo_limit_env is not None and jamendo_limit_env.strip():
+        try:
+            playlist_raw["jamendo_limit"] = int(jamendo_limit_env.strip())
+        except ValueError:
+            playlist_raw["jamendo_limit"] = jamendo_limit_env.strip()
 
     # Env-var overrides for cache/tmp directories (for Docker volume mounts)
     cache_dir = Path(os.getenv("MAMMAMIRADIO_CACHE_DIR", "cache"))
@@ -795,6 +899,15 @@ def load_config(path: str = "radio.toml") -> StationConfig:
         config.party_mode = "festival"
     elif _festival_env in _FALSY:
         config.party_mode = None
+
+    _ledger_env = os.getenv("MAMMAMIRADIO_LEDGER_ENABLED", "").strip().lower()
+    if _ledger_env in _TRUTHY:
+        config.ledger_enabled = True
+    elif _ledger_env in _FALSY:
+        config.ledger_enabled = False
+    _ledger_retention = os.getenv("MAMMAMIRADIO_LEDGER_RETENTION_DAYS", "").strip()
+    if _ledger_retention.isdigit() and int(_ledger_retention) > 0:
+        config.ledger_retention_days = int(_ledger_retention)
 
     # Addon overrides: persistent paths, auto-enable HA
     if addon_mode:

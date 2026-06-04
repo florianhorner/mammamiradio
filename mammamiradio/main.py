@@ -14,10 +14,12 @@ from pathlib import Path
 
 from fastapi import FastAPI
 
-from mammamiradio.core.config import load_config
+from mammamiradio.core.config import DEFAULT_STATION_NAME, load_config
 from mammamiradio.core.models import StationState
 from mammamiradio.core.sync import init_db
+from mammamiradio.home.evening_memory import EveningLedger
 from mammamiradio.hosts.persona import PersonaStore
+from mammamiradio.integrations import router as integrations_router
 from mammamiradio.playlist.downloader import evict_cache_lru, purge_suspect_cache_files
 from mammamiradio.playlist.playlist import DEMO_TRACKS, fetch_startup_playlist, read_persisted_source
 from mammamiradio.scheduling.producer import prewarm_first_segment, run_producer
@@ -29,6 +31,16 @@ logging.basicConfig(
     format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
     datefmt="%H:%M:%S",
 )
+
+
+def _configure_http_logging() -> None:
+    level_name = os.getenv("MAMMAMIRADIO_HTTP_LOG_LEVEL", "WARNING").strip().upper()
+    level = logging.getLevelNamesMapping().get(level_name, logging.WARNING)
+    logging.getLogger("httpx").setLevel(level)
+    logging.getLogger("httpcore").setLevel(level)
+
+
+_configure_http_logging()
 logger = logging.getLogger("mammamiradio")
 
 _producer_task: asyncio.Task | None = None
@@ -63,9 +75,10 @@ async def _lifespan(app: FastAPI):
     await shutdown()
 
 
-app = FastAPI(title="mammamiradio", lifespan=_lifespan)
+app = FastAPI(title=DEFAULT_STATION_NAME, lifespan=_lifespan)
 app.include_router(router)
 app.include_router(listener_requests_router)
+app.include_router(integrations_router)
 
 
 async def startup():
@@ -117,6 +130,11 @@ async def startup():
             "Restoring stopped session state from previous run — use /api/resume or the admin panel to start playback"
         )
 
+    # Restore the evening running-gag ledger so a mid-evening addon restart
+    # resumes the same session and gags instead of resetting them. Missing or
+    # corrupt files start fresh and never block boot.
+    evening_ledger = EveningLedger.load(config.cache_dir)
+
     persisted_source = read_persisted_source(config.cache_dir)
     logger.info("Fetching startup playlist")
     try:
@@ -141,6 +159,7 @@ async def startup():
         playlist_source=playlist_source,
         startup_source_error=startup_source_error,
         persona_store=persona_store,
+        evening_ledger=evening_ledger,
         session_stopped=_session_stopped,
         chaos_mode_active=_read_persisted_chaos_mode(config),
     )
@@ -166,6 +185,22 @@ async def startup():
     app.state.config = config
     app.state.start_time = time.time()
 
+    # Provenance ledger (Show Memory). Start BEFORE producer/playback so the
+    # earliest segments are captured, and stop AFTER them on shutdown so final
+    # rows survive. Hung off state so all three capture tiers reach it
+    # (_generate_json_response, producer, on_stream_segment) without app access.
+    from mammamiradio.core.ledger import ProvenanceLedger
+
+    ledger = ProvenanceLedger(
+        config.ledger_dir,
+        enabled=config.ledger_enabled,
+        retention_days=config.ledger_retention_days,
+        queue_max=config.ledger_queue_max,
+    )
+    ledger.start()
+    app.state.ledger = ledger
+    state.ledger = ledger
+
     # Pre-produce music segments in the background so app startup is instant.
     # If a listener arrives before prewarm finishes, the producer's idle-resume
     # logic queues a canned clip as an immediate fallback.
@@ -183,6 +218,13 @@ async def startup():
     app.state.prewarm_task = _prewarm_task
     app.state.playback_task = _playback_task
     app.state.producer_task = _producer_task
+    # Validate configured AI keys in the background so a bogus key persisted in .env /
+    # options.json surfaces in the admin BEFORE any banter fails. Fire-and-forget —
+    # never awaited, so it can't delay first audio (Leadership Principle #2).
+    if config.anthropic_api_key or config.openai_api_key:
+        from mammamiradio.web.streamer import _run_provider_verdict
+
+        app.state.provider_verdict_task = asyncio.create_task(_run_provider_verdict(app.state))
     # Startup diagnostics — first 5 seconds of logs must be actionable for debugging
     _config_file = Path("radio.toml").resolve()
     _audio_src = {"charts": "yt-dlp", "demo": "demo", "local": "local"}.get(
@@ -222,6 +264,21 @@ async def shutdown():
     if _playback_task:
         _playback_task.cancel()
         tasks_to_cancel.append(_playback_task)
+    # The provider-verdict probe is created outside the producer/playback set
+    # (startup + credential saves); cancel it so it can't mutate station_state
+    # after teardown begins — same write-after-shutdown race as the downloads.
+    verdict_task = getattr(app.state, "provider_verdict_task", None)
+    if verdict_task:
+        verdict_task.cancel()
+        tasks_to_cancel.append(verdict_task)
+    # Fire-and-forget background tasks (queue-from-search / listener song
+    # downloads). Cancel them too so an in-flight yt-dlp download can't write to
+    # app.state after teardown begins.
+    background_tasks = getattr(app.state, "background_tasks", None)
+    if background_tasks:
+        for _bg in list(background_tasks):
+            _bg.cancel()
+            tasks_to_cancel.append(_bg)
     if tasks_to_cancel:
         await asyncio.gather(*tasks_to_cancel, return_exceptions=True)
     if hasattr(app.state, "producer_task"):
@@ -232,6 +289,10 @@ async def shutdown():
         app.state.playback_task = None
     if hasattr(app.state, "stream_hub"):
         app.state.stream_hub.close()
+    # Stop the ledger AFTER producer/playback are cancelled so final rows drain.
+    if getattr(app.state, "ledger", None) is not None:
+        app.state.ledger.stop()
+        app.state.ledger = None
 
 
 if __name__ == "__main__":

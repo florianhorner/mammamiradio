@@ -10,58 +10,13 @@
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=scripts/lint-patterns.sh
+source "$SCRIPT_DIR/lint-patterns.sh"
+
 CHANGELOGS=(
   CHANGELOG.md
   ha-addon/mammamiradio/CHANGELOG.md
-)
-
-# Each pattern is a POSIX extended regex (grep -E). Patterns are word-anchored or
-# specific multi-word phrases to minimize false positives on legitimate technical text.
-PATTERNS=(
-  # Internal sprint / workstream labels
-  'PR-[A-Z][0-9/]*[A-Z0-9]*'      # PR-A, PR-B/5, PR-C, PR-D/5, PR-F
-  '\bWS[0-9]+(-[A-Z0-9]+)?'       # WS2, WS3, WS3-A, WS3-B, WS5, WS6
-  '\b[Ff]inding #[0-9]+'          # finding #8, finding #11, Finding #1
-  '\b[Ii]tem [0-9]+'              # Item 1, Item 19, Item 21
-  '\bP[0-9]-[0-9]+\b'             # P0-1, P1-2, P1-3
-  '\b[HM][0-9]+/[HM][0-9]+\b'     # H2/H3
-  '\b[HM][0-9]+\b(?: \()'         # M1 (used in (M1) context — covered by parens form below)
-  '\([HM][0-9]+\)'                # (M1), (M4), (H2/H3)
-  '\bsoak window\b'
-  '\blive session\b'
-  '\b[Aa]pproach [A-Z]\b'         # Approach A, Approach B
-  '\bConcept [A-Z][a-z]'          # Concept A Time-Horizon Stack
-  '\bphase [A-Z]\b'               # phase A, phase B (lowercase)
-  '\bPhase [A-Z][0-9]?\b'         # Phase A, Phase B1
-  '\bPhase [0-9]+\b'              # Phase 1, Phase 2
-  '\bTrack [A-Z]\b'               # Track A, Track B
-  '\bleadership principle\b'
-
-  # Agent / tool provenance
-  '/autoplan'
-  '\bcodex review\b'
-  '\bcodex independent review\b'
-  '\bClaude review\b'
-  '\bClaude Code\b'
-  '\bConductor agent\b'
-  '\bConductor session\b'
-  '\boperator-honesty\b'
-
-  # Cathedral / sacred vocabulary
-  '\bcathedral\b'
-  '\bsacred files?\b'
-  '\bdomain naves?\b'
-  '\bgod[- ]module\b'
-  '\bnave\b'
-
-  # Contributor archaeology
-  '\bfirst outside contribution\b'
-  '\bwork was superseded\b'
-  '\bred tests ride green\b'
-  '\binformed the later\b'
-  '\bsuperseded\b'
-  '\bConductor setup fails\b'
-  '\bCLAUDE\.md\b'
 )
 
 FAIL=0
@@ -72,7 +27,7 @@ for FILE in "${CHANGELOGS[@]}"; do
     echo "SKIP: $FILE not found"
     continue
   fi
-  for PAT in "${PATTERNS[@]}"; do
+  for PAT in "${LINT_PATTERNS[@]}"; do
     if grep -nE "$PAT" "$FILE" 2>/dev/null | grep -q .; then
       MATCHES=$(grep -nE "$PAT" "$FILE")
       while IFS= read -r line; do
