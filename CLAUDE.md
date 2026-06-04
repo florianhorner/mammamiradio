@@ -100,7 +100,7 @@ private durable system for strategy or relationship context.
   - `ha-addon/mammamiradio/Dockerfile`: HA add-on image (Alpine-based)
   - `ha-addon/mammamiradio/rootfs/run.sh`: entrypoint mapping Supervisor env vars
   - `ha-addon/mammamiradio/translations/en.yaml`: UI labels for add-on options
-  - `ha-addon/mammamiradio-edge/`: dev-release channel add-on (metadata only — pulls the same image as stable; CI auto-bumps its calendar version). See `docs/runbooks/ha-addon.md` → "Edge channel".
+  - `ha-addon/mammamiradio-edge/`: dev-release channel add-on (metadata only — pulls the same image as stable; version is the `main` short-SHA, cut manually with `make edge-release`). See `docs/runbooks/ha-addon.md` → "Edge channel".
 - `.github/workflows/docker.yml`: multi-arch Docker build CI
 
 ## Environment
@@ -124,6 +124,7 @@ private durable system for strategy or relationship context.
 - `JAMENDO_CLIENT_ID`: Jamendo API client id (empty = Jamendo source disabled)
 - `JAMENDO_COUNTRY`: 3-letter uppercase ISO 3166-1 alpha-3 (e.g. `ITA`, `DEU`); empty disables the country filter. radio.toml default is `ITA` for Italian-trending music.
 - `JAMENDO_ORDER`: Jamendo sort order (`popularity_week` | `popularity_month` | `popularity_total` | `releasedate_desc` | empty). radio.toml default is `popularity_week`.
+- `JAMENDO_LIMIT`: Jamendo API result depth, integer `1`-`200`. radio.toml default is `200` to reduce short-rotation repeats.
 - `MIN_COOLDOWN_HOURS`: override the release-cooldown window (default `24`, read by `scripts/check-release-cooldown.sh`)
 - `MAMMAMIRADIO_SUPER_ITALIAN`: station personality dial (`true`/`1`/`yes` to enable; default on). When ON, listener UI and hosts are Italian-first. When OFF, listener UI uses English utility copy with Italian headlines and station-feel words, and AI hosts code-switch (English narrative + Italian flavor). Operator-toggleable from admin Engine Room (hot-reloadable; persisted to `.env` in standalone mode and `/data/options.json` in HA addon mode).
 - `MAMMAMIRADIO_FESTIVAL_MODE`: enable Festival Mode (`true`/`1`/`yes`; default off). Hosts become theatrical music competition MCs — fictional Italian-regional delegations, dramatic scoring, drinking game triggers. Toggleable live from the admin panel without a restart; persisted to `.env` in standalone mode and `/data/options.json` in HA addon mode.

@@ -26,12 +26,12 @@ jobs:
       # lint script in the same change to bypass enforcement. PRs that modify
       # the lint take effect only after merging to base.
       - name: Checkout base ref
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           ref: ${{ github.event.pull_request.base.ref }}
 
       - name: Fetch PR body
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         with:
           script: |
             const body = context.payload.pull_request.body ?? "";

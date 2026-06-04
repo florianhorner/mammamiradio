@@ -156,7 +156,7 @@ Most station behavior lives in `radio.toml`:
 | Section | What it controls |
 |---------|-----------------|
 | `[station]` | Station name, language, theme |
-| `[playlist]` | Shuffle behavior, repeat/artist cooldowns, Jamendo CC music (`jamendo_client_id`, `jamendo_tags`) |
+| `[playlist]` | Shuffle behavior, repeat/artist cooldowns, Jamendo CC music (`jamendo_client_id`, `jamendo_tags`, `jamendo_limit`) |
 | `[pacing]` | Songs between banter, songs between ads, spots per break |
 | `[[hosts]]` | Host names, TTS engine (`edge`/`openai`/`azure`/`elevenlabs`), voices, personality |
 | `[audio]` | Sample rate, channels, bitrate, Claude model |

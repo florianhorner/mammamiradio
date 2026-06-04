@@ -1,0 +1,47 @@
+Verification for florianhorner/feat/music-search-backlog-issue
+(run locally in .venv / Python 3.11 against the branch merged with origin/main)
+Code commit: 2cef1d44 (test: guard jamendo_limit absent from persisted URL)
+
+$ python -m pytest tests/ -q
+2345 passed, 2 skipped, 7 deselected, 1 warning in ~55s
+
+$ make coverage-check   # CI's test+coverage gate
+Required test coverage of 92.0% reached. Total coverage: 94.11%
+All coverage floors held. Total: 94% (floor: 92%)
+
+$ ruff check .
+All checks passed!
+
+$ ruff format --check mammamiradio/ tests/
+148 files already formatted
+
+$ mypy mammamiradio/core/config.py mammamiradio/playlist/playlist.py
+Success: no issues found in 2 source files
+
+$ bash scripts/check-release-invariants.sh
+Passed: 6  Failed: 0 — All invariants passed.
+
+$ bash scripts/check-changelog-lint.sh
+Changelog lint clean.
+
+$ bash tests/workflows/test_cooldown_gate.sh
+All 9 cooldown gate cases passed.
+
+$ diff -q radio.toml ha-addon/mammamiradio/radio.toml
+(identical — add-on radio sync test holds; both ship jamendo_limit = 200)
+
+Pre-ship review squad (3 parallel agents: adversarial / test-coverage / docs-config)
+on the feature commit. No P0/P1 findings. One P2 acted on:
+  - tests/playlist/test_jamendo_coverage.py: added guard that the persisted
+    jamendo:// source URL does not encode `limit` (locks the architecture.md
+    contract that result depth is re-read from active config at fetch time).
+
+New/changed behavior covered by tests:
+  tests/playlist/test_jamendo_coverage.py::test_build_jamendo_url_defaults_to_deeper_rotation_limit
+  tests/playlist/test_jamendo_coverage.py::test_fetch_jamendo_playlist_uses_config_limit
+  tests/playlist/test_jamendo_coverage.py::test_validate_config_rejects_bad_jamendo_limit
+  tests/playlist/test_jamendo_coverage.py::test_load_config_invalid_jamendo_limit_env_var_raises
+  tests/playlist/test_jamendo_coverage.py::test_jamendo_source_url_does_not_encode_limit
+  tests/playlist/test_playlist_fetch.py::test_fetch_jamendo_playlist_url_includes_required_cc_params (limit=200)
+  tests/core/test_config.py::test_load_config_from_radio_toml (jamendo_limit == 200)
+  tests/core/test_config.py (JAMENDO_LIMIT env override)

@@ -21,7 +21,7 @@ from urllib.parse import urlsplit, urlunsplit
 import httpx
 from websockets.asyncio.client import connect as websocket_connect
 
-from mammamiradio.core.config import TimerInterruptConfig
+from mammamiradio.core.config import DEFAULT_STATION_NAME, TimerInterruptConfig
 from mammamiradio.core.models import InterruptSpec, ScoredEntityStatus
 from mammamiradio.home.ha_enrichment import (
     EVENT_BUFFER_SIZE,
@@ -1371,7 +1371,8 @@ async def fetch_home_context(
         return HomeContext()
 
 
-_last_ha_push: float = 0.0  # debounce: skip if last push was < 2s ago
+_last_ha_push: float = 0.0  # debounce: skip playing pushes < 2s apart
+_last_ha_stop_push: float = 0.0  # debounce: skip consecutive stopped pushes < 2s apart
 _ha_push_lock: asyncio.Lock | None = None
 
 
@@ -1390,15 +1391,30 @@ async def push_state_to_ha(
     current_track: object | None,
     listeners_active: int,
     session_stopped: bool,
+    queue_depth: int = 0,
+    station_name: str = DEFAULT_STATION_NAME,
 ) -> None:
-    """Push radio state to HA as media_player + sensor entities. Fire-and-forget."""
-    global _last_ha_push
+    """Push radio state to HA as media_player + sensor entities. Fire-and-forget.
+
+    ``station_name`` is the listener-facing name used for media_player/sensor
+    friendly names and the station ``media_artist``. Entity IDs and the
+    ``mammamiradio_*`` custom attributes stay unchanged for compatibility.
+    """
+    global _last_ha_push, _last_ha_stop_push
+
+    # Floor to the canonical name so a blank value can never reach an HA label.
+    station_name = station_name or DEFAULT_STATION_NAME
 
     async with _get_ha_push_lock():
         now = time.time()
         if not session_stopped and now - _last_ha_push < 2.0:
             return
-        _last_ha_push = now
+        if session_stopped and now - _last_ha_stop_push < 2.0:
+            return
+        if session_stopped:
+            _last_ha_stop_push = now
+        else:
+            _last_ha_push = now
 
         headers = {"Authorization": f"Bearer {ha_token}", "Content-Type": "application/json"}
         base_url = ha_url.rstrip("/")
@@ -1416,36 +1432,41 @@ async def push_state_to_ha(
                 or getattr(current_track, "title", None)
                 or now_streaming.get("label", "")
             )
-            media_artist = metadata.get("artist") or getattr(current_track, "artist", None) or "Radio MammaMia"
+            media_artist = metadata.get("artist") or getattr(current_track, "artist", None) or station_name
         else:
             media_title = metadata.get("title") or (now_streaming.get("label", "") if now_streaming else "")
-            media_artist = "Radio MammaMia"
+            media_artist = station_name
 
         started = (now_streaming.get("started", now) if now_streaming else now) or now
-        media_position = now - started
+        media_position = max(0.0, now - started)
+
+        media_attrs: dict = {
+            "friendly_name": station_name,
+            "supported_features": 0,
+            "media_title": media_title,
+            "media_artist": media_artist,
+            "media_content_type": "music" if segment_type == "music" else "channel",
+            "mammamiradio_segment_type": segment_type,
+            "mammamiradio_queue_depth": queue_depth,
+            "mammamiradio_listeners": listeners_active,
+        }
+        if is_playing:
+            media_attrs["media_position"] = media_position
+            media_attrs["media_position_updated_at"] = datetime.datetime.now(datetime.UTC).isoformat()
 
         entities: list[tuple[str, dict]] = [
             (
                 "media_player.mammamiradio",
                 {
                     "state": mp_state,
-                    "attributes": {
-                        "friendly_name": "Radio MammaMia",
-                        "media_title": media_title,
-                        "media_artist": media_artist,
-                        "media_content_type": "music" if segment_type == "music" else "channel",
-                        "media_position": media_position,
-                        "mammamiradio_segment_type": segment_type,
-                        "mammamiradio_queue_depth": 0,
-                        "mammamiradio_listeners": listeners_active,
-                    },
+                    "attributes": media_attrs,
                 },
             ),
             (
                 "sensor.mammamiradio_segment_type",
                 {
                     "state": segment_type,
-                    "attributes": {"friendly_name": "MammaMia Segment Type"},
+                    "attributes": {"friendly_name": f"{station_name} Segment Type"},
                 },
             ),
             (
@@ -1453,7 +1474,7 @@ async def push_state_to_ha(
                 {
                     "state": listeners_active,
                     "attributes": {
-                        "friendly_name": "MammaMia Listeners",
+                        "friendly_name": f"{station_name} Listeners",
                         "unit_of_measurement": "listeners",
                     },
                 },
@@ -1462,7 +1483,7 @@ async def push_state_to_ha(
                 "binary_sensor.mammamiradio_on_air",
                 {
                     "state": "off" if session_stopped else "on",
-                    "attributes": {"friendly_name": "MammaMia On Air"},
+                    "attributes": {"friendly_name": f"{station_name} On Air"},
                 },
             ),
         ]

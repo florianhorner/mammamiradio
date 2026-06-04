@@ -49,6 +49,20 @@ The current version source of truth is `pyproject.toml`.
 
 ### Fixed
 
+- **The HA media player card now shows accurate elapsed time.** The station's Home Assistant entity now includes the `media_position_updated_at` timestamp that HA requires to count forward between updates, so the playback position no longer resets or freezes every 30 seconds in the media card and companion app.
+
+- **`mammamiradio_queue_depth` in the HA entity now reflects the real queue.** The attribute previously always reported 0, so automations checking queue depth never triggered. It now carries the live count of segments waiting to play.
+
+- **Playback position is omitted when the station is idle.** When the station stops, the `media_position` attribute is no longer included in the HA entity, so Home Assistant correctly shows the player as idle rather than frozen at the last played position.
+
+- **Rapid stop-event bursts no longer flood the HA state API.** Consecutive stop-state pushes within 2 seconds are now debounced the same way playing-state pushes are, preventing an unusual watchdog restart loop from generating more API calls than needed.
+
+- **Queueing a song from admin search no longer shows a false error.** Previously, picking a track from the admin search could pop "Failed to add to queue" even though the track was downloading fine and would play — the browser request was waiting on the full download and the connection timed out. The download now runs in the background and the request returns instantly, so the admin sees a "downloading — on air shortly" confirmation and the track plays next once it is ready. The live stream is never interrupted. A queued track now also survives routine edits made while it downloads (adding tracks, reordering, mode toggles), and if a download genuinely fails the admin gets a clear message instead of silence.
+
+- **Admin search no longer surfaces unplayable results.** The web search sometimes listed an artist's channel as the top hit; clicking it failed with an error because a channel can't be queued. Search now returns only real tracks, so every result can be queued.
+
+- **The admin live queue no longer overlaps itself.** In the Scaletta (live queue), the "when" label and the segment-type badge could collide into unreadable text on narrower screens. The redundant "planned" tag was removed; upcoming-but-not-yet-rendered rows stay dimmed to mark them.
+
 - **The Edge add-on now auto-updates after every add-on change.** The automated edge-channel version bump previously could not land on the protected branch, so Home Assistant never showed an Edge "Update" and the add-on build reported a failure on every change. The bump now goes through the normal checks, so the Edge channel tracks the latest build again.
 
 ### Security
@@ -56,6 +70,10 @@ The current version source of truth is `pyproject.toml`.
 - **Admin endpoints no longer auto-trust private networks when admin credentials are configured.** Previously a client on a LAN or Tailscale address was trusted for admin access even when `ADMIN_PASSWORD` or `ADMIN_TOKEN` was set, so a configured credential could be silently bypassed from any private-network browser. Now, when a credential is configured, all non-loopback admin traffic must present it. Credential-less private-network deployments are unchanged (still trusted, still CSRF-guarded on writes). Standalone runs that bind to a non-loopback host (including an empty bind host, which listens on all interfaces) now require `ADMIN_PASSWORD` or `ADMIN_TOKEN` at startup. Browser admin access requires `ADMIN_PASSWORD`; `ADMIN_TOKEN` is a header-only API credential a browser cannot send on navigation.
 
 ### Changed
+
+- **Jamendo rotation depth now defaults to 200 tracks.** The `[playlist].jamendo_limit`
+  config key and `JAMENDO_LIMIT` env override control Jamendo API result depth
+  from `1` to `200`, reducing repeats when Jamendo is the active music source.
 
 - **Admin producer-desk polish** — the `/admin` control room is now English-first
   for all utility copy (buttons, tooltips, toasts, status, empty states), with

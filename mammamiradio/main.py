@@ -14,7 +14,7 @@ from pathlib import Path
 
 from fastapi import FastAPI
 
-from mammamiradio.core.config import load_config
+from mammamiradio.core.config import DEFAULT_STATION_NAME, load_config
 from mammamiradio.core.models import StationState
 from mammamiradio.core.sync import init_db
 from mammamiradio.home.evening_memory import EveningLedger
@@ -75,7 +75,7 @@ async def _lifespan(app: FastAPI):
     await shutdown()
 
 
-app = FastAPI(title="mammamiradio", lifespan=_lifespan)
+app = FastAPI(title=DEFAULT_STATION_NAME, lifespan=_lifespan)
 app.include_router(router)
 app.include_router(listener_requests_router)
 app.include_router(integrations_router)
@@ -248,6 +248,21 @@ async def shutdown():
     if _playback_task:
         _playback_task.cancel()
         tasks_to_cancel.append(_playback_task)
+    # The provider-verdict probe is created outside the producer/playback set
+    # (startup + credential saves); cancel it so it can't mutate station_state
+    # after teardown begins — same write-after-shutdown race as the downloads.
+    verdict_task = getattr(app.state, "provider_verdict_task", None)
+    if verdict_task:
+        verdict_task.cancel()
+        tasks_to_cancel.append(verdict_task)
+    # Fire-and-forget background tasks (queue-from-search / listener song
+    # downloads). Cancel them too so an in-flight yt-dlp download can't write to
+    # app.state after teardown begins.
+    background_tasks = getattr(app.state, "background_tasks", None)
+    if background_tasks:
+        for _bg in list(background_tasks):
+            _bg.cancel()
+            tasks_to_cancel.append(_bg)
     if tasks_to_cancel:
         await asyncio.gather(*tasks_to_cancel, return_exceptions=True)
     if hasattr(app.state, "producer_task"):

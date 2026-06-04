@@ -433,7 +433,7 @@ def _build_jamendo_url(
     tags: str,
     country: str = "",
     order: str = "",
-    limit: int = 50,
+    limit: int = 200,
 ) -> str:
     params: dict[str, str] = {
         "client_id": client_id,
@@ -455,7 +455,7 @@ def _fetch_jamendo_playlist(
     tags: str | None = None,
     country: str | None = None,
     order: str | None = None,
-    limit: int = 50,
+    limit: int | None = None,
 ) -> list[Track]:
     """Fetch a Creative Commons playlist from Jamendo."""
     client_id = (config.playlist.jamendo_client_id or "").strip()
@@ -465,12 +465,13 @@ def _fetch_jamendo_playlist(
     requested_tags = (tags or config.playlist.jamendo_tags or "pop").strip() or "pop"
     requested_country = (country if country is not None else config.playlist.jamendo_country or "").strip()
     requested_order = (order if order is not None else config.playlist.jamendo_order or "").strip()
+    requested_limit = limit if limit is not None else config.playlist.jamendo_limit
     url = _build_jamendo_url(
         client_id,
         tags=requested_tags,
         country=requested_country,
         order=requested_order,
-        limit=limit,
+        limit=requested_limit,
     )
     try:
         with urlopen(url, timeout=4.0) as resp:

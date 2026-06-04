@@ -187,10 +187,12 @@ When the HA integration is enabled (`ha_enabled: true` in `radio.toml` or the HA
 
 | Entity ID | Type | State values | Key attributes |
 |---|---|---|---|
-| `media_player.mammamiradio` | media_player | `playing` / `idle` | `media_title`, `media_artist`, `media_content_type`, `mammamiradio_segment_type`, `mammamiradio_listeners` |
+| `media_player.mammamiradio` | media_player | `playing` / `idle` | `media_title`, `media_artist`, `media_content_type`, `media_position`, `media_position_updated_at` (playing only), `mammamiradio_segment_type`, `mammamiradio_listeners`, `mammamiradio_queue_depth` |
 | `sensor.mammamiradio_segment_type` | sensor | `music` / `banter` / `ad` / `off` | — |
 | `sensor.mammamiradio_listeners` | sensor | integer | `unit_of_measurement: listeners` |
 | `binary_sensor.mammamiradio_on_air` | binary_sensor | `on` / `off` | — |
+
+All four entities are labelled with the configured station name (`Mamma Mi Radio` by default): the media player's `friendly_name` is the station name itself (and it doubles as `media_artist` for non-music segments), while the sensors read `<station> Segment Type`, `<station> Listeners`, and `<station> On Air`. Entity IDs and the `mammamiradio_*` attribute keys stay fixed regardless of the display name, so existing automations and dashboards keep working.
 
 **30-second cold-start note:** after a HA or addon restart, pushed entities reappear within 30 seconds via the heartbeat. Automations triggering on `state_changed` may miss the first segment after restart — add an `initial_state: playing` guard if needed.
 

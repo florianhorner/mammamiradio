@@ -1453,13 +1453,6 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
 .a-programme tr.predicted {
   opacity: 0.72;
 }
-.a-programme tr.predicted .ts::after {
-  content: " · planned";
-  color: var(--muted);
-  font-size: 10px;
-  text-transform: none;
-  letter-spacing: 0;
-}
 .a-programme tr.rendered-queue.next {
   background: rgba(37,99,235,0.08);
   box-shadow: inset 2px 0 0 var(--ok);
@@ -2110,6 +2103,35 @@ const SOURCE_CHIPS={
 let _lastSetupJson=null;
 
 function toast(m){const e=document.getElementById('toast');e.textContent=m;e.classList.add('show');setTimeout(()=>e.classList.remove('show'),1600)}
+// Surface background queue-from-search failures the POST couldn't report (it
+// returned 200 before the download finished). /status carries recent notices;
+// toast any whose ts we haven't shown yet. The first poll only primes the
+// watermark — notices that already existed at page load (a refresh re-fetches
+// the server-side deque) are NOT re-toasted; we only toast failures that occur
+// during this session.
+let _lastNoticeTs=0, _noticesPrimed=false;
+function notifyExternalAddNotices(notices){
+  if(!Array.isArray(notices)||!notices.length){_noticesPrimed=true;return;}
+  const maxTs=Math.max(...notices.map(n=>(n&&n.ts)||0));
+  if(!_noticesPrimed){_lastNoticeTs=maxTs;_noticesPrimed=true;return;}
+  const fresh=notices.filter(n=>n&&(n.ts||0)>_lastNoticeTs);
+  _lastNoticeTs=Math.max(_lastNoticeTs,maxTs);
+  if(!fresh.length)return;
+  for(const n of fresh){
+    const name=n.display||'track';
+    if(n.ok){
+      // Added to the rotation pool because the play-next slot was taken. No
+      // strict ordering promise — playlist order isn't next-play order. Plain
+      // toast, not an error.
+      toast('Added “'+name+'” to rotation — it’ll play soon.');
+      continue;
+    }
+    const msg=n.reason==='source_changed'
+      ? 'Couldn’t queue “'+name+'” — the playlist source changed.'
+      : 'Couldn’t download “'+name+'” — try another result.';
+    if(typeof window.errorToast==='function')window.errorToast(msg);else toast(msg);
+  }
+}
 function esc(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;')}
 function escJs(s){return String(s||'').replace(/\\/g,'\\\\').replace(/'/g,"\\'");}
 function fmtRuntimeTs(ts){
@@ -2915,7 +2937,7 @@ async function addExternal(i){
   try{
     const r=await api('POST','/api/playlist/add-external',{youtube_id:t.youtube_id,title:t.title,artist:t.artist,duration_ms:t.duration_ms});
     if(r.ok){
-      toast('Queued: '+t.display);
+      toast('Downloading: '+t.display+' — on air shortly');
       document.getElementById('searchResults').innerHTML='';
       si.value='';_plFilter='';
     }else{
@@ -3416,6 +3438,7 @@ async function refreshFast(){
     if (_st.station) {
       try { localStorage.setItem('stationName', _st.station); } catch (_) {}
     }
+    notifyExternalAddNotices(_st.external_add_notices);
     const lrData=lrr.ok?await lrr.json():{requests:[]};
     if(_st.session_stopped!==undefined)updateStopState(_st.session_stopped);
     updateNow(_st.now_streaming);

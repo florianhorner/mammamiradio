@@ -39,14 +39,13 @@ import ipaddress
 import logging
 import time
 import uuid
-from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 
 from mammamiradio.core.models import SegmentType
-from mammamiradio.web.streamer import require_admin_access
+from mammamiradio.web.streamer import _register_background_task, require_admin_access
 
 logger = logging.getLogger("mammamiradio.listener_requests")
 
@@ -288,29 +287,28 @@ async def listener_request(request: Request):
 
     # Fire async download for song requests
     if is_song_request:
-        _dl_task = asyncio.create_task(_download_listener_song(req, request.app.state, state.playlist_revision))
-        request.app.state.background_tasks = getattr(request.app.state, "background_tasks", set())
-        request.app.state.background_tasks.add(_dl_task)
-        _dl_task.add_done_callback(request.app.state.background_tasks.discard)
+        _dl_task = asyncio.create_task(_download_listener_song(req, request.app.state, state.source_revision))
+        _register_background_task(request.app.state, _dl_task)
 
     logger.info("Listener request queued: request_id=%s type=%s", req["request_id"], req["type"])
     return {"ok": True, "queued": True, "type": req["type"]}
 
 
-async def _download_listener_song(req: dict, app_state, originating_revision: int) -> None:
+async def _download_listener_song(req: dict, app_state, originating_source_revision: int) -> None:
     """Background task: search yt-dlp for a listener song request and pin it.
 
     Stream-safe: does NOT purge the pre-buffered queue.  The pinned track
     enters the queue naturally after the current lookahead drains, avoiding
-    any audible silence gap.  If the playlist source changed while downloading
-    (revision mismatch) or the request was already consumed, the track is
-    dropped entirely to prevent leaking old requests into the new source.
+    any audible silence gap.  If the playlist SOURCE switched while downloading
+    or the request was already consumed, the track is dropped entirely to
+    prevent leaking old requests into the new source. Shares the download +
+    source-guard + pin core with the admin queue-from-search path.
     """
     from mammamiradio.core.models import Track
-    from mammamiradio.playlist.downloader import download_external_track, search_ytdlp_metadata
+    from mammamiradio.playlist.downloader import search_ytdlp_metadata
+    from mammamiradio.web.streamer import _commit_external_download
 
     state = app_state.station_state
-    config = app_state.config
     query = req.get("song_query") or req.get("message") or ""
     try:
         loop = asyncio.get_running_loop()
@@ -326,24 +324,30 @@ async def _download_listener_song(req: dict, app_state, originating_revision: in
             duration_ms=meta["duration_ms"],
             youtube_id=meta["youtube_id"],
         )
-        # Download so it's ready when the producer picks it up
-        await download_external_track(track, config.cache_dir, music_dir=Path("music"))
-
-        # Guard: if the playlist source switched while we were downloading,
-        # drop the result entirely.  Adding it to the new playlist would embed
-        # an old listener wish in a freshly loaded source.
-        if state.playlist_revision != originating_revision or req not in state.pending_requests:
+        status = await _commit_external_download(
+            track,
+            app_state,
+            originating_source_revision,
+            # Drop if the request was consumed/dismissed while downloading.
+            should_commit=lambda: req in state.pending_requests,
+            # Pin only when the play-next slot is free AND this request is still at
+            # the head of the queue. The pinned_track guard preserves an operator
+            # pin (e.g. move-to-next, which bumps playlist_revision but not
+            # source_revision) instead of clobbering it; the track still joins
+            # rotation via the "queued" path.
+            should_pin=lambda: (
+                state.pinned_track is None and bool(state.pending_requests) and state.pending_requests[0] is req
+            ),
+        )
+        # "pinned" or "queued" both mean the track landed in the playlist for this
+        # request; only "dropped" means a source switch / consumption discarded it.
+        if status != "dropped":
+            req["song_found"] = True
+            req["song_track"] = track.display
+            req["song_track_obj"] = track
+            logger.info("Listener song request ready: %s", track.display)
+        else:
             logger.info("Listener song downloaded but playlist changed or request consumed: %s", track.display)
-            return
-
-        state.playlist.append(track)
-        req["song_found"] = True
-        req["song_track"] = track.display
-        req["song_track_obj"] = track
-        if state.pending_requests and state.pending_requests[0] is req:
-            state.pinned_track = track
-            state.force_next = SegmentType.MUSIC
-        logger.info("Listener song request ready: %s", track.display)
     except asyncio.CancelledError:
         req["song_error"] = True
         if req in state.pending_requests:

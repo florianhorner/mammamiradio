@@ -29,6 +29,13 @@ load_dotenv()
 _TRUTHY = {"true", "1", "yes"}
 _FALSY = {"false", "0", "no"}
 
+# Canonical user-facing station name — the single source of truth. Every
+# user-visible surface (HA entities, FastAPI/OpenAPI title, clip sidecar, config
+# fallbacks) references this so the name cannot drift the way "Radio MammaMia",
+# "MammaMia", "Malamie", and lowercase "mammamiradio" once did. Technical
+# identifiers (package name, env vars, entity IDs, slugs) stay "mammamiradio".
+DEFAULT_STATION_NAME = "Mamma Mi Radio"
+
 
 def coerce_bool(value: object, default: bool = False) -> bool:
     """Type-safe bool coercion that rejects truthy-string-of-falsy-word.
@@ -57,7 +64,7 @@ def coerce_bool(value: object, default: bool = False) -> bool:
 class StationSection:
     """Station identity and public stream metadata."""
 
-    name: str = "Mamma Mi Radio"
+    name: str = DEFAULT_STATION_NAME
     language: str = "it"
     theme: str = ""
 
@@ -75,6 +82,7 @@ class PlaylistSection:
     jamendo_tags: str = "pop"
     jamendo_country: str = ""
     jamendo_order: str = ""
+    jamendo_limit: int = 200
 
 
 @dataclass
@@ -267,7 +275,7 @@ class BrandTheme:
 class BrandSection:
     """The brand-fiction layer: what listeners see, separate from the engine config."""
 
-    station_name: str = "mammamiradio"
+    station_name: str = DEFAULT_STATION_NAME
     frequency: str = ""
     city: str = ""
     founded: int = 0
@@ -318,6 +326,16 @@ class StationConfig:
     # during config load because the configured ID wasn't valid for the chosen
     # backend. Empty when all voices passed validation.
     tts_degraded_voices: list[str] = field(default_factory=list)
+
+    @property
+    def display_station_name(self) -> str:
+        """Canonical listener-facing station name — the single resolver, never blank.
+
+        Every user-visible surface (HA entities, clip sidecar, etc.) reads this
+        instead of re-deriving the name, so the value stays consistent. Resolves
+        brand → station → the canonical default.
+        """
+        return self.brand.station_name or self.station.name or DEFAULT_STATION_NAME
 
 
 def _normalize_tts_voices(config: StationConfig) -> None:
@@ -604,7 +622,7 @@ def _parse_brand(raw: dict, hosts: list[HostPersonality]) -> tuple[BrandSection,
     if not brand_raw:
         return (
             BrandSection(
-                station_name=raw.get("station", {}).get("name", "mammamiradio"),
+                station_name=raw.get("station", {}).get("name", DEFAULT_STATION_NAME),
                 hosts=[
                     BrandHost(engine_host=h.name, display_name=h.name, description=(h.style or "")[:160]) for h in hosts
                 ],
@@ -705,7 +723,7 @@ def _parse_brand(raw: dict, hosts: list[HostPersonality]) -> tuple[BrandSection,
                 brand_raw["founded"] = year
 
     brand = BrandSection(
-        station_name=brand_raw.get("station_name", raw.get("station", {}).get("name", "mammamiradio")),
+        station_name=brand_raw.get("station_name", raw.get("station", {}).get("name", DEFAULT_STATION_NAME)),
         frequency=brand_raw.get("frequency", ""),
         city=brand_raw.get("city", ""),
         founded=int(brand_raw.get("founded", 0)),
@@ -787,6 +805,10 @@ def _validate(config: StationConfig) -> None:
     }
     if config.playlist.jamendo_order and config.playlist.jamendo_order not in _valid_jamendo_orders:
         errors.append(_err("playlist.jamendo_order", f"must be one of {sorted(_valid_jamendo_orders)} or empty"))
+    if not isinstance(config.playlist.jamendo_limit, int) or isinstance(config.playlist.jamendo_limit, bool):
+        errors.append(_err("playlist.jamendo_limit", "must be an integer between 1 and 200"))
+    elif not 1 <= config.playlist.jamendo_limit <= 200:
+        errors.append(_err("playlist.jamendo_limit", "must be between 1 and 200"))
 
     if not (config.anthropic_api_key or config.openai_api_key):
         log.warning("No ANTHROPIC_API_KEY or OPENAI_API_KEY — banter/ads will use fallback text")
@@ -928,6 +950,12 @@ def load_config(path: str = "radio.toml") -> StationConfig:
         playlist_raw["jamendo_country"] = os.getenv("JAMENDO_COUNTRY", "").strip()
     if os.getenv("JAMENDO_ORDER") is not None:
         playlist_raw["jamendo_order"] = os.getenv("JAMENDO_ORDER", "").strip()
+    jamendo_limit_env = os.getenv("JAMENDO_LIMIT")
+    if jamendo_limit_env is not None and jamendo_limit_env.strip():
+        try:
+            playlist_raw["jamendo_limit"] = int(jamendo_limit_env.strip())
+        except ValueError:
+            playlist_raw["jamendo_limit"] = jamendo_limit_env.strip()
 
     # Env-var overrides for cache/tmp directories (for Docker volume mounts)
     cache_dir = Path(os.getenv("MAMMAMIRADIO_CACHE_DIR", "cache"))
