@@ -187,6 +187,59 @@ async def test_station_id_uses_host_engine_when_sweeper_voice_is_host_based():
 
 
 @pytest.mark.asyncio
+async def test_station_id_uses_configured_sweeper_engine():
+    state = _make_state()
+    config = _make_config()
+    config.sonic_brand.sweeper_voice = "marin"
+    config.sonic_brand.sweeper_engine = "openai"
+    config.sonic_brand.sweeper_edge_fallback_voice = "it-IT-GiuseppeMultilingualNeural"
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+
+    with (
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.STATION_ID),
+        patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, return_value=_fake_path()) as mock_synthesize,
+        patch(f"{PRODUCER_MODULE}.generate_station_id_bed", side_effect=_fake_path),
+        patch(f"{PRODUCER_MODULE}.mix_voice_with_sting", side_effect=_fake_path),
+        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+    ):
+        await _run_until_queued(queue, state, config)
+
+    seg = queue.get_nowait()
+    assert seg.type == SegmentType.STATION_ID
+    kwargs = mock_synthesize.call_args.kwargs
+    assert kwargs["engine"] == "openai"
+    assert kwargs["edge_fallback_voice"] == "it-IT-GiuseppeMultilingualNeural"
+
+
+@pytest.mark.asyncio
+async def test_sweeper_uses_configured_sweeper_engine():
+    state = _make_state()
+    config = _make_config()
+    config.sonic_brand.sweeper_voice = "marin"
+    config.sonic_brand.sweeper_engine = "openai"
+    config.sonic_brand.sweeper_edge_fallback_voice = "it-IT-GiuseppeMultilingualNeural"
+    config.sonic_brand.sweepers = ["Mamma Mi Radio."]
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    imaging = MagicMock()
+    imaging.pick_sweeper_sting.side_effect = _fake_path
+
+    with (
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.SWEEPER),
+        patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, return_value=_fake_path()) as mock_synthesize,
+        patch(f"{PRODUCER_MODULE}._make_imaging_lib", return_value=imaging),
+        patch(f"{PRODUCER_MODULE}.mix_voice_with_sting", side_effect=_fake_path),
+        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+    ):
+        await _run_until_queued(queue, state, config)
+
+    seg = queue.get_nowait()
+    assert seg.type == SegmentType.SWEEPER
+    kwargs = mock_synthesize.call_args.kwargs
+    assert kwargs["engine"] == "openai"
+    assert kwargs["edge_fallback_voice"] == "it-IT-GiuseppeMultilingualNeural"
+
+
+@pytest.mark.asyncio
 async def test_time_check_uses_host_engine_for_tts():
     state = _make_state()
     config = _make_config()
@@ -2351,6 +2404,40 @@ class TestBanterTitle:
 
         assert _banter_title(None, canned=False) == "Banter"
         assert _banter_title([{"text": "no host"}], canned=False) == "Banter"
+
+    def test_host_order_sorts_to_config_order(self):
+        """LLM opened with Marco but config lists Giulia first — display shows Giulia & Marco."""
+        from mammamiradio.scheduling.producer import _banter_title
+
+        script = [{"host": "Marco", "text": "Ciao"}, {"host": "Giulia", "text": "Benvenuti"}]
+        assert _banter_title(script, canned=False, host_order=["Giulia", "Marco"]) == "Giulia & Marco"
+
+    def test_host_not_in_order_sorts_to_end(self):
+        """A host absent from host_order still appears, sorted after known hosts."""
+        from mammamiradio.scheduling.producer import _banter_title
+
+        script = [{"host": "Giulia", "text": "Ciao"}, {"host": "Unknown", "text": "Hey"}]
+        result = _banter_title(script, canned=False, host_order=["Giulia", "Marco"])
+        assert result == "Giulia & Unknown"
+
+    def test_host_order_empty_list_falls_back_to_script_order(self):
+        """Empty host_order is falsy — sorting is skipped, script order is preserved."""
+        from mammamiradio.scheduling.producer import _banter_title
+
+        script = [{"host": "Marco", "text": "Ciao"}, {"host": "Giulia", "text": "Benvenuti"}]
+        assert _banter_title(script, canned=False, host_order=[]) == "Marco & Giulia"
+
+    def test_host_order_caps_at_two_with_three_hosts(self):
+        """Cap-at-2 persists even with host_order; first two in config order are shown."""
+        from mammamiradio.scheduling.producer import _banter_title
+
+        script = [
+            {"host": "Marco", "text": "a"},
+            {"host": "Giulia", "text": "b"},
+            {"host": "Luca", "text": "c"},
+        ]
+        result = _banter_title(script, canned=False, host_order=["Giulia", "Luca", "Marco"])
+        assert result == "Giulia & Luca"
 
 
 class TestAdTitle:

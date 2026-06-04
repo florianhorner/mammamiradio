@@ -43,9 +43,9 @@ sed -i '' 's/^version:.*/version: X.Y.Z/' ha-addon/mammamiradio/config.yaml
 sed -i '' 's/^version = .*/version = "X.Y.Z"/' pyproject.toml
 ```
 
-## Addon stage: experimental (pre-1.0)
+## Addon stage
 
-`ha-addon/mammamiradio/config.yaml` declares `stage: experimental`. This produces the orange "Experimental" badge in the HACS addon store and signals pre-1.0 status to new installers. Revisit at the v1.0 cut — either delete the line or flip to `stage: stable` once the product is stable.
+`ha-addon/mammamiradio/config.yaml` declares `stage: stable` for the release channel. The Edge channel stays `stage: experimental` in `ha-addon/mammamiradio-edge/config.yaml` so testers still see the orange Experimental badge on main-branch builds.
 
 ## Config options: the contract
 

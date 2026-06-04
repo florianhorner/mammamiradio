@@ -592,6 +592,12 @@ body[data-stopped="true"] .sidebar-live-line { color: var(--cream-dk); }
 .lr-btn-queue { background: rgba(37,99,235,0.18); color: var(--ok); }
 .lr-btn-queue:hover { background: rgba(37,99,235,0.32); }
 .lr-head .status-inline { font-size: 10px; font-weight: 600; }
+.lr-consumed-label { font-size: 10px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: rgba(245,237,216,0.3); margin: 10px 0 4px; }
+.lr-item-consumed { opacity: 0.6; }
+.lr-badge { font-size: 10px; font-weight: 600; padding: 2px 6px; border-radius: 4px; }
+.lr-badge-ok { background: rgba(37,99,235,0.18); color: var(--ok); }
+.lr-badge-warn { background: rgba(244,208,72,0.12); color: var(--sun); }
+.lr-track { margin-left: 6px; font-style: italic; color: rgba(245,237,216,0.45); }
 
 /* ── MISC ── */
 .empty { font-size: 12px; color: rgba(245,237,216,0.35); text-align: center; padding: 16px 0; font-style: italic; }
@@ -893,7 +899,10 @@ body::before {
 .a-programme tr { transition: background 150ms; }
 .a-programme tr:hover { background: rgba(245,237,216,0.03); }
 .a-programme tr.past td { opacity: 0.5; }
-.a-programme tr.next { background: rgba(37,99,235,0.04); }
+.a-programme tr.next { background: rgba(244,208,72,0.06); box-shadow: inset 3px 0 0 var(--sun2); }
+.a-programme tr.next .ts { color: var(--sun); font-weight: 600; }
+.a-programme tr.next .ti { font-style: italic; font-family: var(--font-display); font-size: 15px; }
+.prog-subtitle { display: block; font-family: var(--font-body); font-style: normal; font-size: 10px; color: var(--muted); line-height: 1.2; margin-top: 1px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .a-programme tr.now {
   background: rgba(236,204,48,0.06);
   box-shadow: inset 2px 0 0 var(--sun2);
@@ -914,6 +923,18 @@ body::before {
 .a-programme .ac button svg { width: 12px; height: 12px; }
 .a-programme .ac button:hover { color: var(--sun); border-color: var(--sun2); background: rgba(236,204,48,0.06); }
 .a-programme .ac button:focus-visible { outline: none; box-shadow: 0 0 0 2px rgba(236,204,48,0.5); }
+
+/* "In produzione" feed — live backstage work above the queue. Reuses the
+   canonical status-inline (working/ready/blocked) + segment-inline badges;
+   status lines are English utility copy, the section label stays Italian. */
+.queue-production { margin-bottom: 14px; }
+.prod-entry {
+  display: flex; align-items: center; gap: 8px;
+  padding: 5px 2px; font-size: 11px; color: var(--text-secondary);
+}
+.prod-entry.recent { opacity: 0.5; }
+.prod-entry .prod-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.prod-entry .prod-elapsed { font-family: var(--font-mono); font-size: 10px; color: var(--muted); flex-shrink: 0; font-variant-numeric: tabular-nums; }
 
 /* Compact non-status segment labels for programme categories */
 .a-programme .segment-inline,
@@ -1237,7 +1258,7 @@ body[data-stopped="true"] .a-station-card .dot.on { animation-play-state: paused
     background: rgba(236,204,48,0.08);
     box-shadow: inset 2px 0 0 var(--sun2);
   }
-  .a-programme tr.next { background: rgba(37,99,235,0.05); }
+  .a-programme tr.next { background: rgba(244,208,72,0.06); box-shadow: inset 3px 0 0 var(--sun2); }
   .a-programme tr.past { opacity: 0.66; }
   .a-programme tr.past td { opacity: 1; }
   .a-programme td {
@@ -1741,6 +1762,10 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
         <div class="card-label">Pending requests <span id="lrMeta" style="float:right;font-weight:400;color:var(--muted)"></span></div>
         <div id="lrBody"><div class="empty">No requests</div></div>
       </div>
+      <div class="queue-production" id="queue-production" style="display:none">
+        <div class="card-label">In produzione</div>
+        <div id="productionFeed"></div>
+      </div>
       <div id="programmeList">
         <div class="prog-empty">Building queue...</div>
       </div>
@@ -2037,7 +2062,7 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
             <div class="setup-subhead">Initial checks</div>
             <div class="setup-list" id="setupChecks"></div>
             <div id="setupKeysConfigured" style="display:none;padding:0.75rem 1rem;background:rgba(37,99,235,0.1);border:1px solid rgba(37,99,235,0.3);border-radius:8px;margin-bottom:0.75rem">
-              <span style="color:var(--ok);font-weight:600" id="setupKeysLabel">&#10003; AI keys configured</span>
+              <span style="color:var(--ok);font-weight:600" id="setupKeysLabel">&#10003; Provider keys configured</span>
               <span style="opacity:0.7;margin-left:0.5rem;font-size:0.85em" id="setupKeysDetail"></span>
               <button type="button" class="btn btn-util" style="margin-left:0.75rem;font-size:0.8em;padding:0.2rem 0.6rem" onclick="_keysEditMode=true;document.getElementById('setupKeysForm').style.display='block'">Replace</button>
             </div>
@@ -2046,6 +2071,9 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
               <div class="setup-keys">
                 <input class="input" id="setupAnthropicKey" type="password" placeholder="ANTHROPIC_API_KEY (optional)" autocomplete="off" aria-label="Anthropic API key">
                 <input class="input" id="setupOpenaiKey" type="password" placeholder="OPENAI_API_KEY (optional)" autocomplete="off" aria-label="OpenAI API key">
+                <input class="input" id="setupAzureSpeechKey" type="password" placeholder="AZURE_SPEECH_KEY (optional)" autocomplete="off" aria-label="Azure Speech key">
+                <input class="input" id="setupAzureSpeechRegion" type="text" placeholder="AZURE_SPEECH_REGION (optional)" autocomplete="off" aria-label="Azure Speech region">
+                <input class="input" id="setupElevenlabsKey" type="password" placeholder="ELEVENLABS_API_KEY (optional)" autocomplete="off" aria-label="ElevenLabs API key">
               </div>
               <div class="setup-actions" style="margin-top:10px">
                 <button type="button" class="btn btn-trigger" id="setupSaveBtn" onclick="setupSaveKeys(this)">Save Keys</button>
@@ -2479,6 +2507,40 @@ function splitTrackLabel(seg){
   }
   return {title:label,artist:(seg&&seg.metadata&&seg.metadata.artist)||''};
 }
+// Subtitle line shown under the NEXT row's title: artist·source / hosts / brand / category.
+// Surfaces the "what is it" detail even on narrow viewports where the Fonte column hides.
+function buildSubtitle(it,typeKey,parts){
+  if(typeKey==='music'){
+    if(parts.artist&&it.source_kind)return `${parts.artist} · ${it.source_kind}`;
+    return parts.artist||it.source_kind||'';
+  }
+  if(typeKey==='banter')return (it.metadata&&it.metadata.title)||'';
+  if(typeKey==='ad'){const m=String(it.label||'').match(/^Ad:\s*(.+?)(?:\s*\+\d+.*)?$/i);return m?m[1].trim():'';}
+  if(typeKey==='news_flash')return (it.metadata&&it.metadata.category)||'breaking';
+  return '';
+}
+
+// "In produzione" — render the live production feed (current work + recent trail).
+// Driven by st.production from /api/status. Hidden entirely when idle (never a dead box).
+function renderProduction(st){
+  const wrap=document.getElementById('queue-production');
+  const feed=document.getElementById('productionFeed');
+  if(!wrap||!feed)return;
+  const p=st&&st.production||{};
+  const rows=[];
+  if(p.current&&p.current.label){
+    const badge=segmentInline(segmentTypeKey(p.current.kind||'music'));
+    const el=p.current.elapsed_sec?`<span class="prod-elapsed">${p.current.elapsed_sec}s</span>`:'';
+    rows.push(`<div class="prod-entry">${statusInline('working','',p.current.label)}${badge}<span class="prod-label">${esc(p.current.label)}</span>${el}</div>`);
+  }
+  (p.recent||[]).forEach(r=>{
+    const badge=segmentInline(segmentTypeKey(r.kind||'music'));
+    rows.push(`<div class="prod-entry recent">${statusInline(r.ok?'ready':'blocked','',r.label)}${badge}<span class="prod-label">${esc(r.label)}</span></div>`);
+  });
+  if(rows.length){feed.innerHTML=rows.join('');wrap.style.display='';}
+  else{feed.innerHTML='';wrap.style.display='none';}
+}
+
 function renderProgramme(st){
   // session_stopped is part of the key: the empty-state branches below render
   // different copy when stopped vs building, so a stop/resume with an unchanged
@@ -2528,7 +2590,9 @@ function renderProgramme(st){
     const action=actionable
       ? `<button type="button" class="queue-remove-btn" title="Remove from queue" aria-label="Remove from queue" onclick="event.stopPropagation();removeQueueItem('${escJs(it.id||'')}',this)"><svg class="ic" aria-hidden="true"><use href="#ic-trash"/></svg></button>`
       : '';
-    rows.push(`<tr class="${rowClass}" ${clickAttrs}><td class="ts">${relLabel(it._queueIndex)}</td><td>${segmentInline(typeKey)}</td><td class="ti">${esc(titleText||segmentText(typeKey))}</td><td class="ho">${esc(sourceText)}</td><td class="du">${fmtDur(it,typeKey)}</td><td class="ac">${action}</td></tr>`);
+    const subtitle=it._queueIndex===0?buildSubtitle(it,typeKey,parts):'';
+    const titleCell=`${esc(titleText||segmentText(typeKey))}${subtitle?`<span class="prog-subtitle">${esc(subtitle)}</span>`:''}`;
+    rows.push(`<tr class="${rowClass}" ${clickAttrs}><td class="ts">${relLabel(it._queueIndex)}</td><td>${segmentInline(typeKey)}</td><td class="ti">${titleCell}</td><td class="ho">${esc(sourceText)}</td><td class="du">${fmtDur(it,typeKey)}</td><td class="ac">${action}</td></tr>`);
   });
 
   if(upFiltered.length>8){
@@ -2609,12 +2673,24 @@ function statusRow(title,state,label,detail){
   return `<div class="status-row"><div class="status-copy"><div class="status-title">${esc(title)}</div><div class="status-detail">${esc(detail)}</div></div>${statusChip(state,label)}</div>`;
 }
 function runtimeProviderRow(title,item){
-  const state=item?.fallback_active?'degraded':'ready';
-  const label=item?.fallback_active?'Fallback':'Primary';
+  let state,label;
+  if(item?.recovery_mode==='circuit_breaker'||item?.recovery_mode==='action_required'){
+    state='degraded';
+    label='Backup active';
+  }else if(item?.recovery_mode==='transient'){
+    state='working';
+    label='Auto-recovering';
+  }else{
+    state=item?.fallback_active?'degraded':'ready';
+    label=item?.fallback_active?'Fallback':'Primary';
+  }
+  const reasonLine=item?.action_guidance||item?.switch_reason||'';
+  const retryLine=item?.retry_in_seconds>0?'Retrying in '+Math.ceil(item.retry_in_seconds/60)+' min':'';
   const detail=[
     'Current: '+(item?.current_label||item?.current_provider||'—'),
     'Primary: '+(item?.primary_label||item?.primary_provider||'—'),
-    item?.switch_reason||'',
+    reasonLine,
+    retryLine,
     item?.last_switch_timestamp?'Last switch: '+fmtRuntimeTs(item.last_switch_timestamp):''
   ].filter(Boolean).join(' · ');
   return statusRow(title,state,label,detail);
@@ -2634,13 +2710,16 @@ function updateRuntimeStatus(st){
       }
       return;
     }
-    const state=rs.health_state||'ready';
-    const label=state==='blocked'?'Error':state==='degraded'?'Fallback':state==='idle'?'Paused':'Ready';
+    const stationOnAir=rs.station_on_air===true;
+    const taskBlocked=rs.health_state==='blocked';
+    const headerState=taskBlocked?'blocked':stationOnAir?'ready':'degraded';
+    const headerLabel=taskBlocked?'Error':stationOnAir?'On Air':'Paused';
+    const headerDetail=rs.health_explanation?headerLabel+' · '+rs.health_explanation:headerLabel;
     if(header){
-      header.className='status-dot '+state;
-      header.setAttribute('aria-label',rs.health_explanation||label);
-      header.title=rs.health_explanation||'Runtime status';
-      header.innerHTML='<span class="dot"></span>'+esc(label);
+      header.className='status-dot '+headerState;
+      header.setAttribute('aria-label',headerDetail);
+      header.title=headerDetail;
+      header.innerHTML='<span class="dot"></span>'+esc(headerLabel);
     }
     if(!card)return;
     const providers=rs.providers||{};
@@ -2650,7 +2729,7 @@ function updateRuntimeStatus(st){
       ? `${lastFailover.provider_class||'provider'}: ${lastFailover.from_provider||'—'} → ${lastFailover.to_provider||'—'} · ${lastFailover.reason||''} · ${fmtRuntimeTs(lastFailover.timestamp)}`
       : (rs.no_failover_message||'No failover in current session.');
     card.innerHTML=[
-      statusRow('Current health',state,label,rs.health_explanation||'Runtime health available'),
+      statusRow('Current health',headerState,headerLabel,rs.health_explanation||'Runtime health available'),
       runtimeProviderRow('Audio source',providers.audio_source),
       runtimeProviderRow('Script provider',providers.script_provider),
       runtimeProviderRow('TTS provider',providers.tts_provider),
@@ -2704,8 +2783,8 @@ function renderSetup(setup){
   });
   document.getElementById('setupChecks').innerHTML=checks.join('')||'<div class="empty">No checks flagged</div>';
 
-  const llmEssential=(setup.essentials||[]).find(e=>e.key==='llm_keys');
-  const configuredKeys=llmEssential?.configured_keys||[];
+  const keyEssentials=(setup.essentials||[]).filter(e=>e.key==='llm_keys'||e.key==='tts_keys');
+  const configuredKeys=[...new Set(keyEssentials.flatMap(e=>e.configured_keys||[]))];
   const keysConfigured=configuredKeys.length>0;
   document.getElementById('setupKeysConfigured').style.display=keysConfigured?'block':'none';
   if(!_keysEditMode) document.getElementById('setupKeysForm').style.display=keysConfigured?'none':'block';
@@ -2739,14 +2818,23 @@ async function setupSaveKeys(el){
   flash(el);
   const anthropic=(document.getElementById('setupAnthropicKey')?.value||'').trim();
   const openai=(document.getElementById('setupOpenaiKey')?.value||'').trim();
+  const azureKey=(document.getElementById('setupAzureSpeechKey')?.value||'').trim();
+  const azureRegion=(document.getElementById('setupAzureSpeechRegion')?.value||'').trim();
+  const elevenlabs=(document.getElementById('setupElevenlabsKey')?.value||'').trim();
   const payload={};
   if(anthropic) payload.ANTHROPIC_API_KEY=anthropic;
   if(openai) payload.OPENAI_API_KEY=openai;
+  if(azureKey) payload.AZURE_SPEECH_KEY=azureKey;
+  if(azureRegion) payload.AZURE_SPEECH_REGION=azureRegion;
+  if(elevenlabs) payload.ELEVENLABS_API_KEY=elevenlabs;
   if(!Object.keys(payload).length){toast('Enter at least one key');return}
   const resp=await api('POST','/api/setup/save-keys',payload);
   if(!resp.ok){toast(resp.error||'Saving keys failed');return}
   document.getElementById('setupAnthropicKey').value='';
   document.getElementById('setupOpenaiKey').value='';
+  document.getElementById('setupAzureSpeechKey').value='';
+  document.getElementById('setupAzureSpeechRegion').value='';
+  document.getElementById('setupElevenlabsKey').value='';
   _keysEditMode=false;
   const updated=await api('POST','/api/setup/recheck');
   renderSetup(updated);
@@ -3180,13 +3268,19 @@ async function applyHostPreset(n,presetName){
 }
 
 // ── Listener Requests ──
-function updateListenerRequests(reqs){
+function updateListenerRequests(reqs,consumed){
   const el=document.getElementById('lrBody');
   const meta=document.getElementById('lrMeta');
-  if(!reqs?.length){el.innerHTML='<div class="empty">No requests — listeners can ask for tracks or shout-outs from the radio</div>';meta.textContent='';return}
-  meta.textContent=reqs.length+' pending';
-  _lrReqs=reqs;
-  el.innerHTML=reqs.map((r,i)=>{
+  _lrReqs=reqs||[];
+  consumed=consumed||[];
+  let html='';
+  if(!_lrReqs.length&&!consumed.length){
+    el.innerHTML='<div class="empty">No requests — listeners can ask for tracks or shout-outs from the radio</div>';
+    meta.textContent='';
+    return;
+  }
+  meta.textContent=_lrReqs.length?_lrReqs.length+' pending':'';
+  html+=_lrReqs.map((r,i)=>{
     const age=r.age_s<60?r.age_s+'s fa':Math.floor(r.age_s/60)+'m fa';
     let status='';
     let actions='';
@@ -3209,6 +3303,21 @@ function updateListenerRequests(reqs){
       <div class="lr-actions">${actions}</div>
     </div>`;
   }).join('');
+  if(consumed.length){
+    html+=`<div class="lr-consumed-label">Recently handled</div>`;
+    html+=consumed.map(r=>{
+      const age=r.age_s<60?r.age_s+'s fa':Math.floor(r.age_s/60)+'m fa';
+      const badge=r.status==='song_not_found'
+        ?'<span class="lr-badge lr-badge-warn">&#9888; Song not found</span>'
+        :'<span class="lr-badge lr-badge-ok">&#10003; Sent to hosts</span>';
+      const track=r.song_track?`<span class="lr-track">${esc(r.song_track)}</span>`:'';
+      return `<div class="lr-item lr-item-consumed">
+        <div class="lr-head"><span class="lr-name">${esc(r.name||'Listener')}</span>${badge}<span class="lr-age">${age}</span></div>
+        <div class="lr-msg">${esc(r.message||'')}${track}</div>
+      </div>`;
+    }).join('');
+  }
+  el.innerHTML=html;
 }
 let _lrReqs=[];
 async function lrDismiss(id){
@@ -3474,11 +3583,12 @@ async function refreshFast(){
     const lrData=lrr.ok?await lrr.json():{requests:[]};
     if(_st.session_stopped!==undefined)updateStopState(_st.session_stopped);
     updateNow(_st.now_streaming);
+    renderProduction(_st);
     renderProgramme(_st);
     updateRecent(_st);
     updateLog(_st.stream_log);
     updatePl(_st.playlist||[]);
-    updateListenerRequests(lrData.requests||[]);
+    updateListenerRequests(lrData.requests||[],lrData.recently_consumed||[]);
     updatePaceCounters(_st.pacing);
     updateRuntimeStatus(_st);
     updateEngineRoom(_st,_caps);

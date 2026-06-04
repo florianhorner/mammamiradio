@@ -113,7 +113,7 @@ Two features create the illusion of a live radio studio:
 
 ### Clip sharing
 
-A rolling `deque[bytes]` ring buffer on `app.state` records ~60 seconds of raw MP3 chunks during the playback loop. `POST /api/clip` extracts the last 30 seconds into a shareable file in `{cache_dir}/clips/`. Clips are served without auth at `GET /clips/{id}.mp3` and auto-expire after 24 hours. Per-IP rate limiting (1 clip per 10 seconds) and a 50-clip disk cap prevent abuse.
+A rolling `deque[bytes]` ring buffer on `app.state` records up to `CLIP_MAX_SEGMENT_SECONDS` (180s) of raw MP3 chunks during the playback loop. `POST /api/clip` extracts a shareable file into `{cache_dir}/clips/`: for a live ad or banter segment it captures the whole segment so far (operator-authored content, no copyright cap); for music it captures the last 30 seconds. When an ad/banter segment ends, the playback loop snapshots it so a tap within `CLIP_LOOKBACK_SECONDS` (15s) after it ends still grabs the whole bit. Clips are served without auth at `GET /clips/{id}.mp3` and auto-expire after 24 hours. Per-IP rate limiting (1 clip per 10 seconds, rolled back on a `no_audio` no-op so a cold-start listener can retry) and a 50-clip disk cap prevent abuse. On failure the route returns structured codes (`retry_after` seconds, or `reason: "no_audio"`) — never prose — which the listener UI maps to warm copy.
 
 ### Periodic chart refresh
 
@@ -181,15 +181,19 @@ Once playback is running, the producer's recovery layers (last-known-good music 
 
 ## TTS architecture
 
-Each host declares a TTS engine in `radio.toml`: `engine = "edge"` (default) or `engine = "openai"`.
+Each host declares a TTS engine in `radio.toml`: `engine = "edge"` (default), `engine = "openai"`, `engine = "azure"`, or `engine = "elevenlabs"`. Dedicated ad voices and the sonic-brand sweeper voice use the same provider-routing fields.
 
 **Edge TTS** (Microsoft): free, no API key. Each host maps to an Azure Neural voice (e.g., `it-IT-GiuseppeNeural`). SSML prosody tags (rate, pitch) are derived from the host's personality axes for voice differentiation.
 
 **OpenAI TTS** (`gpt-4o-mini-tts`): requires `OPENAI_API_KEY`. Each host maps to an OpenAI voice (e.g., `onyx`). Personality-aware delivery instructions are generated from the host's energy, warmth, and chaos axes — the model interprets these as acting direction, not just static parameters.
 
-Fallback chain: OpenAI failure → `edge_fallback_voice` (so the host falls back to their own Edge voice, not a stranger) → stock pre-bundled clips.
+**Azure Speech TTS**: requires `AZURE_SPEECH_KEY` and `AZURE_SPEECH_REGION`. Useful for official Italian voices and HD voices while keeping the existing Edge voice family as fallback.
 
-A singleton `openai.AsyncOpenAI` client is reused across all TTS calls for connection pool efficiency.
+**ElevenLabs TTS**: requires `ELEVENLABS_API_KEY` and operator-provided voice IDs. Intended for custom character voices in ads, sweepers, and guest bits.
+
+Fallback chain: cloud TTS failure or missing credentials → `edge_fallback_voice` (so the role falls back to its own Edge voice, not a stranger) → Edge runtime fallback/silence recovery.
+
+A singleton OpenAI client is reused across OpenAI TTS calls for connection pool efficiency.
 
 ## Compounding listener memory
 
@@ -287,10 +291,10 @@ The same mechanism is callable directly via `POST /api/interrupt` (admin auth, 6
 | `/healthz` | GET | Public | Liveness probe with process uptime |
 | `/readyz` | GET | Public | Readiness probe with queue depth and startup status |
 | `/public-status` | GET | Public | Current segment, recent log, the real queued segments (`upcoming_mode` is `queued` or `building`), and `stream.audio_format` (the canonical encoding contract — see "Stream audio format metadata" below) |
-| `/status` | GET | Admin | Full admin JSON: queue depth, uptime, scripts, HA context, errors, `provider_health`, and `runtime_status` (normalized provider state + session failover event history) |
+| `/status` | GET | Admin | Full admin JSON: queue depth, uptime, scripts, HA context, errors, `provider_health`, `runtime_status` (normalized provider state + session failover event history), and `production` (the live "In produzione" feed — `current` is the phase the producer is building right now, `recent` is a bounded trail of just-finished work; admin-only, never in `/public-status`) |
 | `/api/setup/status` | GET | Admin | First-run setup status, detected run mode, and station mode |
 | `/api/setup/recheck` | POST | Admin | Re-run setup probes |
-| `/api/setup/provider-check` | POST | Admin | Active, secret-safe Anthropic/OpenAI connectivity check |
+| `/api/setup/provider-check` | POST | Admin | Active, secret-safe Anthropic/OpenAI/Azure Speech/ElevenLabs connectivity check |
 | `/api/setup/addon-snippet` | GET | Admin | Copy-friendly Home Assistant add-on config snippet |
 | `/api/shuffle` | POST | Admin | Shuffle playlist |
 | `/api/skip` | POST | Admin | Skip current segment |
@@ -316,7 +320,7 @@ The same mechanism is callable directly via `POST /api/interrupt` (admin auth, 6
 | `/api/stop` | POST | Admin | Gracefully stop the session (skip + purge + pause producer until `/api/resume`) |
 | `/api/resume` | POST | Admin | Resume a stopped session |
 | `/api/credentials` | POST | Admin | Update credentials at runtime |
-| `/api/clip` | POST | Public | Capture last 30s of audio into a shareable clip |
+| `/api/clip` | POST | Public | Capture a shareable clip (full ad/banter segment, or last 30s of music) |
 | `/clips/{id}.mp3` | GET | Public | Serve a saved clip (no auth, for sharing) |
 | `/api/track-rules` | POST | Admin | Flag a reaction rule for the current track |
 | `/api/listener-request` | POST | Public | Submit a song request or shoutout |
@@ -387,8 +391,9 @@ The rich path is richer, but the failure path still produces a stream.
 | `mammamiradio/audio/imaging.py` | station imaging selector for transition stings, sweeper stings, and talk beds |
 | `mammamiradio/audio/normalizer.py` | ffmpeg helpers for normalization, mixing, tones, bumpers, bleed, and SFX |
 | `mammamiradio/audio/audio_quality.py` | Audio quality gate: duration and silence checks before segments reach the queue |
-| `mammamiradio/audio/tts.py` | TTS synthesis (Edge TTS + OpenAI gpt-4o-mini-tts) |
-| `mammamiradio/audio/voice_catalog.py` | Edge voice IDs and metadata catalog |
+| `mammamiradio/audio/tts.py` | TTS synthesis (Edge, OpenAI, Azure Speech, ElevenLabs) |
+| `mammamiradio/audio/voice_catalog.py` | Edge, OpenAI, and curated Azure voice ID catalogs |
+| `scripts/audition_tts_voices.py` | Local audition clips and manifest generation for configured/catalog TTS voices |
 | `mammamiradio/home/ha_context.py` | Home Assistant polling, mood classification, reactive triggers |
 | `mammamiradio/home/ha_enrichment.py` | Pure HA event derivation: state diffing, event pruning, numeric passthrough |
 | `mammamiradio/web/streamer.py` | HTTP routes, auth gating, playback loop, clip endpoints, listener fanout (TODO: split — see cathedral plan PR 5) |

@@ -3,14 +3,18 @@
 from __future__ import annotations
 
 import asyncio
+import html
 import logging
 import os
+import re
 import shutil
 from functools import partial
 from pathlib import Path
+from urllib.parse import quote
 from uuid import uuid4
 
 import edge_tts
+import httpx
 
 from mammamiradio.audio.audio_quality import AudioQualityError
 from mammamiradio.audio.normalizer import (
@@ -45,6 +49,13 @@ _instructions_cache: dict[int, str] = {}
 # Singleton OpenAI client — reuses HTTP connection pool across calls
 _openai_client = None
 _openai_client_key: str = ""
+# Singleton httpx clients for Azure and ElevenLabs — same pattern as OpenAI
+_azure_client: httpx.AsyncClient | None = None
+_azure_client_key: tuple[str, str] = ("", "")
+_elevenlabs_client: httpx.AsyncClient | None = None
+_elevenlabs_client_key: str = ""
+# XML 1.0 control characters illegal in SSML (strips before html.escape)
+_XML_CONTROL_CHARS = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
 # Runtime memoization: edge voices that failed synthesis in this session.
 # Prevents repeated per-segment failures for the same voice ID when edge-tts
 # returns "Invalid voice" or similar. Reset via reset_voice_failures().
@@ -107,6 +118,15 @@ def _openai_instructions_for_host(host: HostPersonality) -> str:
     return result
 
 
+def _openai_instructions_for_ad_voice(voice: AdVoice) -> str:
+    parts = ["Perform as an Italian radio commercial character."]
+    if voice.role:
+        parts.append(f"Role: {voice.role}.")
+    if voice.style:
+        parts.append(f"Style: {voice.style}.")
+    return " ".join(parts)
+
+
 def _estimate_duration(path: Path) -> float:
     """Rough duration estimate from file size at 192kbps."""
     return max(5.0, path.stat().st_size / (192 * 128))
@@ -125,6 +145,26 @@ def _get_openai_client(api_key: str):
     _openai_client = OpenAI(api_key=api_key)
     _openai_client_key = api_key
     return _openai_client
+
+
+def _get_azure_client(api_key: str, region: str) -> httpx.AsyncClient:
+    """Return a singleton httpx client for Azure TTS, reusing the connection pool."""
+    global _azure_client, _azure_client_key
+    if _azure_client is not None and _azure_client_key == (api_key, region):
+        return _azure_client
+    _azure_client = httpx.AsyncClient(timeout=30.0)
+    _azure_client_key = (api_key, region)
+    return _azure_client
+
+
+def _get_elevenlabs_client(api_key: str) -> httpx.AsyncClient:
+    """Return a singleton httpx client for ElevenLabs TTS, reusing the connection pool."""
+    global _elevenlabs_client, _elevenlabs_client_key
+    if _elevenlabs_client is not None and _elevenlabs_client_key == api_key:
+        return _elevenlabs_client
+    _elevenlabs_client = httpx.AsyncClient(timeout=30.0)
+    _elevenlabs_client_key = api_key
+    return _elevenlabs_client
 
 
 async def synthesize_openai(
@@ -170,6 +210,103 @@ async def synthesize_openai(
     return output_path
 
 
+async def synthesize_azure(
+    text: str,
+    voice: str,
+    output_path: Path,
+    *,
+    rate: str | None = None,
+    pitch: str | None = None,
+    loudnorm: bool = True,
+) -> Path:
+    """Render text with Azure Speech TTS REST API, then normalize to station settings."""
+    api_key = os.getenv("AZURE_SPEECH_KEY", "")
+    region = os.getenv("AZURE_SPEECH_REGION", "")
+    if not api_key or not region:
+        raise RuntimeError("AZURE_SPEECH_KEY and AZURE_SPEECH_REGION must be set")
+
+    raw_path = output_path.with_suffix(".raw.mp3")
+    clean_text = _XML_CONTROL_CHARS.sub("", text)
+    escaped = html.escape(clean_text, quote=False)
+    ssml = (
+        '<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" xml:lang="it-IT">'
+        f'<voice name="{html.escape(voice, quote=True)}">'
+        f'<prosody rate="{html.escape(rate or "+0%", quote=True)}" pitch="{html.escape(pitch or "+0Hz", quote=True)}">'
+        f"{escaped}"
+        "</prosody>"
+        "</voice>"
+        "</speak>"
+    )
+    headers = {
+        "Ocp-Apim-Subscription-Key": api_key,
+        "Content-Type": "application/ssml+xml",
+        "X-Microsoft-OutputFormat": "audio-24khz-160kbitrate-mono-mp3",
+        "User-Agent": "mammamiradio",
+    }
+    url = f"https://{region}.tts.speech.microsoft.com/cognitiveservices/v1"
+    try:
+        client = _get_azure_client(api_key, region)
+        response = await client.post(url, headers=headers, content=ssml.encode("utf-8"))
+        response.raise_for_status()
+        raw_path.write_bytes(response.content)
+
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, lambda: normalize(raw_path, output_path, loudnorm=loudnorm))
+        raw_path.unlink(missing_ok=True)
+    except Exception:
+        raw_path.unlink(missing_ok=True)
+        raise
+
+    logger.info("Synthesized (Azure): %s (%s)", output_path.name, voice)
+    return output_path
+
+
+async def synthesize_elevenlabs(
+    text: str,
+    voice: str,
+    output_path: Path,
+    *,
+    loudnorm: bool = True,
+) -> Path:
+    """Render text with ElevenLabs TTS REST API, then normalize to station settings."""
+    api_key = os.getenv("ELEVENLABS_API_KEY", "")
+    if not api_key:
+        raise RuntimeError("ELEVENLABS_API_KEY not set")
+
+    raw_path = output_path.with_suffix(".raw.mp3")
+    url = f"https://api.elevenlabs.io/v1/text-to-speech/{quote(voice, safe='')}"
+    headers = {
+        "xi-api-key": api_key,
+        "Accept": "audio/mpeg",
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "text": text,
+        "model_id": "eleven_multilingual_v2",
+        "voice_settings": {
+            "stability": 0.42,
+            "similarity_boost": 0.78,
+            "style": 0.45,
+            "use_speaker_boost": True,
+        },
+    }
+    try:
+        client = _get_elevenlabs_client(api_key)
+        response = await client.post(url, headers=headers, json=payload)
+        response.raise_for_status()
+        raw_path.write_bytes(response.content)
+
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, lambda: normalize(raw_path, output_path, loudnorm=loudnorm))
+        raw_path.unlink(missing_ok=True)
+    except Exception:
+        raw_path.unlink(missing_ok=True)
+        raise
+
+    logger.info("Synthesized (ElevenLabs): %s (%s)", output_path.name, voice)
+    return output_path
+
+
 async def synthesize(
     text: str,
     voice: str,
@@ -190,6 +327,9 @@ async def synthesize(
     loudnorm=False skips the EBU R128 pass — use for intermediate lines that will
     be assembled and loudnorm'd as a single unit by the caller.
     """
+    engine = (engine or "edge").strip().lower()
+    fallback_voice = edge_fallback_voice or _EDGE_DEFAULT_FALLBACK_VOICE
+
     if engine == "openai":
         if os.getenv("OPENAI_API_KEY", ""):
             try:
@@ -202,14 +342,42 @@ async def synthesize(
         else:
             logger.debug("OpenAI TTS requested but OPENAI_API_KEY not set, using edge-tts")
         # Use edge fallback voice when falling back from OpenAI
-        if edge_fallback_voice:
-            voice = edge_fallback_voice
+        voice = fallback_voice
+    elif engine == "azure":
+        if os.getenv("AZURE_SPEECH_KEY", "") and os.getenv("AZURE_SPEECH_REGION", ""):
+            try:
+                async with _HEAVY_SEM:
+                    return await synthesize_azure(
+                        text,
+                        voice,
+                        output_path,
+                        rate=rate,
+                        pitch=pitch,
+                        loudnorm=loudnorm,
+                    )
+            except Exception as e:
+                logger.warning("Azure TTS failed, falling back to edge-tts: %s", e)
+        else:
+            logger.debug("Azure TTS requested but AZURE_SPEECH_KEY/AZURE_SPEECH_REGION not set, using edge-tts")
+        voice = fallback_voice
+    elif engine == "elevenlabs":
+        if os.getenv("ELEVENLABS_API_KEY", ""):
+            try:
+                async with _HEAVY_SEM:
+                    return await synthesize_elevenlabs(text, voice, output_path, loudnorm=loudnorm)
+            except Exception as e:
+                logger.warning("ElevenLabs TTS failed, falling back to edge-tts: %s", e)
+        else:
+            logger.debug("ElevenLabs TTS requested but ELEVENLABS_API_KEY not set, using edge-tts")
+        voice = fallback_voice
+    elif engine != "edge":
+        logger.warning("Unknown TTS engine '%s'; using edge-tts", engine)
+        voice = fallback_voice
 
     edge_voice = _coerce_edge_voice(voice, edge_fallback_voice=edge_fallback_voice)
 
     # Honour runtime memoization: if this voice already failed once this
     # session, skip the primary attempt and go straight to the fallback.
-    fallback_voice = edge_fallback_voice or _EDGE_DEFAULT_FALLBACK_VOICE
     if edge_voice in _failed_edge_voices and edge_voice != fallback_voice:
         logger.debug(
             "Edge voice '%s' previously failed this session; using fallback '%s'",
@@ -280,7 +448,11 @@ async def synthesize_ad(
         if part.type == "voice" and part.text:
             voice_for_part = voices.get(part.role, default_voice) if part.role else default_voice
             # Legal disclaimers are format-scoped, not accidental role spikes.
-            extra: dict[str, str] = {}
+            extra: dict[str, str | bool] = {
+                "engine": voice_for_part.engine,
+                "edge_fallback_voice": voice_for_part.edge_fallback_voice,
+                "openai_instructions": _openai_instructions_for_ad_voice(voice_for_part),
+            }
             if part.role == "disclaimer_goblin":
                 extra["rate"] = _DISCLAIMER_RATE_BY_FORMAT.get(script.format, "+35%")
             # Skip per-part loudnorm — normalize_ad() handles the final loudnorm pass
@@ -326,9 +498,17 @@ async def synthesize_ad(
     voice_sfx_parts = [r for r in results if r is not None]
 
     if not voice_sfx_parts:
-        # Fallback: synthesize brand name
+        # Fallback: synthesize brand name with the configured engine so cloud
+        # voices aren't silently downgraded to edge-tts on this path.
         fallback_path = tmp_dir / f"ad_fallback_{uuid4().hex[:8]}.mp3"
-        await synthesize(script.brand, default_voice.voice, fallback_path)
+        await synthesize(
+            script.brand,
+            default_voice.voice,
+            fallback_path,
+            engine=default_voice.engine,
+            edge_fallback_voice=default_voice.edge_fallback_voice,
+            openai_instructions=_openai_instructions_for_ad_voice(default_voice),
+        )
         return fallback_path
 
     # Concatenate voice+sfx parts
@@ -393,13 +573,28 @@ async def synthesize_ad(
             logger.warning("Environment bed mixing failed (%s), continuing without: %s", env_name, e)
 
     # Mix music bed (loudest bed layer — harmonic colour)
-    try:
-        await loop.run_in_executor(None, mix_with_bed, voice_path, bed_path, output_path, 0.24)
+    if bed_path.exists() and bed_path.stat().st_size > 0:
+        try:
+            await loop.run_in_executor(None, mix_with_bed, voice_path, bed_path, output_path, 0.24)
+            if output_path.exists() and output_path.stat().st_size > 0:
+                bed_path.unlink(missing_ok=True)
+                voice_path.unlink(missing_ok=True)
+                logger.info("Ad with beds (env=%s mood=%s): %s", env_name or "none", mood, output_path.name)
+            else:
+                logger.warning("Music bed mixing produced empty output (%s), using voice-only", mood)
+                bed_path.unlink(missing_ok=True)
+                if voice_path != output_path:
+                    output_path.unlink(missing_ok=True)
+                    shutil.move(str(voice_path), str(output_path))
+        except Exception as e:
+            logger.warning("Music bed mixing failed (%s), using voice-only: %s", mood, e)
+            bed_path.unlink(missing_ok=True)
+            if voice_path != output_path:
+                output_path.unlink(missing_ok=True)
+                shutil.move(str(voice_path), str(output_path))
+    else:
+        logger.warning("Music bed missing or empty at %s, using voice-only ad", bed_path)
         bed_path.unlink(missing_ok=True)
-        voice_path.unlink(missing_ok=True)
-        logger.info("Ad with beds (env=%s mood=%s): %s", env_name or "none", mood, output_path.name)
-    except Exception as e:
-        logger.warning("Music bed mixing failed (%s), using voice-only: %s", mood, e)
         if voice_path != output_path:
             shutil.move(str(voice_path), str(output_path))
 

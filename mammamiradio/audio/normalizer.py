@@ -736,10 +736,10 @@ def generate_music_bed(output_path: Path, mood: str, duration_sec: float) -> Pat
         root, third, fifth = 220.0, 277.0, 370.0
         flat7 = root * 1.8
         bass_expr = (
-            f"0.35*sin(2*PI*{root * 0.5}*t)*max(0,1-2*mod(t,2))"
-            f"+0.35*sin(2*PI*{fifth * 0.5}*t)*max(0,1-2*abs(mod(t,2)-0.5))"
-            f"+0.35*sin(2*PI*{flat7 * 0.5}*t)*max(0,1-2*abs(mod(t,2)-1.0))"
-            f"+0.35*sin(2*PI*{third * 0.5}*t)*max(0,1-2*abs(mod(t,2)-1.5))"
+            f"0.35*sin(2*PI*{root * 0.5}*t)*max(0\\,1-2*mod(t\\,2))"
+            f"+0.35*sin(2*PI*{fifth * 0.5}*t)*max(0\\,1-2*abs(mod(t\\,2)-0.5))"
+            f"+0.35*sin(2*PI*{flat7 * 0.5}*t)*max(0\\,1-2*abs(mod(t\\,2)-1.0))"
+            f"+0.35*sin(2*PI*{third * 0.5}*t)*max(0\\,1-2*abs(mod(t\\,2)-1.5))"
         )
         pad = _pad_expr(root, third, fifth, _piano)
         expr = f"0.5*({pad})+0.7*({bass_expr})"
@@ -1064,7 +1064,7 @@ def generate_transition_sting(
     """Generate a station-branded transition sting for music/speech boundaries."""
     from_name = from_type_name.strip().lower()
     to_name = to_type_name.strip().lower()
-    speech_types = {"banter", "news_flash", "ad"}
+    speech_types = {"banter", "news_flash", "ad", "station_id"}
     notes = motif_notes or [523, 659, 784, 1047]
 
     tmp = Path(tempfile.mkdtemp())

@@ -146,6 +146,9 @@ def test_parser_exports_all_supported_keys():
     options = {
         "anthropic_api_key": "sk-ant",
         "openai_api_key": "sk-oai",
+        "azure_speech_key": "az-key",
+        "azure_speech_region": "westeurope",
+        "elevenlabs_api_key": "el-key",
         "station_name": "Test Station",
         "quality_profile": "premium",
         "admin_token": "tok123",
@@ -157,6 +160,9 @@ def test_parser_exports_all_supported_keys():
     exports = _parse_exports(stdout)
     assert exports["ANTHROPIC_API_KEY"] == "sk-ant"
     assert exports["OPENAI_API_KEY"] == "sk-oai"
+    assert exports["AZURE_SPEECH_KEY"] == "az-key"
+    assert exports["AZURE_SPEECH_REGION"] == "westeurope"
+    assert exports["ELEVENLABS_API_KEY"] == "el-key"
     assert exports["STATION_NAME"] == "Test Station"
     assert exports["MAMMAMIRADIO_QUALITY"] == "premium"
     assert exports["ADMIN_TOKEN"] == "tok123"

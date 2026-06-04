@@ -7,6 +7,7 @@
   "mammamiradio.core.capabilities": 100,
   "mammamiradio.core.config": 90,
   "mammamiradio.core.models": 98,
+  "mammamiradio.core.provider_checks": 85,
   "mammamiradio.core.setup_status": 100,
   "mammamiradio.core.sync": 88,
   "mammamiradio.home.ha_context": 97,

@@ -18,6 +18,9 @@ from mammamiradio.core.models import StationState
 _CREDENTIAL_FIELDS: dict[str, tuple[str, str]] = {
     "anthropic_api_key": ("ANTHROPIC_API_KEY", "anthropic_api_key"),
     "openai_api_key": ("OPENAI_API_KEY", "openai_api_key"),
+    "azure_speech_key": ("AZURE_SPEECH_KEY", "azure_speech_key"),
+    "azure_speech_region": ("AZURE_SPEECH_REGION", "azure_speech_region"),
+    "elevenlabs_api_key": ("ELEVENLABS_API_KEY", "elevenlabs_api_key"),
 }
 _CREDENTIAL_ENV_TO_FIELD = {env_key: field for field, (env_key, _config_attr) in _CREDENTIAL_FIELDS.items()}
 _ADDON_OPTIONS_LOCK = threading.Lock()
@@ -46,6 +49,12 @@ def _apply_live_credentials(state: StationState, config, updates: dict[str, str]
         config.openai_api_key = updates["OPENAI_API_KEY"]
         state.openai_key_status = "unverified"
         state.openai_key_checked_at = 0.0
+    if "AZURE_SPEECH_KEY" in updates:
+        config.azure_speech_key = updates["AZURE_SPEECH_KEY"]
+    if "AZURE_SPEECH_REGION" in updates:
+        config.azure_speech_region = updates["AZURE_SPEECH_REGION"]
+    if "ELEVENLABS_API_KEY" in updates:
+        config.elevenlabs_api_key = updates["ELEVENLABS_API_KEY"]
 
 
 def _save_dotenv(updates: dict[str, str]) -> None:

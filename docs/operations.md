@@ -95,30 +95,41 @@ Admin (require `ADMIN_PASSWORD` or `ADMIN_TOKEN` unless on loopback):
 
 `GET /status` returns a `runtime_status` object under the top-level response. It contains:
 
-- `providers` — current `audio_source`, `script_provider`, and `tts_provider` with `primary`, `active`, and `fallback_active` flags per provider.
+- `station_on_air` — listener-centric boolean that is true only when producer/playback tasks are alive, no listener-facing silence failure is active, and the session is not stopped.
+- `health_state` — backward-compatible runtime health state for blocked tasks, listener-facing silence, paused sessions, and provider fallback summaries.
+- `providers` — current `audio_source`, `script_provider`, and `tts_provider` with `primary_provider`, `current_provider`, `fallback_active`, `recovery_mode`, `retry_in_seconds`, and `action_guidance` fields per provider. `script_provider` populates the recovery fields so transient Anthropic errors read differently from circuit-breaker and `action_required` fallback; non-script providers keep those fields empty unless future recovery metadata is added.
 - `recent_events` — last 10 provider switch/failover events with timestamps, reasons, and whether a fallback was active.
 - `last_switch` — most recent provider change event, or `null` if no switches have occurred this session.
 - `failover_events` — last 10 events where `fallback_active` was true.
 
-The Engine Room card in `/admin` renders this live. Structured log events (`provider_switch_event`, `provider_health_state`) are also emitted so log aggregators can alert on sustained fallback states.
+The Engine Room card in `/admin` renders this as two tiers: station health ("On Air" / "Paused" / "Error") and provider health ("Primary" / "Auto-recovering" / "Backup active"). Structured log events (`provider_switch_event`, `provider_health_state`) are also emitted so log aggregators can alert on sustained fallback states.
 
-### Detecting a not-working AI key
+### Detecting a not-working provider key
 
-A key that is present but invalid (a wrong or revoked `ANTHROPIC_API_KEY` / `OPENAI_API_KEY`)
-is validated actively, so the operator sees it without waiting for a banter segment to fail:
+A key that is present but invalid is validated actively, so the operator sees it
+without waiting for a banter or TTS segment to fail. The active checks cover
+`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `AZURE_SPEECH_KEY`/`AZURE_SPEECH_REGION`,
+and `ELEVENLABS_API_KEY`.
 
 - On startup (when any key is configured) and after a key-save, a single secret-safe
-  `max_tokens=1` probe (`check_provider_keys`) runs in the background — fire-and-forget, so it
-  never delays boot or the first audio. `POST /api/setup/provider-check` runs it on demand.
+  provider probe (`check_provider_keys`) runs in the background — fire-and-forget, so it
+  never delays boot or the first audio. Anthropic/OpenAI use minimal text probes; Azure Speech
+  and ElevenLabs use voice-list endpoints, not billable synthesis. `POST /api/setup/provider-check`
+  runs it on demand.
 - The verdict is cached on the station state and exposed in `GET /api/capabilities`:
   `capabilities.anthropic_key_status` / `capabilities.openai_key_status`, and
-  `provider_health.{anthropic,openai}.key_status`. Each is `"unverified"` (not yet checked, or a
-  non-auth probe error such as quota/rate-limit/network), `"valid"`, or `"rejected"` (the
-  provider actively refused the key with a 401).
+  `provider_health.{anthropic,openai,azure_speech,elevenlabs_tts}.key_status`. Each is
+  `"unverified"` (not yet checked, or a non-auth probe error such as quota/rate-limit/network),
+  `"valid"`, or `"rejected"` (the provider actively refused the key with a 401).
 - A `"rejected"` key reads in the Engine Room as a persistent **key not working — replace key**
   state, distinct from the transient time-based `anthropic_degraded` "suspended" fallback. When a
   rejected key is the only configured LLM key, `capabilities.next_step` steers toward replacing it.
 - The listener side never surfaces key health; if OpenAI is valid the station keeps sounding live.
+
+For voice casting specifically, run
+`.venv/bin/python scripts/audition_tts_voices.py --include-catalog --providers all` to generate local clips
+and a manifest under `tmp/voice-auditions/`. Missing TTS-provider credentials are shown as skipped instead
+of being hidden by the runtime Edge fallback.
 
 ## Recommended production shape
 

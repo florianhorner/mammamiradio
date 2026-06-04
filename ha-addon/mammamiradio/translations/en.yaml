@@ -11,6 +11,15 @@ configuration:
   openai_api_key:
     name: OpenAI API Key
     description: Enables OpenAI host voices and serves as the script-generation fallback when Anthropic is unavailable. Without this, OpenAI hosts use Edge TTS and scripts fall back to stock copy.
+  azure_speech_key:
+    name: Azure Speech Key
+    description: Enables official Azure Speech voices for Italian hosts, sweepers, and ads. Requires Azure Speech Region; missing or failing Azure voices fall back to Edge TTS.
+  azure_speech_region:
+    name: Azure Speech Region
+    description: Azure Speech resource region, such as westeurope or eastus. Required with Azure Speech Key.
+  elevenlabs_api_key:
+    name: ElevenLabs API Key
+    description: Enables custom ElevenLabs character voices when radio.toml uses engine = "elevenlabs". Missing or failing voices fall back to Edge TTS.
   quality_profile:
     name: AI Quality
     description: "Premium: best hosts, highest cost. Balanced: great hosts at sensible cost (recommended). Economy: cheapest, lighter hosts. Picks the right model per task automatically — no model names to track."
@@ -22,7 +31,7 @@ configuration:
     description: "Set a stable token for the admin API and HA media_player integration. If left empty, one is auto-generated on each restart; check the add-on log to retrieve it."
   super_italian_mode:
     name: Super Italian Mode
-    description: "On (default): listener UI and hosts are Italian-first. Off: listener UI uses English utility copy with Italian station-feel words intact, and AI hosts code-switch with Italian sprinkles."
+    description: "Off (default): listener UI uses English utility copy with Italian station-feel words intact, and AI hosts code-switch with Italian sprinkles. On: listener UI and hosts are Italian-first."
   chaos_mode_active:
     name: Chaos Mode
     description: "Keeps host-chaos mode enabled across restarts. Turning it on from the admin panel still arms the immediate first strike; boot restore does not."

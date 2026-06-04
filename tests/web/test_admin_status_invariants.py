@@ -96,6 +96,46 @@ def test_pipeline_status_uses_canonical_status_chips() -> None:
         assert expected in block
 
 
+def test_setup_keys_banner_includes_voice_provider_credentials() -> None:
+    block = _function_block(_read_admin_html(), "renderSetup")
+
+    assert "Provider keys configured" in _read_admin_html()
+    assert "e.key==='llm_keys'||e.key==='tts_keys'" in block
+    assert "configuredKeys=[...new Set(keyEssentials.flatMap(e=>e.configured_keys||[]))]" in block
+
+
+def test_runtime_status_header_reads_station_on_air_not_health_state() -> None:
+    block = _function_block(_read_admin_html(), "updateRuntimeStatus")
+
+    assert "const stationOnAir=rs.station_on_air===true" in block
+    assert "const taskBlocked=rs.health_state==='blocked'" in block
+    assert "const headerState=taskBlocked?'blocked':stationOnAir?'ready':'degraded'" in block
+    assert "const headerLabel=taskBlocked?'Error':stationOnAir?'On Air':'Paused'" in block
+    assert "const headerDetail=rs.health_explanation?headerLabel+' · '+rs.health_explanation:headerLabel" in block
+    assert "header.className='status-dot '+headerState" in block
+    assert "header.setAttribute('aria-label',headerDetail)" in block
+    assert "header.innerHTML='<span class=\"dot\"></span>'+esc(headerLabel)" in block
+    assert "statusRow('Current health',headerState,headerLabel" in block
+    assert "const state=rs.health_state||'ready'" not in block
+
+
+def test_runtime_provider_row_handles_recovery_mode() -> None:
+    block = _function_block(_read_admin_html(), "runtimeProviderRow")
+
+    assert "item?.recovery_mode==='circuit_breaker'||item?.recovery_mode==='action_required'" in block
+    assert "state='degraded'" in block
+    assert "label='Backup active'" in block
+    assert "item?.recovery_mode==='transient'" in block
+    assert "state='working'" in block
+    assert "label='Auto-recovering'" in block
+    assert "const reasonLine=item?.action_guidance||item?.switch_reason||''" in block
+    assert (
+        "const retryLine=item?.retry_in_seconds>0?'Retrying in '+Math.ceil(item.retry_in_seconds/60)+' min':''"
+    ) in block
+    assert "reasonLine" in block
+    assert "retryLine" in block
+
+
 def test_segment_labels_use_canonical_status_surfaces() -> None:
     html = _read_admin_html()
 

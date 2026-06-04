@@ -18,6 +18,35 @@ The current version source of truth is `pyproject.toml`.
   counter now prices each model the station actually used, so the spend estimate is
   honest rather than a flat guess.
 
+- **The admin queue now shows the studio working in the background.** Above the Scaletta, an "In produzione" feed reveals what the hosts are creating right now — writing an ad, voicing a banter, finding the next track — with a live timer and a short trail of what just finished. The next-up segment is highlighted with the studio gold accent and a one-line detail (artist, hosts, or brand). The operator no longer stares at a static list wondering whether anything is happening.
+
+- **Share a whole moment, not just thirty seconds.** The Share button now always
+  copies the clip link to your clipboard (alongside the native share sheet), so
+  it's ready to paste anywhere even if you dismiss the sheet. Clips of host banter
+  and ads — the station's own content — capture the full segment instead of a fixed
+  30-second window, and a short grace period after a segment ends lets you still
+  grab a great ad a beat too late. Music clips stay at 30 seconds. And when the
+  station is busy, the Share button now speaks plainly ("the tape decks need a
+  moment — give them a few seconds and tap again") instead of showing a technical
+  error message.
+
+- **Expanded TTS voice routing** — hosts, sweepers, station IDs, and ad
+  character voices can now use Edge, OpenAI, Azure Speech, or ElevenLabs TTS
+  with per-voice Edge fallbacks. The built-in cast now mixes OpenAI `cedar`,
+  `marin`, `coral`, Azure Italian HD voices, and existing Edge fallbacks so
+  commercials and imaging no longer collapse onto the same few Edge timbres.
+  Home Assistant add-on options and setup checks accept Azure Speech and
+  ElevenLabs credentials without requiring secrets in `radio.toml`.
+
+- **Voice audition clips** — `scripts/audition_tts_voices.py` can now generate
+  local MP3 samples plus a manifest for the configured cast and the built-in
+  Edge/OpenAI/Azure catalogs. Missing provider credentials are reported as
+  skipped so auditions are not confused with runtime Edge fallback.
+
+- **The admin Engine Room now tells you exactly what the station is doing** — the header badge shows "On Air" when music or hosts are streaming, "Paused" when you've stopped it deliberately, and "Error" when a task has died and needs attention. Provider chips (script, audio, TTS) now distinguish between "Backup active" (primary is down, using fallback) and "Auto-recovering" (transient error, no action needed), and show a plain-English reason plus a countdown when the circuit breaker is cooling off. Silence while listeners are connected is now surfaced as a blocked state immediately rather than waiting for the next polling cycle.
+
+- **The admin now shows what happened to a listener request after the hosts handled it.** A "Recently handled" section appears below the Pending queue for up to 5 minutes, showing each request with a status badge — "Sent to hosts" (blue) when the hosts picked it up, or "Song not found" (amber) when the requested track could not be downloaded. Requests leave the Pending list as soon as they're consumed, so operators no longer wonder whether their action registered.
+
 - **Show Memory: an opt-in record of how each moment was made.** A new provenance
   ledger (off by default) can record, for operators who turn it on, exactly how a
   given second of radio came to be: the raw AI attempts behind a host or ad, the
@@ -56,6 +85,14 @@ The current version source of truth is `pyproject.toml`.
 
 ### Fixed
 
+- **Deliberate Stop now stays stopped until Resume.** A listener connecting no longer silently restarts a stopped station, aligning playback with the documented 2.10.3 behavior; the playback loop fully honors the stopped state.
+
+- **"Suspicious jazz" ad music beds no longer fail to render.** FFmpeg expression commas are now escaped correctly for that bed.
+
+- **Ads with a failed or empty music bed now air voice-only.** The station keeps the playable voice segment instead of risking a lost ad.
+
+- **Station-ID transitions now use branded stings.** Transitions into and out of station IDs use station motifs instead of the generic fallback sweep.
+
 - **Admin programme durations are now truthful.** Status payloads expose real current segment duration/progress and stream-log durations, and the admin/live/listener UIs no longer invent music, banter, or ad durations when metadata is missing.
 
 - **The HA media player card now shows accurate elapsed time.** The station's Home Assistant entity now includes the `media_position_updated_at` timestamp that HA requires to count forward between updates, so the playback position no longer resets or freezes every 30 seconds in the media card and companion app.
@@ -79,6 +116,10 @@ The current version source of truth is `pyproject.toml`.
 - **Admin endpoints no longer auto-trust private networks when admin credentials are configured.** Previously a client on a LAN or Tailscale address was trusted for admin access even when `ADMIN_PASSWORD` or `ADMIN_TOKEN` was set, so a configured credential could be silently bypassed from any private-network browser. Now, when a credential is configured, all non-loopback admin traffic must present it. Credential-less private-network deployments are unchanged (still trusted, still CSRF-guarded on writes). Standalone runs that bind to a non-loopback host (including an empty bind host, which listens on all interfaces) now require `ADMIN_PASSWORD` or `ADMIN_TOKEN` at startup. Browser admin access requires `ADMIN_PASSWORD`; `ADMIN_TOKEN` is a header-only API credential a browser cannot send on navigation.
 
 ### Changed
+
+- **The station now defaults to English-first.** New installs render English utility copy on the listener page (with Italian station-feel words and headlines intact), and the AI hosts code-switch — English narrative with Italian flavor. The admin control room stays English-first. Flip on **Super Italian Mode** (admin Engine Room toggle, or `MAMMAMIRADIO_SUPER_ITALIAN=true`) for the fully Italian-first listener and host experience.
+
+- **The stable Home Assistant add-on now presents as stable in the store.** The release channel no longer carries the Experimental pill, while the Edge channel keeps it. Both add-on folders now ship the same custom AppArmor profile so Supervisor can award the extra security-rating point after install/update.
 
 - **Jamendo rotation depth now defaults to 200 tracks.** The `[playlist].jamendo_limit`
   config key and `JAMENDO_LIMIT` env override control Jamendo API result depth

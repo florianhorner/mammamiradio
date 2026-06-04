@@ -122,6 +122,13 @@ STARTUP_GRACE_SECONDS = 30.0
 CLIP_RATE_LIMIT_SECONDS = 10.0
 CLIP_RATE_PRUNE_SECONDS = 300.0
 CLIP_DURATION_SECONDS = 30
+# Ad/banter are operator-authored (no copyright cap), so a shared clip can cover
+# the whole segment. This ceiling bounds both the ring buffer (main.py sizes it
+# from this) and the per-clip extraction so memory stays bounded on Pi hardware.
+CLIP_MAX_SEGMENT_SECONDS = 180
+# After an ad/banter ends we keep its snapshot briefly, so a listener who taps
+# Share a moment too late (music already playing again) still gets the whole bit.
+CLIP_LOOKBACK_SECONDS = 15
 CLIP_MAX_SAVED = 50
 DEFAULT_CLIP_BITRATE_KBPS = 192
 
@@ -315,6 +322,9 @@ def _runtime_provider_label(provider: str) -> str:
     labels = {
         "anthropic": "Anthropic",
         "openai": "OpenAI",
+        "azure": "Azure Speech",
+        "elevenlabs": "ElevenLabs",
+        "mixed_tts": "Mixed TTS",
         "stock": "Stock copy",
         "edge": "Edge TTS",
         "silence": "Silence fallback",
@@ -332,6 +342,24 @@ def _runtime_provider_label(provider: str) -> str:
     return labels.get(provider, provider.replace("_", " ").title() if provider else "Unknown")
 
 
+_FALLBACK_REASON_LABELS = {
+    "anthropic_exception": "Anthropic had a brief API error - retrying automatically",
+    "anthropic_auth_failed": "Anthropic API key rejected - check your key in Engine Room",
+    "anthropic_auth_blocked": "Anthropic API key rejected - check your key in Engine Room",
+    "anthropic_usage_limit": "Anthropic usage limit reached - check your plan at anthropic.com",
+    "anthropic_usage_limit_blocked": "Anthropic usage limit reached - check your plan at anthropic.com",
+    "anthropic_nonretryable": "Anthropic service error - check status.anthropic.com",
+    "anthropic_absent": "No Anthropic key configured - running on OpenAI",
+}
+_ACTION_REQUIRED_FALLBACK_REASONS = {
+    "anthropic_auth_failed",
+    "anthropic_auth_blocked",
+    "anthropic_usage_limit",
+    "anthropic_usage_limit_blocked",
+    "anthropic_nonretryable",
+}
+
+
 def _provider_status(
     provider_class: str,
     *,
@@ -340,6 +368,9 @@ def _provider_status(
     fallback_active: bool,
     reason: str,
     state: StationState,
+    recovery_mode: str | None = None,
+    retry_in_seconds: int | None = None,
+    action_guidance: str = "",
 ) -> dict:
     saved = state.runtime_provider_state.get(provider_class, {})
     return {
@@ -351,14 +382,17 @@ def _provider_status(
         "fallback_active": fallback_active,
         "last_switch_timestamp": saved.get("last_switch_timestamp") if saved else None,
         "switch_reason": saved.get("reason") or reason,
+        "recovery_mode": recovery_mode,
+        "retry_in_seconds": retry_in_seconds,
+        "action_guidance": action_guidance,
     }
 
 
 def _script_provider_status(config, state: StationState, provider_health: dict) -> dict:
     anthropic_degraded = bool(provider_health.get("anthropic", {}).get("degraded"))
+    saved = state.runtime_provider_state.get("script_provider", {})
     if config.anthropic_api_key:
         primary = "anthropic"
-        saved = state.runtime_provider_state.get("script_provider", {})
         saved_current = str(saved.get("current_provider") or "")
         saved_fallback = bool(saved.get("fallback_active", False))
         if saved_current and (saved_fallback or saved_current != primary):
@@ -391,6 +425,22 @@ def _script_provider_status(config, state: StationState, provider_health: dict) 
         primary = current = "stock"
         fallback_active = False
         reason = "No LLM provider configured; stock copy is active"
+    fallback_reason = saved.get("reason") or reason
+    recovery_mode: str | None = None
+    retry_in_seconds: int | None = None
+    action_guidance = ""
+    if fallback_active:
+        if state.anthropic_disabled_until > time.time():
+            recovery_mode = "circuit_breaker"
+            _r = provider_health.get("anthropic", {}).get("retry_after_s")
+            retry_in_seconds = int(_r) if _r else None
+            action_guidance = _FALLBACK_REASON_LABELS.get(fallback_reason, fallback_reason)
+        elif fallback_reason in _ACTION_REQUIRED_FALLBACK_REASONS:
+            recovery_mode = "action_required"
+            action_guidance = _FALLBACK_REASON_LABELS[fallback_reason]
+        else:
+            recovery_mode = "transient"
+            action_guidance = "No action needed - will retry automatically"
     return _provider_status(
         "script_provider",
         primary_provider=primary,
@@ -398,21 +448,41 @@ def _script_provider_status(config, state: StationState, provider_health: dict) 
         fallback_active=fallback_active,
         reason=reason,
         state=state,
+        recovery_mode=recovery_mode,
+        retry_in_seconds=retry_in_seconds,
+        action_guidance=action_guidance,
     )
 
 
 def _tts_provider_status(config, state: StationState) -> dict:
-    openai_hosts = any((host.engine or "edge") == "openai" for host in config.hosts)
-    if openai_hosts:
-        primary = "openai"
-        if config.openai_api_key:
-            current = "openai"
-            fallback_active = False
-            reason = "OpenAI TTS is configured for at least one host"
-        else:
+    engines = {(host.engine or "edge").strip().lower() for host in config.hosts}
+    engines.update((voice.engine or "edge").strip().lower() for voice in config.ads.voices)
+    if config.sonic_brand.sweeper_voice:
+        engines.add((config.sonic_brand.sweeper_engine or "edge").strip().lower())
+    cloud_engines = sorted(engine for engine in engines if engine != "edge")
+
+    if cloud_engines:
+        primary = cloud_engines[0] if len(cloud_engines) == 1 else "mixed_tts"
+        configured = {
+            "openai": bool(config.openai_api_key),
+            "azure": bool(config.azure_speech_key and config.azure_speech_region),
+            "elevenlabs": bool(config.elevenlabs_api_key),
+        }
+        missing = [engine for engine in cloud_engines if not configured.get(engine, False)]
+        if missing and len(missing) == len(cloud_engines):
             current = "edge"
             fallback_active = True
-            reason = "OpenAI TTS host configured but OPENAI_API_KEY is unavailable; Edge voice fallback is active"
+            reason = f"TTS provider key missing for {', '.join(missing)}; Edge voice fallback is active"
+        elif missing:
+            current = primary
+            fallback_active = True
+            reason = f"Mixed TTS configured; {', '.join(missing)} voices are falling back to Edge"
+        else:
+            current = primary
+            fallback_active = False
+            reason = (
+                "Mixed TTS voice providers are configured" if len(cloud_engines) > 1 else f"{primary} TTS is configured"
+            )
     else:
         primary = current = "edge"
         fallback_active = False
@@ -457,18 +527,33 @@ def _runtime_status_snapshot(
         "tts_provider": tts_status,
     }
     fallback_active = any(item["fallback_active"] for item in providers.values())
-    task_blocked = not runtime_health.get("producer_task_alive", True) or not runtime_health.get(
-        "playback_task_alive",
-        True,
-    )
-    if task_blocked:
+    tasks_alive = runtime_health.get("producer_task_alive", True) and runtime_health.get("playback_task_alive", True)
+    silence_with_listeners = bool(runtime_health.get("silence_with_listeners", False))
+    station_on_air = tasks_alive and not silence_with_listeners and not state.session_stopped
+    if not tasks_alive:
         health_state = "blocked"
         health_color = "red"
         health_explanation = "A runtime task is stopped; playback needs operator attention."
+    elif state.session_stopped:
+        # Check a deliberate operator pause BEFORE silence: /api/stop keeps the
+        # tasks alive, so an empty queue with a listener still connected would
+        # otherwise flip a paused station to the red "Error" state after the
+        # silence window. A deliberate pause must read as "Paused", never "Error".
+        health_state = "ready"
+        health_color = "blue"
+        health_explanation = "Station is paused by the operator."
+    elif silence_with_listeners:
+        health_state = "blocked"
+        health_color = "red"
+        health_explanation = "Listeners are connected but playback is silent; playback needs operator attention."
     elif fallback_active:
         health_state = "degraded"
         health_color = "yellow"
-        active = [item["current_label"] for item in providers.values() if item["fallback_active"]]
+        active = [
+            providers[name]["current_label"]
+            for name in ("audio_source", "script_provider")
+            if providers[name]["fallback_active"]
+        ]
         health_explanation = "Fallback active: " + ", ".join(active)
     else:
         health_state = "ready"
@@ -483,7 +568,9 @@ def _runtime_status_snapshot(
                 "event": "provider_health_state",
                 "health_state": health_state,
                 "fallback_active": fallback_active,
-                "runtime_provider_classes": [name for name, item in providers.items() if item["fallback_active"]],
+                "runtime_provider_classes": [
+                    name for name in ("audio_source", "script_provider") if providers[name]["fallback_active"]
+                ],
             },
         )
 
@@ -495,6 +582,7 @@ def _runtime_status_snapshot(
         "health_state": health_state,
         "health_color": health_color,
         "health_explanation": health_explanation,
+        "station_on_air": station_on_air,
         "fallback_active": fallback_active,
         "providers": providers,
         "last_switch_timestamp": last_switch.get("timestamp") if last_switch else None,
@@ -627,6 +715,12 @@ def _provider_health_snapshot(config, state: StationState) -> dict:
         "openai": {
             "configured": bool(config.openai_api_key),
             "key_status": state.openai_key_status,
+        },
+        "azure_speech": {
+            "configured": bool(config.azure_speech_key and config.azure_speech_region),
+        },
+        "elevenlabs": {
+            "configured": bool(config.elevenlabs_api_key),
         },
         "chaos": {
             "enabled": state.chaos_mode_active,
@@ -1072,6 +1166,15 @@ async def run_playback_loop(app) -> None:
     _ha_push_tasks: set[asyncio.Task] = set()  # prevent GC of HA push tasks
 
     while True:
+        if state.session_stopped:
+            state.queue_empty_since = None
+            try:
+                await asyncio.wait_for(state.resume_event.wait(), timeout=1.0)
+            except TimeoutError:
+                pass
+            state.resume_event.clear()
+            continue
+
         # Pause when nobody is listening — don't burn API tokens or disk on an empty room.
         # The queue stays full; the moment a listener connects, playback resumes instantly.
         if not hub._listeners:
@@ -1111,6 +1214,10 @@ async def run_playback_loop(app) -> None:
                 pulled_from_queue = True
                 state.queue_empty_since = None
             except TimeoutError:
+                if state.session_stopped:
+                    state.queue_empty_since = None
+                    continue
+
                 if not hub._listeners:
                     state.queue_empty_since = None
                     continue
@@ -1221,6 +1328,17 @@ async def run_playback_loop(app) -> None:
                         continue
 
         prev_last_provider_event = state.runtime_events[-1] if state.runtime_events else None
+        if state.session_stopped:
+            # Stop landed mid-selection: drop this segment instead of airing it.
+            # Unlink any ephemeral temp (a queue-pulled segment or an interrupt
+            # bridge captured just before the stop) and balance the queue
+            # bookkeeping — the normal finally calls task_done for pulled segments.
+            if getattr(segment, "ephemeral", False):
+                segment.path.unlink(missing_ok=True)
+            if pulled_from_queue:
+                segment_queue.task_done()
+            state.queue_empty_since = None
+            continue
         state.on_stream_segment(segment)
         if state.runtime_events:
             new_last_provider_event = state.runtime_events[-1]
@@ -1284,6 +1402,36 @@ async def run_playback_loop(app) -> None:
                     ahead = expected - elapsed
                     if ahead > 0.005:
                         await asyncio.sleep(ahead)
+            # Lookback snapshot: when an ad/banter segment finishes, remember the
+            # whole thing so a listener who taps Share just after it ends (music
+            # already playing again) still captures it. Single extract at the
+            # boundary — no per-chunk work on the throttled send path above.
+            if segment.type in (SegmentType.AD, SegmentType.BANTER) and not was_skipped:
+                # Wrapped: snapshotting is a nice-to-have. An extract failure
+                # (e.g. MemoryError joining a long segment on a Pi) must never
+                # escape into the playback coroutine and drop the stream
+                # (leadership principle #1). Worst case: no lookback for this bit.
+                try:
+                    from mammamiradio.scheduling.clip import extract_clip as _extract_clip
+
+                    _clip_buf = getattr(app.state, "clip_ring_buffer", None)
+                    if _clip_buf:
+                        _bitrate = config.audio.bitrate if hasattr(config, "audio") else DEFAULT_CLIP_BITRATE_KBPS
+                        _secs = min(
+                            CLIP_MAX_SEGMENT_SECONDS,
+                            max(CLIP_DURATION_SECONDS, math.ceil(segment.duration_sec or 0)),
+                        )
+                        _snap = _extract_clip(_clip_buf, duration_seconds=_secs, bitrate_kbps=_bitrate)
+                        if _snap:
+                            _meta = segment.metadata if isinstance(segment.metadata, dict) else {}
+                            app.state.last_shareworthy_clip = {
+                                "bytes": _snap,
+                                "ended_monotonic": time.monotonic(),
+                                "type": segment.type.value,
+                                "title": str(_meta.get("title") or "").strip(),
+                            }
+                except Exception as exc:
+                    logger.warning("lookback snapshot failed for %s segment: %s", segment.type.value, exc)
             if segment.type == SegmentType.MUSIC and not was_skipped:
                 listen_sec = bytes_sent / bytes_per_sec if bytes_per_sec else None
                 # Fire-and-forget: persistence must not block the handoff to the next
@@ -1409,11 +1557,6 @@ async def _persist_skipped_music(state: StationState, config, metadata: dict, *,
 
 async def _audio_generator(request: Request):
     """Stream the live station feed from the playback loop."""
-    state = request.app.state.station_state
-    config = request.app.state.config
-    if state.session_stopped:
-        _clear_session_stopped(state, config)
-
     hub = request.app.state.stream_hub
     listener_id, listener_queue = hub.subscribe()
 
@@ -1628,7 +1771,13 @@ async def setup_provider_check(request: Request, _: None = Depends(require_admin
         # concurrent save swapped a key must NOT accept that task's stale 401. Compare
         # current config to the keys captured when the task was created.
         snapshot = getattr(request.app.state, "_provider_check_task_keys", None)
-        if snapshot == (config.anthropic_api_key, config.openai_api_key):
+        if snapshot == (
+            config.anthropic_api_key,
+            config.openai_api_key,
+            config.azure_speech_key,
+            config.azure_speech_region,
+            config.elevenlabs_api_key,
+        ):
             _record_provider_verdict(request.app.state.station_state, probe_result)
 
     lock = getattr(request.app.state, "_provider_check_lock", None)
@@ -1660,7 +1809,13 @@ async def setup_provider_check(request: Request, _: None = Depends(require_admin
         if task is None:
             # Capture the keys this task probes so the verdict can't be misattributed
             # to a later config (Codex: snapshot travels with the task, not the waiter).
-            request.app.state._provider_check_task_keys = (config.anthropic_api_key, config.openai_api_key)
+            request.app.state._provider_check_task_keys = (
+                config.anthropic_api_key,
+                config.openai_api_key,
+                config.azure_speech_key,
+                config.azure_speech_region,
+                config.elevenlabs_api_key,
+            )
             task = asyncio.create_task(check_provider_keys(config))
             request.app.state._provider_check_task = task
 
@@ -1971,6 +2126,13 @@ async def stop_session(request: Request, _: None = Depends(require_admin_access)
     # Purge queued segments
     purged = _purge_segment_queue(request.app.state.queue)
     state.queued_segments.clear()
+    # Drop any pending interrupt/forced segment so it can't fire as stale audio on
+    # the next resume; unlink an ephemeral bridge temp so the stop doesn't leak it.
+    if state.interrupt_slot is not None and state.interrupt_slot_ephemeral:
+        state.interrupt_slot.unlink(missing_ok=True)
+    state.interrupt_slot = None
+    state.interrupt_slot_ephemeral = False
+    state.force_next = None
     # Skip current segment
     if state.now_streaming:
         request.app.state.skip_event.set()
@@ -1980,6 +2142,8 @@ async def stop_session(request: Request, _: None = Depends(require_admin_access)
     config = request.app.state.config
     _persist_session_stopped(config, True)
     state.now_streaming = {"type": "stopped", "label": "Session stopped", "started": time.time(), "metadata": {}}
+    # Drop any remembered ad/banter snapshot so a clip can't leak across a stop.
+    request.app.state.last_shareworthy_clip = None
     logger.info("Session stopped by admin (purged %d segments)", purged)
     return {"ok": True, "purged": purged}
 
@@ -3042,29 +3206,66 @@ async def create_clip(request: Request):
     """Extract the last ~30s of audio into a shareable clip."""
     from mammamiradio.scheduling.clip import CLIP_TTL_SECONDS, cleanup_old_clips, extract_clip, save_clip
 
-    # Rate limit: 1 clip per 10 seconds per IP
+    # Rate limit: 1 clip per 10 seconds per IP. Return retry_after (seconds), not
+    # tech-lingo prose — the listener UI turns it into warm, actionable copy.
     client_ip = request.client.host if request.client else "unknown"
     now = time.time()
     async with _clip_rate_lock:
-        if now - _clip_rate.get(client_ip, 0) < CLIP_RATE_LIMIT_SECONDS:
+        last = _clip_rate.get(client_ip, 0)
+        if now - last < CLIP_RATE_LIMIT_SECONDS:
             from fastapi.responses import JSONResponse
 
-            return JSONResponse({"ok": False, "error": "Rate limited — try again in a few seconds"}, status_code=429)
+            retry_after = max(1, math.ceil(CLIP_RATE_LIMIT_SECONDS - (now - last)))
+            return JSONResponse({"ok": False, "retry_after": retry_after}, status_code=429)
         _clip_rate[client_ip] = now
         # Prune stale entries to avoid unbounded growth.
         stale_keys = [k for k, v in _clip_rate.items() if now - v >= CLIP_RATE_PRUNE_SECONDS]
         for key in stale_keys:
             _clip_rate.pop(key, None)
 
-    ring_buffer = getattr(request.app.state, "clip_ring_buffer", None)
-    if ring_buffer is None or len(ring_buffer) == 0:
-        return {"ok": False, "error": "No audio buffered yet"}
-
     config = request.app.state.config
     bitrate = config.audio.bitrate if hasattr(config, "audio") else DEFAULT_CLIP_BITRATE_KBPS
-    clip_data = extract_clip(ring_buffer, duration_seconds=CLIP_DURATION_SECONDS, bitrate_kbps=bitrate)
+    station_state = getattr(request.app.state, "station_state", None)
+    now_streaming = getattr(station_state, "now_streaming", None) or {}
+    if not isinstance(now_streaming, dict):
+        now_streaming = {}
+    ring_buffer = getattr(request.app.state, "clip_ring_buffer", None)
+
+    # Pick what to clip:
+    #  - live ad/banter  → the whole segment so far (operator content, no 30s cap)
+    #  - just-finished ad/banter within the lookback window → the saved snapshot
+    #  - otherwise (music) → the rolling 30s window (copyright-capped)
+    seg_type = now_streaming.get("type")
+    clip_data = None
+    clip_title_override = None
+    if seg_type in ("ad", "banter") and ring_buffer:
+        started = float(now_streaming.get("started") or now)
+        duration_sec = float(now_streaming.get("duration_sec") or CLIP_DURATION_SECONDS)
+        elapsed = max(0.0, now - started)
+        cap = min(float(CLIP_MAX_SEGMENT_SECONDS), duration_sec)
+        secs = min(cap, max(float(CLIP_DURATION_SECONDS), elapsed))
+        clip_data = extract_clip(ring_buffer, duration_seconds=math.ceil(secs), bitrate_kbps=bitrate)
+    else:
+        snap = getattr(request.app.state, "last_shareworthy_clip", None)
+        if (
+            isinstance(snap, dict)
+            and snap.get("bytes")
+            and (time.monotonic() - float(snap.get("ended_monotonic", 0))) < CLIP_LOOKBACK_SECONDS
+        ):
+            clip_data = snap["bytes"]
+            clip_title_override = str(snap.get("title") or "").strip()
+
+    if clip_data is None:
+        if ring_buffer is None or len(ring_buffer) == 0:
+            # Nothing to clip yet (e.g. cold start). Roll back the rate-limit
+            # stamp so the listener can retry the moment audio is buffered,
+            # instead of being locked out for the full window after a no-op.
+            _clip_rate.pop(client_ip, None)
+            return {"ok": False, "reason": "no_audio"}
+        clip_data = extract_clip(ring_buffer, duration_seconds=CLIP_DURATION_SECONDS, bitrate_kbps=bitrate)
     if not clip_data:
-        return {"ok": False, "error": "Buffer empty"}
+        _clip_rate.pop(client_ip, None)
+        return {"ok": False, "reason": "no_audio"}
 
     clips_dir = config.cache_dir / "clips"
 
@@ -3081,16 +3282,20 @@ async def create_clip(request: Request):
     # Best-effort: missing now_streaming or schema drift falls back to station_name.
     import json as _json
 
-    station_state = getattr(request.app.state, "station_state", None)
-    now_streaming = getattr(station_state, "now_streaming", None) or {}
     # metadata is producer-managed and normally a dict, but a None or an
     # unexpected scalar would crash the .get() below and turn a successful
     # clip into a 500. Normalize to dict before reading fields.
-    raw_meta = now_streaming.get("metadata", {}) if isinstance(now_streaming, dict) else {}
+    raw_meta = now_streaming.get("metadata", {})
     meta = raw_meta if isinstance(raw_meta, dict) else {}
     station_name = config.display_station_name
     track_title = str(meta.get("title_only") or meta.get("title") or "").strip()
     track_artist = str(meta.get("artist") or "").strip()
+    # When we served a just-finished ad/banter via the lookback snapshot,
+    # now_streaming describes the CURRENT segment (music) — stamp the remembered
+    # ad/banter title instead so the share card names what was actually clipped.
+    if clip_title_override is not None:
+        track_title = clip_title_override
+        track_artist = ""
     sidecar = {
         "station_name": station_name,
         "track_title": track_title,
@@ -3282,6 +3487,22 @@ async def status(request: Request, _: None = Depends(require_admin_access)):
             "segments_produced": state.segments_produced,
             "tracks_played": len(state.played_tracks),
             "uptime_sec": round(time.time() - start_time),
+            # Live production feed ("In produzione", admin-only): what the producer
+            # is building right now + a short trail of just-finished work. Best-effort
+            # display state; never gates audio. current is null when the producer is idle.
+            "production": {
+                "current": (
+                    {
+                        "phase": state.gen_phase,
+                        "kind": state.gen_kind,
+                        "label": state.gen_label,
+                        "elapsed_sec": (int(time.monotonic() - state.gen_started) if state.gen_started else None),
+                    }
+                    if state.gen_phase
+                    else None
+                ),
+                "recent": [{"kind": r["kind"], "label": r["label"], "ok": r["ok"]} for r in list(state.gen_recent)],
+            },
             "playlist_source": _serialize_source(state.playlist_source),
             "produced_log": [{"type": e.type, "label": e.label, "timestamp": e.timestamp} for e in state.segment_log],
             "last_banter_script": state.last_banter_script,

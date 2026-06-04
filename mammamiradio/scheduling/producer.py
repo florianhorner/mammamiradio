@@ -223,13 +223,17 @@ async def _queue_drain_recovery_bridge(
     )
 
 
-def _banter_title(script: list[dict] | None, *, canned: bool) -> str:
+def _banter_title(script: list[dict] | None, *, canned: bool, host_order: list[str] | None = None) -> str:
     """Produce a user-facing label for a BANTER segment.
 
     Prefers unique host names from the script (joined with ' & '). Falls back
     to "Pre-recorded banter" when the audio came from a canned clip with no
     script attached, and finally to a generic label. The goal is that queue
     rows never render a bare "banter" type name to operators or listeners.
+
+    host_order pins the display order to the config host list so adjacent
+    segments always show the same canonical ordering regardless of which host
+    the LLM chose to open with.
     """
     if canned:
         return "Pre-recorded banter"
@@ -238,6 +242,9 @@ def _banter_title(script: list[dict] | None, *, canned: bool) -> str:
         name = (line or {}).get("host", "").strip() if isinstance(line, dict) else ""
         if name and name not in hosts:
             hosts.append(name)
+    if hosts and host_order:
+        rank = {h: i for i, h in enumerate(host_order)}
+        hosts.sort(key=lambda h: rank.get(h, len(host_order)))
     if hosts:
         return " & ".join(hosts[:2])
     return "Banter"
@@ -1258,7 +1265,13 @@ async def run_producer(
                 )
 
                 loop = asyncio.get_running_loop()
-                rendered = await _render_music_track(track, config, temp_prefix="music", context="music")
+                state.set_gen("finding", "music", f"Finding {track.display}")
+                _gen_ok = False
+                try:
+                    rendered = await _render_music_track(track, config, temp_prefix="music", context="music")
+                    _gen_ok = rendered is not None
+                finally:
+                    state.end_gen(ok=_gen_ok)
                 if rendered is None:
                     continue
                 norm_path = rendered.path
@@ -1495,6 +1508,8 @@ async def run_producer(
                             _banter_attempt_id = uuid4().hex
                             _banter_collector = CallCollector(attempt_id=_banter_attempt_id)
                             _prov_tok = set_collector(_banter_collector)
+                            state.set_gen("writing", "banter", "Writing banter")
+                            _gen_ok = False
                             try:
                                 lines, listener_request_commit = await _sw.write_banter(
                                     state,
@@ -1503,8 +1518,10 @@ async def run_producer(
                                     is_first_listener=_is_first_listener,
                                     chaos_subtype=chaos_subtype,
                                 )
+                                _gen_ok = True
                             finally:
                                 reset_collector(_prov_tok)
+                                state.end_gen(ok=_gen_ok)
                             line_texts = [text for _host, text in lines]
                             _emit_segment_prepared(
                                 state,
@@ -1530,6 +1547,8 @@ async def run_producer(
                             _banter_attempt_id = uuid4().hex
                             _banter_collector = CallCollector(attempt_id=_banter_attempt_id)
                             _prov_tok = set_collector(_banter_collector)
+                            state.set_gen("writing", "banter", "Writing banter")
+                            _gen_ok = False
                             try:
                                 transition_task = _sw.write_transition(state, config, next_segment="banter")
                                 banter_task = _sw.write_banter(
@@ -1541,8 +1560,10 @@ async def run_producer(
                                 (trans_host, trans_text), (lines, listener_request_commit) = await asyncio.gather(
                                     transition_task, banter_task
                                 )
+                                _gen_ok = True
                             finally:
                                 reset_collector(_prov_tok)
+                                state.end_gen(ok=_gen_ok)
                             line_texts = [trans_text] + [text for _host, text in lines]
                             _emit_segment_prepared(
                                 state,
@@ -1759,7 +1780,11 @@ async def run_producer(
                         "type": "banter",
                         "lines": state.last_banter_script,
                         "canned": canned is not None,
-                        "title": _banter_title(state.last_banter_script, canned=canned is not None),
+                        "title": _banter_title(
+                            state.last_banter_script,
+                            canned=canned is not None,
+                            host_order=[h.name for h in config.hosts],
+                        ),
                         "chaos_subtype": chaos_subtype.value if chaos_subtype else "",
                         "chaos_degraded": state.chaos_last_degraded_reason if chaos_subtype else "",
                         "has_music_tail": bool(has_music_tail),
@@ -1797,7 +1822,13 @@ async def run_producer(
                 logger.info("Producing NEWS FLASH")
 
                 try:
-                    host, text, category = await _sw.write_news_flash(state, config)
+                    state.set_gen("writing", "news_flash", "Writing a news flash")
+                    _gen_ok = False
+                    try:
+                        host, text, category = await _sw.write_news_flash(state, config)
+                        _gen_ok = True
+                    finally:
+                        state.end_gen(ok=_gen_ok)
                     flash_path = config.tmp_dir / f"flash_{uuid4().hex[:8]}.mp3"
 
                     # Keep news flashes intelligible; only traffic gets a small urgency nudge.
@@ -1862,8 +1893,8 @@ async def run_producer(
 
                     # Use configured sweeper voice, or a random host
                     sweeper_voice = sb.sweeper_voice
-                    sweeper_engine = "edge"
-                    sweeper_fallback = ""
+                    sweeper_engine = sb.sweeper_engine
+                    sweeper_fallback = sb.sweeper_edge_fallback_voice
                     if not sweeper_voice:
                         sweeper_host = random.choice(config.hosts)
                         sweeper_voice = sweeper_host.voice
@@ -1905,8 +1936,8 @@ async def run_producer(
                     sweeper_text = random.choice(sb.sweepers) if sb.sweepers else config.station.name
 
                     sweeper_voice = sb.sweeper_voice
-                    sweeper_engine = "edge"
-                    sweeper_fallback = ""
+                    sweeper_engine = sb.sweeper_engine
+                    sweeper_fallback = sb.sweeper_edge_fallback_voice
                     if not sweeper_voice:
                         sweeper_host = random.choice(config.hosts)
                         sweeper_voice = sweeper_host.voice
@@ -2110,6 +2141,9 @@ async def run_producer(
                 _ad_attempt_id = uuid4().hex
                 _ad_collector = CallCollector(attempt_id=_ad_attempt_id, ad_break_id=_ad_attempt_id)
                 _ad_prov_tok = set_collector(_ad_collector)
+                _ad_brand = spot_params[0][0] if spot_params else ""
+                state.set_gen("writing", "ad", f"Writing the {_ad_brand} spot" if _ad_brand else "Writing an ad break")
+                _gen_ok = False
                 try:
                     (
                         (intro_parts, intro_text, intro_has_music_tail),
@@ -2125,8 +2159,10 @@ async def run_producer(
                         ),
                         _build_bumpers(),
                     )
+                    _gen_ok = True
                 finally:
                     reset_collector(_ad_prov_tok)
+                    state.end_gen(ok=_gen_ok)
 
                 # ── PHASE 2: Fan out all ad TTS synthesis in parallel ──
                 ad_paths = await asyncio.gather(
@@ -2370,6 +2406,7 @@ async def run_producer(
                     "reason": segment.metadata.get("queue_reason", "Rendered and queued for playback."),
                     "playlist_index": segment.metadata.get("playlist_index", -1),
                     "source_kind": segment.metadata.get("source_kind", ""),
+                    "duration_sec": round(segment.duration_sec or 0, 1),
                 }
             )
             # Queue appended → up_next changed → integration consumers polling

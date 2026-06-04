@@ -11,6 +11,29 @@
   change in behavior (the previous setting maps to Balanced). The dial is also in the
   admin Engine Room and switches live without a restart.
 
+- **Share a whole moment, not just thirty seconds.** The Share button now always
+  copies the clip link to your clipboard (alongside the native share sheet). Clips
+  of host banter and ads capture the full segment instead of a fixed 30-second
+  window, with a short grace period so you can still grab a great ad a beat too
+  late; music clips stay at 30 seconds. When the station is busy, the Share button
+  speaks plainly ("the tape decks need a moment — give them a few seconds and tap
+  again") instead of a technical error.
+
+- **Expanded TTS voice routing** — hosts, sweepers, station IDs, and ad
+  character voices can now use Edge, OpenAI, Azure Speech, or ElevenLabs TTS
+  with per-voice Edge fallbacks. Add-on options now include Azure Speech and
+  ElevenLabs credentials for premium voice mixes without editing secrets into
+  `radio.toml`.
+
+- **Voice audition clips** — `scripts/audition_tts_voices.py` can now generate
+  local MP3 samples plus a manifest for the configured cast and the built-in
+  Edge/OpenAI/Azure catalogs. Missing provider credentials are reported as
+  skipped so auditions are not confused with runtime Edge fallback.
+
+- **The admin Engine Room now tells you exactly what the station is doing** — the header badge shows "On Air" when music or hosts are streaming, "Paused" when you've stopped it deliberately, and "Error" when a task has died and needs attention. Provider chips now distinguish "Backup active" (primary is down) from "Auto-recovering" (transient error, will self-heal), and show a plain-English reason plus a retry countdown. Silence while listeners are connected now surfaces as a blocked state immediately.
+
+- **The admin now shows what happened to a listener request after the hosts handled it.** A "Recently handled" section appears below the Pending queue for up to 5 minutes, showing each request with a status badge — "Sent to hosts" (blue) when the hosts picked it up, or "Song not found" (amber) when the requested track could not be downloaded.
+
 - **Jamendo rotation depth now defaults to 200 tracks.** The add-on's bundled
   `radio.toml` sets `jamendo_limit = 200`, and advanced deployments can override
   it with `JAMENDO_LIMIT` (`1`-`200`) to tune Jamendo API result depth.
@@ -33,6 +56,10 @@
   `docs/integrations/sample-payloads/` as the binding contract.
 
 ### Changed
+
+- **The station now defaults to English-first.** New installs render English utility copy on the listener page (with Italian station-feel words intact) and English-first admin, and the AI hosts code-switch with Italian flavor. Turn on **Super Italian Mode** in the add-on options (or the admin Engine Room) for the fully Italian-first experience.
+
+- **The stable add-on now presents as stable in Home Assistant.** The release channel no longer shows the Experimental pill, Edge keeps it, and both add-on folders now include the shared custom AppArmor profile so Supervisor can award the extra security-rating point after install/update.
 
 - **Sports flashes are clearer and less shouty** — Sports news now uses a steadier host selection path, asks for informed radio-desk updates instead of maximum-excitement commentary, and no longer adds a dedicated sports TTS speed/pitch spike.
 

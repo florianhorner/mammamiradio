@@ -111,6 +111,9 @@ def addon_options_snippet(config: StationConfig) -> str:
     values = {
         "anthropic_api_key": "*** configured ***" if config.anthropic_api_key else "<optional>",
         "openai_api_key": "*** configured ***" if config.openai_api_key else "<optional>",
+        "azure_speech_key": "*** configured ***" if config.azure_speech_key else "<optional>",
+        "azure_speech_region": config.azure_speech_region or "<optional>",
+        "elevenlabs_api_key": "*** configured ***" if config.elevenlabs_api_key else "<optional>",
     }
     return json.dumps(values, indent=2)
 
@@ -123,6 +126,8 @@ def build_setup_status(config: StationConfig, state: StationState) -> dict:
     demo_playlist = _playlist_is_demo(state)
     station_mode = classify_station_mode(config, state, demo_playlist=demo_playlist)
     has_llm = bool(config.anthropic_api_key or config.openai_api_key)
+    has_azure_tts = bool(config.azure_speech_key and config.azure_speech_region)
+    has_cloud_tts = bool(config.openai_api_key or has_azure_tts or config.elevenlabs_api_key)
     has_ha = bool(config.homeassistant.enabled and config.ha_token)
     is_ha_enabled = bool(config.homeassistant.enabled)
 
@@ -162,6 +167,40 @@ def build_setup_status(config: StationConfig, state: StationState) -> dict:
                 for key, configured in [
                     ("ANTHROPIC_API_KEY", bool(config.anthropic_api_key)),
                     ("OPENAI_API_KEY", bool(config.openai_api_key)),
+                ]
+                if configured
+            ],
+        },
+        {
+            "key": "tts_keys",
+            "label": "Voice Provider Keys",
+            "required": False,
+            "required_label": "Optional for premium voices",
+            "status": "configured" if has_cloud_tts else "missing",
+            "summary": (
+                "At least one cloud TTS provider is configured for premium voices."
+                if has_cloud_tts
+                else "No premium TTS key found. The station still runs with Edge voice fallbacks."
+            ),
+            "next_action": (
+                "Add OPENAI_API_KEY, AZURE_SPEECH_KEY plus AZURE_SPEECH_REGION, "
+                "or ELEVENLABS_API_KEY for expanded voices."
+            ),
+            "skip_outcome": "If you skip this, configured cloud voices fall back to Edge voices.",
+            "where": {
+                "ha_addon": "Add-on Configuration",
+                "docker": ".env used by docker compose",
+                "macos": "the generated .env file behind the Mac launcher",
+                "local": ".env in the project root",
+            },
+            "accepted_keys": ["OPENAI_API_KEY", "AZURE_SPEECH_KEY", "AZURE_SPEECH_REGION", "ELEVENLABS_API_KEY"],
+            "configured_keys": [
+                key
+                for key, configured in [
+                    ("OPENAI_API_KEY", bool(config.openai_api_key)),
+                    ("AZURE_SPEECH_KEY", bool(config.azure_speech_key)),
+                    ("AZURE_SPEECH_REGION", bool(config.azure_speech_region)),
+                    ("ELEVENLABS_API_KEY", bool(config.elevenlabs_api_key)),
                 ]
                 if configured
             ],

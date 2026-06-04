@@ -202,8 +202,8 @@ class HostPersonality:
     voice: str
     style: str
     personality: PersonalityAxes = field(default_factory=PersonalityAxes)
-    engine: str = "edge"  # "edge" for edge-tts, "openai" for OpenAI gpt-4o-mini-tts
-    edge_fallback_voice: str = ""  # edge-tts voice used when OpenAI engine falls back
+    engine: str = "edge"  # edge|openai|azure|elevenlabs
+    edge_fallback_voice: str = ""  # edge-tts voice used when a cloud TTS engine falls back
 
 
 @dataclass
@@ -391,6 +391,21 @@ class ExternalAddNotice(TypedDict):
     ts: float
 
 
+RECENTLY_CONSUMED_RETENTION_SECONDS = 300
+
+
+class ConsumedListenerRequest(TypedDict):
+    """A consumed listener request retained for 5-minute admin visibility."""
+
+    id: str
+    name: str | None
+    message: str | None
+    song_track: str | None
+    type: str | None
+    status: str  # "sent_to_hosts" | "song_not_found"
+    consumed_at: float
+
+
 @dataclass
 class StationState:
     """Mutable in-memory state shared by producer and streamer tasks."""
@@ -484,6 +499,9 @@ class StationState:
     pinned_track: Track | None = None
     # Listener requests: shoutouts and song wishes submitted via the dashboard
     pending_requests: list[dict] = field(default_factory=list)
+    # Recently consumed requests kept for 5 min so the admin can see what happened
+    # to a request that left Pending (sent to hosts, or song not found).
+    recently_consumed_requests: list[ConsumedListenerRequest] = field(default_factory=list)
     # Operator-visible pending actions/directives. This mirrors legacy single
     # slots while the producer still consumes those slots for compatibility.
     pending_actions: deque[dict] = field(default_factory=lambda: deque(maxlen=200))
@@ -541,6 +559,37 @@ class StationState:
     runtime_events: deque[RuntimeProviderEvent] = field(default_factory=lambda: deque(maxlen=50))
     runtime_provider_state: dict[str, dict] = field(default_factory=dict)
     runtime_health_state: str = ""
+    # Live production tracking — what the producer is building right now, surfaced
+    # in /api/status so the admin "In produzione" feed can show backstage work.
+    # gen_phase is a stable machine key (tests + badge mapping); gen_label is the
+    # human English line shown to the operator. All cleared (idle) by end_gen.
+    gen_phase: str = ""  # "writing"|"voicing"|"finding"|"mastering"|"checking"|""
+    gen_kind: str = ""  # segment type for the badge: "music"|"banter"|"ad"|"news_flash"|""
+    gen_label: str = ""  # human English incl. subject, e.g. "Writing the Velocino spot"
+    gen_started: float = 0.0  # time.monotonic() when the current phase began; 0.0 when idle
+    gen_recent: deque[dict] = field(default_factory=lambda: deque(maxlen=3))
+    # each entry: {"phase": str, "kind": str, "label": str, "ok": bool}
+
+    def set_gen(self, phase: str, kind: str, label: str) -> None:
+        """Mark the producer as actively building a segment (drives 'In produzione').
+
+        Best-effort display state only — never gates the audio path.
+        """
+        self.gen_phase, self.gen_kind, self.gen_label = phase, kind, label
+        self.gen_started = time.monotonic()
+
+    def end_gen(self, ok: bool = True) -> None:
+        """Clear the current production phase, pushing it onto the recent trail.
+
+        ok=False records a blocked (✗) outcome for operator honesty. A crash that
+        skips end_gen does not wedge anything: the next set_gen overwrites state.
+        """
+        if self.gen_phase:
+            self.gen_recent.appendleft(
+                {"phase": self.gen_phase, "kind": self.gen_kind, "label": self.gen_label, "ok": ok}
+            )
+        self.gen_phase = self.gen_kind = self.gen_label = ""
+        self.gen_started = 0.0
 
     def update_runtime_provider(
         self,

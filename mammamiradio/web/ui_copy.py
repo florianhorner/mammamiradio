@@ -56,6 +56,13 @@ COPY: dict[str, dict[str, str]] = {
         "np_next": "Next",
         "np_building": "Building schedule…",
         "np_live": "Live",
+        # Clip sharing — warm, in-character, and every error names the way out
+        # (leadership principle #5). {s} is filled with the retry seconds by JS.
+        "clip_saving": "Saving your clip…",
+        "clip_copied": "Link copied — paste it anywhere to share.",
+        "clip_rate_limited": "The tape decks are still spooling your last clip — give them {s}s and tap again.",
+        "clip_no_audio": "Nothing to clip just yet — let the radio play for a moment, then tap Share.",
+        "clip_error": "That clip didn't take — give it a moment and tap Share again.",
     },
     "it": {
         "listen_now": "Ascolta Ora",
@@ -94,6 +101,11 @@ COPY: dict[str, dict[str, str]] = {
         "np_next": "Prossimo",
         "np_building": "In costruzione…",
         "np_live": "In diretta",
+        "clip_saving": "Sto salvando la clip…",
+        "clip_copied": "Link copiato — incollalo dove vuoi per condividerlo.",
+        "clip_rate_limited": "I registratori stanno ancora montando l'ultima clip — aspetta {s}s e ritocca.",
+        "clip_no_audio": "Ancora niente da clippare — lascia suonare la radio un attimo, poi tocca Condividi.",
+        "clip_error": "La clip non è partita — aspetta un attimo e ritocca Condividi.",
     },
 }
 

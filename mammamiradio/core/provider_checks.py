@@ -72,6 +72,38 @@ async def _post_json(
     return response.status_code, ""
 
 
+async def _get(
+    client: httpx.AsyncClient,
+    url: str,
+    *,
+    headers: dict[str, str],
+) -> tuple[int | None, str]:
+    try:
+        response = await client.get(url, headers=headers)
+    except httpx.HTTPError as exc:
+        return None, str(exc)
+    content_type = response.headers.get("content-type", "")
+    if "application/json" in content_type or response.status_code >= 400:
+        return response.status_code, response.text[:2000]
+    return response.status_code, ""
+
+
+async def _post_empty(
+    client: httpx.AsyncClient,
+    url: str,
+    *,
+    headers: dict[str, str],
+) -> tuple[int | None, str]:
+    """POST with no body — for token/auth probe endpoints that expect Content-Length: 0."""
+    try:
+        response = await client.post(url, headers=headers)
+    except httpx.HTTPError as exc:
+        return None, str(exc)
+    if response.status_code >= 400:
+        return response.status_code, response.text[:2000]
+    return response.status_code, ""
+
+
 def _scrub_secrets(value: str, secrets: tuple[str, ...]) -> str:
     scrubbed = value
     for secret in secrets:
@@ -107,9 +139,18 @@ async def check_provider_keys(config: StationConfig, *, timeout_s: float = 12.0)
         "anthropic": _missing_result("anthropic"),
         "openai_chat": _missing_result("openai_chat"),
         "openai_tts": _missing_result("openai_tts"),
+        "azure_speech": _missing_result("azure_speech"),
+        "elevenlabs_tts": _missing_result("elevenlabs_tts"),
     }
 
-    if not config.anthropic_api_key and not config.openai_api_key:
+    if not any(
+        (
+            config.anthropic_api_key,
+            config.openai_api_key,
+            config.azure_speech_key and config.azure_speech_region,
+            config.elevenlabs_api_key,
+        )
+    ):
         return {
             "ok": False,
             "providers": results,
@@ -160,6 +201,31 @@ async def check_provider_keys(config: StationConfig, *, timeout_s: float = 12.0)
                 },
             )
             results["openai_tts"] = _result("openai_tts", status, body, secrets=(config.openai_api_key,))
+
+        if config.azure_speech_key and config.azure_speech_region:
+            # Token-issuer endpoint: POST with no body, ~400-byte response vs
+            # ~150KB from the voices/list endpoint. Same 401/403 on bad key.
+            status, body = await _post_empty(
+                client,
+                f"https://{config.azure_speech_region}.api.cognitive.microsoft.com/sts/v1.0/issueToken",
+                headers={"Ocp-Apim-Subscription-Key": config.azure_speech_key},
+            )
+            results["azure_speech"] = _result("azure_speech", status, body, secrets=(config.azure_speech_key,))
+
+        if config.elevenlabs_api_key:
+            # /v1/user returns account info (~300 bytes) vs /v1/voices which
+            # returns all voice metadata (20-80KB). Same 401 on bad key.
+            status, body = await _get(
+                client,
+                "https://api.elevenlabs.io/v1/user",
+                headers={"xi-api-key": config.elevenlabs_api_key},
+            )
+            results["elevenlabs_tts"] = _result(
+                "elevenlabs_tts",
+                status,
+                body,
+                secrets=(config.elevenlabs_api_key,),
+            )
 
     return {
         "ok": any(item["ok"] for item in results.values()),

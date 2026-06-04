@@ -436,11 +436,26 @@
       const res = await fetch(_base + '/api/clip', { method: 'POST' });
       const data = await res.json().catch(() => null);
       if (!res.ok || !data || !data.ok) {
-        const err = (data && data.error) || _t('clip_error', 'Nessun audio in memoria');
-        _showToast(err);
+        // Warm, actionable copy mapped from backend codes — never raw tech lingo.
+        let msg;
+        if (data && data.retry_after) {
+          msg = _t('clip_rate_limited', 'The tape decks need a moment — give them {s}s and tap again.')
+            .replace('{s}', data.retry_after);
+        } else if (data && data.reason === 'no_audio') {
+          msg = _t('clip_no_audio', 'Nothing to clip just yet — let the radio play for a moment, then tap Share.');
+        } else {
+          msg = _t('clip_error', "That clip didn't take — give it a moment and tap Share again.");
+        }
+        _showToast(msg);
         return;
       }
       const shareUrl = window.location.origin + _base + (data.share_url || data.url);
+      // Always drop the URL on the clipboard (best-effort) so it's there no matter
+      // which share path runs — even if the native sheet is dismissed.
+      let copied = false;
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        try { await navigator.clipboard.writeText(shareUrl); copied = true; } catch (e) { /* best-effort */ }
+      }
       const npEl = document.getElementById('np-track');
       const stationName = localStorage.getItem('stationName') || 'Mamma Mi Radio';
       const title = (npEl && npEl.textContent && npEl.textContent.trim()) || stationName;
@@ -448,12 +463,20 @@
         try {
           await navigator.share({ title: title + ' — ' + stationName, url: shareUrl });
         } catch (err) {
-          if (err && err.name === 'AbortError') return;  // user cancelled, no toast
+          if (err && err.name === 'AbortError') {
+            // user cancelled the sheet. If the link made it to the clipboard,
+            // confirm it; otherwise give them a way out (principle #5) via the
+            // last-resort prompt rather than failing silently.
+            if (copied) { _showToast(_t('clip_copied', 'Link copied!')); }
+            else { window.prompt(_t('clip_copy_prompt', 'Copia il link:'), shareUrl); }
+            nextState = 'shared';
+            return;
+          }
           throw err;
         }
-      } else if (navigator.clipboard && navigator.clipboard.writeText) {
-        await navigator.clipboard.writeText(shareUrl);
-        _showToast(_t('clip_copied', 'Link copiato!'));
+        if (copied) _showToast(_t('clip_copied', 'Link copied!'));
+      } else if (copied) {
+        _showToast(_t('clip_copied', 'Link copied!'));
       } else {
         // Last-resort fallback: prompt
         window.prompt(_t('clip_copy_prompt', 'Copia il link:'), shareUrl);

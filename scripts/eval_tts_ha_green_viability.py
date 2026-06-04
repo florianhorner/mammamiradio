@@ -118,13 +118,13 @@ _PROVIDER_MATRIX: dict[str, ProviderViability] = {
         kind=KIND_CLOUD,
         ha_green_status=STATUS_CONDITIONAL,
         reason=(
-            "Cloud client can be HA Green-safe in principle, but there is no "
-            "runtime backend yet and it requires Azure credentials."
+            "Optional runtime backend. HA Green only performs an HTTPS REST "
+            "API call and FFmpeg normalization, but the operator must provide Azure credentials."
         ),
         required_env=["AZURE_SPEECH_KEY", "AZURE_SPEECH_REGION"],
-        required_packages=["httpx or azure speech client", "ffmpeg"],
-        aarch64_image_risk="low-medium: prefer REST/httpx to avoid native SDK packaging risk",
-        runtime_risk="medium: account friction, network dependency, and unproven Italian expressiveness",
+        required_packages=["httpx", "ffmpeg"],
+        aarch64_image_risk="low: implemented as REST/httpx, no native SDK required",
+        runtime_risk="medium: account friction, network dependency, and quota/provider failures fall back to Edge",
         expected_latency="cloud latency; must not block first audio or stream recovery",
         operator_cost="paid or free-tier limited Azure usage",
     ),
@@ -133,13 +133,13 @@ _PROVIDER_MATRIX: dict[str, ProviderViability] = {
         kind=KIND_CLOUD,
         ha_green_status=STATUS_CONDITIONAL,
         reason=(
-            "Expressive cloud TTS keeps inference off HA Green, but it requires "
-            "a paid/keyed service and no runtime backend exists yet."
+            "Expressive optional runtime backend keeps inference off HA Green, "
+            "but it requires a keyed service and operator-provided voice IDs."
         ),
         required_env=["ELEVENLABS_API_KEY"],
-        required_packages=["elevenlabs client or httpx", "ffmpeg"],
-        aarch64_image_risk="low-medium: keep as REST/httpx or optional client to avoid base image bloat",
-        runtime_risk="medium: quota/cost limits are a poor fit for always-on radio without strict fallback",
+        required_packages=["httpx", "ffmpeg"],
+        aarch64_image_risk="low: implemented as REST/httpx, no native client required",
+        runtime_risk="medium: quota/cost limits require strict fallback to Edge for always-on radio",
         expected_latency="cloud latency; must be measured against queue lookahead",
         operator_cost="paid service; free tier is not enough for continuous radio",
     ),

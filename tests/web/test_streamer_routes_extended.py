@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import json
 import os
 import time
 from pathlib import Path
@@ -19,7 +20,7 @@ from mammamiradio.core.models import PlaylistSource, Segment, SegmentType, Stati
 from mammamiradio.playlist.playlist import ExplicitSourceError
 from mammamiradio.web.listener_requests import _download_listener_song
 from mammamiradio.web.listener_requests import router as listener_requests_router
-from mammamiradio.web.streamer import LiveStreamHub, router
+from mammamiradio.web.streamer import CLIP_DURATION_SECONDS, LiveStreamHub, router
 
 TOML_PATH = str(Path(__file__).resolve().parents[2] / "radio.toml")
 
@@ -773,6 +774,45 @@ async def test_get_listener_requests_returns_age():
     body = resp.json()
     assert len(body["requests"]) == 1
     assert body["requests"][0]["age_s"] >= 8
+
+
+@pytest.mark.asyncio
+async def test_get_listener_requests_prunes_expired_recently_consumed():
+    app = _make_test_app()
+    now = time.time()
+    app.state.station_state.recently_consumed_requests = [
+        {
+            "id": "old",
+            "name": "Marta",
+            "message": "Ciao",
+            "type": "shoutout",
+            "status": "acknowledged",
+            "consumed_at": now - 301,
+        },
+        {
+            "id": "fresh",
+            "name": "Luca",
+            "message": "Metti Volare",
+            "type": "song_request",
+            "status": "song_not_found",
+            "consumed_at": now - 10,
+        },
+    ]
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.get("/api/listener-requests")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert len(body["recently_consumed"]) == 1
+    recent = body["recently_consumed"][0]
+    assert recent["id"] == "fresh"
+    assert recent["name"] == "Luca"
+    assert recent["message"] == "Metti Volare"
+    assert recent["song_track"] is None
+    assert recent["type"] == "song_request"
+    assert recent["status"] == "song_not_found"
+    assert 10 <= recent["age_s"] < 300
+    assert [r["id"] for r in app.state.station_state.recently_consumed_requests] == ["fresh"]
 
 
 # ---------------------------------------------------------------------------
@@ -2947,7 +2987,9 @@ async def test_clip_create_empty_ring_buffer():
     assert resp.status_code == 200
     body = resp.json()
     assert body["ok"] is False
-    assert "No audio" in body["error"] or "Buffer" in body["error"]
+    # Structured code, not tech-lingo prose — the UI maps it to warm copy.
+    assert body["reason"] == "no_audio"
+    assert "error" not in body
 
 
 @pytest.mark.asyncio
@@ -2962,6 +3004,7 @@ async def test_clip_create_no_ring_buffer():
     assert resp.status_code == 200
     body = resp.json()
     assert body["ok"] is False
+    assert body["reason"] == "no_audio"
 
 
 @pytest.mark.asyncio
@@ -2992,8 +3035,8 @@ async def test_clip_create_with_data(tmp_path):
 
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("_clear_clip_rate")
-async def test_clip_create_returns_buffer_empty_when_extract_returns_empty_bytes(tmp_path):
-    """POST /api/clip returns a specific error when extraction yields empty bytes."""
+async def test_clip_create_returns_no_audio_when_extract_returns_empty_bytes(tmp_path):
+    """POST /api/clip returns the no_audio code when extraction yields empty bytes."""
     app = _make_test_app()
     app.state.config.cache_dir = tmp_path / "cache"
     app.state.config.cache_dir.mkdir()
@@ -3010,7 +3053,7 @@ async def test_clip_create_returns_buffer_empty_when_extract_returns_empty_bytes
             resp = await client.post("/api/clip")
 
     assert resp.status_code == 200
-    assert resp.json() == {"ok": False, "error": "Buffer empty"}
+    assert resp.json() == {"ok": False, "reason": "no_audio"}
 
 
 @pytest.mark.asyncio
@@ -3047,6 +3090,205 @@ async def test_clip_create_prunes_oldest_saved_clips_before_writing_new_one(tmp_
     assert resp.json()["ok"] is True
     assert not (clips_dir / "existing_00.mp3").exists()
     assert len(list(clips_dir.glob("*.mp3"))) == 50
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_clear_clip_rate")
+async def test_clip_rate_limited_returns_retry_after(tmp_path):
+    """A second clip within the window returns 429 with an int retry_after, no prose."""
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path / "cache"
+    app.state.config.cache_dir.mkdir()
+    app.state.config.audio.bitrate = 192
+    from collections import deque
+
+    ring = deque(maxlen=240)
+    for _ in range(10):
+        ring.append(b"\xff" * 4096)
+    app.state.clip_ring_buffer = ring
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        first = await client.post("/api/clip")
+        second = await client.post("/api/clip")
+
+    assert first.status_code == 200 and first.json()["ok"] is True
+    assert second.status_code == 429
+    body = second.json()
+    assert body["ok"] is False
+    assert isinstance(body["retry_after"], int) and body["retry_after"] >= 1
+    assert "error" not in body  # no tech-lingo prose
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_clear_clip_rate")
+async def test_clip_ad_segment_extends_duration(tmp_path):
+    """A live ad/banter segment extends the clip beyond the 30s music cap."""
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path / "cache"
+    app.state.config.cache_dir.mkdir()
+    app.state.config.audio.bitrate = 192
+    from collections import deque
+
+    ring = deque(maxlen=2000)
+    for _ in range(10):
+        ring.append(b"\xff" * 4096)
+    app.state.clip_ring_buffer = ring
+    # Current segment is an ad, aired ~100s of a 120s spot.
+    app.state.station_state.now_streaming = {
+        "type": "ad",
+        "label": "Sponsored",
+        "started": time.time() - 100,
+        "duration_sec": 120,
+        "metadata": {"title": "Mausolea Berlusconi"},
+    }
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    with patch("mammamiradio.scheduling.clip.extract_clip", return_value=b"\xff" * 4096) as mock_extract:
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            resp = await client.post("/api/clip")
+
+    assert resp.status_code == 200 and resp.json()["ok"] is True
+    # elapsed≈100s, capped at min(180, 120)=120 → ~100s requested, well past the
+    # 30s music cap. Allow a small window for clock/ceil drift.
+    requested = mock_extract.call_args.kwargs["duration_seconds"]
+    assert 100 <= requested <= 120
+    assert requested > CLIP_DURATION_SECONDS
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_clear_clip_rate")
+async def test_clip_lookback_serves_recent_adbanter_snapshot(tmp_path):
+    """Music playing + a fresh ad/banter snapshot → the snapshot is served even with an empty ring."""
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path / "cache"
+    app.state.config.cache_dir.mkdir()
+    app.state.config.audio.bitrate = 192
+    from collections import deque
+
+    # Empty ring: the only way a clip can succeed is via the lookback snapshot.
+    app.state.clip_ring_buffer = deque(maxlen=240)
+    app.state.station_state.now_streaming = {"type": "music", "label": "A Song", "started": time.time()}
+    app.state.last_shareworthy_clip = {
+        "bytes": b"\xff" * 8192,
+        "ended_monotonic": time.monotonic(),  # just ended
+        "type": "ad",
+        "title": "Mausolea Berlusconi",
+    }
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.post("/api/clip")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ok"] is True
+    # The sidecar names the clipped ad, not the current music track.
+    sidecar = json.loads((app.state.config.cache_dir / "clips" / f"{body['clip_id']}.json").read_text())
+    assert sidecar["track_title"] == "Mausolea Berlusconi"
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_clear_clip_rate")
+async def test_clip_lookback_ignored_when_stale(tmp_path):
+    """A snapshot older than the lookback window is ignored → empty ring yields no_audio."""
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path / "cache"
+    app.state.config.cache_dir.mkdir()
+    app.state.config.audio.bitrate = 192
+    from collections import deque
+
+    app.state.clip_ring_buffer = deque(maxlen=240)
+    app.state.station_state.now_streaming = {"type": "music", "label": "A Song", "started": time.time()}
+    app.state.last_shareworthy_clip = {
+        "bytes": b"\xff" * 8192,
+        "ended_monotonic": time.monotonic() - 60,  # well past the 15s window
+        "type": "ad",
+        "title": "Old Ad",
+    }
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.post("/api/clip")
+
+    assert resp.status_code == 200
+    assert resp.json() == {"ok": False, "reason": "no_audio"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_clear_clip_rate")
+async def test_clip_banter_segment_extends_duration(tmp_path):
+    """A live banter segment also extends past the 30s cap (not just ad)."""
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path / "cache"
+    app.state.config.cache_dir.mkdir()
+    app.state.config.audio.bitrate = 192
+    from collections import deque
+
+    ring = deque(maxlen=2000)
+    for _ in range(10):
+        ring.append(b"\xff" * 4096)
+    app.state.clip_ring_buffer = ring
+    app.state.station_state.now_streaming = {
+        "type": "banter",
+        "label": "Marco & Giulia",
+        "started": time.time() - 70,
+        "duration_sec": 90,
+        "metadata": {"title": "Bit about the coffee machine"},
+    }
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    with patch("mammamiradio.scheduling.clip.extract_clip", return_value=b"\xff" * 4096) as mock_extract:
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            resp = await client.post("/api/clip")
+
+    assert resp.status_code == 200 and resp.json()["ok"] is True
+    assert mock_extract.call_args.kwargs["duration_seconds"] > CLIP_DURATION_SECONDS
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_clear_clip_rate")
+async def test_clip_no_audio_does_not_lock_out_retry(tmp_path):
+    """A no_audio no-op must not consume the rate-limit window (cold-start retry)."""
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path / "cache"
+    app.state.config.cache_dir.mkdir()
+    app.state.config.audio.bitrate = 192
+    from collections import deque
+
+    app.state.clip_ring_buffer = deque(maxlen=240)  # empty → no_audio
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        first = await client.post("/api/clip")
+        # Buffer fills a moment later; an immediate retry must NOT be rate-limited.
+        ring = app.state.clip_ring_buffer
+        for _ in range(10):
+            ring.append(b"\xff" * 4096)
+        second = await client.post("/api/clip")
+
+    assert first.json() == {"ok": False, "reason": "no_audio"}
+    assert second.status_code == 200 and second.json()["ok"] is True
+
+
+@pytest.mark.asyncio
+async def test_stop_clears_last_shareworthy_clip(tmp_path):
+    """Stopping the session drops any remembered ad/banter snapshot (no cross-session leak)."""
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path / "cache"
+    app.state.last_shareworthy_clip = {
+        "bytes": b"\xff" * 4096,
+        "ended_monotonic": time.monotonic(),
+        "type": "ad",
+        "title": "Some Ad",
+    }
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.post("/api/stop")
+
+    assert resp.status_code == 200 and resp.json()["ok"] is True
+    assert app.state.last_shareworthy_clip is None
 
 
 @pytest.mark.asyncio
@@ -3147,15 +3389,24 @@ async def test_clip_rate_limiting(tmp_path):
 
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("_clear_clip_rate")
-async def test_clip_rate_prune_keeps_recent_entries():
-    """Clip limiter pruning drops stale IPs without clearing recent limits."""
+async def test_clip_rate_prune_keeps_recent_entries(tmp_path):
+    """Clip limiter pruning drops stale IPs without clearing recent limits.
+
+    The current IP's stamp is recorded only when a clip actually succeeds (a
+    no_audio no-op rolls it back), so this uses a populated buffer.
+    """
     app = _make_test_app()
+    app.state.config.cache_dir = tmp_path / "cache"
+    app.state.config.cache_dir.mkdir()
+    app.state.config.audio.bitrate = 192
     from collections import deque
 
     from mammamiradio.web import streamer as streamer_mod
 
-    # Empty ring buffer is enough: pruning happens before clip extraction.
-    app.state.clip_ring_buffer = deque(maxlen=240)
+    ring = deque(maxlen=240)
+    for _ in range(10):
+        ring.append(b"\xff" * 4096)
+    app.state.clip_ring_buffer = ring
     now = 1_700_000_000.0
     streamer_mod._clip_rate["198.51.100.1"] = now - 5
     streamer_mod._clip_rate["198.51.100.2"] = now - 301
@@ -3166,6 +3417,7 @@ async def test_clip_rate_prune_keeps_recent_entries():
             resp = await client.post("/api/clip")
 
     assert resp.status_code == 200
+    assert resp.json()["ok"] is True
     assert streamer_mod._clip_rate["198.51.100.1"] == pytest.approx(now - 5)
     assert "198.51.100.2" not in streamer_mod._clip_rate
     assert streamer_mod._clip_rate["203.0.113.9"] == pytest.approx(now)

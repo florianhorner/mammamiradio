@@ -20,9 +20,10 @@ If you want to fix or extend X, look in Y. The folder hierarchy IS the mental mo
 | "Why this track?" rationale generation             | `mammamiradio/playlist/track_rationale.py`   |
 | FFmpeg normalize / mix / concat / SFX              | `mammamiradio/audio/normalizer.py`           |
 | Station imaging stingers and talk beds             | `mammamiradio/audio/imaging.py`              |
-| Edge TTS / OpenAI TTS synthesis                    | `mammamiradio/audio/tts.py`                  |
+| Edge / OpenAI / Azure / ElevenLabs TTS synthesis   | `mammamiradio/audio/tts.py`                  |
 | Audio quality gate (duration, silence checks)      | `mammamiradio/audio/audio_quality.py`        |
-| Voice catalog (Edge voice IDs)                     | `mammamiradio/audio/voice_catalog.py`        |
+| Voice catalog (Edge, OpenAI, Azure voice IDs)      | `mammamiradio/audio/voice_catalog.py`        |
+| Generate TTS audition clips and manifest           | `scripts/audition_tts_voices.py`            |
 | Home Assistant polling / state formatting          | `mammamiradio/home/ha_context.py`            |
 | HA event derivation (diffs, pruning)               | `mammamiradio/home/ha_enrichment.py`         |
 | Segment scheduling (banter / ad / music)           | `mammamiradio/scheduling/scheduler.py`       |
