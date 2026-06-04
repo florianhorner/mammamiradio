@@ -227,6 +227,8 @@ async def test_ha_stop_transition_pushes_idle_state(tmp_path):
     assert stop_call.kwargs["current_track"] is None
     assert stop_call.kwargs["listeners_active"] == 0
     assert stop_call.kwargs["session_stopped"] is True
+    # The call site must forward the canonical station name (config.display_station_name).
+    assert stop_call.kwargs["station_name"] == "Mamma Mi Radio"
 
 
 @pytest.mark.asyncio

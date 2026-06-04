@@ -309,7 +309,7 @@ fi
 
 # ---- 13. Edge add-on folder ----
 # The edge add-on runs the SAME image as stable, so its config must stay
-# schema-locked to stable. CI (addon-build.yml bump-edge) advances its version.
+# schema-locked to stable. Its version is a manual edge release (`make edge-release`).
 echo "13. Edge add-on"
 EDGE_CONFIG="ha-addon/mammamiradio-edge/config.yaml"
 STABLE_CONFIG="ha-addon/mammamiradio/config.yaml"
@@ -345,12 +345,14 @@ else
         fail "edge image mismatch: got '$EDGE_IMAGE', expected '$EXPECTED'"
     fi
 
-    # version — calver YYYY.M.D.N or the 0.0.0 seed
+    # version — a manual edge release sets this to the main short SHA (7-char hex,
+    # see `make edge-release`). The dotted-numeric form is still accepted so the
+    # pre-migration calver value validates until the first SHA release is cut.
     EDGE_VER=$(grep '^version:' "$EDGE_CONFIG" | awk '{print $2}' | tr -d '"')
-    if echo "$EDGE_VER" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+(\.[0-9]+)?$'; then
+    if echo "$EDGE_VER" | grep -qE '^[0-9a-f]{7}$|^[0-9]+\.[0-9]+\.[0-9]+(\.[0-9]+)?$'; then
         pass "edge version format: $EDGE_VER"
     else
-        fail "edge version must be calver or 0.0.0 seed, got '$EDGE_VER'"
+        fail "edge version must be a 7-char short SHA (make edge-release), got '$EDGE_VER'"
     fi
 
     # options + schema parity with stable (edge runs the same image/run.sh).
