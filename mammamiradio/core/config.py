@@ -82,6 +82,7 @@ class PlaylistSection:
     jamendo_tags: str = "pop"
     jamendo_country: str = ""
     jamendo_order: str = ""
+    jamendo_limit: int = 200
 
 
 @dataclass
@@ -314,10 +315,24 @@ class StationConfig:
     allow_ytdlp: bool = False
     super_italian_mode: bool = True
     party_mode: PartyMode | None = None
+    # Provenance ledger (Show Memory): opt-in, off by default. Records how each
+    # aired moment was made to a daily-rotated JSONL under cache_dir/ledger.
+    ledger_enabled: bool = False
+    ledger_retention_days: int = 14
+    ledger_queue_max: int = 2000
     # Names of hosts or ad voices that had their configured voice replaced
     # during config load because the configured ID wasn't valid for the chosen
     # backend. Empty when all voices passed validation.
     tts_degraded_voices: list[str] = field(default_factory=list)
+
+    @property
+    def ledger_dir(self) -> Path:
+        """Provenance ledger directory, derived from cache_dir (never hardcoded).
+
+        Inherits the addon (/data/cache) vs standalone (./cache) vs /tmp fallback
+        resolution that cache_dir already performs.
+        """
+        return self.cache_dir / "ledger"
 
     @property
     def display_station_name(self) -> str:
@@ -666,6 +681,10 @@ def _validate(config: StationConfig) -> None:
     }
     if config.playlist.jamendo_order and config.playlist.jamendo_order not in _valid_jamendo_orders:
         errors.append(_err("playlist.jamendo_order", f"must be one of {sorted(_valid_jamendo_orders)} or empty"))
+    if not isinstance(config.playlist.jamendo_limit, int) or isinstance(config.playlist.jamendo_limit, bool):
+        errors.append(_err("playlist.jamendo_limit", "must be an integer between 1 and 200"))
+    elif not 1 <= config.playlist.jamendo_limit <= 200:
+        errors.append(_err("playlist.jamendo_limit", "must be between 1 and 200"))
 
     if not (config.anthropic_api_key or config.openai_api_key):
         log.warning("No ANTHROPIC_API_KEY or OPENAI_API_KEY — banter/ads will use fallback text")
@@ -805,6 +824,12 @@ def load_config(path: str = "radio.toml") -> StationConfig:
         playlist_raw["jamendo_country"] = os.getenv("JAMENDO_COUNTRY", "").strip()
     if os.getenv("JAMENDO_ORDER") is not None:
         playlist_raw["jamendo_order"] = os.getenv("JAMENDO_ORDER", "").strip()
+    jamendo_limit_env = os.getenv("JAMENDO_LIMIT")
+    if jamendo_limit_env is not None and jamendo_limit_env.strip():
+        try:
+            playlist_raw["jamendo_limit"] = int(jamendo_limit_env.strip())
+        except ValueError:
+            playlist_raw["jamendo_limit"] = jamendo_limit_env.strip()
 
     # Env-var overrides for cache/tmp directories (for Docker volume mounts)
     cache_dir = Path(os.getenv("MAMMAMIRADIO_CACHE_DIR", "cache"))
@@ -874,6 +899,15 @@ def load_config(path: str = "radio.toml") -> StationConfig:
         config.party_mode = "festival"
     elif _festival_env in _FALSY:
         config.party_mode = None
+
+    _ledger_env = os.getenv("MAMMAMIRADIO_LEDGER_ENABLED", "").strip().lower()
+    if _ledger_env in _TRUTHY:
+        config.ledger_enabled = True
+    elif _ledger_env in _FALSY:
+        config.ledger_enabled = False
+    _ledger_retention = os.getenv("MAMMAMIRADIO_LEDGER_RETENTION_DAYS", "").strip()
+    if _ledger_retention.isdigit() and int(_ledger_retention) > 0:
+        config.ledger_retention_days = int(_ledger_retention)
 
     # Addon overrides: persistent paths, auto-enable HA
     if addon_mode:

@@ -775,6 +775,45 @@ async def test_get_listener_requests_returns_age():
     assert body["requests"][0]["age_s"] >= 8
 
 
+@pytest.mark.asyncio
+async def test_get_listener_requests_prunes_expired_recently_consumed():
+    app = _make_test_app()
+    now = time.time()
+    app.state.station_state.recently_consumed_requests = [
+        {
+            "id": "old",
+            "name": "Marta",
+            "message": "Ciao",
+            "type": "shoutout",
+            "status": "acknowledged",
+            "consumed_at": now - 301,
+        },
+        {
+            "id": "fresh",
+            "name": "Luca",
+            "message": "Metti Volare",
+            "type": "song_request",
+            "status": "song_not_found",
+            "consumed_at": now - 10,
+        },
+    ]
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.get("/api/listener-requests")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert len(body["recently_consumed"]) == 1
+    recent = body["recently_consumed"][0]
+    assert recent["id"] == "fresh"
+    assert recent["name"] == "Luca"
+    assert recent["message"] == "Metti Volare"
+    assert recent["song_track"] is None
+    assert recent["type"] == "song_request"
+    assert recent["status"] == "song_not_found"
+    assert 10 <= recent["age_s"] < 300
+    assert [r["id"] for r in app.state.station_state.recently_consumed_requests] == ["fresh"]
+
+
 # ---------------------------------------------------------------------------
 # Track B v2.11.0 — Phase 2: pending_requests record shape extensions
 # (request_id, status, evict_after, submitter_ip_hash). Additive only — state

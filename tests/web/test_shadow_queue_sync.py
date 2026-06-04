@@ -528,6 +528,21 @@ class TestRuntimeStatusSnapshot:
 
         assert snap["station_on_air"] is False
         assert snap["health_state"] == "ready"
+
+    def test_session_stopped_stays_paused_even_with_silence_and_listener(self):
+        # A deliberate operator pause must read as paused ("ready"), never the
+        # red "blocked"/Error state, even after the silence window elapses with a
+        # listener still connected — session_stopped is checked before silence.
+        app = _make_app()
+        app.state.station_state.session_stopped = True
+        app.state.stream_hub.subscribe()
+        app.state.station_state.queue_empty_since = time.monotonic() - 31
+        req = _fake_request(app)
+
+        snap = _runtime_status_snapshot(req)
+
+        assert snap["health_state"] == "ready"
+        assert "paused by the operator" in snap["health_explanation"]
         assert snap["health_explanation"] == "Station is paused by the operator."
 
     def test_degraded_status_surfaces_audio_failover_event(self):

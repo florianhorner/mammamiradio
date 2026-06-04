@@ -1584,11 +1584,14 @@ def reset_ha_push_debounce():
     import mammamiradio.home.ha_context as _hc
 
     original = _hc._last_ha_push
+    original_stop = _hc._last_ha_stop_push
     original_lock = _hc._ha_push_lock
     _hc._last_ha_push = 0.0
+    _hc._last_ha_stop_push = 0.0
     _hc._ha_push_lock = None
     yield
     _hc._last_ha_push = original
+    _hc._last_ha_stop_push = original_stop
     _hc._ha_push_lock = original_lock
 
 
@@ -1622,8 +1625,32 @@ async def test_push_state_to_ha_normal(reset_ha_push_debounce):
     assert any("binary_sensor.mammamiradio_on_air" in u for u in urls)
     mp_call = next(c for c in mock_client.post.call_args_list if "media_player" in c.args[0])
     assert mp_call.kwargs["json"]["state"] == "playing"
+    attributes = mp_call.kwargs["json"]["attributes"]
+    assert attributes["supported_features"] == 0
+    assert "media_position" in attributes
+    assert "media_position_updated_at" in attributes
     bs_call = next(c for c in mock_client.post.call_args_list if "binary_sensor" in c.args[0])
     assert bs_call.kwargs["json"]["state"] == "on"
+
+
+@pytest.mark.asyncio
+async def test_push_state_to_ha_media_position_floored_at_zero(reset_ha_push_debounce):
+    """media_position must never be negative even if started is slightly in the future."""
+    mock_client = AsyncMock()
+    mock_client.post.return_value = MagicMock(status_code=200)
+
+    with patch("mammamiradio.home.ha_context._get_ha_client", return_value=mock_client):
+        await push_state_to_ha(
+            ha_url="http://ha.local:8123",
+            ha_token="test-token",
+            now_streaming={"type": "music", "label": "Song", "started": time.time() + 10, "metadata": {}},
+            current_track=None,
+            listeners_active=1,
+            session_stopped=False,
+        )
+
+    mp_call = next(c for c in mock_client.post.call_args_list if "media_player" in c.args[0])
+    assert mp_call.kwargs["json"]["attributes"]["media_position"] >= 0.0
 
 
 @pytest.mark.asyncio
@@ -1655,6 +1682,7 @@ async def test_push_state_to_ha_prefers_now_streaming_metadata(reset_ha_push_deb
     mp_call = next(c for c in mock_client.post.call_args_list if "media_player" in c.args[0])
     assert mp_call.kwargs["json"]["attributes"]["media_title"] == "Current Song"
     assert mp_call.kwargs["json"]["attributes"]["media_artist"] == "Current Artist"
+    assert mp_call.kwargs["json"]["attributes"]["supported_features"] == 0
 
 
 @pytest.mark.asyncio
@@ -1676,6 +1704,7 @@ async def test_push_state_to_ha_uses_track_fallback_for_music(reset_ha_push_debo
 
     mp_call = next(c for c in mock_client.post.call_args_list if "media_player" in c.args[0])
     attributes = mp_call.kwargs["json"]["attributes"]
+    assert attributes["supported_features"] == 0
     assert attributes["media_title"] == "Track Title"
     assert attributes["media_artist"] == "Track Artist"
     assert attributes["media_content_type"] == "music"
@@ -1705,10 +1734,13 @@ async def test_push_state_to_ha_nonmusic_uses_channel_payload(reset_ha_push_debo
 
     mp_call = next(c for c in mock_client.post.call_args_list if "media_player" in c.args[0])
     attributes = mp_call.kwargs["json"]["attributes"]
+    assert attributes["supported_features"] == 0
     assert attributes["media_title"] == "Morning handoff"
     assert attributes["media_artist"] == "Mamma Mi Radio"
     assert attributes["media_content_type"] == "channel"
     assert attributes["mammamiradio_segment_type"] == "banter"
+    assert "media_position" in attributes
+    assert "media_position_updated_at" in attributes
 
 
 @pytest.mark.asyncio
@@ -1896,6 +1928,9 @@ async def test_push_state_to_ha_session_stopped(reset_ha_push_debounce):
 
     mp_call = next(c for c in mock_client.post.call_args_list if "media_player" in c.args[0])
     assert mp_call.kwargs["json"]["state"] == "idle"
+    idle_attrs = mp_call.kwargs["json"]["attributes"]
+    assert "media_position" not in idle_attrs
+    assert "media_position_updated_at" not in idle_attrs
     bs_call = next(c for c in mock_client.post.call_args_list if "binary_sensor" in c.args[0])
     assert bs_call.kwargs["json"]["state"] == "off"
     seg_call = next(c for c in mock_client.post.call_args_list if "segment_type" in c.args[0])
@@ -1928,6 +1963,81 @@ async def test_push_state_to_ha_debounce(reset_ha_push_debounce):
         )
 
     assert mock_client.post.call_count == 4  # only first call's 4 POSTs
+
+
+@pytest.mark.asyncio
+async def test_push_state_to_ha_stopped_debounce(reset_ha_push_debounce):
+    """Second stopped push within 2s is debounced."""
+    mock_client = AsyncMock()
+    mock_client.post.return_value = MagicMock(status_code=200)
+
+    with patch("mammamiradio.home.ha_context._get_ha_client", return_value=mock_client):
+        await push_state_to_ha(
+            ha_url="http://ha.local:8123",
+            ha_token="test-token",
+            now_streaming={},
+            current_track=None,
+            listeners_active=0,
+            session_stopped=True,
+        )
+        await push_state_to_ha(
+            ha_url="http://ha.local:8123",
+            ha_token="test-token",
+            now_streaming={},
+            current_track=None,
+            listeners_active=0,
+            session_stopped=True,
+        )
+
+    assert mock_client.post.call_count == 4  # only first stopped push's 4 POSTs
+
+
+@pytest.mark.asyncio
+async def test_push_state_to_ha_queue_depth(reset_ha_push_debounce):
+    """queue_depth parameter is reflected in mammamiradio_queue_depth attribute."""
+    mock_client = AsyncMock()
+    mock_client.post.return_value = MagicMock(status_code=200)
+
+    with patch("mammamiradio.home.ha_context._get_ha_client", return_value=mock_client):
+        await push_state_to_ha(
+            ha_url="http://ha.local:8123",
+            ha_token="test-token",
+            now_streaming={"type": "music", "label": "Song", "started": time.time(), "metadata": {}},
+            current_track=None,
+            listeners_active=1,
+            session_stopped=False,
+            queue_depth=3,
+        )
+
+    mp_call = next(c for c in mock_client.post.call_args_list if "media_player" in c.args[0])
+    assert mp_call.kwargs["json"]["attributes"]["mammamiradio_queue_depth"] == 3
+
+
+@pytest.mark.asyncio
+async def test_push_state_to_ha_playing_after_stopped_is_not_debounced(reset_ha_push_debounce):
+    """Resume push immediately after a stopped push is not swallowed by the stopped debounce."""
+    mock_client = AsyncMock()
+    mock_client.post.return_value = MagicMock(status_code=200)
+
+    with patch("mammamiradio.home.ha_context._get_ha_client", return_value=mock_client):
+        await push_state_to_ha(
+            ha_url="http://ha.local:8123",
+            ha_token="test-token",
+            now_streaming={},
+            current_track=None,
+            listeners_active=0,
+            session_stopped=True,
+        )
+        await push_state_to_ha(
+            ha_url="http://ha.local:8123",
+            ha_token="test-token",
+            now_streaming={"type": "music", "label": "Song", "started": time.time(), "metadata": {}},
+            current_track=None,
+            listeners_active=1,
+            session_stopped=False,
+        )
+
+    assert mock_client.post.call_count == 8  # both pushes fire; resume not suppressed
 
 
 @pytest.mark.asyncio

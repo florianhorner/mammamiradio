@@ -10,12 +10,14 @@ from __future__ import annotations
 
 import asyncio
 import datetime
+import hashlib
 import json
 import logging
 import os
 import random
 import re
 import time
+import uuid
 from dataclasses import dataclass
 from itertools import cycle
 from typing import cast
@@ -25,6 +27,7 @@ import anthropic
 from mammamiradio.audio.normalizer import AVAILABLE_SFX_TYPES
 from mammamiradio.core.config import StationConfig
 from mammamiradio.core.models import (
+    RECENTLY_CONSUMED_RETENTION_SECONDS,
     ChaosSubtype,
     HostPersonality,
     PersonalityAxes,
@@ -80,6 +83,7 @@ _anthropic_block_expired_logged: bool = False
 # Cached system prompt — rebuilt only when config changes
 _cached_system_prompt: str = ""
 _cached_prompt_key: str = ""
+_cached_system_prompt_hash: str = ""
 
 
 @dataclass
@@ -99,6 +103,22 @@ class ListenerRequestCommit:
         if self.mark_song_error:
             self.request["song_error"] = True
         if self.consume:
+            now = time.time()
+            state.recently_consumed_requests.append(
+                {
+                    "id": self.request.get("request_id") or str(self.request.get("ts", "")),
+                    "name": self.request.get("name"),
+                    "message": self.request.get("message"),
+                    "song_track": self.request.get("song_track"),
+                    "type": self.request.get("type"),
+                    "status": "song_not_found" if self.mark_song_error else "sent_to_hosts",
+                    "consumed_at": now,
+                }
+            )
+            cutoff = now - RECENTLY_CONSUMED_RETENTION_SECONDS
+            state.recently_consumed_requests = [
+                r for r in state.recently_consumed_requests if r.get("consumed_at", 0) >= cutoff
+            ]
             state.pending_requests.remove(self.request)
 
 
@@ -114,7 +134,7 @@ def _plan_listener_request_block(state: StationState) -> tuple[str, ListenerRequ
 
     if still_downloading:
         next_missed = req.get("banter_cycles_missed", 0) + 1
-        if next_missed >= 2:
+        if next_missed >= 5:
             still_downloading = False
             commit = ListenerRequestCommit(
                 request=req,
@@ -125,7 +145,14 @@ def _plan_listener_request_block(state: StationState) -> tuple[str, ListenerRequ
         else:
             return "", ListenerRequestCommit(request=req, banter_cycles_missed=next_missed)
     else:
-        commit = ListenerRequestCommit(request=req, consume=True)
+        # A background download that already failed (song_error set directly by
+        # _download_listener_song) must consume as "song_not_found", not the
+        # default "sent_to_hosts". song_found / message-only requests stay False.
+        commit = ListenerRequestCommit(
+            request=req,
+            consume=True,
+            mark_song_error=bool(req.get("song_error")),
+        )
 
     name = _sanitize_prompt_data(str(req.get("name") or "Un ascoltatore"), max_len=60)
     msg = _sanitize_prompt_data(str(req.get("message") or ""), max_len=200)
@@ -290,6 +317,8 @@ async def _generate_json_response(
     model: str,
     max_tokens: int,
     caller: str | None = None,
+    role: str | None = None,
+    spot_index: int | None = None,
 ) -> dict:
     """Generate JSON via Anthropic, falling back to OpenAI when needed."""
     global _anthropic_auth_blocked_key, _anthropic_auth_blocked_until, _anthropic_block_expired_logged
@@ -353,6 +382,7 @@ async def _generate_json_response(
                             _anthropic_blocked_reason,
                         )
                         _anthropic_block_expired_logged = True
+                    _t_anthropic = time.perf_counter()
                     try:
                         client = _get_client(config.anthropic_api_key)
                         resp = await asyncio.wait_for(
@@ -364,10 +394,13 @@ async def _generate_json_response(
                             ),
                             timeout=45.0,
                         )
+                        _anthropic_in = _anthropic_out = 0
                         if hasattr(resp, "usage") and resp.usage:
                             state.api_calls += 1
-                            state.api_input_tokens += resp.usage.input_tokens
-                            state.api_output_tokens += resp.usage.output_tokens
+                            _anthropic_in = resp.usage.input_tokens
+                            _anthropic_out = resp.usage.output_tokens
+                            state.api_input_tokens += _anthropic_in
+                            state.api_output_tokens += _anthropic_out
                         raw = resp.content[0].text.strip()  # type: ignore[union-attr]
                         state.anthropic_disabled_until = 0.0
                         state.anthropic_last_error = ""
@@ -398,8 +431,42 @@ async def _generate_json_response(
                                     "caller": caller,
                                 },
                             )
+                        _emit_llm_call(
+                            state=state,
+                            config=config,
+                            caller=caller,
+                            role=role,
+                            spot_index=spot_index,
+                            provider="anthropic",
+                            model=model,
+                            prompt=prompt,
+                            raw_output=raw,
+                            ok=True,
+                            fallback_reason=None,
+                            input_tokens=_anthropic_in,
+                            output_tokens=_anthropic_out,
+                            duration_ms=int((time.perf_counter() - _t_anthropic) * 1000),
+                            openai_fallback=False,
+                        )
                         return parsed
                     except Exception as exc:
+                        _emit_llm_call(
+                            state=state,
+                            config=config,
+                            caller=caller,
+                            role=role,
+                            spot_index=spot_index,
+                            provider="anthropic",
+                            model=model,
+                            prompt=prompt,
+                            raw_output=None,
+                            ok=False,
+                            fallback_reason=f"anthropic_{type(exc).__name__}",
+                            input_tokens=0,
+                            output_tokens=0,
+                            duration_ms=int((time.perf_counter() - _t_anthropic) * 1000),
+                            openai_fallback=True,
+                        )
                         if _is_anthropic_auth_error(exc):
                             _trip_anthropic_circuit_and_fallback(
                                 exc,
@@ -495,6 +562,23 @@ async def _generate_json_response(
                 "raw_preview": raw[:500],
             },
         )
+        _emit_llm_call(
+            state=state,
+            config=config,
+            caller=caller,
+            role=role,
+            spot_index=spot_index,
+            provider="openai",
+            model=openai_model,
+            prompt=prompt,
+            raw_output=raw,
+            ok=False,
+            fallback_reason="openai_json_decode_error",
+            input_tokens=prompt_tokens,
+            output_tokens=completion_tokens,
+            duration_ms=latency_ms,
+            openai_fallback=fallback_reason != "anthropic_absent",
+        )
         raise
     logger.info(
         "openai_script_call",
@@ -526,18 +610,129 @@ async def _generate_json_response(
                     "caller": caller,
                 },
             )
+    _emit_llm_call(
+        state=state,
+        config=config,
+        caller=caller,
+        role=role,
+        spot_index=spot_index,
+        provider="openai",
+        model=openai_model,
+        prompt=prompt,
+        raw_output=raw,
+        ok=True,
+        fallback_reason=fallback_reason if fallback_reason != "anthropic_absent" else None,
+        input_tokens=prompt_tokens,
+        output_tokens=completion_tokens,
+        duration_ms=latency_ms,
+        openai_fallback=fallback_reason != "anthropic_absent",
+    )
     return parsed
 
 
 def _get_system_prompt(config: StationConfig) -> str:
     """Return cached system prompt, rebuilding only when hosts change."""
-    global _cached_system_prompt, _cached_prompt_key
+    global _cached_system_prompt, _cached_prompt_key, _cached_system_prompt_hash
     key = "|".join(f"{h.name}:{h.style}:{h.personality.to_dict()}" for h in config.hosts)
     key += f"|super_italian={int(config.super_italian_mode)}"
     if key != _cached_prompt_key:
         _cached_system_prompt = _build_system_prompt(config)
         _cached_prompt_key = key
+        # Hash once per (re)build, not per call — the prompt is several KB.
+        _cached_system_prompt_hash = hashlib.sha256(_cached_system_prompt.encode("utf-8")).hexdigest()
     return _cached_system_prompt
+
+
+def _get_system_prompt_hash(config: StationConfig) -> str:
+    """sha256 of the current system prompt, computed at build time and cached."""
+    _get_system_prompt(config)  # ensures the cache (and hash) is populated
+    return _cached_system_prompt_hash
+
+
+def _provenance_tags(state: StationState, config: StationConfig) -> dict:
+    """Offered-state tags for a Tier-1 row. These say what context was OFFERED to
+    the model, never what it USED (utilization is computed downstream from the
+    rendered script). Best-effort getattr so a missing attr never raises."""
+    return {
+        "ha_context_present": bool(getattr(state, "ha_context", "")),
+        "gag_offered": bool(getattr(state, "ha_running_gag", "")),
+        "home_mood": getattr(state, "ha_home_mood", "") or "",
+        "festival": config.party_mode == "festival",
+        "listener_request_present": bool(getattr(state, "pending_requests", None)),
+    }
+
+
+def _emit_llm_call(
+    *,
+    state: StationState,
+    config: StationConfig,
+    caller: str | None,
+    role: str | None,
+    spot_index: int | None,
+    provider: str,
+    model: str,
+    prompt: str,
+    raw_output: str | None,
+    ok: bool,
+    fallback_reason: str | None,
+    input_tokens: int,
+    output_tokens: int,
+    duration_ms: int,
+    openai_fallback: bool,
+) -> None:
+    """Tier-1: record one raw LLM attempt (success OR failure) to the ledger.
+
+    The enabled-check is FIRST so that with the ledger off there is zero UUID /
+    hash / tag / contextvar work on the hot path. Never raises into generation.
+    """
+    led = getattr(state, "ledger", None)
+    if led is None or not led.enabled:
+        return
+    try:
+        from mammamiradio.core.ledger import SCHEMA_VERSION
+        from mammamiradio.core.provenance_ctx import get_collector
+
+        effective_role = role or caller or "unknown"
+        llm_call_id = uuid.uuid4().hex
+        collector = get_collector()
+        sys_hash = _get_system_prompt_hash(config)
+        led.record_system_prompt(sys_hash, _cached_system_prompt)
+        led.record(
+            {
+                "schema_version": SCHEMA_VERSION,
+                "ts": time.time(),
+                "record": "llm_call",
+                "llm_call_id": llm_call_id,
+                "attempt_id": collector.attempt_id if collector else None,
+                "ad_break_id": collector.ad_break_id if collector else None,
+                "role": effective_role,
+                "spot_index": spot_index,
+                "caller": caller,
+                "system_prompt_hash": sys_hash,
+                "context_prompt": prompt,
+                "raw_output": raw_output,
+                "ok": ok,
+                "fallback_reason": fallback_reason,
+                "model": model,
+                "provider": provider,
+                "input_tokens": input_tokens,
+                "output_tokens": output_tokens,
+                "duration_ms": duration_ms,
+                "openai_fallback": openai_fallback,
+                "tags": _provenance_tags(state, config),
+            }
+        )
+        if collector is not None:
+            collector.calls.append(
+                {
+                    "llm_call_id": llm_call_id,
+                    "role": effective_role,
+                    "spot_index": spot_index,
+                    "ok": ok,
+                }
+            )
+    except Exception as exc:  # pragma: no cover - provenance must never break audio
+        logger.debug("Provenance Tier-1 emit failed: %s", exc)
 
 
 # Matches characters that could be used for prompt injection delimiters
@@ -1331,10 +1526,10 @@ NEWS_FLASH_CATEGORIES = {
         "a senator caught putting panna on carbonara. Delivered with fake-serious urgency."
     ),
     "sports": (
-        "Fake Italian sports flash delivered like a SERIE A COMMENTATOR HAVING A MELTDOWN. "
-        "FULL EXCITEMENT. Build to a crescendo. Fictional teams, fictional players, "
-        "impossible scores. 'GOOOOOL DI MARIO FANTASTICOOOOO!' energy. "
-        "The commentary should be breathless, barely coherent with excitement."
+        "Fake Italian sports desk update delivered by a measured, informed radio host. "
+        "Fictional teams and players are fine, but keep the scoreline followable and the analysis clear: "
+        "who scored, what changed, and why the match matters. Light dry wit is welcome; "
+        "avoid meltdown commentary, all-caps hype, extended goal screams, and breathless incoherence."
     ),
     "weather": (
         "Absurd Italian weather report. It's raining espresso in Napoli, "
@@ -1347,6 +1542,32 @@ NEWS_FLASH_CATEGORIES = {
         "to be a Botticelli. Delivered as a serious cultural segment."
     ),
 }
+
+
+def _sports_anchor_score(host: HostPersonality) -> int:
+    """Score hosts for clear sports updates instead of maximum excitement."""
+    axes = host.personality
+    return abs(axes.energy - 62) + abs(axes.chaos - 42) + abs(axes.verbosity - 48) + (abs(axes.warmth - 55) // 2)
+
+
+def _pick_news_flash_host(config: StationConfig, category: str) -> HostPersonality:
+    """Select a host for solo news flashes.
+
+    Sports uses a steady-anchor pool so a single manic persona does not monopolize
+    match updates. Other categories keep the existing station-wide random casting.
+    """
+    hosts = list(config.hosts)
+    if not hosts:
+        return HostPersonality(name="Host", voice="it-IT-DiegoNeural", style="")
+
+    if category != "sports" or len(hosts) == 1:
+        return random.choice(hosts)
+
+    highest_energy = max(host.personality.energy for host in hosts)
+    anchor_candidates = [host for host in hosts if host.personality.energy < highest_energy] or hosts
+    best_score = min(_sports_anchor_score(host) for host in anchor_candidates)
+    anchor_pool = [host for host in anchor_candidates if _sports_anchor_score(host) <= best_score + 20]
+    return random.choice(anchor_pool)
 
 
 async def write_news_flash(
@@ -1369,11 +1590,7 @@ async def write_news_flash(
     recent_tracks = [_sanitize_prompt_data(t.display) for t in list(state.played_tracks)[-3:]]
     jokes = list(state.running_jokes)[-3:] if state.running_jokes else []
 
-    # Sports flashes always go to the more manic host, others random
-    if category == "sports":
-        host = max(config.hosts, key=lambda h: h.personality.energy)
-    else:
-        host = random.choice(config.hosts)
+    host = _pick_news_flash_host(config, category)
 
     prompt = f"""Write a short news flash bulletin for the radio station.
 
@@ -1385,8 +1602,9 @@ Running jokes to optionally callback: {jokes if jokes else "none"}
 
 RULES:
 - Single host delivers this: {host.name} ({host.style})
-- 2-4 sentences MAX. Punchy. Absurd but delivered with total conviction.
-- For sports: USE CAPS for excited parts. Build tension. "INCREDIBILE! INCREDIBILEEEE!"
+- 2-4 sentences MAX. Punchy, clear, and delivered with total conviction.
+- For sports: sound like an informed radio sports desk. Keep the update measured and followable.
+- For sports: no all-caps hype, no extended goal screams, no crescendo-meltdown delivery.
 - Must feel like a real Italian radio news flash interrupting the programming.
 - ALL text in {config.station.language}.
 
@@ -1418,6 +1636,7 @@ async def write_transition(
     next_segment: str = "banter",
     style: str | None = None,
     song_cues: list[dict] | None = None,
+    role: str | None = None,
 ) -> tuple[HostPersonality, str]:
     """Generate a short host transition line to talk over the end of a song.
 
@@ -1513,6 +1732,7 @@ Return JSON:
             model=config.audio.claude_model,
             max_tokens=100,
             caller="transition",
+            role=role,
         )
         text = _massage_transition_text(data.get("text", "Allora..."), next_segment, recent_texts)
         logger.info("Generated transition: %s", text[:50])
@@ -1532,6 +1752,7 @@ async def write_ad(
     config: StationConfig,
     ad_format: str = "classic_pitch",
     sonic: SonicWorld | None = None,
+    spot_index: int | None = None,
 ) -> AdScript:
     """Generate a structured fictional ad script for one brand with role-based voices."""
     if not has_script_llm(config):
@@ -1662,6 +1883,8 @@ Return JSON:
             model=config.audio.claude_creative_model,
             max_tokens=800,
             caller="ad",
+            role="ad_spot",
+            spot_index=spot_index,
         )
 
         parts = []

@@ -180,7 +180,7 @@ When the HA integration is enabled (`ha_enabled: true` in `radio.toml` or the HA
 
 | Entity ID | Type | State values | Key attributes |
 |---|---|---|---|
-| `media_player.mammamiradio` | media_player | `playing` / `idle` | `media_title`, `media_artist`, `media_content_type`, `mammamiradio_segment_type`, `mammamiradio_listeners` |
+| `media_player.mammamiradio` | media_player | `playing` / `idle` | `media_title`, `media_artist`, `media_content_type`, `media_position`, `media_position_updated_at` (playing only), `mammamiradio_segment_type`, `mammamiradio_listeners`, `mammamiradio_queue_depth` |
 | `sensor.mammamiradio_segment_type` | sensor | `music` / `banter` / `ad` / `off` | — |
 | `sensor.mammamiradio_listeners` | sensor | integer | `unit_of_measurement: listeners` |
 | `binary_sensor.mammamiradio_on_air` | binary_sensor | `on` / `off` | — |

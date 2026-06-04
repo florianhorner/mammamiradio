@@ -185,6 +185,22 @@ async def startup():
     app.state.config = config
     app.state.start_time = time.time()
 
+    # Provenance ledger (Show Memory). Start BEFORE producer/playback so the
+    # earliest segments are captured, and stop AFTER them on shutdown so final
+    # rows survive. Hung off state so all three capture tiers reach it
+    # (_generate_json_response, producer, on_stream_segment) without app access.
+    from mammamiradio.core.ledger import ProvenanceLedger
+
+    ledger = ProvenanceLedger(
+        config.ledger_dir,
+        enabled=config.ledger_enabled,
+        retention_days=config.ledger_retention_days,
+        queue_max=config.ledger_queue_max,
+    )
+    ledger.start()
+    app.state.ledger = ledger
+    state.ledger = ledger
+
     # Pre-produce music segments in the background so app startup is instant.
     # If a listener arrives before prewarm finishes, the producer's idle-resume
     # logic queues a canned clip as an immediate fallback.
@@ -273,6 +289,10 @@ async def shutdown():
         app.state.playback_task = None
     if hasattr(app.state, "stream_hub"):
         app.state.stream_hub.close()
+    # Stop the ledger AFTER producer/playback are cancelled so final rows drain.
+    if getattr(app.state, "ledger", None) is not None:
+        app.state.ledger.stop()
+        app.state.ledger = None
 
 
 if __name__ == "__main__":
