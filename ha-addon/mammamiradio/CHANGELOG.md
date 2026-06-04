@@ -4,6 +4,8 @@
 
 ### Added
 
+- **The admin Engine Room now tells you exactly what the station is doing** — the header badge shows "On Air" when music or hosts are streaming, "Paused" when you've stopped it deliberately, and "Error" when a task has died and needs attention. Provider chips now distinguish "Backup active" (primary is down) from "Auto-recovering" (transient error, will self-heal), and show a plain-English reason plus a retry countdown. Silence while listeners are connected now surfaces as a blocked state immediately.
+
 - **The admin now shows what happened to a listener request after the hosts handled it.** A "Recently handled" section appears below the Pending queue for up to 5 minutes, showing each request with a status badge — "Sent to hosts" (blue) when the hosts picked it up, or "Song not found" (amber) when the requested track could not be downloaded.
 
 - **Jamendo rotation depth now defaults to 200 tracks.** The add-on's bundled

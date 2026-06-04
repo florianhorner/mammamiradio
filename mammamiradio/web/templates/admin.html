@@ -2601,12 +2601,24 @@ function statusRow(title,state,label,detail){
   return `<div class="status-row"><div class="status-copy"><div class="status-title">${esc(title)}</div><div class="status-detail">${esc(detail)}</div></div>${statusChip(state,label)}</div>`;
 }
 function runtimeProviderRow(title,item){
-  const state=item?.fallback_active?'degraded':'ready';
-  const label=item?.fallback_active?'Fallback':'Primary';
+  let state,label;
+  if(item?.recovery_mode==='circuit_breaker'||item?.recovery_mode==='action_required'){
+    state='degraded';
+    label='Backup active';
+  }else if(item?.recovery_mode==='transient'){
+    state='working';
+    label='Auto-recovering';
+  }else{
+    state=item?.fallback_active?'degraded':'ready';
+    label=item?.fallback_active?'Fallback':'Primary';
+  }
+  const reasonLine=item?.action_guidance||item?.switch_reason||'';
+  const retryLine=item?.retry_in_seconds>0?'Retrying in '+Math.ceil(item.retry_in_seconds/60)+' min':'';
   const detail=[
     'Current: '+(item?.current_label||item?.current_provider||'—'),
     'Primary: '+(item?.primary_label||item?.primary_provider||'—'),
-    item?.switch_reason||'',
+    reasonLine,
+    retryLine,
     item?.last_switch_timestamp?'Last switch: '+fmtRuntimeTs(item.last_switch_timestamp):''
   ].filter(Boolean).join(' · ');
   return statusRow(title,state,label,detail);
@@ -2626,13 +2638,16 @@ function updateRuntimeStatus(st){
       }
       return;
     }
-    const state=rs.health_state||'ready';
-    const label=state==='blocked'?'Error':state==='degraded'?'Fallback':state==='idle'?'Paused':'Ready';
+    const stationOnAir=rs.station_on_air===true;
+    const taskBlocked=rs.health_state==='blocked';
+    const headerState=taskBlocked?'blocked':stationOnAir?'ready':'degraded';
+    const headerLabel=taskBlocked?'Error':stationOnAir?'On Air':'Paused';
+    const headerDetail=rs.health_explanation?headerLabel+' · '+rs.health_explanation:headerLabel;
     if(header){
-      header.className='status-dot '+state;
-      header.setAttribute('aria-label',rs.health_explanation||label);
-      header.title=rs.health_explanation||'Runtime status';
-      header.innerHTML='<span class="dot"></span>'+esc(label);
+      header.className='status-dot '+headerState;
+      header.setAttribute('aria-label',headerDetail);
+      header.title=headerDetail;
+      header.innerHTML='<span class="dot"></span>'+esc(headerLabel);
     }
     if(!card)return;
     const providers=rs.providers||{};
@@ -2642,7 +2657,7 @@ function updateRuntimeStatus(st){
       ? `${lastFailover.provider_class||'provider'}: ${lastFailover.from_provider||'—'} → ${lastFailover.to_provider||'—'} · ${lastFailover.reason||''} · ${fmtRuntimeTs(lastFailover.timestamp)}`
       : (rs.no_failover_message||'No failover in current session.');
     card.innerHTML=[
-      statusRow('Current health',state,label,rs.health_explanation||'Runtime health available'),
+      statusRow('Current health',headerState,headerLabel,rs.health_explanation||'Runtime health available'),
       runtimeProviderRow('Audio source',providers.audio_source),
       runtimeProviderRow('Script provider',providers.script_provider),
       runtimeProviderRow('TTS provider',providers.tts_provider),
