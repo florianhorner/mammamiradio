@@ -30,7 +30,7 @@ def test_load_config_from_radio_toml(monkeypatch):
     assert config.pacing.songs_between_banter == 2
     assert config.pacing.songs_between_ads == 4
     assert config.playlist.jamendo_limit == 200
-    assert config.super_italian_mode is True
+    assert config.super_italian_mode is False
     assert len(config.hosts) == 2
     assert config.hosts[0].name == "Marco"
     assert config.hosts[1].name == "Giulia"

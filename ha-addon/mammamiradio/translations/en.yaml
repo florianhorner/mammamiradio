@@ -31,7 +31,7 @@ configuration:
     description: "Set a stable token for the admin API and HA media_player integration. If left empty, one is auto-generated on each restart; check the add-on log to retrieve it."
   super_italian_mode:
     name: Super Italian Mode
-    description: "On (default): listener UI and hosts are Italian-first. Off: listener UI uses English utility copy with Italian station-feel words intact, and AI hosts code-switch with Italian sprinkles."
+    description: "Off (default): listener UI uses English utility copy with Italian station-feel words intact, and AI hosts code-switch with Italian sprinkles. On: listener UI and hosts are Italian-first."
   chaos_mode_active:
     name: Chaos Mode
     description: "Keeps host-chaos mode enabled across restarts. Turning it on from the admin panel still arms the immediate first strike; boot restore does not."
