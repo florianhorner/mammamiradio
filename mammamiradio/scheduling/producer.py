@@ -243,7 +243,8 @@ def _banter_title(script: list[dict] | None, *, canned: bool, host_order: list[s
         if name and name not in hosts:
             hosts.append(name)
     if hosts and host_order:
-        hosts.sort(key=lambda h: host_order.index(h) if h in host_order else len(host_order))
+        rank = {h: i for i, h in enumerate(host_order)}
+        hosts.sort(key=lambda h: rank.get(h, len(host_order)))
     if hosts:
         return " & ".join(hosts[:2])
     return "Banter"

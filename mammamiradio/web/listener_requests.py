@@ -44,7 +44,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 
-from mammamiradio.core.models import SegmentType
+from mammamiradio.core.models import RECENTLY_CONSUMED_RETENTION_SECONDS, SegmentType
 from mammamiradio.web.streamer import _register_background_task, require_admin_access
 
 logger = logging.getLogger("mammamiradio.listener_requests")
@@ -131,6 +131,10 @@ async def get_listener_requests(request: Request, _: None = Depends(require_admi
     """Return current pending listener request queue (admin only)."""
     state = request.app.state.station_state
     now = time.time()
+    cutoff = now - RECENTLY_CONSUMED_RETENTION_SECONDS
+    state.recently_consumed_requests = [
+        r for r in state.recently_consumed_requests if r.get("consumed_at", 0) >= cutoff
+    ]
     return {
         "requests": [
             {

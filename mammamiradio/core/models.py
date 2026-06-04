@@ -388,6 +388,9 @@ class ExternalAddNotice(TypedDict):
     ts: float
 
 
+RECENTLY_CONSUMED_RETENTION_SECONDS = 300
+
+
 @dataclass
 class StationState:
     """Mutable in-memory state shared by producer and streamer tasks."""
@@ -482,7 +485,7 @@ class StationState:
     # Listener requests: shoutouts and song wishes submitted via the dashboard
     pending_requests: list[dict] = field(default_factory=list)
     # Recently consumed requests kept for 5 min so the admin can see what happened
-    # to a request that left Pending (acknowledged by hosts, or song not found).
+    # to a request that left Pending (sent to hosts, or song not found).
     recently_consumed_requests: list[dict] = field(default_factory=list)
     # Operator-visible pending actions/directives. This mirrors legacy single
     # slots while the producer still consumes those slots for compatibility.

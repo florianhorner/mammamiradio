@@ -3205,7 +3205,7 @@ function updateListenerRequests(reqs,consumed){
       const age=r.age_s<60?r.age_s+'s fa':Math.floor(r.age_s/60)+'m fa';
       const badge=r.status==='song_not_found'
         ?'<span class="lr-badge lr-badge-warn">&#9888; Song not found</span>'
-        :'<span class="lr-badge lr-badge-ok">&#10003; Acknowledged</span>';
+        :'<span class="lr-badge lr-badge-ok">&#10003; Sent to hosts</span>';
       const track=r.song_track?`<span class="lr-track">${esc(r.song_track)}</span>`:'';
       return `<div class="lr-item lr-item-consumed">
         <div class="lr-head"><span class="lr-name">${esc(r.name||'Listener')}</span>${badge}<span class="lr-age">${age}</span></div>

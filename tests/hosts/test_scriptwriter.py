@@ -1191,7 +1191,7 @@ def test_listener_request_commit_populates_recently_consumed_on_acknowledge(stat
     assert req not in state.pending_requests
     assert len(state.recently_consumed_requests) == 1
     consumed = state.recently_consumed_requests[0]
-    assert consumed["status"] == "acknowledged"
+    assert consumed["status"] == "sent_to_hosts"
     assert consumed["name"] == "Sofia"
 
 

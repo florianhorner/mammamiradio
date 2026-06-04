@@ -25,6 +25,7 @@ import anthropic
 from mammamiradio.audio.normalizer import AVAILABLE_SFX_TYPES
 from mammamiradio.core.config import StationConfig
 from mammamiradio.core.models import (
+    RECENTLY_CONSUMED_RETENTION_SECONDS,
     ChaosSubtype,
     HostPersonality,
     PersonalityAxes,
@@ -99,6 +100,7 @@ class ListenerRequestCommit:
         if self.mark_song_error:
             self.request["song_error"] = True
         if self.consume:
+            now = time.time()
             state.recently_consumed_requests.append(
                 {
                     "id": self.request.get("request_id") or str(self.request.get("ts", "")),
@@ -106,13 +108,13 @@ class ListenerRequestCommit:
                     "message": self.request.get("message"),
                     "song_track": self.request.get("song_track"),
                     "type": self.request.get("type"),
-                    "status": "song_not_found" if self.mark_song_error else "acknowledged",
-                    "consumed_at": time.time(),
+                    "status": "song_not_found" if self.mark_song_error else "sent_to_hosts",
+                    "consumed_at": now,
                 }
             )
-            cutoff = time.time() - 300
+            cutoff = now - RECENTLY_CONSUMED_RETENTION_SECONDS
             state.recently_consumed_requests = [
-                r for r in state.recently_consumed_requests if r["consumed_at"] >= cutoff
+                r for r in state.recently_consumed_requests if r.get("consumed_at", 0) >= cutoff
             ]
             state.pending_requests.remove(self.request)
 
