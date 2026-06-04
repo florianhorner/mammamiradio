@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from mammamiradio.core.config import load_config
+from mammamiradio.core.config import load_config, resolve_model
 
 TOML_PATH = str(Path(__file__).resolve().parents[2] / "radio.toml")
 
@@ -60,9 +60,10 @@ def test_station_theme_override(monkeypatch):
 
 
 def test_claude_model_override(monkeypatch):
+    """CLAUDE_MODEL (back-compat) overrides the fast-role Anthropic model."""
     monkeypatch.setenv("CLAUDE_MODEL", "claude-sonnet-4-6")
     config = load_config(TOML_PATH)
-    assert config.audio.claude_model == "claude-sonnet-4-6"
+    assert resolve_model(config.models, "transition", "anthropic") == "claude-sonnet-4-6"
 
 
 def test_cache_dir_override(monkeypatch):
@@ -89,6 +90,7 @@ def test_defaults_without_overrides(monkeypatch):
 
 
 def test_claude_creative_model_override(monkeypatch):
+    """CLAUDE_CREATIVE_MODEL (back-compat) overrides the creative-role Anthropic model."""
     monkeypatch.setenv("CLAUDE_CREATIVE_MODEL", "claude-opus-4-6")
     config = load_config(TOML_PATH)
-    assert config.audio.claude_creative_model == "claude-opus-4-6"
+    assert resolve_model(config.models, "banter", "anthropic") == "claude-opus-4-6"

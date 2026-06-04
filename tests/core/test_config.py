@@ -14,6 +14,7 @@ from mammamiradio.core.config import (
     _validate,
     coerce_bool,
     load_config,
+    resolve_model,
     runtime_json,
 )
 
@@ -90,8 +91,8 @@ def test_audio_section_loaded():
     assert config.audio.sample_rate == 48000
     assert config.audio.channels == 2
     assert config.audio.bitrate == 192
-    # CLAUDE_MODEL env override may be set; just check it's non-empty
-    assert config.audio.claude_model
+    # Model IDs now live in [models]; the audio section no longer carries them.
+    assert resolve_model(config.models, "banter", "anthropic")
 
 
 def test_homeassistant_section_loaded():

@@ -6,7 +6,7 @@ from typing import Any
 
 import httpx
 
-from mammamiradio.core.config import StationConfig
+from mammamiradio.core.config import StationConfig, resolve_model
 
 
 def _error_payload(body: str) -> dict[str, Any]:
@@ -125,7 +125,9 @@ async def check_provider_keys(config: StationConfig, *, timeout_s: float = 12.0)
                     "anthropic-version": "2023-06-01",
                 },
                 payload={
-                    "model": config.audio.claude_model,
+                    # Probe the creative-role model (what banter/ads air); a 404
+                    # here surfaces a stale catalog ID in the structured result.
+                    "model": resolve_model(config.models, None, "anthropic"),
                     "max_tokens": 1,
                     "messages": [{"role": "user", "content": "Reply with ok."}],
                 },
@@ -139,7 +141,7 @@ async def check_provider_keys(config: StationConfig, *, timeout_s: float = 12.0)
                 "https://api.openai.com/v1/chat/completions",
                 headers=openai_headers,
                 payload={
-                    "model": config.audio.openai_script_model,
+                    "model": resolve_model(config.models, None, "openai"),
                     "max_tokens": 1,
                     "messages": [{"role": "user", "content": "Reply ok."}],
                 },

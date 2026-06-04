@@ -495,9 +495,10 @@ async def test_openai_fallback_default_model_is_gpt_4o_mini(config, state):
 
 @pytest.mark.asyncio
 async def test_openai_fallback_uses_configured_model(config, state):
-    """When audio.openai_script_model is overridden, OpenAI is called with that model."""
+    """When the OpenAI catalog is overridden, OpenAI is called with that model."""
     config.openai_api_key = "openai-key"
-    config.audio.openai_script_model = "gpt-5-mini"
+    # banter → creative role → balanced openai creative = "small"
+    config.models.catalog["openai"]["small"] = "gpt-5-mini"
     host_name = config.hosts[0].name
     openai_client = _mock_openai_response(json.dumps({"lines": [{"host": host_name, "text": "hi"}], "new_joke": None}))
     mock_client = MagicMock()
