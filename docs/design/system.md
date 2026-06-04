@@ -522,6 +522,32 @@ mud" failure mode (observed 2026-05-04, Motore panel). The 22%-opacity gold
 rule is just enough to register as a divider without competing with the body
 text or the panel border.
 
+### "In produzione" feed — canonical (admin Scaletta)
+
+The admin Scaletta panel shows a live production feed above the queue table, so the
+operator can see backstage work in progress instead of a static list. It is composed
+entirely from existing canonical components — no new vocabulary:
+
+- **Section label:** `.card-label` "In produzione" — an Italian *structural* label,
+  consistent with Scaletta / Regia / Rotazione. (Italian is reserved for structural
+  names; see "Language scope".)
+- **Current line:** `.status-inline.working` (gold pulsing ●, icon-only) + a
+  `.segment-inline` badge (music=blue, banter=gold, ad=warm-amber, news=orange) + an
+  **English** status line + elapsed seconds in JetBrains Mono. Example:
+  `● [AD] Writing the Velocino spot · 8s`.
+- **Recent trail:** the last ≤3 finished phases, faded, with `.status-inline.ready`
+  (✓) for success or `.status-inline.blocked` (✗) for a failed attempt (operator
+  honesty). No timestamps.
+- **Idle:** the feed hides entirely when nothing is generating and the trail is empty —
+  never a dead box.
+
+**Hard rules learned here (do not regress):** status lines are **English utility copy**
+(`Writing` / `Voicing` / `Finding`), never engineer acronyms (`LLM` / `TTS` / `YTDL`)
+and never Italian dynamic copy — those break the illusion and the localization rule.
+The NEXT queue row uses a subtle gold tint (`rgba(244,208,72,0.06)`) + 3px gold left
+inset, never a solid-gold fill (no light card backgrounds). Data: admin `/status` only,
+under the `production` key — never the listener `/public-status`.
+
 ## Listener site composition — canonical
 
 The listener surface (served at `/` and `/listen`) is a radio station website, not a player widget. Five-band vertical composition, designed for desktop first (1440px), scales down gracefully. Reference wireframe: `.context/designs/unified-player-20260421/site-v1.html` (approved 2026-04-21).

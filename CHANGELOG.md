@@ -8,6 +8,8 @@ The current version source of truth is `pyproject.toml`.
 
 ### Added
 
+- **The admin queue now shows the studio working in the background.** Above the Scaletta, an "In produzione" feed reveals what the hosts are creating right now — writing an ad, voicing a banter, finding the next track — with a live timer and a short trail of what just finished. The next-up segment is highlighted with the studio gold accent and a one-line detail (artist, hosts, or brand). The operator no longer stares at a static list wondering whether anything is happening.
+
 - **The admin now shows what happened to a listener request after the hosts handled it.** A "Recently handled" section appears below the Pending queue for up to 5 minutes, showing each request with a status badge — "Sent to hosts" (blue) when the hosts picked it up, or "Song not found" (amber) when the requested track could not be downloaded. Requests leave the Pending list as soon as they're consumed, so operators no longer wonder whether their action registered.
 
 - **Show Memory: an opt-in record of how each moment was made.** A new provenance

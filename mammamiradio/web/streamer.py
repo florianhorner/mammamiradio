@@ -3191,6 +3191,22 @@ async def status(request: Request, _: None = Depends(require_admin_access)):
             "segments_produced": state.segments_produced,
             "tracks_played": len(state.played_tracks),
             "uptime_sec": round(time.time() - start_time),
+            # Live production feed ("In produzione", admin-only): what the producer
+            # is building right now + a short trail of just-finished work. Best-effort
+            # display state; never gates audio. current is null when the producer is idle.
+            "production": {
+                "current": (
+                    {
+                        "phase": state.gen_phase,
+                        "kind": state.gen_kind,
+                        "label": state.gen_label,
+                        "elapsed_sec": (int(time.monotonic() - state.gen_started) if state.gen_started else None),
+                    }
+                    if state.gen_phase
+                    else None
+                ),
+                "recent": [{"kind": r["kind"], "label": r["label"], "ok": r["ok"]} for r in list(state.gen_recent)],
+            },
             "playlist_source": _serialize_source(state.playlist_source),
             "produced_log": [{"type": e.type, "label": e.label, "timestamp": e.timestamp} for e in state.segment_log],
             "last_banter_script": state.last_banter_script,
