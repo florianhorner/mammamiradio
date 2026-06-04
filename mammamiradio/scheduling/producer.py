@@ -753,6 +753,44 @@ async def _fire_interrupt(
     return True
 
 
+def _emit_segment_prepared(
+    state,
+    *,
+    segment_id: str,
+    role: str,
+    final_script: list[str],
+    collector,
+) -> None:
+    """Tier-2: record the FINAL spoken script (post-processing) for one segment.
+
+    Joins back to the Tier-1 ``llm_call`` rows via ``llm_call_refs`` (the ids the
+    collector accumulated while the segment's calls fanned out) and forward to the
+    Tier-3 ``stream_result`` row via the shared ``segment_id``. Enabled-check first;
+    never raises into the producer.
+    """
+    led = getattr(state, "ledger", None)
+    if led is None or not led.enabled:
+        return
+    try:
+        import time as _time
+
+        from mammamiradio.core.ledger import SCHEMA_VERSION
+
+        led.record(
+            {
+                "schema_version": SCHEMA_VERSION,
+                "ts": _time.time(),
+                "record": "segment_prepared",
+                "segment_id": segment_id,
+                "role": role,
+                "final_script": final_script,
+                "llm_call_refs": [c.get("llm_call_id") for c in collector.calls] if collector else [],
+            }
+        )
+    except Exception as exc:  # pragma: no cover - provenance must never break audio
+        logger.debug("Provenance Tier-2 emit failed: %s", exc)
+
+
 async def run_producer(
     queue: asyncio.Queue[Segment],
     state: StationState,
@@ -1435,6 +1473,7 @@ async def run_producer(
 
                 banter_expected_min_duration_sec: float | None = None
                 banter_expected_line_count: int | None = None
+                _banter_attempt_id: str = ""
 
                 if canned:
                     logger.info("Using pre-bundled banter clip: %s", canned.name)
@@ -1442,15 +1481,34 @@ async def run_producer(
                     state.last_banter_script = [{"host": "Radio", "text": "(pre-recorded banter)"}]
                 elif not impossible_tts:
                     try:
+                        from mammamiradio.core.provenance_ctx import (
+                            CallCollector,
+                            reset_collector,
+                            set_collector,
+                        )
+
                         if chaos_subtype is not None:
-                            lines, listener_request_commit = await _sw.write_banter(
-                                state,
-                                config,
-                                is_new_listener=_is_new_listener,
-                                is_first_listener=_is_first_listener,
-                                chaos_subtype=chaos_subtype,
-                            )
+                            _banter_attempt_id = uuid4().hex
+                            _banter_collector = CallCollector(attempt_id=_banter_attempt_id)
+                            _prov_tok = set_collector(_banter_collector)
+                            try:
+                                lines, listener_request_commit = await _sw.write_banter(
+                                    state,
+                                    config,
+                                    is_new_listener=_is_new_listener,
+                                    is_first_listener=_is_first_listener,
+                                    chaos_subtype=chaos_subtype,
+                                )
+                            finally:
+                                reset_collector(_prov_tok)
                             line_texts = [text for _host, text in lines]
+                            _emit_segment_prepared(
+                                state,
+                                segment_id=_banter_attempt_id,
+                                role="banter",
+                                final_script=line_texts,
+                                collector=_banter_collector,
+                            )
                             banter_expected_min_duration_sec = _expected_banter_duration_sec(line_texts)
                             banter_expected_line_count = len(line_texts) if len(line_texts) > 1 else None
                             audio_path = await synthesize_dialogue(lines, config.tmp_dir)
@@ -1465,17 +1523,30 @@ async def run_producer(
                             ]
                         else:
                             # Generate transition voice + banter in parallel
-                            transition_task = _sw.write_transition(state, config, next_segment="banter")
-                            banter_task = _sw.write_banter(
-                                state,
-                                config,
-                                is_new_listener=_is_new_listener,
-                                is_first_listener=_is_first_listener,
-                            )
-                            (trans_host, trans_text), (lines, listener_request_commit) = await asyncio.gather(
-                                transition_task, banter_task
-                            )
+                            _banter_attempt_id = uuid4().hex
+                            _banter_collector = CallCollector(attempt_id=_banter_attempt_id)
+                            _prov_tok = set_collector(_banter_collector)
+                            try:
+                                transition_task = _sw.write_transition(state, config, next_segment="banter")
+                                banter_task = _sw.write_banter(
+                                    state,
+                                    config,
+                                    is_new_listener=_is_new_listener,
+                                    is_first_listener=_is_first_listener,
+                                )
+                                (trans_host, trans_text), (lines, listener_request_commit) = await asyncio.gather(
+                                    transition_task, banter_task
+                                )
+                            finally:
+                                reset_collector(_prov_tok)
                             line_texts = [trans_text] + [text for _host, text in lines]
+                            _emit_segment_prepared(
+                                state,
+                                segment_id=_banter_attempt_id,
+                                role="banter",
+                                final_script=line_texts,
+                                collector=_banter_collector,
+                            )
                             banter_expected_min_duration_sec = _expected_banter_duration_sec(line_texts)
                             banter_expected_line_count = len(line_texts) if len(line_texts) > 1 else None
 
@@ -1688,6 +1759,7 @@ async def run_producer(
                         "chaos_subtype": chaos_subtype.value if chaos_subtype else "",
                         "chaos_degraded": state.chaos_last_degraded_reason if chaos_subtype else "",
                         "has_music_tail": bool(has_music_tail),
+                        "ledger_segment_id": _banter_attempt_id or None,
                     },
                     ephemeral=canned is None,
                 )
@@ -2030,20 +2102,32 @@ async def run_producer(
                     return bumper_in, mid_bumpers
 
                 # Fan out: intro + LLM scripts + bumpers all in parallel
-                (
-                    (intro_parts, intro_text, intro_has_music_tail),
-                    scripts,
-                    (bumper_in, mid_bumpers),
-                ) = await asyncio.gather(
-                    _build_intro(),
-                    asyncio.gather(
-                        *(
-                            _sw.write_ad(brand, vm, state, config, ad_format=af, sonic=sn)
-                            for brand, af, sn, vm in spot_params
-                        )
-                    ),
-                    _build_bumpers(),
+                from mammamiradio.core.provenance_ctx import (
+                    CallCollector,
+                    reset_collector,
+                    set_collector,
                 )
+
+                _ad_attempt_id = uuid4().hex
+                _ad_collector = CallCollector(attempt_id=_ad_attempt_id, ad_break_id=_ad_attempt_id)
+                _ad_prov_tok = set_collector(_ad_collector)
+                try:
+                    (
+                        (intro_parts, intro_text, intro_has_music_tail),
+                        scripts,
+                        (bumper_in, mid_bumpers),
+                    ) = await asyncio.gather(
+                        _build_intro(),
+                        asyncio.gather(
+                            *(
+                                _sw.write_ad(brand, vm, state, config, ad_format=af, sonic=sn, spot_index=i)
+                                for i, (brand, af, sn, vm) in enumerate(spot_params)
+                            )
+                        ),
+                        _build_bumpers(),
+                    )
+                finally:
+                    reset_collector(_ad_prov_tok)
 
                 # ── PHASE 2: Fan out all ad TTS synthesis in parallel ──
                 ad_paths = await asyncio.gather(
@@ -2080,6 +2164,14 @@ async def run_producer(
                     )
                     if spot_idx < num_spots - 1 and spot_idx < len(mid_bumpers):
                         break_parts.append(mid_bumpers[spot_idx])
+
+                _emit_segment_prepared(
+                    state,
+                    segment_id=_ad_attempt_id,
+                    role="ad_break",
+                    final_script=break_texts,
+                    collector=_ad_collector,
+                )
 
                 # ── PHASE 4: Closing bumper + outro in parallel ──
                 bumper_out = config.tmp_dir / f"bumper_out_{uuid4().hex[:8]}.mp3"
@@ -2151,6 +2243,7 @@ async def run_producer(
                         "roles_used": break_roles,
                         "title": _ad_title(break_brands),
                         "has_music_tail": bool(intro_has_music_tail),
+                        "ledger_segment_id": _ad_attempt_id,
                     },
                 )
                 _bound_brands = break_brands

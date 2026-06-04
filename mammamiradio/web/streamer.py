@@ -266,15 +266,10 @@ def _runtime_health_snapshot(request: Request) -> dict:
     shadow_depth = len(state.queued_segments)
     now_streaming = state.now_streaming or {}
     now_metadata = now_streaming.get("metadata", {}) if isinstance(now_streaming, dict) else {}
+    from mammamiradio.core.segment_status import is_fallback_active
+
     audio_source = now_metadata.get("audio_source", "")
-    fallback_active = (
-        bool(now_metadata.get("fallback"))
-        or bool(audio_source and str(audio_source).startswith("fallback"))
-        or bool(now_metadata.get("queue_drain_recovery"))
-        or bool(now_metadata.get("resume_bridge"))
-        or bool(now_metadata.get("silence_fallback"))
-        or audio_source in ("norm_cache", "emergency_tone")
-    )
+    fallback_active = is_fallback_active(now_metadata)
     if not audio_source and fallback_active:
         audio_source = "canned"
     if not audio_source or audio_source == "prewarm" or (audio_source == "download" and not fallback_active):
@@ -1192,6 +1187,10 @@ async def run_playback_loop(app) -> None:
             send_start = time.monotonic()
             bytes_sent = 0
             was_skipped = False
+            # Sample listeners at the START of the send loop so a mid-segment
+            # disconnect doesn't mislabel an aired segment as no_listeners
+            # (matches classify_stream_outcome's documented contract).
+            start_listeners = len(hub._listeners)
             skip_event.clear()
             with open(segment.path, "rb") as f:
                 _skip_id3_and_xing_header(f)
@@ -1225,10 +1224,52 @@ async def run_playback_loop(app) -> None:
                 _persist_tasks.add(task)
                 task.add_done_callback(_persist_tasks.discard)
         finally:
+            _emit_stream_result(state, segment, bytes_sent, was_skipped, start_listeners)
             if segment.ephemeral:
                 segment.path.unlink(missing_ok=True)
             if pulled_from_queue:
                 segment_queue.task_done()
+
+
+def _emit_stream_result(state, segment, bytes_sent: int, was_skipped: bool, listeners: int) -> None:
+    """Tier-3: record the TRUE aired outcome after the send loop.
+
+    Fires from the (sync) playback loop's finally, so it captures partial and
+    failed sends too. Enabled-check first; never raises into the stream.
+    """
+    led = getattr(state, "ledger", None)
+    if led is None or not led.enabled:
+        return
+    try:
+        import time as _time
+
+        from mammamiradio.core.ledger import SCHEMA_VERSION
+        from mammamiradio.core.segment_status import classify_stream_outcome, is_fallback_active
+
+        meta = segment.metadata or {}
+        fallback_active = is_fallback_active(meta)
+        led.record(
+            {
+                "schema_version": SCHEMA_VERSION,
+                "ts": _time.time(),
+                "record": "stream_result",
+                "segment_id": meta.get("ledger_segment_id"),
+                "segment_type": segment.type.value,
+                "aired_status": classify_stream_outcome(
+                    was_skipped=was_skipped,
+                    bytes_sent=bytes_sent,
+                    listeners=listeners,
+                    fallback_active=fallback_active,
+                ),
+                "bytes_sent": bytes_sent,
+                "listeners": listeners,
+                "audio_source": str(meta.get("audio_source") or ""),
+                "fallback_active": fallback_active,
+                "title": meta.get("title") or meta.get("brand"),
+            }
+        )
+    except Exception as exc:  # pragma: no cover - provenance must never break audio
+        logger.debug("Provenance Tier-3 emit failed: %s", exc)
 
 
 def _track_from_music_metadata(metadata: dict) -> Track | None:
