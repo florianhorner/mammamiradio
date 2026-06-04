@@ -1680,6 +1680,7 @@ async def test_push_state_to_ha_uses_track_fallback_for_music(reset_ha_push_debo
     assert attributes["media_artist"] == "Track Artist"
     assert attributes["media_content_type"] == "music"
     assert attributes["mammamiradio_listeners"] == 2
+    assert attributes["supported_features"] == 0
 
 
 @pytest.mark.asyncio

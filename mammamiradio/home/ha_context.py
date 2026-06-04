@@ -1447,6 +1447,7 @@ async def push_state_to_ha(
                         "mammamiradio_segment_type": segment_type,
                         "mammamiradio_queue_depth": 0,
                         "mammamiradio_listeners": listeners_active,
+                        "supported_features": 0,
                     },
                 },
             ),
