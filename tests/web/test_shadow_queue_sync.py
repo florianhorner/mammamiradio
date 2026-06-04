@@ -15,6 +15,7 @@ the two produces misleading up-next displays.  These tests cover:
 from __future__ import annotations
 
 import asyncio
+import re
 import time
 from pathlib import Path
 from typing import Any
@@ -27,6 +28,7 @@ from httpx import ASGITransport, AsyncClient
 from mammamiradio.core.config import load_config
 from mammamiradio.core.models import PlaylistSource, Segment, SegmentType, StationState, Track
 from mammamiradio.web.streamer import (
+    _FALLBACK_REASON_LABELS,
     LiveStreamHub,
     _apply_loaded_source,
     _runtime_health_snapshot,
@@ -97,6 +99,21 @@ def _fake_request(app: FastAPI) -> Any:
     req = MagicMock()
     req.app = app
     return req
+
+
+def _provider_health(
+    *,
+    anthropic_degraded: bool = False,
+    retry_after_s: int = 0,
+    last_error: str = "",
+) -> dict:
+    return {
+        "anthropic": {
+            "degraded": anthropic_degraded,
+            "retry_after_s": retry_after_s,
+            "last_error": last_error,
+        }
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -452,6 +469,82 @@ class TestRuntimeStatusSnapshot:
         assert snap["providers"]["script_provider"]["current_provider"] == "anthropic"
         assert snap["no_failover_message"] == "No failover in current session."
 
+    def test_station_on_air_true_when_tasks_alive_and_no_silence(self):
+        app = _make_app()
+        req = _fake_request(app)
+
+        snap = _runtime_status_snapshot(req)
+
+        assert snap["station_on_air"] is True
+
+    def test_station_on_air_true_even_when_script_fallback_active(self):
+        app = _make_app()
+        state = app.state.station_state
+        app.state.config.anthropic_api_key = "anthropic-key"
+        app.state.config.openai_api_key = "openai-key"
+        state.update_runtime_provider(
+            "script_provider",
+            current_provider="openai",
+            primary_provider="anthropic",
+            fallback_active=True,
+            reason="anthropic_exception",
+        )
+        req = _fake_request(app)
+
+        snap = _runtime_status_snapshot(req)
+
+        assert snap["health_state"] == "degraded"
+        assert snap["station_on_air"] is True
+
+    def test_station_on_air_false_when_silence_with_listeners(self):
+        app = _make_app()
+        app.state.stream_hub.subscribe()
+        app.state.station_state.queue_empty_since = time.monotonic() - 31
+        req = _fake_request(app)
+
+        snap = _runtime_status_snapshot(req)
+
+        assert snap["station_on_air"] is False
+        assert snap["health_state"] == "blocked"
+        assert "playback is silent" in snap["health_explanation"]
+
+    def test_station_on_air_false_when_producer_task_stopped(self):
+        app = _make_app()
+        task = MagicMock()
+        task.done.return_value = True
+        app.state.producer_task = task
+        req = _fake_request(app)
+
+        snap = _runtime_status_snapshot(req)
+
+        assert snap["station_on_air"] is False
+
+    def test_station_on_air_false_when_session_stopped(self):
+        app = _make_app()
+        app.state.station_state.session_stopped = True
+        req = _fake_request(app)
+
+        snap = _runtime_status_snapshot(req)
+
+        assert snap["station_on_air"] is False
+        assert snap["health_state"] == "ready"
+
+    def test_session_stopped_stays_paused_even_with_silence_and_listener(self):
+        # A deliberate operator pause must read as paused ("ready"), never the
+        # red "blocked"/Error state, even after the silence window elapses with a
+        # listener still connected — session_stopped is checked before silence.
+        app = _make_app()
+        app.state.station_state.session_stopped = True
+        app.state.stream_hub.subscribe()
+        app.state.station_state.queue_empty_since = time.monotonic() - 31
+        req = _fake_request(app)
+
+        snap = _runtime_status_snapshot(req)
+
+        assert snap["health_state"] == "ready"
+        assert "paused by the operator" in snap["health_explanation"]
+        assert snap["health_explanation"] == "Station is paused by the operator."
+
     def test_degraded_status_surfaces_audio_failover_event(self):
         app = _make_app()
         state = app.state.station_state
@@ -570,6 +663,152 @@ class TestRuntimeStatusSnapshot:
 
         assert snap["health_state"] == "degraded"
         assert snap["providers"]["audio_source"]["fallback_active"] is True
+
+
+class TestScriptProviderStatusRecovery:
+    def test_recovery_mode_transient_when_disabled_until_expired(self):
+        app = _make_app()
+        state = app.state.station_state
+        app.state.config.anthropic_api_key = "anthropic-key"
+        app.state.config.openai_api_key = "openai-key"
+        state.anthropic_disabled_until = time.time() - 1
+        state.update_runtime_provider(
+            "script_provider",
+            current_provider="openai",
+            primary_provider="anthropic",
+            fallback_active=True,
+            reason="anthropic_exception",
+        )
+        req = _fake_request(app)
+
+        snap = _runtime_status_snapshot(req, provider_health=_provider_health())
+        provider = snap["providers"]["script_provider"]
+
+        assert provider["recovery_mode"] == "transient"
+        assert provider["retry_in_seconds"] is None
+        assert provider["action_guidance"] == "No action needed - will retry automatically"
+
+    @pytest.mark.parametrize(
+        "reason",
+        [
+            "anthropic_auth_failed",
+            "anthropic_auth_blocked",
+            "anthropic_usage_limit",
+            "anthropic_usage_limit_blocked",
+            "anthropic_nonretryable",
+        ],
+    )
+    def test_expired_actionable_fallback_reasons_still_require_action(self, reason: str):
+        app = _make_app()
+        state = app.state.station_state
+        app.state.config.anthropic_api_key = "anthropic-key"
+        app.state.config.openai_api_key = "openai-key"
+        state.anthropic_disabled_until = time.time() - 1
+        state.update_runtime_provider(
+            "script_provider",
+            current_provider="openai",
+            primary_provider="anthropic",
+            fallback_active=True,
+            reason=reason,
+        )
+        req = _fake_request(app)
+
+        snap = _runtime_status_snapshot(req, provider_health=_provider_health())
+        provider = snap["providers"]["script_provider"]
+
+        assert provider["recovery_mode"] == "action_required"
+        assert provider["retry_in_seconds"] is None
+        assert provider["action_guidance"] == _FALLBACK_REASON_LABELS[reason]
+        assert provider["action_guidance"] != "No action needed - will retry automatically"
+
+    def test_recovery_mode_circuit_breaker_when_disabled_until_active(self):
+        app = _make_app()
+        state = app.state.station_state
+        app.state.config.anthropic_api_key = "anthropic-key"
+        app.state.config.openai_api_key = "openai-key"
+        state.anthropic_disabled_until = time.time() + 600
+        state.update_runtime_provider(
+            "script_provider",
+            current_provider="openai",
+            primary_provider="anthropic",
+            fallback_active=True,
+            reason="anthropic_auth_failed",
+        )
+        req = _fake_request(app)
+
+        snap = _runtime_status_snapshot(
+            req,
+            provider_health=_provider_health(anthropic_degraded=True, retry_after_s=300),
+        )
+        provider = snap["providers"]["script_provider"]
+
+        assert provider["recovery_mode"] == "circuit_breaker"
+        assert provider["retry_in_seconds"] == 300
+        assert provider["action_guidance"] == _FALLBACK_REASON_LABELS["anthropic_auth_failed"]
+
+    def test_retry_in_seconds_reads_from_provider_health(self):
+        app = _make_app()
+        state = app.state.station_state
+        app.state.config.anthropic_api_key = "anthropic-key"
+        app.state.config.openai_api_key = "openai-key"
+        state.anthropic_disabled_until = time.time() + 600
+        state.update_runtime_provider(
+            "script_provider",
+            current_provider="openai",
+            primary_provider="anthropic",
+            fallback_active=True,
+            reason="anthropic_usage_limit",
+        )
+        req = _fake_request(app)
+
+        snap = _runtime_status_snapshot(
+            req,
+            provider_health=_provider_health(anthropic_degraded=True, retry_after_s=17),
+        )
+
+        assert snap["providers"]["script_provider"]["retry_in_seconds"] == 17
+
+    def test_action_guidance_populated_for_circuit_breaker(self):
+        app = _make_app()
+        state = app.state.station_state
+        app.state.config.anthropic_api_key = "anthropic-key"
+        app.state.config.openai_api_key = "openai-key"
+        state.anthropic_disabled_until = time.time() + 600
+        state.update_runtime_provider(
+            "script_provider",
+            current_provider="openai",
+            primary_provider="anthropic",
+            fallback_active=True,
+            reason="anthropic_usage_limit_blocked",
+        )
+        req = _fake_request(app)
+
+        snap = _runtime_status_snapshot(
+            req,
+            provider_health=_provider_health(anthropic_degraded=True, retry_after_s=180),
+        )
+
+        assert "usage limit" in snap["providers"]["script_provider"]["action_guidance"]
+
+    def test_recovery_mode_none_when_no_fallback(self):
+        app = _make_app()
+        app.state.config.anthropic_api_key = "anthropic-key"
+        app.state.config.openai_api_key = "openai-key"
+        req = _fake_request(app)
+
+        snap = _runtime_status_snapshot(req, provider_health=_provider_health())
+        provider = snap["providers"]["script_provider"]
+
+        assert provider["recovery_mode"] is None
+        assert provider["retry_in_seconds"] is None
+        assert provider["action_guidance"] == ""
+
+    def test_fallback_reason_labels_covers_all_scriptwriter_fallback_reasons(self):
+        scriptwriter = Path(__file__).resolve().parents[2] / "mammamiradio" / "hosts" / "scriptwriter.py"
+        source = scriptwriter.read_text(encoding="utf-8")
+        reasons = set(re.findall(r'(?:fallback_reason\s*=\s*|return\s+)"(anthropic_[^"]+)"', source))
+
+        assert reasons == set(_FALLBACK_REASON_LABELS)
 
 
 # ---------------------------------------------------------------------------
