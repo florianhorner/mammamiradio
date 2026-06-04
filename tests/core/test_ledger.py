@@ -160,6 +160,22 @@ def test_startup_prunes_and_gzips_without_in_process_rollover(tmp_path):
     assert _day_file(tmp_path, clock).exists()
 
 
+def test_start_disables_when_dir_unavailable(tmp_path, monkeypatch):
+    # Read-only /data on a restarted Pi addon: mkdir fails. The ledger must
+    # disable itself, spawn no thread, and stay silent — never raise into boot.
+    led = ProvenanceLedger(tmp_path / "ledger", enabled=True)
+
+    def boom(self, *a, **k):
+        raise OSError("read-only file system")
+
+    monkeypatch.setattr(Path, "mkdir", boom)
+    led.start()  # must not raise
+    assert led.enabled is False
+    assert led._thread is None
+    led.record({"record": "llm_call"})  # silent no-op, must not raise
+    led.stop()  # safe even though the thread never started
+
+
 def test_sidecar_not_reappended_across_restarts(tmp_path):
     # The system prompt must be written once, not once per process restart.
     led1 = ProvenanceLedger(tmp_path, enabled=True)
