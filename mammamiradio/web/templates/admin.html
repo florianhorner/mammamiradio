@@ -899,7 +899,10 @@ body::before {
 .a-programme tr { transition: background 150ms; }
 .a-programme tr:hover { background: rgba(245,237,216,0.03); }
 .a-programme tr.past td { opacity: 0.5; }
-.a-programme tr.next { background: rgba(37,99,235,0.04); }
+.a-programme tr.next { background: rgba(244,208,72,0.06); box-shadow: inset 3px 0 0 var(--sun2); }
+.a-programme tr.next .ts { color: var(--sun); font-weight: 600; }
+.a-programme tr.next .ti { font-style: italic; font-family: var(--font-display); font-size: 15px; }
+.prog-subtitle { display: block; font-family: var(--font-body); font-style: normal; font-size: 10px; color: var(--muted); line-height: 1.2; margin-top: 1px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .a-programme tr.now {
   background: rgba(236,204,48,0.06);
   box-shadow: inset 2px 0 0 var(--sun2);
@@ -920,6 +923,18 @@ body::before {
 .a-programme .ac button svg { width: 12px; height: 12px; }
 .a-programme .ac button:hover { color: var(--sun); border-color: var(--sun2); background: rgba(236,204,48,0.06); }
 .a-programme .ac button:focus-visible { outline: none; box-shadow: 0 0 0 2px rgba(236,204,48,0.5); }
+
+/* "In produzione" feed — live backstage work above the queue. Reuses the
+   canonical status-inline (working/ready/blocked) + segment-inline badges;
+   status lines are English utility copy, the section label stays Italian. */
+.queue-production { margin-bottom: 14px; }
+.prod-entry {
+  display: flex; align-items: center; gap: 8px;
+  padding: 5px 2px; font-size: 11px; color: var(--text-secondary);
+}
+.prod-entry.recent { opacity: 0.5; }
+.prod-entry .prod-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.prod-entry .prod-elapsed { font-family: var(--font-mono); font-size: 10px; color: var(--muted); flex-shrink: 0; font-variant-numeric: tabular-nums; }
 
 /* Compact non-status segment labels for programme categories */
 .a-programme .segment-inline,
@@ -1243,7 +1258,7 @@ body[data-stopped="true"] .a-station-card .dot.on { animation-play-state: paused
     background: rgba(236,204,48,0.08);
     box-shadow: inset 2px 0 0 var(--sun2);
   }
-  .a-programme tr.next { background: rgba(37,99,235,0.05); }
+  .a-programme tr.next { background: rgba(244,208,72,0.06); box-shadow: inset 3px 0 0 var(--sun2); }
   .a-programme tr.past { opacity: 0.66; }
   .a-programme tr.past td { opacity: 1; }
   .a-programme td {
@@ -1746,6 +1761,10 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
       <div class="queue-requests">
         <div class="card-label">Pending requests <span id="lrMeta" style="float:right;font-weight:400;color:var(--muted)"></span></div>
         <div id="lrBody"><div class="empty">No requests</div></div>
+      </div>
+      <div class="queue-production" id="queue-production" style="display:none">
+        <div class="card-label">In produzione</div>
+        <div id="productionFeed"></div>
       </div>
       <div id="programmeList">
         <div class="prog-empty">Building queue...</div>
@@ -2474,6 +2493,40 @@ function splitTrackLabel(seg){
   }
   return {title:label,artist:(seg&&seg.metadata&&seg.metadata.artist)||''};
 }
+// Subtitle line shown under the NEXT row's title: artist·source / hosts / brand / category.
+// Surfaces the "what is it" detail even on narrow viewports where the Fonte column hides.
+function buildSubtitle(it,typeKey,parts){
+  if(typeKey==='music'){
+    if(parts.artist&&it.source_kind)return `${parts.artist} · ${it.source_kind}`;
+    return parts.artist||it.source_kind||'';
+  }
+  if(typeKey==='banter')return (it.metadata&&it.metadata.title)||'';
+  if(typeKey==='ad'){const m=String(it.label||'').match(/^Ad:\s*(.+?)(?:\s*\+\d+.*)?$/i);return m?m[1].trim():'';}
+  if(typeKey==='news_flash')return (it.metadata&&it.metadata.category)||'breaking';
+  return '';
+}
+
+// "In produzione" — render the live production feed (current work + recent trail).
+// Driven by st.production from /api/status. Hidden entirely when idle (never a dead box).
+function renderProduction(st){
+  const wrap=document.getElementById('queue-production');
+  const feed=document.getElementById('productionFeed');
+  if(!wrap||!feed)return;
+  const p=st&&st.production||{};
+  const rows=[];
+  if(p.current&&p.current.label){
+    const badge=segmentInline(segmentTypeKey(p.current.kind||'music'));
+    const el=p.current.elapsed_sec?`<span class="prod-elapsed">${p.current.elapsed_sec}s</span>`:'';
+    rows.push(`<div class="prod-entry">${statusInline('working','',p.current.label)}${badge}<span class="prod-label">${esc(p.current.label)}</span>${el}</div>`);
+  }
+  (p.recent||[]).forEach(r=>{
+    const badge=segmentInline(segmentTypeKey(r.kind||'music'));
+    rows.push(`<div class="prod-entry recent">${statusInline(r.ok?'ready':'blocked','',r.label)}${badge}<span class="prod-label">${esc(r.label)}</span></div>`);
+  });
+  if(rows.length){feed.innerHTML=rows.join('');wrap.style.display='';}
+  else{feed.innerHTML='';wrap.style.display='none';}
+}
+
 function renderProgramme(st){
   // session_stopped is part of the key: the empty-state branches below render
   // different copy when stopped vs building, so a stop/resume with an unchanged
@@ -2523,7 +2576,9 @@ function renderProgramme(st){
     const action=actionable
       ? `<button type="button" class="queue-remove-btn" title="Remove from queue" aria-label="Remove from queue" onclick="event.stopPropagation();removeQueueItem('${escJs(it.id||'')}',this)"><svg class="ic" aria-hidden="true"><use href="#ic-trash"/></svg></button>`
       : '';
-    rows.push(`<tr class="${rowClass}" ${clickAttrs}><td class="ts">${relLabel(it._queueIndex)}</td><td>${segmentInline(typeKey)}</td><td class="ti">${esc(titleText||segmentText(typeKey))}</td><td class="ho">${esc(sourceText)}</td><td class="du">${fmtDur(it,typeKey)}</td><td class="ac">${action}</td></tr>`);
+    const subtitle=it._queueIndex===0?buildSubtitle(it,typeKey,parts):'';
+    const titleCell=`${esc(titleText||segmentText(typeKey))}${subtitle?`<span class="prog-subtitle">${esc(subtitle)}</span>`:''}`;
+    rows.push(`<tr class="${rowClass}" ${clickAttrs}><td class="ts">${relLabel(it._queueIndex)}</td><td>${segmentInline(typeKey)}</td><td class="ti">${titleCell}</td><td class="ho">${esc(sourceText)}</td><td class="du">${fmtDur(it,typeKey)}</td><td class="ac">${action}</td></tr>`);
   });
 
   if(upFiltered.length>8){
@@ -3492,6 +3547,7 @@ async function refreshFast(){
     const lrData=lrr.ok?await lrr.json():{requests:[]};
     if(_st.session_stopped!==undefined)updateStopState(_st.session_stopped);
     updateNow(_st.now_streaming);
+    renderProduction(_st);
     renderProgramme(_st);
     updateRecent(_st);
     updateLog(_st.stream_log);

@@ -8,6 +8,8 @@ The current version source of truth is `pyproject.toml`.
 
 ### Added
 
+- **The admin queue now shows the studio working in the background.** Above the Scaletta, an "In produzione" feed reveals what the hosts are creating right now — writing an ad, voicing a banter, finding the next track — with a live timer and a short trail of what just finished. The next-up segment is highlighted with the studio gold accent and a one-line detail (artist, hosts, or brand). The operator no longer stares at a static list wondering whether anything is happening.
+
 - **Share a whole moment, not just thirty seconds.** The Share button now always
   copies the clip link to your clipboard (alongside the native share sheet), so
   it's ready to paste anywhere even if you dismiss the sheet. Clips of host banter

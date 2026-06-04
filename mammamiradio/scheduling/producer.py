@@ -1265,7 +1265,13 @@ async def run_producer(
                 )
 
                 loop = asyncio.get_running_loop()
-                rendered = await _render_music_track(track, config, temp_prefix="music", context="music")
+                state.set_gen("finding", "music", f"Finding {track.display}")
+                _gen_ok = False
+                try:
+                    rendered = await _render_music_track(track, config, temp_prefix="music", context="music")
+                    _gen_ok = rendered is not None
+                finally:
+                    state.end_gen(ok=_gen_ok)
                 if rendered is None:
                     continue
                 norm_path = rendered.path
@@ -1502,6 +1508,8 @@ async def run_producer(
                             _banter_attempt_id = uuid4().hex
                             _banter_collector = CallCollector(attempt_id=_banter_attempt_id)
                             _prov_tok = set_collector(_banter_collector)
+                            state.set_gen("writing", "banter", "Writing banter")
+                            _gen_ok = False
                             try:
                                 lines, listener_request_commit = await _sw.write_banter(
                                     state,
@@ -1510,8 +1518,10 @@ async def run_producer(
                                     is_first_listener=_is_first_listener,
                                     chaos_subtype=chaos_subtype,
                                 )
+                                _gen_ok = True
                             finally:
                                 reset_collector(_prov_tok)
+                                state.end_gen(ok=_gen_ok)
                             line_texts = [text for _host, text in lines]
                             _emit_segment_prepared(
                                 state,
@@ -1537,6 +1547,8 @@ async def run_producer(
                             _banter_attempt_id = uuid4().hex
                             _banter_collector = CallCollector(attempt_id=_banter_attempt_id)
                             _prov_tok = set_collector(_banter_collector)
+                            state.set_gen("writing", "banter", "Writing banter")
+                            _gen_ok = False
                             try:
                                 transition_task = _sw.write_transition(state, config, next_segment="banter")
                                 banter_task = _sw.write_banter(
@@ -1548,8 +1560,10 @@ async def run_producer(
                                 (trans_host, trans_text), (lines, listener_request_commit) = await asyncio.gather(
                                     transition_task, banter_task
                                 )
+                                _gen_ok = True
                             finally:
                                 reset_collector(_prov_tok)
+                                state.end_gen(ok=_gen_ok)
                             line_texts = [trans_text] + [text for _host, text in lines]
                             _emit_segment_prepared(
                                 state,
@@ -1808,7 +1822,13 @@ async def run_producer(
                 logger.info("Producing NEWS FLASH")
 
                 try:
-                    host, text, category = await _sw.write_news_flash(state, config)
+                    state.set_gen("writing", "news_flash", "Writing a news flash")
+                    _gen_ok = False
+                    try:
+                        host, text, category = await _sw.write_news_flash(state, config)
+                        _gen_ok = True
+                    finally:
+                        state.end_gen(ok=_gen_ok)
                     flash_path = config.tmp_dir / f"flash_{uuid4().hex[:8]}.mp3"
 
                     # Keep news flashes intelligible; only traffic gets a small urgency nudge.
@@ -2121,6 +2141,9 @@ async def run_producer(
                 _ad_attempt_id = uuid4().hex
                 _ad_collector = CallCollector(attempt_id=_ad_attempt_id, ad_break_id=_ad_attempt_id)
                 _ad_prov_tok = set_collector(_ad_collector)
+                _ad_brand = spot_params[0][0] if spot_params else ""
+                state.set_gen("writing", "ad", f"Writing the {_ad_brand} spot" if _ad_brand else "Writing an ad break")
+                _gen_ok = False
                 try:
                     (
                         (intro_parts, intro_text, intro_has_music_tail),
@@ -2136,8 +2159,10 @@ async def run_producer(
                         ),
                         _build_bumpers(),
                     )
+                    _gen_ok = True
                 finally:
                     reset_collector(_ad_prov_tok)
+                    state.end_gen(ok=_gen_ok)
 
                 # ── PHASE 2: Fan out all ad TTS synthesis in parallel ──
                 ad_paths = await asyncio.gather(
