@@ -21,6 +21,10 @@
   sample-payload JSON fixtures committed under
   `docs/integrations/sample-payloads/` as the binding contract.
 
+### Fixed
+
+- **The admin now shows what happened to a listener request after the hosts handled it.** A "Recently handled" section appears below the Pending queue for up to 5 minutes, showing each request with a status badge — "Sent to hosts" when the hosts picked it up, or "Song not found" when the requested track could not be downloaded.
+
 ## 2.13.0
 
 ### Added
