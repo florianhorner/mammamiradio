@@ -70,13 +70,14 @@ def test_admin_copy_defaults_to_english_operator_labels():
 
 def test_chaos_and_festival_controls_live_in_experimental_section():
     html = ADMIN_HTML.read_text()
-    experimental_start = html.index('<section class="a-panel" id="experimental">')
-    next_section = html.index("<!-- Tricolor divider -->", experimental_start)
+    experimental_start = html.find('<section class="a-panel" id="experimental">')
+    assert experimental_start != -1, "admin.html must have an #experimental section"
+    next_section = html.find("<!-- Tricolor divider -->", experimental_start)
+    assert next_section != -1, "admin.html must have a <!-- Tricolor divider --> after #experimental"
     experimental = html[experimental_start:next_section]
-    triggers = html[html.index('<section class="a-panel" id="triggers">') : experimental_start]
 
     assert 'id="chaosControl"' in experimental
     assert 'id="festivalControl"' in experimental
     assert "High-personality modes" in experimental
-    assert 'id="chaosControl"' not in triggers
-    assert 'id="festivalControl"' not in triggers
+    assert 'id="chaosControl"' not in html[:experimental_start]
+    assert 'id="festivalControl"' not in html[:experimental_start]
