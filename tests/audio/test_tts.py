@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 
 from mammamiradio.core.models import HostPersonality
@@ -317,6 +318,226 @@ async def test_openai_instructions_from_personality(_mock_all, tmp_path, monkeyp
 
 
 # ---------------------------------------------------------------------------
+# synthesize with cloud provider engines
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_synthesize_azure_happy_path(_mock_all, tmp_path, monkeypatch):
+    from mammamiradio.audio.tts import synthesize
+
+    monkeypatch.setenv("AZURE_SPEECH_KEY", "azure-secret")
+    monkeypatch.setenv("AZURE_SPEECH_REGION", "westeurope")
+    seen: dict[str, object] = {}
+
+    class _AzureClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, url, headers, content):
+            seen["url"] = url
+            seen["headers"] = headers
+            seen["content"] = content.decode("utf-8")
+            return httpx.Response(200, content=b"\x00" * 512, request=httpx.Request("POST", url))
+
+    monkeypatch.setattr("mammamiradio.audio.tts.httpx.AsyncClient", _AzureClient)
+
+    output = tmp_path / "azure_out.mp3"
+    result = await synthesize(
+        "Ciao mondo",
+        "it-IT-Isabella:DragonHDLatestNeural",
+        output,
+        engine="azure",
+        rate="+10%",
+        pitch="+5Hz",
+    )
+
+    assert result == output
+    assert seen["url"] == "https://westeurope.tts.speech.microsoft.com/cognitiveservices/v1"
+    assert seen["headers"]["Ocp-Apim-Subscription-Key"] == "azure-secret"
+    assert 'voice name="it-IT-Isabella:DragonHDLatestNeural"' in str(seen["content"])
+    assert 'rate="+10%"' in str(seen["content"])
+    _mock_all["normalize"].assert_called_once()
+    _mock_all["Communicate"].assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_synthesize_azure_missing_key_falls_back_to_edge(_mock_all, tmp_path, monkeypatch):
+    from mammamiradio.audio.tts import synthesize
+
+    monkeypatch.delenv("AZURE_SPEECH_KEY", raising=False)
+    monkeypatch.delenv("AZURE_SPEECH_REGION", raising=False)
+
+    output = tmp_path / "azure_fallback.mp3"
+    result = await synthesize(
+        "Ciao",
+        "it-IT-Alessio:DragonHDLatestNeural",
+        output,
+        engine="azure",
+        edge_fallback_voice="it-IT-DiegoNeural",
+    )
+
+    assert result == output
+    call = _mock_all["Communicate"].call_args
+    assert call[0][1] == "it-IT-DiegoNeural"
+
+
+@pytest.mark.asyncio
+async def test_synthesize_elevenlabs_happy_path(_mock_all, tmp_path, monkeypatch):
+    from mammamiradio.audio.tts import synthesize
+
+    monkeypatch.setenv("ELEVENLABS_API_KEY", "eleven-secret")
+    seen: dict[str, object] = {}
+
+    class _ElevenClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, url, headers, json):
+            seen["url"] = url
+            seen["headers"] = headers
+            seen["json"] = json
+            return httpx.Response(200, content=b"\x00" * 512, request=httpx.Request("POST", url))
+
+    monkeypatch.setattr("mammamiradio.audio.tts.httpx.AsyncClient", _ElevenClient)
+
+    output = tmp_path / "eleven_out.mp3"
+    result = await synthesize("Ciao mondo", "voice_italian_character", output, engine="elevenlabs")
+
+    assert result == output
+    assert seen["url"] == "https://api.elevenlabs.io/v1/text-to-speech/voice_italian_character"
+    assert seen["headers"]["xi-api-key"] == "eleven-secret"
+    assert seen["json"]["model_id"] == "eleven_multilingual_v2"
+    _mock_all["normalize"].assert_called_once()
+    _mock_all["Communicate"].assert_not_called()
+
+
+class _HttpErrorClient:
+    """httpx.AsyncClient stub whose POST returns a non-2xx response.
+
+    raise_for_status() on the returned response trips, exercising the cloud
+    engine's try/except → edge fallback chain (not the pre-flight missing-key
+    branch).
+    """
+
+    def __init__(self, *args, **kwargs):
+        pass
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+    async def post(self, url, **kwargs):
+        return httpx.Response(500, content=b"upstream boom", request=httpx.Request("POST", url))
+
+
+@pytest.mark.asyncio
+async def test_synthesize_azure_http_error_falls_back_to_edge(_mock_all, tmp_path, monkeypatch):
+    """Azure returning 5xx mid-synthesis must degrade to edge-tts, not dead air."""
+    from mammamiradio.audio.tts import synthesize
+
+    # Distinct creds from the happy-path test so the singleton client cache misses.
+    monkeypatch.setenv("AZURE_SPEECH_KEY", "azure-err-key")
+    monkeypatch.setenv("AZURE_SPEECH_REGION", "eastus")
+    monkeypatch.setattr("mammamiradio.audio.tts.httpx.AsyncClient", _HttpErrorClient)
+
+    output = tmp_path / "azure_http_error.mp3"
+    result = await synthesize(
+        "Ciao",
+        "it-IT-Isabella:DragonHDLatestNeural",
+        output,
+        engine="azure",
+        edge_fallback_voice="it-IT-DiegoNeural",
+    )
+
+    assert result == output
+    # Edge fallback ran with the configured edge voice — the illusion is preserved.
+    call = _mock_all["Communicate"].call_args
+    assert call[0][1] == "it-IT-DiegoNeural"
+
+
+@pytest.mark.asyncio
+async def test_synthesize_elevenlabs_http_error_falls_back_to_edge(_mock_all, tmp_path, monkeypatch):
+    """ElevenLabs returning 5xx mid-synthesis must degrade to edge-tts, not dead air."""
+    from mammamiradio.audio.tts import synthesize
+
+    monkeypatch.setenv("ELEVENLABS_API_KEY", "eleven-err-key")
+    monkeypatch.setattr("mammamiradio.audio.tts.httpx.AsyncClient", _HttpErrorClient)
+
+    output = tmp_path / "eleven_http_error.mp3"
+    result = await synthesize(
+        "Ciao",
+        "voice_italian_character",
+        output,
+        engine="elevenlabs",
+        edge_fallback_voice="it-IT-DiegoNeural",
+    )
+
+    assert result == output
+    call = _mock_all["Communicate"].call_args
+    assert call[0][1] == "it-IT-DiegoNeural"
+
+
+@pytest.mark.asyncio
+async def test_synthesize_elevenlabs_missing_key_falls_back_to_edge(_mock_all, tmp_path, monkeypatch):
+    """No ELEVENLABS_API_KEY → edge fallback (mirrors the Azure missing-key case)."""
+    from mammamiradio.audio.tts import synthesize
+
+    monkeypatch.delenv("ELEVENLABS_API_KEY", raising=False)
+
+    output = tmp_path / "eleven_fallback.mp3"
+    result = await synthesize(
+        "Ciao",
+        "voice_italian_character",
+        output,
+        engine="elevenlabs",
+        edge_fallback_voice="it-IT-DiegoNeural",
+    )
+
+    assert result == output
+    call = _mock_all["Communicate"].call_args
+    assert call[0][1] == "it-IT-DiegoNeural"
+
+
+@pytest.mark.asyncio
+async def test_synthesize_azure_full_failure_falls_back_to_silence(_mock_all, tmp_path, monkeypatch):
+    """Azure 5xx AND edge-tts down → silence, never a terminal failure (Scenario 2)."""
+    from mammamiradio.audio.tts import synthesize
+
+    monkeypatch.setenv("AZURE_SPEECH_KEY", "azure-silence-key")
+    monkeypatch.setenv("AZURE_SPEECH_REGION", "northeurope")
+    monkeypatch.setattr("mammamiradio.audio.tts.httpx.AsyncClient", _HttpErrorClient)
+    # Edge save also fails — both the cloud and the edge path are down.
+    _mock_all["comm_instance"].save = AsyncMock(side_effect=RuntimeError("edge down"))
+
+    output = tmp_path / "azure_then_silence.mp3"
+    result = await synthesize(
+        "Ciao",
+        "it-IT-Alessio:DragonHDLatestNeural",
+        output,
+        engine="azure",
+        edge_fallback_voice="it-IT-DiegoNeural",
+    )
+
+    assert result == output
+    _mock_all["generate_silence"].assert_called_once()
+
+
+# ---------------------------------------------------------------------------
 # synthesize_ad
 # ---------------------------------------------------------------------------
 
@@ -350,6 +571,43 @@ async def test_synthesize_ad_disclaimer_goblin_rate(_mock_all, tmp_path):
             found_rate = True
             break
     assert found_rate, f"Expected rate='+55%' in Communicate calls, got: {calls}"
+
+
+@pytest.mark.asyncio
+async def test_synthesize_ad_passes_voice_engine_and_fallback(_mock_all, tmp_path):
+    from mammamiradio.audio.tts import synthesize_ad
+
+    script = AdScript(
+        brand="Velocino",
+        parts=[AdPart(type="voice", text="Una macchina che urla!", role="hammer")],
+        mood="lounge",
+    )
+    voices = {
+        "hammer": AdVoice(
+            name="Roberto",
+            voice="marin",
+            style="booming",
+            role="hammer",
+            engine="openai",
+            edge_fallback_voice="it-IT-DiegoNeural",
+        ),
+    }
+    synth_calls: list[tuple[str, dict]] = []
+
+    async def _fake_synthesize(text, voice, output_path, **kwargs):
+        synth_calls.append((voice, kwargs))
+        return _touch(output_path)
+
+    with patch("mammamiradio.audio.tts.synthesize", side_effect=_fake_synthesize):
+        result = await synthesize_ad(script, voices, tmp_path)
+
+    assert result.exists()
+    assert synth_calls
+    voice, kwargs = synth_calls[0]
+    assert voice == "marin"
+    assert kwargs["engine"] == "openai"
+    assert kwargs["edge_fallback_voice"] == "it-IT-DiegoNeural"
+    assert "booming" in kwargs["openai_instructions"]
 
 
 @pytest.mark.asyncio

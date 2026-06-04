@@ -20,7 +20,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from mammamiradio.audio.tts import _EDGE_DEFAULT_FALLBACK_VOICE, _looks_like_openai_voice
-from mammamiradio.audio.voice_catalog import is_known_edge_voice
+from mammamiradio.audio.voice_catalog import is_known_azure_voice, is_known_edge_voice
 from mammamiradio.core.models import HostPersonality, PartyMode, PersonalityAxes
 from mammamiradio.hosts.ad_creative import AdBrand, AdVoice, CampaignSpine
 
@@ -138,6 +138,8 @@ class SonicBrandSection:
     sweepers: list[str] = field(default_factory=list)
     motif_notes: list[int] = field(default_factory=lambda: [523, 659, 784, 1047])
     sweeper_voice: str = ""
+    sweeper_engine: str = "edge"
+    sweeper_edge_fallback_voice: str = ""
 
 
 @dataclass
@@ -199,6 +201,8 @@ _BRAND_BODY_FONTS = frozenset(
     }
 )
 _BRAND_MONO_FONTS = frozenset({"JetBrains Mono", "IBM Plex Mono"})
+_TTS_ENGINES = {"edge", "openai", "azure", "elevenlabs"}
+_CLOUD_TTS_ENGINES = {"openai", "azure", "elevenlabs"}
 
 
 def _hex_to_rgb(hex_color: str) -> tuple[int, int, int] | None:
@@ -310,6 +314,9 @@ class StationConfig:
     admin_token: str = ""
     anthropic_api_key: str = ""
     openai_api_key: str = ""
+    azure_speech_key: str = ""
+    azure_speech_region: str = ""
+    elevenlabs_api_key: str = ""
     ha_token: str = ""
     is_addon: bool = False
     allow_ytdlp: bool = False
@@ -358,46 +365,83 @@ def _normalize_tts_voices(config: StationConfig) -> None:
 
     log = logging.getLogger(__name__)
     degraded: list[str] = []
-    for host in config.hosts:
-        host.engine = (host.engine or "edge").strip().lower()
-        if host.engine not in {"edge", "openai"}:
-            log.warning("Host '%s' has unknown engine '%s'; using edge", host.name, host.engine)
-            host.engine = "edge"
 
-        if host.engine == "openai" and not host.edge_fallback_voice:
-            host.edge_fallback_voice = _EDGE_DEFAULT_FALLBACK_VOICE
+    def _clean_engine(engine: str, owner: str) -> str:
+        result = (engine or "edge").strip().lower()
+        if result not in _TTS_ENGINES:
+            log.warning("Voice '%s' has unknown engine '%s'; using edge", owner, engine)
+            return "edge"
+        return result
+
+    def _fallback(owner: str, configured: str = "") -> str:
+        voice = (configured or "").strip() or _EDGE_DEFAULT_FALLBACK_VOICE
+        if _looks_like_openai_voice(voice) or not is_known_edge_voice(voice):
             log.warning(
-                "Host '%s' uses OpenAI TTS but has no edge_fallback_voice; defaulting to %s",
-                host.name,
-                host.edge_fallback_voice,
+                "Voice '%s' has invalid edge fallback '%s'; using fallback '%s'",
+                owner,
+                voice,
+                _EDGE_DEFAULT_FALLBACK_VOICE,
             )
+            return _EDGE_DEFAULT_FALLBACK_VOICE
+        return voice
+
+    def _normalize_edge_voice(owner: str, voice: str, fallback_voice: str = "") -> str:
+        if _looks_like_openai_voice(voice):
+            fallback = _fallback(owner, fallback_voice)
+            log.warning(
+                "Voice '%s' is configured with OpenAI voice '%s' on edge engine; using fallback '%s'",
+                owner,
+                voice,
+                fallback,
+            )
+            degraded.append(owner)
+            return fallback
+        if voice and not is_known_edge_voice(voice):
+            fallback = _fallback(owner, fallback_voice)
+            log.warning(
+                "Voice '%s' has unknown edge voice '%s'; using fallback '%s'",
+                owner,
+                voice,
+                fallback,
+            )
+            degraded.append(owner)
+            return fallback
+        return voice
+
+    def _cloud_fallback(owner: str, engine: str, fallback_voice: str) -> str:
+        fallback = _fallback(owner, fallback_voice)
+        if not fallback_voice:
+            log.warning(
+                "Voice '%s' uses %s TTS but has no edge fallback voice; defaulting to %s",
+                owner,
+                engine,
+                fallback,
+            )
+        return fallback
+
+    for host in config.hosts:
+        host.engine = _clean_engine(host.engine, host.name)
+
+        if host.engine in _CLOUD_TTS_ENGINES:
+            host.edge_fallback_voice = _cloud_fallback(host.name, host.engine, host.edge_fallback_voice)
 
         # Validate edge-engine hosts against the edge voice catalog.
         if host.engine == "edge":
-            if _looks_like_openai_voice(host.voice):
-                fallback = host.edge_fallback_voice or _EDGE_DEFAULT_FALLBACK_VOICE
-                log.warning(
-                    "Host '%s' is configured with OpenAI voice '%s' on edge engine; using fallback '%s'",
-                    host.name,
-                    host.voice,
-                    fallback,
-                )
-                host.voice = fallback
-                degraded.append(host.name)
-            elif host.voice and not is_known_edge_voice(host.voice):
-                fallback = host.edge_fallback_voice or _EDGE_DEFAULT_FALLBACK_VOICE
-                log.warning(
-                    "Host '%s' has unknown edge voice '%s'; using fallback '%s'",
-                    host.name,
-                    host.voice,
-                    fallback,
-                )
-                host.voice = fallback
-                degraded.append(host.name)
-        elif host.engine == "openai" and host.voice and not _looks_like_openai_voice(host.voice):
+            host.voice = _normalize_edge_voice(host.name, host.voice, host.edge_fallback_voice)
+        elif host.engine == "openai" and not host.voice:
+            fallback = _fallback(host.name, host.edge_fallback_voice)
+            log.warning(
+                "Host '%s' has engine='openai' but no voice ID; switching to edge fallback '%s'",
+                host.name,
+                fallback,
+            )
+            host.engine = "edge"
+            host.voice = fallback
+            degraded.append(host.name)
+        elif host.engine == "openai" and not _looks_like_openai_voice(host.voice):
             # engine=openai but voice isn't an OpenAI ID → runtime would fail.
             # Flip the host to edge using the fallback voice so synthesis works.
-            fallback = host.edge_fallback_voice or _EDGE_DEFAULT_FALLBACK_VOICE
+            fallback = _fallback(host.name, host.edge_fallback_voice)
             log.warning(
                 "Host '%s' has engine='openai' but non-OpenAI voice '%s'; switching to edge fallback '%s'",
                 host.name,
@@ -407,26 +451,117 @@ def _normalize_tts_voices(config: StationConfig) -> None:
             host.engine = "edge"
             host.voice = fallback
             degraded.append(host.name)
+        elif host.engine == "azure" and not host.voice:
+            fallback = _fallback(host.name, host.edge_fallback_voice)
+            log.warning(
+                "Host '%s' has engine='azure' but no voice; switching to edge fallback '%s'",
+                host.name,
+                fallback,
+            )
+            host.engine = "edge"
+            host.voice = fallback
+            degraded.append(host.name)
+        elif host.engine == "azure" and host.voice.startswith("it-IT-") and not is_known_azure_voice(host.voice):
+            log.info("Host '%s' uses Azure voice '%s' outside the curated local catalog", host.name, host.voice)
+        elif host.engine == "elevenlabs" and not host.voice:
+            fallback = _fallback(host.name, host.edge_fallback_voice)
+            log.warning(
+                "Host '%s' has engine='elevenlabs' but no voice ID; switching to edge fallback '%s'",
+                host.name,
+                fallback,
+            )
+            host.engine = "edge"
+            host.voice = fallback
+            degraded.append(host.name)
 
     for voice in config.ads.voices:
-        if _looks_like_openai_voice(voice.voice):
+        voice.engine = _clean_engine(voice.engine, voice.name)
+        if voice.engine in _CLOUD_TTS_ENGINES:
+            voice.edge_fallback_voice = _cloud_fallback(voice.name, voice.engine, voice.edge_fallback_voice)
+
+        if voice.engine == "edge":
+            voice.voice = _normalize_edge_voice(voice.name, voice.voice, voice.edge_fallback_voice)
+        elif voice.engine == "openai" and not voice.voice:
+            fallback = _fallback(voice.name, voice.edge_fallback_voice)
             log.warning(
-                "Ad voice '%s' uses OpenAI voice id '%s'; replacing with fallback '%s'",
+                "Ad voice '%s' has engine='openai' but no voice ID; switching to edge fallback '%s'",
+                voice.name,
+                fallback,
+            )
+            voice.engine = "edge"
+            voice.voice = fallback
+            degraded.append(voice.name)
+        elif voice.engine == "openai" and not _looks_like_openai_voice(voice.voice):
+            fallback = _fallback(voice.name, voice.edge_fallback_voice)
+            log.warning(
+                "Ad voice '%s' has engine='openai' but non-OpenAI voice '%s'; switching to edge fallback '%s'",
                 voice.name,
                 voice.voice,
-                _EDGE_DEFAULT_FALLBACK_VOICE,
+                fallback,
             )
-            voice.voice = _EDGE_DEFAULT_FALLBACK_VOICE
+            voice.engine = "edge"
+            voice.voice = fallback
             degraded.append(voice.name)
-        elif voice.voice and not is_known_edge_voice(voice.voice):
+        elif voice.engine == "azure" and not voice.voice:
+            fallback = _fallback(voice.name, voice.edge_fallback_voice)
             log.warning(
-                "Ad voice '%s' has unknown edge voice '%s'; replacing with fallback '%s'",
+                "Ad voice '%s' has engine='azure' but no voice; switching to edge fallback '%s'",
                 voice.name,
-                voice.voice,
-                _EDGE_DEFAULT_FALLBACK_VOICE,
+                fallback,
             )
-            voice.voice = _EDGE_DEFAULT_FALLBACK_VOICE
+            voice.engine = "edge"
+            voice.voice = fallback
             degraded.append(voice.name)
+        elif voice.engine == "azure" and voice.voice.startswith("it-IT-") and not is_known_azure_voice(voice.voice):
+            log.info("Ad voice '%s' uses Azure voice '%s' outside the curated local catalog", voice.name, voice.voice)
+        elif voice.engine == "elevenlabs" and not voice.voice:
+            fallback = _fallback(voice.name, voice.edge_fallback_voice)
+            log.warning(
+                "Ad voice '%s' has engine='elevenlabs' but no voice ID; switching to edge fallback '%s'",
+                voice.name,
+                fallback,
+            )
+            voice.engine = "edge"
+            voice.voice = fallback
+            degraded.append(voice.name)
+
+    sb = config.sonic_brand
+    sb.sweeper_engine = _clean_engine(sb.sweeper_engine, "sonic_brand.sweeper_voice")
+    if not sb.sweeper_voice and sb.sweeper_engine in _CLOUD_TTS_ENGINES:
+        log.warning(
+            "Sonic brand sweeper has engine='%s' but no voice; resetting to edge",
+            sb.sweeper_engine,
+        )
+        sb.sweeper_engine = "edge"
+    if sb.sweeper_voice:
+        if sb.sweeper_engine in _CLOUD_TTS_ENGINES:
+            sb.sweeper_edge_fallback_voice = _cloud_fallback(
+                "sonic_brand.sweeper_voice",
+                sb.sweeper_engine,
+                sb.sweeper_edge_fallback_voice,
+            )
+        if sb.sweeper_engine == "edge":
+            sb.sweeper_voice = _normalize_edge_voice(
+                "sonic_brand.sweeper_voice",
+                sb.sweeper_voice,
+                sb.sweeper_edge_fallback_voice,
+            )
+        elif sb.sweeper_engine == "openai" and not _looks_like_openai_voice(sb.sweeper_voice):
+            fallback = _fallback("sonic_brand.sweeper_voice", sb.sweeper_edge_fallback_voice)
+            log.warning(
+                "Sonic brand sweeper has engine='openai' but non-OpenAI voice '%s'; switching to edge fallback '%s'",
+                sb.sweeper_voice,
+                fallback,
+            )
+            sb.sweeper_engine = "edge"
+            sb.sweeper_voice = fallback
+            degraded.append("sonic_brand.sweeper_voice")
+        elif (
+            sb.sweeper_engine == "azure"
+            and sb.sweeper_voice.startswith("it-IT-")
+            and not is_known_azure_voice(sb.sweeper_voice)
+        ):
+            log.info("Sonic brand sweeper uses Azure voice '%s' outside the curated local catalog", sb.sweeper_voice)
 
     config.tts_degraded_voices = degraded
 
@@ -468,6 +603,9 @@ def _apply_addon_options() -> None:
     env_map = {
         "anthropic_api_key": "ANTHROPIC_API_KEY",
         "openai_api_key": "OPENAI_API_KEY",
+        "azure_speech_key": "AZURE_SPEECH_KEY",
+        "azure_speech_region": "AZURE_SPEECH_REGION",
+        "elevenlabs_api_key": "ELEVENLABS_API_KEY",
         "admin_password": "ADMIN_PASSWORD",
         "jamendo_client_id": "JAMENDO_CLIENT_ID",
     }
@@ -755,6 +893,8 @@ def load_config(path: str = "radio.toml") -> StationConfig:
                 voice=v["voice"],
                 style=v.get("style", ""),
                 role=v.get("role", ""),
+                engine=v.get("engine", "edge"),
+                edge_fallback_voice=v.get("edge_fallback_voice", ""),
             )
             for v in ads_raw.get("voices", [])
         ]
@@ -882,6 +1022,9 @@ def load_config(path: str = "radio.toml") -> StationConfig:
         admin_token=os.getenv("ADMIN_TOKEN", ""),
         anthropic_api_key=os.getenv("ANTHROPIC_API_KEY", ""),
         openai_api_key=os.getenv("OPENAI_API_KEY", ""),
+        azure_speech_key=os.getenv("AZURE_SPEECH_KEY", ""),
+        azure_speech_region=os.getenv("AZURE_SPEECH_REGION", ""),
+        elevenlabs_api_key=os.getenv("ELEVENLABS_API_KEY", ""),
         ha_token=ha_token,
         is_addon=addon_mode,
         allow_ytdlp=os.getenv("MAMMAMIRADIO_ALLOW_YTDLP", "false").lower() in ("true", "1", "yes"),

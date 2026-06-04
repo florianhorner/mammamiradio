@@ -11,8 +11,20 @@ Add: `https://github.com/florianhorner/mammamiradio`
 
 ### 2. Configure API key
 
-In the add-on Configuration tab, set your `anthropic_api_key` (required for AI banter and ads).
-`openai_api_key` is optional — used as TTS fallback when Anthropic is unavailable.
+In the add-on Configuration tab, set your `anthropic_api_key` (recommended for AI banter and ads).
+`openai_api_key` is optional for script fallback and OpenAI TTS voices. `azure_speech_key` plus
+`azure_speech_region` unlock official Azure Italian voices, and `elevenlabs_api_key` unlocks custom
+ElevenLabs character voices when configured in `radio.toml`.
+
+Before committing to a voice mix, run a local audition from the repository:
+
+```bash
+.venv/bin/python scripts/audition_tts_voices.py --include-catalog --providers all
+```
+
+The command writes clips and a `manifest.json` under `tmp/voice-auditions/`.
+Providers without credentials are listed as skipped instead of being hidden by
+the runtime Edge fallback.
 
 Without any API key, the station runs in Demo Mode: music plays, banter falls back to stock copy (the bundled-clip inventory is a TODO — `demo_assets/banter/` ships empty today).
 

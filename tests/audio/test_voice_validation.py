@@ -161,6 +161,42 @@ def test_openai_host_with_edge_voice_is_flipped_to_edge():
     assert host.voice == "it-IT-IsabellaNeural" or host.voice == "it-IT-DiegoNeural"
 
 
+def test_azure_host_keeps_azure_voice_and_gets_edge_fallback():
+    host = HostPersonality(
+        name="AzureGiulia",
+        voice="it-IT-Isabella:DragonHDLatestNeural",
+        style="sharp",
+        engine="azure",
+        personality=PersonalityAxes(),
+    )
+    config = _build_config([host])
+    _normalize_tts_voices(config)
+
+    assert host.engine == "azure"
+    assert host.voice == "it-IT-Isabella:DragonHDLatestNeural"
+    assert host.edge_fallback_voice == "it-IT-DiegoNeural"
+    assert "AzureGiulia" not in config.tts_degraded_voices
+
+
+def test_provider_routed_openai_ad_voice_is_accepted():
+    host = HostPersonality(name="Host", voice="it-IT-DiegoNeural", style="host", engine="edge")
+    ad_voice = AdVoice(
+        name="Palmira",
+        voice="shimmer",
+        style="whisper",
+        role="seductress",
+        engine="openai",
+        edge_fallback_voice="it-IT-IsabellaNeural",
+    )
+    config = _build_config([host], [ad_voice])
+    _normalize_tts_voices(config)
+
+    assert ad_voice.engine == "openai"
+    assert ad_voice.voice == "shimmer"
+    assert ad_voice.edge_fallback_voice == "it-IT-IsabellaNeural"
+    assert "Palmira" not in config.tts_degraded_voices
+
+
 # ---------------------------------------------------------------------------
 # Guard 3: runtime voice failure is memoized — one attempt per voice
 # ---------------------------------------------------------------------------
@@ -341,6 +377,7 @@ async def test_scenario2_backend_unreachable_still_produces_output(tmp_path):
 
 def test_voice_catalog_contains_station_defaults():
     from mammamiradio.audio.voice_catalog import (
+        AZURE_ITALIAN_VOICES,
         EDGE_DEFAULT_FALLBACK_VOICE,
         EDGE_ITALIAN_VOICES,
         OPENAI_VOICES,
@@ -355,6 +392,12 @@ def test_voice_catalog_contains_station_defaults():
     # OpenAI — spec explicitly lists these six as the core set.
     for v in ("alloy", "echo", "fable", "onyx", "nova", "shimmer"):
         assert v in OPENAI_VOICES
+    assert "marin" in OPENAI_VOICES
+    assert "cedar" in OPENAI_VOICES
+
+    # Azure — official Speech catalog used for provider-routed premium Italian voices.
+    assert "it-IT-Alessio:DragonHDLatestNeural" in AZURE_ITALIAN_VOICES
+    assert "it-IT-Isabella:DragonHDLatestNeural" in AZURE_ITALIAN_VOICES
 
 
 def test_is_openai_voice_case_insensitive():

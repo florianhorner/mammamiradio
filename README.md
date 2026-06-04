@@ -143,7 +143,7 @@ The station degrades gracefully instead of failing:
 | `MAMMAMIRADIO_ALLOW_YTDLP` not set | Skips chart downloads; falls back to Jamendo CC music, then local `music/` files, then bundled demo assets |
 | `jamendo_client_id` not set | Skips Jamendo; falls back to local `music/` files, then bundled demo assets |
 | Anthropic API key | Falls back to OpenAI `gpt-4o-mini`, then stock copy |
-| OpenAI API key | Falls back to Edge TTS voices |
+| OpenAI / Azure / ElevenLabs TTS key | Provider-routed voices fall back to their configured Edge voices |
 | Home Assistant token | Continues without home context |
 | Ad brands in config | Skips ads instead of crashing |
 
@@ -158,13 +158,23 @@ Most station behavior lives in `radio.toml`:
 | `[station]` | Station name, language, theme |
 | `[playlist]` | Shuffle behavior, repeat/artist cooldowns, Jamendo CC music (`jamendo_client_id`, `jamendo_tags`, `jamendo_limit`) |
 | `[pacing]` | Songs between banter, songs between ads, spots per break |
-| `[[hosts]]` | Host names, TTS engine (`edge`/`openai`), voices, personality |
+| `[[hosts]]` | Host names, TTS engine (`edge`/`openai`/`azure`/`elevenlabs`), voices, personality |
 | `[audio]` | Sample rate, channels, bitrate, Claude model |
 | `[homeassistant]` | HA context toggle, base URL, refresh interval |
 | `[[ads.brands]]` | Fictional Italian brand pool, categories, campaign spines |
-| `[[ads.voices]]` | Dedicated commercial voices for ads |
+| `[[ads.voices]]` | Dedicated commercial voices for ads, with optional provider engines and Edge fallbacks |
 
 Secrets (API keys, passwords) stay in `.env`, never in `radio.toml`.
+
+To audition the current cast plus every built-in Edge/OpenAI/Azure catalog voice
+your configured keys can actually synthesize:
+
+```bash
+.venv/bin/python scripts/audition_tts_voices.py --include-catalog --providers all
+```
+
+Clips and a `manifest.json` are written under `tmp/voice-auditions/`. Providers
+without credentials are skipped instead of silently falling back to Edge.
 
 <details>
 <summary>Sharing with friends</summary>

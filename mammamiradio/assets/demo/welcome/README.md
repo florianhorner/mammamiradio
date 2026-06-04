@@ -14,8 +14,8 @@ from mammamiradio.audio.tts import synthesize
 from pathlib import Path
 
 clips = [
-    ('marco_welcome_1.mp3', 'it-IT-GianniNeural', 'Eyyy, qualcuno si e collegato! Benvenuto, benvenuto!'),
-    ('marco_welcome_2.mp3', 'it-IT-GianniNeural', 'Eccolo! Un nuovo ascoltatore! Che bello, che bello!'),
+    ('marco_welcome_1.mp3', 'it-IT-GiuseppeMultilingualNeural', 'Eyyy, qualcuno si e collegato! Benvenuto, benvenuto!'),
+    ('marco_welcome_2.mp3', 'it-IT-GiuseppeMultilingualNeural', 'Eccolo! Un nuovo ascoltatore! Che bello, che bello!'),
     ('giulia_welcome_1.mp3', 'it-IT-ElsaNeural', 'Benvenuto... vediamo cosa ci hai portato oggi.'),
     ('giulia_welcome_2.mp3', 'it-IT-ElsaNeural', 'Oh, qualcuno si e sintonizzato. Finalmente.'),
 ]
