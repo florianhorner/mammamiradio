@@ -1502,10 +1502,10 @@ NEWS_FLASH_CATEGORIES = {
         "a senator caught putting panna on carbonara. Delivered with fake-serious urgency."
     ),
     "sports": (
-        "Fake Italian sports flash delivered like a SERIE A COMMENTATOR HAVING A MELTDOWN. "
-        "FULL EXCITEMENT. Build to a crescendo. Fictional teams, fictional players, "
-        "impossible scores. 'GOOOOOL DI MARIO FANTASTICOOOOO!' energy. "
-        "The commentary should be breathless, barely coherent with excitement."
+        "Fake Italian sports desk update delivered by a measured, informed radio host. "
+        "Fictional teams and players are fine, but keep the scoreline followable and the analysis clear: "
+        "who scored, what changed, and why the match matters. Light dry wit is welcome; "
+        "avoid meltdown commentary, all-caps hype, extended goal screams, and breathless incoherence."
     ),
     "weather": (
         "Absurd Italian weather report. It's raining espresso in Napoli, "
@@ -1518,6 +1518,32 @@ NEWS_FLASH_CATEGORIES = {
         "to be a Botticelli. Delivered as a serious cultural segment."
     ),
 }
+
+
+def _sports_anchor_score(host: HostPersonality) -> int:
+    """Score hosts for clear sports updates instead of maximum excitement."""
+    axes = host.personality
+    return abs(axes.energy - 62) + abs(axes.chaos - 42) + abs(axes.verbosity - 48) + (abs(axes.warmth - 55) // 2)
+
+
+def _pick_news_flash_host(config: StationConfig, category: str) -> HostPersonality:
+    """Select a host for solo news flashes.
+
+    Sports uses a steady-anchor pool so a single manic persona does not monopolize
+    match updates. Other categories keep the existing station-wide random casting.
+    """
+    hosts = list(config.hosts)
+    if not hosts:
+        return HostPersonality(name="Host", voice="it-IT-DiegoNeural", style="")
+
+    if category != "sports" or len(hosts) == 1:
+        return random.choice(hosts)
+
+    highest_energy = max(host.personality.energy for host in hosts)
+    anchor_candidates = [host for host in hosts if host.personality.energy < highest_energy] or hosts
+    best_score = min(_sports_anchor_score(host) for host in anchor_candidates)
+    anchor_pool = [host for host in anchor_candidates if _sports_anchor_score(host) <= best_score + 20]
+    return random.choice(anchor_pool)
 
 
 async def write_news_flash(
@@ -1540,11 +1566,7 @@ async def write_news_flash(
     recent_tracks = [_sanitize_prompt_data(t.display) for t in list(state.played_tracks)[-3:]]
     jokes = list(state.running_jokes)[-3:] if state.running_jokes else []
 
-    # Sports flashes always go to the more manic host, others random
-    if category == "sports":
-        host = max(config.hosts, key=lambda h: h.personality.energy)
-    else:
-        host = random.choice(config.hosts)
+    host = _pick_news_flash_host(config, category)
 
     prompt = f"""Write a short news flash bulletin for the radio station.
 
@@ -1556,8 +1578,9 @@ Running jokes to optionally callback: {jokes if jokes else "none"}
 
 RULES:
 - Single host delivers this: {host.name} ({host.style})
-- 2-4 sentences MAX. Punchy. Absurd but delivered with total conviction.
-- For sports: USE CAPS for excited parts. Build tension. "INCREDIBILE! INCREDIBILEEEE!"
+- 2-4 sentences MAX. Punchy, clear, and delivered with total conviction.
+- For sports: sound like an informed radio sports desk. Keep the update measured and followable.
+- For sports: no all-caps hype, no extended goal screams, no crescendo-meltdown delivery.
 - Must feel like a real Italian radio news flash interrupting the programming.
 - ALL text in {config.station.language}.
 

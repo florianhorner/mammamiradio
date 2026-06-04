@@ -33,6 +33,14 @@
   sample-payload JSON fixtures committed under
   `docs/integrations/sample-payloads/` as the binding contract.
 
+### Changed
+
+- **Sports flashes are clearer and less shouty** — Sports news now uses a steadier host selection path, asks for informed radio-desk updates instead of maximum-excitement commentary, and no longer adds a dedicated sports TTS speed/pitch spike.
+
+### Fixed
+
+- **Admin programme durations are now truthful.** Status payloads expose real current segment duration/progress and stream-log durations, and the admin/live/listener UIs no longer invent music, banter, or ad durations when metadata is missing.
+
 ## 2.13.0
 
 ### Added

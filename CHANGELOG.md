@@ -56,6 +56,8 @@ The current version source of truth is `pyproject.toml`.
 
 ### Fixed
 
+- **Admin programme durations are now truthful.** Status payloads expose real current segment duration/progress and stream-log durations, and the admin/live/listener UIs no longer invent music, banter, or ad durations when metadata is missing.
+
 - **The HA media player card now shows accurate elapsed time.** The station's Home Assistant entity now includes the `media_position_updated_at` timestamp that HA requires to count forward between updates, so the playback position no longer resets or freezes every 30 seconds in the media card and companion app.
 
 - **`mammamiradio_queue_depth` in the HA entity now reflects the real queue.** The attribute previously always reported 0, so automations checking queue depth never triggered. It now carries the live count of segments waiting to play.
@@ -166,6 +168,7 @@ The current version source of truth is `pyproject.toml`.
 - **Stable add-on images are now published by Git-tag push** — A new `addon-release.yml` workflow, triggered by `v*` tag push, is now solely responsible for publishing `:X.Y.Z` and `:latest` for the HA add-on. `addon-build.yml` (main-push) no longer publishes those tags; it publishes only `:sha`, `:0.0.0`, and the edge calver. The release workflow validates the tag ref, semver, `config.yaml` version, and prebuilt per-arch `:sha` images, smokes the source image, promotes that exact artifact to stable tags, updates `:latest` only for the newest stable semver, then smokes the published release tag. Release flow: merge version-bump commit → wait for CI → `git tag vX.Y.Z && git push origin vX.Y.Z`.
 - **Queue fallback starts before the health-failure window.** Active listeners now get cache rescue attempts after a 5-second bounded queue-empty wait, before the preserved 30-second silence health-failure threshold triggers.
 - **Engineering backlog moved to GitHub issues** — `docs/todos.md` was removed. Open engineering work is now tracked as GitHub issues. A new CI guard (`scripts/check-no-backlog-files.sh`, wired into `quality.yml`) fails the build if a catch-all `TODO.md`/`TODOS.md`/`docs/todos.md`/`docs/backlog.md` file is re-added.
+- **Sports flashes are clearer and less shouty** — Sports news now uses a steadier host selection path, asks for informed radio-desk updates instead of maximum-excitement commentary, and no longer adds a dedicated sports TTS speed/pitch spike.
 
 ### Fixed
 

@@ -2381,6 +2381,15 @@ async function flagCurrentTrack(el) {
 }
 
 // ── Now Playing (sidebar) ──
+function durationSec(item){
+  const sec=item?.duration_sec;
+  if(Number.isFinite(sec)&&sec>0)return sec;
+  const ms=item?.duration_ms ?? item?.metadata?.duration_ms;
+  if(Number.isFinite(ms)&&ms>0)return ms/1000;
+  const metaSec=item?.metadata?.duration_s;
+  if(Number.isFinite(metaSec)&&metaSec>0)return metaSec;
+  return null;
+}
 function updateNow(ns){
   if(!ns||!ns.type){
     const ty=document.getElementById('nowType');
@@ -2423,16 +2432,16 @@ function updateNow(ns){
   if(topBarTitleText)topBarTitleText.textContent=title+' ';
   if(topBarArtist)topBarArtist.textContent=artistEl.textContent;
   document.getElementById('progFill').setAttribute('data-t',typeKey);
-  const dur=ns.metadata?.duration_ms?ns.metadata.duration_ms/1000:typeKey==='music'?240:typeKey==='banter'?30:typeKey==='ad'?60:20;
+  const dur=durationSec(ns);
   const label=ns.label||'';
-  if(label!==_prevLabel){_prevLabel=label;_nowStart=ns.started?ns.started*1000:Date.now();_nowDur=dur}
+  if(label!==_prevLabel){_prevLabel=label;_nowStart=ns.started?ns.started*1000:Date.now();_nowDur=dur||0}
   if(!_tick){_tick=setInterval(()=>{
     const el=Math.max(0,(Date.now()-_nowStart)/1000);
-    const rem=Math.max(0,Math.floor(_nowDur-el));
+    const rem=_nowDur>0?Math.max(0,Math.floor(_nowDur-el)):0;
     const m=Math.floor(rem/60);const s=String(rem%60).padStart(2,'0');
     const em=Math.floor(el/60);const es=String(Math.floor(el)%60).padStart(2,'0');
     document.getElementById('nowElapsed').textContent=em+':'+es;
-    document.getElementById('progFill').style.width=Math.min(100,(el/Math.max(_nowDur,1))*100)+'%';
+    document.getElementById('progFill').style.width=(_nowDur>0?Math.min(100,(el/_nowDur)*100):0)+'%';
   },500)}
 }
 
@@ -2478,9 +2487,8 @@ function renderProgramme(st){
 
   // Mobile fix: duration helper for upcoming Dur column
   const fmtDur=(it,typeKey)=>{
-    const ms=it?.duration_ms ?? it?.metadata?.duration_ms;
-    const sec=it?.duration_sec ?? it?.metadata?.duration_sec;
-    let s=ms!=null?Math.round(ms/1000):sec!=null?Math.round(sec):(typeKey==='music'?240:typeKey==='banter'?40:typeKey==='ad'?70:typeKey==='news_flash'?20:20);
+    let s=durationSec(it);
+    s=s!=null?Math.round(s):null;
     if(!s||s<0)return '';
     const m=Math.floor(s/60),r=s%60;
     return m+':'+(r<10?'0':'')+r;
