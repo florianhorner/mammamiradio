@@ -1614,6 +1614,23 @@ async def test_write_news_flash_api_exception_returns_fallback(config, state):
 
 
 @pytest.mark.asyncio
+async def test_write_news_flash_sports_prompt_prioritizes_clarity(config, state):
+    with patch(
+        "mammamiradio.hosts.scriptwriter._generate_json_response",
+        new_callable=AsyncMock,
+        return_value={"text": "Il Borgo Sud pareggia al novantesimo con freddezza."},
+    ) as mock_generate:
+        _host, _text, category = await write_news_flash(state, config, category="sports")
+
+    prompt = mock_generate.await_args.kwargs["prompt"]
+    assert category == "sports"
+    assert "measured and followable" in prompt
+    assert "no all-caps hype" in prompt
+    assert "no extended goal screams" in prompt
+    assert "crescendo-meltdown" in prompt
+
+
+@pytest.mark.asyncio
 async def test_write_news_flash_strips_markdown_fences(config, state):
     response_text = '```json\n{"text": "Traffico bloccato."}\n```'
     mock_cls = _mock_anthropic_response(response_text)
