@@ -86,7 +86,7 @@ Two features create the illusion of a live radio studio:
 
 ### Clip sharing
 
-A rolling `deque[bytes]` ring buffer on `app.state` records ~60 seconds of raw MP3 chunks during the playback loop. `POST /api/clip` extracts the last 30 seconds into a shareable file in `{cache_dir}/clips/`. Clips are served without auth at `GET /clips/{id}.mp3` and auto-expire after 24 hours. Per-IP rate limiting (1 clip per 10 seconds) and a 50-clip disk cap prevent abuse.
+A rolling `deque[bytes]` ring buffer on `app.state` records up to `CLIP_MAX_SEGMENT_SECONDS` (180s) of raw MP3 chunks during the playback loop. `POST /api/clip` extracts a shareable file into `{cache_dir}/clips/`: for a live ad or banter segment it captures the whole segment so far (operator-authored content, no copyright cap); for music it captures the last 30 seconds. When an ad/banter segment ends, the playback loop snapshots it so a tap within `CLIP_LOOKBACK_SECONDS` (15s) after it ends still grabs the whole bit. Clips are served without auth at `GET /clips/{id}.mp3` and auto-expire after 24 hours. Per-IP rate limiting (1 clip per 10 seconds, rolled back on a `no_audio` no-op so a cold-start listener can retry) and a 50-clip disk cap prevent abuse. On failure the route returns structured codes (`retry_after` seconds, or `reason: "no_audio"`) — never prose — which the listener UI maps to warm copy.
 
 ### Periodic chart refresh
 
@@ -289,7 +289,7 @@ The same mechanism is callable directly via `POST /api/interrupt` (admin auth, 6
 | `/api/stop` | POST | Admin | Gracefully stop the session (skip + purge + pause producer until `/api/resume`) |
 | `/api/resume` | POST | Admin | Resume a stopped session |
 | `/api/credentials` | POST | Admin | Update credentials at runtime |
-| `/api/clip` | POST | Public | Capture last 30s of audio into a shareable clip |
+| `/api/clip` | POST | Public | Capture a shareable clip (full ad/banter segment, or last 30s of music) |
 | `/clips/{id}.mp3` | GET | Public | Serve a saved clip (no auth, for sharing) |
 | `/api/track-rules` | POST | Admin | Flag a reaction rule for the current track |
 | `/api/listener-request` | POST | Public | Submit a song request or shoutout |

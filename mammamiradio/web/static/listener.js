@@ -464,8 +464,12 @@
           await navigator.share({ title: title + ' — ' + stationName, url: shareUrl });
         } catch (err) {
           if (err && err.name === 'AbortError') {
-            // user cancelled the sheet — the link is already on their clipboard
-            if (copied) { _showToast(_t('clip_copied', 'Link copied!')); nextState = 'shared'; }
+            // user cancelled the sheet. If the link made it to the clipboard,
+            // confirm it; otherwise give them a way out (principle #5) via the
+            // last-resort prompt rather than failing silently.
+            if (copied) { _showToast(_t('clip_copied', 'Link copied!')); }
+            else { window.prompt(_t('clip_copy_prompt', 'Copia il link:'), shareUrl); }
+            nextState = 'shared';
             return;
           }
           throw err;

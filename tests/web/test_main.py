@@ -414,8 +414,15 @@ async def test_startup_boot_summary_and_purge(tmp_path: Path):
 
         # Verify clip ring buffer was created
         from mammamiradio.main import app
+        from mammamiradio.web.streamer import CLIP_MAX_SEGMENT_SECONDS
 
         assert hasattr(app.state, "clip_ring_buffer")
+        # Happy-path maxlen is sized for the longest shareable ad/banter segment
+        # (not the 240 fallback), and the lookback slot starts empty.
+        expected_maxlen = max(240, 192 * 1000 // 8 * CLIP_MAX_SEGMENT_SECONDS // 4096)
+        assert app.state.clip_ring_buffer.maxlen == expected_maxlen
+        assert expected_maxlen > 240
+        assert app.state.last_shareworthy_clip is None
 
 
 @pytest.mark.asyncio

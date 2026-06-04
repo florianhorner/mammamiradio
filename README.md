@@ -95,7 +95,7 @@ This repo ships a [`conductor.json`](conductor.json) that handles `.venv` creati
 
 **It remembers you.** Returning listeners get recognized. Inside jokes compound across sessions. Hosts build a persona around your listening patterns. The station gets better the more you use it.
 
-**Share the moment.** Hit the clip button to capture the last 30 seconds as a shareable MP3. Send friends the insane ad your radio just made up.
+**Share the moment.** Hit the clip button and the link lands on your clipboard, ready to paste. Ads and host banter capture the whole bit (not just 30 seconds), so you can send friends the entire insane ad your radio just made up.
 
 ## Screenshots
 

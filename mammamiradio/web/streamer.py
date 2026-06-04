@@ -1296,24 +1296,31 @@ async def run_playback_loop(app) -> None:
             # already playing again) still captures it. Single extract at the
             # boundary — no per-chunk work on the throttled send path above.
             if segment.type in (SegmentType.AD, SegmentType.BANTER) and not was_skipped:
-                from mammamiradio.scheduling.clip import extract_clip as _extract_clip
+                # Wrapped: snapshotting is a nice-to-have. An extract failure
+                # (e.g. MemoryError joining a long segment on a Pi) must never
+                # escape into the playback coroutine and drop the stream
+                # (leadership principle #1). Worst case: no lookback for this bit.
+                try:
+                    from mammamiradio.scheduling.clip import extract_clip as _extract_clip
 
-                _clip_buf = getattr(app.state, "clip_ring_buffer", None)
-                if _clip_buf:
-                    _bitrate = config.audio.bitrate if hasattr(config, "audio") else DEFAULT_CLIP_BITRATE_KBPS
-                    _secs = min(
-                        CLIP_MAX_SEGMENT_SECONDS,
-                        max(CLIP_DURATION_SECONDS, math.ceil(segment.duration_sec or 0)),
-                    )
-                    _snap = _extract_clip(_clip_buf, duration_seconds=_secs, bitrate_kbps=_bitrate)
-                    if _snap:
-                        _meta = segment.metadata if isinstance(segment.metadata, dict) else {}
-                        app.state.last_shareworthy_clip = {
-                            "bytes": _snap,
-                            "ended_monotonic": time.monotonic(),
-                            "type": segment.type.value,
-                            "title": str(_meta.get("title") or "").strip(),
-                        }
+                    _clip_buf = getattr(app.state, "clip_ring_buffer", None)
+                    if _clip_buf:
+                        _bitrate = config.audio.bitrate if hasattr(config, "audio") else DEFAULT_CLIP_BITRATE_KBPS
+                        _secs = min(
+                            CLIP_MAX_SEGMENT_SECONDS,
+                            max(CLIP_DURATION_SECONDS, math.ceil(segment.duration_sec or 0)),
+                        )
+                        _snap = _extract_clip(_clip_buf, duration_seconds=_secs, bitrate_kbps=_bitrate)
+                        if _snap:
+                            _meta = segment.metadata if isinstance(segment.metadata, dict) else {}
+                            app.state.last_shareworthy_clip = {
+                                "bytes": _snap,
+                                "ended_monotonic": time.monotonic(),
+                                "type": segment.type.value,
+                                "title": str(_meta.get("title") or "").strip(),
+                            }
+                except Exception as exc:
+                    logger.warning("lookback snapshot failed for %s segment: %s", segment.type.value, exc)
             if segment.type == SegmentType.MUSIC and not was_skipped:
                 listen_sec = bytes_sent / bytes_per_sec if bytes_per_sec else None
                 # Fire-and-forget: persistence must not block the handoff to the next
@@ -3034,9 +3041,14 @@ async def create_clip(request: Request):
 
     if clip_data is None:
         if ring_buffer is None or len(ring_buffer) == 0:
+            # Nothing to clip yet (e.g. cold start). Roll back the rate-limit
+            # stamp so the listener can retry the moment audio is buffered,
+            # instead of being locked out for the full window after a no-op.
+            _clip_rate.pop(client_ip, None)
             return {"ok": False, "reason": "no_audio"}
         clip_data = extract_clip(ring_buffer, duration_seconds=CLIP_DURATION_SECONDS, bitrate_kbps=bitrate)
     if not clip_data:
+        _clip_rate.pop(client_ip, None)
         return {"ok": False, "reason": "no_audio"}
 
     clips_dir = config.cache_dir / "clips"
