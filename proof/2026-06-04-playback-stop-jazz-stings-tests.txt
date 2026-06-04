@@ -1,0 +1,36 @@
+Proof: tests — fix(playback) stop-state gate, suspicious_jazz beds, station-id stings
+Branch: florianhorner/fix/playback-stop-jazz-stings
+Date: 2026-06-04
+
+== make check (lint + typecheck + coverage floors) ==
+$ make check
+Success: no issues found in 157 source files        # mypy
+2438 passed, 2 skipped, 8 deselected, 1 warning in 69.20s
+Required test coverage of 92.0% reached. Total coverage: 93.70%
+All coverage floors held. Total: 94% (floor: 92%)
+All checks passed
+(ruff check + ruff format --check: clean; vulture: clean)
+
+== targeted suite (.venv/bin/python -m pytest) ==
+tests/web/test_streamer_routes.py tests/audio/test_tts.py
+tests/audio/test_normalizer_unit.py tests/audio/test_normalizer_imaging.py
+-> 229 passed, 2 deselected
+
+== requires_ffmpeg (real render) ==
+tests/audio/test_normalizer_unit.py -m requires_ffmpeg -> 2 passed
+  includes test_generate_music_bed_suspicious_jazz_renders_with_ffmpeg
+  (proves the lavfi comma-escape fix renders a non-zero MP3 on ffmpeg 8.1.1;
+   pre-fix this failed with "Error opening input files: Invalid argument")
+
+== release invariants ==
+$ bash scripts/check-release-invariants.sh
+Passed: 6  Failed: 0  — All invariants passed.
+  (music_eq_chain == 2 equalizers; session_stopped scenario tested;
+   _pick_canned_clip=None tested)
+
+== 3-scenario audio-delivery coverage (CLAUDE.md rule) ==
+- Normal:        run_playback_loop with session_stopped=False still rescues empty queue
+- Empty-fallback: stopped + active listeners + empty queue -> no rescue selector,
+                  no force_next, nothing broadcast
+- Post-restart:  _audio_generator preserves session_stopped + flag on connect;
+                 /api/resume is the only resume path

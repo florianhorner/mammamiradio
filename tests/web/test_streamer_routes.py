@@ -357,6 +357,83 @@ async def test_run_playback_loop_timeout_fallback_resets_queue_empty_since_and_n
 
 
 @pytest.mark.asyncio
+async def test_run_playback_loop_stopped_session_never_selects_empty_queue_fallback(tmp_path):
+    app = _make_test_app()
+    state = app.state.station_state
+    state.session_stopped = True
+    state.resume_event.clear()
+    app.state.config.cache_dir = tmp_path
+    app.state.stream_hub.subscribe()
+    app.state.stream_hub.broadcast = AsyncMock()
+
+    async def _fast_timeout(awaitable, *_args, **_kwargs):
+        awaitable.close()
+        await asyncio.sleep(0)
+        raise TimeoutError
+
+    with (
+        patch("mammamiradio.web.streamer.asyncio.wait_for", new=AsyncMock(side_effect=_fast_timeout)),
+        patch("mammamiradio.scheduling.producer._pick_canned_clip") as pick_canned,
+        patch("mammamiradio.web.streamer._select_norm_cache_rescue") as select_rescue,
+    ):
+        task = asyncio.create_task(run_playback_loop(app))
+        try:
+            await asyncio.sleep(0.03)
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    pick_canned.assert_not_called()
+    select_rescue.assert_not_called()
+    assert state.force_next is None
+    app.state.stream_hub.broadcast.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_run_playback_loop_stop_during_queue_wait_skips_fallback(tmp_path):
+    app = _make_test_app()
+    state = app.state.station_state
+    state.session_stopped = False
+    app.state.config.cache_dir = tmp_path
+    app.state.stream_hub.subscribe()
+    app.state.stream_hub.broadcast = AsyncMock()
+
+    calls = 0
+
+    async def _stop_during_wait(awaitable, *_args, **_kwargs):
+        nonlocal calls
+        awaitable.close()
+        calls += 1
+        await asyncio.sleep(0)
+        if calls == 1:
+            state.session_stopped = True
+            raise TimeoutError
+        await asyncio.sleep(3600)
+
+    with (
+        patch("mammamiradio.web.streamer.asyncio.wait_for", new=AsyncMock(side_effect=_stop_during_wait)),
+        patch("mammamiradio.scheduling.producer._pick_canned_clip") as pick_canned,
+        patch("mammamiradio.web.streamer._select_norm_cache_rescue") as select_rescue,
+    ):
+        task = asyncio.create_task(run_playback_loop(app))
+        try:
+            deadline = time.monotonic() + 1.0
+            while calls == 0:
+                if time.monotonic() > deadline:
+                    raise AssertionError("playback loop did not enter queue wait")
+                await asyncio.sleep(0.01)
+            await asyncio.sleep(0.03)
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    pick_canned.assert_not_called()
+    select_rescue.assert_not_called()
+    assert state.force_next is None
+    app.state.stream_hub.broadcast.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_run_playback_loop_timeout_uses_norm_cache_after_short_fallback_wait(tmp_path, caplog):
     app = _make_test_app()
     app.state.config.audio.bitrate = 3200
@@ -748,13 +825,8 @@ async def test_healthz_returns_200_when_quiet_but_no_listeners():
 
 
 @pytest.mark.asyncio
-async def test_audio_generator_clears_persisted_session_stopped_on_connect(tmp_path):
-    """Scenario 3 (post-restart): a new listener connecting must clear session_stopped state.
-
-    After a restart, session_stopped.flag may persist on disk and session_stopped=True
-    on the StationState. If the clearing logic regresses, every new listener hits a
-    stopped session and gets no audio. This test guards that invariant.
-    """
+async def test_audio_generator_preserves_persisted_session_stopped_on_connect(tmp_path):
+    """A listener connecting must not resume a deliberately stopped session."""
     from mammamiradio.web.streamer import _audio_generator
 
     app = _make_test_app()
@@ -771,8 +843,8 @@ async def test_audio_generator_clears_persisted_session_stopped_on_connect(tmp_p
     async for _ in gen:  # pragma: no cover - generator exits before yielding
         break
 
-    assert app.state.station_state.session_stopped is False
-    assert not flag.exists()
+    assert app.state.station_state.session_stopped is True
+    assert flag.exists()
 
 
 @pytest.mark.asyncio
@@ -1261,6 +1333,32 @@ async def test_stop_and_resume_toggle_session_state():
 
 
 @pytest.mark.asyncio
+async def test_stop_clears_pending_interrupt_and_force_next(tmp_path):
+    """A deliberate stop must drop any pending interrupt/forced segment so it
+    cannot fire as stale audio on the next resume, and must unlink an ephemeral
+    interrupt bridge temp so the stop does not leak it."""
+    from mammamiradio.core.models import SegmentType
+
+    app = _make_test_app()
+    state = app.state.station_state
+    bridge = tmp_path / "interrupt_bridge.mp3"
+    bridge.write_bytes(b"id3")
+    state.interrupt_slot = bridge
+    state.interrupt_slot_ephemeral = True
+    state.force_next = SegmentType.BANTER
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.post("/api/stop")
+
+    assert resp.status_code == 200
+    assert state.interrupt_slot is None
+    assert state.interrupt_slot_ephemeral is False
+    assert state.force_next is None
+    assert not bridge.exists()
+
+
+@pytest.mark.asyncio
 async def test_panic_cut_while_streaming():
     """Panic while a segment is playing: purges queue, fires skip_event, forces next=music, leaves stream live."""
     from mammamiradio.core.models import SegmentType
@@ -1647,19 +1745,13 @@ async def test_capabilities_exposes_anthropic_degraded_health():
 
 
 # ---------------------------------------------------------------------------
-# Auto-resume: listener connecting clears session_stopped (v2.10.2 fix)
+# Stopped sessions stay stopped until explicit resume
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
 async def test_audio_generator_does_not_auto_resume_stopped_session(tmp_path):
-    """_audio_generator must clear session_stopped when a listener connects.
-
-    A stopped session is resumed automatically when a listener connects —
-    the listener connecting is the clearest signal that someone wants music.
-    This prevents silence after an HA watchdog restart following a deliberate stop.
-    Only an explicit POST /api/stop re-enters the stopped state.
-    """
+    """_audio_generator must preserve session_stopped when a listener connects."""
     from mammamiradio.web.streamer import _audio_generator
 
     app = _make_test_app()
@@ -1676,25 +1768,13 @@ async def test_audio_generator_does_not_auto_resume_stopped_session(tmp_path):
     async for _ in _audio_generator(mock_request):
         pass
 
-    # session_stopped must be cleared — listener connecting auto-resumes
-    assert state.session_stopped is False, (
-        "session_stopped was not cleared by _audio_generator. "
-        "A listener connecting must auto-resume so HA watchdog restarts don't serve silence."
-    )
-    # The flag file must be removed
-    assert not flag.exists(), (
-        "session_stopped.flag was not deleted by _audio_generator. "
-        "The flag must be removed when auto-resuming so the stopped state doesn't persist."
-    )
+    assert state.session_stopped is True
+    assert flag.exists()
 
 
 @pytest.mark.asyncio
-async def test_audio_generator_removes_flag_on_auto_resume(tmp_path):
-    """When a listener connects to a stopped session, _audio_generator removes the flag file.
-
-    The auto-resume clears session_stopped and deletes session_stopped.flag so that
-    an HA watchdog restart after the resume does not re-enter the stopped state.
-    """
+async def test_audio_generator_leaves_flag_until_explicit_resume(tmp_path):
+    """A stream connection must not remove session_stopped.flag."""
     from mammamiradio.web.streamer import _audio_generator
 
     app = _make_test_app()
@@ -1710,10 +1790,8 @@ async def test_audio_generator_removes_flag_on_auto_resume(tmp_path):
     async for _ in _audio_generator(mock_request):
         pass
 
-    assert not flag.exists(), (
-        "session_stopped.flag must be removed by _audio_generator on auto-resume. "
-        "If the flag survives, an HA restart after the listener disconnects re-enters stopped state."
-    )
+    assert app.state.station_state.session_stopped is True
+    assert flag.exists()
 
 
 @pytest.mark.asyncio

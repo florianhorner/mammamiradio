@@ -50,6 +50,14 @@ The current version source of truth is `pyproject.toml`.
 
 ### Fixed
 
+- **Deliberate Stop now stays stopped until Resume.** A listener connecting no longer silently restarts a stopped station, aligning playback with the documented 2.10.3 behavior; the playback loop fully honors the stopped state.
+
+- **"Suspicious jazz" ad music beds no longer fail to render.** FFmpeg expression commas are now escaped correctly for that bed.
+
+- **Ads with a failed or empty music bed now air voice-only.** The station keeps the playable voice segment instead of risking a lost ad.
+
+- **Station-ID transitions now use branded stings.** Transitions into and out of station IDs use station motifs instead of the generic fallback sweep.
+
 - **Admin programme durations are now truthful.** Status payloads expose real current segment duration/progress and stream-log durations, and the admin/live/listener UIs no longer invent music, banter, or ad durations when metadata is missing.
 
 - **The HA media player card now shows accurate elapsed time.** The station's Home Assistant entity now includes the `media_position_updated_at` timestamp that HA requires to count forward between updates, so the playback position no longer resets or freezes every 30 seconds in the media card and companion app.

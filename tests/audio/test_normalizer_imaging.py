@@ -90,6 +90,46 @@ def test_transition_sting_news_flash_to_music(tmp_path, mock_run):
     assert result == out
 
 
+def test_transition_sting_music_to_station_id_uses_branded_motif(tmp_path, mock_run, caplog):
+    out = tmp_path / "sting.mp3"
+    caplog.set_level("WARNING", logger="mammamiradio.audio.normalizer")
+
+    with (
+        patch("mammamiradio.audio.normalizer.generate_sweep") as mock_sweep,
+        patch("mammamiradio.audio.normalizer.generate_station_id_bed") as mock_bed,
+        patch("mammamiradio.audio.normalizer.concat_files") as mock_concat,
+    ):
+        mock_sweep.side_effect = lambda p, **_: p.write_bytes(b"sweep") or p
+        mock_bed.side_effect = lambda p, *_, **__: p.write_bytes(b"motif") or p
+        mock_concat.return_value = out
+        result = generate_transition_sting("music", "station_id", out)
+
+    assert result == out
+    mock_sweep.assert_called_once()
+    mock_bed.assert_called_once()
+    assert not any("unsupported pair" in record.message for record in caplog.records)
+
+
+def test_transition_sting_station_id_to_music_uses_bumper(tmp_path, mock_run, caplog):
+    out = tmp_path / "sting.mp3"
+    caplog.set_level("WARNING", logger="mammamiradio.audio.normalizer")
+
+    with (
+        patch("mammamiradio.audio.normalizer.generate_station_id_bed") as mock_bed,
+        patch("mammamiradio.audio.normalizer.generate_bumper_jingle") as mock_bumper,
+        patch("mammamiradio.audio.normalizer.concat_files") as mock_concat,
+    ):
+        mock_bed.side_effect = lambda p, *_, **__: p.write_bytes(b"motif") or p
+        mock_bumper.side_effect = lambda p, *_, **__: p.write_bytes(b"bump") or p
+        mock_concat.return_value = out
+        result = generate_transition_sting("station_id", "music", out)
+
+    assert result == out
+    mock_bed.assert_called_once()
+    mock_bumper.assert_called_once()
+    assert not any("unsupported pair" in record.message for record in caplog.records)
+
+
 def test_transition_sting_unsupported_pair_falls_back_to_sweep(tmp_path, mock_run):
     out = tmp_path / "sting.mp3"
     with patch("mammamiradio.audio.normalizer.generate_sweep") as mock_sweep:

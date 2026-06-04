@@ -11,6 +11,7 @@ import pytest
 from mammamiradio.audio.normalizer import (
     _run_ffmpeg,
     concat_files,
+    generate_music_bed,
     generate_silence,
     generate_sweep,
     generate_tone,
@@ -351,6 +352,36 @@ def test_generate_sweep_with_ffmpeg(tmp_path):
 
     assert out.exists()
     assert out.stat().st_size > 1000
+
+
+def test_generate_music_bed_suspicious_jazz_escapes_lavfi_expression_commas(tmp_path):
+    commands = []
+
+    def _capture(cmd, _label):
+        commands.append(cmd)
+
+    with patch("mammamiradio.audio.normalizer._run_ffmpeg", side_effect=_capture):
+        generate_music_bed(tmp_path / "jazz.mp3", "suspicious_jazz", 1.0)
+        generate_music_bed(tmp_path / "upbeat.mp3", "upbeat", 1.0)
+
+    jazz_cmd, upbeat_cmd = commands
+    jazz_input = jazz_cmd[jazz_cmd.index("-i") + 1]
+    upbeat_input = upbeat_cmd[upbeat_cmd.index("-i") + 1]
+
+    assert "\\," in jazz_input
+    assert "max(0\\,1-2*mod(t\\,2))" in jazz_input
+    assert "abs(mod(t\\,2)-0.5)" in jazz_input
+    assert "220.0" in jazz_input
+    assert "277.0" in jazz_input
+    assert "\\," not in upbeat_input
+
+
+@pytest.mark.requires_ffmpeg
+def test_generate_music_bed_suspicious_jazz_renders_with_ffmpeg(tmp_path):
+    out = generate_music_bed(tmp_path / "suspicious_jazz.mp3", "suspicious_jazz", 0.5)
+
+    assert out.exists()
+    assert out.stat().st_size > 0
 
 
 # ---------------------------------------------------------------------------

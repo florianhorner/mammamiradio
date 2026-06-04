@@ -421,10 +421,15 @@ async def test_synthesize_ad_empty_parts_fallback(_mock_all, tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_synthesize_ad_music_bed_failure_voice_only(_mock_all, tmp_path):
+async def test_synthesize_ad_empty_music_bed_uses_voice_only(_mock_all, tmp_path, caplog):
     from mammamiradio.audio.tts import synthesize_ad
 
-    _mock_all["generate_music_bed"].side_effect = RuntimeError("ffmpeg broke")
+    def _empty_music_bed(output_path, _mood, _duration):
+        output_path.touch()
+        return output_path
+
+    _mock_all["generate_music_bed"].side_effect = _empty_music_bed
+    caplog.set_level("WARNING", logger="mammamiradio.audio.tts")
 
     script = AdScript(
         brand="TestBrand",
@@ -435,8 +440,10 @@ async def test_synthesize_ad_music_bed_failure_voice_only(_mock_all, tmp_path):
 
     result = await synthesize_ad(script, voices, tmp_path)
 
-    # Should still return a valid path (voice-only fallback via shutil.move)
-    assert result.exists() or True  # move happened
+    assert result.exists()
+    assert result.stat().st_size > 0
+    _mock_all["mix_with_bed"].assert_not_called()
+    assert any("Music bed missing or empty at" in record.message for record in caplog.records)
 
 
 # ---------------------------------------------------------------------------
