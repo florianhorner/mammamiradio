@@ -8,6 +8,12 @@ The current version source of truth is `pyproject.toml`.
 
 ### Added
 
+- **The admin Engine Room now tells you exactly what the station is doing** — the header badge shows "On Air" when music or hosts are streaming, "Paused" when you've stopped it deliberately, and "Error" when a task has died and needs attention. Provider chips (script, audio, TTS) now distinguish between "Backup active" (primary is down, using fallback) and "Auto-recovering" (transient error, no action needed), and show a plain-English reason plus a countdown when the circuit breaker is cooling off. Silence while listeners are connected is now surfaced as a blocked state immediately rather than waiting for the next polling cycle.
+
+### Fixed
+
+- Removed unused `english` parameter from an internal HA context helper; no user-visible change.
+
 - **Home Assistant context now adapts to each home.** The add-on scores prompt-safe
   entities from the full Home Assistant state snapshot instead of only using a
   hardcoded apartment list, so newly paired devices can contribute ambient radio

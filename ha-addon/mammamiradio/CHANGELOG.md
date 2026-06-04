@@ -4,6 +4,12 @@
 
 ### Added
 
+- **The admin Engine Room now tells you exactly what the station is doing** — the header badge shows "On Air" when music or hosts are streaming, "Paused" when you've stopped it deliberately, and "Error" when a task has died and needs attention. Provider chips now distinguish "Backup active" (primary is down) from "Auto-recovering" (transient error, will self-heal), and show a plain-English reason plus a retry countdown. Silence while listeners are connected now surfaces as a blocked state immediately.
+
+### Fixed
+
+- Removed unused internal parameter in HA context helper; no user-visible change.
+
 - **Home Assistant context now adapts to each home.** The add-on scores prompt-safe
   entities from the full Home Assistant state snapshot instead of only using a
   hardcoded apartment list. Location, camera, alarm, and free-text helper
