@@ -8,6 +8,8 @@ The current version source of truth is `pyproject.toml`.
 
 ### Added
 
+- **The admin now shows what happened to a listener request after the hosts handled it.** A "Recently handled" section appears below the Pending queue for up to 5 minutes, showing each request with a status badge — "Sent to hosts" (blue) when the hosts picked it up, or "Song not found" (amber) when the requested track could not be downloaded. Requests leave the Pending list as soon as they're consumed, so operators no longer wonder whether their action registered.
+
 - **Show Memory: an opt-in record of how each moment was made.** A new provenance
   ledger (off by default) can record, for operators who turn it on, exactly how a
   given second of radio came to be: the raw AI attempts behind a host or ad, the

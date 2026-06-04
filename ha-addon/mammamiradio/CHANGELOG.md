@@ -4,6 +4,8 @@
 
 ### Added
 
+- **The admin now shows what happened to a listener request after the hosts handled it.** A "Recently handled" section appears below the Pending queue for up to 5 minutes, showing each request with a status badge — "Sent to hosts" (blue) when the hosts picked it up, or "Song not found" (amber) when the requested track could not be downloaded.
+
 - **Jamendo rotation depth now defaults to 200 tracks.** The add-on's bundled
   `radio.toml` sets `jamendo_limit = 200`, and advanced deployments can override
   it with `JAMENDO_LIMIT` (`1`-`200`) to tune Jamendo API result depth.

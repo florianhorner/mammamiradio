@@ -223,13 +223,17 @@ async def _queue_drain_recovery_bridge(
     )
 
 
-def _banter_title(script: list[dict] | None, *, canned: bool) -> str:
+def _banter_title(script: list[dict] | None, *, canned: bool, host_order: list[str] | None = None) -> str:
     """Produce a user-facing label for a BANTER segment.
 
     Prefers unique host names from the script (joined with ' & '). Falls back
     to "Pre-recorded banter" when the audio came from a canned clip with no
     script attached, and finally to a generic label. The goal is that queue
     rows never render a bare "banter" type name to operators or listeners.
+
+    host_order pins the display order to the config host list so adjacent
+    segments always show the same canonical ordering regardless of which host
+    the LLM chose to open with.
     """
     if canned:
         return "Pre-recorded banter"
@@ -238,6 +242,9 @@ def _banter_title(script: list[dict] | None, *, canned: bool) -> str:
         name = (line or {}).get("host", "").strip() if isinstance(line, dict) else ""
         if name and name not in hosts:
             hosts.append(name)
+    if hosts and host_order:
+        rank = {h: i for i, h in enumerate(host_order)}
+        hosts.sort(key=lambda h: rank.get(h, len(host_order)))
     if hosts:
         return " & ".join(hosts[:2])
     return "Banter"
@@ -1759,7 +1766,11 @@ async def run_producer(
                         "type": "banter",
                         "lines": state.last_banter_script,
                         "canned": canned is not None,
-                        "title": _banter_title(state.last_banter_script, canned=canned is not None),
+                        "title": _banter_title(
+                            state.last_banter_script,
+                            canned=canned is not None,
+                            host_order=[h.name for h in config.hosts],
+                        ),
                         "chaos_subtype": chaos_subtype.value if chaos_subtype else "",
                         "chaos_degraded": state.chaos_last_degraded_reason if chaos_subtype else "",
                         "has_music_tail": bool(has_music_tail),
@@ -2370,6 +2381,7 @@ async def run_producer(
                     "reason": segment.metadata.get("queue_reason", "Rendered and queued for playback."),
                     "playlist_index": segment.metadata.get("playlist_index", -1),
                     "source_kind": segment.metadata.get("source_kind", ""),
+                    "duration_sec": round(segment.duration_sec or 0, 1),
                 }
             )
             # Queue appended → up_next changed → integration consumers polling

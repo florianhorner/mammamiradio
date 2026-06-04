@@ -27,6 +27,7 @@ import anthropic
 from mammamiradio.audio.normalizer import AVAILABLE_SFX_TYPES
 from mammamiradio.core.config import StationConfig
 from mammamiradio.core.models import (
+    RECENTLY_CONSUMED_RETENTION_SECONDS,
     ChaosSubtype,
     HostPersonality,
     PersonalityAxes,
@@ -102,6 +103,22 @@ class ListenerRequestCommit:
         if self.mark_song_error:
             self.request["song_error"] = True
         if self.consume:
+            now = time.time()
+            state.recently_consumed_requests.append(
+                {
+                    "id": self.request.get("request_id") or str(self.request.get("ts", "")),
+                    "name": self.request.get("name"),
+                    "message": self.request.get("message"),
+                    "song_track": self.request.get("song_track"),
+                    "type": self.request.get("type"),
+                    "status": "song_not_found" if self.mark_song_error else "sent_to_hosts",
+                    "consumed_at": now,
+                }
+            )
+            cutoff = now - RECENTLY_CONSUMED_RETENTION_SECONDS
+            state.recently_consumed_requests = [
+                r for r in state.recently_consumed_requests if r.get("consumed_at", 0) >= cutoff
+            ]
             state.pending_requests.remove(self.request)
 
 
@@ -117,7 +134,7 @@ def _plan_listener_request_block(state: StationState) -> tuple[str, ListenerRequ
 
     if still_downloading:
         next_missed = req.get("banter_cycles_missed", 0) + 1
-        if next_missed >= 2:
+        if next_missed >= 5:
             still_downloading = False
             commit = ListenerRequestCommit(
                 request=req,
@@ -128,7 +145,14 @@ def _plan_listener_request_block(state: StationState) -> tuple[str, ListenerRequ
         else:
             return "", ListenerRequestCommit(request=req, banter_cycles_missed=next_missed)
     else:
-        commit = ListenerRequestCommit(request=req, consume=True)
+        # A background download that already failed (song_error set directly by
+        # _download_listener_song) must consume as "song_not_found", not the
+        # default "sent_to_hosts". song_found / message-only requests stay False.
+        commit = ListenerRequestCommit(
+            request=req,
+            consume=True,
+            mark_song_error=bool(req.get("song_error")),
+        )
 
     name = _sanitize_prompt_data(str(req.get("name") or "Un ascoltatore"), max_len=60)
     msg = _sanitize_prompt_data(str(req.get("message") or ""), max_len=200)
