@@ -1166,6 +1166,15 @@ async def run_playback_loop(app) -> None:
     _ha_push_tasks: set[asyncio.Task] = set()  # prevent GC of HA push tasks
 
     while True:
+        if state.session_stopped:
+            state.queue_empty_since = None
+            try:
+                await asyncio.wait_for(state.resume_event.wait(), timeout=1.0)
+            except TimeoutError:
+                pass
+            state.resume_event.clear()
+            continue
+
         # Pause when nobody is listening — don't burn API tokens or disk on an empty room.
         # The queue stays full; the moment a listener connects, playback resumes instantly.
         if not hub._listeners:
@@ -1205,6 +1214,10 @@ async def run_playback_loop(app) -> None:
                 pulled_from_queue = True
                 state.queue_empty_since = None
             except TimeoutError:
+                if state.session_stopped:
+                    state.queue_empty_since = None
+                    continue
+
                 if not hub._listeners:
                     state.queue_empty_since = None
                     continue
@@ -1315,6 +1328,17 @@ async def run_playback_loop(app) -> None:
                         continue
 
         prev_last_provider_event = state.runtime_events[-1] if state.runtime_events else None
+        if state.session_stopped:
+            # Stop landed mid-selection: drop this segment instead of airing it.
+            # Unlink any ephemeral temp (a queue-pulled segment or an interrupt
+            # bridge captured just before the stop) and balance the queue
+            # bookkeeping — the normal finally calls task_done for pulled segments.
+            if getattr(segment, "ephemeral", False):
+                segment.path.unlink(missing_ok=True)
+            if pulled_from_queue:
+                segment_queue.task_done()
+            state.queue_empty_since = None
+            continue
         state.on_stream_segment(segment)
         if state.runtime_events:
             new_last_provider_event = state.runtime_events[-1]
@@ -1533,11 +1557,6 @@ async def _persist_skipped_music(state: StationState, config, metadata: dict, *,
 
 async def _audio_generator(request: Request):
     """Stream the live station feed from the playback loop."""
-    state = request.app.state.station_state
-    config = request.app.state.config
-    if state.session_stopped:
-        _clear_session_stopped(state, config)
-
     hub = request.app.state.stream_hub
     listener_id, listener_queue = hub.subscribe()
 
@@ -2107,6 +2126,13 @@ async def stop_session(request: Request, _: None = Depends(require_admin_access)
     # Purge queued segments
     purged = _purge_segment_queue(request.app.state.queue)
     state.queued_segments.clear()
+    # Drop any pending interrupt/forced segment so it can't fire as stale audio on
+    # the next resume; unlink an ephemeral bridge temp so the stop doesn't leak it.
+    if state.interrupt_slot is not None and state.interrupt_slot_ephemeral:
+        state.interrupt_slot.unlink(missing_ok=True)
+    state.interrupt_slot = None
+    state.interrupt_slot_ephemeral = False
+    state.force_next = None
     # Skip current segment
     if state.now_streaming:
         request.app.state.skip_event.set()

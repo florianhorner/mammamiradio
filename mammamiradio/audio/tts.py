@@ -573,13 +573,28 @@ async def synthesize_ad(
             logger.warning("Environment bed mixing failed (%s), continuing without: %s", env_name, e)
 
     # Mix music bed (loudest bed layer — harmonic colour)
-    try:
-        await loop.run_in_executor(None, mix_with_bed, voice_path, bed_path, output_path, 0.24)
+    if bed_path.exists() and bed_path.stat().st_size > 0:
+        try:
+            await loop.run_in_executor(None, mix_with_bed, voice_path, bed_path, output_path, 0.24)
+            if output_path.exists() and output_path.stat().st_size > 0:
+                bed_path.unlink(missing_ok=True)
+                voice_path.unlink(missing_ok=True)
+                logger.info("Ad with beds (env=%s mood=%s): %s", env_name or "none", mood, output_path.name)
+            else:
+                logger.warning("Music bed mixing produced empty output (%s), using voice-only", mood)
+                bed_path.unlink(missing_ok=True)
+                if voice_path != output_path:
+                    output_path.unlink(missing_ok=True)
+                    shutil.move(str(voice_path), str(output_path))
+        except Exception as e:
+            logger.warning("Music bed mixing failed (%s), using voice-only: %s", mood, e)
+            bed_path.unlink(missing_ok=True)
+            if voice_path != output_path:
+                output_path.unlink(missing_ok=True)
+                shutil.move(str(voice_path), str(output_path))
+    else:
+        logger.warning("Music bed missing or empty at %s, using voice-only ad", bed_path)
         bed_path.unlink(missing_ok=True)
-        voice_path.unlink(missing_ok=True)
-        logger.info("Ad with beds (env=%s mood=%s): %s", env_name or "none", mood, output_path.name)
-    except Exception as e:
-        logger.warning("Music bed mixing failed (%s), using voice-only: %s", mood, e)
         if voice_path != output_path:
             shutil.move(str(voice_path), str(output_path))
 
