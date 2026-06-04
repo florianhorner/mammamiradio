@@ -248,6 +248,45 @@ async def test_run_playback_loop_persists_music_only_after_segment_finishes(tmp_
 
 
 @pytest.mark.asyncio
+async def test_run_playback_loop_snapshots_banter_segment_for_lookback(tmp_path):
+    """After an ad/banter segment streams, the loop saves a lookback snapshot."""
+    from collections import deque
+
+    app = _make_test_app()
+    app.state.config.audio.bitrate = 3200
+    app.state.stream_hub.subscribe()
+    app.state.clip_ring_buffer = deque(maxlen=2000)
+    app.state.last_shareworthy_clip = None
+
+    audio_path = tmp_path / "banter.mp3"
+    audio_path.write_bytes(b"\xff" * 4096)
+    app.state.queue.put_nowait(
+        Segment(
+            type=SegmentType.BANTER,
+            path=audio_path,
+            metadata={"title": "Coffee machine bit"},
+        )
+    )
+
+    task = asyncio.create_task(run_playback_loop(app))
+    try:
+        for _ in range(50):
+            if app.state.last_shareworthy_clip is not None:
+                break
+            await asyncio.sleep(0.01)
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+    snap = app.state.last_shareworthy_clip
+    assert snap is not None
+    assert snap["type"] == "banter"
+    assert snap["bytes"]
+    assert snap["title"] == "Coffee machine bit"
+    assert "ended_monotonic" in snap
+
+
+@pytest.mark.asyncio
 async def test_run_playback_loop_timeout_fallback_keeps_queue_bookkeeping_balanced(tmp_path):
     app = _make_test_app()
     app.state.config.audio.bitrate = 3200

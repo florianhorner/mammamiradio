@@ -8,6 +8,16 @@ The current version source of truth is `pyproject.toml`.
 
 ### Added
 
+- **Share a whole moment, not just thirty seconds.** The Share button now always
+  copies the clip link to your clipboard (alongside the native share sheet), so
+  it's ready to paste anywhere even if you dismiss the sheet. Clips of host banter
+  and ads — the station's own content — capture the full segment instead of a fixed
+  30-second window, and a short grace period after a segment ends lets you still
+  grab a great ad a beat too late. Music clips stay at 30 seconds. And when the
+  station is busy, the Share button now speaks plainly ("the tape decks need a
+  moment — give them a few seconds and tap again") instead of showing a technical
+  error message.
+
 - **Expanded TTS voice routing** — hosts, sweepers, station IDs, and ad
   character voices can now use Edge, OpenAI, Azure Speech, or ElevenLabs TTS
   with per-voice Edge fallbacks. The built-in cast now mixes OpenAI `cedar`,

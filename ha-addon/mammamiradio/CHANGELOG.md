@@ -4,6 +4,14 @@
 
 ### Added
 
+- **Share a whole moment, not just thirty seconds.** The Share button now always
+  copies the clip link to your clipboard (alongside the native share sheet). Clips
+  of host banter and ads capture the full segment instead of a fixed 30-second
+  window, with a short grace period so you can still grab a great ad a beat too
+  late; music clips stay at 30 seconds. When the station is busy, the Share button
+  speaks plainly ("the tape decks need a moment — give them a few seconds and tap
+  again") instead of a technical error.
+
 - **Expanded TTS voice routing** — hosts, sweepers, station IDs, and ad
   character voices can now use Edge, OpenAI, Azure Speech, or ElevenLabs TTS
   with per-voice Edge fallbacks. Add-on options now include Azure Speech and

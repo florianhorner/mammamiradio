@@ -1,0 +1,21 @@
+share-clip polish + Speak Human (#5) — runtime proof
+2026-06-04  branch florianhorner/feat/share-clip-warm-errors
+
+=== Clip behavior tests (real route via httpx ASGITransport + real run_playback_loop) ===
+..........................................                               [100%]
+42 passed, 276 deselected in 0.95s
+
+=== Copy guard (no tech lingo + key parity) ===
+.......                                                                  [100%]
+7 passed in 0.06s
+
+=== Full suite ===
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+2414 passed, 2 skipped, 7 deselected, 1 warning in 51.37s
+
+=== Static + repo gates ===
+All checks passed!
+mypy: Success: no issues found in 157 source files
+Changelog lint clean.
+
