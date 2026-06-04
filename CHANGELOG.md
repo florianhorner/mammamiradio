@@ -58,6 +58,10 @@ The current version source of truth is `pyproject.toml`.
 
 ### Changed
 
+- **Jamendo rotation depth now defaults to 200 tracks.** The `[playlist].jamendo_limit`
+  config key and `JAMENDO_LIMIT` env override control Jamendo API result depth
+  from `1` to `200`, reducing repeats when Jamendo is the active music source.
+
 - **Admin producer-desk polish** — the `/admin` control room is now English-first
   for all utility copy (buttons, tooltips, toasts, status, empty states), with
   Italian kept for structural section names and the on-air badge. The Diretta
