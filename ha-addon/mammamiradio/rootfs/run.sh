@@ -18,11 +18,16 @@ try:
 except (json.JSONDecodeError, OSError) as e:
     print(f'FATAL: corrupt options.json: {e}', file=sys.stderr)
     sys.exit(1)
-for key in ('anthropic_api_key', 'openai_api_key', 'station_name', 'claude_model', 'admin_token', 'jamendo_client_id'):
+for key in ('anthropic_api_key', 'openai_api_key', 'station_name', 'admin_token', 'jamendo_client_id'):
     val = opts.get(key, '')
     if val:
         env_key = key.upper()
         print(f'export {env_key}={shlex.quote(str(val))}')
+# Quality dial → model profile. Missing/blank defaults to 'balanced', which
+# reproduces the prior model mapping exactly (zero behavior change on upgrade
+# from the old claude_model dropdown).
+quality = opts.get('quality_profile') or 'balanced'
+print('export MAMMAMIRADIO_QUALITY=' + shlex.quote(str(quality)))
 enabled = opts.get('enable_home_assistant', True)
 ha_val = 'true' if enabled else 'false'
 print('export HA_ENABLED=' + ha_val)

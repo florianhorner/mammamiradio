@@ -1974,6 +1974,20 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
           </div>
         </div>
 
+        <!-- AI Quality dial (model profile: premium | balanced | economy) -->
+        <div class="card-label">AI Quality</div>
+        <div style="margin-bottom:14px">
+          <select id="qualityProfile" onchange="setQuality(this.value)"
+                  style="width:100%;padding:8px;background:var(--surface);color:var(--cream);border:1px solid var(--line-strong);border-radius:8px;font:inherit">
+            <option value="premium">Premium — best hosts, highest cost</option>
+            <option value="balanced">Balanced — great hosts, sensible cost</option>
+            <option value="economy">Economy — cheapest, lighter hosts</option>
+          </select>
+          <div style="margin-top:6px;font-size:12px;line-height:1.8;color:var(--cream-dk)">
+            Picks the right model per task automatically. Hot-swaps live — the current segment finishes first. No model names to track.
+          </div>
+        </div>
+
         <!-- Group 1: Status -->
         <div class="drawer-subgroup" role="group" aria-labelledby="eg-status-h">
           <div class="ttl-eyebrow" id="eg-status-h">Status</div>
@@ -3314,6 +3328,28 @@ async function toggleSuperItalian(el){
   }
 }
 
+// ── AI Quality dial (model profile) ──
+async function loadQuality(){
+  try{
+    const r=await api('GET','/api/quality');
+    const sel=document.getElementById('qualityProfile');
+    if(sel&&r&&r.active_profile)sel.value=r.active_profile;
+  }catch(e){/* ignore — defaults to balanced */}
+}
+async function setQuality(value){
+  const sel=document.getElementById('qualityProfile');
+  if(sel)sel.disabled=true;
+  try{
+    const r=await api('POST','/api/quality',{quality_profile:value});
+    if(r&&r.ok)toast('AI quality: '+value);
+    else toast('Error: '+((r&&r.error)||'unknown'));
+  }catch(_){
+    toast('Network error');
+  }finally{
+    if(sel)sel.disabled=false;
+  }
+}
+
 // ── Engine Room ──
 function updateEngineRoom(st,caps){
   const rt=document.getElementById('engineRuntime');
@@ -3466,6 +3502,7 @@ async function refresh(){await Promise.all([refreshFast(),refreshSlow()])}
 
 refresh();
 loadSuperItalianToggle();
+loadQuality();
 loadChaosToggle();
 loadFestivalToggle();
 setInterval(refreshFast,3000);

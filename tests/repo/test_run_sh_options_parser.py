@@ -147,7 +147,7 @@ def test_parser_exports_all_supported_keys():
         "anthropic_api_key": "sk-ant",
         "openai_api_key": "sk-oai",
         "station_name": "Test Station",
-        "claude_model": "claude-sonnet-4-6",
+        "quality_profile": "premium",
         "admin_token": "tok123",
         "enable_home_assistant": True,
         "jamendo_client_id": "abc123",
@@ -158,10 +158,19 @@ def test_parser_exports_all_supported_keys():
     assert exports["ANTHROPIC_API_KEY"] == "sk-ant"
     assert exports["OPENAI_API_KEY"] == "sk-oai"
     assert exports["STATION_NAME"] == "Test Station"
-    assert exports["CLAUDE_MODEL"] == "claude-sonnet-4-6"
+    assert exports["MAMMAMIRADIO_QUALITY"] == "premium"
     assert exports["ADMIN_TOKEN"] == "tok123"
     assert exports["HA_ENABLED"] == "true"
     assert exports["JAMENDO_CLIENT_ID"] == "abc123"
+
+
+def test_parser_quality_profile_defaults_to_balanced():
+    """Missing quality_profile (e.g. upgrade from the old claude_model dropdown)
+    maps to MAMMAMIRADIO_QUALITY=balanced — zero behavior change on update."""
+    rc, stdout, _ = _run_parser({"station_name": "X"})
+    assert rc == 0
+    exports = _parse_exports(stdout)
+    assert exports["MAMMAMIRADIO_QUALITY"] == "balanced"
 
 
 def test_parser_fails_on_corrupt_json():

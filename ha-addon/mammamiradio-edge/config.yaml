@@ -29,7 +29,7 @@ options:
   jamendo_client_id: ""
   anthropic_api_key: ""
   openai_api_key: ""
-  claude_model: "claude-haiku-4-5-20251001"
+  quality_profile: "balanced"
   enable_home_assistant: true
   admin_token: ""
   super_italian_mode: true
@@ -40,7 +40,7 @@ schema:
   jamendo_client_id: password?
   anthropic_api_key: password?
   openai_api_key: password?
-  claude_model: list(claude-haiku-4-5-20251001|claude-sonnet-4-6|claude-opus-4-7)?
+  quality_profile: list(premium|balanced|economy)?
   enable_home_assistant: bool?
   admin_token: password?
   super_italian_mode: bool?
