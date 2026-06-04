@@ -31,6 +31,8 @@
 
 ### Changed
 
+- **The stable add-on now presents as stable in Home Assistant.** The release channel no longer shows the Experimental pill, Edge keeps it, and both add-on folders now include the shared custom AppArmor profile so Supervisor can award the extra security-rating point after install/update.
+
 - **Sports flashes are clearer and less shouty** — Sports news now uses a steadier host selection path, asks for informed radio-desk updates instead of maximum-excitement commentary, and no longer adds a dedicated sports TTS speed/pitch spike.
 
 ### Fixed
