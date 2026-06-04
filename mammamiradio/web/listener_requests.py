@@ -44,7 +44,10 @@ from typing import Any
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 
-from mammamiradio.core.models import RECENTLY_CONSUMED_RETENTION_SECONDS, SegmentType
+from mammamiradio.core.models import (
+    RECENTLY_CONSUMED_RETENTION_SECONDS,
+    SegmentType,
+)
 from mammamiradio.web.streamer import _register_background_task, require_admin_access
 
 logger = logging.getLogger("mammamiradio.listener_requests")
