@@ -33,7 +33,7 @@ jobs:
       addon_version: ${{ steps.addon-version.outputs.version }}
       short_sha: ${{ steps.sha.outputs.short_sha }}
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
 
       - name: Validate add-on invariants
         run: bash scripts/validate-addon.sh
@@ -75,7 +75,7 @@ jobs:
             platform: linux/arm64
             base: ghcr.io/home-assistant/aarch64-base:3.20
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
 
       - name: Copy source into addon build context
         run: |

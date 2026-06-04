@@ -852,6 +852,7 @@ async def run_producer(
                             current_track=state.current_track,
                             listeners_active=state.listeners_active,
                             session_stopped=state.session_stopped,
+                            queue_depth=len(state.queued_segments),
                             station_name=config.display_station_name,
                         )
                         interval = 30.0
@@ -947,6 +948,7 @@ async def run_producer(
                             current_track=None,
                             listeners_active=state.listeners_active,
                             session_stopped=True,
+                            queue_depth=0,
                             station_name=config.display_station_name,
                         )
                     )
