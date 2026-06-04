@@ -214,8 +214,11 @@ def resolve_model(models: ModelsSection, caller: str | None, provider: str, prof
     # Floor: any catalog entry for this provider, else the built-in default.
     if provider_catalog:
         return next(iter(provider_catalog.values()))
+    # Last resort (only reached if the provider catalog is empty, which
+    # _validate_models prevents for API-keyed providers): pin to a named
+    # low-cost model so dict ordering can never leak into this floor.
     builtin = _DEFAULT_CATALOG.get(provider, {})
-    return next(iter(builtin.values()), "claude-haiku-4-5-20251001")
+    return builtin.get("haiku") or builtin.get("small") or next(iter(builtin.values()), "claude-haiku-4-5-20251001")
 
 
 def _parse_models_section(raw: dict) -> ModelsSection:
@@ -322,6 +325,8 @@ def _validate_models(config: StationConfig) -> None:
         config.models = _build_default_models()
         if prev_active in config.models.profiles:
             config.models.active_profile = prev_active
+        # Re-apply env overrides — the fresh defaults dropped them.
+        _apply_model_env_overrides(config.models)
 
 
 @dataclass
@@ -839,6 +844,10 @@ def _apply_addon_options() -> None:
     fm = options.get("festival_mode")
     if isinstance(fm, bool) and not os.getenv("MAMMAMIRADIO_FESTIVAL_MODE"):
         os.environ["MAMMAMIRADIO_FESTIVAL_MODE"] = "true" if fm else "false"
+
+    qp = options.get("quality_profile")
+    if isinstance(qp, str) and qp and not os.getenv("MAMMAMIRADIO_QUALITY"):
+        os.environ["MAMMAMIRADIO_QUALITY"] = qp
 
 
 def _parse_brand(raw: dict, hosts: list[HostPersonality]) -> tuple[BrandSection, list[str]]:

@@ -94,3 +94,12 @@ def test_claude_creative_model_override(monkeypatch):
     monkeypatch.setenv("CLAUDE_CREATIVE_MODEL", "claude-opus-4-6")
     config = load_config(TOML_PATH)
     assert resolve_model(config.models, "banter", "anthropic") == "claude-opus-4-6"
+
+
+def test_openai_script_model_override(monkeypatch):
+    """OPENAI_SCRIPT_MODEL (back-compat) overrides every OpenAI catalog entry, so it
+    applies under any role."""
+    monkeypatch.setenv("OPENAI_SCRIPT_MODEL", "gpt-5")
+    config = load_config(TOML_PATH)
+    assert resolve_model(config.models, "banter", "openai") == "gpt-5"
+    assert resolve_model(config.models, "transition", "openai") == "gpt-5"

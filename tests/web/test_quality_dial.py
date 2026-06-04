@@ -120,6 +120,16 @@ async def test_post_quality_rejects_invalid_profile():
 
 
 @pytest.mark.asyncio
+async def test_post_quality_rejects_malformed_json():
+    app = _make_test_app()
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app, client=("127.0.0.1", 1)), base_url="http://testserver"
+    ) as client:
+        resp = await client.post("/api/quality", content="{bad", headers={"content-type": "application/json"})
+    assert resp.json()["ok"] is False  # graceful, not an unhandled 500
+
+
+@pytest.mark.asyncio
 async def test_post_quality_addon_writes_options_json(tmp_path, monkeypatch):
     app = _make_test_app(is_addon=True)
     monkeypatch.delenv("MAMMAMIRADIO_QUALITY", raising=False)
@@ -176,3 +186,20 @@ def test_cost_counter_never_zero_without_per_model_data():
     cost, unpriced = _estimate_api_cost(state)
     assert cost > 0
     assert unpriced is False
+
+
+@pytest.mark.asyncio
+async def test_status_surfaces_unpriced_flag():
+    """The unpriced-model flag must reach the /status body (protected-UI regression
+    guard, like the token cost counter itself)."""
+    app = _make_test_app()
+    app.state.station_state.api_calls = 1
+    app.state.station_state.api_tokens_by_model = {"brand-new-model": {"input": 1000, "output": 1000}}
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app, client=("127.0.0.1", 1)), base_url="http://testserver"
+    ) as client:
+        resp = await client.get("/status")
+    assert resp.status_code == 200
+    consumption = resp.json()["consumption"]
+    assert "api_cost_estimate_usd" in consumption  # protected element preserved
+    assert consumption["api_cost_unpriced_model"] is True

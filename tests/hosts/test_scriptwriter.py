@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 import mammamiradio.hosts.scriptwriter as scriptwriter_module
-from mammamiradio.core.config import load_config
+from mammamiradio.core.config import load_config, resolve_model
 from mammamiradio.core.models import (
     ChaosSubtype,
     HostPersonality,
@@ -558,6 +558,37 @@ async def test_openai_fallback_logs_structured_event(config, state, caplog):
     assert switch.to_provider == "openai"
     assert switch.reason == "anthropic_exception"
     assert state.runtime_events[-1].provider_class == "script_provider"
+
+
+@pytest.mark.asyncio
+async def test_write_banter_populates_api_tokens_by_model(config, state):
+    """End-to-end: a successful Anthropic banter call records tokens under the
+    resolved model id, so the model-aware cost counter prices the right model."""
+    config.anthropic_api_key = "test-key"
+    host_name = config.hosts[0].name
+    mock_usage = MagicMock()
+    mock_usage.input_tokens = 123
+    mock_usage.output_tokens = 456
+    mock_content = MagicMock()
+    mock_content.text = json.dumps({"lines": [{"host": host_name, "text": "Ciao!"}], "new_joke": None})
+    mock_response = MagicMock()
+    mock_response.content = [mock_content]
+    mock_response.usage = mock_usage
+    mock_client = MagicMock()
+    mock_client.messages = MagicMock()
+    mock_client.messages.create = AsyncMock(return_value=mock_response)
+    mock_cls = MagicMock(return_value=mock_client)
+
+    expected_model = resolve_model(config.models, "banter", "anthropic")
+    with (
+        patch("mammamiradio.hosts.scriptwriter._anthropic_client", None),
+        patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
+    ):
+        await write_banter(state, config)
+
+    assert expected_model in state.api_tokens_by_model
+    assert state.api_tokens_by_model[expected_model]["input"] == 123
+    assert state.api_tokens_by_model[expected_model]["output"] == 456
 
 
 @pytest.mark.asyncio

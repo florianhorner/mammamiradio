@@ -2519,7 +2519,10 @@ async def set_quality(request: Request, _: None = Depends(require_admin_access))
     or quality_profile to /data/options.json (addon).
     """
     config = request.app.state.config
-    body = await request.json()
+    try:
+        body = await request.json()
+    except ValueError:
+        return {"ok": False, "error": "invalid JSON body"}
     if not isinstance(body, dict) or "quality_profile" not in body:
         return {"ok": False, "error": "expected JSON object with quality_profile"}
     profile = body["quality_profile"]

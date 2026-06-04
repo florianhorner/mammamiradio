@@ -378,6 +378,23 @@ def test_apply_addon_options(monkeypatch, tmp_path):
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
 
 
+def test_apply_addon_options_quality_profile_round_trips(monkeypatch, tmp_path):
+    """options.json quality_profile must populate MAMMAMIRADIO_QUALITY (so non-run.sh
+    config loads still honor the persisted quality dial)."""
+    import os
+
+    options_file = tmp_path / "options.json"
+    options_file.write_text(json.dumps({"quality_profile": "premium"}))
+    monkeypatch.delenv("MAMMAMIRADIO_QUALITY", raising=False)
+    try:
+        with patch("mammamiradio.core.config.Path") as mock_path_cls:
+            mock_path_cls.return_value = options_file
+            _apply_addon_options()
+        assert os.environ.get("MAMMAMIRADIO_QUALITY") == "premium"
+    finally:
+        os.environ.pop("MAMMAMIRADIO_QUALITY", None)
+
+
 @pytest.mark.parametrize(("value", "expected_env"), [(True, "true"), (False, "false")])
 def test_apply_addon_options_super_italian_round_trips(monkeypatch, tmp_path, value, expected_env):
     """Addon options.json super_italian_mode bool should populate the env var."""

@@ -92,6 +92,21 @@ def test_resolve_never_raises_on_unknown_provider(models):
     assert isinstance(out, str) and out  # built-in last-resort, non-empty
 
 
+def test_resolve_never_raises_when_both_profiles_missing(models):
+    """Operator deletes a profile AND forgets to fix default_profile — still total."""
+    models.active_profile = "nonexistent"
+    models.default_profile = "also_gone"
+    out = resolve_model(models, "banter", "anthropic")
+    assert out and isinstance(out, str)
+
+
+def test_floor_is_named_not_dict_ordered(models):
+    """When the provider catalog is emptied, the floor pins to a named low-cost
+    model (haiku/small), never the first dict entry — ordering must not leak."""
+    models.catalog["anthropic"] = {}  # force the built-in last-resort path
+    assert resolve_model(models, "banter", "anthropic") == "claude-haiku-4-5-20251001"
+
+
 def test_resolve_handles_none_caller(models):
     assert resolve_model(models, None, "anthropic")  # provider probe path
 

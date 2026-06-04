@@ -3471,7 +3471,8 @@ function updateEngineRoom(st,caps){
   const apiCalls=con.api_calls||0;
   const inTok=con.input_tokens||0;
   const outTok=con.output_tokens||0;
-  const cost=con.api_cost_estimate_usd!=null?'$'+con.api_cost_estimate_usd.toFixed(4):'—';
+  const unpriced=con.api_cost_unpriced_model===true;
+  const cost=con.api_cost_estimate_usd!=null?(unpriced?'~$':'$')+con.api_cost_estimate_usd.toFixed(4)+(unpriced?' (est, unpriced model)':''):'—';
   const ttsCh=con.tts_characters||0;
 
   // Update sidebar cost
