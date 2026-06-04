@@ -15,6 +15,10 @@
   Edge/OpenAI/Azure catalogs. Missing provider credentials are reported as
   skipped so auditions are not confused with runtime Edge fallback.
 
+- **The admin Engine Room now tells you exactly what the station is doing** — the header badge shows "On Air" when music or hosts are streaming, "Paused" when you've stopped it deliberately, and "Error" when a task has died and needs attention. Provider chips now distinguish "Backup active" (primary is down) from "Auto-recovering" (transient error, will self-heal), and show a plain-English reason plus a retry countdown. Silence while listeners are connected now surfaces as a blocked state immediately.
+
+- **The admin now shows what happened to a listener request after the hosts handled it.** A "Recently handled" section appears below the Pending queue for up to 5 minutes, showing each request with a status badge — "Sent to hosts" (blue) when the hosts picked it up, or "Song not found" (amber) when the requested track could not be downloaded.
+
 - **Jamendo rotation depth now defaults to 200 tracks.** The add-on's bundled
   `radio.toml` sets `jamendo_limit = 200`, and advanced deployments can override
   it with `JAMENDO_LIMIT` (`1`-`200`) to tune Jamendo API result depth.
@@ -35,6 +39,14 @@
   payload. Includes `ETag` + `Cache-Control` for cheap polling and ten
   sample-payload JSON fixtures committed under
   `docs/integrations/sample-payloads/` as the binding contract.
+
+### Changed
+
+- **Sports flashes are clearer and less shouty** — Sports news now uses a steadier host selection path, asks for informed radio-desk updates instead of maximum-excitement commentary, and no longer adds a dedicated sports TTS speed/pitch spike.
+
+### Fixed
+
+- **Admin programme durations are now truthful.** Status payloads expose real current segment duration/progress and stream-log durations, and the admin/live/listener UIs no longer invent music, banter, or ad durations when metadata is missing.
 
 ## 2.13.0
 

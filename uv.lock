@@ -564,7 +564,7 @@ wheels = [
 
 [[package]]
 name = "mammamiradio"
-version = "2.12.4"
+version = "2.13.0"
 source = { editable = "." }
 dependencies = [
     { name = "aiosqlite" },
@@ -579,6 +579,7 @@ dependencies = [
     { name = "pydantic-settings" },
     { name = "python-dotenv" },
     { name = "uvicorn", extra = ["standard"] },
+    { name = "websockets" },
     { name = "yt-dlp" },
 ]
 
@@ -597,6 +598,7 @@ requires-dist = [
     { name = "python-dotenv", specifier = ">=1.0" },
     { name = "tomli", marker = "python_full_version < '3.11'", specifier = ">=2.0" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.34" },
+    { name = "websockets", specifier = ">=13" },
     { name = "yt-dlp", specifier = ">=2026.2.21" },
 ]
 

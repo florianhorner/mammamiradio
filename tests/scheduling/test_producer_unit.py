@@ -2405,6 +2405,40 @@ class TestBanterTitle:
         assert _banter_title(None, canned=False) == "Banter"
         assert _banter_title([{"text": "no host"}], canned=False) == "Banter"
 
+    def test_host_order_sorts_to_config_order(self):
+        """LLM opened with Marco but config lists Giulia first — display shows Giulia & Marco."""
+        from mammamiradio.scheduling.producer import _banter_title
+
+        script = [{"host": "Marco", "text": "Ciao"}, {"host": "Giulia", "text": "Benvenuti"}]
+        assert _banter_title(script, canned=False, host_order=["Giulia", "Marco"]) == "Giulia & Marco"
+
+    def test_host_not_in_order_sorts_to_end(self):
+        """A host absent from host_order still appears, sorted after known hosts."""
+        from mammamiradio.scheduling.producer import _banter_title
+
+        script = [{"host": "Giulia", "text": "Ciao"}, {"host": "Unknown", "text": "Hey"}]
+        result = _banter_title(script, canned=False, host_order=["Giulia", "Marco"])
+        assert result == "Giulia & Unknown"
+
+    def test_host_order_empty_list_falls_back_to_script_order(self):
+        """Empty host_order is falsy — sorting is skipped, script order is preserved."""
+        from mammamiradio.scheduling.producer import _banter_title
+
+        script = [{"host": "Marco", "text": "Ciao"}, {"host": "Giulia", "text": "Benvenuti"}]
+        assert _banter_title(script, canned=False, host_order=[]) == "Marco & Giulia"
+
+    def test_host_order_caps_at_two_with_three_hosts(self):
+        """Cap-at-2 persists even with host_order; first two in config order are shown."""
+        from mammamiradio.scheduling.producer import _banter_title
+
+        script = [
+            {"host": "Marco", "text": "a"},
+            {"host": "Giulia", "text": "b"},
+            {"host": "Luca", "text": "c"},
+        ]
+        result = _banter_title(script, canned=False, host_order=["Giulia", "Luca", "Marco"])
+        assert result == "Giulia & Luca"
+
 
 class TestAdTitle:
     """Item #8: AD break segments must render a brand-aware label rather than

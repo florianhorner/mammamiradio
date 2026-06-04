@@ -280,15 +280,10 @@ def _runtime_health_snapshot(request: Request) -> dict:
     shadow_depth = len(state.queued_segments)
     now_streaming = state.now_streaming or {}
     now_metadata = now_streaming.get("metadata", {}) if isinstance(now_streaming, dict) else {}
+    from mammamiradio.core.segment_status import is_fallback_active
+
     audio_source = now_metadata.get("audio_source", "")
-    fallback_active = (
-        bool(now_metadata.get("fallback"))
-        or bool(audio_source and str(audio_source).startswith("fallback"))
-        or bool(now_metadata.get("queue_drain_recovery"))
-        or bool(now_metadata.get("resume_bridge"))
-        or bool(now_metadata.get("silence_fallback"))
-        or audio_source in ("norm_cache", "emergency_tone")
-    )
+    fallback_active = is_fallback_active(now_metadata)
     if not audio_source and fallback_active:
         audio_source = "canned"
     if not audio_source or audio_source == "prewarm" or (audio_source == "download" and not fallback_active):
@@ -340,6 +335,24 @@ def _runtime_provider_label(provider: str) -> str:
     return labels.get(provider, provider.replace("_", " ").title() if provider else "Unknown")
 
 
+_FALLBACK_REASON_LABELS = {
+    "anthropic_exception": "Anthropic had a brief API error - retrying automatically",
+    "anthropic_auth_failed": "Anthropic API key rejected - check your key in Engine Room",
+    "anthropic_auth_blocked": "Anthropic API key rejected - check your key in Engine Room",
+    "anthropic_usage_limit": "Anthropic usage limit reached - check your plan at anthropic.com",
+    "anthropic_usage_limit_blocked": "Anthropic usage limit reached - check your plan at anthropic.com",
+    "anthropic_nonretryable": "Anthropic service error - check status.anthropic.com",
+    "anthropic_absent": "No Anthropic key configured - running on OpenAI",
+}
+_ACTION_REQUIRED_FALLBACK_REASONS = {
+    "anthropic_auth_failed",
+    "anthropic_auth_blocked",
+    "anthropic_usage_limit",
+    "anthropic_usage_limit_blocked",
+    "anthropic_nonretryable",
+}
+
+
 def _provider_status(
     provider_class: str,
     *,
@@ -348,6 +361,9 @@ def _provider_status(
     fallback_active: bool,
     reason: str,
     state: StationState,
+    recovery_mode: str | None = None,
+    retry_in_seconds: int | None = None,
+    action_guidance: str = "",
 ) -> dict:
     saved = state.runtime_provider_state.get(provider_class, {})
     return {
@@ -359,14 +375,17 @@ def _provider_status(
         "fallback_active": fallback_active,
         "last_switch_timestamp": saved.get("last_switch_timestamp") if saved else None,
         "switch_reason": saved.get("reason") or reason,
+        "recovery_mode": recovery_mode,
+        "retry_in_seconds": retry_in_seconds,
+        "action_guidance": action_guidance,
     }
 
 
 def _script_provider_status(config, state: StationState, provider_health: dict) -> dict:
     anthropic_degraded = bool(provider_health.get("anthropic", {}).get("degraded"))
+    saved = state.runtime_provider_state.get("script_provider", {})
     if config.anthropic_api_key:
         primary = "anthropic"
-        saved = state.runtime_provider_state.get("script_provider", {})
         saved_current = str(saved.get("current_provider") or "")
         saved_fallback = bool(saved.get("fallback_active", False))
         if saved_current and (saved_fallback or saved_current != primary):
@@ -399,6 +418,22 @@ def _script_provider_status(config, state: StationState, provider_health: dict) 
         primary = current = "stock"
         fallback_active = False
         reason = "No LLM provider configured; stock copy is active"
+    fallback_reason = saved.get("reason") or reason
+    recovery_mode: str | None = None
+    retry_in_seconds: int | None = None
+    action_guidance = ""
+    if fallback_active:
+        if state.anthropic_disabled_until > time.time():
+            recovery_mode = "circuit_breaker"
+            _r = provider_health.get("anthropic", {}).get("retry_after_s")
+            retry_in_seconds = int(_r) if _r else None
+            action_guidance = _FALLBACK_REASON_LABELS.get(fallback_reason, fallback_reason)
+        elif fallback_reason in _ACTION_REQUIRED_FALLBACK_REASONS:
+            recovery_mode = "action_required"
+            action_guidance = _FALLBACK_REASON_LABELS[fallback_reason]
+        else:
+            recovery_mode = "transient"
+            action_guidance = "No action needed - will retry automatically"
     return _provider_status(
         "script_provider",
         primary_provider=primary,
@@ -406,6 +441,9 @@ def _script_provider_status(config, state: StationState, provider_health: dict) 
         fallback_active=fallback_active,
         reason=reason,
         state=state,
+        recovery_mode=recovery_mode,
+        retry_in_seconds=retry_in_seconds,
+        action_guidance=action_guidance,
     )
 
 
@@ -481,15 +519,26 @@ def _runtime_status_snapshot(
         "script_provider": script_status,
         "tts_provider": tts_status,
     }
-    fallback_active = any(providers[name]["fallback_active"] for name in ("audio_source", "script_provider"))
-    task_blocked = not runtime_health.get("producer_task_alive", True) or not runtime_health.get(
-        "playback_task_alive",
-        True,
-    )
-    if task_blocked:
+    fallback_active = any(item["fallback_active"] for item in providers.values())
+    tasks_alive = runtime_health.get("producer_task_alive", True) and runtime_health.get("playback_task_alive", True)
+    silence_with_listeners = bool(runtime_health.get("silence_with_listeners", False))
+    station_on_air = tasks_alive and not silence_with_listeners and not state.session_stopped
+    if not tasks_alive:
         health_state = "blocked"
         health_color = "red"
         health_explanation = "A runtime task is stopped; playback needs operator attention."
+    elif state.session_stopped:
+        # Check a deliberate operator pause BEFORE silence: /api/stop keeps the
+        # tasks alive, so an empty queue with a listener still connected would
+        # otherwise flip a paused station to the red "Error" state after the
+        # silence window. A deliberate pause must read as "Paused", never "Error".
+        health_state = "ready"
+        health_color = "blue"
+        health_explanation = "Station is paused by the operator."
+    elif silence_with_listeners:
+        health_state = "blocked"
+        health_color = "red"
+        health_explanation = "Listeners are connected but playback is silent; playback needs operator attention."
     elif fallback_active:
         health_state = "degraded"
         health_color = "yellow"
@@ -526,6 +575,7 @@ def _runtime_status_snapshot(
         "health_state": health_state,
         "health_color": health_color,
         "health_explanation": health_explanation,
+        "station_on_air": station_on_air,
         "fallback_active": fallback_active,
         "providers": providers,
         "last_switch_timestamp": last_switch.get("timestamp") if last_switch else None,
@@ -766,6 +816,57 @@ def _serialize_track(track: Track) -> dict:
         "youtube_id": track.youtube_id,
         "duration_ms": track.duration_ms,
     }
+
+
+def _duration_sec_from_payload(payload: dict | None) -> float | None:
+    if not payload:
+        return None
+    duration = payload.get("duration_sec")
+    if isinstance(duration, (int, float)) and duration > 0:
+        return float(duration)
+    metadata = payload.get("metadata")
+    if not isinstance(metadata, dict):
+        metadata = {}
+    duration_ms = metadata.get("duration_ms")
+    if isinstance(duration_ms, (int, float)) and duration_ms > 0:
+        return float(duration_ms) / 1000.0
+    duration_s = metadata.get("duration_s")
+    if isinstance(duration_s, (int, float)) and duration_s > 0:
+        return float(duration_s)
+    return None
+
+
+def _status_now_playback(now_streaming: dict, now_ts: float) -> dict:
+    duration_sec = _duration_sec_from_payload(now_streaming)
+    if not now_streaming:
+        return {
+            "now_streaming": now_streaming,
+            "current_progress_sec": None,
+            "current_duration_sec": None,
+        }
+    started = now_streaming.get("started")
+    progress_sec = max(0.0, now_ts - started) if isinstance(started, (int, float)) and started > 0 else None
+    return {
+        "now_streaming": now_streaming,
+        "current_progress_sec": round(progress_sec, 1) if progress_sec is not None else None,
+        "current_duration_sec": round(duration_sec, 1) if duration_sec is not None else None,
+    }
+
+
+def _serialize_stream_log_entry(entry) -> dict:
+    payload = {
+        "type": entry.type,
+        "label": entry.label,
+        "timestamp": entry.timestamp,
+        "metadata": entry.metadata,
+    }
+    duration_sec = float(getattr(entry, "duration_sec", 0.0) or 0.0)
+    if duration_sec <= 0:
+        duration_sec = _duration_sec_from_payload({"metadata": entry.metadata}) or 0.0
+    if duration_sec > 0:
+        payload["duration_sec"] = duration_sec
+        payload["duration_ms"] = round(duration_sec * 1000)
+    return payload
 
 
 def _source_options_reason(config, exc: Exception) -> str:
@@ -1240,6 +1341,13 @@ async def run_playback_loop(app) -> None:
             send_start = time.monotonic()
             bytes_sent = 0
             was_skipped = False
+            # Sample listeners at the START of the send loop so a mid-segment
+            # disconnect doesn't mislabel an aired segment as no_listeners
+            # (matches classify_stream_outcome's documented contract). Default to
+            # 0 first so the finally's _emit_stream_result never references an
+            # unbound local if listener sampling itself raises.
+            start_listeners = 0
+            start_listeners = len(hub._listeners)
             skip_event.clear()
             with open(segment.path, "rb") as f:
                 _skip_id3_and_xing_header(f)
@@ -1273,10 +1381,52 @@ async def run_playback_loop(app) -> None:
                 _persist_tasks.add(task)
                 task.add_done_callback(_persist_tasks.discard)
         finally:
+            _emit_stream_result(state, segment, bytes_sent, was_skipped, start_listeners)
             if segment.ephemeral:
                 segment.path.unlink(missing_ok=True)
             if pulled_from_queue:
                 segment_queue.task_done()
+
+
+def _emit_stream_result(state, segment, bytes_sent: int, was_skipped: bool, listeners: int) -> None:
+    """Tier-3: record the TRUE aired outcome after the send loop.
+
+    Fires from the (sync) playback loop's finally, so it captures partial and
+    failed sends too. Enabled-check first; never raises into the stream.
+    """
+    led = getattr(state, "ledger", None)
+    if led is None or not led.enabled:
+        return
+    try:
+        import time as _time
+
+        from mammamiradio.core.ledger import SCHEMA_VERSION
+        from mammamiradio.core.segment_status import classify_stream_outcome, is_fallback_active
+
+        meta = segment.metadata or {}
+        fallback_active = is_fallback_active(meta)
+        led.record(
+            {
+                "schema_version": SCHEMA_VERSION,
+                "ts": _time.time(),
+                "record": "stream_result",
+                "segment_id": meta.get("ledger_segment_id"),
+                "segment_type": segment.type.value,
+                "aired_status": classify_stream_outcome(
+                    was_skipped=was_skipped,
+                    bytes_sent=bytes_sent,
+                    listeners=listeners,
+                    fallback_active=fallback_active,
+                ),
+                "bytes_sent": bytes_sent,
+                "listeners": listeners,
+                "audio_source": str(meta.get("audio_source") or ""),
+                "fallback_active": fallback_active,
+                "title": meta.get("title") or meta.get("brand"),
+            }
+        )
+    except Exception as exc:  # pragma: no cover - provenance must never break audio
+        logger.debug("Provenance Tier-3 emit failed: %s", exc)
 
 
 def _track_from_music_metadata(metadata: dict) -> Track | None:
@@ -2818,6 +2968,7 @@ def _public_status_payload(request: Request) -> dict:
     runtime_health = _runtime_health_snapshot(request)
     start_time = getattr(request.app.state, "start_time", None) or 0
     uptime_sec = round(time.time() - start_time) if start_time else 0
+    now_ts = time.time()
     if state.queued_segments:
         upcoming = [{**item, "source": "rendered_queue"} for item in state.queued_segments[:8]]
     else:
@@ -2835,7 +2986,7 @@ def _public_status_payload(request: Request) -> dict:
         }
         # Event fields: only if within retention window (person filter applied in producer)
         _retention = EVENT_RETENTION_SECONDS
-        _now = time.time()
+        _now = now_ts
         if state.ha_last_event_ts > 0 and (_now - state.ha_last_event_ts) < _retention:
             ha_moments["last_event_label"] = state.ha_last_event_label
             ha_moments["last_event_ago_min"] = max(1, round((_now - state.ha_last_event_ts) / 60))
@@ -2843,18 +2994,16 @@ def _public_status_payload(request: Request) -> dict:
         if not ha_moments.get("mood") and not ha_moments.get("weather") and not ha_moments.get("last_event_label"):
             ha_moments = None
 
+    playback = _status_now_playback(state.now_streaming, now_ts)
     return {
         "station": config.station.name,
         "running_jokes": list(state.running_jokes),
-        "now_streaming": state.now_streaming,
+        **playback,
         "current_source": _serialize_source(state.playlist_source),
         "golden_path": _golden_path_status(config, state),
         "runtime_health": runtime_health,
         "session_stopped": state.session_stopped,
-        "stream_log": [
-            {"type": e.type, "label": e.label, "timestamp": e.timestamp, "metadata": e.metadata}
-            for e in state.stream_log
-        ],
+        "stream_log": [_serialize_stream_log_entry(e) for e in state.stream_log],
         "upcoming": upcoming,
         "upcoming_mode": "queued" if upcoming else "building",
         "stream": {

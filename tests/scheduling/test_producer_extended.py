@@ -1147,8 +1147,8 @@ async def test_news_flash_segment_is_produced(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_news_flash_sports_uses_faster_rate(tmp_path):
-    """Producer applies a faster TTS rate for sports news flashes."""
+async def test_news_flash_sports_uses_neutral_tts_prosody(tmp_path):
+    """Producer does not spike sports news with extra TTS rate or pitch."""
     state = _make_state()
     config = _make_config(tmp_path)
     config.anthropic_api_key = "test-key"
@@ -1169,7 +1169,7 @@ async def test_news_flash_sports_uses_faster_rate(tmp_path):
         patch(
             f"{SCRIPTWRITER_MODULE}.write_news_flash",
             new_callable=AsyncMock,
-            return_value=(host, "Gooool!", "sports"),
+            return_value=(host, "Il Borgo Sud pareggia con ordine.", "sports"),
         ),
         patch(f"{MODULE}.synthesize", side_effect=_capture_synthesize),
         patch(f"{MODULE}._try_crossfade", new_callable=AsyncMock, return_value=flash_path),
@@ -1178,8 +1178,8 @@ async def test_news_flash_sports_uses_faster_rate(tmp_path):
         await _run_until_queued(queue, state, config)
 
     assert synthesize_calls, "synthesize must be called"
-    assert synthesize_calls[0]["rate"] == "+25%"
-    assert synthesize_calls[0]["pitch"] == "+12Hz"
+    assert synthesize_calls[0]["rate"] is None
+    assert synthesize_calls[0]["pitch"] is None
 
 
 @pytest.mark.asyncio

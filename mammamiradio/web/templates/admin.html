@@ -592,6 +592,12 @@ body[data-stopped="true"] .sidebar-live-line { color: var(--cream-dk); }
 .lr-btn-queue { background: rgba(37,99,235,0.18); color: var(--ok); }
 .lr-btn-queue:hover { background: rgba(37,99,235,0.32); }
 .lr-head .status-inline { font-size: 10px; font-weight: 600; }
+.lr-consumed-label { font-size: 10px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: rgba(245,237,216,0.3); margin: 10px 0 4px; }
+.lr-item-consumed { opacity: 0.6; }
+.lr-badge { font-size: 10px; font-weight: 600; padding: 2px 6px; border-radius: 4px; }
+.lr-badge-ok { background: rgba(37,99,235,0.18); color: var(--ok); }
+.lr-badge-warn { background: rgba(244,208,72,0.12); color: var(--sun); }
+.lr-track { margin-left: 6px; font-style: italic; color: rgba(245,237,216,0.45); }
 
 /* ── MISC ── */
 .empty { font-size: 12px; color: rgba(245,237,216,0.35); text-align: center; padding: 16px 0; font-style: italic; }
@@ -2384,6 +2390,15 @@ async function flagCurrentTrack(el) {
 }
 
 // ── Now Playing (sidebar) ──
+function durationSec(item){
+  const sec=item?.duration_sec;
+  if(Number.isFinite(sec)&&sec>0)return sec;
+  const ms=item?.duration_ms ?? item?.metadata?.duration_ms;
+  if(Number.isFinite(ms)&&ms>0)return ms/1000;
+  const metaSec=item?.metadata?.duration_s;
+  if(Number.isFinite(metaSec)&&metaSec>0)return metaSec;
+  return null;
+}
 function updateNow(ns){
   if(!ns||!ns.type){
     const ty=document.getElementById('nowType');
@@ -2426,16 +2441,16 @@ function updateNow(ns){
   if(topBarTitleText)topBarTitleText.textContent=title+' ';
   if(topBarArtist)topBarArtist.textContent=artistEl.textContent;
   document.getElementById('progFill').setAttribute('data-t',typeKey);
-  const dur=ns.metadata?.duration_ms?ns.metadata.duration_ms/1000:typeKey==='music'?240:typeKey==='banter'?30:typeKey==='ad'?60:20;
+  const dur=durationSec(ns);
   const label=ns.label||'';
-  if(label!==_prevLabel){_prevLabel=label;_nowStart=ns.started?ns.started*1000:Date.now();_nowDur=dur}
+  if(label!==_prevLabel){_prevLabel=label;_nowStart=ns.started?ns.started*1000:Date.now();_nowDur=dur||0}
   if(!_tick){_tick=setInterval(()=>{
     const el=Math.max(0,(Date.now()-_nowStart)/1000);
-    const rem=Math.max(0,Math.floor(_nowDur-el));
+    const rem=_nowDur>0?Math.max(0,Math.floor(_nowDur-el)):0;
     const m=Math.floor(rem/60);const s=String(rem%60).padStart(2,'0');
     const em=Math.floor(el/60);const es=String(Math.floor(el)%60).padStart(2,'0');
     document.getElementById('nowElapsed').textContent=em+':'+es;
-    document.getElementById('progFill').style.width=Math.min(100,(el/Math.max(_nowDur,1))*100)+'%';
+    document.getElementById('progFill').style.width=(_nowDur>0?Math.min(100,(el/_nowDur)*100):0)+'%';
   },500)}
 }
 
@@ -2481,9 +2496,8 @@ function renderProgramme(st){
 
   // Mobile fix: duration helper for upcoming Dur column
   const fmtDur=(it,typeKey)=>{
-    const ms=it?.duration_ms ?? it?.metadata?.duration_ms;
-    const sec=it?.duration_sec ?? it?.metadata?.duration_sec;
-    let s=ms!=null?Math.round(ms/1000):sec!=null?Math.round(sec):(typeKey==='music'?240:typeKey==='banter'?40:typeKey==='ad'?70:typeKey==='news_flash'?20:20);
+    let s=durationSec(it);
+    s=s!=null?Math.round(s):null;
     if(!s||s<0)return '';
     const m=Math.floor(s/60),r=s%60;
     return m+':'+(r<10?'0':'')+r;
@@ -2590,12 +2604,24 @@ function statusRow(title,state,label,detail){
   return `<div class="status-row"><div class="status-copy"><div class="status-title">${esc(title)}</div><div class="status-detail">${esc(detail)}</div></div>${statusChip(state,label)}</div>`;
 }
 function runtimeProviderRow(title,item){
-  const state=item?.fallback_active?'degraded':'ready';
-  const label=item?.fallback_active?'Fallback':'Primary';
+  let state,label;
+  if(item?.recovery_mode==='circuit_breaker'||item?.recovery_mode==='action_required'){
+    state='degraded';
+    label='Backup active';
+  }else if(item?.recovery_mode==='transient'){
+    state='working';
+    label='Auto-recovering';
+  }else{
+    state=item?.fallback_active?'degraded':'ready';
+    label=item?.fallback_active?'Fallback':'Primary';
+  }
+  const reasonLine=item?.action_guidance||item?.switch_reason||'';
+  const retryLine=item?.retry_in_seconds>0?'Retrying in '+Math.ceil(item.retry_in_seconds/60)+' min':'';
   const detail=[
     'Current: '+(item?.current_label||item?.current_provider||'—'),
     'Primary: '+(item?.primary_label||item?.primary_provider||'—'),
-    item?.switch_reason||'',
+    reasonLine,
+    retryLine,
     item?.last_switch_timestamp?'Last switch: '+fmtRuntimeTs(item.last_switch_timestamp):''
   ].filter(Boolean).join(' · ');
   return statusRow(title,state,label,detail);
@@ -2615,13 +2641,16 @@ function updateRuntimeStatus(st){
       }
       return;
     }
-    const state=rs.health_state||'ready';
-    const label=state==='blocked'?'Error':state==='degraded'?'Fallback':state==='idle'?'Paused':'Ready';
+    const stationOnAir=rs.station_on_air===true;
+    const taskBlocked=rs.health_state==='blocked';
+    const headerState=taskBlocked?'blocked':stationOnAir?'ready':'degraded';
+    const headerLabel=taskBlocked?'Error':stationOnAir?'On Air':'Paused';
+    const headerDetail=rs.health_explanation?headerLabel+' · '+rs.health_explanation:headerLabel;
     if(header){
-      header.className='status-dot '+state;
-      header.setAttribute('aria-label',rs.health_explanation||label);
-      header.title=rs.health_explanation||'Runtime status';
-      header.innerHTML='<span class="dot"></span>'+esc(label);
+      header.className='status-dot '+headerState;
+      header.setAttribute('aria-label',headerDetail);
+      header.title=headerDetail;
+      header.innerHTML='<span class="dot"></span>'+esc(headerLabel);
     }
     if(!card)return;
     const providers=rs.providers||{};
@@ -2631,7 +2660,7 @@ function updateRuntimeStatus(st){
       ? `${lastFailover.provider_class||'provider'}: ${lastFailover.from_provider||'—'} → ${lastFailover.to_provider||'—'} · ${lastFailover.reason||''} · ${fmtRuntimeTs(lastFailover.timestamp)}`
       : (rs.no_failover_message||'No failover in current session.');
     card.innerHTML=[
-      statusRow('Current health',state,label,rs.health_explanation||'Runtime health available'),
+      statusRow('Current health',headerState,headerLabel,rs.health_explanation||'Runtime health available'),
       runtimeProviderRow('Audio source',providers.audio_source),
       runtimeProviderRow('Script provider',providers.script_provider),
       runtimeProviderRow('TTS provider',providers.tts_provider),
@@ -3170,13 +3199,19 @@ async function applyHostPreset(n,presetName){
 }
 
 // ── Listener Requests ──
-function updateListenerRequests(reqs){
+function updateListenerRequests(reqs,consumed){
   const el=document.getElementById('lrBody');
   const meta=document.getElementById('lrMeta');
-  if(!reqs?.length){el.innerHTML='<div class="empty">No requests — listeners can ask for tracks or shout-outs from the radio</div>';meta.textContent='';return}
-  meta.textContent=reqs.length+' pending';
-  _lrReqs=reqs;
-  el.innerHTML=reqs.map((r,i)=>{
+  _lrReqs=reqs||[];
+  consumed=consumed||[];
+  let html='';
+  if(!_lrReqs.length&&!consumed.length){
+    el.innerHTML='<div class="empty">No requests — listeners can ask for tracks or shout-outs from the radio</div>';
+    meta.textContent='';
+    return;
+  }
+  meta.textContent=_lrReqs.length?_lrReqs.length+' pending':'';
+  html+=_lrReqs.map((r,i)=>{
     const age=r.age_s<60?r.age_s+'s fa':Math.floor(r.age_s/60)+'m fa';
     let status='';
     let actions='';
@@ -3199,6 +3234,21 @@ function updateListenerRequests(reqs){
       <div class="lr-actions">${actions}</div>
     </div>`;
   }).join('');
+  if(consumed.length){
+    html+=`<div class="lr-consumed-label">Recently handled</div>`;
+    html+=consumed.map(r=>{
+      const age=r.age_s<60?r.age_s+'s fa':Math.floor(r.age_s/60)+'m fa';
+      const badge=r.status==='song_not_found'
+        ?'<span class="lr-badge lr-badge-warn">&#9888; Song not found</span>'
+        :'<span class="lr-badge lr-badge-ok">&#10003; Sent to hosts</span>';
+      const track=r.song_track?`<span class="lr-track">${esc(r.song_track)}</span>`:'';
+      return `<div class="lr-item lr-item-consumed">
+        <div class="lr-head"><span class="lr-name">${esc(r.name||'Listener')}</span>${badge}<span class="lr-age">${age}</span></div>
+        <div class="lr-msg">${esc(r.message||'')}${track}</div>
+      </div>`;
+    }).join('');
+  }
+  el.innerHTML=html;
 }
 let _lrReqs=[];
 async function lrDismiss(id){
@@ -3446,7 +3496,7 @@ async function refreshFast(){
     updateRecent(_st);
     updateLog(_st.stream_log);
     updatePl(_st.playlist||[]);
-    updateListenerRequests(lrData.requests||[]);
+    updateListenerRequests(lrData.requests||[],lrData.recently_consumed||[]);
     updatePaceCounters(_st.pacing);
     updateRuntimeStatus(_st);
     updateEngineRoom(_st,_caps);

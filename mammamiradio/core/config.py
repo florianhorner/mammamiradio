@@ -322,10 +322,24 @@ class StationConfig:
     allow_ytdlp: bool = False
     super_italian_mode: bool = True
     party_mode: PartyMode | None = None
+    # Provenance ledger (Show Memory): opt-in, off by default. Records how each
+    # aired moment was made to a daily-rotated JSONL under cache_dir/ledger.
+    ledger_enabled: bool = False
+    ledger_retention_days: int = 14
+    ledger_queue_max: int = 2000
     # Names of hosts or ad voices that had their configured voice replaced
     # during config load because the configured ID wasn't valid for the chosen
     # backend. Empty when all voices passed validation.
     tts_degraded_voices: list[str] = field(default_factory=list)
+
+    @property
+    def ledger_dir(self) -> Path:
+        """Provenance ledger directory, derived from cache_dir (never hardcoded).
+
+        Inherits the addon (/data/cache) vs standalone (./cache) vs /tmp fallback
+        resolution that cache_dir already performs.
+        """
+        return self.cache_dir / "ledger"
 
     @property
     def display_station_name(self) -> str:
@@ -1028,6 +1042,15 @@ def load_config(path: str = "radio.toml") -> StationConfig:
         config.party_mode = "festival"
     elif _festival_env in _FALSY:
         config.party_mode = None
+
+    _ledger_env = os.getenv("MAMMAMIRADIO_LEDGER_ENABLED", "").strip().lower()
+    if _ledger_env in _TRUTHY:
+        config.ledger_enabled = True
+    elif _ledger_env in _FALSY:
+        config.ledger_enabled = False
+    _ledger_retention = os.getenv("MAMMAMIRADIO_LEDGER_RETENTION_DAYS", "").strip()
+    if _ledger_retention.isdigit() and int(_ledger_retention) > 0:
+        config.ledger_retention_days = int(_ledger_retention)
 
     # Addon overrides: persistent paths, auto-enable HA
     if addon_mode:

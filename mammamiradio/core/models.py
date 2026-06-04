@@ -14,6 +14,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING, ClassVar, Literal, TypedDict
 from urllib.parse import urlsplit, urlunsplit
 
+from mammamiradio.core.segment_status import is_fallback_active
+
 if TYPE_CHECKING:
     from mammamiradio.home.evening_memory import EveningLedger
     from mammamiradio.hosts.persona import PersonaStore
@@ -237,6 +239,7 @@ class SegmentLogEntry:
     label: str
     timestamp: float = 0.0
     metadata: dict = field(default_factory=dict)
+    duration_sec: float = 0.0
 
 
 @dataclass
@@ -388,6 +391,21 @@ class ExternalAddNotice(TypedDict):
     ts: float
 
 
+RECENTLY_CONSUMED_RETENTION_SECONDS = 300
+
+
+class ConsumedListenerRequest(TypedDict):
+    """A consumed listener request retained for 5-minute admin visibility."""
+
+    id: str
+    name: str | None
+    message: str | None
+    song_track: str | None
+    type: str | None
+    status: str  # "sent_to_hosts" | "song_not_found"
+    consumed_at: float
+
+
 @dataclass
 class StationState:
     """Mutable in-memory state shared by producer and streamer tasks."""
@@ -481,6 +499,9 @@ class StationState:
     pinned_track: Track | None = None
     # Listener requests: shoutouts and song wishes submitted via the dashboard
     pending_requests: list[dict] = field(default_factory=list)
+    # Recently consumed requests kept for 5 min so the admin can see what happened
+    # to a request that left Pending (sent to hosts, or song not found).
+    recently_consumed_requests: list[ConsumedListenerRequest] = field(default_factory=list)
     # Operator-visible pending actions/directives. This mirrors legacy single
     # slots while the producer still consumes those slots for compatibility.
     pending_actions: deque[dict] = field(default_factory=lambda: deque(maxlen=200))
@@ -639,14 +660,7 @@ class StationState:
             self.canned_clips_streamed += 1
         raw_audio_source = str(segment.metadata.get("audio_source") or "")
         if raw_audio_source or segment.metadata.get("fallback") or segment.type == SegmentType.MUSIC:
-            fallback_active = (
-                bool(segment.metadata.get("fallback"))
-                or raw_audio_source.startswith("fallback")
-                or bool(segment.metadata.get("queue_drain_recovery"))
-                or bool(segment.metadata.get("resume_bridge"))
-                or bool(segment.metadata.get("silence_fallback"))
-                or raw_audio_source in ("norm_cache", "emergency_tone")
-            )
+            fallback_active = is_fallback_active(segment.metadata)
             audio_source = raw_audio_source
             if not audio_source and fallback_active:
                 audio_source = "canned"
@@ -715,6 +729,7 @@ class StationState:
                 label=label,
                 timestamp=now,
                 metadata=segment.metadata,
+                duration_sec=segment.duration_sec,
             )
         )
 

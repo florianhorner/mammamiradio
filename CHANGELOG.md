@@ -21,6 +21,20 @@ The current version source of truth is `pyproject.toml`.
   Edge/OpenAI/Azure catalogs. Missing provider credentials are reported as
   skipped so auditions are not confused with runtime Edge fallback.
 
+- **The admin Engine Room now tells you exactly what the station is doing** — the header badge shows "On Air" when music or hosts are streaming, "Paused" when you've stopped it deliberately, and "Error" when a task has died and needs attention. Provider chips (script, audio, TTS) now distinguish between "Backup active" (primary is down, using fallback) and "Auto-recovering" (transient error, no action needed), and show a plain-English reason plus a countdown when the circuit breaker is cooling off. Silence while listeners are connected is now surfaced as a blocked state immediately rather than waiting for the next polling cycle.
+
+- **The admin now shows what happened to a listener request after the hosts handled it.** A "Recently handled" section appears below the Pending queue for up to 5 minutes, showing each request with a status badge — "Sent to hosts" (blue) when the hosts picked it up, or "Song not found" (amber) when the requested track could not be downloaded. Requests leave the Pending list as soon as they're consumed, so operators no longer wonder whether their action registered.
+
+- **Show Memory: an opt-in record of how each moment was made.** A new provenance
+  ledger (off by default) can record, for operators who turn it on, exactly how a
+  given second of radio came to be: the raw AI attempts behind a host or ad, the
+  final spoken script, and whether it actually reached listeners. It writes
+  daily-rotated, private files under the cache directory and is strictly
+  best-effort — it never delays, blocks, or interrupts the live stream, and a
+  busy moment simply drops the oldest record and notes that it did. Enable it with
+  `MAMMAMIRADIO_LEDGER_ENABLED`; tune history with `MAMMAMIRADIO_LEDGER_RETENTION_DAYS`
+  (default 14 days). Listeners never see any of this.
+
 - **Home Assistant context now adapts to each home.** The add-on scores prompt-safe
   entities from the full Home Assistant state snapshot instead of only using a
   hardcoded apartment list, so newly paired devices can contribute ambient radio
@@ -48,6 +62,8 @@ The current version source of truth is `pyproject.toml`.
   from `/public-status`.
 
 ### Fixed
+
+- **Admin programme durations are now truthful.** Status payloads expose real current segment duration/progress and stream-log durations, and the admin/live/listener UIs no longer invent music, banter, or ad durations when metadata is missing.
 
 - **The HA media player card now shows accurate elapsed time.** The station's Home Assistant entity now includes the `media_position_updated_at` timestamp that HA requires to count forward between updates, so the playback position no longer resets or freezes every 30 seconds in the media card and companion app.
 
@@ -159,6 +175,7 @@ The current version source of truth is `pyproject.toml`.
 - **Stable add-on images are now published by Git-tag push** — A new `addon-release.yml` workflow, triggered by `v*` tag push, is now solely responsible for publishing `:X.Y.Z` and `:latest` for the HA add-on. `addon-build.yml` (main-push) no longer publishes those tags; it publishes only `:sha`, `:0.0.0`, and the edge calver. The release workflow validates the tag ref, semver, `config.yaml` version, and prebuilt per-arch `:sha` images, smokes the source image, promotes that exact artifact to stable tags, updates `:latest` only for the newest stable semver, then smokes the published release tag. Release flow: merge version-bump commit → wait for CI → `git tag vX.Y.Z && git push origin vX.Y.Z`.
 - **Queue fallback starts before the health-failure window.** Active listeners now get cache rescue attempts after a 5-second bounded queue-empty wait, before the preserved 30-second silence health-failure threshold triggers.
 - **Engineering backlog moved to GitHub issues** — `docs/todos.md` was removed. Open engineering work is now tracked as GitHub issues. A new CI guard (`scripts/check-no-backlog-files.sh`, wired into `quality.yml`) fails the build if a catch-all `TODO.md`/`TODOS.md`/`docs/todos.md`/`docs/backlog.md` file is re-added.
+- **Sports flashes are clearer and less shouty** — Sports news now uses a steadier host selection path, asks for informed radio-desk updates instead of maximum-excitement commentary, and no longer adds a dedicated sports TTS speed/pitch spike.
 
 ### Fixed
 

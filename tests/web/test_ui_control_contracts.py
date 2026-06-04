@@ -783,6 +783,18 @@ class TestNowStreamingInvariants:
         assert state.now_streaming["type"] == "music"
         assert state.now_streaming.get("label") != "Skipping..."
 
+    def test_admin_duration_rendering_has_no_type_based_fake_fallbacks(self):
+        html = ADMIN_HTML.read_text()
+        forbidden = [
+            r"typeKey==='music'\?240",
+            r"typeKey==='banter'\?30",
+            r"typeKey==='ad'\?60",
+            r"typeKey==='news_flash'\?20",
+        ]
+        for pattern in forbidden:
+            assert not re.search(pattern, html), f"admin.html reintroduced fake duration fallback: {pattern}"
+        assert "function durationSec(item)" in html
+
 
 # ── Item 21: scheduler reason strings must not leak into admin queue rows ─────
 
@@ -967,6 +979,7 @@ class TestRuntimeProviderTransparencyUI:
         assert resp.status_code == 200
         runtime_status = resp.json()["runtime_status"]
         assert runtime_status["health_state"] in {"ready", "degraded", "blocked"}
+        assert isinstance(runtime_status["station_on_air"], bool)
         assert isinstance(runtime_status["failover_events"], list)
         assert "no_failover_message" in runtime_status
         assert set(runtime_status["providers"]) == {"audio_source", "script_provider", "tts_provider"}
@@ -979,13 +992,16 @@ class TestRuntimeProviderTransparencyUI:
             assert "fallback_active" in provider
             assert "last_switch_timestamp" in provider
             assert "switch_reason" in provider
+            assert "recovery_mode" in provider
+            assert "retry_in_seconds" in provider
+            assert "action_guidance" in provider
 
     def test_status_helpers_emit_accessible_state_labels(self):
         html = ADMIN_HTML.read_text()
 
         assert 'aria-label="${esc(safeTitle)}"' in html
         assert 'aria-label="status: working"' in html
-        assert "header.setAttribute('aria-label',rs.health_explanation||label)" in html
+        assert "header.setAttribute('aria-label',headerDetail)" in html
 
 
 # ── Item 19: stopped-state UI actually stops (timer, waveform, producer btns) ──

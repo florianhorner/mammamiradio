@@ -1130,7 +1130,8 @@ def test_plan_listener_request_block_song_still_downloading_defers(state):
     assert req in state.pending_requests
 
 
-def test_plan_listener_request_block_song_still_downloading_marks_error_after_two_cycles(state):
+def test_plan_listener_request_block_song_still_downloading_defers_at_cycle_two(state):
+    """Cycle 2 (banter_cycles_missed=1→2) must still defer — timeout is at cycle 5."""
     req = {
         "name": "Luca",
         "message": "metti Eros Ramazzotti",
@@ -1144,6 +1145,77 @@ def test_plan_listener_request_block_song_still_downloading_marks_error_after_tw
 
     prompt, commit = _plan_listener_request_block(state)
 
+    assert prompt == ""
+    assert commit is not None
+    assert commit.consume is False
+    assert commit.mark_song_error is False
+    commit.apply(state)
+    assert req["banter_cycles_missed"] == 2
+    assert req in state.pending_requests
+
+
+def test_plan_listener_request_block_song_still_downloading_defers_at_cycle_three(state):
+    """Cycle 3 (banter_cycles_missed=2→3) must still defer — timeout is at cycle 5."""
+    req = {
+        "name": "Luca",
+        "message": "metti Eros Ramazzotti",
+        "type": "song_request",
+        "song_found": False,
+        "song_error": False,
+        "song_track": None,
+        "banter_cycles_missed": 2,
+    }
+    state.pending_requests.append(req)
+
+    prompt, commit = _plan_listener_request_block(state)
+
+    assert prompt == ""
+    assert commit is not None
+    assert commit.consume is False
+    assert commit.mark_song_error is False
+    commit.apply(state)
+    assert req["banter_cycles_missed"] == 3
+    assert req in state.pending_requests
+
+
+def test_plan_listener_request_block_song_still_downloading_defers_at_cycle_four(state):
+    """Cycle 4 (banter_cycles_missed=3→4) must still defer — timeout is at cycle 5."""
+    req = {
+        "name": "Luca",
+        "message": "metti Eros Ramazzotti",
+        "type": "song_request",
+        "song_found": False,
+        "song_error": False,
+        "song_track": None,
+        "banter_cycles_missed": 3,
+    }
+    state.pending_requests.append(req)
+
+    prompt, commit = _plan_listener_request_block(state)
+
+    assert prompt == ""
+    assert commit is not None
+    assert commit.consume is False
+    assert commit.mark_song_error is False
+    commit.apply(state)
+    assert req["banter_cycles_missed"] == 4
+    assert req in state.pending_requests
+
+
+def test_plan_listener_request_block_song_still_downloading_marks_error_after_five_cycles(state):
+    req = {
+        "name": "Luca",
+        "message": "metti Eros Ramazzotti",
+        "type": "song_request",
+        "song_found": False,
+        "song_error": False,
+        "song_track": None,
+        "banter_cycles_missed": 4,
+    }
+    state.pending_requests.append(req)
+
+    prompt, commit = _plan_listener_request_block(state)
+
     assert "SONG NOT FOUND" in prompt
     assert commit is not None
     assert commit.consume is True
@@ -1151,6 +1223,51 @@ def test_plan_listener_request_block_song_still_downloading_marks_error_after_tw
     commit.apply(state)
     assert req["song_error"] is True
     assert req not in state.pending_requests
+    # Request moves to recently_consumed with song_not_found status
+    assert len(state.recently_consumed_requests) == 1
+    assert state.recently_consumed_requests[0]["status"] == "song_not_found"
+    assert state.recently_consumed_requests[0]["name"] == "Luca"
+
+
+def test_plan_listener_request_block_background_failure_consumes_song_not_found(state):
+    # A song request whose background download already FAILED (song_error set
+    # directly by _download_listener_song, before the 5-cycle timeout) must
+    # consume as "song_not_found", not the default "sent_to_hosts".
+    req = {
+        "name": "Giulia",
+        "message": "metti una canzone",
+        "type": "song_request",
+        "song_found": False,
+        "song_error": True,
+        "song_track": None,
+        "banter_cycles_missed": 0,
+    }
+    state.pending_requests.append(req)
+
+    _, commit = _plan_listener_request_block(state)
+
+    assert commit is not None
+    assert commit.consume is True
+    assert commit.mark_song_error is True
+    commit.apply(state)
+    assert req not in state.pending_requests
+    assert len(state.recently_consumed_requests) == 1
+    assert state.recently_consumed_requests[0]["status"] == "song_not_found"
+    assert state.recently_consumed_requests[0]["name"] == "Giulia"
+
+
+def test_listener_request_commit_populates_recently_consumed_on_acknowledge(state):
+    req = {"name": "Sofia", "message": "ciao!", "type": "dedica", "ts": 1000.0}
+    state.pending_requests.append(req)
+    from mammamiradio.hosts.scriptwriter import ListenerRequestCommit
+
+    commit = ListenerRequestCommit(request=req, consume=True)
+    commit.apply(state)
+    assert req not in state.pending_requests
+    assert len(state.recently_consumed_requests) == 1
+    consumed = state.recently_consumed_requests[0]
+    assert consumed["status"] == "sent_to_hosts"
+    assert consumed["name"] == "Sofia"
 
 
 def test_plan_listener_request_block_song_found_announcement(state):
@@ -1611,6 +1728,23 @@ async def test_write_news_flash_api_exception_returns_fallback(config, state):
     assert isinstance(host, HostPersonality)
     assert isinstance(text, str) and len(text) > 0
     assert category == "sports"
+
+
+@pytest.mark.asyncio
+async def test_write_news_flash_sports_prompt_prioritizes_clarity(config, state):
+    with patch(
+        "mammamiradio.hosts.scriptwriter._generate_json_response",
+        new_callable=AsyncMock,
+        return_value={"text": "Il Borgo Sud pareggia al novantesimo con freddezza."},
+    ) as mock_generate:
+        _host, _text, category = await write_news_flash(state, config, category="sports")
+
+    prompt = mock_generate.await_args.kwargs["prompt"]
+    assert category == "sports"
+    assert "measured and followable" in prompt
+    assert "no all-caps hype" in prompt
+    assert "no extended goal screams" in prompt
+    assert "crescendo-meltdown" in prompt
 
 
 @pytest.mark.asyncio
