@@ -211,10 +211,26 @@ Why: the scriptwriter generates fake ads in the brand's voice, makes false produ
 ## Quality gates
 
 - **Land via `/ship` — never a bare merge (enforced)**: Every PR is opened and merged through `/ship`, which runs the mandatory pre-ship review squad (adversarial + test-coverage + docs/config-consistency). A `PreToolUse` hook (`scripts/hooks/require-preship-squad.sh`, wired in `.claude/settings.json`) refuses a bare `gh pr create` / `gh pr merge` unless a `review`/`adversarial-review` entry is logged for HEAD (or a recent ancestor). Added after a refactor cut opened PRs with bare `gh pr create`, skipping the squad's docs/config-consistency check and letting a doc-sync violation reach a green PR. Fail-open and project-scoped.
-- **Pre-merge QA (mandatory)**: Every PR must pass two separate `/qa` runs before merge:
-  1. **Player QA** (`/qa` on `/` dashboard) — listener-facing: stream playback, now-playing, up-next, Casa card, song requests, clip sharing, responsive layout.
-  2. **Admin QA** (`/qa` on `/admin`) — operator-facing: controls (skip/stop/resume/shuffle), pacing sliders, host config, key management, engine room, playlist management.
-  Splitting QA into two focused runs maximizes findings per surface. A single combined run tends to rush through one side. Both must pass before merging.
+- **QA gates (mandatory, risk-scoped)**: Manual `/qa` is required for the surfaces a PR can affect, and every release candidate must pass both surfaces before user-facing release.
+  1. **Player QA** (`/qa` on `/` dashboard) is required for listener-facing changes: stream playback, now-playing, up-next, Casa card, song requests, clip sharing, public status, listener routes/assets, or playback-visible behavior.
+  2. **Admin QA** (`/qa` on `/admin`) is required for operator-facing changes: controls, pacing sliders, host config, key management, engine room, playlist management, admin routes/assets, or operator feedback.
+  3. PRs affecting both surfaces, shared auth/routing/frontend state, or uncertain user-facing behavior require both.
+  4. Docs-only, tests-only, CI-only, dependency-only, and pure internal refactors may skip manual PR QA when automated checks pass and the PR states why no user-facing surface is affected.
+  5. Coordinated batches, release-manager queues, edge releases, and stable releases must pass both Player QA and Admin QA on the final candidate state before shipping.
+  6. QA may be reused only when the later diff cannot affect that surface; link or name the reused QA result and explain why it remains valid.
+  A single combined rushed QA run is still insufficient. Do not claim QA passed unless that exact QA scope ran or was explicitly reused under this rule.
+- **QA Impact (PR body / ship notes)**: every PR states its QA scope so the gate above is auditable:
+  ```md
+  ## QA Impact
+  Classification: Player / Admin / Both / None / Deferred to release candidate
+  Reason:
+  - Touched surfaces:
+  - Why this QA scope is sufficient:
+  QA performed:
+  - Player QA: run / reused / not applicable / deferred
+  - Admin QA: run / reused / not applicable / deferred
+  ```
+  For stacked PRs and release-manager queues: rebase/fix/green each PR, run only the PR-specific QA surface when the PR itself is risky, stage the queue into a release candidate, then run full Player QA + Admin QA once on the final candidate and ship only if both pass. The pre-ship review squad is unchanged; this rule scopes only manual `/qa`.
 - **Coverage ratchet (automatic)**: Coverage can only go up, never down. Two layers enforce this:
   - **Aggregate floor**: `fail_under` in `pyproject.toml` — the overall minimum.
   - **Per-module floors**: `.coverage-floors.json` — every module has its own floor. A module-level regression fails CI even if the aggregate stays above threshold.
