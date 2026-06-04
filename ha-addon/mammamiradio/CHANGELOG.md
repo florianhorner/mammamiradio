@@ -4,6 +4,13 @@
 
 ### Added
 
+- **AI quality dial replaces the model dropdown.** The old "AI Model" option is now
+  a Premium / Balanced / Economy quality dial. Pick the experience you want and the
+  station chooses the right model for each job automatically — no model names to
+  track, and it keeps working when new models ship. Existing add-ons update with no
+  change in behavior (the previous setting maps to Balanced). The dial is also in the
+  admin Engine Room and switches live without a restart.
+
 - **Jamendo rotation depth now defaults to 200 tracks.** The add-on's bundled
   `radio.toml` sets `jamendo_limit = 200`, and advanced deployments can override
   it with `JAMENDO_LIMIT` (`1`-`200`) to tune Jamendo API result depth.

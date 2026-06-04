@@ -8,6 +8,16 @@ The current version source of truth is `pyproject.toml`.
 
 ### Added
 
+- **Pick your AI quality with one dial.** The add-on's model picker is now a simple
+  Premium / Balanced / Economy quality dial in the admin Engine Room. Choose the
+  experience you want and the station picks the right model for each job
+  automatically — richer models for hosts and ads, fast ones for quick links.
+  Switch it live without a restart; the segment on air finishes first. Operators no
+  longer track model names, and because model choices now live in one place in the
+  station config, keeping up with new AI models is a one-line change. The cost
+  counter now prices each model the station actually used, so the spend estimate is
+  honest rather than a flat guess.
+
 - **Show Memory: an opt-in record of how each moment was made.** A new provenance
   ledger (off by default) can record, for operators who turn it on, exactly how a
   given second of radio came to be: the raw AI attempts behind a host or ad, the
