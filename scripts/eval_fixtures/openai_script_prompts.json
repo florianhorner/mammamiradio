@@ -21,7 +21,7 @@
     "id": "news_flash_sports",
     "caller": "news_flash",
     "max_tokens": 300,
-    "prompt": "Generate a short Italian sports flash about a fictional minor-league football match in Calabria. 2 sentences, witty. Return JSON: {\"category\": \"sports\", \"text\": \"...\", \"sting\": \"sports\"}"
+    "prompt": "Generate a short Italian sports flash about a fictional minor-league football match in Calabria. 2 sentences, measured and informed with one dry detail, no all-caps hype or goal screams. Return JSON: {\"category\": \"sports\", \"text\": \"...\", \"sting\": \"sports\"}"
   },
   {
     "id": "transition_to_ad",

@@ -8,6 +8,18 @@ The current version source of truth is `pyproject.toml`.
 
 ### Added
 
+- **The admin now shows what happened to a listener request after the hosts handled it.** A "Recently handled" section appears below the Pending queue for up to 5 minutes, showing each request with a status badge — "Sent to hosts" (blue) when the hosts picked it up, or "Song not found" (amber) when the requested track could not be downloaded. Requests leave the Pending list as soon as they're consumed, so operators no longer wonder whether their action registered.
+
+- **Show Memory: an opt-in record of how each moment was made.** A new provenance
+  ledger (off by default) can record, for operators who turn it on, exactly how a
+  given second of radio came to be: the raw AI attempts behind a host or ad, the
+  final spoken script, and whether it actually reached listeners. It writes
+  daily-rotated, private files under the cache directory and is strictly
+  best-effort — it never delays, blocks, or interrupts the live stream, and a
+  busy moment simply drops the oldest record and notes that it did. Enable it with
+  `MAMMAMIRADIO_LEDGER_ENABLED`; tune history with `MAMMAMIRADIO_LEDGER_RETENTION_DAYS`
+  (default 14 days). Listeners never see any of this.
+
 - **Home Assistant context now adapts to each home.** The add-on scores prompt-safe
   entities from the full Home Assistant state snapshot instead of only using a
   hardcoded apartment list, so newly paired devices can contribute ambient radio
@@ -36,7 +48,15 @@ The current version source of truth is `pyproject.toml`.
 
 ### Fixed
 
-- **The admin now shows what happened to a listener request after the hosts handled it.** A "Recently handled" section appears below the Pending queue for up to 5 minutes, showing each request with a status badge — "Sent to hosts" (blue) when the hosts picked it up, or "Song not found" (amber) when the requested track could not be downloaded. Requests leave the Pending list as soon as they're consumed, so operators no longer wonder whether their action registered.
+- **Admin programme durations are now truthful.** Status payloads expose real current segment duration/progress and stream-log durations, and the admin/live/listener UIs no longer invent music, banter, or ad durations when metadata is missing.
+
+- **The HA media player card now shows accurate elapsed time.** The station's Home Assistant entity now includes the `media_position_updated_at` timestamp that HA requires to count forward between updates, so the playback position no longer resets or freezes every 30 seconds in the media card and companion app.
+
+- **`mammamiradio_queue_depth` in the HA entity now reflects the real queue.** The attribute previously always reported 0, so automations checking queue depth never triggered. It now carries the live count of segments waiting to play.
+
+- **Playback position is omitted when the station is idle.** When the station stops, the `media_position` attribute is no longer included in the HA entity, so Home Assistant correctly shows the player as idle rather than frozen at the last played position.
+
+- **Rapid stop-event bursts no longer flood the HA state API.** Consecutive stop-state pushes within 2 seconds are now debounced the same way playing-state pushes are, preventing an unusual watchdog restart loop from generating more API calls than needed.
 
 - **Queueing a song from admin search no longer shows a false error.** Previously, picking a track from the admin search could pop "Failed to add to queue" even though the track was downloading fine and would play — the browser request was waiting on the full download and the connection timed out. The download now runs in the background and the request returns instantly, so the admin sees a "downloading — on air shortly" confirmation and the track plays next once it is ready. The live stream is never interrupted. A queued track now also survives routine edits made while it downloads (adding tracks, reordering, mode toggles), and if a download genuinely fails the admin gets a clear message instead of silence.
 
@@ -51,6 +71,10 @@ The current version source of truth is `pyproject.toml`.
 - **Admin endpoints no longer auto-trust private networks when admin credentials are configured.** Previously a client on a LAN or Tailscale address was trusted for admin access even when `ADMIN_PASSWORD` or `ADMIN_TOKEN` was set, so a configured credential could be silently bypassed from any private-network browser. Now, when a credential is configured, all non-loopback admin traffic must present it. Credential-less private-network deployments are unchanged (still trusted, still CSRF-guarded on writes). Standalone runs that bind to a non-loopback host (including an empty bind host, which listens on all interfaces) now require `ADMIN_PASSWORD` or `ADMIN_TOKEN` at startup. Browser admin access requires `ADMIN_PASSWORD`; `ADMIN_TOKEN` is a header-only API credential a browser cannot send on navigation.
 
 ### Changed
+
+- **Jamendo rotation depth now defaults to 200 tracks.** The `[playlist].jamendo_limit`
+  config key and `JAMENDO_LIMIT` env override control Jamendo API result depth
+  from `1` to `200`, reducing repeats when Jamendo is the active music source.
 
 - **Admin producer-desk polish** — the `/admin` control room is now English-first
   for all utility copy (buttons, tooltips, toasts, status, empty states), with
@@ -136,6 +160,7 @@ The current version source of truth is `pyproject.toml`.
 - **Stable add-on images are now published by Git-tag push** — A new `addon-release.yml` workflow, triggered by `v*` tag push, is now solely responsible for publishing `:X.Y.Z` and `:latest` for the HA add-on. `addon-build.yml` (main-push) no longer publishes those tags; it publishes only `:sha`, `:0.0.0`, and the edge calver. The release workflow validates the tag ref, semver, `config.yaml` version, and prebuilt per-arch `:sha` images, smokes the source image, promotes that exact artifact to stable tags, updates `:latest` only for the newest stable semver, then smokes the published release tag. Release flow: merge version-bump commit → wait for CI → `git tag vX.Y.Z && git push origin vX.Y.Z`.
 - **Queue fallback starts before the health-failure window.** Active listeners now get cache rescue attempts after a 5-second bounded queue-empty wait, before the preserved 30-second silence health-failure threshold triggers.
 - **Engineering backlog moved to GitHub issues** — `docs/todos.md` was removed. Open engineering work is now tracked as GitHub issues. A new CI guard (`scripts/check-no-backlog-files.sh`, wired into `quality.yml`) fails the build if a catch-all `TODO.md`/`TODOS.md`/`docs/todos.md`/`docs/backlog.md` file is re-added.
+- **Sports flashes are clearer and less shouty** — Sports news now uses a steadier host selection path, asks for informed radio-desk updates instead of maximum-excitement commentary, and no longer adds a dedicated sports TTS speed/pitch spike.
 
 ### Fixed
 

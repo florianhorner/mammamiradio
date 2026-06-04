@@ -1005,6 +1005,35 @@ async def test_shutdown_with_no_tasks_set():
     mock_gather.assert_not_called()
 
 
+@pytest.mark.asyncio
+async def test_shutdown_stops_and_clears_ledger():
+    """shutdown() stops the provenance ledger and clears it; a second shutdown
+    with no ledger is a safe no-op. Covers both arcs of the ledger guard
+    deterministically (it must not depend on leftover app.state from prior tests).
+    """
+    import mammamiradio.main as main_mod
+
+    main_mod._producer_task = None
+    main_mod._playback_task = None
+    main_mod._prewarm_task = None
+    for attr in ("producer_task", "prewarm_task", "playback_task", "stream_hub", "background_tasks"):
+        if hasattr(main_mod.app.state, attr):
+            delattr(main_mod.app.state, attr)
+    main_mod.app.state.provider_verdict_task = None
+
+    fake_ledger = MagicMock()
+    main_mod.app.state.ledger = fake_ledger
+    with patch("asyncio.gather", new_callable=AsyncMock):
+        await main_mod.shutdown()  # ledger present → True arc
+    fake_ledger.stop.assert_called_once()
+    assert main_mod.app.state.ledger is None
+
+    # ledger already None → False arc, must not raise
+    with patch("asyncio.gather", new_callable=AsyncMock):
+        await main_mod.shutdown()
+    assert main_mod.app.state.ledger is None
+
+
 def test_fastapi_title_uses_canonical_station_name():
     """The OpenAPI/app title is the canonical station name, sourced from the single constant."""
     from mammamiradio.core.config import DEFAULT_STATION_NAME

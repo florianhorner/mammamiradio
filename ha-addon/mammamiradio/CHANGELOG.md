@@ -4,6 +4,12 @@
 
 ### Added
 
+- **The admin now shows what happened to a listener request after the hosts handled it.** A "Recently handled" section appears below the Pending queue for up to 5 minutes, showing each request with a status badge — "Sent to hosts" (blue) when the hosts picked it up, or "Song not found" (amber) when the requested track could not be downloaded.
+
+- **Jamendo rotation depth now defaults to 200 tracks.** The add-on's bundled
+  `radio.toml` sets `jamendo_limit = 200`, and advanced deployments can override
+  it with `JAMENDO_LIMIT` (`1`-`200`) to tune Jamendo API result depth.
+
 - **Home Assistant context now adapts to each home.** The add-on scores prompt-safe
   entities from the full Home Assistant state snapshot instead of only using a
   hardcoded apartment list. Location, camera, alarm, and free-text helper
@@ -21,9 +27,13 @@
   sample-payload JSON fixtures committed under
   `docs/integrations/sample-payloads/` as the binding contract.
 
+### Changed
+
+- **Sports flashes are clearer and less shouty** — Sports news now uses a steadier host selection path, asks for informed radio-desk updates instead of maximum-excitement commentary, and no longer adds a dedicated sports TTS speed/pitch spike.
+
 ### Fixed
 
-- **The admin now shows what happened to a listener request after the hosts handled it.** A "Recently handled" section appears below the Pending queue for up to 5 minutes, showing each request with a status badge — "Sent to hosts" when the hosts picked it up, or "Song not found" when the requested track could not be downloaded.
+- **Admin programme durations are now truthful.** Status payloads expose real current segment duration/progress and stream-log durations, and the admin/live/listener UIs no longer invent music, banter, or ad durations when metadata is missing.
 
 ## 2.13.0
 
