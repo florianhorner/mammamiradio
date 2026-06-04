@@ -129,6 +129,54 @@ def test_retention_prunes_old_day_files(tmp_path):
     assert not old.exists(), "file older than retention should be pruned"
 
 
+def test_startup_prunes_and_gzips_without_in_process_rollover(tmp_path):
+    # Simulates restart-before-midnight: a fresh process boots on a later date
+    # with leftover files from prior runs and must gzip + prune on startup,
+    # WITHOUT ever observing an in-process date rollover.
+    clock = _Clock()
+    tmp_path.mkdir(exist_ok=True)
+    # A recent prior-day plaintext file (within retention) — should be gzipped.
+    from datetime import datetime, timedelta
+
+    yesterday = (datetime.fromtimestamp(clock.t, tz=UTC) - timedelta(days=1)).strftime("%Y-%m-%d")
+    recent = tmp_path / f"provenance-{yesterday}.jsonl"
+    recent.write_text('{"record":"yesterday"}\n')
+    # An ancient file beyond retention — should be pruned.
+    ancient = tmp_path / "provenance-2000-01-01.jsonl"
+    ancient.write_text('{"record":"ancient"}\n')
+
+    led = ProvenanceLedger(tmp_path, enabled=True, retention_days=14, clock=clock)
+    led.start()
+    led.record({"record": "today"})
+    led.stop()
+
+    # Yesterday's file gzipped on boot (no rollover happened in-process).
+    assert not recent.exists()
+    assert recent.with_suffix(".jsonl.gz").exists()
+    # Ancient file pruned on boot.
+    assert not ancient.exists()
+    assert not ancient.with_suffix(".jsonl.gz").exists()
+    # Today's file is still the live plaintext append target.
+    assert _day_file(tmp_path, clock).exists()
+
+
+def test_sidecar_not_reappended_across_restarts(tmp_path):
+    # The system prompt must be written once, not once per process restart.
+    led1 = ProvenanceLedger(tmp_path, enabled=True)
+    led1.start()
+    led1.record_system_prompt("hashABC", "SYSTEM PROMPT TEXT")
+    led1.stop()
+
+    # Fresh ledger object (new process) over the same dir, same prompt hash.
+    led2 = ProvenanceLedger(tmp_path, enabled=True)
+    led2.start()
+    led2.record_system_prompt("hashABC", "SYSTEM PROMPT TEXT")
+    led2.stop()
+
+    rows = _read_lines(tmp_path / "system-prompts.jsonl")
+    assert len(rows) == 1, "restart re-appended an already-recorded system prompt"
+
+
 def test_sidecar_dedup_writes_once(tmp_path):
     led = ProvenanceLedger(tmp_path, enabled=True)
     led.start()

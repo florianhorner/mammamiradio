@@ -1189,7 +1189,10 @@ async def run_playback_loop(app) -> None:
             was_skipped = False
             # Sample listeners at the START of the send loop so a mid-segment
             # disconnect doesn't mislabel an aired segment as no_listeners
-            # (matches classify_stream_outcome's documented contract).
+            # (matches classify_stream_outcome's documented contract). Default to
+            # 0 first so the finally's _emit_stream_result never references an
+            # unbound local if listener sampling itself raises.
+            start_listeners = 0
             start_listeners = len(hub._listeners)
             skip_event.clear()
             with open(segment.path, "rb") as f:

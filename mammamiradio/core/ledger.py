@@ -88,6 +88,11 @@ class ProvenanceLedger:
             logger.warning("Provenance ledger dir unavailable (%s); ledger disabled", exc)
             self.enabled = False
             return
+        # Seed the sidecar dedup set from disk BEFORE the thread (and thus any
+        # record_system_prompt caller) can run, so a restart does not re-append
+        # the multi-KB system prompt that is already recorded. Cheap one-time
+        # read; the slow gzip/prune work happens on the writer thread instead.
+        self._seed_seen_prompt_hashes()
         self._stopping = False
         self._thread = threading.Thread(target=self._run, name="provenance-ledger", daemon=True)
         self._thread.start()
@@ -154,6 +159,15 @@ class ProvenanceLedger:
     # ── writer thread ──────────────────────────────────────────────────────
 
     def _run(self) -> None:
+        # Enforce retention on boot, off the startup/audio path. Without this,
+        # gzip+prune only ever fire when the LONG-RUNNING process observes an
+        # in-process UTC midnight — so an addon that restarts before midnight
+        # (HA watchdog, updates, daily reboot) would never prune, and plaintext
+        # provenance would accumulate past retention_days forever.
+        try:
+            self._startup_maintenance()
+        except Exception as exc:  # pragma: no cover - maintenance must never kill the writer
+            logger.debug("Provenance startup maintenance failed: %s", exc)
         while True:
             with self._cond:
                 while not self._records:
@@ -185,6 +199,52 @@ class ProvenanceLedger:
             self._safe_write_line(self.ledger_dir / _SIDECAR_FILENAME, payload)
             return
         self._safe_write_line(self._provenance_path(), row)
+
+    # ── startup maintenance (writer-thread only) ───────────────────────────
+
+    def _startup_maintenance(self) -> None:
+        """Boot-time retention pass: pin today's date, gzip any leftover
+        plaintext day-files from a prior run, then prune expired files.
+
+        This makes retention robust to restart-before-midnight: a process that
+        never lives across an in-process date rollover still compresses and
+        prunes on every boot. Runs on the writer thread so the (potentially slow
+        on a Pi SD card) gzip never blocks app startup or the audio path.
+        """
+        today = datetime.fromtimestamp(self._clock(), tz=UTC).strftime("%Y-%m-%d")
+        self._current_date = today
+        try:
+            stale = list(self.ledger_dir.glob(_PROVENANCE_GLOB))
+        except OSError:
+            stale = []
+        for path in stale:
+            date_str = path.name[len(_PROVENANCE_PREFIX) :].split(".", 1)[0]
+            # Today's file is the active append target — leave it plaintext.
+            if date_str != today:
+                self._gzip_day(date_str)
+        self._prune()
+
+    def _seed_seen_prompt_hashes(self) -> None:
+        """Load already-recorded sidecar hashes so a restart does not re-append
+        a system prompt that is already on disk. Best-effort; a read failure
+        just means the worst case (one redundant sidecar row) on this boot."""
+        sidecar = self.ledger_dir / _SIDECAR_FILENAME
+        try:
+            if not sidecar.exists():
+                return
+            with sidecar.open("r", encoding="utf-8") as fh:
+                for line in fh:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        prompt_hash = json.loads(line).get("system_prompt_hash")
+                    except (ValueError, TypeError):
+                        continue
+                    if prompt_hash:
+                        self._seen_prompt_hashes.add(prompt_hash)
+        except OSError as exc:
+            logger.debug("Provenance sidecar seed failed: %s", exc)
 
     # ── rotation / files (writer-thread only) ──────────────────────────────
 
