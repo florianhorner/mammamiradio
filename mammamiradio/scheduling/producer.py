@@ -821,6 +821,7 @@ async def run_producer(
                             current_track=state.current_track,
                             listeners_active=state.listeners_active,
                             session_stopped=state.session_stopped,
+                            station_name=config.display_station_name,
                         )
                         interval = 30.0
                     except Exception:
@@ -915,6 +916,7 @@ async def run_producer(
                             current_track=None,
                             listeners_active=state.listeners_active,
                             session_stopped=True,
+                            station_name=config.display_station_name,
                         )
                     )
                 )

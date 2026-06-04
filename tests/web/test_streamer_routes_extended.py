@@ -3279,7 +3279,8 @@ async def test_create_clip_writes_sidecar(tmp_path):
     sidecar = _json.loads(sidecar_path.read_text())
     assert sidecar["track_title"] == "Albachiara"
     assert sidecar["track_artist"] == "Vasco Rossi"
-    assert "station_name" in sidecar
+    # The sidecar name must come from the single resolver, not a stale literal.
+    assert sidecar["station_name"] == app.state.config.display_station_name
     assert "created_at" in sidecar
 
 
