@@ -1,0 +1,45 @@
+Verification for florianhorner/feat/voice-options-research
+(run locally in .venv / Python 3.11 against the branch merged with origin/main)
+Merge commit: c1319ea7 (Merge origin/main); fix commit: 7a190b23
+
+$ python scripts/coverage-ratchet.py check   # CI's full-suite test + coverage gate
+2392 passed, 2 skipped, 7 deselected, 1 warning in ~66s
+Required test coverage of 92.0% reached. Total coverage: 94.14%
+All coverage floors held. Total: 94% (floor: 92%)
+  mammamiradio/core/config.py            93% (floor 90)
+  mammamiradio/core/provider_checks.py   85% (floor 85, newly added)
+
+$ ruff check .
+All checks passed!
+
+$ ruff format --check tests/audio/test_tts.py tests/core/test_provider_checks.py \
+    tests/core/test_config_tts_normalization.py tests/web/test_tts_provider_status.py
+4 files already formatted
+
+$ mypy tests/audio/test_tts.py tests/core/test_provider_checks.py \
+    tests/web/test_tts_provider_status.py tests/core/test_config_tts_normalization.py
+Success: no issues found in 4 source files
+
+$ bash scripts/check-release-invariants.sh
+Passed: 6  Failed: 0 — All invariants passed.
+
+$ bash scripts/check-changelog-lint.sh
+Changelog lint clean.
+
+$ bash scripts/validate-addon.sh
+All checks passed. Safe to push.
+
+Pre-ship review squad (3 parallel agents: adversarial / test-coverage / docs-config)
+ran on the feature commit. The TTS fallback CODE was confirmed correct (every cloud
+engine degrades to Edge, then to silence). The gap was missing proof — the
+audio-delivery coverage rule (Scenario 2) was unmet and core.config had silently
+dropped below its 90% floor. All P0/P1 findings fixed; no production code changed.
+
+New/changed behavior covered by tests (cloud-TTS fallback, Scenario 1/2):
+  tests/audio/test_tts.py::test_synthesize_azure_http_error_falls_back_to_edge
+  tests/audio/test_tts.py::test_synthesize_elevenlabs_http_error_falls_back_to_edge
+  tests/audio/test_tts.py::test_synthesize_elevenlabs_missing_key_falls_back_to_edge
+  tests/audio/test_tts.py::test_synthesize_azure_full_failure_falls_back_to_silence
+  tests/core/test_provider_checks.py::test_provider_check_classifies_azure_and_elevenlabs_auth_errors
+  tests/web/test_tts_provider_status.py  (5 cases: primary / missing-key / mixed_tts / partial / all-edge)
+  tests/core/test_config_tts_normalization.py  (14 cases: host / ad-voice / sweeper degradation branches)
