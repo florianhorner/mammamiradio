@@ -1523,12 +1523,7 @@ NEWS_FLASH_CATEGORIES = {
 def _sports_anchor_score(host: HostPersonality) -> int:
     """Score hosts for clear sports updates instead of maximum excitement."""
     axes = host.personality
-    return (
-        abs(axes.energy - 62)
-        + abs(axes.chaos - 42)
-        + abs(axes.verbosity - 48)
-        + (abs(axes.warmth - 55) // 2)
-    )
+    return abs(axes.energy - 62) + abs(axes.chaos - 42) + abs(axes.verbosity - 48) + (abs(axes.warmth - 55) // 2)
 
 
 def _pick_news_flash_host(config: StationConfig, category: str) -> HostPersonality:
