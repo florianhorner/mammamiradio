@@ -50,6 +50,8 @@
 
 ### Changed
 
+- **The station now defaults to English-first.** New installs render English utility copy on the listener page (with Italian station-feel words intact) and English-first admin, and the AI hosts code-switch with Italian flavor. Turn on **Super Italian Mode** in the add-on options (or the admin Engine Room) for the fully Italian-first experience.
+
 - **The stable add-on now presents as stable in Home Assistant.** The release channel no longer shows the Experimental pill, Edge keeps it, and both add-on folders now include the shared custom AppArmor profile so Supervisor can award the extra security-rating point after install/update.
 
 - **Sports flashes are clearer and less shouty** — Sports news now uses a steadier host selection path, asks for informed radio-desk updates instead of maximum-excitement commentary, and no longer adds a dedicated sports TTS speed/pitch spike.

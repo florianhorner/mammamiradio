@@ -97,6 +97,8 @@ The current version source of truth is `pyproject.toml`.
 
 ### Changed
 
+- **The station now defaults to English-first.** New installs render English utility copy on the listener page (with Italian station-feel words and headlines intact), and the AI hosts code-switch — English narrative with Italian flavor. The admin control room stays English-first. Flip on **Super Italian Mode** (admin Engine Room toggle, or `MAMMAMIRADIO_SUPER_ITALIAN=true`) for the fully Italian-first listener and host experience.
+
 - **The stable Home Assistant add-on now presents as stable in the store.** The release channel no longer carries the Experimental pill, while the Edge channel keeps it. Both add-on folders now ship the same custom AppArmor profile so Supervisor can award the extra security-rating point after install/update.
 
 - **Jamendo rotation depth now defaults to 200 tracks.** The `[playlist].jamendo_limit`
