@@ -1634,6 +1634,26 @@ async def test_push_state_to_ha_normal(reset_ha_push_debounce):
 
 
 @pytest.mark.asyncio
+async def test_push_state_to_ha_media_position_floored_at_zero(reset_ha_push_debounce):
+    """media_position must never be negative even if started is slightly in the future."""
+    mock_client = AsyncMock()
+    mock_client.post.return_value = MagicMock(status_code=200)
+
+    with patch("mammamiradio.home.ha_context._get_ha_client", return_value=mock_client):
+        await push_state_to_ha(
+            ha_url="http://ha.local:8123",
+            ha_token="test-token",
+            now_streaming={"type": "music", "label": "Song", "started": time.time() + 10, "metadata": {}},
+            current_track=None,
+            listeners_active=1,
+            session_stopped=False,
+        )
+
+    mp_call = next(c for c in mock_client.post.call_args_list if "media_player" in c.args[0])
+    assert mp_call.kwargs["json"]["attributes"]["media_position"] >= 0.0
+
+
+@pytest.mark.asyncio
 async def test_push_state_to_ha_prefers_now_streaming_metadata(reset_ha_push_debounce):
     """HA title/artist must describe the on-air segment, not the producer's queued track."""
     mock_client = AsyncMock()
