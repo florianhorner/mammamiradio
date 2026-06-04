@@ -29,6 +29,13 @@ load_dotenv()
 _TRUTHY = {"true", "1", "yes"}
 _FALSY = {"false", "0", "no"}
 
+# Canonical user-facing station name — the single source of truth. Every
+# user-visible surface (HA entities, FastAPI/OpenAPI title, clip sidecar, config
+# fallbacks) references this so the name cannot drift the way "Radio MammaMia",
+# "MammaMia", "Malamie", and lowercase "mammamiradio" once did. Technical
+# identifiers (package name, env vars, entity IDs, slugs) stay "mammamiradio".
+DEFAULT_STATION_NAME = "Mamma Mi Radio"
+
 
 def coerce_bool(value: object, default: bool = False) -> bool:
     """Type-safe bool coercion that rejects truthy-string-of-falsy-word.
@@ -57,7 +64,7 @@ def coerce_bool(value: object, default: bool = False) -> bool:
 class StationSection:
     """Station identity and public stream metadata."""
 
-    name: str = "Mamma Mi Radio"
+    name: str = DEFAULT_STATION_NAME
     language: str = "it"
     theme: str = ""
 
@@ -263,7 +270,7 @@ class BrandTheme:
 class BrandSection:
     """The brand-fiction layer: what listeners see, separate from the engine config."""
 
-    station_name: str = "mammamiradio"
+    station_name: str = DEFAULT_STATION_NAME
     frequency: str = ""
     city: str = ""
     founded: int = 0
@@ -311,6 +318,16 @@ class StationConfig:
     # during config load because the configured ID wasn't valid for the chosen
     # backend. Empty when all voices passed validation.
     tts_degraded_voices: list[str] = field(default_factory=list)
+
+    @property
+    def display_station_name(self) -> str:
+        """Canonical listener-facing station name — the single resolver, never blank.
+
+        Every user-visible surface (HA entities, clip sidecar, etc.) reads this
+        instead of re-deriving the name, so the value stays consistent. Resolves
+        brand → station → the canonical default.
+        """
+        return self.brand.station_name or self.station.name or DEFAULT_STATION_NAME
 
 
 def _normalize_tts_voices(config: StationConfig) -> None:
@@ -466,7 +483,7 @@ def _parse_brand(raw: dict, hosts: list[HostPersonality]) -> tuple[BrandSection,
     if not brand_raw:
         return (
             BrandSection(
-                station_name=raw.get("station", {}).get("name", "mammamiradio"),
+                station_name=raw.get("station", {}).get("name", DEFAULT_STATION_NAME),
                 hosts=[
                     BrandHost(engine_host=h.name, display_name=h.name, description=(h.style or "")[:160]) for h in hosts
                 ],
@@ -567,7 +584,7 @@ def _parse_brand(raw: dict, hosts: list[HostPersonality]) -> tuple[BrandSection,
                 brand_raw["founded"] = year
 
     brand = BrandSection(
-        station_name=brand_raw.get("station_name", raw.get("station", {}).get("name", "mammamiradio")),
+        station_name=brand_raw.get("station_name", raw.get("station", {}).get("name", DEFAULT_STATION_NAME)),
         frequency=brand_raw.get("frequency", ""),
         city=brand_raw.get("city", ""),
         founded=int(brand_raw.get("founded", 0)),

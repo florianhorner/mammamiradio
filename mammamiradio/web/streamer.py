@@ -1198,6 +1198,7 @@ async def run_playback_loop(app) -> None:
                     listeners_active=state.listeners_active,
                     session_stopped=state.session_stopped,
                     queue_depth=len(state.queued_segments),
+                    station_name=config.display_station_name,
                 )
             )
             _ha_push_tasks.add(_ha_task)
@@ -2902,7 +2903,7 @@ async def create_clip(request: Request):
     # clip into a 500. Normalize to dict before reading fields.
     raw_meta = now_streaming.get("metadata", {}) if isinstance(now_streaming, dict) else {}
     meta = raw_meta if isinstance(raw_meta, dict) else {}
-    station_name = getattr(config.brand, "station_name", "Mamma Mi Radio")
+    station_name = config.display_station_name
     track_title = str(meta.get("title_only") or meta.get("title") or "").strip()
     track_artist = str(meta.get("artist") or "").strip()
     sidecar = {
@@ -2998,7 +2999,7 @@ async def clip_landing(clip_id: str, request: Request):
 
     ingress_prefix = _sanitize_ingress_prefix(request.headers.get("X-Ingress-Path", ""))
     public_base_url = f"{str(request.base_url).rstrip('/')}{ingress_prefix}"
-    station_name = sidecar.get("station_name") or getattr(config.brand, "station_name", "Mamma Mi Radio")
+    station_name = sidecar.get("station_name") or config.display_station_name
     track_title = sidecar.get("track_title", "")
     track_artist = sidecar.get("track_artist", "")
 

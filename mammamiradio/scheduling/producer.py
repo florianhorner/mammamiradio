@@ -815,6 +815,7 @@ async def run_producer(
                             listeners_active=state.listeners_active,
                             session_stopped=state.session_stopped,
                             queue_depth=len(state.queued_segments),
+                            station_name=config.display_station_name,
                         )
                         interval = 30.0
                     except Exception:
@@ -910,6 +911,7 @@ async def run_producer(
                             listeners_active=state.listeners_active,
                             session_stopped=True,
                             queue_depth=0,
+                            station_name=config.display_station_name,
                         )
                     )
                 )

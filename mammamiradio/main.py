@@ -14,7 +14,7 @@ from pathlib import Path
 
 from fastapi import FastAPI
 
-from mammamiradio.core.config import load_config
+from mammamiradio.core.config import DEFAULT_STATION_NAME, load_config
 from mammamiradio.core.models import StationState
 from mammamiradio.core.sync import init_db
 from mammamiradio.home.evening_memory import EveningLedger
@@ -75,7 +75,7 @@ async def _lifespan(app: FastAPI):
     await shutdown()
 
 
-app = FastAPI(title="mammamiradio", lifespan=_lifespan)
+app = FastAPI(title=DEFAULT_STATION_NAME, lifespan=_lifespan)
 app.include_router(router)
 app.include_router(listener_requests_router)
 app.include_router(integrations_router)

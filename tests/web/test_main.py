@@ -1003,3 +1003,12 @@ async def test_shutdown_with_no_tasks_set():
         await main_mod.shutdown()
 
     mock_gather.assert_not_called()
+
+
+def test_fastapi_title_uses_canonical_station_name():
+    """The OpenAPI/app title is the canonical station name, sourced from the single constant."""
+    from mammamiradio.core.config import DEFAULT_STATION_NAME
+    from mammamiradio.main import app
+
+    assert DEFAULT_STATION_NAME == "Mamma Mi Radio"
+    assert app.title == DEFAULT_STATION_NAME
