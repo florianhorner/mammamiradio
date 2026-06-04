@@ -1154,6 +1154,54 @@ def test_plan_listener_request_block_song_still_downloading_defers_at_cycle_two(
     assert req in state.pending_requests
 
 
+def test_plan_listener_request_block_song_still_downloading_defers_at_cycle_three(state):
+    """Cycle 3 (banter_cycles_missed=2→3) must still defer — timeout is at cycle 5."""
+    req = {
+        "name": "Luca",
+        "message": "metti Eros Ramazzotti",
+        "type": "song_request",
+        "song_found": False,
+        "song_error": False,
+        "song_track": None,
+        "banter_cycles_missed": 2,
+    }
+    state.pending_requests.append(req)
+
+    prompt, commit = _plan_listener_request_block(state)
+
+    assert prompt == ""
+    assert commit is not None
+    assert commit.consume is False
+    assert commit.mark_song_error is False
+    commit.apply(state)
+    assert req["banter_cycles_missed"] == 3
+    assert req in state.pending_requests
+
+
+def test_plan_listener_request_block_song_still_downloading_defers_at_cycle_four(state):
+    """Cycle 4 (banter_cycles_missed=3→4) must still defer — timeout is at cycle 5."""
+    req = {
+        "name": "Luca",
+        "message": "metti Eros Ramazzotti",
+        "type": "song_request",
+        "song_found": False,
+        "song_error": False,
+        "song_track": None,
+        "banter_cycles_missed": 3,
+    }
+    state.pending_requests.append(req)
+
+    prompt, commit = _plan_listener_request_block(state)
+
+    assert prompt == ""
+    assert commit is not None
+    assert commit.consume is False
+    assert commit.mark_song_error is False
+    commit.apply(state)
+    assert req["banter_cycles_missed"] == 4
+    assert req in state.pending_requests
+
+
 def test_plan_listener_request_block_song_still_downloading_marks_error_after_five_cycles(state):
     req = {
         "name": "Luca",
