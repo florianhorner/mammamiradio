@@ -3438,12 +3438,25 @@ async function toggleSuperItalian(el){
 }
 
 // ── AI Quality dial (model profile) ──
+const QUALITY_LABELS={
+  premium:'Premium — best hosts, highest cost',
+  balanced:'Balanced — great hosts, sensible cost',
+  economy:'Economy — cheapest, lighter hosts',
+};
 async function loadQuality(){
   try{
     const r=await api('GET','/api/quality');
     const sel=document.getElementById('qualityProfile');
-    if(sel&&r&&r.active_profile)sel.value=r.active_profile;
-  }catch(e){/* ignore — defaults to balanced */}
+    if(!sel||!r)return;
+    // Populate from the live profile set so custom radio.toml profiles appear
+    // (and removed ones don't linger). Falls back to the static options on error.
+    if(Array.isArray(r.profiles)&&r.profiles.length){
+      sel.innerHTML=r.profiles.map(p=>
+        '<option value="'+p+'">'+(QUALITY_LABELS[p]||(p.charAt(0).toUpperCase()+p.slice(1)))+'</option>'
+      ).join('');
+    }
+    if(r.active_profile)sel.value=r.active_profile;
+  }catch(e){/* ignore — keeps the static default options */}
 }
 async function setQuality(value){
   const sel=document.getElementById('qualityProfile');

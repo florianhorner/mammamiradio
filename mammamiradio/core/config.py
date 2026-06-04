@@ -266,8 +266,7 @@ def _apply_model_env_overrides(models: ModelsSection) -> None:
 
     - CLAUDE_CREATIVE_MODEL → anthropic creative-role model
     - CLAUDE_MODEL          → anthropic fast-role model
-    - OPENAI_SCRIPT_MODEL   → every OpenAI catalog entry (historically one global
-                              OpenAI fallback model)
+    - OPENAI_SCRIPT_MODEL   → every OpenAI catalog entry (one global OpenAI fallback model)
     """
     dp = models.profiles.get(models.default_profile, {})
     anth = dp.get("anthropic", {})
