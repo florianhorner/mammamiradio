@@ -12,7 +12,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
 
@@ -31,12 +31,6 @@ jobs:
 
       - name: Release cooldown gate self-test
         run: bash tests/workflows/test_cooldown_gate.sh
-
-      - name: Edge bump monotonic guard self-test
-        run: bash tests/workflows/test_edge_bump_monotonic.sh
-
-      - name: Edge calver self-test
-        run: bash tests/workflows/test_edge_calver.sh
 
       - name: Edge add-on validation self-test
         run: bash tests/workflows/test_validate_addon_edge.sh

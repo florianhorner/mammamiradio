@@ -2,24 +2,82 @@
 
 ## Unreleased
 
+### Added
+
+- **Jamendo rotation depth now defaults to 200 tracks.** The add-on's bundled
+  `radio.toml` sets `jamendo_limit = 200`, and advanced deployments can override
+  it with `JAMENDO_LIMIT` (`1`-`200`) to tune Jamendo API result depth.
+
+- **Home Assistant context now adapts to each home.** The add-on scores prompt-safe
+  entities from the full Home Assistant state snapshot instead of only using a
+  hardcoded apartment list. Location, camera, alarm, and free-text helper
+  entities plus secret-shaped attributes are filtered before prompt assembly;
+  who's home stays as simple home/away (never location) so the hosts can still
+  welcome you back and notice an empty house. The admin Engine Room shows what
+  was selected plus privacy filter counts.
+
+- **Music Assistant now-playing contract** — a new read-only endpoint at
+  `GET /api/integrations/v1/now-playing` exposes a stable, normalized
+  shape for third-party music controllers (Music Assistant, custom
+  Lovelace cards). External players can show the current track, host
+  banter, ads, and station IDs without reverse-engineering the listener
+  payload. Includes `ETag` + `Cache-Control` for cheap polling and ten
+  sample-payload JSON fixtures committed under
+  `docs/integrations/sample-payloads/` as the binding contract.
+
 ### Fixed
 
 - **Admin programme durations are now truthful.** Status payloads expose real current segment duration/progress and stream-log durations, and the admin/live/listener UIs no longer invent music, banter, or ad durations when metadata is missing.
+
+## 2.13.0
+
+### Added
+
+- **Shareable clip moments** — Tap "Condividi clip" on the listener page (or the Clip button on `/live`) to share the last 30 seconds as a branded landing page. The link previews in iMessage and WhatsApp with the station name, the track that was playing, the 30-second audio, and an "Ascolta in diretta" button. Expired and missing clips show a friendly "Questo momento è passato" page instead of a 404.
+- **Host interrupt trigger** — When a Home Assistant timer fires, the hosts immediately interrupt whatever is playing and deliver an urgent banter segment telling the listener to act. Configure per-timer directives in `radio.toml` under `[[homeassistant.timer_interrupt]]`. The same mechanism is exposed as `POST /api/interrupt`, so any HA automation (motion sensor, alarm, dishwasher done) can inject a custom directive into the stream without code changes.
+- **Admin producer desk** — The admin panel is reorganized around the live broadcast: an On Air zone (current segment, transport controls, running AI cost), a Live Queue holding the forward Scaletta, and a Rotation Pool, with secondary controls tucked into collapsible drawers. Operators can drop a single queued segment without clearing the whole queue.
+- **Stream audio format on `/public-status`** — The public payload now exposes a `stream.audio_format` object (codec, mime type, bitrate, sample rate, channels). External integrations can declare `/stream` correctly before playback instead of assuming the default MP3/192k configuration.
+
+### Changed
+
+- **Banter cadence minimum is now 2 songs.** Previously a value of `1` for `songs_between_banter` made the hosts talk after every single song. The admin Cadenza slider and config validation now enforce a floor of 2.
+
+### Fixed
+
+- **Host banter is no longer truncated to its first phrase.** Per-line voice normalization had been trimming silence with a setting that stopped output at the first pause, collapsing multi-line host exchanges to a second or two. Silence trimming now removes trailing silence only.
+- **Pacing API rejects malformed payloads.** Non-object bodies and non-integer fields on `PATCH /api/pacing` now return a clear error instead of a 500 or silent coercion. Cadence values are clamped to a safe ceiling so a single request cannot effectively disable banter or ads.
+- **yt-dlp downloads now time out after 30 seconds.** A hung YouTube connection can no longer permanently block a thread in the audio pipeline.
+- **`httpx` and `httpcore` request logs are quiet by default.** Successful outbound HTTP calls no longer flood the log stream. Set `MAMMAMIRADIO_HTTP_LOG_LEVEL=INFO` (or `DEBUG`) to re-enable detailed traffic logs.
+
+## 2.12.4
+
+### Added
+
+- **Edge add-on (development channel)** — A second add-on, **Mamma Mi Radio (Edge)**, now ships from this repository and tracks the latest development build. Install the stable **Mamma Mi Radio** add-on for daily listening; Edge is for testing. The two share one image and cannot run at the same time (both use port 8000).
+- **Runtime status in the Engine Room** — The admin Engine Room now shows a live health indicator and a Runtime Status card: which audio, script, and voice providers are active, plus any recent fallbacks.
+
+### Fixed
+
+- **Spoken host segments are assembled more strictly.** Broken or implausibly short multi-line banter is now rejected before it can reach the listener, instead of playing a malformed segment.
+- **Admin control touch targets meet the 44 px accessibility minimum.** Mode toggles and other admin controls are easier to tap on phones and tablets.
 
 ## 2.12.3
 
 ### Added
 
+- **HA Green performance smoke gate** — `make perf-smoke` now checks a live station's health, readiness, public runtime status, and first stream byte against configurable HA Green thresholds.
 - **Festival Mode** — New `festival_mode` add-on option. When enabled, the AI hosts become theatrical music competition MCs: songs are introduced as fictional Italian-regional delegations, dramatic points are assigned, and drinking game triggers are called. Toggleable live from the admin panel without an add-on restart; persisted through `/data/options.json` so it survives restarts.
 
 ### Changed
 
+- **Queue fallback starts before the health-failure window.** Active listeners now get cache rescue attempts after a 5-second bounded queue-empty wait, before the preserved 30-second silence health-failure threshold triggers.
 - **Italian-first is now the default.** New add-on installs default `super_italian_mode` to `true`, while the option remains available for operators who want the older code-switching style.
 - **Jamendo can participate in the normal programme.** When charts and Jamendo are both configured, startup blends Jamendo tracks into the chart rotation instead of keeping Jamendo fallback-only.
 - **Admin source chips enrich instead of replacing the programme.** Jamendo, chart reload, and decade buttons add tracks into the current rotation without purging the queue, skipping current playback, or clearing listener requests.
 
 ### Fixed
 
+- **Cache rescue no longer repeats the first cached song by filename.** Empty-queue fallback avoids the current/recent song when alternatives exist and randomizes the rescue candidate, so skip is less likely to land back on the same cached track.
 - **Palinsesto hides scheduler pool diagnostics and duplicate current rows.** Pool badges/wrap notes no longer appear in the operator programme, and the current segment is filtered out of history.
 - **Speech/ad transition stacking is reduced.** Segments that already carry a music-tail crossfade no longer receive an extra transition sting before them.
 - **Empty-queue skip is safer on HA Green.** Skip records a bridge action and forces next music before cutting when the queue is empty, and status exposes skip readiness.

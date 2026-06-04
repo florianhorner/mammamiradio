@@ -25,11 +25,12 @@ from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 
 from mammamiradio.core.config import load_config
-from mammamiradio.core.models import Segment, SegmentType, StationState, Track
+from mammamiradio.core.models import PlaylistSource, Segment, SegmentType, StationState, Track
 from mammamiradio.web.streamer import (
     LiveStreamHub,
     _apply_loaded_source,
     _runtime_health_snapshot,
+    _runtime_status_snapshot,
     _sync_runtime_state,
     router,
 )
@@ -280,6 +281,59 @@ class TestRuntimeHealthSnapshot:
 
         assert snap["failover_active"] is True
 
+    def test_failover_active_true_for_canned_fallback_without_audio_source(self):
+        app = _make_app()
+        app.state.station_state.now_streaming = {"metadata": {"fallback": True, "canned": True}}
+        req = _fake_request(app)
+
+        snap = _runtime_health_snapshot(req)
+
+        assert snap["audio_source"] == "canned"
+        assert snap["failover_active"] is True
+
+    def test_failover_active_true_for_norm_cache_rescue(self):
+        app = _make_app()
+        app.state.station_state.now_streaming = {
+            "metadata": {"audio_source": "norm_cache", "queue_drain_recovery": True}
+        }
+        req = _fake_request(app)
+
+        snap = _runtime_health_snapshot(req)
+
+        assert snap["audio_source"] == "norm_cache"
+        assert snap["failover_active"] is True
+
+    def test_failover_active_true_for_emergency_tone(self):
+        app = _make_app()
+        app.state.station_state.now_streaming = {
+            "metadata": {"audio_source": "emergency_tone", "queue_drain_recovery": True}
+        }
+        req = _fake_request(app)
+
+        snap = _runtime_health_snapshot(req)
+
+        assert snap["failover_active"] is True
+
+    def test_failover_active_true_for_silence_fallback(self):
+        app = _make_app()
+        app.state.station_state.now_streaming = {"metadata": {"silence_fallback": True}}
+        req = _fake_request(app)
+
+        snap = _runtime_health_snapshot(req)
+
+        assert snap["failover_active"] is True
+
+    def test_download_audio_source_reports_playlist_source_not_failover(self):
+        app = _make_app()
+        app.state.station_state.playlist_source = PlaylistSource(kind="charts")
+        app.state.station_state.now_streaming = {"metadata": {"audio_source": "download"}}
+        req = _fake_request(app)
+
+        snap = _runtime_health_snapshot(req)
+
+        assert snap["audio_source"] == "charts"
+        assert snap["failover_active"] is False
+
     def test_shadow_corrections_reflected_in_snapshot(self):
         app = _make_app()
         app.state.station_state.shadow_queue_corrections = 7
@@ -326,6 +380,197 @@ class TestRuntimeHealthSnapshot:
 
         assert snap["audio_source"] == "unknown"
 
+    def test_queue_empty_elapsed_and_silence_failure_are_exposed(self):
+        app = _make_app()
+        app.state.stream_hub.subscribe()
+        app.state.station_state.queue_empty_since = time.monotonic() - 31
+        req = _fake_request(app)
+
+        snap = _runtime_health_snapshot(req)
+
+        assert snap["queue_empty_elapsed_s"] >= 30
+        assert snap["silence_with_listeners"] is True
+
+
+# ---------------------------------------------------------------------------
+# _runtime_status_snapshot tests
+# ---------------------------------------------------------------------------
+
+
+class TestRuntimeStatusSnapshot:
+    def test_initial_primary_audio_observation_does_not_emit_switch_event(self):
+        app = _make_app()
+        state = app.state.station_state
+        state.playlist_source = PlaylistSource(kind="charts")
+
+        state.on_stream_segment(
+            Segment(
+                type=SegmentType.MUSIC,
+                path=Path("/tmp/primary.mp3"),
+                metadata={"title": "Primary", "audio_source": "download"},
+            )
+        )
+
+        assert state.runtime_provider_state["audio_source"]["current_provider"] == "charts"
+        assert list(state.runtime_events) == []
+
+    def test_regular_banter_does_not_overwrite_audio_provider(self):
+        app = _make_app()
+        state = app.state.station_state
+        state.playlist_source = PlaylistSource(kind="charts")
+        state.update_runtime_provider(
+            "audio_source",
+            current_provider="charts",
+            primary_provider="charts",
+            fallback_active=False,
+            reason="Primary audio source is on air",
+        )
+
+        state.on_stream_segment(
+            Segment(
+                type=SegmentType.BANTER,
+                path=Path("/tmp/banter.mp3"),
+                metadata={"title": "Host talk"},
+            )
+        )
+
+        assert state.runtime_provider_state["audio_source"]["current_provider"] == "charts"
+        assert list(state.runtime_events) == []
+
+    def test_ready_status_has_normalized_provider_contract(self):
+        app = _make_app()
+        app.state.config.anthropic_api_key = "anthropic-key"
+        app.state.config.openai_api_key = "openai-key"
+        app.state.station_state.now_streaming = {"metadata": {"audio_source": "charts"}}
+        req = _fake_request(app)
+
+        snap = _runtime_status_snapshot(req)
+
+        assert snap["health_state"] == "ready"
+        assert snap["fallback_active"] is False
+        assert set(snap["providers"]) == {"audio_source", "script_provider", "tts_provider"}
+        assert snap["providers"]["script_provider"]["current_provider"] == "anthropic"
+        assert snap["no_failover_message"] == "No failover in current session."
+
+    def test_degraded_status_surfaces_audio_failover_event(self):
+        app = _make_app()
+        state = app.state.station_state
+        state.on_stream_segment(
+            Segment(
+                type=SegmentType.MUSIC,
+                path=Path("/tmp/fallback.mp3"),
+                metadata={
+                    "title": "Fallback",
+                    "audio_source": "fallback_demo_asset",
+                    "fallback": True,
+                    "fallback_reason": "Queue empty; demo asset rescue active",
+                },
+            )
+        )
+        req = _fake_request(app)
+
+        snap = _runtime_status_snapshot(req)
+
+        assert snap["health_state"] == "degraded"
+        assert snap["fallback_active"] is True
+        assert snap["providers"]["audio_source"]["current_provider"] == "fallback_demo_asset"
+        assert snap["failover_events"][0]["reason"] == "Queue empty; demo asset rescue active"
+        assert snap["no_failover_message"] == ""
+
+    def test_blocked_status_overrides_fallback_state(self):
+        app = _make_app()
+        task = MagicMock()
+        task.done.return_value = True
+        app.state.producer_task = task
+        req = _fake_request(app)
+
+        snap = _runtime_status_snapshot(req)
+
+        assert snap["health_state"] == "blocked"
+        assert snap["health_color"] == "red"
+
+    def test_status_prefers_recorded_script_fallback_over_provider_health(self):
+        app = _make_app()
+        state = app.state.station_state
+        app.state.config.anthropic_api_key = "anthropic-key"
+        app.state.config.openai_api_key = "openai-key"
+        state.update_runtime_provider(
+            "script_provider",
+            current_provider="openai",
+            primary_provider="anthropic",
+            fallback_active=True,
+            reason="anthropic_exception",
+        )
+        req = _fake_request(app)
+
+        snap = _runtime_status_snapshot(req)
+
+        assert snap["health_state"] == "degraded"
+        assert snap["providers"]["script_provider"]["current_provider"] == "openai"
+        assert snap["providers"]["script_provider"]["fallback_active"] is True
+        assert snap["providers"]["script_provider"]["switch_reason"] == "anthropic_exception"
+
+    def test_status_uses_recorded_script_recovery_after_fallback(self):
+        app = _make_app()
+        state = app.state.station_state
+        app.state.config.anthropic_api_key = "anthropic-key"
+        app.state.config.openai_api_key = "openai-key"
+        state.update_runtime_provider(
+            "script_provider",
+            current_provider="openai",
+            primary_provider="anthropic",
+            fallback_active=True,
+            reason="anthropic_exception",
+        )
+        state.update_runtime_provider(
+            "script_provider",
+            current_provider="anthropic",
+            primary_provider="anthropic",
+            fallback_active=False,
+            reason="Anthropic is the active script provider",
+        )
+        req = _fake_request(app)
+
+        snap = _runtime_status_snapshot(req)
+
+        assert snap["health_state"] == "ready"
+        assert snap["providers"]["script_provider"]["current_provider"] == "anthropic"
+        assert snap["providers"]["script_provider"]["fallback_active"] is False
+
+    def test_norm_cache_rescue_is_detected_as_degraded(self):
+        app = _make_app()
+        state = app.state.station_state
+        state.on_stream_segment(
+            Segment(
+                type=SegmentType.MUSIC,
+                path=Path("/tmp/norm.mp3"),
+                metadata={"audio_source": "norm_cache", "queue_drain_recovery": True},
+            )
+        )
+        req = _fake_request(app)
+
+        snap = _runtime_status_snapshot(req)
+
+        assert snap["health_state"] == "degraded"
+        assert snap["providers"]["audio_source"]["fallback_active"] is True
+
+    def test_emergency_tone_is_detected_as_degraded(self):
+        app = _make_app()
+        state = app.state.station_state
+        state.on_stream_segment(
+            Segment(
+                type=SegmentType.MUSIC,
+                path=Path("/tmp/tone.mp3"),
+                metadata={"audio_source": "emergency_tone", "queue_drain_recovery": True},
+            )
+        )
+        req = _fake_request(app)
+
+        snap = _runtime_status_snapshot(req)
+
+        assert snap["health_state"] == "degraded"
+        assert snap["providers"]["audio_source"]["fallback_active"] is True
+
 
 # ---------------------------------------------------------------------------
 # public-status endpoint — upcoming / upcoming_mode selection
@@ -343,6 +588,22 @@ async def test_public_status_upcoming_mode_queued_when_shadow_has_items():
     data = resp.json()
     assert data["upcoming_mode"] == "queued"
     assert all(item["source"] == "rendered_queue" for item in data["upcoming"])
+
+
+@pytest.mark.asyncio
+async def test_public_status_rendered_upcoming_is_capped_at_8_with_source_fields():
+    """Rendered queue previews expose at most 8 listener-safe rows."""
+    shadow = [_seg(f"Track {i}") for i in range(10)]
+    app = _make_app(shadow=shadow, queue_items=10)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        resp = await client.get("/public-status")
+
+    assert resp.status_code == 200
+    upcoming = resp.json()["upcoming"]
+    assert len(upcoming) == 8
+    assert [item["label"] for item in upcoming] == [f"Track {i}" for i in range(8)]
+    assert all(item["source"] == "rendered_queue" for item in upcoming)
 
 
 @pytest.mark.asyncio
@@ -375,6 +636,42 @@ async def test_public_status_predicted_source_when_shadow_empty_but_playlist_pre
     data = resp.json()
     predicted = [i for i in data["upcoming"] if i["source"] == "predicted_from_playlist"]
     assert len(predicted) > 0
+
+
+@pytest.mark.asyncio
+async def test_public_status_predicted_upcoming_requests_8_with_source_fields():
+    """Prediction previews request 8 items and annotate their source."""
+    app = _make_app(shadow=[], queue_items=0)
+
+    def _preview(*_args, count: int) -> list[dict]:
+        return [{"type": "music", "label": f"Predicted {i}"} for i in range(count)]
+
+    with patch("mammamiradio.web.streamer.preview_upcoming", side_effect=_preview) as preview:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            resp = await client.get("/public-status")
+
+    assert resp.status_code == 200
+    preview.assert_called_once()
+    assert preview.call_args.kwargs["count"] == 8
+    upcoming = resp.json()["upcoming"]
+    assert len(upcoming) == 8
+    assert [item["label"] for item in upcoming] == [f"Predicted {i}" for i in range(8)]
+    assert all(item["source"] == "predicted_from_playlist" for item in upcoming)
+
+
+@pytest.mark.asyncio
+async def test_public_status_runtime_health_exposes_silence_budget():
+    app = _make_app()
+    app.state.stream_hub.subscribe()
+    app.state.station_state.queue_empty_since = time.monotonic() - 31
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        resp = await client.get("/public-status")
+
+    assert resp.status_code == 200
+    runtime_health = resp.json()["runtime_health"]
+    assert runtime_health["queue_empty_elapsed_s"] >= 30
+    assert runtime_health["silence_with_listeners"] is True
 
 
 @pytest.mark.asyncio

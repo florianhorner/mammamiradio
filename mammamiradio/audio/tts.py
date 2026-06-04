@@ -6,11 +6,13 @@ import asyncio
 import logging
 import os
 import shutil
+from functools import partial
 from pathlib import Path
 from uuid import uuid4
 
 import edge_tts
 
+from mammamiradio.audio.audio_quality import AudioQualityError
 from mammamiradio.audio.normalizer import (
     concat_files,
     generate_brand_motif,
@@ -21,6 +23,7 @@ from mammamiradio.audio.normalizer import (
     mix_with_bed,
     normalize,
     normalize_ad,
+    probe_duration_sec,
 )
 from mammamiradio.audio.voice_catalog import (
     EDGE_DEFAULT_FALLBACK_VOICE as _EDGE_DEFAULT_FALLBACK_VOICE,
@@ -51,6 +54,8 @@ _failed_edge_voices: set[str] = set()
 # (e.g. Home Assistant Green — fanless ARM SoC). Two slots let one TTS+normalize and
 # one SFX/bed generation overlap without saturating all cores.
 _HEAVY_SEM = asyncio.Semaphore(2)
+_MIN_DIALOGUE_LINE_BYTES = 1024
+_MIN_DIALOGUE_LINE_DURATION_SEC = 0.5
 # Disclaimer voice rate by ad format. Formats not listed use the +35%
 # disclaimer_goblin default shared by the other ad treatments.
 _DISCLAIMER_RATE_BY_FORMAT = {
@@ -443,11 +448,38 @@ def _prosody_for_host(host: HostPersonality) -> dict[str, str]:
     return kwargs
 
 
+def _validate_dialogue_part(path: Path, *, line_number: int) -> None:
+    """Reject broken intermediate TTS line files before they can hide in concat."""
+    if not path.exists():
+        raise AudioQualityError(f"dialogue line {line_number} audio missing: {path}")
+    size = path.stat().st_size
+    if size < _MIN_DIALOGUE_LINE_BYTES:
+        raise AudioQualityError(f"dialogue line {line_number} audio is too small ({size} bytes)")
+    duration = probe_duration_sec(path)
+    # A None probe means ffprobe timed out or is unavailable (common on a
+    # loaded Pi) — not proof the file is broken. The size check above already
+    # rejects truncated-to-nothing files; skip the duration check rather than
+    # reject a plausibly-valid line. Gates 2 and 3 also no-op when probing
+    # fails, so this keeps Gate 1 consistent with the rest of the chain.
+    if duration is not None and duration < _MIN_DIALOGUE_LINE_DURATION_SEC:
+        raise AudioQualityError(
+            f"dialogue line {line_number} audio too short ({duration:.2f}s < {_MIN_DIALOGUE_LINE_DURATION_SEC:.2f}s)"
+        )
+
+
+def _unlink_many(paths: list[Path]) -> None:
+    for path in paths:
+        path.unlink(missing_ok=True)
+
+
 async def synthesize_dialogue(
     lines: list[tuple[HostPersonality, str]],
     tmp_dir: Path,
 ) -> Path:
     """Render all host lines in parallel and stitch the exchange together."""
+    if not lines:
+        raise ValueError("synthesize_dialogue: lines list must not be empty")
+
     paths = [tmp_dir / f"line_{uuid4().hex[:8]}.mp3" for _ in lines]
     multi_line = len(lines) > 1
 
@@ -475,15 +507,40 @@ async def synthesize_dialogue(
     if not multi_line:
         return parts[0]
 
+    # Per-line validation catches broken intermediate files before they can hide
+    # in concat. Only runs for multi-line: single-line segments are short by design
+    # (Italian exclamations like "Sì!" are legitimately < 0.5s) and are guarded
+    # by the banter quality gate in the producer instead.
+    loop = asyncio.get_running_loop()
+    try:
+        await asyncio.gather(
+            *(
+                loop.run_in_executor(None, partial(_validate_dialogue_part, part, line_number=idx))
+                for idx, part in enumerate(parts, start=1)
+            )
+        )
+    except Exception:
+        _unlink_many(parts)
+        raise
+
     raw_path = tmp_dir / f"dialogue_raw_{uuid4().hex[:8]}.mp3"
     output_path = tmp_dir / f"dialogue_{uuid4().hex[:8]}.mp3"
-    loop = asyncio.get_running_loop()
-    await loop.run_in_executor(None, concat_files, parts, raw_path, 300, False)
-    for p in parts:
-        p.unlink(missing_ok=True)
+    try:
+        await loop.run_in_executor(
+            None,
+            partial(concat_files, parts, raw_path, 300, False, strict_duration=True),
+        )
+    except Exception:
+        _unlink_many([*parts, raw_path])
+        raise
+    _unlink_many(parts)
 
     # One loudnorm pass on the fully assembled dialogue
     async with _HEAVY_SEM:
-        await loop.run_in_executor(None, normalize, raw_path, output_path)
+        try:
+            await loop.run_in_executor(None, normalize, raw_path, output_path)
+        except Exception:
+            _unlink_many([raw_path, output_path])
+            raise
     raw_path.unlink(missing_ok=True)
     return output_path

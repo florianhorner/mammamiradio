@@ -8,13 +8,16 @@ import random
 import re
 import time
 from collections import deque
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import TYPE_CHECKING, ClassVar, Literal
+from typing import TYPE_CHECKING, ClassVar, Literal, TypedDict
 from urllib.parse import urlsplit, urlunsplit
 
+from mammamiradio.core.segment_status import is_fallback_active
+
 if TYPE_CHECKING:
+    from mammamiradio.home.evening_memory import EveningLedger
     from mammamiradio.hosts.persona import PersonaStore
 
 
@@ -32,6 +35,23 @@ class SegmentType(Enum):
     SWEEPER = "sweeper"
     TIME_CHECK = "time_check"
 
+    @property
+    def segment_class(self) -> Literal["music", "voice", "interstitial"]:
+        """Stable display bucket consumed by the v1 integration contract.
+
+        Maps every internal SegmentType to one of three renderer buckets so
+        integration consumers (Music Assistant, custom HA cards, future
+        provider authors) can branch on a small stable enum instead of the
+        full internal taxonomy. Transient runtime states like ``stopped`` or
+        ``skipping`` are mapped to ``unavailable`` by the serializer, not by
+        this property.
+        """
+        if self is SegmentType.MUSIC:
+            return "music"
+        if self in (SegmentType.BANTER, SegmentType.NEWS_FLASH):
+            return "voice"
+        return "interstitial"
+
 
 class ChaosSubtype(Enum):
     """Host-chaos flavors carried by BANTER segments."""
@@ -40,6 +60,16 @@ class ChaosSubtype(Enum):
     ABANDONED_STORM = "chaos_abandoned_storm"
     IMPOSSIBLE_RECALL = "chaos_impossible_recall"
     ICON_MOMENT = "chaos_icon_moment"
+    URGENT_INTERRUPT = "urgent_interrupt"
+
+
+@dataclass
+class InterruptSpec:
+    """Describes a pending host interrupt triggered by an HA automation or timer."""
+
+    directive: str
+    urgency: str = "pissed"  # "pissed" | "urgent" | "gentle"
+    cooldown: int = 60  # seconds before this entity can fire again
 
 
 @dataclass
@@ -109,6 +139,22 @@ class PlayedEntry:
 
     track: Track
     played_at: float
+
+
+@dataclass
+class RuntimeProviderEvent:
+    """Operator-visible runtime provider transition for the current session."""
+
+    event: str
+    provider_class: str
+    from_provider: str
+    to_provider: str
+    reason: str
+    fallback_active: bool
+    timestamp: float = 0.0
+
+    def to_dict(self) -> dict:
+        return asdict(self)
 
 
 @dataclass
@@ -318,12 +364,44 @@ class ListenerProfile:
         )
 
 
+# Tri-state verdict from the active key-validation probe. Typed so route logic,
+# UI shaping, and tests share one contract and mypy catches drift/typos.
+KeyStatus = Literal["unverified", "valid", "rejected"]
+
+
+class ScoredEntityStatus(TypedDict):
+    """Admin-only telemetry shape for a budgeted HA entity (see ScoredEntity.to_status_dict)."""
+
+    entity_id: str
+    area: str | None
+    domain: str
+    score: float
+    state: object
+    label: str
+    summary: str
+    device_class: object
+
+
+class ExternalAddNotice(TypedDict):
+    """A failed/dropped background queue-from-search outcome surfaced in /status."""
+
+    display: str
+    ok: bool
+    reason: str
+    ts: float
+
+
 @dataclass
 class StationState:
     """Mutable in-memory state shared by producer and streamer tasks."""
 
     playlist: list[Track] = field(default_factory=list)
     playlist_revision: int = 0
+    # Bumped ONLY when the playlist source is replaced (switch_playlist), never
+    # on in-place mutations like enrich / move-to-next / festival toggle. Used by
+    # background external downloads to tell a real source switch (drop the pick)
+    # from a benign edit (keep it). See _commit_external_download.
+    source_revision: int = 0
     played_tracks: deque[Track] = field(default_factory=lambda: deque(maxlen=50))
     played_track_log: deque[PlayedEntry] = field(default_factory=lambda: deque(maxlen=100))
     songs_since_banter: int = 0
@@ -369,6 +447,12 @@ class StationState:
     ha_weather_arc: str = ""
     # Phase 4: pending reactive directive (consumed after one use)
     ha_pending_directive: str = ""
+    # Impossible Moments v2 (A): one rendered evening running-gag for the next
+    # banter (consumed after one use); populated by the producer from the ledger.
+    ha_running_gag: str = ""
+    # Ledger bucket key for the offered gag, so the producer can spend its
+    # cooldown (mark_spoken) only after generated banter actually airs.
+    ha_running_gag_key: str = ""
     # Dashboard HA moments: last notable event (for Casa card)
     ha_recent_event_count: int = 0
     ha_last_event_label: str = ""
@@ -378,8 +462,17 @@ class StationState:
     ha_weather_arc_en: str = ""
     ha_events_summary_en: str = ""
     ha_last_event_label_en: str = ""
+    ha_scored_entities: list[ScoredEntityStatus] = field(default_factory=list)
+    ha_denylist_hits: dict[str, int] = field(default_factory=dict)
+    ha_catalog_hit_rate: float = 0.0
     # Force-trigger: producer will use this type instead of scheduler for the next segment
     force_next: SegmentType | None = None
+    # Host interrupt: pre-generated bridge clip to play immediately on interrupt
+    interrupt_slot: Path | None = None
+    # Whether the current interrupt bridge clip is a generated temp file
+    interrupt_slot_ephemeral: bool = False
+    # Timestamp of last fired interrupt (for cooldown enforcement)
+    last_interrupt_ts: float = 0.0
     # Chaos Mode: station-wide host-chaos toggle plus first-strike handoff.
     chaos_mode_active: bool = False
     chaos_pending: ChaosSubtype | None = None
@@ -394,12 +487,19 @@ class StationState:
     # Operator-visible pending actions/directives. This mirrors legacy single
     # slots while the producer still consumes those slots for compatibility.
     pending_actions: deque[dict] = field(default_factory=lambda: deque(maxlen=200))
+    # Recent background external-add outcomes the admin couldn't see synchronously
+    # (the request returned 200 before the download finished). Each entry:
+    # {"display": str, "ok": bool, "reason": str, "ts": float}. Surfaced in
+    # /status so the admin UI can toast a failed/dropped queue-from-search.
+    external_add_notices: deque[ExternalAddNotice] = field(default_factory=lambda: deque(maxlen=10))
     # IP-based rate limiting for /api/listener-request {ip: last_ts}
     _listener_request_rl: dict = field(default_factory=dict)
     # Shareware trial: counts canned banter clips actually streamed to listener
     canned_clips_streamed: int = 0
     # Persona store for compounding listener memory (set by main.py at startup)
     persona_store: PersonaStore | None = None
+    # Evening running-gag ledger (Impossible Moments v2 A); set by main.py at startup
+    evening_ledger: EveningLedger | None = None
     # Consumption metrics
     api_calls: int = 0
     api_input_tokens: int = 0
@@ -410,6 +510,15 @@ class StationState:
     anthropic_last_error: str = ""
     anthropic_last_error_at: float = 0.0
     anthropic_auth_failures: int = 0
+    # Active key-validation verdict (set by a startup/on-save/on-demand auth ping;
+    # distinct from the time-based suspend above). "rejected" means the provider
+    # actively refused the key (401) — a persistent "replace the key" condition the
+    # operator can see WITHOUT waiting for a banter segment to fail. "unverified"
+    # means not-yet-checked or a non-auth probe failure (quota/rate-limit/network).
+    anthropic_key_status: KeyStatus = "unverified"
+    anthropic_key_checked_at: float = 0.0
+    openai_key_status: KeyStatus = "unverified"
+    openai_key_checked_at: float = 0.0
     # Listener connection tracking for "impossible moments"
     listeners_active: int = 0
     listeners_peak: int = 0
@@ -420,6 +529,60 @@ class StationState:
     runtime_sync_events: int = 0
     shadow_queue_corrections: int = 0
     playback_epoch: int = 0
+    # Most recent observable state change for the v1 integration contract.
+    # Updated by on_stream_segment, /api/stop, and /api/resume so the
+    # changed_at field and weak ETag in /api/integrations/v1/now-playing
+    # reflect any consumer-visible mutation.
+    last_state_change_at: float = 0.0
+    runtime_events: deque[RuntimeProviderEvent] = field(default_factory=lambda: deque(maxlen=50))
+    runtime_provider_state: dict[str, dict] = field(default_factory=dict)
+    runtime_health_state: str = ""
+
+    def update_runtime_provider(
+        self,
+        provider_class: str,
+        *,
+        current_provider: str,
+        primary_provider: str,
+        fallback_active: bool,
+        reason: str,
+        event: str = "provider_switch_event",
+        timestamp: float | None = None,
+    ) -> RuntimeProviderEvent | None:
+        """Record a bounded provider transition when runtime truth changes."""
+        now = time.time() if timestamp is None else timestamp
+        previous = self.runtime_provider_state.get(provider_class, {})
+        previous_provider = str(previous.get("current_provider") or "")
+        previous_fallback = bool(previous.get("fallback_active", False))
+        previous_switch_timestamp = previous.get("last_switch_timestamp")
+        changed = (
+            previous_provider != current_provider or previous_fallback != fallback_active
+            if previous
+            else fallback_active or current_provider != primary_provider
+        )
+
+        self.runtime_provider_state[provider_class] = {
+            "current_provider": current_provider,
+            "primary_provider": primary_provider,
+            "fallback_active": fallback_active,
+            "reason": reason,
+            "last_observed": now,
+            "last_switch_timestamp": now if changed else previous_switch_timestamp,
+        }
+        if not changed:
+            return None
+
+        entry = RuntimeProviderEvent(
+            event=event,
+            provider_class=provider_class,
+            from_provider=previous_provider or primary_provider,
+            to_provider=current_provider,
+            reason=reason,
+            fallback_active=fallback_active,
+            timestamp=now,
+        )
+        self.runtime_events.append(entry)
+        return entry
 
     def switch_playlist(self, tracks: list[Track], source: PlaylistSource | None = None) -> None:
         """Replace the active playlist and bump revision counter.
@@ -427,6 +590,7 @@ class StationState:
         In-flight producer segments are discarded on next commit check.
         """
         self.playlist_revision += 1
+        self.source_revision += 1
         self.playlist = tracks
         self.playlist_source = source
         self.startup_source_error = ""
@@ -476,6 +640,30 @@ class StationState:
         # Track canned banter clips at stream time (shareware trial)
         if segment.metadata.get("canned"):
             self.canned_clips_streamed += 1
+        raw_audio_source = str(segment.metadata.get("audio_source") or "")
+        if raw_audio_source or segment.metadata.get("fallback") or segment.type == SegmentType.MUSIC:
+            fallback_active = is_fallback_active(segment.metadata)
+            audio_source = raw_audio_source
+            if not audio_source and fallback_active:
+                audio_source = "canned"
+            elif (
+                segment.type == SegmentType.MUSIC
+                and self.playlist_source is not None
+                and (not audio_source or (not fallback_active and audio_source == "download"))
+            ):
+                audio_source = self.playlist_source.kind
+            self.update_runtime_provider(
+                "audio_source",
+                current_provider=audio_source or "stream",
+                primary_provider=self.playlist_source.kind if self.playlist_source is not None else "stream",
+                fallback_active=fallback_active,
+                reason=(
+                    str(segment.metadata.get("fallback_reason") or "Fallback audio is currently on air")
+                    if fallback_active
+                    else "Primary audio source is on air"
+                ),
+                timestamp=now,
+            )
         # Only add to studio-bleed pool once banter truly starts streaming.
         if segment.type == SegmentType.BANTER and not segment.metadata.get("canned"):
             self.recent_banter_paths.append(segment.path)
@@ -516,6 +704,7 @@ class StationState:
             "duration_sec": segment.duration_sec,
             "metadata": segment.metadata,
         }
+        self.last_state_change_at = now
         self.stream_log.append(
             SegmentLogEntry(
                 type=seg_type,

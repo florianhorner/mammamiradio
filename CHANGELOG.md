@@ -8,15 +8,163 @@ The current version source of truth is `pyproject.toml`.
 
 ### Added
 
-- **Edge add-on (development channel)** — A second Home Assistant add-on, **Mamma Mi Radio (Edge)**, now ships from the same repository. It tracks the latest `main` build: its version is a calendar version bumped automatically by CI on every add-on-changing merge, so Home Assistant shows a normal in-place "Update" each time. The stable **Mamma Mi Radio** add-on is unchanged and still updates only on deliberate releases. Edge and stable share one image and cannot run simultaneously (both bind port 8000) — install one. See `docs/runbooks/ha-addon.md` for switching instructions.
+- **Show Memory: an opt-in record of how each moment was made.** A new provenance
+  ledger (off by default) can record, for operators who turn it on, exactly how a
+  given second of radio came to be: the raw AI attempts behind a host or ad, the
+  final spoken script, and whether it actually reached listeners. It writes
+  daily-rotated, private files under the cache directory and is strictly
+  best-effort — it never delays, blocks, or interrupts the live stream, and a
+  busy moment simply drops the oldest record and notes that it did. Enable it with
+  `MAMMAMIRADIO_LEDGER_ENABLED`; tune history with `MAMMAMIRADIO_LEDGER_RETENTION_DAYS`
+  (default 14 days). Listeners never see any of this.
 
-### Changed
+- **Home Assistant context now adapts to each home.** The add-on scores prompt-safe
+  entities from the full Home Assistant state snapshot instead of only using a
+  hardcoded apartment list, so newly paired devices can contribute ambient radio
+  context without code changes. Location, camera, alarm, and free-text helper
+  entities plus secret-shaped attributes are filtered before prompt assembly;
+  who's home stays as simple home/away (never location) so the hosts can still
+  welcome you back and notice an empty house. The admin Engine Room shows the
+  scored slice plus privacy filter counts.
 
-- **Engineering backlog moved to GitHub issues** — `docs/todos.md` was removed. Open engineering work is now tracked as GitHub issues. A new CI guard (`scripts/check-no-backlog-files.sh`, wired into `quality.yml`) fails the build if a catch-all `TODO.md`/`TODOS.md`/`docs/todos.md`/`docs/backlog.md` file is re-added.
+- **The admin now tells you when an AI key isn't working** — a wrong or revoked Anthropic or OpenAI key is checked the moment the station starts (and again whenever you save a key), so the Engine Room shows a clear "key not working — replace key" state right away instead of looking connected until a host segment silently fails. Listeners never see any of this, and if a second valid key is configured the station keeps sounding live.
+
+- **Running-gag callbacks about your home** — when Home Assistant is connected, the AI hosts now occasionally land a deferred callback about a recurring home event from the same evening (the coffee machine going on yet again, the door, the vacuum), like an inside joke that builds over the night. The station keeps a small per-evening tally that survives addon restarts, paces each gag with a cooldown so it never repeats too often, and only draws on discrete on/off events (never numeric sensor noise). No effect when Home Assistant is not connected.
+
+- **Music Assistant now-playing contract** — a dedicated read-only JSON
+  endpoint at `GET /api/integrations/v1/now-playing` exposes a stable shape
+  for third-party music controllers: station identity, stream URL,
+  segment display class (music / voice / interstitial / unavailable),
+  current track or host, up next, session state, and a `changed_at`
+  timestamp paired with a weak `ETag` + `Cache-Control` for cheap polling.
+  Internal metadata fields are filtered through a server-side allowlist
+  so signed URLs, file paths, and download errors cannot leak. Contract
+  pinned by ten sample-payload JSON fixtures under
+  `docs/integrations/sample-payloads/`, each wired into the test suite.
+  Documented at `docs/integrations/now-playing.md` with a migration guide
+  from `/public-status`.
 
 ### Fixed
 
 - **Admin programme durations are now truthful.** Status payloads expose real current segment duration/progress and stream-log durations, and the admin/live/listener UIs no longer invent music, banter, or ad durations when metadata is missing.
+
+- **The HA media player card now shows accurate elapsed time.** The station's Home Assistant entity now includes the `media_position_updated_at` timestamp that HA requires to count forward between updates, so the playback position no longer resets or freezes every 30 seconds in the media card and companion app.
+
+- **`mammamiradio_queue_depth` in the HA entity now reflects the real queue.** The attribute previously always reported 0, so automations checking queue depth never triggered. It now carries the live count of segments waiting to play.
+
+- **Playback position is omitted when the station is idle.** When the station stops, the `media_position` attribute is no longer included in the HA entity, so Home Assistant correctly shows the player as idle rather than frozen at the last played position.
+
+- **Rapid stop-event bursts no longer flood the HA state API.** Consecutive stop-state pushes within 2 seconds are now debounced the same way playing-state pushes are, preventing an unusual watchdog restart loop from generating more API calls than needed.
+
+- **Queueing a song from admin search no longer shows a false error.** Previously, picking a track from the admin search could pop "Failed to add to queue" even though the track was downloading fine and would play — the browser request was waiting on the full download and the connection timed out. The download now runs in the background and the request returns instantly, so the admin sees a "downloading — on air shortly" confirmation and the track plays next once it is ready. The live stream is never interrupted. A queued track now also survives routine edits made while it downloads (adding tracks, reordering, mode toggles), and if a download genuinely fails the admin gets a clear message instead of silence.
+
+- **Admin search no longer surfaces unplayable results.** The web search sometimes listed an artist's channel as the top hit; clicking it failed with an error because a channel can't be queued. Search now returns only real tracks, so every result can be queued.
+
+- **The admin live queue no longer overlaps itself.** In the Scaletta (live queue), the "when" label and the segment-type badge could collide into unreadable text on narrower screens. The redundant "planned" tag was removed; upcoming-but-not-yet-rendered rows stay dimmed to mark them.
+
+- **The Edge add-on now auto-updates after every add-on change.** The automated edge-channel version bump previously could not land on the protected branch, so Home Assistant never showed an Edge "Update" and the add-on build reported a failure on every change. The bump now goes through the normal checks, so the Edge channel tracks the latest build again.
+
+### Security
+
+- **Admin endpoints no longer auto-trust private networks when admin credentials are configured.** Previously a client on a LAN or Tailscale address was trusted for admin access even when `ADMIN_PASSWORD` or `ADMIN_TOKEN` was set, so a configured credential could be silently bypassed from any private-network browser. Now, when a credential is configured, all non-loopback admin traffic must present it. Credential-less private-network deployments are unchanged (still trusted, still CSRF-guarded on writes). Standalone runs that bind to a non-loopback host (including an empty bind host, which listens on all interfaces) now require `ADMIN_PASSWORD` or `ADMIN_TOKEN` at startup. Browser admin access requires `ADMIN_PASSWORD`; `ADMIN_TOKEN` is a header-only API credential a browser cannot send on navigation.
+
+### Changed
+
+- **Jamendo rotation depth now defaults to 200 tracks.** The `[playlist].jamendo_limit`
+  config key and `JAMENDO_LIMIT` env override control Jamendo API result depth
+  from `1` to `200`, reducing repeats when Jamendo is the active music source.
+
+- **Admin producer-desk polish** — the `/admin` control room is now English-first
+  for all utility copy (buttons, tooltips, toasts, status, empty states), with
+  Italian kept for structural section names and the on-air badge. The Diretta
+  drawer groups its controls into four labeled sections (live modes, immediate
+  actions, quick actions, pacing). The Motore drawer splits into Status / Costi /
+  Setup, and Setup collapses on its own once everything is ready. Archivio gains a
+  search box plus type and time filters that remember your selection while you
+  work. The Scaletta table now sheds optional columns on tablet widths before
+  collapsing to cards on phones.
+- **Undo for destructive admin actions** — purging the queue or removing a
+  segment shows a 5-second Undo toast and only commits when the window closes, so
+  a mis-tap on a running station is recoverable.
+
+## [2.13.0] - 2026-05-26
+
+### Added
+
+- **Shareable clip moments** — Tap "Condividi clip" on the listener page (or the Clip button on `/live`) to share the last 30 seconds as a branded landing page (`/clips/{id}`), not a raw MP3. The link previews in iMessage / WhatsApp with the station name, the track that was playing, the 30s audio, and an "Ascolta in diretta" button. Clip metadata is captured at creation time as a JSON sidecar so the landing page can show what was playing even after the track ends. Expired and missing clips return a graceful "Questo momento è passato" HTML page (HTTP 200) instead of a 404 — OG scrapers cache 404s permanently, which would kill the preview forever.
+- **Stream audio format metadata on `/public-status`** — the public payload now
+  exposes a `stream.audio_format` object with `codec`, `mime_type`,
+  `bitrate_kbps`, `sample_rate_hz`, and `channels`. External integrations can
+  read it before playback to declare `/stream` correctly without assuming the
+  default MP3/192k configuration. Backed by a shared helper that also feeds the
+  `/stream` response headers, so the API metadata and ICY headers cannot drift.
+- **PR-body editorial lint** — Pull-request descriptions are now linted against
+  the same vocabulary banned in the public changelog (internal sprint labels,
+  agent tool provenance, planning vocabulary, contributor archaeology), plus a
+  small set of process-narrative phrases. Enforced in CI on every PR
+  open/edit/synchronize, and at the local `gh pr create` boundary via the
+  existing proof-block hook. The shared pattern list lives in
+  `scripts/lint-patterns.sh`; both lints consume it so the rules can't drift.
+- **Host interrupt trigger** — when a Home Assistant timer fires, the hosts immediately interrupt whatever is playing and deliver an urgent, pissed banter segment telling the listener to act. Sub-7s end-to-end: HA timer fires → detected within ≤5s (dedicated lightweight poll) → audio within ≤2s of detection. Configure per-timer directives in `radio.toml` under `[[homeassistant.timer_interrupt]]`. The same mechanism is exposed as `POST /api/interrupt` — any HA automation (motion sensor, alarm, dishwasher done) can inject a custom directive into the stream without code changes.
+- **Admin producer desk** — The `/admin` panel is reorganized around the live
+  broadcast: an On Air zone (current segment, transport controls, running AI
+  cost), a Live Queue holding the forward Scaletta, and a Rotation Pool, with
+  secondary controls tucked into collapsible drawers. A new
+  `POST /api/queue/remove` endpoint (admin auth) lets operators drop a single
+  queued segment without clearing the whole queue. Removal targets a stable
+  segment id, so a track that scrolls off the head between rendering the row
+  and clicking can never be removed by mistake.
+
+### Changed
+
+- **Banter cadence minimum is now 2 songs.** `pacing.songs_between_banter` must
+  be at least 2 — a value of 1 made the hosts talk after every single song.
+  Config validation, the scheduler, and the admin Cadenza slider all enforce
+  the new floor.
+
+### Fixed
+
+- **Host banter is no longer truncated to its first phrase.** Per-line voice
+  normalization trimmed silence with a setting that stopped output at the first
+  pause, collapsing multi-line host exchanges to a second or two. The shortened
+  audio was then rejected as too short, so the hosts could fall silent for an
+  entire session. Silence trimming now removes trailing silence only.
+- **`PATCH /api/pacing` rejects malformed payloads.** Non-object bodies and
+  non-integer field values now return HTTP 400 and leave the running config
+  untouched, instead of raising a 500 or silently coercing the value. Cadence
+  values are also clamped to a safe ceiling so a single request cannot
+  effectively disable banter or ads. Config-load validation now enforces the
+  same ceilings, so a stray `radio.toml` cannot bypass the runtime clamp.
+- **yt-dlp downloads now time out after 30 seconds.** Python's urllib has no
+  default socket timeout, so a hung YouTube connection could permanently block
+  a thread in the `run_in_executor` pool shared with the audio pipeline. A
+  30-second socket timeout on both downloads and metadata searches now fails
+  fast and falls back through the existing silence-placeholder path.
+- **`httpx` and `httpcore` request logs are no longer spammy.** Both libraries
+  default to `WARNING` so successful outbound calls do not flood the log
+  stream. Set `MAMMAMIRADIO_HTTP_LOG_LEVEL=INFO` (or `DEBUG`) to re-enable
+  detailed HTTP traffic logs.
+
+## [2.12.4] - 2026-05-18
+
+### Added
+
+- **Runtime provider transparency** — `GET /status` now includes `runtime_status` with health_state, a providers map (primary/current/fallback for audio source, script provider, and TTS provider), and recent failover events. The admin Engine Room shows a header health dot and a Runtime Status card with live primary/fallback state. Provider switch events are logged as `provider_switch_event` with structured fields. Fallback detection covers all producer rescue paths: norm-cache bridges, emergency tone, silence fallback, and `fallback_*` audio sources.
+- **HA Green performance smoke gate** — `make perf-smoke` now runs a runtime check against a live station, validating `/healthz`, `/readyz`, `/public-status`, and `/stream` first-byte latency with configurable HA Green thresholds.
+- **Edge add-on (development channel)** — A second Home Assistant add-on, **Mamma Mi Radio (Edge)**, now ships from the same repository. It tracks the latest `main` build: its version is a calendar version bumped automatically by CI on every add-on-changing merge, so Home Assistant shows a normal in-place "Update" each time. The stable **Mamma Mi Radio** add-on is unchanged and still updates only on deliberate releases. Edge and stable share one image and cannot run simultaneously (both bind port 8000) — install one. See `docs/runbooks/ha-addon.md` for switching instructions.
+
+### Changed
+
+- **Stable add-on images are now published by Git-tag push** — A new `addon-release.yml` workflow, triggered by `v*` tag push, is now solely responsible for publishing `:X.Y.Z` and `:latest` for the HA add-on. `addon-build.yml` (main-push) no longer publishes those tags; it publishes only `:sha`, `:0.0.0`, and the edge calver. The release workflow validates the tag ref, semver, `config.yaml` version, and prebuilt per-arch `:sha` images, smokes the source image, promotes that exact artifact to stable tags, updates `:latest` only for the newest stable semver, then smokes the published release tag. Release flow: merge version-bump commit → wait for CI → `git tag vX.Y.Z && git push origin vX.Y.Z`.
+- **Queue fallback starts before the health-failure window.** Active listeners now get cache rescue attempts after a 5-second bounded queue-empty wait, before the preserved 30-second silence health-failure threshold triggers.
+- **Engineering backlog moved to GitHub issues** — `docs/todos.md` was removed. Open engineering work is now tracked as GitHub issues. A new CI guard (`scripts/check-no-backlog-files.sh`, wired into `quality.yml`) fails the build if a catch-all `TODO.md`/`TODOS.md`/`docs/todos.md`/`docs/backlog.md` file is re-added.
+
+### Fixed
+
+- **`io.hass.*` labels now correctly embedded in every build variant** — The add-on Dockerfile now injects `io.hass.version`, `io.hass.type`, and `io.hass.arch` from build-args for all three CI build paths (stable, edge seed, edge calver). A missing-labels gate in `scripts/validate-addon.sh` and a scoped test ensure the contract holds. Local Docker builds without `--build-arg` now emit `io.hass.version=unknown` rather than an empty string, making the missing-arg case visible instead of silent.
+- **Spoken host segment assembly is stricter.** Generated multi-line banter now rejects broken intermediate TTS line files, strict concat duration shortfalls, and implausibly short multi-line exchanges before they can reach the listener queue.
+- **Cache rescue no longer repeats the first cached song by filename.** Empty-queue fallback now avoids the current/recent song when alternatives exist and randomizes the rescue candidate, preventing skip from landing back on the same cached track.
+- **Admin control touch targets now meet the 44 px WCAG minimum.** Mode-control switches and other admin controls expand their tap area to at least 44×44 px without enlarging the visible control.
 
 ## [2.12.3] - 2026-05-17
 
@@ -163,7 +311,7 @@ entrypoint `mammamiradio.main:app` and Docker invocations are unaffected.
   - `ADMIN_PANEL_STANDARDS.md` → `docs/design/admin-panel.md`
   - `HA_ADDON_RUNBOOK.md` → `docs/runbooks/ha-addon.md`
 
-  **Cross-references updated** in `README.md`, repo agent guidance, `CONTRIBUTING.md`, the moved docs themselves, and four source/test files that referenced `DESIGN.md` in comments (`mammamiradio/core/config.py`, `mammamiradio/web/templates/admin.html`, `tests/hosts/test_brand_config.py`, `tests/web/test_design_tokens.py`). Historical audit notes (`docs/2026-04-13-log-resolution-plan.md`, `docs/2026-04-16-documentation-structure-audit.md`) are dated snapshots and were left untouched.
+  **Cross-references updated** in `README.md`, repo agent guidance, `CONTRIBUTING.md`, the moved docs themselves, and four source/test files that referenced `DESIGN.md` in comments (`mammamiradio/core/config.py`, `mammamiradio/web/templates/admin.html`, `tests/hosts/test_brand_config.py`, `tests/web/test_design_tokens.py`). Historical audit notes (`docs/archive/2026-04-13-log-resolution-plan.md`, `docs/archive/2026-04-16-documentation-structure-audit.md`) are dated snapshots and were left untouched.
 - **Admin panel fully Italianized**: all operator-facing label strings in `admin.html` — trigger card titles (`Aggiungi banter`, `Forza pubblicità`, `Notizia flash`, `Caos in arrivo`), quick-action chips (`Taglia banter/pubblicità`, `Ricarica live`, `Svuota coda`, `Segnala traccia`), filter pills (`Tutto`, `Musica`, `Pubblicità`), preset names (`EQUILIBRATO`, `CALMO`), slider axis labels (`Energia`, `Caos`, `Calore`, `Verbosità`), search placeholder and button (`Cerca musica`, `Cerca`), engine room section headings, setup subheadings, toast strings, and the `ON AIR` → `IN ONDA` pill — are now in Italian. API endpoint strings, JS variable names, CSS class names, and `data-` identifiers are unchanged. Eliminates the mixed-language whiplash that remained after the panel shell was italianized but content strings stayed in English.
 - **`CSS.escape()` hardens host-name CSS attribute selectors** in `admin.html`: two `` `[data-h="${n}"]` `` template literals in `updHost()` and `applyHostPreset()` now wrap `n` with `CSS.escape()`. Host names containing CSS special characters (quotes, brackets, dots) previously caused silent no-match — the host block was never found and the UI failed closed. No XSS risk existed, but operators with unconventional host names saw broken personality sliders.
 - **Host preset active-state comparison uses `data-preset` attribute** instead of visible button text, so preset highlight survives localized display labels (previously broke when `BALANCED` → `EQUILIBRATO`).
@@ -239,6 +387,7 @@ entrypoint `mammamiradio.main:app` and Docker invocations are unaffected.
 - **ICY header injection guard**: station name and genre are CRLF-scrubbed before writing to ICY response headers, closing an HTTP response-splitting vector for operators who set `STATION_NAME` with embedded newlines.
 - **youtube\_id format validation**: `/api/playlist/add-external` now validates the `youtube_id` parameter against `[A-Za-z0-9_-]{11}` before passing it to yt-dlp, blocking path traversal and injection payloads.
 - **HA addon version sync**: `ha-addon/mammamiradio/config.yaml` version bumped to `2.10.9` to match `pyproject.toml` (was stale at `2.10.8`).
+- **Local setup now avoids broken Python 3.13 installs**: `conductor-setup.sh` now prefers `python3.11 → python3.12 → python3.13 → python3` instead of leading with 3.13. On machines where 3.13 is installed but its `ensurepip` is broken, setup falls back to the project's target interpreter (3.11) automatically.
 
 ### Changed
 
@@ -262,10 +411,6 @@ entrypoint `mammamiradio.main:app` and Docker invocations are unaffected.
 ### Refactored
 
 - **Dashboard inline CSS/JS extracted into `/static/`**: moved dashboard styles and scripts out of the HTML template so static assets can be cached, reviewed, and reused normally.
-
-### Fixed
-
-- **Local setup now avoids broken Python 3.13 installs**: `conductor-setup.sh` now prefers `python3.11 → python3.12 → python3.13 → python3` instead of leading with 3.13. On machines where 3.13 is installed but its `ensurepip` is broken, setup falls back to the project's target interpreter (3.11) automatically.
 
 ## [2.10.9] - 2026-04-20
 

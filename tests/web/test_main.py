@@ -2,15 +2,86 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
 
+# Capture the real verdict runner at import time, before the autouse stub below
+# patches the module attribute — Scenario-3 test needs the genuine function.
+from mammamiradio.web.streamer import _run_provider_verdict as _real_run_provider_verdict
+
 MODULE = "mammamiradio.main"
 TEST_TMP = Path("/tmp/mammamiradio-test-main-tmp")
 TEST_CACHE = Path("/tmp/mammamiradio-test-main-cache")
+
+
+@pytest.fixture(autouse=True)
+def _stub_provider_verdict():
+    """Stop startup() from firing a real key-validation probe in lifecycle tests.
+
+    The MagicMock configs below have truthy api-key attributes, so startup schedules
+    the background verdict task. Stub the runner so it never reaches the network (it
+    is looked up via a late `from ...streamer import _run_provider_verdict` inside
+    startup, so patch the streamer module where it lives — not main).
+    """
+    with patch("mammamiradio.web.streamer._run_provider_verdict", new=AsyncMock()):
+        yield
+
+
+@pytest.mark.parametrize(
+    ("env_value", "expected_level"),
+    [
+        (None, logging.WARNING),
+        ("INFO", logging.INFO),
+        ("invalid", logging.WARNING),
+        ("BASIC_FORMAT", logging.WARNING),
+    ],
+)
+def test_http_dependency_loggers_default_to_warning_with_env_override(monkeypatch, env_value, expected_level):
+    """Successful httpx/httpcore request logs stay quiet unless explicitly enabled."""
+    original_levels = {logger_name: logging.getLogger(logger_name).level for logger_name in ("httpx", "httpcore")}
+    try:
+        from mammamiradio.main import _configure_http_logging
+
+        for logger_name in ("httpx", "httpcore"):
+            logging.getLogger(logger_name).setLevel(logging.NOTSET)
+
+        if env_value is None:
+            monkeypatch.delenv("MAMMAMIRADIO_HTTP_LOG_LEVEL", raising=False)
+        else:
+            monkeypatch.setenv("MAMMAMIRADIO_HTTP_LOG_LEVEL", env_value)
+
+        _configure_http_logging()
+
+        assert logging.getLogger("httpx").level == expected_level
+        assert logging.getLogger("httpcore").level == expected_level
+    finally:
+        for logger_name, level in original_levels.items():
+            logging.getLogger(logger_name).setLevel(level)
+
+
+def test_module_import_applies_http_logging_configuration(monkeypatch):
+    """Removing the module-level _configure_http_logging() call must break this test."""
+    import importlib
+
+    import mammamiradio.main
+
+    original_levels = {logger_name: logging.getLogger(logger_name).level for logger_name in ("httpx", "httpcore")}
+    try:
+        for logger_name in ("httpx", "httpcore"):
+            logging.getLogger(logger_name).setLevel(logging.NOTSET)
+        monkeypatch.setenv("MAMMAMIRADIO_HTTP_LOG_LEVEL", "DEBUG")
+
+        importlib.reload(mammamiradio.main)
+
+        assert logging.getLogger("httpx").level == logging.DEBUG
+        assert logging.getLogger("httpcore").level == logging.DEBUG
+    finally:
+        for logger_name, level in original_levels.items():
+            logging.getLogger(logger_name).setLevel(level)
 
 
 @pytest.mark.asyncio
@@ -49,6 +120,145 @@ async def test_startup_creates_state_and_tasks():
         assert hasattr(app.state, "producer_task")
         assert hasattr(app.state, "playback_task")
         assert app.state.station_state.playlist == demo_tracks
+
+
+@pytest.mark.asyncio
+async def test_startup_skips_provider_verdict_when_no_keys():
+    """With no AI key configured, startup() must NOT schedule a validation probe."""
+    from mammamiradio.core.models import Track
+
+    mock_config = MagicMock()
+    mock_config.station.name = "TestRadio"
+    mock_config.station.language = "it"
+    mock_config.bind_host = "127.0.0.1"
+    mock_config.port = 8000
+    mock_config.pacing.lookahead_segments = 3
+    mock_config.max_cache_size_mb = 500
+    mock_config.tmp_dir = TEST_TMP
+    mock_config.cache_dir = TEST_CACHE
+    mock_config.anthropic_api_key = ""
+    mock_config.openai_api_key = ""
+
+    demo_tracks = [Track(title="Song", artist="Art", duration_ms=1000, spotify_id="t1")]
+
+    with (
+        patch(f"{MODULE}.load_config", return_value=mock_config),
+        patch(f"{MODULE}.read_persisted_source", return_value=None),
+        patch(f"{MODULE}.fetch_startup_playlist", return_value=(demo_tracks, None, "")),
+        patch(f"{MODULE}.run_producer", new_callable=AsyncMock),
+        patch(f"{MODULE}.run_playback_loop", new_callable=AsyncMock),
+        patch("mammamiradio.web.streamer._run_provider_verdict", new=AsyncMock()) as verdict,
+    ):
+        from mammamiradio.main import startup
+
+        await startup()
+
+        verdict.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_startup_with_key_schedules_provider_verdict():
+    """With a key configured, startup() must schedule the background validation probe."""
+    from mammamiradio.core.models import Track
+
+    mock_config = MagicMock()
+    mock_config.station.name = "TestRadio"
+    mock_config.station.language = "it"
+    mock_config.bind_host = "127.0.0.1"
+    mock_config.port = 8000
+    mock_config.pacing.lookahead_segments = 3
+    mock_config.max_cache_size_mb = 500
+    mock_config.tmp_dir = TEST_TMP
+    mock_config.cache_dir = TEST_CACHE
+    mock_config.anthropic_api_key = "sk-ant-x"
+    mock_config.openai_api_key = ""
+
+    demo_tracks = [Track(title="Song", artist="Art", duration_ms=1000, spotify_id="t1")]
+
+    with (
+        patch(f"{MODULE}.load_config", return_value=mock_config),
+        patch(f"{MODULE}.read_persisted_source", return_value=None),
+        patch(f"{MODULE}.fetch_startup_playlist", return_value=(demo_tracks, None, "")),
+        patch(f"{MODULE}.run_producer", new_callable=AsyncMock),
+        patch(f"{MODULE}.run_playback_loop", new_callable=AsyncMock),
+        patch("mammamiradio.web.streamer._run_provider_verdict", new=AsyncMock()) as verdict,
+    ):
+        from mammamiradio.main import app, startup
+
+        await startup()
+
+        verdict.assert_called_once()
+        assert hasattr(app.state, "provider_verdict_task")
+
+
+@pytest.mark.asyncio
+async def test_startup_persisted_bogus_key_reads_rejected_after_boot():
+    """Scenario 3 (post-restart): a bogus key persisted in .env surfaces as rejected on boot.
+
+    Simulates the HA-watchdog-restart path — fresh StationState, key already on disk —
+    and proves the admin would show "not working" without waiting for a banter to fail.
+    """
+    from mammamiradio.core.models import Track
+
+    mock_config = MagicMock()
+    mock_config.station.name = "TestRadio"
+    mock_config.station.language = "it"
+    mock_config.bind_host = "127.0.0.1"
+    mock_config.port = 8000
+    mock_config.pacing.lookahead_segments = 3
+    mock_config.max_cache_size_mb = 500
+    mock_config.tmp_dir = TEST_TMP
+    mock_config.cache_dir = TEST_CACHE
+    mock_config.anthropic_api_key = "sk-ant-persisted-bogus"
+    mock_config.openai_api_key = ""
+
+    demo_tracks = [Track(title="Song", artist="Art", duration_ms=1000, spotify_id="t1")]
+    probe = {
+        "ok": False,
+        "providers": {
+            "anthropic": {
+                "provider": "anthropic",
+                "configured": True,
+                "ok": False,
+                "status_code": 401,
+                "error_type": "authentication_error",
+                "detail": "",
+            },
+            "openai_chat": {
+                "provider": "openai_chat",
+                "configured": False,
+                "ok": False,
+                "status_code": None,
+                "error_type": "not_configured",
+                "detail": "",
+            },
+            "openai_tts": {
+                "provider": "openai_tts",
+                "configured": False,
+                "ok": False,
+                "status_code": None,
+                "error_type": "not_configured",
+                "detail": "",
+            },
+        },
+    }
+
+    with (
+        patch(f"{MODULE}.load_config", return_value=mock_config),
+        patch(f"{MODULE}.read_persisted_source", return_value=None),
+        patch(f"{MODULE}.fetch_startup_playlist", return_value=(demo_tracks, None, "")),
+        patch(f"{MODULE}.run_producer", new_callable=AsyncMock),
+        patch(f"{MODULE}.run_playback_loop", new_callable=AsyncMock),
+        # Real _run_provider_verdict (autouse stub bypassed) with a mocked probe boundary.
+        patch("mammamiradio.web.streamer._run_provider_verdict", new=_real_run_provider_verdict),
+        patch("mammamiradio.web.provider_verdict.check_provider_keys", new=AsyncMock(return_value=probe)),
+    ):
+        from mammamiradio.main import app, startup
+
+        await startup()
+        await app.state.provider_verdict_task
+
+    assert app.state.station_state.anthropic_key_status == "rejected"
 
 
 @pytest.mark.asyncio
@@ -323,6 +533,11 @@ async def test_shutdown_cancels_tasks():
     main_mod.app.state.producer_task = producer_task
     main_mod.app.state.playback_task = playback_task
     main_mod.app.state.stream_hub = MagicMock()
+    # Isolate from prior tests that may have left a verdict probe / background
+    # tasks on the shared app.state — this test asserts exactly the 3 lifecycle
+    # tasks are gathered.
+    main_mod.app.state.provider_verdict_task = None
+    main_mod.app.state.background_tasks = set()
 
     with patch("asyncio.gather", new_callable=AsyncMock) as mock_gather:
         await main_mod.shutdown()
@@ -339,6 +554,41 @@ async def test_shutdown_cancels_tasks():
     main_mod._prewarm_task = None
     main_mod._producer_task = None
     main_mod._playback_task = None
+
+
+@pytest.mark.asyncio
+async def test_shutdown_cancels_background_tasks():
+    """shutdown() also cancels fire-and-forget background tasks (queue-from-search
+    / listener song downloads) so an in-flight yt-dlp fetch can't write to
+    app.state after teardown begins."""
+    import mammamiradio.main as main_mod
+
+    main_mod._prewarm_task = None
+    main_mod._producer_task = None
+    main_mod._playback_task = None
+    bg_task = AsyncMock()
+    bg_task.cancel = MagicMock()
+    # The provider-verdict probe lives outside the background_tasks set; shutdown
+    # must cancel it too.
+    verdict_task = AsyncMock()
+    verdict_task.cancel = MagicMock()
+    main_mod.app.state.provider_verdict_task = verdict_task
+    main_mod.app.state.background_tasks = {bg_task}
+    main_mod.app.state.stream_hub = MagicMock()
+
+    with patch("asyncio.gather", new_callable=AsyncMock) as mock_gather:
+        await main_mod.shutdown()
+
+    bg_task.cancel.assert_called_once()
+    verdict_task.cancel.assert_called_once()
+    _args, _kwargs = mock_gather.call_args
+    assert bg_task in _args
+    assert verdict_task in _args
+    assert _kwargs.get("return_exceptions") is True
+
+    # Cleanup
+    main_mod.app.state.background_tasks = set()
+    main_mod.app.state.provider_verdict_task = None
 
 
 @pytest.mark.asyncio
@@ -737,7 +987,14 @@ async def test_shutdown_with_no_tasks_set():
     main_mod._playback_task = None
     main_mod._prewarm_task = None
 
-    for attr in ("producer_task", "prewarm_task", "playback_task", "stream_hub"):
+    for attr in (
+        "producer_task",
+        "prewarm_task",
+        "playback_task",
+        "stream_hub",
+        "provider_verdict_task",
+        "background_tasks",
+    ):
         if hasattr(main_mod.app.state, attr):
             delattr(main_mod.app.state, attr)
 
@@ -746,3 +1003,41 @@ async def test_shutdown_with_no_tasks_set():
         await main_mod.shutdown()
 
     mock_gather.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_shutdown_stops_and_clears_ledger():
+    """shutdown() stops the provenance ledger and clears it; a second shutdown
+    with no ledger is a safe no-op. Covers both arcs of the ledger guard
+    deterministically (it must not depend on leftover app.state from prior tests).
+    """
+    import mammamiradio.main as main_mod
+
+    main_mod._producer_task = None
+    main_mod._playback_task = None
+    main_mod._prewarm_task = None
+    for attr in ("producer_task", "prewarm_task", "playback_task", "stream_hub", "background_tasks"):
+        if hasattr(main_mod.app.state, attr):
+            delattr(main_mod.app.state, attr)
+    main_mod.app.state.provider_verdict_task = None
+
+    fake_ledger = MagicMock()
+    main_mod.app.state.ledger = fake_ledger
+    with patch("asyncio.gather", new_callable=AsyncMock):
+        await main_mod.shutdown()  # ledger present → True arc
+    fake_ledger.stop.assert_called_once()
+    assert main_mod.app.state.ledger is None
+
+    # ledger already None → False arc, must not raise
+    with patch("asyncio.gather", new_callable=AsyncMock):
+        await main_mod.shutdown()
+    assert main_mod.app.state.ledger is None
+
+
+def test_fastapi_title_uses_canonical_station_name():
+    """The OpenAPI/app title is the canonical station name, sourced from the single constant."""
+    from mammamiradio.core.config import DEFAULT_STATION_NAME
+    from mammamiradio.main import app
+
+    assert DEFAULT_STATION_NAME == "Mamma Mi Radio"
+    assert app.title == DEFAULT_STATION_NAME

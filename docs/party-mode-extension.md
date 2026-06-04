@@ -51,7 +51,7 @@ PartyMode = Literal["festival", "hitster"]
 
 ### 2. Write the prompt block
 
-In `mammamiradio/hosts/scriptwriter.py`, add a constant after `FESTIVAL_MODE_BLOCK`:
+In `mammamiradio/hosts/prompt_world.py`, add a constant after `FESTIVAL_MODE_BLOCK` (mode-block prompt-fiction lives here), then import it into `scriptwriter.py` where the other `*_MODE_BLOCK`s are imported from `prompt_world`:
 
 ```python
 HITSTER_MODE_BLOCK = """\
@@ -165,7 +165,8 @@ Add idempotence, auth, and stacking (hitster + chaos simultaneously) tests. See 
 | File | What changes |
 |---|---|
 | `mammamiradio/core/models.py` | Widen `PartyMode` literal |
-| `mammamiradio/hosts/scriptwriter.py` | New `*_MODE_BLOCK` constant + injection |
+| `mammamiradio/hosts/prompt_world.py` | New `*_MODE_BLOCK` constant (prompt-fiction data) |
+| `mammamiradio/hosts/scriptwriter.py` | Import the new block from `prompt_world` + inject in `write_banter` |
 | `mammamiradio/web/streamer.py` | Mode validation in `set_party` |
 | `mammamiradio/core/config.py` | Env var reader |
 | `mammamiradio/web/templates/admin.html` | UI toggle |

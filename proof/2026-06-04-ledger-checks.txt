@@ -1,0 +1,18 @@
+# Provenance ledger (Show Memory) — pre-ship verification
+# branch: florianhorner/feat/scriptwriter-context-ledger
+# commit: 9e87c6522e09a076ae754ee450ad006531bbd1ff
+# date (UTC): 2026-06-04T12:40:07Z
+
+## ruff check .
+All checks passed!
+
+## ruff format --check .
+162 files already formatted
+
+## mypy mammamiradio/ tests/
+Success: no issues found in 157 source files
+
+## pytest tests/ + coverage ratchet (make coverage-check)
+Required test coverage of 92.0% reached. Total coverage: 93.81%
+2391 passed, 2 skipped, 7 deselected in 60.44s (0:01:00)
+All coverage floors held. Total: 94% (floor: 92%)

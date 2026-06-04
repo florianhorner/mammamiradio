@@ -60,6 +60,7 @@ Everything else lives under `docs/`:
 - `docs/operations.md` - runtime assumptions and deploy reality
 - `docs/troubleshooting.md` - common failures and recovery paths
 - `docs/runbooks/ha-addon.md` - addon release process, config contract, pre-merge checklist
+- `docs/runbooks/refactor-cuts.md` - god-module split: per-cut pre-flight checklist and lessons
 - `docs/design/system.md` - Volare design system: colors, typography, components, motion
 - `docs/design/admin-panel.md` - admin control-room layout, info architecture, motion rules
 - `docs/conductor.md` - Conductor workspace lifecycle and `.env` discovery
@@ -99,7 +100,7 @@ private durable system for strategy or relationship context.
   - `ha-addon/mammamiradio/Dockerfile`: HA add-on image (Alpine-based)
   - `ha-addon/mammamiradio/rootfs/run.sh`: entrypoint mapping Supervisor env vars
   - `ha-addon/mammamiradio/translations/en.yaml`: UI labels for add-on options
-  - `ha-addon/mammamiradio-edge/`: dev-release channel add-on (metadata only — pulls the same image as stable; CI auto-bumps its calendar version). See `docs/runbooks/ha-addon.md` → "Edge channel".
+  - `ha-addon/mammamiradio-edge/`: dev-release channel add-on (metadata only — pulls the same image as stable; version is the `main` short-SHA, cut manually with `make edge-release`). See `docs/runbooks/ha-addon.md` → "Edge channel".
 - `.github/workflows/docker.yml`: multi-arch Docker build CI
 
 ## Environment
@@ -107,6 +108,7 @@ private durable system for strategy or relationship context.
 - `MAMMAMIRADIO_BIND_HOST`, `MAMMAMIRADIO_PORT`: bind address and port
 - `MAMMAMIRADIO_CACHE_DIR`, `MAMMAMIRADIO_TMP_DIR`: override cache/tmp directories (for Docker volumes)
 - `LOG_LEVEL`: override log verbosity (`DEBUG`, `INFO`, `WARNING`, `ERROR`; default `INFO`)
+- `MAMMAMIRADIO_HTTP_LOG_LEVEL`: log level applied to `httpx` and `httpcore` (default `WARNING`). Successful request logs from those libraries are suppressed at default; raise to `INFO` or `DEBUG` to inspect outbound HTTP traffic. Invalid values fall back to `WARNING`.
 - `ADMIN_USERNAME`, `ADMIN_PASSWORD`, `ADMIN_TOKEN`: admin auth
 - `ANTHROPIC_API_KEY`: Claude banter/ad generation
 - `OPENAI_API_KEY`: OpenAI gpt-4o-mini-tts voice synthesis + script generation fallback when Anthropic is unavailable
@@ -120,9 +122,12 @@ private durable system for strategy or relationship context.
 - `JAMENDO_CLIENT_ID`: Jamendo API client id (empty = Jamendo source disabled)
 - `JAMENDO_COUNTRY`: 3-letter uppercase ISO 3166-1 alpha-3 (e.g. `ITA`, `DEU`); empty disables the country filter. radio.toml default is `ITA` for Italian-trending music.
 - `JAMENDO_ORDER`: Jamendo sort order (`popularity_week` | `popularity_month` | `popularity_total` | `releasedate_desc` | empty). radio.toml default is `popularity_week`.
+- `JAMENDO_LIMIT`: Jamendo API result depth, integer `1`-`200`. radio.toml default is `200` to reduce short-rotation repeats.
 - `MIN_COOLDOWN_HOURS`: override the release-cooldown window (default `24`, read by `scripts/check-release-cooldown.sh`)
 - `MAMMAMIRADIO_SUPER_ITALIAN`: station personality dial (`true`/`1`/`yes` to enable; default on). When ON, listener UI and hosts are Italian-first. When OFF, listener UI uses English utility copy with Italian headlines and station-feel words, and AI hosts code-switch (English narrative + Italian flavor). Operator-toggleable from admin Engine Room (hot-reloadable; persisted to `.env` in standalone mode and `/data/options.json` in HA addon mode).
 - `MAMMAMIRADIO_FESTIVAL_MODE`: enable Festival Mode (`true`/`1`/`yes`; default off). Hosts become theatrical music competition MCs — fictional Italian-regional delegations, dramatic scoring, drinking game triggers. Toggleable live from the admin panel without a restart; persisted to `.env` in standalone mode and `/data/options.json` in HA addon mode.
+- `MAMMAMIRADIO_LEDGER_ENABLED`: enable the provenance ledger / Show Memory (`true`/`1`/`yes`; default **off**). When on, a best-effort daemon thread records how each aired moment was made — the raw LLM attempts (Tier 1), the final spoken script (Tier 2), and the true aired outcome (Tier 3) — as daily-rotated JSONL under `cache_dir/ledger` (dir `0700`, files `0600`). Off by default because the rows include home + listener context written locally in plaintext. Never raises into the audio path; a saturated queue drops the oldest row and surfaces a `ledger_heartbeat`. The ledger directory is always derived from `MAMMAMIRADIO_CACHE_DIR`, so when set it inherits the addon (`/data/cache`) vs standalone (`./cache`) resolution. **Env/standalone-only by design:** because the rows include home + listener context in plaintext, this toggle is intentionally NOT exposed in the HA addon options UI (`config.yaml`/`run.sh`) the way `MAMMAMIRADIO_FESTIVAL_MODE` and `MAMMAMIRADIO_SUPER_ITALIAN` are — an addon operator cannot enable it from the UI; it is set via env only.
+- `MAMMAMIRADIO_LEDGER_RETENTION_DAYS`: days of provenance history to keep before a day-rollover gzips and prunes older files (positive integer; default `14`). The deque cap (`ledger_queue_max`, default `2000` rows) is config-only in `StationConfig` with no env override.
 
 ## Runtime behavior
 
@@ -157,7 +162,7 @@ start.sh                    dev entrypoint with uvicorn and reload
 tests/                      mirrors mammamiradio/ — tests/<nave>/test_*.py
 ```
 
-Two god modules carry a `# TODO: split` marker: `web/streamer.py` (~2,300 LOC) and `hosts/scriptwriter.py` (~1,500 LOC). They have postal addresses now; the actual splits land in PRs 5 and 6 of the cathedral plan (`docs/2026-04-28-cathedral-restructure.md`).
+Two god modules carry a `# TODO: split` marker: `web/streamer.py` (~2,300 LOC) and `hosts/scriptwriter.py` (~1,500 LOC). They have postal addresses now; the actual splits land in PRs 5 and 6 of the cathedral plan (`docs/archive/2026-04-28-cathedral-restructure.md`).
 
 ## Design System
 
@@ -201,10 +206,11 @@ Why: the scriptwriter generates fake ads in the brand's voice, makes false produ
 - Treat 60 minutes of uninterrupted runtime per live station object as the default minimum when tinkering around an active stream.
 - Built-in demo music should favor current modern tracks, not nostalgic or older fallback selections.
 - Advertisements need a convincing underlying sound bed. Prefer CC-free music or sound design beds under ad voiceovers instead of dry voice-only spots.
-- To tune scriptwriter behavior without a stream gap: edit `mammamiradio/hosts/scriptwriter.py`, run `make check`, then `POST /api/hot-reload` (admin auth, empty body), then `POST /api/trigger {"type": "banter"}` to generate a segment with the new code. The stream stays live throughout. If reload fails (syntax error), the endpoint returns 500 and the stream keeps running with the old code.
+- To tune host behavior without a stream gap: edit `mammamiradio/hosts/scriptwriter.py` (generation logic) and/or the prompt-data leaves — `mammamiradio/hosts/prompt_world.py` (expression banks, host fingerprints, Chaos/Festival mode blocks), `mammamiradio/hosts/transitions.py` (transition rewrite openers), `mammamiradio/hosts/fallbacks.py` (chaos stock lines, ad-break bumpers) — run `make check`, then `POST /api/hot-reload` (admin auth, empty body) — it reloads `prompt_world`, `transitions`, `fallbacks` then `scriptwriter` leaves-first, so edits to any of them take effect — then `POST /api/trigger {"type": "banter"}` to generate a segment with the new code. The stream stays live throughout. If reload fails (syntax error), the endpoint returns 500 and the stream keeps running with the old code.
 
 ## Quality gates
 
+- **Land via `/ship` — never a bare merge (enforced)**: Every PR is opened and merged through `/ship`, which runs the mandatory pre-ship review squad (adversarial + test-coverage + docs/config-consistency). A `PreToolUse` hook (`scripts/hooks/require-preship-squad.sh`, wired in `.claude/settings.json`) refuses a bare `gh pr create` / `gh pr merge` unless a `review`/`adversarial-review` entry is logged for HEAD (or a recent ancestor). Added after a refactor cut opened PRs with bare `gh pr create`, skipping the squad's docs/config-consistency check and letting a doc-sync violation reach a green PR. Fail-open and project-scoped.
 - **Pre-merge QA (mandatory)**: Every PR must pass two separate `/qa` runs before merge:
   1. **Player QA** (`/qa` on `/` dashboard) — listener-facing: stream playback, now-playing, up-next, Casa card, song requests, clip sharing, responsive layout.
   2. **Admin QA** (`/qa` on `/admin`) — operator-facing: controls (skip/stop/resume/shuffle), pacing sliders, host config, key management, engine room, playlist management.
@@ -255,9 +261,14 @@ If the behavior changed and the docs didn't, the docs are wrong. Fix them in the
 - Architectural metaphors as labels: `cathedral`, `domain naves`, `sacred files`, `god-module`, `leadership principle`, `operator-honesty`
 - Contributor archaeology: `first outside contribution`, `work was superseded`
 
-**Where this content belongs instead:** PR bodies, runbooks (`docs/runbooks/`), stabilization log (`docs/stabilization-log.md`), strategic planning docs (`docs/YYYY-MM-DD-*.md`).
+**Where this content belongs instead:** runbooks (`docs/runbooks/`), stabilization log (`docs/stabilization-log.md`), strategic planning docs (`docs/YYYY-MM-DD-*.md`). **Not** PR bodies — the same editorial boundary applies to pull-request descriptions.
 
-**Enforcement:** `scripts/check-changelog-lint.sh` runs in CI on every PR. To extend, add a regex pattern to the `PATTERNS` array in that file.
+**Enforcement:** the shared pattern list lives in `scripts/lint-patterns.sh` (`LINT_PATTERNS` array). Two lints consume it:
+
+- `scripts/check-changelog-lint.sh` — runs in `quality.yml` against `CHANGELOG.md` and `ha-addon/mammamiradio/CHANGELOG.md`.
+- `scripts/check-pr-body-lint.sh` — runs in `.github/workflows/pr-body-lint.yml` against the PR body on every `opened/edited/synchronize/ready_for_review` event, plus a small set of PR-body-specific patterns for process narrative (`N commits ahead`, `picked up cleanly`, `auto-decided`, `soak verification`, `dual-voice review`, `🤖 Generated with`). The local PreToolUse hook (`~/.claude/hooks/verify-proof-block.sh`) chains it in at `gh pr create` time when the script is present in the project.
+
+To extend the rules, add a regex to `LINT_PATTERNS` in `scripts/lint-patterns.sh` — both lints pick it up automatically.
 
 ## Scope discipline
 
@@ -324,6 +335,25 @@ For every bug fix or behavior change, do not stop at the first broken instance.
 Review question to apply before merge:
 
 `What invariant failed here, where else could it fail the same way, and what automated check will catch the next instance before a user does?`
+
+## Refactor discipline
+
+For behavior-preserving refactors that MOVE a symbol between modules (the god-module
+split train, and any future relocation), run these checks at SCOPE time — before naming
+what moves — not only during execution:
+
+- **Whole-repo symbol grep.** Grep every moved symbol across the ENTIRE repo, including
+  `scripts/`, `.github/workflows/`, and `docs/` — not just `mammamiradio/` + `tests/`. CI
+  guards and shell scripts hardcode symbol names; a move that ignores them red-fails the
+  build (W3b near-miss: `scripts/validate-addon.sh` AST-scans for `_inject_ingress_prefix`).
+- **Dependency-closure gate.** Verify every symbol the move-target calls that is SHARED
+  with code staying behind or destined for another cut. A target that reaches a shared
+  primitive must not move until that primitive's home is settled (W3b: `_render_admin_response`
+  → `_get_csrf_token`, shared with the auth cut).
+- **Read the test bodies, not just grep counts.** Refines the plan-audit rule — read the
+  actual test files; counts miss pre-existing duplication (W3b: 8 sanitize tests, not 4).
+
+Full per-cut checklist + cut-by-cut lessons: `docs/runbooks/refactor-cuts.md`.
 
 ## Audio delivery test coverage rule
 
