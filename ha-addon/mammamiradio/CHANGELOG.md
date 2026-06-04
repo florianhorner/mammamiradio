@@ -4,6 +4,10 @@
 
 ### Added
 
+- **Jamendo rotation depth now defaults to 200 tracks.** The add-on's bundled
+  `radio.toml` sets `jamendo_limit = 200`, and advanced deployments can override
+  it with `JAMENDO_LIMIT` (`1`-`200`) to tune Jamendo API result depth.
+
 - **Home Assistant context now adapts to each home.** The add-on scores prompt-safe
   entities from the full Home Assistant state snapshot instead of only using a
   hardcoded apartment list. Location, camera, alarm, and free-text helper

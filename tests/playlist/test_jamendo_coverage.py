@@ -892,6 +892,15 @@ def test_build_jamendo_url_includes_country_and_order_when_set(config):
     assert "tags=pop" in url
 
 
+def test_build_jamendo_url_defaults_to_deeper_rotation_limit(config):
+    """Default Jamendo URL construction requests the full configured station pool."""
+    from mammamiradio.playlist.playlist import _build_jamendo_url
+
+    url = _build_jamendo_url("cid123", tags="pop")
+
+    assert "limit=200" in url
+
+
 def test_build_jamendo_url_omits_country_and_order_when_empty(config):
     """When country and order are empty strings, they are omitted from the URL."""
     from mammamiradio.playlist.playlist import _build_jamendo_url
@@ -924,6 +933,27 @@ def test_fetch_jamendo_playlist_uses_config_country_and_order(config):
     called_url = mock_urlopen.call_args.args[0]
     assert "country=ITA" in called_url
     assert "order=popularity_week" in called_url
+
+
+def test_fetch_jamendo_playlist_uses_config_limit(config):
+    """fetch reads the result depth from config when not explicitly overridden."""
+    from mammamiradio.playlist.playlist import _fetch_jamendo_playlist
+
+    config.playlist.jamendo_client_id = "cid123"
+    config.playlist.jamendo_limit = 123
+
+    payload = {"results": []}
+    with patch("mammamiradio.playlist.playlist.urlopen") as mock_urlopen:
+        mock_response = MagicMock()
+        mock_response.read.return_value = json.dumps(payload).encode("utf-8")
+        mock_response.__enter__ = lambda s: s
+        mock_response.__exit__ = MagicMock(return_value=False)
+        mock_urlopen.return_value = mock_response
+
+        _fetch_jamendo_playlist(config)
+
+    called_url = mock_urlopen.call_args.args[0]
+    assert "limit=123" in called_url
 
 
 def test_jamendo_source_round_trip_preserves_country_and_order(config):
@@ -1008,8 +1038,18 @@ def test_validate_config_accepts_valid_jamendo_order(config):
         validate_config(config)  # no raise
 
 
+def test_validate_config_rejects_bad_jamendo_limit(config):
+    """validate_config rejects Jamendo limits outside the API-supported range."""
+    from mammamiradio.core.config import _validate as validate_config
+
+    for limit in (0, 201, "200", True):
+        config.playlist.jamendo_limit = limit
+        with pytest.raises(ValueError, match="jamendo_limit"):
+            validate_config(config)
+
+
 def test_load_config_jamendo_env_vars_override_radio_toml(monkeypatch):
-    """JAMENDO_COUNTRY / JAMENDO_ORDER env vars override the radio.toml values.
+    """JAMENDO_* env vars override the radio.toml values.
 
     Closes the env-override coverage gap surfaced by /plan-eng-review on PR #283.
     Pattern mirrors the existing JAMENDO_CLIENT_ID env override at the same site.
@@ -1018,9 +1058,20 @@ def test_load_config_jamendo_env_vars_override_radio_toml(monkeypatch):
 
     monkeypatch.setenv("JAMENDO_COUNTRY", "DEU")
     monkeypatch.setenv("JAMENDO_ORDER", "popularity_month")
+    monkeypatch.setenv("JAMENDO_LIMIT", "123")
     config = load_config()
     assert config.playlist.jamendo_country == "DEU"
     assert config.playlist.jamendo_order == "popularity_month"
+    assert config.playlist.jamendo_limit == 123
+
+
+def test_load_config_invalid_jamendo_limit_env_var_raises(monkeypatch):
+    """JAMENDO_LIMIT with a non-integer value raises at validation time."""
+    from mammamiradio.core.config import load_config
+
+    monkeypatch.setenv("JAMENDO_LIMIT", "abc")
+    with pytest.raises(ValueError, match="jamendo_limit"):
+        load_config()
 
 
 def test_jamendo_country_and_order_fall_back_to_config_when_url_silent(config):

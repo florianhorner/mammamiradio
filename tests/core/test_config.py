@@ -22,12 +22,14 @@ def test_load_config_from_radio_toml(monkeypatch):
     """Loading radio.toml should produce a valid StationConfig."""
     toml_path = Path(__file__).resolve().parents[2] / "radio.toml"
     monkeypatch.delenv("STATION_NAME", raising=False)
+    monkeypatch.delenv("JAMENDO_LIMIT", raising=False)
     config = load_config(str(toml_path))
 
     assert config.station.name == "Mamma Mi Radio"
     assert config.station.language == "it"
     assert config.pacing.songs_between_banter == 2
     assert config.pacing.songs_between_ads == 4
+    assert config.playlist.jamendo_limit == 200
     assert config.super_italian_mode is True
     assert len(config.hosts) == 2
     assert config.hosts[0].name == "Marco"

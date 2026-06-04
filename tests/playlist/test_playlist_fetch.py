@@ -226,6 +226,7 @@ def test_fetch_jamendo_playlist_url_includes_required_cc_params(config):
         _fetch_jamendo_playlist(config)
 
     called_url = mock_urlopen.call_args.args[0]
+    assert "limit=200" in called_url
     assert "cc_commercial=1" in called_url
     assert "cc_sharealike=0" in called_url
 
