@@ -615,10 +615,10 @@ def test_load_config_tolerates_legacy_sonic_brand_keys(tmp_path):
     assert anchor in raw, "anchor line drifted; update this test's injection point"
     custom = raw.replace(
         anchor,
-        f'{anchor}\nshort_sting = "Malamie..."\nsweeper_probability = 0.25',
+        f'{anchor}\nshort_sting = "Legacy sting..."\nsweeper_probability = 0.25',
     )
     # Guard the str.replace from silently no-op'ing if radio.toml ever drifts.
-    assert 'short_sting = "Malamie..."' in custom
+    assert 'short_sting = "Legacy sting..."' in custom
     assert "sweeper_probability = 0.25" in custom
     custom_path = tmp_path / "radio.toml"
     custom_path.write_text(custom)
@@ -627,6 +627,41 @@ def test_load_config_tolerates_legacy_sonic_brand_keys(tmp_path):
 
     assert not hasattr(config.sonic_brand, "short_sting")
     assert not hasattr(config.sonic_brand, "sweeper_probability")
+
+
+def test_loaded_sweepers_use_canonical_station_name(monkeypatch):
+    """Sonic-brand sweepers must use the canonical name, never the legacy 'Malamie' artifact."""
+    monkeypatch.delenv("STATION_NAME", raising=False)
+    source = Path(__file__).resolve().parents[2] / "radio.toml"
+    config = load_config(str(source))
+
+    sweepers = config.sonic_brand.sweepers
+    assert sweepers, "expected radio.toml to define sweepers"
+    for line in sweepers:
+        assert "Malamie" not in line, f"legacy station-name artifact in sweeper: {line!r}"
+
+
+def test_display_station_name_is_canonical_and_never_blank(monkeypatch):
+    """display_station_name resolves brand → station → default and never returns an empty string."""
+    monkeypatch.delenv("STATION_NAME", raising=False)
+    source = Path(__file__).resolve().parents[2] / "radio.toml"
+    config = load_config(str(source))
+
+    # Default shipped config resolves to the canonical name.
+    assert config.display_station_name == "Mamma Mi Radio"
+
+    # Brand name wins when set.
+    config.brand.station_name = "Radio Sole"
+    assert config.display_station_name == "Radio Sole"
+
+    # Blank brand falls through to the station name.
+    config.brand.station_name = ""
+    config.station.name = "Engine Name"
+    assert config.display_station_name == "Engine Name"
+
+    # Both blank floors to the canonical default — never empty.
+    config.station.name = ""
+    assert config.display_station_name == "Mamma Mi Radio"
 
 
 @pytest.mark.parametrize(

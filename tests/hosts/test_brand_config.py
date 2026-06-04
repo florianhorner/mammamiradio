@@ -89,7 +89,7 @@ def test_parse_brand_missing_block_uses_defaults():
 def test_parse_brand_empty_dict_falls_back():
     raw = {}
     brand, warnings = _parse_brand(raw, _make_hosts())
-    assert brand.station_name == "mammamiradio"
+    assert brand.station_name == "Mamma Mi Radio"
     assert warnings == []
 
 
@@ -261,6 +261,6 @@ def test_load_pre_brand_fixture_clean():
     with open(fixture, "rb") as f:
         raw = tomllib.load(f)
     brand, warnings = _parse_brand(raw, _make_hosts())
-    assert brand.station_name  # falls back to [station].name or "mammamiradio"
+    assert brand.station_name  # falls back to [station].name or "Mamma Mi Radio"
     assert len(brand.hosts) == 2
     assert warnings == []
