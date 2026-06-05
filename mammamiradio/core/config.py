@@ -153,7 +153,6 @@ _DEFAULT_PROFILES: dict[str, dict[str, dict[str, str]]] = {
         "openai": {"creative": "small", "fast": "small"},
     },
 }
-_VALID_PROFILES = frozenset(_DEFAULT_PROFILES)
 
 
 @dataclass
@@ -211,12 +210,18 @@ def resolve_model(models: ModelsSection, caller: str | None, provider: str, prof
     provider_catalog = models.catalog.get(provider, {})
     if key and key in provider_catalog:
         return provider_catalog[key]
-    # Floor: any catalog entry for this provider, else the built-in default.
+    # Floor (reached when a profile references a key absent from the catalog —
+    # possible for a non-active profile that escaped _validate_models). Choose
+    # deterministically: prefer a named low-cost key, else the lexicographically
+    # first key. NEVER insertion order — TOML ordering must not leak into which
+    # model airs.
     if provider_catalog:
-        return next(iter(provider_catalog.values()))
-    # Last resort (only reached if the provider catalog is empty, which
-    # _validate_models prevents for API-keyed providers): pin to a named
-    # low-cost model so dict ordering can never leak into this floor.
+        for _pref in ("haiku", "small"):
+            if _pref in provider_catalog:
+                return provider_catalog[_pref]
+        return provider_catalog[min(provider_catalog)]
+    # Last resort: provider catalog entirely empty (_validate_models prevents
+    # this for API-keyed providers). Pin to a named built-in low-cost model.
     builtin = _DEFAULT_CATALOG.get(provider, {})
     return builtin.get("haiku") or builtin.get("small") or next(iter(builtin.values()), "claude-haiku-4-5-20251001")
 
@@ -268,14 +273,18 @@ def _apply_model_env_overrides(models: ModelsSection) -> None:
     - CLAUDE_MODEL          → anthropic fast-role model
     - OPENAI_SCRIPT_MODEL   → every OpenAI catalog entry (one global OpenAI fallback model)
     """
-    dp = models.profiles.get(models.default_profile, {})
-    anth = dp.get("anthropic", {})
     creative_env = os.getenv("CLAUDE_CREATIVE_MODEL")
-    if creative_env and anth.get("creative"):
-        models.catalog.setdefault("anthropic", {})[anth["creative"]] = creative_env
     fast_env = os.getenv("CLAUDE_MODEL")
-    if fast_env and anth.get("fast"):
-        models.catalog.setdefault("anthropic", {})[anth["fast"]] = fast_env
+    # Patch the catalog key for every profile so the override is honored
+    # regardless of which quality profile is active (not just the default one).
+    # Process fast before creative so that when both roles map to the same catalog
+    # key (e.g. economy: creative=haiku, fast=haiku) the creative override wins.
+    for prof_data in models.profiles.values():
+        anth = prof_data.get("anthropic", {})
+        if fast_env and anth.get("fast"):
+            models.catalog.setdefault("anthropic", {})[anth["fast"]] = fast_env
+        if creative_env and anth.get("creative"):
+            models.catalog.setdefault("anthropic", {})[anth["creative"]] = creative_env
     openai_env = os.getenv("OPENAI_SCRIPT_MODEL")
     if openai_env:
         for key in models.catalog.get("openai", {}):
@@ -312,7 +321,8 @@ def _validate_models(config: StationConfig) -> None:
         for prov in providers:
             for role in roles:
                 key = m.profiles.get(prof, {}).get(prov, {}).get(role)
-                if not key or key not in m.catalog.get(prov, {}):
+                catalog_value = m.catalog.get(prov, {}).get(key) if key else None
+                if not key or not catalog_value:
                     problems.append(f"profile '{prof}'/{prov}/role '{role}' unresolved")
 
     if problems:

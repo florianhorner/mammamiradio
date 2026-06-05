@@ -107,6 +107,20 @@ def test_floor_is_named_not_dict_ordered(models):
     assert resolve_model(models, "banter", "anthropic") == "claude-haiku-4-5-20251001"
 
 
+def test_floor_3_missing_key_is_deterministic_not_insertion_order(models):
+    """A profile referencing a catalog key that doesn't exist (non-empty catalog)
+    must resolve deterministically — prefer a named low-cost key, else the
+    lexicographically first key — NEVER the first-inserted entry."""
+    models.profiles["balanced"]["anthropic"]["creative"] = "missing_key"
+    models.active_profile = "balanced"
+    # No haiku/small present → lexicographically first key ('alpha'), not 'zeta'
+    models.catalog["anthropic"] = {"zeta": "z-model", "alpha": "a-model"}
+    assert resolve_model(models, "banter", "anthropic") == "a-model"
+    # haiku present → preferred regardless of insertion order
+    models.catalog["anthropic"] = {"zeta": "z-model", "haiku": "h-model"}
+    assert resolve_model(models, "banter", "anthropic") == "h-model"
+
+
 def test_resolve_handles_none_caller(models):
     assert resolve_model(models, None, "anthropic")  # provider probe path
 
@@ -148,6 +162,27 @@ def test_validate_models_degrades_on_unresolved_role(monkeypatch):
     # degraded back to a working built-in catalog
     assert resolve_model(cfg.models, "banter", "anthropic")
     assert cfg.models.catalog["anthropic"]["opus"] == "claude-opus-4-8"
+
+
+def test_validate_models_degrades_on_blank_catalog_value(monkeypatch):
+    """A catalog entry with a blank string value must degrade — resolve_model()
+    must not return '' and silently call the provider with model=''."""
+    from mammamiradio.core.config import StationConfig
+
+    cfg = StationConfig.__new__(StationConfig)
+    cfg.anthropic_api_key = "sk-ant"
+    cfg.openai_api_key = ""
+    cfg.models = ModelsSection(
+        catalog={"anthropic": {"opus": ""}},  # blank value — must be rejected
+        routing={"banter": "creative"},
+        profiles={"balanced": {"anthropic": {"creative": "opus"}}},
+        default_profile="balanced",
+        active_profile="balanced",
+    )
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    _validate_models(cfg)
+    # degraded — catalog should now have a real non-blank model ID
+    assert resolve_model(cfg.models, "banter", "anthropic")
 
 
 def test_validate_models_noop_without_keys():

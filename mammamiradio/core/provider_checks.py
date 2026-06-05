@@ -158,22 +158,34 @@ async def check_provider_keys(config: StationConfig, *, timeout_s: float = 12.0)
 
     async with httpx.AsyncClient(timeout=timeout_s) as client:
         if config.anthropic_api_key:
-            status, body = await _post_json(
-                client,
-                "https://api.anthropic.com/v1/messages",
-                headers={
-                    "x-api-key": config.anthropic_api_key,
-                    "anthropic-version": "2023-06-01",
-                },
-                payload={
-                    # Probe the creative-role model (what banter/ads air); a 404
-                    # here surfaces a stale catalog ID in the structured result.
-                    "model": resolve_model(config.models, None, "anthropic"),
-                    "max_tokens": 1,
-                    "messages": [{"role": "user", "content": "Reply with ok."}],
-                },
-            )
-            results["anthropic"] = _result("anthropic", status, body, secrets=(config.anthropic_api_key,))
+            # Probe every distinct Anthropic model the active profile will use
+            # (creative for banter/ads/news, fast for transitions) so a stale
+            # fast-role model id is surfaced here, not only when a live
+            # transition 404s. Report the first failing model.
+            anth_models: list[str] = []
+            for _caller in ("banter", "transition"):
+                _m = resolve_model(config.models, _caller, "anthropic")
+                if _m not in anth_models:
+                    anth_models.append(_m)
+            anth_result = results["anthropic"]
+            for _m in anth_models:
+                status, body = await _post_json(
+                    client,
+                    "https://api.anthropic.com/v1/messages",
+                    headers={
+                        "x-api-key": config.anthropic_api_key,
+                        "anthropic-version": "2023-06-01",
+                    },
+                    payload={
+                        "model": _m,
+                        "max_tokens": 1,
+                        "messages": [{"role": "user", "content": "Reply with ok."}],
+                    },
+                )
+                anth_result = _result("anthropic", status, body, secrets=(config.anthropic_api_key,))
+                if not anth_result["ok"]:
+                    break  # surface the first failing model
+            results["anthropic"] = anth_result
 
         if config.openai_api_key:
             openai_headers = {"Authorization": f"Bearer {config.openai_api_key}"}

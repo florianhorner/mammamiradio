@@ -96,6 +96,19 @@ def test_claude_creative_model_override(monkeypatch):
     assert resolve_model(config.models, "banter", "anthropic") == "claude-opus-4-6"
 
 
+def test_claude_creative_model_override_under_economy_profile(monkeypatch):
+    """CLAUDE_CREATIVE_MODEL must be honored even when the active profile maps
+    creative to a different catalog key than the default profile (e.g. economy
+    uses 'haiku' not 'opus' for creative — both must be patched).
+    CLAUDE_MODEL is explicitly cleared so the fast override doesn't interfere
+    with the creative→haiku key in the economy profile."""
+    monkeypatch.setenv("CLAUDE_CREATIVE_MODEL", "claude-opus-4-6")
+    monkeypatch.delenv("CLAUDE_MODEL", raising=False)
+    monkeypatch.setenv("MAMMAMIRADIO_QUALITY", "economy")
+    config = load_config(TOML_PATH)
+    assert resolve_model(config.models, "banter", "anthropic") == "claude-opus-4-6"
+
+
 def test_openai_script_model_override(monkeypatch):
     """OPENAI_SCRIPT_MODEL (back-compat) overrides every OpenAI catalog entry, so it
     applies under any role."""
