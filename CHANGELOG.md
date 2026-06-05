@@ -8,6 +8,8 @@ The current version source of truth is `pyproject.toml`.
 
 ### Added
 
+- **Admin playlist and search pagination** — Large rotations no longer over-render in the Producer Desk. `/status`, `GET /api/playlist`, and `GET /api/search` expose bounded playlist/search windows with load-more metadata, while artwork from Apple charts, web search results, and listener-request downloads is preserved through queueing.
+
 - **The admin queue now shows the studio working in the background.** Above the Scaletta, an "In produzione" feed reveals what the hosts are creating right now — writing an ad, voicing a banter, finding the next track — with a live timer and a short trail of what just finished. The next-up segment is highlighted with the studio gold accent and a one-line detail (artist, hosts, or brand). The operator no longer stares at a static list wondering whether anything is happening.
 
 - **Share a whole moment, not just thirty seconds.** The Share button now always
@@ -74,6 +76,10 @@ The current version source of truth is `pyproject.toml`.
   from `/public-status`.
 
 ### Fixed
+
+- **Engine Room track count now reflects the full rotation.** The playlist size stat in the Engine Room shows the actual number of tracks in the rotation (e.g. "312 tracks") rather than the most-recently-fetched page size.
+
+- **Loaded playlist pages no longer snap back on refresh.** Tracks added via "Load more" stay visible across the 3-second status poll instead of collapsing back to the first 80 on the next cycle.
 
 - **Deliberate Stop now stays stopped until Resume.** A listener connecting no longer silently restarts a stopped station, aligning playback with the documented 2.10.3 behavior; the playback loop fully honors the stopped state.
 
