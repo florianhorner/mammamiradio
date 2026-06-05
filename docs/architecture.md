@@ -75,7 +75,7 @@ Charts / Jamendo / classic eras / local files / demo tracks
 Script generation never names a model in code. Each call site asks for a model by
 **role**, and `resolve_model()` in `mammamiradio/core/config.py` resolves it:
 
-```
+```text
 task (caller)  ──routing──▶  role  ──active profile──▶  catalog key  ──catalog──▶  model id
   "banter"                  "creative"     premium/balanced/economy        "opus"      "claude-opus-4-8"
   "transition"              "fast"                                          "haiku"     "claude-haiku-..."

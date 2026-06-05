@@ -378,6 +378,28 @@ def test_apply_addon_options(monkeypatch, tmp_path):
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
 
 
+def test_legacy_audio_model_keys_do_not_break_boot(tmp_path):
+    """An upgraded standalone radio.toml that still has claude_model /
+    claude_creative_model / openai_script_model in [audio] must still boot —
+    the deprecated keys are dropped, not passed to AudioSection (principle #2)."""
+    repo_toml = Path(__file__).resolve().parents[2] / "radio.toml"
+    text = repo_toml.read_text()
+    legacy = (
+        "[audio]\n"
+        'claude_model = "claude-haiku-4-5-20251001"\n'
+        'claude_creative_model = "claude-opus-4-6"\n'
+        'openai_script_model = "gpt-4o-mini"\n'
+    )
+    assert "[audio]\n" in text
+    patched = text.replace("[audio]\n", legacy, 1)
+    toml_path = tmp_path / "radio.toml"
+    toml_path.write_text(patched)
+
+    config = load_config(str(toml_path))  # must not raise TypeError
+    assert resolve_model(config.models, "banter", "anthropic")
+    assert not hasattr(config.audio, "claude_model")
+
+
 def test_apply_addon_options_quality_profile_round_trips(monkeypatch, tmp_path):
     """options.json quality_profile must populate MAMMAMIRADIO_QUALITY (so non-run.sh
     config loads still honor the persisted quality dial)."""

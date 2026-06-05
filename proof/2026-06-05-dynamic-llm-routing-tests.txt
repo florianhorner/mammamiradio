@@ -1,8 +1,8 @@
-Dynamic LLM routing — local verification (2026-06-04T22:39:49Z)
-commit: 843be42a8c2bf821b9db0042bf828ff52f85471a
+Dynamic LLM routing — local verification (2026-06-05T00:20:30Z)
+commit: e7f31aea595fd85613841478bfc46186596fdb3e (+ pending P1 boot-safety fix)
 
 ## pytest
-2539 passed, 2 skipped, 8 deselected, 1 warning in 52.69s
+2540 passed, 2 skipped, 8 deselected, 1 warning in 53.30s
 ## ruff
 All checks passed!
 ## mypy
@@ -10,8 +10,6 @@ Success: no issues found in 163 source files
 ## coverage
 Required test coverage of 92.0% reached. Total coverage: 93.86%
 All coverage floors held. Total: 94% (floor: 92%)
-## changelog lint
-Changelog lint clean.
 ## release invariants
 All invariants passed.
 ## addon validate

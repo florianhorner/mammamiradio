@@ -1143,6 +1143,26 @@ def load_config(path: str = "radio.toml") -> StationConfig:
         else:
             station_raw.pop("bitrate")
 
+    # Legacy: model IDs moved from [audio] to [models]. An upgraded standalone
+    # radio.toml may still carry claude_model / claude_creative_model /
+    # openai_script_model in [audio]; drop them so AudioSection(**audio_raw) does
+    # not raise TypeError and refuse to boot. Model selection now lives in
+    # [models] (or the built-in defaults); the matching env vars still override
+    # the catalog. Leadership principle #2: the station must always boot.
+    _legacy_audio_model_keys = [
+        k for k in ("claude_model", "claude_creative_model", "openai_script_model") if k in audio_raw
+    ]
+    if _legacy_audio_model_keys:
+        import logging as _log
+
+        _log.getLogger(__name__).warning(
+            "Ignoring deprecated [audio] keys %s — model selection now lives in [models] "
+            "(see CLAUDE.md). Remove them from radio.toml.",
+            _legacy_audio_model_keys,
+        )
+        for _k in _legacy_audio_model_keys:
+            audio_raw.pop(_k, None)
+
     ha_raw = raw.get("homeassistant", {})
     # Env-var overrides for HA add-on: HA_URL and HA_ENABLED
     if os.getenv("HA_URL"):
