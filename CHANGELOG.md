@@ -8,6 +8,10 @@ The current version source of truth is `pyproject.toml`.
 
 ### Added
 
+- **An Apache-2.0 license, a code of conduct, and a security policy.** The project
+  is now openly licensed so anyone can use and build on it, with clear contribution
+  and vulnerability-reporting guidelines.
+
 - **Admin playlist and search pagination** — Large rotations no longer over-render in the Producer Desk. `/status`, `GET /api/playlist`, and `GET /api/search` expose bounded playlist/search windows with load-more metadata, while artwork from Apple charts, web search results, and listener-request downloads is preserved through queueing.
 
 - **Real album covers on the now-playing screen.** When a song is on, your phone's
