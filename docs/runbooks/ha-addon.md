@@ -299,5 +299,6 @@ Use these to tell intentional degradation from a real regression during post-mer
 |-------|-------|
 | Port 8000 | config.yaml (`ingress_port`), run.sh (`MAMMAMIRADIO_PORT`, `--port`), config.py (default) |
 | `MAMMAMIRADIO_ALLOW_YTDLP=true` | run.sh (hardcoded, required for chart music playback) |
+| `MAMMAMIRADIO_LEDGER_ENABLED=true` | run.sh (hardcoded, enables per-segment provenance ledger in the addon; data stays local at `/data/cache/ledger/`) |
 
 If you change any of these, grep for the old value and update all locations.

@@ -83,6 +83,9 @@ fi
 # ---- Enable yt-dlp as primary music source ----
 export MAMMAMIRADIO_ALLOW_YTDLP="true"
 
+# ---- Enable provenance ledger (records per-segment production data to cache/ledger/) ----
+export MAMMAMIRADIO_LEDGER_ENABLED="true"
+
 # ---- Bind to all interfaces (required for ingress) ----
 export MAMMAMIRADIO_BIND_HOST="0.0.0.0"
 export MAMMAMIRADIO_PORT="8000"
