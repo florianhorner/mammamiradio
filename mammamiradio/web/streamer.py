@@ -2528,6 +2528,104 @@ async def set_super_italian(request: Request, _: None = Depends(require_admin_ac
     return {"ok": True, "super_italian_mode": value}
 
 
+_quality_lock = asyncio.Lock()
+
+
+@router.get("/api/quality")
+async def get_quality(request: Request, _: None = Depends(require_admin_access)):
+    """Return the active model quality profile and the available profiles."""
+    config = request.app.state.config
+    return {
+        "active_profile": config.models.active_profile,
+        "profiles": sorted(config.models.profiles),
+    }
+
+
+@router.post("/api/quality")
+async def set_quality(request: Request, _: None = Depends(require_admin_access)):
+    """Switch the active model quality profile (premium|balanced|economy) live.
+
+    Hot-swaps with NO restart and NO queue purge: only the model that voices the
+    NEXT generated segment changes; the current segment finishes airing
+    untouched (contrast /api/playlist/load, which purges). No prompt-cache reset
+    needed — the system prompt is model-independent, so a model-ID change can't
+    break the illusion mid-segment.
+
+    Persistence mirrors super_italian: MAMMAMIRADIO_QUALITY to `.env` (standalone)
+    or quality_profile to /data/options.json (addon).
+    """
+    config = request.app.state.config
+    try:
+        body = await request.json()
+    except ValueError:
+        return {"ok": False, "error": "invalid JSON body"}
+    if not isinstance(body, dict) or "quality_profile" not in body:
+        return {"ok": False, "error": "expected JSON object with quality_profile"}
+    profile = body["quality_profile"]
+    if not isinstance(profile, str) or profile not in config.models.profiles:
+        return {"ok": False, "error": f"quality_profile must be one of {sorted(config.models.profiles)}"}
+    loop = asyncio.get_running_loop()
+    async with _quality_lock:
+        try:
+            if config.is_addon:
+                await loop.run_in_executor(None, _save_addon_option, "quality_profile", profile)
+            else:
+                await loop.run_in_executor(None, _save_dotenv, {"MAMMAMIRADIO_QUALITY": profile})
+        except Exception as exc:
+            logger.warning("Failed to persist quality_profile=%s: %s", profile, exc)
+            return JSONResponse({"ok": False, "error": "failed to persist quality_profile"}, status_code=500)
+        config.models.active_profile = profile
+        os.environ["MAMMAMIRADIO_QUALITY"] = profile
+    return {"ok": True, "active_profile": profile}
+
+
+# Approximate public per-token USD rates (input, output) for the models the
+# station routes to. Used ONLY for the operator's cost estimate — a stale or
+# missing entry never affects audio. With dynamic routing, one session can run
+# several models, so we price each model from per-model token tallies rather than
+# a single flat rate. Update when prices change; an unpriced model (just added to
+# the catalog) falls back to the highest known tier and is flagged in the UI.
+MODEL_PRICES: dict[str, tuple[float, float]] = {
+    "claude-opus-4-8": (0.000015, 0.000075),
+    "claude-opus-4-6": (0.000015, 0.000075),
+    "claude-sonnet-4-6": (0.000003, 0.000015),
+    "claude-haiku-4-5-20251001": (0.0000008, 0.000004),
+    "gpt-4o": (0.0000025, 0.00001),
+    "gpt-4o-mini": (0.00000015, 0.0000006),
+}
+_UNPRICED_FALLBACK = (0.000015, 0.000075)  # highest known tier — conservative
+
+
+def _estimate_api_cost(state) -> tuple[float, bool]:
+    """Sum per-model token cost. Returns (usd, has_unpriced_model).
+
+    Prices each model the session actually used (api_tokens_by_model). A model
+    with no MODEL_PRICES entry falls back to the highest known tier and trips the
+    flag so the UI can annotate the estimate — never a silent $0, never a KeyError.
+    """
+    by_model = getattr(state, "api_tokens_by_model", None) or {}
+    if not by_model:
+        # No per-model data yet — flat haiku estimate on aggregate counters so
+        # the counter is never blank for a fresh/legacy session.
+        in_rate, out_rate = MODEL_PRICES["claude-haiku-4-5-20251001"]
+        return round(state.api_input_tokens * in_rate + state.api_output_tokens * out_rate, 4), False
+    total = 0.0
+    has_unpriced = False
+    for model_id, toks in by_model.items():
+        rates = MODEL_PRICES.get(model_id)
+        if rates is None:
+            rates = _UNPRICED_FALLBACK
+            has_unpriced = True
+        total += toks.get("input", 0) * rates[0] + toks.get("output", 0) * rates[1]
+    return round(total, 4), has_unpriced
+
+
+def _consumption_cost(state) -> dict:
+    """Cost fields for the /status consumption block (protected UI element)."""
+    cost, unpriced = _estimate_api_cost(state)
+    return {"api_cost_estimate_usd": cost, "api_cost_unpriced_model": unpriced}
+
+
 _party_lock = asyncio.Lock()
 
 
@@ -2815,10 +2913,21 @@ async def _commit_external_download(
     the rotation pool but the play-next slot was occupied), or "dropped" (source
     switched / consumed). Raises on download failure / cancellation for the caller
     to surface. Shared by the admin and listener download paths."""
+    from mammamiradio.playlist.cover_art import maybe_resolve, needs_resolve
     from mammamiradio.playlist.downloader import download_external_track
 
     state = app_state.station_state
     config = app_state.config
+    # Upgrade a YouTube video thumbnail to a real album cover (off the event loop —
+    # urlopen is blocking) before the slow download. Search-sourced tracks always
+    # carry a thumbnail; only resolve when there's one to upgrade, so a track with
+    # no art at all doesn't trigger a lookup. Best-effort: falls back to the
+    # thumbnail on a miss, never raises.
+    current_art = getattr(track, "album_art", "") or ""
+    if current_art and needs_resolve(current_art):
+        track.album_art = await asyncio.to_thread(
+            maybe_resolve, current_art, track.artist, track.title, cache_dir=config.cache_dir
+        )
     await download_external_track(track, config.cache_dir, music_dir=Path("music"))
     # Serialize the commit decision with source switches. /api/playlist/load holds
     # source_switch_lock across the slow load and only bumps source_revision at the
@@ -2903,11 +3012,15 @@ async def add_track(request: Request, _: None = Depends(require_admin_access)):
     from mammamiradio.core.models import Track
 
     body = await request.json()
+    # Preserve album_art when the caller supplies one (e.g. re-adding a track that
+    # already carries a cover). Live cover resolution happens on the download paths
+    # (_commit_external_download), not on this fast synchronous append.
     track = Track(
         title=body.get("title", ""),
         artist=body.get("artist", ""),
         duration_ms=body.get("duration_ms", 0),
         spotify_id=body.get("spotify_id", ""),
+        album_art=str(body.get("album_art") or "").strip(),
     )
     if not track.title:
         return {"ok": False, "error": "Missing title"}
@@ -3536,11 +3649,9 @@ async def status(
                 "input_tokens": state.api_input_tokens,
                 "output_tokens": state.api_output_tokens,
                 "tts_characters": state.tts_characters,
-                # Haiku pricing: $0.80/M input, $4.00/M output (claude-haiku-4-5, 2026)
-                "api_cost_estimate_usd": round(
-                    state.api_input_tokens * 0.0000008 + state.api_output_tokens * 0.000004,
-                    4,
-                ),
+                # Model-aware cost: prices each model the session actually ran
+                # (api_cost_estimate_usd stays present — protected UI element).
+                **_consumption_cost(state),
                 "cache_size_mb": _cached_cache_size_mb(config.cache_dir),
                 "cache_limit_mb": config.max_cache_size_mb,
             },

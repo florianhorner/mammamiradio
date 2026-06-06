@@ -10,6 +10,24 @@ The current version source of truth is `pyproject.toml`.
 
 - **Admin playlist and search pagination** — Large rotations no longer over-render in the Producer Desk. `/status`, `GET /api/playlist`, and `GET /api/search` expose bounded playlist/search windows with load-more metadata, while artwork from Apple charts, web search results, and listener-request downloads is preserved through queueing.
 
+- **Real album covers on the now-playing screen.** When a song is on, your phone's
+  lock screen, CarPlay, and Control Center now show the actual album artwork instead
+  of the station logo — and the cover follows each track as it changes. Chart songs
+  carry their cover straight from the chart feed; songs you search and add, or that
+  listeners request, get their cover looked up automatically. Home Assistant's media
+  card shows the cover too. When no cover is found, every screen falls back cleanly to
+  the station logo — never a broken image.
+
+- **Pick your AI quality with one dial.** The add-on's model picker is now a simple
+  Premium / Balanced / Economy quality dial in the admin Engine Room. Choose the
+  experience you want and the station picks the right model for each job
+  automatically — richer models for hosts and ads, fast ones for quick links.
+  Switch it live without a restart; the segment on air finishes first. Operators no
+  longer track model names, and because model choices now live in one place in the
+  station config, keeping up with new AI models is a one-line change. The cost
+  counter now prices each model the station actually used, so the spend estimate is
+  honest rather than a flat guess.
+
 - **The admin queue now shows the studio working in the background.** Above the Scaletta, an "In produzione" feed reveals what the hosts are creating right now — writing an ad, voicing a banter, finding the next track — with a live timer and a short trail of what just finished. The next-up segment is highlighted with the studio gold accent and a one-line detail (artist, hosts, or brand). The operator no longer stares at a static list wondering whether anything is happening.
 
 - **Share a whole moment, not just thirty seconds.** The Share button now always
@@ -24,11 +42,14 @@ The current version source of truth is `pyproject.toml`.
 
 - **Expanded TTS voice routing** — hosts, sweepers, station IDs, and ad
   character voices can now use Edge, OpenAI, Azure Speech, or ElevenLabs TTS
-  with per-voice Edge fallbacks. The built-in cast now mixes OpenAI `cedar`,
-  `marin`, `coral`, Azure Italian HD voices, and existing Edge fallbacks so
-  commercials and imaging no longer collapse onto the same few Edge timbres.
-  Home Assistant add-on options and setup checks accept Azure Speech and
-  ElevenLabs credentials without requiring secrets in `radio.toml`.
+  with per-voice Edge fallbacks. Both hosts move to studio-grade ElevenLabs
+  voices, and four ElevenLabs ad characters — a gravel-deep elder statesman, a
+  velvet-menace charmer, a classic announcer, and a mysterious guest — join the
+  original OpenAI/Azure ad cast rather than replacing it. Most ad roles now
+  carry two voices and the station picks one at random per spot, so commercials
+  rotate between timbres instead of collapsing onto the same few. Home Assistant
+  add-on options and setup checks accept Azure Speech and ElevenLabs credentials
+  without requiring secrets in `radio.toml`.
 
 - **Voice audition clips** — `scripts/audition_tts_voices.py` can now generate
   local MP3 samples plus a manifest for the configured cast and the built-in

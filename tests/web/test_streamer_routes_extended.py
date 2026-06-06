@@ -504,6 +504,163 @@ async def test_add_track_to_end():
 
 
 @pytest.mark.asyncio
+async def test_add_track_preserves_album_art():
+    """A supplied album_art rides through /api/playlist/add onto the queued track."""
+    app = _make_test_app()
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.post(
+            "/api/playlist/add",
+            json={
+                "title": "Con Copertina",
+                "artist": "Artista",
+                "duration_ms": 200_000,
+                "album_art": "https://is1.mzstatic.com/image/600x600bb.jpg",
+            },
+        )
+    assert resp.status_code == 200
+    assert app.state.station_state.playlist[-1].album_art == "https://is1.mzstatic.com/image/600x600bb.jpg"
+
+
+@pytest.mark.asyncio
+async def test_add_external_track_preserves_real_album_art(tmp_path):
+    """A real (non-YouTube) cover in the add-external payload is kept as-is — no lookup."""
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path
+    app.state.config.allow_ytdlp = True
+    cover = "https://is1.mzstatic.com/image/600x600bb.jpg"
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    with patch(
+        "mammamiradio.playlist.downloader.download_external_track",
+        new_callable=AsyncMock,
+        return_value=tmp_path / "dl.mp3",
+    ):
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            resp = await client.post(
+                "/api/playlist/add-external",
+                json={
+                    "youtube_id": "dQw4w9WgXcQ",
+                    "title": "Brano",
+                    "artist": "Artista",
+                    "duration_ms": 123000,
+                    "album_art": cover,
+                },
+            )
+        assert resp.status_code == 200
+        await asyncio.gather(*list(app.state.background_tasks))
+    assert app.state.station_state.pinned_track.album_art == cover
+
+
+def _cover_urlopen_mock(payload: dict) -> MagicMock:
+    """A urlopen stand-in for mammamiradio.playlist.cover_art returning iTunes JSON."""
+    resp = MagicMock()
+    resp.read.return_value = json.dumps(payload).encode("utf-8")
+    resp.__enter__ = lambda s: s
+    resp.__exit__ = MagicMock(return_value=False)
+    return MagicMock(return_value=resp)
+
+
+@pytest.mark.asyncio
+async def test_add_external_track_upgrades_youtube_thumbnail(tmp_path):
+    """The real-world path: a yt-dlp thumbnail is upgraded to a resolved iTunes cover
+    on the background download path (the gate-True branch of _commit_external_download)."""
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path
+    app.state.config.allow_ytdlp = True
+    thumb = "https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg"
+    itunes = _cover_urlopen_mock({"results": [{"artworkUrl100": "https://is1.mzstatic.com/100x100bb.jpg"}]})
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    with (
+        patch(
+            "mammamiradio.playlist.downloader.download_external_track",
+            new_callable=AsyncMock,
+            return_value=tmp_path / "dl.mp3",
+        ),
+        patch("mammamiradio.playlist.cover_art.urlopen", itunes),
+    ):
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            resp = await client.post(
+                "/api/playlist/add-external",
+                json={
+                    "youtube_id": "dQw4w9WgXcQ",
+                    "title": "Brano",
+                    "artist": "Artista",
+                    "duration_ms": 123000,
+                    "album_art": thumb,
+                },
+            )
+        assert resp.status_code == 200
+        await asyncio.gather(*list(app.state.background_tasks))
+    # The ytimg thumbnail was upgraded to the upscaled iTunes cover.
+    assert app.state.station_state.pinned_track.album_art == "https://is1.mzstatic.com/600x600bb.jpg"
+
+
+@pytest.mark.asyncio
+async def test_add_external_track_keeps_thumbnail_when_cover_lookup_misses(tmp_path):
+    """On an iTunes miss the track keeps its thumbnail rather than going blank —
+    protects the now-playing tile from regressing to no image."""
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path
+    app.state.config.allow_ytdlp = True
+    thumb = "https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg"
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    with (
+        patch(
+            "mammamiradio.playlist.downloader.download_external_track",
+            new_callable=AsyncMock,
+            return_value=tmp_path / "dl.mp3",
+        ),
+        patch("mammamiradio.playlist.cover_art.urlopen", _cover_urlopen_mock({"results": []})),
+    ):
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            resp = await client.post(
+                "/api/playlist/add-external",
+                json={
+                    "youtube_id": "dQw4w9WgXcQ",
+                    "title": "Brano",
+                    "artist": "Artista",
+                    "duration_ms": 123000,
+                    "album_art": thumb,
+                },
+            )
+        assert resp.status_code == 200
+        await asyncio.gather(*list(app.state.background_tasks))
+    assert app.state.station_state.pinned_track.album_art == thumb
+
+
+@pytest.mark.asyncio
+async def test_listener_request_upgrades_thumbnail_to_cover(tmp_path):
+    """A listener song request: the yt-dlp thumbnail in search metadata is upgraded
+    to a resolved cover through the shared _commit_external_download path."""
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path
+    state = app.state.station_state
+    thumb = "https://i.ytimg.com/vi/abc12345678/hqdefault.jpg"
+    meta = {
+        "title": "Canzone",
+        "artist": "Tizio",
+        "duration_ms": 180000,
+        "youtube_id": "abc12345678",
+        "album_art": thumb,
+    }
+    req = {"request_id": "r1", "song_query": "canzone tizio"}
+    state.pending_requests.append(req)
+    itunes = _cover_urlopen_mock({"results": [{"artworkUrl100": "https://is1.mzstatic.com/100x100bb.jpg"}]})
+    with (
+        patch("mammamiradio.playlist.downloader.search_ytdlp_metadata", return_value=[meta]),
+        patch(
+            "mammamiradio.playlist.downloader.download_external_track",
+            new_callable=AsyncMock,
+            return_value=tmp_path / "dl.mp3",
+        ),
+        patch("mammamiradio.playlist.cover_art.urlopen", itunes),
+    ):
+        await _download_listener_song(req, app.state, state.source_revision)
+    assert state.pinned_track is not None
+    assert state.pinned_track.album_art == "https://is1.mzstatic.com/600x600bb.jpg"
+
+
+@pytest.mark.asyncio
 async def test_add_track_play_next():
     app = _make_test_app()
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
@@ -3346,7 +3503,7 @@ async def test_clip_ad_segment_extends_duration(tmp_path):
         "label": "Sponsored",
         "started": time.time() - 100,
         "duration_sec": 120,
-        "metadata": {"title": "Mausolea Berlusconi"},
+        "metadata": {"title": "Mausolea del Presidentissimo"},
     }
 
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
@@ -3379,7 +3536,7 @@ async def test_clip_lookback_serves_recent_adbanter_snapshot(tmp_path):
         "bytes": b"\xff" * 8192,
         "ended_monotonic": time.monotonic(),  # just ended
         "type": "ad",
-        "title": "Mausolea Berlusconi",
+        "title": "Mausolea del Presidentissimo",
     }
 
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
@@ -3391,7 +3548,7 @@ async def test_clip_lookback_serves_recent_adbanter_snapshot(tmp_path):
     assert body["ok"] is True
     # The sidecar names the clipped ad, not the current music track.
     sidecar = json.loads((app.state.config.cache_dir / "clips" / f"{body['clip_id']}.json").read_text())
-    assert sidecar["track_title"] == "Mausolea Berlusconi"
+    assert sidecar["track_title"] == "Mausolea del Presidentissimo"
 
 
 @pytest.mark.asyncio

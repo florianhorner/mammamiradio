@@ -6,6 +6,22 @@
 
 - **Admin playlist and search pagination** — Large rotations no longer over-render in the Producer Desk. Status, playlist, and search APIs expose bounded windows with load-more metadata, while artwork from Apple charts, web search results, and listener-request downloads is preserved through queueing.
 
+- **Real album covers on the now-playing screen.** When a song is on, the phone
+  lock screen, CarPlay, Control Center, and the Home Assistant media card now show
+  the real album artwork instead of the station logo, and it follows each track.
+  Chart songs carry their cover from the chart feed; searched/added and listener-
+  requested songs get their cover looked up automatically. No cover found falls back
+  cleanly to the station logo — never a broken image.
+
+- **AI quality dial replaces the model dropdown.** The old "AI Model" option is now
+  a Premium / Balanced / Economy quality dial. Pick the experience you want and the
+  station chooses the right model for each job automatically — no model names to
+  track, and it keeps working when new models ship. Existing add-ons update with no
+  change in behavior: if `/data/options.json` still contains the removed
+  `claude_model` option, it is honored as the legacy fast-model override until you
+  save the new quality profile. The dial is also in the admin Engine Room and
+  switches live without a restart.
+
 - **Share a whole moment, not just thirty seconds.** The Share button now always
   copies the clip link to your clipboard (alongside the native share sheet). Clips
   of host banter and ads capture the full segment instead of a fixed 30-second

@@ -55,7 +55,9 @@ def estimate_cost_usd(model: str, prompt_tokens: int, completion_tokens: int) ->
 
 
 async def run_one(*, model: str, fixture: dict, config, state) -> dict:
-    config.audio.openai_script_model = model
+    # Force the OpenAI branch to use the model under test regardless of which
+    # role the fixture's caller maps to: point every OpenAI catalog entry at it.
+    config.models.catalog["openai"] = {"large": model, "small": model}
     record = {
         "model": model,
         "fixture_id": fixture["id"],

@@ -1,7 +1,7 @@
 name: Mamma Mi Radio (Edge)
 description: Development channel — always the latest main-branch build. For testing only; use the stable Mamma Mi Radio add-on for daily listening.
 slug: mammamiradio-edge
-version: 86427ca
+version: cb0d18a
 stage: experimental
 url: https://github.com/florianhorner/mammamiradio
 image: ghcr.io/florianhorner/mammamiradio-addon-{arch}
@@ -32,7 +32,7 @@ options:
   azure_speech_key: ""
   azure_speech_region: ""
   elevenlabs_api_key: ""
-  claude_model: "claude-haiku-4-5-20251001"
+  quality_profile: "balanced"
   enable_home_assistant: true
   admin_token: ""
   super_italian_mode: false
@@ -46,7 +46,7 @@ schema:
   azure_speech_key: password?
   azure_speech_region: str?
   elevenlabs_api_key: password?
-  claude_model: list(claude-haiku-4-5-20251001|claude-sonnet-4-6|claude-opus-4-7)?
+  quality_profile: list(premium|balanced|economy)?
   enable_home_assistant: bool?
   admin_token: password?
   super_italian_mode: bool?

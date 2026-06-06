@@ -15,6 +15,7 @@ from urllib.request import urlopen
 
 from mammamiradio.core.config import StationConfig
 from mammamiradio.core.models import PlaylistSource, Track
+from mammamiradio.playlist.cover_art import upscale_itunes_artwork
 
 _DEMO_ASSETS_MUSIC_DIR = Path(__file__).resolve().parent.parent / "assets" / "demo" / "music"
 _JAMENDO_API_BASE_URL = "https://api.jamendo.com/v3.0/tracks/"
@@ -369,9 +370,6 @@ def _fetch_current_italy_charts(limit: int = 100, max_per_artist: int = 2) -> li
         title = str(item.get("name", "")).strip()
         artist = str(item.get("artistName", "")).strip()
         item_id = str(item.get("id", "")).strip()
-        album_art = str(item.get("artworkUrl100") or item.get("artworkUrl60") or "").strip()
-        if album_art:
-            album_art = album_art.replace("/100x100", "/600x600").replace("/60x60", "/600x600")
         if not title or not artist:
             continue
         if not _is_plausible_music_title(title, artist):
@@ -383,6 +381,11 @@ def _fetch_current_italy_charts(limit: int = 100, max_per_artist: int = 2) -> li
         if artist_counts.get(artist_key, 0) >= max_per_artist:
             continue
         artist_counts[artist_key] = artist_counts.get(artist_key, 0) + 1
+        # The RSS feed already carries cover art — no extra network call needed.
+        # Upscale the 100px thumbnail to a real cover for lock-screen / HA surfaces.
+        album_art = str(item.get("artworkUrl100") or item.get("artworkUrl60") or "").strip()
+        if album_art:
+            album_art = upscale_itunes_artwork(album_art)
         tracks.append(
             Track(
                 title=title,

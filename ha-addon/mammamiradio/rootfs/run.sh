@@ -25,7 +25,6 @@ for key in (
     'azure_speech_region',
     'elevenlabs_api_key',
     'station_name',
-    'claude_model',
     'admin_token',
     'jamendo_client_id',
 ):
@@ -33,6 +32,15 @@ for key in (
     if val:
         env_key = key.upper()
         print(f'export {env_key}={shlex.quote(str(val))}')
+# Quality dial → model profile. Missing/blank defaults to 'balanced'. Existing
+# add-ons may still have the removed claude_model option in /data/options.json;
+# keep honoring it as the legacy fast-role override until the operator saves the
+# new quality_profile option.
+quality = opts.get('quality_profile') or 'balanced'
+print('export MAMMAMIRADIO_QUALITY=' + shlex.quote(str(quality)))
+legacy_claude_model = opts.get('claude_model') if not opts.get('quality_profile') else ''
+if legacy_claude_model:
+    print('export CLAUDE_MODEL=' + shlex.quote(str(legacy_claude_model)))
 enabled = opts.get('enable_home_assistant', True)
 ha_val = 'true' if enabled else 'false'
 print('export HA_ENABLED=' + ha_val)
@@ -74,6 +82,9 @@ fi
 
 # ---- Enable yt-dlp as primary music source ----
 export MAMMAMIRADIO_ALLOW_YTDLP="true"
+
+# ---- Enable provenance ledger (records per-segment production data to cache/ledger/) ----
+export MAMMAMIRADIO_LEDGER_ENABLED="true"
 
 # ---- Bind to all interfaces (required for ingress) ----
 export MAMMAMIRADIO_BIND_HOST="0.0.0.0"

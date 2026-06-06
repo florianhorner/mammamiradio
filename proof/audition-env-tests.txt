@@ -1,0 +1,5 @@
+audition-env-hermetic — test proof
+date(UTC): 2026-06-06T11:24:39Z
+--- targeted (with .env loaded, proves hermeticity) ---
+.........                                                                [100%]
+9 passed in 0.08s
