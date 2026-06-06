@@ -17,7 +17,7 @@ import re
 import sys
 from collections import Counter
 from collections.abc import Mapping
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -75,6 +75,7 @@ class VoiceAuditionTarget:
     rate: str | None = None
     pitch: str | None = None
     openai_instructions: str = ""
+    voice_settings: dict | None = None
 
 
 @dataclass
@@ -332,6 +333,35 @@ def build_audition_targets(
     return sorted(merged.values(), key=lambda t: (PROVIDERS.index(t.provider), t.label, t.voice))
 
 
+def expand_stability_variants(
+    targets: list[VoiceAuditionTarget],
+    stabilities: list[float] | None,
+) -> list[VoiceAuditionTarget]:
+    """Fan out each ElevenLabs target into one variant per stability value.
+
+    Used to A/B a host voice's clarity: low ElevenLabs stability mumbles, higher
+    tightens diction. Non-ElevenLabs targets and the empty-sweep case pass through
+    unchanged. Each variant carries ``voice_settings={'stability': s}`` and a label
+    suffix so the manifest stays distinct.
+    """
+    if not stabilities:
+        return targets
+    expanded: list[VoiceAuditionTarget] = []
+    for target in targets:
+        if target.provider != "elevenlabs":
+            expanded.append(target)
+            continue
+        for stability in stabilities:
+            expanded.append(
+                replace(
+                    target,
+                    label=f"{target.label}-stab{round(stability * 100):02d}",
+                    voice_settings={**(target.voice_settings or {}), "stability": stability},
+                )
+            )
+    return expanded
+
+
 async def _synthesize_target(target: VoiceAuditionTarget, output_path: Path) -> Path:
     if target.provider == "openai":
         return await tts_module.synthesize_openai(
@@ -349,7 +379,9 @@ async def _synthesize_target(target: VoiceAuditionTarget, output_path: Path) -> 
             pitch=target.pitch,
         )
     if target.provider == "elevenlabs":
-        return await tts_module.synthesize_elevenlabs(target.text, target.voice, output_path)
+        return await tts_module.synthesize_elevenlabs(
+            target.text, target.voice, output_path, voice_settings=target.voice_settings
+        )
     return await tts_module.synthesize(
         target.text,
         target.voice,
@@ -391,7 +423,9 @@ async def run_auditions(
             )
             continue
 
-        output_path = run_dir / f"{index:02d}-{target.provider}-{_slug(target.voice)}.mp3"
+        stability = target.voice_settings.get("stability") if target.voice_settings else None
+        stab_suffix = f"-stab{round(stability * 100):02d}" if stability is not None else ""
+        output_path = run_dir / f"{index:02d}-{target.provider}-{_slug(target.voice)}{stab_suffix}.mp3"
         if missing_env:
             results.append(
                 VoiceAuditionResult(
@@ -506,6 +540,14 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--voice", action="append", help="Add one explicit provider:voice_id target; repeatable")
     parser.add_argument("--sample-text", default=DEFAULT_SAMPLE_TEXT, help="Italian sample sentence for all auditions")
+    parser.add_argument(
+        "--elevenlabs-stability",
+        nargs="*",
+        type=float,
+        default=None,
+        help="Sweep ElevenLabs stability values (e.g. 0.42 0.6 0.75); fans out each "
+        "ElevenLabs voice into one clip per value to A/B clarity (low = mumbly).",
+    )
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_ROOT, help="Base output directory")
     parser.add_argument(
         "--timestamp",
@@ -528,6 +570,7 @@ def main(argv: list[str] | None = None) -> int:
             manual_voices=manual_voices,
             sample_text=args.sample_text,
         )
+        targets = expand_stability_variants(targets, args.elevenlabs_stability)
     except (OSError, ValueError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2

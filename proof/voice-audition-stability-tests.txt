@@ -1,0 +1,28 @@
+mammamiradio — feat(voices): audition harness ElevenLabs stability sweep + synthesize_elevenlabs voice_settings
+branch: florianhorner/feat/voice-audition-stability
+base: origin/main @ 58ccafc1
+
+Full test suite:
+  2611 passed, 2 skipped, 8 deselected in 52.65s
+
+New tests:
+  test_tts.py::test_synthesize_elevenlabs_voice_settings_default_and_override
+  test_audition_tts_voices.py::test_expand_stability_variants_fans_out_elevenlabs_only
+  test_audition_tts_voices.py::test_expand_stability_variants_noop_when_empty
+
+Affected modules (tts + audition): 64 passed
+
+Lint / format / typecheck:
+  ruff check ................. All checks passed
+  ruff format --check ........ 4 files already formatted
+  mypy scripts/audition_tts_voices.py ... Success
+
+Harness smoke (dry-run, no API calls):
+  python scripts/audition_tts_voices.py --providers elevenlabs \
+    --voice elevenlabs:o4b57JYAECRMJyCEXyIE --no-configured \
+    --elevenlabs-stability 0.42 0.6 0.75 --dry-run
+  -> 3 planned targets (one per stability value)
+
+Adversarial diff review: No P0/P1. Production synthesize_elevenlabs payload is byte-identical
+when voice_settings=None ({**defaults, **{}} == the old hardcoded literal). scripts/audition_tts_voices.py
+is not imported by any module under mammamiradio/ — zero runtime blast radius.

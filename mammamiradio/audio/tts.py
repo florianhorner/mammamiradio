@@ -261,14 +261,30 @@ async def synthesize_azure(
     return output_path
 
 
+# The station's house ElevenLabs voice tuning. Per-call overrides (the voice
+# audition harness) merge over these; production callers use them as-is.
+_ELEVENLABS_DEFAULT_VOICE_SETTINGS: dict = {
+    "stability": 0.42,
+    "similarity_boost": 0.78,
+    "style": 0.45,
+    "use_speaker_boost": True,
+}
+
+
 async def synthesize_elevenlabs(
     text: str,
     voice: str,
     output_path: Path,
     *,
     loudnorm: bool = True,
+    voice_settings: dict | None = None,
 ) -> Path:
-    """Render text with ElevenLabs TTS REST API, then normalize to station settings."""
+    """Render text with ElevenLabs TTS REST API, then normalize to station settings.
+
+    ``voice_settings`` overrides the house defaults per call (used by the voice
+    audition harness to sweep stability/style/similarity); when None, the station
+    defaults apply, so production callers are unchanged.
+    """
     api_key = os.getenv("ELEVENLABS_API_KEY", "")
     if not api_key:
         raise RuntimeError("ELEVENLABS_API_KEY not set")
@@ -283,12 +299,7 @@ async def synthesize_elevenlabs(
     payload = {
         "text": text,
         "model_id": "eleven_multilingual_v2",
-        "voice_settings": {
-            "stability": 0.42,
-            "similarity_boost": 0.78,
-            "style": 0.45,
-            "use_speaker_boost": True,
-        },
+        "voice_settings": {**_ELEVENLABS_DEFAULT_VOICE_SETTINGS, **(voice_settings or {})},
     }
     try:
         client = _get_elevenlabs_client(api_key)
