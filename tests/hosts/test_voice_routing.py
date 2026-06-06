@@ -6,8 +6,10 @@ without TTS API keys in the environment, i.e. in CI):
 - Every ad voice carries a *canonical* speaker role, so it is actually
   castable. A voice with an unknown role lands in the role index but is never
   requested by the casting engine — dead config.
-- Every canonical role is filled exactly once, so role -> voice resolution is
-  unambiguous (the role index is last-wins; duplicates silently shadow).
+- Every canonical role has at least one voice, so it is castable. A role may
+  carry several voices (e.g. an ElevenLabs character plus the original
+  OpenAI/Azure voice); the caster picks one at random per spot for variety.
+- Ad-voice names are unique, since the caster dedupes by name within a spot.
 - Every brand campaign ``spokesperson`` resolves: it names a canonical role,
   a configured voice carries that role, and the role appears in at least one
   of the campaign's pooled formats (otherwise the spokesperson is overridden
@@ -53,17 +55,26 @@ def test_every_ad_voice_has_a_canonical_role():
         )
 
 
-def test_each_canonical_role_filled_exactly_once():
+def test_every_canonical_role_has_at_least_one_voice():
     cfg = _config()
     by_role: dict[str, list[str]] = {}
     for v in cfg.ads.voices:
         by_role.setdefault(v.role, []).append(v.name)
     for role in SPEAKER_ROLES:
         names = by_role.get(role, [])
-        assert len(names) == 1, (
-            f"canonical role {role!r} must map to exactly one voice, got {names} "
-            f"(zero = uncastable role; duplicates = silent last-wins shadowing)"
+        assert names, (
+            f"canonical role {role!r} has no configured voice — any format or "
+            f"spokesperson that needs it casts a random pool fallback instead"
         )
+
+
+def test_ad_voice_names_are_unique():
+    """The caster dedupes by voice name within a spot; duplicate names would
+    let one physical voice shadow another and break the not-already-used logic."""
+    cfg = _config()
+    names = [v.name for v in cfg.ads.voices]
+    dupes = {n for n in names if names.count(n) > 1}
+    assert not dupes, f"duplicate ad-voice names: {sorted(dupes)}"
 
 
 def test_brand_spokesperson_pins_resolve_to_a_voice():

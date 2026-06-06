@@ -415,9 +415,11 @@ tagline = "Ti portiamo dove vuoi. Ti recitiamo Dante lungo il tragitto."
 category = "services"
 recurring = false
 
-# Six ad-voice slots, one per canonical speaker role. Four now use ElevenLabs
-# character voices; the role drives the script direction (see SPEAKER_ROLES in
-# hosts/ad_creative.py), the style line documents the intended performance.
+# Ad-voice pool. Several roles carry more than one voice (an ElevenLabs
+# character plus the original OpenAI/Azure voice); the caster picks one at
+# random per spot, so ad breaks vary instead of always using the same timbre.
+# The role drives the script direction (see SPEAKER_ROLES in
+# hosts/ad_creative.py); the style line documents the intended performance.
 [[ads.voices]]
 name = "L'Annunciatore"
 voice = "QttbagfgqUCm9K0VgUyT"
@@ -462,4 +464,38 @@ voice = "rj347nCpioEmxiJbdf70"
 engine = "elevenlabs"
 edge_fallback_voice = "it-IT-DiegoNeural"
 style = "mysterious guest voice that nobody can quite place, delivers ads as if he wandered into the studio by accident and just started reading, oddly compelling"
+role = "witness"
+
+# Original OpenAI/Azure ad voices — kept alongside the ElevenLabs characters so
+# each role rotates between two timbres. Variety per ad break.
+[[ads.voices]]
+name = "Roberto"
+voice = "it-IT-Alessio:DragonHDLatestNeural"
+engine = "azure"
+edge_fallback_voice = "it-IT-DiegoNeural"
+style = "booming TV announcer, dramatic pauses, sells everything like it's the last day on earth"
+role = "hammer"
+
+[[ads.voices]]
+name = "Palmira"
+voice = "shimmer"
+engine = "openai"
+edge_fallback_voice = "it-IT-IsabellaNeural"
+style = "ASMR whisperer, unsettlingly intimate, makes toothpaste sound sensual"
+role = "seductress"
+
+[[ads.voices]]
+name = "Dottore Marzio"
+voice = "it-IT-DiegoNeural"
+engine = "azure"
+edge_fallback_voice = "it-IT-GiuseppeMultilingualNeural"
+style = "dry official government notice voice, reads absurd regulations with total sincerity"
+role = "bureaucrat"
+
+[[ads.voices]]
+name = "Signora Testimonia"
+voice = "marin"
+engine = "openai"
+edge_fallback_voice = "it-IT-ElsaNeural"
+style = "fake customer testimonial voice, suspiciously specific enthusiasm, clearly reading a script"
 role = "witness"
