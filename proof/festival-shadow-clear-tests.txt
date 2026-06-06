@@ -1,0 +1,29 @@
+mammamiradio — fix(queue): consolidate purges into _purge_queue_and_shadow; fix festival-enable shadow drift
+branch: florianhorner/feat/queue-txn-spine
+base: origin/main @ 4da0288e (merged before testing)
+
+Full test suite (merged + change applied):
+  2608 passed, 2 skipped, 8 deselected in 54.01s
+
+New / changed tests:
+  test_festival_mode.py::test_post_party_enable_clears_shadow_queue          (regression — THE bug)
+  test_streamer_coverage.py::test_purge_queue_and_shadow_drains_and_clears
+  test_streamer_coverage.py::test_purge_queue_and_shadow_unlinks_ephemeral_keeps_durable
+  test_streamer.py::test_streamer_exposes_chaos_route_and_purges_on_enable    (source-guard updated)
+
+Affected modules (festival / chaos / interrupt / shadow-sync / streamer routes):
+  521 passed
+
+Lint / format / typecheck (changed files):
+  ruff check ................. All checks passed
+  ruff format --check ........ 4 files already formatted
+  mypy mammamiradio/web/streamer.py ... Success: no issues found
+  vulture ..................... no dead-code flags (_purge_segment_queue still used by the helper)
+
+Pre-ship review:
+  Blueprint workflow (7 read-only agents) mapped all 10 shadow-write + queue-op sites and
+  adversarially verified the design before any code was written — it caught that a naive
+  put_nowait enqueue would drop rendered segments under load (dead air), and that the
+  festival-enable purge was missing its shadow clear (the bug this PR fixes).
+  Adversarial diff review (chaos-engineer subagent): No P0/P1 — behavior preserved at all 6
+  migrated sites, chaos persist/rollback intact, festival DISABLE still does not purge.

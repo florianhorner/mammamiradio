@@ -98,6 +98,8 @@ The current version source of truth is `pyproject.toml`.
 
 ### Fixed
 
+- **Festival Mode no longer leaves ghost tracks in "Up Next".** Switching Festival Mode on now clears the upcoming list at the same instant it clears the queued audio, so the panel always matches what is about to play. Every queue-clearing action now runs through one path, so the list and the audio can't drift apart again.
+
 - **Home Assistant updates now say why they fail, and shrug off a brief hiccup.** When the station can't send its now-playing status to Home Assistant, the add-on log names the real reason instead of an empty line, and the station quietly retries once after a short network blip. Listeners never notice; an operator reading the log finally gets a straight answer.
 
 - **Engine Room track count now reflects the full rotation.** The playlist size stat in the Engine Room shows the actual number of tracks in the rotation (e.g. "312 tracks") rather than the most-recently-fetched page size.

@@ -11,6 +11,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from mammamiradio.core.models import Segment, SegmentType, StationState
 from mammamiradio.web.streamer import (
     LiveStreamHub,
     _get_csrf_token,
@@ -21,6 +22,7 @@ from mammamiradio.web.streamer import (
     _is_loopback_client,
     _is_private_network,
     _preview_tracks,
+    _purge_queue_and_shadow,
     _purge_segment_queue,
     _same_origin,
     _serialize_source,
@@ -97,6 +99,44 @@ async def test_purge_segment_queue():
 async def test_purge_empty_queue():
     q = asyncio.Queue()
     assert _purge_segment_queue(q) == 0
+
+
+@pytest.mark.asyncio
+async def test_purge_queue_and_shadow_drains_and_clears(tmp_path):
+    """The single purge home drains the real queue AND clears the shadow, returning the count."""
+    q = asyncio.Queue()
+    f = tmp_path / "seg.mp3"
+    f.write_bytes(b"x")
+    q.put_nowait(Segment(type=SegmentType.MUSIC, path=f, ephemeral=False))
+    state = StationState()
+    state.queued_segments = [{"type": "music", "label": "A"}, {"type": "banter", "label": "B"}]
+
+    purged = _purge_queue_and_shadow(q, state)
+
+    assert purged == 1
+    assert q.empty()
+    assert state.queued_segments == []  # shadow cleared together with the real queue
+
+
+@pytest.mark.asyncio
+async def test_purge_queue_and_shadow_unlinks_ephemeral_keeps_durable(tmp_path):
+    """Ephemeral segments are unlinked from disk on purge; non-ephemeral are kept."""
+    q = asyncio.Queue()
+    eph = tmp_path / "eph.mp3"
+    eph.write_bytes(b"x")
+    keep = tmp_path / "keep.mp3"
+    keep.write_bytes(b"x")
+    q.put_nowait(Segment(type=SegmentType.MUSIC, path=eph, ephemeral=True))
+    q.put_nowait(Segment(type=SegmentType.MUSIC, path=keep, ephemeral=False))
+    state = StationState()
+    state.queued_segments = [{"label": "x"}]
+
+    purged = _purge_queue_and_shadow(q, state)
+
+    assert purged == 2
+    assert state.queued_segments == []
+    assert not eph.exists()  # ephemeral unlinked
+    assert keep.exists()  # non-ephemeral kept
 
 
 # ---------------------------------------------------------------------------
@@ -324,7 +364,6 @@ def test_tail_log_missing():
 @pytest.mark.asyncio
 async def test_purge_segment_queue_ephemeral_unlinks(tmp_path):
     """Ephemeral segments have their file unlinked during purge."""
-    from mammamiradio.core.models import Segment, SegmentType
 
     audio = tmp_path / "seg.mp3"
     audio.write_bytes(b"\x00" * 64)
@@ -441,7 +480,6 @@ async def test_hub_close_queue_full():
 
 def test_hub_unsubscribe_updates_state():
     """unsubscribe updates state.listeners_active when state is attached."""
-    from mammamiradio.core.models import StationState
 
     hub = LiveStreamHub()
     state = StationState()

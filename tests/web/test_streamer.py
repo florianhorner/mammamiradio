@@ -38,7 +38,7 @@ def test_streamer_exposes_chaos_route_and_purges_on_enable():
     src = (Path(__file__).resolve().parents[2] / "mammamiradio" / "web" / "streamer.py").read_text()
     assert '@router.post("/api/chaos")' in src
     assert "state.chaos_pending = first_strike" in src
-    assert "purged = _purge_segment_queue(queue)" in src
+    assert "purged = _purge_queue_and_shadow(queue, state)" in src
     assert "state.chaos_pending = None" in src
 
 
