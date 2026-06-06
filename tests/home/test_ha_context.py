@@ -1633,6 +1633,103 @@ async def test_push_state_to_ha_normal(reset_ha_push_debounce):
     assert bs_call.kwargs["json"]["state"] == "on"
 
 
+def _mp_attrs(mock_client):
+    mp_call = next(c for c in mock_client.post.call_args_list if "media_player" in c.args[0])
+    return mp_call.kwargs["json"]["attributes"]
+
+
+@pytest.mark.asyncio
+async def test_push_state_to_ha_sets_entity_picture_for_http_album_art(reset_ha_push_debounce):
+    """NORMAL: an http(s) album_art surfaces as entity_picture; inert attrs stay off."""
+    mock_client = AsyncMock()
+    mock_client.post.return_value = MagicMock(status_code=200)
+    with patch("mammamiradio.home.ha_context._get_ha_client", return_value=mock_client):
+        await push_state_to_ha(
+            ha_url="http://ha.local:8123",
+            ha_token="t",
+            now_streaming={
+                "type": "music",
+                "label": "Volare",
+                "started": time.time() - 5,
+                "metadata": {"title": "Volare", "album_art": "https://x/600x600bb.jpg"},
+            },
+            current_track=None,
+            listeners_active=1,
+            session_stopped=False,
+        )
+    attrs = _mp_attrs(mock_client)
+    assert attrs["entity_picture"] == "https://x/600x600bb.jpg"
+    # The frontend reads entity_picture; these are inert for a synthetic REST entity.
+    assert "media_image_url" not in attrs
+    assert "media_image_remotely_accessible" not in attrs
+
+
+@pytest.mark.asyncio
+async def test_push_state_to_ha_no_entity_picture_when_album_art_missing(reset_ha_push_debounce):
+    """EMPTY: no album_art → entity_picture unset (HA shows its default icon, no broken tile)."""
+    mock_client = AsyncMock()
+    mock_client.post.return_value = MagicMock(status_code=200)
+    with patch("mammamiradio.home.ha_context._get_ha_client", return_value=mock_client):
+        await push_state_to_ha(
+            ha_url="http://ha.local:8123",
+            ha_token="t",
+            now_streaming={"type": "music", "label": "Song", "started": time.time(), "metadata": {}},
+            current_track=None,
+            listeners_active=0,
+            session_stopped=False,
+        )
+    assert "entity_picture" not in _mp_attrs(mock_client)
+
+
+@pytest.mark.asyncio
+async def test_push_state_to_ha_ignores_non_http_album_art(reset_ha_push_debounce):
+    """A relative/local album_art is never used (HA would resolve it against its own origin)."""
+    mock_client = AsyncMock()
+    mock_client.post.return_value = MagicMock(status_code=200)
+    with patch("mammamiradio.home.ha_context._get_ha_client", return_value=mock_client):
+        await push_state_to_ha(
+            ha_url="http://ha.local:8123",
+            ha_token="t",
+            now_streaming={
+                "type": "music",
+                "label": "Song",
+                "started": time.time(),
+                "metadata": {"album_art": "/artwork/station.svg"},
+            },
+            current_track=None,
+            listeners_active=0,
+            session_stopped=False,
+        )
+    assert "entity_picture" not in _mp_attrs(mock_client)
+
+
+@pytest.mark.asyncio
+async def test_push_state_to_ha_stopped_has_no_entity_picture(reset_ha_push_debounce):
+    """POST-RESTART: a stopped session never carries artwork and stays idle/off."""
+    mock_client = AsyncMock()
+    mock_client.post.return_value = MagicMock(status_code=200)
+    with patch("mammamiradio.home.ha_context._get_ha_client", return_value=mock_client):
+        await push_state_to_ha(
+            ha_url="http://ha.local:8123",
+            ha_token="t",
+            now_streaming={
+                "type": "music",
+                "label": "Song",
+                "started": time.time(),
+                "metadata": {"album_art": "https://x/600x600bb.jpg"},
+            },
+            current_track=None,
+            listeners_active=0,
+            session_stopped=True,
+        )
+    attrs = _mp_attrs(mock_client)
+    assert "entity_picture" not in attrs
+    # Existing contract preserved: stopped session is not "playing" and has no position.
+    mp_call = next(c for c in mock_client.post.call_args_list if "media_player" in c.args[0])
+    assert mp_call.kwargs["json"]["state"] == "idle"
+    assert "media_position" not in attrs
+
+
 @pytest.mark.asyncio
 async def test_push_state_to_ha_media_position_floored_at_zero(reset_ha_push_debounce):
     """media_position must never be negative even if started is slightly in the future."""

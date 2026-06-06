@@ -8,6 +8,14 @@ The current version source of truth is `pyproject.toml`.
 
 ### Added
 
+- **Real album covers on the now-playing screen.** When a song is on, your phone's
+  lock screen, CarPlay, and Control Center now show the actual album artwork instead
+  of the station logo — and the cover follows each track as it changes. Chart songs
+  carry their cover straight from the chart feed; songs you search and add, or that
+  listeners request, get their cover looked up automatically. Home Assistant's media
+  card shows the cover too. When no cover is found, every screen falls back cleanly to
+  the station logo — never a broken image.
+
 - **The admin queue now shows the studio working in the background.** Above the Scaletta, an "In produzione" feed reveals what the hosts are creating right now — writing an ad, voicing a banter, finding the next track — with a live timer and a short trail of what just finished. The next-up segment is highlighted with the studio gold accent and a one-line detail (artist, hosts, or brand). The operator no longer stares at a static list wondering whether anything is happening.
 
 - **Share a whole moment, not just thirty seconds.** The Share button now always

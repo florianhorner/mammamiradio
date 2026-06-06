@@ -3019,7 +3019,7 @@ async function addExternal(i){
   const btn=document.getElementById('ext-btn-'+i);
   if(btn){btn.classList.add('loading');btn.textContent='Downloading…';}
   try{
-    const r=await api('POST','/api/playlist/add-external',{youtube_id:t.youtube_id,title:t.title,artist:t.artist,duration_ms:t.duration_ms});
+    const r=await api('POST','/api/playlist/add-external',{youtube_id:t.youtube_id,title:t.title,artist:t.artist,duration_ms:t.duration_ms,album_art:t.album_art||''});
     if(r.ok){
       toast('Downloading: '+t.display+' — on air shortly');
       document.getElementById('searchResults').innerHTML='';

@@ -4,6 +4,13 @@
 
 ### Added
 
+- **Real album covers on the now-playing screen.** When a song is on, the phone
+  lock screen, CarPlay, Control Center, and the Home Assistant media card now show
+  the real album artwork instead of the station logo, and it follows each track.
+  Chart songs carry their cover from the chart feed; searched/added and listener-
+  requested songs get their cover looked up automatically. No cover found falls back
+  cleanly to the station logo — never a broken image.
+
 - **Share a whole moment, not just thirty seconds.** The Share button now always
   copies the clip link to your clipboard (alongside the native share sheet). Clips
   of host banter and ads capture the full segment instead of a fixed 30-second
