@@ -102,9 +102,247 @@ class AudioSection:
     sample_rate: int = 48000
     channels: int = 2
     bitrate: int = 192
-    claude_model: str = "claude-haiku-4-5-20251001"
-    claude_creative_model: str = "claude-opus-4-6"
-    openai_script_model: str = "gpt-4o-mini"
+
+
+# ── Dynamic LLM routing ───────────────────────────────────────────────────
+# Script generation never names a model in code. Tasks ask for a ROLE; a
+# per-provider catalog maps role→model; a quality profile selects which catalog
+# entry each role resolves to. Swap any model by editing radio.toml [models]
+# (or an env var) — no code change, no stale dropdown.
+#
+#   task (caller) ──routing──▶ role ──active_profile──▶ catalog_key ──catalog──▶ model_id
+#
+# DEFAULT_ROLE and DEFAULT_MODELS are the ONLY places a model identity lives in
+# code, and only as the cold-start safety net: if [models] is missing or
+# malformed the station still boots and airs on these (degrade, never die).
+DEFAULT_ROLE = "creative"
+
+# Built-in fallback catalog. `balanced` reproduces today's exact mapping
+# (creative=opus for banter/news/ads, fast=haiku for transitions) so removing
+# [models] from radio.toml is behavior-preserving. `fast` is pinned to the
+# lowest-latency model in EVERY profile — transitions are the latency-sensitive
+# glue between songs and must never risk dead air (leadership principle #2).
+_DEFAULT_CATALOG: dict[str, dict[str, str]] = {
+    "anthropic": {
+        "opus": "claude-opus-4-8",
+        "sonnet": "claude-sonnet-4-6",
+        "haiku": "claude-haiku-4-5-20251001",
+    },
+    "openai": {
+        "large": "gpt-4o",
+        "small": "gpt-4o-mini",
+    },
+}
+_DEFAULT_ROUTING: dict[str, str] = {
+    "banter": "creative",
+    "news_flash": "creative",
+    "ad": "creative",
+    "transition": "fast",
+}
+_DEFAULT_PROFILES: dict[str, dict[str, dict[str, str]]] = {
+    "premium": {
+        "anthropic": {"creative": "opus", "fast": "haiku"},
+        "openai": {"creative": "large", "fast": "small"},
+    },
+    "balanced": {
+        "anthropic": {"creative": "opus", "fast": "haiku"},
+        "openai": {"creative": "small", "fast": "small"},
+    },
+    "economy": {
+        "anthropic": {"creative": "haiku", "fast": "haiku"},
+        "openai": {"creative": "small", "fast": "small"},
+    },
+}
+
+
+@dataclass
+class ModelsSection:
+    """Role-based model routing. All fields are plain data (dicts), so adding a
+    model or a profile is a config edit, never a code change.
+
+    catalog:  provider → catalog_key → model_id  (the only place model IDs live)
+    routing:  task/caller → role
+    profiles: profile → provider → role → catalog_key
+    """
+
+    catalog: dict[str, dict[str, str]] = field(default_factory=dict)
+    routing: dict[str, str] = field(default_factory=dict)
+    profiles: dict[str, dict[str, dict[str, str]]] = field(default_factory=dict)
+    default_profile: str = "balanced"
+    active_profile: str = "balanced"
+
+
+def _build_default_models() -> ModelsSection:
+    """Fresh ModelsSection backed by the built-in catalog (deep-copied so the
+    module-level defaults can never be mutated by a running config)."""
+    import copy
+
+    return ModelsSection(
+        catalog=copy.deepcopy(_DEFAULT_CATALOG),
+        routing=copy.deepcopy(_DEFAULT_ROUTING),
+        profiles=copy.deepcopy(_DEFAULT_PROFILES),
+    )
+
+
+def resolve_model(models: ModelsSection, caller: str | None, provider: str, profile: str | None = None) -> str:
+    """Resolve which model voices `caller` on `provider`, right now.
+
+    Total by construction — never raises, always returns a non-empty model ID:
+      1. role  = routing[caller]  (DEFAULT_ROLE if the task isn't routed)
+      2. key   = profiles[active|default][provider][role]
+      3. floor = profiles[default_profile][provider][role]  (NEVER "first entry":
+                 TOML ordering must not leak into production behavior)
+      4. id    = catalog[provider][key]  → any catalog entry for the provider as
+                 the last resort. `_validate` guarantees catalog[provider] is
+                 non-empty for every API-keyed provider.
+
+    A Python exception here would crash segment generation = dead air, so every
+    lookup is defensive.
+    """
+    role = models.routing.get(caller or "", DEFAULT_ROLE)
+    prof = profile or models.active_profile or models.default_profile
+
+    def _key_for(profile_name: str) -> str | None:
+        prov_map = models.profiles.get(profile_name, {}).get(provider, {})
+        return prov_map.get(role) or prov_map.get(DEFAULT_ROLE)
+
+    key = _key_for(prof) or _key_for(models.default_profile)
+    provider_catalog = models.catalog.get(provider, {})
+    if key and key in provider_catalog:
+        return provider_catalog[key]
+    # Floor (reached when a profile references a key absent from the catalog —
+    # possible for a non-active profile that escaped _validate_models). Choose
+    # deterministically: prefer a named low-cost key, else the lexicographically
+    # first key. NEVER insertion order — TOML ordering must not leak into which
+    # model airs.
+    if provider_catalog:
+        for _pref in ("haiku", "small"):
+            if _pref in provider_catalog:
+                return provider_catalog[_pref]
+        return provider_catalog[min(provider_catalog)]
+    # Last resort: provider catalog entirely empty (_validate_models prevents
+    # this for API-keyed providers). Pin to a named built-in low-cost model.
+    builtin = _DEFAULT_CATALOG.get(provider, {})
+    return builtin.get("haiku") or builtin.get("small") or next(iter(builtin.values()), "claude-haiku-4-5-20251001")
+
+
+def _parse_models_section(raw: dict) -> ModelsSection:
+    """Build a ModelsSection from raw [models] TOML, degrading to the built-in
+    catalog on a missing or malformed block (never raises — the station must
+    boot and air even with a broken [models] edit)."""
+    import logging as _log
+
+    log = _log.getLogger(__name__)
+    section = raw.get("models")
+    if not section:
+        # No [models] block (minimal/legacy radio.toml) → built-in defaults.
+        return _build_default_models()
+    try:
+        catalog = section.get("catalog") or {}
+        routing = section.get("routing") or {}
+        profiles = section.get("profiles") or {}
+        if not (isinstance(catalog, dict) and isinstance(routing, dict) and isinstance(profiles, dict)):
+            raise ValueError("models.catalog/routing/profiles must be tables")
+        if not catalog or not profiles:
+            raise ValueError("models.catalog and models.profiles must be non-empty")
+        default_profile = section.get("default_profile", "balanced")
+        # Merge operator routing OVER the built-in defaults: a partial or empty
+        # [models.routing] must not drop the transition→fast mapping, or
+        # transitions would silently resolve to the creative (slow) model and
+        # risk dead air between songs. Operator entries still win.
+        merged_routing = {**_DEFAULT_ROUTING, **{str(t): str(r) for t, r in routing.items()}}
+        return ModelsSection(
+            catalog={str(p): {str(k): str(v) for k, v in m.items()} for p, m in catalog.items()},
+            routing=merged_routing,
+            profiles={
+                str(pf): {str(pr): {str(role): str(key) for role, key in rm.items()} for pr, rm in provs.items()}
+                for pf, provs in profiles.items()
+            },
+            default_profile=str(default_profile),
+            active_profile=str(default_profile),
+        )
+    except Exception as exc:
+        log.error(
+            "Invalid [models] config (%s) — falling back to built-in DEFAULT_MODELS so the station still boots",
+            exc,
+        )
+        return _build_default_models()
+
+
+def _apply_model_env_overrides(models: ModelsSection) -> None:
+    """Back-compat env overrides.
+
+    - CLAUDE_CREATIVE_MODEL → anthropic creative-role model
+    - CLAUDE_MODEL          → anthropic fast-role model
+    - OPENAI_SCRIPT_MODEL   → every OpenAI catalog entry (one global OpenAI fallback model)
+
+    Anthropic overrides get dedicated catalog keys instead of rewriting whatever
+    key a profile currently points at. Economy maps creative and fast to the same
+    `haiku` key; mutating that shared key would make balanced/premium
+    transitions inherit a creative override and risk slow inter-song links.
+    """
+    creative_env = os.getenv("CLAUDE_CREATIVE_MODEL")
+    fast_env = os.getenv("CLAUDE_MODEL")
+    anth_catalog = models.catalog.setdefault("anthropic", {})
+    if fast_env:
+        anth_catalog["__env_fast"] = fast_env
+        for prof_data in models.profiles.values():
+            prof_data.setdefault("anthropic", {})["fast"] = "__env_fast"
+    if creative_env:
+        anth_catalog["__env_creative"] = creative_env
+        for prof_data in models.profiles.values():
+            prof_data.setdefault("anthropic", {})["creative"] = "__env_creative"
+    openai_env = os.getenv("OPENAI_SCRIPT_MODEL")
+    if openai_env:
+        for key in models.catalog.get("openai", {}):
+            models.catalog["openai"][key] = openai_env
+
+
+def _validate_models(config: StationConfig) -> None:
+    """Degrade-don't-die validation for [models]. Every routed role (plus the
+    DEFAULT_ROLE floor) must resolve to a real catalog entry for each API-keyed
+    provider under both the active and default profile. On any gap, log loud and
+    fall back to the built-in DEFAULT_MODELS — a model misconfig must never take
+    the station off air (leadership principle #1+#2)."""
+    import logging
+
+    log = logging.getLogger(__name__)
+    providers = []
+    if config.anthropic_api_key:
+        providers.append("anthropic")
+    if config.openai_api_key or os.getenv("OPENAI_API_KEY"):
+        providers.append("openai")
+    if not providers:
+        return  # No LLM configured — stock copy only, nothing to resolve.
+
+    m = config.models
+    problems: list[str] = []
+    if not m.catalog:
+        problems.append("empty catalog")
+    if m.active_profile not in m.profiles:
+        problems.append(f"active_profile '{m.active_profile}' undefined")
+    if m.default_profile not in m.profiles:
+        problems.append(f"default_profile '{m.default_profile}' undefined")
+    roles = set(m.routing.values()) | {DEFAULT_ROLE}
+    for prof in {m.active_profile, m.default_profile}:
+        for prov in providers:
+            for role in roles:
+                key = m.profiles.get(prof, {}).get(prov, {}).get(role)
+                catalog_value = m.catalog.get(prov, {}).get(key) if key else None
+                if not key or not catalog_value:
+                    problems.append(f"profile '{prof}'/{prov}/role '{role}' unresolved")
+
+    if problems:
+        log.error(
+            "Invalid [models] (%s) — falling back to built-in DEFAULT_MODELS so the station stays on air",
+            "; ".join(problems[:6]),
+        )
+        prev_active = config.models.active_profile
+        config.models = _build_default_models()
+        if prev_active in config.models.profiles:
+            config.models.active_profile = prev_active
+        # Re-apply env overrides — the fresh defaults dropped them.
+        _apply_model_env_overrides(config.models)
 
 
 @dataclass
@@ -298,6 +536,7 @@ class StationConfig:
     imaging: ImagingSection = field(default_factory=ImagingSection)
     sonic_brand: SonicBrandSection = field(default_factory=SonicBrandSection)
     audio: AudioSection = field(default_factory=AudioSection)
+    models: ModelsSection = field(default_factory=_build_default_models)
     homeassistant: HomeAssistantSection = field(default_factory=HomeAssistantSection)
     persona: PersonaSection = field(default_factory=PersonaSection)
     brand: BrandSection = field(default_factory=BrandSection)
@@ -622,6 +861,13 @@ def _apply_addon_options() -> None:
     if isinstance(fm, bool) and not os.getenv("MAMMAMIRADIO_FESTIVAL_MODE"):
         os.environ["MAMMAMIRADIO_FESTIVAL_MODE"] = "true" if fm else "false"
 
+    qp = options.get("quality_profile")
+    if isinstance(qp, str) and qp and not os.getenv("MAMMAMIRADIO_QUALITY"):
+        os.environ["MAMMAMIRADIO_QUALITY"] = qp
+    legacy_claude_model = options.get("claude_model") if not qp else None
+    if isinstance(legacy_claude_model, str) and legacy_claude_model and not os.getenv("CLAUDE_MODEL"):
+        os.environ["CLAUDE_MODEL"] = legacy_claude_model
+
 
 def _parse_brand(raw: dict, hosts: list[HostPersonality]) -> tuple[BrandSection, list[str]]:
     """Parse [brand] from radio.toml; apply guardrails per design D1.
@@ -766,6 +1012,10 @@ def _validate(config: StationConfig) -> None:
 
     log = logging.getLogger(__name__)
     errors = []
+
+    # Models degrade rather than fail boot — a model misconfig must never take
+    # the station off air. Runs before the fail-fast checks below.
+    _validate_models(config)
 
     if not config.hosts:
         errors.append("No hosts configured — banter requires at least one host (set in radio.toml [[hosts]])")
@@ -913,6 +1163,26 @@ def load_config(path: str = "radio.toml") -> StationConfig:
         else:
             station_raw.pop("bitrate")
 
+    # Legacy: model IDs moved from [audio] to [models]. An upgraded standalone
+    # radio.toml may still carry claude_model / claude_creative_model /
+    # openai_script_model in [audio]; drop them so AudioSection(**audio_raw) does
+    # not raise TypeError and refuse to boot. Model selection now lives in
+    # [models] (or the built-in defaults); the matching env vars still override
+    # the catalog. Leadership principle #2: the station must always boot.
+    _legacy_audio_model_keys = [
+        k for k in ("claude_model", "claude_creative_model", "openai_script_model") if k in audio_raw
+    ]
+    if _legacy_audio_model_keys:
+        import logging as _log
+
+        _log.getLogger(__name__).warning(
+            "Ignoring deprecated [audio] keys %s — model selection now lives in [models] "
+            "(see CLAUDE.md). Remove them from radio.toml.",
+            _legacy_audio_model_keys,
+        )
+        for _k in _legacy_audio_model_keys:
+            audio_raw.pop(_k, None)
+
     ha_raw = raw.get("homeassistant", {})
     # Env-var overrides for HA add-on: HA_URL and HA_ENABLED
     if os.getenv("HA_URL"):
@@ -951,12 +1221,11 @@ def load_config(path: str = "radio.toml") -> StationConfig:
         station_raw["name"] = os.getenv("STATION_NAME")
     if os.getenv("STATION_THEME"):
         station_raw["theme"] = os.getenv("STATION_THEME")
-    if os.getenv("CLAUDE_MODEL"):
-        audio_raw["claude_model"] = os.getenv("CLAUDE_MODEL")
-    if os.getenv("CLAUDE_CREATIVE_MODEL"):
-        audio_raw["claude_creative_model"] = os.getenv("CLAUDE_CREATIVE_MODEL")
-    if os.getenv("OPENAI_SCRIPT_MODEL"):
-        audio_raw["openai_script_model"] = os.getenv("OPENAI_SCRIPT_MODEL")
+    # Dynamic LLM routing: model IDs live in [models], never in code. Parse the
+    # catalog/routing/profiles (degrade to built-in DEFAULT_MODELS on malformed
+    # config so the station always boots), then apply back-compat env overrides.
+    models_section = _parse_models_section(raw)
+    _apply_model_env_overrides(models_section)
     playlist_raw = dict(raw.get("playlist", {}))
     if os.getenv("JAMENDO_CLIENT_ID") is not None:
         playlist_raw["jamendo_client_id"] = os.getenv("JAMENDO_CLIENT_ID", "").strip()
@@ -1008,6 +1277,7 @@ def load_config(path: str = "radio.toml") -> StationConfig:
         imaging=ImagingSection(**raw.get("imaging", {})),
         sonic_brand=sonic_brand,
         audio=AudioSection(**audio_raw),
+        models=models_section,
         homeassistant=ha_section,
         persona=PersonaSection(**raw.get("persona", {})),
         brand=brand,
@@ -1051,6 +1321,23 @@ def load_config(path: str = "radio.toml") -> StationConfig:
     _ledger_retention = os.getenv("MAMMAMIRADIO_LEDGER_RETENTION_DAYS", "").strip()
     if _ledger_retention.isdigit() and int(_ledger_retention) > 0:
         config.ledger_retention_days = int(_ledger_retention)
+
+    # Quality dial: pick the active model profile (premium|balanced|economy).
+    # Mirrors the MAMMAMIRADIO_SUPER_ITALIAN env pattern; the HA addon maps its
+    # quality_profile option to this var via run.sh.
+    _quality_env = os.getenv("MAMMAMIRADIO_QUALITY", "").strip().lower()
+    if _quality_env:
+        if _quality_env in config.models.profiles:
+            config.models.active_profile = _quality_env
+        else:
+            import logging as _log
+
+            _log.getLogger(__name__).warning(
+                "MAMMAMIRADIO_QUALITY=%s is not a defined profile (%s) — keeping %s",
+                _quality_env,
+                sorted(config.models.profiles),
+                config.models.active_profile,
+            )
 
     # Addon overrides: persistent paths, auto-enable HA
     if addon_mode:

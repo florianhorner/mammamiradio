@@ -522,6 +522,10 @@ class StationState:
     api_calls: int = 0
     api_input_tokens: int = 0
     api_output_tokens: int = 0
+    # Per-model token tallies (model_id → {"input": n, "output": n}) so the cost
+    # counter prices each model it actually used, not a flat single rate. Dynamic
+    # routing means different segments run different models within one session.
+    api_tokens_by_model: dict[str, dict[str, int]] = field(default_factory=dict)
     tts_characters: int = 0
     # Provider health telemetry (for /status and /api/capabilities diagnostics)
     anthropic_disabled_until: float = 0.0

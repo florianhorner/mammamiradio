@@ -13,6 +13,9 @@ def _isolate_env():
     sensitive = [
         "ANTHROPIC_API_KEY",
         "OPENAI_API_KEY",
+        "AZURE_SPEECH_KEY",
+        "AZURE_SPEECH_REGION",
+        "ELEVENLABS_API_KEY",
         "HA_TOKEN",
     ]
     saved = {k: os.environ.pop(k, None) for k in sensitive}

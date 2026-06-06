@@ -1,0 +1,41 @@
+# ElevenLabs voice routing + variety pass — pre-ship verification
+# branch: florianhorner/feat/azure-elevenlabs-voice-setup
+# commit: ba9eeccd1bdf5f5c0eb8980ab048f921e23ba99f
+# date (UTC): 2026-06-06T01:51:00Z
+
+## ruff check .
+All checks passed!
+
+## ruff format --check .
+168 files already formatted
+
+## mypy mammamiradio/ tests/
+Success: no issues found in 162 source files
+
+## pytest tests/ (full suite)
+2513 passed, 2 skipped, 8 deselected, 1 warning in 51.07s
+
+## make coverage-check
+Required test coverage of 92.0% reached. Total coverage: 93.83%
+All coverage floors held. Total: 94% (floor: 92%)
+
+## release invariants
+  Passed: 6  Failed: 0
+All invariants passed.
+
+## ad-voice pool (10 voices; 4 roles carry 2 timbres)
+  bureaucrat         x2: Nonno Aldo, Dottore Marzio
+  disclaimer_goblin  x1: Rinaldo
+  hammer             x2: L'Annunciatore, Roberto
+  maniac             x1: Fiamma
+  seductress         x2: Don Carmelo, Palmira
+  witness            x2: Lo Straniero, Signora Testimonia
+
+## runtime: ElevenLabs synthesis smoke (real API, short line each)
+  PASS Marco            o4b57JYAECRMJyCEXyIE (34605b)
+  PASS Giulia           fQmr8dTaOQq116mo2X7F (37485b)
+  PASS Nonno Aldo       NOpBlnGInO9m6vDvFkFC (49005b)
+  PASS Don Carmelo      UlwxMDtxqMDYmG6pk2q6 (35181b)
+  PASS L'Annunciatore   QttbagfgqUCm9K0VgUyT (36333b)
+  PASS Lo Straniero     rj347nCpioEmxiJbdf70 (34605b)
+  6/6 ElevenLabs voices produced real audio

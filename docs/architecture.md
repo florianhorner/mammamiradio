@@ -70,6 +70,33 @@ Charts / Jamendo / classic eras / local files / demo tracks
   - builds a break from host intro, bumpers, one or more ad spots, and host outro
   - records per-spot campaign history (format, sonic signature, summary) for format rotation and campaign arc continuity
 
+### Dynamic LLM routing (which model voices each task)
+
+Script generation never names a model in code. Each call site asks for a model by
+**role**, and `resolve_model()` in `mammamiradio/core/config.py` resolves it:
+
+```text
+task (caller)  ──routing──▶  role  ──active profile──▶  catalog key  ──catalog──▶  model id
+  "banter"                  "creative"     premium/balanced/economy        "opus"      "claude-opus-4-8"
+  "transition"              "fast"                                          "haiku"     "claude-haiku-..."
+```
+
+- The `[models]` block in `radio.toml` is the only place model IDs live: a
+  per-provider `catalog`, a `routing` map (task→role), and named `profiles`
+  (the admin "quality dial": `premium` | `balanced` | `economy`).
+- `resolve_model()` is **total** — an unrouted task, missing profile, or missing
+  catalog key resolves through `default_profile` to a real model ID, never a crash
+  (a crash here would be dead air). The only hardcoded constant is the role name
+  `DEFAULT_ROLE = "creative"`; no model ID is baked into code except the built-in
+  `DEFAULT_MODELS` cold-start safety net.
+- A missing or malformed `[models]` block **degrades** to `DEFAULT_MODELS` so the
+  station always boots and airs; it never fails boot.
+- `fast` (transitions) is pinned to the lowest-latency model in every profile.
+- The OpenAI fallback resolves the **same role** on the OpenAI side, so a transition
+  falls back to the fast OpenAI model and banter to the creative one.
+- The quality profile hot-swaps live via `POST /api/quality` (admin) with no restart
+  and no queue purge — only the next generated segment changes model.
+
 Every produced segment becomes a temporary MP3 on disk and is pushed into `asyncio.Queue[Segment]`.
 Before queueing, `mammamiradio/audio/imaging.py` may prepend transition stings at music/speech boundaries and mix motif stings under sweepers. Optional operator assets live under `mammamiradio/assets/imaging/`; otherwise FFmpeg-generated stings and beds are used.
 
@@ -307,6 +334,8 @@ The same mechanism is callable directly via `POST /api/interrupt` (admin auth, 6
 | `/api/chaos` | POST | Admin | Toggle Chaos Mode with `{"enabled": bool}`; persists `chaos_mode_active` to `.env` or HA add-on options |
 | `/api/party` | GET | Admin | Return `{"active": bool, "mode": str\|null}` for Festival Mode |
 | `/api/party` | POST | Admin | Toggle Festival Mode with `{"action": "enable"\|"disable", "mode": "festival"}`; persists `festival_mode` to `.env` or HA add-on options; purges queue and arms first-strike banter on enable |
+| `/api/quality` | GET | Admin | Return `{"active_profile": str, "profiles": [str]}` for the model quality dial |
+| `/api/quality` | POST | Admin | Set the active model profile with `{"quality_profile": "premium"\|"balanced"\|"economy"}`; hot-swaps live with no restart and no queue purge; persists `MAMMAMIRADIO_QUALITY`/`quality_profile` |
 | `/api/trigger` | POST | Admin | Trigger segment production |
 | `/api/stop` | POST | Admin | Gracefully stop the session (skip + purge + pause producer until `/api/resume`) |
 | `/api/resume` | POST | Admin | Resume a stopped session |

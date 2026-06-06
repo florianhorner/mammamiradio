@@ -3297,7 +3297,7 @@ async def test_clip_ad_segment_extends_duration(tmp_path):
         "label": "Sponsored",
         "started": time.time() - 100,
         "duration_sec": 120,
-        "metadata": {"title": "Mausolea Berlusconi"},
+        "metadata": {"title": "Mausolea del Presidentissimo"},
     }
 
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
@@ -3330,7 +3330,7 @@ async def test_clip_lookback_serves_recent_adbanter_snapshot(tmp_path):
         "bytes": b"\xff" * 8192,
         "ended_monotonic": time.monotonic(),  # just ended
         "type": "ad",
-        "title": "Mausolea Berlusconi",
+        "title": "Mausolea del Presidentissimo",
     }
 
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
@@ -3342,7 +3342,7 @@ async def test_clip_lookback_serves_recent_adbanter_snapshot(tmp_path):
     assert body["ok"] is True
     # The sidecar names the clipped ad, not the current music track.
     sidecar = json.loads((app.state.config.cache_dir / "clips" / f"{body['clip_id']}.json").read_text())
-    assert sidecar["track_title"] == "Mausolea Berlusconi"
+    assert sidecar["track_title"] == "Mausolea del Presidentissimo"
 
 
 @pytest.mark.asyncio
