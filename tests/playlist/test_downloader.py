@@ -652,7 +652,10 @@ def test_search_ytdlp_metadata_success_parses_entries():
                         "title": "Volare",
                         "channel": "Modugno Channel",
                         "duration": 0,
-                        "thumbnails": [{"url": "https://img.example/small.jpg"}, {"url": "https://img.example/large.jpg"}],
+                        "thumbnails": [
+                            {"url": "https://img.example/small.jpg"},
+                            {"url": "https://img.example/large.jpg"},
+                        ],
                     },
                 ]
             }
