@@ -41,7 +41,9 @@ def test_load_config_from_radio_toml(monkeypatch):
 def test_load_config_sets_default_edge_fallback_for_openai_hosts(tmp_path):
     source = Path(__file__).resolve().parents[2] / "radio.toml"
     custom = source.read_text().replace(
-        'voice = "cedar"\nengine = "openai"\nedge_fallback_voice = "it-IT-GiuseppeMultilingualNeural"\n',
+        'voice = "o4b57JYAECRMJyCEXyIE"\n'
+        'engine = "elevenlabs"\n'
+        'edge_fallback_voice = "it-IT-GiuseppeMultilingualNeural"\n',
         'voice = "cedar"\nengine = "openai"\n',
     )
     custom_path = tmp_path / "radio.toml"
@@ -57,7 +59,9 @@ def test_load_config_sets_default_edge_fallback_for_openai_hosts(tmp_path):
 def test_load_config_normalizes_edge_host_with_openai_voice(tmp_path):
     source = Path(__file__).resolve().parents[2] / "radio.toml"
     custom = source.read_text().replace(
-        'voice = "cedar"\nengine = "openai"\nedge_fallback_voice = "it-IT-GiuseppeMultilingualNeural"',
+        'voice = "o4b57JYAECRMJyCEXyIE"\n'
+        'engine = "elevenlabs"\n'
+        'edge_fallback_voice = "it-IT-GiuseppeMultilingualNeural"',
         'voice = "cedar"\nengine = "edge"\nedge_fallback_voice = ""',
     )
     custom_path = tmp_path / "radio.toml"
@@ -90,15 +94,15 @@ def test_load_config_accepts_provider_routed_ad_voice_with_openai_id():
     toml_path = Path(__file__).resolve().parents[2] / "radio.toml"
     config = load_config(str(toml_path))
 
-    palmira = next(v for v in config.ads.voices if v.name == "Palmira")
-    assert palmira.engine == "openai"
-    assert palmira.voice == "shimmer"
-    assert palmira.edge_fallback_voice == "it-IT-IsabellaNeural"
+    fiamma = next(v for v in config.ads.voices if v.name == "Fiamma")
+    assert fiamma.engine == "openai"
+    assert fiamma.voice == "coral"
+    assert fiamma.edge_fallback_voice == "it-IT-ElsaNeural"
 
-    roberto = next(v for v in config.ads.voices if v.name == "Roberto")
-    assert roberto.engine == "azure"
-    assert roberto.voice == "it-IT-Alessio:DragonHDLatestNeural"
-    assert roberto.edge_fallback_voice == "it-IT-DiegoNeural"
+    annunciatore = next(v for v in config.ads.voices if v.name == "L'Annunciatore")
+    assert annunciatore.engine == "elevenlabs"
+    assert annunciatore.voice == "QttbagfgqUCm9K0VgUyT"
+    assert annunciatore.edge_fallback_voice == "it-IT-DiegoNeural"
 
 
 def test_audio_section_loaded():
@@ -554,15 +558,14 @@ def test_load_config_parses_voice_roles():
     toml_path = Path(__file__).resolve().parents[2] / "radio.toml"
     config = load_config(str(toml_path))
 
-    roberto = next(v for v in config.ads.voices if v.name == "Roberto")
-    assert roberto.role == "hammer"
+    annunciatore = next(v for v in config.ads.voices if v.name == "L'Annunciatore")
+    assert annunciatore.role == "hammer"
 
-    palmira = next(v for v in config.ads.voices if v.name == "Palmira")
-    assert palmira.role == "seductress"
+    don_carmelo = next(v for v in config.ads.voices if v.name == "Don Carmelo")
+    assert don_carmelo.role == "seductress"
 
-    # New voices
-    marzio = next(v for v in config.ads.voices if v.name == "Dottore Marzio")
-    assert marzio.role == "bureaucrat"
+    nonno_aldo = next(v for v in config.ads.voices if v.name == "Nonno Aldo")
+    assert nonno_aldo.role == "bureaucrat"
 
 
 def test_load_config_rejects_nonpositive_pacing_values(tmp_path):

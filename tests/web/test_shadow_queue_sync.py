@@ -458,8 +458,10 @@ class TestRuntimeStatusSnapshot:
         app = _make_app()
         app.state.config.anthropic_api_key = "anthropic-key"
         app.state.config.openai_api_key = "openai-key"
-        # The default cast uses Azure voices; supply the key so the TTS provider
-        # is healthy and the snapshot reports a clean, no-fallback contract.
+        # The default cast spans ElevenLabs (hosts), Azure (sweeper) and OpenAI
+        # (one ad voice); supply every key so the TTS provider is healthy and the
+        # snapshot reports a clean, no-fallback contract.
+        app.state.config.elevenlabs_api_key = "elevenlabs-key"
         app.state.config.azure_speech_key = "azure-key"
         app.state.config.azure_speech_region = "westeurope"
         app.state.station_state.now_streaming = {"metadata": {"audio_source": "charts"}}
@@ -612,8 +614,10 @@ class TestRuntimeStatusSnapshot:
         state = app.state.station_state
         app.state.config.anthropic_api_key = "anthropic-key"
         app.state.config.openai_api_key = "openai-key"
-        # The default cast uses Azure voices; supply the key so the TTS provider
-        # is healthy and this test isolates the script-provider recovery state.
+        # The default cast spans ElevenLabs (hosts), Azure (sweeper) and OpenAI
+        # (one ad voice); supply every key so the TTS provider is healthy and this
+        # test isolates the script-provider recovery state.
+        app.state.config.elevenlabs_api_key = "elevenlabs-key"
         app.state.config.azure_speech_key = "azure-key"
         app.state.config.azure_speech_region = "westeurope"
         state.update_runtime_provider(

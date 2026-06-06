@@ -22,9 +22,11 @@ The current version source of truth is `pyproject.toml`.
 
 - **Expanded TTS voice routing** — hosts, sweepers, station IDs, and ad
   character voices can now use Edge, OpenAI, Azure Speech, or ElevenLabs TTS
-  with per-voice Edge fallbacks. The built-in cast now mixes OpenAI `cedar`,
-  `marin`, `coral`, Azure Italian HD voices, and existing Edge fallbacks so
-  commercials and imaging no longer collapse onto the same few Edge timbres.
+  with per-voice Edge fallbacks. The built-in cast now leads with studio-grade
+  ElevenLabs voices for both hosts and the station's signature ad characters —
+  a gravel-deep elder statesman, a velvet-menace charmer, a classic announcer,
+  and a mysterious guest — alongside OpenAI, Azure Italian HD, and Edge voices,
+  so commercials and imaging no longer collapse onto the same few Edge timbres.
   Home Assistant add-on options and setup checks accept Azure Speech and
   ElevenLabs credentials without requiring secrets in `radio.toml`.
 
