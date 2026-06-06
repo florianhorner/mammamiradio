@@ -1422,6 +1422,8 @@ async def push_state_to_ha(
 
         segment_type = "off" if session_stopped else (now_streaming.get("type", "off") if now_streaming else "off")
         metadata = now_streaming.get("metadata", {}) if now_streaming else {}
+        if not isinstance(metadata, dict):
+            metadata = {}
         is_playing = not session_stopped and bool(now_streaming)
         mp_state = "playing" if is_playing else "idle"
 
@@ -1453,6 +1455,15 @@ async def push_state_to_ha(
         if is_playing:
             media_attrs["media_position"] = media_position
             media_attrs["media_position_updated_at"] = datetime.datetime.now(datetime.UTC).isoformat()
+
+        # Secondary artwork surface: the HA frontend reads entity_picture directly.
+        # Only set it while actually playing, and only for an absolute http(s) cover
+        # URL — never a relative/local path (HA resolves relative entity_picture
+        # against its own origin, which 404s for an add-on). When absent, leave it
+        # unset so HA shows its clean default icon instead of a stale or broken tile.
+        album_art = str(metadata.get("album_art") or "").strip()
+        if is_playing and album_art.startswith(("http://", "https://")):
+            media_attrs["entity_picture"] = album_art
 
         entities: list[tuple[str, dict]] = [
             (

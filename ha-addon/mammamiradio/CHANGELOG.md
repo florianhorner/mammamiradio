@@ -4,6 +4,13 @@
 
 ### Added
 
+- **Real album covers on the now-playing screen.** When a song is on, the phone
+  lock screen, CarPlay, Control Center, and the Home Assistant media card now show
+  the real album artwork instead of the station logo, and it follows each track.
+  Chart songs carry their cover from the chart feed; searched/added and listener-
+  requested songs get their cover looked up automatically. No cover found falls back
+  cleanly to the station logo — never a broken image.
+
 - **AI quality dial replaces the model dropdown.** The old "AI Model" option is now
   a Premium / Balanced / Economy quality dial. Pick the experience you want and the
   station chooses the right model for each job automatically — no model names to

@@ -240,6 +240,24 @@ If `[homeassistant].enabled = true` and `HA_TOKEN` is present:
 - the listener dashboard shows a "Casa" card with mood, weather, and recent events via `ha_moments` in `/public-status`
 - the admin panel shows full HA details (mood, weather arc, events summary, pending directives, scored entities, and privacy filter counts) via `ha_details` in `/status`
 - scored entities and privacy filter counts are admin-only and never appear in `/public-status`
+- while a song is playing, `push_state_to_ha` sets `entity_picture` on `media_player.mammamiradio` to the track's absolute http(s) cover URL (`Track.album_art`); it is left unset for non-http art or when idle/stopped so HA shows its default icon rather than a stale or broken tile. `media_image_url`/`media_image_remotely_accessible` are intentionally omitted (inert for a state pushed via the REST API rather than a media_player integration component)
+
+## Album cover artwork
+
+`Track.album_art` drives the now-playing artwork on every surface. The primary,
+already-wired surface is the listener PWA MediaSession (`web/static/listener.js`),
+which shows the cover on the phone lock screen, CarPlay, and Control Center; Home
+Assistant's `entity_picture` (above) is a secondary surface.
+
+- **Chart tracks** read their cover straight from the Apple charts RSS feed item
+  (`artworkUrl100`, upscaled to 600px) in `playlist.py` — no extra network call.
+- **Searched/added and listener-requested tracks** carry a YouTube thumbnail from
+  the yt-dlp search; `playlist/cover_art.py` upgrades it to a real cover via the
+  iTunes Search API (`country=IT`) on the background download path
+  (`_commit_external_download`), off the event loop. Results are cached to
+  `cache_dir/cover_art_cache.json` (hashed key; definitive misses cached with a TTL,
+  transient failures never cached). Resolution is best-effort and never raises into
+  the audio or HA-push path; a miss falls back to the existing art or the station logo.
 
 This is opportunistic context, not a hard dependency. Failures there should not stop the station.
 

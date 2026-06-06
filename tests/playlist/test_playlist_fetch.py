@@ -114,6 +114,33 @@ def test_fetch_current_italy_charts_success():
     assert tracks[1].spotify_id == "chart_2"
 
 
+def test_fetch_current_italy_charts_reads_feed_artwork():
+    """Chart tracks get album_art from the RSS feed item, upscaled to 600px."""
+    from mammamiradio.playlist.playlist import _fetch_current_italy_charts
+
+    payload = {
+        "feed": {
+            "results": [
+                {"name": "Song", "artistName": "Artist", "id": "1", "artworkUrl100": "https://x/100x100bb.jpg"},
+                {"name": "No Art", "artistName": "Other", "id": "2"},  # no artwork field
+            ]
+        }
+    }
+    with patch("mammamiradio.playlist.playlist.urlopen") as mock_urlopen:
+        mock_response = MagicMock()
+        mock_response.read.return_value = json.dumps(payload).encode("utf-8")
+        mock_response.__enter__ = lambda s: s
+        mock_response.__exit__ = MagicMock(return_value=False)
+        mock_urlopen.return_value = mock_response
+
+        tracks = _fetch_current_italy_charts()
+
+    assert tracks[0].album_art == "https://x/600x600bb.jpg"
+    # No artwork in the feed item → empty album_art, but the track is still built.
+    assert tracks[1].album_art == ""
+    assert tracks[1].title == "No Art"
+
+
 def test_fetch_current_italy_charts_per_artist_cap():
     """No artist appears more than max_per_artist times in the result."""
     from mammamiradio.playlist.playlist import _fetch_current_italy_charts

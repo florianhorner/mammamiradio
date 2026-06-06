@@ -8,6 +8,14 @@ The current version source of truth is `pyproject.toml`.
 
 ### Added
 
+- **Real album covers on the now-playing screen.** When a song is on, your phone's
+  lock screen, CarPlay, and Control Center now show the actual album artwork instead
+  of the station logo — and the cover follows each track as it changes. Chart songs
+  carry their cover straight from the chart feed; songs you search and add, or that
+  listeners request, get their cover looked up automatically. Home Assistant's media
+  card shows the cover too. When no cover is found, every screen falls back cleanly to
+  the station logo — never a broken image.
+
 - **Pick your AI quality with one dial.** The add-on's model picker is now a simple
   Premium / Balanced / Economy quality dial in the admin Engine Room. Choose the
   experience you want and the station picks the right model for each job

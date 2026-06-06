@@ -1,0 +1,10 @@
+ha-artwork — test proof
+commit: bae7a0a4 (pre-amend; tests below run on the amended tree)
+date(UTC): 2026-06-06T10:55:09Z
+command: make check (clean env, .env unlinked — CI-equivalent)
+---
+All checks passed!
+Required test coverage of 92.0% reached. Total coverage: 93.89%
+2537 passed, 2 skipped, 8 deselected, 1 warning in 58.84s
+All coverage floors held. Total: 94% (floor: 92%)
+All checks passed

@@ -342,6 +342,7 @@ async def _download_listener_song(req: dict, app_state, originating_source_revis
             artist=meta["artist"],
             duration_ms=meta["duration_ms"],
             youtube_id=meta["youtube_id"],
+            album_art=str(meta.get("album_art") or "").strip(),
         )
         status = await _commit_external_download(
             track,

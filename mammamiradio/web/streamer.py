@@ -2784,6 +2784,7 @@ async def add_external_track(request: Request, _: None = Depends(require_admin_a
         artist=artist,
         duration_ms=duration_ms,
         youtube_id=youtube_id,
+        album_art=str(body.get("album_art") or "").strip(),
     )
 
     # Fire the download in the background and return before the ingress proxy
@@ -2826,10 +2827,21 @@ async def _commit_external_download(
     the rotation pool but the play-next slot was occupied), or "dropped" (source
     switched / consumed). Raises on download failure / cancellation for the caller
     to surface. Shared by the admin and listener download paths."""
+    from mammamiradio.playlist.cover_art import maybe_resolve, needs_resolve
     from mammamiradio.playlist.downloader import download_external_track
 
     state = app_state.station_state
     config = app_state.config
+    # Upgrade a YouTube video thumbnail to a real album cover (off the event loop —
+    # urlopen is blocking) before the slow download. Search-sourced tracks always
+    # carry a thumbnail; only resolve when there's one to upgrade, so a track with
+    # no art at all doesn't trigger a lookup. Best-effort: falls back to the
+    # thumbnail on a miss, never raises.
+    current_art = getattr(track, "album_art", "") or ""
+    if current_art and needs_resolve(current_art):
+        track.album_art = await asyncio.to_thread(
+            maybe_resolve, current_art, track.artist, track.title, cache_dir=config.cache_dir
+        )
     await download_external_track(track, config.cache_dir, music_dir=Path("music"))
     # Serialize the commit decision with source switches. /api/playlist/load holds
     # source_switch_lock across the slow load and only bumps source_revision at the
@@ -2914,11 +2926,15 @@ async def add_track(request: Request, _: None = Depends(require_admin_access)):
     from mammamiradio.core.models import Track
 
     body = await request.json()
+    # Preserve album_art when the caller supplies one (e.g. re-adding a track that
+    # already carries a cover). Live cover resolution happens on the download paths
+    # (_commit_external_download), not on this fast synchronous append.
     track = Track(
         title=body.get("title", ""),
         artist=body.get("artist", ""),
         duration_ms=body.get("duration_ms", 0),
         spotify_id=body.get("spotify_id", ""),
+        album_art=str(body.get("album_art") or "").strip(),
     )
     if not track.title:
         return {"ok": False, "error": "Missing title"}
