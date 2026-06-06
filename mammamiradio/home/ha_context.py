@@ -1500,16 +1500,45 @@ async def push_state_to_ha(
         ]
 
         async def _push_one(eid: str, p: dict) -> None:
-            try:
-                resp = await client.post(
-                    f"{base_url}/api/states/{eid}",
-                    headers=headers,
-                    json=p,
-                    timeout=5.0,
-                )
-                if resp.status_code >= 400:
-                    logger.warning("HA push failed for %s: HTTP %d", eid, resp.status_code)
-            except Exception as e:
-                logger.warning("HA push failed for %s: %s", eid, e)
+            # Always log the exception TYPE + repr. A bare str() on a timeout or
+            # cancellation-style exception is empty, which is what produced the
+            # unreadable "HA push failed for <eid>: " lines in production. Include
+            # the HTTP body on a 4xx/5xx so the operator can see *why* it failed.
+            #
+            # One bounded retry, transient network errors only. The whole push
+            # runs inside _get_ha_push_lock(), so a newer push cannot interleave
+            # and replay stale state behind this one. HTTP errors are not retried
+            # (they will not fix themselves within 5s); the 30s heartbeat re-pushes.
+            last_exc: httpx.TransportError | None = None
+            for _attempt in range(2):
+                try:
+                    resp = await client.post(
+                        f"{base_url}/api/states/{eid}",
+                        headers=headers,
+                        json=p,
+                        timeout=5.0,
+                    )
+                    if resp.status_code >= 400:
+                        raw = getattr(resp, "text", "")
+                        body = raw.strip().replace("\n", " ")[:200] if isinstance(raw, str) else ""
+                        logger.warning(
+                            "HA push failed for %s: HTTP %d%s",
+                            eid,
+                            resp.status_code,
+                            f" — {body}" if body else "",
+                        )
+                    return
+                except httpx.TransportError as e:
+                    last_exc = e
+                    continue
+                except Exception as e:
+                    logger.warning("HA push failed for %s: %s: %r", eid, type(e).__name__, e)
+                    return
+            logger.warning(
+                "HA push failed for %s after retry: %s: %r",
+                eid,
+                type(last_exc).__name__,
+                last_exc,
+            )
 
         await asyncio.gather(*(_push_one(eid, p) for eid, p in entities))

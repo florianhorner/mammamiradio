@@ -551,6 +551,10 @@ body[data-stopped="true"] .sidebar-live-line { color: var(--cream-dk); }
 .sr-add.external:hover { background: rgba(37,99,235,0.22); }
 .sr-add.loading { opacity: 0.5; pointer-events: none; }
 .sr-label { font-size: 10px; color: rgba(245,237,216,0.4); margin: 8px 0 4px; letter-spacing: 0.08em; text-transform: uppercase; font-weight: 600; }
+.load-more-row { display: flex; justify-content: center; padding: 10px 0 4px; }
+.load-more-btn { font-size: 11px; font-weight: 700; padding: 5px 12px; border-radius: 5px; background: rgba(245,237,216,0.06); color: rgba(245,237,216,0.72); border: 1px solid rgba(245,237,216,0.14); cursor: pointer; }
+.load-more-btn:hover { color: var(--cream); border-color: rgba(245,237,216,0.3); }
+.load-more-btn.loading { opacity: 0.5; pointer-events: none; }
 
 .pl-row { display: flex; align-items: center; gap: 8px; padding: 6px 0; border-bottom: 1px solid rgba(245,237,216,0.06); font-size: 12px; transition: background 0.15s; }
 .pl-row:hover { background: rgba(245,237,216,0.03); border-radius: 4px; }
@@ -565,7 +569,8 @@ body[data-stopped="true"] .sidebar-live-line { color: var(--cream-dk); }
 .pl-n { font-size: 10px; color: rgba(245,237,216,0.3); width: 22px; text-align: right; }
 .pl-t { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pl-art { width: 36px; height: 36px; border-radius: 3px; object-fit: cover; flex-shrink: 0; border: 1px solid rgba(244,208,72,0.2); }
-.pl-art-empty { width: 36px; height: 36px; border-radius: 3px; background: rgba(245,237,216,0.04); border: 1px solid rgba(245,237,216,0.08); flex-shrink: 0; }
+.pl-art-empty { width: 18px; height: 18px; border-radius: 3px; background: rgba(245,237,216,0.05); border: 1px solid rgba(245,237,216,0.12); flex-shrink: 0; position: relative; }
+.pl-art-empty::before { content: ""; position: absolute; left: 4px; right: 4px; top: 8px; border-top: 1px solid rgba(245,237,216,0.28); transform: rotate(-35deg); }
 .pl-chips { display: flex; gap: 4px; align-items: center; margin-left: auto; }
 .pl-era { font-size: 9px; font-weight: 700; font-family: var(--font-mono); color: var(--sun); background: rgba(244,208,72,0.12); border: 1px solid rgba(244,208,72,0.25); border-radius: 3px; padding: 1px 4px; white-space: nowrap; }
 .pl-src { font-size: 9px; padding: 1px 5px; border-radius: 3px; font-weight: 600; white-space: nowrap; }
@@ -2908,6 +2913,10 @@ function updateRecent(st){
 
 // ── Playlist ──
 let _plFilter='';
+const PLAYLIST_PAGE_SIZE=80;
+let _plRows=[];
+let _plPage={total:0,offset:0,limit:PLAYLIST_PAGE_SIZE,has_more:false};
+let _plLoadingMore=false;
 function sourceControlVisibility(caps){
   const capabilities=caps?.capabilities||{};
   return {
@@ -2951,20 +2960,47 @@ function sourceChip(source){
   const chip=SOURCE_CHIPS[source]||SOURCE_CHIPS.local;
   return `<span class="pl-src ${chip.cls}">${esc(chip.label)}</span>`;
 }
-function updatePl(tracks){
+function updatePl(tracks,page){
   const el=document.getElementById('plBody');const meta=document.getElementById('plMeta');
-  if(!tracks?.length){el.innerHTML='<div class="empty">No tracks</div>';meta.textContent='';return}
-  meta.textContent=tracks.length+' tracce';
-  const s=tracks.slice(0,80);
+  const incoming=tracks||[];
+  const inPage=page||{total:incoming.length,offset:0,limit:incoming.length||PLAYLIST_PAGE_SIZE,has_more:false};
+  // Status polls are capped at server max_limit (200). If we have more rows loaded via
+  // load-more, keep the extra cached rows to prevent snap-back on the next poll.
+  if(incoming.length&&incoming.length<_plRows.length&&inPage.has_more){
+    _plRows=incoming.concat(_plRows.slice(incoming.length));
+  }else{
+    _plRows=incoming;
+  }
+  _plPage={...inPage,limit:_plRows.length};
+  if(!_plRows.length){el.innerHTML='<div class="empty">No tracks</div>';meta.textContent='';return}
+  const total=Number(_plPage.total||_plRows.length);
+  const loadedEnd=Math.min((_plPage.offset||0)+_plRows.length,total);
+  meta.textContent=total>_plRows.length?`${loadedEnd}/${total} tracks`:_plRows.length+' tracks';
   const filter=_plFilter.toLowerCase();
-  const filtered=filter?s.filter(t=>`${t.title} ${t.artist}`.toLowerCase().includes(filter)):s;
-  el.innerHTML=filtered.map((t,i)=>{
-    const idx=filter?tracks.indexOf(t):i;
+  const rows=_plRows.map((t,i)=>({t,idx:(_plPage.offset||0)+i}));
+  const filtered=filter?rows.filter(row=>`${row.t.title} ${row.t.artist}`.toLowerCase().includes(filter)):rows;
+  el.innerHTML=filtered.map(({t,idx})=>{
     const era=eraLabel(t.year);
     const eraPill=era?`<span class="pl-era">${era}</span>`:'';
     return `<div class="pl-row" draggable="true" data-i="${idx}" data-id="${esc(t.spotify_id||t.id||'')}"><span class="pl-grip" title="Drag to reorder" tabindex="0" role="button" aria-label="Drag to reorder"><svg class="grip-dots" viewBox="0 0 10 16" fill="currentColor" aria-hidden="true"><circle cx="3" cy="3" r="1.2"/><circle cx="7" cy="3" r="1.2"/><circle cx="3" cy="8" r="1.2"/><circle cx="7" cy="8" r="1.2"/><circle cx="3" cy="13" r="1.2"/><circle cx="7" cy="13" r="1.2"/></svg></span><span class="pl-n">${idx+1}</span>${trackThumb(t)}<span class="pl-t">${esc(t.display||t.title||'?')}</span><div class="pl-chips">${eraPill}${sourceChip(t.source)}</div><div class="pl-a"><button class="pl-btn" onclick="moveNext(${idx})" aria-label="Move to next">&#9654; Next</button><button class="pl-btn" onclick="removeTr(${idx})" aria-label="Remove from rotation">&#10005;</button></div></div>`;
-  }).join('')+(tracks.length>80?`<div class="empty">+ ${tracks.length-80} more</div>`:'');
+  }).join('')+(!_plFilter&&_plPage.has_more?'<div class="load-more-row"><button type="button" class="load-more-btn" id="plMoreBtn" onclick="loadMorePlaylist()">Load more tracks</button></div>':'');
   initDragDrop();
+}
+async function loadMorePlaylist(){
+  if(_plLoadingMore||!_plPage.has_more)return;
+  _plLoadingMore=true;
+  const btn=document.getElementById('plMoreBtn');
+  if(btn){btn.classList.add('loading');btn.textContent='Loading...';}
+  try{
+    const offset=(_plPage.offset||0)+_plRows.length;
+    const resp=await fetch(_base+`/api/playlist?offset=${offset}&limit=${PLAYLIST_PAGE_SIZE}`,{headers:H()});
+    if(!resp.ok)return;
+    const d=await resp.json();
+    _plRows=_plRows.concat(d.tracks||[]);
+    updatePl(_plRows,{total:d.total||_plRows.length,offset:_plPage.offset||0,limit:_plRows.length,has_more:!!d.has_more});
+  }finally{
+    _plLoadingMore=false;
+  }
 }
 function focusPlaylistTrack(index, trackId){
   const rows=[...document.querySelectorAll('.pl-row')];
@@ -3001,31 +3037,58 @@ const si=document.getElementById('searchInput');
 si.addEventListener('keydown',e=>{if(e.key==='Enter')doSearch()});
 si.addEventListener('input',()=>{
   _plFilter=si.value.trim();
-  if(_st.playlist)updatePl(_st.playlist);
+  if(_st.playlist)updatePl(_st.playlist,_st.playlist_page||null);
   clearTimeout(_searchTo);
   if(_plFilter.length>=2)_searchTo=setTimeout(doSearch,400);
   else document.getElementById('searchResults').innerHTML='';
 });
-let _sR=[],_sExt=[];
-async function doSearch(){
+let _sR=[],_sExt=[],_sPage={has_more:false},_sExtPage={has_more:false};
+const SEARCH_PAGE_SIZE=5;
+function renderSearchResults(q){
+  const el=document.getElementById('searchResults');
+  let html='';
+  if(_sR.length){
+    html+='<div class="sr-label">In playlist</div>'+_sR.map((t,i)=>`<div class="sr-row"><span>${esc(t.artist)} — ${esc(t.title)}</span><button class="sr-add" onclick="addTr(${i})">&#9654; Next</button></div>`).join('');
+  }
+  if(_sExt.length){
+    html+='<div class="sr-label" style="margin-top:8px">From the web</div>'+_sExt.map((t,i)=>`<div class="sr-row"><span>${esc(t.artist?t.artist+' — ':'')}${esc(t.title)}</span><button class="sr-add external" id="ext-btn-${i}" onclick="addExternal(${i})">&#8681; Queue</button></div>`).join('');
+  }
+  if(_sPage.has_more||_sExtPage.has_more){
+    html+='<div class="load-more-row"><button type="button" class="load-more-btn" id="searchMoreBtn" onclick="searchMore()">Load more results</button></div>';
+  }
+  if(!html)html=q.length>=2?'<div class="empty">No results</div>':'';
+  el.innerHTML=html;
+}
+async function doSearch(append){
   const q=si.value.trim();if(!q)return;
   const el=document.getElementById('searchResults');
-  el.innerHTML='<div class="sr-label" style="color:rgba(245,237,216,0.25)">Searching…</div>';
+  const isAppend=append===true;
+  if(!isAppend){
+    _sR=[];_sExt=[];_sPage={has_more:false};_sExtPage={has_more:false};
+    el.innerHTML='<div class="sr-label" style="color:rgba(245,237,216,0.25)">Searching...</div>';
+  }
   try{
-    const resp=await fetch(_base+'/api/search?q='+encodeURIComponent(q),{headers:H()});
+    const params=new URLSearchParams({
+      q,
+      offset:String(isAppend?_sR.length:0),
+      limit:String(SEARCH_PAGE_SIZE),
+      external_offset:String(isAppend?_sExt.length:0),
+      external_limit:String(SEARCH_PAGE_SIZE),
+    });
+    const resp=await fetch(_base+'/api/search?'+params.toString(),{headers:H()});
     if(!resp.ok){console.warn('Search failed:',resp.status);el.innerHTML='';return}
     const d=await resp.json();
-    _sR=d.results||[];_sExt=d.external||[];
-    let html='';
-    if(_sR.length){
-      html+='<div class="sr-label">In playlist</div>'+_sR.slice(0,5).map((t,i)=>`<div class="sr-row"><span>${esc(t.artist)} — ${esc(t.title)}</span><button class="sr-add" onclick="addTr(${i})">&#9654; Next</button></div>`).join('');
-    }
-    if(_sExt.length){
-      html+='<div class="sr-label" style="margin-top:8px">From the web</div>'+_sExt.slice(0,5).map((t,i)=>`<div class="sr-row"><span>${esc(t.artist?t.artist+' — ':'')}${esc(t.title)}</span><button class="sr-add external" id="ext-btn-${i}" onclick="addExternal(${i})">&#8681; Queue</button></div>`).join('');
-    }
-    if(!html)html=q.length>=2?'<div class="empty">No results</div>':'';
-    el.innerHTML=html;
+    _sR=isAppend?_sR.concat(d.results||[]):d.results||[];
+    _sExt=isAppend?_sExt.concat(d.external||[]):d.external||[];
+    _sPage={total:d.total||0,offset:d.offset||0,limit:d.limit||SEARCH_PAGE_SIZE,has_more:!!d.has_more};
+    _sExtPage={known_count:d.external_known_count||0,offset:d.external_offset||0,limit:d.external_limit||SEARCH_PAGE_SIZE,has_more:!!d.external_has_more};
+    renderSearchResults(q);
   }catch(e){console.warn('Search error:',e);el.innerHTML='';}
+}
+async function searchMore(){
+  const btn=document.getElementById('searchMoreBtn');
+  if(btn){btn.classList.add('loading');btn.textContent='Loading...';}
+  await doSearch(true);
 }
 async function addTr(i){const t=_sR[i];if(!t)return;await api('POST','/api/playlist/move_to_next',{index:t.index});toast('Now playing: '+t.display);document.getElementById('searchResults').innerHTML='';si.value='';_plFilter=''}
 async function addExternal(i){
@@ -3033,7 +3096,7 @@ async function addExternal(i){
   const btn=document.getElementById('ext-btn-'+i);
   if(btn){btn.classList.add('loading');btn.textContent='Downloading…';}
   try{
-    const r=await api('POST','/api/playlist/add-external',{youtube_id:t.youtube_id,title:t.title,artist:t.artist,duration_ms:t.duration_ms,album_art:t.album_art||''});
+    const r=await api('POST','/api/playlist/add-external',{youtube_id:t.youtube_id,title:t.title,artist:t.artist,duration_ms:t.duration_ms,album_art:t.album_art});
     if(r.ok){
       toast('Downloading: '+t.display+' — on air shortly');
       document.getElementById('searchResults').innerHTML='';
@@ -3498,7 +3561,7 @@ function updateEngineRoom(st,caps){
   if(!rt)return;
   const uptime=(st.uptime_sec||st.uptime_s)?Math.round((st.uptime_sec||st.uptime_s)/60)+'m':'—';
   const qd=st.queue_depth!=null?st.queue_depth:'—';
-  const pl=st.playlist?st.playlist.length:'—';
+  const pl=st.playlist_page?.total??st.playlist?.length??'—';
   const listeners=st.listeners?st.listeners.active:(st.listeners_active||0);
   const con=st.consumption||{};
   const apiCalls=con.api_calls||0;
@@ -3608,7 +3671,8 @@ function updateEngineRoom(st,caps){
 // ── Polling ──
 async function refreshFast(){
   try{
-    const [sr,lrr]=await Promise.all([fetch(_base+'/status',{headers:H()}),fetch(_base+'/api/listener-requests',{headers:H()})]);
+    const playlistLimit=Math.max(_plRows.length||0,PLAYLIST_PAGE_SIZE);
+    const [sr,lrr]=await Promise.all([fetch(_base+`/status?playlist_limit=${playlistLimit}`,{headers:H()}),fetch(_base+'/api/listener-requests',{headers:H()})]);
     _st=await sr.json();
     if (_st.station) {
       try { localStorage.setItem('stationName', _st.station); } catch (_) {}
@@ -3621,7 +3685,7 @@ async function refreshFast(){
     renderProgramme(_st);
     updateRecent(_st);
     updateLog(_st.stream_log);
-    updatePl(_st.playlist||[]);
+    updatePl(_st.playlist||[],_st.playlist_page||null);
     updateListenerRequests(lrData.requests||[],lrData.recently_consumed||[]);
     updatePaceCounters(_st.pacing);
     updateRuntimeStatus(_st);
