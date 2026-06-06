@@ -115,8 +115,46 @@ nostalgia = 30
 sample_rate = 48000
 channels = 2
 bitrate = 192
-claude_model = "claude-haiku-4-5-20251001"
-claude_creative_model = "claude-opus-4-6"
+
+# ── Dynamic LLM routing ───────────────────────────────────────────────────
+# Script generation never names a model in code. A task asks for a ROLE; the
+# catalog maps role→model per provider; the active profile (the admin "quality
+# dial": premium|balanced|economy) selects which catalog entry each role uses.
+#
+#   task ──routing──▶ role ──profile──▶ catalog key ──catalog──▶ model id
+#
+# Swap any model = edit ONE catalog line below. No code change, no stale dropdown.
+# `fast` is pinned to the lowest-latency model in every profile (transitions are
+# latency-sensitive — a slow one risks dead air).
+[models]
+default_profile = "balanced"
+
+[models.catalog.anthropic]   # the ONLY place Anthropic model IDs live
+opus   = "claude-opus-4-8"
+sonnet = "claude-sonnet-4-6"
+haiku  = "claude-haiku-4-5-20251001"
+
+[models.catalog.openai]      # the ONLY place OpenAI model IDs live
+large = "gpt-4o"
+small = "gpt-4o-mini"
+
+[models.routing]             # task (caller) → role
+banter     = "creative"
+news_flash = "creative"
+ad         = "creative"
+transition = "fast"
+
+[models.profiles.premium]    # role → catalog key, per provider
+anthropic = { creative = "opus", fast = "haiku" }
+openai    = { creative = "large", fast = "small" }
+
+[models.profiles.balanced]   # reproduces prior behavior (creative=opus, fast=haiku)
+anthropic = { creative = "opus", fast = "haiku" }
+openai    = { creative = "small", fast = "small" }
+
+[models.profiles.economy]
+anthropic = { creative = "haiku", fast = "haiku" }
+openai    = { creative = "small", fast = "small" }
 
 [homeassistant]
 enabled = false

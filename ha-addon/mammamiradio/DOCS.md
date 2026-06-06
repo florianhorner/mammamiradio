@@ -156,7 +156,8 @@ If silence is in cache from a failed run: stop the addon, SSH to the HA host, de
   |
   +-- run.sh reads JSON, exports as env vars
   |     ANTHROPIC_API_KEY, OPENAI_API_KEY,
-  |     STATION_NAME, CLAUDE_MODEL,
+  |     AZURE_SPEECH_KEY, AZURE_SPEECH_REGION, ELEVENLABS_API_KEY,
+  |     STATION_NAME, MAMMAMIRADIO_QUALITY (from quality_profile, default balanced),
   |     ADMIN_TOKEN (blank => auto-generated),
   |     HA_ENABLED (from enable_home_assistant)
   |

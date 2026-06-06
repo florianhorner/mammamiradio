@@ -14,6 +14,7 @@ from mammamiradio.core.config import (
     _validate,
     coerce_bool,
     load_config,
+    resolve_model,
     runtime_json,
 )
 
@@ -109,8 +110,8 @@ def test_audio_section_loaded():
     assert config.audio.sample_rate == 48000
     assert config.audio.channels == 2
     assert config.audio.bitrate == 192
-    # CLAUDE_MODEL env override may be set; just check it's non-empty
-    assert config.audio.claude_model
+    # Model IDs now live in [models]; the audio section no longer carries them.
+    assert resolve_model(config.models, "banter", "anthropic")
 
 
 def test_homeassistant_section_loaded():
@@ -375,6 +376,80 @@ def test_apply_addon_options(monkeypatch, tmp_path):
     assert os.environ.get("ANTHROPIC_API_KEY") == "test_key"
     # Cleanup
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+
+
+def test_legacy_audio_model_keys_do_not_break_boot(tmp_path):
+    """An upgraded standalone radio.toml that still has claude_model /
+    claude_creative_model / openai_script_model in [audio] must still boot —
+    the deprecated keys are dropped, not passed to AudioSection (principle #2)."""
+    repo_toml = Path(__file__).resolve().parents[2] / "radio.toml"
+    text = repo_toml.read_text()
+    legacy = (
+        "[audio]\n"
+        'claude_model = "claude-haiku-4-5-20251001"\n'
+        'claude_creative_model = "claude-opus-4-6"\n'
+        'openai_script_model = "gpt-4o-mini"\n'
+    )
+    assert "[audio]\n" in text
+    patched = text.replace("[audio]\n", legacy, 1)
+    toml_path = tmp_path / "radio.toml"
+    toml_path.write_text(patched)
+
+    config = load_config(str(toml_path))  # must not raise TypeError
+    assert resolve_model(config.models, "banter", "anthropic")
+    assert not hasattr(config.audio, "claude_model")
+
+
+def test_apply_addon_options_quality_profile_round_trips(monkeypatch, tmp_path):
+    """options.json quality_profile must populate MAMMAMIRADIO_QUALITY (so non-run.sh
+    config loads still honor the persisted quality dial)."""
+    import os
+
+    options_file = tmp_path / "options.json"
+    options_file.write_text(json.dumps({"quality_profile": "premium"}))
+    monkeypatch.delenv("MAMMAMIRADIO_QUALITY", raising=False)
+    try:
+        with patch("mammamiradio.core.config.Path") as mock_path_cls:
+            mock_path_cls.return_value = options_file
+            _apply_addon_options()
+        assert os.environ.get("MAMMAMIRADIO_QUALITY") == "premium"
+    finally:
+        os.environ.pop("MAMMAMIRADIO_QUALITY", None)
+
+
+def test_apply_addon_options_legacy_claude_model_round_trips(monkeypatch, tmp_path):
+    """Existing add-ons can still have the removed claude_model option persisted;
+    keep it as the legacy fast-role override so upgrade behavior is preserved."""
+    import os
+
+    options_file = tmp_path / "options.json"
+    options_file.write_text(json.dumps({"claude_model": "claude-sonnet-4-6"}))
+    monkeypatch.delenv("CLAUDE_MODEL", raising=False)
+    try:
+        with patch("mammamiradio.core.config.Path") as mock_path_cls:
+            mock_path_cls.return_value = options_file
+            _apply_addon_options()
+        assert os.environ.get("CLAUDE_MODEL") == "claude-sonnet-4-6"
+    finally:
+        os.environ.pop("CLAUDE_MODEL", None)
+
+
+def test_apply_addon_options_quality_profile_wins_over_legacy_claude_model(monkeypatch, tmp_path):
+    import os
+
+    options_file = tmp_path / "options.json"
+    options_file.write_text(json.dumps({"quality_profile": "premium", "claude_model": "claude-sonnet-4-6"}))
+    monkeypatch.delenv("MAMMAMIRADIO_QUALITY", raising=False)
+    monkeypatch.delenv("CLAUDE_MODEL", raising=False)
+    try:
+        with patch("mammamiradio.core.config.Path") as mock_path_cls:
+            mock_path_cls.return_value = options_file
+            _apply_addon_options()
+        assert os.environ.get("MAMMAMIRADIO_QUALITY") == "premium"
+        assert os.environ.get("CLAUDE_MODEL") is None
+    finally:
+        os.environ.pop("MAMMAMIRADIO_QUALITY", None)
+        os.environ.pop("CLAUDE_MODEL", None)
 
 
 @pytest.mark.parametrize(("value", "expected_env"), [(True, "true"), (False, "false")])

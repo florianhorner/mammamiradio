@@ -25,7 +25,7 @@ from typing import cast
 import anthropic
 
 from mammamiradio.audio.normalizer import AVAILABLE_SFX_TYPES
-from mammamiradio.core.config import StationConfig
+from mammamiradio.core.config import StationConfig, resolve_model
 from mammamiradio.core.models import (
     RECENTLY_CONSUMED_RETENTION_SECONDS,
     ChaosSubtype,
@@ -401,6 +401,9 @@ async def _generate_json_response(
                             _anthropic_out = resp.usage.output_tokens
                             state.api_input_tokens += _anthropic_in
                             state.api_output_tokens += _anthropic_out
+                            _bucket = state.api_tokens_by_model.setdefault(model, {"input": 0, "output": 0})
+                            _bucket["input"] += _anthropic_in
+                            _bucket["output"] += _anthropic_out
                         raw = resp.content[0].text.strip()  # type: ignore[union-attr]
                         state.anthropic_disabled_until = 0.0
                         state.anthropic_last_error = ""
@@ -518,7 +521,9 @@ async def _generate_json_response(
     if not openai_key:
         raise RuntimeError("No LLM API key configured for script generation")
 
-    openai_model = config.audio.openai_script_model
+    # Resolve the OpenAI model for THIS task's role (not one fixed fallback model),
+    # so a transition falls back to the fast OpenAI model and banter to the creative one.
+    openai_model = resolve_model(config.models, caller, "openai")
     client = _get_openai_client(openai_key)
     loop = asyncio.get_running_loop()
 
@@ -544,6 +549,9 @@ async def _generate_json_response(
         completion_tokens = getattr(resp.usage, "completion_tokens", 0)
         state.api_input_tokens += prompt_tokens
         state.api_output_tokens += completion_tokens
+        _bucket = state.api_tokens_by_model.setdefault(openai_model, {"input": 0, "output": 0})
+        _bucket["input"] += prompt_tokens
+        _bucket["output"] += completion_tokens
     raw = (resp.choices[0].message.content or "").strip()  # type: ignore[attr-defined]
     try:
         parsed = json.loads(_strip_fences(raw))
@@ -1412,7 +1420,7 @@ Return JSON:
             prompt=prompt,
             config=config,
             state=state,
-            model=config.audio.claude_creative_model,
+            model=resolve_model(config.models, "banter", "anthropic"),
             max_tokens=1200,
             caller="banter",
         )
@@ -1616,7 +1624,7 @@ Return JSON:
             prompt=prompt,
             config=config,
             state=state,
-            model=config.audio.claude_creative_model,
+            model=resolve_model(config.models, "news_flash", "anthropic"),
             max_tokens=300,
             caller="news_flash",
         )
@@ -1729,7 +1737,7 @@ Return JSON:
             prompt=prompt,
             config=config,
             state=state,
-            model=config.audio.claude_model,
+            model=resolve_model(config.models, "transition", "anthropic"),
             max_tokens=100,
             caller="transition",
             role=role,
@@ -1880,7 +1888,7 @@ Return JSON:
             prompt=prompt,
             config=config,
             state=state,
-            model=config.audio.claude_creative_model,
+            model=resolve_model(config.models, "ad", "anthropic"),
             max_tokens=800,
             caller="ad",
             role="ad_spot",
