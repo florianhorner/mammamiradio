@@ -1859,7 +1859,7 @@ Recently played music: {recent_tracks if recent_tracks else "show just started"}
 
 RULES:
 - Absurd but delivered with COMPLETE sincerity. The product may be insane but the pitch is 100% professional.
-- Think Italian TV shopping channel meets GTA radio meets Silvio Berlusconi's fever dream.
+- Think Italian TV shopping channel meets GTA radio meets a faded political showman's fever dream.
 - 15-25 seconds when read aloud. Keep each voice line under 30 words.
 - Follow the ad format rules above. Use the assigned speakers by their role names.
 - Open HARD. The first beat should grab attention immediately.
