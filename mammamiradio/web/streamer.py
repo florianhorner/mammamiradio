@@ -2826,6 +2826,7 @@ async def _download_admin_external_track(track: Any, app_state: Any, originating
 async def add_track(request: Request, _: None = Depends(require_admin_access)):
     """Add a track to the playlist."""
     from mammamiradio.core.models import Track
+
     body = await request.json()
     # Preserve album_art when the caller supplies one (e.g. re-adding a track that
     # already carries a cover). Live cover resolution happens on the download paths
