@@ -640,8 +640,23 @@ def test_search_ytdlp_metadata_success_parses_entries():
                 "entries": [
                     None,
                     {"id": ""},
-                    {"id": "albachiar01", "title": "Albachiara", "uploader": "Vasco Rossi", "duration": 123},
-                    {"id": "volare00001", "title": "Volare", "channel": "Modugno Channel", "duration": 0},
+                    {
+                        "id": "albachiar01",
+                        "title": "Albachiara",
+                        "uploader": "Vasco Rossi",
+                        "duration": 123,
+                        "thumbnail": "https://img.example/albachiara.jpg",
+                    },
+                    {
+                        "id": "volare00001",
+                        "title": "Volare",
+                        "channel": "Modugno Channel",
+                        "duration": 0,
+                        "thumbnails": [
+                            {"url": "https://img.example/small.jpg"},
+                            {"url": "https://img.example/large.jpg"},
+                        ],
+                    },
                 ]
             }
 
@@ -658,8 +673,10 @@ def test_search_ytdlp_metadata_success_parses_entries():
     assert results[0]["youtube_id"] == "albachiar01"
     assert results[0]["artist"] == "Vasco Rossi"
     assert results[0]["duration_ms"] == 123000
+    assert results[0]["album_art"] == "https://img.example/albachiara.jpg"
     assert results[1]["youtube_id"] == "volare00001"
     assert results[1]["artist"] == "Modugno Channel"
+    assert results[1]["album_art"] == "https://img.example/large.jpg"
 
 
 def test_search_ytdlp_metadata_sets_socket_timeout():

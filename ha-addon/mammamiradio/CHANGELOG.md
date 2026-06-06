@@ -4,6 +4,8 @@
 
 ### Added
 
+- **Admin playlist and search pagination** — Large rotations no longer over-render in the Producer Desk. Status, playlist, and search APIs expose bounded windows with load-more metadata, while artwork from Apple charts, web search results, and listener-request downloads is preserved through queueing.
+
 - **Real album covers on the now-playing screen.** When a song is on, the phone
   lock screen, CarPlay, Control Center, and the Home Assistant media card now show
   the real album artwork instead of the station logo, and it follows each track.
@@ -73,6 +75,10 @@
 - **Sports flashes are clearer and less shouty** — Sports news now uses a steadier host selection path, asks for informed radio-desk updates instead of maximum-excitement commentary, and no longer adds a dedicated sports TTS speed/pitch spike.
 
 ### Fixed
+
+- **Engine Room track count now reflects the full rotation.** The playlist size stat shows the actual number of tracks in the rotation rather than the most-recently-fetched page size.
+
+- **Loaded playlist pages no longer snap back on refresh.** Tracks added via "Load more" stay visible across status polls instead of collapsing back to the first page on the next cycle.
 
 - **Admin programme durations are now truthful.** Status payloads expose real current segment duration/progress and stream-log durations, and the admin/live/listener UIs no longer invent music, banter, or ad durations when metadata is missing.
 
