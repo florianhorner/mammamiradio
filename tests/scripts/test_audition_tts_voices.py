@@ -122,6 +122,19 @@ def test_missing_env_for_provider_is_secret_safe() -> None:
     assert audition.missing_env_for_provider("elevenlabs", env) == ("ELEVENLABS_API_KEY",)
 
 
+def test_missing_env_for_provider_honors_explicit_empty_env(monkeypatch) -> None:
+    """An explicitly-empty env means 'no credentials', even when the process env
+    has them — `env or os.environ` used to leak os.environ for a falsy `{}`."""
+    monkeypatch.setenv("AZURE_SPEECH_KEY", "leaked")
+    monkeypatch.setenv("AZURE_SPEECH_REGION", "leaked")
+    monkeypatch.setenv("ELEVENLABS_API_KEY", "leaked")
+
+    assert audition.missing_env_for_provider("azure", {}) == ("AZURE_SPEECH_KEY", "AZURE_SPEECH_REGION")
+    assert audition.missing_env_for_provider("elevenlabs", {}) == ("ELEVENLABS_API_KEY",)
+    # None (the default) still falls back to the process environment.
+    assert audition.missing_env_for_provider("azure", None) == ()
+
+
 @pytest.mark.asyncio
 async def test_run_auditions_skips_missing_cloud_credentials_without_synthesizing(tmp_path, monkeypatch) -> None:
     calls: list[tuple[str, str]] = []

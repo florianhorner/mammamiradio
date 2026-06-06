@@ -155,7 +155,11 @@ def required_env_for_provider(provider: str) -> tuple[str, ...]:
 
 
 def missing_env_for_provider(provider: str, env: Mapping[str, str] | None = None) -> tuple[str, ...]:
-    env_map = env or os.environ
+    # Honor an explicitly-passed env (including an empty mapping) — only fall back
+    # to the process environment when no env was supplied. Using `env or os.environ`
+    # treated an empty `{}` as "unset" and leaked real credentials into callers that
+    # asked for a clean environment (e.g. the strict-mode missing-credentials test).
+    env_map = env if env is not None else os.environ
     return tuple(name for name in required_env_for_provider(provider) if not env_map.get(name))
 
 
