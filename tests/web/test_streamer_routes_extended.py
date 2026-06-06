@@ -1829,6 +1829,7 @@ async def test_add_external_track_sanitizes_invalid_album_art(tmp_path):
         app = _make_test_app()
         app.state.config.cache_dir = tmp_path
         app.state.config.allow_ytdlp = True
+        starting_revision = app.state.station_state.playlist_revision
         transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
         with patch(
             "mammamiradio.playlist.downloader.download_external_track",
@@ -1851,6 +1852,8 @@ async def test_add_external_track_sanitizes_invalid_album_art(tmp_path):
         assert app.state.station_state.pinned_track is not None
         assert app.state.station_state.pinned_track.album_art == ""
         assert app.state.station_state.playlist[-1].album_art == ""
+        # The successful commit must bump the playlist revision (pagination contract).
+        assert app.state.station_state.playlist_revision == starting_revision + 1
 
 
 @pytest.mark.asyncio
@@ -2171,6 +2174,7 @@ async def test_download_listener_song_sanitizes_invalid_album_art(tmp_path):
     app = _make_test_app()
     app.state.config.cache_dir = tmp_path
     state = app.state.station_state
+    starting_revision = state.playlist_revision
     req = {"song_query": "albachiara", "message": "metti albachiara", "song_found": False, "song_error": False}
     state.pending_requests.append(req)
     with (
@@ -2197,6 +2201,8 @@ async def test_download_listener_song_sanitizes_invalid_album_art(tmp_path):
     assert req["song_track_obj"].album_art == ""
     assert state.pinned_track is not None
     assert state.pinned_track.album_art == ""
+    # The successful commit must bump the playlist revision (pagination contract).
+    assert state.playlist_revision == starting_revision + 1
 
 
 @pytest.mark.asyncio
