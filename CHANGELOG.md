@@ -8,6 +8,10 @@ The current version source of truth is `pyproject.toml`.
 
 ### Added
 
+- **An Apache-2.0 license, a code of conduct, and a security policy.** The project
+  is now openly licensed so anyone can use and build on it, with clear contribution
+  and vulnerability-reporting guidelines.
+
 - **Real album covers on the now-playing screen.** When a song is on, your phone's
   lock screen, CarPlay, and Control Center now show the actual album artwork instead
   of the station logo — and the cover follows each track as it changes. Chart songs
