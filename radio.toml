@@ -87,8 +87,8 @@ lookahead_segments = 3
 
 [[hosts]]
 name = "Marco"
-voice = "cedar"
-engine = "openai"
+voice = "o4b57JYAECRMJyCEXyIE"
+engine = "elevenlabs"
 edge_fallback_voice = "it-IT-GiuseppeMultilingualNeural"
 style = "manic energy, steamrolls every conversation, interrupts people mid-thought, says things he shouldn't on air, conspiracy theories about Italian food, gets way too personal about listeners' lives, drops obscure cinema references nobody asked for, once got suspended for a week (he's proud of it), massive ego, catastrophically bad takes delivered with total conviction, never admits he's wrong — doubles down harder when cornered, genuinely believes he is the reason people tune in"
 [hosts.personality]
@@ -100,8 +100,8 @@ nostalgia = 75
 
 [[hosts]]
 name = "Giulia"
-voice = "it-IT-Isabella:DragonHDLatestNeural"
-engine = "azure"
+voice = "fQmr8dTaOQq116mo2X7F"
+engine = "elevenlabs"
 edge_fallback_voice = "it-IT-IsabellaNeural"
 style = "razor-sharp sarcasm, cuts Marco off whenever he deserves it, openly judges the playlist, delivers devastating one-liners with zero emotion, pretends she's too good for this station but clearly loves it, will burn any caller who says something stupid, openly contemptuous of Marco's intelligence, delivers devastation with the warmth of a tax audit, treats him like a slow child she is legally obligated to work with"
 [hosts.personality]
@@ -115,8 +115,46 @@ nostalgia = 30
 sample_rate = 48000
 channels = 2
 bitrate = 192
-claude_model = "claude-haiku-4-5-20251001"
-claude_creative_model = "claude-opus-4-6"
+
+# ── Dynamic LLM routing ───────────────────────────────────────────────────
+# Script generation never names a model in code. A task asks for a ROLE; the
+# catalog maps role→model per provider; the active profile (the admin "quality
+# dial": premium|balanced|economy) selects which catalog entry each role uses.
+#
+#   task ──routing──▶ role ──profile──▶ catalog key ──catalog──▶ model id
+#
+# Swap any model = edit ONE catalog line below. No code change, no stale dropdown.
+# `fast` is pinned to the lowest-latency model in every profile (transitions are
+# latency-sensitive — a slow one risks dead air).
+[models]
+default_profile = "balanced"
+
+[models.catalog.anthropic]   # the ONLY place Anthropic model IDs live
+opus   = "claude-opus-4-8"
+sonnet = "claude-sonnet-4-6"
+haiku  = "claude-haiku-4-5-20251001"
+
+[models.catalog.openai]      # the ONLY place OpenAI model IDs live
+large = "gpt-4o"
+small = "gpt-4o-mini"
+
+[models.routing]             # task (caller) → role
+banter     = "creative"
+news_flash = "creative"
+ad         = "creative"
+transition = "fast"
+
+[models.profiles.premium]    # role → catalog key, per provider
+anthropic = { creative = "opus", fast = "haiku" }
+openai    = { creative = "large", fast = "small" }
+
+[models.profiles.balanced]   # reproduces prior behavior (creative=opus, fast=haiku)
+anthropic = { creative = "opus", fast = "haiku" }
+openai    = { creative = "small", fast = "small" }
+
+[models.profiles.economy]
+anthropic = { creative = "haiku", fast = "haiku" }
+openai    = { creative = "small", fast = "small" }
 
 [homeassistant]
 enabled = false
@@ -320,10 +358,16 @@ spokesperson = "hammer"
 escalation_rule = "Each ad reveals a worse subscription tier or a more absurd cloud-computing metaphor"
 
 [[ads.brands]]
-name = "Mausoleo Berlusconi"
+name = "Mausoleo del Presidentissimo"
 tagline = "Le donne in gonna entrano gratis. I bambini pagano doppio."
 category = "tourism"
-recurring = false
+recurring = true
+[ads.brands.campaign]
+premise = "A solemn elder statesman narrates visits to the Mausoleo del Presidentissimo as if it were a sacred national pilgrimage, reading the most absurd attractions with total deadpan gravitas"
+sonic_signature = "overblown_epic"
+format_pool = ["institutional_psa"]
+spokesperson = "bureaucrat"
+escalation_rule = "Each ad reveals a more outrageous mausoleum amenity announced with deeper, more dignified sincerity"
 
 [[ads.brands]]
 name = "Spaghetti Carbonara su Stecco"
@@ -372,6 +416,12 @@ name = "Assicurazione Fantasma"
 tagline = "Ti copriamo. Forse. Dipende dall'umore."
 category = "finance"
 recurring = true
+[ads.brands.campaign]
+premise = "A smooth, intimate voice sells phantom insurance policies that may or may not exist, making coverage sound like a personal favour you can't refuse"
+sonic_signature = "hotline_beep"
+format_pool = ["late_night_whisper"]
+spokesperson = "seductress"
+escalation_rule = "Each ad makes the policy's terms vaguer and the implied consequences of declining more unsettling"
 
 [[ads.brands]]
 name = "Palestra Domani"
@@ -403,20 +453,25 @@ tagline = "Ti portiamo dove vuoi. Ti recitiamo Dante lungo il tragitto."
 category = "services"
 recurring = false
 
+# Ad-voice pool. Several roles carry more than one voice (an ElevenLabs
+# character plus the original OpenAI/Azure voice); the caster picks one at
+# random per spot, so ad breaks vary instead of always using the same timbre.
+# The role drives the script direction (see SPEAKER_ROLES in
+# hosts/ad_creative.py); the style line documents the intended performance.
 [[ads.voices]]
-name = "Roberto"
-voice = "it-IT-Alessio:DragonHDLatestNeural"
-engine = "azure"
+name = "L'Annunciatore"
+voice = "QttbagfgqUCm9K0VgUyT"
+engine = "elevenlabs"
 edge_fallback_voice = "it-IT-DiegoNeural"
-style = "booming TV announcer, dramatic pauses, sells everything like it's the last day on earth"
+style = "textbook Italian radio ad delivery — warm confidence, rising inflection on the product name, rhythm that makes everything sound unmissable and time-limited"
 role = "hammer"
 
 [[ads.voices]]
-name = "Palmira"
-voice = "shimmer"
-engine = "openai"
-edge_fallback_voice = "it-IT-IsabellaNeural"
-style = "ASMR whisperer, unsettlingly intimate, makes toothpaste sound sensual"
+name = "Don Carmelo"
+voice = "UlwxMDtxqMDYmG6pk2q6"
+engine = "elevenlabs"
+edge_fallback_voice = "it-IT-DiegoNeural"
+style = "smooth mob-adjacent charmer, always smiling, always reasonable, makes you feel honoured and slightly terrified, sells protection plans and insurance with implications so obvious they're never stated"
 role = "seductress"
 
 [[ads.voices]]
@@ -432,6 +487,40 @@ engine = "openai"
 edge_fallback_voice = "it-IT-ElsaNeural"
 style = "overly enthusiastic infomercial host, everything is INCREDIBILE"
 role = "maniac"
+
+[[ads.voices]]
+name = "Nonno Aldo"
+voice = "NOpBlnGInO9m6vDvFkFC"
+engine = "elevenlabs"
+edge_fallback_voice = "it-IT-GiuseppeMultilingualNeural"
+style = "ancient patriarch with a trombone-deep voice, speaks with the slow deliberate weight of someone who has buried three governments, sells anything — mausoleums, crypto, sketchy supplements — with total sincerity and zero self-awareness about the contrast"
+role = "bureaucrat"
+
+[[ads.voices]]
+name = "Lo Straniero"
+voice = "rj347nCpioEmxiJbdf70"
+engine = "elevenlabs"
+edge_fallback_voice = "it-IT-DiegoNeural"
+style = "mysterious guest voice that nobody can quite place, delivers ads as if he wandered into the studio by accident and just started reading, oddly compelling"
+role = "witness"
+
+# Original OpenAI/Azure ad voices — kept alongside the ElevenLabs characters so
+# each role rotates between two timbres. Variety per ad break.
+[[ads.voices]]
+name = "Roberto"
+voice = "it-IT-Alessio:DragonHDLatestNeural"
+engine = "azure"
+edge_fallback_voice = "it-IT-DiegoNeural"
+style = "booming TV announcer, dramatic pauses, sells everything like it's the last day on earth"
+role = "hammer"
+
+[[ads.voices]]
+name = "Palmira"
+voice = "shimmer"
+engine = "openai"
+edge_fallback_voice = "it-IT-IsabellaNeural"
+style = "ASMR whisperer, unsettlingly intimate, makes toothpaste sound sensual"
+role = "seductress"
 
 [[ads.voices]]
 name = "Dottore Marzio"

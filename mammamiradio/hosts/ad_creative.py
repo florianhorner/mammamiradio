@@ -353,26 +353,26 @@ def _cast_voices(
         )
         return {role: fallback for role in roles_needed} if roles_needed else {"default": fallback}
 
-    # Build role->voice index
-    role_index: dict[str, AdVoice] = {}
+    # Build role->voices index. A role may have several voices (e.g. two
+    # "hammer" announcers from different engines); casting picks one at random
+    # so ad breaks vary instead of always using the same timbre per role.
+    role_index: dict[str, list[AdVoice]] = {}
     for v in voices:
         if v.role:
-            role_index[v.role] = v
+            role_index.setdefault(v.role, []).append(v)
 
     result: dict[str, AdVoice] = {}
     used_voices: set[str] = set()
 
     for role in roles_needed:
-        if role in role_index:
-            result[role] = role_index[role]
-            used_voices.add(role_index[role].name)
-        else:
-            # Fallback: pick a random voice not already used
-            available = [v for v in voices if v.name not in used_voices]
-            if not available:
-                available = list(voices)
-            pick = random.choice(available)
-            result[role] = pick
-            used_voices.add(pick.name)
+        candidates = role_index.get(role, [])
+        # Prefer a voice not already cast in this spot; fall back to reusing one
+        # of the role's voices, then to any voice in the pool.
+        pool = [v for v in candidates if v.name not in used_voices] or candidates
+        if not pool:
+            pool = [v for v in voices if v.name not in used_voices] or list(voices)
+        pick = random.choice(pool)
+        result[role] = pick
+        used_voices.add(pick.name)
 
     return result

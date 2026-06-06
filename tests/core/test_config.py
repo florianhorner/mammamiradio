@@ -14,6 +14,7 @@ from mammamiradio.core.config import (
     _validate,
     coerce_bool,
     load_config,
+    resolve_model,
     runtime_json,
 )
 
@@ -41,7 +42,9 @@ def test_load_config_from_radio_toml(monkeypatch):
 def test_load_config_sets_default_edge_fallback_for_openai_hosts(tmp_path):
     source = Path(__file__).resolve().parents[2] / "radio.toml"
     custom = source.read_text().replace(
-        'voice = "cedar"\nengine = "openai"\nedge_fallback_voice = "it-IT-GiuseppeMultilingualNeural"\n',
+        'voice = "o4b57JYAECRMJyCEXyIE"\n'
+        'engine = "elevenlabs"\n'
+        'edge_fallback_voice = "it-IT-GiuseppeMultilingualNeural"\n',
         'voice = "cedar"\nengine = "openai"\n',
     )
     custom_path = tmp_path / "radio.toml"
@@ -57,7 +60,9 @@ def test_load_config_sets_default_edge_fallback_for_openai_hosts(tmp_path):
 def test_load_config_normalizes_edge_host_with_openai_voice(tmp_path):
     source = Path(__file__).resolve().parents[2] / "radio.toml"
     custom = source.read_text().replace(
-        'voice = "cedar"\nengine = "openai"\nedge_fallback_voice = "it-IT-GiuseppeMultilingualNeural"',
+        'voice = "o4b57JYAECRMJyCEXyIE"\n'
+        'engine = "elevenlabs"\n'
+        'edge_fallback_voice = "it-IT-GiuseppeMultilingualNeural"',
         'voice = "cedar"\nengine = "edge"\nedge_fallback_voice = ""',
     )
     custom_path = tmp_path / "radio.toml"
@@ -90,15 +95,15 @@ def test_load_config_accepts_provider_routed_ad_voice_with_openai_id():
     toml_path = Path(__file__).resolve().parents[2] / "radio.toml"
     config = load_config(str(toml_path))
 
-    palmira = next(v for v in config.ads.voices if v.name == "Palmira")
-    assert palmira.engine == "openai"
-    assert palmira.voice == "shimmer"
-    assert palmira.edge_fallback_voice == "it-IT-IsabellaNeural"
+    fiamma = next(v for v in config.ads.voices if v.name == "Fiamma")
+    assert fiamma.engine == "openai"
+    assert fiamma.voice == "coral"
+    assert fiamma.edge_fallback_voice == "it-IT-ElsaNeural"
 
-    roberto = next(v for v in config.ads.voices if v.name == "Roberto")
-    assert roberto.engine == "azure"
-    assert roberto.voice == "it-IT-Alessio:DragonHDLatestNeural"
-    assert roberto.edge_fallback_voice == "it-IT-DiegoNeural"
+    annunciatore = next(v for v in config.ads.voices if v.name == "L'Annunciatore")
+    assert annunciatore.engine == "elevenlabs"
+    assert annunciatore.voice == "QttbagfgqUCm9K0VgUyT"
+    assert annunciatore.edge_fallback_voice == "it-IT-DiegoNeural"
 
 
 def test_audio_section_loaded():
@@ -109,8 +114,8 @@ def test_audio_section_loaded():
     assert config.audio.sample_rate == 48000
     assert config.audio.channels == 2
     assert config.audio.bitrate == 192
-    # CLAUDE_MODEL env override may be set; just check it's non-empty
-    assert config.audio.claude_model
+    # Model IDs now live in [models]; the audio section no longer carries them.
+    assert resolve_model(config.models, "banter", "anthropic")
 
 
 def test_homeassistant_section_loaded():
@@ -377,6 +382,80 @@ def test_apply_addon_options(monkeypatch, tmp_path):
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
 
 
+def test_legacy_audio_model_keys_do_not_break_boot(tmp_path):
+    """An upgraded standalone radio.toml that still has claude_model /
+    claude_creative_model / openai_script_model in [audio] must still boot —
+    the deprecated keys are dropped, not passed to AudioSection (principle #2)."""
+    repo_toml = Path(__file__).resolve().parents[2] / "radio.toml"
+    text = repo_toml.read_text()
+    legacy = (
+        "[audio]\n"
+        'claude_model = "claude-haiku-4-5-20251001"\n'
+        'claude_creative_model = "claude-opus-4-6"\n'
+        'openai_script_model = "gpt-4o-mini"\n'
+    )
+    assert "[audio]\n" in text
+    patched = text.replace("[audio]\n", legacy, 1)
+    toml_path = tmp_path / "radio.toml"
+    toml_path.write_text(patched)
+
+    config = load_config(str(toml_path))  # must not raise TypeError
+    assert resolve_model(config.models, "banter", "anthropic")
+    assert not hasattr(config.audio, "claude_model")
+
+
+def test_apply_addon_options_quality_profile_round_trips(monkeypatch, tmp_path):
+    """options.json quality_profile must populate MAMMAMIRADIO_QUALITY (so non-run.sh
+    config loads still honor the persisted quality dial)."""
+    import os
+
+    options_file = tmp_path / "options.json"
+    options_file.write_text(json.dumps({"quality_profile": "premium"}))
+    monkeypatch.delenv("MAMMAMIRADIO_QUALITY", raising=False)
+    try:
+        with patch("mammamiradio.core.config.Path") as mock_path_cls:
+            mock_path_cls.return_value = options_file
+            _apply_addon_options()
+        assert os.environ.get("MAMMAMIRADIO_QUALITY") == "premium"
+    finally:
+        os.environ.pop("MAMMAMIRADIO_QUALITY", None)
+
+
+def test_apply_addon_options_legacy_claude_model_round_trips(monkeypatch, tmp_path):
+    """Existing add-ons can still have the removed claude_model option persisted;
+    keep it as the legacy fast-role override so upgrade behavior is preserved."""
+    import os
+
+    options_file = tmp_path / "options.json"
+    options_file.write_text(json.dumps({"claude_model": "claude-sonnet-4-6"}))
+    monkeypatch.delenv("CLAUDE_MODEL", raising=False)
+    try:
+        with patch("mammamiradio.core.config.Path") as mock_path_cls:
+            mock_path_cls.return_value = options_file
+            _apply_addon_options()
+        assert os.environ.get("CLAUDE_MODEL") == "claude-sonnet-4-6"
+    finally:
+        os.environ.pop("CLAUDE_MODEL", None)
+
+
+def test_apply_addon_options_quality_profile_wins_over_legacy_claude_model(monkeypatch, tmp_path):
+    import os
+
+    options_file = tmp_path / "options.json"
+    options_file.write_text(json.dumps({"quality_profile": "premium", "claude_model": "claude-sonnet-4-6"}))
+    monkeypatch.delenv("MAMMAMIRADIO_QUALITY", raising=False)
+    monkeypatch.delenv("CLAUDE_MODEL", raising=False)
+    try:
+        with patch("mammamiradio.core.config.Path") as mock_path_cls:
+            mock_path_cls.return_value = options_file
+            _apply_addon_options()
+        assert os.environ.get("MAMMAMIRADIO_QUALITY") == "premium"
+        assert os.environ.get("CLAUDE_MODEL") is None
+    finally:
+        os.environ.pop("MAMMAMIRADIO_QUALITY", None)
+        os.environ.pop("CLAUDE_MODEL", None)
+
+
 @pytest.mark.parametrize(("value", "expected_env"), [(True, "true"), (False, "false")])
 def test_apply_addon_options_super_italian_round_trips(monkeypatch, tmp_path, value, expected_env):
     """Addon options.json super_italian_mode bool should populate the env var."""
@@ -554,15 +633,14 @@ def test_load_config_parses_voice_roles():
     toml_path = Path(__file__).resolve().parents[2] / "radio.toml"
     config = load_config(str(toml_path))
 
-    roberto = next(v for v in config.ads.voices if v.name == "Roberto")
-    assert roberto.role == "hammer"
+    annunciatore = next(v for v in config.ads.voices if v.name == "L'Annunciatore")
+    assert annunciatore.role == "hammer"
 
-    palmira = next(v for v in config.ads.voices if v.name == "Palmira")
-    assert palmira.role == "seductress"
+    don_carmelo = next(v for v in config.ads.voices if v.name == "Don Carmelo")
+    assert don_carmelo.role == "seductress"
 
-    # New voices
-    marzio = next(v for v in config.ads.voices if v.name == "Dottore Marzio")
-    assert marzio.role == "bureaucrat"
+    nonno_aldo = next(v for v in config.ads.voices if v.name == "Nonno Aldo")
+    assert nonno_aldo.role == "bureaucrat"
 
 
 def test_load_config_rejects_nonpositive_pacing_values(tmp_path):

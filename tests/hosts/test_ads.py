@@ -288,3 +288,27 @@ def test_ad_part_with_role():
 def test_ad_voice_with_role():
     voice = AdVoice(name="Roberto", voice="it-IT-GianniNeural", style="booming", role="hammer")
     assert voice.role == "hammer"
+
+
+def test_cast_voices_rotates_among_multiple_voices_for_a_role():
+    """When a role has several voices, the caster spreads picks across them so
+    ad breaks vary instead of always using the same timbre."""
+    from mammamiradio.hosts.ad_creative import _cast_voices
+
+    brand = AdBrand(name="T", tagline="t")
+    voices = [
+        AdVoice(name="Roberto", voice="it-IT-AlessioNeural", style="boom", role="hammer"),
+        AdVoice(name="Annunciatore", voice="el-id", engine="elevenlabs", style="classic", role="hammer"),
+    ]
+    picks = {_cast_voices(brand, voices, [], ["hammer"])["hammer"].name for _ in range(40)}
+    assert picks == {"Roberto", "Annunciatore"}, f"expected both voices to be cast, got {picks}"
+
+
+def test_cast_voices_single_voice_per_role_is_deterministic():
+    """A role with one voice always casts that voice (backward compatibility)."""
+    from mammamiradio.hosts.ad_creative import _cast_voices
+
+    brand = AdBrand(name="T", tagline="t")
+    voices = [AdVoice(name="Solo", voice="it-IT-DiegoNeural", style="x", role="hammer")]
+    for _ in range(10):
+        assert _cast_voices(brand, voices, [], ["hammer"])["hammer"].name == "Solo"
