@@ -1,0 +1,34 @@
+# ElevenLabs voice routing — pre-ship verification
+# branch: florianhorner/feat/azure-elevenlabs-voice-setup
+# commit: ee4600de1177e929264f0c9839c9068606c088f9
+# date (UTC): 2026-06-06T01:27:54Z
+
+## ruff check .
+All checks passed!
+
+## ruff format --check .
+168 files already formatted
+
+## mypy mammamiradio/ tests/
+Success: no issues found in 162 source files
+
+## pytest tests/ (full suite)
+2510 passed, 2 skipped, 8 deselected, 1 warning in 51.93s
+
+## make coverage-check (per-module floors)
+Required test coverage of 92.0% reached. Total coverage: 93.83%
+All coverage floors held. Total: 94% (floor: 92%)
+
+## release invariants (scripts/check-release-invariants.sh)
+  Passed: 6  Failed: 0
+All invariants passed.
+
+## runtime: TTS synthesis smoke test (real API calls, short line each)
+  PASS  elevenlabs Marco            o4b57JYAECRMJyCEXyIE  (32301 bytes)
+  PASS  elevenlabs Giulia           fQmr8dTaOQq116mo2X7F  (36333 bytes)
+  PASS  elevenlabs Nonno Aldo       NOpBlnGInO9m6vDvFkFC  (39789 bytes)
+  PASS  elevenlabs Don Carmelo      UlwxMDtxqMDYmG6pk2q6  (38637 bytes)
+  PASS  elevenlabs L'Annunciatore   QttbagfgqUCm9K0VgUyT  (37485 bytes)
+  PASS  elevenlabs Lo Straniero     rj347nCpioEmxiJbdf70  (35181 bytes)
+  PASS  azure      sweeper          (46701 bytes)
+  ElevenLabs: 6/6 voices produced real audio
