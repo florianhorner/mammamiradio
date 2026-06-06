@@ -172,6 +172,26 @@ def _purge_segment_queue(q) -> int:
     return purged
 
 
+def _purge_queue_and_shadow(q, state: StationState) -> int:
+    """Drain the real queue AND clear the UI shadow in one synchronous block.
+
+    Single home for "purge everything". Every operator purge (stop, panic,
+    source-switch, chaos-enable, festival-enable, /api/purge) routes through
+    here so the shadow (``state.queued_segments``, the "Up Next" projection) can
+    never again be left stale behind a drained real queue. The festival-enable
+    path previously drained the queue but forgot the shadow clear, leaving the
+    panel showing segments that no longer existed (the queue-shadow drift seen
+    when Festival Mode was toggled mid-stream).
+
+    Synchronous: the drain and the shadow clear happen with no ``await`` between
+    them, so a caller can keep its epoch bump / ``skip_event`` in the same
+    no-await stretch and no reader can observe the two views disagreeing.
+    """
+    purged = _purge_segment_queue(q)
+    state.queued_segments.clear()
+    return purged
+
+
 def _session_stopped_flag(config) -> Path:
     """Return the persisted operator-stop marker path."""
     return config.cache_dir / SESSION_STOPPED_FLAG
@@ -767,8 +787,7 @@ def _apply_loaded_source(
     state.switch_playlist(tracks, resolved_source)
 
     # Immediate cutover: purge queued segments and skip current playback
-    purged = _purge_segment_queue(request.app.state.queue)
-    state.queued_segments.clear()
+    purged = _purge_queue_and_shadow(request.app.state.queue, state)
     skipped = False
     if state.now_streaming:
         request.app.state.skip_event.set()
@@ -2051,8 +2070,7 @@ async def skip_track(request: Request, _: None = Depends(require_admin_access)):
 @router.post("/api/purge")
 async def purge_queue(request: Request, _: None = Depends(require_admin_access)):
     """Drain all pre-produced segments from the queue."""
-    purged = _purge_segment_queue(request.app.state.queue)
-    request.app.state.station_state.queued_segments.clear()
+    purged = _purge_queue_and_shadow(request.app.state.queue, request.app.state.station_state)
     return {"ok": True, "purged": purged}
 
 
@@ -2064,8 +2082,7 @@ async def panic_cut(request: Request, _: None = Depends(require_admin_access)):
     disconnect. Use /api/stop when a full session halt is intended.
     """
     state = request.app.state.station_state
-    purged = _purge_segment_queue(request.app.state.queue)
-    state.queued_segments.clear()
+    purged = _purge_queue_and_shadow(request.app.state.queue, state)
     if state.now_streaming:
         request.app.state.skip_event.set()
     # force_next is set AFTER skip_event to avoid the producer consuming it
@@ -2163,8 +2180,7 @@ async def stop_session(request: Request, _: None = Depends(require_admin_access)
     """Gracefully stop the station: skip current, purge queue, cancel producer."""
     state = request.app.state.station_state
     # Purge queued segments
-    purged = _purge_segment_queue(request.app.state.queue)
-    state.queued_segments.clear()
+    purged = _purge_queue_and_shadow(request.app.state.queue, state)
     # Drop any pending interrupt/forced segment so it can't fire as stale audio on
     # the next resume; unlink an ephemeral bridge temp so the stop doesn't leak it.
     if state.interrupt_slot is not None and state.interrupt_slot_ephemeral:
@@ -2481,8 +2497,7 @@ async def set_chaos(request: Request, _: None = Depends(require_admin_access)):
             state.chaos_cutover_epoch += 1
             state.chaos_audio_failures = 0
             state.chaos_last_degraded_reason = ""
-            purged = _purge_segment_queue(queue)
-            state.queued_segments.clear()
+            purged = _purge_queue_and_shadow(queue, state)
         else:
             state.chaos_mode_active = False
             state.chaos_pending = None
@@ -2681,7 +2696,7 @@ async def set_party(request: Request, _: None = Depends(require_admin_access)):
         os.environ["MAMMAMIRADIO_FESTIVAL_MODE"] = val
         if action == "enable":
             state.playlist_revision += 1
-            _purge_segment_queue(segment_queue)
+            _purge_queue_and_shadow(segment_queue, state)
             state.force_next = SegmentType.BANTER
         if config.is_addon:
             await loop.run_in_executor(None, _save_festival_addon_options, target_mode == "festival")

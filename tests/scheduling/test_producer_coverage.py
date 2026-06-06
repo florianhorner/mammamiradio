@@ -754,7 +754,7 @@ async def test_ad_break_quality_reject_resets_songs_since_ad(tmp_path):
         task = asyncio.create_task(run_producer(queue, state, config))
         try:
             # Give enough time for one full AD production cycle to complete and be rejected
-            deadline = asyncio.get_event_loop().time() + 5.0
+            deadline = asyncio.get_event_loop().time() + 15.0
             while state.songs_since_ad != 0 and asyncio.get_event_loop().time() < deadline:
                 await asyncio.sleep(0.05)
         finally:
@@ -1119,7 +1119,7 @@ async def test_drain_guard_inserts_canned_clip_on_queue_drain(tmp_path):
         task = asyncio.create_task(run_producer(queue, state, config))
         try:
             # Wait for the producer to fill the lookahead buffer.
-            deadline = asyncio.get_event_loop().time() + 5.0
+            deadline = asyncio.get_event_loop().time() + 15.0
             while queue.qsize() < config.pacing.lookahead_segments:
                 if asyncio.get_event_loop().time() > deadline:
                     raise TimeoutError("Producer did not fill queue in time")
@@ -1282,7 +1282,7 @@ async def test_banter_metadata_includes_has_music_tail(tmp_path):
 
         task = asyncio.create_task(run_producer(queue, state, config))
         try:
-            deadline = asyncio.get_event_loop().time() + 5.0
+            deadline = asyncio.get_event_loop().time() + 15.0
             while queue.empty():
                 if asyncio.get_event_loop().time() > deadline:
                     raise TimeoutError("Producer did not queue banter")

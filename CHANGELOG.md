@@ -8,6 +8,12 @@ The current version source of truth is `pyproject.toml`.
 
 ### Added
 
+- **Audition host voices by clarity, not just identity.** The voice-audition harness (`scripts/audition_tts_voices.py`) can now sweep ElevenLabs stability settings — `--elevenlabs-stability 0.42 0.6 0.75` renders the same lines at each setting so you can A/B a host's diction (low stability mumbles, higher tightens it) before committing to a voice.
+
+- **An Apache-2.0 license, a code of conduct, and a security policy.** The project
+  is now openly licensed so anyone can use and build on it, with clear contribution
+  and vulnerability-reporting guidelines.
+
 - **Admin playlist and search pagination** — Large rotations no longer over-render in the Producer Desk. `/status`, `GET /api/playlist`, and `GET /api/search` expose bounded playlist/search windows with load-more metadata, while artwork from Apple charts, web search results, and listener-request downloads is preserved through queueing.
 
 - **Real album covers on the now-playing screen.** When a song is on, your phone's
@@ -99,6 +105,8 @@ The current version source of truth is `pyproject.toml`.
 ### Fixed
 
 - **Admin load-more state stays accurate after playlist edits.** The Producer Desk now invalidates cached playlist tails when the rotation changes, hides the load-more button once all loaded rows reach the total, resets load-more buttons after network errors, and skips repeated yt-dlp lookups after web search results are exhausted.
+
+- **Festival Mode no longer leaves ghost tracks in "Up Next".** Switching Festival Mode on now clears the upcoming list at the same instant it clears the queued audio, so the panel always matches what is about to play. Every queue-clearing action now runs through one path, so the list and the audio can't drift apart again.
 
 - **Home Assistant updates now say why they fail, and shrug off a brief hiccup.** When the station can't send its now-playing status to Home Assistant, the add-on log names the real reason instead of an empty line, and the station quietly retries once after a short network blip. Listeners never notice; an operator reading the log finally gets a straight answer.
 

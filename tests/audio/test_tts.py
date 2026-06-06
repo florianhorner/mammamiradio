@@ -424,6 +424,43 @@ async def test_synthesize_elevenlabs_happy_path(_mock_all, tmp_path, monkeypatch
     _mock_all["Communicate"].assert_not_called()
 
 
+@pytest.mark.asyncio
+async def test_synthesize_elevenlabs_voice_settings_default_and_override(_mock_all, tmp_path, monkeypatch):
+    """voice_settings=None uses the house tuning; a dict merges over it — the
+    audition harness sweeps stability without changing production callers."""
+    from mammamiradio.audio.tts import synthesize_elevenlabs
+
+    monkeypatch.setenv("ELEVENLABS_API_KEY", "eleven-secret-settings")
+    seen: dict[str, object] = {}
+
+    class _ElevenClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, url, headers, json):
+            seen["json"] = json
+            return httpx.Response(200, content=b"\x00" * 512, request=httpx.Request("POST", url))
+
+    monkeypatch.setattr("mammamiradio.audio.tts.httpx.AsyncClient", _ElevenClient)
+
+    # Default: the station's house tuning (stability 0.42).
+    await synthesize_elevenlabs("Ciao", "voice_a", tmp_path / "d.mp3")
+    assert seen["json"]["voice_settings"]["stability"] == 0.42
+    assert seen["json"]["voice_settings"]["similarity_boost"] == 0.78
+
+    # Override merges over the defaults — only stability changes.
+    await synthesize_elevenlabs("Ciao", "voice_a", tmp_path / "o.mp3", voice_settings={"stability": 0.7})
+    assert seen["json"]["voice_settings"]["stability"] == 0.7
+    assert seen["json"]["voice_settings"]["similarity_boost"] == 0.78  # untouched default
+    assert seen["json"]["voice_settings"]["use_speaker_boost"] is True
+
+
 class _HttpErrorClient:
     """httpx.AsyncClient stub whose POST returns a non-2xx response.
 

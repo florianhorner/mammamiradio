@@ -217,6 +217,15 @@ Thanks to the people who've shaped `mammamiradio`:
 
 Want to contribute? See [CONTRIBUTING.md](CONTRIBUTING.md) and pick any open issue. First-time contributors are especially welcome — and are protected by the [merge-first protocol](CLAUDE.md#first-time-contributor-protocol) so your PR lands before any refactoring on top.
 
+## License
+
+The **code** in this repository is licensed under [Apache-2.0](LICENSE).
+
+That license covers the source only. It does **not** grant rights to the music the
+station plays (charts pulled via yt-dlp, Jamendo tracks, or your own local files) or
+to the AI-generated host banter and ads. You are responsible for the rights to
+whatever your station plays and says.
+
 ## Star History
 
 [![Star History Chart](https://api.star-history.com/svg?repos=florianhorner/mammamiradio&type=Date)](https://star-history.com/#florianhorner/mammamiradio&Date)

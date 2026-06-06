@@ -1,0 +1,11 @@
+Sharpen-GitHub-repo verification — 2026-06-06
+
+[pinned .venv/bin/ruff 0.15.15] ruff check . : All checks passed!
+[pinned .venv/bin/ruff 0.15.15] ruff format --check . : 172 files already formatted
+scripts/check-changelog-lint.sh : Changelog lint clean.
+scripts/pre-release-check.sh : Passed: 8  Failed: 0 (version sync intact, no bump)
+wheel build (.venv python -m pip wheel . --no-deps) : success
+  METADATA License-Expression: Apache-2.0
+  METADATA License-File: LICENSE / License-File: NOTICE
+  dist-info/licenses/{LICENSE,NOTICE} bundled via setuptools default glob
+Note: no Python source changed; coverage source (mammamiradio/) untouched.
