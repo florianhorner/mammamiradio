@@ -1633,6 +1633,96 @@ async def test_push_state_to_ha_normal(reset_ha_push_debounce):
     assert bs_call.kwargs["json"]["state"] == "on"
 
 
+@pytest.mark.asyncio
+async def test_push_state_to_ha_logs_typed_error_and_retries_on_transient(reset_ha_push_debounce, caplog):
+    """A transient network error logs the exception TYPE + repr (never blank) and
+    is retried exactly once per entity (4 entities x 2 attempts = 8 POSTs)."""
+    import logging
+
+    import httpx
+
+    mock_client = AsyncMock()
+    mock_client.post.side_effect = httpx.ReadTimeout("timed out")
+
+    with (
+        patch("mammamiradio.home.ha_context._get_ha_client", return_value=mock_client),
+        caplog.at_level(logging.WARNING, logger="mammamiradio.home.ha_context"),
+    ):
+        await push_state_to_ha(
+            ha_url="http://ha.local:8123",
+            ha_token="test-token",
+            now_streaming={"type": "music", "label": "Volare", "metadata": {"title": "Volare"}},
+            current_track=None,
+            listeners_active=1,
+            session_stopped=False,
+        )
+
+    # 4 entities, one bounded retry each → 8 POST attempts.
+    assert mock_client.post.call_count == 8
+    text = caplog.text
+    assert "after retry" in text
+    assert "ReadTimeout" in text  # typed, never the old blank string
+    assert "HA push failed for" in text
+
+
+@pytest.mark.asyncio
+async def test_push_state_to_ha_logs_http_body_on_4xx_without_retry(reset_ha_push_debounce, caplog):
+    """A 4xx response logs the status AND the body, and is NOT retried."""
+    import logging
+
+    mock_resp = MagicMock(status_code=401)
+    mock_resp.text = "401: Unauthorized"
+    mock_client = AsyncMock()
+    mock_client.post.return_value = mock_resp
+
+    with (
+        patch("mammamiradio.home.ha_context._get_ha_client", return_value=mock_client),
+        caplog.at_level(logging.WARNING, logger="mammamiradio.home.ha_context"),
+    ):
+        await push_state_to_ha(
+            ha_url="http://ha.local:8123",
+            ha_token="test-token",
+            now_streaming={"type": "music", "label": "Volare", "metadata": {"title": "Volare"}},
+            current_track=None,
+            listeners_active=1,
+            session_stopped=False,
+        )
+
+    # 4 entities, no retry on HTTP errors → exactly 4 POSTs.
+    assert mock_client.post.call_count == 4
+    assert "HTTP 401" in caplog.text
+    assert "Unauthorized" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_push_state_to_ha_retry_then_success_is_silent(reset_ha_push_debounce, caplog):
+    """A transient failure followed by success on retry logs nothing for that entity."""
+    import logging
+
+    import httpx
+
+    ok = MagicMock(status_code=200)
+    mock_client = AsyncMock()
+    # Every entity: first attempt times out, second attempt succeeds.
+    mock_client.post.side_effect = [httpx.ConnectError("boom"), ok] * 4
+
+    with (
+        patch("mammamiradio.home.ha_context._get_ha_client", return_value=mock_client),
+        caplog.at_level(logging.WARNING, logger="mammamiradio.home.ha_context"),
+    ):
+        await push_state_to_ha(
+            ha_url="http://ha.local:8123",
+            ha_token="test-token",
+            now_streaming={"type": "music", "label": "Volare", "metadata": {"title": "Volare"}},
+            current_track=None,
+            listeners_active=1,
+            session_stopped=False,
+        )
+
+    assert mock_client.post.call_count == 8  # 4 entities x (fail + succeed)
+    assert "HA push failed" not in caplog.text
+
+
 def _mp_attrs(mock_client):
     mp_call = next(c for c in mock_client.post.call_args_list if "media_player" in c.args[0])
     return mp_call.kwargs["json"]["attributes"]
@@ -1944,13 +2034,12 @@ async def test_push_state_to_ha_floors_blank_station_name(reset_ha_push_debounce
 
 @pytest.mark.asyncio
 async def test_push_state_to_ha_ha_unreachable_continues(reset_ha_push_debounce):
-    """If first POST raises ConnectError, warning is logged and remaining 3 POSTs still fire."""
-    call_count = 0
+    """A persistently unreachable entity is retried once, then logged with the typed
+    'after retry' format; the other 3 entities still POST successfully."""
 
     async def _post_side_effect(*args, **kwargs):
-        nonlocal call_count
-        call_count += 1
-        if call_count == 1:
+        url = args[0] if args else kwargs.get("url", "")
+        if "media_player" in url:
             raise httpx.ConnectError("unreachable")
         return MagicMock(status_code=200)
 
@@ -1970,21 +2059,23 @@ async def test_push_state_to_ha_ha_unreachable_continues(reset_ha_push_debounce)
             session_stopped=False,
         )
 
-    assert call_count == 4
+    # media_player retried once (2 attempts) + 3 healthy entities = 5 POSTs.
+    assert mock_client.post.call_count == 5
     mock_logger.warning.assert_called_once()
-    assert "media_player.mammamiradio" in mock_logger.warning.call_args.args[1]
+    assert mock_logger.warning.call_args.args[1] == "media_player.mammamiradio"
+    assert "after retry" in mock_logger.warning.call_args.args[0]
 
 
 @pytest.mark.asyncio
 async def test_push_state_to_ha_http_error_warns_and_continues(reset_ha_push_debounce):
-    """HTTP 4xx/5xx responses are logged per entity without aborting the batch."""
+    """HTTP 4xx/5xx responses are logged per entity (with body slot) and NOT retried."""
+
+    async def _post_side_effect(*args, **kwargs):
+        url = args[0] if args else kwargs.get("url", "")
+        return MagicMock(status_code=503 if "segment_type" in url else 200)
+
     mock_client = AsyncMock()
-    mock_client.post.side_effect = [
-        MagicMock(status_code=200),
-        MagicMock(status_code=503),
-        MagicMock(status_code=200),
-        MagicMock(status_code=200),
-    ]
+    mock_client.post.side_effect = _post_side_effect
 
     with (
         patch("mammamiradio.home.ha_context._get_ha_client", return_value=mock_client),
@@ -1999,11 +2090,13 @@ async def test_push_state_to_ha_http_error_warns_and_continues(reset_ha_push_deb
             session_stopped=False,
         )
 
+    # HTTP errors are not retried → exactly 4 POSTs.
     assert mock_client.post.call_count == 4
     mock_logger.warning.assert_called_once_with(
-        "HA push failed for %s: HTTP %d",
+        "HA push failed for %s: HTTP %d%s",
         "sensor.mammamiradio_segment_type",
         503,
+        "",
     )
 
 
@@ -2213,13 +2306,11 @@ async def test_push_state_to_ha_trailing_slash(reset_ha_push_debounce):
 
 @pytest.mark.asyncio
 async def test_push_state_to_ha_partial_failure_continues(reset_ha_push_debounce):
-    """If second POST times out, entities 3 and 4 still POST successfully."""
-    call_count = 0
+    """A timing-out entity is retried once, then logged; the others still POST."""
 
     async def _post_side_effect(*args, **kwargs):
-        nonlocal call_count
-        call_count += 1
-        if call_count == 2:
+        url = args[0] if args else kwargs.get("url", "")
+        if "segment_type" in url:
             raise httpx.TimeoutException("timeout")
         return MagicMock(status_code=200)
 
@@ -2239,10 +2330,11 @@ async def test_push_state_to_ha_partial_failure_continues(reset_ha_push_debounce
             session_stopped=False,
         )
 
-    assert call_count == 4  # all 4 attempted despite POST 2 failing
+    # segment_type retried once (2 attempts) + 3 healthy entities = 5 POSTs.
+    assert mock_client.post.call_count == 5
     mock_logger.warning.assert_called_once()
-    # The entity that failed (index 1 = sensor.mammamiradio_segment_type) is named in the warning
-    assert "sensor.mammamiradio_segment_type" in mock_logger.warning.call_args.args[1]
+    assert mock_logger.warning.call_args.args[1] == "sensor.mammamiradio_segment_type"
+    assert "after retry" in mock_logger.warning.call_args.args[0]
 
 
 # ---------------------------------------------------------------------------
