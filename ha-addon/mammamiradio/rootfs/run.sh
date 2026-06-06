@@ -32,11 +32,15 @@ for key in (
     if val:
         env_key = key.upper()
         print(f'export {env_key}={shlex.quote(str(val))}')
-# Quality dial → model profile. Missing/blank defaults to 'balanced', which
-# reproduces the prior model mapping exactly (zero behavior change on upgrade
-# from the old claude_model dropdown).
+# Quality dial → model profile. Missing/blank defaults to 'balanced'. Existing
+# add-ons may still have the removed claude_model option in /data/options.json;
+# keep honoring it as the legacy fast-role override until the operator saves the
+# new quality_profile option.
 quality = opts.get('quality_profile') or 'balanced'
 print('export MAMMAMIRADIO_QUALITY=' + shlex.quote(str(quality)))
+legacy_claude_model = opts.get('claude_model') if not opts.get('quality_profile') else ''
+if legacy_claude_model:
+    print('export CLAUDE_MODEL=' + shlex.quote(str(legacy_claude_model)))
 enabled = opts.get('enable_home_assistant', True)
 ha_val = 'true' if enabled else 'false'
 print('export HA_ENABLED=' + ha_val)

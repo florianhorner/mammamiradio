@@ -189,17 +189,29 @@ async def check_provider_keys(config: StationConfig, *, timeout_s: float = 12.0)
 
         if config.openai_api_key:
             openai_headers = {"Authorization": f"Bearer {config.openai_api_key}"}
-            status, body = await _post_json(
-                client,
-                "https://api.openai.com/v1/chat/completions",
-                headers=openai_headers,
-                payload={
-                    "model": resolve_model(config.models, None, "openai"),
-                    "max_tokens": 1,
-                    "messages": [{"role": "user", "content": "Reply ok."}],
-                },
-            )
-            results["openai_chat"] = _result("openai_chat", status, body, secrets=(config.openai_api_key,))
+            # Mirror the Anthropic check: dynamic routing can use different
+            # OpenAI chat models for creative copy and fast transitions.
+            openai_models: list[str] = []
+            for _caller in ("banter", "transition"):
+                _m = resolve_model(config.models, _caller, "openai")
+                if _m not in openai_models:
+                    openai_models.append(_m)
+            openai_result = results["openai_chat"]
+            for _m in openai_models:
+                status, body = await _post_json(
+                    client,
+                    "https://api.openai.com/v1/chat/completions",
+                    headers=openai_headers,
+                    payload={
+                        "model": _m,
+                        "max_tokens": 1,
+                        "messages": [{"role": "user", "content": "Reply ok."}],
+                    },
+                )
+                openai_result = _result("openai_chat", status, body, secrets=(config.openai_api_key,))
+                if not openai_result["ok"]:
+                    break
+            results["openai_chat"] = openai_result
 
             status, body = await _post_json(
                 client,

@@ -246,9 +246,14 @@ def _parse_models_section(raw: dict) -> ModelsSection:
         if not catalog or not profiles:
             raise ValueError("models.catalog and models.profiles must be non-empty")
         default_profile = section.get("default_profile", "balanced")
+        # Merge operator routing OVER the built-in defaults: a partial or empty
+        # [models.routing] must not drop the transition→fast mapping, or
+        # transitions would silently resolve to the creative (slow) model and
+        # risk dead air between songs. Operator entries still win.
+        merged_routing = {**_DEFAULT_ROUTING, **{str(t): str(r) for t, r in routing.items()}}
         return ModelsSection(
             catalog={str(p): {str(k): str(v) for k, v in m.items()} for p, m in catalog.items()},
-            routing={str(t): str(r) for t, r in routing.items()},
+            routing=merged_routing,
             profiles={
                 str(pf): {str(pr): {str(role): str(key) for role, key in rm.items()} for pr, rm in provs.items()}
                 for pf, provs in profiles.items()
@@ -265,26 +270,28 @@ def _parse_models_section(raw: dict) -> ModelsSection:
 
 
 def _apply_model_env_overrides(models: ModelsSection) -> None:
-    """Back-compat env overrides. Each var replaces the catalog VALUE at the key
-    its role resolves to under the default profile, so the override takes effect
-    under any profile that references that key (precedence: env > catalog).
+    """Back-compat env overrides.
 
     - CLAUDE_CREATIVE_MODEL → anthropic creative-role model
     - CLAUDE_MODEL          → anthropic fast-role model
     - OPENAI_SCRIPT_MODEL   → every OpenAI catalog entry (one global OpenAI fallback model)
+
+    Anthropic overrides get dedicated catalog keys instead of rewriting whatever
+    key a profile currently points at. Economy maps creative and fast to the same
+    `haiku` key; mutating that shared key would make balanced/premium
+    transitions inherit a creative override and risk slow inter-song links.
     """
     creative_env = os.getenv("CLAUDE_CREATIVE_MODEL")
     fast_env = os.getenv("CLAUDE_MODEL")
-    # Patch the catalog key for every profile so the override is honored
-    # regardless of which quality profile is active (not just the default one).
-    # Process fast before creative so that when both roles map to the same catalog
-    # key (e.g. economy: creative=haiku, fast=haiku) the creative override wins.
-    for prof_data in models.profiles.values():
-        anth = prof_data.get("anthropic", {})
-        if fast_env and anth.get("fast"):
-            models.catalog.setdefault("anthropic", {})[anth["fast"]] = fast_env
-        if creative_env and anth.get("creative"):
-            models.catalog.setdefault("anthropic", {})[anth["creative"]] = creative_env
+    anth_catalog = models.catalog.setdefault("anthropic", {})
+    if fast_env:
+        anth_catalog["__env_fast"] = fast_env
+        for prof_data in models.profiles.values():
+            prof_data.setdefault("anthropic", {})["fast"] = "__env_fast"
+    if creative_env:
+        anth_catalog["__env_creative"] = creative_env
+        for prof_data in models.profiles.values():
+            prof_data.setdefault("anthropic", {})["creative"] = "__env_creative"
     openai_env = os.getenv("OPENAI_SCRIPT_MODEL")
     if openai_env:
         for key in models.catalog.get("openai", {}):
@@ -857,6 +864,9 @@ def _apply_addon_options() -> None:
     qp = options.get("quality_profile")
     if isinstance(qp, str) and qp and not os.getenv("MAMMAMIRADIO_QUALITY"):
         os.environ["MAMMAMIRADIO_QUALITY"] = qp
+    legacy_claude_model = options.get("claude_model") if not qp else None
+    if isinstance(legacy_claude_model, str) and legacy_claude_model and not os.getenv("CLAUDE_MODEL"):
+        os.environ["CLAUDE_MODEL"] = legacy_claude_model
 
 
 def _parse_brand(raw: dict, hosts: list[HostPersonality]) -> tuple[BrandSection, list[str]]:

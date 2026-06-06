@@ -417,6 +417,41 @@ def test_apply_addon_options_quality_profile_round_trips(monkeypatch, tmp_path):
         os.environ.pop("MAMMAMIRADIO_QUALITY", None)
 
 
+def test_apply_addon_options_legacy_claude_model_round_trips(monkeypatch, tmp_path):
+    """Existing add-ons can still have the removed claude_model option persisted;
+    keep it as the legacy fast-role override so upgrade behavior is preserved."""
+    import os
+
+    options_file = tmp_path / "options.json"
+    options_file.write_text(json.dumps({"claude_model": "claude-sonnet-4-6"}))
+    monkeypatch.delenv("CLAUDE_MODEL", raising=False)
+    try:
+        with patch("mammamiradio.core.config.Path") as mock_path_cls:
+            mock_path_cls.return_value = options_file
+            _apply_addon_options()
+        assert os.environ.get("CLAUDE_MODEL") == "claude-sonnet-4-6"
+    finally:
+        os.environ.pop("CLAUDE_MODEL", None)
+
+
+def test_apply_addon_options_quality_profile_wins_over_legacy_claude_model(monkeypatch, tmp_path):
+    import os
+
+    options_file = tmp_path / "options.json"
+    options_file.write_text(json.dumps({"quality_profile": "premium", "claude_model": "claude-sonnet-4-6"}))
+    monkeypatch.delenv("MAMMAMIRADIO_QUALITY", raising=False)
+    monkeypatch.delenv("CLAUDE_MODEL", raising=False)
+    try:
+        with patch("mammamiradio.core.config.Path") as mock_path_cls:
+            mock_path_cls.return_value = options_file
+            _apply_addon_options()
+        assert os.environ.get("MAMMAMIRADIO_QUALITY") == "premium"
+        assert os.environ.get("CLAUDE_MODEL") is None
+    finally:
+        os.environ.pop("MAMMAMIRADIO_QUALITY", None)
+        os.environ.pop("CLAUDE_MODEL", None)
+
+
 @pytest.mark.parametrize(("value", "expected_env"), [(True, "true"), (False, "false")])
 def test_apply_addon_options_super_italian_round_trips(monkeypatch, tmp_path, value, expected_env):
     """Addon options.json super_italian_mode bool should populate the env var."""

@@ -141,6 +141,20 @@ def test_empty_catalog_degrades():
     assert m.catalog  # non-empty after degrade
 
 
+def test_partial_models_config_without_routing_keeps_fast_transitions():
+    m = _parse_models_section(
+        {
+            "models": {
+                "catalog": {"anthropic": {"creative_key": "creative-model", "fast_key": "fast-model"}},
+                "profiles": {"balanced": {"anthropic": {"creative": "creative_key", "fast": "fast_key"}}},
+                "default_profile": "balanced",
+            }
+        }
+    )
+    assert resolve_model(m, "banter", "anthropic") == "creative-model"
+    assert resolve_model(m, "transition", "anthropic") == "fast-model"
+
+
 def test_validate_models_degrades_on_unresolved_role(monkeypatch):
     """A keyed provider whose active profile can't resolve a routed role must
     degrade to DEFAULT_MODELS, not stop the station."""

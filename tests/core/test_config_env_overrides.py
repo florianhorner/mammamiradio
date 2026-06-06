@@ -92,8 +92,10 @@ def test_defaults_without_overrides(monkeypatch):
 def test_claude_creative_model_override(monkeypatch):
     """CLAUDE_CREATIVE_MODEL (back-compat) overrides the creative-role Anthropic model."""
     monkeypatch.setenv("CLAUDE_CREATIVE_MODEL", "claude-opus-4-6")
+    monkeypatch.delenv("CLAUDE_MODEL", raising=False)
     config = load_config(TOML_PATH)
     assert resolve_model(config.models, "banter", "anthropic") == "claude-opus-4-6"
+    assert resolve_model(config.models, "transition", "anthropic") == "claude-haiku-4-5-20251001"
 
 
 def test_claude_creative_model_override_under_economy_profile(monkeypatch):
@@ -107,6 +109,18 @@ def test_claude_creative_model_override_under_economy_profile(monkeypatch):
     monkeypatch.setenv("MAMMAMIRADIO_QUALITY", "economy")
     config = load_config(TOML_PATH)
     assert resolve_model(config.models, "banter", "anthropic") == "claude-opus-4-6"
+    assert resolve_model(config.models, "transition", "anthropic") == "claude-haiku-4-5-20251001"
+
+
+def test_claude_model_override_under_economy_does_not_override_creative(monkeypatch):
+    """CLAUDE_MODEL targets only the fast role even when economy normally shares
+    the haiku catalog key between creative and fast."""
+    monkeypatch.setenv("CLAUDE_MODEL", "claude-sonnet-4-6")
+    monkeypatch.delenv("CLAUDE_CREATIVE_MODEL", raising=False)
+    monkeypatch.setenv("MAMMAMIRADIO_QUALITY", "economy")
+    config = load_config(TOML_PATH)
+    assert resolve_model(config.models, "transition", "anthropic") == "claude-sonnet-4-6"
+    assert resolve_model(config.models, "banter", "anthropic") == "claude-haiku-4-5-20251001"
 
 
 def test_openai_script_model_override(monkeypatch):

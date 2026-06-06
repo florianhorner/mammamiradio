@@ -91,6 +91,23 @@ async def test_post_quality_applies_and_persists_standalone(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_post_quality_persistence_failure_does_not_change_live_profile(monkeypatch):
+    app = _make_test_app(is_addon=False)
+    monkeypatch.delenv("MAMMAMIRADIO_QUALITY", raising=False)
+    assert app.state.config.models.active_profile == "balanced"
+    with patch("mammamiradio.web.streamer._save_dotenv", side_effect=OSError("disk full")):
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app, client=("127.0.0.1", 1)), base_url="http://testserver"
+        ) as client:
+            resp = await client.post("/api/quality", json={"quality_profile": "premium"})
+
+    assert resp.status_code == 500
+    assert resp.json()["ok"] is False
+    assert app.state.config.models.active_profile == "balanced"
+    assert os.environ.get("MAMMAMIRADIO_QUALITY") is None
+
+
+@pytest.mark.asyncio
 async def test_post_quality_swap_does_not_purge_queue():
     """Principle #1: switching the dial must NOT touch the queue or skip the
     current segment — the in-flight segment finishes airing untouched."""

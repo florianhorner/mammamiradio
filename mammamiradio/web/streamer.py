@@ -2530,12 +2530,16 @@ async def set_quality(request: Request, _: None = Depends(require_admin_access))
         return {"ok": False, "error": f"quality_profile must be one of {sorted(config.models.profiles)}"}
     loop = asyncio.get_running_loop()
     async with _quality_lock:
+        try:
+            if config.is_addon:
+                await loop.run_in_executor(None, _save_addon_option, "quality_profile", profile)
+            else:
+                await loop.run_in_executor(None, _save_dotenv, {"MAMMAMIRADIO_QUALITY": profile})
+        except Exception as exc:
+            logger.warning("Failed to persist quality_profile=%s: %s", profile, exc)
+            return JSONResponse({"ok": False, "error": "failed to persist quality_profile"}, status_code=500)
         config.models.active_profile = profile
         os.environ["MAMMAMIRADIO_QUALITY"] = profile
-        if config.is_addon:
-            await loop.run_in_executor(None, _save_addon_option, "quality_profile", profile)
-        else:
-            await loop.run_in_executor(None, _save_dotenv, {"MAMMAMIRADIO_QUALITY": profile})
     return {"ok": True, "active_profile": profile}
 
 

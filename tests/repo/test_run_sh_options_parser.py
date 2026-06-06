@@ -179,6 +179,24 @@ def test_parser_quality_profile_defaults_to_balanced():
     assert exports["MAMMAMIRADIO_QUALITY"] == "balanced"
 
 
+def test_parser_preserves_legacy_claude_model_when_quality_profile_missing():
+    """Existing add-ons can carry claude_model in options.json after the schema
+    migrates; run.sh must keep it as the legacy fast-model override."""
+    rc, stdout, _ = _run_parser({"claude_model": "claude-sonnet-4-6"})
+    assert rc == 0
+    exports = _parse_exports(stdout)
+    assert exports["MAMMAMIRADIO_QUALITY"] == "balanced"
+    assert exports["CLAUDE_MODEL"] == "claude-sonnet-4-6"
+
+
+def test_parser_quality_profile_wins_over_legacy_claude_model():
+    rc, stdout, _ = _run_parser({"quality_profile": "premium", "claude_model": "claude-sonnet-4-6"})
+    assert rc == 0
+    exports = _parse_exports(stdout)
+    assert exports["MAMMAMIRADIO_QUALITY"] == "premium"
+    assert "CLAUDE_MODEL" not in exports
+
+
 def test_parser_fails_on_corrupt_json():
     """Corrupt options.json must exit non-zero, not silently continue."""
     import tempfile
