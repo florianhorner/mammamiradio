@@ -320,12 +320,12 @@ spokesperson = "hammer"
 escalation_rule = "Each ad reveals a worse subscription tier or a more absurd cloud-computing metaphor"
 
 [[ads.brands]]
-name = "Mausoleo Berlusconi"
+name = "Mausoleo del Presidentissimo"
 tagline = "Le donne in gonna entrano gratis. I bambini pagano doppio."
 category = "tourism"
 recurring = true
 [ads.brands.campaign]
-premise = "A solemn elder statesman narrates visits to the Mausoleo Berlusconi as if it were a sacred national pilgrimage, reading the most absurd attractions with total deadpan gravitas"
+premise = "A solemn elder statesman narrates visits to the Mausoleo del Presidentissimo as if it were a sacred national pilgrimage, reading the most absurd attractions with total deadpan gravitas"
 sonic_signature = "overblown_epic"
 format_pool = ["institutional_psa"]
 spokesperson = "bureaucrat"
