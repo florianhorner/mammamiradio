@@ -113,6 +113,31 @@ def test_manual_voice_specs_support_provider_prefixed_ids_with_colons() -> None:
     ]
 
 
+def test_expand_stability_variants_fans_out_elevenlabs_only() -> None:
+    targets = [
+        audition.VoiceAuditionTarget(provider="elevenlabs", voice="v1", label="host-marco", source="configured"),
+        audition.VoiceAuditionTarget(
+            provider="edge", voice="it-IT-DiegoNeural", label="catalog-edge", source="catalog"
+        ),
+    ]
+
+    expanded = audition.expand_stability_variants(targets, [0.42, 0.6])
+
+    by_label = {t.label: t for t in expanded}
+    # Edge target passes through untouched; ElevenLabs fans out into one clip per stability.
+    assert by_label["catalog-edge"].voice_settings is None
+    assert by_label["host-marco-stab42"].voice_settings == {"stability": 0.42}
+    assert by_label["host-marco-stab60"].voice_settings == {"stability": 0.6}
+    # The voice id is preserved on every variant — only the settings/label differ.
+    assert all(t.voice == "v1" for t in expanded if t.provider == "elevenlabs")
+
+
+def test_expand_stability_variants_noop_when_empty() -> None:
+    targets = [audition.VoiceAuditionTarget(provider="elevenlabs", voice="v1", label="m", source="configured")]
+    assert audition.expand_stability_variants(targets, None) is targets
+    assert audition.expand_stability_variants(targets, []) is targets
+
+
 def test_missing_env_for_provider_is_secret_safe() -> None:
     env = {"OPENAI_API_KEY": "sk-test", "AZURE_SPEECH_KEY": "azure-key"}
 

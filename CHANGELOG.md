@@ -8,6 +8,8 @@ The current version source of truth is `pyproject.toml`.
 
 ### Added
 
+- **Audition host voices by clarity, not just identity.** The voice-audition harness (`scripts/audition_tts_voices.py`) can now sweep ElevenLabs stability settings — `--elevenlabs-stability 0.42 0.6 0.75` renders the same lines at each setting so you can A/B a host's diction (low stability mumbles, higher tightens it) before committing to a voice.
+
 - **An Apache-2.0 license, a code of conduct, and a security policy.** The project
   is now openly licensed so anyone can use and build on it, with clear contribution
   and vulnerability-reporting guidelines.
