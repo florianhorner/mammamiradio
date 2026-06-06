@@ -78,6 +78,8 @@
 
 - **Admin load-more state stays accurate after playlist edits.** The Producer Desk now invalidates cached playlist tails when the rotation changes, hides the load-more button once all loaded rows reach the total, resets load-more buttons after network errors, and skips repeated yt-dlp lookups after web search results are exhausted.
 
+- **Home Assistant updates now say why they fail, and shrug off a brief hiccup.** When the station can't send its now-playing status to Home Assistant, the add-on log names the real reason instead of an empty line, and the station quietly retries once after a short network blip. Listeners never notice; an operator reading the log finally gets a straight answer.
+
 - **Engine Room track count now reflects the full rotation.** The playlist size stat shows the actual number of tracks in the rotation rather than the most-recently-fetched page size.
 
 - **Loaded playlist pages no longer snap back on refresh.** Tracks added via "Load more" stay visible across status polls instead of collapsing back to the first page on the next cycle.

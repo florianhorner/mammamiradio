@@ -1,0 +1,25 @@
+mammamiradio — fix(ha): typed errors + one bounded retry on HA state-push failures
+branch: florianhorner/fix/host-voice-quality-and-prod-lag
+base: origin/main @ d12466b2 (merged before testing)
+
+Full test suite (merged + change applied):
+  2605 passed, 2 skipped, 8 deselected in 57.67s
+
+HA context module (tests/home/test_ha_context.py):
+  152 passed
+  includes 3 new + 3 updated push_state_to_ha tests:
+    - test_push_state_to_ha_logs_typed_error_and_retries_on_transient
+    - test_push_state_to_ha_logs_http_body_on_4xx_without_retry
+    - test_push_state_to_ha_retry_then_success_is_silent
+    - test_push_state_to_ha_ha_unreachable_continues   (rewritten, URL-keyed)
+    - test_push_state_to_ha_http_error_warns_and_continues (rewritten, URL-keyed)
+    - test_push_state_to_ha_partial_failure_continues  (rewritten, URL-keyed)
+
+Lint / format / typecheck (changed files):
+  ruff check ................. All checks passed
+  ruff format --check ........ 2 files already formatted
+  mypy mammamiradio/home/ha_context.py ... Success: no issues found
+
+Adversarial pre-ship review (chaos-engineer subagent): No P0/P1 issues — verified
+retry-loop exit paths, TransportError class coverage, CancelledError propagation,
+stale-replay safety under _get_ha_push_lock(), latency stays off the audio loop.
