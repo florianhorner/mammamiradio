@@ -1,0 +1,18 @@
+# Proof: tests for feat(audio) per-segment and per-stage render timing
+# branch: feat/producer-render-timing
+
+## unit: pytest tests/audio/test_normalizer_unit.py tests/scheduling/test_producer.py tests/audio/test_loudness_reconcile.py -q
+........................................................................ [ 84%]
+.............                                                            [100%]
+85 passed, 2 deselected in 1.96s
+
+## new test: test_run_ffmpeg_logs_stage_timing_at_debug (asserts DEBUG per-stage timing line)
+
+## lint+format: ruff (normalizer.py, producer.py, test_normalizer_unit.py)
+All checks passed!
+3 files already formatted
+
+## typecheck: mypy mammamiradio/audio/normalizer.py mammamiradio/scheduling/producer.py
+Success: no issues found in 2 source files
+
+## full suite: pytest tests/ -q -> 2656 passed, 2 skipped, 13 deselected

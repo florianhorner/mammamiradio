@@ -8,6 +8,8 @@ The current version source of truth is `pyproject.toml`.
 
 ### Added
 
+- **The station logs how long each segment took to build.** Every segment the producer builds now records its total prep time on one line, and with logs turned up to debug you get a per-step breakdown of the audio work (normalize, loudness, mixing) that pinpoints the slow step. When the music ever runs thin, you can see exactly where the time went instead of guessing.
+
 - **Shuffle the rotation backlog in one click.** The Shuffle button in the Rotazione panel instantly randomises the entire track order — useful when you've just enriched the pool with a new era or source and want the mix to start fresh instead of front-loading the new arrivals.
 
 - **Trigger a host break and it airs next, not minutes later.** Hit Trigger for a banter, ad, or news flash and the station now slots it in right after the current song — instead of behind everything already queued — so the moment you want lands on air at the next break. Tap once: if you tap again while the first pick is still cueing, you get a gentle "give the tape decks a few seconds" rather than two stacking up.

@@ -140,6 +140,37 @@ ffmpeg -version
 
 The app logs the tail of stderr from failing ffmpeg commands, so the logs usually tell you which sub-step died.
 
+## The music runs thin or a segment takes too long to build
+
+If the queue is draining faster than segments are produced (you may see a
+`Queue empty during active playback` bridge in the logs), find out which step is
+slow before changing anything.
+
+Every segment the producer builds logs its total build time at `INFO` (this is
+wall-clock from pick to queued, so for banter/ads it also includes the script
+and Home Assistant lookups, not just the audio work):
+
+```text
+Queued music in 79.2s (queue size: 2)
+```
+
+For the precise per-step audio attribution, raise the log level to `DEBUG`
+(`LOG_LEVEL=DEBUG`)
+for one session. Each ffmpeg stage then logs its own wall time, labelled by what
+it was doing, so you can attribute the seconds:
+
+```text
+ffmpeg stage measure_lufs youtube_x.mp3: 3.10s
+ffmpeg stage normalize youtube_x.mp3: 41.80s
+ffmpeg stage LUFS reconcile (-4.2 dB) music_x.mp3: 31.40s
+ffmpeg stage mix voice with talk bed: 34.90s
+```
+
+On the Pi these are single-threaded full-file re-encodes, so a music track that
+needs both a normalize pass and a loudness-reconcile re-encode is the usual
+culprit. A normalization cache hit on an already-reconciled file skips both and
+should log near-instant stages.
+
 ## Tests fail during collection
 
 If you see import errors like `ModuleNotFoundError: No module named 'dotenv'`, you are running tests outside the project env.
