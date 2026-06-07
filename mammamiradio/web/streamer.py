@@ -2188,6 +2188,7 @@ async def stop_session(request: Request, _: None = Depends(require_admin_access)
     state.interrupt_slot = None
     state.interrupt_slot_ephemeral = False
     state.force_next = None
+    state.operator_force_pending = None
     # Skip current segment
     if state.now_streaming:
         request.app.state.skip_event.set()
@@ -2224,6 +2225,9 @@ async def trigger_segment(request: Request, _: None = Depends(require_admin_acce
 
     state = request.app.state.station_state
     state.force_next = valid[seg_type]
+    # Attribute this force to the operator so the admin panel can surface it as a
+    # deliberate trigger (internal forces never set this — see StationState).
+    state.operator_force_pending = valid[seg_type]
     return {"ok": True, "triggered": seg_type}
 
 
@@ -3631,6 +3635,12 @@ async def status(
     payload.update(
         {
             "queue_depth": segment_queue.qsize(),
+            # Honest airtime-ahead readout for the admin panel: the summed
+            # duration of the rendered queue. Surfaces SECONDS of buffered audio,
+            # not item count (3 short banters are not 3 songs of runway). The
+            # shadow carries duration_sec per entry; best-effort and never gates
+            # audio.
+            "buffered_audio_sec": round(sum(max(seg.get("duration_sec") or 0, 0) for seg in state.queued_segments), 1),
             "segments_produced": state.segments_produced,
             "tracks_played": len(state.played_tracks),
             "uptime_sec": round(time.time() - start_time),
@@ -3701,6 +3711,10 @@ async def status(
                 "last_degraded_reason": state.chaos_last_degraded_reason,
             },
             "force_pending": state.force_next.value if state.force_next else None,
+            # Operator-attributed trigger (set only by /api/trigger) — the panel
+            # uses THIS, never force_pending, so internal/rescue forces don't
+            # false-light the "Triggered" row.
+            "operator_force_pending": (state.operator_force_pending.value if state.operator_force_pending else None),
             "session_stopped": state.session_stopped,
             "playlist": playlist_page["tracks"],
             "playlist_page": {

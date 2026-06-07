@@ -1131,6 +1131,10 @@ async def run_producer(
         elif state.force_next is not None:
             seg_type = state.force_next
             state.force_next = None
+            # The force is now being built — it is no longer "pending"; clear the
+            # operator attribution so the panel's "Triggered" row hands off to the
+            # live "building" row instead of showing both.
+            state.operator_force_pending = None
             logger.info("Forced trigger: %s", seg_type.value)
         else:
             seg_type = next_segment_type(state, config.pacing)
