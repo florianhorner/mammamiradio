@@ -369,7 +369,9 @@ def test_playlist_pagination_keeps_accessible_absolute_index_rows() -> None:
     text = _read_admin_html()
     update_block = text[text.index("function updatePl") : text.index("async function loadMorePlaylist")]
 
-    assert "idx:(_plPage.offset||0)+i" in update_block
+    assert re.search(r"idx\s*:\s*\(\s*_plPage\.offset\s*\|\|\s*0\s*\)\s*\+\s*i", update_block)
+    assert "incomingRevision===previousRevision" in update_block
+    assert "loadedEnd<total" in update_block
     assert 'data-i="${idx}"' in update_block
     assert 'tabindex="0"' in update_block
     assert 'role="button"' in update_block
@@ -385,6 +387,27 @@ def test_search_external_queue_posts_album_art() -> None:
     text = _read_admin_html()
     add_external_block = text[text.index("async function addExternal") : text.index("// ── Drag & Drop")]
     assert "album_art:t.album_art" in add_external_block
+
+
+def test_load_more_buttons_reset_on_error_paths() -> None:
+    """Playlist/search load-more controls must not remain stuck in loading state."""
+    text = _read_admin_html()
+    playlist_block = text[text.index("async function loadMorePlaylist") : text.index("function focusPlaylistTrack")]
+    search_block = text[text.index("async function doSearch") : text.index("async function addTr")]
+
+    assert "Playlist load-more failed" in playlist_block
+    assert "Playlist load-more error" in playlist_block
+    assert "expectedRevision=_plPage.revision" in playlist_block
+    assert "revisionChanged" in playlist_block
+    assert "Playlist changed while loading more; refreshing first page." in playlist_block
+    assert "/api/playlist?offset=0&limit=${PLAYLIST_PAGE_SIZE}" in playlist_block
+    assert playlist_block.index("revisionChanged") < playlist_block.index("_plRows=_plRows.concat")
+    assert "btn.classList.remove('loading')" in playlist_block
+    assert "btn.textContent='Load more tracks'" in playlist_block
+    assert "include_external:String(!isAppend||_sExtPage.has_more)" in search_block
+    assert "prevR=_sR.slice()" in search_block
+    assert "renderSearchResults(q)" in search_block
+    assert "btn.textContent='Load more results'" in search_block
 
 
 def test_empty_playlist_art_is_compact_placeholder() -> None:

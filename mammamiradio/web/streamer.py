@@ -868,16 +868,19 @@ def _serialize_track(track: Track) -> dict:
     }
 
 
-def _paginated_tracks(tracks: list[Track], offset: int, limit: int) -> dict[str, Any]:
+def _paginated_tracks(tracks: list[Track], offset: int, limit: int, *, revision: int | None = None) -> dict[str, Any]:
     total = len(tracks)
     page = tracks[offset : offset + limit]
-    return {
+    payload: dict[str, Any] = {
         "tracks": [_serialize_track(track) for track in page],
         "total": total,
         "offset": offset,
         "limit": limit,
         "has_more": offset + len(page) < total,
     }
+    if revision is not None:
+        payload["revision"] = revision
+    return payload
 
 
 def _duration_sec_from_payload(payload: dict | None) -> float | None:
@@ -2727,6 +2730,7 @@ async def remove_track(request: Request, _: None = Depends(require_admin_access)
     state = request.app.state.station_state
     if 0 <= idx < len(state.playlist):
         removed = state.playlist.pop(idx)
+        state.playlist_revision += 1
         return {"ok": True, "removed": removed.display}
     return {"ok": False, "error": "Invalid index"}
 
@@ -2742,6 +2746,7 @@ async def move_track(request: Request, _: None = Depends(require_admin_access)):
     if 0 <= src < len(pl) and 0 <= dst < len(pl):
         track = pl.pop(src)
         pl.insert(dst, track)
+        state.playlist_revision += 1
         return {"ok": True, "moved": track.display}
     return {"ok": False, "error": "Invalid indices"}
 
@@ -2756,7 +2761,7 @@ async def playlist_tracks(
     """Return a bounded playlist page for admin lazy loading."""
     offset, limit = _page_bounds(offset, limit, default_limit=80, max_limit=200)
     state = request.app.state.station_state
-    return _paginated_tracks(state.playlist, offset, limit)
+    return _paginated_tracks(state.playlist, offset, limit, revision=state.playlist_revision)
 
 
 @router.get("/api/search")
@@ -2767,6 +2772,7 @@ async def search_tracks(
     limit: int = 20,
     external_offset: int = 0,
     external_limit: int = 5,
+    include_external: bool = True,
     _: None = Depends(require_admin_access),
 ):
     """Search the current playlist and yt-dlp for tracks matching the query."""
@@ -2809,23 +2815,26 @@ async def search_tracks(
     # timeout and surface as a connection error in the admin (same failure class
     # that motivated backgrounding add-external). On timeout we return the
     # in-playlist results with no web hits rather than failing the whole request.
-    loop = asyncio.get_running_loop()
-    # Cap fetch depth to prevent DoS via unbounded external_offset (4-thread pool, 45s timeout).
-    fetch_depth = min(external_offset + external_limit + 1, 50)
-    try:
-        external_candidates = await asyncio.wait_for(
-            loop.run_in_executor(
-                _search_executor,
-                search_ytdlp_metadata,
-                q.strip(),
-                fetch_depth,
-            ),
-            timeout=45,
-        )
-    except Exception:
-        logger.warning("yt-dlp external search failed/timed out for query %r", q, exc_info=True)
-        external_candidates = []
+    external_candidates = []
+    if include_external:
+        loop = asyncio.get_running_loop()
+        # Cap fetch depth to prevent DoS via unbounded external_offset (4-thread pool, 45s timeout).
+        fetch_depth = min(external_offset + external_limit + 1, 50)
+        try:
+            external_candidates = await asyncio.wait_for(
+                loop.run_in_executor(
+                    _search_executor,
+                    search_ytdlp_metadata,
+                    q.strip(),
+                    fetch_depth,
+                ),
+                timeout=45,
+            )
+        except Exception:
+            logger.warning("yt-dlp external search failed/timed out for query %r", q, exc_info=True)
+            external_candidates = []
     external = external_candidates[external_offset : external_offset + external_limit]
+    external_known_count = len(external_candidates) if include_external else external_offset
 
     return {
         "results": results,
@@ -2837,7 +2846,7 @@ async def search_tracks(
         "external_offset": external_offset,
         "external_limit": external_limit,
         "external_has_more": external_offset + len(external) < len(external_candidates),
-        "external_known_count": len(external_candidates),
+        "external_known_count": external_known_count,
     }
 
 
@@ -2956,6 +2965,7 @@ async def _commit_external_download(
         if state.source_revision != originating_source_revision or not should_commit():
             return "dropped"
         state.playlist.append(track)
+        state.playlist_revision += 1
         # Don't clobber a pin that's still pending — claim the play-next slot only
         # when the caller's guard says it's free. Otherwise the track is in
         # rotation and the caller surfaces that it's queued-behind, not next.
@@ -3046,6 +3056,7 @@ async def add_track(request: Request, _: None = Depends(require_admin_access)):
         state.playlist.insert(0, track)
     else:
         state.playlist.append(track)
+    state.playlist_revision += 1
     return {"ok": True, "added": track.display, "position": position}
 
 
@@ -3611,7 +3622,12 @@ async def status(
     provider_health = _provider_health_snapshot(config, state)
     runtime_status = _runtime_status_snapshot(request, runtime_health=runtime_health, provider_health=provider_health)
     playlist_offset, playlist_limit = _page_bounds(playlist_offset, playlist_limit, default_limit=80, max_limit=200)
-    playlist_page = _paginated_tracks(state.playlist, playlist_offset, playlist_limit)
+    playlist_page = _paginated_tracks(
+        state.playlist,
+        playlist_offset,
+        playlist_limit,
+        revision=state.playlist_revision,
+    )
     payload.update(
         {
             "queue_depth": segment_queue.qsize(),
@@ -3692,6 +3708,7 @@ async def status(
                 "offset": playlist_page["offset"],
                 "limit": playlist_page["limit"],
                 "has_more": playlist_page["has_more"],
+                "revision": playlist_page["revision"],
             },
             "brand": _serialize_brand(config.brand),
             "brand_warnings": list(config.brand_warnings),
