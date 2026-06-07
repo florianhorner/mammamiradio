@@ -1080,7 +1080,7 @@ def _validate(config: StationConfig) -> None:
         log.warning("Home Assistant enabled but no HA_TOKEN in environment")
     if not config.ads.brands:
         log.warning("No ad brands configured — ad segments will be skipped")
-    if not _is_loopback_host(config.bind_host) and not (config.admin_password or config.admin_token):
+    if not _is_loopback_host(config.bind_host) and not (config.admin_password or config.admin_token) and not config.is_addon:
         errors.append("Set ADMIN_PASSWORD or ADMIN_TOKEN when binding to a non-loopback host")
 
     if errors:

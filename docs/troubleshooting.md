@@ -114,15 +114,15 @@ Check:
 
 Even when configured correctly, HA references are opportunistic. The prompt only encourages one casual reference when it fits.
 
-## Remote admin access does not work
+## Admin access
 
-The app rejects non-local binds without auth.
+**HA add-on:** Direct LAN access to `http://<ha-ip>:8000/admin` works without any token as long as you have not configured a custom `admin_token` in the add-on options. Port 8000 serves the listener page (`/`), the admin panel (`/admin`), and the audio stream (`/stream`). From outside your home network, `/admin` returns 403.
 
-Rules:
+**Standalone mode:** The app rejects non-local binds without credentials configured. Rules:
 
 - if `ADMIN_PASSWORD` is set, admin routes require HTTP Basic auth everywhere
 - if only `ADMIN_TOKEN` is set, non-local admin access requires `X-Radio-Admin-Token` header
-- if neither is set, admin routes only work from localhost
+- if neither is set, admin routes only work from localhost (or via HA add-on LAN trust)
 
 Health probes are the exception. `/healthz` and `/readyz` stay unauthenticated so Docker, Home Assistant, and external monitors can poll them without admin credentials.
 

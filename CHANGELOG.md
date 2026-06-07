@@ -6,6 +6,10 @@ The current version source of truth is `pyproject.toml`.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Direct `/admin` access from your home network now works.** If you open `http://<pi-ip>:8000/admin` in a browser on your local Wi-Fi, the admin panel loads without needing a token. Port 8000 serves the listener page (`/`), the admin panel (`/admin`), and the audio stream (`/stream`) — no HA sidebar required for any of them. Configuring a custom `admin_token` in the add-on options still enforces that token even from the LAN.
+
 ### Added
 
 - **Audition host voices by clarity, not just identity.** The voice-audition harness (`scripts/audition_tts_voices.py`) can now sweep ElevenLabs stability settings — `--elevenlabs-stability 0.42 0.6 0.75` renders the same lines at each setting so you can A/B a host's diction (low stability mumbles, higher tightens it) before committing to a voice.

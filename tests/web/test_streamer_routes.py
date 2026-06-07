@@ -38,7 +38,7 @@ TOML_PATH = str(Path(__file__).resolve().parents[2] / "radio.toml")
 # ---------------------------------------------------------------------------
 
 
-def _make_test_app(*, admin_password: str = "", admin_token: str = "") -> FastAPI:
+def _make_test_app(*, admin_password: str = "", admin_token: str = "", is_addon: bool = False) -> FastAPI:
     """Build a minimal FastAPI app with the streamer router and populated state."""
     app = FastAPI()
     app.include_router(router)
@@ -48,6 +48,7 @@ def _make_test_app(*, admin_password: str = "", admin_token: str = "") -> FastAP
     # Override auth settings for test isolation
     config.admin_password = admin_password
     config.admin_token = admin_token
+    config.is_addon = is_addon
 
     state = StationState(
         playlist=[Track(title="Test Song", artist="Test Artist", duration_ms=180_000, spotify_id="t1")],
@@ -1589,6 +1590,52 @@ async def test_admin_panel_with_basic_auth_returns_html():
         resp = await client.get("/admin", auth=("admin", "secret"))
     assert resp.status_code == 200
     assert "text/html" in resp.headers["content-type"]
+
+
+# ---------------------------------------------------------------------------
+# HA add-on mode: LAN trust without admin_token configured
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_admin_lan_access_in_addon_mode_no_creds():
+    """In HA add-on mode with no credentials, a LAN client can reach /admin."""
+    app = _make_test_app(is_addon=True)
+    transport = httpx.ASGITransport(app=app, client=("192.168.1.50", 9999))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.get("/admin")
+    assert resp.status_code == 200
+    assert "text/html" in resp.headers["content-type"]
+
+
+@pytest.mark.asyncio
+async def test_admin_lan_post_without_csrf_blocked_in_addon_mode():
+    """In HA add-on mode, a LAN POST without CSRF token is still blocked."""
+    app = _make_test_app(is_addon=True)
+    transport = httpx.ASGITransport(app=app, client=("192.168.1.50", 9999))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.post("/api/skip")
+    assert resp.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_admin_lan_with_user_set_token_requires_token():
+    """In HA add-on mode with explicit admin_token, LAN clients must provide the token."""
+    app = _make_test_app(is_addon=True, admin_token="tok-abc-123")
+    transport = httpx.ASGITransport(app=app, client=("192.168.1.50", 9999))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.get("/admin")
+    assert resp.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_admin_public_ip_rejected_in_addon_mode_no_creds():
+    """In HA add-on mode with no credentials, a public IP is still blocked."""
+    app = _make_test_app(is_addon=True)
+    transport = httpx.ASGITransport(app=app, client=("203.0.113.50", 9999))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.get("/admin")
+    assert resp.status_code == 403
 
 
 # ---------------------------------------------------------------------------

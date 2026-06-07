@@ -131,13 +131,17 @@ If silence is in cache from a failed run: stop the addon, SSH to the HA host, de
 
 **Fix**: Verify your `anthropic_api_key` is valid. Check the log for `AuthenticationError` or `RateLimitError`.
 
-### Admin API inaccessible directly
+### Accessing the station directly
 
-**Symptom**: Direct access to `http://<ha-ip>:8000/admin` returns 401.
+Port 8000 serves three URLs from your home network:
 
-**Cause**: If you left `admin_token` blank in the Configuration tab, `run.sh` auto-generates a token on each restart and does not log it. Set a value in `admin_token` to pin it across restarts, or use HA ingress as the primary UI.
+| URL | Who uses it | Notes |
+|-----|-------------|-------|
+| `http://<ha-ip>:8000/` | Listeners (guests, family) | Public — no login needed |
+| `http://<ha-ip>:8000/admin` | You (operator) | LAN-trusted — no token needed |
+| `http://<ha-ip>:8000/stream` | Media players, mpv, VLC | Raw MP3 stream |
 
-**Fix**: Access the addon via the HA sidebar (ingress). The exposed port 8000 on the host is intended for streaming clients only.
+If you configured a custom `admin_token` in the add-on options, direct `/admin` access requires that token via `X-Radio-Admin-Token` header. From outside your home network, `/admin` returns 403.
 
 ## Key files
 
