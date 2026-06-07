@@ -2017,10 +2017,9 @@ async def capabilities(request: Request, _: None = Depends(require_admin_access)
 @router.post("/api/shuffle")
 async def shuffle_playlist(request: Request, _: None = Depends(require_admin_access)):
     """Shuffle upcoming tracks."""
-    import random
-
     state = request.app.state.station_state
-    random.shuffle(state.playlist)
+    _random.shuffle(state.playlist)
+    state.playlist_revision += 1
     return {"ok": True, "message": "Playlist shuffled"}
 
 
