@@ -1794,6 +1794,7 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
           <button type="button" class="btn btn-chip" onclick="enrichPlaylistSource('classic_70s',this)">Anni '70</button>
           <button type="button" class="btn btn-chip" onclick="enrichPlaylistSource('classic_80s',this)">Anni '80</button>
           <button type="button" class="btn btn-chip" onclick="enrichPlaylistSource('classic_90s',this)">Anni '90</button>
+          <button type="button" class="btn btn-chip" onclick="shufflePlaylist(this)" title="Shuffle rotation"><svg width="12" height="12" style="vertical-align:-1px"><use href="#ic-shuffle"/></svg> Shuffle</button>
         </div>
         <div class="rotation-sort">order: current rotation</div>
       </div>
@@ -2957,6 +2958,13 @@ function updateSourceControls(st,caps){
   const visibility=sourceControlVisibility(caps);
   if(jamBtn)jamBtn.style.display=visibility.jamendo?'':'none';
   if(chartsBtn)chartsBtn.style.display=visibility.charts_reload?'':'none';
+}
+async function shufflePlaylist(el){
+  flash(el);
+  const r=await api('POST','/api/shuffle',{});
+  if(!r.ok){toast('Error: '+(r.error||'unknown'));return;}
+  toast('Playlist shuffled');
+  await refreshFast();
 }
 async function enrichPlaylistSource(kind,el){
   flash(el);

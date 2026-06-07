@@ -8,6 +8,8 @@ The current version source of truth is `pyproject.toml`.
 
 ### Added
 
+- **Shuffle the rotation backlog in one click.** The Shuffle button in the Rotazione panel instantly randomises the entire track order — useful when you've just enriched the pool with a new era or source and want the mix to start fresh instead of front-loading the new arrivals.
+
 - **Trigger a host break and it airs next, not minutes later.** Hit Trigger for a banter, ad, or news flash and the station now slots it in right after the current song — instead of behind everything already queued — so the moment you want lands on air at the next break. Tap once: if you tap again while the first pick is still cueing, you get a gentle "give the tape decks a few seconds" rather than two stacking up.
 
 - **Volume no longer jumps between songs, hosts, and ads.** Every segment is now measured and nudged to one consistent loudness before it airs, so a quiet song isn't buried and an ad doesn't blast — the station holds a steady level end to end. Ads still sit a touch hotter so they pop, just without the old jarring jump. Tunable in `radio.toml` (`[audio]` → `lufs_target`, `ad_lufs_target`).
