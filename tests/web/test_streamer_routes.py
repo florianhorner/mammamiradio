@@ -1138,6 +1138,26 @@ async def test_status_operator_force_pending_set_only_by_trigger():
 
 
 @pytest.mark.asyncio
+async def test_trigger_rejects_second_while_one_pending():
+    """Air-next builds one trigger at a time: a second tap while one is still
+    pending is rejected with a human way-out message (leadership #5), never a
+    silent overwrite of the operator's first pick."""
+    from mammamiradio.core.models import SegmentType
+
+    app = _make_test_app()
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        first = await client.post("/api/trigger", json={"type": "banter"})
+        assert first.json()["ok"] is True
+        second = await client.post("/api/trigger", json={"type": "ad"})
+        body = second.json()
+    assert body["ok"] is False
+    assert "tap again" in body["error"].lower()  # a way out, not a dead end
+    # The operator's first pick is preserved, not overwritten by the rejected tap.
+    assert app.state.station_state.operator_force_pending == SegmentType.BANTER
+
+
+@pytest.mark.asyncio
 async def test_setup_recheck_returns_onboarding_payload():
     app = _make_test_app()
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))

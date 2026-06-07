@@ -8,6 +8,8 @@ The current version source of truth is `pyproject.toml`.
 
 ### Added
 
+- **Trigger a host break and it airs next, not minutes later.** Hit Trigger for a banter, ad, or news flash and the station now slots it in right after the current song — instead of behind everything already queued — so the moment you want lands on air at the next break. Tap once: if you tap again while the first pick is still cueing, you get a gentle "give the tape decks a few seconds" rather than two stacking up.
+
 - **Volume no longer jumps between songs, hosts, and ads.** Every segment is now measured and nudged to one consistent loudness before it airs, so a quiet song isn't buried and an ad doesn't blast — the station holds a steady level end to end. Ads still sit a touch hotter so they pop, just without the old jarring jump. Tunable in `radio.toml` (`[audio]` → `lufs_target`, `ad_lufs_target`).
 
 - **Audition host voices by clarity, not just identity.** The voice-audition harness (`scripts/audition_tts_voices.py`) can now sweep ElevenLabs stability settings — `--elevenlabs-stability 0.42 0.6 0.75` renders the same lines at each setting so you can A/B a host's diction (low stability mumbles, higher tightens it) before committing to a voice.
@@ -38,7 +40,7 @@ The current version source of truth is `pyproject.toml`.
 
 - **The admin queue now shows the studio working in the background.** Above the Scaletta, an "In produzione" feed reveals what the hosts are creating right now — writing an ad, voicing a banter, finding the next track — with a live timer and a short trail of what just finished. The next-up segment is highlighted with the studio gold accent and a one-line detail (artist, hosts, or brand). The operator no longer stares at a static list wondering whether anything is happening.
 
-- **Triggers land visibly, and you can see how much audio is ready.** Hit Trigger for a banter, ad, or news flash and the "In produzione" feed instantly confirms it's accepted and building next — a tap never looks like it did nothing. And next to the Scaletta, a new readout shows how many minutes of audio are rendered and ready to air (airtime, not just a track count), so it's clear why a fresh trigger plays after what's already lined up.
+- **Triggers land visibly, and you can see how much audio is ready.** Hit Trigger for a banter, ad, or news flash and the "In produzione" feed instantly confirms it's accepted and building next — a tap never looks like it did nothing. And next to the Scaletta, a new readout shows how many minutes of audio are rendered and ready to air (airtime, not just a track count), so you always know how much runway is buffered ahead.
 
 - **Share a whole moment, not just thirty seconds.** The Share button now always
   copies the clip link to your clipboard (alongside the native share sheet), so

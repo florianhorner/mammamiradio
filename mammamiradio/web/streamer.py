@@ -2224,6 +2224,14 @@ async def trigger_segment(request: Request, _: None = Depends(require_admin_acce
         return {"ok": False, "error": f"type must be one of: {list(valid.keys())}"}
 
     state = request.app.state.station_state
+    # Air-next builds and front-inserts one operator trigger at a time. Reject a
+    # second tap while one is still pending — with a way out (leadership #5),
+    # never a silent overwrite of the first pick.
+    if state.operator_force_pending is not None:
+        return {
+            "ok": False,
+            "error": "Give the tape decks a few seconds to cue your last pick, then tap again.",
+        }
     state.force_next = valid[seg_type]
     # Attribute this force to the operator so the admin panel can surface it as a
     # deliberate trigger (internal forces never set this — see StationState).
