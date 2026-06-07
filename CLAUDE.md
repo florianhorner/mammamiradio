@@ -146,6 +146,7 @@ private durable system for strategy or relationship context.
 - If Home Assistant is enabled and `HA_TOKEN` is present, banter and ads may reference current home state.
 - `audio.bitrate` is the single source of truth for encoding, ICY headers, and playback throttling.
 - Source switching via `/api/playlist/load` purges the queue, skips the current segment, and begins playback from the new source immediately.
+- Operator triggers (`/api/trigger` banter/ad/news) get **air-next**: the producer builds the forced segment, then front-inserts it at the head of the queue (`_front_insert_queue_and_shadow`, a no-await drain→prepend→repush that drops the furthest-future tail if the bounded queue would overflow) so it airs at the next boundary instead of behind the buffered lookahead. Only operator triggers (`operator_force_pending`) front-insert; the 60s-silence rescue and other internal forces append normally. A second trigger while one is still pending is rejected with a way-out message (one at a time).
 - Non-local binds require `ADMIN_PASSWORD` or `ADMIN_TOKEN`.
 
 ## Project structure
