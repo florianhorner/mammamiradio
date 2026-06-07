@@ -226,7 +226,10 @@ async def dismiss_listener_request(request: Request, _: None = Depends(require_a
         track = r.get("song_track_obj")
         if track is None:
             continue
+        original_len = len(state.playlist)
         state.playlist = [t for t in state.playlist if t is not track]
+        if len(state.playlist) != original_len:
+            state.playlist_revision += 1
         if state.pinned_track is track:
             state.pinned_track = None
             if state.force_next == SegmentType.MUSIC:
