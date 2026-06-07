@@ -123,6 +123,45 @@ async def test_startup_creates_state_and_tasks():
 
 
 @pytest.mark.asyncio
+async def test_startup_wires_loudness_targets_from_config():
+    """startup() must thread radio.toml's [audio] LUFS targets into the normalizer
+    (the config -> startup -> normalizer-global seam). Patched on the normalizer
+    module because startup() imports the function via a late local import."""
+    from mammamiradio.core.models import Track
+
+    mock_config = MagicMock()
+    mock_config.station.name = "TestRadio"
+    mock_config.station.language = "it"
+    mock_config.pacing.lookahead_segments = 3
+    mock_config.max_cache_size_mb = 500
+    mock_config.tmp_dir = TEST_TMP
+    mock_config.cache_dir = TEST_CACHE
+    mock_config.audio.lufs_target = -16.0
+    mock_config.audio.ad_lufs_target = -15.0
+    mock_config.audio.sample_rate = 48000
+    mock_config.audio.channels = 2
+    mock_config.audio.bitrate = 192
+
+    demo_tracks = [Track(title="Song", artist="Art", duration_ms=1000, spotify_id="t1")]
+
+    with (
+        patch(f"{MODULE}.load_config", return_value=mock_config),
+        patch(f"{MODULE}.read_persisted_source", return_value=None),
+        patch(f"{MODULE}.fetch_startup_playlist", return_value=(demo_tracks, None, "")),
+        patch(f"{MODULE}.run_producer", new_callable=AsyncMock),
+        patch(f"{MODULE}.run_playback_loop", new_callable=AsyncMock),
+        patch("mammamiradio.audio.normalizer.configure_loudness_reconcile") as m_configure,
+    ):
+        from mammamiradio.main import startup
+
+        await startup()
+
+    # The encoding params must thread through too, so reconcile preserves a
+    # non-default sample rate / channels / bitrate.
+    m_configure.assert_called_once_with(-16.0, -15.0, sample_rate=48000, channels=2, bitrate=192)
+
+
+@pytest.mark.asyncio
 async def test_startup_skips_provider_verdict_when_no_keys():
     """With no AI key configured, startup() must NOT schedule a validation probe."""
     from mammamiradio.core.models import Track

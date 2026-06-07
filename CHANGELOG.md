@@ -8,6 +8,8 @@ The current version source of truth is `pyproject.toml`.
 
 ### Added
 
+- **Volume no longer jumps between songs, hosts, and ads.** Every segment is now measured and nudged to one consistent loudness before it airs, so a quiet song isn't buried and an ad doesn't blast — the station holds a steady level end to end. Ads still sit a touch hotter so they pop, just without the old jarring jump. Tunable in `radio.toml` (`[audio]` → `lufs_target`, `ad_lufs_target`).
+
 - **Audition host voices by clarity, not just identity.** The voice-audition harness (`scripts/audition_tts_voices.py`) can now sweep ElevenLabs stability settings — `--elevenlabs-stability 0.42 0.6 0.75` renders the same lines at each setting so you can A/B a host's diction (low stability mumbles, higher tightens it) before committing to a voice.
 
 - **An Apache-2.0 license, a code of conduct, and a security policy.** The project

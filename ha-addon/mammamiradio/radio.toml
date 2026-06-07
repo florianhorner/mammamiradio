@@ -116,6 +116,11 @@ nostalgia = 30
 sample_rate = 48000
 channels = 2
 bitrate = 192
+# Integrated-LUFS targets for the loudness-reconciliation pass: every finished
+# segment is measured and nudged to one level so music, hosts, beds and ads no
+# longer jump in volume. Ads sit 1 LU hotter so they still pop.
+lufs_target = -16.0
+ad_lufs_target = -15.0
 
 # ── Dynamic LLM routing ───────────────────────────────────────────────────
 # Script generation never names a model in code. A task asks for a ROLE; the
