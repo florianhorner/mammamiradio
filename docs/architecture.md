@@ -79,6 +79,12 @@ produced each one (the Green's `dynaudnorm` path has no fixed target on its own)
 It is idempotent (an already-on-target segment skips the re-encode, so the
 redundant terminal passes some segments take cost only a measure) and best-effort
 (a measurement or re-encode failure leaves the segment untouched — never dead air).
+A music **cache hit** replays a normalized file from a prior session and so bypasses
+`normalize()` and this pass; the producer therefore calls `reconcile_cached_music()`
+on each hit, which reconciles the cached file to the music target on first play and
+stamps a `reconciled_lufs` marker into the norm sidecar so later hits skip both the
+re-encode and the measure. This self-heals files cached before reconciliation
+existed (which otherwise aired at their old, quieter level) one play at a time.
 
 ### Dynamic LLM routing (which model voices each task)
 

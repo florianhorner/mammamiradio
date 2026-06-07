@@ -38,6 +38,7 @@ from mammamiradio.audio.normalizer import (
     mix_voice_with_sting,
     normalize,
     probe_duration_sec,
+    reconcile_cached_music,
     save_track_metadata,
 )
 from mammamiradio.audio.tts import synthesize, synthesize_ad, synthesize_dialogue
@@ -133,6 +134,11 @@ async def _render_music_track(
     norm_cached = _normalized_cache_path(track, config)
     if norm_cached.exists():
         logger.debug("Normalization cache hit%s: %s", f" ({context})" if context else "", norm_cached.name)
+        # A cache hit skips normalize() + its reconcile pass, so a file produced
+        # before reconciliation existed would air at its old level. Reconcile it on
+        # hit (off the event loop) so every song lands at the target; skipped once
+        # the sidecar marks it done, so steady-state cache hits stay instant.
+        await loop.run_in_executor(None, reconcile_cached_music, norm_cached)
         return RenderedMusicTrack(track=track, path=norm_cached, cache_path=norm_cached, cache_hit=True)
 
     norm_path = config.tmp_dir / f"{temp_prefix}_{uuid4().hex[:8]}.mp3"
