@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -691,6 +692,31 @@ def test_load_track_metadata_incomplete_data_returns_none(tmp_path):
     norm.write_bytes(b"pretend mp3")
     sidecar = tmp_path / "norm_incomplete_192k.mp3.json"
     sidecar.write_text('{"title": "only title, no artist"}')
+    assert load_track_metadata(norm) is None
+
+
+def test_save_track_metadata_drops_stale_reconciled_marker(tmp_path):
+    # save_track_metadata runs only for a freshly (re)normalized file, so a
+    # reconciled_lufs marker in a leftover/orphaned sidecar (eviction unlinks the
+    # .mp3 but leaves the .json) is tied to the OLD content and MUST be dropped —
+    # the fresh file re-earns it on the next cache-hit reconcile. Other keys survive.
+    norm = tmp_path / "norm_merge_192k.mp3"
+    norm.write_bytes(b"pretend mp3")
+    sidecar = tmp_path / "norm_merge_192k.mp3.json"
+    sidecar.write_text(json.dumps({"reconciled_lufs": -16.0, "stray": "keep"}))
+    save_track_metadata(norm, title="T", artist="A")
+    data = json.loads(sidecar.read_text())
+    assert "reconciled_lufs" not in data  # stale marker dropped
+    assert data["title"] == "T" and data["artist"] == "A"
+    assert data["stray"] == "keep"  # unrelated keys preserved
+
+
+def test_load_track_metadata_non_utf8_returns_none(tmp_path):
+    # Sibling of the _load_sidecar fix: a non-UTF8 sidecar must return None, not raise.
+    norm = tmp_path / "norm_bad_utf8_192k.mp3"
+    norm.write_bytes(b"pretend mp3")
+    sidecar = tmp_path / "norm_bad_utf8_192k.mp3.json"
+    sidecar.write_bytes(b"\xff\xfe\x00not utf-8")
     assert load_track_metadata(norm) is None
 
 

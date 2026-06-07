@@ -28,25 +28,49 @@ def _norm_sidecar_path(norm_path: Path) -> Path:
     return norm_path.parent / f"{norm_path.name}.json"
 
 
+def _load_sidecar(sidecar: Path) -> dict:
+    """Best-effort read of a norm sidecar's JSON dict; {} on missing/corrupt.
+
+    The sidecar is shared state: ``save_track_metadata`` writes ``{title, artist}``
+    and ``reconcile_cached_music`` writes ``reconciled_lufs``. Both must read-merge
+    through here so neither clobbers the other's keys, regardless of call order.
+    """
+    try:
+        if sidecar.exists():
+            # read_text() raises UnicodeDecodeError on a non-UTF8/corrupt sidecar;
+            # treat that as a benign empty read so it never escapes into the audio path.
+            data = json.loads(sidecar.read_text())
+            if isinstance(data, dict):
+                return data
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        pass
+    return {}
+
+
 def save_track_metadata(norm_path: Path, title: str, artist: str) -> None:
     """Persist title+artist alongside a normalized cache file so rescue paths can
-    surface human-readable metadata instead of the raw filename."""
+    surface human-readable metadata instead of the raw filename.
+
+    Called only when a cache file is freshly (re)normalized. Any `reconciled_lufs`
+    marker found here is tied to the OLD content of an orphaned sidecar (eviction
+    unlinks the .mp3 but leaves the .json), so it is DROPPED — the fresh file must
+    re-earn its marker on the first cache-hit reconcile. Other keys are preserved.
+    """
     sidecar = _norm_sidecar_path(norm_path)
+    data = _load_sidecar(sidecar)
+    data.pop("reconciled_lufs", None)  # content-specific; a fresh file re-earns it
+    data.update({"title": title, "artist": artist})
     try:
-        sidecar.write_text(json.dumps({"title": title, "artist": artist}))
+        sidecar.write_text(json.dumps(data))
     except OSError as exc:
         logger.debug("Could not write norm metadata sidecar %s: %s", sidecar.name, exc)
 
 
 def load_track_metadata(norm_path: Path) -> dict[str, str] | None:
     """Return {'title', 'artist'} from a norm cache sidecar if present and valid."""
-    sidecar = _norm_sidecar_path(norm_path)
-    if not sidecar.exists():
-        return None
-    try:
-        data = json.loads(sidecar.read_text())
-    except (OSError, json.JSONDecodeError):
-        return None
+    # Reuse _load_sidecar so a non-UTF8/non-dict/corrupt sidecar returns None
+    # cleanly instead of raising (same failure mode guarded in the reconcile path).
+    data = _load_sidecar(_norm_sidecar_path(norm_path))
     title = data.get("title")
     artist = data.get("artist")
     if isinstance(title, str) and isinstance(artist, str) and title and artist:
@@ -212,7 +236,7 @@ def configure_loudness_reconcile(
     ]
 
 
-def _reconcile_lufs(path: Path, *, ad: bool = False) -> None:
+def _reconcile_lufs(path: Path, *, ad: bool = False) -> bool:
     """Nudge a finished segment to the configured integrated-LUFS target.
 
     No-op unless reconciliation is configured. Measures the file (cheap ebur128)
@@ -222,10 +246,17 @@ def _reconcile_lufs(path: Path, *, ad: bool = False) -> None:
     ``normalize()`` then ``mix_voice_with_bed()``) cost only a measure, never a
     second re-encode. Best-effort — a failed measure, re-encode, or rename leaves
     the file as produced and never raises into the audio path.
+
+    Returns ``True`` only when the file is confirmed at target — either already
+    within tolerance or successfully re-encoded. Returns ``False`` when the level
+    could not be verified (reconcile unconfigured, measurement failed, or the
+    re-encode/rename failed). Callers that persist a "reconciled" marker MUST gate
+    it on a ``True`` result, or a transiently-failed file gets permanently marked
+    fixed while still off target.
     """
     cfg = _loudness_reconcile
     if cfg is None:
-        return
+        return False
     target = cfg[1] if ad else cfg[0]
     # Hold a normalization concurrency slot for the measure + corrective re-encode
     # so reconcile honours the same 2-ffmpeg ceiling as the rest of the pipeline
@@ -233,11 +264,11 @@ def _reconcile_lufs(path: Path, *, ad: bool = False) -> None:
     with _NORM_SEM:
         lufs = measure_lufs(path)
         if lufs is None:
-            return  # measurement failed — leave the file as produced
+            return False  # measurement failed — leave the file as produced
         # Clamp so a near-silent or corrupt file is never pumped to a huge gain.
         gain_db = max(-12.0, min(12.0, target - lufs))
         if abs(gain_db) < 0.5:
-            return  # already on target (within measurement noise) — skip the re-encode
+            return True  # already on target (within measurement noise) — confirmed
         tmp = path.with_name(f"{path.stem}.lufs{path.suffix}")
         cmd = [
             "ffmpeg",
@@ -256,8 +287,37 @@ def _reconcile_lufs(path: Path, *, ad: bool = False) -> None:
             tmp.replace(path)
         except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
             tmp.unlink(missing_ok=True)
-            return  # measure/encode/rename failed — keep the original, never break audio
+            return False  # measure/encode/rename failed — keep the original, never break audio
     logger.info("LUFS reconcile: %s -> %.1f LUFS (%+.1f dB)", path.name, target, gain_db)
+    return True
+
+
+def reconcile_cached_music(path: Path) -> None:
+    """Bring a CACHED music file to the configured target on a cache-hit play.
+
+    A cache hit skips ``normalize()`` (and therefore the reconcile pass), so a norm
+    file produced before reconciliation existed would air at its old, un-reconciled
+    level — the cause of "some songs are just quieter". This corrects it on hit, then
+    records the target in the file's sidecar so later hits skip the work *and* the
+    ebur128 measure and stay instant (matters on constrained addon hardware). It
+    self-heals the existing cache one play at a time. No-op when reconciliation is
+    unconfigured; idempotent and best-effort — never raises into the audio path.
+    """
+    cfg = _loudness_reconcile
+    if cfg is None:
+        return
+    target = cfg[0]  # music uses the non-ad target
+    sidecar = _norm_sidecar_path(path)
+    data = _load_sidecar(sidecar)
+    if data.get("reconciled_lufs") == target:
+        return  # already at the current target — instant hit, no measure
+    if not _reconcile_lufs(path):
+        return  # measure/re-encode failed — leave UNMARKED so the next hit retries
+    data["reconciled_lufs"] = target
+    try:
+        sidecar.write_text(json.dumps(data))
+    except OSError as exc:
+        logger.debug("Could not mark norm sidecar reconciled %s: %s", sidecar.name, exc)
 
 
 def normalize(

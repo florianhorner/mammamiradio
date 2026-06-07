@@ -110,6 +110,8 @@ The current version source of truth is `pyproject.toml`.
 
 ### Fixed
 
+- **The quieter songs come up to level, including ones the station prepared earlier.** A song the station had readied before it learned to hold a steady volume used to come on a little softer than the rest. Now the first time it plays after this update it's brought up to match everything else — and it stays there for every play after, so the songs you hear most don't wait on it twice.
+
 - **The hosts sound right now.** Marco reads clearly instead of mumbling, and Giulia sounds like the 80-year-old Nonna she is written as instead of a thirty-something. Each host's voice can now be dialed in independently in the station config (a per-host `voice_settings`), so tuning one host never disturbs the other.
 
 - **Admin load-more state stays accurate after playlist edits.** The Producer Desk now invalidates cached playlist tails when the rotation changes, hides the load-more button once all loaded rows reach the total, resets load-more buttons after network errors, and skips repeated yt-dlp lookups after web search results are exhausted.
