@@ -183,6 +183,14 @@ The current version source of truth is `pyproject.toml`.
   segment shows a 5-second Undo toast and only commits when the window closes, so
   a mis-tap on a running station is recoverable.
 
+- **Hosts stay tuned to your home without oversharing it.** When the station
+  references what's happening at home, it now draws on only a handful of the most
+  relevant presence signals — the spaces actually in use, most-recently-active
+  first — instead of every motion and occupancy sensor in the house. Sensors
+  you've explicitly named always come through; unlabeled or location-less ones are
+  left out, so the hosts stay grounded in the moment while less of your home's raw
+  sensor detail reaches the writers.
+
 ## [2.13.0] - 2026-05-26
 
 ### Added
