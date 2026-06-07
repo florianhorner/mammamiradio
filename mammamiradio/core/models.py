@@ -204,6 +204,7 @@ class HostPersonality:
     personality: PersonalityAxes = field(default_factory=PersonalityAxes)
     engine: str = "edge"  # edge|openai|azure|elevenlabs
     edge_fallback_voice: str = ""  # edge-tts voice used when a cloud TTS engine falls back
+    voice_settings: dict = field(default_factory=dict)  # per-host ElevenLabs overrides, e.g. {"stability": 0.6}
 
 
 @dataclass
@@ -482,6 +483,12 @@ class StationState:
     ha_catalog_hit_rate: float = 0.0
     # Force-trigger: producer will use this type instead of scheduler for the next segment
     force_next: SegmentType | None = None
+    # Operator-attributed pending trigger: set ONLY by the /api/trigger endpoint so the
+    # admin panel can honestly surface "you triggered X" without false-lighting on internal
+    # forces — the 60s-silence dead-air rescue and stop/skip/resume all set force_next too.
+    # Cleared the moment the producer consumes any force, or on stop (bounds staleness to
+    # one production cycle).
+    operator_force_pending: SegmentType | None = None
     # Host interrupt: pre-generated bridge clip to play immediately on interrupt
     interrupt_slot: Path | None = None
     # Whether the current interrupt bridge clip is a generated temp file
@@ -663,6 +670,7 @@ class StationState:
         self._listener_request_rl.clear()
         self.pinned_track = None
         self.force_next = None
+        self.operator_force_pending = None
 
     def _log(self, seg_type: str, label: str, metadata: dict | None = None) -> None:
         """Append a bounded producer-side log entry."""

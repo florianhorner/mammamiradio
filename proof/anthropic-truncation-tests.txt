@@ -1,0 +1,25 @@
+# Proof: tests for fix(hosts) label Anthropic max_tokens truncation honestly
+# branch: fix/anthropic-truncation-telemetry
+
+## unit: pytest tests/hosts/test_scriptwriter.py tests/web/test_shadow_queue_sync.py -q
+........................................................................ [ 80%]
+...................................                                      [100%]
+179 passed in 1.28s
+
+## new tests added (truncation telemetry):
+ - test_anthropic_max_tokens_truncation_is_labelled_honestly (partial-JSON cut)
+ - test_anthropic_max_tokens_empty_content_is_labelled_honestly (empty content -> IndexError)
+ - invariant guard: test_shadow_queue_sync scans every fallback_reason literal == _FALLBACK_REASON_LABELS keys
+
+## lint: ruff check (scriptwriter.py, streamer.py, test_scriptwriter.py)
+All checks passed!
+
+## typecheck: mypy mammamiradio/hosts/scriptwriter.py
+mammamiradio/audio/tts.py:465: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+Success: no issues found in 1 source file
+
+## changelog lint:
+Changelog lint clean.
+
+## full suite: pytest tests/ -q
+2655 passed, 2 skipped, 13 deselected in ~54s

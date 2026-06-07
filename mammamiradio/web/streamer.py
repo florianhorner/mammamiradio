@@ -388,6 +388,7 @@ def _runtime_provider_label(provider: str) -> str:
 
 _FALLBACK_REASON_LABELS = {
     "anthropic_exception": "Anthropic had a brief API error - retrying automatically",
+    "anthropic_max_tokens_truncated": "Anthropic ran long and got cut off - retrying automatically",
     "anthropic_auth_failed": "Anthropic API key rejected - check your key in Engine Room",
     "anthropic_auth_blocked": "Anthropic API key rejected - check your key in Engine Room",
     "anthropic_usage_limit": "Anthropic usage limit reached - check your plan at anthropic.com",
@@ -868,16 +869,19 @@ def _serialize_track(track: Track) -> dict:
     }
 
 
-def _paginated_tracks(tracks: list[Track], offset: int, limit: int) -> dict[str, Any]:
+def _paginated_tracks(tracks: list[Track], offset: int, limit: int, *, revision: int | None = None) -> dict[str, Any]:
     total = len(tracks)
     page = tracks[offset : offset + limit]
-    return {
+    payload: dict[str, Any] = {
         "tracks": [_serialize_track(track) for track in page],
         "total": total,
         "offset": offset,
         "limit": limit,
         "has_more": offset + len(page) < total,
     }
+    if revision is not None:
+        payload["revision"] = revision
+    return payload
 
 
 def _duration_sec_from_payload(payload: dict | None) -> float | None:
@@ -2014,10 +2018,9 @@ async def capabilities(request: Request, _: None = Depends(require_admin_access)
 @router.post("/api/shuffle")
 async def shuffle_playlist(request: Request, _: None = Depends(require_admin_access)):
     """Shuffle upcoming tracks."""
-    import random
-
     state = request.app.state.station_state
-    random.shuffle(state.playlist)
+    _random.shuffle(state.playlist)
+    state.playlist_revision += 1
     return {"ok": True, "message": "Playlist shuffled"}
 
 
@@ -2185,6 +2188,7 @@ async def stop_session(request: Request, _: None = Depends(require_admin_access)
     state.interrupt_slot = None
     state.interrupt_slot_ephemeral = False
     state.force_next = None
+    state.operator_force_pending = None
     # Skip current segment
     if state.now_streaming:
         request.app.state.skip_event.set()
@@ -2220,7 +2224,18 @@ async def trigger_segment(request: Request, _: None = Depends(require_admin_acce
         return {"ok": False, "error": f"type must be one of: {list(valid.keys())}"}
 
     state = request.app.state.station_state
+    # Air-next builds and front-inserts one operator trigger at a time. Reject a
+    # second tap while one is still pending — with a way out (leadership #5),
+    # never a silent overwrite of the first pick.
+    if state.operator_force_pending is not None:
+        return {
+            "ok": False,
+            "error": "Give the tape decks a few seconds to cue your last pick, then tap again.",
+        }
     state.force_next = valid[seg_type]
+    # Attribute this force to the operator so the admin panel can surface it as a
+    # deliberate trigger (internal forces never set this — see StationState).
+    state.operator_force_pending = valid[seg_type]
     return {"ok": True, "triggered": seg_type}
 
 
@@ -2727,6 +2742,7 @@ async def remove_track(request: Request, _: None = Depends(require_admin_access)
     state = request.app.state.station_state
     if 0 <= idx < len(state.playlist):
         removed = state.playlist.pop(idx)
+        state.playlist_revision += 1
         return {"ok": True, "removed": removed.display}
     return {"ok": False, "error": "Invalid index"}
 
@@ -2742,6 +2758,7 @@ async def move_track(request: Request, _: None = Depends(require_admin_access)):
     if 0 <= src < len(pl) and 0 <= dst < len(pl):
         track = pl.pop(src)
         pl.insert(dst, track)
+        state.playlist_revision += 1
         return {"ok": True, "moved": track.display}
     return {"ok": False, "error": "Invalid indices"}
 
@@ -2756,7 +2773,7 @@ async def playlist_tracks(
     """Return a bounded playlist page for admin lazy loading."""
     offset, limit = _page_bounds(offset, limit, default_limit=80, max_limit=200)
     state = request.app.state.station_state
-    return _paginated_tracks(state.playlist, offset, limit)
+    return _paginated_tracks(state.playlist, offset, limit, revision=state.playlist_revision)
 
 
 @router.get("/api/search")
@@ -2767,6 +2784,7 @@ async def search_tracks(
     limit: int = 20,
     external_offset: int = 0,
     external_limit: int = 5,
+    include_external: bool = True,
     _: None = Depends(require_admin_access),
 ):
     """Search the current playlist and yt-dlp for tracks matching the query."""
@@ -2809,23 +2827,26 @@ async def search_tracks(
     # timeout and surface as a connection error in the admin (same failure class
     # that motivated backgrounding add-external). On timeout we return the
     # in-playlist results with no web hits rather than failing the whole request.
-    loop = asyncio.get_running_loop()
-    # Cap fetch depth to prevent DoS via unbounded external_offset (4-thread pool, 45s timeout).
-    fetch_depth = min(external_offset + external_limit + 1, 50)
-    try:
-        external_candidates = await asyncio.wait_for(
-            loop.run_in_executor(
-                _search_executor,
-                search_ytdlp_metadata,
-                q.strip(),
-                fetch_depth,
-            ),
-            timeout=45,
-        )
-    except Exception:
-        logger.warning("yt-dlp external search failed/timed out for query %r", q, exc_info=True)
-        external_candidates = []
+    external_candidates = []
+    if include_external:
+        loop = asyncio.get_running_loop()
+        # Cap fetch depth to prevent DoS via unbounded external_offset (4-thread pool, 45s timeout).
+        fetch_depth = min(external_offset + external_limit + 1, 50)
+        try:
+            external_candidates = await asyncio.wait_for(
+                loop.run_in_executor(
+                    _search_executor,
+                    search_ytdlp_metadata,
+                    q.strip(),
+                    fetch_depth,
+                ),
+                timeout=45,
+            )
+        except Exception:
+            logger.warning("yt-dlp external search failed/timed out for query %r", q, exc_info=True)
+            external_candidates = []
     external = external_candidates[external_offset : external_offset + external_limit]
+    external_known_count = len(external_candidates) if include_external else external_offset
 
     return {
         "results": results,
@@ -2837,7 +2858,7 @@ async def search_tracks(
         "external_offset": external_offset,
         "external_limit": external_limit,
         "external_has_more": external_offset + len(external) < len(external_candidates),
-        "external_known_count": len(external_candidates),
+        "external_known_count": external_known_count,
     }
 
 
@@ -2956,6 +2977,7 @@ async def _commit_external_download(
         if state.source_revision != originating_source_revision or not should_commit():
             return "dropped"
         state.playlist.append(track)
+        state.playlist_revision += 1
         # Don't clobber a pin that's still pending — claim the play-next slot only
         # when the caller's guard says it's free. Otherwise the track is in
         # rotation and the caller surfaces that it's queued-behind, not next.
@@ -3046,6 +3068,7 @@ async def add_track(request: Request, _: None = Depends(require_admin_access)):
         state.playlist.insert(0, track)
     else:
         state.playlist.append(track)
+    state.playlist_revision += 1
     return {"ok": True, "added": track.display, "position": position}
 
 
@@ -3611,10 +3634,21 @@ async def status(
     provider_health = _provider_health_snapshot(config, state)
     runtime_status = _runtime_status_snapshot(request, runtime_health=runtime_health, provider_health=provider_health)
     playlist_offset, playlist_limit = _page_bounds(playlist_offset, playlist_limit, default_limit=80, max_limit=200)
-    playlist_page = _paginated_tracks(state.playlist, playlist_offset, playlist_limit)
+    playlist_page = _paginated_tracks(
+        state.playlist,
+        playlist_offset,
+        playlist_limit,
+        revision=state.playlist_revision,
+    )
     payload.update(
         {
             "queue_depth": segment_queue.qsize(),
+            # Honest airtime-ahead readout for the admin panel: the summed
+            # duration of the rendered queue. Surfaces SECONDS of buffered audio,
+            # not item count (3 short banters are not 3 songs of runway). The
+            # shadow carries duration_sec per entry; best-effort and never gates
+            # audio.
+            "buffered_audio_sec": round(sum(max(seg.get("duration_sec") or 0, 0) for seg in state.queued_segments), 1),
             "segments_produced": state.segments_produced,
             "tracks_played": len(state.played_tracks),
             "uptime_sec": round(time.time() - start_time),
@@ -3685,6 +3719,10 @@ async def status(
                 "last_degraded_reason": state.chaos_last_degraded_reason,
             },
             "force_pending": state.force_next.value if state.force_next else None,
+            # Operator-attributed trigger (set only by /api/trigger) — the panel
+            # uses THIS, never force_pending, so internal/rescue forces don't
+            # false-light the "Triggered" row.
+            "operator_force_pending": (state.operator_force_pending.value if state.operator_force_pending else None),
             "session_stopped": state.session_stopped,
             "playlist": playlist_page["tracks"],
             "playlist_page": {
@@ -3692,6 +3730,7 @@ async def status(
                 "offset": playlist_page["offset"],
                 "limit": playlist_page["limit"],
                 "has_more": playlist_page["has_more"],
+                "revision": playlist_page["revision"],
             },
             "brand": _serialize_brand(config.brand),
             "brand_warnings": list(config.brand_warnings),

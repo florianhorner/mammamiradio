@@ -12,6 +12,14 @@ The current version source of truth is `pyproject.toml`.
 
 ### Added
 
+- **The station logs how long each segment took to build.** Every segment the producer builds now records its total prep time on one line, and with logs turned up to debug you get a per-step breakdown of the audio work (normalize, loudness, mixing) that pinpoints the slow step. When the music ever runs thin, you can see exactly where the time went instead of guessing.
+
+- **Shuffle the rotation backlog in one click.** The Shuffle button in the Rotazione panel instantly randomises the entire track order — useful when you've just enriched the pool with a new era or source and want the mix to start fresh instead of front-loading the new arrivals.
+
+- **Trigger a host break and it airs next, not minutes later.** Hit Trigger for a banter, ad, or news flash and the station now slots it in right after the current song — instead of behind everything already queued — so the moment you want lands on air at the next break. Tap once: if you tap again while the first pick is still cueing, you get a gentle "give the tape decks a few seconds" rather than two stacking up.
+
+- **Volume no longer jumps between songs, hosts, and ads.** Every segment is now measured and nudged to one consistent loudness before it airs, so a quiet song isn't buried and an ad doesn't blast — the station holds a steady level end to end. Ads still sit a touch hotter so they pop, just without the old jarring jump. Tunable in `radio.toml` (`[audio]` → `lufs_target`, `ad_lufs_target`).
+
 - **Audition host voices by clarity, not just identity.** The voice-audition harness (`scripts/audition_tts_voices.py`) can now sweep ElevenLabs stability settings — `--elevenlabs-stability 0.42 0.6 0.75` renders the same lines at each setting so you can A/B a host's diction (low stability mumbles, higher tightens it) before committing to a voice.
 
 - **An Apache-2.0 license, a code of conduct, and a security policy.** The project
@@ -39,6 +47,8 @@ The current version source of truth is `pyproject.toml`.
   honest rather than a flat guess.
 
 - **The admin queue now shows the studio working in the background.** Above the Scaletta, an "In produzione" feed reveals what the hosts are creating right now — writing an ad, voicing a banter, finding the next track — with a live timer and a short trail of what just finished. The next-up segment is highlighted with the studio gold accent and a one-line detail (artist, hosts, or brand). The operator no longer stares at a static list wondering whether anything is happening.
+
+- **Triggers land visibly, and you can see how much audio is ready.** Hit Trigger for a banter, ad, or news flash and the "In produzione" feed instantly confirms it's accepted and building next — a tap never looks like it did nothing. And next to the Scaletta, a new readout shows how many minutes of audio are rendered and ready to air (airtime, not just a track count), so you always know how much runway is buffered ahead.
 
 - **Share a whole moment, not just thirty seconds.** The Share button now always
   copies the clip link to your clipboard (alongside the native share sheet), so
@@ -107,6 +117,14 @@ The current version source of truth is `pyproject.toml`.
   from `/public-status`.
 
 ### Fixed
+
+- **The quieter songs come up to level, including ones the station prepared earlier.** A song the station had readied before it learned to hold a steady volume used to come on a little softer than the rest. Now the first time it plays after this update it's brought up to match everything else — and it stays there for every play after, so the songs you hear most don't wait on it twice.
+
+- **A cut-off host line is now recognized for what it is.** When the AI host writer runs long and gets cut off mid-sentence, the station now names that as a length cutoff — in the log and in the operator status message ("ran long and got cut off") — instead of a generic error, and still switches to the backup voice so banter keeps flowing. The cause is now measurable rather than hidden, so the underlying length can be tuned with real numbers.
+
+- **The hosts sound right now.** Marco reads clearly instead of mumbling, and Giulia sounds like the 80-year-old Nonna she is written as instead of a thirty-something. Each host's voice can now be dialed in independently in the station config (a per-host `voice_settings`), so tuning one host never disturbs the other.
+
+- **Admin load-more state stays accurate after playlist edits.** The Producer Desk now invalidates cached playlist tails when the rotation changes, hides the load-more button once all loaded rows reach the total, resets load-more buttons after network errors, and skips repeated yt-dlp lookups after web search results are exhausted.
 
 - **Festival Mode no longer leaves ghost tracks in "Up Next".** Switching Festival Mode on now clears the upcoming list at the same instant it clears the queued audio, so the panel always matches what is about to play. Every queue-clearing action now runs through one path, so the list and the audio can't drift apart again.
 

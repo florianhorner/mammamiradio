@@ -102,6 +102,12 @@ class AudioSection:
     sample_rate: int = 48000
     channels: int = 2
     bitrate: int = 192
+    # Integrated-LUFS targets for the loudness-reconciliation pass (measure +
+    # corrective gain on each finished segment so music, dialogue, bedded banter
+    # and ads all land at one perceived level). ad_lufs_target sits 1 LU hotter
+    # so ads still pop, without the old jarring 2-LU jump.
+    lufs_target: float = -16.0
+    ad_lufs_target: float = -15.0
 
 
 # ── Dynamic LLM routing ───────────────────────────────────────────────────
@@ -1104,6 +1110,7 @@ def load_config(path: str = "radio.toml") -> StationConfig:
             personality=PersonalityAxes.from_dict(h.get("personality", {})),
             engine=h.get("engine", "edge"),
             edge_fallback_voice=h.get("edge_fallback_voice", ""),
+            voice_settings=dict(h.get("voice_settings", {})),
         )
         for h in raw.get("hosts", [])
     ]

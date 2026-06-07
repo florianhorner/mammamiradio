@@ -39,6 +39,41 @@ def test_load_config_from_radio_toml(monkeypatch):
     assert len(config.ads.voices) > 0
 
 
+def test_load_config_parses_per_host_voice_settings():
+    """Marco carries an ElevenLabs clarity override (stability); a host without a
+    voice_settings table defaults to {} so its synthesis uses the house tuning."""
+    toml_path = Path(__file__).resolve().parents[2] / "radio.toml"
+    config = load_config(str(toml_path))
+    marco = next(h for h in config.hosts if h.name == "Marco")
+    giulia = next(h for h in config.hosts if h.name == "Giulia")
+    assert marco.voice_settings == {"stability": 0.6}
+    assert giulia.voice_settings == {}
+
+
+def test_load_config_parses_audio_lufs_targets(tmp_path):
+    """radio.toml [audio] lufs/ad targets parse into AudioSection; an omitted key
+    falls back to the dataclass default so older configs keep working."""
+    source = Path(__file__).resolve().parents[2] / "radio.toml"
+    config = load_config(str(source))
+    assert config.audio.lufs_target == -16.0
+    assert config.audio.ad_lufs_target == -15.0
+    assert AudioSection().lufs_target == -16.0
+    assert AudioSection().ad_lufs_target == -15.0
+
+    # Older radio.toml without the keys: exercise the real load path and confirm it
+    # falls back to the defaults rather than erroring on the missing keys.
+    stripped = "\n".join(
+        line
+        for line in source.read_text().splitlines()
+        if not line.strip().startswith(("lufs_target", "ad_lufs_target"))
+    )
+    custom = tmp_path / "radio.toml"
+    custom.write_text(stripped)
+    legacy = load_config(str(custom))
+    assert legacy.audio.lufs_target == -16.0
+    assert legacy.audio.ad_lufs_target == -15.0
+
+
 def test_load_config_sets_default_edge_fallback_for_openai_hosts(tmp_path):
     source = Path(__file__).resolve().parents[2] / "radio.toml"
     custom = source.read_text().replace(
