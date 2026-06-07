@@ -39,6 +39,17 @@ def test_load_config_from_radio_toml(monkeypatch):
     assert len(config.ads.voices) > 0
 
 
+def test_load_config_parses_per_host_voice_settings():
+    """Marco carries an ElevenLabs clarity override (stability); a host without a
+    voice_settings table defaults to {} so its synthesis uses the house tuning."""
+    toml_path = Path(__file__).resolve().parents[2] / "radio.toml"
+    config = load_config(str(toml_path))
+    marco = next(h for h in config.hosts if h.name == "Marco")
+    giulia = next(h for h in config.hosts if h.name == "Giulia")
+    assert marco.voice_settings == {"stability": 0.6}
+    assert giulia.voice_settings == {}
+
+
 def test_load_config_sets_default_edge_fallback_for_openai_hosts(tmp_path):
     source = Path(__file__).resolve().parents[2] / "radio.toml"
     custom = source.read_text().replace(

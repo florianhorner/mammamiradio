@@ -204,6 +204,7 @@ class HostPersonality:
     personality: PersonalityAxes = field(default_factory=PersonalityAxes)
     engine: str = "edge"  # edge|openai|azure|elevenlabs
     edge_fallback_voice: str = ""  # edge-tts voice used when a cloud TTS engine falls back
+    voice_settings: dict = field(default_factory=dict)  # per-host ElevenLabs overrides, e.g. {"stability": 0.6}
 
 
 @dataclass

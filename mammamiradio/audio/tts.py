@@ -329,6 +329,7 @@ async def synthesize(
     edge_fallback_voice: str = "",
     openai_instructions: str = "",
     loudnorm: bool = True,
+    voice_settings: dict | None = None,
 ) -> Path:
     """Render text via the chosen TTS engine, then normalize to station output settings.
 
@@ -375,7 +376,9 @@ async def synthesize(
         if os.getenv("ELEVENLABS_API_KEY", ""):
             try:
                 async with _HEAVY_SEM:
-                    return await synthesize_elevenlabs(text, voice, output_path, loudnorm=loudnorm)
+                    return await synthesize_elevenlabs(
+                        text, voice, output_path, loudnorm=loudnorm, voice_settings=voice_settings
+                    )
             except Exception as e:
                 logger.warning("ElevenLabs TTS failed, falling back to edge-tts: %s", e)
         else:
@@ -704,6 +707,7 @@ async def synthesize_dialogue(
                     edge_fallback_voice=host.edge_fallback_voice,
                     openai_instructions=_openai_instructions_for_host(host),
                     loudnorm=not multi_line,
+                    voice_settings=host.voice_settings,
                 )
                 for (host, text), path in zip(lines, paths, strict=True)
             )

@@ -1104,6 +1104,7 @@ def load_config(path: str = "radio.toml") -> StationConfig:
             personality=PersonalityAxes.from_dict(h.get("personality", {})),
             engine=h.get("engine", "edge"),
             edge_fallback_voice=h.get("edge_fallback_voice", ""),
+            voice_settings=dict(h.get("voice_settings", {})),
         )
         for h in raw.get("hosts", [])
     ]
