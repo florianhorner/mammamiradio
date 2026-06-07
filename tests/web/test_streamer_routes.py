@@ -1060,6 +1060,84 @@ async def test_status_includes_station_mode():
 
 
 @pytest.mark.asyncio
+async def test_status_buffered_audio_sec_sums_shadow_durations():
+    """buffered_audio_sec surfaces airtime ahead (seconds), not item count."""
+    app = _make_test_app()
+    # The real queue must match the shadow depth: the one-directional drift guard
+    # (_sync_runtime_state) trims the shadow down to the real queue size before
+    # the sum runs, so an empty real queue would zero it out.
+    for _ in range(3):
+        app.state.queue.put_nowait(Segment(type=SegmentType.MUSIC, path=Path("/tmp/fake.mp3"), metadata={}))
+    app.state.station_state.queued_segments = [
+        {"type": "music", "label": "A", "duration_sec": 180.0},
+        {"type": "banter", "label": "B", "duration_sec": 12.5},
+        {"type": "music", "label": "C"},  # missing duration -> 0, never raises
+    ]
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.get("/status")
+    assert resp.status_code == 200
+    assert resp.json()["buffered_audio_sec"] == 192.5
+
+
+@pytest.mark.asyncio
+async def test_status_buffered_audio_sec_zero_when_queue_empty():
+    """Empty shadow -> 0.0 (UI hides the readout; never a dead '0s' box)."""
+    app = _make_test_app()
+    app.state.station_state.queued_segments = []
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.get("/status")
+    assert resp.status_code == 200
+    assert resp.json()["buffered_audio_sec"] == 0.0
+
+
+@pytest.mark.asyncio
+async def test_status_buffered_audio_sec_respects_drift_guard():
+    """The sum runs on the post-trim shadow: the one-directional drift guard keeps
+    the shadow no longer than the real queue, so only the surviving (oldest)
+    entries count toward buffered airtime.
+    """
+    app = _make_test_app()
+    # One real segment, three shadow entries -> the guard trims the shadow to [:1]
+    # (keeps the oldest) before buffered_audio_sec sums it.
+    app.state.queue.put_nowait(Segment(type=SegmentType.MUSIC, path=Path("/tmp/fake.mp3"), metadata={}))
+    app.state.station_state.queued_segments = [
+        {"type": "music", "label": "A", "duration_sec": 180.0},
+        {"type": "music", "label": "B", "duration_sec": 120.0},
+        {"type": "music", "label": "C", "duration_sec": 60.0},
+    ]
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.get("/status")
+    assert resp.status_code == 200
+    assert resp.json()["buffered_audio_sec"] == 180.0  # only the surviving oldest entry
+    assert app.state.station_state.shadow_queue_corrections == 1
+
+
+@pytest.mark.asyncio
+async def test_status_operator_force_pending_set_only_by_trigger():
+    """The panel's "Triggered" row must reflect OPERATOR action only: /api/trigger
+    sets operator_force_pending, but an internal force (the silence-rescue setting
+    force_next directly) must NOT — otherwise the panel lies during an incident.
+    """
+    app = _make_test_app()
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        # Internal force (simulates the 60s-silence dead-air rescue / stop-skip music force).
+        app.state.station_state.force_next = SegmentType.BANTER
+        body = (await client.get("/status")).json()
+        assert body["force_pending"] == "banter"
+        assert body["operator_force_pending"] is None  # not operator-attributed -> no Triggered row
+
+        # Operator trigger.
+        trig = await client.post("/api/trigger", json={"type": "ad"})
+        assert trig.status_code == 200
+        body = (await client.get("/status")).json()
+        assert body["operator_force_pending"] == "ad"
+
+
+@pytest.mark.asyncio
 async def test_setup_recheck_returns_onboarding_payload():
     app = _make_test_app()
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
