@@ -485,6 +485,28 @@ def test_measure_lufs_parses_integrated_loudness():
     assert result == pytest.approx(-16.2)
 
 
+def test_measure_lufs_takes_summary_not_per_frame_floor():
+    """ebur128 logs a per-frame 'I: -70.0 LUFS' (the gate floor, before data has
+    accumulated) for EVERY frame, then the true integrated value in its
+    end-of-stream Summary. measure_lufs must return the Summary value, not the
+    first per-frame -70.0 — the regression that made it return -70 for everything
+    and silently disabled both the fast-path skip and any LUFS-based correction.
+    """
+    from mammamiradio.audio.normalizer import measure_lufs
+
+    fake_result = MagicMock(spec=subprocess.CompletedProcess)
+    fake_result.returncode = 0
+    fake_result.stderr = (
+        "[Parsed_ebur128_0 @ 0x1] t: 0.1 TARGET:-23 LUFS  M: -70.0 S:-70.0  I: -70.0 LUFS  LRA: 0.0 LU\n"
+        "[Parsed_ebur128_0 @ 0x1] t: 0.2 TARGET:-23 LUFS  M: -22.0 S:-70.0  I: -70.0 LUFS  LRA: 0.0 LU\n"
+        "[Parsed_ebur128_0 @ 0x1] Summary:\n\n"
+        "  Integrated loudness:\n    I:         -16.2 LUFS\n    Threshold: -26.2 LUFS\n"
+    )
+    with patch("mammamiradio.audio.normalizer.subprocess.run", return_value=fake_result):
+        result = measure_lufs(Path("/tmp/test.mp3"))
+    assert result == pytest.approx(-16.2)  # the Summary value, not the -70.0 per-frame floor
+
+
 def test_measure_lufs_returns_none_on_failure():
     """measure_lufs returns None when ffmpeg/ebur128 fails."""
     from mammamiradio.audio.normalizer import measure_lufs
