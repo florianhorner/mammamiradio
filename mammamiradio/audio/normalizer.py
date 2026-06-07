@@ -86,10 +86,14 @@ def measure_lufs(input_path: Path) -> float | None:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
     except (OSError, subprocess.TimeoutExpired):
         return None
-    # ebur128 summary prints "I:  -16.2 LUFS" in stderr
-    match = re.search(r"I:\s+(-?\d+\.\d+)\s+LUFS", result.stderr or "")
-    if match:
-        return float(match.group(1))
+    # ebur128 logs a per-frame "I: -70.0 LUFS" line (the gate floor, before any
+    # data has accumulated) for EVERY frame, then the true integrated value in
+    # its end-of-stream Summary. Take the LAST match — the Summary value — not
+    # the first per-frame -70.0 (which made this return -70 for everything,
+    # silently disabling the fast-path skip below and any LUFS-based correction).
+    matches = re.findall(r"I:\s+(-?\d+\.\d+)\s+LUFS", result.stderr or "")
+    if matches:
+        return float(matches[-1])
     return None
 
 
@@ -98,6 +102,18 @@ _MP3_OUTPUT_ARGS: list[str] = ["-ar", "48000", "-ac", "2", "-b:a", "192k", "-wri
 _FFMPEG_APHASER_MAX_DELAY_MS = 5.0
 _FFMPEG_TREMOLO_MIN_FREQ_HZ = 0.1
 _FFMPEG_TIMEOUT_SEC = float(os.getenv("MAMMAMIRADIO_FFMPEG_TIMEOUT_SEC", "180"))
+
+# Loudness reconciliation: when configured (configure_loudness_reconcile, called
+# once at startup), each finished segment is measured and nudged to one
+# integrated-LUFS target so music, dialogue, bedded banter and ads land at the
+# same perceived level — regardless of which upstream filter (dynaudnorm on the
+# Green vs loudnorm) produced them. None = disabled (the default, so tests and
+# any unconfigured import keep today's raw per-filter levels).
+_loudness_reconcile: tuple[float, float] | None = None  # (main_target_lufs, ad_target_lufs)
+# Output encoding args for the reconcile re-encode — set from radio.toml [audio] at
+# startup so a non-default sample rate / channels / bitrate is preserved (matching
+# what normalize() honours), never silently rewritten to the house defaults.
+_reconcile_output_args: list[str] = list(_MP3_OUTPUT_ARGS)
 
 # Canonical list of supported SFX types (synthetic fallbacks).
 # Pre-recorded files in sfx_dir can extend this, but this list is what the
@@ -164,6 +180,86 @@ def _gate_after(onset_sec: float) -> str:
     return f"if(gte(t\\,{_fmt_num(onset)})\\,1\\,0)"
 
 
+def configure_loudness_reconcile(
+    main_target: float | None,
+    ad_target: float | None,
+    *,
+    sample_rate: int = 48000,
+    channels: int = 2,
+    bitrate: int = 192,
+) -> None:
+    """Enable per-segment LUFS reconciliation (call once at startup).
+
+    Pass the integrated-LUFS targets for non-ad and ad segments; pass None for
+    either to disable reconciliation entirely (returns to raw per-filter levels).
+    The corrective re-encode honours the station's configured encoding so a
+    non-default sample rate / channels / bitrate is preserved, not silently
+    rewritten to the house 48k/stereo/192k defaults.
+    """
+    global _loudness_reconcile, _reconcile_output_args
+    _loudness_reconcile = None if main_target is None or ad_target is None else (float(main_target), float(ad_target))
+    _reconcile_output_args = [
+        "-ar",
+        str(sample_rate),
+        "-ac",
+        str(channels),
+        "-b:a",
+        f"{bitrate}k",
+        "-write_xing",
+        "0",
+        "-f",
+        "mp3",
+    ]
+
+
+def _reconcile_lufs(path: Path, *, ad: bool = False) -> None:
+    """Nudge a finished segment to the configured integrated-LUFS target.
+
+    No-op unless reconciliation is configured. Measures the file (cheap ebur128)
+    and applies a single corrective ``volume`` gain so the integrated level lands
+    on target. Idempotent: a file already on target gets a sub-0.5 dB correction
+    and is skipped, so the redundant terminal passes some segments take (e.g.
+    ``normalize()`` then ``mix_voice_with_bed()``) cost only a measure, never a
+    second re-encode. Best-effort — a failed measure, re-encode, or rename leaves
+    the file as produced and never raises into the audio path.
+    """
+    cfg = _loudness_reconcile
+    if cfg is None:
+        return
+    target = cfg[1] if ad else cfg[0]
+    # Hold a normalization concurrency slot for the measure + corrective re-encode
+    # so reconcile honours the same 2-ffmpeg ceiling as the rest of the pipeline
+    # (the constrained-Pi regime where the SIGABRT / EQ-count guards live).
+    with _NORM_SEM:
+        lufs = measure_lufs(path)
+        if lufs is None:
+            return  # measurement failed — leave the file as produced
+        # Clamp so a near-silent or corrupt file is never pumped to a huge gain.
+        gain_db = max(-12.0, min(12.0, target - lufs))
+        if abs(gain_db) < 0.5:
+            return  # already on target (within measurement noise) — skip the re-encode
+        tmp = path.with_name(f"{path.stem}.lufs{path.suffix}")
+        cmd = [
+            "ffmpeg",
+            "-y",
+            "-i",
+            str(path),
+            "-af",
+            f"volume={_fmt_num(gain_db)}dB",
+            *_reconcile_output_args,
+            str(tmp),
+        ]
+        try:
+            _run_ffmpeg(cmd, f"LUFS reconcile ({gain_db:+.1f} dB) {path.name}")
+            # Rename inside the try so a failed atomic replace (disk full, vanished
+            # file) also leaves the original untouched — never raises.
+            tmp.replace(path)
+        except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+            tmp.unlink(missing_ok=True)
+            return  # measure/encode/rename failed — keep the original, never break audio
+    logger.info("LUFS reconcile: %s -> %.1f LUFS (%+.1f dB)", path.name, target, gain_db)
+
+
 def normalize(
     input_path: Path,
     output_path: Path,
@@ -199,6 +295,11 @@ def normalize(
         "acompressor=threshold=0.25:ratio=2:attack=20:release=250:makeup=1"  # gentle radio leveller
     )
 
+    # ``loudnorm`` doubles as the reconcile gate below, but the fast-path skip also
+    # sets it False for a FINAL track already near -16. Capture the caller's intent
+    # first so a skipped-but-final segment still reconciles to the configured target
+    # (which may not be -16); intermediate TTS lines pass loudnorm=False and stay raw.
+    is_final = loudnorm
     # Skip the expensive loudnorm pass if the file is already within ±1.5 LU of -16 LUFS,
     # but still re-encode to the station format (sample rate, channels, bitrate) and trim
     # trailing silence. A bare shutil.copy2 would leave the file at whatever sample rate
@@ -261,6 +362,10 @@ def normalize(
     ]
     with _NORM_SEM:
         _run_ffmpeg(cmd, f"normalize {input_path.name}")
+    if is_final:
+        # Final segment (incl. a fast-path-skipped one) — bring it to the configured
+        # target; reconcile is a cheap no-op when already there.
+        _reconcile_lufs(output_path)
     logger.info("Normalized%s: %s -> %s", "" if loudnorm else " (fast)", input_path.name, output_path.name)
     return output_path
 
@@ -1117,6 +1222,7 @@ def mix_voice_with_bed(voice_path: Path, bed_path: Path, output_path: Path, bed_
         str(output_path),
     ]
     _run_ffmpeg(cmd, "mix voice with talk bed")
+    _reconcile_lufs(output_path)
     logger.info("Mixed voice + talk bed -> %s", output_path.name)
     return output_path
 
@@ -1350,6 +1456,7 @@ def mix_voice_with_sting(
         str(output_path),
     ]
     _run_ffmpeg(cmd, "mix voice with sting")
+    _reconcile_lufs(output_path)
     logger.info("Mixed voice + sting -> %s", output_path.name)
     return output_path
 
@@ -1363,9 +1470,11 @@ def normalize_ad(input_path: Path, output_path: Path) -> Path:
     aggressive loudnorm (I=-14, LRA=7 for minimal dynamic range, TP=-1.0 for
     maximum loudness before clipping).
 
-    Compared to music normalize() (I=-16, LRA=11, TP=-1.5), ads are 2 LUFS
-    louder, much narrower dynamic range, and brighter. This is the standard
-    broadcast approach — ads should pop without being jarring.
+    The I=-14 stage gives ads their punch; a final loudness-reconciliation pass
+    (``_reconcile_lufs(ad=True)``) then settles the aired level to ad_lufs_target
+    (default -15 LUFS — 1 LU hotter than music's -16, not the raw 2 LU of this
+    stage), so ads pop without the old jarring jump. Narrower dynamic range and
+    brighter than music throughout — the standard broadcast approach.
     """
     cmd = [
         "ffmpeg",
@@ -1387,6 +1496,7 @@ def normalize_ad(input_path: Path, output_path: Path) -> Path:
         str(output_path),
     ]
     _run_ffmpeg(cmd, f"normalize_ad {input_path.name}")
+    _reconcile_lufs(output_path, ad=True)
     logger.info("Ad broadcast processing: %s -> %s", input_path.name, output_path.name)
     return output_path
 
@@ -1445,6 +1555,7 @@ def mix_ad_with_bed(voiceover_path: Path, output_path: Path) -> Path:
         str(output_path),
     ]
     _run_ffmpeg(cmd, f"mix_ad_with_bed {voiceover_path.name}")
+    _reconcile_lufs(output_path, ad=True)
     logger.info("Ad bed mix: %s -> %s", voiceover_path.name, output_path.name)
     return output_path
 

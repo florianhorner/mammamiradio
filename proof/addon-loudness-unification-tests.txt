@@ -1,0 +1,18 @@
+# addon-loudness-unification — test + lint proof
+# generated 2026-06-07T10:59:54Z
+
+## pytest — loudness reconcile + measure_lufs parser + config + startup wiring
+........................................................................ [ 79%]
+.....................................                                    [100%]
+181 passed, 2 deselected in 0.94s
+
+## real-ffmpeg LUFS guards (-m requires_ffmpeg / pi-smoke)
+........                                                                 [100%]
+8 passed in 1.63s
+
+## ruff check + format --check + mypy — touched modules
+All checks passed!
+3 files already formatted
+Success: no issues found in 3 source files
+
+## full suite — 'make check': all checks passed; coverage 94%, all per-module floors held

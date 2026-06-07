@@ -145,6 +145,7 @@ private durable system for strategy or relationship context.
 - If Anthropic fails mid-session, script generation falls back to OpenAI `gpt-4o-mini` when `OPENAI_API_KEY` is set, then to short stock copy.
 - If Home Assistant is enabled and `HA_TOKEN` is present, banter and ads may reference current home state.
 - `audio.bitrate` is the single source of truth for encoding, ICY headers, and playback throttling.
+- `audio.lufs_target` / `audio.ad_lufs_target` set the integrated-LUFS targets for the loudness-reconciliation pass: every finished segment is measured (`measure_lufs`) and nudged with one corrective `volume` gain so music, dialogue, bedded banter, and ads all air at the same level (ads 1 LU hotter). Configured once at startup via `configure_loudness_reconcile()` in `audio/normalizer.py`; idempotent and best-effort (a failed measure/re-encode leaves the segment untouched — never dead air). Defaults `-16.0` / `-15.0`.
 - Source switching via `/api/playlist/load` purges the queue, skips the current segment, and begins playback from the new source immediately.
 - Non-local binds require `ADMIN_PASSWORD` or `ADMIN_TOKEN`.
 

@@ -70,6 +70,16 @@ Charts / Jamendo / classic eras / local files / demo tracks
   - builds a break from host intro, bumpers, one or more ad spots, and host outro
   - records per-spot campaign history (format, sonic signature, summary) for format rotation and campaign arc continuity
 
+Every finished segment then passes a final **loudness-reconciliation** step: it is
+measured (`measure_lufs`, EBU R128) and nudged with a single corrective `volume`
+gain so music, hosts, beds, and ads all air at one integrated-LUFS target
+(`[audio] lufs_target`, with ads at `ad_lufs_target` — 1 LU hotter). This holds
+perceived volume steady across segment types regardless of which upstream filter
+produced each one (the Green's `dynaudnorm` path has no fixed target on its own).
+It is idempotent (an already-on-target segment skips the re-encode, so the
+redundant terminal passes some segments take cost only a measure) and best-effort
+(a measurement or re-encode failure leaves the segment untouched — never dead air).
+
 ### Dynamic LLM routing (which model voices each task)
 
 Script generation never names a model in code. Each call site asks for a model by
