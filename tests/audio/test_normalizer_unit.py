@@ -59,6 +59,19 @@ def test_run_ffmpeg_passes_command(mock_subprocess):
     mock_run.assert_called_once_with(cmd, capture_output=True, timeout=180.0)
 
 
+def test_run_ffmpeg_logs_stage_timing_at_debug(mock_subprocess, caplog):
+    """Render-latency deep-dive: every ffmpeg stage logs its wall time at DEBUG,
+    labelled by description, so the seconds can be attributed per stage."""
+    import logging
+
+    with caplog.at_level(logging.DEBUG, logger="mammamiradio.audio.normalizer"):
+        _run_ffmpeg(["ffmpeg", "-y", "out.mp3"], "normalize song.mp3")
+
+    timing = [r for r in caplog.records if "ffmpeg stage normalize song.mp3" in r.getMessage()]
+    assert timing, "expected a DEBUG per-stage timing line for the ffmpeg call"
+    assert timing[-1].levelno == logging.DEBUG
+
+
 def test_run_ffmpeg_raises_on_nonzero_return(mock_subprocess):
     _mock_run, completed = mock_subprocess
     completed.returncode = 1

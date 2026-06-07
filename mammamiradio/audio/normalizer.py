@@ -10,6 +10,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import time
 from pathlib import Path
 from threading import BoundedSemaphore
 
@@ -106,10 +107,12 @@ def measure_lufs(input_path: Path) -> float | None:
         "null",
         "-",
     ]
+    _t0 = time.perf_counter()
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
     except (OSError, subprocess.TimeoutExpired):
         return None
+    logger.debug("ffmpeg stage measure_lufs %s: %.2fs", input_path.name, time.perf_counter() - _t0)
     # ebur128 logs a per-frame "I: -70.0 LUFS" line (the gate floor, before any
     # data has accumulated) for EVERY frame, then the true integrated value in
     # its end-of-stream Summary. Take the LAST match — the Summary value — not
@@ -158,7 +161,14 @@ AVAILABLE_SFX_TYPES: list[str] = [
 
 
 def _run_ffmpeg(cmd: list[str], description: str) -> subprocess.CompletedProcess:
-    """Run an ffmpeg command with stderr capture and logging on failure."""
+    """Run an ffmpeg command with stderr capture and logging on failure.
+
+    Per-stage wall time is logged at DEBUG (set LOG_LEVEL=DEBUG for a soak) so the
+    render-latency deep-dive can attribute the seconds — every ffmpeg stage funnels
+    through here labelled by ``description`` (e.g. "normalize X", "LUFS reconcile",
+    "mix voice with talk bed", "concat N files").
+    """
+    _t0 = time.perf_counter()
     try:
         result = subprocess.run(cmd, capture_output=True, timeout=_FFMPEG_TIMEOUT_SEC)
     except subprocess.TimeoutExpired:
@@ -168,6 +178,7 @@ def _run_ffmpeg(cmd: list[str], description: str) -> subprocess.CompletedProcess
         stderr = result.stderr.decode(errors="replace")[-500:]
         logger.error("ffmpeg failed (%s): %s", description, stderr)
         result.check_returncode()  # raises CalledProcessError
+    logger.debug("ffmpeg stage %s: %.2fs", description, time.perf_counter() - _t0)
     return result
 
 
