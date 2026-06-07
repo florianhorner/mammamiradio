@@ -369,6 +369,24 @@ def test_empty_bind_host_requires_auth(monkeypatch):
         load_config(str(toml_path))
 
 
+def test_non_local_bind_allowed_in_addon_mode_without_creds(monkeypatch):
+    """In HA add-on mode, a non-loopback bind without admin creds must NOT raise.
+
+    The addon binds 0.0.0.0 for ingress and relies on the private-network LAN
+    trust in require_admin_access instead of a forced token. SUPERVISOR_TOKEN
+    flips is_addon True, which exempts the credential requirement.
+    """
+    toml_path = Path(__file__).resolve().parents[2] / "radio.toml"
+    monkeypatch.setenv("MAMMAMIRADIO_BIND_HOST", "0.0.0.0")
+    monkeypatch.setenv("SUPERVISOR_TOKEN", "supervisor-abc")
+    monkeypatch.delenv("ADMIN_PASSWORD", raising=False)
+    monkeypatch.delenv("ADMIN_TOKEN", raising=False)
+
+    config = load_config(str(toml_path))
+    assert config.is_addon is True
+    assert config.bind_host == "0.0.0.0"
+
+
 # --- Addon detection tests ---
 
 
