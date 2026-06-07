@@ -1755,6 +1755,7 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
         </div>
         <div class="programme-toolbar">
           <span class="filter-count" id="programmeCount"></span>
+          <span class="filter-count" id="bufferedReady" title="Audio rendered and ready to air"></span>
           <div class="filter-pills">
             <button type="button" class="filter-pill active" data-filter="all" onclick="setProgrammeFilter('all',this)">All</button>
             <button type="button" class="filter-pill" data-filter="music" onclick="setProgrammeFilter('music',this)">Music</button>
@@ -1793,6 +1794,7 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
           <button type="button" class="btn btn-chip" onclick="enrichPlaylistSource('classic_70s',this)">Anni '70</button>
           <button type="button" class="btn btn-chip" onclick="enrichPlaylistSource('classic_80s',this)">Anni '80</button>
           <button type="button" class="btn btn-chip" onclick="enrichPlaylistSource('classic_90s',this)">Anni '90</button>
+          <button type="button" class="btn btn-chip" onclick="shufflePlaylist(this)" title="Shuffle rotation"><svg width="12" height="12" style="vertical-align:-1px"><use href="#ic-shuffle"/></svg> Shuffle</button>
         </div>
         <div class="rotation-sort">order: current rotation</div>
       </div>
@@ -2538,12 +2540,38 @@ function renderProduction(st){
     const el=p.current.elapsed_sec?`<span class="prod-elapsed">${p.current.elapsed_sec}s</span>`:'';
     rows.push(`<div class="prod-entry">${statusInline('working','',p.current.label)}${badge}<span class="prod-label">${esc(p.current.label)}</span>${el}</div>`);
   }
+  // Operator hit Trigger: acknowledge the accepted-but-not-yet-building moment
+  // so the panel never looks like the click did nothing. Reads operator_force_pending
+  // (set ONLY by /api/trigger), NOT force_pending — so internal forces (the
+  // 60s-silence dead-air rescue, stop/skip/resume) never false-light this row
+  // during an incident. It clears the instant the producer starts building it;
+  // the guard suppresses a duplicate row while that hand-off to "current" settles.
+  const fp=st&&st.operator_force_pending;
+  if(fp&&!(p.current&&segmentTypeKey(p.current.kind)===segmentTypeKey(fp))){
+    const badge=segmentInline(segmentTypeKey(fp));
+    rows.push(`<div class="prod-entry">${statusInline('working','',segmentText(segmentTypeKey(fp)))}${badge}<span class="prod-label">Triggered — building next</span></div>`);
+  }
   (p.recent||[]).forEach(r=>{
     const badge=segmentInline(segmentTypeKey(r.kind||'music'));
     rows.push(`<div class="prod-entry recent">${statusInline(r.ok?'ready':'blocked','',r.label)}${badge}<span class="prod-label">${esc(r.label)}</span></div>`);
   });
   if(rows.length){feed.innerHTML=rows.join('');wrap.style.display='';}
   else{feed.innerHTML='';wrap.style.display='none';}
+}
+
+// Honest airtime-ahead readout: SECONDS of buffered audio, not item count
+// (3 short banters are not 3 songs of runway). Updated every poll so it never
+// goes stale; blank when nothing is queued — never a dead "0s" box.
+function updateBufferedReady(st){
+  const el=document.getElementById('bufferedReady');
+  if(!el)return;
+  const sec=st&&typeof st.buffered_audio_sec==='number'?st.buffered_audio_sec:0;
+  if(!(sec>0)){el.textContent='';return;}
+  // Round to whole seconds BEFORE splitting so a value like 119.6s renders
+  // "~2m00s", never an impossible "~1m60s" (no minute-carry if you round m and s
+  // independently).
+  const total=Math.round(sec),m=Math.floor(total/60),s=total%60;
+  el.textContent='· ~'+(m>0?m+'m'+(s<10?'0':'')+s+'s':s+'s')+' ready';
 }
 
 function renderProgramme(st){
@@ -2930,6 +2958,13 @@ function updateSourceControls(st,caps){
   const visibility=sourceControlVisibility(caps);
   if(jamBtn)jamBtn.style.display=visibility.jamendo?'':'none';
   if(chartsBtn)chartsBtn.style.display=visibility.charts_reload?'':'none';
+}
+async function shufflePlaylist(el){
+  flash(el);
+  const r=await api('POST','/api/shuffle',{});
+  if(!r.ok){toast('Error: '+(r.error||'unknown'));return;}
+  toast('Playlist shuffled');
+  await refreshFast();
 }
 async function enrichPlaylistSource(kind,el){
   flash(el);
@@ -3721,6 +3756,7 @@ async function refreshFast(){
     updateNow(_st.now_streaming);
     renderProduction(_st);
     renderProgramme(_st);
+    updateBufferedReady(_st);
     updateRecent(_st);
     updateLog(_st.stream_log);
     updatePl(_st.playlist||[],_st.playlist_page||null);

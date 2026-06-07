@@ -102,6 +102,12 @@ class AudioSection:
     sample_rate: int = 48000
     channels: int = 2
     bitrate: int = 192
+    # Integrated-LUFS targets for the loudness-reconciliation pass (measure +
+    # corrective gain on each finished segment so music, dialogue, bedded banter
+    # and ads all land at one perceived level). ad_lufs_target sits 1 LU hotter
+    # so ads still pop, without the old jarring 2-LU jump.
+    lufs_target: float = -16.0
+    ad_lufs_target: float = -15.0
 
 
 # ── Dynamic LLM routing ───────────────────────────────────────────────────

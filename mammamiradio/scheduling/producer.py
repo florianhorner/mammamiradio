@@ -38,6 +38,7 @@ from mammamiradio.audio.normalizer import (
     mix_voice_with_sting,
     normalize,
     probe_duration_sec,
+    reconcile_cached_music,
     save_track_metadata,
 )
 from mammamiradio.audio.tts import synthesize, synthesize_ad, synthesize_dialogue
@@ -133,6 +134,11 @@ async def _render_music_track(
     norm_cached = _normalized_cache_path(track, config)
     if norm_cached.exists():
         logger.debug("Normalization cache hit%s: %s", f" ({context})" if context else "", norm_cached.name)
+        # A cache hit skips normalize() + its reconcile pass, so a file produced
+        # before reconciliation existed would air at its old level. Reconcile it on
+        # hit (off the event loop) so every song lands at the target; skipped once
+        # the sidecar marks it done, so steady-state cache hits stay instant.
+        await loop.run_in_executor(None, reconcile_cached_music, norm_cached)
         return RenderedMusicTrack(track=track, path=norm_cached, cache_path=norm_cached, cache_hit=True)
 
     norm_path = config.tmp_dir / f"{temp_prefix}_{uuid4().hex[:8]}.mp3"
@@ -413,6 +419,60 @@ def _initial_previous_segment_type(queue: asyncio.Queue[Segment], state: Station
     if state.current_track is not None:
         return SegmentType.MUSIC
     return None
+
+
+def _front_insert_queue_and_shadow(
+    queue: asyncio.Queue[Segment], state: StationState, segment: Segment, shadow_entry: dict
+) -> bool:
+    """Air an operator-triggered segment NEXT instead of behind the buffered
+    lookahead. Synchronously drains the queue, puts the segment at the front, and
+    repushes — no await between draining the real queue and updating the shadow, so
+    the streamer cannot interleave (mirrors ``_purge_queue_and_shadow`` and the
+    ``/api/queue/remove`` critical section). Drops the furthest-future tail if the
+    bounded queue would otherwise overflow ``maxsize`` (which would raise QueueFull
+    and risk dead air); dropped renders are re-produced on a later cycle. Returns
+    False (dropping the segment) if the session was stopped mid-build.
+    """
+    if state.session_stopped:
+        if segment.ephemeral:
+            segment.path.unlink(missing_ok=True)
+        logger.info("Discarding forced %s because the session is stopped", segment.type.value)
+        return False
+    items: list[Segment] = []
+    while not queue.empty():
+        try:
+            items.append(queue.get_nowait())
+            queue.task_done()
+        except asyncio.QueueEmpty:
+            break
+    items.insert(0, segment)
+    dropped: list[Segment] = []
+    while queue.maxsize and len(items) > queue.maxsize:
+        dropped.append(items.pop())  # furthest-future first
+    for item in items:
+        queue.put_nowait(item)
+    # Shadow mirrors the real queue: prepend the new entry, then drop the same
+    # number of tail entries (never the new front one) so the one-directional drift
+    # guard never has to "correct" a shadow > queue overshoot and log a false alarm
+    # on every air-next.
+    state.queued_segments.insert(0, shadow_entry)
+    for seg in dropped:
+        if getattr(seg, "ephemeral", False):
+            seg.path.unlink(missing_ok=True)
+    if dropped and len(state.queued_segments) > 1:
+        drop_n = min(len(dropped), len(state.queued_segments) - 1)
+        del state.queued_segments[len(state.queued_segments) - drop_n :]
+    # The operator's pick is now queued — the trigger is fulfilled. Clearing the
+    # in-flight guard HERE (not at render-start) is what makes "one at a time" hold
+    # through a slow render: a second tap stays rejected until this pick airs, so it
+    # can never be front-inserted ahead of it.
+    state.operator_force_pending = None
+    logger.info(
+        "Air-next: front-inserted %s%s",
+        segment.type.value,
+        f" (dropped {len(dropped)} buffered tail segment(s))" if dropped else "",
+    )
+    return True
 
 
 async def _apply_talk_bed(
@@ -1123,6 +1183,7 @@ async def run_producer(
         # to discard the in-flight chaos segment correctly.
         generation_chaos_epoch = state.chaos_cutover_epoch
         chaos_subtype: ChaosSubtype | None = None
+        is_operator_forced = False  # operator /api/trigger -> air-next (front-insert)
         if state.chaos_pending is not None:
             chaos_subtype = state.chaos_pending
             state.chaos_last_degraded_reason = ""
@@ -1131,12 +1192,26 @@ async def run_producer(
         elif state.force_next is not None:
             seg_type = state.force_next
             state.force_next = None
-            logger.info("Forced trigger: %s", seg_type.value)
+            # An operator trigger (not the 60s-silence rescue or other internal
+            # forces) gets air-next: it is front-inserted so it airs at the next
+            # boundary instead of behind the buffered lookahead.
+            is_operator_forced = state.operator_force_pending is not None
+            # Keep operator_force_pending set through the whole render (cleared only
+            # when the segment actually queues, in _front_insert_queue_and_shadow, or
+            # on a discard below). That makes the second-trigger rejection hold for the
+            # full render, so a later tap can't be front-inserted ahead of this pick.
+            # The panel's "Triggered" row is suppressed once production.current shows
+            # this kind building, so there is no duplicate row.
+            logger.info("Forced trigger: %s (air-next=%s)", seg_type.value, is_operator_forced)
         else:
             seg_type = next_segment_type(state, config.pacing)
         segment: Segment | None = None
         generation_revision = state.playlist_revision
         success_callback: Callable[[], None] | None = None
+        # Render-latency deep-dive: total wall time to build this segment, logged
+        # at INFO on the Queued line below. Per-stage ffmpeg breakdown is at DEBUG
+        # in audio/normalizer.py (set LOG_LEVEL=DEBUG for a soak).
+        _t_render = time.perf_counter()
 
         # Refresh Home Assistant context for banter/ad segments
         if (
@@ -2374,10 +2449,14 @@ async def run_producer(
             if generation_revision != state.playlist_revision:
                 logger.info("Discarding stale %s segment after playlist source switch", seg_type.value)
                 _unlink_if_tmp_render(segment, config.tmp_dir)
+                if is_operator_forced:
+                    state.operator_force_pending = None  # render abandoned — let the operator retry
                 continue
             if generation_chaos_epoch != state.chaos_cutover_epoch:
                 logger.info("Discarding stale %s segment after chaos cutover", seg_type.value)
                 _unlink_if_tmp_render(segment, config.tmp_dir)
+                if is_operator_forced:
+                    state.operator_force_pending = None  # render abandoned — let the operator retry
                 continue
             # Stable per-segment id: stamped on the Segment metadata AND the
             # shadow-list entry so /api/queue/remove can target a segment by
@@ -2385,8 +2464,27 @@ async def run_producer(
             # streamer consumes the head).
             queue_id = uuid4().hex
             segment.metadata["queue_id"] = queue_id
-            if not await _queue_segment(segment):
-                continue
+            shadow_entry = {
+                "id": queue_id,
+                "type": segment.type.value,
+                "label": segment.metadata.get("title", segment.type.value),
+                "spotify_id": segment.metadata.get("spotify_id", ""),
+                "reason": segment.metadata.get("queue_reason", "Rendered and queued for playback."),
+                "playlist_index": segment.metadata.get("playlist_index", -1),
+                "source_kind": segment.metadata.get("source_kind", ""),
+                "duration_sec": round(segment.duration_sec or 0, 1),
+            }
+            if is_operator_forced:
+                # Air-next: front-insert past the buffered lookahead so the operator
+                # hears their pick at the next boundary, never minutes later.
+                if not _front_insert_queue_and_shadow(queue, state, segment, shadow_entry):
+                    continue
+                if "error" not in segment.metadata:
+                    prev_seg_type = segment.type
+            else:
+                if not await _queue_segment(segment):
+                    continue
+                state.queued_segments.append(shadow_entry)
             if chaos_subtype is not None and state.chaos_pending == chaos_subtype:
                 state.chaos_pending = None
             if chaos_subtype == ChaosSubtype.URGENT_INTERRUPT:
@@ -2397,18 +2495,6 @@ async def run_producer(
                 if state.force_next == SegmentType.BANTER:
                     state.force_next = None
             _segments_produced += 1
-            state.queued_segments.append(
-                {
-                    "id": queue_id,
-                    "type": segment.type.value,
-                    "label": segment.metadata.get("title", segment.type.value),
-                    "spotify_id": segment.metadata.get("spotify_id", ""),
-                    "reason": segment.metadata.get("queue_reason", "Rendered and queued for playback."),
-                    "playlist_index": segment.metadata.get("playlist_index", -1),
-                    "source_kind": segment.metadata.get("source_kind", ""),
-                    "duration_sec": round(segment.duration_sec or 0, 1),
-                }
-            )
             # Queue appended → up_next changed → integration consumers polling
             # ``changed_at`` need to see this even without a segment transition.
             state.last_state_change_at = time.time()
@@ -2427,4 +2513,9 @@ async def run_producer(
                         _prefetch_next(state, config, _prefetch_failed_keys),
                         name="prefetch-norm",
                     )
-            logger.info("Queued %s (queue size: %d)", segment.type.value, queue.qsize())
+            logger.info(
+                "Queued %s in %.1fs (queue size: %d)",
+                segment.type.value,
+                time.perf_counter() - _t_render,
+                queue.qsize(),
+            )
