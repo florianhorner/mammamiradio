@@ -44,7 +44,11 @@ def _make_test_app(*, admin_password: str = "", admin_token: str = "", is_addon:
     app.include_router(router)
     app.include_router(listener_requests_router)
 
-    config = load_config(TOML_PATH)
+    with patch.dict(os.environ, {"ADMIN_PASSWORD": "", "ADMIN_TOKEN": ""}):
+        os.environ.pop("MAMMAMIRADIO_BIND_HOST", None)
+        os.environ.pop("SUPERVISOR_TOKEN", None)
+        os.environ.pop("HASSIO_TOKEN", None)
+        config = load_config(TOML_PATH)
     # Override auth settings for test isolation
     config.admin_password = admin_password
     config.admin_token = admin_token
@@ -1696,8 +1700,11 @@ async def test_admin_panel_with_basic_auth_returns_html():
 
 
 @pytest.mark.asyncio
-async def test_admin_lan_access_in_addon_mode_no_creds():
+async def test_admin_lan_access_in_addon_mode_no_creds(monkeypatch):
     """In HA add-on mode with no credentials, a LAN client can reach /admin."""
+    monkeypatch.setenv("MAMMAMIRADIO_BIND_HOST", "0.0.0.0")
+    monkeypatch.delenv("ADMIN_PASSWORD", raising=False)
+    monkeypatch.delenv("ADMIN_TOKEN", raising=False)
     app = _make_test_app(is_addon=True)
     transport = httpx.ASGITransport(app=app, client=("192.168.1.50", 9999))
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
