@@ -2625,20 +2625,31 @@ MODEL_PRICES: dict[str, tuple[float, float]] = {
 }
 _UNPRICED_FALLBACK = (0.000015, 0.000075)  # highest known tier — conservative
 
+# One deliberately-blended TTS rate (~$20 / 1M chars) across Azure / OpenAI /
+# ElevenLabs. Cent-accurate TTS cost is impossible — ElevenLabs alone swings 3-5x
+# by plan tier — so this is rough on purpose. The honesty lives in the UI label
+# ("~$N est"), not in the arithmetic. Only paid cloud chars reach state.tts_characters
+# (Edge-tts is free and never counted), so this never bills a silent fallback.
+TTS_BLENDED_RATE = 0.00002
+
 
 def _estimate_api_cost(state) -> tuple[float, bool]:
-    """Sum per-model token cost. Returns (usd, has_unpriced_model).
+    """Sum per-model token cost plus a rough TTS estimate. Returns (usd, has_unpriced).
 
     Prices each model the session actually used (api_tokens_by_model). A model
     with no MODEL_PRICES entry falls back to the highest known tier and trips the
     flag so the UI can annotate the estimate — never a silent $0, never a KeyError.
+    Adds a blended TTS character cost on top. getattr keeps a persisted/legacy state
+    (no tts_characters attr) safe.
     """
+    tts_cost = getattr(state, "tts_characters", 0) * TTS_BLENDED_RATE
     by_model = getattr(state, "api_tokens_by_model", None) or {}
     if not by_model:
         # No per-model data yet — flat haiku estimate on aggregate counters so
         # the counter is never blank for a fresh/legacy session.
         in_rate, out_rate = MODEL_PRICES["claude-haiku-4-5-20251001"]
-        return round(state.api_input_tokens * in_rate + state.api_output_tokens * out_rate, 4), False
+        llm = state.api_input_tokens * in_rate + state.api_output_tokens * out_rate
+        return round(llm + tts_cost, 4), False
     total = 0.0
     has_unpriced = False
     for model_id, toks in by_model.items():
@@ -2647,7 +2658,7 @@ def _estimate_api_cost(state) -> tuple[float, bool]:
             rates = _UNPRICED_FALLBACK
             has_unpriced = True
         total += toks.get("input", 0) * rates[0] + toks.get("output", 0) * rates[1]
-    return round(total, 4), has_unpriced
+    return round(total + tts_cost, 4), has_unpriced
 
 
 def _consumption_cost(state) -> dict:

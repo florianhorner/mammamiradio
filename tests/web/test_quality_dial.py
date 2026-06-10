@@ -205,6 +205,35 @@ def test_cost_counter_never_zero_without_per_model_data():
     assert unpriced is False
 
 
+def test_cost_counter_includes_tts_characters():
+    """Paid TTS characters add a blended estimate on top of the LLM token cost."""
+    state = StationState(playlist=[])
+    state.api_tokens_by_model = {"gpt-4o-mini": {"input": 1_000_000, "output": 1_000_000}}  # 0.75
+    state.tts_characters = 1_000_000  # * 0.00002 blended = 20.00
+    cost, _ = _estimate_api_cost(state)
+    assert cost == pytest.approx(0.75 + 20.0, abs=0.01)
+
+
+def test_cost_counter_tts_folds_into_legacy_aggregate_branch():
+    """TTS estimate is also added in the no-per-model (legacy/fresh) branch."""
+    state = StationState(playlist=[])
+    state.api_input_tokens = 0
+    state.api_output_tokens = 0
+    state.tts_characters = 500_000  # * 0.00002 = 10.00
+    cost, unpriced = _estimate_api_cost(state)
+    assert cost == pytest.approx(10.0, abs=0.01)
+    assert unpriced is False
+
+
+def test_cost_counter_tts_getattr_safe_on_legacy_state():
+    """A state object predating tts_characters must not raise (getattr default 0)."""
+    from types import SimpleNamespace
+
+    legacy = SimpleNamespace(api_tokens_by_model={}, api_input_tokens=0, api_output_tokens=0)
+    cost, _ = _estimate_api_cost(legacy)
+    assert cost == 0.0
+
+
 @pytest.mark.asyncio
 async def test_status_surfaces_unpriced_flag():
     """The unpriced-model flag must reach the /status body (protected-UI regression

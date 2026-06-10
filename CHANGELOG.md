@@ -162,6 +162,8 @@ The current version source of truth is `pyproject.toml`.
 
 ### Changed
 
+- **The admin cost counter now reads as an honest estimate, and leads with what you made.** The Engine Room and sidebar used to headline a four-decimal dollar figure labelled "24h" — but it never reset on a 24-hour clock (it counted from the last restart) and it left voice synthesis out entirely. Now the sidebar leads with **segments produced this session** (the real count of host bits, ads, and station moments the engine made), with cost as a quiet second line shown as a rounded `~$N est`. The estimate now folds in a blended text-to-speech cost alongside the AI writing cost, and the window is labelled "Session" because that is what it measures. Cent-accuracy across shifting model and voice prices isn't a real target, so the number is honestly an estimate rather than a falsely precise one.
+
 - **The station now defaults to English-first.** New installs render English utility copy on the listener page (with Italian station-feel words and headlines intact), and the AI hosts code-switch — English narrative with Italian flavor. The admin control room stays English-first. Flip on **Super Italian Mode** (admin Engine Room toggle, or `MAMMAMIRADIO_SUPER_ITALIAN=true`) for the fully Italian-first listener and host experience.
 
 - **The stable Home Assistant add-on now presents as stable in the store.** The release channel no longer carries the Experimental pill, while the Edge channel keeps it. Both add-on folders now ship the same custom AppArmor profile so Supervisor can award the extra security-rating point after install/update.

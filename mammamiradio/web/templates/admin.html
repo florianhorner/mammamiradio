@@ -1420,6 +1420,18 @@ body[data-stopped="true"] .a-station-card .dot.on { animation-play-state: paused
   color: var(--sun);
   font-weight: 600;
 }
+/* Session output: segments is the headline (larger, cream), cost is the
+   secondary muted line. Two separate single-pair rows — never a collapsed row. */
+.on-air-output-line b#sidebarSegments {
+  font-size: 18px;
+  color: var(--cream);
+  line-height: 1.1;
+}
+.on-air-cost-line b#sidebarCost {
+  font-size: 11px;
+  color: var(--muted);
+  font-weight: 500;
+}
 .on-air-buttons {
   display: flex;
   gap: 8px;
@@ -1708,8 +1720,11 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
             <span class="label on" id="onAirBadge">In onda</span>
             <span id="stationSignal">Live signal</span>
           </div>
+          <div class="on-air-cost-line on-air-output-line">
+            <span class="lbl">Produced · Session</span><b id="sidebarSegments">—</b>
+          </div>
           <div class="on-air-cost-line">
-            <span class="lbl">AI cost · 24h</span><b id="sidebarCost">—</b>
+            <span class="lbl">Session cost</span><b id="sidebarCost">—</b>
           </div>
           <div class="on-air-buttons">
             <button type="button" class="btn-icon" title="Next track" onclick="doSkip(this)">
@@ -1741,7 +1756,7 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
       </div>
       <span class="mode-chip" id="modeChip" style="display:none" aria-live="polite"></span>
       <div class="topbar-cost">
-        <span class="lbl">AI cost · 24h</span>
+        <span class="lbl">Session cost</span>
         <b id="topBarCost">—</b>
       </div>
     </div>
@@ -3641,7 +3656,10 @@ function updateEngineRoom(st,caps){
   const inTok=con.input_tokens||0;
   const outTok=con.output_tokens||0;
   const unpriced=con.api_cost_unpriced_model===true;
-  const cost=con.api_cost_estimate_usd!=null?(unpriced?'~$':'$')+con.api_cost_estimate_usd.toFixed(4)+(unpriced?' (est, unpriced model)':''):'—';
+  // Cost is inherently an estimate (blended TTS rate, drifting model prices) — never
+  // claim cent precision. Round to the nearest dollar and always flag it "est".
+  const _rawCost=con.api_cost_estimate_usd;
+  const cost=_rawCost==null?'—':((_rawCost<1?'<$1':'~$'+Math.round(_rawCost))+' est'+(unpriced?' (unpriced model)':''));
   const ttsCh=con.tts_characters||0;
 
   // Update sidebar cost
@@ -3649,6 +3667,10 @@ function updateEngineRoom(st,caps){
   if(sidebarCost)sidebarCost.textContent=cost;
   const topBarCost=document.getElementById('topBarCost');
   if(topBarCost)topBarCost.textContent=cost;
+  // Sidebar headline: segments produced this session (exact count). '—' until the
+  // first segment airs, so a cold-boot 0 isn't a sad empty headline.
+  const sidebarSegments=document.getElementById('sidebarSegments');
+  if(sidebarSegments)sidebarSegments.textContent=(st.segments_produced>0?st.segments_produced:'—');
 
   // Update sidebar uptime
   const sidebarUptime=document.getElementById('sidebarUptime');
