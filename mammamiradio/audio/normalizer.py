@@ -10,6 +10,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import time
 from pathlib import Path
 from threading import BoundedSemaphore
 
@@ -29,9 +30,16 @@ def _norm_sidecar_path(norm_path: Path) -> Path:
 
 
 def _load_sidecar(sidecar: Path) -> dict:
-    """Best-effort read of a norm sidecar's JSON dict; {} on missing/corrupt."""
+    """Best-effort read of a norm sidecar's JSON dict; {} on missing/corrupt.
+
+    The sidecar is shared state: ``save_track_metadata`` writes ``{title, artist}``
+    and ``reconcile_cached_music`` writes ``reconciled_lufs``. Both must read-merge
+    through here so neither clobbers the other's keys, regardless of call order.
+    """
     try:
         if sidecar.exists():
+            # read_text() raises UnicodeDecodeError on a non-UTF8/corrupt sidecar;
+            # treat that as a benign empty read so it never escapes into the audio path.
             data = json.loads(sidecar.read_text())
             if isinstance(data, dict):
                 return data
@@ -42,10 +50,16 @@ def _load_sidecar(sidecar: Path) -> dict:
 
 def save_track_metadata(norm_path: Path, title: str, artist: str) -> None:
     """Persist title+artist alongside a normalized cache file so rescue paths can
-    surface human-readable metadata instead of the raw filename."""
+    surface human-readable metadata instead of the raw filename.
+
+    Called only when a cache file is freshly (re)normalized. Any `reconciled_lufs`
+    marker found here is tied to the OLD content of an orphaned sidecar (eviction
+    unlinks the .mp3 but leaves the .json), so it is DROPPED — the fresh file must
+    re-earn its marker on the first cache-hit reconcile. Other keys are preserved.
+    """
     sidecar = _norm_sidecar_path(norm_path)
     data = _load_sidecar(sidecar)
-    data.pop("reconciled_lufs", None)
+    data.pop("reconciled_lufs", None)  # content-specific; a fresh file re-earns it
     data.update({"title": title, "artist": artist})
     try:
         sidecar.write_text(json.dumps(data))
@@ -55,6 +69,8 @@ def save_track_metadata(norm_path: Path, title: str, artist: str) -> None:
 
 def load_track_metadata(norm_path: Path) -> dict[str, str] | None:
     """Return {'title', 'artist'} from a norm cache sidecar if present and valid."""
+    # Reuse _load_sidecar so a non-UTF8/non-dict/corrupt sidecar returns None
+    # cleanly instead of raising (same failure mode guarded in the reconcile path).
     data = _load_sidecar(_norm_sidecar_path(norm_path))
     title = data.get("title")
     artist = data.get("artist")
@@ -91,10 +107,12 @@ def measure_lufs(input_path: Path) -> float | None:
         "null",
         "-",
     ]
+    _t0 = time.perf_counter()
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
     except (OSError, subprocess.TimeoutExpired):
         return None
+    logger.debug("ffmpeg stage measure_lufs %s: %.2fs", input_path.name, time.perf_counter() - _t0)
     # ebur128 logs a per-frame "I: -70.0 LUFS" line (the gate floor, before any
     # data has accumulated) for EVERY frame, then the true integrated value in
     # its end-of-stream Summary. Take the LAST match — the Summary value — not
@@ -143,7 +161,14 @@ AVAILABLE_SFX_TYPES: list[str] = [
 
 
 def _run_ffmpeg(cmd: list[str], description: str) -> subprocess.CompletedProcess:
-    """Run an ffmpeg command with stderr capture and logging on failure."""
+    """Run an ffmpeg command with stderr capture and logging on failure.
+
+    Per-stage wall time is logged at DEBUG (set LOG_LEVEL=DEBUG for a soak) so the
+    render-latency deep-dive can attribute the seconds — every ffmpeg stage funnels
+    through here labelled by ``description`` (e.g. "normalize X", "LUFS reconcile",
+    "mix voice with talk bed", "concat N files").
+    """
+    _t0 = time.perf_counter()
     try:
         result = subprocess.run(cmd, capture_output=True, timeout=_FFMPEG_TIMEOUT_SEC)
     except subprocess.TimeoutExpired:
@@ -153,6 +178,7 @@ def _run_ffmpeg(cmd: list[str], description: str) -> subprocess.CompletedProcess
         stderr = result.stderr.decode(errors="replace")[-500:]
         logger.error("ffmpeg failed (%s): %s", description, stderr)
         result.check_returncode()  # raises CalledProcessError
+    logger.debug("ffmpeg stage %s: %.2fs", description, time.perf_counter() - _t0)
     return result
 
 
@@ -231,6 +257,13 @@ def _reconcile_lufs(path: Path, *, ad: bool = False) -> bool:
     ``normalize()`` then ``mix_voice_with_bed()``) cost only a measure, never a
     second re-encode. Best-effort — a failed measure, re-encode, or rename leaves
     the file as produced and never raises into the audio path.
+
+    Returns ``True`` only when the file is confirmed at target — either already
+    within tolerance or successfully re-encoded. Returns ``False`` when the level
+    could not be verified (reconcile unconfigured, measurement failed, or the
+    re-encode/rename failed). Callers that persist a "reconciled" marker MUST gate
+    it on a ``True`` result, or a transiently-failed file gets permanently marked
+    fixed while still off target.
     """
     cfg = _loudness_reconcile
     if cfg is None:
@@ -246,7 +279,7 @@ def _reconcile_lufs(path: Path, *, ad: bool = False) -> bool:
         # Clamp so a near-silent or corrupt file is never pumped to a huge gain.
         gain_db = max(-12.0, min(12.0, target - lufs))
         if abs(gain_db) < 0.5:
-            return True  # already on target (within measurement noise)
+            return True  # already on target (within measurement noise) — confirmed
         tmp = path.with_name(f"{path.stem}.lufs{path.suffix}")
         cmd = [
             "ffmpeg",
@@ -271,17 +304,26 @@ def _reconcile_lufs(path: Path, *, ad: bool = False) -> bool:
 
 
 def reconcile_cached_music(path: Path) -> None:
-    """Bring a cached music file to the configured LUFS target on cache-hit play."""
+    """Bring a CACHED music file to the configured target on a cache-hit play.
+
+    A cache hit skips ``normalize()`` (and therefore the reconcile pass), so a norm
+    file produced before reconciliation existed would air at its old, un-reconciled
+    level — the cause of "some songs are just quieter". This corrects it on hit, then
+    records the target in the file's sidecar so later hits skip the work *and* the
+    ebur128 measure and stay instant (matters on constrained addon hardware). It
+    self-heals the existing cache one play at a time. No-op when reconciliation is
+    unconfigured; idempotent and best-effort — never raises into the audio path.
+    """
     cfg = _loudness_reconcile
     if cfg is None:
         return
-    target = cfg[0]
+    target = cfg[0]  # music uses the non-ad target
     sidecar = _norm_sidecar_path(path)
     data = _load_sidecar(sidecar)
     if data.get("reconciled_lufs") == target:
-        return
+        return  # already at the current target — instant hit, no measure
     if not _reconcile_lufs(path):
-        return
+        return  # measure/re-encode failed — leave UNMARKED so the next hit retries
     data["reconciled_lufs"] = target
     try:
         sidecar.write_text(json.dumps(data))

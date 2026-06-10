@@ -389,6 +389,7 @@ def _runtime_provider_label(provider: str) -> str:
 
 _FALLBACK_REASON_LABELS = {
     "anthropic_exception": "Anthropic had a brief API error - retrying automatically",
+    "anthropic_max_tokens_truncated": "Anthropic ran long and got cut off - retrying automatically",
     "anthropic_auth_failed": "Anthropic API key rejected - check your key in Engine Room",
     "anthropic_auth_blocked": "Anthropic API key rejected - check your key in Engine Room",
     "anthropic_usage_limit": "Anthropic usage limit reached - check your plan at anthropic.com",
@@ -1948,10 +1949,9 @@ async def capabilities(request: Request, _: None = Depends(require_admin_access)
 @router.post("/api/shuffle")
 async def shuffle_playlist(request: Request, _: None = Depends(require_admin_access)):
     """Shuffle upcoming tracks."""
-    import random
-
     state = request.app.state.station_state
-    random.shuffle(state.playlist)
+    _random.shuffle(state.playlist)
+    state.playlist_revision += 1
     return {"ok": True, "message": "Playlist shuffled"}
 
 

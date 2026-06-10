@@ -383,6 +383,7 @@ async def _generate_json_response(
                         )
                         _anthropic_block_expired_logged = True
                     _t_anthropic = time.perf_counter()
+                    _anthropic_stop_reason: str | None = None
                     try:
                         client = _get_client(config.anthropic_api_key)
                         resp = await asyncio.wait_for(
@@ -394,6 +395,10 @@ async def _generate_json_response(
                             ),
                             timeout=45.0,
                         )
+                        # Read stop_reason before indexing content: a max_tokens cut can
+                        # return an empty content list, which would raise IndexError below
+                        # and lose the truncation signal if captured after.
+                        _anthropic_stop_reason = getattr(resp, "stop_reason", None)
                         _anthropic_in = _anthropic_out = 0
                         if hasattr(resp, "usage") and resp.usage:
                             state.api_calls += 1
@@ -453,6 +458,16 @@ async def _generate_json_response(
                         )
                         return parsed
                     except Exception as exc:
+                        # stop_reason="max_tokens" means the model was cut off at the token
+                        # budget. That truncation surfaces here two ways: partial JSON that
+                        # fails to parse (JSONDecodeError) or an empty content list that
+                        # fails to index (IndexError). Label both honestly so the ledger
+                        # measures truncation frequency instead of hiding it behind a
+                        # generic exception name. Behaviour is unchanged — we still fall
+                        # back to OpenAI; only the telemetry/log reason differs.
+                        _max_tokens_truncated = _anthropic_stop_reason == "max_tokens" and isinstance(
+                            exc, (json.JSONDecodeError, IndexError)
+                        )
                         _emit_llm_call(
                             state=state,
                             config=config,
@@ -464,7 +479,11 @@ async def _generate_json_response(
                             prompt=prompt,
                             raw_output=None,
                             ok=False,
-                            fallback_reason=f"anthropic_{type(exc).__name__}",
+                            fallback_reason=(
+                                "anthropic_max_tokens_truncated"
+                                if _max_tokens_truncated
+                                else f"anthropic_{type(exc).__name__}"
+                            ),
                             input_tokens=0,
                             output_tokens=0,
                             duration_ms=int((time.perf_counter() - _t_anthropic) * 1000),
@@ -514,8 +533,16 @@ async def _generate_json_response(
                         else:
                             if not config.openai_api_key:
                                 raise
-                            fallback_reason = "anthropic_exception"
-                            logger.warning("Anthropic %s, falling back to OpenAI: %s", type(exc).__name__, exc)
+                            if _max_tokens_truncated:
+                                fallback_reason = "anthropic_max_tokens_truncated"
+                                logger.warning(
+                                    "Anthropic response truncated at max_tokens (%s), falling back to OpenAI: %s",
+                                    model,
+                                    exc,
+                                )
+                            else:
+                                fallback_reason = "anthropic_exception"
+                                logger.warning("Anthropic %s, falling back to OpenAI: %s", type(exc).__name__, exc)
 
     openai_key = config.openai_api_key or os.getenv("OPENAI_API_KEY", "")
     if not openai_key:

@@ -561,6 +561,92 @@ async def test_openai_fallback_logs_structured_event(config, state, caplog):
 
 
 @pytest.mark.asyncio
+async def test_anthropic_max_tokens_truncation_is_labelled_honestly(config, state, caplog):
+    """A truncated Anthropic response (stop_reason=max_tokens + unterminated JSON)
+    is reported as 'anthropic_max_tokens_truncated', not a generic JSONDecodeError,
+    while still falling back to OpenAI so the listener gets banter."""
+    import logging
+
+    config.anthropic_api_key = "anthropic-key"
+    config.openai_api_key = "openai-key"
+    host_name = config.hosts[0].name
+    openai_client = _mock_openai_response(json.dumps({"lines": [{"host": host_name, "text": "hi"}], "new_joke": None}))
+
+    # Anthropic returns JSON cut off mid-string with stop_reason="max_tokens".
+    mock_usage = MagicMock()
+    mock_usage.input_tokens = 50
+    mock_usage.output_tokens = 300
+    mock_content = MagicMock()
+    mock_content.text = '{"lines": [{"host": "Marco", "text": "Ciao a tutti, oggi'
+    mock_response = MagicMock()
+    mock_response.content = [mock_content]
+    mock_response.usage = mock_usage
+    mock_response.stop_reason = "max_tokens"
+    mock_client = MagicMock()
+    mock_client.messages = MagicMock()
+    mock_client.messages.create = AsyncMock(return_value=mock_response)
+    mock_cls = MagicMock(return_value=mock_client)
+
+    with (
+        caplog.at_level(logging.INFO, logger="mammamiradio.hosts.scriptwriter"),
+        patch("mammamiradio.hosts.scriptwriter._anthropic_client", None),
+        patch("mammamiradio.hosts.scriptwriter._openai_client", None),
+        patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
+        patch("mammamiradio.hosts.scriptwriter._get_openai_client", return_value=openai_client),
+    ):
+        await write_banter(state, config)
+
+    fallback_records = [r for r in caplog.records if getattr(r, "event", None) == "openai_script_call"]
+    assert fallback_records, "expected an openai_script_call after Anthropic truncation"
+    assert fallback_records[-1].fallback_reason == "anthropic_max_tokens_truncated"
+
+    switch_records = [r for r in caplog.records if getattr(r, "event", None) == "provider_switch_event"]
+    assert switch_records, "expected provider switch telemetry on truncation fallback"
+    assert switch_records[-1].reason == "anthropic_max_tokens_truncated"
+    # Illusion preserved: listener still gets banter via the OpenAI fallback.
+    assert state.runtime_provider_state["script_provider"]["current_provider"] == "openai"
+
+
+@pytest.mark.asyncio
+async def test_anthropic_max_tokens_empty_content_is_labelled_honestly(config, state, caplog):
+    """A max_tokens cut that returns an *empty* content list (IndexError on
+    resp.content[0], not a JSONDecodeError) is still recognized as truncation —
+    stop_reason is read before content is indexed."""
+    import logging
+
+    config.anthropic_api_key = "anthropic-key"
+    config.openai_api_key = "openai-key"
+    host_name = config.hosts[0].name
+    openai_client = _mock_openai_response(json.dumps({"lines": [{"host": host_name, "text": "hi"}], "new_joke": None}))
+
+    mock_usage = MagicMock()
+    mock_usage.input_tokens = 50
+    mock_usage.output_tokens = 300
+    mock_response = MagicMock()
+    mock_response.content = []  # empty: resp.content[0] raises IndexError
+    mock_response.usage = mock_usage
+    mock_response.stop_reason = "max_tokens"
+    mock_client = MagicMock()
+    mock_client.messages = MagicMock()
+    mock_client.messages.create = AsyncMock(return_value=mock_response)
+    mock_cls = MagicMock(return_value=mock_client)
+
+    with (
+        caplog.at_level(logging.INFO, logger="mammamiradio.hosts.scriptwriter"),
+        patch("mammamiradio.hosts.scriptwriter._anthropic_client", None),
+        patch("mammamiradio.hosts.scriptwriter._openai_client", None),
+        patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
+        patch("mammamiradio.hosts.scriptwriter._get_openai_client", return_value=openai_client),
+    ):
+        await write_banter(state, config)
+
+    fallback_records = [r for r in caplog.records if getattr(r, "event", None) == "openai_script_call"]
+    assert fallback_records, "expected an openai_script_call after empty-content truncation"
+    assert fallback_records[-1].fallback_reason == "anthropic_max_tokens_truncated"
+    assert state.runtime_provider_state["script_provider"]["current_provider"] == "openai"
+
+
+@pytest.mark.asyncio
 async def test_write_banter_populates_api_tokens_by_model(config, state):
     """End-to-end: a successful Anthropic banter call records tokens under the
     resolved model id, so the model-aware cost counter prices the right model."""

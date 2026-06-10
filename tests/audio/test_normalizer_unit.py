@@ -59,6 +59,19 @@ def test_run_ffmpeg_passes_command(mock_subprocess):
     mock_run.assert_called_once_with(cmd, capture_output=True, timeout=180.0)
 
 
+def test_run_ffmpeg_logs_stage_timing_at_debug(mock_subprocess, caplog):
+    """Render-latency deep-dive: every ffmpeg stage logs its wall time at DEBUG,
+    labelled by description, so the seconds can be attributed per stage."""
+    import logging
+
+    with caplog.at_level(logging.DEBUG, logger="mammamiradio.audio.normalizer"):
+        _run_ffmpeg(["ffmpeg", "-y", "out.mp3"], "normalize song.mp3")
+
+    timing = [r for r in caplog.records if "ffmpeg stage normalize song.mp3" in r.getMessage()]
+    assert timing, "expected a DEBUG per-stage timing line for the ffmpeg call"
+    assert timing[-1].levelno == logging.DEBUG
+
+
 def test_run_ffmpeg_raises_on_nonzero_return(mock_subprocess):
     _mock_run, completed = mock_subprocess
     completed.returncode = 1
@@ -696,26 +709,27 @@ def test_load_track_metadata_incomplete_data_returns_none(tmp_path):
 
 
 def test_save_track_metadata_drops_stale_reconciled_marker(tmp_path):
+    # save_track_metadata runs only for a freshly (re)normalized file, so a
+    # reconciled_lufs marker in a leftover/orphaned sidecar (eviction unlinks the
+    # .mp3 but leaves the .json) is tied to the OLD content and MUST be dropped —
+    # the fresh file re-earns it on the next cache-hit reconcile. Other keys survive.
     norm = tmp_path / "norm_merge_192k.mp3"
     norm.write_bytes(b"pretend mp3")
     sidecar = tmp_path / "norm_merge_192k.mp3.json"
     sidecar.write_text(json.dumps({"reconciled_lufs": -16.0, "stray": "keep"}))
-
     save_track_metadata(norm, title="T", artist="A")
-
     data = json.loads(sidecar.read_text())
-    assert "reconciled_lufs" not in data
-    assert data["title"] == "T"
-    assert data["artist"] == "A"
-    assert data["stray"] == "keep"
+    assert "reconciled_lufs" not in data  # stale marker dropped
+    assert data["title"] == "T" and data["artist"] == "A"
+    assert data["stray"] == "keep"  # unrelated keys preserved
 
 
 def test_load_track_metadata_non_utf8_returns_none(tmp_path):
+    # Sibling of the _load_sidecar fix: a non-UTF8 sidecar must return None, not raise.
     norm = tmp_path / "norm_bad_utf8_192k.mp3"
     norm.write_bytes(b"pretend mp3")
     sidecar = tmp_path / "norm_bad_utf8_192k.mp3.json"
     sidecar.write_bytes(b"\xff\xfe\x00not utf-8")
-
     assert load_track_metadata(norm) is None
 
 

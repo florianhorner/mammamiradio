@@ -1,0 +1,25 @@
+# Proof: tests for feat(ha) room-occupancy awareness for hosts
+# branch: florianhorner/feat/privacy-switch-context-pullers
+
+## unit: pytest tests/home/test_ha_context.py -q
+158 passed in 0.25s
+
+## new tests added (presence budget cap — HA-ingestion three-scenario rule + invariants):
+ - test_scored_entities_caps_uncurated_presence_and_retains_curated_presence (normal: cap + curated retained)
+ - test_scored_entities_empty_presence_leaves_non_presence_summary_unchanged (empty)
+ - test_scored_entities_no_registry_excludes_uncurated_area_less_presence_but_keeps_curated (post-restart/no-registry)
+ - test_scored_entities_anti_flood_keeps_relevant_raw_states_intact (100 sensors; asserts `relevant` dict intact -> mood/gags/events unaffected)
+ - test_scored_entities_excludes_area_less_aggregate_presence_from_slice (whole-home aggregate excluded)
+ - test_presence_slice_privacy_invariant_keeps_device_trackers_denied (no person names; device_tracker still denied)
+
+## lint: ruff check mammamiradio/home/ha_context.py tests/home/test_ha_context.py
+All checks passed!
+
+## format: ruff format --check mammamiradio/home/ha_context.py tests/home/test_ha_context.py
+2 files already formatted
+
+## typecheck: mypy mammamiradio/home/ha_context.py
+Success: no issues found in 1 source file
+
+## full suite: pytest tests/ -q
+2624 passed, 2 skipped, 8 deselected, 1 warning in 60.27s

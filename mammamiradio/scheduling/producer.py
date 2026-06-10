@@ -151,6 +151,10 @@ async def _render_music_track(
     norm_cached = _normalized_cache_path(track, config)
     if norm_cached.exists():
         logger.debug("Normalization cache hit%s: %s", f" ({context})" if context else "", norm_cached.name)
+        # A cache hit skips normalize() + its reconcile pass, so a file produced
+        # before reconciliation existed would air at its old level. Reconcile it on
+        # hit (off the event loop) so every song lands at the target; skipped once
+        # the sidecar marks it done, so steady-state cache hits stay instant.
         await loop.run_in_executor(None, reconcile_cached_music, norm_cached)
         return RenderedMusicTrack(track=track, path=norm_cached, cache_path=norm_cached, cache_hit=True)
 
@@ -1203,6 +1207,10 @@ async def run_producer(
         segment: Segment | None = None
         generation_revision = state.playlist_revision
         success_callback: Callable[[], None] | None = None
+        # Render-latency deep-dive: total wall time to build this segment, logged
+        # at INFO on the Queued line below. Per-stage ffmpeg breakdown is at DEBUG
+        # in audio/normalizer.py (set LOG_LEVEL=DEBUG for a soak).
+        _t_render = time.perf_counter()
 
         # Refresh Home Assistant context for banter/ad segments
         if (
@@ -2504,4 +2512,9 @@ async def run_producer(
                         _prefetch_next(state, config, _prefetch_failed_keys),
                         name="prefetch-norm",
                     )
-            logger.info("Queued %s (queue size: %d)", segment.type.value, queue.qsize())
+            logger.info(
+                "Queued %s in %.1fs (queue size: %d)",
+                segment.type.value,
+                time.perf_counter() - _t_render,
+                queue.qsize(),
+            )

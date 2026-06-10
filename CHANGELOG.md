@@ -8,6 +8,10 @@ The current version source of truth is `pyproject.toml`.
 
 ### Added
 
+- **The station logs how long each segment took to build.** Every segment the producer builds now records its total prep time on one line, and with logs turned up to debug you get a per-step breakdown of the audio work (normalize, loudness, mixing) that pinpoints the slow step. When the music ever runs thin, you can see exactly where the time went instead of guessing.
+
+- **Shuffle the rotation backlog in one click.** The Shuffle button in the Rotazione panel instantly randomises the entire track order — useful when you've just enriched the pool with a new era or source and want the mix to start fresh instead of front-loading the new arrivals.
+
 - **Trigger a host break and it airs next, not minutes later.** Hit Trigger for a banter, ad, or news flash and the station now slots it in right after the current song — instead of behind everything already queued — so the moment you want lands on air at the next break. Tap once: if you tap again while the first pick is still cueing, you get a gentle "give the tape decks a few seconds" rather than two stacking up.
 
 - **Volume no longer jumps between songs, hosts, and ads.** Every segment is now measured and nudged to one consistent loudness before it airs, so a quiet song isn't buried and an ad doesn't blast — the station holds a steady level end to end. Ads still sit a touch hotter so they pop, just without the old jarring jump. Tunable in `radio.toml` (`[audio]` → `lufs_target`, `ad_lufs_target`).
@@ -110,6 +114,10 @@ The current version source of truth is `pyproject.toml`.
 
 ### Fixed
 
+- **The quieter songs come up to level, including ones the station prepared earlier.** A song the station had readied before it learned to hold a steady volume used to come on a little softer than the rest. Now the first time it plays after this update it's brought up to match everything else — and it stays there for every play after, so the songs you hear most don't wait on it twice.
+
+- **A cut-off host line is now recognized for what it is.** When the AI host writer runs long and gets cut off mid-sentence, the station now names that as a length cutoff — in the log and in the operator status message ("ran long and got cut off") — instead of a generic error, and still switches to the backup voice so banter keeps flowing. The cause is now measurable rather than hidden, so the underlying length can be tuned with real numbers.
+
 - **The hosts sound right now.** Marco reads clearly instead of mumbling, and Giulia sounds like the 80-year-old Nonna she is written as instead of a thirty-something. Each host's voice can now be dialed in independently in the station config (a per-host `voice_settings`), so tuning one host never disturbs the other.
 
 - **Admin load-more state stays accurate after playlist edits.** The Producer Desk now invalidates cached playlist tails when the rotation changes, hides the load-more button once all loaded rows reach the total, resets load-more buttons after network errors, and skips repeated yt-dlp lookups after web search results are exhausted.
@@ -174,6 +182,14 @@ The current version source of truth is `pyproject.toml`.
 - **Undo for destructive admin actions** — purging the queue or removing a
   segment shows a 5-second Undo toast and only commits when the window closes, so
   a mis-tap on a running station is recoverable.
+
+- **Hosts stay tuned to your home without oversharing it.** When the station
+  references what's happening at home, it now draws on only a handful of the most
+  relevant presence signals — the spaces actually in use, most-recently-active
+  first — instead of every motion and occupancy sensor in the house. Sensors
+  you've explicitly named always come through; unlabeled or location-less ones are
+  left out, so the hosts stay grounded in the moment while less of your home's raw
+  sensor detail reaches the writers.
 
 ### Fixed
 

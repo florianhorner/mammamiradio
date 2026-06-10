@@ -13,6 +13,8 @@ import httpx
 import pytest
 
 from mammamiradio.home.ha_context import (
+    ENTITY_LABELS,
+    MAX_PRESENCE_IN_SLICE,
     HomeContext,
     HomeEvent,
     _apply_registry_area,
@@ -192,6 +194,245 @@ def test_scored_entities_rank_curated_and_budget_prompt_slice():
     summary = _build_budgeted_summary(scored)
     assert "entity_id" not in summary
     assert "La macchina del caffè" in summary
+
+
+def _iso_changed(now: float, age_seconds: int) -> str:
+    return datetime.datetime.fromtimestamp(now - age_seconds, tz=datetime.UTC).isoformat()
+
+
+def _presence_state(
+    name: str,
+    *,
+    state: str = "on",
+    area: str | None = "Kitchen",
+    changed: str | None = None,
+    device_class: str = "occupancy",
+) -> dict:
+    attrs = {"friendly_name": name, "device_class": device_class}
+    if area is not None:
+        attrs["area"] = area
+    data = {"state": state, "attributes": attrs}
+    if changed is not None:
+        data["last_changed"] = changed
+    return data
+
+
+def _uncurated_presence_ids(scored) -> list[str]:
+    # Filter by ENTITY_LABELS membership (not a hard-coded id) so the cap-slot
+    # count stays correct if curated presence sensors are renamed or added.
+    return [
+        entity.entity_id
+        for entity in scored
+        if entity.domain == "binary_sensor"
+        and entity.raw_state.get("attributes", {}).get("device_class") in {"occupancy", "presence", "motion"}
+        and entity.entity_id not in ENTITY_LABELS
+    ]
+
+
+def test_scored_entities_caps_uncurated_presence_and_retains_curated_presence():
+    now = datetime.datetime(2026, 6, 7, 12, 0, tzinfo=datetime.UTC).timestamp()
+    curated_presence = "binary_sensor.8_stockwerk_group_sensor_wohnzimmer_esszimmer_bar"
+    states = {
+        curated_presence: _presence_state(
+            "Wohnzimmer Esszimmer Bar Occupancy",
+            state="off",
+            area="Wohnzimmer",
+            changed=_iso_changed(now, 5_000),
+        ),
+        "weather.forecast_home": {
+            "state": "sunny",
+            "attributes": {"temperature": 22, "temperature_unit": "°C", "area": "Home"},
+        },
+        "media_player.samsung_s95ca_65": {
+            "state": "playing",
+            "attributes": {"media_title": "Volare", "area": "Wohnzimmer"},
+        },
+        "climate.schlafzimmer": {
+            "state": "heat",
+            "attributes": {"current_temperature": 20, "temperature": 21, "area": "Schlafzimmer"},
+        },
+    }
+    for idx, age in enumerate((600, 500, 400, 300, 200), start=1):
+        states[f"binary_sensor.room_{idx}_occupancy"] = _presence_state(
+            f"Room {idx} Occupancy",
+            state="on",
+            area=f"Room {idx}",
+            changed=_iso_changed(now, age),
+        )
+    states["binary_sensor.recent_off_occupancy"] = _presence_state(
+        "Recent Off Occupancy",
+        state="off",
+        area="Hallway",
+        changed=_iso_changed(now, 1),
+    )
+
+    scored = _build_scored_entities(states, event_entity_ids=set(), now=now, limit=10, char_limit=0)
+    ids = [entity.entity_id for entity in scored]
+    uncurated_ids = _uncurated_presence_ids(scored)
+
+    assert len(uncurated_ids) == MAX_PRESENCE_IN_SLICE
+    assert curated_presence in ids
+    assert "binary_sensor.recent_off_occupancy" not in ids
+    assert "binary_sensor.room_1_occupancy" not in ids
+    assert {"weather.forecast_home", "media_player.samsung_s95ca_65", "climate.schlafzimmer"} <= set(ids)
+    assert any("Room 5" in entity.summary_line for entity in scored)
+
+
+def test_scored_entities_empty_presence_leaves_non_presence_summary_unchanged():
+    states = {
+        "weather.forecast_home": {
+            "state": "cloudy",
+            "attributes": {"temperature": 18, "temperature_unit": "°C"},
+        },
+        "media_player.living_room": {
+            "state": "playing",
+            "attributes": {"friendly_name": "Living room speaker", "media_title": "Volare"},
+        },
+    }
+
+    scored = _build_scored_entities(states, event_entity_ids=set(), now=time.time(), limit=5, char_limit=0)
+    summary = _build_budgeted_summary(scored)
+
+    assert _uncurated_presence_ids(scored) == []
+    assert "Meteo" in summary
+    assert "Living room speaker" in summary
+
+
+def test_scored_entities_no_registry_excludes_uncurated_area_less_presence_but_keeps_curated():
+    curated_presence = "binary_sensor.8_stockwerk_group_sensor_wohnzimmer_esszimmer_bar"
+    states = {
+        curated_presence: _presence_state(
+            "Wohnzimmer Esszimmer Bar Occupancy",
+            state="on",
+            area=None,
+        ),
+        "binary_sensor.kitchen_occupancy": _presence_state(
+            "Kitchen Occupancy",
+            state="on",
+            area=None,
+        ),
+        "weather.forecast_home": {
+            "state": "sunny",
+            "attributes": {"temperature": 22, "temperature_unit": "°C"},
+        },
+    }
+
+    scored = _build_scored_entities(states, event_entity_ids=set(), now=time.time(), limit=5, char_limit=0)
+    ids = [entity.entity_id for entity in scored]
+
+    assert curated_presence in ids
+    assert "binary_sensor.kitchen_occupancy" not in ids
+    assert "weather.forecast_home" in ids
+
+
+@pytest.mark.asyncio
+async def test_scored_entities_anti_flood_keeps_relevant_raw_states_intact():
+    all_states = []
+    registry_areas = {}
+    for idx in range(100):
+        entity_id = f"binary_sensor.room_{idx}_occupancy"
+        all_states.append(
+            {
+                "entity_id": entity_id,
+                "state": "on" if idx % 2 == 0 else "off",
+                "attributes": {
+                    "friendly_name": f"Room {idx} Occupancy",
+                    "device_class": "occupancy",
+                },
+                "last_changed": _iso_changed(1_800_000_000.0, idx),
+            }
+        )
+        registry_areas[entity_id] = f"Room {idx}"
+    all_states.append(
+        {
+            "entity_id": "media_player.living_room",
+            "state": "playing",
+            "attributes": {"friendly_name": "Living room speaker", "media_title": "Volare"},
+        }
+    )
+
+    mock_resp = MagicMock()
+    mock_resp.raise_for_status = MagicMock()
+    mock_resp.json.return_value = all_states
+    mock_client = AsyncMock()
+    mock_client.get.return_value = mock_resp
+
+    with (
+        patch("mammamiradio.home.ha_context._get_ha_client", return_value=mock_client),
+        patch(
+            "mammamiradio.home.ha_context._fetch_ha_registry_areas",
+            new_callable=AsyncMock,
+            return_value=registry_areas,
+        ),
+        patch("mammamiradio.home.ha_context.fetch_weather_forecast", new_callable=AsyncMock, return_value=""),
+        patch("mammamiradio.home.ha_context._ha_cache", None),
+    ):
+        result = await fetch_home_context("http://ha:8123", "token", poll_interval=0.0, _cache=None)
+
+    scored_presence = _uncurated_presence_ids(result.scored)
+    relevant_presence = [entity_id for entity_id in result.raw_states if entity_id.startswith("binary_sensor.room_")]
+
+    assert len(scored_presence) == MAX_PRESENCE_IN_SLICE
+    assert "media_player.living_room" in [entity.entity_id for entity in result.scored]
+    assert len(relevant_presence) == 100
+
+
+def test_scored_entities_excludes_area_less_aggregate_presence_from_slice():
+    now = time.time()
+    states = {
+        "binary_sensor.magic_areas_global_presence": _presence_state(
+            "Whole Home Occupancy",
+            state="on",
+            area=None,
+            changed=_iso_changed(now, 1),
+        ),
+        "binary_sensor.kitchen_occupancy": _presence_state(
+            "Kitchen Occupancy",
+            state="on",
+            area="Kitchen",
+            changed=_iso_changed(now, 60),
+        ),
+        "light.kitchen": {"state": "on", "attributes": {"friendly_name": "Kitchen light"}},
+    }
+
+    scored = _build_scored_entities(states, event_entity_ids=set(), now=now, limit=5, char_limit=0)
+    ids = [entity.entity_id for entity in scored]
+
+    assert "binary_sensor.magic_areas_global_presence" not in ids
+    assert "binary_sensor.kitchen_occupancy" in ids
+    assert "light.kitchen" in ids
+
+
+def test_presence_slice_privacy_invariant_keeps_device_trackers_denied():
+    hits: dict[str, int] = {}
+    tracker = {
+        "state": "home",
+        "attributes": {
+            "friendly_name": "Florian iPhone",
+            "latitude": 52.5,
+            "longitude": 13.4,
+        },
+    }
+
+    assert _filter_state("device_tracker.florian_iphone", tracker, hits) is None
+    assert hits["privacy:device_tracker"] == 1
+
+    scored = _build_scored_entities(
+        {
+            "binary_sensor.office_occupancy": _presence_state(
+                "Office Occupancy",
+                state="on",
+                area="Office",
+            )
+        },
+        event_entity_ids=set(),
+        now=time.time(),
+        limit=5,
+        char_limit=0,
+    )
+    summary = _build_budgeted_summary(scored)
+    assert "Florian" not in summary
+    assert "device_tracker" not in summary
 
 
 def test_filter_state_drops_text_helper_domains():
