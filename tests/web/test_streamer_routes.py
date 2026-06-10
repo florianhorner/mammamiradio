@@ -38,15 +38,25 @@ TOML_PATH = str(Path(__file__).resolve().parents[2] / "radio.toml")
 # ---------------------------------------------------------------------------
 
 
-def _make_test_app(*, admin_password: str = "", admin_token: str = "", is_addon: bool = False) -> FastAPI:
+def _make_test_app(
+    *,
+    admin_password: str = "",
+    admin_token: str = "",
+    is_addon: bool = False,
+    preserve_bind_env: bool = False,
+) -> FastAPI:
     """Build a minimal FastAPI app with the streamer router and populated state."""
     app = FastAPI()
     app.include_router(router)
     app.include_router(listener_requests_router)
 
     with patch.dict(os.environ, {"ADMIN_PASSWORD": "", "ADMIN_TOKEN": ""}):
-        os.environ.pop("MAMMAMIRADIO_BIND_HOST", None)
-        os.environ.pop("SUPERVISOR_TOKEN", None)
+        if not preserve_bind_env:
+            os.environ.pop("MAMMAMIRADIO_BIND_HOST", None)
+        if is_addon:
+            os.environ["SUPERVISOR_TOKEN"] = "test-supervisor-token"
+        else:
+            os.environ.pop("SUPERVISOR_TOKEN", None)
         os.environ.pop("HASSIO_TOKEN", None)
         config = load_config(TOML_PATH)
     # Override auth settings for test isolation
@@ -1705,7 +1715,8 @@ async def test_admin_lan_access_in_addon_mode_no_creds(monkeypatch):
     monkeypatch.setenv("MAMMAMIRADIO_BIND_HOST", "0.0.0.0")
     monkeypatch.delenv("ADMIN_PASSWORD", raising=False)
     monkeypatch.delenv("ADMIN_TOKEN", raising=False)
-    app = _make_test_app(is_addon=True)
+    app = _make_test_app(is_addon=True, preserve_bind_env=True)
+    assert app.state.config.bind_host == "0.0.0.0"
     transport = httpx.ASGITransport(app=app, client=("192.168.1.50", 9999))
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
         resp = await client.get("/admin")
