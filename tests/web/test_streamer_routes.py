@@ -1725,6 +1725,18 @@ async def test_admin_lan_access_in_addon_mode_no_creds(monkeypatch):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("client_ip", ["fd00::50", "fe80::50"])
+async def test_admin_ipv6_lan_access_in_addon_mode_no_creds(client_ip):
+    """In HA add-on mode with no credentials, IPv6 LAN clients can reach /admin."""
+    app = _make_test_app(is_addon=True)
+    transport = httpx.ASGITransport(app=app, client=(client_ip, 9999))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.get("/admin")
+    assert resp.status_code == 200
+    assert "text/html" in resp.headers["content-type"]
+
+
+@pytest.mark.asyncio
 async def test_admin_lan_post_without_csrf_blocked_in_addon_mode():
     """In HA add-on mode, a LAN POST without CSRF token is still blocked."""
     app = _make_test_app(is_addon=True)

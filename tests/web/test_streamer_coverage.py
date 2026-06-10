@@ -260,10 +260,18 @@ def test_is_private_network_link_local():
     assert _is_private_network(req) is True
 
 
+def test_is_private_network_ipv6_lan_ranges():
+    for ip in ("fd00::1234", "fc00::1", "fe80::1"):
+        req = MagicMock()
+        req.client.host = ip
+        assert _is_private_network(req) is True, f"{ip} should be trusted"
+
+
 def test_is_private_network_public_ip():
-    req = MagicMock()
-    req.client.host = "203.0.113.50"
-    assert _is_private_network(req) is False
+    for ip in ("203.0.113.50", "2001:4860:4860::8888"):
+        req = MagicMock()
+        req.client.host = ip
+        assert _is_private_network(req) is False, f"{ip} should not be trusted"
 
 
 # ---------------------------------------------------------------------------

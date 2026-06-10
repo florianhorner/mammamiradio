@@ -1071,15 +1071,18 @@ class LiveStreamHub:
 
 _HASSIO_NETWORK = ipaddress.ip_network("172.30.32.0/23")
 
-# Private/trusted networks: loopback, RFC1918, link-local, HA Supervisor,
-# and Tailscale/CGNAT (100.64.0.0/10). A self-hosted radio station trusts
-# its own LAN — the operator installed it themselves.
+# Private/trusted networks: loopback, RFC1918, IPv4/IPv6 link-local,
+# IPv6 unique-local, HA Supervisor, and Tailscale/CGNAT (100.64.0.0/10).
+# A self-hosted radio station trusts its own LAN — the operator installed it
+# themselves.
 _TRUSTED_NETWORKS = [
     ipaddress.ip_network("10.0.0.0/8"),
     ipaddress.ip_network("172.16.0.0/12"),
     ipaddress.ip_network("192.168.0.0/16"),
     ipaddress.ip_network("100.64.0.0/10"),  # CGNAT / Tailscale
     ipaddress.ip_network("169.254.0.0/16"),  # link-local
+    ipaddress.ip_network("fc00::/7"),  # IPv6 unique-local
+    ipaddress.ip_network("fe80::/10"),  # IPv6 link-local
     _HASSIO_NETWORK,
 ]
 
@@ -1098,7 +1101,7 @@ def _is_loopback_client(request: Request) -> bool:
 
 
 def _is_private_network(request: Request) -> bool:
-    """Return True for loopback, RFC1918, Tailscale CGNAT, or HA Supervisor."""
+    """Return True for loopback, LAN, Tailscale CGNAT, or HA Supervisor."""
     if _is_loopback_client(request):
         return True
     if not request.client:
