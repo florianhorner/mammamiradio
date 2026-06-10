@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -691,6 +692,30 @@ def test_load_track_metadata_incomplete_data_returns_none(tmp_path):
     norm.write_bytes(b"pretend mp3")
     sidecar = tmp_path / "norm_incomplete_192k.mp3.json"
     sidecar.write_text('{"title": "only title, no artist"}')
+    assert load_track_metadata(norm) is None
+
+
+def test_save_track_metadata_drops_stale_reconciled_marker(tmp_path):
+    norm = tmp_path / "norm_merge_192k.mp3"
+    norm.write_bytes(b"pretend mp3")
+    sidecar = tmp_path / "norm_merge_192k.mp3.json"
+    sidecar.write_text(json.dumps({"reconciled_lufs": -16.0, "stray": "keep"}))
+
+    save_track_metadata(norm, title="T", artist="A")
+
+    data = json.loads(sidecar.read_text())
+    assert "reconciled_lufs" not in data
+    assert data["title"] == "T"
+    assert data["artist"] == "A"
+    assert data["stray"] == "keep"
+
+
+def test_load_track_metadata_non_utf8_returns_none(tmp_path):
+    norm = tmp_path / "norm_bad_utf8_192k.mp3"
+    norm.write_bytes(b"pretend mp3")
+    sidecar = tmp_path / "norm_bad_utf8_192k.mp3.json"
+    sidecar.write_bytes(b"\xff\xfe\x00not utf-8")
+
     assert load_track_metadata(norm) is None
 
 

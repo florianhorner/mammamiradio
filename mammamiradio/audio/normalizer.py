@@ -28,25 +28,34 @@ def _norm_sidecar_path(norm_path: Path) -> Path:
     return norm_path.parent / f"{norm_path.name}.json"
 
 
+def _load_sidecar(sidecar: Path) -> dict:
+    """Best-effort read of a norm sidecar's JSON dict; {} on missing/corrupt."""
+    try:
+        if sidecar.exists():
+            data = json.loads(sidecar.read_text())
+            if isinstance(data, dict):
+                return data
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        pass
+    return {}
+
+
 def save_track_metadata(norm_path: Path, title: str, artist: str) -> None:
     """Persist title+artist alongside a normalized cache file so rescue paths can
     surface human-readable metadata instead of the raw filename."""
     sidecar = _norm_sidecar_path(norm_path)
+    data = _load_sidecar(sidecar)
+    data.pop("reconciled_lufs", None)
+    data.update({"title": title, "artist": artist})
     try:
-        sidecar.write_text(json.dumps({"title": title, "artist": artist}))
+        sidecar.write_text(json.dumps(data))
     except OSError as exc:
         logger.debug("Could not write norm metadata sidecar %s: %s", sidecar.name, exc)
 
 
 def load_track_metadata(norm_path: Path) -> dict[str, str] | None:
     """Return {'title', 'artist'} from a norm cache sidecar if present and valid."""
-    sidecar = _norm_sidecar_path(norm_path)
-    if not sidecar.exists():
-        return None
-    try:
-        data = json.loads(sidecar.read_text())
-    except (OSError, json.JSONDecodeError):
-        return None
+    data = _load_sidecar(_norm_sidecar_path(norm_path))
     title = data.get("title")
     artist = data.get("artist")
     if isinstance(title, str) and isinstance(artist, str) and title and artist:
@@ -212,7 +221,7 @@ def configure_loudness_reconcile(
     ]
 
 
-def _reconcile_lufs(path: Path, *, ad: bool = False) -> None:
+def _reconcile_lufs(path: Path, *, ad: bool = False) -> bool:
     """Nudge a finished segment to the configured integrated-LUFS target.
 
     No-op unless reconciliation is configured. Measures the file (cheap ebur128)
@@ -225,7 +234,7 @@ def _reconcile_lufs(path: Path, *, ad: bool = False) -> None:
     """
     cfg = _loudness_reconcile
     if cfg is None:
-        return
+        return False
     target = cfg[1] if ad else cfg[0]
     # Hold a normalization concurrency slot for the measure + corrective re-encode
     # so reconcile honours the same 2-ffmpeg ceiling as the rest of the pipeline
@@ -233,11 +242,11 @@ def _reconcile_lufs(path: Path, *, ad: bool = False) -> None:
     with _NORM_SEM:
         lufs = measure_lufs(path)
         if lufs is None:
-            return  # measurement failed — leave the file as produced
+            return False  # measurement failed — leave the file as produced
         # Clamp so a near-silent or corrupt file is never pumped to a huge gain.
         gain_db = max(-12.0, min(12.0, target - lufs))
         if abs(gain_db) < 0.5:
-            return  # already on target (within measurement noise) — skip the re-encode
+            return True  # already on target (within measurement noise)
         tmp = path.with_name(f"{path.stem}.lufs{path.suffix}")
         cmd = [
             "ffmpeg",
@@ -256,8 +265,28 @@ def _reconcile_lufs(path: Path, *, ad: bool = False) -> None:
             tmp.replace(path)
         except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
             tmp.unlink(missing_ok=True)
-            return  # measure/encode/rename failed — keep the original, never break audio
+            return False  # measure/encode/rename failed — keep the original, never break audio
     logger.info("LUFS reconcile: %s -> %.1f LUFS (%+.1f dB)", path.name, target, gain_db)
+    return True
+
+
+def reconcile_cached_music(path: Path) -> None:
+    """Bring a cached music file to the configured LUFS target on cache-hit play."""
+    cfg = _loudness_reconcile
+    if cfg is None:
+        return
+    target = cfg[0]
+    sidecar = _norm_sidecar_path(path)
+    data = _load_sidecar(sidecar)
+    if data.get("reconciled_lufs") == target:
+        return
+    if not _reconcile_lufs(path):
+        return
+    data["reconciled_lufs"] = target
+    try:
+        sidecar.write_text(json.dumps(data))
+    except OSError as exc:
+        logger.debug("Could not mark norm sidecar reconciled %s: %s", sidecar.name, exc)
 
 
 def normalize(

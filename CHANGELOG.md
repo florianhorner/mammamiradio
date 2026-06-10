@@ -175,6 +175,16 @@ The current version source of truth is `pyproject.toml`.
   segment shows a 5-second Undo toast and only commits when the window closes, so
   a mis-tap on a running station is recoverable.
 
+### Fixed
+
+- **Producer norm-cache bridges stop replaying the same cached song by filename.**
+  Resume, idle wake-up, and active queue-drain bridges now share the recent-aware
+  cache selector used by playback rescue, so they avoid the current/recent track
+  and randomize among alternatives while preserving instant audio.
+- **Cached music hits keep loudness reconciliation.** Pre-normalized music that
+  already exists in `cache/norm_*.mp3` still re-earns the LUFS marker on first
+  playback, so older cached tracks do not air at stale levels.
+
 ## [2.13.0] - 2026-05-26
 
 ### Added
