@@ -83,7 +83,21 @@ fi
 # ---- 2. Image path format ----
 echo "2. Image path"
 IMAGE=$(grep '^image:' ha-addon/mammamiradio/config.yaml | awk '{print $2}')
-OWNER=$(git remote get-url origin 2>/dev/null | sed 's|.*github.com[:/]||;s|/.*||' || gh api user -q .login 2>/dev/null || echo "unknown")
+# Owner detection (primary: git remote → gh → repository.yaml manifest → unknown).
+# Each `$(...)` ends in `|| true` so a failing stage (git with no origin, grep
+# with no match) can't trip `set -euo pipefail`: under pipefail the pipeline
+# inherits git's non-zero exit, which `set -e` would otherwise treat as fatal.
+OWNER=$(git remote get-url origin 2>/dev/null | sed 's|.*github.com[:/]||;s|/.*||' || true)
+if [ -z "$OWNER" ]; then
+    OWNER=$(gh api user -q .login 2>/dev/null || true)
+fi
+# No remote and no gh (fresh/no-remote worktree): fall back to the canonical
+# owner recorded in repository.yaml — the single-source repo manifest — instead
+# of an empty owner (which would expand to the bogus ghcr.io//... expectation).
+if [ -z "$OWNER" ]; then
+    OWNER=$(grep '^url:' repository.yaml 2>/dev/null | sed 's|.*github.com[:/]||;s|/.*||' || true)
+fi
+[ -z "$OWNER" ] && OWNER="unknown"
 EXPECTED="ghcr.io/${OWNER}/mammamiradio-addon-{arch}"
 if [ "$IMAGE" = "$EXPECTED" ]; then
     pass "Image path: $IMAGE"
