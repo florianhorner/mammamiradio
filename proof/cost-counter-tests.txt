@@ -1,0 +1,15 @@
+Cost counter reframe — test + lint proof
+branch: florianhorner/feat/cost-counter-reliability
+commit: 92050e66
+
+== Targeted tests: TTS billing + admin template invariants + cost math ==
+........................................................................ [ 68%]
+.................................                                        [100%]
+105 passed in 1.09s
+
+== ruff lint (changed source + test) ==
+All checks passed!
+4 files already formatted
+
+== Full suite (make check) ==
+2675 passed, 2 skipped — total coverage 93.90% (floor 92%); mammamiradio.audio.tts 95% (floor 90%); all per-module floors held
