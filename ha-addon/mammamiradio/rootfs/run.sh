@@ -90,13 +90,6 @@ export MAMMAMIRADIO_LEDGER_ENABLED="true"
 export MAMMAMIRADIO_BIND_HOST="0.0.0.0"
 export MAMMAMIRADIO_PORT="8000"
 
-# ---- Admin token: use config option if set, otherwise auto-generate ----
-if [ -z "$ADMIN_TOKEN" ]; then
-    ADMIN_TOKEN="$(python3 -c 'import uuid; print(uuid.uuid4().hex)')"
-    export ADMIN_TOKEN
-    echo "[mammamiradio] Auto-generated ADMIN_TOKEN for non-loopback bind"
-fi
-
 # ---- Point cache/tmp at persistent /data ----
 export MAMMAMIRADIO_CACHE_DIR="/data/cache"
 export MAMMAMIRADIO_TMP_DIR="/data/tmp"

@@ -1,0 +1,18 @@
+# Proof — public-admin-routes-404 fix (#552) + admin-auth contract pinning
+# Branch updated onto origin/main; generated 2026-06-11
+
+=== pytest tests/ -q ===
+..............................                                           [100%]
+=============================== warnings summary ===============================
+.venv/lib/python3.11/site-packages/fastapi/testclient.py:1
+  /Users/florianhorner/conductor/workspaces/mammamiradio/providence/.venv/lib/python3.11/site-packages/fastapi/testclient.py:1: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.
+    from starlette.testclient import TestClient as TestClient  # noqa
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+2692 passed, 2 skipped, 13 deselected, 1 warning in 54.57s
+
+=== ruff check . ===
+All checks passed!
+
+=== ruff format --check . ===
+176 files already formatted

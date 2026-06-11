@@ -1,4 +1,12 @@
-"""Tests for LiveStreamHub, HTTP routes, and admin auth in streamer.py."""
+"""Tests for LiveStreamHub, HTTP routes, and admin auth in streamer.py.
+
+The admin-access tests here (``test_admin_*``) are the request-layer half of the
+admin-access contract; the boot-layer half lives in ``tests/core/test_config.py``.
+The Supervisor-network POST trust and basic-auth CSRF rows are additionally pinned
+in ``tests/web/test_streamer_routes_extended.py``. The single source of truth for the
+contract is the "Admin access model" matrix in ``docs/operations.md`` — change a row
+there and in ``require_admin_access`` together, and update these tests to match.
+"""
 
 from __future__ import annotations
 
@@ -38,16 +46,31 @@ TOML_PATH = str(Path(__file__).resolve().parents[2] / "radio.toml")
 # ---------------------------------------------------------------------------
 
 
-def _make_test_app(*, admin_password: str = "", admin_token: str = "") -> FastAPI:
+def _make_test_app(
+    *,
+    admin_password: str = "",
+    admin_token: str = "",
+    is_addon: bool = False,
+    preserve_bind_env: bool = False,
+) -> FastAPI:
     """Build a minimal FastAPI app with the streamer router and populated state."""
     app = FastAPI()
     app.include_router(router)
     app.include_router(listener_requests_router)
 
-    config = load_config(TOML_PATH)
+    with patch.dict(os.environ, {"ADMIN_PASSWORD": "", "ADMIN_TOKEN": ""}):
+        if not preserve_bind_env:
+            os.environ.pop("MAMMAMIRADIO_BIND_HOST", None)
+        if is_addon:
+            os.environ["SUPERVISOR_TOKEN"] = "test-supervisor-token"
+        else:
+            os.environ.pop("SUPERVISOR_TOKEN", None)
+        os.environ.pop("HASSIO_TOKEN", None)
+        config = load_config(TOML_PATH)
     # Override auth settings for test isolation
     config.admin_password = admin_password
     config.admin_token = admin_token
+    config.is_addon = is_addon
 
     state = StationState(
         playlist=[Track(title="Test Song", artist="Test Artist", duration_ms=180_000, spotify_id="t1")],
@@ -1687,6 +1710,68 @@ async def test_admin_panel_with_basic_auth_returns_html():
         resp = await client.get("/admin", auth=("admin", "secret"))
     assert resp.status_code == 200
     assert "text/html" in resp.headers["content-type"]
+
+
+# ---------------------------------------------------------------------------
+# HA add-on mode: LAN trust without admin_token configured
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_admin_lan_access_in_addon_mode_no_creds(monkeypatch):
+    """In HA add-on mode with no credentials, a LAN client can reach /admin."""
+    monkeypatch.setenv("MAMMAMIRADIO_BIND_HOST", "0.0.0.0")
+    monkeypatch.delenv("ADMIN_PASSWORD", raising=False)
+    monkeypatch.delenv("ADMIN_TOKEN", raising=False)
+    app = _make_test_app(is_addon=True, preserve_bind_env=True)
+    assert app.state.config.bind_host == "0.0.0.0"
+    transport = httpx.ASGITransport(app=app, client=("192.168.1.50", 9999))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.get("/admin")
+    assert resp.status_code == 200
+    assert "text/html" in resp.headers["content-type"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("client_ip", ["fd00::50", "fe80::50"])
+async def test_admin_ipv6_lan_access_in_addon_mode_no_creds(client_ip):
+    """In HA add-on mode with no credentials, IPv6 LAN clients can reach /admin."""
+    app = _make_test_app(is_addon=True)
+    transport = httpx.ASGITransport(app=app, client=(client_ip, 9999))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.get("/admin")
+    assert resp.status_code == 200
+    assert "text/html" in resp.headers["content-type"]
+
+
+@pytest.mark.asyncio
+async def test_admin_lan_post_without_csrf_blocked_in_addon_mode():
+    """In HA add-on mode, a LAN POST without CSRF token is still blocked."""
+    app = _make_test_app(is_addon=True)
+    transport = httpx.ASGITransport(app=app, client=("192.168.1.50", 9999))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.post("/api/skip")
+    assert resp.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_admin_lan_with_user_set_token_requires_token():
+    """In HA add-on mode with explicit admin_token, LAN clients must provide the token."""
+    app = _make_test_app(is_addon=True, admin_token="tok-abc-123")
+    transport = httpx.ASGITransport(app=app, client=("192.168.1.50", 9999))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.get("/admin")
+    assert resp.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_admin_public_ip_rejected_in_addon_mode_no_creds():
+    """In HA add-on mode with no credentials, a public IP is still blocked."""
+    app = _make_test_app(is_addon=True)
+    transport = httpx.ASGITransport(app=app, client=("203.0.113.50", 9999))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.get("/admin")
+    assert resp.status_code == 403
 
 
 # ---------------------------------------------------------------------------

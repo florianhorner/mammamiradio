@@ -6,6 +6,10 @@ The current version source of truth is `pyproject.toml`.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Direct `/admin` access from your home network now works.** If you open `http://<pi-ip>:8000/admin` in a browser on your local Wi-Fi, the admin panel loads without needing a token. Port 8000 serves the listener page (`/`), the admin panel (`/admin`), and the audio stream (`/stream`) — no HA sidebar required for any of them. Configuring a custom `admin_token` in the add-on options still enforces that token even from the LAN.
+
 ### Added
 
 - **The station logs how long each segment took to build.** Every segment the producer builds now records its total prep time on one line, and with logs turned up to debug you get a per-step breakdown of the audio work (normalize, loudness, mixing) that pinpoints the slow step. When the music ever runs thin, you can see exactly where the time went instead of guessing.

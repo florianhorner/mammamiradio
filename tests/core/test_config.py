@@ -1,3 +1,11 @@
+"""Tests for StationConfig loading, validation, and add-on option mapping.
+
+The non-loopback-bind / admin-credential tests here (``test_*bind*``,
+``test_is_addon*``) are the boot-layer half of the admin-access contract; the
+request-layer half lives in ``tests/web/test_streamer_routes.py``. Single source of
+truth: the "Admin access model" matrix in ``docs/operations.md``.
+"""
+
 from __future__ import annotations
 
 import json
@@ -369,6 +377,24 @@ def test_empty_bind_host_requires_auth(monkeypatch):
         load_config(str(toml_path))
 
 
+def test_non_local_bind_allowed_in_addon_mode_without_creds(monkeypatch):
+    """In HA add-on mode, a non-loopback bind without admin creds must NOT raise.
+
+    The addon binds 0.0.0.0 for ingress and relies on the private-network LAN
+    trust in require_admin_access instead of a forced token. SUPERVISOR_TOKEN
+    flips is_addon True, which exempts the credential requirement.
+    """
+    toml_path = Path(__file__).resolve().parents[2] / "radio.toml"
+    monkeypatch.setenv("MAMMAMIRADIO_BIND_HOST", "0.0.0.0")
+    monkeypatch.setenv("SUPERVISOR_TOKEN", "supervisor-abc")
+    monkeypatch.delenv("ADMIN_PASSWORD", raising=False)
+    monkeypatch.delenv("ADMIN_TOKEN", raising=False)
+
+    config = load_config(str(toml_path))
+    assert config.is_addon is True
+    assert config.bind_host == "0.0.0.0"
+
+
 # --- Addon detection tests ---
 
 
@@ -620,13 +646,16 @@ def test_addon_mode_respects_ha_enabled_false(monkeypatch):
 
 
 def test_addon_mode_bind_auth_uses_supervisor_token(monkeypatch):
-    """Addon mode binds 0.0.0.0 but run.sh auto-generates ADMIN_TOKEN first,
-    so config validation passes via the standard credential requirement."""
+    """Addon mode binds 0.0.0.0; an explicitly configured ADMIN_TOKEN still loads.
+
+    Addon mode is exempt from the non-loopback credential requirement (see
+    test_non_local_bind_allowed_in_addon_mode_without_creds), but a token set in
+    the add-on options is honored and config still loads cleanly."""
     toml_path = Path(__file__).resolve().parents[2] / "radio.toml"
     monkeypatch.setenv("SUPERVISOR_TOKEN", "test_token")
     monkeypatch.setenv("MAMMAMIRADIO_BIND_HOST", "0.0.0.0")
-    # rootfs/run.sh exports ADMIN_TOKEN before launching the app in addon mode.
-    monkeypatch.setenv("ADMIN_TOKEN", "addon-generated-token")
+    # Operator set an explicit admin_token in the add-on options.
+    monkeypatch.setenv("ADMIN_TOKEN", "operator-set-token")
     monkeypatch.delenv("ADMIN_PASSWORD", raising=False)
 
     config = load_config(str(toml_path))  # Should not raise

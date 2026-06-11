@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Fixed
+
+- **Direct `/admin` access from your home network now works.** If you open `http://<pi-ip>:8000/admin` in a browser on your local Wi-Fi, the admin panel loads without needing a token. If you configured a custom `admin_token` in the add-on options, that token is still enforced. From outside your home network, `/admin` returns 403.
+
 ### Added
 
 - **Admin playlist and search pagination** — Large rotations no longer over-render in the Producer Desk. Status, playlist, and search APIs expose bounded windows with load-more metadata, while artwork from Apple charts, web search results, and listener-request downloads is preserved through queueing.
