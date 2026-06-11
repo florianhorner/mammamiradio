@@ -1455,6 +1455,27 @@ async def test_synthesize_does_not_bill_when_cloud_falls_back_to_edge(_mock_all,
 
 
 @pytest.mark.asyncio
+async def test_synthesize_does_not_bill_when_cloud_synth_raises(_mock_all, tmp_path, monkeypatch):
+    """A paid engine with a key present whose synth RAISES falls back to free Edge, bills nothing.
+
+    Distinct from the missing-key path: this exercises the try/except *after* the paid
+    call starts, guarding the `result = ...; _bill_tts(); return result` ordering. A failed
+    cloud call delivers no audio, so the counter must stay at 0 — billing lives only on the
+    success path, never before the try.
+    """
+    from types import SimpleNamespace
+
+    from mammamiradio.audio.tts import synthesize
+
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-key")
+    state = SimpleNamespace(tts_characters=0)
+    with patch("mammamiradio.audio.tts._get_openai_client", side_effect=RuntimeError("API down")):
+        await synthesize("Ciao mondo", "onyx", tmp_path / "o.mp3", engine="openai", state=state)
+    _mock_all["Communicate"].assert_called_once()  # fell back to edge-tts
+    assert state.tts_characters == 0  # failed paid call → never billed
+
+
+@pytest.mark.asyncio
 async def test_synthesize_edge_engine_never_billed(_mock_all, tmp_path):
     """Edge is free — an explicit edge engine never touches the counter."""
     from types import SimpleNamespace
