@@ -29,7 +29,7 @@ Environment:
 - `MAMMAMIRADIO_PORT`
 - `MAMMAMIRADIO_ALLOW_YTDLP` (optional, enables live charts and yt-dlp downloads; enabled by default in HA addon and Conductor)
 - `ADMIN_USERNAME`
-- `ADMIN_PASSWORD` or `ADMIN_TOKEN` — required for any non-loopback bind (see **Admin access model**)
+- `ADMIN_PASSWORD` or `ADMIN_TOKEN` — required for any non-loopback bind in standalone mode; optional for the HA add-on, which trusts its own LAN (see **Admin access model**)
 - `ANTHROPIC_API_KEY`
 - `OPENAI_API_KEY` (optional, used for TTS and as script generation fallback)
 - `HA_TOKEN` if Home Assistant integration is enabled
@@ -143,25 +143,67 @@ There is no blessed platform in this repo, but the sensible shape is:
 
 ## Admin access model
 
-Loopback (`127.0.0.1`, `localhost`) is fully trusted — no credentials needed.
+This section is the single source of truth for who may reach `/admin` and the
+admin API. Two layers enforce it: a **boot check** (`_validate` in
+`mammamiradio/core/config.py`) decides whether the process starts at all, and a
+**per-request check** (`require_admin_access` in `mammamiradio/web/streamer.py`)
+authorizes each call. The tables below are the contract; the code conforms to
+them, and the `tests/web/test_streamer_routes.py` admin-access group plus
+`tests/core/test_config.py` bind tests pin every row. Change a row here and in
+those two enforcement points together, never one without the others.
 
-For any non-loopback bind (`0.0.0.0`, a LAN/Tailscale address, or an empty
-`MAMMAMIRADIO_BIND_HOST`, which listens on all interfaces):
+Terms: **standalone** = any non-add-on run (local, Docker). **add-on** =
+the Home Assistant add-on (`is_addon` true). **Creds** = `ADMIN_PASSWORD` and/or
+`ADMIN_TOKEN`. **Private network** = loopback, RFC1918 LAN, Tailscale/CGNAT
+(`100.64.0.0/10`), IPv4/IPv6 link-local, IPv6 unique-local (`fc00::/7`), and the
+HA Supervisor network (`172.30.32.0/23`). A non-loopback bind is `0.0.0.0`, a
+LAN/Tailscale address, or an empty `MAMMAMIRADIO_BIND_HOST` (listens on all
+interfaces).
 
-- **Standalone startup now fails** unless `ADMIN_PASSWORD` or `ADMIN_TOKEN` is
-  set. This is a behavior change: earlier versions started without credentials
-  and trusted private networks at runtime. If you bind to `0.0.0.0` in
-  standalone mode, set a credential or startup raises a config error.
-- **When a credential is configured, private-network trust no longer bypasses
-  it.** A LAN/Tailscale client must present the credential; it is no longer
-  auto-trusted just for being on a private network.
-- **`ADMIN_TOKEN` is a header-only API credential** (`X-Radio-Admin-Token`). A
-  browser cannot send it on plain navigation, so to open `/admin` in a browser
-  on a non-loopback bind you need `ADMIN_PASSWORD`. Use `ADMIN_TOKEN` for
-  programmatic/API callers (HA `rest_command`, scripts).
-- **Credential-less private-network deployments are unchanged** — still trusted
-  for reads and CSRF-guarded on writes. The HA add-on auto-generates an
-  `ADMIN_TOKEN` at startup, so it is always in the credentialed path.
+### Boot: does the process start?
+
+| Bind host | Mode | Creds set? | Result |
+| --- | --- | --- | --- |
+| Loopback (`127.0.0.1`, `localhost`) | any | any | Starts |
+| Non-loopback | standalone | none | **Refuses to boot** (config error) |
+| Non-loopback | standalone | yes | Starts |
+| Non-loopback | add-on | any | Starts (the add-on trusts its own LAN) |
+
+The add-on is the only mode that boots on a non-loopback bind without a
+credential. It is the operator's own Home Assistant box, so it trusts its LAN by
+design — see the per-request table for what that LAN may then do.
+
+### Per request: may this caller reach `/admin`?
+
+| Caller origin | Creds configured | Result |
+| --- | --- | --- |
+| Loopback | any | Allow (no CSRF — same machine) |
+| HA Supervisor net, add-on mode | any | Allow (no CSRF — Docker-internal, used by HA automations) |
+| Private network (LAN / Tailscale / IPv6 ULA+link-local) | `ADMIN_TOKEN` set | Require `X-Radio-Admin-Token` header (`401` if missing/wrong) |
+| Private network | `ADMIN_PASSWORD` set | Require Basic auth + CSRF on writes (`401` if wrong) |
+| Private network | none | Allow read; CSRF token or same-origin required on writes |
+| Public IP | none | **`403` reject** |
+| Public IP | any cred set | Require that credential (`401` if missing/wrong) |
+
+Two invariants this table preserves:
+
+- **A configured credential is never bypassed by private-network trust.** If you
+  set `ADMIN_PASSWORD` or `ADMIN_TOKEN`, a LAN/Tailscale client must present it —
+  it is not auto-trusted just for being on a private network. The credential-less
+  "allow read on the LAN" row only applies when no credential is configured.
+- **Public IPs never reach `/admin` without a credential.** The credential-less
+  LAN fallback is scoped to private networks; a public client is rejected.
+
+`ADMIN_TOKEN` is a header-only API credential (`X-Radio-Admin-Token`). A browser
+cannot send it on plain navigation, so to open `/admin` in a browser on a
+credentialed non-loopback bind you need `ADMIN_PASSWORD`; use `ADMIN_TOKEN` for
+programmatic/API callers (HA `rest_command`, scripts).
+
+The HA add-on ships with **no credential by default**: a direct LAN browser hits
+`http://<ha-ip>:8000/admin` and lands in the credential-less private-network row
+(read allowed, writes CSRF-guarded), while ingress and HA automations come in on
+the Supervisor network. To require a credential on the add-on, set `admin_token`
+in the add-on options; a configured token is then enforced even on the LAN.
 
 ## Docker
 
@@ -177,7 +219,7 @@ The `Dockerfile` builds a standalone image with Python 3.11 and FFmpeg. The cont
 
 The `ha-addon/` directory contains a complete HA add-on scaffold. Users add the repo URL in HA Settings > Add-ons > Repositories, then install "Mamma Mi Radio" from the store.
 
-The add-on entrypoint (`ha-addon/mammamiradio/rootfs/run.sh`) maps Supervisor-injected `$SUPERVISOR_TOKEN` to `HA_TOKEN`, auto-generates an `ADMIN_TOKEN`, reads add-on options from `/data/options.json`, and starts uvicorn.
+The add-on entrypoint (`ha-addon/mammamiradio/rootfs/run.sh`) maps Supervisor-injected `$SUPERVISOR_TOKEN` to `HA_TOKEN`, reads add-on options from `/data/options.json`, and starts uvicorn. It binds `0.0.0.0` with no admin credential by default and trusts its own LAN for admin access (see **Admin access model**); set `admin_token` in the add-on options to require a credential.
 
 The dashboard is accessible via HA ingress (sidebar). The first-run flow exposes the same setup checks there as every other run mode, and the stream URL can be played on any HA media player.
 

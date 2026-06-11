@@ -1153,6 +1153,11 @@ def _enforce_csrf_for_private_network(request: Request) -> None:
     )
 
 
+# Admin-access contract: the authoritative matrix is the "Admin access model"
+# section in docs/operations.md. This function is the request-layer half; the
+# boot-layer half is _validate() in core/config.py. Keep this function, that check,
+# and the doc in sync — the tests/web/test_streamer_routes.py admin-access group
+# and tests/core/test_config.py bind tests pin every row.
 def require_admin_access(
     request: Request,
     credentials: HTTPBasicCredentials | None = Depends(security),

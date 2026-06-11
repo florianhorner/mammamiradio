@@ -1,3 +1,11 @@
+"""Tests for StationConfig loading, validation, and add-on option mapping.
+
+The non-loopback-bind / admin-credential tests here (``test_*bind*``,
+``test_is_addon*``) are the boot-layer half of the admin-access contract; the
+request-layer half lives in ``tests/web/test_streamer_routes.py``. Single source of
+truth: the "Admin access model" matrix in ``docs/operations.md``.
+"""
+
 from __future__ import annotations
 
 import json

@@ -162,7 +162,7 @@ If you configured a custom `admin_token` in the add-on options, direct `/admin` 
   |     ANTHROPIC_API_KEY, OPENAI_API_KEY,
   |     AZURE_SPEECH_KEY, AZURE_SPEECH_REGION, ELEVENLABS_API_KEY,
   |     STATION_NAME, MAMMAMIRADIO_QUALITY (from quality_profile, default balanced),
-  |     ADMIN_TOKEN (blank => auto-generated),
+  |     ADMIN_TOKEN (blank => LAN-trusted, no token required),
   |     HA_ENABLED (from enable_home_assistant)
   |
   +-- run.sh maps Supervisor token
