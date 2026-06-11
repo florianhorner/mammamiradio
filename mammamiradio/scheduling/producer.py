@@ -23,6 +23,7 @@ import httpx
 import mammamiradio.hosts.scriptwriter as _sw
 from mammamiradio.audio.audio_quality import AudioQualityError, AudioToolError, validate_segment_audio
 from mammamiradio.audio.imaging import ImagingLibrary
+from mammamiradio.audio.norm_cache import select_norm_cache_rescue
 from mammamiradio.audio.normalizer import (
     concat_files,
     crossfade_voice_over_music,
@@ -114,6 +115,22 @@ def _normalized_cache_path(track: Track, config: StationConfig) -> Path:
     return config.cache_dir / f"norm_{track.cache_key}_{config.audio.bitrate}k.mp3"
 
 
+def _norm_cache_bridge_payload(norm_path: Path, bridge_flag: str) -> tuple[dict, str]:
+    _meta = load_track_metadata(norm_path) or {}
+    title = _meta.get("title") or humanize_norm_filename(norm_path.name)
+    artist = _meta.get("artist", "")
+    detail = f"{artist} - {title}" if artist else title
+    return (
+        {
+            "title": title,
+            "artist": artist,
+            bridge_flag: True,
+            "audio_source": "norm_cache",
+        },
+        f"{norm_path.name} ({detail})",
+    )
+
+
 async def _render_music_track(
     track: Track,
     config: StationConfig,
@@ -185,24 +202,18 @@ async def _queue_drain_recovery_bridge(
             )
         )
 
-    norm_files = sorted(config.cache_dir.glob("norm_*.mp3"))
-    if norm_files:
-        norm_path = norm_files[0]
-        _meta = load_track_metadata(norm_path) or {}
+    norm_path = select_norm_cache_rescue(config.cache_dir, state)
+    if norm_path:
+        metadata, log_label = _norm_cache_bridge_payload(norm_path, "queue_drain_recovery")
         logger.warning(
             "Queue empty during active playback — inserting norm-cache bridge: %s",
-            norm_path.name,
+            log_label,
         )
         return await queue_segment(
             Segment(
                 type=SegmentType.MUSIC,
                 path=norm_path,
-                metadata={
-                    "title": _meta.get("title") or humanize_norm_filename(norm_path.name),
-                    "artist": _meta.get("artist", ""),
-                    "queue_drain_recovery": True,
-                    "audio_source": "norm_cache",
-                },
+                metadata=metadata,
                 ephemeral=False,
             )
         )
@@ -555,6 +566,7 @@ async def _synthesize_impossible_moment(
         imp_path,
         engine=host.engine,
         edge_fallback_voice=host.edge_fallback_voice,
+        state=state,
     )
     xfade_out = config.tmp_dir / f"impossible_xf_{uuid4().hex[:8]}.mp3"
     audio_path = await _try_crossfade(imp_path, config, xfade_out)
@@ -1052,23 +1064,17 @@ async def run_producer(
                         )
                     )
                 else:
-                    # No canned clips — grab the first pre-normalized track from the
-                    # norm cache (already processed, no FFmpeg wait needed).
-                    norm_files = sorted(config.cache_dir.glob("norm_*.mp3"))
-                    if norm_files:
-                        norm_path = norm_files[0]
-                        logger.info("Resume bridge: seeding pre-normalized track %s", norm_path.name)
-                        _meta = load_track_metadata(norm_path) or {}
+                    # No canned clips — grab a recent-aware pre-normalized track
+                    # from the norm cache (already processed, no FFmpeg wait).
+                    norm_path = select_norm_cache_rescue(config.cache_dir, state)
+                    if norm_path:
+                        metadata, log_label = _norm_cache_bridge_payload(norm_path, "resume_bridge")
+                        logger.info("Resume bridge: seeding pre-normalized track %s", log_label)
                         await _queue_segment(
                             Segment(
                                 type=SegmentType.MUSIC,
                                 path=norm_path,
-                                metadata={
-                                    "title": _meta.get("title") or humanize_norm_filename(norm_path.name),
-                                    "artist": _meta.get("artist", ""),
-                                    "resume_bridge": True,
-                                    "audio_source": "norm_cache",
-                                },
+                                metadata=metadata,
                                 ephemeral=False,
                             )
                         )
@@ -1101,21 +1107,15 @@ async def run_producer(
                         )
                     )
                 else:
-                    norm_files = sorted(config.cache_dir.glob("norm_*.mp3"))
-                    if norm_files:
-                        norm_path = norm_files[0]
-                        logger.info("Idle bridge: seeding pre-normalized track %s", norm_path.name)
-                        _meta = load_track_metadata(norm_path) or {}
+                    norm_path = select_norm_cache_rescue(config.cache_dir, state)
+                    if norm_path:
+                        metadata, log_label = _norm_cache_bridge_payload(norm_path, "idle_bridge")
+                        logger.info("Idle bridge: seeding pre-normalized track %s", log_label)
                         await _queue_segment(
                             Segment(
                                 type=SegmentType.MUSIC,
                                 path=norm_path,
-                                metadata={
-                                    "title": _meta.get("title") or humanize_norm_filename(norm_path.name),
-                                    "artist": _meta.get("artist", ""),
-                                    "idle_bridge": True,
-                                    "audio_source": "norm_cache",
-                                },
+                                metadata=metadata,
                                 ephemeral=False,
                             )
                         )
@@ -1607,7 +1607,7 @@ async def run_producer(
                             )
                             banter_expected_min_duration_sec = _expected_banter_duration_sec(line_texts)
                             banter_expected_line_count = len(line_texts) if len(line_texts) > 1 else None
-                            audio_path = await synthesize_dialogue(lines, config.tmp_dir)
+                            audio_path = await synthesize_dialogue(lines, config.tmp_dir, state=state)
                             state.last_banter_script = [
                                 {
                                     "host": h.name,
@@ -1669,6 +1669,7 @@ async def run_producer(
                                     **_prosody,
                                     engine=_host.engine,
                                     edge_fallback_voice=_host.edge_fallback_voice,
+                                    state=state,
                                 )
                                 xfade_out = config.tmp_dir / f"banter_trans_{uuid4().hex[:8]}.mp3"
                                 result = await _try_crossfade(_path, config, xfade_out)
@@ -1677,7 +1678,7 @@ async def run_producer(
                             banter_path: Path
                             (trans_voice_path, has_music_tail), banter_path = await asyncio.gather(
                                 _do_transition(),
-                                synthesize_dialogue(lines, config.tmp_dir),
+                                synthesize_dialogue(lines, config.tmp_dir, state=state),
                             )
 
                             # Concat: transition + banter (both pre-normalized)
@@ -1918,6 +1919,7 @@ async def run_producer(
                         rate=flash_rate,
                         engine=host.engine,
                         edge_fallback_voice=host.edge_fallback_voice,
+                        state=state,
                     )
 
                     # Try to overlay on the tail of the last music segment
@@ -1983,6 +1985,7 @@ async def run_producer(
                         voice_path,
                         engine=sweeper_engine,
                         edge_fallback_voice=sweeper_fallback,
+                        state=state,
                     )
                     sting_task = loop.run_in_executor(None, generate_station_id_bed, sting_path, 3.0, sb.motif_notes)
                     await asyncio.gather(voice_task, sting_task)
@@ -2026,6 +2029,7 @@ async def run_producer(
                         audio_path,
                         engine=sweeper_engine,
                         edge_fallback_voice=sweeper_fallback,
+                        state=state,
                     )
                     loop = asyncio.get_running_loop()
                     sting_path = config.tmp_dir / f"sweeper_sting_{uuid4().hex[:8]}.mp3"
@@ -2080,6 +2084,7 @@ async def run_producer(
                             voice_path,
                             engine=host.engine,
                             edge_fallback_voice=host.edge_fallback_voice,
+                            state=state,
                         ),
                         loop.run_in_executor(None, generate_tone, chime_path, 1047, 0.3),
                     )
@@ -2158,6 +2163,7 @@ async def run_producer(
                         ipath,
                         engine=ihost.engine,
                         edge_fallback_voice=ihost.edge_fallback_voice,
+                        state=state,
                     )
                     xout = config.tmp_dir / f"ad_trans_{uuid4().hex[:8]}.mp3"
                     ipath = await _try_crossfade(ipath, config, xout)
@@ -2182,6 +2188,7 @@ async def run_producer(
                             pitch="-10Hz",
                             engine=pengine,
                             edge_fallback_voice=pfallback,
+                            state=state,
                         )
                         parts.append(ppath)
                     except Exception:
@@ -2242,7 +2249,7 @@ async def run_producer(
                 # ── PHASE 2: Fan out all ad TTS synthesis in parallel ──
                 ad_paths = await asyncio.gather(
                     *(
-                        synthesize_ad(script, vm, config.tmp_dir, sfx_dir)
+                        synthesize_ad(script, vm, config.tmp_dir, sfx_dir, state=state)
                         for script, (_, _, _, vm) in zip(scripts, spot_params, strict=False)
                     )
                 )
@@ -2296,6 +2303,7 @@ async def run_producer(
                         outro_path,
                         engine=outro_host.engine,
                         edge_fallback_voice=outro_host.edge_fallback_voice,
+                        state=state,
                     ),
                 )
                 break_parts.append(bumper_out)

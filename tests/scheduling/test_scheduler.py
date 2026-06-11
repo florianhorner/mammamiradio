@@ -151,6 +151,34 @@ def test_select_next_track_relaxes_on_small_pool():
     assert pick.spotify_id == "only"
 
 
+def test_select_next_track_repeated_cycles_do_not_repeat_within_cooldown():
+    """Repeated select_next_track/after_music cycles keep the cooldown invariant when alternatives exist."""
+    tracks = [
+        Track(title=f"Song {idx}", artist=f"Artist {idx}", duration_ms=1, spotify_id=str(idx)) for idx in range(5)
+    ]
+    state = StationState(playlist=tracks)
+
+    for _ in range(20):
+        recent_keys = {track.cache_key for track in list(state.played_tracks)[-3:]}
+        pick = state.select_next_track(repeat_cooldown=3, artist_cooldown=0, max_artist_per_hour=0)
+        assert pick.cache_key not in recent_keys
+        state.after_music(pick)
+
+
+def test_select_next_track_all_in_repeat_cooldown_picks_least_recently_played():
+    """When the whole pool is inside cooldown, final fallback chooses the stalest track."""
+    tracks = [
+        Track(title="A", artist="Art1", duration_ms=1, spotify_id="a"),
+        Track(title="B", artist="Art2", duration_ms=1, spotify_id="b"),
+        Track(title="C", artist="Art3", duration_ms=1, spotify_id="c"),
+    ]
+    state = StationState(playlist=tracks, played_tracks=[tracks[0], tracks[1], tracks[2], tracks[0], tracks[1]])
+
+    pick = state.select_next_track(repeat_cooldown=3, artist_cooldown=0, max_artist_per_hour=0)
+
+    assert pick == tracks[2]
+
+
 def test_select_next_track_does_not_mutate_playlist():
     """select_next_track should not modify the playlist (unlike reserve_next_track)."""
     tracks = [

@@ -10,6 +10,7 @@ import re
 import shutil
 from functools import partial
 from pathlib import Path
+from typing import TYPE_CHECKING
 from urllib.parse import quote
 from uuid import uuid4
 
@@ -37,6 +38,9 @@ from mammamiradio.audio.voice_catalog import (
 )
 from mammamiradio.core.models import HostPersonality
 from mammamiradio.hosts.ad_creative import AdScript, AdVoice
+
+if TYPE_CHECKING:
+    from mammamiradio.core.models import StationState
 
 logger = logging.getLogger(__name__)
 
@@ -330,6 +334,7 @@ async def synthesize(
     openai_instructions: str = "",
     loudnorm: bool = True,
     voice_settings: dict | None = None,
+    state: StationState | None = None,
 ) -> Path:
     """Render text via the chosen TTS engine, then normalize to station output settings.
 
@@ -338,17 +343,33 @@ async def synthesize(
 
     loudnorm=False skips the EBU R128 pass — use for intermediate lines that will
     be assembled and loudnorm'd as a single unit by the caller.
+
+    state: when provided, characters synthesized by a PAID cloud engine (OpenAI,
+    Azure, ElevenLabs) are added to state.tts_characters for the operator's cost
+    estimate. Edge-tts is free and never counted — so a voice that requests a cloud
+    engine but falls back to Edge (missing key, API error) is correctly NOT billed.
+    Best-effort only: never raises into the audio path.
     """
     engine = (engine or "edge").strip().lower()
     fallback_voice = edge_fallback_voice or _EDGE_DEFAULT_FALLBACK_VOICE
+
+    def _bill_tts() -> None:
+        # Rough by design — folded into a figure the UI labels an estimate.
+        if state is not None:
+            try:
+                state.tts_characters += len(text)
+            except Exception:  # never let cost bookkeeping touch the audio path
+                pass
 
     if engine == "openai":
         if os.getenv("OPENAI_API_KEY", ""):
             try:
                 async with _HEAVY_SEM:
-                    return await synthesize_openai(
+                    result = await synthesize_openai(
                         text, voice, output_path, instructions=openai_instructions, loudnorm=loudnorm
                     )
+                _bill_tts()
+                return result
             except Exception as e:
                 logger.warning("OpenAI TTS failed, falling back to edge-tts: %s", e)
         else:
@@ -359,7 +380,7 @@ async def synthesize(
         if os.getenv("AZURE_SPEECH_KEY", "") and os.getenv("AZURE_SPEECH_REGION", ""):
             try:
                 async with _HEAVY_SEM:
-                    return await synthesize_azure(
+                    result = await synthesize_azure(
                         text,
                         voice,
                         output_path,
@@ -367,6 +388,8 @@ async def synthesize(
                         pitch=pitch,
                         loudnorm=loudnorm,
                     )
+                _bill_tts()
+                return result
             except Exception as e:
                 logger.warning("Azure TTS failed, falling back to edge-tts: %s", e)
         else:
@@ -376,9 +399,11 @@ async def synthesize(
         if os.getenv("ELEVENLABS_API_KEY", ""):
             try:
                 async with _HEAVY_SEM:
-                    return await synthesize_elevenlabs(
+                    result = await synthesize_elevenlabs(
                         text, voice, output_path, loudnorm=loudnorm, voice_settings=voice_settings
                     )
+                _bill_tts()
+                return result
             except Exception as e:
                 logger.warning("ElevenLabs TTS failed, falling back to edge-tts: %s", e)
         else:
@@ -442,11 +467,14 @@ async def synthesize_ad(
     voices: dict[str, AdVoice],
     tmp_dir: Path,
     sfx_dir: Path | None = None,
+    state: StationState | None = None,
 ) -> Path:
     """Assemble a multi-part ad: voice segments + SFX + pauses into a single MP3.
 
     Voices is a role->AdVoice map. Parts with a role field use the matching voice;
     parts without a role use the first voice in the dict.
+
+    state is forwarded to each voice-part synthesize() for paid-TTS char accounting.
     """
     ad_parts: list[Path] = []
     loop = asyncio.get_running_loop()
@@ -470,7 +498,7 @@ async def synthesize_ad(
             if part.role == "disclaimer_goblin":
                 extra["rate"] = _DISCLAIMER_RATE_BY_FORMAT.get(script.format, "+35%")
             # Skip per-part loudnorm — normalize_ad() handles the final loudnorm pass
-            return await synthesize(part.text, voice_for_part.voice, part_path, **extra, loudnorm=False)
+            return await synthesize(part.text, voice_for_part.voice, part_path, **extra, loudnorm=False, state=state)
         if part.type == "sfx" and part.sfx:
             sfx_name = part.sfx if part.sfx in AVAILABLE_SFX_TYPES else "chime"
             try:
@@ -522,6 +550,7 @@ async def synthesize_ad(
             engine=default_voice.engine,
             edge_fallback_voice=default_voice.edge_fallback_voice,
             openai_instructions=_openai_instructions_for_ad_voice(default_voice),
+            state=state,
         )
         return fallback_path
 
@@ -684,8 +713,12 @@ def _unlink_many(paths: list[Path]) -> None:
 async def synthesize_dialogue(
     lines: list[tuple[HostPersonality, str]],
     tmp_dir: Path,
+    state: StationState | None = None,
 ) -> Path:
-    """Render all host lines in parallel and stitch the exchange together."""
+    """Render all host lines in parallel and stitch the exchange together.
+
+    state is forwarded to each per-line synthesize() for paid-TTS char accounting.
+    """
     if not lines:
         raise ValueError("synthesize_dialogue: lines list must not be empty")
 
@@ -708,6 +741,7 @@ async def synthesize_dialogue(
                     openai_instructions=_openai_instructions_for_host(host),
                     loudnorm=not multi_line,
                     voice_settings=host.voice_settings,
+                    state=state,
                 )
                 for (host, text), path in zip(lines, paths, strict=True)
             )

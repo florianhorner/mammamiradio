@@ -160,11 +160,21 @@ The current version source of truth is `pyproject.toml`.
 
 - **The Edge add-on now auto-updates after every add-on change.** The automated edge-channel version bump previously could not land on the protected branch, so Home Assistant never showed an Edge "Update" and the add-on build reported a failure on every change. The bump now goes through the normal checks, so the Edge channel tracks the latest build again.
 
+- **Producer norm-cache bridges stop replaying the same cached song by filename.**
+  Resume, idle wake-up, and active queue-drain bridges now share the recent-aware
+  cache selector used by playback rescue, so they avoid the current/recent track
+  and randomize among alternatives while preserving instant audio.
+- **Cached music hits keep loudness reconciliation.** Pre-normalized music that
+  already exists in `cache/norm_*.mp3` still re-earns the LUFS marker on first
+  playback, so older cached tracks do not air at stale levels.
+
 ### Security
 
 - **Admin endpoints no longer auto-trust private networks when admin credentials are configured.** Previously a client on a LAN or Tailscale address was trusted for admin access even when `ADMIN_PASSWORD` or `ADMIN_TOKEN` was set, so a configured credential could be silently bypassed from any private-network browser. Now, when a credential is configured, all non-loopback admin traffic must present it. Credential-less private-network deployments are unchanged (still trusted, still CSRF-guarded on writes). Standalone runs that bind to a non-loopback host (including an empty bind host, which listens on all interfaces) now require `ADMIN_PASSWORD` or `ADMIN_TOKEN` at startup. Browser admin access requires `ADMIN_PASSWORD`; `ADMIN_TOKEN` is a header-only API credential a browser cannot send on navigation.
 
 ### Changed
+
+- **The admin cost counter now reads as an honest estimate, and leads with what you made.** The Engine Room and sidebar used to headline a four-decimal dollar figure labelled "24h" — but it never reset on a 24-hour clock (it counted from the last restart) and it left voice synthesis out entirely. Now the sidebar leads with **segments produced this session** (the real count of host bits, ads, and station moments the engine made), with cost as a quiet second line shown as a rounded `~$N est`. The estimate now folds in a blended text-to-speech cost alongside the AI writing cost, and the window is labelled "Session" because that is what it measures. Cent-accuracy across shifting model and voice prices isn't a real target, so the number is honestly an estimate rather than a falsely precise one.
 
 - **The station now defaults to English-first.** New installs render English utility copy on the listener page (with Italian station-feel words and headlines intact), and the AI hosts code-switch — English narrative with Italian flavor. The admin control room stays English-first. Flip on **Super Italian Mode** (admin Engine Room toggle, or `MAMMAMIRADIO_SUPER_ITALIAN=true`) for the fully Italian-first listener and host experience.
 

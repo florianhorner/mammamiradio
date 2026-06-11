@@ -52,6 +52,19 @@ def _music_bed_side_effect(output_path, mood, duration):
 @pytest.fixture
 def _mock_all(monkeypatch):
     """Patch every external dependency used by tts.py."""
+    import mammamiradio.audio.tts as tts_mod
+
+    def _reset_provider_clients() -> None:
+        tts_mod._openai_client = None
+        tts_mod._openai_client_key = ""
+        tts_mod._azure_client = None
+        tts_mod._azure_client_key = ("", "")
+        tts_mod._elevenlabs_client = None
+        tts_mod._elevenlabs_client_key = ""
+        tts_mod._failed_edge_voices.clear()  # edge-failure memoization leaks across tests otherwise
+
+    _reset_provider_clients()
+
     # edge_tts.Communicate
     mock_comm_instance = MagicMock()
     mock_comm_instance.save = AsyncMock(side_effect=lambda p: _touch(Path(p)))
@@ -80,6 +93,7 @@ def _mock_all(monkeypatch):
             "generate_brand_motif": mock_motif,
             "ffprobe_duration": mock_duration,
         }
+    _reset_provider_clients()
 
 
 # ---------------------------------------------------------------------------
@@ -1400,3 +1414,223 @@ async def test_synthesize_ad_normalize_ad_empty_falls_back_to_unprocessed(_mock_
 
     assert result.exists()
     assert "broadcast" not in result.name
+
+
+# ---------------------------------------------------------------------------
+# TTS cost accounting (state.tts_characters) — paid cloud chars only
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_synthesize_bills_tts_chars_on_cloud_success(_mock_all, tmp_path, monkeypatch):
+    """A successful PAID cloud synth adds len(text) to state.tts_characters."""
+    from types import SimpleNamespace
+
+    from mammamiradio.audio.tts import synthesize
+
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-key")
+    mock_response = MagicMock()
+    mock_response.content = b"\x00" * 512
+    mock_client = MagicMock()
+    mock_client.audio.speech.create.return_value = mock_response
+
+    state = SimpleNamespace(tts_characters=0)
+    text = "Ciao mondo"
+    with patch("mammamiradio.audio.tts._get_openai_client", return_value=mock_client):
+        await synthesize(text, "onyx", tmp_path / "o.mp3", engine="openai", state=state)
+    assert state.tts_characters == len(text)
+
+
+@pytest.mark.asyncio
+async def test_synthesize_does_not_bill_when_cloud_falls_back_to_edge(_mock_all, tmp_path, monkeypatch):
+    """A cloud engine that falls back to free Edge (missing key) bills nothing."""
+    from types import SimpleNamespace
+
+    from mammamiradio.audio.tts import synthesize
+
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    state = SimpleNamespace(tts_characters=0)
+    await synthesize("Ciao mondo", "onyx", tmp_path / "o.mp3", engine="openai", state=state)
+    _mock_all["Communicate"].assert_called_once()  # fell back to edge-tts
+    assert state.tts_characters == 0  # free → never billed
+
+
+@pytest.mark.asyncio
+async def test_synthesize_does_not_bill_when_cloud_synth_raises(_mock_all, tmp_path, monkeypatch):
+    """A paid engine with a key present whose synth RAISES falls back to free Edge, bills nothing.
+
+    Distinct from the missing-key path: this exercises the try/except *after* the paid
+    call starts, guarding the `result = ...; _bill_tts(); return result` ordering. A failed
+    cloud call delivers no audio, so the counter must stay at 0 — billing lives only on the
+    success path, never before the try.
+    """
+    from types import SimpleNamespace
+
+    from mammamiradio.audio.tts import synthesize
+
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-key")
+    state = SimpleNamespace(tts_characters=0)
+    with patch("mammamiradio.audio.tts._get_openai_client", side_effect=RuntimeError("API down")):
+        await synthesize("Ciao mondo", "onyx", tmp_path / "o.mp3", engine="openai", state=state)
+    _mock_all["Communicate"].assert_called_once()  # fell back to edge-tts
+    assert state.tts_characters == 0  # failed paid call → never billed
+
+
+@pytest.mark.asyncio
+async def test_synthesize_post_restart_state_bills_normally(_mock_all, tmp_path, monkeypatch):
+    """Post-restart scenario: a restart-shaped state (session_stopped set, fresh counter)
+    still bills real paid spend accurately. The billing side-channel is restart-agnostic —
+    synthesize never reads session_stopped, and a paid call that *succeeded* cost money
+    whether or not the prior session was stopped, so the counter must reflect it. (The other
+    post-restart shape — a restored/legacy state missing the attr entirely — is covered by
+    test_cost_counter_tts_getattr_safe_on_legacy_state in test_quality_dial.py.)
+    """
+    from types import SimpleNamespace
+
+    from mammamiradio.audio.tts import synthesize
+
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-key")
+    mock_response = MagicMock()
+    mock_response.content = b"\x00" * 512
+    mock_client = MagicMock()
+    mock_client.audio.speech.create.return_value = mock_response
+
+    # Shape mirrors a session restored after an HA-watchdog restart.
+    state = SimpleNamespace(tts_characters=0, session_stopped=True)
+    text = "Bentornati"
+    with patch("mammamiradio.audio.tts._get_openai_client", return_value=mock_client):
+        await synthesize(text, "onyx", tmp_path / "o.mp3", engine="openai", state=state)
+    assert state.tts_characters == len(text)  # real spend billed regardless of restart flags
+
+
+@pytest.mark.asyncio
+async def test_synthesize_edge_engine_never_billed(_mock_all, tmp_path):
+    """Edge is free — an explicit edge engine never touches the counter."""
+    from types import SimpleNamespace
+
+    from mammamiradio.audio.tts import synthesize
+
+    state = SimpleNamespace(tts_characters=0)
+    await synthesize("Ciao", "it-IT-IsabellaNeural", tmp_path / "o.mp3", engine="edge", state=state)
+    assert state.tts_characters == 0
+
+
+@pytest.mark.asyncio
+async def test_synthesize_without_state_does_not_raise(_mock_all, tmp_path, monkeypatch):
+    """state=None (default) is safe — cost bookkeeping never touches the audio path."""
+    from mammamiradio.audio.tts import synthesize
+
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-key")
+    mock_response = MagicMock()
+    mock_response.content = b"\x00" * 512
+    mock_client = MagicMock()
+    mock_client.audio.speech.create.return_value = mock_response
+    with patch("mammamiradio.audio.tts._get_openai_client", return_value=mock_client):
+        out = await synthesize("Ciao", "onyx", tmp_path / "o.mp3", engine="openai")
+    assert out == tmp_path / "o.mp3"
+
+
+@pytest.mark.asyncio
+async def test_synthesize_dialogue_forwards_state_billing(_mock_all, tmp_path, monkeypatch):
+    """Multi-line dialogue bills each cloud line's characters to state."""
+    from types import SimpleNamespace
+
+    from mammamiradio.audio.tts import synthesize_dialogue
+
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-key")
+    mock_response = MagicMock()
+    mock_response.content = b"\x00" * 512
+    mock_client = MagicMock()
+    mock_client.audio.speech.create.return_value = mock_response
+
+    host = HostPersonality(name="Gio", voice="onyx", style="warm", engine="openai")
+    lines = [(host, "Riga uno"), (host, "Riga due")]
+    state = SimpleNamespace(tts_characters=0)
+    with patch("mammamiradio.audio.tts._get_openai_client", return_value=mock_client):
+        await synthesize_dialogue(lines, tmp_path, state=state)
+    assert state.tts_characters == len("Riga uno") + len("Riga due")
+
+
+@pytest.mark.asyncio
+async def test_synthesize_bills_on_azure_success(_mock_all, tmp_path, monkeypatch):
+    """Azure cloud success bills len(text), proving billing isn't OpenAI-only."""
+    from types import SimpleNamespace
+
+    from mammamiradio.audio.tts import synthesize
+
+    monkeypatch.setenv("AZURE_SPEECH_KEY", "azure-secret")
+    monkeypatch.setenv("AZURE_SPEECH_REGION", "westeurope")
+
+    class _AzureClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, url, headers, content):
+            return httpx.Response(200, content=b"\x00" * 512, request=httpx.Request("POST", url))
+
+    monkeypatch.setattr("mammamiradio.audio.tts.httpx.AsyncClient", _AzureClient)
+    state = SimpleNamespace(tts_characters=0)
+    text = "Ciao Azure"
+    await synthesize(text, "it-IT-IsabellaNeural", tmp_path / "az.mp3", engine="azure", state=state)
+    assert state.tts_characters == len(text)
+
+
+@pytest.mark.asyncio
+async def test_synthesize_bills_on_elevenlabs_success(_mock_all, tmp_path, monkeypatch):
+    """ElevenLabs cloud success bills len(text)."""
+    from types import SimpleNamespace
+
+    from mammamiradio.audio.tts import synthesize
+
+    monkeypatch.setenv("ELEVENLABS_API_KEY", "eleven-secret")
+
+    class _ElevenClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, url, headers, json):
+            return httpx.Response(200, content=b"\x00" * 512, request=httpx.Request("POST", url))
+
+    monkeypatch.setattr("mammamiradio.audio.tts.httpx.AsyncClient", _ElevenClient)
+    state = SimpleNamespace(tts_characters=0)
+    text = "Ciao ElevenLabs"
+    await synthesize(text, "voice_italian_character", tmp_path / "el.mp3", engine="elevenlabs", state=state)
+    assert state.tts_characters == len(text)
+
+
+@pytest.mark.asyncio
+async def test_synthesize_ad_forwards_state_billing(_mock_all, tmp_path, monkeypatch):
+    """synthesize_ad threads state into each voice part's synthesize()."""
+    from types import SimpleNamespace
+
+    from mammamiradio.audio.tts import synthesize_ad
+
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-key")
+    mock_response = MagicMock()
+    mock_response.content = b"\x00" * 512
+    mock_client = MagicMock()
+    mock_client.audio.speech.create.return_value = mock_response
+
+    text = "Compra ora!"
+    script = AdScript(brand="TestBrand", parts=[AdPart(type="voice", text=text)], mood="lounge")
+    voices = {"default": AdVoice(name="Ann", voice="onyx", style="warm", engine="openai")}
+    state = SimpleNamespace(tts_characters=0)
+
+    with (
+        patch("mammamiradio.audio.tts._get_openai_client", return_value=mock_client),
+        patch("mammamiradio.audio.tts.normalize_ad", side_effect=_normalize_side_effect),
+    ):
+        await synthesize_ad(script, voices, tmp_path, state=state)
+    assert state.tts_characters == len(text)

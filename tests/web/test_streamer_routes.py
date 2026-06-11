@@ -21,6 +21,7 @@ import httpx
 import pytest
 from fastapi import FastAPI
 
+from mammamiradio.audio.norm_cache import select_norm_cache_rescue
 from mammamiradio.core.config import load_config
 from mammamiradio.core.models import Segment, SegmentType, StationState, Track
 from mammamiradio.web.listener_requests import router as listener_requests_router
@@ -32,7 +33,6 @@ from mammamiradio.web.streamer import (
     _persist_completed_music,
     _record_provider_verdict,
     _run_provider_verdict,
-    _select_norm_cache_rescue,
     router,
     run_playback_loop,
 )
@@ -114,8 +114,8 @@ def test_select_norm_cache_rescue_avoids_current_song_when_alternatives_exist(tm
         '{"title": "A far l amore comincia tu", "artist": "Raffaella Carra"}'
     )
 
-    with patch("mammamiradio.web.streamer._random.choice", side_effect=lambda items: items[0]) as choice:
-        rescue = _select_norm_cache_rescue(tmp_path, state)
+    with patch("mammamiradio.audio.norm_cache.random.choice", side_effect=lambda items: items[0]) as choice:
+        rescue = select_norm_cache_rescue(tmp_path, state)
 
     assert rescue == alternative
     choice.assert_called_once_with([alternative])

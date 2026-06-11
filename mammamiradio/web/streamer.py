@@ -25,6 +25,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Redirect
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.templating import Jinja2Templates
 
+from mammamiradio.audio.norm_cache import select_norm_cache_rescue as _select_norm_cache_rescue
 from mammamiradio.audio.normalizer import humanize_norm_filename, load_track_metadata
 from mammamiradio.audio.stream_format import stream_audio_metadata
 from mammamiradio.core.capabilities import capabilities_to_dict, get_capabilities
@@ -670,76 +671,6 @@ def _queue_empty_elapsed(state: StationState) -> float:
 
 def _silence_with_listeners(state: StationState, queue_empty_elapsed: float) -> bool:
     return queue_empty_elapsed > SILENCE_FAILURE_SECONDS and state.listeners_active > 0
-
-
-def _identity_key(value: str) -> str:
-    """Normalize listener-facing titles enough to compare cache fallbacks."""
-    return _re.sub(r"[^a-z0-9]+", " ", value.lower()).strip()
-
-
-def _identity_matches(left: str, right: str) -> bool:
-    if not left or not right:
-        return False
-    if left == right:
-        return True
-    return min(len(left), len(right)) >= 12 and (left in right or right in left)
-
-
-def _segment_identity_keys(segment: dict) -> set[str]:
-    """Return comparable labels for a streamed segment."""
-    keys: set[str] = set()
-    label = str(segment.get("label") or "").strip()
-    if label:
-        keys.add(_identity_key(label))
-    metadata = segment.get("metadata") or {}
-    if isinstance(metadata, dict):
-        title = str(metadata.get("title") or "").strip()
-        title_only = str(metadata.get("title_only") or "").strip()
-        artist = str(metadata.get("artist") or "").strip()
-        for value in (title, title_only):
-            if value:
-                keys.add(_identity_key(value))
-            if value and artist:
-                keys.add(_identity_key(f"{artist} {value}"))
-    return {key for key in keys if key}
-
-
-def _norm_cache_identity_keys(path: Path) -> set[str]:
-    """Return comparable title/artist labels for a normalized cache file."""
-    keys = {_identity_key(humanize_norm_filename(path.name))}
-    sidecar = load_track_metadata(path)
-    if sidecar:
-        title = str(sidecar.get("title") or "").strip()
-        artist = str(sidecar.get("artist") or "").strip()
-        if title:
-            keys.add(_identity_key(title))
-        if title and artist:
-            keys.add(_identity_key(f"{artist} {title}"))
-    return {key for key in keys if key}
-
-
-def _select_norm_cache_rescue(cache_dir: Path, state: StationState) -> Path | None:
-    """Pick a cache rescue clip without replaying the current/recent song first."""
-    norm_files = sorted(cache_dir.glob("norm_*.mp3"))
-    if not norm_files:
-        return None
-
-    recent_keys: set[str] = set()
-    if state.now_streaming:
-        recent_keys.update(_segment_identity_keys(state.now_streaming))
-    for entry in list(state.stream_log)[-5:]:
-        if entry.type == SegmentType.MUSIC.value:
-            recent_keys.update(_segment_identity_keys({"label": entry.label, "metadata": entry.metadata}))
-    if not recent_keys:
-        return _random.choice(norm_files)
-
-    candidates: list[Path] = []
-    for path in norm_files:
-        path_keys = _norm_cache_identity_keys(path)
-        if not any(_identity_matches(path_key, recent_key) for path_key in path_keys for recent_key in recent_keys):
-            candidates.append(path)
-
-    return _random.choice(candidates or norm_files)
 
 
 def _provider_health_snapshot(config, state: StationState) -> dict:
@@ -2633,20 +2564,31 @@ MODEL_PRICES: dict[str, tuple[float, float]] = {
 }
 _UNPRICED_FALLBACK = (0.000015, 0.000075)  # highest known tier — conservative
 
+# One deliberately-blended TTS rate (~$20 / 1M chars) across Azure / OpenAI /
+# ElevenLabs. Cent-accurate TTS cost is impossible — ElevenLabs alone swings 3-5x
+# by plan tier — so this is rough on purpose. The honesty lives in the UI label
+# ("~$N est"), not in the arithmetic. Only paid cloud chars reach state.tts_characters
+# (Edge-tts is free and never counted), so this never bills a silent fallback.
+TTS_BLENDED_RATE = 0.00002
+
 
 def _estimate_api_cost(state) -> tuple[float, bool]:
-    """Sum per-model token cost. Returns (usd, has_unpriced_model).
+    """Sum per-model token cost plus a rough TTS estimate. Returns (usd, has_unpriced).
 
     Prices each model the session actually used (api_tokens_by_model). A model
     with no MODEL_PRICES entry falls back to the highest known tier and trips the
     flag so the UI can annotate the estimate — never a silent $0, never a KeyError.
+    Adds a blended TTS character cost on top. getattr keeps a persisted/legacy state
+    (no tts_characters attr) safe.
     """
+    tts_cost = getattr(state, "tts_characters", 0) * TTS_BLENDED_RATE
     by_model = getattr(state, "api_tokens_by_model", None) or {}
     if not by_model:
         # No per-model data yet — flat haiku estimate on aggregate counters so
         # the counter is never blank for a fresh/legacy session.
         in_rate, out_rate = MODEL_PRICES["claude-haiku-4-5-20251001"]
-        return round(state.api_input_tokens * in_rate + state.api_output_tokens * out_rate, 4), False
+        llm = state.api_input_tokens * in_rate + state.api_output_tokens * out_rate
+        return round(llm + tts_cost, 4), False
     total = 0.0
     has_unpriced = False
     for model_id, toks in by_model.items():
@@ -2655,7 +2597,7 @@ def _estimate_api_cost(state) -> tuple[float, bool]:
             rates = _UNPRICED_FALLBACK
             has_unpriced = True
         total += toks.get("input", 0) * rates[0] + toks.get("output", 0) * rates[1]
-    return round(total, 4), has_unpriced
+    return round(total + tts_cost, 4), has_unpriced
 
 
 def _consumption_cost(state) -> dict:

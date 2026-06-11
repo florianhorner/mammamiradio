@@ -1,0 +1,16 @@
+pydantic-core pin fix — resolution + test proof
+branch: florianhorner/fix/pydantic-core-pin
+
+== Dependency consistency (pip check) ==
+No broken requirements found.
+
+== Pinned versions (now consistent) ==
+pydantic==2.13.4 
+pydantic-core==2.46.4 
+(pydantic 2.13.4 requires pydantic-core==2.46.4 — was 2.47.0, unresolvable)
+
+== Full suite (make check) ==
+All checks passed — full pytest suite green with pydantic-core 2.46.4; all coverage floors held.
+
+== Resolution proof ==
+pip-compile resolves cleanly to pydantic-core==2.46.4 (the only version compatible with the latest released pydantic, 2.13.4). The prior 2.47.0 pin caused ResolutionImpossible in submit-pypi/validate-project.

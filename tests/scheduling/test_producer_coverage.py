@@ -14,10 +14,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from mammamiradio.audio.audio_quality import AudioQualityError
+from mammamiradio.audio.normalizer import save_track_metadata
 from mammamiradio.core.models import (
     AdHistoryEntry,
     HostPersonality,
     Segment,
+    SegmentLogEntry,
     SegmentType,
     StationState,
     Track,
@@ -1153,24 +1155,32 @@ async def test_drain_guard_inserts_canned_clip_on_queue_drain(tmp_path):
 @pytest.mark.asyncio
 async def test_drain_guard_norm_cache_bridge_when_no_canned_clip(tmp_path):
     """When the queue drains during active playback and no canned clip is available,
-    the drain guard falls back to inserting a pre-normalized track from cache_dir."""
+    the drain guard uses a recent-aware pre-normalized track from cache_dir."""
     state = _make_run_state()
+    state.stream_log.append(
+        SegmentLogEntry(
+            type=SegmentType.MUSIC.value,
+            label="Alex Warren - Ordinary",
+            metadata={"title": "Ordinary", "artist": "Alex Warren"},
+        )
+    )
     config = _make_run_config()
     config.tmp_dir = tmp_path
     config.cache_dir = tmp_path
     queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
 
-    norm_file = tmp_path / "norm_test_song_192k.mp3"
+    recent_norm_file = tmp_path / "norm_aaa_ordinary_192k.mp3"
+    recent_norm_file.write_bytes(b"fake recent norm audio" * 100)
+    save_track_metadata(recent_norm_file, title="Ordinary", artist="Alex Warren")
+    norm_file = tmp_path / "norm_zzz_cached_192k.mp3"
     norm_file.write_bytes(b"fake norm audio" * 100)
+    save_track_metadata(norm_file, title="Cached", artist="Cache Artist")
 
     async def _queue_segment(segment: Segment) -> bool:
         await queue.put(segment)
         return True
 
-    with (
-        patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=None),
-        patch(f"{PRODUCER_MODULE}.load_track_metadata", return_value={"title": "Cached", "artist": "Cache Artist"}),
-    ):
+    with patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=None):
         queued = await _queue_drain_recovery_bridge(_queue_segment, state, config)
 
     assert queued is True
