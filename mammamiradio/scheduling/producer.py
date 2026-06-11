@@ -566,6 +566,7 @@ async def _synthesize_impossible_moment(
         imp_path,
         engine=host.engine,
         edge_fallback_voice=host.edge_fallback_voice,
+        state=state,
     )
     xfade_out = config.tmp_dir / f"impossible_xf_{uuid4().hex[:8]}.mp3"
     audio_path = await _try_crossfade(imp_path, config, xfade_out)
@@ -1606,7 +1607,7 @@ async def run_producer(
                             )
                             banter_expected_min_duration_sec = _expected_banter_duration_sec(line_texts)
                             banter_expected_line_count = len(line_texts) if len(line_texts) > 1 else None
-                            audio_path = await synthesize_dialogue(lines, config.tmp_dir)
+                            audio_path = await synthesize_dialogue(lines, config.tmp_dir, state=state)
                             state.last_banter_script = [
                                 {
                                     "host": h.name,
@@ -1668,6 +1669,7 @@ async def run_producer(
                                     **_prosody,
                                     engine=_host.engine,
                                     edge_fallback_voice=_host.edge_fallback_voice,
+                                    state=state,
                                 )
                                 xfade_out = config.tmp_dir / f"banter_trans_{uuid4().hex[:8]}.mp3"
                                 result = await _try_crossfade(_path, config, xfade_out)
@@ -1676,7 +1678,7 @@ async def run_producer(
                             banter_path: Path
                             (trans_voice_path, has_music_tail), banter_path = await asyncio.gather(
                                 _do_transition(),
-                                synthesize_dialogue(lines, config.tmp_dir),
+                                synthesize_dialogue(lines, config.tmp_dir, state=state),
                             )
 
                             # Concat: transition + banter (both pre-normalized)
@@ -1917,6 +1919,7 @@ async def run_producer(
                         rate=flash_rate,
                         engine=host.engine,
                         edge_fallback_voice=host.edge_fallback_voice,
+                        state=state,
                     )
 
                     # Try to overlay on the tail of the last music segment
@@ -1982,6 +1985,7 @@ async def run_producer(
                         voice_path,
                         engine=sweeper_engine,
                         edge_fallback_voice=sweeper_fallback,
+                        state=state,
                     )
                     sting_task = loop.run_in_executor(None, generate_station_id_bed, sting_path, 3.0, sb.motif_notes)
                     await asyncio.gather(voice_task, sting_task)
@@ -2025,6 +2029,7 @@ async def run_producer(
                         audio_path,
                         engine=sweeper_engine,
                         edge_fallback_voice=sweeper_fallback,
+                        state=state,
                     )
                     loop = asyncio.get_running_loop()
                     sting_path = config.tmp_dir / f"sweeper_sting_{uuid4().hex[:8]}.mp3"
@@ -2079,6 +2084,7 @@ async def run_producer(
                             voice_path,
                             engine=host.engine,
                             edge_fallback_voice=host.edge_fallback_voice,
+                            state=state,
                         ),
                         loop.run_in_executor(None, generate_tone, chime_path, 1047, 0.3),
                     )
@@ -2157,6 +2163,7 @@ async def run_producer(
                         ipath,
                         engine=ihost.engine,
                         edge_fallback_voice=ihost.edge_fallback_voice,
+                        state=state,
                     )
                     xout = config.tmp_dir / f"ad_trans_{uuid4().hex[:8]}.mp3"
                     ipath = await _try_crossfade(ipath, config, xout)
@@ -2181,6 +2188,7 @@ async def run_producer(
                             pitch="-10Hz",
                             engine=pengine,
                             edge_fallback_voice=pfallback,
+                            state=state,
                         )
                         parts.append(ppath)
                     except Exception:
@@ -2241,7 +2249,7 @@ async def run_producer(
                 # ── PHASE 2: Fan out all ad TTS synthesis in parallel ──
                 ad_paths = await asyncio.gather(
                     *(
-                        synthesize_ad(script, vm, config.tmp_dir, sfx_dir)
+                        synthesize_ad(script, vm, config.tmp_dir, sfx_dir, state=state)
                         for script, (_, _, _, vm) in zip(scripts, spot_params, strict=False)
                     )
                 )
@@ -2295,6 +2303,7 @@ async def run_producer(
                         outro_path,
                         engine=outro_host.engine,
                         edge_fallback_voice=outro_host.edge_fallback_voice,
+                        state=state,
                     ),
                 )
                 break_parts.append(bumper_out)
