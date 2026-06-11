@@ -61,6 +61,7 @@ def _mock_all(monkeypatch):
         tts_mod._azure_client_key = ("", "")
         tts_mod._elevenlabs_client = None
         tts_mod._elevenlabs_client_key = ""
+        tts_mod._failed_edge_voices.clear()  # edge-failure memoization leaks across tests otherwise
 
     _reset_provider_clients()
 
@@ -1473,6 +1474,33 @@ async def test_synthesize_does_not_bill_when_cloud_synth_raises(_mock_all, tmp_p
         await synthesize("Ciao mondo", "onyx", tmp_path / "o.mp3", engine="openai", state=state)
     _mock_all["Communicate"].assert_called_once()  # fell back to edge-tts
     assert state.tts_characters == 0  # failed paid call → never billed
+
+
+@pytest.mark.asyncio
+async def test_synthesize_post_restart_state_bills_normally(_mock_all, tmp_path, monkeypatch):
+    """Post-restart scenario: a restart-shaped state (session_stopped set, fresh counter)
+    still bills real paid spend accurately. The billing side-channel is restart-agnostic —
+    synthesize never reads session_stopped, and a paid call that *succeeded* cost money
+    whether or not the prior session was stopped, so the counter must reflect it. (The other
+    post-restart shape — a restored/legacy state missing the attr entirely — is covered by
+    test_cost_counter_tts_getattr_safe_on_legacy_state in test_quality_dial.py.)
+    """
+    from types import SimpleNamespace
+
+    from mammamiradio.audio.tts import synthesize
+
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-key")
+    mock_response = MagicMock()
+    mock_response.content = b"\x00" * 512
+    mock_client = MagicMock()
+    mock_client.audio.speech.create.return_value = mock_response
+
+    # Shape mirrors a session restored after an HA-watchdog restart.
+    state = SimpleNamespace(tts_characters=0, session_stopped=True)
+    text = "Bentornati"
+    with patch("mammamiradio.audio.tts._get_openai_client", return_value=mock_client):
+        await synthesize(text, "onyx", tmp_path / "o.mp3", engine="openai", state=state)
+    assert state.tts_characters == len(text)  # real spend billed regardless of restart flags
 
 
 @pytest.mark.asyncio

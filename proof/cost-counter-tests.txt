@@ -1,15 +1,19 @@
 Cost counter reframe — test + lint proof
 branch: florianhorner/feat/cost-counter-reliability
-commit: 92050e66
 
 == Targeted tests: TTS billing + admin template invariants + cost math ==
-........................................................................ [ 68%]
-.................................                                        [100%]
-105 passed in 1.09s
+........................................................................ [ 67%]
+..................................                                       [100%]
+106 passed in 0.99s
 
-== ruff lint (changed source + test) ==
+== ruff lint + format (changed source + test) ==
 All checks passed!
 4 files already formatted
 
 == Full suite (make check) ==
-2675 passed, 2 skipped — total coverage 93.90% (floor 92%); mammamiradio.audio.tts 95% (floor 90%); all per-module floors held
+2677 passed, 2 skipped — total coverage 94% (floor 92%); mammamiradio.audio.tts 95% (floor 90%); all per-module floors held
+
+Post-review hardening (CodeRabbit + pre-ship squad):
+ - test_synthesize_does_not_bill_when_cloud_synth_raises (failed paid call never bills)
+ - test_synthesize_post_restart_state_bills_normally (restart-shaped state bills real spend)
+ - fixture now resets _failed_edge_voices (edge-failure memoization no longer leaks across tests)
