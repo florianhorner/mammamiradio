@@ -2,9 +2,10 @@
 
 The admin-access tests here (``test_admin_*``) are the request-layer half of the
 admin-access contract; the boot-layer half lives in ``tests/core/test_config.py``.
-The single source of truth for the contract is the "Admin access model" matrix in
-``docs/operations.md`` — change a row there and in ``require_admin_access`` together,
-and update these tests to match.
+The Supervisor-network POST trust and basic-auth CSRF rows are additionally pinned
+in ``tests/web/test_streamer_routes_extended.py``. The single source of truth for the
+contract is the "Admin access model" matrix in ``docs/operations.md`` — change a row
+there and in ``require_admin_access`` together, and update these tests to match.
 """
 
 from __future__ import annotations

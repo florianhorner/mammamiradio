@@ -376,8 +376,9 @@ Admin access is granted by one of:
 - localhost access, unless `ADMIN_PASSWORD` is configured
 - HTTP Basic auth via `ADMIN_USERNAME` and `ADMIN_PASSWORD`
 - token auth via `X-Radio-Admin-Token` header for non-local requests when only `ADMIN_TOKEN` is configured
+- private-network trust (LAN, Tailscale, HA Supervisor) when no credential is configured — reads allowed, writes CSRF-checked; public IPs are always rejected
 
-Non-local binds without admin auth are rejected during config validation.
+In standalone mode, a non-loopback bind without a credential is rejected during config validation. The HA add-on is exempt: it boots on `0.0.0.0` with no credential and trusts its own LAN. The full matrix is the single source of truth in [operations.md](operations.md) ("Admin access model").
 
 ### CSRF protection
 
