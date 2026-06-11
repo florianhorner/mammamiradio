@@ -118,6 +118,8 @@ The current version source of truth is `pyproject.toml`.
 
 ### Fixed
 
+- **The Admin Token help text now says what the token actually does.** The add-on's Admin Token field used to claim it was needed for the Home Assistant media player — it isn't; the media player works whether or not you set it. The description now explains the token covers the admin panel and any automations that call the station directly, so a blank token no longer reads as riskier than it is.
+
 - **The quieter songs come up to level, including ones the station prepared earlier.** A song the station had readied before it learned to hold a steady volume used to come on a little softer than the rest. Now the first time it plays after this update it's brought up to match everything else — and it stays there for every play after, so the songs you hear most don't wait on it twice.
 
 - **A cut-off host line is now recognized for what it is.** When the AI host writer runs long and gets cut off mid-sentence, the station now names that as a length cutoff — in the log and in the operator status message ("ran long and got cut off") — instead of a generic error, and still switches to the backup voice so banter keeps flowing. The cause is now measurable rather than hidden, so the underlying length can be tuned with real numbers.
