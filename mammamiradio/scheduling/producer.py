@@ -23,6 +23,7 @@ import httpx
 import mammamiradio.hosts.scriptwriter as _sw
 from mammamiradio.audio.audio_quality import AudioQualityError, AudioToolError, validate_segment_audio
 from mammamiradio.audio.imaging import ImagingLibrary
+from mammamiradio.audio.norm_cache import select_norm_cache_rescue
 from mammamiradio.audio.normalizer import (
     concat_files,
     crossfade_voice_over_music,
@@ -114,6 +115,22 @@ def _normalized_cache_path(track: Track, config: StationConfig) -> Path:
     return config.cache_dir / f"norm_{track.cache_key}_{config.audio.bitrate}k.mp3"
 
 
+def _norm_cache_bridge_payload(norm_path: Path, bridge_flag: str) -> tuple[dict, str]:
+    _meta = load_track_metadata(norm_path) or {}
+    title = _meta.get("title") or humanize_norm_filename(norm_path.name)
+    artist = _meta.get("artist", "")
+    detail = f"{artist} - {title}" if artist else title
+    return (
+        {
+            "title": title,
+            "artist": artist,
+            bridge_flag: True,
+            "audio_source": "norm_cache",
+        },
+        f"{norm_path.name} ({detail})",
+    )
+
+
 async def _render_music_track(
     track: Track,
     config: StationConfig,
@@ -185,24 +202,18 @@ async def _queue_drain_recovery_bridge(
             )
         )
 
-    norm_files = sorted(config.cache_dir.glob("norm_*.mp3"))
-    if norm_files:
-        norm_path = norm_files[0]
-        _meta = load_track_metadata(norm_path) or {}
+    norm_path = select_norm_cache_rescue(config.cache_dir, state)
+    if norm_path:
+        metadata, log_label = _norm_cache_bridge_payload(norm_path, "queue_drain_recovery")
         logger.warning(
             "Queue empty during active playback — inserting norm-cache bridge: %s",
-            norm_path.name,
+            log_label,
         )
         return await queue_segment(
             Segment(
                 type=SegmentType.MUSIC,
                 path=norm_path,
-                metadata={
-                    "title": _meta.get("title") or humanize_norm_filename(norm_path.name),
-                    "artist": _meta.get("artist", ""),
-                    "queue_drain_recovery": True,
-                    "audio_source": "norm_cache",
-                },
+                metadata=metadata,
                 ephemeral=False,
             )
         )
@@ -1053,23 +1064,17 @@ async def run_producer(
                         )
                     )
                 else:
-                    # No canned clips — grab the first pre-normalized track from the
-                    # norm cache (already processed, no FFmpeg wait needed).
-                    norm_files = sorted(config.cache_dir.glob("norm_*.mp3"))
-                    if norm_files:
-                        norm_path = norm_files[0]
-                        logger.info("Resume bridge: seeding pre-normalized track %s", norm_path.name)
-                        _meta = load_track_metadata(norm_path) or {}
+                    # No canned clips — grab a recent-aware pre-normalized track
+                    # from the norm cache (already processed, no FFmpeg wait).
+                    norm_path = select_norm_cache_rescue(config.cache_dir, state)
+                    if norm_path:
+                        metadata, log_label = _norm_cache_bridge_payload(norm_path, "resume_bridge")
+                        logger.info("Resume bridge: seeding pre-normalized track %s", log_label)
                         await _queue_segment(
                             Segment(
                                 type=SegmentType.MUSIC,
                                 path=norm_path,
-                                metadata={
-                                    "title": _meta.get("title") or humanize_norm_filename(norm_path.name),
-                                    "artist": _meta.get("artist", ""),
-                                    "resume_bridge": True,
-                                    "audio_source": "norm_cache",
-                                },
+                                metadata=metadata,
                                 ephemeral=False,
                             )
                         )
@@ -1102,21 +1107,15 @@ async def run_producer(
                         )
                     )
                 else:
-                    norm_files = sorted(config.cache_dir.glob("norm_*.mp3"))
-                    if norm_files:
-                        norm_path = norm_files[0]
-                        logger.info("Idle bridge: seeding pre-normalized track %s", norm_path.name)
-                        _meta = load_track_metadata(norm_path) or {}
+                    norm_path = select_norm_cache_rescue(config.cache_dir, state)
+                    if norm_path:
+                        metadata, log_label = _norm_cache_bridge_payload(norm_path, "idle_bridge")
+                        logger.info("Idle bridge: seeding pre-normalized track %s", log_label)
                         await _queue_segment(
                             Segment(
                                 type=SegmentType.MUSIC,
                                 path=norm_path,
-                                metadata={
-                                    "title": _meta.get("title") or humanize_norm_filename(norm_path.name),
-                                    "artist": _meta.get("artist", ""),
-                                    "idle_bridge": True,
-                                    "audio_source": "norm_cache",
-                                },
+                                metadata=metadata,
                                 ephemeral=False,
                             )
                         )
