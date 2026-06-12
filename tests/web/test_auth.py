@@ -16,6 +16,9 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
+import pytest
+from fastapi import HTTPException
+
 from mammamiradio.web.auth import (
     _enforce_csrf_for_basic_auth,
     _enforce_csrf_for_private_network,
@@ -88,6 +91,21 @@ def test_auth_facade_reexport_identity():
         "_TRUSTED_NETWORKS",
     ):
         assert getattr(streamer, name) is getattr(auth, name), name
+
+
+def test_listener_requests_hassio_network_is_auth_ssot():
+    """listener_requests trusts the SAME _HASSIO_NETWORK object as web.auth.
+
+    web.auth is the declared SSOT for trusted-network classification. The
+    listener proxy formerly kept its own ip_network("172.30.32.0/23") literal,
+    which could silently drift if either CIDR changed. Pin object identity so a
+    reintroduced duplicate fails here.
+    """
+    import mammamiradio.web.auth as auth
+    import mammamiradio.web.listener_requests as listener_requests
+
+    assert listener_requests._HASSIO_NETWORK is auth._HASSIO_NETWORK
+    assert auth._HASSIO_NETWORK in listener_requests._TRUSTED_PROXY_NETWORKS
 
 
 # ---------------------------------------------------------------------------
@@ -276,6 +294,51 @@ def test_same_origin_explicit_port_mismatch():
     assert _same_origin(req, "https://example.com:8443/path") is False
 
 
+@pytest.mark.parametrize(
+    "candidate",
+    [
+        "https://example.com:999999/path",  # out-of-range port (raises on .port)
+        "https://example.com:bad/path",  # non-numeric port (raises on .port)
+        "https://example.com: 80/path",  # whitespace in port (raises on .port)
+        "https://[evil.com/path",  # unmatched bracket (raises at urlparse() call)
+    ],
+)
+def test_same_origin_malformed_candidate_fails_closed(candidate):
+    """A malformed candidate returns False, never raises ValueError.
+
+    urlparse raises at call time on an unmatched bracket and lazily on .port
+    access for a bad port. require_admin_access does not catch ValueError, so an
+    unguarded raise here becomes a raw 500 with a traceback instead of a clean
+    cross-site 403.
+    """
+    req = MagicMock()
+    req.url.scheme = "https"
+    req.url.hostname = "example.com"
+    req.url.port = 443
+    assert _same_origin(req, candidate) is False
+
+
+def test_same_origin_malformed_request_port_fails_closed():
+    """A malformed port on the request URL itself also fails closed, not 500.
+
+    request.url.port lazily reparses too; a hostile or buggy upstream that lands
+    a bad port on the request side must not be allowed to crash the check.
+    """
+
+    class _RaisingPort:
+        scheme = "https"
+        hostname = "example.com"
+        netloc = "example.com"
+
+        @property
+        def port(self):
+            raise ValueError("Port out of range 0-65535")
+
+    req = MagicMock()
+    req.url = _RaisingPort()
+    assert _same_origin(req, "https://example.com/path") is False
+
+
 # ---------------------------------------------------------------------------
 # CSRF enforcement exemption branches
 # ---------------------------------------------------------------------------
@@ -340,6 +403,30 @@ def test_enforce_private_network_referer_accepts():
     """A same-origin Referer authorizes a LAN mutation when token and Origin are absent."""
     req = _mock_request(headers={"Referer": "https://example.com/admin"})
     assert _enforce_csrf_for_private_network(req) is None
+
+
+@pytest.mark.parametrize("header", ["Origin", "Referer"])
+def test_enforce_basic_auth_malformed_header_raises_403_not_500(header):
+    """A malformed Origin/Referer port yields a clean cross-site 403, never a 500.
+
+    The bad port can no longer escape _same_origin as a ValueError, so the
+    enforcement helper falls through to its own HTTPException(403) instead of
+    surfacing a raw traceback to the client.
+    """
+    req = _mock_request(headers={header: "https://example.com:999999/admin"})
+    config = _mock_config(admin_password="pw")
+    with pytest.raises(HTTPException) as exc:
+        _enforce_csrf_for_basic_auth(req, MagicMock(), config)
+    assert exc.value.status_code == 403
+
+
+@pytest.mark.parametrize("header", ["Origin", "Referer"])
+def test_enforce_private_network_malformed_header_raises_403_not_500(header):
+    """Malformed Origin/Referer on a LAN write also fails closed with a 403."""
+    req = _mock_request(headers={header: "https://example.com:bad/admin"})
+    with pytest.raises(HTTPException) as exc:
+        _enforce_csrf_for_private_network(req)
+    assert exc.value.status_code == 403
 
 
 # ---------------------------------------------------------------------------
