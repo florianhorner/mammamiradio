@@ -181,7 +181,7 @@ def test_azure_host_keeps_azure_voice_and_gets_edge_fallback():
 def test_provider_routed_openai_ad_voice_is_accepted():
     host = HostPersonality(name="Host", voice="it-IT-DiegoNeural", style="host", engine="edge")
     ad_voice = AdVoice(
-        name="Palmira",
+        name="AnonymousOpenAI",
         voice="shimmer",
         style="whisper",
         role="seductress",
@@ -194,7 +194,7 @@ def test_provider_routed_openai_ad_voice_is_accepted():
     assert ad_voice.engine == "openai"
     assert ad_voice.voice == "shimmer"
     assert ad_voice.edge_fallback_voice == "it-IT-IsabellaNeural"
-    assert "Palmira" not in config.tts_degraded_voices
+    assert "AnonymousOpenAI" not in config.tts_degraded_voices
 
 
 # ---------------------------------------------------------------------------

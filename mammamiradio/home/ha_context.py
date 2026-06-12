@@ -103,6 +103,7 @@ ALL_ENTITIES = GOLD_ENTITIES + SILVER_ENTITIES + BRONZE_ENTITIES
 
 DEFAULT_CONTEXT_ENTITY_LIMIT = 12
 DEFAULT_CONTEXT_CHAR_LIMIT = 2000
+MAX_PRESENCE_IN_SLICE = 4
 DROP_DOMAINS = {
     "update",
     "button",
@@ -151,6 +152,7 @@ DOMAIN_SALIENCE_WEIGHTS = {
 }
 POWER_SENSOR_WEIGHT = 0.5
 PRESENCE_SENSOR_WEIGHT = 0.9
+PRESENCE_SENSOR_DEVICE_CLASSES = {"occupancy", "presence", "motion"}
 OVERRIDE_SCORE_BOOST = 0.5
 AREA_SCORE_BOOST = 0.2
 RECENT_CHANGE_WINDOW_SECONDS = 15 * 60
@@ -559,7 +561,7 @@ def _score_entity(entity_id: str, state_data: dict, *, event_entity_ids: set[str
     score = DOMAIN_SALIENCE_WEIGHTS.get(domain, 0.1)
     if domain == "sensor" and device_class == "power":
         score = POWER_SENSOR_WEIGHT
-    if domain == "binary_sensor" and device_class in {"presence", "occupancy", "motion"}:
+    if domain == "binary_sensor" and device_class in PRESENCE_SENSOR_DEVICE_CLASSES:
         score = PRESENCE_SENSOR_WEIGHT
     if entity_id in ENTITY_LABELS:
         score += OVERRIDE_SCORE_BOOST
@@ -707,11 +709,25 @@ def _build_scored_entities(
             )
         )
 
-    selected = sorted(
+    presence_keep_ids = {
+        item.entity_id
+        for item in sorted(
+            (item for item in scored if _is_capped_presence_sensor(item) and item.area is not None),
+            key=_presence_slice_rank,
+            reverse=True,
+        )[:MAX_PRESENCE_IN_SLICE]
+    }
+    selected = []
+    for item in sorted(
         scored,
         key=lambda item: (item.score, item.entity_id in ENTITY_LABELS, item.entity_id),
         reverse=True,
-    )[:limit]
+    ):
+        if _is_capped_presence_sensor(item) and (item.area is None or item.entity_id not in presence_keep_ids):
+            continue
+        selected.append(item)
+        if len(selected) >= limit:
+            break
     if char_limit <= 0:
         return selected
 
@@ -725,6 +741,24 @@ def _build_scored_entities(
         budgeted.append(item)
         used = projected
     return budgeted
+
+
+def _is_capped_presence_sensor(item: ScoredEntity) -> bool:
+    attrs = item.raw_state.get("attributes", {}) or {}
+    return (
+        item.domain == "binary_sensor"
+        and attrs.get("device_class") in PRESENCE_SENSOR_DEVICE_CLASSES
+        and item.entity_id not in ENTITY_LABELS
+    )
+
+
+def _presence_slice_rank(item: ScoredEntity) -> tuple[bool, float, str]:
+    # Used with sorted(..., reverse=True) to keep the most relevant uncurated
+    # presence sensors: currently-`on` first, then most-recently-changed. The
+    # entity_id is only a deterministic, stable tiebreak (reverse-lexicographic
+    # under reverse=True) when on-state and recency are equal.
+    changed = _parse_ha_timestamp(item.raw_state.get("last_changed")) or 0.0
+    return (str(item.raw_state.get("state", "")).lower() == "on", changed, item.entity_id)
 
 
 def _build_budgeted_summary(scored: list[ScoredEntity]) -> str:
@@ -1422,6 +1456,8 @@ async def push_state_to_ha(
 
         segment_type = "off" if session_stopped else (now_streaming.get("type", "off") if now_streaming else "off")
         metadata = now_streaming.get("metadata", {}) if now_streaming else {}
+        if not isinstance(metadata, dict):
+            metadata = {}
         is_playing = not session_stopped and bool(now_streaming)
         mp_state = "playing" if is_playing else "idle"
 
@@ -1453,6 +1489,15 @@ async def push_state_to_ha(
         if is_playing:
             media_attrs["media_position"] = media_position
             media_attrs["media_position_updated_at"] = datetime.datetime.now(datetime.UTC).isoformat()
+
+        # Secondary artwork surface: the HA frontend reads entity_picture directly.
+        # Only set it while actually playing, and only for an absolute http(s) cover
+        # URL — never a relative/local path (HA resolves relative entity_picture
+        # against its own origin, which 404s for an add-on). When absent, leave it
+        # unset so HA shows its clean default icon instead of a stale or broken tile.
+        album_art = str(metadata.get("album_art") or "").strip()
+        if is_playing and album_art.startswith(("http://", "https://")):
+            media_attrs["entity_picture"] = album_art
 
         entities: list[tuple[str, dict]] = [
             (
@@ -1489,16 +1534,45 @@ async def push_state_to_ha(
         ]
 
         async def _push_one(eid: str, p: dict) -> None:
-            try:
-                resp = await client.post(
-                    f"{base_url}/api/states/{eid}",
-                    headers=headers,
-                    json=p,
-                    timeout=5.0,
-                )
-                if resp.status_code >= 400:
-                    logger.warning("HA push failed for %s: HTTP %d", eid, resp.status_code)
-            except Exception as e:
-                logger.warning("HA push failed for %s: %s", eid, e)
+            # Always log the exception TYPE + repr. A bare str() on a timeout or
+            # cancellation-style exception is empty, which is what produced the
+            # unreadable "HA push failed for <eid>: " lines in production. Include
+            # the HTTP body on a 4xx/5xx so the operator can see *why* it failed.
+            #
+            # One bounded retry, transient network errors only. The whole push
+            # runs inside _get_ha_push_lock(), so a newer push cannot interleave
+            # and replay stale state behind this one. HTTP errors are not retried
+            # (they will not fix themselves within 5s); the 30s heartbeat re-pushes.
+            last_exc: httpx.TransportError | None = None
+            for _attempt in range(2):
+                try:
+                    resp = await client.post(
+                        f"{base_url}/api/states/{eid}",
+                        headers=headers,
+                        json=p,
+                        timeout=5.0,
+                    )
+                    if resp.status_code >= 400:
+                        raw = getattr(resp, "text", "")
+                        body = raw.strip().replace("\n", " ")[:200] if isinstance(raw, str) else ""
+                        logger.warning(
+                            "HA push failed for %s: HTTP %d%s",
+                            eid,
+                            resp.status_code,
+                            f" — {body}" if body else "",
+                        )
+                    return
+                except httpx.TransportError as e:
+                    last_exc = e
+                    continue
+                except Exception as e:
+                    logger.warning("HA push failed for %s: %s: %r", eid, type(e).__name__, e)
+                    return
+            logger.warning(
+                "HA push failed for %s after retry: %s: %r",
+                eid,
+                type(last_exc).__name__,
+                last_exc,
+            )
 
         await asyncio.gather(*(_push_one(eid, p) for eid, p in entities))

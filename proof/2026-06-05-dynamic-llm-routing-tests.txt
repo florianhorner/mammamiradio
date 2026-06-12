@@ -1,0 +1,16 @@
+Dynamic LLM routing — local verification (2026-06-06T01:48:49Z)
+commit: cc96713ff9c40fb19907a3ac04971e6fb621e727
+note: tests/scripts/test_audition_tts_voices.py fails ONLY locally (this machine's .env
+      carries real AZURE_SPEECH_* creds that leak past the test's env={} isolation);
+      it is green in CI, which has no .env. Unrelated to this PR (main's TTS audition).
+
+## pytest
+1 failed, 2550 passed, 2 skipped, 8 deselected, 1 warning in 52.38s
+## ruff
+All checks passed!
+## mypy
+Success: no issues found in 163 source files
+## coverage
+Required test coverage of 92.0% reached. Total coverage: 93.86%
+## addon validate
+[0;34mAll checks passed.[0m Safe to push.

@@ -1,0 +1,6 @@
+# landing-gate lint proof — 2026-06-12T11:39:52Z
+
+ruff check: clean
+ruff format: clean
+mypy: clean
+shellcheck: clean

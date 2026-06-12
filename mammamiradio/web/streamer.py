@@ -7,13 +7,11 @@ import atexit
 import concurrent.futures
 import copy
 import importlib
-import ipaddress
 import logging
 import math
 import os
 import random as _random
 import re as _re
-import secrets
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -22,9 +20,9 @@ from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
-from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.templating import Jinja2Templates
 
+from mammamiradio.audio.norm_cache import select_norm_cache_rescue as _select_norm_cache_rescue
 from mammamiradio.audio.normalizer import humanize_norm_filename, load_track_metadata
 from mammamiradio.audio.stream_format import stream_audio_metadata
 from mammamiradio.core.capabilities import capabilities_to_dict, get_capabilities
@@ -54,6 +52,22 @@ from mammamiradio.web.assets import (
     _STATIC_DIR,
     _TEMPLATES_DIR,
     _bust_static_cache,
+)
+from mammamiradio.web.auth import (  # noqa: F401  facade re-export — routes/tests read these as streamer.*; only some are used in-module
+    _CSRF_TOKEN_PLACEHOLDER,
+    _HASSIO_NETWORK,
+    _MUTATING_METHODS,
+    _TRUSTED_NETWORKS,
+    _enforce_csrf_for_basic_auth,
+    _enforce_csrf_for_private_network,
+    _get_csrf_token,
+    _inject_csrf_token,
+    _is_hassio_or_loopback,
+    _is_loopback_client,
+    _is_private_network,
+    _same_origin,
+    require_admin_access,
+    security,
 )
 from mammamiradio.web.mp3_frames import _skip_id3_and_xing_header
 from mammamiradio.web.pages import _get_injected_html, _sanitize_ingress_prefix
@@ -85,12 +99,12 @@ _search_executor = concurrent.futures.ThreadPoolExecutor(max_workers=4, thread_n
 atexit.register(_search_executor.shutdown, wait=False, cancel_futures=True)
 
 router = APIRouter()
-security = HTTPBasic(auto_error=False)
 
-# TODO: split — this 2,395-line god module is a postal address, not a destination.
-# See docs/2026-04-28-cathedral-restructure.md (PR 5) for the routes/auth/playback split plan.
+# TODO: split — this god module is a postal address, not a destination.
+# See docs/archive/2026-04-28-cathedral-restructure.md (PR 5) for the routes/playback split plan.
 # Path roots, the static-asset content hash (_ASSET_VERSION), and
-# _bust_static_cache now live in web/assets.py and are imported above.
+# _bust_static_cache now live in web/assets.py; admin auth (require_admin_access,
+# CSRF, trusted networks) now lives in web/auth.py — both imported above.
 #
 # Jinja2 templates for brand-engine listener page (PR-C). Admin/live still use
 # string-replace via _inject_ingress_prefix (web/pages.py); only listener migrates to Jinja for now.
@@ -113,8 +127,30 @@ def _as_int_index(value, default: int = -1) -> int:
         return default
 
 
-_MUTATING_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
-_CSRF_TOKEN_PLACEHOLDER = "__MAMMAMIRADIO_CSRF_TOKEN__"
+def _page_bounds(offset: int, limit: int, *, default_limit: int, max_limit: int) -> tuple[int, int]:
+    """Clamp client pagination params to bounded, non-negative integers."""
+    try:
+        offset = int(offset)
+    except (TypeError, ValueError):
+        offset = 0
+    try:
+        limit = int(limit)
+    except (TypeError, ValueError):
+        limit = default_limit
+    return max(0, offset), max(1, min(limit, max_limit))
+
+
+def _safe_external_album_art(value: Any) -> str:
+    """Return a browser-renderable artwork URL without making it server-active."""
+    url = str(value or "").strip()
+    if not url:
+        return ""
+    parsed = urlparse(url)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return ""
+    return url
+
+
 SESSION_STOPPED_FLAG = "session_stopped.flag"
 SILENCE_FAILURE_SECONDS = 30.0
 QUEUE_FALLBACK_WAIT_SECONDS = 5.0
@@ -145,6 +181,26 @@ def _purge_segment_queue(q) -> int:
             purged += 1
         except Exception:
             break
+    return purged
+
+
+def _purge_queue_and_shadow(q, state: StationState) -> int:
+    """Drain the real queue AND clear the UI shadow in one synchronous block.
+
+    Single home for "purge everything". Every operator purge (stop, panic,
+    source-switch, chaos-enable, festival-enable, /api/purge) routes through
+    here so the shadow (``state.queued_segments``, the "Up Next" projection) can
+    never again be left stale behind a drained real queue. The festival-enable
+    path previously drained the queue but forgot the shadow clear, leaving the
+    panel showing segments that no longer existed (the queue-shadow drift seen
+    when Festival Mode was toggled mid-stream).
+
+    Synchronous: the drain and the shadow clear happen with no ``await`` between
+    them, so a caller can keep its epoch bump / ``skip_event`` in the same
+    no-await stretch and no reader can observe the two views disagreeing.
+    """
+    purged = _purge_segment_queue(q)
+    state.queued_segments.clear()
     return purged
 
 
@@ -344,6 +400,7 @@ def _runtime_provider_label(provider: str) -> str:
 
 _FALLBACK_REASON_LABELS = {
     "anthropic_exception": "Anthropic had a brief API error - retrying automatically",
+    "anthropic_max_tokens_truncated": "Anthropic ran long and got cut off - retrying automatically",
     "anthropic_auth_failed": "Anthropic API key rejected - check your key in Engine Room",
     "anthropic_auth_blocked": "Anthropic API key rejected - check your key in Engine Room",
     "anthropic_usage_limit": "Anthropic usage limit reached - check your plan at anthropic.com",
@@ -627,76 +684,6 @@ def _silence_with_listeners(state: StationState, queue_empty_elapsed: float) -> 
     return queue_empty_elapsed > SILENCE_FAILURE_SECONDS and state.listeners_active > 0
 
 
-def _identity_key(value: str) -> str:
-    """Normalize listener-facing titles enough to compare cache fallbacks."""
-    return _re.sub(r"[^a-z0-9]+", " ", value.lower()).strip()
-
-
-def _identity_matches(left: str, right: str) -> bool:
-    if not left or not right:
-        return False
-    if left == right:
-        return True
-    return min(len(left), len(right)) >= 12 and (left in right or right in left)
-
-
-def _segment_identity_keys(segment: dict) -> set[str]:
-    """Return comparable labels for a streamed segment."""
-    keys: set[str] = set()
-    label = str(segment.get("label") or "").strip()
-    if label:
-        keys.add(_identity_key(label))
-    metadata = segment.get("metadata") or {}
-    if isinstance(metadata, dict):
-        title = str(metadata.get("title") or "").strip()
-        title_only = str(metadata.get("title_only") or "").strip()
-        artist = str(metadata.get("artist") or "").strip()
-        for value in (title, title_only):
-            if value:
-                keys.add(_identity_key(value))
-            if value and artist:
-                keys.add(_identity_key(f"{artist} {value}"))
-    return {key for key in keys if key}
-
-
-def _norm_cache_identity_keys(path: Path) -> set[str]:
-    """Return comparable title/artist labels for a normalized cache file."""
-    keys = {_identity_key(humanize_norm_filename(path.name))}
-    sidecar = load_track_metadata(path)
-    if sidecar:
-        title = str(sidecar.get("title") or "").strip()
-        artist = str(sidecar.get("artist") or "").strip()
-        if title:
-            keys.add(_identity_key(title))
-        if title and artist:
-            keys.add(_identity_key(f"{artist} {title}"))
-    return {key for key in keys if key}
-
-
-def _select_norm_cache_rescue(cache_dir: Path, state: StationState) -> Path | None:
-    """Pick a cache rescue clip without replaying the current/recent song first."""
-    norm_files = sorted(cache_dir.glob("norm_*.mp3"))
-    if not norm_files:
-        return None
-
-    recent_keys: set[str] = set()
-    if state.now_streaming:
-        recent_keys.update(_segment_identity_keys(state.now_streaming))
-    for entry in list(state.stream_log)[-5:]:
-        if entry.type == SegmentType.MUSIC.value:
-            recent_keys.update(_segment_identity_keys({"label": entry.label, "metadata": entry.metadata}))
-    if not recent_keys:
-        return _random.choice(norm_files)
-
-    candidates: list[Path] = []
-    for path in norm_files:
-        path_keys = _norm_cache_identity_keys(path)
-        if not any(_identity_matches(path_key, recent_key) for path_key in path_keys for recent_key in recent_keys):
-            candidates.append(path)
-
-    return _random.choice(candidates or norm_files)
-
-
 def _provider_health_snapshot(config, state: StationState) -> dict:
     """Return current provider degradation state for admin diagnostics."""
     now = time.time()
@@ -743,8 +730,7 @@ def _apply_loaded_source(
     state.switch_playlist(tracks, resolved_source)
 
     # Immediate cutover: purge queued segments and skip current playback
-    purged = _purge_segment_queue(request.app.state.queue)
-    state.queued_segments.clear()
+    purged = _purge_queue_and_shadow(request.app.state.queue, state)
     skipped = False
     if state.now_streaming:
         request.app.state.skip_event.set()
@@ -825,6 +811,21 @@ def _serialize_track(track: Track) -> dict:
     }
 
 
+def _paginated_tracks(tracks: list[Track], offset: int, limit: int, *, revision: int | None = None) -> dict[str, Any]:
+    total = len(tracks)
+    page = tracks[offset : offset + limit]
+    payload: dict[str, Any] = {
+        "tracks": [_serialize_track(track) for track in page],
+        "total": total,
+        "offset": offset,
+        "limit": limit,
+        "has_more": offset + len(page) < total,
+    }
+    if revision is not None:
+        payload["revision"] = revision
+    return payload
+
+
 def _duration_sec_from_payload(payload: dict | None) -> float | None:
     if not payload:
         return None
@@ -878,70 +879,6 @@ def _serialize_stream_log_entry(entry) -> dict:
 
 def _source_options_reason(config, exc: Exception) -> str:
     return f"Source loading failed: {exc}"
-
-
-def _get_csrf_token(app) -> str:
-    token = getattr(app.state, "csrf_token", "")
-    if not token:
-        token = secrets.token_urlsafe(32)
-        app.state.csrf_token = token
-    return token
-
-
-def _inject_csrf_token(html: str, token: str) -> str:
-    return html.replace(_CSRF_TOKEN_PLACEHOLDER, token)
-
-
-def _same_origin(request: Request, candidate: str) -> bool:
-    parsed = urlparse(candidate)
-    if not parsed.scheme or not parsed.netloc:
-        return False
-    request_url = request.url
-
-    # Normalize ports: None means the default for the scheme (80/443)
-    def _effective_port(port, scheme: str) -> int:
-        if port is not None:
-            return port
-        return 443 if scheme == "https" else 80
-
-    return (
-        parsed.scheme == request_url.scheme
-        and parsed.hostname == request_url.hostname
-        and _effective_port(parsed.port, parsed.scheme) == _effective_port(request_url.port, request_url.scheme)
-    )
-
-
-def _enforce_csrf_for_basic_auth(request: Request, credentials: HTTPBasicCredentials | None, config) -> None:
-    if request.method.upper() not in _MUTATING_METHODS:
-        return
-    if _is_loopback_client(request):
-        return
-
-    ingress_prefix = request.headers.get("X-Ingress-Path", "")
-    if config.is_addon and ingress_prefix and _is_hassio_or_loopback(request):
-        return
-    admin_token_header = request.headers.get("X-Radio-Admin-Token", "")
-    if config.admin_token and admin_token_header and secrets.compare_digest(admin_token_header, config.admin_token):
-        return
-    if not config.admin_password or not credentials:
-        return
-
-    csrf_token = request.headers.get("X-Radio-CSRF-Token", "")
-    if csrf_token and secrets.compare_digest(csrf_token, _get_csrf_token(request.app)):
-        return
-
-    origin = request.headers.get("Origin", "")
-    if origin and _same_origin(request, origin):
-        return
-
-    referer = request.headers.get("Referer", "")
-    if referer and _same_origin(request, referer):
-        return
-
-    raise HTTPException(
-        status_code=403,
-        detail="Cross-site admin write blocked. Reload the dashboard and retry.",
-    )
 
 
 class LiveStreamHub:
@@ -1008,149 +945,6 @@ class LiveStreamHub:
                 queue.put_nowait(None)
             except asyncio.QueueFull:
                 pass
-
-
-_HASSIO_NETWORK = ipaddress.ip_network("172.30.32.0/23")
-
-# Private/trusted networks: loopback, RFC1918, link-local, HA Supervisor,
-# and Tailscale/CGNAT (100.64.0.0/10). A self-hosted radio station trusts
-# its own LAN — the operator installed it themselves.
-_TRUSTED_NETWORKS = [
-    ipaddress.ip_network("10.0.0.0/8"),
-    ipaddress.ip_network("172.16.0.0/12"),
-    ipaddress.ip_network("192.168.0.0/16"),
-    ipaddress.ip_network("100.64.0.0/10"),  # CGNAT / Tailscale
-    ipaddress.ip_network("169.254.0.0/16"),  # link-local
-    _HASSIO_NETWORK,
-]
-
-
-def _is_loopback_client(request: Request) -> bool:
-    """Return whether the current request originated from localhost."""
-    if not request.client:
-        return False
-    host = request.client.host
-    if host == "localhost":
-        return True
-    try:
-        return ipaddress.ip_address(host).is_loopback
-    except ValueError:
-        return False
-
-
-def _is_private_network(request: Request) -> bool:
-    """Return True for loopback, RFC1918, Tailscale CGNAT, or HA Supervisor."""
-    if _is_loopback_client(request):
-        return True
-    if not request.client:
-        return False
-    try:
-        addr = ipaddress.ip_address(request.client.host)
-    except ValueError:
-        return False
-    return any(addr in net for net in _TRUSTED_NETWORKS)
-
-
-def _is_hassio_or_loopback(request: Request) -> bool:
-    """Return True for loopback or the Hassio internal network."""
-    if _is_loopback_client(request):
-        return True
-    if not request.client:
-        return False
-    try:
-        return ipaddress.ip_address(request.client.host) in _HASSIO_NETWORK
-    except ValueError:
-        return False
-
-
-def _enforce_csrf_for_private_network(request: Request) -> None:
-    """Block cross-site mutating requests from private networks.
-
-    LAN trust skips credential checks but a browser on the LAN could still
-    be tricked into a cross-site POST. Require same-origin or CSRF token
-    on mutating methods.
-    """
-    if request.method.upper() not in _MUTATING_METHODS:
-        return
-
-    csrf_token = request.headers.get("X-Radio-CSRF-Token", "")
-    if csrf_token and secrets.compare_digest(csrf_token, _get_csrf_token(request.app)):
-        return
-
-    origin = request.headers.get("Origin", "")
-    if origin and _same_origin(request, origin):
-        return
-
-    referer = request.headers.get("Referer", "")
-    if referer and _same_origin(request, referer):
-        return
-
-    raise HTTPException(
-        status_code=403,
-        detail="Cross-site admin write blocked. Reload the dashboard and retry.",
-    )
-
-
-def require_admin_access(
-    request: Request,
-    credentials: HTTPBasicCredentials | None = Depends(security),
-) -> None:
-    """Authorize admin-only routes using configured credentials or local trust."""
-    config = request.app.state.config
-
-    # Loopback is fully trusted — same machine, no CSRF risk.
-    if _is_loopback_client(request):
-        return
-
-    # HA Supervisor network is Docker-internal (not user-accessible), so
-    # CSRF from a browser on that network is not a real threat. Fully trust
-    # it in addon mode so HA automations (rest_command, etc.) work without tokens.
-    if config.is_addon and _is_hassio_or_loopback(request):
-        return
-
-    # Explicit auth for all non-local traffic when credentials are configured.
-    if config.admin_token:
-        token = request.headers.get("X-Radio-Admin-Token")
-        if token and secrets.compare_digest(token, config.admin_token):
-            return
-
-    if config.admin_password:
-        username = credentials.username if credentials else ""
-        password = credentials.password if credentials else ""
-        if secrets.compare_digest(username, config.admin_username) and secrets.compare_digest(
-            password, config.admin_password
-        ):
-            _enforce_csrf_for_basic_auth(request, credentials, config)
-            return
-        client_ip = request.client.host if request.client else "unknown"
-        logger.warning("Failed admin auth attempt from %s", client_ip)
-        raise HTTPException(
-            status_code=401,
-            detail="Admin authentication required",
-            headers={"WWW-Authenticate": 'Basic realm="mammamiradio admin"'},
-        )
-
-    if config.admin_token:
-        client_ip = request.client.host if request.client else "unknown"
-        logger.warning("Missing admin token from %s", client_ip)
-        raise HTTPException(
-            status_code=401,
-            detail="X-Radio-Admin-Token required",
-        )
-
-    # Backward-compatible fallback when no admin credentials are configured.
-    # In standalone mode load_config() now rejects a non-loopback bind without
-    # creds, so in production this only fires for loopback binds (already
-    # short-circuited above). Reachable here mainly via test apps built without
-    # creds — kept so credential-less LAN deployments keep working with CSRF.
-    if _is_private_network(request):
-        _enforce_csrf_for_private_network(request)
-        return
-
-    raise HTTPException(
-        status_code=403,
-        detail="Admin endpoints are only available from private networks unless admin auth is configured",
-    )
 
 
 async def run_playback_loop(app) -> None:
@@ -1959,10 +1753,9 @@ async def capabilities(request: Request, _: None = Depends(require_admin_access)
 @router.post("/api/shuffle")
 async def shuffle_playlist(request: Request, _: None = Depends(require_admin_access)):
     """Shuffle upcoming tracks."""
-    import random
-
     state = request.app.state.station_state
-    random.shuffle(state.playlist)
+    _random.shuffle(state.playlist)
+    state.playlist_revision += 1
     return {"ok": True, "message": "Playlist shuffled"}
 
 
@@ -2012,8 +1805,7 @@ async def skip_track(request: Request, _: None = Depends(require_admin_access)):
 @router.post("/api/purge")
 async def purge_queue(request: Request, _: None = Depends(require_admin_access)):
     """Drain all pre-produced segments from the queue."""
-    purged = _purge_segment_queue(request.app.state.queue)
-    request.app.state.station_state.queued_segments.clear()
+    purged = _purge_queue_and_shadow(request.app.state.queue, request.app.state.station_state)
     return {"ok": True, "purged": purged}
 
 
@@ -2025,8 +1817,7 @@ async def panic_cut(request: Request, _: None = Depends(require_admin_access)):
     disconnect. Use /api/stop when a full session halt is intended.
     """
     state = request.app.state.station_state
-    purged = _purge_segment_queue(request.app.state.queue)
-    state.queued_segments.clear()
+    purged = _purge_queue_and_shadow(request.app.state.queue, state)
     if state.now_streaming:
         request.app.state.skip_event.set()
     # force_next is set AFTER skip_event to avoid the producer consuming it
@@ -2124,8 +1915,7 @@ async def stop_session(request: Request, _: None = Depends(require_admin_access)
     """Gracefully stop the station: skip current, purge queue, cancel producer."""
     state = request.app.state.station_state
     # Purge queued segments
-    purged = _purge_segment_queue(request.app.state.queue)
-    state.queued_segments.clear()
+    purged = _purge_queue_and_shadow(request.app.state.queue, state)
     # Drop any pending interrupt/forced segment so it can't fire as stale audio on
     # the next resume; unlink an ephemeral bridge temp so the stop doesn't leak it.
     if state.interrupt_slot is not None and state.interrupt_slot_ephemeral:
@@ -2133,6 +1923,7 @@ async def stop_session(request: Request, _: None = Depends(require_admin_access)
     state.interrupt_slot = None
     state.interrupt_slot_ephemeral = False
     state.force_next = None
+    state.operator_force_pending = None
     # Skip current segment
     if state.now_streaming:
         request.app.state.skip_event.set()
@@ -2168,7 +1959,18 @@ async def trigger_segment(request: Request, _: None = Depends(require_admin_acce
         return {"ok": False, "error": f"type must be one of: {list(valid.keys())}"}
 
     state = request.app.state.station_state
+    # Air-next builds and front-inserts one operator trigger at a time. Reject a
+    # second tap while one is still pending — with a way out (leadership #5),
+    # never a silent overwrite of the first pick.
+    if state.operator_force_pending is not None:
+        return {
+            "ok": False,
+            "error": "Give the tape decks a few seconds to cue your last pick, then tap again.",
+        }
     state.force_next = valid[seg_type]
+    # Attribute this force to the operator so the admin panel can surface it as a
+    # deliberate trigger (internal forces never set this — see StationState).
+    state.operator_force_pending = valid[seg_type]
     return {"ok": True, "triggered": seg_type}
 
 
@@ -2249,7 +2051,9 @@ async def hot_reload_modules(request: Request, _: None = Depends(require_admin_a
     (leaves-first) so the scriptwriter facade re-imports fresh values — reloading the facade
     alone would rebind its ``from .prompt_world`` / ``.transitions`` / ``.fallbacks`` import
     names to the stale submodules.
-    NOT reloaded: producer, streamer, persona (hold live task/instance state).
+    NOT reloaded: producer, streamer, persona (hold live task/instance state),
+    auth (reloading would fork require_admin_access from the identity the
+    router captured at import — auth edits would silently not apply).
     Requires --workers 1 (importlib reloads only the worker handling the request).
     """
     import mammamiradio.hosts.fallbacks as _fallbacks_mod
@@ -2442,8 +2246,7 @@ async def set_chaos(request: Request, _: None = Depends(require_admin_access)):
             state.chaos_cutover_epoch += 1
             state.chaos_audio_failures = 0
             state.chaos_last_degraded_reason = ""
-            purged = _purge_segment_queue(queue)
-            state.queued_segments.clear()
+            purged = _purge_queue_and_shadow(queue, state)
         else:
             state.chaos_mode_active = False
             state.chaos_pending = None
@@ -2490,6 +2293,115 @@ async def set_super_italian(request: Request, _: None = Depends(require_admin_ac
         else:
             await loop.run_in_executor(None, _save_dotenv, {"MAMMAMIRADIO_SUPER_ITALIAN": env_value})
     return {"ok": True, "super_italian_mode": value}
+
+
+_quality_lock = asyncio.Lock()
+
+
+@router.get("/api/quality")
+async def get_quality(request: Request, _: None = Depends(require_admin_access)):
+    """Return the active model quality profile and the available profiles."""
+    config = request.app.state.config
+    return {
+        "active_profile": config.models.active_profile,
+        "profiles": sorted(config.models.profiles),
+    }
+
+
+@router.post("/api/quality")
+async def set_quality(request: Request, _: None = Depends(require_admin_access)):
+    """Switch the active model quality profile (premium|balanced|economy) live.
+
+    Hot-swaps with NO restart and NO queue purge: only the model that voices the
+    NEXT generated segment changes; the current segment finishes airing
+    untouched (contrast /api/playlist/load, which purges). No prompt-cache reset
+    needed — the system prompt is model-independent, so a model-ID change can't
+    break the illusion mid-segment.
+
+    Persistence mirrors super_italian: MAMMAMIRADIO_QUALITY to `.env` (standalone)
+    or quality_profile to /data/options.json (addon).
+    """
+    config = request.app.state.config
+    try:
+        body = await request.json()
+    except ValueError:
+        return {"ok": False, "error": "invalid JSON body"}
+    if not isinstance(body, dict) or "quality_profile" not in body:
+        return {"ok": False, "error": "expected JSON object with quality_profile"}
+    profile = body["quality_profile"]
+    if not isinstance(profile, str) or profile not in config.models.profiles:
+        return {"ok": False, "error": f"quality_profile must be one of {sorted(config.models.profiles)}"}
+    loop = asyncio.get_running_loop()
+    async with _quality_lock:
+        try:
+            if config.is_addon:
+                await loop.run_in_executor(None, _save_addon_option, "quality_profile", profile)
+            else:
+                await loop.run_in_executor(None, _save_dotenv, {"MAMMAMIRADIO_QUALITY": profile})
+        except Exception as exc:
+            logger.warning("Failed to persist quality_profile=%s: %s", profile, exc)
+            return JSONResponse({"ok": False, "error": "failed to persist quality_profile"}, status_code=500)
+        config.models.active_profile = profile
+        os.environ["MAMMAMIRADIO_QUALITY"] = profile
+    return {"ok": True, "active_profile": profile}
+
+
+# Approximate public per-token USD rates (input, output) for the models the
+# station routes to. Used ONLY for the operator's cost estimate — a stale or
+# missing entry never affects audio. With dynamic routing, one session can run
+# several models, so we price each model from per-model token tallies rather than
+# a single flat rate. Update when prices change; an unpriced model (just added to
+# the catalog) falls back to the highest known tier and is flagged in the UI.
+MODEL_PRICES: dict[str, tuple[float, float]] = {
+    "claude-opus-4-8": (0.000015, 0.000075),
+    "claude-opus-4-6": (0.000015, 0.000075),
+    "claude-sonnet-4-6": (0.000003, 0.000015),
+    "claude-haiku-4-5-20251001": (0.0000008, 0.000004),
+    "gpt-4o": (0.0000025, 0.00001),
+    "gpt-4o-mini": (0.00000015, 0.0000006),
+}
+_UNPRICED_FALLBACK = (0.000015, 0.000075)  # highest known tier — conservative
+
+# One deliberately-blended TTS rate (~$20 / 1M chars) across Azure / OpenAI /
+# ElevenLabs. Cent-accurate TTS cost is impossible — ElevenLabs alone swings 3-5x
+# by plan tier — so this is rough on purpose. The honesty lives in the UI label
+# ("~$N est"), not in the arithmetic. Only paid cloud chars reach state.tts_characters
+# (Edge-tts is free and never counted), so this never bills a silent fallback.
+TTS_BLENDED_RATE = 0.00002
+
+
+def _estimate_api_cost(state) -> tuple[float, bool]:
+    """Sum per-model token cost plus a rough TTS estimate. Returns (usd, has_unpriced).
+
+    Prices each model the session actually used (api_tokens_by_model). A model
+    with no MODEL_PRICES entry falls back to the highest known tier and trips the
+    flag so the UI can annotate the estimate — never a silent $0, never a KeyError.
+    Adds a blended TTS character cost on top. getattr keeps a persisted/legacy state
+    (no tts_characters attr) safe.
+    """
+    tts_cost = getattr(state, "tts_characters", 0) * TTS_BLENDED_RATE
+    by_model = getattr(state, "api_tokens_by_model", None) or {}
+    if not by_model:
+        # No per-model data yet — flat haiku estimate on aggregate counters so
+        # the counter is never blank for a fresh/legacy session.
+        in_rate, out_rate = MODEL_PRICES["claude-haiku-4-5-20251001"]
+        llm = state.api_input_tokens * in_rate + state.api_output_tokens * out_rate
+        return round(llm + tts_cost, 4), False
+    total = 0.0
+    has_unpriced = False
+    for model_id, toks in by_model.items():
+        rates = MODEL_PRICES.get(model_id)
+        if rates is None:
+            rates = _UNPRICED_FALLBACK
+            has_unpriced = True
+        total += toks.get("input", 0) * rates[0] + toks.get("output", 0) * rates[1]
+    return round(total + tts_cost, 4), has_unpriced
+
+
+def _consumption_cost(state) -> dict:
+    """Cost fields for the /status consumption block (protected UI element)."""
+    cost, unpriced = _estimate_api_cost(state)
+    return {"api_cost_estimate_usd": cost, "api_cost_unpriced_model": unpriced}
 
 
 _party_lock = asyncio.Lock()
@@ -2544,7 +2456,7 @@ async def set_party(request: Request, _: None = Depends(require_admin_access)):
         os.environ["MAMMAMIRADIO_FESTIVAL_MODE"] = val
         if action == "enable":
             state.playlist_revision += 1
-            _purge_segment_queue(segment_queue)
+            _purge_queue_and_shadow(segment_queue, state)
             state.force_next = SegmentType.BANTER
         if config.is_addon:
             await loop.run_in_executor(None, _save_festival_addon_options, target_mode == "festival")
@@ -2578,6 +2490,7 @@ async def remove_track(request: Request, _: None = Depends(require_admin_access)
     state = request.app.state.station_state
     if 0 <= idx < len(state.playlist):
         removed = state.playlist.pop(idx)
+        state.playlist_revision += 1
         return {"ok": True, "removed": removed.display}
     return {"ok": False, "error": "Invalid index"}
 
@@ -2593,54 +2506,108 @@ async def move_track(request: Request, _: None = Depends(require_admin_access)):
     if 0 <= src < len(pl) and 0 <= dst < len(pl):
         track = pl.pop(src)
         pl.insert(dst, track)
+        state.playlist_revision += 1
         return {"ok": True, "moved": track.display}
     return {"ok": False, "error": "Invalid indices"}
 
 
+@router.get("/api/playlist")
+async def playlist_tracks(
+    request: Request,
+    offset: int = 0,
+    limit: int = 80,
+    _: None = Depends(require_admin_access),
+):
+    """Return a bounded playlist page for admin lazy loading."""
+    offset, limit = _page_bounds(offset, limit, default_limit=80, max_limit=200)
+    state = request.app.state.station_state
+    return _paginated_tracks(state.playlist, offset, limit, revision=state.playlist_revision)
+
+
 @router.get("/api/search")
-async def search_tracks(request: Request, q: str = "", _: None = Depends(require_admin_access)):
+async def search_tracks(
+    request: Request,
+    q: str = "",
+    offset: int = 0,
+    limit: int = 20,
+    external_offset: int = 0,
+    external_limit: int = 5,
+    include_external: bool = True,
+    _: None = Depends(require_admin_access),
+):
     """Search the current playlist and yt-dlp for tracks matching the query."""
     from mammamiradio.playlist.downloader import search_ytdlp_metadata
 
+    offset, limit = _page_bounds(offset, limit, default_limit=20, max_limit=50)
+    external_offset, external_limit = _page_bounds(external_offset, external_limit, default_limit=5, max_limit=10)
     if not q.strip():
-        return {"results": [], "external": []}
+        return {
+            "results": [],
+            "external": [],
+            "total": 0,
+            "offset": offset,
+            "limit": limit,
+            "has_more": False,
+            "external_offset": external_offset,
+            "external_limit": external_limit,
+            "external_has_more": False,
+            "external_known_count": 0,
+        }
     query = q.strip().lower()
     state = request.app.state.station_state
 
     # Playlist matches (instant)
-    results = []
+    matches = []
     for i, track in enumerate(state.playlist):
         text = f"{track.title} {track.artist}".lower()
         if query in text:
-            results.append(
+            matches.append(
                 {
                     "index": i,
-                    "title": track.title,
-                    "artist": track.artist,
-                    "display": track.display,
-                    "duration_ms": track.duration_ms,
+                    **_serialize_track(track),
                     "id": track.spotify_id or track.cache_key,
                 }
             )
-            if len(results) >= 20:
-                break
+    results = matches[offset : offset + limit]
 
     # External yt-dlp search (blocking, run off the event loop). Bound the total
     # wait so a slow/cold yt-dlp search can't hang past the HA ingress proxy read
     # timeout and surface as a connection error in the admin (same failure class
     # that motivated backgrounding add-external). On timeout we return the
     # in-playlist results with no web hits rather than failing the whole request.
-    loop = asyncio.get_running_loop()
-    try:
-        external = await asyncio.wait_for(
-            loop.run_in_executor(_search_executor, search_ytdlp_metadata, q.strip(), 5),
-            timeout=45,
-        )
-    except Exception:
-        logger.warning("yt-dlp external search failed/timed out for query %r", q, exc_info=True)
-        external = []
+    external_candidates = []
+    if include_external:
+        loop = asyncio.get_running_loop()
+        # Cap fetch depth to prevent DoS via unbounded external_offset (4-thread pool, 45s timeout).
+        fetch_depth = min(external_offset + external_limit + 1, 50)
+        try:
+            external_candidates = await asyncio.wait_for(
+                loop.run_in_executor(
+                    _search_executor,
+                    search_ytdlp_metadata,
+                    q.strip(),
+                    fetch_depth,
+                ),
+                timeout=45,
+            )
+        except Exception:
+            logger.warning("yt-dlp external search failed/timed out for query %r", q, exc_info=True)
+            external_candidates = []
+    external = external_candidates[external_offset : external_offset + external_limit]
+    external_known_count = len(external_candidates) if include_external else external_offset
 
-    return {"results": results, "external": external}
+    return {
+        "results": results,
+        "external": external,
+        "total": len(matches),
+        "offset": offset,
+        "limit": limit,
+        "has_more": offset + len(results) < len(matches),
+        "external_offset": external_offset,
+        "external_limit": external_limit,
+        "external_has_more": external_offset + len(external) < len(external_candidates),
+        "external_known_count": external_known_count,
+    }
 
 
 @router.post("/api/playlist/add-external")
@@ -2667,6 +2634,7 @@ async def add_external_track(request: Request, _: None = Depends(require_admin_a
     youtube_id = str(body.get("youtube_id") or "").strip()
     title = str(body.get("title") or "").strip()
     artist = str(body.get("artist") or "").strip()
+    album_art = _safe_external_album_art(body.get("album_art"))
     try:
         duration_ms = int(body.get("duration_ms") or 0)
     except (TypeError, ValueError):
@@ -2686,6 +2654,7 @@ async def add_external_track(request: Request, _: None = Depends(require_admin_a
         artist=artist,
         duration_ms=duration_ms,
         youtube_id=youtube_id,
+        album_art=album_art,
     )
 
     # Fire the download in the background and return before the ingress proxy
@@ -2728,10 +2697,21 @@ async def _commit_external_download(
     the rotation pool but the play-next slot was occupied), or "dropped" (source
     switched / consumed). Raises on download failure / cancellation for the caller
     to surface. Shared by the admin and listener download paths."""
+    from mammamiradio.playlist.cover_art import maybe_resolve, needs_resolve
     from mammamiradio.playlist.downloader import download_external_track
 
     state = app_state.station_state
     config = app_state.config
+    # Upgrade a YouTube video thumbnail to a real album cover (off the event loop —
+    # urlopen is blocking) before the slow download. Search-sourced tracks always
+    # carry a thumbnail; only resolve when there's one to upgrade, so a track with
+    # no art at all doesn't trigger a lookup. Best-effort: falls back to the
+    # thumbnail on a miss, never raises.
+    current_art = getattr(track, "album_art", "") or ""
+    if current_art and needs_resolve(current_art):
+        track.album_art = await asyncio.to_thread(
+            maybe_resolve, current_art, track.artist, track.title, cache_dir=config.cache_dir
+        )
     await download_external_track(track, config.cache_dir, music_dir=Path("music"))
     # Serialize the commit decision with source switches. /api/playlist/load holds
     # source_switch_lock across the slow load and only bumps source_revision at the
@@ -2745,6 +2725,7 @@ async def _commit_external_download(
         if state.source_revision != originating_source_revision or not should_commit():
             return "dropped"
         state.playlist.append(track)
+        state.playlist_revision += 1
         # Don't clobber a pin that's still pending — claim the play-next slot only
         # when the caller's guard says it's free. Otherwise the track is in
         # rotation and the caller surfaces that it's queued-behind, not next.
@@ -2816,11 +2797,15 @@ async def add_track(request: Request, _: None = Depends(require_admin_access)):
     from mammamiradio.core.models import Track
 
     body = await request.json()
+    # Preserve album_art when the caller supplies one (e.g. re-adding a track that
+    # already carries a cover). Live cover resolution happens on the download paths
+    # (_commit_external_download), not on this fast synchronous append.
     track = Track(
         title=body.get("title", ""),
         artist=body.get("artist", ""),
         duration_ms=body.get("duration_ms", 0),
         spotify_id=body.get("spotify_id", ""),
+        album_art=str(body.get("album_art") or "").strip(),
     )
     if not track.title:
         return {"ok": False, "error": "Missing title"}
@@ -2831,6 +2816,7 @@ async def add_track(request: Request, _: None = Depends(require_admin_access)):
         state.playlist.insert(0, track)
     else:
         state.playlist.append(track)
+    state.playlist_revision += 1
     return {"ok": True, "added": track.display, "position": position}
 
 
@@ -3379,7 +3365,12 @@ async def public_status(request: Request):
 
 
 @router.get("/status")
-async def status(request: Request, _: None = Depends(require_admin_access)):
+async def status(
+    request: Request,
+    playlist_offset: int = 0,
+    playlist_limit: int = 80,
+    _: None = Depends(require_admin_access),
+):
     """Return full admin diagnostics for the running station."""
     config = request.app.state.config
     state = request.app.state.station_state
@@ -3390,9 +3381,22 @@ async def status(request: Request, _: None = Depends(require_admin_access)):
     runtime_health = _runtime_health_snapshot(request)
     provider_health = _provider_health_snapshot(config, state)
     runtime_status = _runtime_status_snapshot(request, runtime_health=runtime_health, provider_health=provider_health)
+    playlist_offset, playlist_limit = _page_bounds(playlist_offset, playlist_limit, default_limit=80, max_limit=200)
+    playlist_page = _paginated_tracks(
+        state.playlist,
+        playlist_offset,
+        playlist_limit,
+        revision=state.playlist_revision,
+    )
     payload.update(
         {
             "queue_depth": segment_queue.qsize(),
+            # Honest airtime-ahead readout for the admin panel: the summed
+            # duration of the rendered queue. Surfaces SECONDS of buffered audio,
+            # not item count (3 short banters are not 3 songs of runway). The
+            # shadow carries duration_sec per entry; best-effort and never gates
+            # audio.
+            "buffered_audio_sec": round(sum(max(seg.get("duration_sec") or 0, 0) for seg in state.queued_segments), 1),
             "segments_produced": state.segments_produced,
             "tracks_played": len(state.played_tracks),
             "uptime_sec": round(time.time() - start_time),
@@ -3442,11 +3446,9 @@ async def status(request: Request, _: None = Depends(require_admin_access)):
                 "input_tokens": state.api_input_tokens,
                 "output_tokens": state.api_output_tokens,
                 "tts_characters": state.tts_characters,
-                # Haiku pricing: $0.80/M input, $4.00/M output (claude-haiku-4-5, 2026)
-                "api_cost_estimate_usd": round(
-                    state.api_input_tokens * 0.0000008 + state.api_output_tokens * 0.000004,
-                    4,
-                ),
+                # Model-aware cost: prices each model the session actually ran
+                # (api_cost_estimate_usd stays present — protected UI element).
+                **_consumption_cost(state),
                 "cache_size_mb": _cached_cache_size_mb(config.cache_dir),
                 "cache_limit_mb": config.max_cache_size_mb,
             },
@@ -3465,8 +3467,19 @@ async def status(request: Request, _: None = Depends(require_admin_access)):
                 "last_degraded_reason": state.chaos_last_degraded_reason,
             },
             "force_pending": state.force_next.value if state.force_next else None,
+            # Operator-attributed trigger (set only by /api/trigger) — the panel
+            # uses THIS, never force_pending, so internal/rescue forces don't
+            # false-light the "Triggered" row.
+            "operator_force_pending": (state.operator_force_pending.value if state.operator_force_pending else None),
             "session_stopped": state.session_stopped,
-            "playlist": [_serialize_track(t) for t in state.playlist[:100]],
+            "playlist": playlist_page["tracks"],
+            "playlist_page": {
+                "total": playlist_page["total"],
+                "offset": playlist_page["offset"],
+                "limit": playlist_page["limit"],
+                "has_more": playlist_page["has_more"],
+                "revision": playlist_page["revision"],
+            },
             "brand": _serialize_brand(config.brand),
             "brand_warnings": list(config.brand_warnings),
         }

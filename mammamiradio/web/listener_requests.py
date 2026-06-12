@@ -48,7 +48,8 @@ from mammamiradio.core.models import (
     RECENTLY_CONSUMED_RETENTION_SECONDS,
     SegmentType,
 )
-from mammamiradio.web.streamer import _register_background_task, require_admin_access
+from mammamiradio.web.auth import require_admin_access
+from mammamiradio.web.streamer import _register_background_task
 
 logger = logging.getLogger("mammamiradio.listener_requests")
 
@@ -226,7 +227,10 @@ async def dismiss_listener_request(request: Request, _: None = Depends(require_a
         track = r.get("song_track_obj")
         if track is None:
             continue
+        original_len = len(state.playlist)
         state.playlist = [t for t in state.playlist if t is not track]
+        if len(state.playlist) != original_len:
+            state.playlist_revision += 1
         if state.pinned_track is track:
             state.pinned_track = None
             if state.force_next == SegmentType.MUSIC:
@@ -325,7 +329,7 @@ async def _download_listener_song(req: dict, app_state, originating_source_revis
     """
     from mammamiradio.core.models import Track
     from mammamiradio.playlist.downloader import search_ytdlp_metadata
-    from mammamiradio.web.streamer import _commit_external_download
+    from mammamiradio.web.streamer import _commit_external_download, _safe_external_album_art
 
     state = app_state.station_state
     query = req.get("song_query") or req.get("message") or ""
@@ -342,6 +346,7 @@ async def _download_listener_song(req: dict, app_state, originating_source_revis
             artist=meta["artist"],
             duration_ms=meta["duration_ms"],
             youtube_id=meta["youtube_id"],
+            album_art=_safe_external_album_art(meta.get("album_art")),
         )
         status = await _commit_external_download(
             track,

@@ -13,6 +13,8 @@ import httpx
 import pytest
 
 from mammamiradio.home.ha_context import (
+    ENTITY_LABELS,
+    MAX_PRESENCE_IN_SLICE,
     HomeContext,
     HomeEvent,
     _apply_registry_area,
@@ -192,6 +194,245 @@ def test_scored_entities_rank_curated_and_budget_prompt_slice():
     summary = _build_budgeted_summary(scored)
     assert "entity_id" not in summary
     assert "La macchina del caffè" in summary
+
+
+def _iso_changed(now: float, age_seconds: int) -> str:
+    return datetime.datetime.fromtimestamp(now - age_seconds, tz=datetime.UTC).isoformat()
+
+
+def _presence_state(
+    name: str,
+    *,
+    state: str = "on",
+    area: str | None = "Kitchen",
+    changed: str | None = None,
+    device_class: str = "occupancy",
+) -> dict:
+    attrs = {"friendly_name": name, "device_class": device_class}
+    if area is not None:
+        attrs["area"] = area
+    data = {"state": state, "attributes": attrs}
+    if changed is not None:
+        data["last_changed"] = changed
+    return data
+
+
+def _uncurated_presence_ids(scored) -> list[str]:
+    # Filter by ENTITY_LABELS membership (not a hard-coded id) so the cap-slot
+    # count stays correct if curated presence sensors are renamed or added.
+    return [
+        entity.entity_id
+        for entity in scored
+        if entity.domain == "binary_sensor"
+        and entity.raw_state.get("attributes", {}).get("device_class") in {"occupancy", "presence", "motion"}
+        and entity.entity_id not in ENTITY_LABELS
+    ]
+
+
+def test_scored_entities_caps_uncurated_presence_and_retains_curated_presence():
+    now = datetime.datetime(2026, 6, 7, 12, 0, tzinfo=datetime.UTC).timestamp()
+    curated_presence = "binary_sensor.8_stockwerk_group_sensor_wohnzimmer_esszimmer_bar"
+    states = {
+        curated_presence: _presence_state(
+            "Wohnzimmer Esszimmer Bar Occupancy",
+            state="off",
+            area="Wohnzimmer",
+            changed=_iso_changed(now, 5_000),
+        ),
+        "weather.forecast_home": {
+            "state": "sunny",
+            "attributes": {"temperature": 22, "temperature_unit": "°C", "area": "Home"},
+        },
+        "media_player.samsung_s95ca_65": {
+            "state": "playing",
+            "attributes": {"media_title": "Volare", "area": "Wohnzimmer"},
+        },
+        "climate.schlafzimmer": {
+            "state": "heat",
+            "attributes": {"current_temperature": 20, "temperature": 21, "area": "Schlafzimmer"},
+        },
+    }
+    for idx, age in enumerate((600, 500, 400, 300, 200), start=1):
+        states[f"binary_sensor.room_{idx}_occupancy"] = _presence_state(
+            f"Room {idx} Occupancy",
+            state="on",
+            area=f"Room {idx}",
+            changed=_iso_changed(now, age),
+        )
+    states["binary_sensor.recent_off_occupancy"] = _presence_state(
+        "Recent Off Occupancy",
+        state="off",
+        area="Hallway",
+        changed=_iso_changed(now, 1),
+    )
+
+    scored = _build_scored_entities(states, event_entity_ids=set(), now=now, limit=10, char_limit=0)
+    ids = [entity.entity_id for entity in scored]
+    uncurated_ids = _uncurated_presence_ids(scored)
+
+    assert len(uncurated_ids) == MAX_PRESENCE_IN_SLICE
+    assert curated_presence in ids
+    assert "binary_sensor.recent_off_occupancy" not in ids
+    assert "binary_sensor.room_1_occupancy" not in ids
+    assert {"weather.forecast_home", "media_player.samsung_s95ca_65", "climate.schlafzimmer"} <= set(ids)
+    assert any("Room 5" in entity.summary_line for entity in scored)
+
+
+def test_scored_entities_empty_presence_leaves_non_presence_summary_unchanged():
+    states = {
+        "weather.forecast_home": {
+            "state": "cloudy",
+            "attributes": {"temperature": 18, "temperature_unit": "°C"},
+        },
+        "media_player.living_room": {
+            "state": "playing",
+            "attributes": {"friendly_name": "Living room speaker", "media_title": "Volare"},
+        },
+    }
+
+    scored = _build_scored_entities(states, event_entity_ids=set(), now=time.time(), limit=5, char_limit=0)
+    summary = _build_budgeted_summary(scored)
+
+    assert _uncurated_presence_ids(scored) == []
+    assert "Meteo" in summary
+    assert "Living room speaker" in summary
+
+
+def test_scored_entities_no_registry_excludes_uncurated_area_less_presence_but_keeps_curated():
+    curated_presence = "binary_sensor.8_stockwerk_group_sensor_wohnzimmer_esszimmer_bar"
+    states = {
+        curated_presence: _presence_state(
+            "Wohnzimmer Esszimmer Bar Occupancy",
+            state="on",
+            area=None,
+        ),
+        "binary_sensor.kitchen_occupancy": _presence_state(
+            "Kitchen Occupancy",
+            state="on",
+            area=None,
+        ),
+        "weather.forecast_home": {
+            "state": "sunny",
+            "attributes": {"temperature": 22, "temperature_unit": "°C"},
+        },
+    }
+
+    scored = _build_scored_entities(states, event_entity_ids=set(), now=time.time(), limit=5, char_limit=0)
+    ids = [entity.entity_id for entity in scored]
+
+    assert curated_presence in ids
+    assert "binary_sensor.kitchen_occupancy" not in ids
+    assert "weather.forecast_home" in ids
+
+
+@pytest.mark.asyncio
+async def test_scored_entities_anti_flood_keeps_relevant_raw_states_intact():
+    all_states = []
+    registry_areas = {}
+    for idx in range(100):
+        entity_id = f"binary_sensor.room_{idx}_occupancy"
+        all_states.append(
+            {
+                "entity_id": entity_id,
+                "state": "on" if idx % 2 == 0 else "off",
+                "attributes": {
+                    "friendly_name": f"Room {idx} Occupancy",
+                    "device_class": "occupancy",
+                },
+                "last_changed": _iso_changed(1_800_000_000.0, idx),
+            }
+        )
+        registry_areas[entity_id] = f"Room {idx}"
+    all_states.append(
+        {
+            "entity_id": "media_player.living_room",
+            "state": "playing",
+            "attributes": {"friendly_name": "Living room speaker", "media_title": "Volare"},
+        }
+    )
+
+    mock_resp = MagicMock()
+    mock_resp.raise_for_status = MagicMock()
+    mock_resp.json.return_value = all_states
+    mock_client = AsyncMock()
+    mock_client.get.return_value = mock_resp
+
+    with (
+        patch("mammamiradio.home.ha_context._get_ha_client", return_value=mock_client),
+        patch(
+            "mammamiradio.home.ha_context._fetch_ha_registry_areas",
+            new_callable=AsyncMock,
+            return_value=registry_areas,
+        ),
+        patch("mammamiradio.home.ha_context.fetch_weather_forecast", new_callable=AsyncMock, return_value=""),
+        patch("mammamiradio.home.ha_context._ha_cache", None),
+    ):
+        result = await fetch_home_context("http://ha:8123", "token", poll_interval=0.0, _cache=None)
+
+    scored_presence = _uncurated_presence_ids(result.scored)
+    relevant_presence = [entity_id for entity_id in result.raw_states if entity_id.startswith("binary_sensor.room_")]
+
+    assert len(scored_presence) == MAX_PRESENCE_IN_SLICE
+    assert "media_player.living_room" in [entity.entity_id for entity in result.scored]
+    assert len(relevant_presence) == 100
+
+
+def test_scored_entities_excludes_area_less_aggregate_presence_from_slice():
+    now = time.time()
+    states = {
+        "binary_sensor.magic_areas_global_presence": _presence_state(
+            "Whole Home Occupancy",
+            state="on",
+            area=None,
+            changed=_iso_changed(now, 1),
+        ),
+        "binary_sensor.kitchen_occupancy": _presence_state(
+            "Kitchen Occupancy",
+            state="on",
+            area="Kitchen",
+            changed=_iso_changed(now, 60),
+        ),
+        "light.kitchen": {"state": "on", "attributes": {"friendly_name": "Kitchen light"}},
+    }
+
+    scored = _build_scored_entities(states, event_entity_ids=set(), now=now, limit=5, char_limit=0)
+    ids = [entity.entity_id for entity in scored]
+
+    assert "binary_sensor.magic_areas_global_presence" not in ids
+    assert "binary_sensor.kitchen_occupancy" in ids
+    assert "light.kitchen" in ids
+
+
+def test_presence_slice_privacy_invariant_keeps_device_trackers_denied():
+    hits: dict[str, int] = {}
+    tracker = {
+        "state": "home",
+        "attributes": {
+            "friendly_name": "Florian iPhone",
+            "latitude": 52.5,
+            "longitude": 13.4,
+        },
+    }
+
+    assert _filter_state("device_tracker.florian_iphone", tracker, hits) is None
+    assert hits["privacy:device_tracker"] == 1
+
+    scored = _build_scored_entities(
+        {
+            "binary_sensor.office_occupancy": _presence_state(
+                "Office Occupancy",
+                state="on",
+                area="Office",
+            )
+        },
+        event_entity_ids=set(),
+        now=time.time(),
+        limit=5,
+        char_limit=0,
+    )
+    summary = _build_budgeted_summary(scored)
+    assert "Florian" not in summary
+    assert "device_tracker" not in summary
 
 
 def test_filter_state_drops_text_helper_domains():
@@ -1634,6 +1875,193 @@ async def test_push_state_to_ha_normal(reset_ha_push_debounce):
 
 
 @pytest.mark.asyncio
+async def test_push_state_to_ha_logs_typed_error_and_retries_on_transient(reset_ha_push_debounce, caplog):
+    """A transient network error logs the exception TYPE + repr (never blank) and
+    is retried exactly once per entity (4 entities x 2 attempts = 8 POSTs)."""
+    import logging
+
+    import httpx
+
+    mock_client = AsyncMock()
+    mock_client.post.side_effect = httpx.ReadTimeout("timed out")
+
+    with (
+        patch("mammamiradio.home.ha_context._get_ha_client", return_value=mock_client),
+        caplog.at_level(logging.WARNING, logger="mammamiradio.home.ha_context"),
+    ):
+        await push_state_to_ha(
+            ha_url="http://ha.local:8123",
+            ha_token="test-token",
+            now_streaming={"type": "music", "label": "Volare", "metadata": {"title": "Volare"}},
+            current_track=None,
+            listeners_active=1,
+            session_stopped=False,
+        )
+
+    # 4 entities, one bounded retry each → 8 POST attempts.
+    assert mock_client.post.call_count == 8
+    text = caplog.text
+    assert "after retry" in text
+    assert "ReadTimeout" in text  # typed, never the old blank string
+    assert "HA push failed for" in text
+
+
+@pytest.mark.asyncio
+async def test_push_state_to_ha_logs_http_body_on_4xx_without_retry(reset_ha_push_debounce, caplog):
+    """A 4xx response logs the status AND the body, and is NOT retried."""
+    import logging
+
+    mock_resp = MagicMock(status_code=401)
+    mock_resp.text = "401: Unauthorized"
+    mock_client = AsyncMock()
+    mock_client.post.return_value = mock_resp
+
+    with (
+        patch("mammamiradio.home.ha_context._get_ha_client", return_value=mock_client),
+        caplog.at_level(logging.WARNING, logger="mammamiradio.home.ha_context"),
+    ):
+        await push_state_to_ha(
+            ha_url="http://ha.local:8123",
+            ha_token="test-token",
+            now_streaming={"type": "music", "label": "Volare", "metadata": {"title": "Volare"}},
+            current_track=None,
+            listeners_active=1,
+            session_stopped=False,
+        )
+
+    # 4 entities, no retry on HTTP errors → exactly 4 POSTs.
+    assert mock_client.post.call_count == 4
+    assert "HTTP 401" in caplog.text
+    assert "Unauthorized" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_push_state_to_ha_retry_then_success_is_silent(reset_ha_push_debounce, caplog):
+    """A transient failure followed by success on retry logs nothing for that entity."""
+    import logging
+
+    import httpx
+
+    ok = MagicMock(status_code=200)
+    mock_client = AsyncMock()
+    # Every entity: first attempt times out, second attempt succeeds.
+    mock_client.post.side_effect = [httpx.ConnectError("boom"), ok] * 4
+
+    with (
+        patch("mammamiradio.home.ha_context._get_ha_client", return_value=mock_client),
+        caplog.at_level(logging.WARNING, logger="mammamiradio.home.ha_context"),
+    ):
+        await push_state_to_ha(
+            ha_url="http://ha.local:8123",
+            ha_token="test-token",
+            now_streaming={"type": "music", "label": "Volare", "metadata": {"title": "Volare"}},
+            current_track=None,
+            listeners_active=1,
+            session_stopped=False,
+        )
+
+    assert mock_client.post.call_count == 8  # 4 entities x (fail + succeed)
+    assert "HA push failed" not in caplog.text
+
+
+def _mp_attrs(mock_client):
+    mp_call = next(c for c in mock_client.post.call_args_list if "media_player" in c.args[0])
+    return mp_call.kwargs["json"]["attributes"]
+
+
+@pytest.mark.asyncio
+async def test_push_state_to_ha_sets_entity_picture_for_http_album_art(reset_ha_push_debounce):
+    """NORMAL: an http(s) album_art surfaces as entity_picture; inert attrs stay off."""
+    mock_client = AsyncMock()
+    mock_client.post.return_value = MagicMock(status_code=200)
+    with patch("mammamiradio.home.ha_context._get_ha_client", return_value=mock_client):
+        await push_state_to_ha(
+            ha_url="http://ha.local:8123",
+            ha_token="t",
+            now_streaming={
+                "type": "music",
+                "label": "Volare",
+                "started": time.time() - 5,
+                "metadata": {"title": "Volare", "album_art": "https://x/600x600bb.jpg"},
+            },
+            current_track=None,
+            listeners_active=1,
+            session_stopped=False,
+        )
+    attrs = _mp_attrs(mock_client)
+    assert attrs["entity_picture"] == "https://x/600x600bb.jpg"
+    # The frontend reads entity_picture; these are inert for a synthetic REST entity.
+    assert "media_image_url" not in attrs
+    assert "media_image_remotely_accessible" not in attrs
+
+
+@pytest.mark.asyncio
+async def test_push_state_to_ha_no_entity_picture_when_album_art_missing(reset_ha_push_debounce):
+    """EMPTY: no album_art → entity_picture unset (HA shows its default icon, no broken tile)."""
+    mock_client = AsyncMock()
+    mock_client.post.return_value = MagicMock(status_code=200)
+    with patch("mammamiradio.home.ha_context._get_ha_client", return_value=mock_client):
+        await push_state_to_ha(
+            ha_url="http://ha.local:8123",
+            ha_token="t",
+            now_streaming={"type": "music", "label": "Song", "started": time.time(), "metadata": {}},
+            current_track=None,
+            listeners_active=0,
+            session_stopped=False,
+        )
+    assert "entity_picture" not in _mp_attrs(mock_client)
+
+
+@pytest.mark.asyncio
+async def test_push_state_to_ha_ignores_non_http_album_art(reset_ha_push_debounce):
+    """A relative/local album_art is never used (HA would resolve it against its own origin)."""
+    mock_client = AsyncMock()
+    mock_client.post.return_value = MagicMock(status_code=200)
+    with patch("mammamiradio.home.ha_context._get_ha_client", return_value=mock_client):
+        await push_state_to_ha(
+            ha_url="http://ha.local:8123",
+            ha_token="t",
+            now_streaming={
+                "type": "music",
+                "label": "Song",
+                "started": time.time(),
+                "metadata": {"album_art": "/artwork/station.svg"},
+            },
+            current_track=None,
+            listeners_active=0,
+            session_stopped=False,
+        )
+    assert "entity_picture" not in _mp_attrs(mock_client)
+
+
+@pytest.mark.asyncio
+async def test_push_state_to_ha_stopped_has_no_entity_picture(reset_ha_push_debounce):
+    """POST-RESTART: a stopped session never carries artwork and stays idle/off."""
+    mock_client = AsyncMock()
+    mock_client.post.return_value = MagicMock(status_code=200)
+    with patch("mammamiradio.home.ha_context._get_ha_client", return_value=mock_client):
+        await push_state_to_ha(
+            ha_url="http://ha.local:8123",
+            ha_token="t",
+            now_streaming={
+                "type": "music",
+                "label": "Song",
+                "started": time.time(),
+                "metadata": {"album_art": "https://x/600x600bb.jpg"},
+            },
+            current_track=None,
+            listeners_active=0,
+            session_stopped=True,
+        )
+    attrs = _mp_attrs(mock_client)
+    assert "entity_picture" not in attrs
+    # Existing contract preserved: stopped session is not "playing" and has no position.
+    mp_call = next(c for c in mock_client.post.call_args_list if "media_player" in c.args[0])
+    assert mp_call.kwargs["json"]["state"] == "idle"
+    assert "media_position" not in attrs
+
+
+@pytest.mark.asyncio
 async def test_push_state_to_ha_media_position_floored_at_zero(reset_ha_push_debounce):
     """media_position must never be negative even if started is slightly in the future."""
     mock_client = AsyncMock()
@@ -1847,13 +2275,12 @@ async def test_push_state_to_ha_floors_blank_station_name(reset_ha_push_debounce
 
 @pytest.mark.asyncio
 async def test_push_state_to_ha_ha_unreachable_continues(reset_ha_push_debounce):
-    """If first POST raises ConnectError, warning is logged and remaining 3 POSTs still fire."""
-    call_count = 0
+    """A persistently unreachable entity is retried once, then logged with the typed
+    'after retry' format; the other 3 entities still POST successfully."""
 
     async def _post_side_effect(*args, **kwargs):
-        nonlocal call_count
-        call_count += 1
-        if call_count == 1:
+        url = args[0] if args else kwargs.get("url", "")
+        if "media_player" in url:
             raise httpx.ConnectError("unreachable")
         return MagicMock(status_code=200)
 
@@ -1873,21 +2300,23 @@ async def test_push_state_to_ha_ha_unreachable_continues(reset_ha_push_debounce)
             session_stopped=False,
         )
 
-    assert call_count == 4
+    # media_player retried once (2 attempts) + 3 healthy entities = 5 POSTs.
+    assert mock_client.post.call_count == 5
     mock_logger.warning.assert_called_once()
-    assert "media_player.mammamiradio" in mock_logger.warning.call_args.args[1]
+    assert mock_logger.warning.call_args.args[1] == "media_player.mammamiradio"
+    assert "after retry" in mock_logger.warning.call_args.args[0]
 
 
 @pytest.mark.asyncio
 async def test_push_state_to_ha_http_error_warns_and_continues(reset_ha_push_debounce):
-    """HTTP 4xx/5xx responses are logged per entity without aborting the batch."""
+    """HTTP 4xx/5xx responses are logged per entity (with body slot) and NOT retried."""
+
+    async def _post_side_effect(*args, **kwargs):
+        url = args[0] if args else kwargs.get("url", "")
+        return MagicMock(status_code=503 if "segment_type" in url else 200)
+
     mock_client = AsyncMock()
-    mock_client.post.side_effect = [
-        MagicMock(status_code=200),
-        MagicMock(status_code=503),
-        MagicMock(status_code=200),
-        MagicMock(status_code=200),
-    ]
+    mock_client.post.side_effect = _post_side_effect
 
     with (
         patch("mammamiradio.home.ha_context._get_ha_client", return_value=mock_client),
@@ -1902,11 +2331,13 @@ async def test_push_state_to_ha_http_error_warns_and_continues(reset_ha_push_deb
             session_stopped=False,
         )
 
+    # HTTP errors are not retried → exactly 4 POSTs.
     assert mock_client.post.call_count == 4
     mock_logger.warning.assert_called_once_with(
-        "HA push failed for %s: HTTP %d",
+        "HA push failed for %s: HTTP %d%s",
         "sensor.mammamiradio_segment_type",
         503,
+        "",
     )
 
 
@@ -2116,13 +2547,11 @@ async def test_push_state_to_ha_trailing_slash(reset_ha_push_debounce):
 
 @pytest.mark.asyncio
 async def test_push_state_to_ha_partial_failure_continues(reset_ha_push_debounce):
-    """If second POST times out, entities 3 and 4 still POST successfully."""
-    call_count = 0
+    """A timing-out entity is retried once, then logged; the others still POST."""
 
     async def _post_side_effect(*args, **kwargs):
-        nonlocal call_count
-        call_count += 1
-        if call_count == 2:
+        url = args[0] if args else kwargs.get("url", "")
+        if "segment_type" in url:
             raise httpx.TimeoutException("timeout")
         return MagicMock(status_code=200)
 
@@ -2142,10 +2571,11 @@ async def test_push_state_to_ha_partial_failure_continues(reset_ha_push_debounce
             session_stopped=False,
         )
 
-    assert call_count == 4  # all 4 attempted despite POST 2 failing
+    # segment_type retried once (2 attempts) + 3 healthy entities = 5 POSTs.
+    assert mock_client.post.call_count == 5
     mock_logger.warning.assert_called_once()
-    # The entity that failed (index 1 = sensor.mammamiradio_segment_type) is named in the warning
-    assert "sensor.mammamiradio_segment_type" in mock_logger.warning.call_args.args[1]
+    assert mock_logger.warning.call_args.args[1] == "sensor.mammamiradio_segment_type"
+    assert "after retry" in mock_logger.warning.call_args.args[0]
 
 
 # ---------------------------------------------------------------------------

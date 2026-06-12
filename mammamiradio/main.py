@@ -94,6 +94,19 @@ async def startup():
     config = load_config()
     logger.info("Station: %s (%s)", config.station.name, config.station.language)
 
+    # One integrated-LUFS target across every segment type: configure the
+    # normalizer's reconciliation pass from radio.toml [audio]. Music, dialogue,
+    # bedded banter and ads then all land at the same perceived level.
+    from mammamiradio.audio.normalizer import configure_loudness_reconcile
+
+    configure_loudness_reconcile(
+        config.audio.lufs_target,
+        config.audio.ad_lufs_target,
+        sample_rate=config.audio.sample_rate,
+        channels=config.audio.channels,
+        bitrate=config.audio.bitrate,
+    )
+
     config.tmp_dir.mkdir(parents=True, exist_ok=True)
     config.cache_dir.mkdir(parents=True, exist_ok=True)
 

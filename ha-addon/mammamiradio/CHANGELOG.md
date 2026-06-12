@@ -2,7 +2,29 @@
 
 ## Unreleased
 
+### Fixed
+
+- **Direct `/admin` access from your home network now works.** If you open `http://<pi-ip>:8000/admin` in a browser on your local Wi-Fi, the admin panel loads without needing a token. If you configured a custom `admin_token` in the add-on options, that token is still enforced. From outside your home network, `/admin` returns 403.
+
 ### Added
+
+- **Admin playlist and search pagination** — Large rotations no longer over-render in the Producer Desk. Status, playlist, and search APIs expose bounded windows with load-more metadata, while artwork from Apple charts, web search results, and listener-request downloads is preserved through queueing.
+
+- **Real album covers on the now-playing screen.** When a song is on, the phone
+  lock screen, CarPlay, Control Center, and the Home Assistant media card now show
+  the real album artwork instead of the station logo, and it follows each track.
+  Chart songs carry their cover from the chart feed; searched/added and listener-
+  requested songs get their cover looked up automatically. No cover found falls back
+  cleanly to the station logo — never a broken image.
+
+- **AI quality dial replaces the model dropdown.** The old "AI Model" option is now
+  a Premium / Balanced / Economy quality dial. Pick the experience you want and the
+  station chooses the right model for each job automatically — no model names to
+  track, and it keeps working when new models ship. Existing add-ons update with no
+  change in behavior: if `/data/options.json` still contains the removed
+  `claude_model` option, it is honored as the legacy fast-model override until you
+  save the new quality profile. The dial is also in the admin Engine Room and
+  switches live without a restart.
 
 - **Share a whole moment, not just thirty seconds.** The Share button now always
   copies the clip link to your clipboard (alongside the native share sheet). Clips
@@ -57,6 +79,20 @@
 - **Sports flashes are clearer and less shouty** — Sports news now uses a steadier host selection path, asks for informed radio-desk updates instead of maximum-excitement commentary, and no longer adds a dedicated sports TTS speed/pitch spike.
 
 ### Fixed
+
+- **The Admin Token help text now says what the token actually does.** The Admin Token field used to claim it was needed for the Home Assistant media player — it isn't; the media player works whether or not you set it. The description now explains the token covers the admin panel and any automations that call the station directly, so a blank token no longer reads as riskier than it is.
+
+- **The hosts sound right now.** Marco reads clearly instead of mumbling, and Giulia sounds like the 80-year-old Nonna she is written as instead of a thirty-something. Each host's voice can now be dialed in independently in the station config (a per-host `voice_settings`), so tuning one host never disturbs the other.
+
+- **Admin load-more state stays accurate after playlist edits.** The Producer Desk now invalidates cached playlist tails when the rotation changes, hides the load-more button once all loaded rows reach the total, resets load-more buttons after network errors, and skips repeated yt-dlp lookups after web search results are exhausted.
+
+- **Festival Mode no longer leaves ghost tracks in "Up Next".** Switching Festival Mode on now clears the upcoming list at the same instant it clears the queued audio, so the panel always matches what is about to play. Every queue-clearing action now runs through one path, so the list and the audio can't drift apart again.
+
+- **Home Assistant updates now say why they fail, and shrug off a brief hiccup.** When the station can't send its now-playing status to Home Assistant, the add-on log names the real reason instead of an empty line, and the station quietly retries once after a short network blip. Listeners never notice; an operator reading the log finally gets a straight answer.
+
+- **Engine Room track count now reflects the full rotation.** The playlist size stat shows the actual number of tracks in the rotation rather than the most-recently-fetched page size.
+
+- **Loaded playlist pages no longer snap back on refresh.** Tracks added via "Load more" stay visible across status polls instead of collapsing back to the first page on the next cycle.
 
 - **Admin programme durations are now truthful.** Status payloads expose real current segment duration/progress and stream-log durations, and the admin/live/listener UIs no longer invent music, banter, or ad durations when metadata is missing.
 

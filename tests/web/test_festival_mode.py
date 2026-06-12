@@ -120,6 +120,36 @@ async def test_post_party_enable_sets_festival_mode_purges_queue_and_arms_banter
 
 
 @pytest.mark.asyncio
+async def test_post_party_enable_clears_shadow_queue(tmp_path, monkeypatch):
+    """Regression: enabling Festival Mode must clear the UI shadow queue, not just
+    the real audio queue. The enable path drained the real queue but forgot the
+    shadow, leaving the 'Up Next' panel showing segments that no longer existed
+    (the queue-shadow drift seen when Festival Mode was toggled mid-stream)."""
+    app = _make_test_app()
+    monkeypatch.delenv("MAMMAMIRADIO_FESTIVAL_MODE", raising=False)
+    state = app.state.station_state
+    # Populate BOTH the real queue and the shadow projection, as during live playback.
+    for idx in range(3):
+        f = tmp_path / f"old-{idx}.mp3"
+        f.write_bytes(b"old")
+        app.state.queue.put_nowait(Segment(type=SegmentType.MUSIC, path=f, ephemeral=True))
+        state.queued_segments.append({"type": "music", "label": f"Old {idx}"})
+    assert len(state.queued_segments) == 3
+
+    with patch("mammamiradio.web.streamer._save_dotenv"):
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app, client=("127.0.0.1", 12345)),
+            base_url="http://testserver",
+        ) as client:
+            resp = await client.post("/api/party", json={"action": "enable", "mode": "festival"})
+
+    assert resp.status_code == 200
+    # Both views purged together — no stale "Up Next" rows survive the toggle.
+    assert app.state.queue.empty()
+    assert state.queued_segments == []
+
+
+@pytest.mark.asyncio
 async def test_post_party_disable_clears_festival_mode_without_purging_queue(tmp_path, monkeypatch):
     app = _make_test_app()
     monkeypatch.setenv("MAMMAMIRADIO_FESTIVAL_MODE", "true")

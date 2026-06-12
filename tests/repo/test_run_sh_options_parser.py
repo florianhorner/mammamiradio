@@ -150,7 +150,7 @@ def test_parser_exports_all_supported_keys():
         "azure_speech_region": "westeurope",
         "elevenlabs_api_key": "el-key",
         "station_name": "Test Station",
-        "claude_model": "claude-sonnet-4-6",
+        "quality_profile": "premium",
         "admin_token": "tok123",
         "enable_home_assistant": True,
         "jamendo_client_id": "abc123",
@@ -164,10 +164,37 @@ def test_parser_exports_all_supported_keys():
     assert exports["AZURE_SPEECH_REGION"] == "westeurope"
     assert exports["ELEVENLABS_API_KEY"] == "el-key"
     assert exports["STATION_NAME"] == "Test Station"
-    assert exports["CLAUDE_MODEL"] == "claude-sonnet-4-6"
+    assert exports["MAMMAMIRADIO_QUALITY"] == "premium"
     assert exports["ADMIN_TOKEN"] == "tok123"
     assert exports["HA_ENABLED"] == "true"
     assert exports["JAMENDO_CLIENT_ID"] == "abc123"
+
+
+def test_parser_quality_profile_defaults_to_balanced():
+    """Missing quality_profile (e.g. upgrade from the old claude_model dropdown)
+    maps to MAMMAMIRADIO_QUALITY=balanced — zero behavior change on update."""
+    rc, stdout, _ = _run_parser({"station_name": "X"})
+    assert rc == 0
+    exports = _parse_exports(stdout)
+    assert exports["MAMMAMIRADIO_QUALITY"] == "balanced"
+
+
+def test_parser_preserves_legacy_claude_model_when_quality_profile_missing():
+    """Existing add-ons can carry claude_model in options.json after the schema
+    migrates; run.sh must keep it as the legacy fast-model override."""
+    rc, stdout, _ = _run_parser({"claude_model": "claude-sonnet-4-6"})
+    assert rc == 0
+    exports = _parse_exports(stdout)
+    assert exports["MAMMAMIRADIO_QUALITY"] == "balanced"
+    assert exports["CLAUDE_MODEL"] == "claude-sonnet-4-6"
+
+
+def test_parser_quality_profile_wins_over_legacy_claude_model():
+    rc, stdout, _ = _run_parser({"quality_profile": "premium", "claude_model": "claude-sonnet-4-6"})
+    assert rc == 0
+    exports = _parse_exports(stdout)
+    assert exports["MAMMAMIRADIO_QUALITY"] == "premium"
+    assert "CLAUDE_MODEL" not in exports
 
 
 def test_parser_fails_on_corrupt_json():

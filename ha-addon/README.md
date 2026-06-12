@@ -35,7 +35,7 @@ After installing, go to the add-on's **Configuration** tab:
 - **ElevenLabs API Key** (optional): Enables custom ElevenLabs character voices when `radio.toml` uses `engine = "elevenlabs"`. Missing or failing ElevenLabs voices fall back to Edge TTS.
 - **Claude Model**: Pick between Haiku, Sonnet, and Opus Claude models (default: Haiku 4.5).
 - **Enable Home Assistant**: Toggle ambient home context in hosts' banter (default: on).
-- **Admin Token** (optional): Shared secret for the admin API. If blank, `run.sh` auto-generates one at startup.
+- **Admin Token** (optional): Shared secret for the admin API. If blank, the add-on trusts your local network — any device on your LAN can open the admin panel (writes stay protected against cross-site requests). Set a value to require the token even on your LAN.
 - **Super Italian Mode**: Keep listener UI and hosts Italian-first (default: on).
 - **Chaos Mode**: Restore host-chaos mode across restarts when enabled.
 - **Festival Mode**: Restore theatrical music-competition mode across restarts when enabled.

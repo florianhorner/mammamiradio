@@ -25,7 +25,7 @@ from typing import cast
 import anthropic
 
 from mammamiradio.audio.normalizer import AVAILABLE_SFX_TYPES
-from mammamiradio.core.config import StationConfig
+from mammamiradio.core.config import StationConfig, resolve_model
 from mammamiradio.core.models import (
     RECENTLY_CONSUMED_RETENTION_SECONDS,
     ChaosSubtype,
@@ -383,6 +383,7 @@ async def _generate_json_response(
                         )
                         _anthropic_block_expired_logged = True
                     _t_anthropic = time.perf_counter()
+                    _anthropic_stop_reason: str | None = None
                     try:
                         client = _get_client(config.anthropic_api_key)
                         resp = await asyncio.wait_for(
@@ -394,6 +395,10 @@ async def _generate_json_response(
                             ),
                             timeout=45.0,
                         )
+                        # Read stop_reason before indexing content: a max_tokens cut can
+                        # return an empty content list, which would raise IndexError below
+                        # and lose the truncation signal if captured after.
+                        _anthropic_stop_reason = getattr(resp, "stop_reason", None)
                         _anthropic_in = _anthropic_out = 0
                         if hasattr(resp, "usage") and resp.usage:
                             state.api_calls += 1
@@ -401,6 +406,9 @@ async def _generate_json_response(
                             _anthropic_out = resp.usage.output_tokens
                             state.api_input_tokens += _anthropic_in
                             state.api_output_tokens += _anthropic_out
+                            _bucket = state.api_tokens_by_model.setdefault(model, {"input": 0, "output": 0})
+                            _bucket["input"] += _anthropic_in
+                            _bucket["output"] += _anthropic_out
                         raw = resp.content[0].text.strip()  # type: ignore[union-attr]
                         state.anthropic_disabled_until = 0.0
                         state.anthropic_last_error = ""
@@ -450,6 +458,16 @@ async def _generate_json_response(
                         )
                         return parsed
                     except Exception as exc:
+                        # stop_reason="max_tokens" means the model was cut off at the token
+                        # budget. That truncation surfaces here two ways: partial JSON that
+                        # fails to parse (JSONDecodeError) or an empty content list that
+                        # fails to index (IndexError). Label both honestly so the ledger
+                        # measures truncation frequency instead of hiding it behind a
+                        # generic exception name. Behaviour is unchanged — we still fall
+                        # back to OpenAI; only the telemetry/log reason differs.
+                        _max_tokens_truncated = _anthropic_stop_reason == "max_tokens" and isinstance(
+                            exc, (json.JSONDecodeError, IndexError)
+                        )
                         _emit_llm_call(
                             state=state,
                             config=config,
@@ -461,7 +479,11 @@ async def _generate_json_response(
                             prompt=prompt,
                             raw_output=None,
                             ok=False,
-                            fallback_reason=f"anthropic_{type(exc).__name__}",
+                            fallback_reason=(
+                                "anthropic_max_tokens_truncated"
+                                if _max_tokens_truncated
+                                else f"anthropic_{type(exc).__name__}"
+                            ),
                             input_tokens=0,
                             output_tokens=0,
                             duration_ms=int((time.perf_counter() - _t_anthropic) * 1000),
@@ -511,14 +533,24 @@ async def _generate_json_response(
                         else:
                             if not config.openai_api_key:
                                 raise
-                            fallback_reason = "anthropic_exception"
-                            logger.warning("Anthropic %s, falling back to OpenAI: %s", type(exc).__name__, exc)
+                            if _max_tokens_truncated:
+                                fallback_reason = "anthropic_max_tokens_truncated"
+                                logger.warning(
+                                    "Anthropic response truncated at max_tokens (%s), falling back to OpenAI: %s",
+                                    model,
+                                    exc,
+                                )
+                            else:
+                                fallback_reason = "anthropic_exception"
+                                logger.warning("Anthropic %s, falling back to OpenAI: %s", type(exc).__name__, exc)
 
     openai_key = config.openai_api_key or os.getenv("OPENAI_API_KEY", "")
     if not openai_key:
         raise RuntimeError("No LLM API key configured for script generation")
 
-    openai_model = config.audio.openai_script_model
+    # Resolve the OpenAI model for THIS task's role (not one fixed fallback model),
+    # so a transition falls back to the fast OpenAI model and banter to the creative one.
+    openai_model = resolve_model(config.models, caller, "openai")
     client = _get_openai_client(openai_key)
     loop = asyncio.get_running_loop()
 
@@ -544,6 +576,9 @@ async def _generate_json_response(
         completion_tokens = getattr(resp.usage, "completion_tokens", 0)
         state.api_input_tokens += prompt_tokens
         state.api_output_tokens += completion_tokens
+        _bucket = state.api_tokens_by_model.setdefault(openai_model, {"input": 0, "output": 0})
+        _bucket["input"] += prompt_tokens
+        _bucket["output"] += completion_tokens
     raw = (resp.choices[0].message.content or "").strip()  # type: ignore[attr-defined]
     try:
         parsed = json.loads(_strip_fences(raw))
@@ -1412,7 +1447,7 @@ Return JSON:
             prompt=prompt,
             config=config,
             state=state,
-            model=config.audio.claude_creative_model,
+            model=resolve_model(config.models, "banter", "anthropic"),
             max_tokens=1200,
             caller="banter",
         )
@@ -1616,7 +1651,7 @@ Return JSON:
             prompt=prompt,
             config=config,
             state=state,
-            model=config.audio.claude_creative_model,
+            model=resolve_model(config.models, "news_flash", "anthropic"),
             max_tokens=300,
             caller="news_flash",
         )
@@ -1729,7 +1764,7 @@ Return JSON:
             prompt=prompt,
             config=config,
             state=state,
-            model=config.audio.claude_model,
+            model=resolve_model(config.models, "transition", "anthropic"),
             max_tokens=100,
             caller="transition",
             role=role,
@@ -1851,7 +1886,7 @@ Recently played music: {recent_tracks if recent_tracks else "show just started"}
 
 RULES:
 - Absurd but delivered with COMPLETE sincerity. The product may be insane but the pitch is 100% professional.
-- Think Italian TV shopping channel meets GTA radio meets Silvio Berlusconi's fever dream.
+- Think Italian TV shopping channel meets GTA radio meets a faded political showman's fever dream.
 - 15-25 seconds when read aloud. Keep each voice line under 30 words.
 - Follow the ad format rules above. Use the assigned speakers by their role names.
 - Open HARD. The first beat should grab attention immediately.
@@ -1880,7 +1915,7 @@ Return JSON:
             prompt=prompt,
             config=config,
             state=state,
-            model=config.audio.claude_creative_model,
+            model=resolve_model(config.models, "ad", "anthropic"),
             max_tokens=800,
             caller="ad",
             role="ad_spot",

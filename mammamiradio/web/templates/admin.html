@@ -551,6 +551,10 @@ body[data-stopped="true"] .sidebar-live-line { color: var(--cream-dk); }
 .sr-add.external:hover { background: rgba(37,99,235,0.22); }
 .sr-add.loading { opacity: 0.5; pointer-events: none; }
 .sr-label { font-size: 10px; color: rgba(245,237,216,0.4); margin: 8px 0 4px; letter-spacing: 0.08em; text-transform: uppercase; font-weight: 600; }
+.load-more-row { display: flex; justify-content: center; padding: 10px 0 4px; }
+.load-more-btn { font-size: 11px; font-weight: 700; padding: 5px 12px; border-radius: 5px; background: rgba(245,237,216,0.06); color: rgba(245,237,216,0.72); border: 1px solid rgba(245,237,216,0.14); cursor: pointer; }
+.load-more-btn:hover { color: var(--cream); border-color: rgba(245,237,216,0.3); }
+.load-more-btn.loading { opacity: 0.5; pointer-events: none; }
 
 .pl-row { display: flex; align-items: center; gap: 8px; padding: 6px 0; border-bottom: 1px solid rgba(245,237,216,0.06); font-size: 12px; transition: background 0.15s; }
 .pl-row:hover { background: rgba(245,237,216,0.03); border-radius: 4px; }
@@ -565,7 +569,8 @@ body[data-stopped="true"] .sidebar-live-line { color: var(--cream-dk); }
 .pl-n { font-size: 10px; color: rgba(245,237,216,0.3); width: 22px; text-align: right; }
 .pl-t { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pl-art { width: 36px; height: 36px; border-radius: 3px; object-fit: cover; flex-shrink: 0; border: 1px solid rgba(244,208,72,0.2); }
-.pl-art-empty { width: 36px; height: 36px; border-radius: 3px; background: rgba(245,237,216,0.04); border: 1px solid rgba(245,237,216,0.08); flex-shrink: 0; }
+.pl-art-empty { width: 18px; height: 18px; border-radius: 3px; background: rgba(245,237,216,0.05); border: 1px solid rgba(245,237,216,0.12); flex-shrink: 0; position: relative; }
+.pl-art-empty::before { content: ""; position: absolute; left: 4px; right: 4px; top: 8px; border-top: 1px solid rgba(245,237,216,0.28); transform: rotate(-35deg); }
 .pl-chips { display: flex; gap: 4px; align-items: center; margin-left: auto; }
 .pl-era { font-size: 9px; font-weight: 700; font-family: var(--font-mono); color: var(--sun); background: rgba(244,208,72,0.12); border: 1px solid rgba(244,208,72,0.25); border-radius: 3px; padding: 1px 4px; white-space: nowrap; }
 .pl-src { font-size: 9px; padding: 1px 5px; border-radius: 3px; font-weight: 600; white-space: nowrap; }
@@ -1415,6 +1420,18 @@ body[data-stopped="true"] .a-station-card .dot.on { animation-play-state: paused
   color: var(--sun);
   font-weight: 600;
 }
+/* Session output: segments is the headline (larger, cream), cost is the
+   secondary muted line. Two separate single-pair rows — never a collapsed row. */
+.on-air-output-line b#sidebarSegments {
+  font-size: 18px;
+  color: var(--cream);
+  line-height: 1.1;
+}
+.on-air-cost-line b#sidebarCost {
+  font-size: 11px;
+  color: var(--muted);
+  font-weight: 500;
+}
 .on-air-buttons {
   display: flex;
   gap: 8px;
@@ -1703,8 +1720,11 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
             <span class="label on" id="onAirBadge">In onda</span>
             <span id="stationSignal">Live signal</span>
           </div>
+          <div class="on-air-cost-line on-air-output-line">
+            <span class="lbl">Produced · Session</span><b id="sidebarSegments">—</b>
+          </div>
           <div class="on-air-cost-line">
-            <span class="lbl">AI cost · 24h</span><b id="sidebarCost">—</b>
+            <span class="lbl">Session cost</span><b id="sidebarCost">—</b>
           </div>
           <div class="on-air-buttons">
             <button type="button" class="btn-icon" title="Next track" onclick="doSkip(this)">
@@ -1736,7 +1756,7 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
       </div>
       <span class="mode-chip" id="modeChip" style="display:none" aria-live="polite"></span>
       <div class="topbar-cost">
-        <span class="lbl">AI cost · 24h</span>
+        <span class="lbl">Session cost</span>
         <b id="topBarCost">—</b>
       </div>
     </div>
@@ -1750,6 +1770,7 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
         </div>
         <div class="programme-toolbar">
           <span class="filter-count" id="programmeCount"></span>
+          <span class="filter-count" id="bufferedReady" title="Audio rendered and ready to air"></span>
           <div class="filter-pills">
             <button type="button" class="filter-pill active" data-filter="all" onclick="setProgrammeFilter('all',this)">All</button>
             <button type="button" class="filter-pill" data-filter="music" onclick="setProgrammeFilter('music',this)">Music</button>
@@ -1788,6 +1809,7 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
           <button type="button" class="btn btn-chip" onclick="enrichPlaylistSource('classic_70s',this)">Anni '70</button>
           <button type="button" class="btn btn-chip" onclick="enrichPlaylistSource('classic_80s',this)">Anni '80</button>
           <button type="button" class="btn btn-chip" onclick="enrichPlaylistSource('classic_90s',this)">Anni '90</button>
+          <button type="button" class="btn btn-chip" onclick="shufflePlaylist(this)" title="Shuffle rotation"><svg width="12" height="12" style="vertical-align:-1px"><use href="#ic-shuffle"/></svg> Shuffle</button>
         </div>
         <div class="rotation-sort">order: current rotation</div>
       </div>
@@ -1996,6 +2018,20 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
           </label>
           <div style="margin-top:6px;font-size:12px;line-height:1.8;color:var(--cream-dk)">
             Full Italian mode: hosts speak as an Italian station and the listener page stays in Italian.
+          </div>
+        </div>
+
+        <!-- AI Quality dial (model profile: premium | balanced | economy) -->
+        <div class="card-label">AI Quality</div>
+        <div style="margin-bottom:14px">
+          <select id="qualityProfile" onchange="setQuality(this.value)"
+                  style="width:100%;padding:8px;background:var(--surface);color:var(--cream);border:1px solid var(--line-strong);border-radius:8px;font:inherit">
+            <option value="premium">Premium — best hosts, highest cost</option>
+            <option value="balanced" selected>Balanced — great hosts, sensible cost</option>
+            <option value="economy">Economy — cheapest, lighter hosts</option>
+          </select>
+          <div style="margin-top:6px;font-size:12px;line-height:1.8;color:var(--cream-dk)">
+            Picks the right model per task automatically. Hot-swaps live — the current segment finishes first. No model names to track.
           </div>
         </div>
 
@@ -2519,12 +2555,38 @@ function renderProduction(st){
     const el=p.current.elapsed_sec?`<span class="prod-elapsed">${p.current.elapsed_sec}s</span>`:'';
     rows.push(`<div class="prod-entry">${statusInline('working','',p.current.label)}${badge}<span class="prod-label">${esc(p.current.label)}</span>${el}</div>`);
   }
+  // Operator hit Trigger: acknowledge the accepted-but-not-yet-building moment
+  // so the panel never looks like the click did nothing. Reads operator_force_pending
+  // (set ONLY by /api/trigger), NOT force_pending — so internal forces (the
+  // 60s-silence dead-air rescue, stop/skip/resume) never false-light this row
+  // during an incident. It clears the instant the producer starts building it;
+  // the guard suppresses a duplicate row while that hand-off to "current" settles.
+  const fp=st&&st.operator_force_pending;
+  if(fp&&!(p.current&&segmentTypeKey(p.current.kind)===segmentTypeKey(fp))){
+    const badge=segmentInline(segmentTypeKey(fp));
+    rows.push(`<div class="prod-entry">${statusInline('working','',segmentText(segmentTypeKey(fp)))}${badge}<span class="prod-label">Triggered — building next</span></div>`);
+  }
   (p.recent||[]).forEach(r=>{
     const badge=segmentInline(segmentTypeKey(r.kind||'music'));
     rows.push(`<div class="prod-entry recent">${statusInline(r.ok?'ready':'blocked','',r.label)}${badge}<span class="prod-label">${esc(r.label)}</span></div>`);
   });
   if(rows.length){feed.innerHTML=rows.join('');wrap.style.display='';}
   else{feed.innerHTML='';wrap.style.display='none';}
+}
+
+// Honest airtime-ahead readout: SECONDS of buffered audio, not item count
+// (3 short banters are not 3 songs of runway). Updated every poll so it never
+// goes stale; blank when nothing is queued — never a dead "0s" box.
+function updateBufferedReady(st){
+  const el=document.getElementById('bufferedReady');
+  if(!el)return;
+  const sec=st&&typeof st.buffered_audio_sec==='number'?st.buffered_audio_sec:0;
+  if(!(sec>0)){el.textContent='';return;}
+  // Round to whole seconds BEFORE splitting so a value like 119.6s renders
+  // "~2m00s", never an impossible "~1m60s" (no minute-carry if you round m and s
+  // independently).
+  const total=Math.round(sec),m=Math.floor(total/60),s=total%60;
+  el.textContent='· ~'+(m>0?m+'m'+(s<10?'0':'')+s+'s':s+'s')+' ready';
 }
 
 function renderProgramme(st){
@@ -2894,6 +2956,10 @@ function updateRecent(st){
 
 // ── Playlist ──
 let _plFilter='';
+const PLAYLIST_PAGE_SIZE=80;
+let _plRows=[];
+let _plPage={total:0,offset:0,limit:PLAYLIST_PAGE_SIZE,has_more:false};
+let _plLoadingMore=false;
 function sourceControlVisibility(caps){
   const capabilities=caps?.capabilities||{};
   return {
@@ -2907,6 +2973,13 @@ function updateSourceControls(st,caps){
   const visibility=sourceControlVisibility(caps);
   if(jamBtn)jamBtn.style.display=visibility.jamendo?'':'none';
   if(chartsBtn)chartsBtn.style.display=visibility.charts_reload?'':'none';
+}
+async function shufflePlaylist(el){
+  flash(el);
+  const r=await api('POST','/api/shuffle',{});
+  if(!r.ok){toast('Error: '+(r.error||'unknown'));return;}
+  toast('Playlist shuffled');
+  await refreshFast();
 }
 async function enrichPlaylistSource(kind,el){
   flash(el);
@@ -2937,20 +3010,67 @@ function sourceChip(source){
   const chip=SOURCE_CHIPS[source]||SOURCE_CHIPS.local;
   return `<span class="pl-src ${chip.cls}">${esc(chip.label)}</span>`;
 }
-function updatePl(tracks){
+function updatePl(tracks,page){
   const el=document.getElementById('plBody');const meta=document.getElementById('plMeta');
-  if(!tracks?.length){el.innerHTML='<div class="empty">No tracks</div>';meta.textContent='';return}
-  meta.textContent=tracks.length+' tracce';
-  const s=tracks.slice(0,80);
+  const incoming=tracks||[];
+  const inPage=page||{total:incoming.length,offset:0,limit:incoming.length||PLAYLIST_PAGE_SIZE,has_more:false};
+  const previousRevision=_plPage.revision;
+  const incomingRevision=inPage.revision;
+  // Status polls are capped at server max_limit (200). If we have more rows loaded via
+  // load-more, keep the extra cached rows only while the playlist itself is unchanged.
+  if(incoming.length&&incoming.length<_plRows.length&&inPage.has_more&&incomingRevision!=null&&incomingRevision===previousRevision){
+    _plRows=incoming.concat(_plRows.slice(incoming.length));
+  }else{
+    _plRows=incoming;
+  }
+  const total=Number(inPage.total||_plRows.length);
+  const pageOffset=Number(inPage.offset||0);
+  const loadedEnd=Math.min(pageOffset+_plRows.length,total);
+  _plPage={...inPage,limit:_plRows.length,has_more:loadedEnd<total};
+  if(!_plRows.length){el.innerHTML='<div class="empty">No tracks</div>';meta.textContent='';return}
+  meta.textContent=total>_plRows.length?`${loadedEnd}/${total} tracks`:_plRows.length+' tracks';
   const filter=_plFilter.toLowerCase();
-  const filtered=filter?s.filter(t=>`${t.title} ${t.artist}`.toLowerCase().includes(filter)):s;
-  el.innerHTML=filtered.map((t,i)=>{
-    const idx=filter?tracks.indexOf(t):i;
+  const rows=_plRows.map((t,i)=>({t,idx:(_plPage.offset||0)+i}));
+  const filtered=filter?rows.filter(row=>`${row.t.title} ${row.t.artist}`.toLowerCase().includes(filter)):rows;
+  el.innerHTML=filtered.map(({t,idx})=>{
     const era=eraLabel(t.year);
     const eraPill=era?`<span class="pl-era">${era}</span>`:'';
     return `<div class="pl-row" draggable="true" data-i="${idx}" data-id="${esc(t.spotify_id||t.id||'')}"><span class="pl-grip" title="Drag to reorder" tabindex="0" role="button" aria-label="Drag to reorder"><svg class="grip-dots" viewBox="0 0 10 16" fill="currentColor" aria-hidden="true"><circle cx="3" cy="3" r="1.2"/><circle cx="7" cy="3" r="1.2"/><circle cx="3" cy="8" r="1.2"/><circle cx="7" cy="8" r="1.2"/><circle cx="3" cy="13" r="1.2"/><circle cx="7" cy="13" r="1.2"/></svg></span><span class="pl-n">${idx+1}</span>${trackThumb(t)}<span class="pl-t">${esc(t.display||t.title||'?')}</span><div class="pl-chips">${eraPill}${sourceChip(t.source)}</div><div class="pl-a"><button class="pl-btn" onclick="moveNext(${idx})" aria-label="Move to next">&#9654; Next</button><button class="pl-btn" onclick="removeTr(${idx})" aria-label="Remove from rotation">&#10005;</button></div></div>`;
-  }).join('')+(tracks.length>80?`<div class="empty">+ ${tracks.length-80} more</div>`:'');
+  }).join('')+(!_plFilter&&_plPage.has_more?'<div class="load-more-row"><button type="button" class="load-more-btn" id="plMoreBtn" onclick="loadMorePlaylist()">Load more tracks</button></div>':'');
   initDragDrop();
+}
+async function loadMorePlaylist(){
+  if(_plLoadingMore||!_plPage.has_more)return;
+  _plLoadingMore=true;
+  const btn=document.getElementById('plMoreBtn');
+  if(btn){btn.classList.add('loading');btn.textContent='Loading...';}
+  try{
+    const expectedRevision=_plPage.revision;
+    const offset=(_plPage.offset||0)+_plRows.length;
+    const resp=await fetch(_base+`/api/playlist?offset=${offset}&limit=${PLAYLIST_PAGE_SIZE}`,{headers:H()});
+    if(!resp.ok){console.warn('Playlist load-more failed:',resp.status);return;}
+    const d=await resp.json();
+    const responseRevision=d.revision??expectedRevision;
+    const revisionChanged=expectedRevision!=null&&responseRevision!=null&&responseRevision!==expectedRevision;
+    if(revisionChanged){
+      console.warn('Playlist changed while loading more; refreshing first page.');
+      const fresh=await fetch(_base+`/api/playlist?offset=0&limit=${PLAYLIST_PAGE_SIZE}`,{headers:H()});
+      if(fresh.ok){
+        const first=await fresh.json();
+        updatePl(first.tracks||[],{total:first.total||0,offset:first.offset??0,limit:first.limit??PLAYLIST_PAGE_SIZE,has_more:!!first.has_more,revision:first.revision});
+        return;
+      }
+      updatePl(d.tracks||[],{total:d.total||0,offset:d.offset??offset,limit:d.limit??PLAYLIST_PAGE_SIZE,has_more:!!d.has_more,revision:responseRevision});
+      return;
+    }
+    _plRows=_plRows.concat(d.tracks||[]);
+    updatePl(_plRows,{total:d.total||_plRows.length,offset:_plPage.offset||0,limit:_plRows.length,has_more:!!d.has_more,revision:responseRevision});
+  }catch(e){
+    console.warn('Playlist load-more error:',e);
+  }finally{
+    _plLoadingMore=false;
+    if(btn){btn.classList.remove('loading');btn.textContent='Load more tracks';}
+  }
 }
 function focusPlaylistTrack(index, trackId){
   const rows=[...document.querySelectorAll('.pl-row')];
@@ -2987,31 +3107,76 @@ const si=document.getElementById('searchInput');
 si.addEventListener('keydown',e=>{if(e.key==='Enter')doSearch()});
 si.addEventListener('input',()=>{
   _plFilter=si.value.trim();
-  if(_st.playlist)updatePl(_st.playlist);
+  if(_st.playlist)updatePl(_st.playlist,_st.playlist_page||null);
   clearTimeout(_searchTo);
   if(_plFilter.length>=2)_searchTo=setTimeout(doSearch,400);
   else document.getElementById('searchResults').innerHTML='';
 });
-let _sR=[],_sExt=[];
-async function doSearch(){
+let _sR=[],_sExt=[],_sPage={has_more:false},_sExtPage={has_more:false};
+const SEARCH_PAGE_SIZE=5;
+function renderSearchResults(q){
+  const el=document.getElementById('searchResults');
+  let html='';
+  if(_sR.length){
+    html+='<div class="sr-label">In playlist</div>'+_sR.map((t,i)=>`<div class="sr-row"><span>${esc(t.artist)} — ${esc(t.title)}</span><button class="sr-add" onclick="addTr(${i})">&#9654; Next</button></div>`).join('');
+  }
+  if(_sExt.length){
+    html+='<div class="sr-label" style="margin-top:8px">From the web</div>'+_sExt.map((t,i)=>`<div class="sr-row"><span>${esc(t.artist?t.artist+' — ':'')}${esc(t.title)}</span><button class="sr-add external" id="ext-btn-${i}" onclick="addExternal(${i})">&#8681; Queue</button></div>`).join('');
+  }
+  if(_sPage.has_more||_sExtPage.has_more){
+    html+='<div class="load-more-row"><button type="button" class="load-more-btn" id="searchMoreBtn" onclick="searchMore()">Load more results</button></div>';
+  }
+  if(!html)html=q.length>=2?'<div class="empty">No results</div>':'';
+  el.innerHTML=html;
+}
+async function doSearch(append){
   const q=si.value.trim();if(!q)return;
   const el=document.getElementById('searchResults');
-  el.innerHTML='<div class="sr-label" style="color:rgba(245,237,216,0.25)">Searching…</div>';
+  const isAppend=append===true;
+  const prevR=_sR.slice();
+  const prevExt=_sExt.slice();
+  const prevPage={..._sPage};
+  const prevExtPage={..._sExtPage};
+  if(!isAppend){
+    _sR=[];_sExt=[];_sPage={has_more:false};_sExtPage={has_more:false};
+    el.innerHTML='<div class="sr-label" style="color:rgba(245,237,216,0.25)">Searching...</div>';
+  }
   try{
-    const resp=await fetch(_base+'/api/search?q='+encodeURIComponent(q),{headers:H()});
-    if(!resp.ok){console.warn('Search failed:',resp.status);el.innerHTML='';return}
+    const params=new URLSearchParams({
+      q,
+      offset:String(isAppend?_sR.length:0),
+      limit:String(SEARCH_PAGE_SIZE),
+      external_offset:String(isAppend?_sExt.length:0),
+      external_limit:String(SEARCH_PAGE_SIZE),
+      include_external:String(!isAppend||_sExtPage.has_more),
+    });
+    const resp=await fetch(_base+'/api/search?'+params.toString(),{headers:H()});
+    if(!resp.ok){
+      console.warn('Search failed:',resp.status);
+      if(isAppend){_sR=prevR;_sExt=prevExt;_sPage=prevPage;_sExtPage=prevExtPage;renderSearchResults(q);}
+      else el.innerHTML='';
+      return;
+    }
     const d=await resp.json();
-    _sR=d.results||[];_sExt=d.external||[];
-    let html='';
-    if(_sR.length){
-      html+='<div class="sr-label">In playlist</div>'+_sR.slice(0,5).map((t,i)=>`<div class="sr-row"><span>${esc(t.artist)} — ${esc(t.title)}</span><button class="sr-add" onclick="addTr(${i})">&#9654; Next</button></div>`).join('');
-    }
-    if(_sExt.length){
-      html+='<div class="sr-label" style="margin-top:8px">From the web</div>'+_sExt.slice(0,5).map((t,i)=>`<div class="sr-row"><span>${esc(t.artist?t.artist+' — ':'')}${esc(t.title)}</span><button class="sr-add external" id="ext-btn-${i}" onclick="addExternal(${i})">&#8681; Queue</button></div>`).join('');
-    }
-    if(!html)html=q.length>=2?'<div class="empty">No results</div>':'';
-    el.innerHTML=html;
-  }catch(e){console.warn('Search error:',e);el.innerHTML='';}
+    _sR=isAppend?_sR.concat(d.results||[]):d.results||[];
+    _sExt=isAppend?_sExt.concat(d.external||[]):d.external||[];
+    _sPage={total:d.total||0,offset:d.offset||0,limit:d.limit||SEARCH_PAGE_SIZE,has_more:!!d.has_more};
+    _sExtPage={known_count:d.external_known_count||0,offset:d.external_offset||0,limit:d.external_limit||SEARCH_PAGE_SIZE,has_more:!!d.external_has_more};
+    renderSearchResults(q);
+  }catch(e){
+    console.warn('Search error:',e);
+    if(isAppend){_sR=prevR;_sExt=prevExt;_sPage=prevPage;_sExtPage=prevExtPage;renderSearchResults(q);}
+    else el.innerHTML='';
+  }
+}
+async function searchMore(){
+  const btn=document.getElementById('searchMoreBtn');
+  if(btn){btn.classList.add('loading');btn.textContent='Loading...';}
+  try{
+    await doSearch(true);
+  }finally{
+    if(btn){btn.classList.remove('loading');btn.textContent='Load more results';}
+  }
 }
 async function addTr(i){const t=_sR[i];if(!t)return;await api('POST','/api/playlist/move_to_next',{index:t.index});toast('Now playing: '+t.display);document.getElementById('searchResults').innerHTML='';si.value='';_plFilter=''}
 async function addExternal(i){
@@ -3019,7 +3184,7 @@ async function addExternal(i){
   const btn=document.getElementById('ext-btn-'+i);
   if(btn){btn.classList.add('loading');btn.textContent='Downloading…';}
   try{
-    const r=await api('POST','/api/playlist/add-external',{youtube_id:t.youtube_id,title:t.title,artist:t.artist,duration_ms:t.duration_ms});
+    const r=await api('POST','/api/playlist/add-external',{youtube_id:t.youtube_id,title:t.title,artist:t.artist,duration_ms:t.duration_ms,album_art:t.album_art});
     if(r.ok){
       toast('Downloading: '+t.display+' — on air shortly');
       document.getElementById('searchResults').innerHTML='';
@@ -3423,19 +3588,78 @@ async function toggleSuperItalian(el){
   }
 }
 
+// ── AI Quality dial (model profile) ──
+const QUALITY_LABELS={
+  premium:'Premium — best hosts, highest cost',
+  balanced:'Balanced — great hosts, sensible cost',
+  economy:'Economy — cheapest, lighter hosts',
+};
+let _activeQualityProfile='balanced';
+let _qualityRequestSeq=0;
+// Build <option>s via DOM nodes (textContent + .value), never innerHTML, so a
+// profile name with HTML metacharacters can't inject markup.
+function _renderQualityOptions(profiles,active){
+  const sel=document.getElementById('qualityProfile');
+  if(!sel)return;
+  // Don't rebuild while the operator has the dropdown focused/open.
+  if(Array.isArray(profiles)&&profiles.length&&document.activeElement!==sel){
+    sel.replaceChildren(...profiles.map(p=>{
+      const o=document.createElement('option');
+      o.value=p;
+      o.textContent=QUALITY_LABELS[p]||(p.charAt(0).toUpperCase()+p.slice(1));
+      return o;
+    }));
+  }
+  if(active){sel.value=active;_activeQualityProfile=active;}
+}
+async function loadQuality(){
+  const sel=document.getElementById('qualityProfile');
+  if(sel&&sel.disabled)return;
+  const seq=++_qualityRequestSeq;
+  try{
+    const r=await api('GET','/api/quality');
+    if(seq!==_qualityRequestSeq)return;
+    if(r)_renderQualityOptions(r.profiles,r.active_profile);
+  }catch(e){/* ignore — keeps the static default options */}
+}
+async function setQuality(value){
+  const sel=document.getElementById('qualityProfile');
+  ++_qualityRequestSeq;  // invalidate any older GET /api/quality response
+  if(sel)sel.disabled=true;
+  try{
+    const r=await api('POST','/api/quality',{quality_profile:value});
+    if(r&&r.ok){
+      const active=r.active_profile||value;
+      _activeQualityProfile=active;
+      if(sel)sel.value=active;
+      toast('AI quality: '+active);
+    }
+    else{if(sel)sel.value=_activeQualityProfile;toast('Error: '+((r&&r.error)||'unknown'));}
+  }catch(_){
+    if(sel)sel.value=_activeQualityProfile;  // restore — server state unchanged
+    toast('Network error');
+  }finally{
+    if(sel)sel.disabled=false;
+  }
+}
+
 // ── Engine Room ──
 function updateEngineRoom(st,caps){
   const rt=document.getElementById('engineRuntime');
   if(!rt)return;
   const uptime=(st.uptime_sec||st.uptime_s)?Math.round((st.uptime_sec||st.uptime_s)/60)+'m':'—';
   const qd=st.queue_depth!=null?st.queue_depth:'—';
-  const pl=st.playlist?st.playlist.length:'—';
+  const pl=st.playlist_page?.total??st.playlist?.length??'—';
   const listeners=st.listeners?st.listeners.active:(st.listeners_active||0);
   const con=st.consumption||{};
   const apiCalls=con.api_calls||0;
   const inTok=con.input_tokens||0;
   const outTok=con.output_tokens||0;
-  const cost=con.api_cost_estimate_usd!=null?'$'+con.api_cost_estimate_usd.toFixed(4):'—';
+  const unpriced=con.api_cost_unpriced_model===true;
+  // Cost is inherently an estimate (blended TTS rate, drifting model prices) — never
+  // claim cent precision. Round to the nearest dollar and always flag it "est".
+  const _rawCost=con.api_cost_estimate_usd;
+  const cost=_rawCost==null?'—':((_rawCost<1?'<$1':'~$'+Math.round(_rawCost))+' est'+(unpriced?' (unpriced model)':''));
   const ttsCh=con.tts_characters||0;
 
   // Update sidebar cost
@@ -3443,6 +3667,10 @@ function updateEngineRoom(st,caps){
   if(sidebarCost)sidebarCost.textContent=cost;
   const topBarCost=document.getElementById('topBarCost');
   if(topBarCost)topBarCost.textContent=cost;
+  // Sidebar headline: segments produced this session (exact count). '—' until the
+  // first segment airs, so a cold-boot 0 isn't a sad empty headline.
+  const sidebarSegments=document.getElementById('sidebarSegments');
+  if(sidebarSegments)sidebarSegments.textContent=(st.segments_produced>0?st.segments_produced:'—');
 
   // Update sidebar uptime
   const sidebarUptime=document.getElementById('sidebarUptime');
@@ -3538,7 +3766,8 @@ function updateEngineRoom(st,caps){
 // ── Polling ──
 async function refreshFast(){
   try{
-    const [sr,lrr]=await Promise.all([fetch(_base+'/status',{headers:H()}),fetch(_base+'/api/listener-requests',{headers:H()})]);
+    const playlistLimit=Math.max(_plRows.length||0,PLAYLIST_PAGE_SIZE);
+    const [sr,lrr]=await Promise.all([fetch(_base+`/status?playlist_limit=${playlistLimit}`,{headers:H()}),fetch(_base+'/api/listener-requests',{headers:H()})]);
     _st=await sr.json();
     if (_st.station) {
       try { localStorage.setItem('stationName', _st.station); } catch (_) {}
@@ -3549,9 +3778,10 @@ async function refreshFast(){
     updateNow(_st.now_streaming);
     renderProduction(_st);
     renderProgramme(_st);
+    updateBufferedReady(_st);
     updateRecent(_st);
     updateLog(_st.stream_log);
-    updatePl(_st.playlist||[]);
+    updatePl(_st.playlist||[],_st.playlist_page||null);
     updateListenerRequests(lrData.requests||[],lrData.recently_consumed||[]);
     updatePaceCounters(_st.pacing);
     updateRuntimeStatus(_st);
@@ -3570,12 +3800,14 @@ async function refreshSlow(){
     updateSystems(_caps,_st);
     updateSourceControls(_st,_caps);
     renderSetup(setup);
+    loadQuality();  // re-sync the quality dial (not in /status, so poll it here)
   }catch(e){console.error('refreshSlow',e)}
 }
 async function refresh(){await Promise.all([refreshFast(),refreshSlow()])}
 
 refresh();
 loadSuperItalianToggle();
+loadQuality();
 loadChaosToggle();
 loadFestivalToggle();
 setInterval(refreshFast,3000);

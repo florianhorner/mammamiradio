@@ -1,0 +1,22 @@
+mammamiradio — fix: validate --elevenlabs-stability + de-flake producer timeout tests
+branch: florianhorner/fix/audition-validation-and-deflake
+base: origin/main @ 5a2e3e30
+
+Full test suite:
+  2612 passed, 2 skipped, 8 deselected in 54.34s
+
+Changes + new/updated tests:
+  scripts/audition_tts_voices.py — _stability_arg validator (finite, [0.0, 1.0]) for --elevenlabs-stability
+    test_stability_arg_validates_range_and_finiteness (accepts 0/0.42/1; rejects 1.2/-0.1/42/inf/nan)
+    test_expand_stability_variants_fans_out_elevenlabs_only — now asserts a pre-existing voice_settings
+      key (style) is preserved when stability is merged in during fan-out
+  tests/scheduling/test_producer_coverage.py — producer-queue-wait deadline 5s -> 15s on the three
+    sibling polls (de-flakes test_banter_metadata_includes_has_music_tail, which timed out 3x in CI
+    today on unrelated PRs while passing 3/3 locally)
+
+Lint / format / typecheck: ruff clean, format clean, mypy success
+Smoke: `--elevenlabs-stability 1.2 --dry-run` -> "stability must be a finite float in [0.0, 1.0]"
+  (immediate parse-time CLI error instead of a late mid-sweep failure)
+
+Addresses the CodeRabbit + Codex review comments on #535 (validate stability range; lock merge-preservation).
+Test/tooling only — no station runtime behavior change.

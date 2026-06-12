@@ -52,8 +52,9 @@ coverage-ratchet: ## Preview what coverage floors CI would commit on main
 perf-smoke: ## Run HA Green perf smoke against a live station
 	$(PYTHON) scripts/ha-green-perf-smoke.py
 
-pre-release: ## Run pre-release checks (version sync + invariants + CHANGELOG head)
+pre-release: ## Run pre-release checks (version sync + invariants + CHANGELOG head + merge-gate settings)
 	./scripts/pre-release-check.sh
+	./scripts/check-merge-gate.sh
 
 edge-release: ## Cut a manual edge release (edge version = main short-SHA, opens a PR)
 	./scripts/cut-edge-release.sh

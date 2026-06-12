@@ -1,0 +1,13 @@
+# Proof: tests for fix(audio) reconcile loudness on norm-cache hits
+# branch: florianhorner/fix/reconcile-cached-music
+
+## unit: pytest tests/audio/test_loudness_reconcile.py tests/audio/test_normalizer_unit.py tests/scheduling/test_producer.py -q
+........................................................................ [ 85%]
+............                                                             [100%]
+84 passed, 2 deselected in 2.15s
+
+## pi-smoke parity: pytest tests/audio/test_normalizer_real_ffmpeg.py -m requires_ffmpeg (ffmpeg 8.1.1)
+........                                                                 [100%]
+8 passed in 1.74s
+
+## full gate: make check -> All checks passed (coverage 94% / floor 92%)

@@ -16,6 +16,7 @@ from mammamiradio.core.models import (
     HostPersonality,
     PlaylistSource,
     Segment,
+    SegmentLogEntry,
     SegmentType,
     StationState,
     Track,
@@ -1752,7 +1753,7 @@ async def test_ad_break_sets_sonic_worlds_and_roles_in_last_ad_script():
 
 
 # ---------------------------------------------------------------------------
-# Resume bridge removed: session stop/resume no longer seeds an instant clip
+# Resume bridge timing: stopped sessions stay quiet until the producer wakes
 # ---------------------------------------------------------------------------
 
 
@@ -1763,11 +1764,9 @@ async def test_producer_no_resume_bridge_after_session_resume(tmp_path):
     (0.05 s stopped + 0.2 s resumed), so the _was_stopped → resume-bridge path
     never fires and the queue stays empty throughout.
 
-    Note: the resume bridge code itself still exists in the producer (_was_stopped
-    path, lines ~642-682).  When session_stopped flips back to False the producer
-    will, on the NEXT iteration, inject a canned clip (if available) or seed from
-    the norm cache.  This test does not exercise that path — it only verifies that
-    nothing is queued during the stopped sleep window.
+    The resume bridge code itself still exists in the producer.  This test only
+    verifies that nothing is queued during the stopped sleep window before the
+    producer observes the resumed state.
     """
     state = _make_state()
     state.session_stopped = True
@@ -1803,7 +1802,8 @@ async def test_producer_no_resume_bridge_after_session_resume(tmp_path):
             except asyncio.CancelledError:
                 pass
 
-    # No segment should carry resume_bridge=True — that metadata key no longer exists
+    # The task was cancelled before the stopped-state wait woke up, so the resume
+    # bridge should not have had a chance to seed anything.
     segments_with_resume_bridge = []
     while not queue.empty():
         seg = queue.get_nowait()
@@ -1812,7 +1812,7 @@ async def test_producer_no_resume_bridge_after_session_resume(tmp_path):
 
     assert not segments_with_resume_bridge, (
         f"Found {len(segments_with_resume_bridge)} segment(s) with resume_bridge=True; "
-        "the resume bridge was removed and must not inject segments on session resume."
+        "the resume bridge should not fire before the stopped-state wait wakes."
     )
 
 
@@ -1848,21 +1848,20 @@ async def test_producer_session_stopped_state_pauses_production(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Idle bridge: simplified — no norm_cache fallback when no canned clips
+# Idle bridge timing: idle sessions stay quiet until the idle poll wakes
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_idle_bridge_no_norm_cache_fallback_when_no_canned_clips(tmp_path):
+async def test_idle_bridge_does_not_run_before_idle_poll_wakes(tmp_path):
     """When no canned clips exist and the idle bridge runs, the producer still
     falls through to the norm-cache path (lines ~710-727) -- but this test
     cancels the task before the 1 s idle sleep completes, so the bridge path
     never fires and no idle_bridge / norm_cache segment appears in the queue.
 
-    The norm_file created in tmp_path (norm_test.mp3) would be picked up by the
-    glob IF the idle bridge ran.  The test verifies behaviour within the
-    cancellation window only; it does not assert that the norm-cache fallback
-    has been removed from the code.
+    The norm_file created in tmp_path (norm_test.mp3) would be eligible if the
+    idle bridge ran. The test verifies behaviour within the cancellation window
+    only.
     """
     state = _make_state()
     state.listeners_active = 0  # start idle
@@ -1910,7 +1909,7 @@ async def test_idle_bridge_no_norm_cache_fallback_when_no_canned_clips(tmp_path)
 
     assert not norm_cache_segments, (
         f"Found {len(norm_cache_segments)} norm_cache idle_bridge segment(s); "
-        "the idle bridge norm_cache fallback was removed and must not inject such segments."
+        "the idle bridge should not fire before the idle-state wait wakes."
     )
 
 
@@ -2159,18 +2158,31 @@ async def test_resume_bridge_noop_when_no_canned_clips_and_empty_norm_cache(tmp_
 @pytest.mark.asyncio
 async def test_idle_bridge_falls_back_to_norm_cache_when_no_canned_clips(tmp_path):
     """When a listener reconnects after idle and no canned clips exist, the idle
-    bridge seeds the first pre-normalized track from cache_dir."""
+    bridge seeds a recent-aware pre-normalized track from cache_dir."""
     state = _make_state()
     state.listeners_active = 0
+    state.stream_log.append(
+        SegmentLogEntry(
+            type=SegmentType.MUSIC.value,
+            label="Alex Warren - Ordinary",
+            metadata={"title": "Ordinary", "artist": "Alex Warren"},
+        )
+    )
     config = _make_config()
     config.cache_dir = tmp_path
     config.tmp_dir = tmp_path
     queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
 
+    recent_norm_file = tmp_path / "norm_aaa_ordinary.mp3"
+    recent_norm_file.write_bytes(b"pre-normalized current idle audio")
+    save_track_metadata(recent_norm_file, title="Ordinary", artist="Alex Warren")
     norm_file = tmp_path / "norm_idle123.mp3"
     norm_file.write_bytes(b"pre-normalized idle audio")
 
-    with patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=None):
+    with (
+        patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=None),
+        patch("mammamiradio.audio.norm_cache.random.choice", side_effect=lambda items: items[0]),
+    ):
         task = asyncio.create_task(run_producer(queue, state, config))
         try:
             await asyncio.sleep(0.15)
@@ -2275,24 +2287,35 @@ async def test_resume_bridge_skipped_when_queue_already_has_items(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_resume_bridge_picks_first_sorted_norm_file_when_multiple_exist(tmp_path):
-    """When multiple pre-normalized files exist, the resume bridge seeds the first
-    one in sorted (alphabetical) order."""
+async def test_resume_bridge_skips_first_sorted_norm_file_when_current_or_recent(tmp_path):
+    """When multiple pre-normalized files exist, resume avoids the current/recent
+    song instead of blindly seeding the first sorted cache file."""
     state = _make_state()
     state.session_stopped = True
+    state.now_streaming = {
+        "type": "music",
+        "label": "Alex Warren - Ordinary",
+        "metadata": {"title": "Ordinary", "artist": "Alex Warren"},
+    }
     config = _make_config()
     config.cache_dir = tmp_path
     config.tmp_dir = tmp_path
     queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
 
-    norm_zzz = tmp_path / "norm_zzz.mp3"
-    norm_zzz.write_bytes(b"last file")
-    norm_aaa = tmp_path / "norm_aaa.mp3"
-    norm_aaa.write_bytes(b"first file")
-    norm_mmm = tmp_path / "norm_mmm.mp3"
-    norm_mmm.write_bytes(b"middle file")
+    norm_aaa = tmp_path / "norm_aaa_ordinary.mp3"
+    norm_aaa.write_bytes(b"first sorted current file")
+    save_track_metadata(norm_aaa, title="Ordinary", artist="Alex Warren")
+    norm_mmm = tmp_path / "norm_mmm_alt.mp3"
+    norm_mmm.write_bytes(b"middle alternative file")
+    save_track_metadata(norm_mmm, title="Musica Leggera", artist="Colapesce Dimartino")
+    norm_zzz = tmp_path / "norm_zzz_alt.mp3"
+    norm_zzz.write_bytes(b"last alternative file")
+    save_track_metadata(norm_zzz, title="A far l amore", artist="Raffaella Carra")
 
-    with patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=None):
+    with (
+        patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=None),
+        patch("mammamiradio.audio.norm_cache.random.choice", side_effect=lambda items: items[0]),
+    ):
         task = asyncio.create_task(run_producer(queue, state, config))
         try:
             await asyncio.sleep(0.05)
@@ -2310,7 +2333,10 @@ async def test_resume_bridge_picks_first_sorted_norm_file_when_multiple_exist(tm
                 pass
 
     seg = queue.get_nowait()
-    assert seg.path == norm_aaa
+    assert seg.path == norm_mmm
+    assert seg.metadata.get("resume_bridge") is True
+    assert seg.metadata.get("title") == "Musica Leggera"
+    assert seg.metadata.get("artist") == "Colapesce Dimartino"
 
 
 @pytest.mark.asyncio

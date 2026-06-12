@@ -1,0 +1,16 @@
+# honest-production-panel — test + lint proof
+# generated 2026-06-07T09:45:53Z
+
+## pytest — admin panel invariants + /status surfaces
+........................................................................ [ 54%]
+...........................................................              [100%]
+131 passed in 1.94s
+
+## ruff check + format --check — touched modules
+All checks passed!
+3 files already formatted
+
+## mypy — touched modules
+Success: no issues found in 3 source files
+
+## full suite — 'make check': 2624 passed, 2 skipped; coverage 93.88%, all per-module floors held; all checks passed

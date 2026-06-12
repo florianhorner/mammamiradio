@@ -354,6 +354,72 @@ def test_playlist_source_controls_are_non_destructive_by_default() -> None:
     assert "'/api/playlist/enrich'" in text
 
 
+def test_playlist_and_search_have_load_more_controls() -> None:
+    """Admin playlist/search rendering must expose lazy-load controls backed by paginated APIs."""
+    text = _read_admin_html()
+    assert "loadMorePlaylist()" in text
+    assert "searchMore()" in text
+    assert "/api/playlist?offset=" in text
+    assert "playlist_page" in text
+    assert "has_more" in text
+
+
+def test_playlist_pagination_keeps_accessible_absolute_index_rows() -> None:
+    """Paginated rows must preserve full-playlist indices and existing accessible controls."""
+    text = _read_admin_html()
+    update_block = text[text.index("function updatePl") : text.index("async function loadMorePlaylist")]
+
+    assert re.search(r"idx\s*:\s*\(\s*_plPage\.offset\s*\|\|\s*0\s*\)\s*\+\s*i", update_block)
+    assert "incomingRevision===previousRevision" in update_block
+    assert "loadedEnd<total" in update_block
+    assert 'data-i="${idx}"' in update_block
+    assert 'tabindex="0"' in update_block
+    assert 'role="button"' in update_block
+    assert 'aria-label="Drag to reorder"' in update_block
+    assert 'aria-label="Move to next"' in update_block
+    assert 'aria-label="Remove from rotation"' in update_block
+    assert "moveNext(${idx})" in update_block
+    assert "removeTr(${idx})" in update_block
+
+
+def test_search_external_queue_posts_album_art() -> None:
+    """Web result artwork must survive the admin queue-from-search boundary."""
+    text = _read_admin_html()
+    add_external_block = text[text.index("async function addExternal") : text.index("// ── Drag & Drop")]
+    assert "album_art:t.album_art" in add_external_block
+
+
+def test_load_more_buttons_reset_on_error_paths() -> None:
+    """Playlist/search load-more controls must not remain stuck in loading state."""
+    text = _read_admin_html()
+    playlist_block = text[text.index("async function loadMorePlaylist") : text.index("function focusPlaylistTrack")]
+    search_block = text[text.index("async function doSearch") : text.index("async function addTr")]
+
+    assert "Playlist load-more failed" in playlist_block
+    assert "Playlist load-more error" in playlist_block
+    assert "expectedRevision=_plPage.revision" in playlist_block
+    assert "revisionChanged" in playlist_block
+    assert "Playlist changed while loading more; refreshing first page." in playlist_block
+    assert "/api/playlist?offset=0&limit=${PLAYLIST_PAGE_SIZE}" in playlist_block
+    assert playlist_block.index("revisionChanged") < playlist_block.index("_plRows=_plRows.concat")
+    assert "btn.classList.remove('loading')" in playlist_block
+    assert "btn.textContent='Load more tracks'" in playlist_block
+    assert "include_external:String(!isAppend||_sExtPage.has_more)" in search_block
+    assert "prevR=_sR.slice()" in search_block
+    assert "renderSearchResults(q)" in search_block
+    assert "btn.textContent='Load more results'" in search_block
+
+
+def test_empty_playlist_art_is_compact_placeholder() -> None:
+    """Missing artwork should not reserve a full empty album-art square."""
+    text = _read_admin_html()
+    match = re.search(r"\.pl-art-empty\s*\{([^}]*)\}", text, re.DOTALL)
+    assert match, "admin.html must style .pl-art-empty."
+    body = match.group(1)
+    assert re.search(r"width\s*:\s*18px", body), ".pl-art-empty should be a compact marker, not album-art sized."
+    assert re.search(r"height\s*:\s*18px", body), ".pl-art-empty should be a compact marker, not album-art sized."
+
+
 def test_programme_table_desktop_colgroup_has_all_columns() -> None:
     """renderProgramme() must emit all six column classes so fixed-layout widths apply."""
     text = _read_admin_html()

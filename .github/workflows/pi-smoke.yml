@@ -19,17 +19,31 @@ jobs:
         # apt on ubuntu-24.04-arm ships ffmpeg 6.x, but the HA addon's Alpine base
         # runs ffmpeg 7.x and the Pi runs the same. John Van Sickle's static
         # release build mirrors the production runtime; accept 7.x or 8.x so the
-        # check keeps passing when JVS bumps the release track.
+        # check keeps passing when the release track bumps. BtbN's release build
+        # is a fallback because JVS is intermittently unreachable from CI runners
+        # (curl 28 connect timeout) — a single-host outage must not fail the gate.
         run: |
           set -euo pipefail
           cd /tmp
-          curl -fsSL --retry 3 --retry-delay 2 \
-            https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-arm64-static.tar.xz \
-            -o ffmpeg.tar.xz
-          mkdir -p ffmpeg-static
+          download_jvs() {
+            curl -fsSL --connect-timeout 15 --retry 3 --retry-delay 3 --retry-connrefused \
+              https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-arm64-static.tar.xz \
+              -o ffmpeg.tar.xz
+          }
+          download_btbn() {
+            curl -fsSL --connect-timeout 15 --retry 3 --retry-delay 3 --retry-connrefused \
+              https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n7.1-latest-linuxarm64-gpl-7.1.tar.xz \
+              -o ffmpeg.tar.xz
+          }
+          download_jvs || { echo "::warning::John Van Sickle ffmpeg unreachable — falling back to BtbN"; download_btbn; }
+          rm -rf ffmpeg-static && mkdir -p ffmpeg-static
           tar -xJf ffmpeg.tar.xz -C ffmpeg-static --strip-components=1
-          sudo install -m 0755 ffmpeg-static/ffmpeg /usr/local/bin/ffmpeg
-          sudo install -m 0755 ffmpeg-static/ffprobe /usr/local/bin/ffprobe
+          # JVS keeps the binaries at the tarball root; BtbN nests them under bin/.
+          # Locate them rather than hardcoding a layout.
+          ff="$(find ffmpeg-static -type f -name ffmpeg | head -1)"
+          fp="$(find ffmpeg-static -type f -name ffprobe | head -1)"
+          sudo install -m 0755 "$ff" /usr/local/bin/ffmpeg
+          sudo install -m 0755 "$fp" /usr/local/bin/ffprobe
           ffmpeg -version | head -1
           ffmpeg -version | head -1 | grep -E 'ffmpeg version (7|n7|8|n8)'
 

@@ -7,11 +7,11 @@ static HTML attribute URLs (``href=``/``src=``) so assets resolve through the
 Supervisor proxy. JS API calls use the client-side ``_base`` variable, so JS
 string literals are deliberately NOT rewritten here (that would double-prefix).
 
-This is the designated home for page-render helpers. The admin/live render
-closure (``_render_admin_response`` and the CSRF inject helpers) stays in
-``streamer`` for now — it shares ``_get_csrf_token`` with the auth-validation
-cluster, and joins this module in a later cut once that primitive's home is
-settled. Pure string/regex logic — no CSRF, no template/asset-dir deps.
+This is the designated home for page-render helpers. The CSRF primitives
+(``_get_csrf_token``/``_inject_csrf_token``) now live in ``web/auth.py``; the
+admin/live render closure (``_render_admin_response``) stays in ``streamer``
+until the routes cut and calls them through the streamer facade. Pure
+string/regex logic here — no CSRF, no template/asset-dir deps.
 """
 
 from __future__ import annotations

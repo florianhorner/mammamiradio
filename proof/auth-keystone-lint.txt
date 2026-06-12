@@ -1,0 +1,7 @@
+# Lint + typecheck at 2a2e62836d4104bc942bce4442aea84f3d1aede1+fmt — 2026-06-12T10:31:41Z
+$ ruff check .
+All checks passed!
+$ ruff format --check .
+178 files already formatted
+$ mypy mammamiradio/ tests/
+Success: no issues found in 172 source files

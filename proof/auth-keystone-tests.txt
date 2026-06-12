@@ -1,0 +1,5 @@
+# Full test suite at 2a2e62836d4104bc942bce4442aea84f3d1aede1 — 2026-06-12T10:30:21Z
+    from starlette.testclient import TestClient as TestClient  # noqa
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+2703 passed, 2 skipped, 13 deselected, 1 warning in 56.74s

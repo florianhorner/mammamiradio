@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -56,6 +57,19 @@ def test_run_ffmpeg_passes_command(mock_subprocess):
     cmd = ["ffmpeg", "-y", "-i", "in.mp3", "out.mp3"]
     _run_ffmpeg(cmd, "test")
     mock_run.assert_called_once_with(cmd, capture_output=True, timeout=180.0)
+
+
+def test_run_ffmpeg_logs_stage_timing_at_debug(mock_subprocess, caplog):
+    """Render-latency deep-dive: every ffmpeg stage logs its wall time at DEBUG,
+    labelled by description, so the seconds can be attributed per stage."""
+    import logging
+
+    with caplog.at_level(logging.DEBUG, logger="mammamiradio.audio.normalizer"):
+        _run_ffmpeg(["ffmpeg", "-y", "out.mp3"], "normalize song.mp3")
+
+    timing = [r for r in caplog.records if "ffmpeg stage normalize song.mp3" in r.getMessage()]
+    assert timing, "expected a DEBUG per-stage timing line for the ffmpeg call"
+    assert timing[-1].levelno == logging.DEBUG
 
 
 def test_run_ffmpeg_raises_on_nonzero_return(mock_subprocess):
@@ -485,6 +499,28 @@ def test_measure_lufs_parses_integrated_loudness():
     assert result == pytest.approx(-16.2)
 
 
+def test_measure_lufs_takes_summary_not_per_frame_floor():
+    """ebur128 logs a per-frame 'I: -70.0 LUFS' (the gate floor, before data has
+    accumulated) for EVERY frame, then the true integrated value in its
+    end-of-stream Summary. measure_lufs must return the Summary value, not the
+    first per-frame -70.0 — the regression that made it return -70 for everything
+    and silently disabled both the fast-path skip and any LUFS-based correction.
+    """
+    from mammamiradio.audio.normalizer import measure_lufs
+
+    fake_result = MagicMock(spec=subprocess.CompletedProcess)
+    fake_result.returncode = 0
+    fake_result.stderr = (
+        "[Parsed_ebur128_0 @ 0x1] t: 0.1 TARGET:-23 LUFS  M: -70.0 S:-70.0  I: -70.0 LUFS  LRA: 0.0 LU\n"
+        "[Parsed_ebur128_0 @ 0x1] t: 0.2 TARGET:-23 LUFS  M: -22.0 S:-70.0  I: -70.0 LUFS  LRA: 0.0 LU\n"
+        "[Parsed_ebur128_0 @ 0x1] Summary:\n\n"
+        "  Integrated loudness:\n    I:         -16.2 LUFS\n    Threshold: -26.2 LUFS\n"
+    )
+    with patch("mammamiradio.audio.normalizer.subprocess.run", return_value=fake_result):
+        result = measure_lufs(Path("/tmp/test.mp3"))
+    assert result == pytest.approx(-16.2)  # the Summary value, not the -70.0 per-frame floor
+
+
 def test_measure_lufs_returns_none_on_failure():
     """measure_lufs returns None when ffmpeg/ebur128 fails."""
     from mammamiradio.audio.normalizer import measure_lufs
@@ -669,6 +705,31 @@ def test_load_track_metadata_incomplete_data_returns_none(tmp_path):
     norm.write_bytes(b"pretend mp3")
     sidecar = tmp_path / "norm_incomplete_192k.mp3.json"
     sidecar.write_text('{"title": "only title, no artist"}')
+    assert load_track_metadata(norm) is None
+
+
+def test_save_track_metadata_drops_stale_reconciled_marker(tmp_path):
+    # save_track_metadata runs only for a freshly (re)normalized file, so a
+    # reconciled_lufs marker in a leftover/orphaned sidecar (eviction unlinks the
+    # .mp3 but leaves the .json) is tied to the OLD content and MUST be dropped —
+    # the fresh file re-earns it on the next cache-hit reconcile. Other keys survive.
+    norm = tmp_path / "norm_merge_192k.mp3"
+    norm.write_bytes(b"pretend mp3")
+    sidecar = tmp_path / "norm_merge_192k.mp3.json"
+    sidecar.write_text(json.dumps({"reconciled_lufs": -16.0, "stray": "keep"}))
+    save_track_metadata(norm, title="T", artist="A")
+    data = json.loads(sidecar.read_text())
+    assert "reconciled_lufs" not in data  # stale marker dropped
+    assert data["title"] == "T" and data["artist"] == "A"
+    assert data["stray"] == "keep"  # unrelated keys preserved
+
+
+def test_load_track_metadata_non_utf8_returns_none(tmp_path):
+    # Sibling of the _load_sidecar fix: a non-UTF8 sidecar must return None, not raise.
+    norm = tmp_path / "norm_bad_utf8_192k.mp3"
+    norm.write_bytes(b"pretend mp3")
+    sidecar = tmp_path / "norm_bad_utf8_192k.mp3.json"
+    sidecar.write_bytes(b"\xff\xfe\x00not utf-8")
     assert load_track_metadata(norm) is None
 
 
