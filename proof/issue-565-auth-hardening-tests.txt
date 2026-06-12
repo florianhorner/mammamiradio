@@ -1,0 +1,13 @@
+Issue #565 auth hardening — test + gate evidence
+commit: a3892f76e2a379741b2f7b4ae7ce4b84d265b951
+date(UTC): 2026-06-12T21:13:24Z
+
+$ .venv/bin/python -m pytest tests/web/test_auth.py -q
+..............................................                           [100%]
+46 passed in 0.27s
+
+$ make check  (lint + mypy + full suite + coverage ratchet)
+2747 passed, 2 skipped, 13 deselected in ~76s
+mammamiradio/web/auth.py coverage: 100%
+Total coverage: 94.06% (floor 92%) — all per-module floors held
+ruff check: All checks passed!   ruff format --check: 3 files already formatted
