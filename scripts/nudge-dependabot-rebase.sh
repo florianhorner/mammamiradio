@@ -28,8 +28,11 @@ NUDGE_BODY="@dependabot rebase"
 command -v gh >/dev/null 2>&1 || { echo "nudge: gh CLI not found — skipping."; exit 0; }
 command -v jq >/dev/null 2>&1 || { echo "nudge: jq not found — skipping."; exit 0; }
 
+# Empty input is rejected up front: GNU `date -d ""` silently returns
+# midnight today instead of failing.
 iso_to_epoch() {
   local ts="$1"
+  [ -n "$ts" ] || return 0
   date -j -u -f '%Y-%m-%dT%H:%M:%SZ' "$ts" +%s 2>/dev/null \
     || date -u -d "$ts" +%s 2>/dev/null \
     || true

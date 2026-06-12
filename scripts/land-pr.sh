@@ -51,8 +51,11 @@ gh pr merge --help 2>/dev/null | grep -q -- '--match-head-commit' \
 
 # iso_to_epoch <iso8601> -> epoch seconds, or empty on failure.
 # Handles both Z-suffixed UTC (BSD and GNU date) like the squad hook does.
+# Empty input is rejected up front: GNU `date -d ""` silently returns
+# midnight today instead of failing, which would bless missing timestamps.
 iso_to_epoch() {
   local ts="$1"
+  [ -n "$ts" ] || return 0
   date -j -u -f '%Y-%m-%dT%H:%M:%SZ' "$ts" +%s 2>/dev/null \
     || date -u -d "$ts" +%s 2>/dev/null \
     || true
@@ -111,6 +114,7 @@ land_one() {
     return 1
   fi
 
+  [ -n "$last_push" ] || die "PR #$pr reports no commits — refusing to land; check the PR on GitHub."
   local last_push_epoch
   last_push_epoch="$(iso_to_epoch "$last_push")"
   [ -n "$last_push_epoch" ] || die "could not parse the PR #$pr head commit date ($last_push)."
