@@ -1,0 +1,63 @@
+Proof — ci(addon): run container smoke in addon mode (set SUPERVISOR_TOKEN)
+branch: ci/smoke-addon-mode
+
+================================================================
+1. Root cause (the red Build HA Addon smoke job on main)
+================================================================
+Build HA Addon failed on the last three main commits (#552, #566, #564).
+The `build (amd64)` / `build (aarch64)` jobs succeed and push the image; the
+`smoke` job fails: the container starts but /healthz is connection-refused for
+the whole window:
+
+  curl: (7) Failed to connect to localhost port 8765 ... Couldn't connect
+  ##[error]Process completed with exit code 7
+
+Cause: #552 made config._validate() skip the "Set ADMIN_PASSWORD or ADMIN_TOKEN
+when binding to a non-loopback host" error only when config.is_addon, and removed
+run.sh's ADMIN_TOKEN auto-generation. config._is_addon() is True only when
+SUPERVISOR_TOKEN/HASSIO_TOKEN is set. The smoke `docker run` set neither, so the
+container booted in standalone mode, bound 0.0.0.0 with no token, _validate()
+raised, uvicorn never started.
+
+================================================================
+2. Local reproduction of the fix (config.load_config)
+================================================================
+Without SUPERVISOR_TOKEN (smoke's old behavior) -> raises:
+
+  $ MAMMAMIRADIO_BIND_HOST=0.0.0.0 python -c 'from mammamiradio.core import config; config.load_config()'
+  ValueError: Config errors:
+    Set ADMIN_PASSWORD or ADMIN_TOKEN when binding to a non-loopback host
+
+With SUPERVISOR_TOKEN set (real Supervisor env + this fix) -> loads:
+
+  $ MAMMAMIRADIO_BIND_HOST=0.0.0.0 SUPERVISOR_TOKEN=smoke-ci \
+      python -c 'from mammamiradio.core import config; print(config.load_config().is_addon)'
+  load_config OK with SUPERVISOR_TOKEN; is_addon= True bind= 0.0.0.0
+
+================================================================
+3. Contract already covered by unit tests (tests/core/test_config.py)
+================================================================
+  test_non_local_bind_requires_auth                    standalone bind, no creds -> raises
+  test_empty_bind_host_requires_auth                   empty bind, no creds -> raises
+  test_non_local_bind_allowed_in_addon_mode_without_creds  SUPERVISOR_TOKEN set -> loads, is_addon True
+  test_non_local_bind_allowed_with_token               standalone bind + token -> loads
+  test_is_addon_with_supervisor_token / _with_hassio_token / _without_tokens
+
+================================================================
+4. Full test suite (local)
+================================================================
+  $ python -m pytest -q
+  2704 passed, 2 skipped, 13 deselected, 1 warning in 63.72s
+
+================================================================
+5. YAML validity of the changed workflows
+================================================================
+  YAML OK: .github/workflows/addon-build.yml
+  YAML OK: .github/workflows/addon-release.yml
+
+================================================================
+6. Post-merge verification (the authoritative proof)
+================================================================
+Build HA Addon is push-only (never runs on PRs), so the smoke job that this
+fixes only runs after merge to main. Authoritative proof = a green Build HA
+Addon (incl. the `smoke` job: "Smoke OK: status=ok ...") on the new main SHA.
