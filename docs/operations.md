@@ -195,6 +195,10 @@ Two invariants this table preserves:
 - **Public IPs never reach `/admin` without a credential.** The credential-less
   LAN fallback is scoped to private networks; a public client is rejected.
 
+This model reads `request.client.host` raw, so the bind must not sit behind an
+untrusted reverse proxy — one that rewrites the client address would make every
+caller appear private and collapse the table above.
+
 `ADMIN_TOKEN` is a header-only API credential (`X-Radio-Admin-Token`). A browser
 cannot send it on plain navigation, so to open `/admin` in a browser on a
 credentialed non-loopback bind you need `ADMIN_PASSWORD`; use `ADMIN_TOKEN` for
