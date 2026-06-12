@@ -7,9 +7,9 @@ that pin every matrix row stay in tests/web/test_streamer_routes.py (plus the
 extended file). Pure helper behavior — network classification, same-origin,
 CSRF token plumbing — is pinned here.
 
-Relocated from tests/web/test_streamer_coverage.py in the auth keystone cut;
-one duplicate (patched no-client hassio test re-pinning the unpatched one)
-was collapsed during the move.
+Relocated from tests/web/test_streamer_coverage.py in the auth keystone cut,
+plus new pins for the CSRF-exemption branches that route-level tests cannot
+reach (loopback/ingress/token/referer shortcuts in the enforcement helpers).
 """
 
 from __future__ import annotations
@@ -17,6 +17,8 @@ from __future__ import annotations
 from unittest.mock import MagicMock, patch
 
 from mammamiradio.web.auth import (
+    _enforce_csrf_for_basic_auth,
+    _enforce_csrf_for_private_network,
     _get_csrf_token,
     _inject_csrf_token,
     _is_hassio_or_loopback,
@@ -24,6 +26,31 @@ from mammamiradio.web.auth import (
     _is_private_network,
     _same_origin,
 )
+
+
+def _mock_request(
+    *,
+    method: str = "POST",
+    client_host: str | None = "203.0.113.50",
+    headers: dict | None = None,
+    url_scheme: str = "https",
+    url_hostname: str = "example.com",
+    url_port: int | None = 443,
+    csrf_token: str = "session-token",
+):
+    """Minimal Request stand-in for the enforcement helpers."""
+    req = MagicMock()
+    req.method = method
+    if client_host is None:
+        req.client = None
+    else:
+        req.client.host = client_host
+    req.headers = headers or {}
+    req.url.scheme = url_scheme
+    req.url.hostname = url_hostname
+    req.url.port = url_port
+    req.app.state.csrf_token = csrf_token
+    return req
 
 # ---------------------------------------------------------------------------
 # Facade identity guard
@@ -125,6 +152,16 @@ def test_is_hassio_or_loopback_invalid_ip():
     assert result is False
 
 
+def test_is_hassio_or_loopback_no_client_own_guard():
+    """_is_hassio_or_loopback's own no-client guard, isolated from the loopback
+    helper — pins the branch even if a refactor changes _is_loopback_client's
+    handling of client=None."""
+    req = MagicMock()
+    req.client = None
+    with patch("mammamiradio.web.auth._is_loopback_client", return_value=False):
+        assert _is_hassio_or_loopback(req) is False
+
+
 def test_is_private_network_rfc1918():
     for ip in ("10.0.0.1", "172.16.0.1", "192.168.1.100"):
         req = MagicMock()
@@ -218,6 +255,90 @@ def test_same_origin_default_ports():
     req.url.hostname = "example.com"
     req.url.port = None
     assert _same_origin(req, "https://example.com:443/path") is True
+
+
+def test_same_origin_scheme_mismatch():
+    """An http origin never matches an https request, even with same host."""
+    req = MagicMock()
+    req.url.scheme = "https"
+    req.url.hostname = "example.com"
+    req.url.port = 443
+    assert _same_origin(req, "http://example.com/path") is False
+
+
+def test_same_origin_explicit_port_mismatch():
+    """An explicit non-default port must match the request port exactly."""
+    req = MagicMock()
+    req.url.scheme = "https"
+    req.url.hostname = "example.com"
+    req.url.port = 443
+    assert _same_origin(req, "https://example.com:8443/path") is False
+
+
+# ---------------------------------------------------------------------------
+# CSRF enforcement exemption branches
+# ---------------------------------------------------------------------------
+
+
+def _mock_config(*, is_addon: bool = False, admin_token: str = "", admin_password: str = ""):
+    config = MagicMock()
+    config.is_addon = is_addon
+    config.admin_token = admin_token
+    config.admin_password = admin_password
+    return config
+
+
+def test_enforce_basic_auth_skips_non_mutating():
+    """GET requests bypass CSRF enforcement entirely."""
+    req = _mock_request(method="GET")
+    assert _enforce_csrf_for_basic_auth(req, MagicMock(), _mock_config()) is None
+
+
+def test_enforce_basic_auth_loopback_short_circuit():
+    """Loopback clients are exempt from basic-auth CSRF checks."""
+    req = _mock_request(client_host="127.0.0.1")
+    assert _enforce_csrf_for_basic_auth(req, MagicMock(), _mock_config(admin_password="pw")) is None
+
+
+def test_enforce_basic_auth_ingress_hassio_exemption():
+    """Addon-mode requests from the Supervisor network with an ingress prefix skip CSRF."""
+    req = _mock_request(client_host="172.30.32.5", headers={"X-Ingress-Path": "/api/hassio_ingress/x"})
+    config = _mock_config(is_addon=True, admin_password="pw")
+    assert _enforce_csrf_for_basic_auth(req, MagicMock(), config) is None
+
+
+def test_enforce_basic_auth_admin_token_exemption():
+    """A valid X-Radio-Admin-Token header skips the CSRF requirement."""
+    req = _mock_request(headers={"X-Radio-Admin-Token": "tok"})
+    config = _mock_config(admin_token="tok", admin_password="pw")
+    assert _enforce_csrf_for_basic_auth(req, MagicMock(), config) is None
+
+
+def test_enforce_basic_auth_no_password_or_credentials():
+    """Without a configured password (or without credentials) there is nothing to protect."""
+    req = _mock_request()
+    assert _enforce_csrf_for_basic_auth(req, MagicMock(), _mock_config()) is None
+    assert _enforce_csrf_for_basic_auth(req, None, _mock_config(admin_password="pw")) is None
+
+
+def test_enforce_basic_auth_referer_same_origin_accepts():
+    """A same-origin Referer satisfies CSRF when token and Origin are absent."""
+    req = _mock_request(headers={"Referer": "https://example.com/admin"})
+    config = _mock_config(admin_password="pw")
+    assert _enforce_csrf_for_basic_auth(req, MagicMock(), config) is None
+
+
+def test_enforce_private_network_csrf_token_accepts():
+    """A matching X-Radio-CSRF-Token header authorizes a LAN mutation — the path
+    the admin UI relies on when a browser strips Origin/Referer."""
+    req = _mock_request(headers={"X-Radio-CSRF-Token": "session-token"})
+    assert _enforce_csrf_for_private_network(req) is None
+
+
+def test_enforce_private_network_referer_accepts():
+    """A same-origin Referer authorizes a LAN mutation when token and Origin are absent."""
+    req = _mock_request(headers={"Referer": "https://example.com/admin"})
+    assert _enforce_csrf_for_private_network(req) is None
 
 
 # ---------------------------------------------------------------------------
