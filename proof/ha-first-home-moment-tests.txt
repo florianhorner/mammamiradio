@@ -1,0 +1,55 @@
+Proof: feat(ha) first connected home moment — branch feat/ha-first-home-moment-v1
+Captured locally on spokane-v2 (python 3.11, .venv) before opening the PR.
+
+============================================================
+1. FULL TEST SUITE
+============================================================
+$ python -m pytest -q
+2745 passed, 2 skipped, 13 deselected, 1 warning in 61.62s
+
+============================================================
+2. FEATURE TESTS (first connected home moment)
+============================================================
+$ python -m pytest tests/scheduling/test_producer_extended.py -k first_home \
+    tests/web/test_streamer_routes_extended.py::test_admin_status_ha_details_present_with_full_context -q
+8 passed, 41 deselected
+
+Covered scenarios:
+- arms the current banter when context is ready
+- forces next banter from an ad cycle
+- waits for safe context (too few entities / empty summary)
+- requires an LLM (no arm when banter cannot be generated)
+- preserves existing pending actions (directive / force_next / operator force)
+- re-arms when the arm was lost before success
+- does NOT re-arm after success (one-shot flag)
+- run_producer integration: flag fires only when generated banter actually airs
+- admin /status surfaces context_entity_count / context_char_count /
+  context_last_updated / first_home_context_moment_fired
+
+============================================================
+3. LINT / FORMAT / TYPECHECK
+============================================================
+$ ruff check .
+All checks passed!
+
+$ ruff format --check mammamiradio/scheduling/producer.py
+1 file already formatted
+
+$ mypy mammamiradio/scheduling/producer.py mammamiradio/core/models.py mammamiradio/web/streamer.py
+Success: no issues found in 3 source files
+
+============================================================
+4. COVERAGE (full suite, changed modules vs CI floors)
+============================================================
+mammamiradio/core/models.py          99%   (floor 98)  PASS
+mammamiradio/scheduling/producer.py  86%   (floor 83)  PASS
+mammamiradio/web/streamer.py         93%   (floor 91)  PASS
+
+============================================================
+5. RELEASE INVARIANTS / CHANGELOG LINT
+============================================================
+$ bash scripts/check-release-invariants.sh
+Passed: 6  Failed: 0 — All invariants passed.
+
+$ bash scripts/check-changelog-lint.sh
+Changelog lint clean.
