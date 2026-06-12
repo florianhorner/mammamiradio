@@ -4392,6 +4392,10 @@ async def test_admin_status_ha_details_present_with_full_context():
     ]
     state.ha_denylist_hits = {"privacy:device_tracker": 1}
     state.ha_catalog_hit_rate = 0.0
+    state.ha_context_entity_count = 1
+    state.ha_context_char_count = len(state.ha_context)
+    state.ha_context_last_updated = 1234.5
+    state.ha_first_home_context_moment_fired = True
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
         resp = await client.get("/status", headers={"Authorization": "Bearer secret-tok"})
@@ -4406,6 +4410,10 @@ async def test_admin_status_ha_details_present_with_full_context():
     assert hd["scored_entities"][0]["label"] == "Coffee machine"
     assert hd["denylist_hits"] == {"privacy:device_tracker": 1}
     assert hd["catalog_hit_rate"] == 0.0
+    assert hd["context_entity_count"] == 1
+    assert hd["context_char_count"] == len(state.ha_context)
+    assert hd["context_last_updated"] == 1234.5
+    assert hd["first_home_context_moment_fired"] is True
 
 
 @pytest.mark.asyncio

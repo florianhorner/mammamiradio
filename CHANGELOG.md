@@ -12,6 +12,8 @@ The current version source of truth is `pyproject.toml`.
 
 ### Added
 
+- **The host gives your connected home a warm first hello.** The first time the station has a clear read on your Home Assistant home, the host slips one or two real details about it into a break — naturally, like a DJ who just noticed where you are, not by reading off a sensor list. It lands once, then the host settles back into the usual mix. The Engine Room shows how much home context the host is working with and whether that first moment has aired yet.
+
 - **PR landing is now mechanized and pinned to the reviewed code.** Branch protection requires branches to be up to date before merging, and maintainer merges go through `scripts/land-pr.sh`, which updates the branch when needed (CI re-runs on the integrated state) and arms GitHub auto-merge locked to the exact head commit that was verified — a later push cancels the landing instead of shipping unseen changes. Dependabot updates that fall behind are automatically asked to rebase, so weekly dependency batches keep landing hands-free. A read-only settings tripwire (`scripts/check-merge-gate.sh`, part of `make pre-release`) catches drift in the underlying repository settings.
 
 - **The station logs how long each segment took to build.** Every segment the producer builds now records its total prep time on one line, and with logs turned up to debug you get a per-step breakdown of the audio work (normalize, loudness, mixing) that pinpoints the slow step. When the music ever runs thin, you can see exactly where the time went instead of guessing.

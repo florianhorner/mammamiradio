@@ -8,6 +8,8 @@
 
 ### Added
 
+- **The host gives your connected home a warm first hello.** The first time the station has a clear read on your Home Assistant home, the host slips one or two real details about it into a break — naturally, like a DJ who just noticed where you are, not by reading off a sensor list. It lands once, then the host settles back into the usual mix. The Engine Room shows how much home context the host is working with and whether that first moment has aired yet.
+
 - **Admin playlist and search pagination** — Large rotations no longer over-render in the Producer Desk. Status, playlist, and search APIs expose bounded windows with load-more metadata, while artwork from Apple charts, web search results, and listener-request downloads is preserved through queueing.
 
 - **Real album covers on the now-playing screen.** When a song is on, the phone

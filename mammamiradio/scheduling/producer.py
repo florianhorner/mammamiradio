@@ -82,6 +82,11 @@ MUSIC_SELECTION_RETRIES = 20
 MUSIC_QUALITY_GATE_REJECTION_LIMIT = 3
 CACHE_EVICTION_INTERVAL_SECONDS = 3600
 PLAYLIST_REFRESH_INTERVAL_SECONDS = 5400.0
+FIRST_HOME_CONTEXT_MOMENT_DIRECTIVE = (
+    "FIRST CONNECTED HOME MOMENT: Use one or two concrete home details naturally. "
+    "Do not list sensors. Make it feel like a host casually noticing the home."
+)
+FIRST_HOME_CONTEXT_MIN_ENTITIES = 3
 
 
 @dataclass(frozen=True)
@@ -870,6 +875,37 @@ def _emit_segment_prepared(
         logger.debug("Provenance Tier-2 emit failed: %s", exc)
 
 
+def _home_context_ready_for_first_moment(ha_cache: HomeContext) -> bool:
+    if len(ha_cache.scored) < FIRST_HOME_CONTEXT_MIN_ENTITIES:
+        return False
+    if not (ha_cache.summary or "").strip():
+        return False
+    return any(getattr(entity, "area", None) or getattr(entity, "label_en", "") for entity in ha_cache.scored)
+
+
+def _maybe_arm_first_home_context_moment(
+    state: StationState,
+    ha_cache: HomeContext,
+    seg_type: SegmentType,
+    *,
+    can_generate_banter: bool = True,
+) -> None:
+    if state.ha_first_home_context_moment_fired:
+        return
+    if not can_generate_banter:
+        return
+    if state.ha_pending_directive or state.chaos_pending is not None or state.operator_force_pending is not None:
+        return
+    if state.force_next is not None:
+        return
+    if not _home_context_ready_for_first_moment(ha_cache):
+        return
+
+    state.ha_pending_directive = FIRST_HOME_CONTEXT_MOMENT_DIRECTIVE
+    if seg_type != SegmentType.BANTER:
+        state.force_next = SegmentType.BANTER
+
+
 async def run_producer(
     queue: asyncio.Queue[Segment],
     state: StationState,
@@ -1239,6 +1275,10 @@ async def run_producer(
             state.ha_scored_entities = [entity.to_status_dict() for entity in ha_cache.scored]
             state.ha_denylist_hits = dict(ha_cache.denylist_hits)
             state.ha_catalog_hit_rate = ha_cache.catalog_hit_rate
+            state.ha_context_entity_count = len(ha_cache.scored)
+            state.ha_context_char_count = len(ha_cache.summary or "")
+            timestamp = getattr(ha_cache, "timestamp", 0.0)
+            state.ha_context_last_updated = timestamp if isinstance(timestamp, int | float) else 0.0
             # Dashboard HA moments: pick the most notable recent non-person event.
             # Restrict listener-visible events to the curated set: pre-Phase-A only
             # vetted entities could surface here, and Phase A's full-snapshot ingest
@@ -1285,6 +1325,12 @@ async def run_producer(
                     )
                 elif isinstance(result, str):
                     state.ha_pending_directive = result
+            _maybe_arm_first_home_context_moment(
+                state,
+                ha_cache,
+                seg_type,
+                can_generate_banter=_sw.has_script_llm(config),
+            )
 
             # Impossible Moments v2 (A): fold new events into the evening ledger
             # (watermark-deduped) and, for banter only, surface one eligible
@@ -1529,6 +1575,7 @@ async def run_producer(
                 listener_request_commit = None
                 has_music_tail = False
                 loop = asyncio.get_running_loop()
+                first_home_context_moment_pending = state.ha_pending_directive == FIRST_HOME_CONTEXT_MOMENT_DIRECTIVE
 
                 if chaos_subtype is None and not _sw.has_script_llm(config):
                     # No LLM — use canned clips + impossible TTS lines
@@ -1875,6 +1922,7 @@ async def run_producer(
                     _new_listener_count=_new_listener_count,
                     _listener_request_commit=listener_request_commit,
                     _used_generated_banter=(canned is None and not impossible_tts),
+                    _first_home_context_moment_pending=first_home_context_moment_pending,
                     _gag_key=state.ha_running_gag_key,
                     _ledger=state.evening_ledger,
                     _cache_dir=config.cache_dir,
@@ -1884,6 +1932,8 @@ async def run_producer(
                         state.new_listeners_pending = max(0, state.new_listeners_pending - _new_listener_count)
                     if _used_generated_banter and _listener_request_commit is not None:
                         _listener_request_commit.apply(state)
+                    if _used_generated_banter and _first_home_context_moment_pending:
+                        state.ha_first_home_context_moment_fired = True
                     # Spend the running-gag cooldown only when generated banter
                     # (which carried the gag) actually airs — not on canned or
                     # failed-LLM fallbacks. Honors EveningLedger.offer_gag's contract.
