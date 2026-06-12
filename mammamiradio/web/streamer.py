@@ -668,6 +668,10 @@ def _ha_details_payload(state: StationState) -> dict | None:
         "scored_entities": state.ha_scored_entities[:12],
         "denylist_hits": dict(state.ha_denylist_hits),
         "catalog_hit_rate": state.ha_catalog_hit_rate,
+        "context_char_count": state.ha_context_char_count,
+        "context_entity_count": state.ha_context_entity_count,
+        "context_last_updated": state.ha_context_last_updated or None,
+        "first_home_context_moment_fired": state.ha_first_home_context_moment_fired,
     }
 
 
