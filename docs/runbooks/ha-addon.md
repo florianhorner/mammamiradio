@@ -193,6 +193,35 @@ Because *you* open the PR (not a bot / `GITHUB_TOKEN`), its required checks (`qu
 
 **Editing the edge add-on.** Its `options`/`schema` MUST stay identical to stable — edge runs the same image and the same `run.sh` reads the options. `scripts/validate-addon.sh` fails CI on any drift. When you add a config option to stable (the THREE-files contract above), the edge `config.yaml` and `translations/en.yaml` are a fourth and fifth file to update in the same commit. The edge `version:` line is the only field that changes to cut a release, and `make edge-release` does that for you.
 
+## Landing a PR (merge gate)
+
+Landing is mechanized — see the **Landing contract** in `CLAUDE.md` "Quality
+gates" (single source of truth). The short version:
+
+- `/ship` opens the PR and never arms auto-merge; the PR soaks (CodeRabbit,
+  review time) until Florian gives the merge signal.
+- On the signal, run `scripts/land-pr.sh <PR#>`. It verifies the pre-ship
+  squad entry against the PR head (code-state freshness — a soak of days is
+  fine, a push after the review is not), updates the branch if it is behind
+  (CI re-runs on the integrated state), and arms
+  `gh pr merge --squash --auto --match-head-commit <head>` so the merge only
+  fires on the exact head it verified.
+- Raw `gh pr merge` is denied by the local hook
+  (`scripts/hooks/require-preship-squad.sh`); `--disable-auto` (disarming) is
+  allowed. The hook is a local guard, not a security boundary.
+- Branch protection on `main` has strict status checks (branch must be up to
+  date before merging) since 2026-06-12. Dependabot PRs that fall behind get
+  an automatic `@dependabot rebase` comment (`dependabot-nudge.yml`) because
+  Dependabot only self-rebases on conflicts. **Live proof pending:** confirm
+  on the first weekly batch that Dependabot honors the nudge comment authored
+  by `github-actions[bot]`; if it ignores it, comment `@dependabot rebase`
+  with your own gh auth (`gh pr comment <PR#> --body "@dependabot rebase"`)
+  and demote the workflow to advisory.
+- Settings drift tripwire: `bash scripts/check-merge-gate.sh` (also part of
+  `make pre-release`) asserts strict checks, `allow_update_branch`,
+  `allow_auto_merge`, and the required contexts. Run it if landing behaves
+  oddly.
+
 ## Pre-merge checklist
 
 Before merging ANY change that touches addon files:
@@ -204,6 +233,8 @@ Before merging ANY change that touches addon files:
 - [ ] If new config option: added to config.yaml + run.sh + translations
 - [ ] If path changed: grep all files for the old path
 - [ ] If renamed anything: `grep -r "old_name" .` returns zero hits
+- [ ] Landing goes through `scripts/land-pr.sh` (see "Landing a PR" above) —
+      `scripts/check-merge-gate.sh` passes if anything about merging looks off
 
 **After merging a version-bump commit** (to publish the stable image):
 1. Wait for `addon-build.yml` to pass on the merged commit
