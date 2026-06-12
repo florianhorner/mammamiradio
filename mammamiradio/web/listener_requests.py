@@ -48,7 +48,8 @@ from mammamiradio.core.models import (
     RECENTLY_CONSUMED_RETENTION_SECONDS,
     SegmentType,
 )
-from mammamiradio.web.streamer import _register_background_task, require_admin_access
+from mammamiradio.web.auth import require_admin_access
+from mammamiradio.web.streamer import _register_background_task
 
 logger = logging.getLogger("mammamiradio.listener_requests")
 

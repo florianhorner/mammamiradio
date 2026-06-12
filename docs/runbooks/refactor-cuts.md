@@ -23,6 +23,24 @@ Run at SCOPE time (before naming what moves), then again before shipping:
       is green, so it reaches the soak Pi. Don't batch (cuts went 34 commits without
       soaking).
 
+## Lessons (cut 7: W2 auth keystone → `web/auth.py`)
+
+5. **Patch strings are usages too.** Four tests patched
+   `mammamiradio.web.streamer._is_loopback_client` while exercising callees
+   (`_is_private_network`, `_is_hassio_or_loopback`) that resolve the name from their
+   OWN module globals. After the move those patches would silently no-op — the whole-repo
+   grep must include `patch("...")` literals and `monkeypatch.setattr` targets, and the
+   patched lookup-site must move (and the string be rewritten) in the same cut.
+6. **The local import auto-fixer fights facade re-exports twice.** It strips the
+   `# noqa: F401` comment while the old definitions still shadow the import, then strips
+   the now-"unused" re-exported names once the definitions are deleted. Re-assert the
+   combined `# noqa: F401` import after the deletions land, and verify with the pinned
+   venv ruff before committing.
+7. **Docs carry forward references that unblock on a cut.** `web/pages.py`'s docstring
+   said `_render_admin_response` "stays in streamer for now ... once that primitive's
+   home is settled" — settling `_get_csrf_token` in auth.py made that paragraph stale.
+   Doc-sync includes comments in sibling modules waiting on the cut, not just `docs/`.
+
 ## Lessons (cuts 1–6: W1 / H1 / W3a / W3b + edge release)
 
 1. **CI guards hardcode symbol names.** `scripts/validate-addon.sh` check 10 AST-scans
