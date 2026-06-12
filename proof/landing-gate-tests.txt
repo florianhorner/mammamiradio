@@ -1,0 +1,11 @@
+# landing-gate test proof — 2026-06-12T11:38:45Z — branch florianhorner/feat/cicd-merge-gate-mechanism
+
+## pytest (full suite, merged state)
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+2703 passed, 2 skipped, 13 deselected, 1 warning in 53.78s
+
+## bash workflow suites
+All 18 pre-ship squad gate cases passed.
+All 16 land-pr cases passed.
+All 9 dependabot nudge cases passed.
+All 7 check-merge-gate cases passed.
