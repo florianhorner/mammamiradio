@@ -1,0 +1,28 @@
+# Runtime QA evidence — auth extraction (web/auth.py), 2026-06-12
+# Local uvicorn (demo mode, 127.0.0.1:8000) started for QA and stopped after.
+
+Admin surface (/admin):
+  GET /admin (loopback, no credentials)      -> HTTP 200 (loopback trust via web/auth.py)
+  Browser console errors                     -> none
+  CSRF placeholder __MAMMAMIRADIO_CSRF_TOKEN__ replaced in served HTML -> verified (absent)
+  POST /api/trigger {"type":"banter"}        -> HTTP 200 (mutating admin request authorized)
+  PATCH /api/pacing (round-trip same values) -> HTTP 200 {"ok":true}
+  /status -> consumption.api_cost_estimate_usd present (protected UI element) -> verified
+  Admin UI shows "SESSION COST ... $ est" counter, .mi gold accent, .tricolor-stripe -> all present
+
+Listener surface (/):
+  GET /                                      -> HTTP 200, page renders fully
+  Browser console errors                     -> none
+  GET /stream                                -> HTTP 200, 94208 bytes delivered in 4s (~192 kbps)
+  GET /public-status                         -> HTTP 200
+
+Addon contract:
+  scripts/validate-addon.sh                  -> "All checks passed. Safe to push."
+
+Byte-faithfulness:
+  AST get_source_segment compare of all 14 moved symbols vs origin/main -> byte-identical
+  (9 functions: _get_csrf_token, _inject_csrf_token, _same_origin,
+   _enforce_csrf_for_basic_auth, _is_loopback_client, _is_private_network,
+   _is_hassio_or_loopback, _enforce_csrf_for_private_network, require_admin_access;
+   5 assigns: security, _MUTATING_METHODS, _CSRF_TOKEN_PLACEHOLDER,
+   _HASSIO_NETWORK, _TRUSTED_NETWORKS)
