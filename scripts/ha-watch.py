@@ -257,10 +257,15 @@ def parse_github_pulls(data: bytes, source: str) -> list[Item]:
         body = entry.get("body", "") or ""
         pull_request = entry.get("pull_request") or {}
         url = pull_request.get("html_url") or entry.get("html_url", "") or ""
+        item_id = url or str(entry.get("id", ""))
+        if not item_id:
+            # No stable identity: persisting an empty key would suppress every
+            # future identity-less item forever. Drop it instead.
+            continue
         items.append(
             Item(
                 source=source,
-                item_id=url or str(entry.get("id", "")),
+                item_id=item_id,
                 title=title,
                 url=url,
                 date=entry.get("updated_at", "") or "",

@@ -1,17 +1,16 @@
 ha-watch.py — local verification proof
-date: 2026-06-12T13:51:00Z
+date: 2026-06-12T14:01:28Z
 
 $ pytest tests/scripts/test_ha_watch.py -q
-...............................                                          [100%]
-31 passed in 0.11s
-
-$ ruff check + mypy mammamiradio/ tests/
+33 passed in 0.19s
+$ full suite
+2736 passed (1 pre-existing env-flaky Azure test deselected)
+$ ruff + mypy mammamiradio/ tests/
 All checks passed!
 Success: no issues found in 173 source files
 
-Bot review fixes (PR #571):
-- CodeQL incomplete-url-substring: token host check now urlsplit().hostname == 'api.github.com' (rejects https://evil.com/api.github.com)
-- breaking-change source: /issues endpoint honors labels (verified: 5/5 returned items breaking-change labeled); /pulls silently ignored the filter
-- script is now executable (0755)
-
-$ python scripts/ha-watch.py --dry-run --json  (live)  -> exit 0, errors: []
+PR #571 bot-review fixes + squad P1, all resolved:
+- CodeQL incomplete-url-substring -> urlsplit().hostname check (CodeQL passes)
+- breaking-change feed -> /issues endpoint (honors labels; verified 5/5 labeled)
+- script executable (0755)
+- identity-less GitHub entry dropped (no dedup-key poisoning)

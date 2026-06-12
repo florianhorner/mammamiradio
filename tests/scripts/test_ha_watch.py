@@ -364,6 +364,20 @@ def test_parse_github_pulls_prefers_pull_request_url() -> None:
     assert item.item_id == item.url
 
 
+def test_parse_github_pulls_null_pull_request_falls_back_to_html_url() -> None:
+    """Plain issues return pull_request: null — must fall back, not crash."""
+    data = json.dumps(
+        [{"id": 7, "html_url": "https://x/issues/7", "pull_request": None, "title": "media_player"}]
+    ).encode()
+    assert ha_watch.parse_github_pulls(data, "core_breaking")[0].url == "https://x/issues/7"
+
+
+def test_parse_github_pulls_skips_identityless_entry() -> None:
+    """An entry with no url and no id is dropped, never persisted as an empty key."""
+    data = json.dumps([{"title": "media_player", "body": "x"}]).encode()
+    assert ha_watch.parse_github_pulls(data, "core_breaking") == []
+
+
 def test_fetch_gh_token_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
     captured: dict = {}
 
