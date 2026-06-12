@@ -34,13 +34,24 @@ printf '#!/usr/bin/env sh\nexit 1\n' > "$SHIM/git"
 printf '#!/usr/bin/env sh\nexit 1\n' > "$SHIM/gh"
 chmod +x "$SHIM/git" "$SHIM/gh"
 
-OUT="$(PATH="$SHIM:$PATH" bash "$VALIDATE" 2>&1)" || true
+# Capture the exit code rather than masking it: the validator must pass cleanly
+# under the shim. git is only used for owner detection and a `rev-parse` that
+# falls back to `pwd`, so a non-zero exit means the shim broke a later step —
+# which a bare `|| true` would silently hide.
+set +e
+OUT="$(PATH="$SHIM:$PATH" bash "$VALIDATE" 2>&1)"
+RC=$?
+set -e
 
 if echo "$OUT" | grep -qF 'ghcr.io//mammamiradio-addon-{arch}'; then
   fail "owner resolved to empty (ghcr.io//...) — repository.yaml fallback not working"
 fi
 echo "$OUT" | grep -qF 'Image path: ghcr.io/florianhorner/mammamiradio-addon-{arch}' \
   || fail "expected florianhorner owner from repository.yaml fallback"
+if [ "$RC" -ne 0 ]; then
+  echo "$OUT" | tail -20 >&2
+  fail "validator exited $RC under the git/gh shim (expected 0 — a later step may be broken)"
+fi
 
 pass "owner falls back to repository.yaml when git/gh are unavailable"
 echo "All validate-addon owner-fallback scenarios passed."

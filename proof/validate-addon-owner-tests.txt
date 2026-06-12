@@ -1,5 +1,5 @@
 # Proof — validator owner fallback + admin_token copy fix
-# Branch florianhorner/feat/evaluate-pasted-ideas rebased onto origin/main; regenerated 2026-06-11 after CodeRabbit reorder (repository.yaml before gh)
+# Branch florianhorner/feat/evaluate-pasted-ideas merged with origin/main; regenerated 2026-06-12 after CodeRabbit reorder + codex test hardening
 
 === bash tests/workflows/test_validate_addon_owner.sh ===
 PASS: owner falls back to repository.yaml when git/gh are unavailable
@@ -7,7 +7,7 @@ All validate-addon owner-fallback scenarios passed.
 
 === pytest tests/repo/test_repo_scripts.py -q (validator self-tests) ===
 ..............................                                           [100%]
-30 passed in 4.30s
+30 passed in 4.23s
 
 === bash scripts/validate-addon.sh (image owner + edge parity) ===
 2. Image path
@@ -21,4 +21,4 @@ ha-addon/mammamiradio-edge/translations/en.yaml:0
 ha-addon/mammamiradio/translations/en.yaml:0
 
 === full suite ===
-2693 passed, 2 skipped, 13 deselected, 1 warning in 58.41s
+2704 passed, 2 skipped, 13 deselected, 1 warning in 55.01s
