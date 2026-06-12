@@ -1,0 +1,16 @@
+ha-watch.py — local verification proof
+commit: 30ffd014832b777b269be9be4aaaa2a92b5a6796
+date: 2026-06-12T13:14:53Z
+
+$ pytest tests/scripts/test_ha_watch.py -q
+.............................                                            [100%]
+29 passed in 0.13s
+
+$ ruff check scripts/ha-watch.py tests/scripts/test_ha_watch.py
+All checks passed!
+
+$ mypy scripts/ha-watch.py
+Success: no issues found in 1 source file
+
+$ python scripts/ha-watch.py --dry-run --json  (live, real HA feeds)
+exit 0; errors: []; flagged the 2026.6 'Pick a card, any card' release with matched=[card picker, custom card, getentitysuggestion]
