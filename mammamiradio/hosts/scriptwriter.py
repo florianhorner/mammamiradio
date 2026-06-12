@@ -466,7 +466,7 @@ async def _generate_json_response(
                         # generic exception name. Behaviour is unchanged — we still fall
                         # back to OpenAI; only the telemetry/log reason differs.
                         _max_tokens_truncated = _anthropic_stop_reason == "max_tokens" and isinstance(
-                            exc, (json.JSONDecodeError, IndexError)
+                            exc, json.JSONDecodeError | IndexError
                         )
                         _emit_llm_call(
                             state=state,
@@ -1392,6 +1392,7 @@ CHAOS DIRECTION:
     # Phase 4: reactive directive — HIGH PRIORITY impossible moment from a home event
     reactive_block = ""
     pending_directive = _sanitize_prompt_data(state.ha_pending_directive, max_len=300)
+    consumed_pending_directive = False
     if pending_directive:
         reactive_block = f"""
 HIGH PRIORITY — HOME EVENT DIRECTIVE:
@@ -1404,6 +1405,7 @@ Make this the focus of this banter break. It happened just now — react natural
         is_interrupt = ChaosSubtype.URGENT_INTERRUPT in (chaos_subtype, state.chaos_pending)
         if not is_interrupt:
             state.ha_pending_directive = ""
+            consumed_pending_directive = True
 
     # Listener request injection
     listener_request_block, listener_request_commit = _plan_listener_request_block(state)
@@ -1511,6 +1513,8 @@ Return JSON:
 
     except Exception as e:
         logger.error("Banter generation failed (%s): %s", type(e).__name__, e, exc_info=True)
+        if consumed_pending_directive and not state.ha_pending_directive:
+            state.ha_pending_directive = pending_directive
         if chaos_subtype is not None:
             state.chaos_script_fallbacks += 1
             state.chaos_last_degraded_reason = "script_fallback"

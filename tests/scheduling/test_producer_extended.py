@@ -34,6 +34,7 @@ from mammamiradio.hosts.ad_creative import (
 )
 from mammamiradio.scheduling.producer import (
     FIRST_HOME_CONTEXT_MOMENT_DIRECTIVE,
+    _home_context_ready_for_first_moment,
     _maybe_arm_first_home_context_moment,
     run_producer,
 )
@@ -80,17 +81,27 @@ def _fake_path(*_args, **_kwargs) -> Path:
     return Path("/tmp/mammamiradio_test/fake.mp3")
 
 
-def _scored_home_entity(idx: int, *, area: str | None = None) -> ScoredEntity:
-    room = area or f"Room {idx}"
+_NO_AREA = object()
+
+
+def _scored_home_entity(
+    idx: int,
+    *,
+    area: str | None | object = _NO_AREA,
+    label_it: str | None = None,
+    label_en: str | None = None,
+) -> ScoredEntity:
+    room = f"Room {idx}" if area is _NO_AREA else area
+    label_base = room or f"Entity {idx}"
     return ScoredEntity(
         entity_id=f"light.room_{idx}",
         area=room,
         domain="light",
         score=1.0,
-        raw_state={"state": "on", "attributes": {"friendly_name": f"{room} light", "area": room}},
-        label_it=f"Luce {room}",
-        label_en=f"{room} light",
-        summary_line=f"{room} light: accese",
+        raw_state={"state": "on", "attributes": {"friendly_name": f"{label_base} light", "area": room}},
+        label_it=f"Luce {label_base}" if label_it is None else label_it,
+        label_en=f"{label_base} light" if label_en is None else label_en,
+        summary_line=f"{label_base} light: accese",
     )
 
 
@@ -316,6 +327,25 @@ def test_first_home_context_moment_waits_for_safe_context():
     assert state.force_next is None
     assert state.ha_first_home_context_moment_fired is False
 
+    context_without_area_or_label = HomeContext(
+        summary="Context without a narratable label",
+        scored=[_scored_home_entity(idx, area=None, label_it="", label_en="") for idx in range(3)],
+    )
+    _maybe_arm_first_home_context_moment(state, context_without_area_or_label, SegmentType.BANTER)
+
+    assert state.ha_pending_directive == ""
+    assert state.force_next is None
+    assert state.ha_first_home_context_moment_fired is False
+
+
+def test_first_home_context_ready_accepts_label_only_entity():
+    entities = [_scored_home_entity(idx, area=None, label_it="", label_en="") for idx in range(3)]
+    entities[0].label = "Hallway lamp"
+
+    ha_context = HomeContext(summary="Label-only home context", scored=entities)
+
+    assert _home_context_ready_for_first_moment(ha_context) is True
+
 
 def test_first_home_context_moment_requires_generated_banter():
     state = _make_state()
@@ -335,6 +365,7 @@ def test_first_home_context_moment_requires_generated_banter():
 def test_first_home_context_moment_preserves_pending_actions():
     for attr, value in (
         ("ha_pending_directive", "Dinner is ready"),
+        ("chaos_pending", True),
         ("force_next", SegmentType.MUSIC),
         ("operator_force_pending", SegmentType.BANTER),
     ):
@@ -477,6 +508,45 @@ async def test_ha_context_first_home_moment_armed_during_banter(tmp_path):
     assert state.ha_pending_directive == ""
     assert state.force_next is None
     assert state.ha_first_home_context_moment_fired is True
+
+
+@pytest.mark.asyncio
+async def test_ha_context_first_home_moment_not_fired_when_directive_restored_after_fallback(tmp_path):
+    state = _make_state()
+    config = _make_config(tmp_path)
+    config.homeassistant.enabled = True
+    config.ha_token = "fake-token"
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+
+    host = config.hosts[0] if config.hosts else HostPersonality(name="Marco", voice="it-IT-DiegoNeural", style="warm")
+    mock_context = _first_home_context(
+        summary="- Kitchen light: accese\n- Bedroom presence: occupata\n- Vacuum: pulisce"
+    )
+    mock_context.denylist_hits = {}
+    mock_context.catalog_hit_rate = 0.0
+
+    async def _write_banter_restores_directive_after_fallback(*args, **_kwargs):
+        args[0].ha_pending_directive = FIRST_HOME_CONTEXT_MOMENT_DIRECTIVE
+        return [(host, "Anyway. Music.")], None
+
+    with (
+        patch(f"{MODULE}.next_segment_type", return_value=SegmentType.BANTER),
+        patch(f"{MODULE}._sw.has_script_llm", return_value=True),
+        patch(
+            f"{SCRIPTWRITER_MODULE}.write_banter",
+            new_callable=AsyncMock,
+            side_effect=_write_banter_restores_directive_after_fallback,
+        ),
+        patch(f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora...")),
+        patch(f"{MODULE}.synthesize", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(f"{MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(f"{MODULE}.concat_files", return_value=_fake_path()),
+        patch(f"{MODULE}.fetch_home_context", new_callable=AsyncMock, return_value=mock_context),
+    ):
+        await _run_until_queued(queue, state, config)
+
+    assert state.ha_pending_directive == FIRST_HOME_CONTEXT_MOMENT_DIRECTIVE
+    assert state.ha_first_home_context_moment_fired is False
 
 
 @pytest.mark.asyncio
