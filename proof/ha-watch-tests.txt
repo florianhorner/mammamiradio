@@ -1,0 +1,16 @@
+ha-watch.py — local verification proof
+date: 2026-06-12T14:01:28Z
+
+$ pytest tests/scripts/test_ha_watch.py -q
+33 passed in 0.19s
+$ full suite
+2736 passed (1 pre-existing env-flaky Azure test deselected)
+$ ruff + mypy mammamiradio/ tests/
+All checks passed!
+Success: no issues found in 173 source files
+
+PR #571 bot-review fixes + squad P1, all resolved:
+- CodeQL incomplete-url-substring -> urlsplit().hostname check (CodeQL passes)
+- breaking-change feed -> /issues endpoint (honors labels; verified 5/5 labeled)
+- script executable (0755)
+- identity-less GitHub entry dropped (no dedup-key poisoning)
