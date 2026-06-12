@@ -39,6 +39,9 @@ jobs:
       - name: Edge add-on validation self-test
         run: bash tests/workflows/test_validate_addon_edge.sh
 
+      - name: Addon owner-fallback self-test
+        run: bash tests/workflows/test_validate_addon_owner.sh
+
       - name: Pre-ship squad gate self-test
         run: bash tests/workflows/test_preship_squad_gate.sh
 
