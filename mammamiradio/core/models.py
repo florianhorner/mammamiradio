@@ -481,6 +481,10 @@ class StationState:
     ha_scored_entities: list[ScoredEntityStatus] = field(default_factory=list)
     ha_denylist_hits: dict[str, int] = field(default_factory=dict)
     ha_catalog_hit_rate: float = 0.0
+    ha_context_last_updated: float = 0.0
+    ha_context_entity_count: int = 0
+    ha_context_char_count: int = 0
+    ha_first_home_context_moment_fired: bool = False
     # Force-trigger: producer will use this type instead of scheduler for the next segment
     force_next: SegmentType | None = None
     # Operator-attributed pending trigger: set ONLY by the /api/trigger endpoint so the

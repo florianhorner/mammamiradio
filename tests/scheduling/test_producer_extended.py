@@ -19,7 +19,7 @@ from mammamiradio.core.models import (
     StationState,
     Track,
 )
-from mammamiradio.home.ha_context import ScoredEntity
+from mammamiradio.home.ha_context import HomeContext, ScoredEntity
 from mammamiradio.home.ha_enrichment import HomeEvent
 from mammamiradio.hosts.ad_creative import (
     AdBrand,
@@ -32,7 +32,11 @@ from mammamiradio.hosts.ad_creative import (
     _pick_brand,
     _select_ad_creative,
 )
-from mammamiradio.scheduling.producer import run_producer
+from mammamiradio.scheduling.producer import (
+    FIRST_HOME_CONTEXT_MOMENT_DIRECTIVE,
+    _maybe_arm_first_home_context_moment,
+    run_producer,
+)
 
 TOML_PATH = str(Path(__file__).resolve().parents[2] / "radio.toml")
 MODULE = "mammamiradio.scheduling.producer"
@@ -74,6 +78,28 @@ def _make_config(tmp_path: Path | None = None):
 
 def _fake_path(*_args, **_kwargs) -> Path:
     return Path("/tmp/mammamiradio_test/fake.mp3")
+
+
+def _scored_home_entity(idx: int, *, area: str | None = None) -> ScoredEntity:
+    room = area or f"Room {idx}"
+    return ScoredEntity(
+        entity_id=f"light.room_{idx}",
+        area=room,
+        domain="light",
+        score=1.0,
+        raw_state={"state": "on", "attributes": {"friendly_name": f"{room} light", "area": room}},
+        label_it=f"Luce {room}",
+        label_en=f"{room} light",
+        summary_line=f"{room} light: accese",
+    )
+
+
+def _first_home_context(*, scored_count: int = 3, summary: str = "Home context ready") -> HomeContext:
+    return HomeContext(
+        summary=summary,
+        timestamp=1234.5,
+        scored=[_scored_home_entity(idx) for idx in range(scored_count)],
+    )
 
 
 async def _run_until_queued(
@@ -253,6 +279,97 @@ async def test_ad_break_host_fallback_voice(tmp_path):
 # ---------------------------------------------------------------------------
 
 
+def test_first_home_context_moment_arms_current_banter():
+    state = _make_state()
+    ha_context = _first_home_context()
+
+    _maybe_arm_first_home_context_moment(state, ha_context, SegmentType.BANTER)
+
+    assert state.ha_pending_directive == FIRST_HOME_CONTEXT_MOMENT_DIRECTIVE
+    assert state.force_next is None
+    assert state.ha_first_home_context_moment_fired is False
+
+
+def test_first_home_context_moment_forces_next_banter_from_ad():
+    state = _make_state()
+    ha_context = _first_home_context()
+
+    _maybe_arm_first_home_context_moment(state, ha_context, SegmentType.AD)
+
+    assert state.ha_pending_directive == FIRST_HOME_CONTEXT_MOMENT_DIRECTIVE
+    assert state.force_next == SegmentType.BANTER
+    assert state.ha_first_home_context_moment_fired is False
+
+
+def test_first_home_context_moment_waits_for_safe_context():
+    state = _make_state()
+
+    _maybe_arm_first_home_context_moment(state, _first_home_context(scored_count=2), SegmentType.BANTER)
+
+    assert state.ha_pending_directive == ""
+    assert state.force_next is None
+    assert state.ha_first_home_context_moment_fired is False
+
+    _maybe_arm_first_home_context_moment(state, _first_home_context(summary=""), SegmentType.BANTER)
+
+    assert state.ha_pending_directive == ""
+    assert state.force_next is None
+    assert state.ha_first_home_context_moment_fired is False
+
+
+def test_first_home_context_moment_requires_generated_banter():
+    state = _make_state()
+
+    _maybe_arm_first_home_context_moment(
+        state,
+        _first_home_context(),
+        SegmentType.BANTER,
+        can_generate_banter=False,
+    )
+
+    assert state.ha_pending_directive == ""
+    assert state.force_next is None
+    assert state.ha_first_home_context_moment_fired is False
+
+
+def test_first_home_context_moment_preserves_pending_actions():
+    for attr, value in (
+        ("ha_pending_directive", "Dinner is ready"),
+        ("force_next", SegmentType.MUSIC),
+        ("operator_force_pending", SegmentType.BANTER),
+    ):
+        state = _make_state()
+        setattr(state, attr, value)
+
+        _maybe_arm_first_home_context_moment(state, _first_home_context(), SegmentType.BANTER)
+
+        assert getattr(state, attr) == value
+        assert state.ha_first_home_context_moment_fired is False
+
+
+def test_first_home_context_moment_rearms_when_arm_was_lost_before_success():
+    state = _make_state()
+    _maybe_arm_first_home_context_moment(state, _first_home_context(), SegmentType.BANTER)
+    state.ha_pending_directive = ""
+
+    _maybe_arm_first_home_context_moment(state, _first_home_context(), SegmentType.AD)
+
+    assert state.ha_pending_directive == FIRST_HOME_CONTEXT_MOMENT_DIRECTIVE
+    assert state.force_next == SegmentType.BANTER
+    assert state.ha_first_home_context_moment_fired is False
+
+
+def test_first_home_context_moment_does_not_rearm_after_success():
+    state = _make_state()
+    state.ha_first_home_context_moment_fired = True
+
+    _maybe_arm_first_home_context_moment(state, _first_home_context(), SegmentType.AD)
+
+    assert state.ha_pending_directive == ""
+    assert state.force_next is None
+    assert state.ha_first_home_context_moment_fired is True
+
+
 @pytest.mark.asyncio
 async def test_ha_context_refreshed_for_banter(tmp_path):
     state = _make_state()
@@ -269,6 +386,7 @@ async def test_ha_context_refreshed_for_banter(tmp_path):
     mock_context.events_summary = "- La macchina del caffe: spento/a -> acceso/a (1 min fa)"
     mock_context.mood = "Caffe in preparazione"
     mock_context.weather_arc = "Meteo: soleggiato, 22C."
+    mock_context.timestamp = 1234.5
     mock_context.mood_en = "Coffee brewing"
     mock_context.weather_arc_en = "Weather: sunny, 22C."
     mock_context.events_summary_en = "- Coffee machine: off -> on (1 min ago)"
@@ -314,8 +432,51 @@ async def test_ha_context_refreshed_for_banter(tmp_path):
     assert state.ha_events_summary == "- La macchina del caffe: spento/a -> acceso/a (1 min fa)"
     assert state.ha_scored_entities[0]["label"] == "Coffee machine"
     assert state.ha_denylist_hits == {"privacy:person": 1}
+    assert state.ha_context_entity_count == 1
+    assert state.ha_context_char_count == len("Il tempo e' bello")
+    assert state.ha_context_last_updated == 1234.5
     assert state.ha_last_event_label == "La macchina del caffe"
     assert state.ha_last_event_label_en == "Coffee machine"
+
+
+@pytest.mark.asyncio
+async def test_ha_context_first_home_moment_armed_during_banter(tmp_path):
+    state = _make_state()
+    config = _make_config(tmp_path)
+    config.homeassistant.enabled = True
+    config.ha_token = "fake-token"
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+
+    host = config.hosts[0] if config.hosts else HostPersonality(name="Marco", voice="it-IT-DiegoNeural", style="warm")
+    mock_context = _first_home_context(
+        summary="- Kitchen light: accese\n- Bedroom presence: occupata\n- Vacuum: pulisce"
+    )
+    mock_context.denylist_hits = {}
+    mock_context.catalog_hit_rate = 0.0
+
+    async def _write_banter_consumes_directive(*args, **_kwargs):
+        args[0].ha_pending_directive = ""
+        return [(host, "Ciao!")], None
+
+    with (
+        patch(f"{MODULE}.next_segment_type", return_value=SegmentType.BANTER),
+        patch(f"{MODULE}._sw.has_script_llm", return_value=True),
+        patch(
+            f"{SCRIPTWRITER_MODULE}.write_banter",
+            new_callable=AsyncMock,
+            side_effect=_write_banter_consumes_directive,
+        ),
+        patch(f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora...")),
+        patch(f"{MODULE}.synthesize", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(f"{MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(f"{MODULE}.concat_files", return_value=_fake_path()),
+        patch(f"{MODULE}.fetch_home_context", new_callable=AsyncMock, return_value=mock_context),
+    ):
+        await _run_until_queued(queue, state, config)
+
+    assert state.ha_pending_directive == ""
+    assert state.force_next is None
+    assert state.ha_first_home_context_moment_fired is True
 
 
 @pytest.mark.asyncio

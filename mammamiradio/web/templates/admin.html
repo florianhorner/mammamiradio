@@ -3747,6 +3747,9 @@ function updateEngineRoom(st,caps){
     if(hd.events_summary_en||hd.events_summary)lines.push('Events:<br>'+esc(hd.events_summary_en||hd.events_summary).replace(/\n/g,'<br>'));
     if(hd.pending_directive)lines.push('Directive pending: <strong style="color:var(--warning)">'+esc(hd.pending_directive.substring(0,80))+'...</strong>');
     lines.push('Recent events: '+(hd.recent_event_count||0));
+    lines.push('Prompt slice: '+Number(hd.context_entity_count||0)+' entities, '+Number(hd.context_char_count||0)+' chars');
+    if(hd.context_last_updated)lines.push('Updated: '+new Date(Number(hd.context_last_updated)*1000).toLocaleTimeString());
+    lines.push('First home moment: '+(hd.first_home_context_moment_fired?'fired':'waiting'));
     if(hd.last_event_label_en||hd.last_event_label)lines.push('Last event: '+esc(hd.last_event_label_en||hd.last_event_label));
     if(Array.isArray(hd.scored_entities)&&hd.scored_entities.length){
       const scored=hd.scored_entities.slice(0,6).map(e=>esc(e.label||e.entity_id||'Entity')+' <span style="color:var(--muted)">'+Number(e.score||0).toFixed(2)+'</span>');
