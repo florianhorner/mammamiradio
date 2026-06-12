@@ -37,6 +37,7 @@ from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
 from pathlib import Path
 from urllib.error import HTTPError, URLError
+from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
 
 USER_AGENT = "mammamiradio-ha-watch/1.0 (+https://github.com/florianhorner/mammamiradio)"
@@ -93,13 +94,13 @@ SOURCES: tuple[Source, ...] = (
     ),
     Source(
         "core_breaking",
-        "https://api.github.com/repos/home-assistant/core/pulls?labels=breaking-change&state=open&per_page=100",
+        "https://api.github.com/repos/home-assistant/core/issues?labels=breaking-change&state=open&per_page=100",
         "github_pulls",
         1,
     ),
     Source(
         "frontend_breaking",
-        "https://api.github.com/repos/home-assistant/frontend/pulls?labels=breaking-change&state=open&per_page=100",
+        "https://api.github.com/repos/home-assistant/frontend/issues?labels=breaking-change&state=open&per_page=100",
         "github_pulls",
         2,
     ),
@@ -241,20 +242,28 @@ def parse_atom(data: bytes, source: str) -> list[Item]:
 
 
 def parse_github_pulls(data: bytes, source: str) -> list[Item]:
-    """Parse a GitHub `GET /pulls` JSON array into Items (html_url/title/body)."""
+    """Parse a GitHub issues JSON array into Items (html_url/title/body).
+
+    Uses the issues endpoint, not `/pulls`: the `List pull requests` endpoint
+    silently ignores a `labels` query param, so `?labels=breaking-change` there
+    would scan the newest 100 open PRs regardless of label. The issues endpoint
+    honors `labels`; a returned item that is a PR carries a `pull_request`
+    object whose `html_url` points at the pull request.
+    """
     payload = json.loads(data or b"[]")
     items: list[Item] = []
-    for pull in payload:
-        title = pull.get("title", "") or ""
-        body = pull.get("body", "") or ""
-        url = pull.get("html_url", "") or ""
+    for entry in payload:
+        title = entry.get("title", "") or ""
+        body = entry.get("body", "") or ""
+        pull_request = entry.get("pull_request") or {}
+        url = pull_request.get("html_url") or entry.get("html_url", "") or ""
         items.append(
             Item(
                 source=source,
-                item_id=url or str(pull.get("id", "")),
+                item_id=url or str(entry.get("id", "")),
                 title=title,
                 url=url,
-                date=pull.get("updated_at", "") or "",
+                date=entry.get("updated_at", "") or "",
                 text=f"{title}\n{body}",
             )
         )
@@ -293,9 +302,19 @@ def new_items(items: list[Item], seen: dict) -> list[Item]:
     return [item for item in items if item.item_id not in seen]
 
 
+def _is_github_api(url: str) -> bool:
+    """True only when the URL's host is exactly api.github.com.
+
+    A substring check (``"api.github.com" in url``) would also match a hostile
+    host like ``https://evil.com/api.github.com`` and leak the GitHub token to
+    it; compare the parsed hostname instead.
+    """
+    return urlsplit(url).hostname == "api.github.com"
+
+
 def _fetch(url: str, *, timeout: float = 15.0) -> bytes:
     headers = {"User-Agent": USER_AGENT, "Accept": "*/*"}
-    if "api.github.com" in url:
+    if _is_github_api(url):
         headers["Accept"] = "application/vnd.github+json"
         token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
         if token:
@@ -349,7 +368,7 @@ def run(
             parsed = parse_feed(source.kind, data, source.name)
         except (HTTPError, URLError, ET.ParseError, json.JSONDecodeError, ValueError) as err:
             msg = f"{source.name}: {type(err).__name__}: {err}"
-            if isinstance(err, HTTPError) and err.code == 403 and "api.github.com" in source.url:
+            if isinstance(err, HTTPError) and err.code == 403 and _is_github_api(source.url):
                 msg += " — set GITHUB_TOKEN to lift the GitHub rate limit"
             errors.append(msg)
             continue

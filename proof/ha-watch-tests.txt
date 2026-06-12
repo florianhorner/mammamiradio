@@ -1,16 +1,17 @@
 ha-watch.py — local verification proof
-commit: 30ffd014832b777b269be9be4aaaa2a92b5a6796
-date: 2026-06-12T13:14:53Z
+date: 2026-06-12T13:51:00Z
 
 $ pytest tests/scripts/test_ha_watch.py -q
-.............................                                            [100%]
-29 passed in 0.13s
+...............................                                          [100%]
+31 passed in 0.11s
 
-$ ruff check scripts/ha-watch.py tests/scripts/test_ha_watch.py
+$ ruff check + mypy mammamiradio/ tests/
 All checks passed!
+Success: no issues found in 173 source files
 
-$ mypy scripts/ha-watch.py
-Success: no issues found in 1 source file
+Bot review fixes (PR #571):
+- CodeQL incomplete-url-substring: token host check now urlsplit().hostname == 'api.github.com' (rejects https://evil.com/api.github.com)
+- breaking-change source: /issues endpoint honors labels (verified: 5/5 returned items breaking-change labeled); /pulls silently ignored the filter
+- script is now executable (0755)
 
-$ python scripts/ha-watch.py --dry-run --json  (live, real HA feeds)
-exit 0; errors: []; flagged the 2026.6 'Pick a card, any card' release with matched=[card picker, custom card, getentitysuggestion]
+$ python scripts/ha-watch.py --dry-run --json  (live)  -> exit 0, errors: []

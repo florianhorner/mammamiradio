@@ -16,7 +16,7 @@ Ranked by lead time (highest-signal first):
 | Source | Feed | Lead time |
 |--------|------|-----------|
 | Developer blog | `developers.home-assistant.io/blog/rss.xml` | days–months |
-| Core `breaking-change` PRs | `api.github.com/repos/home-assistant/core/pulls?labels=breaking-change&state=open` | weeks |
+| Core `breaking-change` PRs | `api.github.com/repos/home-assistant/core/issues?labels=breaking-change&state=open` | weeks |
 | Frontend `breaking-change` PRs | same on `home-assistant/frontend` | weeks |
 | Architecture discussions | `github.com/home-assistant/architecture/discussions.atom` | weeks–months |
 | Main release blog | `home-assistant.io/atom.xml` | GA day |

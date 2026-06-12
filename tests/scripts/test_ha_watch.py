@@ -334,6 +334,35 @@ def test_fetch_injects_github_auth_only_for_github(monkeypatch: pytest.MonkeyPat
     ha_watch._fetch("https://developers.home-assistant.io/blog/rss.xml")
     assert captured["request"].get_header("Authorization") is None
 
+    # A hostile host that merely CONTAINS the string must not get the token.
+    ha_watch._fetch("https://evil.com/api.github.com/x")
+    assert captured["request"].get_header("Authorization") is None
+
+
+def test_is_github_api_matches_host_not_substring() -> None:
+    assert ha_watch._is_github_api("https://api.github.com/repos/x/issues")
+    assert not ha_watch._is_github_api("https://evil.com/api.github.com/x")
+    assert not ha_watch._is_github_api("https://api.github.com.evil.com/x")
+
+
+def test_parse_github_pulls_prefers_pull_request_url() -> None:
+    """Issues endpoint: a PR item carries pull_request.html_url pointing at the PR."""
+    data = json.dumps(
+        [
+            {
+                "id": 9,
+                "html_url": "https://github.com/home-assistant/core/issues/42",
+                "pull_request": {"html_url": "https://github.com/home-assistant/core/pull/42"},
+                "title": "Remove deprecated media_player flag",
+                "body": "supported_features must be an enum.",
+                "updated_at": "2026-06-02T00:00:00Z",
+            }
+        ]
+    ).encode()
+    item = ha_watch.parse_github_pulls(data, "core_breaking")[0]
+    assert item.url == "https://github.com/home-assistant/core/pull/42"
+    assert item.item_id == item.url
+
 
 def test_fetch_gh_token_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
     captured: dict = {}
