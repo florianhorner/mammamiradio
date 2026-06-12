@@ -163,7 +163,7 @@ mammamiradio/
   hosts/                    scriptwriter (LLM banter+ads — TODO: split), persona, context_cues, ad_creative
   home/                     ha_context (HA polling, mood), ha_enrichment (event diff/prune)
   scheduling/               producer (async loop), scheduler (segment-type picker), clip (WTF ring buffer)
-  web/                      streamer (TODO: split — routes/playback loop), auth (admin auth + CSRF), listener_requests, og_card, templates/, static/
+  web/                      streamer (TODO: split — routes/playback loop), auth (admin auth + CSRF), pages (ingress rewrite), listener_requests, og_card, templates/, static/
   assets/                   demo/ MP3s + SFX, logo.svg
 radio.toml                  station config
 start.sh                    dev entrypoint with uvicorn and reload
