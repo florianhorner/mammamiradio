@@ -205,6 +205,14 @@ The current version source of truth is `pyproject.toml`.
   left out, so the hosts stay grounded in the moment while less of your home's raw
   sensor detail reaches the writers.
 
+### Refactored
+
+- **Admin access checks extracted into their own module** — `mammamiradio/web/auth.py`
+  now owns the request-layer admin authorization (credentials, admin token, CSRF
+  enforcement, and trusted-network classification), previously embedded in
+  `streamer.py`. No behavior change: every admin route enforces exactly the same
+  rules, pinned by the same tests.
+
 ## [2.13.0] - 2026-05-26
 
 ### Added

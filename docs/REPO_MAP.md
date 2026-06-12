@@ -30,7 +30,8 @@ If you want to fix or extend X, look in Y. The folder hierarchy IS the mental mo
 | Producer loop (queue ahead of playback)            | `mammamiradio/scheduling/producer.py`        |
 | WTF clip extraction + ring buffer                  | `mammamiradio/scheduling/clip.py`            |
 | Party mode toggle (Festival Mode, future themes)   | `mammamiradio/web/streamer.py` + `docs/party-mode-extension.md` |
-| HTTP routes / playback loop / auth                 | `mammamiradio/web/streamer.py`               |
+| HTTP routes / playback loop                        | `mammamiradio/web/streamer.py`               |
+| Admin auth (credentials, CSRF, trusted networks)   | `mammamiradio/web/auth.py`                   |
 | Listener-request endpoints (dedica, song wish)     | `mammamiradio/web/listener_requests.py`      |
 | Open Graph share card                              | `mammamiradio/web/og_card.py`                |
 | Listener / admin / live HTML                       | `mammamiradio/web/templates/`                |
@@ -84,7 +85,7 @@ The `tests/` tree mirrors the source tree exactly. To find the test for `mammami
 
 Two modules carry a `# TODO: split` marker referencing the cathedral plan:
 
-- `mammamiradio/web/streamer.py` (~2,300 LOC) — splits in PR 5 of the cathedral plan into `routes_listener.py`, `routes_admin.py`, `auth.py`, `playback_loop.py`, `public_status.py`
-- `mammamiradio/hosts/scriptwriter.py` (~1,500 LOC) — splits in PR 6 into `prompts.py`, `llm_client.py`, `banter.py`, `ads.py`. Data leaves `prompt_world.py`, `transitions.py`, `fallbacks.py` are already extracted.
+- `mammamiradio/web/streamer.py` (~3,500 LOC) — splits in PR 5 of the cathedral plan into `routes_listener.py`, `routes_admin.py`, `playback_loop.py`, `public_status.py` (`auth.py` is already extracted)
+- `mammamiradio/hosts/scriptwriter.py` (~2,000 LOC) — splits in PR 6 into `prompts.py`, `llm_client.py`, `banter.py`, `ads.py`. Data leaves `prompt_world.py`, `transitions.py`, `fallbacks.py` are already extracted.
 
 Until those PRs land, these modules are postal addresses, not destinations. Ride the structure that exists today; do not pre-split.
