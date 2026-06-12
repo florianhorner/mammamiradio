@@ -83,19 +83,21 @@ fi
 # ---- 2. Image path format ----
 echo "2. Image path"
 IMAGE=$(grep '^image:' ha-addon/mammamiradio/config.yaml | awk '{print $2}')
-# Owner detection (primary: git remote → gh → repository.yaml manifest → unknown).
+# Owner detection (primary: git remote → repository.yaml manifest → gh → unknown).
 # Each `$(...)` ends in `|| true` so a failing stage (git with no origin, grep
 # with no match) can't trip `set -euo pipefail`: under pipefail the pipeline
 # inherits git's non-zero exit, which `set -e` would otherwise treat as fatal.
 OWNER=$(git remote get-url origin 2>/dev/null | sed 's|.*github.com[:/]||;s|/.*||' || true)
-if [ -z "$OWNER" ]; then
-    OWNER=$(gh api user -q .login 2>/dev/null || true)
-fi
-# No remote and no gh (fresh/no-remote worktree): fall back to the canonical
-# owner recorded in repository.yaml — the single-source repo manifest — instead
-# of an empty owner (which would expand to the bogus ghcr.io//... expectation).
+# No remote (fresh/no-remote worktree): the repo manifest is the canonical owner.
+# Prefer it over `gh api user`, which returns whoever is logged in — possibly a
+# different account than the repo owner, which would make EXPECTED wrong and fail
+# a correct config.yaml (the bogus mismatch this fallback exists to prevent).
 if [ -z "$OWNER" ]; then
     OWNER=$(grep '^url:' repository.yaml 2>/dev/null | sed 's|.*github.com[:/]||;s|/.*||' || true)
+fi
+# Last resort if the manifest is missing/malformed: the logged-in gh account.
+if [ -z "$OWNER" ]; then
+    OWNER=$(gh api user -q .login 2>/dev/null || true)
 fi
 [ -z "$OWNER" ] && OWNER="unknown"
 EXPECTED="ghcr.io/${OWNER}/mammamiradio-addon-{arch}"
