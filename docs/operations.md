@@ -146,11 +146,12 @@ There is no blessed platform in this repo, but the sensible shape is:
 This section is the single source of truth for who may reach `/admin` and the
 admin API. Two layers enforce it: a **boot check** (`_validate` in
 `mammamiradio/core/config.py`) decides whether the process starts at all, and a
-**per-request check** (`require_admin_access` in `mammamiradio/web/streamer.py`)
+**per-request check** (`require_admin_access` in `mammamiradio/web/auth.py`)
 authorizes each call. The tables below are the contract; the code conforms to
 them, and the `tests/web/test_streamer_routes.py` admin-access group plus
-`tests/core/test_config.py` bind tests pin every row. Change a row here and in
-those two enforcement points together, never one without the others.
+`tests/core/test_config.py` bind tests pin every row (helper-level unit tests
+live in `tests/web/test_auth.py`). Change a row here and in those two
+enforcement points together, never one without the others.
 
 Terms: **standalone** = any non-add-on run (local, Docker). **add-on** =
 the Home Assistant add-on (`is_addon` true). **Creds** = `ADMIN_PASSWORD` and/or
