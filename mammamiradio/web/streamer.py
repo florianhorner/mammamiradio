@@ -7,13 +7,11 @@ import atexit
 import concurrent.futures
 import copy
 import importlib
-import ipaddress
 import logging
 import math
 import os
 import random as _random
 import re as _re
-import secrets
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -22,7 +20,6 @@ from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
-from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.templating import Jinja2Templates
 
 from mammamiradio.audio.norm_cache import select_norm_cache_rescue as _select_norm_cache_rescue
@@ -56,6 +53,22 @@ from mammamiradio.web.assets import (
     _TEMPLATES_DIR,
     _bust_static_cache,
 )
+from mammamiradio.web.auth import (  # noqa: F401  facade re-export — routes/tests read these as streamer.*; only some are used in-module
+    _CSRF_TOKEN_PLACEHOLDER,
+    _HASSIO_NETWORK,
+    _MUTATING_METHODS,
+    _TRUSTED_NETWORKS,
+    _enforce_csrf_for_basic_auth,
+    _enforce_csrf_for_private_network,
+    _get_csrf_token,
+    _inject_csrf_token,
+    _is_hassio_or_loopback,
+    _is_loopback_client,
+    _is_private_network,
+    _same_origin,
+    require_admin_access,
+    security,
+)
 from mammamiradio.web.mp3_frames import _skip_id3_and_xing_header
 from mammamiradio.web.pages import _get_injected_html, _sanitize_ingress_prefix
 from mammamiradio.web.persistence import (
@@ -86,12 +99,12 @@ _search_executor = concurrent.futures.ThreadPoolExecutor(max_workers=4, thread_n
 atexit.register(_search_executor.shutdown, wait=False, cancel_futures=True)
 
 router = APIRouter()
-security = HTTPBasic(auto_error=False)
 
-# TODO: split — this 2,395-line god module is a postal address, not a destination.
-# See docs/2026-04-28-cathedral-restructure.md (PR 5) for the routes/auth/playback split plan.
+# TODO: split — this god module is a postal address, not a destination.
+# See docs/archive/2026-04-28-cathedral-restructure.md (PR 5) for the routes/playback split plan.
 # Path roots, the static-asset content hash (_ASSET_VERSION), and
-# _bust_static_cache now live in web/assets.py and are imported above.
+# _bust_static_cache now live in web/assets.py; admin auth (require_admin_access,
+# CSRF, trusted networks) now lives in web/auth.py — both imported above.
 #
 # Jinja2 templates for brand-engine listener page (PR-C). Admin/live still use
 # string-replace via _inject_ingress_prefix (web/pages.py); only listener migrates to Jinja for now.
@@ -138,8 +151,6 @@ def _safe_external_album_art(value: Any) -> str:
     return url
 
 
-_MUTATING_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
-_CSRF_TOKEN_PLACEHOLDER = "__MAMMAMIRADIO_CSRF_TOKEN__"
 SESSION_STOPPED_FLAG = "session_stopped.flag"
 SILENCE_FAILURE_SECONDS = 30.0
 QUEUE_FALLBACK_WAIT_SECONDS = 5.0
@@ -870,70 +881,6 @@ def _source_options_reason(config, exc: Exception) -> str:
     return f"Source loading failed: {exc}"
 
 
-def _get_csrf_token(app) -> str:
-    token = getattr(app.state, "csrf_token", "")
-    if not token:
-        token = secrets.token_urlsafe(32)
-        app.state.csrf_token = token
-    return token
-
-
-def _inject_csrf_token(html: str, token: str) -> str:
-    return html.replace(_CSRF_TOKEN_PLACEHOLDER, token)
-
-
-def _same_origin(request: Request, candidate: str) -> bool:
-    parsed = urlparse(candidate)
-    if not parsed.scheme or not parsed.netloc:
-        return False
-    request_url = request.url
-
-    # Normalize ports: None means the default for the scheme (80/443)
-    def _effective_port(port, scheme: str) -> int:
-        if port is not None:
-            return port
-        return 443 if scheme == "https" else 80
-
-    return (
-        parsed.scheme == request_url.scheme
-        and parsed.hostname == request_url.hostname
-        and _effective_port(parsed.port, parsed.scheme) == _effective_port(request_url.port, request_url.scheme)
-    )
-
-
-def _enforce_csrf_for_basic_auth(request: Request, credentials: HTTPBasicCredentials | None, config) -> None:
-    if request.method.upper() not in _MUTATING_METHODS:
-        return
-    if _is_loopback_client(request):
-        return
-
-    ingress_prefix = request.headers.get("X-Ingress-Path", "")
-    if config.is_addon and ingress_prefix and _is_hassio_or_loopback(request):
-        return
-    admin_token_header = request.headers.get("X-Radio-Admin-Token", "")
-    if config.admin_token and admin_token_header and secrets.compare_digest(admin_token_header, config.admin_token):
-        return
-    if not config.admin_password or not credentials:
-        return
-
-    csrf_token = request.headers.get("X-Radio-CSRF-Token", "")
-    if csrf_token and secrets.compare_digest(csrf_token, _get_csrf_token(request.app)):
-        return
-
-    origin = request.headers.get("Origin", "")
-    if origin and _same_origin(request, origin):
-        return
-
-    referer = request.headers.get("Referer", "")
-    if referer and _same_origin(request, referer):
-        return
-
-    raise HTTPException(
-        status_code=403,
-        detail="Cross-site admin write blocked. Reload the dashboard and retry.",
-    )
-
-
 class LiveStreamHub:
     """Fan out live audio chunks to all connected listener streams."""
 
@@ -998,157 +945,6 @@ class LiveStreamHub:
                 queue.put_nowait(None)
             except asyncio.QueueFull:
                 pass
-
-
-_HASSIO_NETWORK = ipaddress.ip_network("172.30.32.0/23")
-
-# Private/trusted networks: loopback, RFC1918, IPv4/IPv6 link-local,
-# IPv6 unique-local, HA Supervisor, and Tailscale/CGNAT (100.64.0.0/10).
-# A self-hosted radio station trusts its own LAN — the operator installed it
-# themselves.
-_TRUSTED_NETWORKS = [
-    ipaddress.ip_network("10.0.0.0/8"),
-    ipaddress.ip_network("172.16.0.0/12"),
-    ipaddress.ip_network("192.168.0.0/16"),
-    ipaddress.ip_network("100.64.0.0/10"),  # CGNAT / Tailscale
-    ipaddress.ip_network("169.254.0.0/16"),  # link-local
-    ipaddress.ip_network("fc00::/7"),  # IPv6 unique-local
-    ipaddress.ip_network("fe80::/10"),  # IPv6 link-local
-    _HASSIO_NETWORK,
-]
-
-
-def _is_loopback_client(request: Request) -> bool:
-    """Return whether the current request originated from localhost."""
-    if not request.client:
-        return False
-    host = request.client.host
-    if host == "localhost":
-        return True
-    try:
-        return ipaddress.ip_address(host).is_loopback
-    except ValueError:
-        return False
-
-
-def _is_private_network(request: Request) -> bool:
-    """Return True for loopback, LAN, Tailscale CGNAT, or HA Supervisor."""
-    if _is_loopback_client(request):
-        return True
-    if not request.client:
-        return False
-    try:
-        addr = ipaddress.ip_address(request.client.host)
-    except ValueError:
-        return False
-    return any(addr in net for net in _TRUSTED_NETWORKS)
-
-
-def _is_hassio_or_loopback(request: Request) -> bool:
-    """Return True for loopback or the Hassio internal network."""
-    if _is_loopback_client(request):
-        return True
-    if not request.client:
-        return False
-    try:
-        return ipaddress.ip_address(request.client.host) in _HASSIO_NETWORK
-    except ValueError:
-        return False
-
-
-def _enforce_csrf_for_private_network(request: Request) -> None:
-    """Block cross-site mutating requests from private networks.
-
-    LAN trust skips credential checks but a browser on the LAN could still
-    be tricked into a cross-site POST. Require same-origin or CSRF token
-    on mutating methods.
-    """
-    if request.method.upper() not in _MUTATING_METHODS:
-        return
-
-    csrf_token = request.headers.get("X-Radio-CSRF-Token", "")
-    if csrf_token and secrets.compare_digest(csrf_token, _get_csrf_token(request.app)):
-        return
-
-    origin = request.headers.get("Origin", "")
-    if origin and _same_origin(request, origin):
-        return
-
-    referer = request.headers.get("Referer", "")
-    if referer and _same_origin(request, referer):
-        return
-
-    raise HTTPException(
-        status_code=403,
-        detail="Cross-site admin write blocked. Reload the dashboard and retry.",
-    )
-
-
-# Admin-access contract: the authoritative matrix is the "Admin access model"
-# section in docs/operations.md. This function is the request-layer half; the
-# boot-layer half is _validate() in core/config.py. Keep this function, that check,
-# and the doc in sync — the tests/web/test_streamer_routes.py admin-access group
-# and tests/core/test_config.py bind tests pin every row.
-def require_admin_access(
-    request: Request,
-    credentials: HTTPBasicCredentials | None = Depends(security),
-) -> None:
-    """Authorize admin-only routes using configured credentials or local trust."""
-    config = request.app.state.config
-
-    # Loopback is fully trusted — same machine, no CSRF risk.
-    if _is_loopback_client(request):
-        return
-
-    # HA Supervisor network is Docker-internal (not user-accessible), so
-    # CSRF from a browser on that network is not a real threat. Fully trust
-    # it in addon mode so HA automations (rest_command, etc.) work without tokens.
-    if config.is_addon and _is_hassio_or_loopback(request):
-        return
-
-    # Explicit auth for all non-local traffic when credentials are configured.
-    if config.admin_token:
-        token = request.headers.get("X-Radio-Admin-Token")
-        if token and secrets.compare_digest(token, config.admin_token):
-            return
-
-    if config.admin_password:
-        username = credentials.username if credentials else ""
-        password = credentials.password if credentials else ""
-        if secrets.compare_digest(username, config.admin_username) and secrets.compare_digest(
-            password, config.admin_password
-        ):
-            _enforce_csrf_for_basic_auth(request, credentials, config)
-            return
-        client_ip = request.client.host if request.client else "unknown"
-        logger.warning("Failed admin auth attempt from %s", client_ip)
-        raise HTTPException(
-            status_code=401,
-            detail="Admin authentication required",
-            headers={"WWW-Authenticate": 'Basic realm="mammamiradio admin"'},
-        )
-
-    if config.admin_token:
-        client_ip = request.client.host if request.client else "unknown"
-        logger.warning("Missing admin token from %s", client_ip)
-        raise HTTPException(
-            status_code=401,
-            detail="X-Radio-Admin-Token required",
-        )
-
-    # Backward-compatible fallback when no admin credentials are configured.
-    # In standalone mode load_config() now rejects a non-loopback bind without
-    # creds, so in production this only fires for loopback binds (already
-    # short-circuited above). Reachable here mainly via test apps built without
-    # creds — kept so credential-less LAN deployments keep working with CSRF.
-    if _is_private_network(request):
-        _enforce_csrf_for_private_network(request)
-        return
-
-    raise HTTPException(
-        status_code=403,
-        detail="Admin endpoints are only available from private networks unless admin auth is configured",
-    )
 
 
 async def run_playback_loop(app) -> None:

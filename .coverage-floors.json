@@ -29,6 +29,7 @@
   "mammamiradio.scheduling.clip": 96,
   "mammamiradio.scheduling.producer": 83,
   "mammamiradio.scheduling.scheduler": 99,
-  "mammamiradio.web.streamer": 91,
-  "mammamiradio.web.og_card": 96
+  "mammamiradio.web.auth": 92,
+  "mammamiradio.web.og_card": 96,
+  "mammamiradio.web.streamer": 91
 }
