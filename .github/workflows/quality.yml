@@ -35,6 +35,18 @@ jobs:
       - name: Edge add-on validation self-test
         run: bash tests/workflows/test_validate_addon_edge.sh
 
+      - name: Pre-ship squad gate self-test
+        run: bash tests/workflows/test_preship_squad_gate.sh
+
+      - name: Landing wrapper self-test
+        run: bash tests/workflows/test_land_pr.sh
+
+      - name: Dependabot nudge self-test
+        run: bash tests/workflows/test_dependabot_nudge.sh
+
+      - name: Merge-gate drift check self-test
+        run: bash tests/workflows/test_check_merge_gate.sh
+
       - name: Ruff lint
         run: ruff check .
 
