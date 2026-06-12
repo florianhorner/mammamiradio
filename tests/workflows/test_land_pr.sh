@@ -23,7 +23,10 @@ trap 'rm -rf "$TMPDIR_T"' EXIT
 
 HEAD_FULL="$(git rev-parse HEAD)"
 HEAD_SHORT="$(git rev-parse --short HEAD)"
-ANC_SHORT="$(git rev-parse --short HEAD~1)"
+# Ancestor cases need HEAD~1 — a depth-1 shallow clone has no parent commit.
+# CI checks out with fetch-depth: 2 (quality.yml) precisely for this.
+ANC_SHORT="$(git rev-parse --short HEAD~1 2>/dev/null)" \
+  || fail "HEAD~1 unavailable (shallow clone?) — checkout with fetch-depth >= 2"
 BOGUS_SHA="0000000"
 
 NOW_ISO="$(date -u +%Y-%m-%dT%H:%M:%SZ)"

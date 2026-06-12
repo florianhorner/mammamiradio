@@ -22,7 +22,10 @@ fail() { echo "FAIL: $1" >&2; exit 1; }
 pass() { echo "PASS: $1"; }
 
 HEAD_SHA="$(git rev-parse --short HEAD)"
-ANC_SHA="$(git rev-parse --short HEAD~1)"
+# Ancestor cases need HEAD~1 — a depth-1 shallow clone has no parent commit.
+# CI checks out with fetch-depth: 2 (quality.yml) precisely for this.
+ANC_SHA="$(git rev-parse --short HEAD~1 2>/dev/null)" \
+  || fail "HEAD~1 unavailable (shallow clone?) — checkout with fetch-depth >= 2"
 BOGUS_SHA="0000000"
 
 NOW_ISO="$(date -u +%Y-%m-%dT%H:%M:%SZ)"

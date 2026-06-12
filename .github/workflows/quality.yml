@@ -15,6 +15,10 @@ jobs:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
+          # The workflow self-tests resolve HEAD~1 (ancestor cases in the
+          # squad-gate and landing-wrapper suites); a depth-1 clone has no
+          # parent commit and they die with "Needed a single revision".
+          fetch-depth: 2
 
       - name: Install ffmpeg
         run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
