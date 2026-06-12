@@ -64,6 +64,7 @@ Everything else lives under `docs/`:
 - `docs/troubleshooting.md` - common failures and recovery paths
 - `docs/runbooks/ha-addon.md` - addon release process, config contract, pre-merge checklist
 - `docs/runbooks/refactor-cuts.md` - god-module split: per-cut pre-flight checklist and lessons
+- `docs/runbooks/ha-upstream-watch.md` - early-warning watcher for HA upstream changes touching our HA surface
 - `docs/design/system.md` - Volare design system: colors, typography, components, motion
 - `docs/design/admin-panel.md` - admin control-room layout, info architecture, motion rules
 - `docs/conductor.md` - Conductor workspace lifecycle and `.env` discovery
