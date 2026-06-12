@@ -314,8 +314,8 @@ def test_fetch_injects_github_auth_only_for_github(monkeypatch: pytest.MonkeyPat
         def __enter__(self) -> _Resp:
             return self
 
-        def __exit__(self, *a: object) -> bool:
-            return False
+        def __exit__(self, *a: object) -> None:
+            return None
 
     def fake_urlopen(request, timeout: float = 15.0):
         captured["request"] = request
@@ -345,8 +345,8 @@ def test_fetch_gh_token_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
         def __enter__(self) -> _Resp:
             return self
 
-        def __exit__(self, *a: object) -> bool:
-            return False
+        def __exit__(self, *a: object) -> None:
+            return None
 
     def fake_urlopen(request, timeout: float = 15.0):
         captured["r"] = request
