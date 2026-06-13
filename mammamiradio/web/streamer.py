@@ -154,6 +154,14 @@ def _safe_external_album_art(value: Any) -> str:
 
 SESSION_STOPPED_FLAG = "session_stopped.flag"
 SILENCE_FAILURE_SECONDS = 30.0
+# Producer rescue-bridge health (#547). A drain/resume/idle bridge firing now and
+# then is normal (one startup or resume bridge is expected). Firing repeatedly
+# means the lookahead queue is starving and the station is "running on rescue" —
+# audio plays, but it is cached rotation, not the real station. BRIDGE_HEALTH_*
+# defines that line: this many bridges inside the rolling window flips runtime
+# status to unhealthy so the operator sees it instead of a falsely-green station.
+BRIDGE_HEALTH_WINDOW_SECONDS = 900.0  # 15-minute rolling window
+BRIDGE_HEALTH_THRESHOLD = 3  # bridges within the window before "running on rescue"
 QUEUE_FALLBACK_WAIT_SECONDS = 5.0
 STARTUP_GRACE_SECONDS = 30.0
 CLIP_RATE_LIMIT_SECONDS = 10.0
@@ -648,6 +656,32 @@ def _runtime_status_snapshot(
         "recent_events": recent_events,
         "failover_events": failover_events,
         "no_failover_message": "No failover in current session." if not failover_events else "",
+        "bridge_health": _bridge_health_snapshot(state),
+    }
+
+
+def _bridge_health_snapshot(state: StationState) -> dict:
+    """Producer rescue-bridge health for the admin Runtime Status card (#547).
+
+    Windows ``state.bridge_events`` to count recent drain/resume/idle bridge
+    fires; ``unhealthy`` trips once the count reaches ``BRIDGE_HEALTH_THRESHOLD``
+    inside ``BRIDGE_HEALTH_WINDOW_SECONDS``. Session counts and the queue-empty
+    elapsed (reused from the existing health probe) ride along so the operator
+    sees one honest "running on rescue" readout instead of a falsely-green card.
+    """
+    now = time.time()
+    window = BRIDGE_HEALTH_WINDOW_SECONDS
+    recent = [e for e in state.bridge_events if now - float(e.get("timestamp") or 0.0) <= window]
+    last_fire = state.bridge_events[-1] if state.bridge_events else None
+    return {
+        "window_seconds": window,
+        "threshold": BRIDGE_HEALTH_THRESHOLD,
+        "session_count": state.bridge_fires_total,
+        "by_type": dict(state.bridge_fires_by_type),
+        "window_count": len(recent),
+        "last_fire": dict(last_fire) if last_fire else None,
+        "queue_empty_elapsed_s": round(_queue_empty_elapsed(state), 1),
+        "unhealthy": len(recent) >= BRIDGE_HEALTH_THRESHOLD,
     }
 
 

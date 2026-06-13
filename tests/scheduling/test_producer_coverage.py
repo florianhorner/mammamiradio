@@ -1191,6 +1191,10 @@ async def test_drain_guard_norm_cache_bridge_when_no_canned_clip(tmp_path):
     assert seg.metadata["artist"] == "Cache Artist"
     assert seg.metadata["queue_drain_recovery"] is True
     assert seg.metadata["audio_source"] == "norm_cache"
+    # #547: a successful norm-cache drain bridge is recorded for observability.
+    assert state.bridge_fires_total == 1
+    last = state.bridge_events[-1]
+    assert (last["bridge_type"], last["source"]) == ("drain", "norm_cache")
 
 
 @pytest.mark.asyncio
@@ -1224,6 +1228,10 @@ async def test_drain_guard_emergency_tone_when_no_canned_clip_or_norm_cache(tmp_
     assert seg.ephemeral is True
     assert seg.metadata["queue_drain_recovery"] is True
     assert seg.metadata["audio_source"] == "emergency_tone"
+    # #547: the emergency-tone drain bridge is recorded too.
+    assert state.bridge_fires_total == 1
+    last = state.bridge_events[-1]
+    assert (last["bridge_type"], last["source"]) == ("drain", "emergency_tone")
 
 
 @pytest.mark.asyncio
@@ -1247,6 +1255,63 @@ async def test_drain_guard_emergency_tone_failure_is_contained(tmp_path):
 
     assert queued is False
     assert queue.empty()
+    # #547: a bridge that failed to enqueue must NOT be counted — telemetry only
+    # records audio that actually reached the queue.
+    assert state.bridge_fires_total == 0
+    assert len(state.bridge_events) == 0
+
+
+@pytest.mark.asyncio
+async def test_drain_guard_records_bridge_fire_for_canned_clip(tmp_path):
+    """A successful canned-clip drain bridge is recorded as ('drain', 'canned')."""
+    state = _make_run_state()
+    config = _make_run_config()
+    config.tmp_dir = tmp_path
+    config.cache_dir = tmp_path
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+
+    canned_clip = tmp_path / "canned.mp3"
+    canned_clip.write_bytes(b"canned banter audio" * 50)
+
+    async def _queue_segment(segment: Segment) -> bool:
+        await queue.put(segment)
+        return True
+
+    with patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=canned_clip):
+        queued = await _queue_drain_recovery_bridge(_queue_segment, state, config)
+
+    assert queued is True
+    seg = queue.get_nowait()
+    assert seg.type == SegmentType.BANTER
+    assert seg.metadata["queue_drain_recovery"] is True
+    assert state.bridge_fires_total == 1
+    assert state.bridge_fires_by_type["drain"] == 1
+    last = state.bridge_events[-1]
+    assert (last["bridge_type"], last["source"]) == ("drain", "canned")
+
+
+@pytest.mark.asyncio
+async def test_drain_guard_does_not_record_bridge_fire_when_enqueue_rejected(tmp_path):
+    """The `if ok:` guard: a canned clip that fails to enqueue (e.g. session
+    stopped mid-generation, queue overflow) must NOT count as a bridge fire —
+    telemetry records only audio that actually reached the queue."""
+    state = _make_run_state()
+    config = _make_run_config()
+    config.tmp_dir = tmp_path
+    config.cache_dir = tmp_path
+
+    canned_clip = tmp_path / "canned.mp3"
+    canned_clip.write_bytes(b"canned banter audio" * 50)
+
+    async def _reject_segment(segment: Segment) -> bool:
+        return False  # enqueue rejected (e.g. session stopped)
+
+    with patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=canned_clip):
+        queued = await _queue_drain_recovery_bridge(_reject_segment, state, config)
+
+    assert queued is False
+    assert state.bridge_fires_total == 0
+    assert len(state.bridge_events) == 0
 
 
 @pytest.mark.asyncio
