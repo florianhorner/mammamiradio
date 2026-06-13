@@ -963,6 +963,30 @@ def test_budgeted_summary_strips_angle_brackets_at_llm_boundary():
     assert "home_state_data" in out
 
 
+def test_label_stats_all_curated_does_not_divide_by_zero():
+    # When every eligible entity is curated, the hit-rate denominator
+    # (eligible - curated) is 0; the guard must clamp it to 1, not raise.
+    from mammamiradio.home.ha_context import ScoredEntity, _label_stats
+
+    scored = [
+        ScoredEntity(
+            entity_id="switch.bar_kaffeemaschine_steckdose",
+            area="Kitchen",
+            domain="switch",
+            score=1.0,
+            raw_state={},
+            label_it="La macchina del caffe",
+            label_en="Coffee machine",
+            label_tier="curated",
+            summary_line="x",
+        )
+    ]
+    stats = _label_stats(scored)
+    assert stats["eligible"] == 1
+    assert stats["curated"] == 1
+    assert stats["catalog_hit_rate"] == 0.0
+
+
 # ---------------------------------------------------------------------------
 # Additional mood coverage
 # ---------------------------------------------------------------------------

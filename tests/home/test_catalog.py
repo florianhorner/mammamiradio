@@ -81,6 +81,24 @@ def test_resolve_label_drops_entity_without_safe_name_or_catalog(tmp_path):
     assert resolve_label("sensor.unlabeled_helper", {"state": "on", "attributes": {}}, cache_dir=tmp_path) is None
 
 
+@pytest.mark.parametrize(
+    "entity_id,friendly_name",
+    [
+        # HA's default friendly_name for an unnamed entity is the snake_case
+        # object_id — must never reach the host (anti-illusion guard).
+        ("fan.kuche_lufter_shelly", "kuche_lufter_shelly"),
+        # A full dotted entity_id leaking through friendly_name.
+        ("light.office", "light.office"),
+    ],
+)
+def test_resolve_label_fallback_drops_raw_object_ids(tmp_path, entity_id, friendly_name):
+    state = {"state": "on", "attributes": {"friendly_name": friendly_name}}
+    # validate_label rejects these strings; the fallback tier must honor that
+    # and drop the entity rather than airing a raw id.
+    assert not validate_label(friendly_name, entity_id)
+    assert resolve_label(entity_id, state, cache_dir=tmp_path) is None
+
+
 def test_load_catalog_corrupt_json_degrades_to_empty(tmp_path):
     (tmp_path / CATALOG_FILENAME).write_text("{", encoding="utf-8")
     assert load_catalog(tmp_path)["entries"] == {}
@@ -105,10 +123,7 @@ def test_validate_label_rejects_unsafe_labels():
 
 
 def test_select_label_candidates_sorts_by_score_and_caps_tokens(tmp_path):
-    states = {
-        f"sensor.entity_{idx}": _state(f"Entity {idx}", area="A" * 240)
-        for idx in range(60)
-    }
+    states = {f"sensor.entity_{idx}": _state(f"Entity {idx}", area="A" * 240) for idx in range(60)}
     scores = {entity_id: float(idx) for idx, entity_id in enumerate(states)}
 
     selected = select_label_candidates(
@@ -179,9 +194,10 @@ async def test_generate_label_catalog_failure_preserves_old_catalog(tmp_path):
         result = await generate_label_catalog({entity_id: state}, cache_dir=tmp_path, config=config, force=True)
 
     assert result["entries"][entity_id]["label_it"] == "Vecchia luce"
-    assert json.loads((tmp_path / CATALOG_FILENAME).read_text(encoding="utf-8"))["entries"][entity_id][
-        "label_it"
-    ] == "Vecchia luce"
+    assert (
+        json.loads((tmp_path / CATALOG_FILENAME).read_text(encoding="utf-8"))["entries"][entity_id]["label_it"]
+        == "Vecchia luce"
+    )
 
 
 @pytest.mark.asyncio
@@ -195,4 +211,25 @@ async def test_schedule_label_generation_flag_prevents_task_buildup(tmp_path):
         await asyncio.sleep(0)
         await asyncio.sleep(0)
         assert schedule_label_generation(states, cache_dir=tmp_path, config=config)
+        await asyncio.sleep(0)
+
+
+@pytest.mark.asyncio
+async def test_schedule_label_generation_resets_flag_after_failure(tmp_path):
+    """A failed background refresh must clear the scheduled flag, not strand it
+    True forever (which would silently starve all future generation)."""
+    config = _config()
+    states = {"light.counter": _state("Counter light")}
+
+    with patch(
+        "mammamiradio.home.catalog.generate_label_catalog",
+        new=AsyncMock(side_effect=RuntimeError("boom")),
+    ):
+        assert schedule_label_generation(states, cache_dir=tmp_path, config=config)
+        # Let the background task run to completion (and hit its finally block).
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        # Flag was reset despite the failure: a new refresh can be scheduled.
+        assert schedule_label_generation(states, cache_dir=tmp_path, config=config)
+        await asyncio.sleep(0)
         await asyncio.sleep(0)

@@ -2131,6 +2131,37 @@ async def test_homeassistant_labels_regenerate_returns_409_when_running():
     assert resp.status_code == 409
 
 
+@pytest.mark.asyncio
+async def test_homeassistant_labels_regenerate_no_key_returns_unscheduled():
+    app = _make_test_app()
+    app.state.config.anthropic_api_key = ""
+
+    with patch("mammamiradio.web.streamer.generation_in_progress", return_value=False):
+        transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 9999))
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            resp = await client.post("/api/homeassistant/labels/regenerate")
+
+    assert resp.status_code == 200
+    assert resp.json() == {"scheduled": False, "reason": "anthropic_key_missing"}
+
+
+@pytest.mark.asyncio
+async def test_homeassistant_labels_regenerate_no_home_context_returns_unscheduled():
+    app = _make_test_app()
+    app.state.config.anthropic_api_key = "sk-ant-test"
+
+    with (
+        patch("mammamiradio.web.streamer.generation_in_progress", return_value=False),
+        patch("mammamiradio.web.streamer.get_cached_home_context", return_value=None),
+    ):
+        transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 9999))
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            resp = await client.post("/api/homeassistant/labels/regenerate")
+
+    assert resp.status_code == 200
+    assert resp.json() == {"scheduled": False, "reason": "home_context_unavailable"}
+
+
 # ---------------------------------------------------------------------------
 # Stopped sessions stay stopped until explicit resume
 # ---------------------------------------------------------------------------

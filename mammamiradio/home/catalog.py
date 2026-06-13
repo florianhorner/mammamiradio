@@ -341,7 +341,11 @@ def resolve_label(entity_id: str, state_data: dict, *, cache_dir: Path | None = 
             return LabelResolution(label_it, label_en, "catalog")
 
     fallback = _fallback_label(entity_id, state_data)
-    if fallback:
+    # Anti-illusion guard: a friendly/registry name that is really the raw
+    # snake_case object_id (HA's default for unnamed entities) or a dotted
+    # entity_id must not air. validate_label is the only tier with that check,
+    # so the fallback must clear it too — otherwise drop to tier 4.
+    if fallback and validate_label(fallback, entity_id):
         return LabelResolution(fallback, fallback, "fallback")
     return None
 
