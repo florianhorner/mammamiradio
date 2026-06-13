@@ -104,6 +104,33 @@ Admin (require `ADMIN_PASSWORD` or `ADMIN_TOKEN` unless on loopback):
 
 The Engine Room card in `/admin` renders this as two tiers: station health ("On Air" / "Paused" / "Error") and provider health ("Primary" / "Auto-recovering" / "Backup active"). Structured log events (`provider_switch_event`, `provider_health_state`) are also emitted so log aggregators can alert on sustained fallback states.
 
+### Reading queue-rescue health ("running on rescue")
+
+`runtime_status.bridge_health` reports how often the producer is bridging a
+starved lookahead queue with rescue audio (cached, canned, or an emergency
+tone). When a bridge fires the station is briefly not the real radio — audio
+keeps playing, but it is rotation/canned fallback, not fresh content. The fields:
+
+- `session_count` / `by_type` — lifetime bridge fires this session, split across
+  `drain` (queue emptied mid-playback), `resume` (waking from a stopped session),
+  and `idle` (a listener returned after the station went idle).
+- `window_count` — bridge fires inside the rolling window (`window_seconds`,
+  default 900s / 15 min).
+- `last_fire` — the most recent bridge `{bridge_type, source, timestamp}`.
+- `queue_empty_elapsed_s` — how long the queue has been empty right now.
+- `unhealthy` — `true` once `window_count` reaches `threshold` (default **3
+  bridges in 15 minutes**). That is the documented line for "the station is
+  running on rescue": one startup or resume bridge is normal, but repeated
+  bridging means the queue is starving (most visibly on the Pi, where
+  normalization latency is high) and needs attention even though audio plays.
+
+The Engine Room **Queue rescue** row renders this as "Healthy" or "Running on
+rescue", with the window/session counts, the last bridge, and current
+queue-empty seconds. A `producer_bridge_fire` structured log event is emitted on
+every fire so log aggregators can alert on sustained starvation. Counts are
+session-local by design and reset on restart. This is observability only — it
+does not change scheduling, prefetch depth, or rescue selection.
+
 ### Detecting a not-working provider key
 
 A key that is present but invalid is validated actively, so the operator sees it
