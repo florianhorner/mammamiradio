@@ -1,0 +1,17 @@
+# Proof — PR #577 fix(ha): retry first home moment after fallback (CI-fix follow-up)
+# Generated locally on branch fix/ha-first-home-moment-retry
+
+## ruff check (changed files)
+All checks passed!
+
+## mypy mammamiradio/ tests/ (last line)
+Success: no issues found in 173 source files
+
+## pytest — affected files
+........................................................................ [ 87%]
+.....................                                                    [100%]
+165 passed in 5.85s
+
+## pytest — full suite
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+2759 passed, 2 skipped, 13 deselected, 1 warning in 56.46s

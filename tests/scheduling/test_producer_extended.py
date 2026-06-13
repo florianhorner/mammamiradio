@@ -81,17 +81,21 @@ def _fake_path(*_args, **_kwargs) -> Path:
     return Path("/tmp/mammamiradio_test/fake.mp3")
 
 
-_NO_AREA = object()
+class _NoArea:
+    """Sentinel type: 'area not passed' (-> default Room N) vs explicit area=None."""
+
+
+_NO_AREA = _NoArea()
 
 
 def _scored_home_entity(
     idx: int,
     *,
-    area: str | None | object = _NO_AREA,
+    area: str | None | _NoArea = _NO_AREA,
     label_it: str | None = None,
     label_en: str | None = None,
 ) -> ScoredEntity:
-    room = f"Room {idx}" if area is _NO_AREA else area
+    room: str | None = f"Room {idx}" if isinstance(area, _NoArea) else area
     label_base = room or f"Entity {idx}"
     return ScoredEntity(
         entity_id=f"light.room_{idx}",

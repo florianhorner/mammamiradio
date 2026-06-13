@@ -418,7 +418,10 @@ async def test_write_banter_falls_back_on_api_exception(config, state):
 
 @pytest.mark.asyncio
 async def test_write_banter_restores_pending_directive_on_fallback(config, state):
-    state.ha_pending_directive = "Mention the kitchen light."
+    # Quotes are rewritten by _sanitize_prompt_data before the directive reaches
+    # the prompt; the restore must put back the RAW directive, not that copy.
+    raw_directive = 'Mention the "kitchen" light.'
+    state.ha_pending_directive = raw_directive
     mock_client = MagicMock()
     mock_client.messages = MagicMock()
     mock_client.messages.create = AsyncMock(side_effect=Exception("API down"))
@@ -431,7 +434,7 @@ async def test_write_banter_restores_pending_directive_on_fallback(config, state
         result, _ = await write_banter(state, config)
 
     assert len(result) >= 2
-    assert state.ha_pending_directive == "Mention the kitchen light."
+    assert state.ha_pending_directive == raw_directive
 
 
 @pytest.mark.asyncio
