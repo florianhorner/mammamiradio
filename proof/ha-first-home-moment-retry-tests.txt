@@ -1,4 +1,4 @@
-# Proof — PR #577 fix(ha): retry first home moment after fallback (CI-fix follow-up)
+# Proof — PR #577 fix(ha): retry first home moment after fallback
 # Generated locally on branch fix/ha-first-home-moment-retry
 
 ## ruff check (changed files)
@@ -8,10 +8,10 @@ All checks passed!
 Success: no issues found in 173 source files
 
 ## pytest — affected files
-........................................................................ [ 87%]
-.....................                                                    [100%]
-165 passed in 5.85s
+........................................................................ [ 82%]
+..............................................                           [100%]
+262 passed in 20.97s
 
 ## pytest — full suite
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-2759 passed, 2 skipped, 13 deselected, 1 warning in 56.46s
+2760 passed, 2 skipped, 13 deselected, 1 warning in 55.19s
