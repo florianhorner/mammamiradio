@@ -1515,6 +1515,12 @@ Return JSON:
         logger.error("Banter generation failed (%s): %s", type(e).__name__, e, exc_info=True)
         if consumed_pending_directive and not state.ha_pending_directive:
             state.ha_pending_directive = pending_directive
+        # The running-gag callback never reached air (we're falling back to stock
+        # copy), so release its cooldown bucket. The producer spends the cooldown
+        # only when ha_running_gag_key is still set; clearing it here keeps a failed
+        # generation from burning a gag the listener never heard — offer_gag can
+        # surface it again at the next break.
+        state.ha_running_gag_key = ""
         if chaos_subtype is not None:
             state.chaos_script_fallbacks += 1
             state.chaos_last_degraded_reason = "script_fallback"

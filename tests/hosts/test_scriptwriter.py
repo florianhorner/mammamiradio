@@ -435,6 +435,26 @@ async def test_write_banter_restores_pending_directive_on_fallback(config, state
 
 
 @pytest.mark.asyncio
+async def test_write_banter_releases_gag_key_on_fallback(config, state):
+    state.ha_running_gag = "The hallway light keeps winking at us."
+    state.ha_running_gag_key = "gag-bucket-1"
+    mock_client = MagicMock()
+    mock_client.messages = MagicMock()
+    mock_client.messages.create = AsyncMock(side_effect=Exception("API down"))
+    mock_cls = MagicMock(return_value=mock_client)
+
+    with (
+        patch("mammamiradio.hosts.scriptwriter._anthropic_client", None),
+        patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
+    ):
+        result, _ = await write_banter(state, config)
+
+    assert len(result) >= 2
+    # The gag never aired, so its cooldown bucket must be released (not spent).
+    assert state.ha_running_gag_key == ""
+
+
+@pytest.mark.asyncio
 async def test_write_banter_falls_back_on_malformed_json(config, state):
     mock_cls = _mock_anthropic_response("this is not valid json {{{")
 
