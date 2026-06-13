@@ -1,4 +1,4 @@
-# Proof — feat(observability): surface producer rescue-bridge health (#547)
+# Proof — PR #579: feat(observability): surface producer rescue-bridge health (closes #547)
 # Generated locally on branch florianhorner/chore/verify-issues-565-547
 
 ## ruff check (mammamiradio/ tests/)
