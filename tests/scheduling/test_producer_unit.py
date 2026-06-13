@@ -1048,6 +1048,54 @@ async def test_running_gag_not_marked_on_canned_fallback():
 
 
 @pytest.mark.asyncio
+async def test_running_gag_not_marked_on_llm_stock_copy_fallback():
+    """An LLM fallback to stock copy must NOT spend the gag cooldown.
+
+    Unlike a canned-clip fallback, a stock-copy fallback keeps ``canned is None``,
+    so ``_used_generated_banter`` is True. The only thing stopping the producer
+    from burning the cooldown is ``write_banter`` releasing ``ha_running_gag_key``
+    before the success callback captures it. This locks that ordering: capturing
+    the key before ``write_banter`` ran would wrongly mark the gag spoken.
+    """
+    state = _make_state()
+    config = _make_config()
+    config.homeassistant.enabled = True
+    config.ha_token = "fake-token"
+    config.homeassistant.url = "http://ha.local:8123"
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+
+    ledger = MagicMock(spec=EveningLedger)
+    ledger.offer_gag.return_value = ("k_coffee", "La macchina del caffè di nuovo stasera.")
+    state.evening_ledger = ledger
+
+    host = config.hosts[0]
+
+    async def _fallback_releases_gag_key(*_args, **_kwargs):
+        # Mirror the real write_banter fallback: release the gag bucket and
+        # return stock copy (canned stays None -> _used_generated_banter is True).
+        state.ha_running_gag_key = ""
+        state.ha_running_gag = ""
+        return [(host, "Comunque, mica male questa.")], None
+
+    with (
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.BANTER),
+        patch(f"{SCRIPTWRITER_MODULE}.has_script_llm", return_value=True),
+        patch(f"{SCRIPTWRITER_MODULE}.write_banter", new_callable=AsyncMock, side_effect=_fallback_releases_gag_key),
+        patch(f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora...")),
+        patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(f"{PRODUCER_MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(f"{PRODUCER_MODULE}.concat_files", return_value=_fake_path()),
+        patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=None),
+        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock, return_value=_ha_ctx_mock()),
+        patch(f"{PRODUCER_MODULE}.check_reactive_triggers", return_value=None),
+    ):
+        await _run_until_queued(queue, state, config)
+
+    ledger.offer_gag.assert_called()
+    ledger.mark_spoken.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_banter_impossible_tts_path_does_not_apply_listener_request_commit():
     """Impossible-TTS fallback should queue banter without mutating listener requests."""
     state = _make_state()

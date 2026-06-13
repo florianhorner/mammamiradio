@@ -1391,7 +1391,12 @@ CHAOS DIRECTION:
 
     # Phase 4: reactive directive — HIGH PRIORITY impossible moment from a home event
     reactive_block = ""
-    pending_directive = _sanitize_prompt_data(state.ha_pending_directive, max_len=300)
+    # Keep the raw directive for restoration; only the sanitized copy goes in the
+    # prompt. Restoring the sanitized copy would mutate the stored directive
+    # (stripped quotes/role markers, truncated past 300 chars) on every fallback.
+    raw_pending_directive = state.ha_pending_directive
+    pending_directive = _sanitize_prompt_data(raw_pending_directive, max_len=300)
+    consumed_pending_directive = False
     if pending_directive:
         reactive_block = f"""
 HIGH PRIORITY — HOME EVENT DIRECTIVE:
@@ -1404,6 +1409,7 @@ Make this the focus of this banter break. It happened just now — react natural
         is_interrupt = ChaosSubtype.URGENT_INTERRUPT in (chaos_subtype, state.chaos_pending)
         if not is_interrupt:
             state.ha_pending_directive = ""
+            consumed_pending_directive = True
 
     # Listener request injection
     listener_request_block, listener_request_commit = _plan_listener_request_block(state)
@@ -1511,6 +1517,14 @@ Return JSON:
 
     except Exception as e:
         logger.error("Banter generation failed (%s): %s", type(e).__name__, e, exc_info=True)
+        if consumed_pending_directive and not state.ha_pending_directive:
+            state.ha_pending_directive = raw_pending_directive
+        # The running-gag callback never reached air (we're falling back to stock
+        # copy), so release its cooldown bucket. The producer spends the cooldown
+        # only when ha_running_gag_key is still set; clearing it here keeps a failed
+        # generation from burning a gag the listener never heard — offer_gag can
+        # surface it again at the next break.
+        state.ha_running_gag_key = ""
         if chaos_subtype is not None:
             state.chaos_script_fallbacks += 1
             state.chaos_last_degraded_reason = "script_fallback"
