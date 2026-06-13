@@ -2001,7 +2001,15 @@ async def test_idle_bridge_queues_canned_clip_when_available(tmp_path):
     seg = queue.get_nowait()
     assert seg.type == SegmentType.BANTER
     assert seg.metadata.get("warmup") is True
+    # #547: idle_bridge marks the warm-up clip as rescue audio so the fallback
+    # classifier does not report it as the primary station; warmup stays for the
+    # display contract.
+    assert seg.metadata.get("idle_bridge") is True
     assert seg.path == canned_clip
+    # The idle bridge fire is recorded for observability.
+    assert state.bridge_fires_total >= 1
+    last = state.bridge_events[-1]
+    assert (last["bridge_type"], last["source"]) == ("idle", "canned")
 
 
 # ---------------------------------------------------------------------------
@@ -2089,6 +2097,10 @@ async def test_resume_bridge_uses_canned_clip_when_available(tmp_path):
     seg = queue.get_nowait()
     assert seg.type == SegmentType.BANTER
     assert seg.metadata.get("resume_bridge") is True
+    # #547: the resume bridge fire is recorded for observability.
+    assert state.bridge_fires_total >= 1
+    last = state.bridge_events[-1]
+    assert (last["bridge_type"], last["source"]) == ("resume", "canned")
 
 
 @pytest.mark.asyncio
@@ -2129,6 +2141,10 @@ async def test_resume_bridge_falls_back_to_norm_cache_when_no_canned_clips(tmp_p
     assert seg.path == norm_file
     assert seg.metadata.get("title") == "Abc123"
     assert seg.metadata.get("artist") == ""
+    # #547: the norm-cache resume bridge fire is recorded.
+    assert state.bridge_fires_total >= 1
+    last = state.bridge_events[-1]
+    assert (last["bridge_type"], last["source"]) == ("resume", "norm_cache")
 
 
 @pytest.mark.asyncio
@@ -2254,6 +2270,10 @@ async def test_idle_bridge_falls_back_to_norm_cache_when_no_canned_clips(tmp_pat
     assert seg.path == norm_file
     assert seg.metadata.get("title") == "Idle123"
     assert seg.metadata.get("artist") == ""
+    # #547: the norm-cache idle bridge fire is recorded.
+    assert state.bridge_fires_total >= 1
+    last = state.bridge_events[-1]
+    assert (last["bridge_type"], last["source"]) == ("idle", "norm_cache")
 
 
 @pytest.mark.asyncio
