@@ -2112,6 +2112,7 @@ async def hot_reload_modules(request: Request, _: None = Depends(require_admin_a
     import mammamiradio.hosts.fallbacks as _fallbacks_mod
     import mammamiradio.hosts.prompt_world as _prompt_world_mod
     import mammamiradio.hosts.scriptwriter as _scriptwriter_mod
+    import mammamiradio.hosts.station_name_guard as _station_name_guard_mod
     import mammamiradio.hosts.transitions as _transitions_mod
 
     # Debounce: reject if called within 5s of last reload (monotonic to avoid NTP skew)
@@ -2142,11 +2143,12 @@ async def hot_reload_modules(request: Request, _: None = Depends(require_admin_a
         importlib.reload(_prompt_world_mod)
         importlib.reload(_transitions_mod)
         importlib.reload(_fallbacks_mod)
+        importlib.reload(_station_name_guard_mod)
         importlib.reload(_scriptwriter_mod)
         duration_ms = int((time.monotonic() - t0) * 1000)
         request.app.state._last_hot_reload_ts = now
         logger.info(
-            "hot-reload: reloaded prompt_world + transitions + fallbacks + scriptwriter in %dms",
+            "hot-reload: reloaded prompt_world + transitions + fallbacks + station_name_guard + scriptwriter in %dms",
             duration_ms,
         )
         return {
@@ -2155,6 +2157,7 @@ async def hot_reload_modules(request: Request, _: None = Depends(require_admin_a
                 "mammamiradio.hosts.prompt_world",
                 "mammamiradio.hosts.transitions",
                 "mammamiradio.hosts.fallbacks",
+                "mammamiradio.hosts.station_name_guard",
                 "mammamiradio.hosts.scriptwriter",
             ],
             "duration_ms": duration_ms,

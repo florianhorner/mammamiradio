@@ -1974,6 +1974,35 @@ async def test_push_state_to_ha_post_restart_rescue_artist_falls_back_to_station
 
 
 @pytest.mark.asyncio
+async def test_push_state_to_ha_keeps_real_radio_titled_song_and_band(reset_ha_push_debounce):
+    """Over-match guard, end to end: a song genuinely titled "Radio Ga Ga" by a
+    band whose name contains "Radio" must reach the HA card intact — the scrub
+    must not blank a real title or wipe a real artist."""
+    mock_client = AsyncMock()
+    mock_client.post.return_value = MagicMock(status_code=200)
+
+    with patch("mammamiradio.home.ha_context._get_ha_client", return_value=mock_client):
+        await push_state_to_ha(
+            ha_url="http://ha.local:8123",
+            ha_token="t",
+            now_streaming={
+                "type": "music",
+                "label": "Radio Ga Ga",
+                "started": time.time() - 5,
+                "metadata": {"title_only": "Radio Ga Ga", "artist": "Radiohead"},
+            },
+            current_track=None,
+            listeners_active=1,
+            session_stopped=False,
+            station_name="Radio PenthouseFlo FM",
+        )
+
+    attrs = _media_player_attrs(mock_client)
+    assert attrs["media_title"] == "Radio Ga Ga"  # real song title not blanked
+    assert attrs["media_artist"] == "Radiohead"  # single-token band not stripped
+
+
+@pytest.mark.asyncio
 async def test_push_state_to_ha_non_music_artist_is_always_station_name(reset_ha_push_debounce):
     """Contract: for non-music segments media_artist is sourced from station_name,
     never from segment metadata (locks the existing behaviour against regression)."""

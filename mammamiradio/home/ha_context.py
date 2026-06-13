@@ -1478,7 +1478,10 @@ async def push_state_to_ha(
                 or strip_foreign_station_name(getattr(current_track, "artist", None), station_name)
                 or station_name
             )
-            media_title = strip_foreign_station_name(media_title, station_name)
+            # Title uses prefix-only mode: strip a rescue display prefix
+            # ("Radio X - Song" -> "Song") but never blank a real song that is
+            # genuinely titled "Radio Ga Ga" / "Radio Free Europe".
+            media_title = strip_foreign_station_name(media_title, station_name, prefix_only=True)
         else:
             media_title = metadata.get("title") or (now_streaming.get("label", "") if now_streaming else "")
             media_artist = station_name

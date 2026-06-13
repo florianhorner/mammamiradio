@@ -51,6 +51,22 @@ def test_strip_handles_empty_and_none():
     assert strip_foreign_station_name(None, STATION) == ""
 
 
+def test_strip_prefix_only_never_blanks_a_real_radio_titled_song():
+    # Title field: a real song literally named "Radio X" must survive (prefix_only
+    # skips the whole-value match that would blank it). Blanking the now-playing
+    # title is itself an illusion break.
+    for title in ("Radio Ga Ga", "Radio Free Europe", "Radio Nowhere"):
+        assert strip_foreign_station_name(title, STATION, prefix_only=True) == title
+
+
+def test_strip_prefix_only_still_strips_rescue_display_prefix():
+    # But the rescue display form "Foreign - Song" still loses the foreign prefix.
+    assert (
+        strip_foreign_station_name("Radio Sabrina Sensatione – Be Without U", STATION, prefix_only=True)
+        == "Be Without U"
+    )
+
+
 # ---- sanitize_spoken_station_name (script text) ------------------------------
 
 

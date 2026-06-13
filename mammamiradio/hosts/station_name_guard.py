@@ -73,7 +73,7 @@ def sanitize_spoken_station_name(text: str, station_name: str) -> str:
     return _WRONG_STATION_PATTERN.sub(_replace, text)
 
 
-def strip_foreign_station_name(value: str | None, station_name: str) -> str:
+def strip_foreign_station_name(value: str | None, station_name: str, *, prefix_only: bool = False) -> str:
     """Strip a foreign 'Radio X' station name out of a now-playing metadata field.
 
     For ``media_artist`` / ``media_title`` and the listener-UI label, a foreign
@@ -85,17 +85,25 @@ def strip_foreign_station_name(value: str | None, station_name: str) -> str:
     value is a foreign station name, strips a leading "Radio X - " prefix off the
     rescue display form, and otherwise returns the value unchanged. Ordinary
     artists like "Radiohead" or "The Radio Dept." are left intact.
+
+    ``prefix_only=True`` keeps the leading-prefix strip but skips the
+    whole-value match, so the value is never emptied. Use it for the **title**
+    field, where a real song can legitimately be named "Radio Ga Ga" / "Radio
+    Free Europe" — blanking those would itself break the now-playing line. The
+    artist field uses the default (full) mode because its fallback chain ends in
+    our own station name, never a blank.
     """
     if not value:
         return ""
     v = value.strip()
     station_lower = station_name.lower()
 
-    # Whole value IS a foreign station name → drop it entirely.
-    full = _FULL_STATION_PATTERN.fullmatch(v)
-    if full and station_lower not in v.lower():
-        logger.warning("Stripped foreign station name from now-playing field: %r", v)
-        return ""
+    # Whole value IS a foreign station name → drop it entirely (artist field only).
+    if not prefix_only:
+        full = _FULL_STATION_PATTERN.fullmatch(v)
+        if full and station_lower not in v.lower():
+            logger.warning("Stripped foreign station name from now-playing field: %r", v)
+            return ""
 
     # Rescue display form "Foreign Radio Name - Song" -> keep the song only.
     prefix = _LEADING_STATION_PREFIX.match(v)
