@@ -880,7 +880,10 @@ def _home_context_ready_for_first_moment(ha_cache: HomeContext) -> bool:
         return False
     if not (ha_cache.summary or "").strip():
         return False
-    return any(getattr(entity, "area", None) or getattr(entity, "label_en", "") for entity in ha_cache.scored)
+    return any(
+        any(str(getattr(entity, field, "") or "").strip() for field in ("area", "label_en", "label_it"))
+        for entity in ha_cache.scored
+    )
 
 
 def _maybe_arm_first_home_context_moment(
@@ -1932,7 +1935,11 @@ async def run_producer(
                         state.new_listeners_pending = max(0, state.new_listeners_pending - _new_listener_count)
                     if _used_generated_banter and _listener_request_commit is not None:
                         _listener_request_commit.apply(state)
-                    if _used_generated_banter and _first_home_context_moment_pending:
+                    if (
+                        _used_generated_banter
+                        and _first_home_context_moment_pending
+                        and state.ha_pending_directive != FIRST_HOME_CONTEXT_MOMENT_DIRECTIVE
+                    ):
                         state.ha_first_home_context_moment_fired = True
                     # Spend the running-gag cooldown only when generated banter
                     # (which carried the gag) actually airs — not on canned or
