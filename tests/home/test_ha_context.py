@@ -7,6 +7,7 @@ import datetime
 import json
 import time
 from collections import deque
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -1872,6 +1873,132 @@ async def test_push_state_to_ha_normal(reset_ha_push_debounce):
     assert "media_position_updated_at" in attributes
     bs_call = next(c for c in mock_client.post.call_args_list if "binary_sensor" in c.args[0])
     assert bs_call.kwargs["json"]["state"] == "on"
+
+
+def _media_player_attrs(mock_client):
+    mp_call = next(c for c in mock_client.post.call_args_list if "media_player" in c.args[0])
+    return mp_call.kwargs["json"]["attributes"]
+
+
+@pytest.mark.asyncio
+async def test_push_state_to_ha_music_keeps_legit_artist(reset_ha_push_debounce):
+    """Scenario 1 — Normal: a real track artist passes through; the guard is a no-op."""
+    mock_client = AsyncMock()
+    mock_client.post.return_value = MagicMock(status_code=200)
+
+    with patch("mammamiradio.home.ha_context._get_ha_client", return_value=mock_client):
+        await push_state_to_ha(
+            ha_url="http://ha.local:8123",
+            ha_token="t",
+            now_streaming={
+                "type": "music",
+                "label": "Have I Wasted",
+                "started": time.time() - 5,
+                "metadata": {"title_only": "Have I Wasted", "artist": "Jonathan Dimmel"},
+            },
+            current_track=None,
+            listeners_active=1,
+            session_stopped=False,
+            station_name="Radio PenthouseFlo FM",
+        )
+
+    attrs = _media_player_attrs(mock_client)
+    assert attrs["media_artist"] == "Jonathan Dimmel"
+    assert attrs["media_title"] == "Have I Wasted"
+
+
+@pytest.mark.asyncio
+async def test_push_state_to_ha_strips_foreign_station_name_from_rescue_metadata(reset_ha_push_debounce):
+    """Scenario 2 — Empty/rescue fallback: a rescue-shaped music segment whose
+    metadata carries a foreign "Radio X" station name (display-form title, no
+    title_only) must never surface that name on the HA card. The artist falls
+    back to our station name; the title keeps just the song."""
+    mock_client = AsyncMock()
+    mock_client.post.return_value = MagicMock(status_code=200)
+
+    with patch("mammamiradio.home.ha_context._get_ha_client", return_value=mock_client):
+        await push_state_to_ha(
+            ha_url="http://ha.local:8123",
+            ha_token="t",
+            now_streaming={
+                "type": "music",
+                "label": "Radio Sabrina Sensatione – Be Without U",
+                "started": time.time() - 5,
+                "metadata": {
+                    "title": "Radio Sabrina Sensatione – Be Without U",
+                    "artist": "Radio Sabrina Sensatione",
+                    "audio_source": "fallback_norm_cache",
+                },
+            },
+            current_track=None,
+            listeners_active=1,
+            session_stopped=False,
+            station_name="Radio PenthouseFlo FM",
+        )
+
+    attrs = _media_player_attrs(mock_client)
+    assert "Radio Sabrina Sensatione" not in attrs["media_artist"]
+    assert "Radio Sabrina Sensatione" not in attrs["media_title"]
+    assert attrs["media_artist"] == "Radio PenthouseFlo FM"  # fell back to our station
+    assert attrs["media_title"] == "Be Without U"  # foreign prefix stripped, song kept
+
+
+@pytest.mark.asyncio
+async def test_push_state_to_ha_post_restart_rescue_artist_falls_back_to_station(reset_ha_push_debounce):
+    """Scenario 3 — Post-restart: the first segment a reconnecting listener gets is
+    a rescue whose current_track ALSO carries a poisoned artist. The fallback chain
+    walks past both foreign values to our station name — never a competitor."""
+    poisoned_track = SimpleNamespace(title="Be Without U", artist="Radio Sabrina Sensatione")
+    mock_client = AsyncMock()
+    mock_client.post.return_value = MagicMock(status_code=200)
+
+    with patch("mammamiradio.home.ha_context._get_ha_client", return_value=mock_client):
+        await push_state_to_ha(
+            ha_url="http://ha.local:8123",
+            ha_token="t",
+            now_streaming={
+                "type": "music",
+                "label": "Be Without U",
+                "started": time.time() - 1,
+                "metadata": {"title_only": "Be Without U", "artist": "Radio Sabrina Sensatione"},
+            },
+            current_track=poisoned_track,
+            listeners_active=2,
+            session_stopped=False,
+            station_name="Radio PenthouseFlo FM",
+        )
+
+    attrs = _media_player_attrs(mock_client)
+    assert attrs["media_artist"] == "Radio PenthouseFlo FM"
+    assert "Sabrina" not in attrs["media_artist"]
+
+
+@pytest.mark.asyncio
+async def test_push_state_to_ha_non_music_artist_is_always_station_name(reset_ha_push_debounce):
+    """Contract: for non-music segments media_artist is sourced from station_name,
+    never from segment metadata (locks the existing behaviour against regression)."""
+    mock_client = AsyncMock()
+    mock_client.post.return_value = MagicMock(status_code=200)
+
+    with patch("mammamiradio.home.ha_context._get_ha_client", return_value=mock_client):
+        await push_state_to_ha(
+            ha_url="http://ha.local:8123",
+            ha_token="t",
+            now_streaming={
+                "type": "banter",
+                "label": "Marco & Giulia",
+                "started": time.time() - 2,
+                # An (impossible) poisoned metadata artist must be ignored entirely.
+                "metadata": {"title": "Marco & Giulia", "artist": "Radio Sabrina Sensatione"},
+            },
+            current_track=None,
+            listeners_active=1,
+            session_stopped=False,
+            station_name="Radio PenthouseFlo FM",
+        )
+
+    attrs = _media_player_attrs(mock_client)
+    assert attrs["media_artist"] == "Radio PenthouseFlo FM"
 
 
 @pytest.mark.asyncio

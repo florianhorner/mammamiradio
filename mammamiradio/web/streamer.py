@@ -40,6 +40,7 @@ from mammamiradio.core.provider_checks import check_provider_keys
 from mammamiradio.core.setup_status import addon_options_snippet, build_setup_status, classify_station_mode
 from mammamiradio.home.ha_context import push_state_to_ha
 from mammamiradio.home.ha_enrichment import EVENT_RETENTION_SECONDS
+from mammamiradio.hosts.station_name_guard import strip_foreign_station_name
 from mammamiradio.playlist.playlist import (
     ExplicitSourceError,
     load_explicit_source,
@@ -1051,8 +1052,19 @@ async def run_playback_loop(app) -> None:
                             rescued_from_norm = True
                             sidecar = load_track_metadata(rescue)
                             if sidecar:
-                                rescue_title = f"{sidecar['artist']} – {sidecar['title']}"
-                                rescue_artist: str | None = sidecar["artist"]
+                                # Illusion guard: a poisoned sidecar artist (a foreign
+                                # "Radio X" station name) must never surface as the
+                                # now-playing artist/label. Strip it and drop to
+                                # title-only rather than airing a competitor's name.
+                                clean_artist = strip_foreign_station_name(
+                                    sidecar["artist"], config.display_station_name
+                                )
+                                if clean_artist:
+                                    rescue_title = f"{clean_artist} – {sidecar['title']}"
+                                    rescue_artist: str | None = clean_artist
+                                else:
+                                    rescue_title = sidecar["title"]
+                                    rescue_artist = None
                             else:
                                 rescue_title = humanize_norm_filename(rescue.name)
                                 rescue_artist = None
@@ -1083,7 +1095,10 @@ async def run_playback_loop(app) -> None:
                             stem = rescue.stem
                             if " - " in stem:
                                 rescue_artist, rescue_title = stem.split(" - ", 1)
-                                rescue_artist = rescue_artist.strip() or "Unknown"
+                                rescue_artist = (
+                                    strip_foreign_station_name(rescue_artist.strip(), config.display_station_name)
+                                    or "Unknown"
+                                )
                                 rescue_title = rescue_title.strip() or stem
                             else:
                                 rescue_artist = "Unknown"

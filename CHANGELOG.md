@@ -8,6 +8,8 @@ The current version source of truth is `pyproject.toml`.
 
 ### Fixed
 
+- **The Home Assistant media card never shows the wrong station name.** A radio-station name that the hosts may have improvised in conversation could occasionally slip into the now-playing artist line on your Home Assistant media player — showing a station that isn't yours. The now-playing details (and the listener page's now-playing line) are now scrubbed so only your real station name ever appears; a song's actual artist and title are left untouched. Improvised station names are also kept out of the spoken ad and news breaks, matching the existing guard on host chatter.
+
 - **Direct `/admin` access from your home network now works.** If you open `http://<pi-ip>:8000/admin` in a browser on your local Wi-Fi, the admin panel loads without needing a token. Port 8000 serves the listener page (`/`), the admin panel (`/admin`), and the audio stream (`/stream`) — no HA sidebar required for any of them. Configuring a custom `admin_token` in the add-on options still enforces that token even from the LAN.
 
 ### Added

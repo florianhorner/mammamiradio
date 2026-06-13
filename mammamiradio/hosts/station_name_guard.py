@@ -1,0 +1,107 @@
+"""Station-name illusion guard.
+
+The single hardest illusion break (leadership principle #1) is a competitor /
+hallucinated radio-station name reaching a human surface. The LLM bleeds
+training-data station names ("Radio Kiss Kiss Moosach") into banter, and home
+context can seed an invented one ("Radio <housemate's name> Sensatione").
+
+Two surfaces, two behaviours:
+
+- **Spoken script text** — a sentence that names a station *should* name ours,
+  so we *replace* the wrong name with our station name
+  (:func:`sanitize_spoken_station_name`).
+- **Now-playing metadata** (HA ``media_artist`` / ``media_title``, the listener
+  UI label) — a song's artist/title is never "Radio X", so substituting our
+  name would be wrong. We *strip* a foreign station name and let the caller
+  fall back (:func:`strip_foreign_station_name`).
+
+Both share one detection vocabulary so the two surfaces never drift apart.
+"""
+
+from __future__ import annotations
+
+import logging
+import re
+
+logger = logging.getLogger(__name__)
+
+# Match station-name-like phrases. Inline (?i:…) makes "Radio" / "siamo su"
+# case-insensitive while requiring Title Case on the proper-noun words that
+# follow, which stops the match before Italian function words like "e", "la".
+_WRONG_STATION_PATTERN = re.compile(
+    r"\b(?i:Radio)(?:\s+[A-Z]\w*){1,3}|\b(?i:siamo\s+su)(?:\s+[A-Z]\w*){1,5}",
+)
+
+# Anchored variant for METADATA fields. Conservative on purpose: it only fires
+# when the *entire* value is a foreign station name, or when the value *begins*
+# with one followed by a separator (the rescue display form
+# "Radio X - Song"). That leaves ordinary artists untouched: "Radiohead" is a
+# single token (no following Title-Case word) and "The Radio Dept." does not
+# start with "Radio" — so neither is mistaken for a station.
+_FULL_STATION_PATTERN = re.compile(
+    r"(?i:Radio)(?:\s+[A-Z]\w*){1,3}|(?i:siamo\s+su)(?:\s+[A-Z]\w*){1,5}",
+)
+_LEADING_STATION_PREFIX = re.compile(
+    r"^(?i:Radio)(?:\s+[A-Z]\w*){1,3}\s*[–—-]\s*",
+)
+
+
+def sanitize_spoken_station_name(text: str, station_name: str) -> str:
+    """Replace any radio station name that isn't ours with the correct one.
+
+    Guards against LLM training-data bleed where it writes competitor station
+    names (e.g. 'Radio Kiss Kiss Moosach') into spoken script text — the single
+    hardest illusion break.
+    """
+    station_lower = station_name.lower()
+
+    def _replace(m: re.Match) -> str:
+        s = m.group(0)
+        # Keep the match if our station name is in it
+        if station_lower in s.lower():
+            return s
+        # "siamo su <wrong>" → "siamo su <ours>"
+        if s.lower().startswith("siamo su "):
+            logger.warning("Replaced wrong station name in script: %r", s)
+            return f"siamo su {station_name}"
+        # "Radio <wrong>" → station name
+        if s.lower().startswith("radio "):
+            logger.warning("Replaced wrong station name in script: %r", s)
+            return station_name
+        return s
+
+    return _WRONG_STATION_PATTERN.sub(_replace, text)
+
+
+def strip_foreign_station_name(value: str | None, station_name: str) -> str:
+    """Strip a foreign 'Radio X' station name out of a now-playing metadata field.
+
+    For ``media_artist`` / ``media_title`` and the listener-UI label, a foreign
+    station name must never surface — but a song's real artist/title is not a
+    station, so we drop the foreign name and let the caller fall back rather than
+    substituting our own name as the artist.
+
+    Conservative by design (see module patterns): returns ``""`` when the whole
+    value is a foreign station name, strips a leading "Radio X - " prefix off the
+    rescue display form, and otherwise returns the value unchanged. Ordinary
+    artists like "Radiohead" or "The Radio Dept." are left intact.
+    """
+    if not value:
+        return ""
+    v = value.strip()
+    station_lower = station_name.lower()
+
+    # Whole value IS a foreign station name → drop it entirely.
+    full = _FULL_STATION_PATTERN.fullmatch(v)
+    if full and station_lower not in v.lower():
+        logger.warning("Stripped foreign station name from now-playing field: %r", v)
+        return ""
+
+    # Rescue display form "Foreign Radio Name - Song" -> keep the song only.
+    prefix = _LEADING_STATION_PREFIX.match(v)
+    if prefix and station_lower not in prefix.group(0).lower():
+        remainder = v[prefix.end() :].strip()
+        logger.warning("Stripped foreign station prefix from now-playing field: %r", v)
+        return remainder
+
+    return v

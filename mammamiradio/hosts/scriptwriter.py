@@ -60,6 +60,7 @@ from mammamiradio.hosts.prompt_world import (
     CHAOS_SUBTYPE_BLOCKS,
     FESTIVAL_MODE_BLOCK,
 )
+from mammamiradio.hosts.station_name_guard import sanitize_spoken_station_name
 from mammamiradio.hosts.transitions import _massage_transition_text, _transition_stem
 
 logger = logging.getLogger(__name__)
@@ -819,38 +820,10 @@ async def _load_song_cues_for_current_track(
         return []
 
 
-_WRONG_STATION_PATTERN = re.compile(
-    # Match station-name-like phrases. Inline (?i:…) makes "Radio" / "siamo su"
-    # case-insensitive while requiring Title Case on the proper-noun words that
-    # follow, which stops the match before Italian function words like "e", "la".
-    r"\b(?i:Radio)(?:\s+[A-Z]\w*){1,3}|\b(?i:siamo\s+su)(?:\s+[A-Z]\w*){1,5}",
-)
-
-
-def _fix_wrong_station_names(text: str, station_name: str) -> str:
-    """Replace any radio station name that isn't ours with the correct one.
-
-    Guards against LLM training-data bleed where it writes competitor station
-    names (e.g. 'Radio Kiss Kiss Moosach') — the single hardest illusion break.
-    """
-    station_lower = station_name.lower()
-
-    def _replace(m: re.Match) -> str:
-        s = m.group(0)
-        # Keep the match if our station name is in it
-        if station_lower in s.lower():
-            return s
-        # "siamo su <wrong>" → "siamo su <ours>"
-        if s.lower().startswith("siamo su "):
-            logger.warning("Replaced wrong station name in banter: %r", s)
-            return f"siamo su {station_name}"
-        # "Radio <wrong>" → station name
-        if s.lower().startswith("radio "):
-            logger.warning("Replaced wrong station name in banter: %r", s)
-            return station_name
-        return s
-
-    return _WRONG_STATION_PATTERN.sub(_replace, text)
+# Station-name illusion guard lives in its own leaf so the HA/web layers can
+# reuse the same detection without importing the scriptwriter. ``_fix_wrong_…``
+# stays as a module-local alias to preserve existing call sites and tests.
+_fix_wrong_station_names = sanitize_spoken_station_name
 
 
 def _chaos_stock_exchange(
@@ -1656,7 +1629,7 @@ Return JSON:
             caller="news_flash",
         )
 
-        text = data.get("text", "Notizia dell'ultima ora!")
+        text = sanitize_spoken_station_name(data.get("text", "Notizia dell'ultima ora!"), config.station.name)
         logger.info("Generated %s flash: %d chars", category, len(text))
         return (host, text, category)
 
@@ -1927,7 +1900,7 @@ Return JSON:
             parts.append(
                 AdPart(
                     type=p.get("type", "voice"),
-                    text=p.get("text", ""),
+                    text=sanitize_spoken_station_name(p.get("text", ""), config.station.name),
                     sfx=p.get("sfx", ""),
                     duration=p.get("duration", 0.0),
                     role=p.get("role", ""),
