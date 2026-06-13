@@ -90,6 +90,7 @@ Admin (require `ADMIN_PASSWORD` or `ADMIN_TOKEN` unless on loopback):
 - `GET /api/listener-requests`, `POST /api/listener-requests/dismiss`
 - `GET /api/search`, `POST /api/playlist/add`, `POST /api/playlist/remove`, `POST /api/playlist/move`, `POST /api/playlist/move_to_next`, `POST /api/playlist/load`, `POST /api/playlist/add-external`
 - `POST /api/hot-reload` — reload `prompt_world.py`, `transitions.py`, `fallbacks.py` then `scriptwriter.py` (leaves-first) in-place without stopping the stream. Requires `--workers 1` (importlib reloads only the worker that handles the request; multi-worker deployments get inconsistent results).
+- `POST /api/homeassistant/labels/regenerate` — force a background refresh of generated device labels; returns `{"scheduled": true}`, `{"scheduled": false, "reason": ...}` when HA context or an Anthropic key is unavailable, or 409 if a refresh is already running.
 
 ### Diagnosing provider fallbacks
 
@@ -255,7 +256,7 @@ The add-on entrypoint (`ha-addon/mammamiradio/rootfs/run.sh`) maps Supervisor-in
 
 The dashboard is accessible via HA ingress (sidebar). The first-run flow exposes the same setup checks there as every other run mode, and the stream URL can be played on any HA media player.
 
-When HA context is enabled, the station reads the Home Assistant state snapshot opportunistically before banter/ad generation. It does not send every entity to the script prompt: telemetry/config entities, unavailable states, free-text helpers (e.g. `input_text`), and sensitive domains such as trackers, cameras, and alarms are filtered first. Resident presence (`person.*`) is kept as home/away only, with GPS and identity attributes stripped, so arrival greetings and the empty-home mood keep working without leaking location. The remaining entities are scored and capped before prompt assembly. The admin Engine Room shows the scored prompt slice and privacy filter counts under Home Assistant details; `/public-status` exposes only listener-safe Casa moments.
+When HA context is enabled, the station reads the Home Assistant state snapshot opportunistically before banter/ad generation. It does not send every entity to the script prompt: telemetry/config entities, unavailable states, free-text helpers (e.g. `input_text`), and sensitive domains such as trackers, cameras, and alarms are filtered first. Resident presence (`person.*`) is kept as home/away only, with GPS and identity attributes stripped, so arrival greetings and the empty-home mood keep working without leaking location. The remaining entities are scored and capped before prompt assembly. When label generation is active (HA enabled and an Anthropic key configured), the display names and room assignments for non-sensitive entities are also sent to Anthropic once to generate radio-friendly labels; no sensor values, presence, or location are included, and the results are cached locally (`cache/ha_label_catalog.json`, owner-only) so each device is only looked up once. A startup log line confirms when this is active. The admin Engine Room shows the scored prompt slice and privacy filter counts under Home Assistant details; `/public-status` exposes only listener-safe Casa moments.
 
 ## Home Assistant pushed entities
 
