@@ -339,8 +339,10 @@ def test_first_home_context_moment_waits_for_safe_context():
 
 
 def test_first_home_context_ready_accepts_label_only_entity():
+    # A safe entity that has only an Italian label — no area, no English label —
+    # still narratable, so it must qualify for the first-home moment.
     entities = [_scored_home_entity(idx, area=None, label_it="", label_en="") for idx in range(3)]
-    entities[0].label = "Hallway lamp"
+    entities[0].label_it = "Luce corridoio"
 
     ha_context = HomeContext(summary="Label-only home context", scored=entities)
 

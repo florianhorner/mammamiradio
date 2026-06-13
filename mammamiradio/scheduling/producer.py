@@ -881,7 +881,7 @@ def _home_context_ready_for_first_moment(ha_cache: HomeContext) -> bool:
     if not (ha_cache.summary or "").strip():
         return False
     return any(
-        any(str(getattr(entity, field, "") or "").strip() for field in ("area", "label", "label_en", "label_it"))
+        any(str(getattr(entity, field, "") or "").strip() for field in ("area", "label_en", "label_it"))
         for entity in ha_cache.scored
     )
 

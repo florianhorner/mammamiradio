@@ -466,7 +466,7 @@ async def _generate_json_response(
                         # generic exception name. Behaviour is unchanged — we still fall
                         # back to OpenAI; only the telemetry/log reason differs.
                         _max_tokens_truncated = _anthropic_stop_reason == "max_tokens" and isinstance(
-                            exc, json.JSONDecodeError | IndexError
+                            exc, (json.JSONDecodeError, IndexError)
                         )
                         _emit_llm_call(
                             state=state,
