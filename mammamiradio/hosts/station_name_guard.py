@@ -32,12 +32,18 @@ _WRONG_STATION_PATTERN = re.compile(
     r"\b(?i:Radio)(?:\s+[A-Z]\w*){1,3}|\b(?i:siamo\s+su)(?:\s+[A-Z]\w*){1,5}",
 )
 
-# Anchored variant for METADATA fields. Conservative on purpose: it only fires
-# when the *entire* value is a foreign station name, or when the value *begins*
-# with one followed by a separator (the rescue display form
-# "Radio X - Song"). That leaves ordinary artists untouched: "Radiohead" is a
-# single token (no following Title-Case word) and "The Radio Dept." does not
-# start with "Radio" — so neither is mistaken for a station.
+# Anchored variant for METADATA fields. It fires when the *entire* value is a
+# station-name-like phrase, or when the value *begins* with one followed by a
+# separator (the rescue display form "Radio X - Song"). "Radiohead" (a single
+# token, no following Title-Case word) and "The Radio Dept." (does not start
+# with "Radio") are safe.
+#
+# This is deliberately aggressive, NOT perfectly conservative: a real band
+# literally named "Radio <Word>" (e.g. "Radio Birdman", "Radio Futura") also
+# matches, and in the artist field is relabeled to our station name. That trade
+# is intentional — a foreign improvised station name reaching the now-playing
+# line is a hard illusion break (leadership #1); a rare real "Radio X" band shown
+# as the station is benign beside it. Pinned by tests in test_station_name_guard.
 _FULL_STATION_PATTERN = re.compile(
     r"(?i:Radio)(?:\s+[A-Z]\w*){1,3}|(?i:siamo\s+su)(?:\s+[A-Z]\w*){1,5}",
 )
@@ -81,10 +87,13 @@ def strip_foreign_station_name(value: str | None, station_name: str, *, prefix_o
     station, so we drop the foreign name and let the caller fall back rather than
     substituting our own name as the artist.
 
-    Conservative by design (see module patterns): returns ``""`` when the whole
-    value is a foreign station name, strips a leading "Radio X - " prefix off the
-    rescue display form, and otherwise returns the value unchanged. Ordinary
-    artists like "Radiohead" or "The Radio Dept." are left intact.
+    Returns ``""`` when the whole value is a foreign station name, strips a
+    leading "Radio X - " prefix off the rescue display form, and otherwise
+    returns the value unchanged. "Radiohead" and "The Radio Dept." are left
+    intact. NOTE: matching is deliberately aggressive — a real band named
+    "Radio <Word>" (e.g. "Radio Birdman") is also stripped, and the artist then
+    falls back to the station name; this is an accepted trade so a foreign
+    improvised station name can never surface (see the module-level note).
 
     ``prefix_only=True`` keeps the leading-prefix strip but skips the
     whole-value match, so the value is never emptied. Use it for the **title**

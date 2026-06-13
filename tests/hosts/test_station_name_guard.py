@@ -41,6 +41,15 @@ def test_strip_leaves_normal_artist():
     assert strip_foreign_station_name("Jonathan Dimmel", STATION) == "Jonathan Dimmel"
 
 
+def test_strip_relabels_real_two_word_radio_bands_aggressively():
+    # Pinned contract: matching is deliberately aggressive (see module note). A
+    # real band literally named "Radio <Word>" is also stripped — in the artist
+    # field the caller then falls back to the station name. Accepted trade so a
+    # foreign improvised station name can never reach the now-playing line.
+    for band in ("Radio Birdman", "Radio Futura", "Radio Moscow", "Radio Company"):
+        assert strip_foreign_station_name(band, STATION) == ""
+
+
 def test_strip_keeps_our_own_station_name():
     ours = "Radio PenthouseFlo FM"
     assert strip_foreign_station_name(ours, ours) == ours
