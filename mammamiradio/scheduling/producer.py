@@ -136,6 +136,24 @@ def _norm_cache_bridge_payload(norm_path: Path, bridge_flag: str) -> tuple[dict,
     )
 
 
+def _record_bridge_fire(state: StationState, bridge_type: str, source: str) -> None:
+    """Record a producer rescue-bridge fire and emit a structured log event.
+
+    Wraps ``StationState.record_bridge_fire`` (#547 observability) and logs a
+    ``producer_bridge_fire`` event in the same ``extra={"event": ...}`` house
+    style as ``provider_health_state``. Best-effort: a telemetry failure must
+    never break the audio path, so everything is contained.
+    """
+    try:
+        state.record_bridge_fire(bridge_type, source)
+        logger.info(
+            "producer_bridge_fire",
+            extra={"event": "producer_bridge_fire", "bridge_type": bridge_type, "source": source},
+        )
+    except Exception:  # pragma: no cover - telemetry must never kill the producer
+        logger.debug("bridge fire telemetry failed", exc_info=True)
+
+
 async def _render_music_track(
     track: Track,
     config: StationConfig,
@@ -194,7 +212,7 @@ async def _queue_drain_recovery_bridge(
     fallback = _pick_canned_clip("banter", state=state) or _pick_canned_clip("welcome")
     if fallback:
         logger.warning("Queue empty during active playback — inserting canned clip as bridge")
-        return await queue_segment(
+        ok = await queue_segment(
             Segment(
                 type=SegmentType.BANTER,
                 path=fallback,
@@ -206,6 +224,9 @@ async def _queue_drain_recovery_bridge(
                 },
             )
         )
+        if ok:
+            _record_bridge_fire(state, "drain", "canned")
+        return ok
 
     norm_path = select_norm_cache_rescue(config.cache_dir, state)
     if norm_path:
@@ -214,7 +235,7 @@ async def _queue_drain_recovery_bridge(
             "Queue empty during active playback — inserting norm-cache bridge: %s",
             log_label,
         )
-        return await queue_segment(
+        ok = await queue_segment(
             Segment(
                 type=SegmentType.MUSIC,
                 path=norm_path,
@@ -222,6 +243,9 @@ async def _queue_drain_recovery_bridge(
                 ephemeral=False,
             )
         )
+        if ok:
+            _record_bridge_fire(state, "drain", "norm_cache")
+        return ok
 
     tone_path = config.tmp_dir / f"drain_tone_{uuid4().hex[:8]}.mp3"
     logger.error("No canned clips or norm cache available — inserting emergency tone bridge")
@@ -230,7 +254,7 @@ async def _queue_drain_recovery_bridge(
     except Exception:
         logger.exception("Emergency tone bridge generation failed")
         return False
-    return await queue_segment(
+    ok = await queue_segment(
         Segment(
             type=SegmentType.MUSIC,
             path=tone_path,
@@ -243,6 +267,9 @@ async def _queue_drain_recovery_bridge(
             ephemeral=True,
         )
     )
+    if ok:
+        _record_bridge_fire(state, "drain", "emergency_tone")
+    return ok
 
 
 def _banter_title(script: list[dict] | None, *, canned: bool, host_order: list[str] | None = None) -> str:
@@ -1086,7 +1113,7 @@ async def run_producer(
             if queue.empty():
                 bridge = _pick_canned_clip("banter", state=state) or _pick_canned_clip("welcome")
                 if bridge:
-                    await _queue_segment(
+                    if await _queue_segment(
                         Segment(
                             type=SegmentType.BANTER,
                             path=bridge,
@@ -1098,7 +1125,8 @@ async def run_producer(
                             },
                             ephemeral=False,
                         )
-                    )
+                    ):
+                        _record_bridge_fire(state, "resume", "canned")
                 else:
                     # No canned clips — grab a recent-aware pre-normalized track
                     # from the norm cache (already processed, no FFmpeg wait).
@@ -1106,14 +1134,15 @@ async def run_producer(
                     if norm_path:
                         metadata, log_label = _norm_cache_bridge_payload(norm_path, "resume_bridge")
                         logger.info("Resume bridge: seeding pre-normalized track %s", log_label)
-                        await _queue_segment(
+                        if await _queue_segment(
                             Segment(
                                 type=SegmentType.MUSIC,
                                 path=norm_path,
                                 metadata=metadata,
                                 ephemeral=False,
                             )
-                        )
+                        ):
+                            _record_bridge_fire(state, "resume", "norm_cache")
 
         if state.listeners_active == 0:
             if not _producer_idle_logged:
@@ -1130,7 +1159,11 @@ async def run_producer(
             if queue.empty():
                 fallback = _pick_canned_clip("banter", state=state) or _pick_canned_clip("welcome")
                 if fallback:
-                    await _queue_segment(
+                    # idle_bridge marks this as rescue audio so the fallback
+                    # classifier (is_fallback_active) does not report a warm-up
+                    # clip as the primary station. warmup stays for the existing
+                    # display contract.
+                    if await _queue_segment(
                         Segment(
                             type=SegmentType.BANTER,
                             path=fallback,
@@ -1138,23 +1171,26 @@ async def run_producer(
                                 "type": "banter",
                                 "canned": True,
                                 "warmup": True,
+                                "idle_bridge": True,
                                 "title": "Station warm-up",
                             },
                         )
-                    )
+                    ):
+                        _record_bridge_fire(state, "idle", "canned")
                 else:
                     norm_path = select_norm_cache_rescue(config.cache_dir, state)
                     if norm_path:
                         metadata, log_label = _norm_cache_bridge_payload(norm_path, "idle_bridge")
                         logger.info("Idle bridge: seeding pre-normalized track %s", log_label)
-                        await _queue_segment(
+                        if await _queue_segment(
                             Segment(
                                 type=SegmentType.MUSIC,
                                 path=norm_path,
                                 metadata=metadata,
                                 ephemeral=False,
                             )
-                        )
+                        ):
+                            _record_bridge_fire(state, "idle", "norm_cache")
             _was_idle = False
         _producer_idle_logged = False
 

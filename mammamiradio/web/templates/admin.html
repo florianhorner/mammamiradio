@@ -2776,11 +2776,28 @@ function updateRuntimeStatus(st){
     const eventLine=lastFailover
       ? `${lastFailover.provider_class||'provider'}: ${lastFailover.from_provider||'—'} → ${lastFailover.to_provider||'—'} · ${lastFailover.reason||''} · ${fmtRuntimeTs(lastFailover.timestamp)}`
       : (rs.no_failover_message||'No failover in current session.');
+    // Queue rescue (#547): how often the producer is bridging a starved queue
+    // with cached/canned/tone audio. Healthy = the real station; warning =
+    // "running on rescue" even though audio is technically playing.
+    const bh=rs.bridge_health;
+    let rescueRow;
+    if(!bh){
+      rescueRow=statusRow('Queue rescue','idle','—','No rescue telemetry yet');
+    }else{
+      const rescueState=bh.unhealthy?'degraded':'ready';
+      const rescueLabel=bh.unhealthy?'Running on rescue':'Healthy';
+      const last=bh.last_fire;
+      const lastLine=last?`last: ${last.bridge_type||'—'}/${last.source||'—'} · ${fmtRuntimeTs(last.timestamp)}`:'no bridges this session';
+      const windowMin=Math.round((bh.window_seconds||900)/60);
+      const rescueDetail=`${bh.window_count||0} in ${windowMin}m (session ${bh.session_count||0}) · ${lastLine} · queue empty ${Math.round(bh.queue_empty_elapsed_s||0)}s`;
+      rescueRow=statusRow('Queue rescue',rescueState,rescueLabel,rescueDetail);
+    }
     card.innerHTML=[
       statusRow('Current health',headerState,headerLabel,rs.health_explanation||'Runtime health available'),
       runtimeProviderRow('Audio source',providers.audio_source),
       runtimeProviderRow('Script provider',providers.script_provider),
       runtimeProviderRow('TTS provider',providers.tts_provider),
+      rescueRow,
       statusRow('Recent failover',lastFailover?'degraded':'idle',lastFailover?'Recorded':'None',eventLine)
     ].join('');
   }catch(e){
