@@ -1629,6 +1629,43 @@ async def test_write_ad_returns_adscript(config, state):
 
 
 @pytest.mark.asyncio
+async def test_write_ad_strips_foreign_station_name_from_voice_parts(config, state):
+    """Illusion guard wired into ads: an improvised competitor station name in an
+    ad voice line is replaced with our station name before the spot airs."""
+    brand = AdBrand(name="TestBrand", tagline="Il meglio", category="food")
+    voices = {"default": AdVoice(name="Voce Uno", voice="it-IT-IsabellaNeural", style="enthusiastic")}
+
+    with patch(
+        "mammamiradio.hosts.scriptwriter._generate_json_response",
+        new_callable=AsyncMock,
+        return_value={
+            "parts": [{"type": "voice", "text": "Solo su Radio Deejay Milano: TestBrand!"}],
+            "summary": "ad",
+        },
+    ):
+        result = await write_ad(brand, voices, state, config)
+
+    joined = " ".join(p.text for p in result.parts if p.type == "voice")
+    assert "Deejay" not in joined
+    assert config.station.name in joined
+
+
+@pytest.mark.asyncio
+async def test_write_news_flash_strips_foreign_station_name(config, state):
+    """Illusion guard wired into news flashes: an improvised competitor station
+    name in the bulletin is replaced with our station name."""
+    with patch(
+        "mammamiradio.hosts.scriptwriter._generate_json_response",
+        new_callable=AsyncMock,
+        return_value={"text": "Siamo su Radio Kiss Kiss e arriva una notizia bomba!"},
+    ):
+        _host, text, _category = await write_news_flash(state, config, category="breaking")
+
+    assert "Kiss Kiss" not in text
+    assert config.station.name in text
+
+
+@pytest.mark.asyncio
 async def test_write_ad_falls_back_on_api_exception(config, state):
     mock_client = MagicMock()
     mock_client.messages = MagicMock()

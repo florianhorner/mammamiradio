@@ -63,6 +63,7 @@ from mammamiradio.home.ha_context import (
 )
 from mammamiradio.hosts.ad_creative import _cast_voices, _pick_brand, _select_ad_creative
 from mammamiradio.hosts.context_cues import generate_impossible_line
+from mammamiradio.hosts.station_name_guard import strip_foreign_station_name
 from mammamiradio.playlist.downloader import (
     download_track,
     evict_cache_lru,
@@ -120,10 +121,15 @@ def _normalized_cache_path(track: Track, config: StationConfig) -> Path:
     return config.cache_dir / f"norm_{track.cache_key}_{config.audio.bitrate}k.mp3"
 
 
-def _norm_cache_bridge_payload(norm_path: Path, bridge_flag: str) -> tuple[dict, str]:
+def _norm_cache_bridge_payload(norm_path: Path, bridge_flag: str, station_name: str) -> tuple[dict, str]:
     _meta = load_track_metadata(norm_path) or {}
     title = _meta.get("title") or humanize_norm_filename(norm_path.name)
-    artist = _meta.get("artist", "")
+    # Illusion guard: a poisoned sidecar artist (a foreign "Radio X" station name)
+    # must never surface as the now-playing artist on the listener UI / Music
+    # Assistant provider. Strip it and drop to title-only — mirroring the streamer
+    # rescue paths, so every sidecar->metadata source scrubs at its origin instead
+    # of one surface getting protected while a sibling bridge leaks.
+    artist = strip_foreign_station_name(_meta.get("artist", ""), station_name)
     detail = f"{artist} - {title}" if artist else title
     return (
         {
@@ -230,7 +236,7 @@ async def _queue_drain_recovery_bridge(
 
     norm_path = select_norm_cache_rescue(config.cache_dir, state)
     if norm_path:
-        metadata, log_label = _norm_cache_bridge_payload(norm_path, "queue_drain_recovery")
+        metadata, log_label = _norm_cache_bridge_payload(norm_path, "queue_drain_recovery", config.display_station_name)
         logger.warning(
             "Queue empty during active playback — inserting norm-cache bridge: %s",
             log_label,
@@ -1135,7 +1141,9 @@ async def run_producer(
                     # from the norm cache (already processed, no FFmpeg wait).
                     norm_path = select_norm_cache_rescue(config.cache_dir, state)
                     if norm_path:
-                        metadata, log_label = _norm_cache_bridge_payload(norm_path, "resume_bridge")
+                        metadata, log_label = _norm_cache_bridge_payload(
+                            norm_path, "resume_bridge", config.display_station_name
+                        )
                         logger.info("Resume bridge: seeding pre-normalized track %s", log_label)
                         if await _queue_segment(
                             Segment(
@@ -1183,7 +1191,9 @@ async def run_producer(
                 else:
                     norm_path = select_norm_cache_rescue(config.cache_dir, state)
                     if norm_path:
-                        metadata, log_label = _norm_cache_bridge_payload(norm_path, "idle_bridge")
+                        metadata, log_label = _norm_cache_bridge_payload(
+                            norm_path, "idle_bridge", config.display_station_name
+                        )
                         logger.info("Idle bridge: seeding pre-normalized track %s", log_label)
                         if await _queue_segment(
                             Segment(

@@ -40,6 +40,7 @@ from mammamiradio.core.provider_checks import check_provider_keys
 from mammamiradio.core.setup_status import addon_options_snippet, build_setup_status, classify_station_mode
 from mammamiradio.home.ha_context import push_state_to_ha
 from mammamiradio.home.ha_enrichment import EVENT_RETENTION_SECONDS
+from mammamiradio.hosts.station_name_guard import strip_foreign_station_name
 from mammamiradio.playlist.playlist import (
     ExplicitSourceError,
     load_explicit_source,
@@ -1085,8 +1086,19 @@ async def run_playback_loop(app) -> None:
                             rescued_from_norm = True
                             sidecar = load_track_metadata(rescue)
                             if sidecar:
-                                rescue_title = f"{sidecar['artist']} – {sidecar['title']}"
-                                rescue_artist: str | None = sidecar["artist"]
+                                # Illusion guard: a poisoned sidecar artist (a foreign
+                                # "Radio X" station name) must never surface as the
+                                # now-playing artist/label. Strip it and drop to
+                                # title-only rather than airing a competitor's name.
+                                clean_artist = strip_foreign_station_name(
+                                    sidecar["artist"], config.display_station_name
+                                )
+                                if clean_artist:
+                                    rescue_title = f"{clean_artist} – {sidecar['title']}"
+                                    rescue_artist: str | None = clean_artist
+                                else:
+                                    rescue_title = sidecar["title"]
+                                    rescue_artist = None
                             else:
                                 rescue_title = humanize_norm_filename(rescue.name)
                                 rescue_artist = None
@@ -1117,7 +1129,10 @@ async def run_playback_loop(app) -> None:
                             stem = rescue.stem
                             if " - " in stem:
                                 rescue_artist, rescue_title = stem.split(" - ", 1)
-                                rescue_artist = rescue_artist.strip() or "Unknown"
+                                rescue_artist = (
+                                    strip_foreign_station_name(rescue_artist.strip(), config.display_station_name)
+                                    or "Unknown"
+                                )
                                 rescue_title = rescue_title.strip() or stem
                             else:
                                 rescue_artist = "Unknown"
@@ -2097,6 +2112,7 @@ async def hot_reload_modules(request: Request, _: None = Depends(require_admin_a
     import mammamiradio.hosts.fallbacks as _fallbacks_mod
     import mammamiradio.hosts.prompt_world as _prompt_world_mod
     import mammamiradio.hosts.scriptwriter as _scriptwriter_mod
+    import mammamiradio.hosts.station_name_guard as _station_name_guard_mod
     import mammamiradio.hosts.transitions as _transitions_mod
 
     # Debounce: reject if called within 5s of last reload (monotonic to avoid NTP skew)
@@ -2127,11 +2143,12 @@ async def hot_reload_modules(request: Request, _: None = Depends(require_admin_a
         importlib.reload(_prompt_world_mod)
         importlib.reload(_transitions_mod)
         importlib.reload(_fallbacks_mod)
+        importlib.reload(_station_name_guard_mod)
         importlib.reload(_scriptwriter_mod)
         duration_ms = int((time.monotonic() - t0) * 1000)
         request.app.state._last_hot_reload_ts = now
         logger.info(
-            "hot-reload: reloaded prompt_world + transitions + fallbacks + scriptwriter in %dms",
+            "hot-reload: reloaded prompt_world + transitions + fallbacks + station_name_guard + scriptwriter in %dms",
             duration_ms,
         )
         return {
@@ -2140,6 +2157,7 @@ async def hot_reload_modules(request: Request, _: None = Depends(require_admin_a
                 "mammamiradio.hosts.prompt_world",
                 "mammamiradio.hosts.transitions",
                 "mammamiradio.hosts.fallbacks",
+                "mammamiradio.hosts.station_name_guard",
                 "mammamiradio.hosts.scriptwriter",
             ],
             "duration_ms": duration_ms,

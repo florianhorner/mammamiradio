@@ -283,3 +283,24 @@ async def test_render_music_cache_hit_reconciles_loudness(tmp_path):
     assert result is not None and result.cache_hit is True
     assert result.path == norm_cached
     m_reconcile.assert_called_once_with(norm_cached)
+
+
+def test_norm_cache_bridge_scrubs_foreign_artist():
+    """P1 regression: the producer bridges (queue_drain_recovery / resume_bridge /
+    idle_bridge) read the SAME norm-cache sidecar as the streamer rescue. A poisoned
+    'Radio X' artist must be scrubbed at this source so it never reaches
+    now_streaming.metadata -> the listener now-playing line and Music Assistant."""
+    from mammamiradio.scheduling.producer import _norm_cache_bridge_payload
+
+    poisoned = {"title": "Be Without U", "artist": "Radio Sabrina Sensatione"}
+    with patch(f"{PRODUCER_MODULE}.load_track_metadata", return_value=poisoned):
+        metadata, log_label = _norm_cache_bridge_payload(
+            Path("norm_abc_128k.mp3"), "queue_drain_recovery", "Mamma Mi Radio"
+        )
+
+    assert "Radio Sabrina Sensatione" not in metadata["artist"]
+    assert "Radio Sabrina Sensatione" not in log_label
+    assert metadata["artist"] == ""  # whole foreign name stripped (artist field)
+    assert metadata["title"] == "Be Without U"  # real title preserved
+    assert metadata["queue_drain_recovery"] is True
+    assert metadata["audio_source"] == "norm_cache"

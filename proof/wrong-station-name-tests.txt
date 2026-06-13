@@ -1,0 +1,16 @@
+# Proof — fix(ha): scrub foreign station names from now-playing metadata
+# Generated locally on branch florianhorner/fix/wrong-station-name
+# HEAD: 5a8203966c4e42042dadb4d8e708048053663082
+
+## ruff check (mammamiradio/ tests/)
+All checks passed!
+
+## mypy mammamiradio/ tests/ (last line)
+Success: no issues found in 175 source files
+
+## make check — full suite + coverage gate
+All checks passed!
+Required test coverage of 92.0% reached. Total coverage: 94.10%
+2796 passed, 2 skipped, 13 deselected, 1 warning in 66.71s (0:01:06)
+All coverage floors held. Total: 94% (floor: 92%)
+All checks passed
