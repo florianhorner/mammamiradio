@@ -602,6 +602,60 @@ async def test_run_playback_loop_rescue_reads_sidecar_metadata(tmp_path, caplog)
 
 
 @pytest.mark.asyncio
+async def test_run_playback_loop_rescue_strips_foreign_station_name_from_sidecar(tmp_path, caplog):
+    """Illusion guard: a norm-cache sidecar whose `artist` is a foreign "Radio X"
+    station name (the production incident — a name the LLM invented from home
+    context that poisoned a cached track) must NOT surface as the now-playing
+    artist/label. The rescue path strips it and drops to title-only."""
+    app = _make_test_app()
+    app.state.config.audio.bitrate = 3200
+    app.state.config.cache_dir = tmp_path
+    app.state.stream_hub.subscribe()
+    caplog.set_level(logging.WARNING)
+
+    rescue_path = tmp_path / "norm_rescue.mp3"
+    rescue_path.write_bytes(b"x" * 4096)
+    import json
+
+    (tmp_path / "norm_rescue.mp3.json").write_text(
+        json.dumps({"title": "Be Without U", "artist": "Radio Sabrina Sensatione"})
+    )
+
+    async def _forced_timeout(awaitable, *_args, **_kwargs):
+        awaitable.close()
+        await asyncio.sleep(0)
+        raise TimeoutError
+
+    with (
+        patch("mammamiradio.web.streamer.asyncio.wait_for", new=AsyncMock(side_effect=_forced_timeout)),
+        patch("mammamiradio.scheduling.producer._pick_canned_clip", return_value=None),
+        patch(
+            "mammamiradio.web.streamer._runtime_monotonic",
+            side_effect=[100.0, 130.5, 130.6, 130.7, 130.8, 130.9],
+        ),
+    ):
+        task = asyncio.create_task(run_playback_loop(app))
+        try:
+            deadline = time.monotonic() + 3.0
+            while (
+                app.state.station_state.now_streaming.get("metadata", {}).get("audio_source") != "fallback_norm_cache"
+            ):
+                if time.monotonic() > deadline:
+                    raise AssertionError("playback loop did not rescue from norm cache")
+                await asyncio.sleep(0.01)
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    now_meta = app.state.station_state.now_streaming.get("metadata", {})
+    # The foreign station name must not appear in any listener-facing field.
+    assert "Radio Sabrina Sensatione" not in (now_meta.get("title") or "")
+    assert now_meta.get("artist") in (None, "")  # stripped → no artist key
+    # The real song title survives.
+    assert now_meta.get("title") == "Be Without U", f"got {now_meta.get('title')!r}"
+
+
+@pytest.mark.asyncio
 async def test_run_playback_loop_rescue_handles_malformed_sidecar(tmp_path, caplog):
     """Malformed sidecar JSON must not crash; rescue falls back to humanize (Item 20)."""
     app = _make_test_app()
@@ -697,6 +751,55 @@ async def test_run_playback_loop_timeout_uses_demo_assets_after_30s(tmp_path, ca
     assert now_meta.get("artist") == "Pino Daniele", (
         f"demo-asset rescue must parse 'Artist - Title.mp3' stems; got artist={now_meta.get('artist')!r}"
     )
+
+
+@pytest.mark.asyncio
+async def test_run_playback_loop_demo_asset_strips_foreign_station_name_from_stem(tmp_path, caplog):
+    """Illusion guard on the demo-asset rescue path: a demo file whose stem parses
+    to a foreign "Radio X" artist must not surface that artist on the now-playing
+    label. The artist falls back to "Unknown" instead of airing a competitor."""
+    app = _make_test_app()
+    app.state.config.audio.bitrate = 3200
+    app.state.config.cache_dir = tmp_path
+    app.state.stream_hub.subscribe()
+    caplog.set_level(logging.WARNING)
+
+    demo_dir = tmp_path / "demo" / "music"
+    demo_dir.mkdir(parents=True)
+    rescue_mp3 = demo_dir / "Radio Sabrina Sensatione - Be Without U.mp3"
+    rescue_mp3.write_bytes(b"x" * 4096)
+
+    async def _forced_timeout(awaitable, *_args, **_kwargs):
+        awaitable.close()
+        await asyncio.sleep(0)
+        raise TimeoutError
+
+    with (
+        patch("mammamiradio.web.streamer.asyncio.wait_for", new=AsyncMock(side_effect=_forced_timeout)),
+        patch("mammamiradio.scheduling.producer._pick_canned_clip", return_value=None),
+        patch(
+            "mammamiradio.web.streamer._runtime_monotonic",
+            side_effect=[100.0, 130.5, 130.6, 130.7, 130.8, 130.9],
+        ),
+        patch("mammamiradio.web.streamer._ASSETS_DIR", tmp_path),
+    ):
+        task = asyncio.create_task(run_playback_loop(app))
+        try:
+            deadline = time.monotonic() + 3.0
+            while (
+                app.state.station_state.now_streaming.get("metadata", {}).get("audio_source") != "fallback_demo_asset"
+            ):
+                if time.monotonic() > deadline:
+                    raise AssertionError("playback loop did not rescue from demo assets")
+                await asyncio.sleep(0.01)
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    now_meta = app.state.station_state.now_streaming.get("metadata", {})
+    got_artist = now_meta.get("artist")
+    assert got_artist == "Unknown", f"foreign station artist should fall back; got {got_artist!r}"
+    assert "Radio Sabrina Sensatione" not in (now_meta.get("title") or "")
 
 
 @pytest.mark.asyncio
@@ -2124,6 +2227,7 @@ async def test_hot_reload_authenticated_200():
         "mammamiradio.hosts.prompt_world",
         "mammamiradio.hosts.transitions",
         "mammamiradio.hosts.fallbacks",
+        "mammamiradio.hosts.station_name_guard",
         "mammamiradio.hosts.scriptwriter",
     ]
     assert body["stream_status"] == "unaffected"
@@ -2247,6 +2351,7 @@ async def test_hot_reload_reloads_prompt_world_before_scriptwriter():
         "mammamiradio.hosts.prompt_world",
         "mammamiradio.hosts.transitions",
         "mammamiradio.hosts.fallbacks",
+        "mammamiradio.hosts.station_name_guard",
         "mammamiradio.hosts.scriptwriter",
     ], "data submodules must reload before scriptwriter (leaves-first)"
 

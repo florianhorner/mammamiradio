@@ -5,8 +5,9 @@ in ``StationState.on_stream_segment`` and the provenance ledger's Tier-3
 ``stream_result`` row classify a segment the same way. Duplicating the flag list
 is the documented failure mode ``producer-rescue-paths-miss-fallback-flag``:
 producer rescue clips set ``queue_drain_recovery`` / ``silence_fallback`` /
-``resume_bridge`` WITHOUT ``fallback:True``, so a naive ``metadata["fallback"]``
-check silently mislabels exactly the dead-air rescues you most want to see.
+``resume_bridge`` / ``idle_bridge`` WITHOUT ``fallback:True``, so a naive
+``metadata["fallback"]`` check silently mislabels exactly the dead-air rescues
+you most want to see.
 
 This module is a dependency-free leaf (stdlib only) so it can be imported by
 ``core.models`` and ``web.streamer`` without import cycles.
@@ -27,6 +28,7 @@ _FALLBACK_FLAG_KEYS = (
     "queue_drain_recovery",
     "resume_bridge",
     "silence_fallback",
+    "idle_bridge",
 )
 
 # audio_source values that are themselves fallback sources even when no boolean

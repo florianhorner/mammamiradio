@@ -29,8 +29,11 @@ from mammamiradio.core.config import load_config
 from mammamiradio.core.models import PlaylistSource, Segment, SegmentType, StationState, Track
 from mammamiradio.web.streamer import (
     _FALLBACK_REASON_LABELS,
+    BRIDGE_HEALTH_THRESHOLD,
+    BRIDGE_HEALTH_WINDOW_SECONDS,
     LiveStreamHub,
     _apply_loaded_source,
+    _bridge_health_snapshot,
     _runtime_health_snapshot,
     _runtime_status_snapshot,
     _sync_runtime_state,
@@ -1033,3 +1036,86 @@ def test_apply_loaded_source_clears_shadow_and_real_queue():
 
     assert app.state.station_state.queued_segments == []
     assert app.state.queue.empty()
+
+
+# ---------------------------------------------------------------------------
+# Producer rescue-bridge health snapshot (#547 observability)
+# ---------------------------------------------------------------------------
+
+
+def test_bridge_health_snapshot_empty_is_healthy():
+    state = StationState()
+    bh = _bridge_health_snapshot(state)
+
+    assert bh["session_count"] == 0
+    assert bh["window_count"] == 0
+    assert bh["unhealthy"] is False
+    assert bh["last_fire"] is None
+    assert bh["by_type"] == {"drain": 0, "resume": 0, "idle": 0}
+    assert bh["threshold"] == BRIDGE_HEALTH_THRESHOLD
+    assert bh["window_seconds"] == BRIDGE_HEALTH_WINDOW_SECONDS
+    assert isinstance(bh["queue_empty_elapsed_s"], float)
+
+
+def test_bridge_health_snapshot_unhealthy_at_threshold():
+    now = 10_000.0
+    state = StationState()
+    # THRESHOLD fires, all inside the window.
+    for i in range(BRIDGE_HEALTH_THRESHOLD):
+        state.record_bridge_fire("drain", "norm_cache", timestamp=now - i)
+
+    with patch("mammamiradio.web.streamer.time.time", return_value=now):
+        bh = _bridge_health_snapshot(state)
+
+    assert bh["session_count"] == BRIDGE_HEALTH_THRESHOLD
+    assert bh["window_count"] == BRIDGE_HEALTH_THRESHOLD
+    assert bh["unhealthy"] is True
+    assert bh["last_fire"]["bridge_type"] == "drain"
+    assert bh["last_fire"]["source"] == "norm_cache"
+
+
+def test_bridge_health_snapshot_below_threshold_is_healthy():
+    now = 10_000.0
+    state = StationState()
+    for i in range(BRIDGE_HEALTH_THRESHOLD - 1):
+        state.record_bridge_fire("resume", "canned", timestamp=now - i)
+
+    with patch("mammamiradio.web.streamer.time.time", return_value=now):
+        bh = _bridge_health_snapshot(state)
+
+    assert bh["window_count"] == BRIDGE_HEALTH_THRESHOLD - 1
+    assert bh["unhealthy"] is False
+
+
+def test_bridge_health_snapshot_ignores_events_outside_window():
+    """Stale fires (older than the rolling window) drop out of window_count but
+    still count toward the lifetime session_count."""
+    now = 100_000.0
+    state = StationState()
+    # THRESHOLD stale fires, each just outside the window.
+    for i in range(BRIDGE_HEALTH_THRESHOLD):
+        state.record_bridge_fire("idle", "canned", timestamp=now - BRIDGE_HEALTH_WINDOW_SECONDS - 10 - i)
+    # One fresh fire inside the window.
+    state.record_bridge_fire("drain", "norm_cache", timestamp=now - 5)
+
+    with patch("mammamiradio.web.streamer.time.time", return_value=now):
+        bh = _bridge_health_snapshot(state)
+
+    assert bh["session_count"] == BRIDGE_HEALTH_THRESHOLD + 1  # lifetime, all fires
+    assert bh["window_count"] == 1  # only the fresh one
+    assert bh["unhealthy"] is False
+    assert bh["by_type"] == {"drain": 1, "resume": 0, "idle": BRIDGE_HEALTH_THRESHOLD}
+
+
+def test_runtime_status_snapshot_includes_bridge_health():
+    """The /status runtime_status dict carries bridge_health so the admin card
+    can render the Queue rescue row."""
+    app = _make_app()
+    state = app.state.station_state
+    state.record_bridge_fire("drain", "canned", timestamp=1.0)
+
+    req = _fake_request(app)
+    rs = _runtime_status_snapshot(req)
+
+    assert "bridge_health" in rs
+    assert rs["bridge_health"]["session_count"] == 1

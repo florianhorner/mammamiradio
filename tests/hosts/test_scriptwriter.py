@@ -417,6 +417,47 @@ async def test_write_banter_falls_back_on_api_exception(config, state):
 
 
 @pytest.mark.asyncio
+async def test_write_banter_restores_pending_directive_on_fallback(config, state):
+    # Quotes are rewritten by _sanitize_prompt_data before the directive reaches
+    # the prompt; the restore must put back the RAW directive, not that copy.
+    raw_directive = 'Mention the "kitchen" light.'
+    state.ha_pending_directive = raw_directive
+    mock_client = MagicMock()
+    mock_client.messages = MagicMock()
+    mock_client.messages.create = AsyncMock(side_effect=Exception("API down"))
+    mock_cls = MagicMock(return_value=mock_client)
+
+    with (
+        patch("mammamiradio.hosts.scriptwriter._anthropic_client", None),
+        patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
+    ):
+        result, _ = await write_banter(state, config)
+
+    assert len(result) >= 2
+    assert state.ha_pending_directive == raw_directive
+
+
+@pytest.mark.asyncio
+async def test_write_banter_releases_gag_key_on_fallback(config, state):
+    state.ha_running_gag = "The hallway light keeps winking at us."
+    state.ha_running_gag_key = "gag-bucket-1"
+    mock_client = MagicMock()
+    mock_client.messages = MagicMock()
+    mock_client.messages.create = AsyncMock(side_effect=Exception("API down"))
+    mock_cls = MagicMock(return_value=mock_client)
+
+    with (
+        patch("mammamiradio.hosts.scriptwriter._anthropic_client", None),
+        patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
+    ):
+        result, _ = await write_banter(state, config)
+
+    assert len(result) >= 2
+    # The gag never aired, so its cooldown bucket must be released (not spent).
+    assert state.ha_running_gag_key == ""
+
+
+@pytest.mark.asyncio
 async def test_write_banter_falls_back_on_malformed_json(config, state):
     mock_cls = _mock_anthropic_response("this is not valid json {{{")
 
@@ -1585,6 +1626,43 @@ async def test_write_ad_returns_adscript(config, state):
     assert result.parts[0].type == "sfx"
     assert result.parts[1].type == "voice"
     assert result.parts[1].text == "Comprate ora!"
+
+
+@pytest.mark.asyncio
+async def test_write_ad_strips_foreign_station_name_from_voice_parts(config, state):
+    """Illusion guard wired into ads: an improvised competitor station name in an
+    ad voice line is replaced with our station name before the spot airs."""
+    brand = AdBrand(name="TestBrand", tagline="Il meglio", category="food")
+    voices = {"default": AdVoice(name="Voce Uno", voice="it-IT-IsabellaNeural", style="enthusiastic")}
+
+    with patch(
+        "mammamiradio.hosts.scriptwriter._generate_json_response",
+        new_callable=AsyncMock,
+        return_value={
+            "parts": [{"type": "voice", "text": "Solo su Radio Deejay Milano: TestBrand!"}],
+            "summary": "ad",
+        },
+    ):
+        result = await write_ad(brand, voices, state, config)
+
+    joined = " ".join(p.text for p in result.parts if p.type == "voice")
+    assert "Deejay" not in joined
+    assert config.station.name in joined
+
+
+@pytest.mark.asyncio
+async def test_write_news_flash_strips_foreign_station_name(config, state):
+    """Illusion guard wired into news flashes: an improvised competitor station
+    name in the bulletin is replaced with our station name."""
+    with patch(
+        "mammamiradio.hosts.scriptwriter._generate_json_response",
+        new_callable=AsyncMock,
+        return_value={"text": "Siamo su Radio Kiss Kiss e arriva una notizia bomba!"},
+    ):
+        _host, text, _category = await write_news_flash(state, config, category="breaking")
+
+    assert "Kiss Kiss" not in text
+    assert config.station.name in text
 
 
 @pytest.mark.asyncio
