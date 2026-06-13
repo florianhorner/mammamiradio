@@ -53,6 +53,7 @@ from mammamiradio.core.models import (
     StationState,
     Track,
 )
+from mammamiradio.home.catalog import schedule_label_generation
 from mammamiradio.home.ha_context import (
     ENTITY_LABELS,
     GOLD_ENTITIES,
@@ -1264,6 +1265,7 @@ async def run_producer(
                 ha_token=config.ha_token,
                 poll_interval=float(config.homeassistant.poll_interval),
                 _cache=ha_cache,
+                cache_dir=config.cache_dir,
             )
             state.ha_context = ha_cache.summary
             state.ha_events_summary = ha_cache.events_summary
@@ -1275,8 +1277,18 @@ async def run_producer(
             state.ha_scored_entities = [entity.to_status_dict() for entity in ha_cache.scored]
             state.ha_denylist_hits = dict(ha_cache.denylist_hits)
             state.ha_catalog_hit_rate = ha_cache.catalog_hit_rate
+            state.ha_label_stats = dict(getattr(ha_cache, "label_stats", {}) or {})
+            state.ha_registry_source = str(getattr(ha_cache, "registry_source", "") or "")
             state.ha_context_entity_count = len(ha_cache.scored)
             state.ha_context_char_count = len(ha_cache.summary or "")
+            raw_states = getattr(ha_cache, "raw_states", {})
+            if isinstance(raw_states, dict):
+                schedule_label_generation(
+                    raw_states,
+                    cache_dir=config.cache_dir,
+                    config=config,
+                    score_by_entity={entity.entity_id: entity.score for entity in ha_cache.scored},
+                )
             timestamp = getattr(ha_cache, "timestamp", 0.0)
             state.ha_context_last_updated = timestamp if isinstance(timestamp, int | float) else 0.0
             # Dashboard HA moments: pick the most notable recent non-person event.

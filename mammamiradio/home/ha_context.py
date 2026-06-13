@@ -11,10 +11,12 @@ import asyncio
 import datetime
 import json
 import logging
+import os
 import re
 import time
 from collections import deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
+from pathlib import Path
 from typing import TypedDict
 from urllib.parse import urlsplit, urlunsplit
 
@@ -23,6 +25,7 @@ from websockets.asyncio.client import connect as websocket_connect
 
 from mammamiradio.core.config import DEFAULT_STATION_NAME, TimerInterruptConfig
 from mammamiradio.core.models import InterruptSpec, ScoredEntityStatus
+from mammamiradio.home.catalog import ENTITY_LABELS, ENTITY_LABELS_EN, LabelResolution, resolve_label
 from mammamiradio.home.ha_enrichment import (
     EVENT_BUFFER_SIZE,
     HomeEvent,
@@ -168,51 +171,6 @@ _EMAIL_RE = re.compile(r"\b[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}\b")
 _LAT_LON_RE = re.compile(r"[-+]?\d{1,2}\.\d{4,}\s*,\s*[-+]?\d{1,3}\.\d{4,}")
 _TOKEN_EXCLUSIONS = {"CONNECTED", "PENDING_UPDATE", "RESTORED", "UNAVAILABLE", "UNKNOWN"}
 
-# Italian-friendly labels for entity states
-ENTITY_LABELS = {
-    "switch.bar_kaffeemaschine_steckdose": "La macchina del caffè",
-    "input_select.kaffee_dad_jokes": "Dad joke del caffè",
-    "vacuum.goldstaubsucher": "Robot aspirapolvere Goldstaubsucher",
-    "vacuum.matrix10_ultra": "Robot aspirapolvere Matrix10 Ultra",
-    "weather.forecast_home": "Meteo al PentFLOuse",
-    "person.florian_horner": "Florian",
-    "person.sabrina": "Sabrina",
-    "person.schnuffi": "Schnuffi",
-    "lock.lock_ultra_8d3c": "Serratura porta d'ingresso",
-    "input_button.foyer_fahrstuhl_fingerbot_push_button": "Ascensore (ultimo utilizzo)",
-    "binary_sensor.8_stockwerk_group_sensor_wohnzimmer_esszimmer_bar": (
-        "Presenza nel soggiorno/sala da pranzo/bar/cucina"
-    ),
-    "input_select.bedroom_occupancy_state": "Camera da letto",
-    "switch.bad_gross_waschmaschine_steckdose": "Lavatrice",
-    "media_player.samsung_s95ca_65": "Televisore Samsung",
-    "media_player.wohnzimmer_sonos_arc_lautsprecher": "Sonos Arc soggiorno",
-    "media_player.esszimmer": "Sonos sala da pranzo",
-    "climate.wohnzimmer_tado_heizung": "Riscaldamento soggiorno",
-    "climate.schlafzimmer": "Riscaldamento camera da letto",
-    "sun.sun": "Sole",
-    "fan.bad_gross_lufter_shelly": "Ventilatore bagno grande",
-    "fan.bad_klein_lufter": "Ventilatore bagno piccolo",
-    "fan.kuche_lufter": "Ventilatore cucina",
-    "input_datetime.last_sleep_time": "Ultimo orario di sonno",
-    "input_datetime.last_wake_time": "Ultimo orario di sveglia",
-    "binary_sensor.buro_9_ring_intercom_klingelt": "Citofono",
-    # Room-level lights
-    "light.magic_areas_light_groups_wohnzimmer_all_lights": "Luci soggiorno",
-    "light.magic_areas_light_groups_schlafzimmer_all_lights": "Luci camera da letto",
-    "light.magic_areas_light_groups_kuche_all_lights": "Luci cucina",
-    "light.magic_areas_light_groups_esszimmer_all_lights": "Luci sala da pranzo",
-    # Power sensors
-    "sensor.bar_bali_boot_steckdose_power": "Lavatrice (consumo)",
-    "sensor.kuche_kaffeemaschine_steckdose_power": "Caffettiera (consumo)",
-    # Atmosphere
-    "light.schlafzimmer_sternenlicht_projektor_2": "Proiettore stelle camera",
-    "light.kleiderschrank_sternenlicht_projektor": "Proiettore stelle guardaroba",
-    "light.terrasse_9_outdoor_lichtschlauch": "Luci terrazza",
-    # Household power
-    "sensor.haushalt_stromverbrauch_gesamt": "Consumo elettrico totale",
-}
-
 # Map raw HA states to natural Italian descriptions
 STATE_TRANSLATIONS = {
     "home": "a casa",
@@ -244,45 +202,6 @@ STATE_TRANSLATIONS = {
     "lightning": "temporale",
 }
 
-
-# English entity labels for admin UI display (parallel to ENTITY_LABELS)
-ENTITY_LABELS_EN: dict[str, str] = {
-    "switch.bar_kaffeemaschine_steckdose": "Coffee machine",
-    "input_select.kaffee_dad_jokes": "Coffee dad joke",
-    "vacuum.goldstaubsucher": "Robot vacuum Goldstaubsucher",
-    "vacuum.matrix10_ultra": "Robot vacuum Matrix10 Ultra",
-    "weather.forecast_home": "Weather at PentFLOuse",
-    "person.florian_horner": "Florian",
-    "person.sabrina": "Sabrina",
-    "person.schnuffi": "Schnuffi",
-    "lock.lock_ultra_8d3c": "Front door lock",
-    "input_button.foyer_fahrstuhl_fingerbot_push_button": "Elevator (last used)",
-    "binary_sensor.8_stockwerk_group_sensor_wohnzimmer_esszimmer_bar": "Living room/dining/bar presence",
-    "input_select.bedroom_occupancy_state": "Bedroom",
-    "switch.bad_gross_waschmaschine_steckdose": "Washing machine",
-    "media_player.samsung_s95ca_65": "Samsung TV",
-    "media_player.wohnzimmer_sonos_arc_lautsprecher": "Sonos Arc living room",
-    "media_player.esszimmer": "Sonos dining room",
-    "climate.wohnzimmer_tado_heizung": "Heating (living room)",
-    "climate.schlafzimmer": "Heating (bedroom)",
-    "sun.sun": "Sun",
-    "fan.bad_gross_lufter_shelly": "Large bathroom fan",
-    "fan.bad_klein_lufter": "Small bathroom fan",
-    "fan.kuche_lufter": "Kitchen fan",
-    "input_datetime.last_sleep_time": "Last sleep time",
-    "input_datetime.last_wake_time": "Last wake time",
-    "binary_sensor.buro_9_ring_intercom_klingelt": "Intercom",
-    "light.magic_areas_light_groups_wohnzimmer_all_lights": "Living room lights",
-    "light.magic_areas_light_groups_schlafzimmer_all_lights": "Bedroom lights",
-    "light.magic_areas_light_groups_kuche_all_lights": "Kitchen lights",
-    "light.magic_areas_light_groups_esszimmer_all_lights": "Dining room lights",
-    "sensor.bar_bali_boot_steckdose_power": "Washing machine (power)",
-    "sensor.kuche_kaffeemaschine_steckdose_power": "Coffee machine (power)",
-    "light.schlafzimmer_sternenlicht_projektor_2": "Star projector (bedroom)",
-    "light.kleiderschrank_sternenlicht_projektor": "Star projector (wardrobe)",
-    "light.terrasse_9_outdoor_lichtschlauch": "Terrace lights",
-    "sensor.haushalt_stromverbrauch_gesamt": "Total household power",
-}
 
 # English state translations for admin UI display
 STATE_TRANSLATIONS_EN: dict[str, str] = {
@@ -407,6 +326,7 @@ class ScoredEntity:
     raw_state: dict
     label_it: str
     label_en: str
+    label_tier: str = "fallback"
     summary_line: str = ""
 
     def to_status_dict(self) -> ScoredEntityStatus:
@@ -418,9 +338,21 @@ class ScoredEntity:
             "score": round(self.score, 3),
             "state": self.raw_state.get("state"),
             "label": self.label_en,
+            "label_tier": self.label_tier,
             "summary": self.summary_line,
             "device_class": attrs.get("device_class"),
         }
+
+
+@dataclass
+class HomeRegistrySnapshot:
+    """Cached HA registry metadata used to enrich REST state snapshots."""
+
+    entity_areas: dict[str, str] = field(default_factory=dict)
+    entity_names: dict[str, str] = field(default_factory=dict)
+    entity_device_names: dict[str, str] = field(default_factory=dict)
+    fetched_at: float = 0.0
+    source: str = "empty_fallback"
 
 
 @dataclass
@@ -443,6 +375,8 @@ class HomeContext:
     last_event_label_en: str = ""
     scored: list[ScoredEntity] = field(default_factory=list)
     catalog_hit_rate: float = 0.0
+    label_stats: dict[str, int | float] = field(default_factory=dict)
+    registry_source: str = ""
     denylist_hits: dict[str, int] = field(default_factory=dict)
 
     @property
@@ -575,20 +509,20 @@ def _score_entity(entity_id: str, state_data: dict, *, event_entity_ids: set[str
     return score
 
 
-def _format_state(entity_id: str, state_data: dict) -> str | None:
+def _resolve_label(entity_id: str, state_data: dict, *, cache_dir: Path | None = None) -> LabelResolution | None:
+    return resolve_label(entity_id, state_data, cache_dir=cache_dir)
+
+
+def _format_state(entity_id: str, state_data: dict, *, cache_dir: Path | None = None) -> str | None:
     """Format a single entity state as a natural language line."""
     state = _sanitize_state_value(state_data.get("state", "unknown"))
     attrs = state_data.get("attributes", {})
-    curated = ENTITY_LABELS.get(entity_id)
-    if curated is None:
-        friendly = attrs.get("friendly_name")
-        if not friendly:
-            # Anti-illusion guard: raw entity IDs never reach the host. Until a
-            # Phase B catalog label is available, drop the entity from the slice.
-            return None
-        label = _sanitize_state_value(str(friendly))
-    else:
-        label = curated
+    resolved = _resolve_label(entity_id, state_data, cache_dir=cache_dir)
+    if resolved is None:
+        # Anti-illusion guard: raw entity IDs never reach the host. If no curated,
+        # catalog, registry, or friendly label is available, drop the entity.
+        return None
+    label = resolved.label_it
 
     if state in ("unavailable", "unknown"):
         return None
@@ -685,17 +619,19 @@ def _build_scored_entities(
     now: float | None = None,
     limit: int = DEFAULT_CONTEXT_ENTITY_LIMIT,
     char_limit: int = DEFAULT_CONTEXT_CHAR_LIMIT,
+    cache_dir: Path | None = None,
 ) -> list[ScoredEntity]:
     """Score filtered HA entities and return the budgeted prompt slice."""
     ref_now = time.time() if now is None else now
     event_ids = event_entity_ids or set()
     scored: list[ScoredEntity] = []
     for entity_id, state_data in states.items():
-        line = _format_state(entity_id, state_data)
+        resolved = _resolve_label(entity_id, state_data, cache_dir=cache_dir)
+        if resolved is None:
+            continue
+        line = _format_state(entity_id, state_data, cache_dir=cache_dir)
         if not line:
             continue
-        label_it = ENTITY_LABELS.get(entity_id, _generic_label(entity_id, state_data))
-        label_en = ENTITY_LABELS_EN.get(entity_id, _generic_label(entity_id, state_data))
         scored.append(
             ScoredEntity(
                 entity_id=entity_id,
@@ -703,8 +639,9 @@ def _build_scored_entities(
                 domain=_entity_domain(entity_id),
                 score=_score_entity(entity_id, state_data, event_entity_ids=event_ids, now=ref_now),
                 raw_state=state_data,
-                label_it=label_it,
-                label_en=label_en,
+                label_it=resolved.label_it,
+                label_en=resolved.label_en,
+                label_tier=resolved.tier,
                 summary_line=line,
             )
         )
@@ -771,7 +708,27 @@ def _build_budgeted_summary(scored: list[ScoredEntity]) -> str:
     return rendered.replace("<", "").replace(">", "")
 
 
-def _build_entity_label_maps(states: dict[str, dict]) -> tuple[dict[str, str], dict[str, str]]:
+def _label_stats(scored: list[ScoredEntity]) -> dict[str, int | float]:
+    eligible = len(scored)
+    curated = sum(1 for entity in scored if entity.label_tier == "curated")
+    catalog_hits = sum(1 for entity in scored if entity.label_tier == "catalog")
+    fallback = sum(1 for entity in scored if entity.label_tier == "fallback")
+    denominator = max(1, eligible - curated)
+    hit_rate = catalog_hits / denominator
+    return {
+        "eligible": eligible,
+        "curated": curated,
+        "catalog_hits": catalog_hits,
+        "fallback": fallback,
+        "catalog_hit_rate": round(hit_rate, 4),
+    }
+
+
+def _build_entity_label_maps(
+    states: dict[str, dict],
+    *,
+    cache_dir: Path | None = None,
+) -> tuple[dict[str, str], dict[str, str]]:
     labels_it = dict(ENTITY_LABELS)
     labels_en = dict(ENTITY_LABELS_EN)
     for entity_id, state_data in states.items():
@@ -782,10 +739,11 @@ def _build_entity_label_maps(states: dict[str, dict]) -> tuple[dict[str, str], d
         # events_summary, bypassing the guard.
         if entity_id in labels_it and entity_id in labels_en:
             continue
-        if not state_data.get("attributes", {}).get("friendly_name"):
+        resolved = _resolve_label(entity_id, state_data, cache_dir=cache_dir)
+        if resolved is None:
             continue
-        labels_it.setdefault(entity_id, _generic_label(entity_id, state_data))
-        labels_en.setdefault(entity_id, _generic_label(entity_id, state_data))
+        labels_it.setdefault(entity_id, resolved.label_it)
+        labels_en.setdefault(entity_id, resolved.label_en)
     return labels_it, labels_en
 
 
@@ -1179,10 +1137,12 @@ def check_reactive_triggers(
 
 _ha_client: httpx.AsyncClient | None = None
 _ha_cache: HomeContext | None = None
-_ha_registry_area_cache: dict[str, str] | None = None
+_ha_registry_snapshot_cache: HomeRegistrySnapshot | None = None
 _ha_registry_fetched_at: float = 0.0
 _HA_REGISTRY_TTL = 6 * 60 * 60
 _HA_REGISTRY_FAILURE_TTL = 60
+_HA_REGISTRY_STALE_TTL = 7 * 24 * 60 * 60
+_HA_REGISTRY_FILENAME = "ha_registry.json"
 
 
 def _get_ha_client() -> httpx.AsyncClient:
@@ -1208,81 +1168,221 @@ def _ha_websocket_url(ha_url: str) -> str:
 
 
 async def _fetch_ha_registry_areas(ha_url: str, ha_token: str) -> dict[str, str]:
-    """Fetch HA entity/device/area registries once and map entity_id -> area name."""
-    global _ha_registry_area_cache, _ha_registry_fetched_at
+    """Compatibility wrapper returning entity_id -> area name."""
+    snapshot = await _fetch_ha_registry_snapshot(ha_url, ha_token)
+    return snapshot.entity_areas
+
+
+def _ha_registry_cache_path(cache_dir: Path) -> Path:
+    return Path(cache_dir) / _HA_REGISTRY_FILENAME
+
+
+def _registry_snapshot_with_source(snapshot: HomeRegistrySnapshot, source: str) -> HomeRegistrySnapshot:
+    return replace(snapshot, source=source)
+
+
+def _load_registry_snapshot(cache_dir: Path, *, now: float | None = None) -> HomeRegistrySnapshot | None:
+    path = _ha_registry_cache_path(cache_dir)
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, TypeError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    fetched_at = data.get("fetched_at")
+    if not isinstance(fetched_at, int | float):
+        return None
+    ref_now = time.time() if now is None else now
+    source = "disk_fresh" if ref_now - float(fetched_at) < _HA_REGISTRY_TTL else "disk_stale"
+    return HomeRegistrySnapshot(
+        entity_areas={str(k): str(v) for k, v in (data.get("entity_areas") or {}).items()},
+        entity_names={str(k): str(v) for k, v in (data.get("entity_names") or {}).items()},
+        entity_device_names={str(k): str(v) for k, v in (data.get("entity_device_names") or {}).items()},
+        fetched_at=float(fetched_at),
+        source=source,
+    )
+
+
+def _write_registry_snapshot(cache_dir: Path, snapshot: HomeRegistrySnapshot) -> None:
+    path = _ha_registry_cache_path(cache_dir)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    payload = {
+        "schema_version": 1,
+        "fetched_at": snapshot.fetched_at,
+        "entity_areas": snapshot.entity_areas,
+        "entity_names": snapshot.entity_names,
+        "entity_device_names": snapshot.entity_device_names,
+    }
+    try:
+        tmp_path.write_text(json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2), encoding="utf-8")
+        os.chmod(tmp_path, 0o600)
+        os.replace(tmp_path, path)
+        os.chmod(path, 0o600)
+    except OSError as exc:
+        logger.warning("Failed to write HA registry cache %s: %s", path, exc)
+        try:
+            tmp_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+async def _fetch_ha_registry_snapshot(
+    ha_url: str,
+    ha_token: str,
+    *,
+    cache_dir: Path | None = None,
+) -> HomeRegistrySnapshot:
+    """Fetch HA registry metadata with memory/disk cache and stale fallback."""
+    global _ha_registry_snapshot_cache, _ha_registry_fetched_at
     now = time.time()
-    if _ha_registry_area_cache is not None and now - _ha_registry_fetched_at < _HA_REGISTRY_TTL:
-        return _ha_registry_area_cache
+    if _ha_registry_snapshot_cache is not None and now - _ha_registry_fetched_at < _HA_REGISTRY_TTL:
+        if _ha_registry_snapshot_cache.source in {"empty_fallback", "disk_stale"}:
+            return _ha_registry_snapshot_cache
+        return _registry_snapshot_with_source(_ha_registry_snapshot_cache, "memory")
+
+    disk_snapshot: HomeRegistrySnapshot | None = None
+    if cache_dir is not None:
+        disk_snapshot = _load_registry_snapshot(Path(cache_dir), now=now)
+        if disk_snapshot is not None and disk_snapshot.source == "disk_fresh":
+            _ha_registry_snapshot_cache = disk_snapshot
+            _ha_registry_fetched_at = disk_snapshot.fetched_at
+            return disk_snapshot
 
     try:
-        async with websocket_connect(_ha_websocket_url(ha_url), open_timeout=5, close_timeout=1) as ws:
-            auth_required = json.loads(await asyncio.wait_for(ws.recv(), timeout=5))
-            if auth_required.get("type") != "auth_required":
-                raise RuntimeError("unexpected HA websocket greeting")
-            await ws.send(json.dumps({"type": "auth", "access_token": ha_token}))
-            auth_response = json.loads(await asyncio.wait_for(ws.recv(), timeout=5))
-            if auth_response.get("type") != "auth_ok":
-                raise RuntimeError(auth_response.get("message") or "HA websocket auth failed")
-
-            commands = [
-                (1, "config/entity_registry/list"),
-                (2, "config/device_registry/list"),
-                (3, "config/area_registry/list"),
-            ]
-            for msg_id, msg_type in commands:
-                await ws.send(json.dumps({"id": msg_id, "type": msg_type}))
-
-            results: dict[int, list[dict]] = {}
-            while len(results) < len(commands):
-                message = json.loads(await asyncio.wait_for(ws.recv(), timeout=5))
-                msg_id = message.get("id")
-                if message.get("type") != "result" or msg_id not in {1, 2, 3}:
-                    continue
-                if not message.get("success", False):
-                    raise RuntimeError(f"HA registry command {msg_id} failed")
-                result = message.get("result") or []
-                results[int(msg_id)] = result if isinstance(result, list) else []
-
-        areas = {
-            str(area.get("area_id")): str(area.get("name") or area.get("area_id"))
-            for area in results.get(3, [])
-            if area.get("area_id")
-        }
-        devices = {
-            str(device.get("id")): str(device.get("area_id"))
-            for device in results.get(2, [])
-            if device.get("id") and device.get("area_id")
-        }
-        entity_areas: dict[str, str] = {}
-        for entity in results.get(1, []):
-            entity_id = entity.get("entity_id")
-            if not entity_id:
-                continue
-            area_id = entity.get("area_id") or devices.get(str(entity.get("device_id")))
-            area_name = areas.get(str(area_id)) if area_id else None
-            if area_name:
-                entity_areas[str(entity_id)] = area_name
-
-        _ha_registry_area_cache = entity_areas
+        snapshot = await _fetch_ha_registry_snapshot_websocket(ha_url, ha_token, fetched_at=now)
+        _ha_registry_snapshot_cache = snapshot
         _ha_registry_fetched_at = now
-        logger.debug("Fetched HA registries: %d entity areas", len(entity_areas))
-        return entity_areas
+        if cache_dir is not None:
+            _write_registry_snapshot(Path(cache_dir), snapshot)
+        logger.debug(
+            "Fetched HA registries: %d areas, %d entity names, %d device names",
+            len(snapshot.entity_areas),
+            len(snapshot.entity_names),
+            len(snapshot.entity_device_names),
+        )
+        return snapshot
     except Exception as exc:
         logger.debug("HA registry fetch unavailable: %s", exc)
-        _ha_registry_area_cache = {}
-        _ha_registry_fetched_at = now - _HA_REGISTRY_TTL + _HA_REGISTRY_FAILURE_TTL
-        return {}
+        if disk_snapshot is None and cache_dir is not None:
+            disk_snapshot = _load_registry_snapshot(Path(cache_dir), now=now)
+        if disk_snapshot is not None and now - disk_snapshot.fetched_at < _HA_REGISTRY_STALE_TTL:
+            stale = _registry_snapshot_with_source(disk_snapshot, "disk_stale")
+            _ha_registry_snapshot_cache = stale
+            _ha_registry_fetched_at = now - _HA_REGISTRY_TTL + _HA_REGISTRY_FAILURE_TTL
+            return stale
+        fallback = HomeRegistrySnapshot(
+            fetched_at=now - _HA_REGISTRY_TTL + _HA_REGISTRY_FAILURE_TTL,
+            source="empty_fallback",
+        )
+        _ha_registry_snapshot_cache = fallback
+        _ha_registry_fetched_at = fallback.fetched_at
+        return fallback
+
+
+async def _fetch_ha_registry_snapshot_websocket(
+    ha_url: str,
+    ha_token: str,
+    *,
+    fetched_at: float,
+) -> HomeRegistrySnapshot:
+    async with websocket_connect(_ha_websocket_url(ha_url), open_timeout=5, close_timeout=1) as ws:
+        auth_required = json.loads(await asyncio.wait_for(ws.recv(), timeout=5))
+        if auth_required.get("type") != "auth_required":
+            raise RuntimeError("unexpected HA websocket greeting")
+        await ws.send(json.dumps({"type": "auth", "access_token": ha_token}))
+        auth_response = json.loads(await asyncio.wait_for(ws.recv(), timeout=5))
+        if auth_response.get("type") != "auth_ok":
+            raise RuntimeError(auth_response.get("message") or "HA websocket auth failed")
+
+        commands = [
+            (1, "config/entity_registry/list"),
+            (2, "config/device_registry/list"),
+            (3, "config/area_registry/list"),
+        ]
+        for msg_id, msg_type in commands:
+            await ws.send(json.dumps({"id": msg_id, "type": msg_type}))
+
+        results: dict[int, list[dict]] = {}
+        while len(results) < len(commands):
+            message = json.loads(await asyncio.wait_for(ws.recv(), timeout=5))
+            msg_id = message.get("id")
+            if message.get("type") != "result" or msg_id not in {1, 2, 3}:
+                continue
+            if not message.get("success", False):
+                raise RuntimeError(f"HA registry command {msg_id} failed")
+            result = message.get("result") or []
+            results[int(msg_id)] = result if isinstance(result, list) else []
+
+    areas = {
+        str(area.get("area_id")): str(area.get("name") or area.get("area_id"))
+        for area in results.get(3, [])
+        if area.get("area_id")
+    }
+    device_areas: dict[str, str] = {}
+    device_names: dict[str, str] = {}
+    for device in results.get(2, []):
+        device_id = device.get("id")
+        if not device_id:
+            continue
+        if device.get("area_id"):
+            device_areas[str(device_id)] = str(device.get("area_id"))
+        name = device.get("name_by_user") or device.get("name")
+        if name:
+            device_names[str(device_id)] = str(name)
+
+    entity_areas: dict[str, str] = {}
+    entity_names: dict[str, str] = {}
+    entity_device_names: dict[str, str] = {}
+    for entity in results.get(1, []):
+        entity_id = entity.get("entity_id")
+        if not entity_id:
+            continue
+        entity_key = str(entity_id)
+        device_id = str(entity.get("device_id") or "")
+        area_id = entity.get("area_id") or device_areas.get(device_id)
+        area_name = areas.get(str(area_id)) if area_id else None
+        if area_name:
+            entity_areas[entity_key] = area_name
+        entity_name = entity.get("name") or entity.get("original_name")
+        if entity_name:
+            entity_names[entity_key] = str(entity_name)
+        if device_id and device_names.get(device_id):
+            entity_device_names[entity_key] = device_names[device_id]
+
+    return HomeRegistrySnapshot(
+        entity_areas=entity_areas,
+        entity_names=entity_names,
+        entity_device_names=entity_device_names,
+        fetched_at=fetched_at,
+        source="websocket",
+    )
 
 
 def _apply_registry_area(entity_id: str, state_data: dict, registry_areas: dict[str, str]) -> dict:
-    area = registry_areas.get(entity_id)
-    if not area:
+    return _apply_registry_snapshot(entity_id, state_data, HomeRegistrySnapshot(entity_areas=registry_areas))
+
+
+def _apply_registry_snapshot(entity_id: str, state_data: dict, snapshot: HomeRegistrySnapshot) -> dict:
+    area = snapshot.entity_areas.get(entity_id)
+    entity_name = snapshot.entity_names.get(entity_id)
+    device_name = snapshot.entity_device_names.get(entity_id)
+    if not area and not entity_name and not device_name:
         return state_data
     attrs = dict(state_data.get("attributes", {}) or {})
-    if attrs.get("area") or attrs.get("area_name") or attrs.get("area_id"):
+    changed = False
+    if area and not (attrs.get("area") or attrs.get("area_name") or attrs.get("area_id")):
+        attrs["area"] = area
+        changed = True
+    if entity_name and not attrs.get("registry_entity_name"):
+        attrs["registry_entity_name"] = entity_name
+        changed = True
+    if device_name and not attrs.get("registry_device_name"):
+        attrs["registry_device_name"] = device_name
+        changed = True
+    if not changed:
         return state_data
     enriched = dict(state_data)
-    attrs["area"] = area
     enriched["attributes"] = attrs
     return enriched
 
@@ -1292,6 +1392,7 @@ async def fetch_home_context(
     ha_token: str,
     poll_interval: float = 60.0,
     _cache: HomeContext | None = None,
+    cache_dir: Path | None = None,
 ) -> HomeContext:
     """Fetch current home state from HA REST API.
 
@@ -1327,7 +1428,7 @@ async def fetch_home_context(
 
         timestamp = time.time()
         denylist_hits: dict[str, int] = {}
-        registry_areas = await _fetch_ha_registry_areas(ha_url, ha_token)
+        registry_snapshot = await _fetch_ha_registry_snapshot(ha_url, ha_token, cache_dir=cache_dir)
         entity_map = {str(e.get("entity_id", "")): e for e in all_states if e.get("entity_id")}
         relevant = {
             entity_id: filtered
@@ -1335,7 +1436,7 @@ async def fetch_home_context(
             if (
                 filtered := _filter_state(
                     entity_id,
-                    _apply_registry_area(entity_id, state_data, registry_areas),
+                    _apply_registry_snapshot(entity_id, state_data, registry_snapshot),
                     denylist_hits,
                 )
             )
@@ -1343,7 +1444,7 @@ async def fetch_home_context(
         }
         old_states = effective_cache.raw_states if effective_cache else {}
         old_events = effective_cache.events if effective_cache else None
-        labels_it, labels_en = _build_entity_label_maps(relevant)
+        labels_it, labels_en = _build_entity_label_maps(relevant, cache_dir=cache_dir)
         events = diff_states(
             old_states,
             relevant,
@@ -1356,7 +1457,9 @@ async def fetch_home_context(
             relevant,
             event_entity_ids={event.entity_id for event in events},
             now=timestamp,
+            cache_dir=cache_dir,
         )
+        label_stats = _label_stats(scored)
         mood = classify_home_mood(relevant)
         mood_en = classify_home_mood_en(relevant)
         weather_arc = await fetch_weather_forecast(ha_url, ha_token)
@@ -1381,6 +1484,9 @@ async def fetch_home_context(
             events_summary_en=events_summary_en,
             last_event_label_en=last_event_label_en,
             scored=scored,
+            catalog_hit_rate=float(label_stats["catalog_hit_rate"]),
+            label_stats=label_stats,
+            registry_source=registry_snapshot.source,
             denylist_hits=denylist_hits,
         )
         _ha_cache = context
@@ -1401,8 +1507,16 @@ async def fetch_home_context(
             timestamp = time.time()
             effective_cache.events = prune_events(effective_cache.events, now=timestamp)
             effective_cache.events_summary = build_events_summary(effective_cache.events, now=timestamp)
+            effective_cache.events_summary_en = build_events_summary_en(
+                effective_cache.events, ENTITY_LABELS_EN, STATE_TRANSLATIONS_EN, now=timestamp
+            )
             return effective_cache
         return HomeContext()
+
+
+def get_cached_home_context() -> HomeContext | None:
+    """Return the module-level HA context cache for admin-triggered refreshes."""
+    return _ha_cache
 
 
 _last_ha_push: float = 0.0  # debounce: skip playing pushes < 2s apart

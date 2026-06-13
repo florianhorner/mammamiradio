@@ -109,6 +109,8 @@ async def startup():
 
     config.tmp_dir.mkdir(parents=True, exist_ok=True)
     config.cache_dir.mkdir(parents=True, exist_ok=True)
+    if config.homeassistant.enabled and config.ha_token and config.anthropic_api_key:
+        logger.info("Label generation sends entity metadata (IDs, names, areas) to LLM provider anthropic")
 
     # Purge suspect cache files (likely failed downloads) before serving
     purged = purge_suspect_cache_files(config.cache_dir)

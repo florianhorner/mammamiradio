@@ -379,6 +379,7 @@ class ScoredEntityStatus(TypedDict):
     score: float
     state: object
     label: str
+    label_tier: str
     summary: str
     device_class: object
 
@@ -481,6 +482,8 @@ class StationState:
     ha_scored_entities: list[ScoredEntityStatus] = field(default_factory=list)
     ha_denylist_hits: dict[str, int] = field(default_factory=dict)
     ha_catalog_hit_rate: float = 0.0
+    ha_label_stats: dict[str, int | float] = field(default_factory=dict)
+    ha_registry_source: str = ""
     ha_context_last_updated: float = 0.0
     ha_context_entity_count: int = 0
     ha_context_char_count: int = 0
