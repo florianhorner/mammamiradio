@@ -1525,7 +1525,17 @@ async def push_state_to_ha(
         # on screen during a news flash. A relative/local path is never used (HA
         # resolves it against its own origin, which 404s for an add-on).
         album_art = str(metadata.get("album_art") or "").strip()
-        cover = album_art if (is_playing and album_art.startswith(("http://", "https://"))) else ""
+        parsed_art = urlsplit(album_art) if album_art else None
+        cover = (
+            album_art
+            if (
+                is_playing
+                and parsed_art is not None
+                and parsed_art.scheme in ("http", "https")
+                and parsed_art.hostname
+            )
+            else ""
+        )
         media_attrs["entity_picture"] = cover or artwork_url or _DEFAULT_STATION_ARTWORK_URL
 
         entities: list[tuple[str, dict]] = [

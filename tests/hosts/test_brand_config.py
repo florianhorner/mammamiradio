@@ -142,7 +142,15 @@ def test_parse_brand_blank_artwork_url_is_empty():
 
 @pytest.mark.parametrize(
     "bad_url",
-    ["/static/logo.png", "logo.png", "http://", "https://", "ftp://host/logo.png", "data:image/png;base64,AAAA"],
+    [
+        "/static/logo.png",
+        "logo.png",
+        "http://",
+        "https://",
+        "https://:443/logo.png",
+        "ftp://host/logo.png",
+        "data:image/png;base64,AAAA",
+    ],
 )
 def test_parse_brand_rejects_non_absolute_artwork_url(bad_url):
     """A relative, scheme-only, or non-http(s) artwork_url is dropped with a warning

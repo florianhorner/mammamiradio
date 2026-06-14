@@ -2174,9 +2174,13 @@ async def test_push_state_to_ha_falls_back_to_logo_when_album_art_missing(reset_
 
 
 @pytest.mark.asyncio
-async def test_push_state_to_ha_ignores_non_http_album_art(reset_ha_push_debounce):
-    """A relative/local album_art is never used (HA resolves it against its own
-    origin); it falls back to the absolute station logo instead."""
+@pytest.mark.parametrize(
+    "bad_art",
+    ["/artwork/station.svg", "station.svg", "http://", "https://", "https://:443/cover.jpg"],
+)
+async def test_push_state_to_ha_ignores_non_http_album_art(reset_ha_push_debounce, bad_art):
+    """A relative/local/scheme-only/hostless album_art is never used (HA resolves
+    it against its own origin); it falls back to the absolute station logo."""
     mock_client = AsyncMock()
     mock_client.post.return_value = MagicMock(status_code=200)
     with patch("mammamiradio.home.ha_context._get_ha_client", return_value=mock_client):
@@ -2187,7 +2191,7 @@ async def test_push_state_to_ha_ignores_non_http_album_art(reset_ha_push_debounc
                 "type": "music",
                 "label": "Song",
                 "started": time.time(),
-                "metadata": {"album_art": "/artwork/station.svg"},
+                "metadata": {"album_art": bad_art},
             },
             current_track=None,
             listeners_active=0,

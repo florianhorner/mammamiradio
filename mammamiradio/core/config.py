@@ -996,12 +996,13 @@ def _parse_brand(raw: dict, hosts: list[HostPersonality]) -> tuple[BrandSection,
 
     # Artwork URL guardrail: HA resolves entity_picture against its own origin,
     # so only an absolute http(s) URL with a host is usable. A relative, non-http,
-    # or scheme-only value (e.g. "http://") would 404 on the HA media card; warn
-    # and fall back to the engine default (blank).
+    # scheme-only ("http://"), or hostless-authority ("https://:443/logo.png")
+    # value would 404 on the HA media card; warn and fall back to the engine
+    # default (blank). Check hostname (not netloc) so ":443" alone is rejected.
     artwork_url = str(brand_raw.get("artwork_url", "") or "").strip()
     if artwork_url:
         parsed = urlsplit(artwork_url)
-        if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        if parsed.scheme not in ("http", "https") or not parsed.hostname:
             warnings.append(
                 f"brand.artwork_url={artwork_url!r} is not an absolute http(s) URL with a host; "
                 "ignoring it and using the default station logo"
