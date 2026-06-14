@@ -123,12 +123,15 @@ def _normalized_cache_path(track: Track, config: StationConfig) -> Path:
 
 def _norm_cache_bridge_payload(norm_path: Path, bridge_flag: str, station_name: str) -> tuple[dict, str]:
     _meta = load_track_metadata(norm_path) or {}
-    title = _meta.get("title") or humanize_norm_filename(norm_path.name)
-    # Illusion guard: a poisoned sidecar artist (a foreign "Radio X" station name)
-    # must never surface as the now-playing artist on the listener UI / Music
-    # Assistant provider. Strip it and drop to title-only — mirroring the streamer
-    # rescue paths, so every sidecar->metadata source scrubs at its origin instead
-    # of one surface getting protected while a sibling bridge leaks.
+    raw_title = _meta.get("title") or humanize_norm_filename(norm_path.name)
+    # Illusion guard: a poisoned sidecar (a foreign "Radio X" station name) must
+    # never surface as the now-playing artist/title on the listener UI / Music
+    # Assistant provider. Strip the artist (drop to title-only) and prefix-strip
+    # the title ("Radio X - Song" -> "Song", but keep a song really titled
+    # "Radio Ga Ga") — mirroring the streamer rescue paths and the HA now-playing
+    # path, so every sidecar->metadata source scrubs at its origin instead of one
+    # surface getting protected while a sibling bridge leaks.
+    title = strip_foreign_station_name(raw_title, station_name, prefix_only=True) or raw_title
     artist = strip_foreign_station_name(_meta.get("artist", ""), station_name)
     detail = f"{artist} - {title}" if artist else title
     return (
