@@ -1,15 +1,22 @@
-Callback Director — test evidence (2026-06-14T20:32:22Z)
-Branch: florianhorner/chore/check-gladiator-ad-logs  HEAD: f3b3966f
-Base: origin/main b8310872
+Callback Director — pre-ship evidence (2026-06-14T20:34:52Z)
+Branch: florianhorner/chore/check-gladiator-ad-logs  HEAD: 631edbf5  Base: origin/main b8310872
 
---- New/changed test files for this feature ---
+[tests] feature suites (gag_select, verbal_gag_ledger, callback_gag, callback_director, evening_memory regression):
 ..........................................................               [100%]
-58 passed in 1.28s
+58 passed in 1.07s
+[tests] full suite:
+2939 passed, 2 skipped, 19 deselected, 1 warning in 68.72s (0:01:08)
 
---- Full suite ---
-2939 passed, 2 skipped, 19 deselected, 1 warning in 72.13s (0:01:12)
+[lint] ruff check:
+All checks passed!
+[lint] ruff format --check:
+185 files already formatted
+[typecheck] mypy mammamiradio/:
+Success: no issues found in 62 source files
+[build] release invariants:
+All invariants passed.
 
---- new-module coverage ---
+[coverage] new modules:
 mammamiradio/home/gag_select.py              16      0      6      0   100%
 mammamiradio/hosts/verbal_gag_ledger.py      51      0      6      0   100%
 TOTAL                                        67      0     12      0   100%
