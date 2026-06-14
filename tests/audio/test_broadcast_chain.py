@@ -18,8 +18,35 @@ from mammamiradio.audio.normalizer import (
     _broadcast_filter_chain,
     _mp3_output_args,
     apply_broadcast_chain,
+    broadcast_chain_version,
     configure_broadcast_chain,
 )
+
+
+def test_broadcast_chain_version_none_when_disabled():
+    """No fingerprint when the chain is off — callers key cache files off this, so None
+    means 'do not bake'."""
+    configure_broadcast_chain(False)
+    assert broadcast_chain_version() is None
+
+
+def test_broadcast_chain_version_stable_when_enabled():
+    """A stable, non-empty fingerprint while enabled — the same config yields the same
+    key so a baked render is reused, not re-encoded."""
+    configure_broadcast_chain(True)
+    v1 = broadcast_chain_version()
+    v2 = broadcast_chain_version()
+    assert v1 and v1 == v2
+
+
+def test_broadcast_chain_version_changes_with_encoding():
+    """A different encoding (bitrate) yields a different fingerprint, so a config change
+    invalidates stale bakes instead of airing them."""
+    configure_broadcast_chain(True, bitrate=192)
+    a = broadcast_chain_version()
+    configure_broadcast_chain(True, bitrate=256)
+    b = broadcast_chain_version()
+    assert a != b
 
 
 def test_mp3_output_args_shape():

@@ -118,6 +118,8 @@ async def test_produced_segment_routes_through_egress_funnel(tmp_path):
         patch(f"{PRODUCER_MODULE}._prefetch_next", new_callable=AsyncMock),
         patch(f"{PRODUCER_MODULE}.generate_track_rationale", return_value="Because it fits."),
         patch(f"{PRODUCER_MODULE}.classify_track_crate", return_value="test"),
+        # Chain active (its version drives the cache-bake path for this cache-hit source).
+        patch(f"{PRODUCER_MODULE}.broadcast_chain_version", return_value="testv"),
         patch(f"{PRODUCER_MODULE}.apply_broadcast_chain", side_effect=spy_colour) as m_chain,
     ):
         await _run_until_status_queued(queue, state, config)
