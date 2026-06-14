@@ -43,6 +43,9 @@ founded = 2024
 tagline = "La radio che ascolta la tua casa"
 about = "Conduttori notturni registrati su nastro e rimixati per la sera. Da Windor a Vergen. La voce che non si spegne mai."
 opengraph_subtitle = "AI Italian late-night radio · 96,7 FM"
+# Logo shown on the Home Assistant media card when a segment has no real cover
+# (host talk, ads, idle). Must be an absolute http(s) URL; blank = engine default.
+artwork_url = ""
 
 [brand.theme]
 # Volare Refined defaults — override per station fiction.
