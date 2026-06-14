@@ -1,0 +1,17 @@
+Release-cadence docs PR — local verification (2026-06-14T00:20:05Z)
+Net diff vs origin/main: CHANGELOG.md (-1/+1), docs/runbooks/ha-addon.md (+51). Docs-only, zero Python touched.
+
+=== scripts/check-changelog-lint.sh ===
+Changelog lint clean.
+
+=== scripts/pre-release-check.sh (version sync + changelog head) ===
+=======================================
+
+All checks passed. Safe to bump the version.
+
+=== scripts/check-release-invariants.sh ===
+=======================================
+
+All invariants passed.
+
+Full pytest intentionally skipped: docs-only change, no code paths affected (QA-gate docs-only exemption).
