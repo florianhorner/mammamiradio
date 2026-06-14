@@ -20,3 +20,32 @@ command: bash scripts/check-release-invariants.sh
 ---
 Passed: 6  Failed: 0
 All invariants passed.
+
+================================================================
+re-verification after review fixes (explicit rescue flag, egress
+robustness, On-Air Sound addon toggle) + merge of origin/main
+date: 2026-06-14
+head: 50e18f24f3bffeb26ca3f013bae576b5b72b0fc1
+
+command: make check (ruff + mypy + vulture + pytest + coverage floors)
+---
+2906 passed, 2 skipped, 19 deselected
+Required test coverage of 92.0% reached. Total coverage: 94%
+All coverage floors held
+All checks passed
+
+command: pytest -m requires_ffmpeg -k broadcast tests/audio/test_normalizer_real_ffmpeg.py
+  (real ffmpeg 8.1.1 — SIGABRT-safety, loudness-neutral on broadband
+   AND voice-band signals, CPU budget)
+---
+[broadcast-chain CPU] 3s segment colour pass: 0.03s
+6 passed in 1.15s
+
+command: bash scripts/check-release-invariants.sh
+---
+All invariants passed.
+
+command: bash scripts/validate-addon.sh
+  (config.yaml / schema / translations parity, stable + edge)
+---
+All checks passed. Safe to push.
