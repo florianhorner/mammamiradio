@@ -1,0 +1,43 @@
+Proof — HA generated label catalog hardening (anti-illusion fix + CodeRabbit round + doc-sync)
+Branch: florianhorner/chore/plan-eng-review
+Head: 163204737167b08dbc90f3e0990f4dfaf347d59f (pre-commit; see PR head for final)
+
+=== Anti-illusion regression: raw object_id / dotted entity_id DROP (tier 4) ===
+fan.kuche_lufter_shelly + friendly_name=kuche_lufter_shelly -> None
+light.office + friendly_name=light.office -> None
+genuine friendly_name=Reading Lamp area=Studio -> LabelResolution(label_it='Reading Lamp (Studio)', label_en='Reading Lamp (Studio)', tier='fallback')
+malformed attributes (list) does not raise -> None
+
+=== ruff check (changed files) ===
+All checks passed!
+
+=== mypy (changed modules) ===
+Success: no issues found in 4 source files
+
+=== catalog.py docstring coverage ===
+27/27 functions documented
+
+=== release invariants ===
+
+All invariants passed.
+
+=== full pytest suite ===
+2828 passed, 2 skipped, 13 deselected, 1 warning in 54.86s
+
+=== coverage ratchet (CI gate) — final, after all review rounds ===
+mammamiradio/home/catalog.py                 303     28    100     20    88%
+mammamiradio/home/ha_context.py              866     18    346     17    97%
+All coverage floors held. Total: 94% (floor: 92%)
+(ha_context holds its 97% floor; catalog.py new-module coverage 88%)
+
+=== registry cache hardening (Codex + CodeRabbit round) ===
+malformed-but-fresh registry cache ("entity_areas": []) -> _load_registry_snapshot None -> websocket refetch (not served for TTL)
+nested junk value ("entity_areas": {"light.x": ["Kitchen"]}) -> None (no stringified garbage label)
+absent mapping field -> empty {} (legit partial cache still usable as stale fallback)
+_call_anthropic_labels test now asserts .with_options(timeout=45.0)
+full pytest suite: 2838 passed, 2 skipped
+
+=== /code-review follow-ups (markdown-fence tolerance + single-resolver delegation) ===
+_parse_label_payload strips ```json / ``` fences before json.loads; unparseable -> [] with a warning (no silent starvation)
+_resolve_anthropic_fast_model now delegates to resolve_model(models, "transition", "anthropic") (env overrides + floor logic honored)
+ratchet: catalog.py 89%, all floors held; full suite 2839 passed

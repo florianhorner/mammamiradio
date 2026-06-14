@@ -38,7 +38,8 @@ from mammamiradio.core.models import (
 )
 from mammamiradio.core.provider_checks import check_provider_keys
 from mammamiradio.core.setup_status import addon_options_snippet, build_setup_status, classify_station_mode
-from mammamiradio.home.ha_context import push_state_to_ha
+from mammamiradio.home.catalog import generation_in_progress, schedule_label_generation
+from mammamiradio.home.ha_context import get_cached_home_context, push_state_to_ha
 from mammamiradio.home.ha_enrichment import EVENT_RETENTION_SECONDS
 from mammamiradio.hosts.station_name_guard import strip_foreign_station_name
 from mammamiradio.playlist.playlist import (
@@ -703,6 +704,8 @@ def _ha_details_payload(state: StationState) -> dict | None:
         "scored_entities": state.ha_scored_entities[:12],
         "denylist_hits": dict(state.ha_denylist_hits),
         "catalog_hit_rate": state.ha_catalog_hit_rate,
+        "label_stats": dict(state.ha_label_stats),
+        "registry_source": state.ha_registry_source or None,
         "context_char_count": state.ha_context_char_count,
         "context_entity_count": state.ha_context_entity_count,
         "context_last_updated": state.ha_context_last_updated or None,
@@ -1810,6 +1813,34 @@ async def capabilities(request: Request, _: None = Depends(require_admin_access)
     result["startup_source_error"] = state.startup_source_error or ""
     result["provider_health"] = provider_health
     return result
+
+
+@router.post("/api/homeassistant/labels/regenerate")
+async def regenerate_homeassistant_labels(request: Request, _: None = Depends(require_admin_access)):
+    """Force a background refresh of generated HA labels."""
+    config = request.app.state.config
+    if generation_in_progress():
+        raise HTTPException(status_code=409, detail="HA label generation already in progress")
+    if not config.anthropic_api_key:
+        return {"scheduled": False, "reason": "anthropic_key_missing"}
+    context = get_cached_home_context()
+    if context is None or not context.raw_states:
+        return {"scheduled": False, "reason": "home_context_unavailable"}
+    scheduled = schedule_label_generation(
+        context.raw_states,
+        cache_dir=config.cache_dir,
+        config=config,
+        score_by_entity={entity.entity_id: entity.score for entity in context.scored},
+        force=True,
+    )
+    if not scheduled:
+        # schedule_label_generation returns False both when a refresh is already
+        # running AND when there is simply nothing new to label. Only the former
+        # is a conflict; the latter is a successful no-op.
+        if generation_in_progress():
+            raise HTTPException(status_code=409, detail="HA label generation already in progress")
+        return {"scheduled": False, "reason": "no_candidates"}
+    return {"scheduled": True}
 
 
 @router.post("/api/shuffle")

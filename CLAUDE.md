@@ -162,7 +162,7 @@ mammamiradio/
   audio/                    normalizer (FFmpeg), audio_quality gate, tts, voice_catalog
   playlist/                 playlist source selection, downloader, song_cues, track_rationale, track_rules
   hosts/                    scriptwriter (LLM banter+ads — TODO: split), persona, context_cues, ad_creative
-  home/                     ha_context (HA polling, mood), ha_enrichment (event diff/prune)
+  home/                     ha_context (HA polling, mood), ha_enrichment (event diff/prune), catalog (generated device-label resolver)
   scheduling/               producer (async loop), scheduler (segment-type picker), clip (WTF ring buffer)
   web/                      streamer (TODO: split — routes/playback loop), auth (admin auth + CSRF), pages (ingress rewrite), listener_requests, og_card, templates/, static/
   assets/                   demo/ MP3s + SFX, logo.svg

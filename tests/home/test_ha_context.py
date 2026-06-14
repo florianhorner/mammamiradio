@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import datetime
 import json
+import os
 import time
 from collections import deque
 from types import SimpleNamespace
@@ -19,18 +20,22 @@ from mammamiradio.home.ha_context import (
     MAX_PRESENCE_IN_SLICE,
     HomeContext,
     HomeEvent,
+    HomeRegistrySnapshot,
     _apply_registry_area,
+    _apply_registry_snapshot,
     _build_budgeted_summary,
     _build_scored_entities,
     _build_summary,
     _build_weather_arc,
     _build_weather_arc_en,
     _fetch_ha_registry_areas,
+    _fetch_ha_registry_snapshot,
     _filter_state,
     _format_state,
     _ha_websocket_url,
     _sanitize_state_value,
     _score_entity,
+    _write_registry_snapshot,
     check_reactive_triggers,
     classify_home_mood,
     classify_home_mood_en,
@@ -122,6 +127,16 @@ def test_format_state_uses_friendly_name_when_uncurated():
     assert line is not None
     assert "Hallway Motion" in line
     assert "sensor.some_random_helper" not in line
+
+
+def test_format_state_uses_registry_entity_name_when_uncurated():
+    line = _format_state(
+        "light.counter",
+        {"state": "on", "attributes": {"registry_entity_name": "Counter", "area": "Kitchen"}},
+    )
+    assert line is not None
+    assert "Counter" in line
+    assert "light.counter" not in line
 
 
 def test_format_state_standard_entity_uses_translations():
@@ -327,6 +342,141 @@ def test_scored_entities_no_registry_excludes_uncurated_area_less_presence_but_k
     assert "weather.forecast_home" in ids
 
 
+def test_scored_entities_include_registry_labeled_entity_and_drop_unlabeled():
+    states = {
+        "light.counter": {
+            "state": "on",
+            "attributes": {"registry_entity_name": "Counter", "area": "Kitchen"},
+        },
+        "sensor.no_label": {"state": "on", "attributes": {}},
+    }
+
+    scored = _build_scored_entities(states, event_entity_ids=set(), now=time.time(), limit=5, char_limit=0)
+
+    assert [entity.entity_id for entity in scored] == ["light.counter"]
+    assert scored[0].label_en == "Counter (Kitchen)"
+    assert scored[0].label_tier == "fallback"
+
+
+def test_scored_entities_drops_labeled_entity_with_unavailable_state():
+    # resolve_label succeeds (a friendly name exists) but _format_state returns
+    # None for an unavailable state — the entity must be dropped, not scored.
+    states = {
+        "light.counter": {"state": "unavailable", "attributes": {"friendly_name": "Counter light"}},
+        "weather.forecast_home": {"state": "sunny", "attributes": {"temperature": 22, "temperature_unit": "°C"}},
+    }
+
+    scored = _build_scored_entities(states, event_entity_ids=set(), now=time.time(), limit=5, char_limit=0)
+
+    assert [entity.entity_id for entity in scored] == ["weather.forecast_home"]
+
+
+def test_write_registry_snapshot_swallows_write_error(tmp_path):
+    # A failed disk write must not raise into the polling path; the temp file is
+    # cleaned up and the cache is simply left unwritten.
+    snapshot = HomeRegistrySnapshot(entity_areas={"light.x": "Kitchen"}, source="websocket")
+
+    with patch("mammamiradio.home.ha_context.os.replace", side_effect=OSError("disk full")):
+        _write_registry_snapshot(tmp_path, snapshot)
+
+    # No catalog/registry file was left behind, and no leftover temp files.
+    assert not list(tmp_path.glob("*.tmp"))
+
+
+def test_format_state_light_brightness_non_numeric_falls_back_to_accese():
+    # A non-numeric brightness must not raise; it degrades to the plain "on" line.
+    result = _format_state(
+        "light.magic_areas_light_groups_wohnzimmer_all_lights",
+        {"state": "on", "attributes": {"brightness": "bright"}},
+    )
+    assert result is not None
+    assert "accese" in result
+    assert "%" not in result
+
+
+def test_format_state_power_sensor_non_numeric_watts_shows_placeholder():
+    # A power sensor with a non-numeric reading degrades to a neutral placeholder.
+    result = _format_state(
+        "sensor.bar_bali_boot_steckdose_power",
+        {"state": "lots", "attributes": {"device_class": "power", "unit_of_measurement": "W"}},
+    )
+    assert result is not None
+    assert "—" in result
+
+
+def test_load_registry_snapshot_rejects_malformed_data(tmp_path):
+    from mammamiradio.home.ha_context import _ha_registry_cache_path, _load_registry_snapshot
+
+    path = _ha_registry_cache_path(tmp_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    # Valid JSON but not a dict -> None.
+    path.write_text("[1, 2, 3]", encoding="utf-8")
+    assert _load_registry_snapshot(tmp_path) is None
+    # Dict without a numeric fetched_at -> None.
+    path.write_text('{"fetched_at": "soon", "entity_areas": {}}', encoding="utf-8")
+    assert _load_registry_snapshot(tmp_path) is None
+    # A present-but-non-dict mapping field marks the whole cache corrupt -> None,
+    # so the caller refetches instead of serving a degraded registry for the TTL.
+    path.write_text(
+        '{"fetched_at": 99999999999, "entity_areas": [1, 2], "entity_names": {}, "entity_device_names": {}}',
+        encoding="utf-8",
+    )
+    assert _load_registry_snapshot(tmp_path) is None
+    # Nested junk (a list value) must not surface as a stringified label -> None.
+    path.write_text(
+        '{"fetched_at": 99999999999, "entity_areas": {"light.x": ["Kitchen"]},'
+        ' "entity_names": {}, "entity_device_names": {}}',
+        encoding="utf-8",
+    )
+    assert _load_registry_snapshot(tmp_path) is None
+
+
+def test_load_registry_snapshot_accepts_clean_string_maps(tmp_path):
+    from mammamiradio.home.ha_context import _ha_registry_cache_path, _load_registry_snapshot
+
+    path = _ha_registry_cache_path(tmp_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        '{"fetched_at": 99999999999, "entity_areas": {"light.x": "Kitchen"},'
+        ' "entity_names": {}, "entity_device_names": {}}',
+        encoding="utf-8",
+    )
+    snapshot = _load_registry_snapshot(tmp_path, now=99999999999)
+    assert snapshot is not None
+    assert snapshot.entity_areas == {"light.x": "Kitchen"}
+    assert snapshot.source == "disk_fresh"
+
+
+@pytest.mark.asyncio
+async def test_fetch_registry_snapshot_malformed_fresh_disk_triggers_websocket(tmp_path):
+    # A malformed but recent cache must not be accepted as disk_fresh; the fetch
+    # falls through to a websocket refresh instead of skipping it for the TTL.
+    from mammamiradio.home import ha_context as ha_mod
+    from mammamiradio.home.ha_context import _fetch_ha_registry_snapshot, _ha_registry_cache_path
+
+    ha_mod._ha_registry_snapshot_cache = None
+    ha_mod._ha_registry_fetched_at = 0.0
+    path = _ha_registry_cache_path(tmp_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    # Recent timestamp but a malformed mapping field.
+    path.write_text(
+        '{"fetched_at": 99999999999, "entity_areas": [], "entity_names": {}, "entity_device_names": {}}',
+        encoding="utf-8",
+    )
+
+    fresh = HomeRegistrySnapshot(entity_areas={"light.x": "Kitchen"}, source="websocket")
+    with patch(
+        "mammamiradio.home.ha_context._fetch_ha_registry_snapshot_websocket",
+        new=AsyncMock(return_value=fresh),
+    ) as ws:
+        result = await _fetch_ha_registry_snapshot("http://ha:8123", "token", cache_dir=tmp_path)
+
+    ws.assert_awaited_once()
+    assert result.entity_areas == {"light.x": "Kitchen"}
+    ha_mod._ha_registry_snapshot_cache = None
+    ha_mod._ha_registry_fetched_at = 0.0
+
+
 @pytest.mark.asyncio
 async def test_scored_entities_anti_flood_keeps_relevant_raw_states_intact():
     all_states = []
@@ -362,9 +512,9 @@ async def test_scored_entities_anti_flood_keeps_relevant_raw_states_intact():
     with (
         patch("mammamiradio.home.ha_context._get_ha_client", return_value=mock_client),
         patch(
-            "mammamiradio.home.ha_context._fetch_ha_registry_areas",
+            "mammamiradio.home.ha_context._fetch_ha_registry_snapshot",
             new_callable=AsyncMock,
-            return_value=registry_areas,
+            return_value=HomeRegistrySnapshot(entity_areas=registry_areas, source="websocket"),
         ),
         patch("mammamiradio.home.ha_context.fetch_weather_forecast", new_callable=AsyncMock, return_value=""),
         patch("mammamiradio.home.ha_context._ha_cache", None),
@@ -536,6 +686,23 @@ def test_apply_registry_area_fills_missing_area_without_overwriting_state_attrs(
     assert "area" not in missing["attributes"]
 
 
+def test_apply_registry_snapshot_adds_names_without_overwriting_existing_area():
+    state = {"state": "on", "attributes": {"area": "Bar"}}
+    snapshot = HomeRegistrySnapshot(
+        entity_areas={"light.counter": "Kitchen"},
+        entity_names={"light.counter": "Counter"},
+        entity_device_names={"light.counter": "Ceiling relay"},
+        source="websocket",
+    )
+
+    enriched = _apply_registry_snapshot("light.counter", state, snapshot)
+
+    assert enriched is not state
+    assert enriched["attributes"]["area"] == "Bar"
+    assert enriched["attributes"]["registry_entity_name"] == "Counter"
+    assert enriched["attributes"]["registry_device_name"] == "Ceiling relay"
+
+
 # ---------------------------------------------------------------------------
 # fetch_home_context
 # ---------------------------------------------------------------------------
@@ -588,7 +755,11 @@ async def test_fetch_calls_api_when_stale():
 
     with (
         patch("mammamiradio.home.ha_context._get_ha_client", return_value=mock_client),
-        patch("mammamiradio.home.ha_context._fetch_ha_registry_areas", new_callable=AsyncMock, return_value={}),
+        patch(
+            "mammamiradio.home.ha_context._fetch_ha_registry_snapshot",
+            new_callable=AsyncMock,
+            return_value=HomeRegistrySnapshot(source="empty_fallback"),
+        ),
         patch("mammamiradio.home.ha_context._ha_cache", None),
         patch("mammamiradio.home.ha_context._weather_forecast_fetched_at", 0.0),
     ):
@@ -598,6 +769,59 @@ async def test_fetch_calls_api_when_stale():
     assert result.timestamp > stale_cache.timestamp
     assert "macchina del caff" in result.summary
     assert "macchina del caff" in result.events_summary
+
+
+@pytest.mark.asyncio
+async def test_fetch_home_context_computes_catalog_hit_rate(tmp_path):
+    from mammamiradio.home.catalog import compute_hash, save_catalog
+
+    entity_id = "light.counter"
+    catalog_state = {
+        "entity_id": entity_id,
+        "state": "on",
+        "attributes": {"friendly_name": "Counter light"},
+    }
+    states = [*_mock_ha_response(), catalog_state]
+    save_catalog(
+        tmp_path,
+        {
+            "entries": {
+                entity_id: {
+                    "hash": compute_hash(entity_id, catalog_state),
+                    "label_it": "Luce bancone",
+                    "label_en": "Counter light",
+                }
+            }
+        },
+    )
+    mock_resp = MagicMock()
+    mock_resp.raise_for_status = MagicMock()
+    mock_resp.json.return_value = states
+    mock_client = AsyncMock()
+    mock_client.get.return_value = mock_resp
+
+    with (
+        patch("mammamiradio.home.ha_context._get_ha_client", return_value=mock_client),
+        patch(
+            "mammamiradio.home.ha_context._fetch_ha_registry_snapshot",
+            new_callable=AsyncMock,
+            return_value=HomeRegistrySnapshot(source="empty_fallback"),
+        ),
+        patch("mammamiradio.home.ha_context.fetch_weather_forecast", new_callable=AsyncMock, return_value=""),
+        patch("mammamiradio.home.ha_context._ha_cache", None),
+    ):
+        result = await fetch_home_context(
+            "http://ha:8123",
+            "token",
+            poll_interval=0.0,
+            _cache=None,
+            cache_dir=tmp_path,
+        )
+
+    assert result.label_stats["curated"] == 2
+    assert result.label_stats["catalog_hits"] == 1
+    assert result.catalog_hit_rate == 1.0
+    assert "Luce bancone" in result.summary
 
 
 @pytest.mark.asyncio
@@ -901,6 +1125,30 @@ def test_budgeted_summary_strips_angle_brackets_at_llm_boundary():
     assert "<" not in out
     assert ">" not in out
     assert "home_state_data" in out
+
+
+def test_label_stats_all_curated_does_not_divide_by_zero():
+    # When every eligible entity is curated, the hit-rate denominator
+    # (eligible - curated) is 0; the guard must clamp it to 1, not raise.
+    from mammamiradio.home.ha_context import ScoredEntity, _label_stats
+
+    scored = [
+        ScoredEntity(
+            entity_id="switch.bar_kaffeemaschine_steckdose",
+            area="Kitchen",
+            domain="switch",
+            score=1.0,
+            raw_state={},
+            label_it="La macchina del caffe",
+            label_en="Coffee machine",
+            label_tier="curated",
+            summary_line="x",
+        )
+    ]
+    stats = _label_stats(scored)
+    assert stats["eligible"] == 1
+    assert stats["curated"] == 1
+    assert stats["catalog_hit_rate"] == 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -2916,12 +3164,17 @@ async def test_fetch_registry_areas_maps_entities_via_device_and_direct_area():
             "type": "result",
             "success": True,
             "result": [
-                {"entity_id": "light.counter", "device_id": "dev1"},
-                {"entity_id": "light.lamp", "area_id": "living"},
+                {"entity_id": "light.counter", "device_id": "dev1", "name": "Counter"},
+                {"entity_id": "light.lamp", "area_id": "living", "original_name": "Lamp"},
                 {"entity_id": "light.orphan"},
             ],
         },
-        {"id": 2, "type": "result", "success": True, "result": [{"id": "dev1", "area_id": "kitchen"}]},
+        {
+            "id": 2,
+            "type": "result",
+            "success": True,
+            "result": [{"id": "dev1", "area_id": "kitchen", "name_by_user": "Ceiling relay"}],
+        },
         {
             "id": 3,
             "type": "result",
@@ -2936,12 +3189,16 @@ async def test_fetch_registry_areas_maps_entities_via_device_and_direct_area():
 
     with (
         patch("mammamiradio.home.ha_context.websocket_connect", MagicMock(return_value=fake_ws)),
-        patch("mammamiradio.home.ha_context._ha_registry_area_cache", None),
+        patch("mammamiradio.home.ha_context._ha_registry_snapshot_cache", None),
         patch("mammamiradio.home.ha_context._ha_registry_fetched_at", 0.0),
     ):
-        result = await _fetch_ha_registry_areas("http://supervisor/core/api", "tok")
+        snapshot = await _fetch_ha_registry_snapshot("http://supervisor/core/api", "tok")
+        result = snapshot.entity_areas
 
     assert result == {"light.counter": "Kitchen", "light.lamp": "Living Room"}
+    assert snapshot.entity_names == {"light.counter": "Counter", "light.lamp": "Lamp"}
+    assert snapshot.entity_device_names == {"light.counter": "Ceiling relay"}
+    assert snapshot.source == "websocket"
     assert "light.orphan" not in result
     # Auth frame carried the token; three registry commands were issued.
     assert fake_ws.sent[0] == {"type": "auth", "access_token": "tok"}
@@ -2959,7 +3216,7 @@ async def test_fetch_registry_areas_returns_empty_on_failure():
             "mammamiradio.home.ha_context.websocket_connect",
             MagicMock(side_effect=RuntimeError("connection refused")),
         ),
-        patch("mammamiradio.home.ha_context._ha_registry_area_cache", None),
+        patch("mammamiradio.home.ha_context._ha_registry_snapshot_cache", None),
         patch("mammamiradio.home.ha_context._ha_registry_fetched_at", 0.0),
     ):
         result = await _fetch_ha_registry_areas("http://supervisor/core/api", "tok")
@@ -2972,7 +3229,10 @@ async def test_fetch_registry_areas_uses_cache_without_reconnecting():
     guard = MagicMock(side_effect=AssertionError("should not open a websocket on cache hit"))
     with (
         patch("mammamiradio.home.ha_context.websocket_connect", guard),
-        patch("mammamiradio.home.ha_context._ha_registry_area_cache", {"light.x": "Office"}),
+        patch(
+            "mammamiradio.home.ha_context._ha_registry_snapshot_cache",
+            HomeRegistrySnapshot(entity_areas={"light.x": "Office"}, fetched_at=time.time(), source="websocket"),
+        ),
         patch("mammamiradio.home.ha_context._ha_registry_fetched_at", time.time()),
     ):
         result = await _fetch_ha_registry_areas("http://supervisor/core/api", "tok")
@@ -2989,12 +3249,98 @@ async def test_fetch_registry_areas_raises_on_bad_auth_returns_empty():
     ]
     with (
         patch("mammamiradio.home.ha_context.websocket_connect", MagicMock(return_value=_FakeRegistryWS(messages))),
-        patch("mammamiradio.home.ha_context._ha_registry_area_cache", None),
+        patch("mammamiradio.home.ha_context._ha_registry_snapshot_cache", None),
         patch("mammamiradio.home.ha_context._ha_registry_fetched_at", 0.0),
     ):
         result = await _fetch_ha_registry_areas("http://supervisor/core/api", "tok")
 
     assert result == {}
+
+
+@pytest.mark.asyncio
+async def test_fetch_registry_snapshot_loads_fresh_disk_before_websocket(tmp_path):
+    now = time.time()
+    (tmp_path / "ha_registry.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "fetched_at": now,
+                "entity_areas": {"light.counter": "Kitchen"},
+                "entity_names": {"light.counter": "Counter"},
+                "entity_device_names": {"light.counter": "Ceiling relay"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    guard = MagicMock(side_effect=AssertionError("fresh disk should avoid websocket"))
+    with (
+        patch("mammamiradio.home.ha_context.websocket_connect", guard),
+        patch("mammamiradio.home.ha_context._ha_registry_snapshot_cache", None),
+        patch("mammamiradio.home.ha_context._ha_registry_fetched_at", 0.0),
+    ):
+        snapshot = await _fetch_ha_registry_snapshot("http://supervisor/core/api", "tok", cache_dir=tmp_path)
+
+    assert snapshot.source == "disk_fresh"
+    assert snapshot.entity_names["light.counter"] == "Counter"
+    guard.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_fetch_registry_snapshot_uses_stale_disk_on_websocket_failure(tmp_path):
+    now = time.time()
+    (tmp_path / "ha_registry.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "fetched_at": now - (7 * 60 * 60),
+                "entity_areas": {"light.counter": "Kitchen"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    with (
+        patch("mammamiradio.home.ha_context.websocket_connect", MagicMock(side_effect=RuntimeError("down"))),
+        patch("mammamiradio.home.ha_context._ha_registry_snapshot_cache", None),
+        patch("mammamiradio.home.ha_context._ha_registry_fetched_at", 0.0),
+    ):
+        snapshot = await _fetch_ha_registry_snapshot("http://supervisor/core/api", "tok", cache_dir=tmp_path)
+
+    assert snapshot.source == "disk_stale"
+    assert snapshot.entity_areas == {"light.counter": "Kitchen"}
+
+
+@pytest.mark.asyncio
+async def test_fetch_registry_snapshot_corrupt_disk_falls_back_empty(tmp_path):
+    (tmp_path / "ha_registry.json").write_text("{", encoding="utf-8")
+    with (
+        patch("mammamiradio.home.ha_context.websocket_connect", MagicMock(side_effect=RuntimeError("down"))),
+        patch("mammamiradio.home.ha_context._ha_registry_snapshot_cache", None),
+        patch("mammamiradio.home.ha_context._ha_registry_fetched_at", 0.0),
+    ):
+        snapshot = await _fetch_ha_registry_snapshot("http://supervisor/core/api", "tok", cache_dir=tmp_path)
+
+    assert snapshot.source == "empty_fallback"
+    assert snapshot.entity_areas == {}
+
+
+@pytest.mark.asyncio
+async def test_fetch_registry_snapshot_websocket_writes_owner_only_cache(tmp_path):
+    messages = [
+        {"type": "auth_required"},
+        {"type": "auth_ok"},
+        {"id": 1, "type": "result", "success": True, "result": [{"entity_id": "light.counter"}]},
+        {"id": 2, "type": "result", "success": True, "result": []},
+        {"id": 3, "type": "result", "success": True, "result": []},
+    ]
+    with (
+        patch("mammamiradio.home.ha_context.websocket_connect", MagicMock(return_value=_FakeRegistryWS(messages))),
+        patch("mammamiradio.home.ha_context._ha_registry_snapshot_cache", None),
+        patch("mammamiradio.home.ha_context._ha_registry_fetched_at", 0.0),
+    ):
+        await _fetch_ha_registry_snapshot("http://supervisor/core/api", "tok", cache_dir=tmp_path)
+
+    mode = os.stat(tmp_path / "ha_registry.json").st_mode & 0o777
+    assert mode == 0o600
 
 
 # ---------------------------------------------------------------------------
