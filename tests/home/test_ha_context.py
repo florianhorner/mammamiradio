@@ -748,6 +748,49 @@ def test_reactive_trigger_fires_on_match():
     assert isinstance(directive, str) and "caffè" in directive.lower()
 
 
+def test_coffee_directive_invites_timing_and_guards_frequency():
+    """Espresso o'clock (WHEN): the coffee directive must invite tying the event
+    to the time of day — the host already sees the clock in the same banter prompt
+    (compute_context_block, asserted by test_context_cues) — AND must forbid
+    frequency/duration commentary, the research's documented "creepy-flip". This
+    is a wording guard: the timing effect and its safety rail both live in the
+    directive string, so they cannot silently regress on an edit.
+    """
+    import mammamiradio.home.ha_context as ha_mod
+
+    ha_mod._reactive_cooldowns.clear()
+    now = time.time()
+    events: deque[HomeEvent] = deque(maxlen=20)
+    events.append(
+        HomeEvent(
+            entity_id="switch.bar_kaffeemaschine_steckdose",
+            label="La macchina del caffè",
+            old_state="spento/a",
+            new_state="acceso/a",
+            timestamp=now - 30,
+        )
+    )
+    directive = check_reactive_triggers(events)
+    assert isinstance(directive, str)
+    # The directive flows through scriptwriter.write_banter, which runs it through
+    # _sanitize_prompt_data(max_len=300). An over-long directive gets truncated and
+    # would silently drop the guardrail at the end — the exact creepy-flip the
+    # wording exists to prevent. So assert the SANITIZED prompt-path form, not just
+    # the raw string, and pin the length budget explicitly.
+    assert len(directive) <= 300, "coffee directive must fit the 300-char prompt sanitizer budget"
+    from mammamiradio.hosts.scriptwriter import _sanitize_prompt_data
+
+    sanitized = _sanitize_prompt_data(directive, max_len=300)
+    # Timing invite (references the clock shown above it in the prompt) survives.
+    assert "mostrata" in sanitized.lower()
+    # Both halves of the guardrail survive: no-frequency AND no-duration.
+    assert "frequenza" in sanitized.lower()
+    assert "da quanto" in sanitized.lower()
+    # The example phrasing must not itself imply a habit ("come sempre"/"as always"),
+    # which would contradict the very guardrail above it.
+    assert "sempre" not in directive.lower()
+
+
 def test_reactive_trigger_respects_age_cutoff():
     import mammamiradio.home.ha_context as ha_mod
 
