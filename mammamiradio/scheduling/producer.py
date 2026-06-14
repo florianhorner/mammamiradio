@@ -528,6 +528,32 @@ def _front_insert_queue_and_shadow(
     return True
 
 
+async def _enqueue_with_egress(
+    queue: asyncio.Queue[Segment],
+    state: StationState,
+    config: StationConfig,
+    segment: Segment,
+    *,
+    front_insert: bool = False,
+    shadow_entry: dict | None = None,
+) -> bool:
+    """The single funnel every segment passes through on its way to the playback queue.
+
+    The outgoing egress FX pipeline (the always-on FM broadcast chain; the chaos
+    and interference stages slot in later) hooks in here, so music, dialogue, ads
+    and bridges all leave through one chokepoint — the audio equivalent of the
+    transmitter every signal passes through last. Operator air-next still routes
+    through the synchronous front-insert critical section, just behind this one
+    entry point. For now this is a behaviour-preserving pass-through; ``config`` is
+    the seam the FX stages read.
+    """
+    if front_insert:
+        assert shadow_entry is not None  # operator air-next always supplies a shadow entry
+        return _front_insert_queue_and_shadow(queue, state, segment, shadow_entry)
+    await queue.put(segment)
+    return True
+
+
 async def _apply_talk_bed(
     audio_path: Path,
     config: StationConfig,
@@ -776,7 +802,7 @@ async def prewarm_first_segment(
             ephemeral=not rendered.cache_hit,
         )
         segment.duration_sec = await loop.run_in_executor(None, _probe_segment_duration, norm_path)
-        await queue.put(segment)
+        await _enqueue_with_egress(queue, state, config, segment)
         state.after_music(track)
         _remember_rendered_music(rendered, state)
         logger.info("Pre-warmed first segment: %s (ready for instant playback)", track.display)
@@ -964,7 +990,7 @@ async def run_producer(
                 segment.path.unlink(missing_ok=True)
             logger.info("Discarding %s because the session is stopped", segment.type.value)
             return False
-        await queue.put(segment)
+        await _enqueue_with_egress(queue, state, config, segment)
         if "error" not in segment.metadata:
             prev_seg_type = segment.type
         return True
@@ -2611,7 +2637,9 @@ async def run_producer(
             if is_operator_forced:
                 # Air-next: front-insert past the buffered lookahead so the operator
                 # hears their pick at the next boundary, never minutes later.
-                if not _front_insert_queue_and_shadow(queue, state, segment, shadow_entry):
+                if not await _enqueue_with_egress(
+                    queue, state, config, segment, front_insert=True, shadow_entry=shadow_entry
+                ):
                     continue
                 if "error" not in segment.metadata:
                     prev_seg_type = segment.type
