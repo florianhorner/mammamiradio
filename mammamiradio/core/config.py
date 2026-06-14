@@ -16,6 +16,7 @@ import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from dotenv import load_dotenv
 
@@ -526,6 +527,11 @@ class BrandSection:
     tagline: str = ""
     about: str = ""
     opengraph_subtitle: str = ""
+    # Absolute http(s) URL to the station logo, surfaced as the HA media_player
+    # entity_picture fallback when a segment has no real cover (voice/ad/idle).
+    # Blank → the engine's built-in default logo (see ha_context). HA resolves
+    # entity_picture against its own origin, so a relative path is rejected here.
+    artwork_url: str = ""
     hosts: list[BrandHost] = field(default_factory=list)
     theme: BrandTheme = field(default_factory=BrandTheme)
 
@@ -988,6 +994,20 @@ def _parse_brand(raw: dict, hosts: list[HostPersonality]) -> tuple[BrandSection,
             else:
                 brand_raw["founded"] = year
 
+    # Artwork URL guardrail: HA resolves entity_picture against its own origin,
+    # so only an absolute http(s) URL with a host is usable. A relative, non-http,
+    # or scheme-only value (e.g. "http://") would 404 on the HA media card; warn
+    # and fall back to the engine default (blank).
+    artwork_url = str(brand_raw.get("artwork_url", "") or "").strip()
+    if artwork_url:
+        parsed = urlsplit(artwork_url)
+        if parsed.scheme not in ("http", "https") or not parsed.netloc:
+            warnings.append(
+                f"brand.artwork_url={artwork_url!r} is not an absolute http(s) URL with a host; "
+                "ignoring it and using the default station logo"
+            )
+            artwork_url = ""
+
     brand = BrandSection(
         station_name=brand_raw.get("station_name", raw.get("station", {}).get("name", DEFAULT_STATION_NAME)),
         frequency=brand_raw.get("frequency", ""),
@@ -996,6 +1016,7 @@ def _parse_brand(raw: dict, hosts: list[HostPersonality]) -> tuple[BrandSection,
         tagline=brand_raw.get("tagline", ""),
         about=brand_raw.get("about", ""),
         opengraph_subtitle=brand_raw.get("opengraph_subtitle", ""),
+        artwork_url=artwork_url,
         hosts=brand_hosts,
         theme=theme,
     )

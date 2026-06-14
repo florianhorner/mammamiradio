@@ -232,12 +232,14 @@ When the HA integration is enabled (`ha_enabled: true` in `radio.toml` or the HA
 
 | Entity ID | Type | State values | Key attributes |
 |---|---|---|---|
-| `media_player.mammamiradio` | media_player | `playing` / `idle` | `media_title`, `media_artist`, `media_content_type`, `media_position`, `media_position_updated_at` (playing only), `mammamiradio_segment_type`, `mammamiradio_listeners`, `mammamiradio_queue_depth` |
+| `media_player.mammamiradio` | media_player | `playing` / `idle` | `media_title`, `media_artist`, `media_content_type`, `media_position`, `media_position_updated_at` (playing only), `entity_picture`, `mammamiradio_segment_type`, `mammamiradio_listeners`, `mammamiradio_queue_depth` |
 | `sensor.mammamiradio_segment_type` | sensor | `music` / `banter` / `ad` / `off` | — |
 | `sensor.mammamiradio_listeners` | sensor | integer | `unit_of_measurement: listeners` |
 | `binary_sensor.mammamiradio_on_air` | binary_sensor | `on` / `off` | — |
 
 All four entities are labelled with the configured station name (`Mamma Mi Radio` by default): the media player's `friendly_name` is the station name itself (and it doubles as `media_artist` for non-music segments), while the sensors read `<station> Segment Type`, `<station> Listeners`, and `<station> On Air`. Entity IDs and the `mammamiradio_*` attribute keys stay fixed regardless of the display name, so existing automations and dashboards keep working.
+
+`entity_picture` is always an absolute image URL: the real album cover while a track plays, and the station logo for host talk, ads, and idle. The logo fallback matters because the HA media card keeps the last cover when `entity_picture` is removed — so without it the previous track's art would linger through a news flash. Override the logo per station with `artwork_url` under `[brand]` in `radio.toml` (must be an absolute `http(s)` URL; a relative path is rejected because HA resolves `entity_picture` against its own origin). Blank uses the bundled station logo.
 
 **30-second cold-start note:** after a HA or addon restart, pushed entities reappear within 30 seconds via the heartbeat. Automations triggering on `state_changed` may miss the first segment after restart — add an `initial_state: playing` guard if needed.
 

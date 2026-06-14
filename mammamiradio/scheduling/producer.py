@@ -933,6 +933,7 @@ async def run_producer(
                             session_stopped=state.session_stopped,
                             queue_depth=len(state.queued_segments),
                             station_name=config.display_station_name,
+                            artwork_url=config.brand.artwork_url,
                         )
                         interval = 30.0
                     except Exception:
@@ -1029,6 +1030,7 @@ async def run_producer(
                             session_stopped=True,
                             queue_depth=0,
                             station_name=config.display_station_name,
+                            artwork_url=config.brand.artwork_url,
                         )
                     )
                 )

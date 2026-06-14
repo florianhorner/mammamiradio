@@ -1157,6 +1157,7 @@ async def run_playback_loop(app) -> None:
                     session_stopped=state.session_stopped,
                     queue_depth=len(state.queued_segments),
                     station_name=config.display_station_name,
+                    artwork_url=config.brand.artwork_url,
                 )
             )
             _ha_push_tasks.add(_ha_task)

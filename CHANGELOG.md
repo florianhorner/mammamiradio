@@ -8,6 +8,8 @@ The current version source of truth is `pyproject.toml`.
 
 ### Fixed
 
+- **The Home Assistant media card no longer keeps the last song's cover during talk.** When the hosts talk, an ad plays, or the station is idle, the HA media card now shows the station logo instead of leaving the previous track's album art frozen on screen. The real cover returns the moment music does. You can point the card at your own logo with `artwork_url` under `[brand]` in `radio.toml`.
+
 - **Direct `/admin` access from your home network now works.** If you open `http://<pi-ip>:8000/admin` in a browser on your local Wi-Fi, the admin panel loads without needing a token. Port 8000 serves the listener page (`/`), the admin panel (`/admin`), and the audio stream (`/stream`) — no HA sidebar required for any of them. Configuring a custom `admin_token` in the add-on options still enforces that token even from the LAN.
 
 ### Added
