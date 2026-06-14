@@ -1,0 +1,7 @@
+station-name-guard metadata-matching hardening — test proof
+commit: 5fa0cc03a47d6f7ce0f398b16d5e392dbdb82aca
+date (UTC): 2026-06-14T00:20:40Z
+---
+........................................................................ [ 95%]
+.......                                                                  [100%]
+151 passed in 3.64s
