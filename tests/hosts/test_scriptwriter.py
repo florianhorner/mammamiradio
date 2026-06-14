@@ -417,6 +417,47 @@ async def test_write_banter_falls_back_on_api_exception(config, state):
 
 
 @pytest.mark.asyncio
+async def test_write_banter_restores_pending_directive_on_fallback(config, state):
+    # Quotes are rewritten by _sanitize_prompt_data before the directive reaches
+    # the prompt; the restore must put back the RAW directive, not that copy.
+    raw_directive = 'Mention the "kitchen" light.'
+    state.ha_pending_directive = raw_directive
+    mock_client = MagicMock()
+    mock_client.messages = MagicMock()
+    mock_client.messages.create = AsyncMock(side_effect=Exception("API down"))
+    mock_cls = MagicMock(return_value=mock_client)
+
+    with (
+        patch("mammamiradio.hosts.scriptwriter._anthropic_client", None),
+        patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
+    ):
+        result, _ = await write_banter(state, config)
+
+    assert len(result) >= 2
+    assert state.ha_pending_directive == raw_directive
+
+
+@pytest.mark.asyncio
+async def test_write_banter_releases_gag_key_on_fallback(config, state):
+    state.ha_running_gag = "The hallway light keeps winking at us."
+    state.ha_running_gag_key = "gag-bucket-1"
+    mock_client = MagicMock()
+    mock_client.messages = MagicMock()
+    mock_client.messages.create = AsyncMock(side_effect=Exception("API down"))
+    mock_cls = MagicMock(return_value=mock_client)
+
+    with (
+        patch("mammamiradio.hosts.scriptwriter._anthropic_client", None),
+        patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
+    ):
+        result, _ = await write_banter(state, config)
+
+    assert len(result) >= 2
+    # The gag never aired, so its cooldown bucket must be released (not spent).
+    assert state.ha_running_gag_key == ""
+
+
+@pytest.mark.asyncio
 async def test_write_banter_falls_back_on_malformed_json(config, state):
     mock_cls = _mock_anthropic_response("this is not valid json {{{")
 
@@ -558,6 +599,92 @@ async def test_openai_fallback_logs_structured_event(config, state, caplog):
     assert switch.to_provider == "openai"
     assert switch.reason == "anthropic_exception"
     assert state.runtime_events[-1].provider_class == "script_provider"
+
+
+@pytest.mark.asyncio
+async def test_anthropic_max_tokens_truncation_is_labelled_honestly(config, state, caplog):
+    """A truncated Anthropic response (stop_reason=max_tokens + unterminated JSON)
+    is reported as 'anthropic_max_tokens_truncated', not a generic JSONDecodeError,
+    while still falling back to OpenAI so the listener gets banter."""
+    import logging
+
+    config.anthropic_api_key = "anthropic-key"
+    config.openai_api_key = "openai-key"
+    host_name = config.hosts[0].name
+    openai_client = _mock_openai_response(json.dumps({"lines": [{"host": host_name, "text": "hi"}], "new_joke": None}))
+
+    # Anthropic returns JSON cut off mid-string with stop_reason="max_tokens".
+    mock_usage = MagicMock()
+    mock_usage.input_tokens = 50
+    mock_usage.output_tokens = 300
+    mock_content = MagicMock()
+    mock_content.text = '{"lines": [{"host": "Marco", "text": "Ciao a tutti, oggi'
+    mock_response = MagicMock()
+    mock_response.content = [mock_content]
+    mock_response.usage = mock_usage
+    mock_response.stop_reason = "max_tokens"
+    mock_client = MagicMock()
+    mock_client.messages = MagicMock()
+    mock_client.messages.create = AsyncMock(return_value=mock_response)
+    mock_cls = MagicMock(return_value=mock_client)
+
+    with (
+        caplog.at_level(logging.INFO, logger="mammamiradio.hosts.scriptwriter"),
+        patch("mammamiradio.hosts.scriptwriter._anthropic_client", None),
+        patch("mammamiradio.hosts.scriptwriter._openai_client", None),
+        patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
+        patch("mammamiradio.hosts.scriptwriter._get_openai_client", return_value=openai_client),
+    ):
+        await write_banter(state, config)
+
+    fallback_records = [r for r in caplog.records if getattr(r, "event", None) == "openai_script_call"]
+    assert fallback_records, "expected an openai_script_call after Anthropic truncation"
+    assert fallback_records[-1].fallback_reason == "anthropic_max_tokens_truncated"
+
+    switch_records = [r for r in caplog.records if getattr(r, "event", None) == "provider_switch_event"]
+    assert switch_records, "expected provider switch telemetry on truncation fallback"
+    assert switch_records[-1].reason == "anthropic_max_tokens_truncated"
+    # Illusion preserved: listener still gets banter via the OpenAI fallback.
+    assert state.runtime_provider_state["script_provider"]["current_provider"] == "openai"
+
+
+@pytest.mark.asyncio
+async def test_anthropic_max_tokens_empty_content_is_labelled_honestly(config, state, caplog):
+    """A max_tokens cut that returns an *empty* content list (IndexError on
+    resp.content[0], not a JSONDecodeError) is still recognized as truncation —
+    stop_reason is read before content is indexed."""
+    import logging
+
+    config.anthropic_api_key = "anthropic-key"
+    config.openai_api_key = "openai-key"
+    host_name = config.hosts[0].name
+    openai_client = _mock_openai_response(json.dumps({"lines": [{"host": host_name, "text": "hi"}], "new_joke": None}))
+
+    mock_usage = MagicMock()
+    mock_usage.input_tokens = 50
+    mock_usage.output_tokens = 300
+    mock_response = MagicMock()
+    mock_response.content = []  # empty: resp.content[0] raises IndexError
+    mock_response.usage = mock_usage
+    mock_response.stop_reason = "max_tokens"
+    mock_client = MagicMock()
+    mock_client.messages = MagicMock()
+    mock_client.messages.create = AsyncMock(return_value=mock_response)
+    mock_cls = MagicMock(return_value=mock_client)
+
+    with (
+        caplog.at_level(logging.INFO, logger="mammamiradio.hosts.scriptwriter"),
+        patch("mammamiradio.hosts.scriptwriter._anthropic_client", None),
+        patch("mammamiradio.hosts.scriptwriter._openai_client", None),
+        patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
+        patch("mammamiradio.hosts.scriptwriter._get_openai_client", return_value=openai_client),
+    ):
+        await write_banter(state, config)
+
+    fallback_records = [r for r in caplog.records if getattr(r, "event", None) == "openai_script_call"]
+    assert fallback_records, "expected an openai_script_call after empty-content truncation"
+    assert fallback_records[-1].fallback_reason == "anthropic_max_tokens_truncated"
+    assert state.runtime_provider_state["script_provider"]["current_provider"] == "openai"
 
 
 @pytest.mark.asyncio
@@ -1499,6 +1626,43 @@ async def test_write_ad_returns_adscript(config, state):
     assert result.parts[0].type == "sfx"
     assert result.parts[1].type == "voice"
     assert result.parts[1].text == "Comprate ora!"
+
+
+@pytest.mark.asyncio
+async def test_write_ad_strips_foreign_station_name_from_voice_parts(config, state):
+    """Illusion guard wired into ads: an improvised competitor station name in an
+    ad voice line is replaced with our station name before the spot airs."""
+    brand = AdBrand(name="TestBrand", tagline="Il meglio", category="food")
+    voices = {"default": AdVoice(name="Voce Uno", voice="it-IT-IsabellaNeural", style="enthusiastic")}
+
+    with patch(
+        "mammamiradio.hosts.scriptwriter._generate_json_response",
+        new_callable=AsyncMock,
+        return_value={
+            "parts": [{"type": "voice", "text": "Solo su Radio Deejay Milano: TestBrand!"}],
+            "summary": "ad",
+        },
+    ):
+        result = await write_ad(brand, voices, state, config)
+
+    joined = " ".join(p.text for p in result.parts if p.type == "voice")
+    assert "Deejay" not in joined
+    assert config.station.name in joined
+
+
+@pytest.mark.asyncio
+async def test_write_news_flash_strips_foreign_station_name(config, state):
+    """Illusion guard wired into news flashes: an improvised competitor station
+    name in the bulletin is replaced with our station name."""
+    with patch(
+        "mammamiradio.hosts.scriptwriter._generate_json_response",
+        new_callable=AsyncMock,
+        return_value={"text": "Siamo su Radio Kiss Kiss e arriva una notizia bomba!"},
+    ):
+        _host, text, _category = await write_news_flash(state, config, category="breaking")
+
+    assert "Kiss Kiss" not in text
+    assert config.station.name in text
 
 
 @pytest.mark.asyncio

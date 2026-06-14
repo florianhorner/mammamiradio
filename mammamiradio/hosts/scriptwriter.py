@@ -60,6 +60,7 @@ from mammamiradio.hosts.prompt_world import (
     CHAOS_SUBTYPE_BLOCKS,
     FESTIVAL_MODE_BLOCK,
 )
+from mammamiradio.hosts.station_name_guard import sanitize_spoken_station_name
 from mammamiradio.hosts.transitions import _massage_transition_text, _transition_stem
 
 logger = logging.getLogger(__name__)
@@ -383,6 +384,7 @@ async def _generate_json_response(
                         )
                         _anthropic_block_expired_logged = True
                     _t_anthropic = time.perf_counter()
+                    _anthropic_stop_reason: str | None = None
                     try:
                         client = _get_client(config.anthropic_api_key)
                         resp = await asyncio.wait_for(
@@ -394,6 +396,10 @@ async def _generate_json_response(
                             ),
                             timeout=45.0,
                         )
+                        # Read stop_reason before indexing content: a max_tokens cut can
+                        # return an empty content list, which would raise IndexError below
+                        # and lose the truncation signal if captured after.
+                        _anthropic_stop_reason = getattr(resp, "stop_reason", None)
                         _anthropic_in = _anthropic_out = 0
                         if hasattr(resp, "usage") and resp.usage:
                             state.api_calls += 1
@@ -453,6 +459,16 @@ async def _generate_json_response(
                         )
                         return parsed
                     except Exception as exc:
+                        # stop_reason="max_tokens" means the model was cut off at the token
+                        # budget. That truncation surfaces here two ways: partial JSON that
+                        # fails to parse (JSONDecodeError) or an empty content list that
+                        # fails to index (IndexError). Label both honestly so the ledger
+                        # measures truncation frequency instead of hiding it behind a
+                        # generic exception name. Behaviour is unchanged — we still fall
+                        # back to OpenAI; only the telemetry/log reason differs.
+                        _max_tokens_truncated = _anthropic_stop_reason == "max_tokens" and isinstance(
+                            exc, (json.JSONDecodeError, IndexError)
+                        )
                         _emit_llm_call(
                             state=state,
                             config=config,
@@ -464,7 +480,11 @@ async def _generate_json_response(
                             prompt=prompt,
                             raw_output=None,
                             ok=False,
-                            fallback_reason=f"anthropic_{type(exc).__name__}",
+                            fallback_reason=(
+                                "anthropic_max_tokens_truncated"
+                                if _max_tokens_truncated
+                                else f"anthropic_{type(exc).__name__}"
+                            ),
                             input_tokens=0,
                             output_tokens=0,
                             duration_ms=int((time.perf_counter() - _t_anthropic) * 1000),
@@ -514,8 +534,16 @@ async def _generate_json_response(
                         else:
                             if not config.openai_api_key:
                                 raise
-                            fallback_reason = "anthropic_exception"
-                            logger.warning("Anthropic %s, falling back to OpenAI: %s", type(exc).__name__, exc)
+                            if _max_tokens_truncated:
+                                fallback_reason = "anthropic_max_tokens_truncated"
+                                logger.warning(
+                                    "Anthropic response truncated at max_tokens (%s), falling back to OpenAI: %s",
+                                    model,
+                                    exc,
+                                )
+                            else:
+                                fallback_reason = "anthropic_exception"
+                                logger.warning("Anthropic %s, falling back to OpenAI: %s", type(exc).__name__, exc)
 
     openai_key = config.openai_api_key or os.getenv("OPENAI_API_KEY", "")
     if not openai_key:
@@ -792,38 +820,10 @@ async def _load_song_cues_for_current_track(
         return []
 
 
-_WRONG_STATION_PATTERN = re.compile(
-    # Match station-name-like phrases. Inline (?i:…) makes "Radio" / "siamo su"
-    # case-insensitive while requiring Title Case on the proper-noun words that
-    # follow, which stops the match before Italian function words like "e", "la".
-    r"\b(?i:Radio)(?:\s+[A-Z]\w*){1,3}|\b(?i:siamo\s+su)(?:\s+[A-Z]\w*){1,5}",
-)
-
-
-def _fix_wrong_station_names(text: str, station_name: str) -> str:
-    """Replace any radio station name that isn't ours with the correct one.
-
-    Guards against LLM training-data bleed where it writes competitor station
-    names (e.g. 'Radio Kiss Kiss Moosach') — the single hardest illusion break.
-    """
-    station_lower = station_name.lower()
-
-    def _replace(m: re.Match) -> str:
-        s = m.group(0)
-        # Keep the match if our station name is in it
-        if station_lower in s.lower():
-            return s
-        # "siamo su <wrong>" → "siamo su <ours>"
-        if s.lower().startswith("siamo su "):
-            logger.warning("Replaced wrong station name in banter: %r", s)
-            return f"siamo su {station_name}"
-        # "Radio <wrong>" → station name
-        if s.lower().startswith("radio "):
-            logger.warning("Replaced wrong station name in banter: %r", s)
-            return station_name
-        return s
-
-    return _WRONG_STATION_PATTERN.sub(_replace, text)
+# Station-name illusion guard lives in its own leaf so the HA/web layers can
+# reuse the same detection without importing the scriptwriter. ``_fix_wrong_…``
+# stays as a module-local alias to preserve existing call sites and tests.
+_fix_wrong_station_names = sanitize_spoken_station_name
 
 
 def _chaos_stock_exchange(
@@ -1364,7 +1364,12 @@ CHAOS DIRECTION:
 
     # Phase 4: reactive directive — HIGH PRIORITY impossible moment from a home event
     reactive_block = ""
-    pending_directive = _sanitize_prompt_data(state.ha_pending_directive, max_len=300)
+    # Keep the raw directive for restoration; only the sanitized copy goes in the
+    # prompt. Restoring the sanitized copy would mutate the stored directive
+    # (stripped quotes/role markers, truncated past 300 chars) on every fallback.
+    raw_pending_directive = state.ha_pending_directive
+    pending_directive = _sanitize_prompt_data(raw_pending_directive, max_len=300)
+    consumed_pending_directive = False
     if pending_directive:
         reactive_block = f"""
 HIGH PRIORITY — HOME EVENT DIRECTIVE:
@@ -1377,6 +1382,7 @@ Make this the focus of this banter break. It happened just now — react natural
         is_interrupt = ChaosSubtype.URGENT_INTERRUPT in (chaos_subtype, state.chaos_pending)
         if not is_interrupt:
             state.ha_pending_directive = ""
+            consumed_pending_directive = True
 
     # Listener request injection
     listener_request_block, listener_request_commit = _plan_listener_request_block(state)
@@ -1484,6 +1490,14 @@ Return JSON:
 
     except Exception as e:
         logger.error("Banter generation failed (%s): %s", type(e).__name__, e, exc_info=True)
+        if consumed_pending_directive and not state.ha_pending_directive:
+            state.ha_pending_directive = raw_pending_directive
+        # The running-gag callback never reached air (we're falling back to stock
+        # copy), so release its cooldown bucket. The producer spends the cooldown
+        # only when ha_running_gag_key is still set; clearing it here keeps a failed
+        # generation from burning a gag the listener never heard — offer_gag can
+        # surface it again at the next break.
+        state.ha_running_gag_key = ""
         if chaos_subtype is not None:
             state.chaos_script_fallbacks += 1
             state.chaos_last_degraded_reason = "script_fallback"
@@ -1629,7 +1643,7 @@ Return JSON:
             caller="news_flash",
         )
 
-        text = data.get("text", "Notizia dell'ultima ora!")
+        text = sanitize_spoken_station_name(data.get("text", "Notizia dell'ultima ora!"), config.station.name)
         logger.info("Generated %s flash: %d chars", category, len(text))
         return (host, text, category)
 
@@ -1900,7 +1914,7 @@ Return JSON:
             parts.append(
                 AdPart(
                     type=p.get("type", "voice"),
-                    text=p.get("text", ""),
+                    text=sanitize_spoken_station_name(p.get("text", ""), config.station.name),
                     sfx=p.get("sfx", ""),
                     duration=p.get("duration", 0.0),
                     role=p.get("role", ""),

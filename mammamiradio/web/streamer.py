@@ -7,13 +7,11 @@ import atexit
 import concurrent.futures
 import copy
 import importlib
-import ipaddress
 import logging
 import math
 import os
 import random as _random
 import re as _re
-import secrets
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -22,9 +20,9 @@ from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
-from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.templating import Jinja2Templates
 
+from mammamiradio.audio.norm_cache import select_norm_cache_rescue as _select_norm_cache_rescue
 from mammamiradio.audio.normalizer import humanize_norm_filename, load_track_metadata
 from mammamiradio.audio.stream_format import stream_audio_metadata
 from mammamiradio.core.capabilities import capabilities_to_dict, get_capabilities
@@ -42,6 +40,7 @@ from mammamiradio.core.provider_checks import check_provider_keys
 from mammamiradio.core.setup_status import addon_options_snippet, build_setup_status, classify_station_mode
 from mammamiradio.home.ha_context import push_state_to_ha
 from mammamiradio.home.ha_enrichment import EVENT_RETENTION_SECONDS
+from mammamiradio.hosts.station_name_guard import strip_foreign_station_name
 from mammamiradio.playlist.playlist import (
     ExplicitSourceError,
     load_explicit_source,
@@ -54,6 +53,22 @@ from mammamiradio.web.assets import (
     _STATIC_DIR,
     _TEMPLATES_DIR,
     _bust_static_cache,
+)
+from mammamiradio.web.auth import (  # noqa: F401  facade re-export — routes/tests read these as streamer.*; only some are used in-module
+    _CSRF_TOKEN_PLACEHOLDER,
+    _HASSIO_NETWORK,
+    _MUTATING_METHODS,
+    _TRUSTED_NETWORKS,
+    _enforce_csrf_for_basic_auth,
+    _enforce_csrf_for_private_network,
+    _get_csrf_token,
+    _inject_csrf_token,
+    _is_hassio_or_loopback,
+    _is_loopback_client,
+    _is_private_network,
+    _same_origin,
+    require_admin_access,
+    security,
 )
 from mammamiradio.web.mp3_frames import _skip_id3_and_xing_header
 from mammamiradio.web.pages import _get_injected_html, _sanitize_ingress_prefix
@@ -85,12 +100,12 @@ _search_executor = concurrent.futures.ThreadPoolExecutor(max_workers=4, thread_n
 atexit.register(_search_executor.shutdown, wait=False, cancel_futures=True)
 
 router = APIRouter()
-security = HTTPBasic(auto_error=False)
 
-# TODO: split — this 2,395-line god module is a postal address, not a destination.
-# See docs/2026-04-28-cathedral-restructure.md (PR 5) for the routes/auth/playback split plan.
+# TODO: split — this god module is a postal address, not a destination.
+# See docs/archive/2026-04-28-cathedral-restructure.md (PR 5) for the routes/playback split plan.
 # Path roots, the static-asset content hash (_ASSET_VERSION), and
-# _bust_static_cache now live in web/assets.py and are imported above.
+# _bust_static_cache now live in web/assets.py; admin auth (require_admin_access,
+# CSRF, trusted networks) now lives in web/auth.py — both imported above.
 #
 # Jinja2 templates for brand-engine listener page (PR-C). Admin/live still use
 # string-replace via _inject_ingress_prefix (web/pages.py); only listener migrates to Jinja for now.
@@ -137,10 +152,16 @@ def _safe_external_album_art(value: Any) -> str:
     return url
 
 
-_MUTATING_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
-_CSRF_TOKEN_PLACEHOLDER = "__MAMMAMIRADIO_CSRF_TOKEN__"
 SESSION_STOPPED_FLAG = "session_stopped.flag"
 SILENCE_FAILURE_SECONDS = 30.0
+# Producer rescue-bridge health (#547). A drain/resume/idle bridge firing now and
+# then is normal (one startup or resume bridge is expected). Firing repeatedly
+# means the lookahead queue is starving and the station is "running on rescue" —
+# audio plays, but it is cached rotation, not the real station. BRIDGE_HEALTH_*
+# defines that line: this many bridges inside the rolling window flips runtime
+# status to unhealthy so the operator sees it instead of a falsely-green station.
+BRIDGE_HEALTH_WINDOW_SECONDS = 900.0  # 15-minute rolling window
+BRIDGE_HEALTH_THRESHOLD = 3  # bridges within the window before "running on rescue"
 QUEUE_FALLBACK_WAIT_SECONDS = 5.0
 STARTUP_GRACE_SECONDS = 30.0
 CLIP_RATE_LIMIT_SECONDS = 10.0
@@ -388,6 +409,7 @@ def _runtime_provider_label(provider: str) -> str:
 
 _FALLBACK_REASON_LABELS = {
     "anthropic_exception": "Anthropic had a brief API error - retrying automatically",
+    "anthropic_max_tokens_truncated": "Anthropic ran long and got cut off - retrying automatically",
     "anthropic_auth_failed": "Anthropic API key rejected - check your key in Engine Room",
     "anthropic_auth_blocked": "Anthropic API key rejected - check your key in Engine Room",
     "anthropic_usage_limit": "Anthropic usage limit reached - check your plan at anthropic.com",
@@ -634,6 +656,32 @@ def _runtime_status_snapshot(
         "recent_events": recent_events,
         "failover_events": failover_events,
         "no_failover_message": "No failover in current session." if not failover_events else "",
+        "bridge_health": _bridge_health_snapshot(state),
+    }
+
+
+def _bridge_health_snapshot(state: StationState) -> dict:
+    """Producer rescue-bridge health for the admin Runtime Status card (#547).
+
+    Windows ``state.bridge_events`` to count recent drain/resume/idle bridge
+    fires; ``unhealthy`` trips once the count reaches ``BRIDGE_HEALTH_THRESHOLD``
+    inside ``BRIDGE_HEALTH_WINDOW_SECONDS``. Session counts and the queue-empty
+    elapsed (reused from the existing health probe) ride along so the operator
+    sees one honest "running on rescue" readout instead of a falsely-green card.
+    """
+    now = time.time()
+    window = BRIDGE_HEALTH_WINDOW_SECONDS
+    recent = [e for e in state.bridge_events if now - float(e.get("timestamp") or 0.0) <= window]
+    last_fire = state.bridge_events[-1] if state.bridge_events else None
+    return {
+        "window_seconds": window,
+        "threshold": BRIDGE_HEALTH_THRESHOLD,
+        "session_count": state.bridge_fires_total,
+        "by_type": dict(state.bridge_fires_by_type),
+        "window_count": len(recent),
+        "last_fire": dict(last_fire) if last_fire else None,
+        "queue_empty_elapsed_s": round(_queue_empty_elapsed(state), 1),
+        "unhealthy": len(recent) >= BRIDGE_HEALTH_THRESHOLD,
     }
 
 
@@ -655,6 +703,10 @@ def _ha_details_payload(state: StationState) -> dict | None:
         "scored_entities": state.ha_scored_entities[:12],
         "denylist_hits": dict(state.ha_denylist_hits),
         "catalog_hit_rate": state.ha_catalog_hit_rate,
+        "context_char_count": state.ha_context_char_count,
+        "context_entity_count": state.ha_context_entity_count,
+        "context_last_updated": state.ha_context_last_updated or None,
+        "first_home_context_moment_fired": state.ha_first_home_context_moment_fired,
     }
 
 
@@ -669,76 +721,6 @@ def _queue_empty_elapsed(state: StationState) -> float:
 
 def _silence_with_listeners(state: StationState, queue_empty_elapsed: float) -> bool:
     return queue_empty_elapsed > SILENCE_FAILURE_SECONDS and state.listeners_active > 0
-
-
-def _identity_key(value: str) -> str:
-    """Normalize listener-facing titles enough to compare cache fallbacks."""
-    return _re.sub(r"[^a-z0-9]+", " ", value.lower()).strip()
-
-
-def _identity_matches(left: str, right: str) -> bool:
-    if not left or not right:
-        return False
-    if left == right:
-        return True
-    return min(len(left), len(right)) >= 12 and (left in right or right in left)
-
-
-def _segment_identity_keys(segment: dict) -> set[str]:
-    """Return comparable labels for a streamed segment."""
-    keys: set[str] = set()
-    label = str(segment.get("label") or "").strip()
-    if label:
-        keys.add(_identity_key(label))
-    metadata = segment.get("metadata") or {}
-    if isinstance(metadata, dict):
-        title = str(metadata.get("title") or "").strip()
-        title_only = str(metadata.get("title_only") or "").strip()
-        artist = str(metadata.get("artist") or "").strip()
-        for value in (title, title_only):
-            if value:
-                keys.add(_identity_key(value))
-            if value and artist:
-                keys.add(_identity_key(f"{artist} {value}"))
-    return {key for key in keys if key}
-
-
-def _norm_cache_identity_keys(path: Path) -> set[str]:
-    """Return comparable title/artist labels for a normalized cache file."""
-    keys = {_identity_key(humanize_norm_filename(path.name))}
-    sidecar = load_track_metadata(path)
-    if sidecar:
-        title = str(sidecar.get("title") or "").strip()
-        artist = str(sidecar.get("artist") or "").strip()
-        if title:
-            keys.add(_identity_key(title))
-        if title and artist:
-            keys.add(_identity_key(f"{artist} {title}"))
-    return {key for key in keys if key}
-
-
-def _select_norm_cache_rescue(cache_dir: Path, state: StationState) -> Path | None:
-    """Pick a cache rescue clip without replaying the current/recent song first."""
-    norm_files = sorted(cache_dir.glob("norm_*.mp3"))
-    if not norm_files:
-        return None
-
-    recent_keys: set[str] = set()
-    if state.now_streaming:
-        recent_keys.update(_segment_identity_keys(state.now_streaming))
-    for entry in list(state.stream_log)[-5:]:
-        if entry.type == SegmentType.MUSIC.value:
-            recent_keys.update(_segment_identity_keys({"label": entry.label, "metadata": entry.metadata}))
-    if not recent_keys:
-        return _random.choice(norm_files)
-
-    candidates: list[Path] = []
-    for path in norm_files:
-        path_keys = _norm_cache_identity_keys(path)
-        if not any(_identity_matches(path_key, recent_key) for path_key in path_keys for recent_key in recent_keys):
-            candidates.append(path)
-
-    return _random.choice(candidates or norm_files)
 
 
 def _provider_health_snapshot(config, state: StationState) -> dict:
@@ -868,16 +850,19 @@ def _serialize_track(track: Track) -> dict:
     }
 
 
-def _paginated_tracks(tracks: list[Track], offset: int, limit: int) -> dict[str, Any]:
+def _paginated_tracks(tracks: list[Track], offset: int, limit: int, *, revision: int | None = None) -> dict[str, Any]:
     total = len(tracks)
     page = tracks[offset : offset + limit]
-    return {
+    payload: dict[str, Any] = {
         "tracks": [_serialize_track(track) for track in page],
         "total": total,
         "offset": offset,
         "limit": limit,
         "has_more": offset + len(page) < total,
     }
+    if revision is not None:
+        payload["revision"] = revision
+    return payload
 
 
 def _duration_sec_from_payload(payload: dict | None) -> float | None:
@@ -933,70 +918,6 @@ def _serialize_stream_log_entry(entry) -> dict:
 
 def _source_options_reason(config, exc: Exception) -> str:
     return f"Source loading failed: {exc}"
-
-
-def _get_csrf_token(app) -> str:
-    token = getattr(app.state, "csrf_token", "")
-    if not token:
-        token = secrets.token_urlsafe(32)
-        app.state.csrf_token = token
-    return token
-
-
-def _inject_csrf_token(html: str, token: str) -> str:
-    return html.replace(_CSRF_TOKEN_PLACEHOLDER, token)
-
-
-def _same_origin(request: Request, candidate: str) -> bool:
-    parsed = urlparse(candidate)
-    if not parsed.scheme or not parsed.netloc:
-        return False
-    request_url = request.url
-
-    # Normalize ports: None means the default for the scheme (80/443)
-    def _effective_port(port, scheme: str) -> int:
-        if port is not None:
-            return port
-        return 443 if scheme == "https" else 80
-
-    return (
-        parsed.scheme == request_url.scheme
-        and parsed.hostname == request_url.hostname
-        and _effective_port(parsed.port, parsed.scheme) == _effective_port(request_url.port, request_url.scheme)
-    )
-
-
-def _enforce_csrf_for_basic_auth(request: Request, credentials: HTTPBasicCredentials | None, config) -> None:
-    if request.method.upper() not in _MUTATING_METHODS:
-        return
-    if _is_loopback_client(request):
-        return
-
-    ingress_prefix = request.headers.get("X-Ingress-Path", "")
-    if config.is_addon and ingress_prefix and _is_hassio_or_loopback(request):
-        return
-    admin_token_header = request.headers.get("X-Radio-Admin-Token", "")
-    if config.admin_token and admin_token_header and secrets.compare_digest(admin_token_header, config.admin_token):
-        return
-    if not config.admin_password or not credentials:
-        return
-
-    csrf_token = request.headers.get("X-Radio-CSRF-Token", "")
-    if csrf_token and secrets.compare_digest(csrf_token, _get_csrf_token(request.app)):
-        return
-
-    origin = request.headers.get("Origin", "")
-    if origin and _same_origin(request, origin):
-        return
-
-    referer = request.headers.get("Referer", "")
-    if referer and _same_origin(request, referer):
-        return
-
-    raise HTTPException(
-        status_code=403,
-        detail="Cross-site admin write blocked. Reload the dashboard and retry.",
-    )
 
 
 class LiveStreamHub:
@@ -1063,149 +984,6 @@ class LiveStreamHub:
                 queue.put_nowait(None)
             except asyncio.QueueFull:
                 pass
-
-
-_HASSIO_NETWORK = ipaddress.ip_network("172.30.32.0/23")
-
-# Private/trusted networks: loopback, RFC1918, link-local, HA Supervisor,
-# and Tailscale/CGNAT (100.64.0.0/10). A self-hosted radio station trusts
-# its own LAN — the operator installed it themselves.
-_TRUSTED_NETWORKS = [
-    ipaddress.ip_network("10.0.0.0/8"),
-    ipaddress.ip_network("172.16.0.0/12"),
-    ipaddress.ip_network("192.168.0.0/16"),
-    ipaddress.ip_network("100.64.0.0/10"),  # CGNAT / Tailscale
-    ipaddress.ip_network("169.254.0.0/16"),  # link-local
-    _HASSIO_NETWORK,
-]
-
-
-def _is_loopback_client(request: Request) -> bool:
-    """Return whether the current request originated from localhost."""
-    if not request.client:
-        return False
-    host = request.client.host
-    if host == "localhost":
-        return True
-    try:
-        return ipaddress.ip_address(host).is_loopback
-    except ValueError:
-        return False
-
-
-def _is_private_network(request: Request) -> bool:
-    """Return True for loopback, RFC1918, Tailscale CGNAT, or HA Supervisor."""
-    if _is_loopback_client(request):
-        return True
-    if not request.client:
-        return False
-    try:
-        addr = ipaddress.ip_address(request.client.host)
-    except ValueError:
-        return False
-    return any(addr in net for net in _TRUSTED_NETWORKS)
-
-
-def _is_hassio_or_loopback(request: Request) -> bool:
-    """Return True for loopback or the Hassio internal network."""
-    if _is_loopback_client(request):
-        return True
-    if not request.client:
-        return False
-    try:
-        return ipaddress.ip_address(request.client.host) in _HASSIO_NETWORK
-    except ValueError:
-        return False
-
-
-def _enforce_csrf_for_private_network(request: Request) -> None:
-    """Block cross-site mutating requests from private networks.
-
-    LAN trust skips credential checks but a browser on the LAN could still
-    be tricked into a cross-site POST. Require same-origin or CSRF token
-    on mutating methods.
-    """
-    if request.method.upper() not in _MUTATING_METHODS:
-        return
-
-    csrf_token = request.headers.get("X-Radio-CSRF-Token", "")
-    if csrf_token and secrets.compare_digest(csrf_token, _get_csrf_token(request.app)):
-        return
-
-    origin = request.headers.get("Origin", "")
-    if origin and _same_origin(request, origin):
-        return
-
-    referer = request.headers.get("Referer", "")
-    if referer and _same_origin(request, referer):
-        return
-
-    raise HTTPException(
-        status_code=403,
-        detail="Cross-site admin write blocked. Reload the dashboard and retry.",
-    )
-
-
-def require_admin_access(
-    request: Request,
-    credentials: HTTPBasicCredentials | None = Depends(security),
-) -> None:
-    """Authorize admin-only routes using configured credentials or local trust."""
-    config = request.app.state.config
-
-    # Loopback is fully trusted — same machine, no CSRF risk.
-    if _is_loopback_client(request):
-        return
-
-    # HA Supervisor network is Docker-internal (not user-accessible), so
-    # CSRF from a browser on that network is not a real threat. Fully trust
-    # it in addon mode so HA automations (rest_command, etc.) work without tokens.
-    if config.is_addon and _is_hassio_or_loopback(request):
-        return
-
-    # Explicit auth for all non-local traffic when credentials are configured.
-    if config.admin_token:
-        token = request.headers.get("X-Radio-Admin-Token")
-        if token and secrets.compare_digest(token, config.admin_token):
-            return
-
-    if config.admin_password:
-        username = credentials.username if credentials else ""
-        password = credentials.password if credentials else ""
-        if secrets.compare_digest(username, config.admin_username) and secrets.compare_digest(
-            password, config.admin_password
-        ):
-            _enforce_csrf_for_basic_auth(request, credentials, config)
-            return
-        client_ip = request.client.host if request.client else "unknown"
-        logger.warning("Failed admin auth attempt from %s", client_ip)
-        raise HTTPException(
-            status_code=401,
-            detail="Admin authentication required",
-            headers={"WWW-Authenticate": 'Basic realm="mammamiradio admin"'},
-        )
-
-    if config.admin_token:
-        client_ip = request.client.host if request.client else "unknown"
-        logger.warning("Missing admin token from %s", client_ip)
-        raise HTTPException(
-            status_code=401,
-            detail="X-Radio-Admin-Token required",
-        )
-
-    # Backward-compatible fallback when no admin credentials are configured.
-    # In standalone mode load_config() now rejects a non-loopback bind without
-    # creds, so in production this only fires for loopback binds (already
-    # short-circuited above). Reachable here mainly via test apps built without
-    # creds — kept so credential-less LAN deployments keep working with CSRF.
-    if _is_private_network(request):
-        _enforce_csrf_for_private_network(request)
-        return
-
-    raise HTTPException(
-        status_code=403,
-        detail="Admin endpoints are only available from private networks unless admin auth is configured",
-    )
 
 
 async def run_playback_loop(app) -> None:
@@ -1308,8 +1086,19 @@ async def run_playback_loop(app) -> None:
                             rescued_from_norm = True
                             sidecar = load_track_metadata(rescue)
                             if sidecar:
-                                rescue_title = f"{sidecar['artist']} – {sidecar['title']}"
-                                rescue_artist: str | None = sidecar["artist"]
+                                # Illusion guard: a poisoned sidecar artist (a foreign
+                                # "Radio X" station name) must never surface as the
+                                # now-playing artist/label. Strip it and drop to
+                                # title-only rather than airing a competitor's name.
+                                clean_artist = strip_foreign_station_name(
+                                    sidecar["artist"], config.display_station_name
+                                )
+                                if clean_artist:
+                                    rescue_title = f"{clean_artist} – {sidecar['title']}"
+                                    rescue_artist: str | None = clean_artist
+                                else:
+                                    rescue_title = sidecar["title"]
+                                    rescue_artist = None
                             else:
                                 rescue_title = humanize_norm_filename(rescue.name)
                                 rescue_artist = None
@@ -1340,7 +1129,10 @@ async def run_playback_loop(app) -> None:
                             stem = rescue.stem
                             if " - " in stem:
                                 rescue_artist, rescue_title = stem.split(" - ", 1)
-                                rescue_artist = rescue_artist.strip() or "Unknown"
+                                rescue_artist = (
+                                    strip_foreign_station_name(rescue_artist.strip(), config.display_station_name)
+                                    or "Unknown"
+                                )
                                 rescue_title = rescue_title.strip() or stem
                             else:
                                 rescue_artist = "Unknown"
@@ -2014,10 +1806,9 @@ async def capabilities(request: Request, _: None = Depends(require_admin_access)
 @router.post("/api/shuffle")
 async def shuffle_playlist(request: Request, _: None = Depends(require_admin_access)):
     """Shuffle upcoming tracks."""
-    import random
-
     state = request.app.state.station_state
-    random.shuffle(state.playlist)
+    _random.shuffle(state.playlist)
+    state.playlist_revision += 1
     return {"ok": True, "message": "Playlist shuffled"}
 
 
@@ -2185,6 +1976,7 @@ async def stop_session(request: Request, _: None = Depends(require_admin_access)
     state.interrupt_slot = None
     state.interrupt_slot_ephemeral = False
     state.force_next = None
+    state.operator_force_pending = None
     # Skip current segment
     if state.now_streaming:
         request.app.state.skip_event.set()
@@ -2220,7 +2012,18 @@ async def trigger_segment(request: Request, _: None = Depends(require_admin_acce
         return {"ok": False, "error": f"type must be one of: {list(valid.keys())}"}
 
     state = request.app.state.station_state
+    # Air-next builds and front-inserts one operator trigger at a time. Reject a
+    # second tap while one is still pending — with a way out (leadership #5),
+    # never a silent overwrite of the first pick.
+    if state.operator_force_pending is not None:
+        return {
+            "ok": False,
+            "error": "Give the tape decks a few seconds to cue your last pick, then tap again.",
+        }
     state.force_next = valid[seg_type]
+    # Attribute this force to the operator so the admin panel can surface it as a
+    # deliberate trigger (internal forces never set this — see StationState).
+    state.operator_force_pending = valid[seg_type]
     return {"ok": True, "triggered": seg_type}
 
 
@@ -2301,12 +2104,15 @@ async def hot_reload_modules(request: Request, _: None = Depends(require_admin_a
     (leaves-first) so the scriptwriter facade re-imports fresh values — reloading the facade
     alone would rebind its ``from .prompt_world`` / ``.transitions`` / ``.fallbacks`` import
     names to the stale submodules.
-    NOT reloaded: producer, streamer, persona (hold live task/instance state).
+    NOT reloaded: producer, streamer, persona (hold live task/instance state),
+    auth (reloading would fork require_admin_access from the identity the
+    router captured at import — auth edits would silently not apply).
     Requires --workers 1 (importlib reloads only the worker handling the request).
     """
     import mammamiradio.hosts.fallbacks as _fallbacks_mod
     import mammamiradio.hosts.prompt_world as _prompt_world_mod
     import mammamiradio.hosts.scriptwriter as _scriptwriter_mod
+    import mammamiradio.hosts.station_name_guard as _station_name_guard_mod
     import mammamiradio.hosts.transitions as _transitions_mod
 
     # Debounce: reject if called within 5s of last reload (monotonic to avoid NTP skew)
@@ -2337,11 +2143,12 @@ async def hot_reload_modules(request: Request, _: None = Depends(require_admin_a
         importlib.reload(_prompt_world_mod)
         importlib.reload(_transitions_mod)
         importlib.reload(_fallbacks_mod)
+        importlib.reload(_station_name_guard_mod)
         importlib.reload(_scriptwriter_mod)
         duration_ms = int((time.monotonic() - t0) * 1000)
         request.app.state._last_hot_reload_ts = now
         logger.info(
-            "hot-reload: reloaded prompt_world + transitions + fallbacks + scriptwriter in %dms",
+            "hot-reload: reloaded prompt_world + transitions + fallbacks + station_name_guard + scriptwriter in %dms",
             duration_ms,
         )
         return {
@@ -2350,6 +2157,7 @@ async def hot_reload_modules(request: Request, _: None = Depends(require_admin_a
                 "mammamiradio.hosts.prompt_world",
                 "mammamiradio.hosts.transitions",
                 "mammamiradio.hosts.fallbacks",
+                "mammamiradio.hosts.station_name_guard",
                 "mammamiradio.hosts.scriptwriter",
             ],
             "duration_ms": duration_ms,
@@ -2610,20 +2418,31 @@ MODEL_PRICES: dict[str, tuple[float, float]] = {
 }
 _UNPRICED_FALLBACK = (0.000015, 0.000075)  # highest known tier — conservative
 
+# One deliberately-blended TTS rate (~$20 / 1M chars) across Azure / OpenAI /
+# ElevenLabs. Cent-accurate TTS cost is impossible — ElevenLabs alone swings 3-5x
+# by plan tier — so this is rough on purpose. The honesty lives in the UI label
+# ("~$N est"), not in the arithmetic. Only paid cloud chars reach state.tts_characters
+# (Edge-tts is free and never counted), so this never bills a silent fallback.
+TTS_BLENDED_RATE = 0.00002
+
 
 def _estimate_api_cost(state) -> tuple[float, bool]:
-    """Sum per-model token cost. Returns (usd, has_unpriced_model).
+    """Sum per-model token cost plus a rough TTS estimate. Returns (usd, has_unpriced).
 
     Prices each model the session actually used (api_tokens_by_model). A model
     with no MODEL_PRICES entry falls back to the highest known tier and trips the
     flag so the UI can annotate the estimate — never a silent $0, never a KeyError.
+    Adds a blended TTS character cost on top. getattr keeps a persisted/legacy state
+    (no tts_characters attr) safe.
     """
+    tts_cost = getattr(state, "tts_characters", 0) * TTS_BLENDED_RATE
     by_model = getattr(state, "api_tokens_by_model", None) or {}
     if not by_model:
         # No per-model data yet — flat haiku estimate on aggregate counters so
         # the counter is never blank for a fresh/legacy session.
         in_rate, out_rate = MODEL_PRICES["claude-haiku-4-5-20251001"]
-        return round(state.api_input_tokens * in_rate + state.api_output_tokens * out_rate, 4), False
+        llm = state.api_input_tokens * in_rate + state.api_output_tokens * out_rate
+        return round(llm + tts_cost, 4), False
     total = 0.0
     has_unpriced = False
     for model_id, toks in by_model.items():
@@ -2632,7 +2451,7 @@ def _estimate_api_cost(state) -> tuple[float, bool]:
             rates = _UNPRICED_FALLBACK
             has_unpriced = True
         total += toks.get("input", 0) * rates[0] + toks.get("output", 0) * rates[1]
-    return round(total, 4), has_unpriced
+    return round(total + tts_cost, 4), has_unpriced
 
 
 def _consumption_cost(state) -> dict:
@@ -2727,6 +2546,7 @@ async def remove_track(request: Request, _: None = Depends(require_admin_access)
     state = request.app.state.station_state
     if 0 <= idx < len(state.playlist):
         removed = state.playlist.pop(idx)
+        state.playlist_revision += 1
         return {"ok": True, "removed": removed.display}
     return {"ok": False, "error": "Invalid index"}
 
@@ -2742,6 +2562,7 @@ async def move_track(request: Request, _: None = Depends(require_admin_access)):
     if 0 <= src < len(pl) and 0 <= dst < len(pl):
         track = pl.pop(src)
         pl.insert(dst, track)
+        state.playlist_revision += 1
         return {"ok": True, "moved": track.display}
     return {"ok": False, "error": "Invalid indices"}
 
@@ -2756,7 +2577,7 @@ async def playlist_tracks(
     """Return a bounded playlist page for admin lazy loading."""
     offset, limit = _page_bounds(offset, limit, default_limit=80, max_limit=200)
     state = request.app.state.station_state
-    return _paginated_tracks(state.playlist, offset, limit)
+    return _paginated_tracks(state.playlist, offset, limit, revision=state.playlist_revision)
 
 
 @router.get("/api/search")
@@ -2767,6 +2588,7 @@ async def search_tracks(
     limit: int = 20,
     external_offset: int = 0,
     external_limit: int = 5,
+    include_external: bool = True,
     _: None = Depends(require_admin_access),
 ):
     """Search the current playlist and yt-dlp for tracks matching the query."""
@@ -2809,23 +2631,26 @@ async def search_tracks(
     # timeout and surface as a connection error in the admin (same failure class
     # that motivated backgrounding add-external). On timeout we return the
     # in-playlist results with no web hits rather than failing the whole request.
-    loop = asyncio.get_running_loop()
-    # Cap fetch depth to prevent DoS via unbounded external_offset (4-thread pool, 45s timeout).
-    fetch_depth = min(external_offset + external_limit + 1, 50)
-    try:
-        external_candidates = await asyncio.wait_for(
-            loop.run_in_executor(
-                _search_executor,
-                search_ytdlp_metadata,
-                q.strip(),
-                fetch_depth,
-            ),
-            timeout=45,
-        )
-    except Exception:
-        logger.warning("yt-dlp external search failed/timed out for query %r", q, exc_info=True)
-        external_candidates = []
+    external_candidates = []
+    if include_external:
+        loop = asyncio.get_running_loop()
+        # Cap fetch depth to prevent DoS via unbounded external_offset (4-thread pool, 45s timeout).
+        fetch_depth = min(external_offset + external_limit + 1, 50)
+        try:
+            external_candidates = await asyncio.wait_for(
+                loop.run_in_executor(
+                    _search_executor,
+                    search_ytdlp_metadata,
+                    q.strip(),
+                    fetch_depth,
+                ),
+                timeout=45,
+            )
+        except Exception:
+            logger.warning("yt-dlp external search failed/timed out for query %r", q, exc_info=True)
+            external_candidates = []
     external = external_candidates[external_offset : external_offset + external_limit]
+    external_known_count = len(external_candidates) if include_external else external_offset
 
     return {
         "results": results,
@@ -2837,7 +2662,7 @@ async def search_tracks(
         "external_offset": external_offset,
         "external_limit": external_limit,
         "external_has_more": external_offset + len(external) < len(external_candidates),
-        "external_known_count": len(external_candidates),
+        "external_known_count": external_known_count,
     }
 
 
@@ -2956,6 +2781,7 @@ async def _commit_external_download(
         if state.source_revision != originating_source_revision or not should_commit():
             return "dropped"
         state.playlist.append(track)
+        state.playlist_revision += 1
         # Don't clobber a pin that's still pending — claim the play-next slot only
         # when the caller's guard says it's free. Otherwise the track is in
         # rotation and the caller surfaces that it's queued-behind, not next.
@@ -3046,6 +2872,7 @@ async def add_track(request: Request, _: None = Depends(require_admin_access)):
         state.playlist.insert(0, track)
     else:
         state.playlist.append(track)
+    state.playlist_revision += 1
     return {"ok": True, "added": track.display, "position": position}
 
 
@@ -3611,10 +3438,21 @@ async def status(
     provider_health = _provider_health_snapshot(config, state)
     runtime_status = _runtime_status_snapshot(request, runtime_health=runtime_health, provider_health=provider_health)
     playlist_offset, playlist_limit = _page_bounds(playlist_offset, playlist_limit, default_limit=80, max_limit=200)
-    playlist_page = _paginated_tracks(state.playlist, playlist_offset, playlist_limit)
+    playlist_page = _paginated_tracks(
+        state.playlist,
+        playlist_offset,
+        playlist_limit,
+        revision=state.playlist_revision,
+    )
     payload.update(
         {
             "queue_depth": segment_queue.qsize(),
+            # Honest airtime-ahead readout for the admin panel: the summed
+            # duration of the rendered queue. Surfaces SECONDS of buffered audio,
+            # not item count (3 short banters are not 3 songs of runway). The
+            # shadow carries duration_sec per entry; best-effort and never gates
+            # audio.
+            "buffered_audio_sec": round(sum(max(seg.get("duration_sec") or 0, 0) for seg in state.queued_segments), 1),
             "segments_produced": state.segments_produced,
             "tracks_played": len(state.played_tracks),
             "uptime_sec": round(time.time() - start_time),
@@ -3685,6 +3523,10 @@ async def status(
                 "last_degraded_reason": state.chaos_last_degraded_reason,
             },
             "force_pending": state.force_next.value if state.force_next else None,
+            # Operator-attributed trigger (set only by /api/trigger) — the panel
+            # uses THIS, never force_pending, so internal/rescue forces don't
+            # false-light the "Triggered" row.
+            "operator_force_pending": (state.operator_force_pending.value if state.operator_force_pending else None),
             "session_stopped": state.session_stopped,
             "playlist": playlist_page["tracks"],
             "playlist_page": {
@@ -3692,6 +3534,7 @@ async def status(
                 "offset": playlist_page["offset"],
                 "limit": playlist_page["limit"],
                 "has_more": playlist_page["has_more"],
+                "revision": playlist_page["revision"],
             },
             "brand": _serialize_brand(config.brand),
             "brand_warnings": list(config.brand_warnings),

@@ -23,6 +23,7 @@ import httpx
 import mammamiradio.hosts.scriptwriter as _sw
 from mammamiradio.audio.audio_quality import AudioQualityError, AudioToolError, validate_segment_audio
 from mammamiradio.audio.imaging import ImagingLibrary
+from mammamiradio.audio.norm_cache import select_norm_cache_rescue
 from mammamiradio.audio.normalizer import (
     concat_files,
     crossfade_voice_over_music,
@@ -38,6 +39,7 @@ from mammamiradio.audio.normalizer import (
     mix_voice_with_sting,
     normalize,
     probe_duration_sec,
+    reconcile_cached_music,
     save_track_metadata,
 )
 from mammamiradio.audio.tts import synthesize, synthesize_ad, synthesize_dialogue
@@ -61,6 +63,7 @@ from mammamiradio.home.ha_context import (
 )
 from mammamiradio.hosts.ad_creative import _cast_voices, _pick_brand, _select_ad_creative
 from mammamiradio.hosts.context_cues import generate_impossible_line
+from mammamiradio.hosts.station_name_guard import strip_foreign_station_name
 from mammamiradio.playlist.downloader import (
     download_track,
     evict_cache_lru,
@@ -80,6 +83,11 @@ MUSIC_SELECTION_RETRIES = 20
 MUSIC_QUALITY_GATE_REJECTION_LIMIT = 3
 CACHE_EVICTION_INTERVAL_SECONDS = 3600
 PLAYLIST_REFRESH_INTERVAL_SECONDS = 5400.0
+FIRST_HOME_CONTEXT_MOMENT_DIRECTIVE = (
+    "FIRST CONNECTED HOME MOMENT: Use one or two concrete home details naturally. "
+    "Do not list sensors. Make it feel like a host casually noticing the home."
+)
+FIRST_HOME_CONTEXT_MIN_ENTITIES = 3
 
 
 @dataclass(frozen=True)
@@ -113,6 +121,45 @@ def _normalized_cache_path(track: Track, config: StationConfig) -> Path:
     return config.cache_dir / f"norm_{track.cache_key}_{config.audio.bitrate}k.mp3"
 
 
+def _norm_cache_bridge_payload(norm_path: Path, bridge_flag: str, station_name: str) -> tuple[dict, str]:
+    _meta = load_track_metadata(norm_path) or {}
+    title = _meta.get("title") or humanize_norm_filename(norm_path.name)
+    # Illusion guard: a poisoned sidecar artist (a foreign "Radio X" station name)
+    # must never surface as the now-playing artist on the listener UI / Music
+    # Assistant provider. Strip it and drop to title-only — mirroring the streamer
+    # rescue paths, so every sidecar->metadata source scrubs at its origin instead
+    # of one surface getting protected while a sibling bridge leaks.
+    artist = strip_foreign_station_name(_meta.get("artist", ""), station_name)
+    detail = f"{artist} - {title}" if artist else title
+    return (
+        {
+            "title": title,
+            "artist": artist,
+            bridge_flag: True,
+            "audio_source": "norm_cache",
+        },
+        f"{norm_path.name} ({detail})",
+    )
+
+
+def _record_bridge_fire(state: StationState, bridge_type: str, source: str) -> None:
+    """Record a producer rescue-bridge fire and emit a structured log event.
+
+    Wraps ``StationState.record_bridge_fire`` (#547 observability) and logs a
+    ``producer_bridge_fire`` event in the same ``extra={"event": ...}`` house
+    style as ``provider_health_state``. Best-effort: a telemetry failure must
+    never break the audio path, so everything is contained.
+    """
+    try:
+        state.record_bridge_fire(bridge_type, source)
+        logger.info(
+            "producer_bridge_fire",
+            extra={"event": "producer_bridge_fire", "bridge_type": bridge_type, "source": source},
+        )
+    except Exception:  # pragma: no cover - telemetry must never kill the producer
+        logger.debug("bridge fire telemetry failed", exc_info=True)
+
+
 async def _render_music_track(
     track: Track,
     config: StationConfig,
@@ -133,6 +180,11 @@ async def _render_music_track(
     norm_cached = _normalized_cache_path(track, config)
     if norm_cached.exists():
         logger.debug("Normalization cache hit%s: %s", f" ({context})" if context else "", norm_cached.name)
+        # A cache hit skips normalize() + its reconcile pass, so a file produced
+        # before reconciliation existed would air at its old level. Reconcile it on
+        # hit (off the event loop) so every song lands at the target; skipped once
+        # the sidecar marks it done, so steady-state cache hits stay instant.
+        await loop.run_in_executor(None, reconcile_cached_music, norm_cached)
         return RenderedMusicTrack(track=track, path=norm_cached, cache_path=norm_cached, cache_hit=True)
 
     norm_path = config.tmp_dir / f"{temp_prefix}_{uuid4().hex[:8]}.mp3"
@@ -166,7 +218,7 @@ async def _queue_drain_recovery_bridge(
     fallback = _pick_canned_clip("banter", state=state) or _pick_canned_clip("welcome")
     if fallback:
         logger.warning("Queue empty during active playback — inserting canned clip as bridge")
-        return await queue_segment(
+        ok = await queue_segment(
             Segment(
                 type=SegmentType.BANTER,
                 path=fallback,
@@ -178,28 +230,28 @@ async def _queue_drain_recovery_bridge(
                 },
             )
         )
+        if ok:
+            _record_bridge_fire(state, "drain", "canned")
+        return ok
 
-    norm_files = sorted(config.cache_dir.glob("norm_*.mp3"))
-    if norm_files:
-        norm_path = norm_files[0]
-        _meta = load_track_metadata(norm_path) or {}
+    norm_path = select_norm_cache_rescue(config.cache_dir, state)
+    if norm_path:
+        metadata, log_label = _norm_cache_bridge_payload(norm_path, "queue_drain_recovery", config.display_station_name)
         logger.warning(
             "Queue empty during active playback — inserting norm-cache bridge: %s",
-            norm_path.name,
+            log_label,
         )
-        return await queue_segment(
+        ok = await queue_segment(
             Segment(
                 type=SegmentType.MUSIC,
                 path=norm_path,
-                metadata={
-                    "title": _meta.get("title") or humanize_norm_filename(norm_path.name),
-                    "artist": _meta.get("artist", ""),
-                    "queue_drain_recovery": True,
-                    "audio_source": "norm_cache",
-                },
+                metadata=metadata,
                 ephemeral=False,
             )
         )
+        if ok:
+            _record_bridge_fire(state, "drain", "norm_cache")
+        return ok
 
     tone_path = config.tmp_dir / f"drain_tone_{uuid4().hex[:8]}.mp3"
     logger.error("No canned clips or norm cache available — inserting emergency tone bridge")
@@ -208,7 +260,7 @@ async def _queue_drain_recovery_bridge(
     except Exception:
         logger.exception("Emergency tone bridge generation failed")
         return False
-    return await queue_segment(
+    ok = await queue_segment(
         Segment(
             type=SegmentType.MUSIC,
             path=tone_path,
@@ -221,6 +273,9 @@ async def _queue_drain_recovery_bridge(
             ephemeral=True,
         )
     )
+    if ok:
+        _record_bridge_fire(state, "drain", "emergency_tone")
+    return ok
 
 
 def _banter_title(script: list[dict] | None, *, canned: bool, host_order: list[str] | None = None) -> str:
@@ -415,6 +470,60 @@ def _initial_previous_segment_type(queue: asyncio.Queue[Segment], state: Station
     return None
 
 
+def _front_insert_queue_and_shadow(
+    queue: asyncio.Queue[Segment], state: StationState, segment: Segment, shadow_entry: dict
+) -> bool:
+    """Air an operator-triggered segment NEXT instead of behind the buffered
+    lookahead. Synchronously drains the queue, puts the segment at the front, and
+    repushes — no await between draining the real queue and updating the shadow, so
+    the streamer cannot interleave (mirrors ``_purge_queue_and_shadow`` and the
+    ``/api/queue/remove`` critical section). Drops the furthest-future tail if the
+    bounded queue would otherwise overflow ``maxsize`` (which would raise QueueFull
+    and risk dead air); dropped renders are re-produced on a later cycle. Returns
+    False (dropping the segment) if the session was stopped mid-build.
+    """
+    if state.session_stopped:
+        if segment.ephemeral:
+            segment.path.unlink(missing_ok=True)
+        logger.info("Discarding forced %s because the session is stopped", segment.type.value)
+        return False
+    items: list[Segment] = []
+    while not queue.empty():
+        try:
+            items.append(queue.get_nowait())
+            queue.task_done()
+        except asyncio.QueueEmpty:
+            break
+    items.insert(0, segment)
+    dropped: list[Segment] = []
+    while queue.maxsize and len(items) > queue.maxsize:
+        dropped.append(items.pop())  # furthest-future first
+    for item in items:
+        queue.put_nowait(item)
+    # Shadow mirrors the real queue: prepend the new entry, then drop the same
+    # number of tail entries (never the new front one) so the one-directional drift
+    # guard never has to "correct" a shadow > queue overshoot and log a false alarm
+    # on every air-next.
+    state.queued_segments.insert(0, shadow_entry)
+    for seg in dropped:
+        if getattr(seg, "ephemeral", False):
+            seg.path.unlink(missing_ok=True)
+    if dropped and len(state.queued_segments) > 1:
+        drop_n = min(len(dropped), len(state.queued_segments) - 1)
+        del state.queued_segments[len(state.queued_segments) - drop_n :]
+    # The operator's pick is now queued — the trigger is fulfilled. Clearing the
+    # in-flight guard HERE (not at render-start) is what makes "one at a time" hold
+    # through a slow render: a second tap stays rejected until this pick airs, so it
+    # can never be front-inserted ahead of it.
+    state.operator_force_pending = None
+    logger.info(
+        "Air-next: front-inserted %s%s",
+        segment.type.value,
+        f" (dropped {len(dropped)} buffered tail segment(s))" if dropped else "",
+    )
+    return True
+
+
 async def _apply_talk_bed(
     audio_path: Path,
     config: StationConfig,
@@ -495,6 +604,7 @@ async def _synthesize_impossible_moment(
         imp_path,
         engine=host.engine,
         edge_fallback_voice=host.edge_fallback_voice,
+        state=state,
     )
     xfade_out = config.tmp_dir / f"impossible_xf_{uuid4().hex[:8]}.mp3"
     audio_path = await _try_crossfade(imp_path, config, xfade_out)
@@ -798,6 +908,40 @@ def _emit_segment_prepared(
         logger.debug("Provenance Tier-2 emit failed: %s", exc)
 
 
+def _home_context_ready_for_first_moment(ha_cache: HomeContext) -> bool:
+    if len(ha_cache.scored) < FIRST_HOME_CONTEXT_MIN_ENTITIES:
+        return False
+    if not (ha_cache.summary or "").strip():
+        return False
+    return any(
+        any(str(getattr(entity, field, "") or "").strip() for field in ("area", "label_en", "label_it"))
+        for entity in ha_cache.scored
+    )
+
+
+def _maybe_arm_first_home_context_moment(
+    state: StationState,
+    ha_cache: HomeContext,
+    seg_type: SegmentType,
+    *,
+    can_generate_banter: bool = True,
+) -> None:
+    if state.ha_first_home_context_moment_fired:
+        return
+    if not can_generate_banter:
+        return
+    if state.ha_pending_directive or state.chaos_pending is not None or state.operator_force_pending is not None:
+        return
+    if state.force_next is not None:
+        return
+    if not _home_context_ready_for_first_moment(ha_cache):
+        return
+
+    state.ha_pending_directive = FIRST_HOME_CONTEXT_MOMENT_DIRECTIVE
+    if seg_type != SegmentType.BANTER:
+        state.force_next = SegmentType.BANTER
+
+
 async def run_producer(
     queue: asyncio.Queue[Segment],
     state: StationState,
@@ -978,7 +1122,7 @@ async def run_producer(
             if queue.empty():
                 bridge = _pick_canned_clip("banter", state=state) or _pick_canned_clip("welcome")
                 if bridge:
-                    await _queue_segment(
+                    if await _queue_segment(
                         Segment(
                             type=SegmentType.BANTER,
                             path=bridge,
@@ -990,28 +1134,26 @@ async def run_producer(
                             },
                             ephemeral=False,
                         )
-                    )
+                    ):
+                        _record_bridge_fire(state, "resume", "canned")
                 else:
-                    # No canned clips — grab the first pre-normalized track from the
-                    # norm cache (already processed, no FFmpeg wait needed).
-                    norm_files = sorted(config.cache_dir.glob("norm_*.mp3"))
-                    if norm_files:
-                        norm_path = norm_files[0]
-                        logger.info("Resume bridge: seeding pre-normalized track %s", norm_path.name)
-                        _meta = load_track_metadata(norm_path) or {}
-                        await _queue_segment(
+                    # No canned clips — grab a recent-aware pre-normalized track
+                    # from the norm cache (already processed, no FFmpeg wait).
+                    norm_path = select_norm_cache_rescue(config.cache_dir, state)
+                    if norm_path:
+                        metadata, log_label = _norm_cache_bridge_payload(
+                            norm_path, "resume_bridge", config.display_station_name
+                        )
+                        logger.info("Resume bridge: seeding pre-normalized track %s", log_label)
+                        if await _queue_segment(
                             Segment(
                                 type=SegmentType.MUSIC,
                                 path=norm_path,
-                                metadata={
-                                    "title": _meta.get("title") or humanize_norm_filename(norm_path.name),
-                                    "artist": _meta.get("artist", ""),
-                                    "resume_bridge": True,
-                                    "audio_source": "norm_cache",
-                                },
+                                metadata=metadata,
                                 ephemeral=False,
                             )
-                        )
+                        ):
+                            _record_bridge_fire(state, "resume", "norm_cache")
 
         if state.listeners_active == 0:
             if not _producer_idle_logged:
@@ -1028,7 +1170,11 @@ async def run_producer(
             if queue.empty():
                 fallback = _pick_canned_clip("banter", state=state) or _pick_canned_clip("welcome")
                 if fallback:
-                    await _queue_segment(
+                    # idle_bridge marks this as rescue audio so the fallback
+                    # classifier (is_fallback_active) does not report a warm-up
+                    # clip as the primary station. warmup stays for the existing
+                    # display contract.
+                    if await _queue_segment(
                         Segment(
                             type=SegmentType.BANTER,
                             path=fallback,
@@ -1036,29 +1182,28 @@ async def run_producer(
                                 "type": "banter",
                                 "canned": True,
                                 "warmup": True,
+                                "idle_bridge": True,
                                 "title": "Station warm-up",
                             },
                         )
-                    )
+                    ):
+                        _record_bridge_fire(state, "idle", "canned")
                 else:
-                    norm_files = sorted(config.cache_dir.glob("norm_*.mp3"))
-                    if norm_files:
-                        norm_path = norm_files[0]
-                        logger.info("Idle bridge: seeding pre-normalized track %s", norm_path.name)
-                        _meta = load_track_metadata(norm_path) or {}
-                        await _queue_segment(
+                    norm_path = select_norm_cache_rescue(config.cache_dir, state)
+                    if norm_path:
+                        metadata, log_label = _norm_cache_bridge_payload(
+                            norm_path, "idle_bridge", config.display_station_name
+                        )
+                        logger.info("Idle bridge: seeding pre-normalized track %s", log_label)
+                        if await _queue_segment(
                             Segment(
                                 type=SegmentType.MUSIC,
                                 path=norm_path,
-                                metadata={
-                                    "title": _meta.get("title") or humanize_norm_filename(norm_path.name),
-                                    "artist": _meta.get("artist", ""),
-                                    "idle_bridge": True,
-                                    "audio_source": "norm_cache",
-                                },
+                                metadata=metadata,
                                 ephemeral=False,
                             )
-                        )
+                        ):
+                            _record_bridge_fire(state, "idle", "norm_cache")
             _was_idle = False
         _producer_idle_logged = False
 
@@ -1123,6 +1268,7 @@ async def run_producer(
         # to discard the in-flight chaos segment correctly.
         generation_chaos_epoch = state.chaos_cutover_epoch
         chaos_subtype: ChaosSubtype | None = None
+        is_operator_forced = False  # operator /api/trigger -> air-next (front-insert)
         if state.chaos_pending is not None:
             chaos_subtype = state.chaos_pending
             state.chaos_last_degraded_reason = ""
@@ -1131,12 +1277,26 @@ async def run_producer(
         elif state.force_next is not None:
             seg_type = state.force_next
             state.force_next = None
-            logger.info("Forced trigger: %s", seg_type.value)
+            # An operator trigger (not the 60s-silence rescue or other internal
+            # forces) gets air-next: it is front-inserted so it airs at the next
+            # boundary instead of behind the buffered lookahead.
+            is_operator_forced = state.operator_force_pending is not None
+            # Keep operator_force_pending set through the whole render (cleared only
+            # when the segment actually queues, in _front_insert_queue_and_shadow, or
+            # on a discard below). That makes the second-trigger rejection hold for the
+            # full render, so a later tap can't be front-inserted ahead of this pick.
+            # The panel's "Triggered" row is suppressed once production.current shows
+            # this kind building, so there is no duplicate row.
+            logger.info("Forced trigger: %s (air-next=%s)", seg_type.value, is_operator_forced)
         else:
             seg_type = next_segment_type(state, config.pacing)
         segment: Segment | None = None
         generation_revision = state.playlist_revision
         success_callback: Callable[[], None] | None = None
+        # Render-latency deep-dive: total wall time to build this segment, logged
+        # at INFO on the Queued line below. Per-stage ffmpeg breakdown is at DEBUG
+        # in audio/normalizer.py (set LOG_LEVEL=DEBUG for a soak).
+        _t_render = time.perf_counter()
 
         # Refresh Home Assistant context for banter/ad segments
         if (
@@ -1164,6 +1324,10 @@ async def run_producer(
             state.ha_scored_entities = [entity.to_status_dict() for entity in ha_cache.scored]
             state.ha_denylist_hits = dict(ha_cache.denylist_hits)
             state.ha_catalog_hit_rate = ha_cache.catalog_hit_rate
+            state.ha_context_entity_count = len(ha_cache.scored)
+            state.ha_context_char_count = len(ha_cache.summary or "")
+            timestamp = getattr(ha_cache, "timestamp", 0.0)
+            state.ha_context_last_updated = timestamp if isinstance(timestamp, int | float) else 0.0
             # Dashboard HA moments: pick the most notable recent non-person event.
             # Restrict listener-visible events to the curated set: pre-Phase-A only
             # vetted entities could surface here, and Phase A's full-snapshot ingest
@@ -1210,6 +1374,12 @@ async def run_producer(
                     )
                 elif isinstance(result, str):
                     state.ha_pending_directive = result
+            _maybe_arm_first_home_context_moment(
+                state,
+                ha_cache,
+                seg_type,
+                can_generate_banter=_sw.has_script_llm(config),
+            )
 
             # Impossible Moments v2 (A): fold new events into the evening ledger
             # (watermark-deduped) and, for banter only, surface one eligible
@@ -1454,6 +1624,7 @@ async def run_producer(
                 listener_request_commit = None
                 has_music_tail = False
                 loop = asyncio.get_running_loop()
+                first_home_context_moment_pending = state.ha_pending_directive == FIRST_HOME_CONTEXT_MOMENT_DIRECTIVE
 
                 if chaos_subtype is None and not _sw.has_script_llm(config):
                     # No LLM — use canned clips + impossible TTS lines
@@ -1532,7 +1703,7 @@ async def run_producer(
                             )
                             banter_expected_min_duration_sec = _expected_banter_duration_sec(line_texts)
                             banter_expected_line_count = len(line_texts) if len(line_texts) > 1 else None
-                            audio_path = await synthesize_dialogue(lines, config.tmp_dir)
+                            audio_path = await synthesize_dialogue(lines, config.tmp_dir, state=state)
                             state.last_banter_script = [
                                 {
                                     "host": h.name,
@@ -1594,6 +1765,7 @@ async def run_producer(
                                     **_prosody,
                                     engine=_host.engine,
                                     edge_fallback_voice=_host.edge_fallback_voice,
+                                    state=state,
                                 )
                                 xfade_out = config.tmp_dir / f"banter_trans_{uuid4().hex[:8]}.mp3"
                                 result = await _try_crossfade(_path, config, xfade_out)
@@ -1602,7 +1774,7 @@ async def run_producer(
                             banter_path: Path
                             (trans_voice_path, has_music_tail), banter_path = await asyncio.gather(
                                 _do_transition(),
-                                synthesize_dialogue(lines, config.tmp_dir),
+                                synthesize_dialogue(lines, config.tmp_dir, state=state),
                             )
 
                             # Concat: transition + banter (both pre-normalized)
@@ -1799,6 +1971,7 @@ async def run_producer(
                     _new_listener_count=_new_listener_count,
                     _listener_request_commit=listener_request_commit,
                     _used_generated_banter=(canned is None and not impossible_tts),
+                    _first_home_context_moment_pending=first_home_context_moment_pending,
                     _gag_key=state.ha_running_gag_key,
                     _ledger=state.evening_ledger,
                     _cache_dir=config.cache_dir,
@@ -1808,6 +1981,12 @@ async def run_producer(
                         state.new_listeners_pending = max(0, state.new_listeners_pending - _new_listener_count)
                     if _used_generated_banter and _listener_request_commit is not None:
                         _listener_request_commit.apply(state)
+                    if (
+                        _used_generated_banter
+                        and _first_home_context_moment_pending
+                        and state.ha_pending_directive != FIRST_HOME_CONTEXT_MOMENT_DIRECTIVE
+                    ):
+                        state.ha_first_home_context_moment_fired = True
                     # Spend the running-gag cooldown only when generated banter
                     # (which carried the gag) actually airs — not on canned or
                     # failed-LLM fallbacks. Honors EveningLedger.offer_gag's contract.
@@ -1843,6 +2022,7 @@ async def run_producer(
                         rate=flash_rate,
                         engine=host.engine,
                         edge_fallback_voice=host.edge_fallback_voice,
+                        state=state,
                     )
 
                     # Try to overlay on the tail of the last music segment
@@ -1908,6 +2088,7 @@ async def run_producer(
                         voice_path,
                         engine=sweeper_engine,
                         edge_fallback_voice=sweeper_fallback,
+                        state=state,
                     )
                     sting_task = loop.run_in_executor(None, generate_station_id_bed, sting_path, 3.0, sb.motif_notes)
                     await asyncio.gather(voice_task, sting_task)
@@ -1951,6 +2132,7 @@ async def run_producer(
                         audio_path,
                         engine=sweeper_engine,
                         edge_fallback_voice=sweeper_fallback,
+                        state=state,
                     )
                     loop = asyncio.get_running_loop()
                     sting_path = config.tmp_dir / f"sweeper_sting_{uuid4().hex[:8]}.mp3"
@@ -2005,6 +2187,7 @@ async def run_producer(
                             voice_path,
                             engine=host.engine,
                             edge_fallback_voice=host.edge_fallback_voice,
+                            state=state,
                         ),
                         loop.run_in_executor(None, generate_tone, chime_path, 1047, 0.3),
                     )
@@ -2083,6 +2266,7 @@ async def run_producer(
                         ipath,
                         engine=ihost.engine,
                         edge_fallback_voice=ihost.edge_fallback_voice,
+                        state=state,
                     )
                     xout = config.tmp_dir / f"ad_trans_{uuid4().hex[:8]}.mp3"
                     ipath = await _try_crossfade(ipath, config, xout)
@@ -2107,6 +2291,7 @@ async def run_producer(
                             pitch="-10Hz",
                             engine=pengine,
                             edge_fallback_voice=pfallback,
+                            state=state,
                         )
                         parts.append(ppath)
                     except Exception:
@@ -2167,7 +2352,7 @@ async def run_producer(
                 # ── PHASE 2: Fan out all ad TTS synthesis in parallel ──
                 ad_paths = await asyncio.gather(
                     *(
-                        synthesize_ad(script, vm, config.tmp_dir, sfx_dir)
+                        synthesize_ad(script, vm, config.tmp_dir, sfx_dir, state=state)
                         for script, (_, _, _, vm) in zip(scripts, spot_params, strict=False)
                     )
                 )
@@ -2221,6 +2406,7 @@ async def run_producer(
                         outro_path,
                         engine=outro_host.engine,
                         edge_fallback_voice=outro_host.edge_fallback_voice,
+                        state=state,
                     ),
                 )
                 break_parts.append(bumper_out)
@@ -2374,10 +2560,14 @@ async def run_producer(
             if generation_revision != state.playlist_revision:
                 logger.info("Discarding stale %s segment after playlist source switch", seg_type.value)
                 _unlink_if_tmp_render(segment, config.tmp_dir)
+                if is_operator_forced:
+                    state.operator_force_pending = None  # render abandoned — let the operator retry
                 continue
             if generation_chaos_epoch != state.chaos_cutover_epoch:
                 logger.info("Discarding stale %s segment after chaos cutover", seg_type.value)
                 _unlink_if_tmp_render(segment, config.tmp_dir)
+                if is_operator_forced:
+                    state.operator_force_pending = None  # render abandoned — let the operator retry
                 continue
             # Stable per-segment id: stamped on the Segment metadata AND the
             # shadow-list entry so /api/queue/remove can target a segment by
@@ -2385,8 +2575,27 @@ async def run_producer(
             # streamer consumes the head).
             queue_id = uuid4().hex
             segment.metadata["queue_id"] = queue_id
-            if not await _queue_segment(segment):
-                continue
+            shadow_entry = {
+                "id": queue_id,
+                "type": segment.type.value,
+                "label": segment.metadata.get("title", segment.type.value),
+                "spotify_id": segment.metadata.get("spotify_id", ""),
+                "reason": segment.metadata.get("queue_reason", "Rendered and queued for playback."),
+                "playlist_index": segment.metadata.get("playlist_index", -1),
+                "source_kind": segment.metadata.get("source_kind", ""),
+                "duration_sec": round(segment.duration_sec or 0, 1),
+            }
+            if is_operator_forced:
+                # Air-next: front-insert past the buffered lookahead so the operator
+                # hears their pick at the next boundary, never minutes later.
+                if not _front_insert_queue_and_shadow(queue, state, segment, shadow_entry):
+                    continue
+                if "error" not in segment.metadata:
+                    prev_seg_type = segment.type
+            else:
+                if not await _queue_segment(segment):
+                    continue
+                state.queued_segments.append(shadow_entry)
             if chaos_subtype is not None and state.chaos_pending == chaos_subtype:
                 state.chaos_pending = None
             if chaos_subtype == ChaosSubtype.URGENT_INTERRUPT:
@@ -2397,18 +2606,6 @@ async def run_producer(
                 if state.force_next == SegmentType.BANTER:
                     state.force_next = None
             _segments_produced += 1
-            state.queued_segments.append(
-                {
-                    "id": queue_id,
-                    "type": segment.type.value,
-                    "label": segment.metadata.get("title", segment.type.value),
-                    "spotify_id": segment.metadata.get("spotify_id", ""),
-                    "reason": segment.metadata.get("queue_reason", "Rendered and queued for playback."),
-                    "playlist_index": segment.metadata.get("playlist_index", -1),
-                    "source_kind": segment.metadata.get("source_kind", ""),
-                    "duration_sec": round(segment.duration_sec or 0, 1),
-                }
-            )
             # Queue appended → up_next changed → integration consumers polling
             # ``changed_at`` need to see this even without a segment transition.
             state.last_state_change_at = time.time()
@@ -2427,4 +2624,9 @@ async def run_producer(
                         _prefetch_next(state, config, _prefetch_failed_keys),
                         name="prefetch-norm",
                     )
-            logger.info("Queued %s (queue size: %d)", segment.type.value, queue.qsize())
+            logger.info(
+                "Queued %s in %.1fs (queue size: %d)",
+                segment.type.value,
+                time.perf_counter() - _t_render,
+                queue.qsize(),
+            )

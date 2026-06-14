@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import math
 import os
 import re
 import sys
@@ -519,6 +520,19 @@ def _print_summary(results: list[VoiceAuditionResult], *, dry_run: bool, run_dir
         print(f"Output: {run_dir}")
 
 
+def _stability_arg(value: str) -> float:
+    """argparse type for --elevenlabs-stability: a finite float in [0.0, 1.0].
+
+    ElevenLabs stability is bounded 0-1; rejecting out-of-range/NaN/inf at parse
+    time gives an immediate CLI error instead of a late API/format failure once
+    the targets have already been expanded.
+    """
+    stability = float(value)
+    if not math.isfinite(stability) or not (0.0 <= stability <= 1.0):
+        raise argparse.ArgumentTypeError("stability must be a finite float in [0.0, 1.0]")
+    return stability
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG_PATH, help="radio.toml path to audition")
@@ -543,7 +557,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--elevenlabs-stability",
         nargs="*",
-        type=float,
+        type=_stability_arg,
         default=None,
         help="Sweep ElevenLabs stability values (e.g. 0.42 0.6 0.75); fans out each "
         "ElevenLabs voice into one clip per value to A/B clarity (low = mumbly).",

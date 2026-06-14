@@ -70,6 +70,22 @@ Charts / Jamendo / classic eras / local files / demo tracks
   - builds a break from host intro, bumpers, one or more ad spots, and host outro
   - records per-spot campaign history (format, sonic signature, summary) for format rotation and campaign arc continuity
 
+Every finished segment then passes a final **loudness-reconciliation** step: it is
+measured (`measure_lufs`, EBU R128) and nudged with a single corrective `volume`
+gain so music, hosts, beds, and ads all air at one integrated-LUFS target
+(`[audio] lufs_target`, with ads at `ad_lufs_target` — 1 LU hotter). This holds
+perceived volume steady across segment types regardless of which upstream filter
+produced each one (the Green's `dynaudnorm` path has no fixed target on its own).
+It is idempotent (an already-on-target segment skips the re-encode, so the
+redundant terminal passes some segments take cost only a measure) and best-effort
+(a measurement or re-encode failure leaves the segment untouched — never dead air).
+A music **cache hit** replays a normalized file from a prior session and so bypasses
+`normalize()` and this pass; the producer therefore calls `reconcile_cached_music()`
+on each hit, which reconciles the cached file to the music target on first play and
+stamps a `reconciled_lufs` marker into the norm sidecar so later hits skip both the
+re-encode and the measure. This self-heals files cached before reconciliation
+existed (which otherwise aired at their old, quieter level) one play at a time.
+
 ### Dynamic LLM routing (which model voices each task)
 
 Script generation never names a model in code. Each call site asks for a model by
@@ -175,7 +191,7 @@ The dashboard derives a tier label from these flags: Demo Radio, Full AI Radio, 
 6. **Bundled demo assets**: pre-shipped MP3s in `mammamiradio/assets/demo/music/`. Empty by default; populated optionally per the demo-asset contract.
 7. **Built-in `DEMO_TRACKS`**: metadata-only Italian-flavored placeholder list. Last-resort fallback so the station always boots with something.
 
-The admin Music & Coda controls expose reload buttons for charts/Jamendo when their capabilities are available and unconditional decade buttons for Anni '70, Anni '80, and Anni '90. `/status` returns a bounded playlist window (default 80 tracks, max 200) plus a `playlist_page` metadata envelope `{total, offset, limit, has_more}`; the dedicated `GET /api/playlist` endpoint handles lazy load-more. Track objects carry `album_art`, `source`, `year`, and `youtube_id` so the browser can render thumbnails, source chips, and era pills without another round trip.
+The admin Music & Coda controls expose reload buttons for charts/Jamendo when their capabilities are available and unconditional decade buttons for Anni '70, Anni '80, and Anni '90. `/status` returns a bounded playlist window (default 80 tracks, max 200) plus a `playlist_page` metadata envelope `{total, offset, limit, has_more, revision}`; the dedicated `GET /api/playlist` endpoint handles lazy load-more. Track objects carry `album_art`, `source`, `year`, and `youtube_id` so the browser can render thumbnails, source chips, and era pills without another round trip.
 
 Once playback is running, the producer's recovery layers (last-known-good music recycle, demo-asset rescue, forced banter) keep the queue from starvation if a source disappears mid-session. Silent audio is never queued intentionally.
 
@@ -309,7 +325,7 @@ The same mechanism is callable directly via `POST /api/interrupt` (admin auth, 6
 | `/healthz` | GET | Public | Liveness probe with process uptime |
 | `/readyz` | GET | Public | Readiness probe with queue depth and startup status |
 | `/public-status` | GET | Public | Current segment, recent log, the real queued segments (`upcoming_mode` is `queued` or `building`), and `stream.audio_format` (the canonical encoding contract — see "Stream audio format metadata" below) |
-| `/status` | GET | Admin | Full admin JSON: queue depth, uptime, scripts, HA context, errors, `provider_health`, `runtime_status` (normalized provider state + session failover event history), `production` (the live "In produzione" feed — `current` is the phase the producer is building right now, `recent` is a bounded trail of just-finished work; admin-only, never in `/public-status`), and `playlist_page` (`{total, offset, limit, has_more}`). Accepts `?playlist_offset=0&playlist_limit=80` (max 200) for lazy loading. |
+| `/status` | GET | Admin | Full admin JSON: queue depth, uptime, scripts, HA context, errors, `provider_health`, `runtime_status` (normalized provider state, session failover event history, and `bridge_health` rescue-bridge telemetry — see operations.md "Reading queue-rescue health"), `production` (the live "In produzione" feed — `current` is the phase the producer is building right now, `recent` is a bounded trail of just-finished work; admin-only, never in `/public-status`), and `playlist_page` (`{total, offset, limit, has_more, revision}`). Accepts `?playlist_offset=0&playlist_limit=80` (max 200) for lazy loading. |
 | `/api/setup/status` | GET | Admin | First-run setup status, detected run mode, and station mode |
 | `/api/setup/recheck` | POST | Admin | Re-run setup probes |
 | `/api/setup/provider-check` | POST | Admin | Active, secret-safe Anthropic/OpenAI/Azure Speech/ElevenLabs connectivity check |
@@ -347,8 +363,8 @@ The same mechanism is callable directly via `POST /api/interrupt` (admin auth, 6
 | `/public-listener-requests` | GET | Public | Sanitized listener-request feed for the on-page sidebar (`public_token`, `status`, name, message, type) — admin `request_id`, `submitter_ip_hash`, and `evict_after` stay server-side |
 | `/api/listener-requests` | GET | Admin | List pending listener requests (full record including `request_id`, `status`, `evict_after`) |
 | `/api/listener-requests/dismiss` | POST | Admin | Dismiss a pending listener request by `ts` (legacy) or `request_id` (canonical) |
-| `/api/playlist` | GET | Admin | Paginated playlist window; `?offset=0&limit=80` (max 200); returns `{tracks, total, offset, limit, has_more}` |
-| `/api/search` | GET | Admin | Search playlist and external sources; pagination via `offset`/`limit` (max 50 local, max 10 external) and `external_offset`/`external_limit`; returns `{results, external, total, has_more, external_has_more, …}` |
+| `/api/playlist` | GET | Admin | Paginated playlist window; `?offset=0&limit=80` (max 200); returns `{tracks, total, offset, limit, has_more, revision}` |
+| `/api/search` | GET | Admin | Search playlist and external sources; pagination via `offset`/`limit` (max 50 local, max 10 external) and `external_offset`/`external_limit`; `include_external=false` skips yt-dlp when the client has exhausted web results; returns `{results, external, total, has_more, external_has_more, …}` |
 | `/api/playlist/add-external` | POST | Admin | Add external track from search results; accepts optional `album_art` URL (http/https only, validated server-side) |
 | `/api/interrupt` | POST | Admin | Immediately interrupt the stream — hosts deliver pissed/urgent banter with a custom directive. Body: `{"directive": str, "urgency": "pissed"\|"urgent"\|"gentle"}`. 60s cooldown enforced; returns 429 on spam. |
 | `/api/hot-reload` | POST | Admin | Reload `prompt_world.py`, `transitions.py`, `fallbacks.py` then `scriptwriter.py` (leaves-first) in-place via `importlib.reload()` — stream continues uninterrupted, next banter uses new code. Requires `--workers 1`. |
@@ -360,8 +376,9 @@ Admin access is granted by one of:
 - localhost access, unless `ADMIN_PASSWORD` is configured
 - HTTP Basic auth via `ADMIN_USERNAME` and `ADMIN_PASSWORD`
 - token auth via `X-Radio-Admin-Token` header for non-local requests when only `ADMIN_TOKEN` is configured
+- private-network trust (LAN, Tailscale, HA Supervisor) when no credential is configured — reads allowed, writes CSRF-checked; public IPs are always rejected
 
-Non-local binds without admin auth are rejected during config validation.
+In standalone mode, a non-loopback bind without a credential is rejected during config validation. The HA add-on is exempt: it boots on `0.0.0.0` with no credential and trusts its own LAN. The full matrix is the single source of truth in [operations.md](operations.md) ("Admin access model").
 
 ### CSRF protection
 
@@ -369,7 +386,7 @@ Mutating admin requests (POST/PUT/PATCH/DELETE) over non-loopback networks must 
 
 ### Source switch concurrency
 
-`source_switch_lock` (asyncio.Lock on `app.state`) serializes `/api/playlist/load` so only one source change runs at a time. The endpoint triggers immediate cutover: the segment queue is purged, the current segment is skipped, and playback begins from the new source. The producer uses a `playlist_revision` counter on `StationState` to detect and discard segments generated for a stale source.
+`source_switch_lock` (asyncio.Lock on `app.state`) serializes `/api/playlist/load` so only one source change runs at a time. The endpoint triggers immediate cutover: the segment queue is purged, the current segment is skipped, and playback begins from the new source. The producer uses a `playlist_revision` counter on `StationState` to detect and discard segments generated for a stale source. `/api/shuffle` also increments `playlist_revision` so any in-flight producer work targeting the old order is discarded and rebuilt against the new sequence.
 
 ## Failure model
 
@@ -417,7 +434,8 @@ The rich path is richer, but the failure path still produces a stream.
 | `scripts/audition_tts_voices.py` | Local audition clips and manifest generation for configured/catalog TTS voices |
 | `mammamiradio/home/ha_context.py` | Home Assistant polling, mood classification, reactive triggers |
 | `mammamiradio/home/ha_enrichment.py` | Pure HA event derivation: state diffing, event pruning, numeric passthrough |
-| `mammamiradio/web/streamer.py` | HTTP routes, auth gating, playback loop, clip endpoints, listener fanout (TODO: split — see cathedral plan PR 5) |
+| `mammamiradio/web/streamer.py` | HTTP routes, playback loop, clip endpoints, listener fanout (TODO: split — see cathedral plan PR 5) |
+| `mammamiradio/web/auth.py` | Request-layer admin auth: `require_admin_access`, CSRF enforcement, trusted-network classification |
 | `mammamiradio/web/listener_requests.py` | Listener-request endpoints (submit, public feed, admin queue, dismiss) and the song-wish download background task |
 | `mammamiradio/web/og_card.py` | Open Graph share-card PNG renderer |
 | `mammamiradio/web/templates/` | `admin.html`, `listener.html`, `live.html` |

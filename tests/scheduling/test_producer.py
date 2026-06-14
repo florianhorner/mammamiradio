@@ -259,3 +259,48 @@ async def test_queued_segment_playlist_index_minus_one_for_nonmusic(tmp_path):
 
     assert state.queued_segments[-1]["playlist_index"] == -1
     assert state.queued_segments[-1]["source_kind"] == ""
+
+
+@pytest.mark.asyncio
+async def test_render_music_cache_hit_reconciles_loudness(tmp_path):
+    """A normalization cache hit must still run the loudness reconcile pass on the
+    cached file — otherwise a norm file produced before reconciliation aired at its
+    old, quieter level ("some songs are just quieter"). Guards producer.py wiring."""
+    from mammamiradio.scheduling.producer import _normalized_cache_path, _render_music_track
+
+    track = Track(title="Bye Bye Bye", artist="NSYNC", duration_ms=200_000, spotify_id="bb1", source="classic")
+    config = _make_config(tmp_path)
+    norm_cached = _normalized_cache_path(track, config)
+    norm_cached.write_bytes(b"pre-reconcile norm audio")  # the cache hit
+
+    with (
+        patch(f"{PRODUCER_MODULE}.download_track", new_callable=AsyncMock, return_value=tmp_path / "dl.mp3"),
+        patch(f"{PRODUCER_MODULE}.validate_download", return_value=(True, "")),
+        patch(f"{PRODUCER_MODULE}.reconcile_cached_music") as m_reconcile,
+    ):
+        result = await _render_music_track(track, config, temp_prefix="t", context="music")
+
+    assert result is not None and result.cache_hit is True
+    assert result.path == norm_cached
+    m_reconcile.assert_called_once_with(norm_cached)
+
+
+def test_norm_cache_bridge_scrubs_foreign_artist():
+    """P1 regression: the producer bridges (queue_drain_recovery / resume_bridge /
+    idle_bridge) read the SAME norm-cache sidecar as the streamer rescue. A poisoned
+    'Radio X' artist must be scrubbed at this source so it never reaches
+    now_streaming.metadata -> the listener now-playing line and Music Assistant."""
+    from mammamiradio.scheduling.producer import _norm_cache_bridge_payload
+
+    poisoned = {"title": "Be Without U", "artist": "Radio Sabrina Sensatione"}
+    with patch(f"{PRODUCER_MODULE}.load_track_metadata", return_value=poisoned):
+        metadata, log_label = _norm_cache_bridge_payload(
+            Path("norm_abc_128k.mp3"), "queue_drain_recovery", "Mamma Mi Radio"
+        )
+
+    assert "Radio Sabrina Sensatione" not in metadata["artist"]
+    assert "Radio Sabrina Sensatione" not in log_label
+    assert metadata["artist"] == ""  # whole foreign name stripped (artist field)
+    assert metadata["title"] == "Be Without U"  # real title preserved
+    assert metadata["queue_drain_recovery"] is True
+    assert metadata["audio_source"] == "norm_cache"

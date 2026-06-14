@@ -236,6 +236,7 @@ async def test_skip_nothing_streaming():
 @pytest.mark.asyncio
 async def test_remove_track_valid_index():
     app = _make_test_app()
+    starting_revision = app.state.station_state.playlist_revision
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
         resp = await client.post("/api/playlist/remove", json={"index": 1})
@@ -244,6 +245,7 @@ async def test_remove_track_valid_index():
     assert body["ok"] is True
     assert "Song B" in body["removed"]
     assert len(app.state.station_state.playlist) == 2
+    assert app.state.station_state.playlist_revision == starting_revision + 1
 
 
 @pytest.mark.asyncio
@@ -276,6 +278,7 @@ async def test_remove_track_rejects_non_integer_index_without_mutating_playlist(
 @pytest.mark.asyncio
 async def test_move_track_valid():
     app = _make_test_app()
+    starting_revision = app.state.station_state.playlist_revision
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
         resp = await client.post("/api/playlist/move", json={"from": 2, "to": 0})
@@ -285,6 +288,7 @@ async def test_move_track_valid():
     assert "Song C" in body["moved"]
     # Song C should now be first
     assert app.state.station_state.playlist[0].title == "Song C"
+    assert app.state.station_state.playlist_revision == starting_revision + 1
 
 
 @pytest.mark.asyncio
@@ -485,6 +489,7 @@ async def test_playlist_enrich_deduplicates_incoming_source_tracks():
 @pytest.mark.asyncio
 async def test_add_track_to_end():
     app = _make_test_app()
+    starting_revision = app.state.station_state.playlist_revision
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
         resp = await client.post(
@@ -501,6 +506,7 @@ async def test_add_track_to_end():
     assert body["ok"] is True
     assert body["position"] == "end"
     assert app.state.station_state.playlist[-1].title == "New Song"
+    assert app.state.station_state.playlist_revision == starting_revision + 1
 
 
 @pytest.mark.asyncio
@@ -782,6 +788,8 @@ async def test_search_empty_query():
     assert body["offset"] == 0
     assert body["limit"] == 20
     assert body["has_more"] is False
+    assert body["external_offset"] == 0
+    assert body["external_limit"] == 5
     assert body["external_known_count"] == 0
     assert body["external_has_more"] is False
 
@@ -816,6 +824,7 @@ async def test_playlist_api_returns_paginated_track_page():
     assert body["offset"] == 2
     assert body["limit"] == 3
     assert body["has_more"] is True
+    assert body["revision"] == app.state.station_state.playlist_revision
 
 
 @pytest.mark.asyncio
@@ -864,7 +873,13 @@ async def test_status_playlist_page_preserves_admin_status_contract():
     assert body["playlist"][0]["source"] == "classic"
     assert body["playlist"][0]["year"] == 2090
     assert body["playlist"][0]["youtube_id"] == "ytid0000100"
-    assert body["playlist_page"] == {"total": 205, "offset": 100, "limit": 3, "has_more": True}
+    assert body["playlist_page"] == {
+        "total": 205,
+        "offset": 100,
+        "limit": 3,
+        "has_more": True,
+        "revision": app.state.station_state.playlist_revision,
+    }
     assert "runtime_status" in body
     assert "provider_health" in body
     assert "production" in body
@@ -961,6 +976,27 @@ async def test_search_external_results_are_paginated_without_global_total():
     assert body["external_known_count"] == 6
     assert "external_total" not in body
     search_mock.assert_called_once_with("External", 6)
+
+
+@pytest.mark.asyncio
+async def test_search_can_skip_external_lookup_after_external_results_exhausted():
+    app = _make_test_app()
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    with patch("mammamiradio.playlist.downloader.search_ytdlp_metadata") as search_mock:
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            resp = await client.get(
+                "/api/search?q=Song&limit=1&external_offset=5&external_limit=5&include_external=false"
+            )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert [track["title"] for track in body["results"]] == ["Song A"]
+    assert body["has_more"] is True
+    assert body["external"] == []
+    assert body["external_offset"] == 5
+    assert body["external_limit"] == 5
+    assert body["external_known_count"] == 5
+    assert body["external_has_more"] is False
+    search_mock.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -1591,6 +1627,7 @@ async def test_dismiss_listener_request_removes_downloaded_track(tmp_path):
     app = _make_test_app()
     app.state.config.cache_dir = tmp_path
     state = app.state.station_state
+    starting_revision = state.playlist_revision
     original_playlist = list(state.playlist)
     req = {
         "name": "Luca",
@@ -1618,6 +1655,7 @@ async def test_dismiss_listener_request_removes_downloaded_track(tmp_path):
     ):
         await _download_listener_song(req, app.state, state.playlist_revision)
     assert req["song_track_obj"] in state.playlist
+    assert state.playlist_revision == starting_revision + 1
     assert state.pinned_track is req["song_track_obj"]
     assert state.force_next == SegmentType.MUSIC
 
@@ -1629,6 +1667,7 @@ async def test_dismiss_listener_request_removes_downloaded_track(tmp_path):
     assert resp.json() == {"ok": True, "removed": 1}
     assert req not in state.pending_requests
     assert state.playlist == original_playlist
+    assert state.playlist_revision == starting_revision + 2
     assert state.pinned_track is None
     assert state.force_next is None
 
@@ -1744,6 +1783,7 @@ async def test_add_external_track_success(tmp_path):
     app = _make_test_app()
     app.state.config.cache_dir = tmp_path
     app.state.config.allow_ytdlp = True
+    starting_revision = app.state.station_state.playlist_revision
     original_len = len(app.state.station_state.playlist)
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
     with patch(
@@ -1771,6 +1811,7 @@ async def test_add_external_track_success(tmp_path):
         # Drain the background download before asserting the pin landed.
         await asyncio.gather(*list(app.state.background_tasks))
     assert len(app.state.station_state.playlist) == original_len + 1
+    assert app.state.station_state.playlist_revision == starting_revision + 1
     assert app.state.station_state.pinned_track is not None
     assert app.state.station_state.pinned_track.youtube_id == "dQw4w9WgXcQ"
     assert app.state.station_state.pinned_track.album_art == "https://img.example/yt.jpg"
@@ -1780,6 +1821,39 @@ async def test_add_external_track_success(tmp_path):
         status_resp = await client.get("/status")
     assert status_resp.status_code == 200
     assert status_resp.json()["playlist"][-1]["album_art"] == "https://img.example/yt.jpg"
+
+
+@pytest.mark.asyncio
+async def test_add_external_track_sanitizes_invalid_album_art(tmp_path):
+    for bad_art in ("javascript:alert(1)", "data:image/png;base64,aaaa", "/relative-cover.jpg"):
+        app = _make_test_app()
+        app.state.config.cache_dir = tmp_path
+        app.state.config.allow_ytdlp = True
+        starting_revision = app.state.station_state.playlist_revision
+        transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+        with patch(
+            "mammamiradio.playlist.downloader.download_external_track",
+            new_callable=AsyncMock,
+            return_value=tmp_path / "dl.mp3",
+        ):
+            async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+                resp = await client.post(
+                    "/api/playlist/add-external",
+                    json={
+                        "youtube_id": "dQw4w9WgXcQ",
+                        "title": "Brano",
+                        "artist": "Artista",
+                        "duration_ms": 123000,
+                        "album_art": bad_art,
+                    },
+                )
+            assert resp.status_code == 200
+            await asyncio.gather(*list(app.state.background_tasks))
+        assert app.state.station_state.pinned_track is not None
+        assert app.state.station_state.pinned_track.album_art == ""
+        assert app.state.station_state.playlist[-1].album_art == ""
+        # The successful commit must bump the playlist revision (pagination contract).
+        assert app.state.station_state.playlist_revision == starting_revision + 1
 
 
 @pytest.mark.asyncio
@@ -2060,6 +2134,7 @@ async def test_download_listener_song_success(tmp_path):
     app = _make_test_app()
     app.state.config.cache_dir = tmp_path
     state = app.state.station_state
+    starting_revision = state.playlist_revision
     original_len = len(state.playlist)
     req = {"song_query": "albachiara", "message": "metti albachiara", "song_found": False, "song_error": False}
     state.pending_requests.append(req)
@@ -2091,6 +2166,43 @@ async def test_download_listener_song_success(tmp_path):
     assert state.pinned_track is not None
     assert state.pinned_track.album_art == "https://img.example/albachiara.jpg"
     assert len(state.playlist) == original_len + 1
+    assert state.playlist_revision == starting_revision + 1
+
+
+@pytest.mark.asyncio
+async def test_download_listener_song_sanitizes_invalid_album_art(tmp_path):
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path
+    state = app.state.station_state
+    starting_revision = state.playlist_revision
+    req = {"song_query": "albachiara", "message": "metti albachiara", "song_found": False, "song_error": False}
+    state.pending_requests.append(req)
+    with (
+        patch(
+            "mammamiradio.playlist.downloader.search_ytdlp_metadata",
+            return_value=[
+                {
+                    "title": "Albachiara",
+                    "artist": "Vasco Rossi",
+                    "duration_ms": 120000,
+                    "youtube_id": "yt123",
+                    "album_art": "javascript:alert(1)",
+                }
+            ],
+        ),
+        patch(
+            "mammamiradio.playlist.downloader.download_external_track",
+            new_callable=AsyncMock,
+            return_value=tmp_path / "song.mp3",
+        ),
+    ):
+        await _download_listener_song(req, app.state, state.playlist_revision)
+    assert req["song_found"] is True
+    assert req["song_track_obj"].album_art == ""
+    assert state.pinned_track is not None
+    assert state.pinned_track.album_art == ""
+    # The successful commit must bump the playlist revision (pagination contract).
+    assert state.playlist_revision == starting_revision + 1
 
 
 @pytest.mark.asyncio
@@ -4280,6 +4392,10 @@ async def test_admin_status_ha_details_present_with_full_context():
     ]
     state.ha_denylist_hits = {"privacy:device_tracker": 1}
     state.ha_catalog_hit_rate = 0.0
+    state.ha_context_entity_count = 1
+    state.ha_context_char_count = len(state.ha_context)
+    state.ha_context_last_updated = 1234.5
+    state.ha_first_home_context_moment_fired = True
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
         resp = await client.get("/status", headers={"Authorization": "Bearer secret-tok"})
@@ -4294,6 +4410,10 @@ async def test_admin_status_ha_details_present_with_full_context():
     assert hd["scored_entities"][0]["label"] == "Coffee machine"
     assert hd["denylist_hits"] == {"privacy:device_tracker": 1}
     assert hd["catalog_hit_rate"] == 0.0
+    assert hd["context_entity_count"] == 1
+    assert hd["context_char_count"] == len(state.ha_context)
+    assert hd["context_last_updated"] == 1234.5
+    assert hd["first_home_context_moment_fired"] is True
 
 
 @pytest.mark.asyncio

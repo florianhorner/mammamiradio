@@ -408,6 +408,32 @@ def _inject_ingress_prefix(html: str, prefix: str) -> str:
     assert "Ingress prefix injection only rewrites safe patterns" in result.stdout
 
 
+def test_validate_addon_resolves_owner_from_repository_yaml_without_remote(tmp_path: Path) -> None:
+    """No git remote + no gh: the expected image owner must fall back to
+    repository.yaml's url, not an empty owner. Regression for the line-86 bug
+    where `sed` exiting 0 on empty input left OWNER="" → ghcr.io//... mismatch.
+    """
+    env = _create_validate_addon_repo(
+        tmp_path,
+        streamer_body="""
+def _inject_ingress_prefix(html: str, prefix: str) -> str:
+    html = html.replace('href="/listen"', f'href="{prefix}/listen"')
+    return html
+""".strip()
+        + "\n",
+    )
+    # Simulate a fresh/no-remote worktree: drop origin (gh is already stubbed to
+    # exit 1 by the helper), and have repository.yaml carry the canonical owner.
+    _run(["git", "remote", "remove", "origin"], cwd=tmp_path)
+    _write(tmp_path / "repository.yaml", "name: test\nurl: https://github.com/florianhorner/mammamiradio\n")
+
+    result = _run(["bash", str(VALIDATE_ADDON)], cwd=tmp_path, env=env)
+
+    assert "ghcr.io//mammamiradio-addon-{arch}" not in result.stdout
+    assert "Image path: ghcr.io/florianhorner/mammamiradio-addon-{arch}" in result.stdout
+    assert result.returncode == 0
+
+
 def test_validate_addon_rejects_options_schema_order_mismatch(tmp_path: Path) -> None:
     env = _create_validate_addon_repo(
         tmp_path,

@@ -31,6 +31,7 @@ from mammamiradio.home.ha_enrichment import (
     diff_states,
     prune_events,
 )
+from mammamiradio.hosts.station_name_guard import strip_foreign_station_name
 
 logger = logging.getLogger(__name__)
 
@@ -103,6 +104,7 @@ ALL_ENTITIES = GOLD_ENTITIES + SILVER_ENTITIES + BRONZE_ENTITIES
 
 DEFAULT_CONTEXT_ENTITY_LIMIT = 12
 DEFAULT_CONTEXT_CHAR_LIMIT = 2000
+MAX_PRESENCE_IN_SLICE = 4
 DROP_DOMAINS = {
     "update",
     "button",
@@ -151,6 +153,7 @@ DOMAIN_SALIENCE_WEIGHTS = {
 }
 POWER_SENSOR_WEIGHT = 0.5
 PRESENCE_SENSOR_WEIGHT = 0.9
+PRESENCE_SENSOR_DEVICE_CLASSES = {"occupancy", "presence", "motion"}
 OVERRIDE_SCORE_BOOST = 0.5
 AREA_SCORE_BOOST = 0.2
 RECENT_CHANGE_WINDOW_SECONDS = 15 * 60
@@ -559,7 +562,7 @@ def _score_entity(entity_id: str, state_data: dict, *, event_entity_ids: set[str
     score = DOMAIN_SALIENCE_WEIGHTS.get(domain, 0.1)
     if domain == "sensor" and device_class == "power":
         score = POWER_SENSOR_WEIGHT
-    if domain == "binary_sensor" and device_class in {"presence", "occupancy", "motion"}:
+    if domain == "binary_sensor" and device_class in PRESENCE_SENSOR_DEVICE_CLASSES:
         score = PRESENCE_SENSOR_WEIGHT
     if entity_id in ENTITY_LABELS:
         score += OVERRIDE_SCORE_BOOST
@@ -707,11 +710,25 @@ def _build_scored_entities(
             )
         )
 
-    selected = sorted(
+    presence_keep_ids = {
+        item.entity_id
+        for item in sorted(
+            (item for item in scored if _is_capped_presence_sensor(item) and item.area is not None),
+            key=_presence_slice_rank,
+            reverse=True,
+        )[:MAX_PRESENCE_IN_SLICE]
+    }
+    selected = []
+    for item in sorted(
         scored,
         key=lambda item: (item.score, item.entity_id in ENTITY_LABELS, item.entity_id),
         reverse=True,
-    )[:limit]
+    ):
+        if _is_capped_presence_sensor(item) and (item.area is None or item.entity_id not in presence_keep_ids):
+            continue
+        selected.append(item)
+        if len(selected) >= limit:
+            break
     if char_limit <= 0:
         return selected
 
@@ -725,6 +742,24 @@ def _build_scored_entities(
         budgeted.append(item)
         used = projected
     return budgeted
+
+
+def _is_capped_presence_sensor(item: ScoredEntity) -> bool:
+    attrs = item.raw_state.get("attributes", {}) or {}
+    return (
+        item.domain == "binary_sensor"
+        and attrs.get("device_class") in PRESENCE_SENSOR_DEVICE_CLASSES
+        and item.entity_id not in ENTITY_LABELS
+    )
+
+
+def _presence_slice_rank(item: ScoredEntity) -> tuple[bool, float, str]:
+    # Used with sorted(..., reverse=True) to keep the most relevant uncurated
+    # presence sensors: currently-`on` first, then most-recently-changed. The
+    # entity_id is only a deterministic, stable tiebreak (reverse-lexicographic
+    # under reverse=True) when on-state and recency are equal.
+    changed = _parse_ha_timestamp(item.raw_state.get("last_changed")) or 0.0
+    return (str(item.raw_state.get("state", "")).lower() == "on", changed, item.entity_id)
 
 
 def _build_budgeted_summary(scored: list[ScoredEntity]) -> str:
@@ -1434,7 +1469,19 @@ async def push_state_to_ha(
                 or getattr(current_track, "title", None)
                 or now_streaming.get("label", "")
             )
-            media_artist = metadata.get("artist") or getattr(current_track, "artist", None) or station_name
+            # Illusion guard: never let a foreign "Radio X" station name reach the
+            # HA card as a song's artist/title (e.g. a rescue segment built from a
+            # poisoned norm-cache sidecar). Strip it and fall back; our own name is
+            # the right last resort for the artist, but not a competitor's.
+            media_artist = (
+                strip_foreign_station_name(metadata.get("artist"), station_name)
+                or strip_foreign_station_name(getattr(current_track, "artist", None), station_name)
+                or station_name
+            )
+            # Title uses prefix-only mode: strip a rescue display prefix
+            # ("Radio X - Song" -> "Song") but never blank a real song that is
+            # genuinely titled "Radio Ga Ga" / "Radio Free Europe".
+            media_title = strip_foreign_station_name(media_title, station_name, prefix_only=True)
         else:
             media_title = metadata.get("title") or (now_streaming.get("label", "") if now_streaming else "")
             media_artist = station_name

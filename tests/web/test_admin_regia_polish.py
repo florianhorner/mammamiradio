@@ -167,6 +167,21 @@ def test_token_cost_counter_survives_in_costs_group() -> None:
     assert html.index('id="engineRuntime"') < html.index('id="setupGroup"')
 
 
+def test_session_cost_reframe_template_invariants() -> None:
+    """Protected cost display: session estimate copy and render targets survive."""
+    html = _html()
+
+    assert "AI cost · 24h" not in html
+    assert "Session cost" in html
+    for target in ("sidebarSegments", "sidebarCost", "topBarCost", "apiCostEl"):
+        assert target in html
+
+    assert ".toFixed(4)" not in html
+    assert "'<$1'" in html
+    assert "'~$'+Math.round(_rawCost)" in html
+    assert "st.segments_produced>0?st.segments_produced:'—'" in html
+
+
 # ── Archivio filters + sessionStorage (T6) ──────────────────────────
 
 

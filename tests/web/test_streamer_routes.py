@@ -1,4 +1,14 @@
-"""Tests for LiveStreamHub, HTTP routes, and admin auth in streamer.py."""
+"""Tests for LiveStreamHub, HTTP routes, and admin-auth enforcement on routes.
+
+The admin-access tests here (``test_admin_*``) are the request-layer half of the
+admin-access contract; the boot-layer half lives in ``tests/core/test_config.py``.
+The Supervisor-network POST trust and basic-auth CSRF rows are additionally pinned
+in ``tests/web/test_streamer_routes_extended.py``; helper-level unit tests live in
+``tests/web/test_auth.py``. The single source of truth for the contract is the
+"Admin access model" matrix in ``docs/operations.md`` — change a row there and in
+``require_admin_access`` (``mammamiradio/web/auth.py``) together, and update these
+tests to match.
+"""
 
 from __future__ import annotations
 
@@ -14,6 +24,7 @@ import httpx
 import pytest
 from fastapi import FastAPI
 
+from mammamiradio.audio.norm_cache import select_norm_cache_rescue
 from mammamiradio.core.config import load_config
 from mammamiradio.core.models import Segment, SegmentType, StationState, Track
 from mammamiradio.web.listener_requests import router as listener_requests_router
@@ -25,7 +36,6 @@ from mammamiradio.web.streamer import (
     _persist_completed_music,
     _record_provider_verdict,
     _run_provider_verdict,
-    _select_norm_cache_rescue,
     router,
     run_playback_loop,
 )
@@ -38,16 +48,31 @@ TOML_PATH = str(Path(__file__).resolve().parents[2] / "radio.toml")
 # ---------------------------------------------------------------------------
 
 
-def _make_test_app(*, admin_password: str = "", admin_token: str = "") -> FastAPI:
+def _make_test_app(
+    *,
+    admin_password: str = "",
+    admin_token: str = "",
+    is_addon: bool = False,
+    preserve_bind_env: bool = False,
+) -> FastAPI:
     """Build a minimal FastAPI app with the streamer router and populated state."""
     app = FastAPI()
     app.include_router(router)
     app.include_router(listener_requests_router)
 
-    config = load_config(TOML_PATH)
+    with patch.dict(os.environ, {"ADMIN_PASSWORD": "", "ADMIN_TOKEN": ""}):
+        if not preserve_bind_env:
+            os.environ.pop("MAMMAMIRADIO_BIND_HOST", None)
+        if is_addon:
+            os.environ["SUPERVISOR_TOKEN"] = "test-supervisor-token"
+        else:
+            os.environ.pop("SUPERVISOR_TOKEN", None)
+        os.environ.pop("HASSIO_TOKEN", None)
+        config = load_config(TOML_PATH)
     # Override auth settings for test isolation
     config.admin_password = admin_password
     config.admin_token = admin_token
+    config.is_addon = is_addon
 
     state = StationState(
         playlist=[Track(title="Test Song", artist="Test Artist", duration_ms=180_000, spotify_id="t1")],
@@ -92,8 +117,8 @@ def test_select_norm_cache_rescue_avoids_current_song_when_alternatives_exist(tm
         '{"title": "A far l amore comincia tu", "artist": "Raffaella Carra"}'
     )
 
-    with patch("mammamiradio.web.streamer._random.choice", side_effect=lambda items: items[0]) as choice:
-        rescue = _select_norm_cache_rescue(tmp_path, state)
+    with patch("mammamiradio.audio.norm_cache.random.choice", side_effect=lambda items: items[0]) as choice:
+        rescue = select_norm_cache_rescue(tmp_path, state)
 
     assert rescue == alternative
     choice.assert_called_once_with([alternative])
@@ -576,6 +601,60 @@ async def test_run_playback_loop_rescue_reads_sidecar_metadata(tmp_path, caplog)
 
 
 @pytest.mark.asyncio
+async def test_run_playback_loop_rescue_strips_foreign_station_name_from_sidecar(tmp_path, caplog):
+    """Illusion guard: a norm-cache sidecar whose `artist` is a foreign "Radio X"
+    station name (the production incident — a name the LLM invented from home
+    context that poisoned a cached track) must NOT surface as the now-playing
+    artist/label. The rescue path strips it and drops to title-only."""
+    app = _make_test_app()
+    app.state.config.audio.bitrate = 3200
+    app.state.config.cache_dir = tmp_path
+    app.state.stream_hub.subscribe()
+    caplog.set_level(logging.WARNING)
+
+    rescue_path = tmp_path / "norm_rescue.mp3"
+    rescue_path.write_bytes(b"x" * 4096)
+    import json
+
+    (tmp_path / "norm_rescue.mp3.json").write_text(
+        json.dumps({"title": "Be Without U", "artist": "Radio Sabrina Sensatione"})
+    )
+
+    async def _forced_timeout(awaitable, *_args, **_kwargs):
+        awaitable.close()
+        await asyncio.sleep(0)
+        raise TimeoutError
+
+    with (
+        patch("mammamiradio.web.streamer.asyncio.wait_for", new=AsyncMock(side_effect=_forced_timeout)),
+        patch("mammamiradio.scheduling.producer._pick_canned_clip", return_value=None),
+        patch(
+            "mammamiradio.web.streamer._runtime_monotonic",
+            side_effect=[100.0, 130.5, 130.6, 130.7, 130.8, 130.9],
+        ),
+    ):
+        task = asyncio.create_task(run_playback_loop(app))
+        try:
+            deadline = time.monotonic() + 3.0
+            while (
+                app.state.station_state.now_streaming.get("metadata", {}).get("audio_source") != "fallback_norm_cache"
+            ):
+                if time.monotonic() > deadline:
+                    raise AssertionError("playback loop did not rescue from norm cache")
+                await asyncio.sleep(0.01)
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    now_meta = app.state.station_state.now_streaming.get("metadata", {})
+    # The foreign station name must not appear in any listener-facing field.
+    assert "Radio Sabrina Sensatione" not in (now_meta.get("title") or "")
+    assert now_meta.get("artist") in (None, "")  # stripped → no artist key
+    # The real song title survives.
+    assert now_meta.get("title") == "Be Without U", f"got {now_meta.get('title')!r}"
+
+
+@pytest.mark.asyncio
 async def test_run_playback_loop_rescue_handles_malformed_sidecar(tmp_path, caplog):
     """Malformed sidecar JSON must not crash; rescue falls back to humanize (Item 20)."""
     app = _make_test_app()
@@ -671,6 +750,55 @@ async def test_run_playback_loop_timeout_uses_demo_assets_after_30s(tmp_path, ca
     assert now_meta.get("artist") == "Pino Daniele", (
         f"demo-asset rescue must parse 'Artist - Title.mp3' stems; got artist={now_meta.get('artist')!r}"
     )
+
+
+@pytest.mark.asyncio
+async def test_run_playback_loop_demo_asset_strips_foreign_station_name_from_stem(tmp_path, caplog):
+    """Illusion guard on the demo-asset rescue path: a demo file whose stem parses
+    to a foreign "Radio X" artist must not surface that artist on the now-playing
+    label. The artist falls back to "Unknown" instead of airing a competitor."""
+    app = _make_test_app()
+    app.state.config.audio.bitrate = 3200
+    app.state.config.cache_dir = tmp_path
+    app.state.stream_hub.subscribe()
+    caplog.set_level(logging.WARNING)
+
+    demo_dir = tmp_path / "demo" / "music"
+    demo_dir.mkdir(parents=True)
+    rescue_mp3 = demo_dir / "Radio Sabrina Sensatione - Be Without U.mp3"
+    rescue_mp3.write_bytes(b"x" * 4096)
+
+    async def _forced_timeout(awaitable, *_args, **_kwargs):
+        awaitable.close()
+        await asyncio.sleep(0)
+        raise TimeoutError
+
+    with (
+        patch("mammamiradio.web.streamer.asyncio.wait_for", new=AsyncMock(side_effect=_forced_timeout)),
+        patch("mammamiradio.scheduling.producer._pick_canned_clip", return_value=None),
+        patch(
+            "mammamiradio.web.streamer._runtime_monotonic",
+            side_effect=[100.0, 130.5, 130.6, 130.7, 130.8, 130.9],
+        ),
+        patch("mammamiradio.web.streamer._ASSETS_DIR", tmp_path),
+    ):
+        task = asyncio.create_task(run_playback_loop(app))
+        try:
+            deadline = time.monotonic() + 3.0
+            while (
+                app.state.station_state.now_streaming.get("metadata", {}).get("audio_source") != "fallback_demo_asset"
+            ):
+                if time.monotonic() > deadline:
+                    raise AssertionError("playback loop did not rescue from demo assets")
+                await asyncio.sleep(0.01)
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    now_meta = app.state.station_state.now_streaming.get("metadata", {})
+    got_artist = now_meta.get("artist")
+    assert got_artist == "Unknown", f"foreign station artist should fall back; got {got_artist!r}"
+    assert "Radio Sabrina Sensatione" not in (now_meta.get("title") or "")
 
 
 @pytest.mark.asyncio
@@ -1057,6 +1185,104 @@ async def test_status_includes_station_mode():
     assert "station_mode" in body
     assert "id" in body["station_mode"]
     assert "provider_health" in body
+
+
+@pytest.mark.asyncio
+async def test_status_buffered_audio_sec_sums_shadow_durations():
+    """buffered_audio_sec surfaces airtime ahead (seconds), not item count."""
+    app = _make_test_app()
+    # The real queue must match the shadow depth: the one-directional drift guard
+    # (_sync_runtime_state) trims the shadow down to the real queue size before
+    # the sum runs, so an empty real queue would zero it out.
+    for _ in range(3):
+        app.state.queue.put_nowait(Segment(type=SegmentType.MUSIC, path=Path("/tmp/fake.mp3"), metadata={}))
+    app.state.station_state.queued_segments = [
+        {"type": "music", "label": "A", "duration_sec": 180.0},
+        {"type": "banter", "label": "B", "duration_sec": 12.5},
+        {"type": "music", "label": "C"},  # missing duration -> 0, never raises
+    ]
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.get("/status")
+    assert resp.status_code == 200
+    assert resp.json()["buffered_audio_sec"] == 192.5
+
+
+@pytest.mark.asyncio
+async def test_status_buffered_audio_sec_zero_when_queue_empty():
+    """Empty shadow -> 0.0 (UI hides the readout; never a dead '0s' box)."""
+    app = _make_test_app()
+    app.state.station_state.queued_segments = []
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.get("/status")
+    assert resp.status_code == 200
+    assert resp.json()["buffered_audio_sec"] == 0.0
+
+
+@pytest.mark.asyncio
+async def test_status_buffered_audio_sec_respects_drift_guard():
+    """The sum runs on the post-trim shadow: the one-directional drift guard keeps
+    the shadow no longer than the real queue, so only the surviving (oldest)
+    entries count toward buffered airtime.
+    """
+    app = _make_test_app()
+    # One real segment, three shadow entries -> the guard trims the shadow to [:1]
+    # (keeps the oldest) before buffered_audio_sec sums it.
+    app.state.queue.put_nowait(Segment(type=SegmentType.MUSIC, path=Path("/tmp/fake.mp3"), metadata={}))
+    app.state.station_state.queued_segments = [
+        {"type": "music", "label": "A", "duration_sec": 180.0},
+        {"type": "music", "label": "B", "duration_sec": 120.0},
+        {"type": "music", "label": "C", "duration_sec": 60.0},
+    ]
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.get("/status")
+    assert resp.status_code == 200
+    assert resp.json()["buffered_audio_sec"] == 180.0  # only the surviving oldest entry
+    assert app.state.station_state.shadow_queue_corrections == 1
+
+
+@pytest.mark.asyncio
+async def test_status_operator_force_pending_set_only_by_trigger():
+    """The panel's "Triggered" row must reflect OPERATOR action only: /api/trigger
+    sets operator_force_pending, but an internal force (the silence-rescue setting
+    force_next directly) must NOT — otherwise the panel lies during an incident.
+    """
+    app = _make_test_app()
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        # Internal force (simulates the 60s-silence dead-air rescue / stop-skip music force).
+        app.state.station_state.force_next = SegmentType.BANTER
+        body = (await client.get("/status")).json()
+        assert body["force_pending"] == "banter"
+        assert body["operator_force_pending"] is None  # not operator-attributed -> no Triggered row
+
+        # Operator trigger.
+        trig = await client.post("/api/trigger", json={"type": "ad"})
+        assert trig.status_code == 200
+        body = (await client.get("/status")).json()
+        assert body["operator_force_pending"] == "ad"
+
+
+@pytest.mark.asyncio
+async def test_trigger_rejects_second_while_one_pending():
+    """Air-next builds one trigger at a time: a second tap while one is still
+    pending is rejected with a human way-out message (leadership #5), never a
+    silent overwrite of the operator's first pick."""
+    from mammamiradio.core.models import SegmentType
+
+    app = _make_test_app()
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        first = await client.post("/api/trigger", json={"type": "banter"})
+        assert first.json()["ok"] is True
+        second = await client.post("/api/trigger", json={"type": "ad"})
+        body = second.json()
+    assert body["ok"] is False
+    assert "tap again" in body["error"].lower()  # a way out, not a dead end
+    # The operator's first pick is preserved, not overwritten by the rejected tap.
+    assert app.state.station_state.operator_force_pending == SegmentType.BANTER
 
 
 @pytest.mark.asyncio
@@ -1592,6 +1818,68 @@ async def test_admin_panel_with_basic_auth_returns_html():
 
 
 # ---------------------------------------------------------------------------
+# HA add-on mode: LAN trust without admin_token configured
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_admin_lan_access_in_addon_mode_no_creds(monkeypatch):
+    """In HA add-on mode with no credentials, a LAN client can reach /admin."""
+    monkeypatch.setenv("MAMMAMIRADIO_BIND_HOST", "0.0.0.0")
+    monkeypatch.delenv("ADMIN_PASSWORD", raising=False)
+    monkeypatch.delenv("ADMIN_TOKEN", raising=False)
+    app = _make_test_app(is_addon=True, preserve_bind_env=True)
+    assert app.state.config.bind_host == "0.0.0.0"
+    transport = httpx.ASGITransport(app=app, client=("192.168.1.50", 9999))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.get("/admin")
+    assert resp.status_code == 200
+    assert "text/html" in resp.headers["content-type"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("client_ip", ["fd00::50", "fe80::50"])
+async def test_admin_ipv6_lan_access_in_addon_mode_no_creds(client_ip):
+    """In HA add-on mode with no credentials, IPv6 LAN clients can reach /admin."""
+    app = _make_test_app(is_addon=True)
+    transport = httpx.ASGITransport(app=app, client=(client_ip, 9999))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.get("/admin")
+    assert resp.status_code == 200
+    assert "text/html" in resp.headers["content-type"]
+
+
+@pytest.mark.asyncio
+async def test_admin_lan_post_without_csrf_blocked_in_addon_mode():
+    """In HA add-on mode, a LAN POST without CSRF token is still blocked."""
+    app = _make_test_app(is_addon=True)
+    transport = httpx.ASGITransport(app=app, client=("192.168.1.50", 9999))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.post("/api/skip")
+    assert resp.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_admin_lan_with_user_set_token_requires_token():
+    """In HA add-on mode with explicit admin_token, LAN clients must provide the token."""
+    app = _make_test_app(is_addon=True, admin_token="tok-abc-123")
+    transport = httpx.ASGITransport(app=app, client=("192.168.1.50", 9999))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.get("/admin")
+    assert resp.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_admin_public_ip_rejected_in_addon_mode_no_creds():
+    """In HA add-on mode with no credentials, a public IP is still blocked."""
+    app = _make_test_app(is_addon=True)
+    transport = httpx.ASGITransport(app=app, client=("203.0.113.50", 9999))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.get("/admin")
+    assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
 # /live mobile host control room — same auth contract as /admin
 # ---------------------------------------------------------------------------
 
@@ -1879,6 +2167,7 @@ async def test_hot_reload_authenticated_200():
         "mammamiradio.hosts.prompt_world",
         "mammamiradio.hosts.transitions",
         "mammamiradio.hosts.fallbacks",
+        "mammamiradio.hosts.station_name_guard",
         "mammamiradio.hosts.scriptwriter",
     ]
     assert body["stream_status"] == "unaffected"
@@ -2002,6 +2291,7 @@ async def test_hot_reload_reloads_prompt_world_before_scriptwriter():
         "mammamiradio.hosts.prompt_world",
         "mammamiradio.hosts.transitions",
         "mammamiradio.hosts.fallbacks",
+        "mammamiradio.hosts.station_name_guard",
         "mammamiradio.hosts.scriptwriter",
     ], "data submodules must reload before scriptwriter (leaves-first)"
 

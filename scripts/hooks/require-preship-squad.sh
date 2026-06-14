@@ -1,26 +1,58 @@
 #!/usr/bin/env bash
-# PreToolUse(Bash) guard — refuse a bare `gh pr create` / `gh pr merge` unless a
-# pre-ship review squad ran for this code. /ship logs the squad as a review-log
-# entry with skill="review" (Step 9) or "adversarial-review" (Step 11); this guard
-# requires such an entry whose commit is in HEAD's recent (<=2h) history.
+# PreToolUse(Bash) guard — two rules:
+#
+#   1. `gh pr create` requires a pre-ship review squad entry for this code.
+#      /ship logs the squad as a review-log entry with skill="review" (Step 9)
+#      or "adversarial-review" (Step 11); this guard requires such an entry
+#      whose commit is in HEAD's recent (<=2h) history.
+#   2. `gh pr merge` is denied OUTRIGHT — landing goes through
+#      scripts/land-pr.sh (the landing contract in CLAUDE.md "Quality gates").
+#      The wrapper does its own squad check with code-state freshness (entry
+#      commit covers the PR head AND nothing was pushed after the entry), so
+#      soaked PRs land without ritual review re-runs. The wrapper's internal
+#      gh calls run inside its own process and never hit this hook.
+#      Exception: `gh pr merge --disable-auto` (disarming a queued merge) is
+#      a cancel operation and passes.
 #
 # Why this exists: on the god-module refactor, PRs were opened with bare
 # `gh pr create` (skipping /ship), so the mandatory pre-ship squad — including its
 # docs/config-consistency check — never ran, and a doc-sync hard-rule violation
-# reached a green, mergeable PR undetected. CLAUDE.md: "Pre-ship review squad
-# (mandatory in every worktree)."
+# reached a green, mergeable PR undetected. The merge rule was added 2026-06-12
+# after hand-rolled base-integration (a `git reset --soft origin/main` onto a
+# moved main) nearly shipped phantom reverts; land-pr.sh pins the merge to the
+# exact reviewed head (--match-head-commit). CLAUDE.md: "Pre-ship review squad
+# (mandatory in every worktree)" + "Landing contract".
+#
+# KNOWN LIMITATION (observed live 2026-06-12): this guard greps the WHOLE Bash
+# command string, so heredoc/string CONTENT mentioning the guarded commands
+# (e.g. a prompt file being written) trips it too. That false positive is
+# accepted — reword the content or write it via the Write tool. A token-aware
+# parse belongs in permission-guard.py, not here.
 #
 # FAILS OPEN: any internal error (no jq, not a git repo, no gstack, parse failure)
-# exits 0 (allow). A bug in this guard can never block a PR. The ONLY path that
-# blocks is the explicit deny at the end, reached only when a gh-pr-create/merge
-# command has no qualifying squad entry for HEAD.
+# exits 0 (allow). A bug in this guard can never block a PR. The ONLY paths that
+# block are the two explicit denies below.
 
 input="$(cat 2>/dev/null)"
 cmd="$(printf '%s' "$input" | jq -r '.tool_input.command // ""' 2>/dev/null)" || exit 0
 
-# Only guard `gh pr create` / `gh pr merge`. Everything else (incl. `gh pr view`,
-# `gh pr checks`, `gh pr list`) passes untouched.
-printf '%s' "$cmd" | grep -Eq '(^|[;&|[:space:]])gh[[:space:]]+pr[[:space:]]+(create|merge)([[:space:]]|$)' || exit 0
+# Rule 2: deny raw `gh pr merge` (except --disable-auto). Landing = land-pr.sh.
+if printf '%s' "$cmd" | grep -Eq '(^|[;&|[:space:]])gh[[:space:]]+pr[[:space:]]+merge([[:space:]]|$)'; then
+  # --disable-auto must be an argument OF the merge command itself (no shell
+  # operator between them) — `... merge 5 && echo "--disable-auto"` is a
+  # bypass attempt, not a disarm.
+  if printf '%s' "$cmd" | grep -Eq '(^|[;&|[:space:]])gh[[:space:]]+pr[[:space:]]+merge([[:space:]][^;&|]*)?[[:space:]]--disable-auto([[:space:]]|$|[^-A-Za-z])'; then
+    exit 0
+  fi
+  cat <<'JSON'
+{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"Raw gh pr merge is retired. Land via scripts/land-pr.sh <PR#> — it verifies the pre-ship squad against the PR head, updates the branch if behind (CI re-runs), and arms auto-merge pinned to the exact reviewed head (--match-head-commit). Disarming with gh pr merge --disable-auto is allowed. See CLAUDE.md 'Landing contract'."}}
+JSON
+  exit 0
+fi
+
+# Rule 1: only guard `gh pr create` beyond this point. Everything else (incl.
+# `gh pr view`, `gh pr checks`, `gh pr list`) passes untouched.
+printf '%s' "$cmd" | grep -Eq '(^|[;&|[:space:]])gh[[:space:]]+pr[[:space:]]+create([[:space:]]|$)' || exit 0
 
 head="$(git rev-parse --short HEAD 2>/dev/null)" || exit 0
 [ -z "$head" ] && exit 0
@@ -59,6 +91,6 @@ done < <("$reader" 2>/dev/null)
 [ "$ok" = "1" ] && exit 0
 
 cat <<'JSON'
-{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"No pre-ship review squad logged for HEAD. Land via /ship (it runs the mandatory squad, incl. the docs/config-consistency check) instead of a bare gh pr create/merge. CLAUDE.md: 'Pre-ship review squad (mandatory in every worktree).'"}}
+{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"No pre-ship review squad logged for HEAD. Open the PR via /ship (it runs the mandatory squad, incl. the docs/config-consistency check) instead of a bare gh pr create. CLAUDE.md: 'Pre-ship review squad (mandatory in every worktree).'"}}
 JSON
 exit 0

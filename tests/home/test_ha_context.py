@@ -7,12 +7,15 @@ import datetime
 import json
 import time
 from collections import deque
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
 
 from mammamiradio.home.ha_context import (
+    ENTITY_LABELS,
+    MAX_PRESENCE_IN_SLICE,
     HomeContext,
     HomeEvent,
     _apply_registry_area,
@@ -192,6 +195,245 @@ def test_scored_entities_rank_curated_and_budget_prompt_slice():
     summary = _build_budgeted_summary(scored)
     assert "entity_id" not in summary
     assert "La macchina del caffè" in summary
+
+
+def _iso_changed(now: float, age_seconds: int) -> str:
+    return datetime.datetime.fromtimestamp(now - age_seconds, tz=datetime.UTC).isoformat()
+
+
+def _presence_state(
+    name: str,
+    *,
+    state: str = "on",
+    area: str | None = "Kitchen",
+    changed: str | None = None,
+    device_class: str = "occupancy",
+) -> dict:
+    attrs = {"friendly_name": name, "device_class": device_class}
+    if area is not None:
+        attrs["area"] = area
+    data = {"state": state, "attributes": attrs}
+    if changed is not None:
+        data["last_changed"] = changed
+    return data
+
+
+def _uncurated_presence_ids(scored) -> list[str]:
+    # Filter by ENTITY_LABELS membership (not a hard-coded id) so the cap-slot
+    # count stays correct if curated presence sensors are renamed or added.
+    return [
+        entity.entity_id
+        for entity in scored
+        if entity.domain == "binary_sensor"
+        and entity.raw_state.get("attributes", {}).get("device_class") in {"occupancy", "presence", "motion"}
+        and entity.entity_id not in ENTITY_LABELS
+    ]
+
+
+def test_scored_entities_caps_uncurated_presence_and_retains_curated_presence():
+    now = datetime.datetime(2026, 6, 7, 12, 0, tzinfo=datetime.UTC).timestamp()
+    curated_presence = "binary_sensor.8_stockwerk_group_sensor_wohnzimmer_esszimmer_bar"
+    states = {
+        curated_presence: _presence_state(
+            "Wohnzimmer Esszimmer Bar Occupancy",
+            state="off",
+            area="Wohnzimmer",
+            changed=_iso_changed(now, 5_000),
+        ),
+        "weather.forecast_home": {
+            "state": "sunny",
+            "attributes": {"temperature": 22, "temperature_unit": "°C", "area": "Home"},
+        },
+        "media_player.samsung_s95ca_65": {
+            "state": "playing",
+            "attributes": {"media_title": "Volare", "area": "Wohnzimmer"},
+        },
+        "climate.schlafzimmer": {
+            "state": "heat",
+            "attributes": {"current_temperature": 20, "temperature": 21, "area": "Schlafzimmer"},
+        },
+    }
+    for idx, age in enumerate((600, 500, 400, 300, 200), start=1):
+        states[f"binary_sensor.room_{idx}_occupancy"] = _presence_state(
+            f"Room {idx} Occupancy",
+            state="on",
+            area=f"Room {idx}",
+            changed=_iso_changed(now, age),
+        )
+    states["binary_sensor.recent_off_occupancy"] = _presence_state(
+        "Recent Off Occupancy",
+        state="off",
+        area="Hallway",
+        changed=_iso_changed(now, 1),
+    )
+
+    scored = _build_scored_entities(states, event_entity_ids=set(), now=now, limit=10, char_limit=0)
+    ids = [entity.entity_id for entity in scored]
+    uncurated_ids = _uncurated_presence_ids(scored)
+
+    assert len(uncurated_ids) == MAX_PRESENCE_IN_SLICE
+    assert curated_presence in ids
+    assert "binary_sensor.recent_off_occupancy" not in ids
+    assert "binary_sensor.room_1_occupancy" not in ids
+    assert {"weather.forecast_home", "media_player.samsung_s95ca_65", "climate.schlafzimmer"} <= set(ids)
+    assert any("Room 5" in entity.summary_line for entity in scored)
+
+
+def test_scored_entities_empty_presence_leaves_non_presence_summary_unchanged():
+    states = {
+        "weather.forecast_home": {
+            "state": "cloudy",
+            "attributes": {"temperature": 18, "temperature_unit": "°C"},
+        },
+        "media_player.living_room": {
+            "state": "playing",
+            "attributes": {"friendly_name": "Living room speaker", "media_title": "Volare"},
+        },
+    }
+
+    scored = _build_scored_entities(states, event_entity_ids=set(), now=time.time(), limit=5, char_limit=0)
+    summary = _build_budgeted_summary(scored)
+
+    assert _uncurated_presence_ids(scored) == []
+    assert "Meteo" in summary
+    assert "Living room speaker" in summary
+
+
+def test_scored_entities_no_registry_excludes_uncurated_area_less_presence_but_keeps_curated():
+    curated_presence = "binary_sensor.8_stockwerk_group_sensor_wohnzimmer_esszimmer_bar"
+    states = {
+        curated_presence: _presence_state(
+            "Wohnzimmer Esszimmer Bar Occupancy",
+            state="on",
+            area=None,
+        ),
+        "binary_sensor.kitchen_occupancy": _presence_state(
+            "Kitchen Occupancy",
+            state="on",
+            area=None,
+        ),
+        "weather.forecast_home": {
+            "state": "sunny",
+            "attributes": {"temperature": 22, "temperature_unit": "°C"},
+        },
+    }
+
+    scored = _build_scored_entities(states, event_entity_ids=set(), now=time.time(), limit=5, char_limit=0)
+    ids = [entity.entity_id for entity in scored]
+
+    assert curated_presence in ids
+    assert "binary_sensor.kitchen_occupancy" not in ids
+    assert "weather.forecast_home" in ids
+
+
+@pytest.mark.asyncio
+async def test_scored_entities_anti_flood_keeps_relevant_raw_states_intact():
+    all_states = []
+    registry_areas = {}
+    for idx in range(100):
+        entity_id = f"binary_sensor.room_{idx}_occupancy"
+        all_states.append(
+            {
+                "entity_id": entity_id,
+                "state": "on" if idx % 2 == 0 else "off",
+                "attributes": {
+                    "friendly_name": f"Room {idx} Occupancy",
+                    "device_class": "occupancy",
+                },
+                "last_changed": _iso_changed(1_800_000_000.0, idx),
+            }
+        )
+        registry_areas[entity_id] = f"Room {idx}"
+    all_states.append(
+        {
+            "entity_id": "media_player.living_room",
+            "state": "playing",
+            "attributes": {"friendly_name": "Living room speaker", "media_title": "Volare"},
+        }
+    )
+
+    mock_resp = MagicMock()
+    mock_resp.raise_for_status = MagicMock()
+    mock_resp.json.return_value = all_states
+    mock_client = AsyncMock()
+    mock_client.get.return_value = mock_resp
+
+    with (
+        patch("mammamiradio.home.ha_context._get_ha_client", return_value=mock_client),
+        patch(
+            "mammamiradio.home.ha_context._fetch_ha_registry_areas",
+            new_callable=AsyncMock,
+            return_value=registry_areas,
+        ),
+        patch("mammamiradio.home.ha_context.fetch_weather_forecast", new_callable=AsyncMock, return_value=""),
+        patch("mammamiradio.home.ha_context._ha_cache", None),
+    ):
+        result = await fetch_home_context("http://ha:8123", "token", poll_interval=0.0, _cache=None)
+
+    scored_presence = _uncurated_presence_ids(result.scored)
+    relevant_presence = [entity_id for entity_id in result.raw_states if entity_id.startswith("binary_sensor.room_")]
+
+    assert len(scored_presence) == MAX_PRESENCE_IN_SLICE
+    assert "media_player.living_room" in [entity.entity_id for entity in result.scored]
+    assert len(relevant_presence) == 100
+
+
+def test_scored_entities_excludes_area_less_aggregate_presence_from_slice():
+    now = time.time()
+    states = {
+        "binary_sensor.magic_areas_global_presence": _presence_state(
+            "Whole Home Occupancy",
+            state="on",
+            area=None,
+            changed=_iso_changed(now, 1),
+        ),
+        "binary_sensor.kitchen_occupancy": _presence_state(
+            "Kitchen Occupancy",
+            state="on",
+            area="Kitchen",
+            changed=_iso_changed(now, 60),
+        ),
+        "light.kitchen": {"state": "on", "attributes": {"friendly_name": "Kitchen light"}},
+    }
+
+    scored = _build_scored_entities(states, event_entity_ids=set(), now=now, limit=5, char_limit=0)
+    ids = [entity.entity_id for entity in scored]
+
+    assert "binary_sensor.magic_areas_global_presence" not in ids
+    assert "binary_sensor.kitchen_occupancy" in ids
+    assert "light.kitchen" in ids
+
+
+def test_presence_slice_privacy_invariant_keeps_device_trackers_denied():
+    hits: dict[str, int] = {}
+    tracker = {
+        "state": "home",
+        "attributes": {
+            "friendly_name": "Florian iPhone",
+            "latitude": 52.5,
+            "longitude": 13.4,
+        },
+    }
+
+    assert _filter_state("device_tracker.florian_iphone", tracker, hits) is None
+    assert hits["privacy:device_tracker"] == 1
+
+    scored = _build_scored_entities(
+        {
+            "binary_sensor.office_occupancy": _presence_state(
+                "Office Occupancy",
+                state="on",
+                area="Office",
+            )
+        },
+        event_entity_ids=set(),
+        now=time.time(),
+        limit=5,
+        char_limit=0,
+    )
+    summary = _build_budgeted_summary(scored)
+    assert "Florian" not in summary
+    assert "device_tracker" not in summary
 
 
 def test_filter_state_drops_text_helper_domains():
@@ -1631,6 +1873,161 @@ async def test_push_state_to_ha_normal(reset_ha_push_debounce):
     assert "media_position_updated_at" in attributes
     bs_call = next(c for c in mock_client.post.call_args_list if "binary_sensor" in c.args[0])
     assert bs_call.kwargs["json"]["state"] == "on"
+
+
+def _media_player_attrs(mock_client):
+    mp_call = next(c for c in mock_client.post.call_args_list if "media_player" in c.args[0])
+    return mp_call.kwargs["json"]["attributes"]
+
+
+@pytest.mark.asyncio
+async def test_push_state_to_ha_music_keeps_legit_artist(reset_ha_push_debounce):
+    """Scenario 1 — Normal: a real track artist passes through; the guard is a no-op."""
+    mock_client = AsyncMock()
+    mock_client.post.return_value = MagicMock(status_code=200)
+
+    with patch("mammamiradio.home.ha_context._get_ha_client", return_value=mock_client):
+        await push_state_to_ha(
+            ha_url="http://ha.local:8123",
+            ha_token="t",
+            now_streaming={
+                "type": "music",
+                "label": "Have I Wasted",
+                "started": time.time() - 5,
+                "metadata": {"title_only": "Have I Wasted", "artist": "Jonathan Dimmel"},
+            },
+            current_track=None,
+            listeners_active=1,
+            session_stopped=False,
+            station_name="Radio PenthouseFlo FM",
+        )
+
+    attrs = _media_player_attrs(mock_client)
+    assert attrs["media_artist"] == "Jonathan Dimmel"
+    assert attrs["media_title"] == "Have I Wasted"
+
+
+@pytest.mark.asyncio
+async def test_push_state_to_ha_strips_foreign_station_name_from_rescue_metadata(reset_ha_push_debounce):
+    """Scenario 2 — Empty/rescue fallback: a rescue-shaped music segment whose
+    metadata carries a foreign "Radio X" station name (display-form title, no
+    title_only) must never surface that name on the HA card. The artist falls
+    back to our station name; the title keeps just the song."""
+    mock_client = AsyncMock()
+    mock_client.post.return_value = MagicMock(status_code=200)
+
+    with patch("mammamiradio.home.ha_context._get_ha_client", return_value=mock_client):
+        await push_state_to_ha(
+            ha_url="http://ha.local:8123",
+            ha_token="t",
+            now_streaming={
+                "type": "music",
+                "label": "Radio Sabrina Sensatione – Be Without U",
+                "started": time.time() - 5,
+                "metadata": {
+                    "title": "Radio Sabrina Sensatione – Be Without U",
+                    "artist": "Radio Sabrina Sensatione",
+                    "audio_source": "fallback_norm_cache",
+                },
+            },
+            current_track=None,
+            listeners_active=1,
+            session_stopped=False,
+            station_name="Radio PenthouseFlo FM",
+        )
+
+    attrs = _media_player_attrs(mock_client)
+    assert "Radio Sabrina Sensatione" not in attrs["media_artist"]
+    assert "Radio Sabrina Sensatione" not in attrs["media_title"]
+    assert attrs["media_artist"] == "Radio PenthouseFlo FM"  # fell back to our station
+    assert attrs["media_title"] == "Be Without U"  # foreign prefix stripped, song kept
+
+
+@pytest.mark.asyncio
+async def test_push_state_to_ha_post_restart_rescue_artist_falls_back_to_station(reset_ha_push_debounce):
+    """Scenario 3 — Post-restart: the first segment a reconnecting listener gets is
+    a rescue whose current_track ALSO carries a poisoned artist. The fallback chain
+    walks past both foreign values to our station name — never a competitor."""
+    poisoned_track = SimpleNamespace(title="Be Without U", artist="Radio Sabrina Sensatione")
+    mock_client = AsyncMock()
+    mock_client.post.return_value = MagicMock(status_code=200)
+
+    with patch("mammamiradio.home.ha_context._get_ha_client", return_value=mock_client):
+        await push_state_to_ha(
+            ha_url="http://ha.local:8123",
+            ha_token="t",
+            now_streaming={
+                "type": "music",
+                "label": "Be Without U",
+                "started": time.time() - 1,
+                "metadata": {"title_only": "Be Without U", "artist": "Radio Sabrina Sensatione"},
+            },
+            current_track=poisoned_track,
+            listeners_active=2,
+            session_stopped=False,
+            station_name="Radio PenthouseFlo FM",
+        )
+
+    attrs = _media_player_attrs(mock_client)
+    assert attrs["media_artist"] == "Radio PenthouseFlo FM"
+    assert "Sabrina" not in attrs["media_artist"]
+
+
+@pytest.mark.asyncio
+async def test_push_state_to_ha_keeps_real_radio_titled_song_and_band(reset_ha_push_debounce):
+    """Over-match guard, end to end: a song genuinely titled "Radio Ga Ga" by a
+    band whose name contains "Radio" must reach the HA card intact — the scrub
+    must not blank a real title or wipe a real artist."""
+    mock_client = AsyncMock()
+    mock_client.post.return_value = MagicMock(status_code=200)
+
+    with patch("mammamiradio.home.ha_context._get_ha_client", return_value=mock_client):
+        await push_state_to_ha(
+            ha_url="http://ha.local:8123",
+            ha_token="t",
+            now_streaming={
+                "type": "music",
+                "label": "Radio Ga Ga",
+                "started": time.time() - 5,
+                "metadata": {"title_only": "Radio Ga Ga", "artist": "Radiohead"},
+            },
+            current_track=None,
+            listeners_active=1,
+            session_stopped=False,
+            station_name="Radio PenthouseFlo FM",
+        )
+
+    attrs = _media_player_attrs(mock_client)
+    assert attrs["media_title"] == "Radio Ga Ga"  # real song title not blanked
+    assert attrs["media_artist"] == "Radiohead"  # single-token band not stripped
+
+
+@pytest.mark.asyncio
+async def test_push_state_to_ha_non_music_artist_is_always_station_name(reset_ha_push_debounce):
+    """Contract: for non-music segments media_artist is sourced from station_name,
+    never from segment metadata (locks the existing behaviour against regression)."""
+    mock_client = AsyncMock()
+    mock_client.post.return_value = MagicMock(status_code=200)
+
+    with patch("mammamiradio.home.ha_context._get_ha_client", return_value=mock_client):
+        await push_state_to_ha(
+            ha_url="http://ha.local:8123",
+            ha_token="t",
+            now_streaming={
+                "type": "banter",
+                "label": "Marco & Giulia",
+                "started": time.time() - 2,
+                # An (impossible) poisoned metadata artist must be ignored entirely.
+                "metadata": {"title": "Marco & Giulia", "artist": "Radio Sabrina Sensatione"},
+            },
+            current_track=None,
+            listeners_active=1,
+            session_stopped=False,
+            station_name="Radio PenthouseFlo FM",
+        )
+
+    attrs = _media_player_attrs(mock_client)
+    assert attrs["media_artist"] == "Radio PenthouseFlo FM"
 
 
 @pytest.mark.asyncio

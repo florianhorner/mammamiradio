@@ -204,6 +204,7 @@ class HostPersonality:
     personality: PersonalityAxes = field(default_factory=PersonalityAxes)
     engine: str = "edge"  # edge|openai|azure|elevenlabs
     edge_fallback_voice: str = ""  # edge-tts voice used when a cloud TTS engine falls back
+    voice_settings: dict = field(default_factory=dict)  # per-host ElevenLabs overrides, e.g. {"stability": 0.6}
 
 
 @dataclass
@@ -480,8 +481,18 @@ class StationState:
     ha_scored_entities: list[ScoredEntityStatus] = field(default_factory=list)
     ha_denylist_hits: dict[str, int] = field(default_factory=dict)
     ha_catalog_hit_rate: float = 0.0
+    ha_context_last_updated: float = 0.0
+    ha_context_entity_count: int = 0
+    ha_context_char_count: int = 0
+    ha_first_home_context_moment_fired: bool = False
     # Force-trigger: producer will use this type instead of scheduler for the next segment
     force_next: SegmentType | None = None
+    # Operator-attributed pending trigger: set ONLY by the /api/trigger endpoint so the
+    # admin panel can honestly surface "you triggered X" without false-lighting on internal
+    # forces — the 60s-silence dead-air rescue and stop/skip/resume all set force_next too.
+    # Cleared the moment the producer consumes any force, or on stop (bounds staleness to
+    # one production cycle).
+    operator_force_pending: SegmentType | None = None
     # Host interrupt: pre-generated bridge clip to play immediately on interrupt
     interrupt_slot: Path | None = None
     # Whether the current interrupt bridge clip is a generated temp file
@@ -551,6 +562,17 @@ class StationState:
     runtime_sync_events: int = 0
     shadow_queue_corrections: int = 0
     playback_epoch: int = 0
+    # Producer rescue-bridge telemetry (#547 observability). Every time a
+    # drain/resume/idle bridge enqueues rescue audio the station is, briefly,
+    # not the real radio (leadership principle #1). These count how often that
+    # happens so the operator can see "running on rescue" instead of a station
+    # that merely looks healthy because audio is playing. Session-local by
+    # design: a restart clears them. bridge_fires_total is the lifetime count
+    # (survives deque eviction); bridge_events backs the rolling-window health
+    # check. record_bridge_fire appends only AFTER a successful enqueue.
+    bridge_fires_total: int = 0
+    bridge_fires_by_type: dict[str, int] = field(default_factory=lambda: {"drain": 0, "resume": 0, "idle": 0})
+    bridge_events: deque[dict] = field(default_factory=lambda: deque(maxlen=50))
     # Most recent observable state change for the v1 integration contract.
     # Updated by on_stream_segment, /api/stop, and /api/resume so the
     # changed_at field and weak ETag in /api/integrations/v1/now-playing
@@ -590,6 +612,25 @@ class StationState:
             )
         self.gen_phase = self.gen_kind = self.gen_label = ""
         self.gen_started = 0.0
+
+    def record_bridge_fire(self, bridge_type: str, source: str, timestamp: float | None = None) -> None:
+        """Record one producer rescue-bridge fire after a successful enqueue.
+
+        Best-effort observability for #547 — never gates the audio path. Called
+        once per bridge that actually queued rescue audio:
+
+            bridge_type ∈ {"drain", "resume", "idle"}   (which rescue site fired)
+            source      ∈ {"canned", "norm_cache", "emergency_tone"}  (what aired)
+
+        bridge_fires_total is the lifetime session count; bridge_events is a
+        bounded trail (maxlen=50) that the runtime status snapshot windows to
+        decide whether the station is "running on rescue".
+        """
+        ts = timestamp if timestamp is not None else time.time()
+        self.bridge_fires_total += 1
+        if bridge_type in self.bridge_fires_by_type:
+            self.bridge_fires_by_type[bridge_type] += 1
+        self.bridge_events.append({"bridge_type": bridge_type, "source": source, "timestamp": ts})
 
     def update_runtime_provider(
         self,
@@ -663,6 +704,7 @@ class StationState:
         self._listener_request_rl.clear()
         self.pinned_track = None
         self.force_next = None
+        self.operator_force_pending = None
 
     def _log(self, seg_type: str, label: str, metadata: dict | None = None) -> None:
         """Append a bounded producer-side log entry."""

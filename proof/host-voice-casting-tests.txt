@@ -1,0 +1,26 @@
+mammamiradio — feat(voices): per-host ElevenLabs settings + host re-casting (auditioned)
+branch: florianhorner/feat/host-voice-casting
+base: origin/main @ 7151e8d7
+
+Full test suite: 2613 passed, 2 skipped, 8 deselected (addon radio.toml sync test green after
+syncing the root copy -> ha-addon/mammamiradio/radio.toml)
+
+Plumbing:
+  HostPersonality gains voice_settings: dict (core/models.py)
+  config parses per-host voice_settings (core/config.py)
+  synthesize() threads voice_settings -> synthesize_elevenlabs; synthesize_dialogue passes host.voice_settings (audio/tts.py)
+  Production callers unaffected when a host has no voice_settings (defaults to {} -> house tuning)
+
+Casting (Florian auditioned on his Sonos via scripts/audition_tts_voices.py):
+  Marco  : voice_settings = { stability = 0.6 }   tighter diction, fixes the mumble (A/B'd 0.42 vs 0.6)
+  Giulia : voice fQmr8dTaOQq116mo2X7F -> fNmw8sukfGuvWVOp33Ge   the actual old-woman voice
+  Palmira (ad, role=seductress): voice shimmer/openai -> fQmr8dTaOQq116mo2X7F/elevenlabs
+           (the prior Giulia voice repurposed for an ad role instead of discarded)
+  ha-addon/mammamiradio/radio.toml kept byte-for-byte in sync (test_addon_radio_toml_matches_root)
+
+New tests:
+  test_load_config_parses_per_host_voice_settings  (Marco {stability:0.6}; Giulia {})
+  test_synthesize_threads_voice_settings_to_elevenlabs  (override reaches the ElevenLabs payload)
+  test_both_hosts_route_to_elevenlabs still green (Marco + Giulia stay on ElevenLabs)
+
+Lint / format / typecheck: ruff clean, format clean, mypy success.

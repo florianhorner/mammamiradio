@@ -2,7 +2,17 @@
 
 ## Unreleased
 
+### Fixed
+
+- **The connected-home hello now retries if the host script falls back.** If AI banter generation fails and the station uses its stock banter instead, the first connected-home moment stays queued for a later real host break instead of being marked done. Homes with safe labels but no room metadata can still qualify for the hello. A running joke that didn't make it to air for the same reason keeps its turn too, instead of quietly going on cooldown.
+
+- **Direct `/admin` access from your home network now works.** If you open `http://<pi-ip>:8000/admin` in a browser on your local Wi-Fi, the admin panel loads without needing a token. If you configured a custom `admin_token` in the add-on options, that token is still enforced. From outside your home network, `/admin` returns 403.
+
 ### Added
+
+- **The Engine Room tells you when the station is running on rescue.** A new Queue rescue row shows how often the station has to bridge a gap with cached, canned, or stand-in audio when fresh content isn't ready in time. Now and then is normal; if it starts happening repeatedly (three times in fifteen minutes) the row flips to a warning, so you can tell a station that's genuinely live from one that only sounds live because something keeps filling the gaps. It also shows the last bridge and how long the queue has been empty right now.
+
+- **The host gives your connected home a warm first hello.** The first time the station has a clear read on your Home Assistant home, the host slips one or two real details about it into a break — naturally, like a DJ who just noticed where you are, not by reading off a sensor list. It lands once, then the host settles back into the usual mix. The Engine Room shows how much home context the host is working with and whether that first moment has aired yet.
 
 - **Admin playlist and search pagination** — Large rotations no longer over-render in the Producer Desk. Status, playlist, and search APIs expose bounded windows with load-more metadata, while artwork from Apple charts, web search results, and listener-request downloads is preserved through queueing.
 
@@ -75,6 +85,12 @@
 - **Sports flashes are clearer and less shouty** — Sports news now uses a steadier host selection path, asks for informed radio-desk updates instead of maximum-excitement commentary, and no longer adds a dedicated sports TTS speed/pitch spike.
 
 ### Fixed
+
+- **The Admin Token help text now says what the token actually does.** The Admin Token field used to claim it was needed for the Home Assistant media player — it isn't; the media player works whether or not you set it. The description now explains the token covers the admin panel and any automations that call the station directly, so a blank token no longer reads as riskier than it is.
+
+- **The hosts sound right now.** Marco reads clearly instead of mumbling, and Giulia sounds like the 80-year-old Nonna she is written as instead of a thirty-something. Each host's voice can now be dialed in independently in the station config (a per-host `voice_settings`), so tuning one host never disturbs the other.
+
+- **Admin load-more state stays accurate after playlist edits.** The Producer Desk now invalidates cached playlist tails when the rotation changes, hides the load-more button once all loaded rows reach the total, resets load-more buttons after network errors, and skips repeated yt-dlp lookups after web search results are exhausted.
 
 - **Festival Mode no longer leaves ghost tracks in "Up Next".** Switching Festival Mode on now clears the upcoming list at the same instant it clears the queued audio, so the panel always matches what is about to play. Every queue-clearing action now runs through one path, so the list and the audio can't drift apart again.
 

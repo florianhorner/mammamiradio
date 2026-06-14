@@ -90,6 +90,7 @@ name = "Marco"
 voice = "o4b57JYAECRMJyCEXyIE"
 engine = "elevenlabs"
 edge_fallback_voice = "it-IT-GiuseppeMultilingualNeural"
+voice_settings = { stability = 0.6 }  # tighter diction — fixes Marco's mumble (auditioned 0.42 vs 0.6)
 style = "manic energy, steamrolls every conversation, interrupts people mid-thought, says things he shouldn't on air, conspiracy theories about Italian food, gets way too personal about listeners' lives, drops obscure cinema references nobody asked for, once got suspended for a week (he's proud of it), massive ego, catastrophically bad takes delivered with total conviction, never admits he's wrong — doubles down harder when cornered, genuinely believes he is the reason people tune in"
 [hosts.personality]
 energy = 100
@@ -100,7 +101,7 @@ nostalgia = 75
 
 [[hosts]]
 name = "Giulia"
-voice = "fQmr8dTaOQq116mo2X7F"
+voice = "fNmw8sukfGuvWVOp33Ge"
 engine = "elevenlabs"
 edge_fallback_voice = "it-IT-IsabellaNeural"
 style = "razor-sharp sarcasm, cuts Marco off whenever he deserves it, openly judges the playlist, delivers devastating one-liners with zero emotion, pretends she's too good for this station but clearly loves it, will burn any caller who says something stupid, openly contemptuous of Marco's intelligence, delivers devastation with the warmth of a tax audit, treats him like a slow child she is legally obligated to work with"
@@ -115,6 +116,11 @@ nostalgia = 30
 sample_rate = 48000
 channels = 2
 bitrate = 192
+# Integrated-LUFS targets for the loudness-reconciliation pass: every finished
+# segment is measured and nudged to one level so music, hosts, beds and ads no
+# longer jump in volume. Ads sit 1 LU hotter so they still pop.
+lufs_target = -16.0
+ad_lufs_target = -15.0
 
 # ── Dynamic LLM routing ───────────────────────────────────────────────────
 # Script generation never names a model in code. A task asks for a ROLE; the
@@ -516,8 +522,8 @@ role = "hammer"
 
 [[ads.voices]]
 name = "Palmira"
-voice = "shimmer"
-engine = "openai"
+voice = "fQmr8dTaOQq116mo2X7F"
+engine = "elevenlabs"
 edge_fallback_voice = "it-IT-IsabellaNeural"
 style = "ASMR whisperer, unsettlingly intimate, makes toothpaste sound sensual"
 role = "seductress"

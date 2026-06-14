@@ -996,6 +996,17 @@ class TestRuntimeProviderTransparencyUI:
             assert "retry_in_seconds" in provider
             assert "action_guidance" in provider
 
+        # #547: producer rescue-bridge health rides along for the Queue rescue card.
+        bridge_health = runtime_status["bridge_health"]
+        assert isinstance(bridge_health["session_count"], int)
+        assert isinstance(bridge_health["window_count"], int)
+        assert isinstance(bridge_health["unhealthy"], bool)
+        assert set(bridge_health["by_type"]) == {"drain", "resume", "idle"}
+        assert bridge_health["threshold"] >= 1
+        assert bridge_health["window_seconds"] > 0
+        assert "last_fire" in bridge_health
+        assert "queue_empty_elapsed_s" in bridge_health
+
     def test_status_helpers_emit_accessible_state_labels(self):
         html = ADMIN_HTML.read_text()
 

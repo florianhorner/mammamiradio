@@ -34,7 +34,7 @@ The station walks a fallback chain at boot: charts (when `MAMMAMIRADIO_ALLOW_YTD
 - Check that `MAMMAMIRADIO_ALLOW_YTDLP=true` is set (it is by default in HA addon and Conductor)
 - A quality gate circuit breaker lets tracks through after 3 consecutive rejections to prevent stream starvation
 
-When listeners are connected, `/readyz` now also flips back to `503 starting` if playback has been silent for more than 30 seconds. The playback loop first tries a canned clip, then the oldest `cache/norm_*.mp3`, then, if `mammamiradio/assets/demo/music/` has any bundled MP3s, a random pick from that directory (the **WS2 demo-asset rescue** — prevents dead air on fresh installs and empty-cache container starts, a no-op when the directory is empty), and after 60 seconds without any bridge asset it requests a forced banter segment from the producer so the queue can recover without a restart. If the station has been explicitly stopped (Stop button on the admin panel), `/readyz` returns `503 stopped` regardless of queue depth so Home Assistant Supervisor and external load balancers do not route fresh listeners to a deliberately paused station. Reconnecting a listener auto-resumes the session and clears `session_stopped` before audio begins.
+When listeners are connected, `/readyz` now also flips back to `503 starting` if playback has been silent for more than 30 seconds. The playback loop first tries a canned clip, then a recent-aware random `cache/norm_*.mp3` pick that avoids the current/recent song when alternatives exist, then, if `mammamiradio/assets/demo/music/` has any bundled MP3s, a random pick from that directory (the **built-in demo track rescue** — prevents dead air on fresh installs and empty-cache container starts, a no-op when the directory is empty), and after 60 seconds without any bridge asset it requests a forced banter segment from the producer so the queue can recover without a restart. If the station has been explicitly stopped (Stop button on the admin panel), `/readyz` returns `503 stopped` regardless of queue depth so Home Assistant Supervisor and external load balancers do not route fresh listeners to a deliberately paused station. Reconnecting a listener auto-resumes the session and clears `session_stopped` before audio begins.
 
 The app persists the last selected source to `cache/playlist_source.json` and restores it on restart. If a persisted source fails to load, startup walks the standard fallback chain (charts → Jamendo → local `music/` → bundled demo → `DEMO_TRACKS`). Operators with MP3s in `music/` will hit tier 4 even when yt-dlp is off and Jamendo isn't configured — yt-dlp is only required to download charts, not to play files already on disk.
 
@@ -95,7 +95,7 @@ Check:
 
 Each OpenAI host can define `edge_fallback_voice` in `radio.toml` so they fall back to their own Edge voice rather than a stranger's.
 
-To inspect script-side OpenAI behavior (banter/ads/news/transitions), grep logs for `openai_script_call` — every OpenAI script call emits a structured record with `model`, `caller`, `latency_ms`, `prompt_tokens`, `completion_tokens`, `json_ok`, and `fallback_reason` (one of `anthropic_absent`, `anthropic_auth_blocked`, `anthropic_auth_failed`, `anthropic_nonretryable`, `anthropic_usage_limit`, `anthropic_usage_limit_blocked`, `anthropic_exception`). Useful for comparing models via `OPENAI_SCRIPT_MODEL` or debugging fallback latency.
+To inspect script-side OpenAI behavior (banter/ads/news/transitions), grep logs for `openai_script_call` — every OpenAI script call emits a structured record with `model`, `caller`, `latency_ms`, `prompt_tokens`, `completion_tokens`, `json_ok`, and `fallback_reason` (one of `anthropic_absent`, `anthropic_auth_blocked`, `anthropic_auth_failed`, `anthropic_max_tokens_truncated`, `anthropic_nonretryable`, `anthropic_usage_limit`, `anthropic_usage_limit_blocked`, `anthropic_exception`). `anthropic_max_tokens_truncated` means the Anthropic response was cut off at the token budget (partial or empty JSON) and the call fell back to OpenAI — grep for it to measure how often the host writer runs long. Useful for comparing models via `OPENAI_SCRIPT_MODEL` or debugging fallback latency.
 
 Voice validation now runs at config load, not at synthesis time:
 
@@ -114,15 +114,15 @@ Check:
 
 Even when configured correctly, HA references are opportunistic. The prompt only encourages one casual reference when it fits.
 
-## Remote admin access does not work
+## Admin access
 
-The app rejects non-local binds without auth.
+**HA add-on:** Direct LAN access to `http://<ha-ip>:8000/admin` works without any token as long as you have not configured a custom `admin_token` in the add-on options. Port 8000 serves the listener page (`/`), the admin panel (`/admin`), and the audio stream (`/stream`). From outside your home network, `/admin` returns 403.
 
-Rules:
+**Standalone mode:** The app rejects non-local binds without credentials configured. Rules:
 
 - if `ADMIN_PASSWORD` is set, admin routes require HTTP Basic auth everywhere
 - if only `ADMIN_TOKEN` is set, non-local admin access requires `X-Radio-Admin-Token` header
-- if neither is set, admin routes only work from localhost
+- if neither is set, admin routes only work from localhost (or via HA add-on LAN trust)
 
 Health probes are the exception. `/healthz` and `/readyz` stay unauthenticated so Docker, Home Assistant, and external monitors can poll them without admin credentials.
 
@@ -139,6 +139,37 @@ ffmpeg -version
 ```
 
 The app logs the tail of stderr from failing ffmpeg commands, so the logs usually tell you which sub-step died.
+
+## The music runs thin or a segment takes too long to build
+
+If the queue is draining faster than segments are produced (you may see a
+`Queue empty during active playback` bridge in the logs), find out which step is
+slow before changing anything.
+
+Every segment the producer builds logs its total build time at `INFO` (this is
+wall-clock from pick to queued, so for banter/ads it also includes the script
+and Home Assistant lookups, not just the audio work):
+
+```text
+Queued music in 79.2s (queue size: 2)
+```
+
+For the precise per-step audio attribution, raise the log level to `DEBUG`
+(`LOG_LEVEL=DEBUG`)
+for one session. Each ffmpeg stage then logs its own wall time, labelled by what
+it was doing, so you can attribute the seconds:
+
+```text
+ffmpeg stage measure_lufs youtube_x.mp3: 3.10s
+ffmpeg stage normalize youtube_x.mp3: 41.80s
+ffmpeg stage LUFS reconcile (-4.2 dB) music_x.mp3: 31.40s
+ffmpeg stage mix voice with talk bed: 34.90s
+```
+
+On the Pi these are single-threaded full-file re-encodes, so a music track that
+needs both a normalize pass and a loudness-reconcile re-encode is the usual
+culprit. A normalization cache hit on an already-reconciled file skips both and
+should log near-instant stages.
 
 ## Tests fail during collection
 

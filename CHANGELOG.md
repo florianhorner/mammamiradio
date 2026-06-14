@@ -6,7 +6,29 @@ The current version source of truth is `pyproject.toml`.
 
 ## [Unreleased]
 
+### Fixed
+
+- **The Home Assistant media card never shows the wrong station name.** A radio-station name that the hosts may have improvised in conversation could occasionally slip into the now-playing artist line on your Home Assistant media player — showing a station that isn't yours. The now-playing details (and the listener page's now-playing line) are now scrubbed so only your real station name ever appears; a song's actual artist and title are left untouched. Improvised station names are also kept out of the spoken ad and news breaks, matching the existing guard on host chatter.
+
+- **The connected-home hello now retries if the host script falls back.** If AI banter generation fails and the station uses its stock banter instead, the first connected-home moment stays queued for a later real host break instead of being marked done. Homes with safe labels but no room metadata can still qualify for the hello. A running joke that didn't make it to air for the same reason keeps its turn too, instead of quietly going on cooldown.
+
+- **Direct `/admin` access from your home network now works.** If you open `http://<pi-ip>:8000/admin` in a browser on your local Wi-Fi, the admin panel loads without needing a token. Port 8000 serves the listener page (`/`), the admin panel (`/admin`), and the audio stream (`/stream`) — no HA sidebar required for any of them. Configuring a custom `admin_token` in the add-on options still enforces that token even from the LAN.
+
 ### Added
+
+- **The Engine Room tells you when the station is running on rescue.** A new Queue rescue row shows how often the station has to bridge a gap with cached, canned, or stand-in audio when fresh content isn't ready in time. Now and then is normal; if it starts happening repeatedly (three times in fifteen minutes) the row flips to a warning, so you can tell a station that's genuinely live from one that only sounds live because something keeps filling the gaps. It also shows the last bridge and how long the queue has been empty right now.
+
+- **The host gives your connected home a warm first hello.** The first time the station has a clear read on your Home Assistant home, the host slips one or two real details about it into a break — naturally, like a DJ who just noticed where you are, not by reading off a sensor list. It lands once, then the host settles back into the usual mix. The Engine Room shows how much home context the host is working with and whether that first moment has aired yet.
+
+- **PR landing is now mechanized and pinned to the reviewed code.** Branch protection requires branches to be up to date before merging, and maintainer merges go through `scripts/land-pr.sh`, which updates the branch when needed (CI re-runs on the integrated state) and arms GitHub auto-merge locked to the exact head commit that was verified — a later push cancels the landing instead of shipping unseen changes. Dependabot updates that fall behind are automatically asked to rebase, so weekly dependency batches keep landing hands-free. A read-only settings tripwire (`scripts/check-merge-gate.sh`, part of `make pre-release`) catches drift in the underlying repository settings.
+
+- **The station logs how long each segment took to build.** Every segment the producer builds now records its total prep time on one line, and with logs turned up to debug you get a per-step breakdown of the audio work (normalize, loudness, mixing) that pinpoints the slow step. When the music ever runs thin, you can see exactly where the time went instead of guessing.
+
+- **Shuffle the rotation backlog in one click.** The Shuffle button in the Rotazione panel instantly randomises the entire track order — useful when you've just enriched the pool with a new era or source and want the mix to start fresh instead of front-loading the new arrivals.
+
+- **Trigger a host break and it airs next, not minutes later.** Hit Trigger for a banter, ad, or news flash and the station now slots it in right after the current song — instead of behind everything already queued — so the moment you want lands on air at the next break. Tap once: if you tap again while the first pick is still cueing, you get a gentle "give the tape decks a few seconds" rather than two stacking up.
+
+- **Volume no longer jumps between songs, hosts, and ads.** Every segment is now measured and nudged to one consistent loudness before it airs, so a quiet song isn't buried and an ad doesn't blast — the station holds a steady level end to end. Ads still sit a touch hotter so they pop, just without the old jarring jump. Tunable in `radio.toml` (`[audio]` → `lufs_target`, `ad_lufs_target`).
 
 - **Audition host voices by clarity, not just identity.** The voice-audition harness (`scripts/audition_tts_voices.py`) can now sweep ElevenLabs stability settings — `--elevenlabs-stability 0.42 0.6 0.75` renders the same lines at each setting so you can A/B a host's diction (low stability mumbles, higher tightens it) before committing to a voice.
 
@@ -35,6 +57,8 @@ The current version source of truth is `pyproject.toml`.
   honest rather than a flat guess.
 
 - **The admin queue now shows the studio working in the background.** Above the Scaletta, an "In produzione" feed reveals what the hosts are creating right now — writing an ad, voicing a banter, finding the next track — with a live timer and a short trail of what just finished. The next-up segment is highlighted with the studio gold accent and a one-line detail (artist, hosts, or brand). The operator no longer stares at a static list wondering whether anything is happening.
+
+- **Triggers land visibly, and you can see how much audio is ready.** Hit Trigger for a banter, ad, or news flash and the "In produzione" feed instantly confirms it's accepted and building next — a tap never looks like it did nothing. And next to the Scaletta, a new readout shows how many minutes of audio are rendered and ready to air (airtime, not just a track count), so you always know how much runway is buffered ahead.
 
 - **Share a whole moment, not just thirty seconds.** The Share button now always
   copies the clip link to your clipboard (alongside the native share sheet), so
@@ -104,6 +128,16 @@ The current version source of truth is `pyproject.toml`.
 
 ### Fixed
 
+- **The Admin Token help text now says what the token actually does.** The add-on's Admin Token field used to claim it was needed for the Home Assistant media player — it isn't; the media player works whether or not you set it. The description now explains the token covers the admin panel and any automations that call the station directly, so a blank token no longer reads as riskier than it is.
+
+- **The quieter songs come up to level, including ones the station prepared earlier.** A song the station had readied before it learned to hold a steady volume used to come on a little softer than the rest. Now the first time it plays after this update it's brought up to match everything else — and it stays there for every play after, so the songs you hear most don't wait on it twice.
+
+- **A cut-off host line is now recognized for what it is.** When the AI host writer runs long and gets cut off mid-sentence, the station now names that as a length cutoff — in the log and in the operator status message ("ran long and got cut off") — instead of a generic error, and still switches to the backup voice so banter keeps flowing. The cause is now measurable rather than hidden, so the underlying length can be tuned with real numbers.
+
+- **The hosts sound right now.** Marco reads clearly instead of mumbling, and Giulia sounds like the 80-year-old Nonna she is written as instead of a thirty-something. Each host's voice can now be dialed in independently in the station config (a per-host `voice_settings`), so tuning one host never disturbs the other.
+
+- **Admin load-more state stays accurate after playlist edits.** The Producer Desk now invalidates cached playlist tails when the rotation changes, hides the load-more button once all loaded rows reach the total, resets load-more buttons after network errors, and skips repeated yt-dlp lookups after web search results are exhausted.
+
 - **Festival Mode no longer leaves ghost tracks in "Up Next".** Switching Festival Mode on now clears the upcoming list at the same instant it clears the queued audio, so the panel always matches what is about to play. Every queue-clearing action now runs through one path, so the list and the audio can't drift apart again.
 
 - **Home Assistant updates now say why they fail, and shrug off a brief hiccup.** When the station can't send its now-playing status to Home Assistant, the add-on log names the real reason instead of an empty line, and the station quietly retries once after a short network blip. Listeners never notice; an operator reading the log finally gets a straight answer.
@@ -138,11 +172,21 @@ The current version source of truth is `pyproject.toml`.
 
 - **The Edge add-on now auto-updates after every add-on change.** The automated edge-channel version bump previously could not land on the protected branch, so Home Assistant never showed an Edge "Update" and the add-on build reported a failure on every change. The bump now goes through the normal checks, so the Edge channel tracks the latest build again.
 
+- **Producer norm-cache bridges stop replaying the same cached song by filename.**
+  Resume, idle wake-up, and active queue-drain bridges now share the recent-aware
+  cache selector used by playback rescue, so they avoid the current/recent track
+  and randomize among alternatives while preserving instant audio.
+- **Cached music hits keep loudness reconciliation.** Pre-normalized music that
+  already exists in `cache/norm_*.mp3` still re-earns the LUFS marker on first
+  playback, so older cached tracks do not air at stale levels.
+
 ### Security
 
 - **Admin endpoints no longer auto-trust private networks when admin credentials are configured.** Previously a client on a LAN or Tailscale address was trusted for admin access even when `ADMIN_PASSWORD` or `ADMIN_TOKEN` was set, so a configured credential could be silently bypassed from any private-network browser. Now, when a credential is configured, all non-loopback admin traffic must present it. Credential-less private-network deployments are unchanged (still trusted, still CSRF-guarded on writes). Standalone runs that bind to a non-loopback host (including an empty bind host, which listens on all interfaces) now require `ADMIN_PASSWORD` or `ADMIN_TOKEN` at startup. Browser admin access requires `ADMIN_PASSWORD`; `ADMIN_TOKEN` is a header-only API credential a browser cannot send on navigation.
 
 ### Changed
+
+- **The admin cost counter now reads as an honest estimate, and leads with what you made.** The Engine Room and sidebar used to headline a four-decimal dollar figure labelled "24h" — but it never reset on a 24-hour clock (it counted from the last restart) and it left voice synthesis out entirely. Now the sidebar leads with **segments produced this session** (the real count of host bits, ads, and station moments the engine made), with cost as a quiet second line shown as a rounded `~$N est`. The estimate now folds in a blended text-to-speech cost alongside the AI writing cost, and the window is labelled "Session" because that is what it measures. Cent-accuracy across shifting model and voice prices isn't a real target, so the number is honestly an estimate rather than a falsely precise one.
 
 - **The station now defaults to English-first.** New installs render English utility copy on the listener page (with Italian station-feel words and headlines intact), and the AI hosts code-switch — English narrative with Italian flavor. The admin control room stays English-first. Flip on **Super Italian Mode** (admin Engine Room toggle, or `MAMMAMIRADIO_SUPER_ITALIAN=true`) for the fully Italian-first listener and host experience.
 
@@ -164,6 +208,22 @@ The current version source of truth is `pyproject.toml`.
 - **Undo for destructive admin actions** — purging the queue or removing a
   segment shows a 5-second Undo toast and only commits when the window closes, so
   a mis-tap on a running station is recoverable.
+
+- **Hosts stay tuned to your home without oversharing it.** When the station
+  references what's happening at home, it now draws on only a handful of the most
+  relevant presence signals — the spaces actually in use, most-recently-active
+  first — instead of every motion and occupancy sensor in the house. Sensors
+  you've explicitly named always come through; unlabeled or location-less ones are
+  left out, so the hosts stay grounded in the moment while less of your home's raw
+  sensor detail reaches the writers.
+
+### Refactored
+
+- **Admin access checks extracted into their own module** — `mammamiradio/web/auth.py`
+  now owns the request-layer admin authorization (credentials, admin token, CSRF
+  enforcement, and trusted-network classification), previously embedded in
+  `streamer.py`. No behavior change: every admin route enforces exactly the same
+  rules, pinned by the same tests.
 
 ## [2.13.0]
 

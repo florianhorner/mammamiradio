@@ -1420,6 +1420,18 @@ body[data-stopped="true"] .a-station-card .dot.on { animation-play-state: paused
   color: var(--sun);
   font-weight: 600;
 }
+/* Session output: segments is the headline (larger, cream), cost is the
+   secondary muted line. Two separate single-pair rows — never a collapsed row. */
+.on-air-output-line b#sidebarSegments {
+  font-size: 18px;
+  color: var(--cream);
+  line-height: 1.1;
+}
+.on-air-cost-line b#sidebarCost {
+  font-size: 11px;
+  color: var(--muted);
+  font-weight: 500;
+}
 .on-air-buttons {
   display: flex;
   gap: 8px;
@@ -1708,8 +1720,11 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
             <span class="label on" id="onAirBadge">In onda</span>
             <span id="stationSignal">Live signal</span>
           </div>
+          <div class="on-air-cost-line on-air-output-line">
+            <span class="lbl">Produced · Session</span><b id="sidebarSegments">—</b>
+          </div>
           <div class="on-air-cost-line">
-            <span class="lbl">AI cost · 24h</span><b id="sidebarCost">—</b>
+            <span class="lbl">Session cost</span><b id="sidebarCost">—</b>
           </div>
           <div class="on-air-buttons">
             <button type="button" class="btn-icon" title="Next track" onclick="doSkip(this)">
@@ -1741,7 +1756,7 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
       </div>
       <span class="mode-chip" id="modeChip" style="display:none" aria-live="polite"></span>
       <div class="topbar-cost">
-        <span class="lbl">AI cost · 24h</span>
+        <span class="lbl">Session cost</span>
         <b id="topBarCost">—</b>
       </div>
     </div>
@@ -1755,6 +1770,7 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
         </div>
         <div class="programme-toolbar">
           <span class="filter-count" id="programmeCount"></span>
+          <span class="filter-count" id="bufferedReady" title="Audio rendered and ready to air"></span>
           <div class="filter-pills">
             <button type="button" class="filter-pill active" data-filter="all" onclick="setProgrammeFilter('all',this)">All</button>
             <button type="button" class="filter-pill" data-filter="music" onclick="setProgrammeFilter('music',this)">Music</button>
@@ -1793,6 +1809,7 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
           <button type="button" class="btn btn-chip" onclick="enrichPlaylistSource('classic_70s',this)">Anni '70</button>
           <button type="button" class="btn btn-chip" onclick="enrichPlaylistSource('classic_80s',this)">Anni '80</button>
           <button type="button" class="btn btn-chip" onclick="enrichPlaylistSource('classic_90s',this)">Anni '90</button>
+          <button type="button" class="btn btn-chip" onclick="shufflePlaylist(this)" title="Shuffle rotation"><svg width="12" height="12" style="vertical-align:-1px"><use href="#ic-shuffle"/></svg> Shuffle</button>
         </div>
         <div class="rotation-sort">order: current rotation</div>
       </div>
@@ -2538,12 +2555,38 @@ function renderProduction(st){
     const el=p.current.elapsed_sec?`<span class="prod-elapsed">${p.current.elapsed_sec}s</span>`:'';
     rows.push(`<div class="prod-entry">${statusInline('working','',p.current.label)}${badge}<span class="prod-label">${esc(p.current.label)}</span>${el}</div>`);
   }
+  // Operator hit Trigger: acknowledge the accepted-but-not-yet-building moment
+  // so the panel never looks like the click did nothing. Reads operator_force_pending
+  // (set ONLY by /api/trigger), NOT force_pending — so internal forces (the
+  // 60s-silence dead-air rescue, stop/skip/resume) never false-light this row
+  // during an incident. It clears the instant the producer starts building it;
+  // the guard suppresses a duplicate row while that hand-off to "current" settles.
+  const fp=st&&st.operator_force_pending;
+  if(fp&&!(p.current&&segmentTypeKey(p.current.kind)===segmentTypeKey(fp))){
+    const badge=segmentInline(segmentTypeKey(fp));
+    rows.push(`<div class="prod-entry">${statusInline('working','',segmentText(segmentTypeKey(fp)))}${badge}<span class="prod-label">Triggered — building next</span></div>`);
+  }
   (p.recent||[]).forEach(r=>{
     const badge=segmentInline(segmentTypeKey(r.kind||'music'));
     rows.push(`<div class="prod-entry recent">${statusInline(r.ok?'ready':'blocked','',r.label)}${badge}<span class="prod-label">${esc(r.label)}</span></div>`);
   });
   if(rows.length){feed.innerHTML=rows.join('');wrap.style.display='';}
   else{feed.innerHTML='';wrap.style.display='none';}
+}
+
+// Honest airtime-ahead readout: SECONDS of buffered audio, not item count
+// (3 short banters are not 3 songs of runway). Updated every poll so it never
+// goes stale; blank when nothing is queued — never a dead "0s" box.
+function updateBufferedReady(st){
+  const el=document.getElementById('bufferedReady');
+  if(!el)return;
+  const sec=st&&typeof st.buffered_audio_sec==='number'?st.buffered_audio_sec:0;
+  if(!(sec>0)){el.textContent='';return;}
+  // Round to whole seconds BEFORE splitting so a value like 119.6s renders
+  // "~2m00s", never an impossible "~1m60s" (no minute-carry if you round m and s
+  // independently).
+  const total=Math.round(sec),m=Math.floor(total/60),s=total%60;
+  el.textContent='· ~'+(m>0?m+'m'+(s<10?'0':'')+s+'s':s+'s')+' ready';
 }
 
 function renderProgramme(st){
@@ -2733,11 +2776,28 @@ function updateRuntimeStatus(st){
     const eventLine=lastFailover
       ? `${lastFailover.provider_class||'provider'}: ${lastFailover.from_provider||'—'} → ${lastFailover.to_provider||'—'} · ${lastFailover.reason||''} · ${fmtRuntimeTs(lastFailover.timestamp)}`
       : (rs.no_failover_message||'No failover in current session.');
+    // Queue rescue (#547): how often the producer is bridging a starved queue
+    // with cached/canned/tone audio. Healthy = the real station; warning =
+    // "running on rescue" even though audio is technically playing.
+    const bh=rs.bridge_health;
+    let rescueRow;
+    if(!bh){
+      rescueRow=statusRow('Queue rescue','idle','—','No rescue telemetry yet');
+    }else{
+      const rescueState=bh.unhealthy?'degraded':'ready';
+      const rescueLabel=bh.unhealthy?'Running on rescue':'Healthy';
+      const last=bh.last_fire;
+      const lastLine=last?`last: ${last.bridge_type||'—'}/${last.source||'—'} · ${fmtRuntimeTs(last.timestamp)}`:'no bridges this session';
+      const windowMin=Math.round((bh.window_seconds||900)/60);
+      const rescueDetail=`${bh.window_count||0} in ${windowMin}m (session ${bh.session_count||0}) · ${lastLine} · queue empty ${Math.round(bh.queue_empty_elapsed_s||0)}s`;
+      rescueRow=statusRow('Queue rescue',rescueState,rescueLabel,rescueDetail);
+    }
     card.innerHTML=[
       statusRow('Current health',headerState,headerLabel,rs.health_explanation||'Runtime health available'),
       runtimeProviderRow('Audio source',providers.audio_source),
       runtimeProviderRow('Script provider',providers.script_provider),
       runtimeProviderRow('TTS provider',providers.tts_provider),
+      rescueRow,
       statusRow('Recent failover',lastFailover?'degraded':'idle',lastFailover?'Recorded':'None',eventLine)
     ].join('');
   }catch(e){
@@ -2931,6 +2991,13 @@ function updateSourceControls(st,caps){
   if(jamBtn)jamBtn.style.display=visibility.jamendo?'':'none';
   if(chartsBtn)chartsBtn.style.display=visibility.charts_reload?'':'none';
 }
+async function shufflePlaylist(el){
+  flash(el);
+  const r=await api('POST','/api/shuffle',{});
+  if(!r.ok){toast('Error: '+(r.error||'unknown'));return;}
+  toast('Playlist shuffled');
+  await refreshFast();
+}
 async function enrichPlaylistSource(kind,el){
   flash(el);
   const dispatch=_SOURCE_DISPATCH[kind]||_SOURCE_DISPATCH.charts;
@@ -2964,17 +3031,20 @@ function updatePl(tracks,page){
   const el=document.getElementById('plBody');const meta=document.getElementById('plMeta');
   const incoming=tracks||[];
   const inPage=page||{total:incoming.length,offset:0,limit:incoming.length||PLAYLIST_PAGE_SIZE,has_more:false};
+  const previousRevision=_plPage.revision;
+  const incomingRevision=inPage.revision;
   // Status polls are capped at server max_limit (200). If we have more rows loaded via
-  // load-more, keep the extra cached rows to prevent snap-back on the next poll.
-  if(incoming.length&&incoming.length<_plRows.length&&inPage.has_more){
+  // load-more, keep the extra cached rows only while the playlist itself is unchanged.
+  if(incoming.length&&incoming.length<_plRows.length&&inPage.has_more&&incomingRevision!=null&&incomingRevision===previousRevision){
     _plRows=incoming.concat(_plRows.slice(incoming.length));
   }else{
     _plRows=incoming;
   }
-  _plPage={...inPage,limit:_plRows.length};
+  const total=Number(inPage.total||_plRows.length);
+  const pageOffset=Number(inPage.offset||0);
+  const loadedEnd=Math.min(pageOffset+_plRows.length,total);
+  _plPage={...inPage,limit:_plRows.length,has_more:loadedEnd<total};
   if(!_plRows.length){el.innerHTML='<div class="empty">No tracks</div>';meta.textContent='';return}
-  const total=Number(_plPage.total||_plRows.length);
-  const loadedEnd=Math.min((_plPage.offset||0)+_plRows.length,total);
   meta.textContent=total>_plRows.length?`${loadedEnd}/${total} tracks`:_plRows.length+' tracks';
   const filter=_plFilter.toLowerCase();
   const rows=_plRows.map((t,i)=>({t,idx:(_plPage.offset||0)+i}));
@@ -2992,14 +3062,31 @@ async function loadMorePlaylist(){
   const btn=document.getElementById('plMoreBtn');
   if(btn){btn.classList.add('loading');btn.textContent='Loading...';}
   try{
+    const expectedRevision=_plPage.revision;
     const offset=(_plPage.offset||0)+_plRows.length;
     const resp=await fetch(_base+`/api/playlist?offset=${offset}&limit=${PLAYLIST_PAGE_SIZE}`,{headers:H()});
-    if(!resp.ok)return;
+    if(!resp.ok){console.warn('Playlist load-more failed:',resp.status);return;}
     const d=await resp.json();
+    const responseRevision=d.revision??expectedRevision;
+    const revisionChanged=expectedRevision!=null&&responseRevision!=null&&responseRevision!==expectedRevision;
+    if(revisionChanged){
+      console.warn('Playlist changed while loading more; refreshing first page.');
+      const fresh=await fetch(_base+`/api/playlist?offset=0&limit=${PLAYLIST_PAGE_SIZE}`,{headers:H()});
+      if(fresh.ok){
+        const first=await fresh.json();
+        updatePl(first.tracks||[],{total:first.total||0,offset:first.offset??0,limit:first.limit??PLAYLIST_PAGE_SIZE,has_more:!!first.has_more,revision:first.revision});
+        return;
+      }
+      updatePl(d.tracks||[],{total:d.total||0,offset:d.offset??offset,limit:d.limit??PLAYLIST_PAGE_SIZE,has_more:!!d.has_more,revision:responseRevision});
+      return;
+    }
     _plRows=_plRows.concat(d.tracks||[]);
-    updatePl(_plRows,{total:d.total||_plRows.length,offset:_plPage.offset||0,limit:_plRows.length,has_more:!!d.has_more});
+    updatePl(_plRows,{total:d.total||_plRows.length,offset:_plPage.offset||0,limit:_plRows.length,has_more:!!d.has_more,revision:responseRevision});
+  }catch(e){
+    console.warn('Playlist load-more error:',e);
   }finally{
     _plLoadingMore=false;
+    if(btn){btn.classList.remove('loading');btn.textContent='Load more tracks';}
   }
 }
 function focusPlaylistTrack(index, trackId){
@@ -3063,6 +3150,10 @@ async function doSearch(append){
   const q=si.value.trim();if(!q)return;
   const el=document.getElementById('searchResults');
   const isAppend=append===true;
+  const prevR=_sR.slice();
+  const prevExt=_sExt.slice();
+  const prevPage={..._sPage};
+  const prevExtPage={..._sExtPage};
   if(!isAppend){
     _sR=[];_sExt=[];_sPage={has_more:false};_sExtPage={has_more:false};
     el.innerHTML='<div class="sr-label" style="color:rgba(245,237,216,0.25)">Searching...</div>';
@@ -3074,21 +3165,35 @@ async function doSearch(append){
       limit:String(SEARCH_PAGE_SIZE),
       external_offset:String(isAppend?_sExt.length:0),
       external_limit:String(SEARCH_PAGE_SIZE),
+      include_external:String(!isAppend||_sExtPage.has_more),
     });
     const resp=await fetch(_base+'/api/search?'+params.toString(),{headers:H()});
-    if(!resp.ok){console.warn('Search failed:',resp.status);el.innerHTML='';return}
+    if(!resp.ok){
+      console.warn('Search failed:',resp.status);
+      if(isAppend){_sR=prevR;_sExt=prevExt;_sPage=prevPage;_sExtPage=prevExtPage;renderSearchResults(q);}
+      else el.innerHTML='';
+      return;
+    }
     const d=await resp.json();
     _sR=isAppend?_sR.concat(d.results||[]):d.results||[];
     _sExt=isAppend?_sExt.concat(d.external||[]):d.external||[];
     _sPage={total:d.total||0,offset:d.offset||0,limit:d.limit||SEARCH_PAGE_SIZE,has_more:!!d.has_more};
     _sExtPage={known_count:d.external_known_count||0,offset:d.external_offset||0,limit:d.external_limit||SEARCH_PAGE_SIZE,has_more:!!d.external_has_more};
     renderSearchResults(q);
-  }catch(e){console.warn('Search error:',e);el.innerHTML='';}
+  }catch(e){
+    console.warn('Search error:',e);
+    if(isAppend){_sR=prevR;_sExt=prevExt;_sPage=prevPage;_sExtPage=prevExtPage;renderSearchResults(q);}
+    else el.innerHTML='';
+  }
 }
 async function searchMore(){
   const btn=document.getElementById('searchMoreBtn');
   if(btn){btn.classList.add('loading');btn.textContent='Loading...';}
-  await doSearch(true);
+  try{
+    await doSearch(true);
+  }finally{
+    if(btn){btn.classList.remove('loading');btn.textContent='Load more results';}
+  }
 }
 async function addTr(i){const t=_sR[i];if(!t)return;await api('POST','/api/playlist/move_to_next',{index:t.index});toast('Now playing: '+t.display);document.getElementById('searchResults').innerHTML='';si.value='';_plFilter=''}
 async function addExternal(i){
@@ -3568,7 +3673,10 @@ function updateEngineRoom(st,caps){
   const inTok=con.input_tokens||0;
   const outTok=con.output_tokens||0;
   const unpriced=con.api_cost_unpriced_model===true;
-  const cost=con.api_cost_estimate_usd!=null?(unpriced?'~$':'$')+con.api_cost_estimate_usd.toFixed(4)+(unpriced?' (est, unpriced model)':''):'—';
+  // Cost is inherently an estimate (blended TTS rate, drifting model prices) — never
+  // claim cent precision. Round to the nearest dollar and always flag it "est".
+  const _rawCost=con.api_cost_estimate_usd;
+  const cost=_rawCost==null?'—':((_rawCost<1?'<$1':'~$'+Math.round(_rawCost))+' est'+(unpriced?' (unpriced model)':''));
   const ttsCh=con.tts_characters||0;
 
   // Update sidebar cost
@@ -3576,6 +3684,10 @@ function updateEngineRoom(st,caps){
   if(sidebarCost)sidebarCost.textContent=cost;
   const topBarCost=document.getElementById('topBarCost');
   if(topBarCost)topBarCost.textContent=cost;
+  // Sidebar headline: segments produced this session (exact count). '—' until the
+  // first segment airs, so a cold-boot 0 isn't a sad empty headline.
+  const sidebarSegments=document.getElementById('sidebarSegments');
+  if(sidebarSegments)sidebarSegments.textContent=(st.segments_produced>0?st.segments_produced:'—');
 
   // Update sidebar uptime
   const sidebarUptime=document.getElementById('sidebarUptime');
@@ -3652,6 +3764,9 @@ function updateEngineRoom(st,caps){
     if(hd.events_summary_en||hd.events_summary)lines.push('Events:<br>'+esc(hd.events_summary_en||hd.events_summary).replace(/\n/g,'<br>'));
     if(hd.pending_directive)lines.push('Directive pending: <strong style="color:var(--warning)">'+esc(hd.pending_directive.substring(0,80))+'...</strong>');
     lines.push('Recent events: '+(hd.recent_event_count||0));
+    lines.push('Prompt slice: '+Number(hd.context_entity_count||0)+' entities, '+Number(hd.context_char_count||0)+' chars');
+    if(hd.context_last_updated)lines.push('Updated: '+new Date(Number(hd.context_last_updated)*1000).toLocaleTimeString());
+    lines.push('First home moment: '+(hd.first_home_context_moment_fired?'fired':'waiting'));
     if(hd.last_event_label_en||hd.last_event_label)lines.push('Last event: '+esc(hd.last_event_label_en||hd.last_event_label));
     if(Array.isArray(hd.scored_entities)&&hd.scored_entities.length){
       const scored=hd.scored_entities.slice(0,6).map(e=>esc(e.label||e.entity_id||'Entity')+' <span style="color:var(--muted)">'+Number(e.score||0).toFixed(2)+'</span>');
@@ -3683,6 +3798,7 @@ async function refreshFast(){
     updateNow(_st.now_streaming);
     renderProduction(_st);
     renderProgramme(_st);
+    updateBufferedReady(_st);
     updateRecent(_st);
     updateLog(_st.stream_log);
     updatePl(_st.playlist||[],_st.playlist_page||null);

@@ -572,3 +572,66 @@ def test_select_next_track_explicit_filter_in_relaxed_fallback():
     # t_explicit was never played → staleness = n_played + 1 (highest). But allow_explicit filter
     # does NOT apply in final fallback → t_explicit may be picked despite being explicit.
     assert result in (t_normal, t_explicit)
+
+
+# ---------------------------------------------------------------------------
+# Producer rescue-bridge telemetry (#547 observability)
+# ---------------------------------------------------------------------------
+
+
+def test_record_bridge_fire_counts_total_by_type_and_event():
+    state = StationState()
+    state.record_bridge_fire("drain", "canned", timestamp=100.0)
+
+    assert state.bridge_fires_total == 1
+    assert state.bridge_fires_by_type == {"drain": 1, "resume": 0, "idle": 0}
+    assert list(state.bridge_events) == [{"bridge_type": "drain", "source": "canned", "timestamp": 100.0}]
+
+
+def test_record_bridge_fire_accumulates_across_types():
+    state = StationState()
+    state.record_bridge_fire("drain", "canned", timestamp=1.0)
+    state.record_bridge_fire("resume", "norm_cache", timestamp=2.0)
+    state.record_bridge_fire("idle", "canned", timestamp=3.0)
+    state.record_bridge_fire("drain", "emergency_tone", timestamp=4.0)
+
+    assert state.bridge_fires_total == 4
+    assert state.bridge_fires_by_type == {"drain": 2, "resume": 1, "idle": 1}
+    # last_fire is the deque tail
+    assert state.bridge_events[-1] == {
+        "bridge_type": "drain",
+        "source": "emergency_tone",
+        "timestamp": 4.0,
+    }
+
+
+def test_record_bridge_fire_total_survives_deque_eviction():
+    """bridge_events is bounded (maxlen=50) but bridge_fires_total is the true
+    session lifetime count — it must keep climbing past the deque cap."""
+    state = StationState()
+    for i in range(120):
+        state.record_bridge_fire("drain", "norm_cache", timestamp=float(i))
+
+    assert state.bridge_fires_total == 120
+    assert state.bridge_fires_by_type["drain"] == 120
+    assert len(state.bridge_events) == 50  # deque cap, oldest evicted
+    assert state.bridge_events[0]["timestamp"] == 70.0  # 120 - 50
+
+
+def test_record_bridge_fire_defaults_timestamp_to_now():
+    state = StationState()
+    with patch("mammamiradio.core.models.time.time", return_value=1234.5):
+        state.record_bridge_fire("idle", "norm_cache")
+
+    assert state.bridge_events[-1]["timestamp"] == 1234.5
+
+
+def test_record_bridge_fire_ignores_unknown_bridge_type_in_by_type():
+    """An unexpected bridge_type still counts toward the total and the event
+    trail, it just does not create a stray by_type bucket."""
+    state = StationState()
+    state.record_bridge_fire("mystery", "canned", timestamp=1.0)
+
+    assert state.bridge_fires_total == 1
+    assert state.bridge_fires_by_type == {"drain": 0, "resume": 0, "idle": 0}
+    assert state.bridge_events[-1]["bridge_type"] == "mystery"

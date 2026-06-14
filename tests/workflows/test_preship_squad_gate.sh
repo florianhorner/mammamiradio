@@ -22,7 +22,10 @@ fail() { echo "FAIL: $1" >&2; exit 1; }
 pass() { echo "PASS: $1"; }
 
 HEAD_SHA="$(git rev-parse --short HEAD)"
-ANC_SHA="$(git rev-parse --short HEAD~1)"
+# Ancestor cases need HEAD~1 — a depth-1 shallow clone has no parent commit.
+# CI checks out with fetch-depth: 2 (quality.yml) precisely for this.
+ANC_SHA="$(git rev-parse --short HEAD~1 2>/dev/null)" \
+  || fail "HEAD~1 unavailable (shallow clone?) — checkout with fetch-depth >= 2"
 BOGUS_SHA="0000000"
 
 NOW_ISO="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -104,10 +107,39 @@ pass "adversarial-review@HEAD allowed"
   || fail "ancestor-commit entry should allow via merge-base"
 pass "ancestor-commit entry allowed"
 
-# Case 8: gh pr merge with matching entry => allow (covers the merge verb)
-[ "$(verdict '{"tool_input":{"command":"gh pr merge 5 --squash"}}' "$(make_reader review "$HEAD_SHA" "$NOW_ISO")")" = allow ] \
-  || fail "gh pr merge with matching entry should allow"
-pass "gh pr merge with entry allowed"
+# Case 8: gh pr merge => DENY even with a fresh matching entry. Landing goes
+# through scripts/land-pr.sh (landing contract, 2026-06-12); the wrapper does
+# its own code-state squad check and the hook never sees its internal gh calls.
+[ "$(verdict '{"tool_input":{"command":"gh pr merge 5 --squash"}}' "$(make_reader review "$HEAD_SHA" "$NOW_ISO")")" = deny ] \
+  || fail "raw gh pr merge must deny even with a fresh squad entry"
+pass "raw gh pr merge denies (use land-pr.sh)"
+
+# Case 8b: gh pr merge --squash --auto => DENY too (arming bypasses the wrapper
+# and skips the head pin) — the way-out message names the wrapper.
+out_8b="$(printf '%s' '{"tool_input":{"command":"gh pr merge 5 --squash --auto"}}' \
+  | MMR_PRESHIP_REVIEW_READER="$DUMMY" bash "$HOOK" 2>/dev/null || true)"
+printf '%s' "$out_8b" | grep -q '"permissionDecision":"deny"' \
+  || fail "gh pr merge --auto must deny (wrapper owns arming)"
+printf '%s' "$out_8b" | grep -q 'land-pr.sh' \
+  || fail "merge deny message must name scripts/land-pr.sh as the way out"
+pass "gh pr merge --auto denies, message names land-pr.sh"
+
+# Case 8c: gh pr merge --disable-auto => ALLOW (disarming is a cancel, not a landing)
+[ "$(verdict '{"tool_input":{"command":"gh pr merge 5 --disable-auto"}}' "$DUMMY")" = allow ] \
+  || fail "gh pr merge --disable-auto should be allowed"
+pass "gh pr merge --disable-auto allowed"
+
+# Case 8c2: --disable-auto AFTER a shell operator must NOT unlock the merge —
+# `gh pr merge 5 --squash && echo "--disable-auto"` is a bypass attempt.
+[ "$(verdict '{"tool_input":{"command":"gh pr merge 5 --squash && echo \"--disable-auto\""}}' "$DUMMY")" = deny ] \
+  || fail "--disable-auto beyond a shell operator must not bypass the merge deny"
+pass "--disable-auto past a shell operator still denies"
+
+# Case 8d: scripts/land-pr.sh invocation => ALLOW (hook does not match it; the
+# wrapper enforces the squad itself with code-state freshness)
+[ "$(verdict '{"tool_input":{"command":"scripts/land-pr.sh 5"}}' "$DUMMY")" = allow ] \
+  || fail "land-pr.sh invocation should pass the hook"
+pass "land-pr.sh invocation allowed"
 
 # Case 9: gh pr create, no entries => DENY
 [ "$(verdict '{"tool_input":{"command":"gh pr create"}}' "$(empty_reader)")" = deny ] \
@@ -143,4 +175,4 @@ pass "unparseable timestamp denies"
 pass "far-future timestamp denies"
 
 echo
-echo "All 14 pre-ship squad gate cases passed."
+echo "All 18 pre-ship squad gate cases passed."

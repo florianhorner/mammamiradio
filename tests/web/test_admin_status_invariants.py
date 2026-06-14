@@ -119,6 +119,21 @@ def test_runtime_status_header_reads_station_on_air_not_health_state() -> None:
     assert "const state=rs.health_state||'ready'" not in block
 
 
+def test_runtime_status_card_renders_queue_rescue_from_bridge_health() -> None:
+    """#547: the Runtime Status card adds a Queue rescue row driven by
+    rs.bridge_health, flipping to the colorblind-safe 'degraded' state when the
+    station is running on rescue."""
+    block = _function_block(_read_admin_html(), "updateRuntimeStatus")
+
+    assert "const bh=rs.bridge_health" in block
+    assert "statusRow('Queue rescue'" in block
+    # Warning state must be the canonical (yellow) 'degraded', never green.
+    assert "const rescueState=bh.unhealthy?'degraded':'ready'" in block
+    assert "Running on rescue" in block
+    # Row is wired into the rendered card array.
+    assert "rescueRow," in block
+
+
 def test_runtime_provider_row_handles_recovery_mode() -> None:
     block = _function_block(_read_admin_html(), "runtimeProviderRow")
 
@@ -243,3 +258,40 @@ def test_all_segment_types_have_css_rules() -> None:
         if rule not in html:
             missing.append(rule)
     assert not missing, f"Missing CSS rules in admin.html: {missing}"
+
+
+def test_production_feed_surfaces_operator_trigger() -> None:
+    """The trigger row reads the operator-attributed field (set only by
+    /api/trigger), so internal forces — the 60s-silence rescue, stop/skip/resume —
+    never false-light "Triggered" during an incident. Pins the full guard so a
+    reorder/inversion breaks the test (no JS runtime in this repo).
+    """
+    block = _function_block(_read_admin_html(), "renderProduction")
+
+    assert "const fp=st&&st.operator_force_pending;" in block
+    # Must NOT key off the un-attributed force_next mirror, or rescue/internal
+    # forces would falsely render as operator triggers.
+    assert "st.force_pending" not in block
+    # Full conditional pinned: dedup guard against double-rendering while the
+    # trigger hands off to the live "building" row.
+    assert "if(fp&&!(p.current&&segmentTypeKey(p.current.kind)===segmentTypeKey(fp))){" in block
+    assert "Triggered — building next" in block
+    # Reuses the canonical (colorblind-safe) status pill, not a bespoke color.
+    assert "statusInline('working','',segmentText(segmentTypeKey(fp)))" in block
+
+
+def test_buffered_ready_readout_shows_airtime_not_item_count() -> None:
+    """The buffered readout surfaces SECONDS of audio (not an item count), is
+    wired into the fast poll, blanks (not '0s') when empty, and rounds to whole
+    seconds before splitting so it can never print an impossible '1m60s'.
+    """
+    html = _read_admin_html()
+
+    assert 'id="bufferedReady"' in html
+    block = _function_block(html, "updateBufferedReady")
+    assert "st.buffered_audio_sec" in block
+    assert "if(!(sec>0)){el.textContent='';return;}" in block  # no dead "0s" box
+    # Carry-safe: round to whole seconds, THEN split — guards the 1m60s boundary.
+    assert "const total=Math.round(sec),m=Math.floor(total/60),s=total%60;" in block
+    assert "el.textContent='· ~'+(m>0?m+'m'+(s<10?'0':'')+s+'s':s+'s')+' ready'" in block
+    assert "updateBufferedReady(_st)" in _function_block(html, "refreshFast")

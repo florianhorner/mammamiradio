@@ -1,0 +1,13 @@
+# landing-gate runtime proof — 2026-06-12T11:38:27Z
+
+## live repo settings (gh api read-back after the settings change)
+{"allow_auto_merge":true,"allow_update_branch":true}
+{"contexts":["quality","pi-smoke"],"strict":true}
+
+## scripts/check-merge-gate.sh live run
+check-merge-gate: PASS — branch protection strict (up-to-date before merge)
+check-merge-gate: PASS — repo allow_update_branch
+check-merge-gate: PASS — repo allow_auto_merge
+check-merge-gate: PASS — required check 'quality' present
+check-merge-gate: PASS — required check 'pi-smoke' present
+check-merge-gate: all merge-gate settings intact.

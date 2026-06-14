@@ -28,7 +28,7 @@ configuration:
     description: "Let hosts use Home Assistant context, such as lights, presence, and climate, in banter and ads. Requires add-on API access; enable this if the boot log shows ha=disabled."
   admin_token:
     name: Admin Token
-    description: "Set a stable token for the admin API and HA media_player integration. If left empty, one is auto-generated on each restart and is not logged; set this value if automations need a reusable token."
+    description: "Set a token to require admin sign-in for the admin API. Leave it empty to trust your home network — any device on your local network can open the admin panel, and changes are still protected against cross-site requests. Set a value to require the token even on your local network, for example when automations need a stable credential."
   super_italian_mode:
     name: Super Italian Mode
     description: "Off (default): listener UI uses English utility copy with Italian station-feel words intact, and AI hosts code-switch with Italian sprinkles. On: listener UI and hosts are Italian-first."

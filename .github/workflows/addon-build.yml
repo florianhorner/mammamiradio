@@ -131,9 +131,14 @@ jobs:
           # 0.0.0.0:8000 — the HA Supervisor ingress contract requires it.
           # The MAMMAMIRADIO_PORT env var is overwritten inside the container,
           # so the host-side port mapping must target the container's real port (8000).
+          # Supervisor always sets SUPERVISOR_TOKEN; the addon's tokenless-LAN-admin
+          # path requires it (see config._is_addon). Without it the image boots in
+          # standalone mode, where binding 0.0.0.0 with no admin token is a fatal
+          # config error and uvicorn never starts.
           docker run -d --name mamma-smoke \
             -p 8765:8000 \
             -e LOG_LEVEL=WARNING \
+            -e SUPERVISOR_TOKEN=smoke-ci \
             ${{ env.REGISTRY }}/${{ env.IMAGE_BASE }}-amd64:${{ github.sha }}
           sleep 40
           HEALTH=$(curl -sS --retry 8 --retry-delay 3 --retry-connrefused http://localhost:8765/healthz)

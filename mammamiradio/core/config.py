@@ -102,6 +102,12 @@ class AudioSection:
     sample_rate: int = 48000
     channels: int = 2
     bitrate: int = 192
+    # Integrated-LUFS targets for the loudness-reconciliation pass (measure +
+    # corrective gain on each finished segment so music, dialogue, bedded banter
+    # and ads all land at one perceived level). ad_lufs_target sits 1 LU hotter
+    # so ads still pop, without the old jarring 2-LU jump.
+    lufs_target: float = -16.0
+    ad_lufs_target: float = -15.0
 
 
 # ── Dynamic LLM routing ───────────────────────────────────────────────────
@@ -1080,7 +1086,11 @@ def _validate(config: StationConfig) -> None:
         log.warning("Home Assistant enabled but no HA_TOKEN in environment")
     if not config.ads.brands:
         log.warning("No ad brands configured — ad segments will be skipped")
-    if not _is_loopback_host(config.bind_host) and not (config.admin_password or config.admin_token):
+    if (
+        not _is_loopback_host(config.bind_host)
+        and not (config.admin_password or config.admin_token)
+        and not config.is_addon
+    ):
         errors.append("Set ADMIN_PASSWORD or ADMIN_TOKEN when binding to a non-loopback host")
 
     if errors:
@@ -1104,6 +1114,7 @@ def load_config(path: str = "radio.toml") -> StationConfig:
             personality=PersonalityAxes.from_dict(h.get("personality", {})),
             engine=h.get("engine", "edge"),
             edge_fallback_voice=h.get("edge_fallback_voice", ""),
+            voice_settings=dict(h.get("voice_settings", {})),
         )
         for h in raw.get("hosts", [])
     ]
