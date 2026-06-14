@@ -43,6 +43,57 @@ sed -i '' 's/^version:.*/version: X.Y.Z/' ha-addon/mammamiradio/config.yaml
 sed -i '' 's/^version = .*/version = "X.Y.Z"/' pyproject.toml
 ```
 
+## Cutting a stable release (the cadence model)
+
+You develop continuously and never freeze a snapshot — so stable is not "stop and tag
+HEAD." It is "promote a build that has already soaked on the edge Pi." The infra is built
+for exactly this: `addon-release.yml` does not rebuild on a tag, it promotes the prebuilt
+`:sha` image. The edge channel is your continuous soak track.
+
+**Rolling release candidate.** `main`'s stable `config.yaml` / `pyproject.toml` always carry
+the *next* version (the RC). Every `main` commit bakes that version into its `:sha` image. The
+number is not "where I am" — it is "what I release next." A stable tag that lags `main` by many
+commits is *correct*, not outdated.
+
+**Promote-current-edge.** The release candidate is always whatever your current edge release
+points at — already built, already on your Pi. No SHA archaeology. "Soaked" is your plain
+judgment that the line you have been running has felt healthy, not a stopwatch on one commit.
+
+**The cut — 3 steps, when the edge line feels good:**
+
+1. **Tag the current edge SHA** (not HEAD, not the `chore(edge)` metadata commit — that commit
+   has no `:sha` image because `addon-build.yml` skips it). The candidate is whatever
+   `ha-addon/mammamiradio-edge/config.yaml` `version:` names:
+   ```bash
+   git fetch origin main --tags
+   EDGE=$(git show origin/main:ha-addon/mammamiradio-edge/config.yaml | awk '/^version:/{print $2}')
+   # X.Y.Z must equal the STABLE config.yaml version at $EDGE
+   git tag vX.Y.Z "$EDGE" && git push origin vX.Y.Z
+   ```
+   `addon-release.yml` pre-flight fails loud if `config.yaml` != tag or either arch `:sha`
+   image is missing — that is your safety net.
+2. **Wait for `addon-release.yml` green**, then verify:
+   `docker pull ghcr.io/florianhorner/mammamiradio-addon-aarch64:X.Y.Z`.
+3. **Open the next RC immediately** so the number keeps meaning something and CI stays green:
+   - `pyproject.toml` + `ha-addon/mammamiradio/config.yaml` → `X.Y+1.0`
+   - **ha-addon CHANGELOG**: add a new `## [X.Y+1.0]` header at the top. REQUIRED —
+     `pre-release-check.sh` compares `config.yaml` to the first *versioned* ha-addon CHANGELOG
+     header (it skips `## Unreleased`); without the new header the next version-touching PR fails.
+   - **root CHANGELOG**: roll `## [Unreleased]` (plus the pending `## [X.Y.Z]`) into a single
+     dated `## [X.Y.Z] - <real tag date>`, then open a fresh `## [Unreleased]`.
+   - Land as a normal `chore(release): open X.Y+1.0` PR via `/ship`.
+
+**Changelog must match the tagged commit.** If the edge SHA you tag is behind `HEAD`, fold only
+the notes actually in that SHA — never publish notes for commits the promoted image lacks.
+
+**Known limitations (revisit if they bite):**
+- `release-cooldown.yml` only fails *red* on a tag <24h after the prior release; it does not
+  actually block `addon-release.yml` from promoting. Don't push the tag inside the window (or use
+  the `hotfix` label) rather than relying on it to stop you.
+- `docker.yml` publishes the standalone image on any `v*` tag even if the addon pre-flight fails.
+- A hotfix after you've opened the next RC (e.g. `2.13.1` once `main` is on `2.14.0`) needs a
+  release branch, because pre-flight requires `config.yaml` == tag.
+
 ## Addon stage
 
 `ha-addon/mammamiradio/config.yaml` declares `stage: stable` for the release channel. The Edge channel stays `stage: experimental` in `ha-addon/mammamiradio-edge/config.yaml` so testers still see the orange Experimental badge on main-branch builds.
